@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState, type KeyboardEvent } from 'react'
+import { useEffect, useMemo, useState, type CSSProperties } from 'react'
 import { api, type CalEvent, type List } from '../api'
 import { makeGuard, ymd } from '../util'
+import { Sidebar } from './Sidebar'
 
 const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June',
@@ -15,7 +16,6 @@ export function CalendarView({ rev, onExpire }: { rev: number; onExpire: () => v
   const [cursor, setCursor] = useState(() => { const n = new Date(); return new Date(n.getFullYear(), n.getMonth(), 1) })
   const [events, setEvents] = useState<CalEvent[]>([])
   const [draft, setDraft] = useState<Draft | null>(null)
-  const [addingCal, setAddingCal] = useState(false)
 
   const days = useMemo(() => {
     const first = new Date(cursor.getFullYear(), cursor.getMonth(), 1)
@@ -62,37 +62,21 @@ export function CalendarView({ rev, onExpire }: { rev: number; onExpire: () => v
     setDraft(null); reload()
   }
   const del = async (uid: string) => { await guard(() => api.deleteEvent(sel, uid)); setDraft(null); reload() }
-  const createCal = async (name: string) => {
-    const c = await guard(() => api.createCalendar(name))
-    setAddingCal(false)
-    if (c) { setCals((cs) => [...cs, c]); setSel(c.id) }
+  const calApi = {
+    create: (name: string) => guard(() => api.createCalendar(name)),
+    update: (id: string, body: { name?: string; color?: string | null }) =>
+      guard(() => api.updateCalendar(id, body)),
+    remove: (id: string) => guard(() => api.deleteCalendar(id)),
+    reorder: (ids: string[]) => guard(() => api.reorderCalendars(ids)),
   }
 
   const todayKey = ymd(new Date())
+  const curCal = cals.find((c) => c.id === sel)
 
   return (
     <div className="work">
-      <div className="side">
-        <div className="side-head">
-          <span className="label">Calendars</span>
-          <button className="icon-btn" title="New calendar" onClick={() => setAddingCal(true)}>+</button>
-        </div>
-        <div className="side-list">
-          {cals.map((c) => (
-            <div key={c.id} className={`side-item ${c.id === sel ? 'active' : ''}`} onClick={() => setSel(c.id)}>
-              <span className="swatch" style={c.color ? { background: c.color } : undefined} />
-              <span className="name">{c.name}</span>
-              <span className="count">{c.event_count}</span>
-            </div>
-          ))}
-          {cals.length === 0 && !addingCal && (
-            <div className="empty" style={{ padding: '14px 16px' }}>No calendars yet.</div>
-          )}
-        </div>
-        {addingCal && (
-          <InlineCreate placeholder="Calendar name" onSubmit={createCal} onCancel={() => setAddingCal(false)} />
-        )}
-      </div>
+      <Sidebar title="Calendars" placeholder="Calendar" items={cals} sel={sel}
+        countOf={(c) => c.event_count} onSelect={setSel} onItems={setCals} api={calApi} />
 
       <div className="content">
         <div className="cal-head">
@@ -106,7 +90,8 @@ export function CalendarView({ rev, onExpire }: { rev: number; onExpire: () => v
         {!sel ? (
           <div className="empty">Create a calendar to get started.</div>
         ) : (
-          <div className="cal-grid">
+          <div className="cal-grid"
+            style={curCal?.color ? { '--ev-c': curCal.color } as CSSProperties : undefined}>
             {DOW.map((d) => <div key={d} className="cal-dow">{d}</div>)}
             {days.map((d) => {
               const key = ymd(d)
@@ -221,19 +206,3 @@ function EventModal({ draft, onClose, onSave, onDelete }: {
   )
 }
 
-function InlineCreate({ placeholder, onSubmit, onCancel }: {
-  placeholder: string; onSubmit: (v: string) => void; onCancel: () => void
-}) {
-  const [v, setV] = useState('')
-  return (
-    <div className="side-add">
-      <input className="input" autoFocus placeholder={placeholder} value={v}
-        onChange={(ev) => setV(ev.target.value)}
-        onBlur={() => { if (!v.trim()) onCancel() }}
-        onKeyDown={(ev: KeyboardEvent) => {
-          if (ev.key === 'Enter' && v.trim()) onSubmit(v.trim())
-          if (ev.key === 'Escape') onCancel()
-        }} />
-    </div>
-  )
-}

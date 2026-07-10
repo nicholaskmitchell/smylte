@@ -17,6 +17,7 @@ import threading
 from typing import Any
 
 from .config import Settings
+from .dav import xml as davxml
 from .dav.client import DavClient
 from .db import store
 from .ical import PRIORITY, EventEdit, TaskEdit
@@ -227,27 +228,67 @@ class TaskService:
         return out
 
     # ── writes ───────────────────────────────────────────────────────────────
-    def create_list(self, name: str) -> dict[str, Any]:
+    def create_list(self, name: str, *, color: str | None = None) -> dict[str, Any]:
+        return self._create_collection(name, ("VTODO",), color=color, event="list_created")
+
+    def create_calendar(self, name: str, *, color: str | None = None) -> dict[str, Any]:
+        return self._create_collection(name, ("VEVENT",), color=color, event="calendar_created")
+
+    def _create_collection(
+        self, name: str, components: tuple[str, ...], *, color: str | None, event: str
+    ) -> dict[str, Any]:
+        kw = {"color": color} if color else {}
         with self._lock:
-            ci = self._dav.create_task_collection(name, components=("VTODO",))
+            ci = self._dav.create_task_collection(name, components=components, **kw)
             self._engine.discover()
             row = self._conn.execute(
                 "SELECT * FROM collections WHERE href=?", (ci.href,)
             ).fetchone()
             dto = self._list_dto(row)
-        self._publish({"type": "list_created", "list": dto["id"]})
+        self._publish({"type": event, "list": dto["id"]})
         return dto
 
-    def create_calendar(self, name: str) -> dict[str, Any]:
+    def update_collection(
+        self,
+        href: str,
+        *,
+        name: str | None = None,
+        color: str | None = None,
+        clear_color: bool = False,
+    ) -> dict[str, Any]:
+        """Rename / recolor via PROPPATCH — the wire is the source of truth, so
+        other CalDAV clients (Tasks.org, Thunderbird, …) see the change too."""
+        props: dict[str, str | None] = {}
+        if name is not None:
+            props[davxml.DISPLAYNAME] = name
+        if clear_color:
+            props[davxml.CALENDAR_COLOR] = None
+        elif color is not None:
+            props[davxml.CALENDAR_COLOR] = color
         with self._lock:
-            ci = self._dav.create_task_collection(name, components=("VEVENT",))
-            self._engine.discover()
+            if props:
+                self._dav.proppatch(href, props)
+                self._engine.discover()
             row = self._conn.execute(
-                "SELECT * FROM collections WHERE href=?", (ci.href,)
+                "SELECT * FROM collections WHERE href=?", (href,)
             ).fetchone()
             dto = self._list_dto(row)
-        self._publish({"type": "calendar_created", "list": dto["id"]})
+        self._publish({"type": "list_updated", "list": dto["id"]})
         return dto
+
+    def reorder_collections(self, hrefs: list[str]) -> None:
+        """Persist a manual order as apple calendar-order (0-based), on the wire."""
+        with self._lock:
+            for i, href in enumerate(hrefs):
+                self._dav.proppatch(href, {davxml.CALENDAR_ORDER: str(i)})
+            self._engine.discover()
+        self._publish({"type": "list_reordered"})
+
+    def delete_collection(self, href: str) -> None:
+        with self._lock:
+            self._dav.delete_collection(href)
+            self._engine.discover()   # marks it deleted in the cache
+        self._publish({"type": "list_deleted", "list": _slug(href)})
 
     def create_task(self, href: str, summary: str, *, edit: TaskEdit | None = None,
                     parent_uid: str | None = None) -> dict[str, Any]:

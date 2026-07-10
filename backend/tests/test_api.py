@@ -124,6 +124,49 @@ def test_tabs_are_separated(client):
     assert lst["id"] not in cal_ids    # a VTODO list never shows under Calendar
 
 
+def test_list_management(client):
+    lst = _list(client)
+    lid = lst["id"]
+
+    # rename + recolor ride PROPPATCH → visible on re-list (wire is truth)
+    r = client.patch(f"/api/lists/{lid}", json={"name": "Renamed", "color": "#FF9500"})
+    assert r.status_code == 200, r.text
+    got = next(x for x in client.get("/api/lists").json() if x["id"] == lid)
+    assert got["name"] == "Renamed" and got["color"] == "#FF9500"
+
+    # clearing the color is an explicit null
+    cleared = client.patch(f"/api/lists/{lid}", json={"color": None}).json()
+    assert cleared["color"] is None
+
+    # bad colors are rejected before touching the wire
+    assert client.patch(f"/api/lists/{lid}", json={"color": "tomato"}).status_code == 422
+
+    # delete removes it from the wire and from /api/lists
+    assert client.delete(f"/api/lists/{lid}").status_code == 204
+    assert lid not in {x["id"] for x in client.get("/api/lists").json()}
+
+
+def test_list_reorder(client):
+    a, b, c = _list(client), _list(client), _list(client)
+    ids = [x["id"] for x in client.get("/api/lists").json()]
+    want = [c["id"], a["id"], b["id"]] + [i for i in ids if i not in {a["id"], b["id"], c["id"]}]
+    r = client.post("/api/lists/reorder", json={"ids": want})
+    assert r.status_code == 200, r.text
+    after = [x["id"] for x in client.get("/api/lists").json()]
+    assert after == want
+    for lst in (a, b, c):
+        client.delete(f"/api/lists/{lst['id']}")
+
+
+def test_create_with_color(client):
+    r = client.post("/api/calendars", json={"name": f"C-{uuid.uuid4().hex[:8]}",
+                                            "color": "#2ECC71FF"})
+    assert r.status_code == 201, r.text
+    cal = r.json()
+    assert cal["color"] == "#2ECC71FF"
+    client.delete(f"/api/calendars/{cal['id']}")
+
+
 def test_hook_endpoint_gate(client):
     assert client.post("/internal/changed", headers={"X-Tasks-Hook-Secret": "wrong"}).status_code == 403
     assert client.post("/internal/changed", headers={"X-Tasks-Hook-Secret": "testhook"}).status_code == 202
