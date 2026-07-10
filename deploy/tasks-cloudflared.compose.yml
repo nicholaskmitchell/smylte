@@ -1,0 +1,21 @@
+# A DEDICATED cloudflared connector for the tasks/radicale public hostname.
+#
+# Why dedicated (not the notes tunnel): the notes connector is on a docker bridge
+# network and can only reach *containers*. This app + Radicale + the public Caddy
+# site all run on the HOST, so the connector needs host networking to reach
+# 127.0.0.1:9080. Create a NEW tunnel in the Cloudflare Zero Trust dashboard,
+# put its token in tasks-cloudflared.env, and point its public hostname
+# radicale.nicholaskmitchell.com -> http://127.0.0.1:9080.
+name: tasks-cloudflared
+
+services:
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: tasks-cloudflared
+    restart: unless-stopped
+    network_mode: host
+    env_file: tasks-cloudflared.env
+    # cloudflared reads TUNNEL_TOKEN from the environment (supplied by env_file).
+    # Don't use `--token ${TUNNEL_TOKEN}`: that is compose-level substitution from
+    # a `.env` dotfile, NOT from env_file, so it resolves to blank.
+    command: tunnel --no-autoupdate run

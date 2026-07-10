@@ -1,0 +1,27 @@
+[server]
+# Bind all interfaces INSIDE the container; the compose file publishes it only
+# to 127.0.0.1:5233 on the host, so it is not reachable off-box.
+hosts = 0.0.0.0:5232
+ssl = False
+
+[auth]
+type = htpasswd
+htpasswd_filename = /config/users
+# Plaintext is fine for a throwaway scratch box. Production uses bcrypt; the
+# auth encryption is server-side storage only and does not affect the wire
+# protocol the DAV client exercises.
+htpasswd_encryption = plain
+
+[rights]
+# Mirror production: each account only sees its own collections.
+type = owner_only
+
+[storage]
+type = multifilesystem
+filesystem_folder = /data/collections
+# Mirror the production Pi optimisation (spec §9): mtime+size beats SHA256 for
+# the item cache on slow storage.
+use_mtime_and_size_for_item_cache = True
+
+[logging]
+level = info

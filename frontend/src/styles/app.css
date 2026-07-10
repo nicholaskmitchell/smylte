@@ -1,0 +1,155 @@
+/* Layout — a dense two-pane utility on the Søren design system. */
+
+.shell { height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
+
+/* ---- top bar ---- */
+.topbar {
+  display: flex; align-items: center; gap: 22px;
+  padding: 12px 24px; border-bottom: 1px solid var(--rule); flex: none;
+}
+.brand {
+  font-family: var(--serif); font-style: italic; font-weight: 500;
+  font-size: 22px; line-height: 1; letter-spacing: -0.01em; color: var(--fg);
+  user-select: none;
+}
+.brand .dot { color: var(--accent); font-style: normal; }
+.tabs { display: flex; gap: 2px; }
+.tab {
+  background: none; border: 0; border-bottom: 2px solid transparent;
+  font-family: var(--mono); font-size: 11px; text-transform: uppercase;
+  letter-spacing: 0.08em; color: var(--fg-muted); padding: 6px 10px 8px; cursor: pointer;
+}
+.tab:hover { color: var(--fg); }
+.tab.active { color: var(--fg); border-bottom-color: var(--accent); }
+.spacer { flex: 1; }
+.topbar-meta { font-family: var(--mono); font-size: 10px; color: var(--fg-faint);
+  text-transform: uppercase; letter-spacing: 0.06em; }
+
+/* ---- work area ---- */
+.work { flex: 1; display: flex; min-height: 0; }
+
+/* sidebar of lists / calendars */
+.side {
+  width: 240px; flex: none; background: var(--paper);
+  border-right: 1px solid var(--rule); display: flex; flex-direction: column; overflow: hidden;
+}
+.side-head {
+  padding: 14px 16px 8px; display: flex; align-items: center; justify-content: space-between;
+}
+.side-list { flex: 1; overflow-y: auto; padding-bottom: 12px; }
+.side-item {
+  display: flex; align-items: center; gap: 8px; padding: 8px 16px;
+  cursor: pointer; border-left: 2px solid transparent; color: var(--fg);
+}
+.side-item:hover { background: var(--bg-elev); }
+.side-item.active { border-left-color: var(--accent); background: var(--bg-elev); }
+.side-item .swatch { width: 8px; height: 8px; flex: none; background: var(--fg-faint); }
+.side-item .name { flex: 1; min-width: 0; font-size: 14px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.side-item .count { font-family: var(--mono); font-size: 11px; color: var(--fg-faint); }
+.side-add { display: flex; gap: 6px; padding: 8px 12px; border-top: 1px solid var(--rule); }
+
+/* main content */
+.content { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
+.content-head {
+  padding: 16px 26px 10px; display: flex; align-items: baseline; gap: 12px;
+  border-bottom: 1px solid var(--rule-faint);
+}
+.content-title { font-family: var(--serif); font-size: 24px; font-weight: 500; letter-spacing: -0.01em; }
+.content-sub { font-family: var(--mono); font-size: 11px; color: var(--fg-faint);
+  text-transform: uppercase; letter-spacing: 0.06em; }
+.scroll { flex: 1; overflow-y: auto; padding: 6px 0 40px; }
+
+/* quick add */
+.quickadd { display: flex; gap: 8px; padding: 12px 26px; }
+.quickadd .input { flex: 1; }
+
+/* ---- task rows ---- */
+.task {
+  display: flex; align-items: flex-start; gap: 11px; padding: 9px 26px;
+  border-bottom: 1px solid var(--rule-faint);
+}
+.task:hover { background: var(--bg-elev); }
+.task.sub { padding-left: 52px; }
+.task.done .task-title { color: var(--fg-faint); text-decoration: line-through; }
+.check {
+  width: 17px; height: 17px; flex: none; margin-top: 2px; border: 1px solid var(--fg-faint);
+  border-radius: 0; background: none; cursor: pointer; display: inline-flex;
+  align-items: center; justify-content: center; color: transparent;
+}
+.check:hover { border-color: var(--accent); }
+.check.on { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+.pri-bar { width: 3px; align-self: stretch; flex: none; background: transparent; }
+.pri-high { background: var(--pri-high); }
+.pri-med { background: var(--pri-med); }
+.pri-low { background: var(--pri-low); }
+.task-body { flex: 1; min-width: 0; }
+.task-title { font-size: 15px; color: var(--fg); }
+.task-meta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 3px; align-items: center; }
+.task-meta .due { font-family: var(--mono); font-size: 11px; color: var(--fg-muted); }
+.task-meta .due.overdue { color: var(--warn); }
+.task-notes { font-size: 13px; color: var(--fg-muted); margin-top: 2px; white-space: pre-wrap; }
+.task-actions { display: flex; gap: 4px; opacity: 0; transition: opacity 0.12s; }
+.task:hover .task-actions { opacity: 1; }
+.task-actions button { background: none; border: 0; color: var(--fg-faint); cursor: pointer;
+  font-family: var(--mono); font-size: 11px; padding: 2px 4px; }
+.task-actions button:hover { color: var(--accent); }
+.task-actions button.danger:hover { color: var(--warn); }
+.child-progress { font-family: var(--mono); font-size: 10px; color: var(--fg-faint); }
+
+.empty { padding: 40px 26px; color: var(--fg-faint); font-size: 14px; }
+.section-label { padding: 14px 26px 4px; }
+
+/* ---- calendar ---- */
+.cal-head { display: flex; align-items: center; gap: 12px; padding: 14px 26px; }
+.cal-title { font-family: var(--serif); font-size: 22px; font-weight: 500; min-width: 220px; }
+.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); border-top: 1px solid var(--rule);
+  border-left: 1px solid var(--rule); }
+.cal-dow { font-family: var(--mono); font-size: 10px; text-transform: uppercase;
+  letter-spacing: 0.08em; color: var(--fg-faint); padding: 6px 8px; text-align: right;
+  border-right: 1px solid var(--rule); border-bottom: 1px solid var(--rule); background: var(--paper); }
+.cal-cell {
+  min-height: 104px; border-right: 1px solid var(--rule); border-bottom: 1px solid var(--rule);
+  padding: 4px 6px; cursor: pointer; display: flex; flex-direction: column; gap: 3px;
+}
+.cal-cell:hover { background: var(--bg-elev); }
+.cal-cell.dim { background: var(--paper); }
+.cal-cell.today .daynum { color: var(--bg); background: var(--accent); }
+.daynum { font-family: var(--mono); font-size: 11px; color: var(--fg-muted); align-self: flex-end;
+  padding: 1px 5px; }
+.cal-ev {
+  font-size: 11px; color: var(--fg); background: color-mix(in oklch, var(--accent) 16%, transparent);
+  border-left: 2px solid var(--accent); padding: 1px 5px; white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; cursor: pointer;
+}
+.cal-ev.allday { background: color-mix(in oklch, var(--ok) 18%, transparent); border-left-color: var(--ok); }
+.cal-ev .t { font-family: var(--mono); color: var(--fg-muted); margin-right: 4px; }
+
+/* ---- modal / panel ---- */
+.overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.32);
+  display: flex; align-items: center; justify-content: center; z-index: 100; padding: 20px; }
+.modal { background: var(--bg-elev); border: 1px solid var(--rule); width: 420px; max-width: 100%;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.25); padding: 18px; display: flex; flex-direction: column; gap: 12px; }
+.modal-head { display: flex; align-items: baseline; justify-content: space-between; }
+.modal-title { font-family: var(--serif); font-size: 18px; font-weight: 500; }
+.field { display: flex; flex-direction: column; gap: 5px; }
+.field-row { display: flex; gap: 10px; }
+.field-row > .field { flex: 1; }
+.modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
+
+/* ---- login ---- */
+.login-wrap { height: 100dvh; display: flex; align-items: center; justify-content: center; padding: 20px; }
+.login-card { width: 340px; max-width: 100%; border: 1px solid var(--rule); background: var(--bg-elev);
+  padding: 28px; display: flex; flex-direction: column; gap: 14px; }
+.login-brand { font-family: var(--serif); font-style: italic; font-size: 30px; text-align: center; }
+.login-brand .dot { color: var(--accent); font-style: normal; }
+.login-err { font-family: var(--mono); font-size: 11px; color: var(--warn); }
+
+.banner { font-family: var(--mono); font-size: 11px; color: var(--warn);
+  padding: 6px 26px; border-bottom: 1px solid var(--rule); background: color-mix(in oklch, var(--warn) 10%, transparent); }
+
+@media (max-width: 720px) {
+  .side { width: 176px; }
+  .task, .quickadd, .content-head, .cal-head { padding-left: 14px; padding-right: 14px; }
+  .cal-cell { min-height: 66px; }
+}

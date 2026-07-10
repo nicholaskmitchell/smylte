@@ -1,0 +1,97 @@
+/* Design system — ported from Søren's UI (~/soren/.../static/index.html).
+   Same OKLCH color system and Fraunces / Inter / JetBrains Mono type tiers, the
+   rule "serif for reading, sans/mono for interaction", sharp corners, hairline
+   rules, uppercase mono micro-labels. Utility layout, not broadsheet. */
+
+:root {
+  --bg: #FBFAF7;
+  --bg-elev: #FFFFFF;
+  --paper: #F2F0EA;
+  --fg: #14131A;
+  --fg-muted: rgba(20, 19, 26, 0.60);
+  --fg-faint: rgba(20, 19, 26, 0.36);
+  --rule: rgba(20, 19, 26, 0.13);
+  --rule-faint: rgba(20, 19, 26, 0.07);
+  --accent: oklch(0.55 0.14 264);
+  --warn: oklch(0.62 0.17 35);
+  --ok: oklch(0.58 0.13 150);
+  /* priority tiers */
+  --pri-high: oklch(0.60 0.19 25);
+  --pri-med: oklch(0.68 0.15 70);
+  --pri-low: oklch(0.60 0.10 240);
+
+  --serif: "Fraunces", Georgia, "Times New Roman", serif;
+  --sans: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+}
+
+:root[data-theme="dark"] {
+  --bg: #0C0C10;
+  --bg-elev: #16161C;
+  --paper: #1A1A22;
+  --fg: #ECEAF2;
+  --fg-muted: rgba(236, 234, 242, 0.60);
+  --fg-faint: rgba(236, 234, 242, 0.34);
+  --rule: rgba(236, 234, 242, 0.14);
+  --rule-faint: rgba(236, 234, 242, 0.07);
+  --accent: oklch(0.72 0.13 264);
+  --warn: oklch(0.72 0.16 40);
+  --ok: oklch(0.70 0.14 155);
+  --pri-high: oklch(0.70 0.18 30);
+  --pri-med: oklch(0.80 0.14 75);
+  --pri-low: oklch(0.72 0.11 245);
+}
+
+* { box-sizing: border-box; }
+html, body, #root { margin: 0; padding: 0; height: 100%; }
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--sans);
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+button { font-family: inherit; color: inherit; }
+input, select, textarea { font-family: inherit; }
+::selection { background: color-mix(in oklch, var(--accent) 30%, transparent); }
+
+/* ---- primitives ---- */
+.label {
+  font-family: var(--mono); font-size: 10px; text-transform: uppercase;
+  letter-spacing: 0.1em; color: var(--fg-faint);
+}
+.mono { font-family: var(--mono); }
+.serif { font-family: var(--serif); }
+
+.btn {
+  background: var(--fg); color: var(--bg); border: 0; border-radius: 0;
+  font-family: var(--mono); font-size: 11px; font-weight: 500; text-transform: uppercase;
+  letter-spacing: 0.06em; padding: 9px 13px; cursor: pointer;
+}
+.btn:hover { background: var(--accent); }
+.btn:disabled { opacity: 0.5; cursor: default; }
+.btn.ghost { background: none; color: var(--fg-muted); border: 1px solid var(--rule); }
+.btn.ghost:hover { color: var(--accent); border-color: var(--accent); background: none; }
+
+.icon-btn {
+  background: none; color: var(--fg-muted); border: 1px solid var(--rule); border-radius: 0;
+  padding: 7px; display: inline-flex; align-items: center; justify-content: center;
+  cursor: pointer; transition: color 0.15s, border-color 0.15s;
+}
+.icon-btn:hover { color: var(--accent); border-color: var(--accent); }
+.icon-btn.active { color: var(--bg); background: var(--accent); border-color: var(--accent); }
+
+.input {
+  background: var(--bg); color: var(--fg); border: 1px solid var(--rule); border-radius: 0;
+  padding: 8px 10px; font-size: 14px; width: 100%;
+}
+.input:focus { outline: none; border-color: var(--accent); }
+
+select.input { appearance: none; -webkit-appearance: none; cursor: pointer; }
+
+.chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-family: var(--mono); font-size: 10px; letter-spacing: 0.04em;
+  color: var(--fg-muted); border: 1px solid var(--rule); padding: 2px 6px;
+}

@@ -1,0 +1,14 @@
+# Phase 0 foundation deps.
+httpx>=0.27,<0.29
+lxml>=5.0
+icalendar>=6.0
+# Pinned to the version Radicale itself uses (production has 0.9.9) so the
+# round-trip fidelity comparison reflects what the server round-trips.
+vobject==0.9.9
+python-dateutil>=2.9
+# Phase 1 web layer.
+fastapi>=0.115
+uvicorn[standard]>=0.30
+pyjwt[crypto]>=2.9          # validate the Cloudflare Access JWT (spec §9)
+pytest>=8.0
+pytest-asyncio>=0.23

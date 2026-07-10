@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Radicale storage hook -> wake the Tasks app. Install to /usr/local/bin/tasks-notify (0755).
+#
+# IMPORTANT (Radicale 3.7.4 storage/multifilesystem/lock.py): Radicale runs this
+# hook in its own process group while holding the storage lock, and the instant
+# this script returns it does os.killpg(SIGKILL) on that whole group. So a
+# backgrounded `curl &` gets KILLED before it can connect — the hook silently
+# does nothing. We therefore POST **synchronously**. It's safe: the endpoint only
+# sets a sync flag and returns 202 in milliseconds (the actual sync runs in the
+# app's background loop), so the storage lock is held only for that brief POST.
+# $1 is the changed path (unused — the app re-syncs all collections).
+SECRET_FILE=/etc/tasks/hook-secret
+SECRET=""
+[ -r "$SECRET_FILE" ] && SECRET="$(cat "$SECRET_FILE")"
+
+/usr/bin/curl -s --connect-timeout 1 --max-time 2 -o /dev/null \
+  -H "X-Tasks-Hook-Secret: ${SECRET}" \
+  -X POST http://127.0.0.1:8080/internal/changed >/dev/null 2>&1
+
+exit 0

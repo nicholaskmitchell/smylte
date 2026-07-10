@@ -1,0 +1,13 @@
+[project]
+name = "tasksd"
+version = "0.0.0"
+description = "TickTick-equivalent task manager backed by Radicale CalDAV"
+requires-python = ">=3.12"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-q"
+markers = [
+    "radicale: integration tests that require the scratch Radicale on :5233",
+]

@@ -1,0 +1,33 @@
+# systemd unit for the Tasks + Calendar app. Install to /etc/systemd/system/.
+# Binds 127.0.0.1:8080 (see tasksd/__main__.py); public exposure is via the
+# cloudflared tunnel -> public Caddy site (see Caddyfile.snippet), never direct.
+[Unit]
+Description=Tasks + Calendar web app (tasksd)
+After=network-online.target radicale.service
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=nicholaskmitchell
+Group=nicholaskmitchell
+WorkingDirectory=/home/nicholaskmitchell/tasks/backend
+EnvironmentFile=/etc/tasks/tasks.env
+ExecStart=/home/nicholaskmitchell/tasks/backend/.venv/bin/python -m tasksd
+Restart=on-failure
+RestartSec=3
+
+# Hardening. ProtectHome=read-only keeps the app from writing anywhere under
+# /home except the one path it needs (the SQLite cache).
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/nicholaskmitchell/tasks/backend
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

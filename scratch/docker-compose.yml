@@ -1,0 +1,29 @@
+# Scratch Radicale — spec §8: "Never run against my production Radicale."
+#
+# Isolation guarantees:
+#   - host port 127.0.0.1:5233  (production is 5232)  -> loopback only
+#   - storage is ./data/collections in THIS folder    (production is ~/radicale/collections)
+#   - throwaway test user (testuser/testpass)          (production users untouched)
+#
+# Runs as uid/gid 1000 so the bind-mounted collection tree stays host-owned and
+# tests can delete .Radicale.cache to simulate a pruned/invalid sync token.
+name: tasks-scratch
+
+services:
+  radicale:
+    build: .
+    image: tasks-scratch-radicale:3.7.4
+    container_name: tasks-scratch-radicale
+    user: "1000:1000"
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5233:5232"
+    volumes:
+      - ./radicale/config:/config/config:ro
+      - ./radicale/users:/config/users:ro
+      - ./data/collections:/data/collections
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:5232/', timeout=3).status in (200,301,302,401,207) else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5

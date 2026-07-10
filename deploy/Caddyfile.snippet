@@ -1,0 +1,35 @@
+# Append this block to /etc/caddy/Caddyfile, then `sudo systemctl reload caddy`.
+#
+# Public site fronting the app + raw CalDAV, reached by the cloudflared tunnel.
+# TLS is terminated at Cloudflare's edge, so this is plain HTTP on loopback.
+#
+# The address is `:9080` (NOT `http://127.0.0.1:9080`): a hostname in the site
+# address becomes a Host matcher, and cloudflared forwards the ORIGINAL
+# `Host: radicale.nicholaskmitchell.com` — which wouldn't match `127.0.0.1`, so
+# Caddy would return an empty default response (a white screen). `:9080` matches
+# any Host; `bind 127.0.0.1 ::1` keeps it loopback-only (both families, since the
+# tunnel origin is `localhost:9080` which may resolve to ::1) so it is never
+# exposed on the LAN/tailnet.
+#
+# No `encode` here: it's a loopback hop and Cloudflare compresses at the edge, and
+# Caddy's `encode zstd gzip` returns an empty body for the `Accept-Encoding:
+# gzip, br, zstd` browsers/cloudflared send.
+:9080 {
+	bind 127.0.0.1 ::1
+
+	# Raw CalDAV for device clients: https://radicale.nicholaskmitchell.com/dav
+	# handle_path strips the /dav prefix; X-Script-Name makes Radicale emit
+	# /dav-prefixed hrefs (verified: 207, hrefs come back as /dav/<user>/...).
+	# DAVx5/Thunderbird base URL = https://radicale.nicholaskmitchell.com/dav
+	handle_path /dav* {
+		reverse_proxy 127.0.0.1:5232 {
+			header_up X-Script-Name /dav
+			flush_interval -1
+		}
+	}
+
+	# Everything else -> the Tasks + Calendar web app.
+	handle {
+		reverse_proxy 127.0.0.1:8080
+	}
+}
