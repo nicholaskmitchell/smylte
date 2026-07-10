@@ -1,7 +1,8 @@
 /* Design system — ported from Søren's UI (~/soren/.../static/index.html).
    Same OKLCH color system and Fraunces / Inter / JetBrains Mono type tiers, the
    rule "serif for reading, sans/mono for interaction", sharp corners, hairline
-   rules, uppercase mono micro-labels. Utility layout, not broadsheet. */
+   rules, uppercase mono micro-labels. Utility layout, not broadsheet.
+   Accent is the site's orange (nicholaskmitchell.com), not Søren's blue. */
 
 :root {
   --bg: #FBFAF7;
@@ -12,8 +13,8 @@
   --fg-faint: rgba(20, 19, 26, 0.36);
   --rule: rgba(20, 19, 26, 0.13);
   --rule-faint: rgba(20, 19, 26, 0.07);
-  --accent: oklch(0.55 0.14 264);
-  --warn: oklch(0.62 0.17 35);
+  --accent: oklch(0.60 0.19 42);
+  --warn: oklch(0.58 0.20 27);
   --ok: oklch(0.58 0.13 150);
   /* priority tiers */
   --pri-high: oklch(0.60 0.19 25);
@@ -34,8 +35,8 @@
   --fg-faint: rgba(236, 234, 242, 0.34);
   --rule: rgba(236, 234, 242, 0.14);
   --rule-faint: rgba(236, 234, 242, 0.07);
-  --accent: oklch(0.72 0.13 264);
-  --warn: oklch(0.72 0.16 40);
+  --accent: oklch(0.72 0.16 45);
+  --warn: oklch(0.70 0.18 28);
   --ok: oklch(0.70 0.14 155);
   --pri-high: oklch(0.70 0.18 30);
   --pri-med: oklch(0.80 0.14 75);

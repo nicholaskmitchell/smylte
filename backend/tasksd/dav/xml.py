@@ -46,6 +46,8 @@ SUPPORTED_COMPONENT_SET = cl(CALDAV, "supported-calendar-component-set")
 COMP = cl(CALDAV, "comp")
 CALENDAR_DESCRIPTION = cl(CALDAV, "calendar-description")
 CALENDAR_COLOR = cl(ICAL, "calendar-color")
+CALENDAR_ORDER = cl(ICAL, "calendar-order")
+PROPERTYUPDATE = cl(DAV, "propertyupdate")
 
 
 def _tostring(el: etree._Element) -> bytes:
@@ -104,6 +106,23 @@ def build_mkcalendar(
         etree.SubElement(prop, CALENDAR_DESCRIPTION).text = description
     if color is not None:
         etree.SubElement(prop, CALENDAR_COLOR).text = color
+    return _tostring(root)
+
+
+def build_proppatch(props: dict[str, str | None]) -> bytes:
+    """PROPPATCH body. A ``None`` value removes the property, anything else
+    sets it (RFC 4918 <set>/<remove> inside one <propertyupdate>)."""
+    root = _root(PROPERTYUPDATE)
+    to_set = {k: v for k, v in props.items() if v is not None}
+    to_remove = [k for k, v in props.items() if v is None]
+    if to_set:
+        prop = etree.SubElement(etree.SubElement(root, cl(DAV, "set")), PROP)
+        for name, value in to_set.items():
+            etree.SubElement(prop, name).text = value
+    if to_remove:
+        prop = etree.SubElement(etree.SubElement(root, cl(DAV, "remove")), PROP)
+        for name in to_remove:
+            etree.SubElement(prop, name)
     return _tostring(root)
 
 

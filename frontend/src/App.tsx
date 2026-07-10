@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, subscribe } from './api'
 import { Login } from './components/Login'
 import { TasksView } from './components/TasksView'
@@ -13,6 +13,9 @@ export function App() {
   const [tab, setTab] = useState<Tab>('tasks')
   const [theme, setTheme] = useState(() => document.documentElement.dataset.theme || 'light')
   const [rev, setRev] = useState(0)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const settingsRef = useRef<HTMLDivElement>(null)
+  const gearRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
     api.me().then((m) => { setUser(m.user); setAuth('in') }).catch(() => setAuth('out'))
@@ -23,6 +26,25 @@ export function App() {
     if (auth !== 'in') return
     return subscribe(() => setRev((r) => r + 1))
   }, [auth])
+
+  // Dismiss the settings menu on an outside click or Escape (like Søren's).
+  useEffect(() => {
+    if (!settingsOpen) return
+    const onClick = (e: MouseEvent) => {
+      const t = e.target as Node
+      if (settingsRef.current?.contains(t) || gearRef.current?.contains(t)) return
+      setSettingsOpen(false)
+    }
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key === 'Escape') setSettingsOpen(false)
+    }
+    document.addEventListener('mousedown', onClick)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onClick)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [settingsOpen])
 
   const toggleTheme = useCallback(() => {
     setTheme((t) => {
@@ -52,11 +74,37 @@ export function App() {
           </button>
         </div>
         <span className="spacer" />
-        <span className="topbar-meta">{user}</span>
-        <button className="icon-btn" title="Toggle theme" onClick={toggleTheme}>
-          {theme === 'dark' ? '☾' : '☀'}
+        <button ref={gearRef} className={`icon-btn ${settingsOpen ? 'active' : ''}`}
+          title="Settings" aria-label="Settings" onClick={() => setSettingsOpen((o) => !o)}>
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
+            strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="3" />
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+          </svg>
         </button>
-        <button className="btn ghost" onClick={onLogout}>Log out</button>
+
+        {settingsOpen && (
+          <div ref={settingsRef} className="menu settings-menu" role="dialog" aria-label="Settings">
+            <div className="menu-head">Settings</div>
+            <div className="menu-row">
+              <label>Theme</label>
+              <button className="menu-toggle" onClick={toggleTheme}>
+                {theme === 'dark' ? 'Dark' : 'Light'}
+              </button>
+            </div>
+            <div className="menu-row">
+              <label>Signed in as</label>
+              <span className="menu-value">{user}</span>
+            </div>
+            <div className="hintline">
+              Lists and calendars live on the Radicale CalDAV server — changes here
+              show up in every connected client.
+            </div>
+            <div className="menu-actions">
+              <button className="btn ghost" onClick={onLogout}>Log out</button>
+            </div>
+          </div>
+        )}
       </div>
       {tab === 'tasks'
         ? <TasksView rev={rev} onExpire={onExpire} />

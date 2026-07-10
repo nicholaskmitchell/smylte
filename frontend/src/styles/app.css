@@ -6,6 +6,7 @@
 .topbar {
   display: flex; align-items: center; gap: 22px;
   padding: 12px 24px; border-bottom: 1px solid var(--rule); flex: none;
+  position: relative;  /* anchor for the settings menu popover */
 }
 .brand {
   font-family: var(--serif); font-style: italic; font-weight: 500;
@@ -24,6 +25,34 @@
 .spacer { flex: 1; }
 .topbar-meta { font-family: var(--mono); font-size: 10px; color: var(--fg-faint);
   text-transform: uppercase; letter-spacing: 0.06em; }
+
+/* ---- settings menu — popover anchored under the gear (Søren's layout) ---- */
+.menu {
+  position: absolute; top: calc(100% + 6px); right: 24px; z-index: 50;
+  width: 300px; max-width: calc(100vw - 36px);
+  background: var(--bg-elev); border: 1px solid var(--rule);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.20);
+  padding: 14px; display: flex; flex-direction: column; gap: 8px;
+}
+.settings-menu { width: 320px; max-height: 82vh; overflow-y: auto; }
+.menu-head {
+  font-family: var(--mono); font-size: 10px; text-transform: uppercase;
+  letter-spacing: 0.1em; color: var(--fg-faint);
+}
+.menu-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.menu-row label {
+  font-family: var(--mono); font-size: 11px; text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--fg-muted);
+}
+.menu-value { font-family: var(--mono); font-size: 11px; color: var(--fg); }
+.menu-toggle {
+  font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
+  background: none; color: var(--fg-muted); border: 1px solid var(--rule);
+  padding: 6px 11px; cursor: pointer; transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.menu-toggle:hover { color: var(--accent); border-color: var(--accent); }
+.hintline { font-size: 12px; color: var(--fg-faint); line-height: 1.4; }
+.menu-actions { display: flex; justify-content: flex-end; margin-top: 2px; }
 
 /* ---- work area ---- */
 .work { flex: 1; display: flex; min-height: 0; }
@@ -47,7 +76,23 @@
 .side-item .name { flex: 1; min-width: 0; font-size: 14px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .side-item .count { font-family: var(--mono); font-size: 11px; color: var(--fg-faint); }
+.side-item .side-edit {
+  background: none; border: 0; color: var(--fg-faint); cursor: pointer;
+  font-size: 13px; line-height: 1; padding: 0 2px; opacity: 0; transition: opacity 0.12s;
+}
+.side-item:hover .side-edit { opacity: 1; }
+.side-item .side-edit:hover { color: var(--accent); }
+.side-item.drag-over { box-shadow: inset 0 2px 0 var(--accent); }
 .side-add { display: flex; gap: 6px; padding: 8px 12px; border-top: 1px solid var(--rule); }
+
+/* color picker (collection edit modal) */
+.color-row { display: flex; gap: 7px; flex-wrap: wrap; }
+.color-dot {
+  width: 22px; height: 22px; border: 1px solid var(--rule); border-radius: 0;
+  cursor: pointer; padding: 0; flex: none;
+}
+.color-dot.on { outline: 2px solid var(--accent); outline-offset: 1px; }
+.color-dot.none { background: none; color: var(--fg-faint); font-size: 11px; line-height: 1; }
 
 /* main content */
 .content { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
@@ -56,6 +101,7 @@
   border-bottom: 1px solid var(--rule-faint);
 }
 .content-title { font-family: var(--serif); font-size: 24px; font-weight: 500; letter-spacing: -0.01em; }
+.title-dot { width: 10px; height: 10px; flex: none; align-self: center; }
 .content-sub { font-family: var(--mono); font-size: 11px; color: var(--fg-faint);
   text-transform: uppercase; letter-spacing: 0.06em; }
 .scroll { flex: 1; overflow-y: auto; padding: 6px 0 40px; }
@@ -117,12 +163,19 @@
 .cal-cell.today .daynum { color: var(--bg); background: var(--accent); }
 .daynum { font-family: var(--mono); font-size: 11px; color: var(--fg-muted); align-self: flex-end;
   padding: 1px 5px; }
+/* Events tint from the calendar's own color (--ev-c, set on .cal-grid);
+   uncolored calendars fall back to the accent / ok tints. */
 .cal-ev {
-  font-size: 11px; color: var(--fg); background: color-mix(in oklch, var(--accent) 16%, transparent);
-  border-left: 2px solid var(--accent); padding: 1px 5px; white-space: nowrap; overflow: hidden;
+  font-size: 11px; color: var(--fg);
+  background: color-mix(in oklch, var(--ev-c, var(--accent)) 16%, transparent);
+  border-left: 2px solid var(--ev-c, var(--accent));
+  padding: 1px 5px; white-space: nowrap; overflow: hidden;
   text-overflow: ellipsis; cursor: pointer;
 }
-.cal-ev.allday { background: color-mix(in oklch, var(--ok) 18%, transparent); border-left-color: var(--ok); }
+.cal-ev.allday {
+  background: color-mix(in oklch, var(--ev-c, var(--ok)) 26%, transparent);
+  border-left-color: var(--ev-c, var(--ok));
+}
 .cal-ev .t { font-family: var(--mono); color: var(--fg-muted); margin-right: 4px; }
 
 /* ---- modal / panel ---- */
@@ -136,6 +189,8 @@
 .field-row { display: flex; gap: 10px; }
 .field-row > .field { flex: 1; }
 .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
+.btn.ghost.danger { color: var(--warn); border-color: var(--warn); }
+.btn.ghost.danger:hover { color: var(--bg); background: var(--warn); }
 
 /* ---- login ---- */
 .login-wrap { height: 100dvh; display: flex; align-items: center; justify-content: center; padding: 20px; }

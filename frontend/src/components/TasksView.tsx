@@ -1,6 +1,7 @@
 import { useEffect, useState, type KeyboardEvent } from 'react'
 import { api, type List, type Task } from '../api'
 import { fmtDue, isOverdue, makeGuard } from '../util'
+import { Sidebar } from './Sidebar'
 
 const PRIORITIES = ['none', 'low', 'medium', 'high']
 
@@ -10,7 +11,6 @@ export function TasksView({ rev, onExpire }: { rev: number; onExpire: () => void
   const [sel, setSel] = useState('')
   const [tasks, setTasks] = useState<Task[]>([])
   const [detail, setDetail] = useState<Task | null>(null)
-  const [addingList, setAddingList] = useState(false)
 
   useEffect(() => {
     guard(async () => {
@@ -37,10 +37,12 @@ export function TasksView({ rev, onExpire }: { rev: number; onExpire: () => void
   const saveDetail = async (uid: string, patch: Record<string, unknown>) => {
     await guard(() => api.patchTask(sel, uid, patch)); reload()
   }
-  const createList = async (name: string) => {
-    const l = await guard(() => api.createList(name))
-    setAddingList(false)
-    if (l) { setLists((ls) => [...ls, l]); setSel(l.id) }
+  const listApi = {
+    create: (name: string) => guard(() => api.createList(name)),
+    update: (id: string, body: { name?: string; color?: string | null }) =>
+      guard(() => api.updateList(id, body)),
+    remove: (id: string) => guard(() => api.deleteList(id)),
+    reorder: (ids: string[]) => guard(() => api.reorderLists(ids)),
   }
 
   const tops = tasks.filter((t) => !t.parent)
@@ -51,30 +53,12 @@ export function TasksView({ rev, onExpire }: { rev: number; onExpire: () => void
 
   return (
     <div className="work">
-      <div className="side">
-        <div className="side-head">
-          <span className="label">Lists</span>
-          <button className="icon-btn" title="New list" onClick={() => setAddingList(true)}>+</button>
-        </div>
-        <div className="side-list">
-          {lists.map((l) => (
-            <div key={l.id} className={`side-item ${l.id === sel ? 'active' : ''}`} onClick={() => setSel(l.id)}>
-              <span className="swatch" style={l.color ? { background: l.color } : undefined} />
-              <span className="name">{l.name}</span>
-              <span className="count">{l.open_count}</span>
-            </div>
-          ))}
-          {lists.length === 0 && !addingList && (
-            <div className="empty" style={{ padding: '14px 16px' }}>No lists yet.</div>
-          )}
-        </div>
-        {addingList && (
-          <InlineCreate placeholder="List name" onSubmit={createList} onCancel={() => setAddingList(false)} />
-        )}
-      </div>
+      <Sidebar title="Lists" placeholder="List" items={lists} sel={sel}
+        countOf={(l) => l.open_count} onSelect={setSel} onItems={setLists} api={listApi} />
 
       <div className="content">
         <div className="content-head">
+          {cur?.color && <span className="title-dot" style={{ background: cur.color }} />}
           <span className="content-title">{cur ? cur.name : 'Tasks'}</span>
           <span className="content-sub">{active.length} open</span>
         </div>
