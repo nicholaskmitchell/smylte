@@ -48,3 +48,7 @@ cd ../backend && .venv/bin/python -m pytest
 The app itself (FastAPI/uvicorn on `127.0.0.1:8080`, behind the existing
 Cloudflare Tunnel + Access) is not built yet — Phase 0 lands before any pixel.
 See the build sheet and `docs/phase0-findings.md`.
+
+## Deployment
+
+Live at https://radicale.nicholaskmitchell.com (see docs/DEPLOY.md). Auto-deploys from `main` via `~/tasks-autopull.sh` (cron, every minute).
