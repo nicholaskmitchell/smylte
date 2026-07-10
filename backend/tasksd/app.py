@@ -11,6 +11,7 @@ import contextlib
 import json
 import logging
 import os
+import re
 import secrets
 from datetime import date, datetime
 
@@ -47,6 +48,24 @@ class Login(BaseModel):
 
 class CreateList(BaseModel):
     name: str
+    color: str | None = None          # #RRGGBB or #RRGGBBAA
+
+
+class EditList(BaseModel):
+    name: str | None = None
+    color: str | None = None          # explicit null clears the color
+
+
+class ReorderLists(BaseModel):
+    ids: list[str]                    # every shown collection, in the new order
+
+
+_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?$")
+
+
+def _check_color(color: str | None) -> None:
+    if color is not None and not _COLOR_RE.match(color):
+        raise HTTPException(422, "color must be #RRGGBB or #RRGGBBAA")
 
 
 class CreateTask(BaseModel):
@@ -298,7 +317,36 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @api.post("/lists", status_code=201)
     async def post_list(request: Request, body: CreateList):
-        return await _run(_svc(request).create_list, body.name)
+        _check_color(body.color)
+        return await _run(_svc(request).create_list, body.name, color=body.color)
+
+    # -- collection management (shared by task lists and calendars) --
+    @api.patch("/lists/{list_id}")
+    @api.patch("/calendars/{list_id}")
+    async def patch_list(request: Request, list_id: str, body: EditList):
+        href = _href(request, list_id)
+        fs = body.model_fields_set
+        _check_color(body.color)
+        return await _run(
+            _svc(request).update_collection, href,
+            name=body.name,
+            color=body.color,
+            clear_color="color" in fs and body.color is None,
+        )
+
+    @api.delete("/lists/{list_id}", status_code=204)
+    @api.delete("/calendars/{list_id}", status_code=204)
+    async def delete_list(request: Request, list_id: str):
+        href = _href(request, list_id)
+        await _run(_svc(request).delete_collection, href)
+        return JSONResponse(status_code=204, content=None)
+
+    @api.post("/lists/reorder")
+    @api.post("/calendars/reorder")
+    async def reorder_lists(request: Request, body: ReorderLists):
+        hrefs = [_href(request, i) for i in body.ids]
+        await _run(_svc(request).reorder_collections, hrefs)
+        return {"ok": True}
 
     # -- tasks --
     @api.get("/lists/{list_id}/tasks")
@@ -359,7 +407,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @api.post("/calendars", status_code=201)
     async def post_calendar(request: Request, body: CreateList):
-        return await _run(_svc(request).create_calendar, body.name)
+        _check_color(body.color)
+        return await _run(_svc(request).create_calendar, body.name, color=body.color)
 
     @api.get("/calendars/{cal_id}/events")
     async def get_events(request: Request, cal_id: str,

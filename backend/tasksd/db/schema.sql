@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS collections (
     displayname TEXT NOT NULL,
     components  TEXT NOT NULL DEFAULT 'VTODO',
     color       TEXT,                       -- wire calendar-color, if advertised
+    ord         INTEGER,                    -- wire calendar-order (manual sort)
     deleted     INTEGER NOT NULL DEFAULT 0,
     updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );

@@ -39,6 +39,8 @@ class CollectionInfo:
     href: str                          # server-absolute path, e.g. /testuser/<id>/
     displayname: str
     components: set[str] = field(default_factory=set)
+    color: str | None = None           # apple ical calendar-color, e.g. #FF9500FF
+    order: int | None = None           # apple ical calendar-order (client sort hint)
 
     @property
     def is_task_list(self) -> bool:
@@ -123,7 +125,10 @@ class DavClient:
         return {m.strip() for m in resp.headers.get("Allow", "").split(",") if m.strip()}
 
     def list_collections(self) -> list[CollectionInfo]:
-        body = X.build_propfind([X.DISPLAYNAME, X.RESOURCETYPE, X.SUPPORTED_COMPONENT_SET])
+        body = X.build_propfind([
+            X.DISPLAYNAME, X.RESOURCETYPE, X.SUPPORTED_COMPONENT_SET,
+            X.CALENDAR_COLOR, X.CALENDAR_ORDER,
+        ])
         resp = self._request(
             "PROPFIND", self.principal_path, content=body, headers={"Depth": "1"}, expected={207}
         )
@@ -139,7 +144,15 @@ class DavClient:
                     c.get("name", "").upper() for c in comp_set.findall(X.COMP) if c.get("name")
                 }
             name = r.text(X.DISPLAYNAME) or r.href.rstrip("/").rsplit("/", 1)[-1]
-            out.append(CollectionInfo(href=r.href, displayname=name, components=comps))
+            color = (r.text(X.CALENDAR_COLOR) or "").strip() or None
+            order_text = (r.text(X.CALENDAR_ORDER) or "").strip()
+            try:
+                order = int(order_text) if order_text else None
+            except ValueError:
+                order = None
+            out.append(CollectionInfo(
+                href=r.href, displayname=name, components=comps, color=color, order=order
+            ))
         return out
 
     # -- collection creation (the VTODO-only MKCALENDAR helper, invariant #8) --
@@ -160,6 +173,22 @@ class DavClient:
 
     def delete_collection(self, href: str) -> None:
         self._request("DELETE", href, expected={200, 204, 404})
+
+    def proppatch(self, href: str, props: dict[str, str | None]) -> None:
+        """PROPPATCH dead properties on a collection (displayname, calendar-color,
+        calendar-order). A ``None`` value removes the property."""
+        if not props:
+            return
+        body = X.build_proppatch(props)
+        resp = self._request("PROPPATCH", href, content=body, expected={207})
+        for r in X.parse_multistatus(resp.content).responses:
+            for ps in r.propstats:
+                if ps.props and not (200 <= ps.status < 300):
+                    failed = ", ".join(ps.props)
+                    raise DavError(
+                        f"PROPPATCH {href} rejected ({ps.status}) for: {failed}",
+                        status=ps.status,
+                    )
 
     # -- item read --
     def get(self, href: str) -> Item:

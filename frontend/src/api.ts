@@ -90,7 +90,11 @@ export const api = {
 
   // tasks
   lists: () => j<List[]>('GET', '/api/lists'),
-  createList: (name: string) => j<List>('POST', '/api/lists', { name }),
+  createList: (name: string, color?: string) => j<List>('POST', '/api/lists', { name, color }),
+  updateList: (id: string, body: { name?: string; color?: string | null }) =>
+    j<List>('PATCH', `/api/lists/${id}`, body),
+  deleteList: (id: string) => j<null>('DELETE', `/api/lists/${id}`),
+  reorderLists: (ids: string[]) => j<unknown>('POST', '/api/lists/reorder', { ids }),
   tasks: (listId: string, includeDone = true) =>
     j<Task[]>('GET', `/api/lists/${listId}/tasks?include_done=${includeDone}`),
   createTask: (listId: string, body: Record<string, unknown>) =>
@@ -106,7 +110,12 @@ export const api = {
 
   // calendars / events
   calendars: () => j<List[]>('GET', '/api/calendars'),
-  createCalendar: (name: string) => j<List>('POST', '/api/calendars', { name }),
+  createCalendar: (name: string, color?: string) =>
+    j<List>('POST', '/api/calendars', { name, color }),
+  updateCalendar: (id: string, body: { name?: string; color?: string | null }) =>
+    j<List>('PATCH', `/api/calendars/${id}`, body),
+  deleteCalendar: (id: string) => j<null>('DELETE', `/api/calendars/${id}`),
+  reorderCalendars: (ids: string[]) => j<unknown>('POST', '/api/calendars/reorder', { ids }),
   events: (calId: string, start: string, end: string) =>
     j<CalEvent[]>('GET', `/api/calendars/${calId}/events?start=${start}&end=${end}`),
   createEvent: (calId: string, body: Record<string, unknown>) =>

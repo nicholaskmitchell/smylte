@@ -31,21 +31,28 @@ def connect(db_path: str) -> sqlite3.Connection:
 
 def init_db(conn: sqlite3.Connection) -> None:
     conn.executescript(_SCHEMA)
+    # Migrations for DBs created before a column existed (executescript's
+    # IF NOT EXISTS won't touch an existing table).
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(collections)")}
+    if "ord" not in cols:
+        conn.execute("ALTER TABLE collections ADD COLUMN ord INTEGER")
 
 
 # ── collections ──────────────────────────────────────────────────────────────
 
-def upsert_collection(conn: sqlite3.Connection, ci: CollectionInfo, *, color: str | None = None) -> None:
+def upsert_collection(conn: sqlite3.Connection, ci: CollectionInfo) -> None:
     conn.execute(
-        """INSERT INTO collections (href, displayname, components, color, deleted, updated_at)
-           VALUES (?, ?, ?, ?, 0, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+        """INSERT INTO collections (href, displayname, components, color, ord, deleted, updated_at)
+           VALUES (?, ?, ?, ?, ?, 0, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
            ON CONFLICT(href) DO UPDATE SET
              displayname=excluded.displayname,
              components=excluded.components,
-             color=COALESCE(excluded.color, collections.color),
+             color=excluded.color,
+             ord=excluded.ord,
              deleted=0,
              updated_at=excluded.updated_at""",
-        (ci.href, ci.displayname, ",".join(sorted(ci.components)) or "VTODO", color),
+        (ci.href, ci.displayname, ",".join(sorted(ci.components)) or "VTODO",
+         ci.color, ci.order),
     )
     conn.execute(
         "INSERT OR IGNORE INTO sync_state (collection_href) VALUES (?)", (ci.href,)
@@ -60,7 +67,8 @@ def get_collections(conn: sqlite3.Connection, *, include_deleted: bool = False) 
     q = "SELECT * FROM collections"
     if not include_deleted:
         q += " WHERE deleted=0"
-    return list(conn.execute(q + " ORDER BY displayname"))
+    # Manual order (calendar-order) first; unordered collections trail, by name.
+    return list(conn.execute(q + " ORDER BY ord IS NULL, ord, displayname"))
 
 
 def mark_collection_deleted(conn: sqlite3.Connection, href: str) -> None:
