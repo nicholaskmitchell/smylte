@@ -15,6 +15,17 @@ type DayEv = CalEvent & { cont?: boolean }
 
 const shiftYmd = (day: string, n: number) => ymd(addDays(new Date(`${day}T00:00`), n))
 
+const daysBetween = (a: string, b: string) =>
+  Math.round((new Date(`${b}T00:00`).getTime() - new Date(`${a}T00:00`).getTime()) / 86400000)
+
+// Shift an ISO date or datetime by n days. Datetimes come back as floating
+// local wall time — the same form the edit modal writes.
+const shiftIso = (v: string, n: number) => {
+  if (!v.includes('T')) return shiftYmd(v, n)
+  const d = addDays(parseDate(v), n)
+  return `${ymd(d)}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
 // Last visible day of an event. DTEND is exclusive for all-day events, and a
 // timed event ending exactly at midnight shouldn't spill into the next day.
 // Days come from dayKey/parseDate so events written with a UTC offset (e.g. by
@@ -109,6 +120,48 @@ export function CalendarView({ rev, onExpire, sideCollapsed, onToggleSide }: {
   const del = async (uid: string, opts?: { recurrence_id?: string | null; scope?: EventScope }) => {
     await guard(() => api.deleteEvent(sel, uid, opts)); setDraft(null); reload()
   }
+
+  // Desktop drag: move an event chip to another day cell, or drag its resize
+  // grip to a new last day. A recurring drop parks in `moveAsk` until the user
+  // picks a scope; delta is anchored to the dragged segment's own cell, so
+  // continuation segments (and window-clipped events) move correctly.
+  const [drag, setDrag] = useState<{ ev: DayEv; fromDay: string; mode: 'move' | 'resize' } | null>(null)
+  const [overDay, setOverDay] = useState<string | null>(null)
+  const [moveAsk, setMoveAsk] = useState<{ ev: CalEvent; body: Record<string, unknown> } | null>(null)
+
+  const dropOnDay = (key: string) => {
+    const d = drag
+    setDrag(null); setOverDay(null)
+    if (!d?.ev.start) return
+    let body: Record<string, unknown>
+    if (d.mode === 'move') {
+      const delta = daysBetween(d.fromDay, key)
+      if (!delta) return
+      body = { start: shiftIso(d.ev.start, delta) }
+      if (d.ev.end) body.end = shiftIso(d.ev.end, delta)
+    } else {
+      const startDay = dayKey(d.ev.start)
+      const day = key < startDay ? startDay : key
+      const start = d.ev.all_day ? d.ev.start.slice(0, 10) : toLocalInput(d.ev.start)
+      let end: string
+      if (d.ev.all_day) {
+        end = shiftYmd(day, 1)              // DTEND stays exclusive
+      } else {
+        end = `${day}T${toLocalInput(d.ev.end || d.ev.start).slice(11, 16)}`
+        if (end <= start) return            // the end must stay after the start
+      }
+      const oldEnd = d.ev.end && (d.ev.all_day ? d.ev.end.slice(0, 10) : toLocalInput(d.ev.end))
+      if (end === oldEnd) return
+      body = { start, end }
+    }
+    if (d.ev.is_recurring) setMoveAsk({ ev: d.ev, body })
+    else save(body, d.ev.uid)
+  }
+  const pickMoveScope = (scope: EventScope) => {
+    if (!moveAsk) return
+    save({ ...moveAsk.body, recurrence_id: moveAsk.ev.recurrence_id, scope }, moveAsk.ev.uid)
+    setMoveAsk(null)
+  }
   const calApi = {
     create: (name: string) => guard(() => api.createCalendar(name)),
     update: (id: string, body: { name?: string; color?: string | null }) =>
@@ -118,6 +171,7 @@ export function CalendarView({ rev, onExpire, sideCollapsed, onToggleSide }: {
   }
 
   const todayKey = ymd(new Date())
+  const lastKey = ymd(days[41])            // final visible day, for resize grips
   const curCal = cals.find((c) => c.id === sel)
 
   return (
@@ -148,7 +202,10 @@ export function CalendarView({ rev, onExpire, sideCollapsed, onToggleSide }: {
                 const dayEvents = byDay[key] || []
                 return (
                   <div key={key}
-                    className={`cal-cell ${inMonth ? '' : 'dim'} ${key === todayKey ? 'today' : ''} ${isMobile && key === focusDay ? 'focus' : ''}`}
+                    className={`cal-cell ${inMonth ? '' : 'dim'} ${key === todayKey ? 'today' : ''} ${isMobile && key === focusDay ? 'focus' : ''} ${drag && overDay === key ? 'drag-over' : ''}`}
+                    onDragOver={(ev) => { if (!drag) return; ev.preventDefault(); setOverDay(key) }}
+                    onDragLeave={() => setOverDay((o) => (o === key ? null : o))}
+                    onDrop={(ev) => { ev.preventDefault(); dropOnDay(key) }}
                     onClick={() => {
                       // Mobile: first tap focuses the day in the agenda; a second
                       // tap on the focused day (or the agenda's button) creates.
@@ -166,18 +223,38 @@ export function CalendarView({ rev, onExpire, sideCollapsed, onToggleSide }: {
                       )
                     ) : (
                       <>
-                        {dayEvents.slice(0, 4).map((e) => (
-                          <div key={e.id} className={`cal-ev ${e.all_day ? 'allday' : ''} ${e.cont ? 'cont' : ''}`}
-                            title={e.is_recurring ? `${e.summary || ''} (repeating)` : (e.summary || '')}
-                            onClick={(ev) => { ev.stopPropagation(); setDraft({ event: e }) }}>
-                            {!e.all_day && e.start && !e.cont && (
-                              <span className="t">{new Date(e.start).toLocaleTimeString([], { hour: 'numeric' })}</span>
-                            )}
-                            {e.is_recurring && <span className="recur" aria-hidden="true">↻ </span>}
-                            {e.cont && <span className="t" aria-hidden="true">‥ </span>}
-                            {e.summary || '(untitled)'}
-                          </div>
-                        ))}
+                        {dayEvents.slice(0, 4).map((e) => {
+                          const evLast = lastDayOf(e)
+                          const resizable = key === (evLast > lastKey ? lastKey : evLast)
+                          return (
+                            <div key={e.id} className={`cal-ev ${e.all_day ? 'allday' : ''} ${e.cont ? 'cont' : ''}`}
+                              title={e.is_recurring ? `${e.summary || ''} (repeating)` : (e.summary || '')}
+                              draggable
+                              onDragStart={(ev) => {
+                                ev.stopPropagation()
+                                ev.dataTransfer.effectAllowed = 'move'
+                                setDrag({ ev: e, fromDay: key, mode: 'move' })
+                              }}
+                              onDragEnd={() => { setDrag(null); setOverDay(null) }}
+                              onClick={(ev) => { ev.stopPropagation(); setDraft({ event: e }) }}>
+                              {!e.all_day && e.start && !e.cont && (
+                                <span className="t">{new Date(e.start).toLocaleTimeString([], { hour: 'numeric' })}</span>
+                              )}
+                              {e.is_recurring && <span className="recur" aria-hidden="true">↻ </span>}
+                              {e.cont && <span className="t" aria-hidden="true">‥ </span>}
+                              {e.summary || '(untitled)'}
+                              {resizable && (
+                                <span className="ev-resize" title="Drag to change the last day"
+                                  draggable
+                                  onDragStart={(ev) => {
+                                    ev.stopPropagation()
+                                    ev.dataTransfer.effectAllowed = 'move'
+                                    setDrag({ ev: e, fromDay: key, mode: 'resize' })
+                                  }} />
+                              )}
+                            </div>
+                          )
+                        })}
                         {dayEvents.length > 4 && <span className="child-progress">+{dayEvents.length - 4} more</span>}
                       </>
                     )}
@@ -224,6 +301,24 @@ export function CalendarView({ rev, onExpire, sideCollapsed, onToggleSide }: {
       {draft && (
         <EventModal draft={draft} onClose={() => setDraft(null)}
           onSave={(body, uid) => save(body, uid)} onDelete={del} />
+      )}
+
+      {moveAsk && (
+        <div className="overlay" onClick={() => setMoveAsk(null)}>
+          <div className="modal" onClick={(ev) => ev.stopPropagation()}>
+            <div className="modal-head">
+              <span className="modal-title">Repeating event</span>
+              <button className="icon-btn" onClick={() => setMoveAsk(null)}>✕</button>
+            </div>
+            <div className="scope-choose">
+              <p className="scope-q">Apply the change to which events?</p>
+              <button className="btn" onClick={() => pickMoveScope('this')}>This event</button>
+              <button className="btn" onClick={() => pickMoveScope('thisandfuture')}>This &amp; following</button>
+              <button className="btn" onClick={() => pickMoveScope('all')}>All events</button>
+              <button className="btn ghost" onClick={() => setMoveAsk(null)}>Cancel</button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )
