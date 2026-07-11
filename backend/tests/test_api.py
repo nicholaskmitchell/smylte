@@ -253,3 +253,85 @@ def test_create_with_color(client):
 def test_hook_endpoint_gate(client):
     assert client.post("/internal/changed", headers={"X-Tasks-Hook-Secret": "wrong"}).status_code == 403
     assert client.post("/internal/changed", headers={"X-Tasks-Hook-Secret": "testhook"}).status_code == 202
+
+
+# ── error mapping: domain exceptions and bad input must not surface as 500s ──
+
+def test_unknown_uid_is_404(client):
+    lid = _list(client)["id"]
+    assert client.patch(f"/api/lists/{lid}/tasks/no-such-uid",
+                        json={"summary": "x"}).status_code == 404
+    assert client.post(f"/api/lists/{lid}/tasks/no-such-uid/complete").status_code == 404
+    cid = _cal(client)["id"]
+    assert client.patch(f"/api/calendars/{cid}/events/no-such-uid",
+                        json={"summary": "x"}).status_code == 404
+
+
+def test_invalid_input_is_422(client):
+    lid = _list(client)["id"]
+    cid = _cal(client)["id"]
+    assert client.post(f"/api/lists/{lid}/tasks",
+                       json={"summary": "x", "due": "not-a-date"}).status_code == 422
+    assert client.post(f"/api/calendars/{cid}/events",
+                       json={"summary": "x", "start": "2026-13-99"}).status_code == 422
+    assert client.get(f"/api/calendars/{cid}/events",
+                      params={"start": "garbage", "end": "2026-08-01"}).status_code == 422
+    assert client.post(f"/api/calendars/{cid}/events", json={
+        "summary": "x", "start": "2026-07-01T09:00:00", "repeat": "fortnightly",
+    }).status_code == 422
+    assert client.request("DELETE", f"/api/calendars/{cid}/events/whatever",
+                          params={"scope": "everything"}).status_code == 422
+    assert client.put("/api/settings", json={"theme": "blue"}).status_code == 422
+
+
+def test_search_operator_characters_do_not_crash(client):
+    for q in ['"unbalanced', "NEAR(", "(((", 'x"y', "a AND", "*", "-"]:
+        r = client.get("/api/search", params={"q": q})
+        assert r.status_code == 200, (q, r.text)
+
+
+def test_search_matches_prefixes(client):
+    lst = _list(client)
+    token = uuid.uuid4().hex[:10]
+    client.post(f"/api/lists/{lst['id']}/tasks", json={"summary": f"pfx{token} report"})
+    hits = client.get("/api/search", params={"q": f"pfx{token[:5]}"}).json()
+    assert any(f"pfx{token}" in (h["summary"] or "") for h in hits)
+
+
+def test_edit_conflict_is_409(client, monkeypatch):
+    from tasksd.service import TaskService
+    from tasksd.sync.engine import ConflictError
+
+    lid = _list(client)["id"]
+    t = client.post(f"/api/lists/{lid}/tasks", json={"summary": "contested"}).json()
+
+    def boom(self, href, uid, edit):
+        raise ConflictError(f"edit conflict on {uid}: retry the change")
+
+    monkeypatch.setattr(TaskService, "edit_task", boom)
+    r = client.patch(f"/api/lists/{lid}/tasks/{t['uid']}", json={"summary": "x"})
+    assert r.status_code == 409
+    assert "conflict" in r.json()["detail"]
+
+
+def test_transport_error_is_dav_error():
+    from tasksd.dav import DavClient
+    from tasksd.dav.errors import DavError
+
+    c = DavClient("http://127.0.0.1:9", "u", "p", timeout=1)   # nothing listens here
+    with pytest.raises(DavError):
+        c.options()
+    c.close()
+
+
+def test_dav_outage_is_502(client, monkeypatch):
+    from tasksd.dav.errors import DavError
+    from tasksd.service import TaskService
+
+    def boom(self):
+        raise DavError("connection refused")
+
+    monkeypatch.setattr(TaskService, "list_lists", boom)
+    r = client.get("/api/lists")
+    assert r.status_code == 502
+    assert "connection refused" not in r.json()["detail"]   # internals stay internal

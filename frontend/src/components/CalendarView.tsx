@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type CSSProperties } from 'react'
 import { api, type CalEvent, type EventScope, type List } from '../api'
-import { addDays, makeGuard, pad, ymd } from '../util'
+import { addDays, dayKey, makeGuard, pad, parseDate, toLocalInput, ymd } from '../util'
 import { useIsMobile } from '../hooks'
 import { Sidebar } from './Sidebar'
 
@@ -17,11 +17,15 @@ const shiftYmd = (day: string, n: number) => ymd(addDays(new Date(`${day}T00:00`
 
 // Last visible day of an event. DTEND is exclusive for all-day events, and a
 // timed event ending exactly at midnight shouldn't spill into the next day.
+// Days come from dayKey/parseDate so events written with a UTC offset (e.g. by
+// another CalDAV client) land on the viewer's local day.
 function lastDayOf(e: CalEvent): string {
-  const startDay = e.start!.slice(0, 10)
+  const startDay = dayKey(e.start!)
   if (!e.end) return startDay
-  const endDay = e.end.slice(0, 10)
-  const exclusive = e.end_is_date || e.end.slice(11, 16) === '00:00'
+  const end = parseDate(e.end)
+  const endDay = ymd(end)
+  const exclusive = e.end_is_date ||
+    (e.end.includes('T') && end.getHours() === 0 && end.getMinutes() === 0)
   const last = exclusive ? shiftYmd(endDay, -1) : endDay
   return last < startDay ? startDay : last
 }
@@ -84,7 +88,7 @@ export function CalendarView({ rev, onExpire, sideCollapsed, onToggleSide }: {
     const last = ymd(days[41])
     for (const e of events) {
       if (!e.start) continue
-      const startDay = e.start.slice(0, 10)
+      const startDay = dayKey(e.start)
       const endDay = lastDayOf(e)
       // Walk every day the event covers, clipped to the visible 6-week window.
       let day = startDay < first ? first : startDay
@@ -195,7 +199,7 @@ export function CalendarView({ rev, onExpire, sideCollapsed, onToggleSide }: {
                     <span className="t">
                       {e.all_day ? 'all day'
                         : e.cont
-                          ? (e.end && !e.end_is_date && e.end.slice(0, 10) === focusDay
+                          ? (e.end && !e.end_is_date && dayKey(e.end) === focusDay
                             ? `– ${new Date(e.end).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
                             : 'all day')
                           : e.start
@@ -239,13 +243,13 @@ function EventModal({ draft, onClose, onSave, onDelete }: {
   const recurring = !!e?.is_recurring
   const [summary, setSummary] = useState(e?.summary || '')
   const [allDay, setAllDay] = useState(e ? e.all_day : false)
-  const baseDate = draft.date || (e?.start ? e.start.slice(0, 10) : ymd(new Date()))
+  const baseDate = draft.date || (e?.start ? dayKey(e.start) : ymd(new Date()))
   const [start, setStart] = useState(
-    e?.start ? (e.start.includes('T') ? e.start.slice(0, 16) : e.start) : `${baseDate}T09:00`,
+    e?.start ? (e.start.includes('T') ? toLocalInput(e.start) : e.start) : `${baseDate}T09:00`,
   )
   const [end, setEnd] = useState(() => {
     if (!e?.end) return `${baseDate}T10:00`
-    if (e.end.includes('T')) return e.end.slice(0, 16)
+    if (e.end.includes('T')) return toLocalInput(e.end)
     // All-day DTEND is exclusive — show the inclusive last day in the picker.
     const inclusive = shiftYmd(e.end.slice(0, 10), -1)
     const startDay = e.start ? e.start.slice(0, 10) : inclusive

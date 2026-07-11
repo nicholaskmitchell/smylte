@@ -114,7 +114,12 @@ class DavClient:
             hdrs["Content-Type"] = "application/xml; charset=utf-8"
         if headers:
             hdrs.update(headers)
-        resp = self._http.request(method, self.abs(href), content=content, headers=hdrs)
+        try:
+            resp = self._http.request(method, self.abs(href), content=content, headers=hdrs)
+        except httpx.HTTPError as e:
+            # Connection refused / timeout / TLS — same taxonomy as HTTP-level
+            # failures so callers (and the API's 502 mapping) see one error type.
+            raise DavError(f"transport error on {method} {href}: {e}") from e
         if expected is not None and resp.status_code not in expected:
             _raise_for(resp)
         return resp

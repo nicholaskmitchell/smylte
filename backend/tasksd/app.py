@@ -14,6 +14,7 @@ import os
 import re
 import secrets
 from datetime import date, datetime
+from typing import Literal
 
 from fastapi import (
     APIRouter,
@@ -33,8 +34,12 @@ from pydantic import BaseModel
 from .access import AccessVerifier
 from .auth import Authenticator, hash_password
 from .config import Settings
+from .dav.errors import AuthError as DavAuthError
+from .dav.errors import DavError
+from .dav.errors import NotFound as DavNotFound
 from .ical import EventEdit, TaskEdit, rrule_from_spec
 from .service import TaskService, priority_from_label
+from .sync.engine import ConflictError
 
 log = logging.getLogger("tasksd")
 
@@ -129,9 +134,17 @@ class EditEvent(Repeat):
 
 class SettingsPatch(BaseModel):
     # Account-synced UI preferences. Extend with new keys as settings are added.
-    theme: str | None = None          # 'light' | 'dark'
-    tasks_view: str | None = None     # 'list' | 'day3' | 'week'
+    theme: Literal["light", "dark"] | None = None
+    tasks_view: Literal["list", "day3", "week"] | None = None
     sidebar_collapsed: bool | None = None
+
+
+_SCOPES = ("all", "this", "thisandfuture")
+
+
+def _check_scope(scope: str) -> None:
+    if scope not in _SCOPES:
+        raise HTTPException(422, f"scope must be one of {', '.join(_SCOPES)}")
 
 
 def _parse_datelike(s: str | None) -> date | datetime | None:
@@ -140,9 +153,12 @@ def _parse_datelike(s: str | None) -> date | datetime | None:
     s = s.strip()
     if not s:
         return None
-    if "T" in s or " " in s:
-        return datetime.fromisoformat(s.replace(" ", "T"))
-    return date.fromisoformat(s)
+    try:
+        if "T" in s or " " in s:
+            return datetime.fromisoformat(s.replace(" ", "T"))
+        return date.fromisoformat(s)
+    except ValueError:
+        raise HTTPException(422, f"invalid date/datetime: {s!r}") from None
 
 
 def _edit_from_create(req: CreateTask) -> TaskEdit | None:
@@ -183,16 +199,24 @@ def _edit_from_patch(req: EditTask) -> TaskEdit:
 def _event_dt(s: str | None, all_day: bool) -> date | datetime | None:
     if s is None:
         return None
-    return date.fromisoformat(s.strip()) if all_day else _parse_datelike(s)
+    if not all_day:
+        return _parse_datelike(s)
+    try:
+        return date.fromisoformat(s.strip())
+    except ValueError:
+        raise HTTPException(422, f"invalid date: {s!r} (all-day values are YYYY-MM-DD)") from None
 
 
 def _rrule_from_repeat(req: Repeat) -> dict | None:
-    return rrule_from_spec(
-        req.repeat,
-        interval=req.repeat_interval,
-        until=_parse_datelike(req.repeat_until),
-        count=req.repeat_count,
-    )
+    try:
+        return rrule_from_spec(
+            req.repeat,
+            interval=req.repeat_interval,
+            until=_parse_datelike(req.repeat_until),
+            count=req.repeat_count,
+        )
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from None
 
 
 def _event_edit_from_create(req: CreateEvent) -> EventEdit | None:
@@ -311,6 +335,38 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             svc.close()
 
     app = FastAPI(title="tasksd", version="0.1.0-phase1", lifespan=lifespan)
+
+    # Domain exceptions → meaningful statuses. Starlette matches handlers by MRO,
+    # so ConflictError/NotFound/AuthError win over the DavError catch-all.
+    @app.exception_handler(ConflictError)
+    async def _conflict(request: Request, exc: ConflictError):
+        return JSONResponse(status_code=409, content={"detail": str(exc)})
+
+    @app.exception_handler(KeyError)
+    async def _unknown_item(request: Request, exc: KeyError):
+        # The engine raises KeyError for an unknown uid/collection on write paths.
+        return JSONResponse(
+            status_code=404,
+            content={"detail": str(exc.args[0]) if exc.args else "unknown resource"},
+        )
+
+    @app.exception_handler(DavNotFound)
+    async def _dav_not_found(request: Request, exc: DavNotFound):
+        return JSONResponse(status_code=404, content={"detail": str(exc)})
+
+    @app.exception_handler(DavAuthError)
+    async def _dav_auth(request: Request, exc: DavAuthError):
+        log.error("Radicale rejected our credentials: %s", exc)
+        return JSONResponse(
+            status_code=502, content={"detail": "calendar server rejected the backend credentials"}
+        )
+
+    @app.exception_handler(DavError)
+    async def _dav_error(request: Request, exc: DavError):
+        log.error("CalDAV error: %s", exc)
+        return JSONResponse(
+            status_code=502, content={"detail": "calendar server unavailable, try again shortly"}
+        )
 
     async def require_auth(
         session: str | None = Cookie(default=None, alias="tasks_session"),
@@ -445,6 +501,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def get_events(request: Request, cal_id: str,
                          start: str = Query(...), end: str = Query(...)):
         href = _href(request, cal_id)
+        _parse_datelike(start), _parse_datelike(end)   # 422 on a bad window bound
         return await _run(_svc(request).events_in_range, href, start, end)
 
     @api.post("/calendars/{cal_id}/events", status_code=201)
@@ -468,6 +525,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @api.patch("/calendars/{cal_id}/events/{uid}")
     async def patch_event(request: Request, cal_id: str, uid: str, body: EditEvent):
         href = _href(request, cal_id)
+        _check_scope(body.scope or "all")
         dto = await _run(
             _svc(request).edit_event, href, uid, _event_edit_from_patch(body),
             recurrence_id=body.recurrence_id, scope=body.scope or "all",
@@ -483,6 +541,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         scope: str = Query(default="all"),   # all|this|thisandfuture
     ):
         href = _href(request, cal_id)
+        _check_scope(scope)
         await _run(
             _svc(request).delete_event, href, uid,
             recurrence_id=recurrence_id, scope=scope,
