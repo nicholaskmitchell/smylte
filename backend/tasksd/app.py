@@ -33,7 +33,7 @@ from pydantic import BaseModel
 from .access import AccessVerifier
 from .auth import Authenticator, hash_password
 from .config import Settings
-from .ical import EventEdit, TaskEdit
+from .ical import EventEdit, TaskEdit, rrule_from_spec
 from .service import TaskService, priority_from_label
 
 log = logging.getLogger("tasksd")
@@ -96,7 +96,15 @@ class Sidecar(BaseModel):
     repeat_from_completion: bool | None = None
 
 
-class CreateEvent(BaseModel):
+class Repeat(BaseModel):
+    # Structured recurrence — translated to an RFC 5545 RRULE server-side.
+    repeat: str | None = None         # none|daily|weekly|monthly|yearly
+    repeat_interval: int = 1          # every N periods
+    repeat_until: str | None = None   # ISO date/datetime the series ends on
+    repeat_count: int | None = None   # number of occurrences (exclusive with until)
+
+
+class CreateEvent(Repeat):
     summary: str
     start: str                        # ISO date (all-day) or datetime
     end: str | None = None
@@ -106,7 +114,7 @@ class CreateEvent(BaseModel):
     tags: list[str] | None = None
 
 
-class EditEvent(BaseModel):
+class EditEvent(Repeat):
     summary: str | None = None
     description: str | None = None
     location: str | None = None
@@ -114,6 +122,14 @@ class EditEvent(BaseModel):
     end: str | None = None
     tags: list[str] | None = None
     status: str | None = None         # CONFIRMED|TENTATIVE|CANCELLED
+    # Per-occurrence editing (Tier 3): which slice of a recurring series to touch.
+    recurrence_id: str | None = None  # the occurrence anchor (original-slot ISO)
+    scope: str | None = None          # all|this|thisandfuture (default: all)
+
+
+class SettingsPatch(BaseModel):
+    # Account-synced UI preferences. Extend with new keys as settings are added.
+    theme: str | None = None          # 'light' | 'dark'
 
 
 def _parse_datelike(s: str | None) -> date | datetime | None:
@@ -168,6 +184,15 @@ def _event_dt(s: str | None, all_day: bool) -> date | datetime | None:
     return date.fromisoformat(s.strip()) if all_day else _parse_datelike(s)
 
 
+def _rrule_from_repeat(req: Repeat) -> dict | None:
+    return rrule_from_spec(
+        req.repeat,
+        interval=req.repeat_interval,
+        until=_parse_datelike(req.repeat_until),
+        count=req.repeat_count,
+    )
+
+
 def _event_edit_from_create(req: CreateEvent) -> EventEdit | None:
     kw: dict = {}
     if req.description is not None:
@@ -176,6 +201,8 @@ def _event_edit_from_create(req: CreateEvent) -> EventEdit | None:
         kw["location"] = req.location
     if req.tags is not None:
         kw["categories"] = req.tags
+    if req.repeat is not None:
+        kw["rrule"] = _rrule_from_repeat(req)
     return EventEdit(**kw) if kw else None
 
 
@@ -196,6 +223,8 @@ def _event_edit_from_patch(req: EditEvent) -> EventEdit:
         kw["categories"] = req.tags
     if "status" in fs:
         kw["status"] = req.status
+    if "repeat" in fs:
+        kw["rrule"] = _rrule_from_repeat(req)
     return EventEdit(**kw)
 
 
@@ -437,16 +466,35 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @api.patch("/calendars/{cal_id}/events/{uid}")
     async def patch_event(request: Request, cal_id: str, uid: str, body: EditEvent):
         href = _href(request, cal_id)
-        dto = await _run(_svc(request).edit_event, href, uid, _event_edit_from_patch(body))
+        dto = await _run(
+            _svc(request).edit_event, href, uid, _event_edit_from_patch(body),
+            recurrence_id=body.recurrence_id, scope=body.scope or "all",
+        )
         if dto is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown event {uid}")
         return dto
 
     @api.delete("/calendars/{cal_id}/events/{uid}", status_code=204)
-    async def delete_event(request: Request, cal_id: str, uid: str):
+    async def delete_event(
+        request: Request, cal_id: str, uid: str,
+        recurrence_id: str | None = Query(default=None),
+        scope: str = Query(default="all"),   # all|this|thisandfuture
+    ):
         href = _href(request, cal_id)
-        await _run(_svc(request).delete_event, href, uid)
+        await _run(
+            _svc(request).delete_event, href, uid,
+            recurrence_id=recurrence_id, scope=scope,
+        )
         return JSONResponse(status_code=204, content=None)
+
+    # -- settings (account-synced UI preferences) --
+    @api.get("/settings")
+    async def get_settings(request: Request):
+        return await _run(_svc(request).get_settings)
+
+    @api.put("/settings")
+    async def put_settings(request: Request, body: SettingsPatch):
+        return await _run(_svc(request).update_settings, body.model_dump(exclude_unset=True))
 
     # -- tags / search / sync --
     @api.get("/tags")
