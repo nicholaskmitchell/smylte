@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, subscribe, type TasksViewMode } from './api'
+import { setErrorNotifier } from './util'
 import { Login } from './components/Login'
 import { TasksView } from './components/TasksView'
 import { CalendarView } from './components/CalendarView'
@@ -16,8 +17,20 @@ export function App() {
   const [sideCollapsed, setSideCollapsed] = useState(false)
   const [rev, setRev] = useState(0)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [toast, setToast] = useState<string | null>(null)
+  const toastTimer = useRef<ReturnType<typeof setTimeout>>()
   const settingsRef = useRef<HTMLDivElement>(null)
   const gearRef = useRef<HTMLButtonElement>(null)
+
+  // Failed saves/deletes anywhere in the app surface here (see makeGuard).
+  useEffect(() => {
+    setErrorNotifier((msg) => {
+      setToast(msg)
+      clearTimeout(toastTimer.current)
+      toastTimer.current = setTimeout(() => setToast(null), 6000)
+    })
+    return () => { setErrorNotifier(null); clearTimeout(toastTimer.current) }
+  }, [])
 
   useEffect(() => {
     api.me().then((m) => { setUser(m.user); setAuth('in') }).catch(() => setAuth('out'))
@@ -146,6 +159,12 @@ export function App() {
             sideCollapsed={sideCollapsed} onToggleSide={toggleSide} />
         : <CalendarView rev={rev} onExpire={onExpire}
             sideCollapsed={sideCollapsed} onToggleSide={toggleSide} />}
+      {toast && (
+        <div className="toast" role="alert">
+          <span>{toast}</span>
+          <button className="icon-btn" aria-label="Dismiss" onClick={() => setToast(null)}>✕</button>
+        </div>
+      )}
     </div>
   )
 }
