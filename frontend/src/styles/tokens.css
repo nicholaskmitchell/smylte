@@ -52,8 +52,11 @@ body {
   font-size: 15px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
 }
 button { font-family: inherit; color: inherit; }
+/* touch-action: no 300ms double-tap-zoom delay on interactive bits */
+button, input, select, label { touch-action: manipulation; }
 input, select, textarea { font-family: inherit; }
 ::selection { background: color-mix(in oklch, var(--accent) 30%, transparent); }
 

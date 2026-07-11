@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type CSSProperties } from 'react'
 import { api, type CalEvent, type EventScope, type List } from '../api'
-import { makeGuard, ymd } from '../util'
+import { makeGuard, pad, ymd } from '../util'
+import { useIsMobile } from '../hooks'
 import { Sidebar } from './Sidebar'
 
 const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
@@ -11,11 +12,24 @@ interface Draft { event?: CalEvent; date?: string }
 
 export function CalendarView({ rev, onExpire }: { rev: number; onExpire: () => void }) {
   const guard = makeGuard(onExpire)
+  const isMobile = useIsMobile()
   const [cals, setCals] = useState<List[]>([])
   const [sel, setSel] = useState('')
   const [cursor, setCursor] = useState(() => { const n = new Date(); return new Date(n.getFullYear(), n.getMonth(), 1) })
   const [events, setEvents] = useState<CalEvent[]>([])
   const [draft, setDraft] = useState<Draft | null>(null)
+  // Mobile shows a day agenda under the grid; this is the day it follows.
+  const [focusDay, setFocusDay] = useState(() => ymd(new Date()))
+
+  // Keep the focused day inside the visible month when the user navigates.
+  useEffect(() => {
+    const monthKey = `${cursor.getFullYear()}-${pad(cursor.getMonth() + 1)}`
+    setFocusDay((f) => {
+      if (f.slice(0, 7) === monthKey) return f
+      const today = ymd(new Date())
+      return today.slice(0, 7) === monthKey ? today : `${monthKey}-01`
+    })
+  }, [cursor])
 
   const days = useMemo(() => {
     const first = new Date(cursor.getFullYear(), cursor.getMonth(), 1)
@@ -87,37 +101,84 @@ export function CalendarView({ rev, onExpire }: { rev: number; onExpire: () => v
           <button className="icon-btn" onClick={() => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1))}>›</button>
           <span className="cal-title">{MONTHS[cursor.getMonth()]} {cursor.getFullYear()}</span>
           <span className="spacer" />
-          {sel && <button className="btn" onClick={() => setDraft({ date: todayKey })}>New event</button>}
+          {sel && !isMobile && <button className="btn" onClick={() => setDraft({ date: todayKey })}>New event</button>}
         </div>
         {!sel ? (
           <div className="empty">Create a calendar to get started.</div>
         ) : (
-          <div className="cal-grid"
+          <div className="cal-scroll"
             style={curCal?.color ? { '--ev-c': curCal.color } as CSSProperties : undefined}>
-            {DOW.map((d) => <div key={d} className="cal-dow">{d}</div>)}
-            {days.map((d) => {
-              const key = ymd(d)
-              const inMonth = d.getMonth() === cursor.getMonth()
-              const dayEvents = byDay[key] || []
-              return (
-                <div key={key} className={`cal-cell ${inMonth ? '' : 'dim'} ${key === todayKey ? 'today' : ''}`}
-                  onClick={() => setDraft({ date: key })}>
-                  <span className="daynum">{d.getDate()}</span>
-                  {dayEvents.slice(0, 4).map((e) => (
-                    <div key={e.id} className={`cal-ev ${e.all_day ? 'allday' : ''}`}
-                      title={e.is_recurring ? `${e.summary || ''} (repeating)` : (e.summary || '')}
-                      onClick={(ev) => { ev.stopPropagation(); setDraft({ event: e }) }}>
-                      {!e.all_day && e.start && (
-                        <span className="t">{new Date(e.start).toLocaleTimeString([], { hour: 'numeric' })}</span>
-                      )}
+            <div className="cal-grid">
+              {DOW.map((d) => <div key={d} className="cal-dow">{d}</div>)}
+              {days.map((d) => {
+                const key = ymd(d)
+                const inMonth = d.getMonth() === cursor.getMonth()
+                const dayEvents = byDay[key] || []
+                return (
+                  <div key={key}
+                    className={`cal-cell ${inMonth ? '' : 'dim'} ${key === todayKey ? 'today' : ''} ${isMobile && key === focusDay ? 'focus' : ''}`}
+                    onClick={() => {
+                      // Mobile: first tap focuses the day in the agenda; a second
+                      // tap on the focused day (or the agenda's button) creates.
+                      if (isMobile && key !== focusDay) setFocusDay(key)
+                      else setDraft({ date: key })
+                    }}>
+                    <span className="daynum">{d.getDate()}</span>
+                    {isMobile ? (
+                      dayEvents.length > 0 && (
+                        <span className="ev-dots">
+                          {dayEvents.slice(0, 6).map((e) => (
+                            <i key={e.id} className={`ev-dot ${e.all_day ? 'allday' : ''}`} />
+                          ))}
+                        </span>
+                      )
+                    ) : (
+                      <>
+                        {dayEvents.slice(0, 4).map((e) => (
+                          <div key={e.id} className={`cal-ev ${e.all_day ? 'allday' : ''}`}
+                            title={e.is_recurring ? `${e.summary || ''} (repeating)` : (e.summary || '')}
+                            onClick={(ev) => { ev.stopPropagation(); setDraft({ event: e }) }}>
+                            {!e.all_day && e.start && (
+                              <span className="t">{new Date(e.start).toLocaleTimeString([], { hour: 'numeric' })}</span>
+                            )}
+                            {e.is_recurring && <span className="recur" aria-hidden="true">↻ </span>}
+                            {e.summary || '(untitled)'}
+                          </div>
+                        ))}
+                        {dayEvents.length > 4 && <span className="child-progress">+{dayEvents.length - 4} more</span>}
+                      </>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+            {isMobile && (
+              <div className="day-agenda">
+                <div className="agenda-head">
+                  <span className="label">
+                    {new Date(`${focusDay}T00:00`).toLocaleDateString(undefined,
+                      { weekday: 'long', month: 'long', day: 'numeric' })}
+                  </span>
+                  <button className="btn" onClick={() => setDraft({ date: focusDay })}>+ Event</button>
+                </div>
+                {(byDay[focusDay] || []).map((e) => (
+                  <button key={e.id} className="agenda-ev" onClick={() => setDraft({ event: e })}>
+                    <span className="t">
+                      {e.all_day ? 'all day' : e.start
+                        ? new Date(e.start).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+                        : ''}
+                    </span>
+                    <span>
                       {e.is_recurring && <span className="recur" aria-hidden="true">↻ </span>}
                       {e.summary || '(untitled)'}
-                    </div>
-                  ))}
-                  {dayEvents.length > 4 && <span className="child-progress">+{dayEvents.length - 4} more</span>}
-                </div>
-              )
-            })}
+                    </span>
+                  </button>
+                ))}
+                {(byDay[focusDay] || []).length === 0 && (
+                  <div className="agenda-empty">No events this day.</div>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>

@@ -3,7 +3,9 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <meta name="theme-color" content="#0C0C10" />
+    <!-- Light by default; the pre-paint script below (and App on toggle) flips
+         it to dark so mobile browser chrome matches the theme. -->
+    <meta name="theme-color" content="#FBFAF7" />
     <title>Tasks &amp; Calendar</title>
     <!-- SVG for modern browsers; PNG fallback for those that won't render an SVG
          tab icon (e.g. older Safari). ?v= busts aggressive favicon caching. -->
@@ -22,6 +24,10 @@
         try {
           var t = localStorage.getItem('tasks-theme')
           if (t === 'dark' || t === 'light') document.documentElement.dataset.theme = t
+          if (t === 'dark') {
+            var m = document.querySelector('meta[name="theme-color"]')
+            if (m) m.setAttribute('content', '#0C0C10')
+          }
         } catch (_) {}
       })()
     </script>

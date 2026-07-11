@@ -149,6 +149,7 @@
 /* ---- calendar ---- */
 .cal-head { display: flex; align-items: center; gap: 12px; padding: 14px 26px; }
 .cal-title { font-family: var(--serif); font-size: 22px; font-weight: 500; min-width: 220px; }
+.cal-scroll { flex: 1; min-height: 0; overflow-y: auto; }
 .cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); border-top: 1px solid var(--rule);
   border-left: 1px solid var(--rule); }
 .cal-dow { font-family: var(--mono); font-size: 10px; text-transform: uppercase;
@@ -163,7 +164,7 @@
 .cal-cell.today .daynum { color: var(--bg); background: var(--accent); }
 .daynum { font-family: var(--mono); font-size: 11px; color: var(--fg-muted); align-self: flex-end;
   padding: 1px 5px; }
-/* Events tint from the calendar's own color (--ev-c, set on .cal-grid);
+/* Events tint from the calendar's own color (--ev-c, set on .cal-scroll);
    uncolored calendars fall back to the accent / ok tints. */
 .cal-ev {
   font-size: 11px; color: var(--fg);
@@ -178,6 +179,28 @@
 }
 .cal-ev .t { font-family: var(--mono); color: var(--fg-muted); margin-right: 4px; }
 .cal-ev .recur { color: var(--fg-muted); font-weight: 600; }
+
+/* mobile calendar: cells carry square event dots, a tap focuses the day and its
+   events list in the agenda below the grid (only rendered on small screens) */
+.cal-cell.focus { box-shadow: inset 0 0 0 2px var(--accent); }
+.ev-dots { display: flex; flex-wrap: wrap; gap: 3px; justify-content: flex-end; padding: 0 2px; }
+.ev-dot { width: 5px; height: 5px; flex: none; background: var(--ev-c, var(--accent)); }
+.ev-dot.allday { background: var(--ev-c, var(--ok)); }
+.day-agenda { padding-bottom: calc(24px + env(safe-area-inset-bottom)); }
+.agenda-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 14px 14px 8px;
+}
+.agenda-ev {
+  display: flex; align-items: baseline; gap: 10px; width: 100%; text-align: left;
+  background: none; border: 0; border-bottom: 1px solid var(--rule-faint);
+  border-left: 2px solid var(--ev-c, var(--accent));
+  padding: 12px 14px; font-size: 15px; color: var(--fg); cursor: pointer;
+}
+.agenda-ev:hover { background: var(--bg-elev); }
+.agenda-ev .t { font-family: var(--mono); font-size: 11px; color: var(--fg-muted); min-width: 58px; flex: none; }
+.agenda-ev .recur { color: var(--fg-muted); font-weight: 600; }
+.agenda-empty { padding: 12px 14px; color: var(--fg-faint); font-size: 14px; }
 
 /* ---- modal / panel ---- */
 .overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.32);
@@ -209,8 +232,74 @@
 .banner { font-family: var(--mono); font-size: 11px; color: var(--warn);
   padding: 6px 26px; border-bottom: 1px solid var(--rule); background: color-mix(in oklch, var(--warn) 10%, transparent); }
 
+/* ---- touch devices: hover-revealed controls must always be visible ---- */
+@media (hover: none) {
+  .task-actions { opacity: 1; }
+  .side-item .side-edit { opacity: 1; }
+}
+
+/* ---- mobile ---- */
 @media (max-width: 720px) {
-  .side { width: 176px; }
-  .task, .quickadd, .content-head, .cal-head { padding-left: 14px; padding-right: 14px; }
-  .cal-cell { min-height: 66px; }
+  .topbar { gap: 14px; padding: 10px 14px; }
+  .brand { font-size: 19px; }
+  .menu { right: 14px; }
+
+  /* panes stack; the sidebar becomes a horizontal collection strip */
+  .work { flex-direction: column; }
+  .side {
+    width: 100%; flex-direction: row; align-items: stretch;
+    border-right: 0; border-bottom: 1px solid var(--rule);
+  }
+  .side-head { padding: 8px 4px 8px 14px; align-items: center; }
+  .side-head .label { display: none; }
+  .side-list {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 14px 8px 8px; overflow-x: auto; overflow-y: hidden;
+    scrollbar-width: none;
+  }
+  .side-list::-webkit-scrollbar { display: none; }
+  .side-item {
+    flex: none; padding: 7px 11px;
+    border: 1px solid var(--rule); border-left-width: 1px;
+  }
+  .side-item.active { border-color: var(--accent); }
+  .side-item .name { flex: none; max-width: 40vw; }
+  .side-item .side-edit { display: none; }
+  .side-item.active .side-edit { display: inline; opacity: 1; padding: 0 2px 0 4px; }
+  .side-add {
+    border-top: 0; border-left: 1px solid var(--rule);
+    flex: none; width: 190px; align-items: center;
+  }
+
+  /* content spacing + touch targets */
+  .task, .quickadd, .content-head, .cal-head, .empty, .banner { padding-left: 14px; padding-right: 14px; }
+  .section-label { padding: 14px 14px 4px; }
+  .task { padding-top: 11px; padding-bottom: 11px; }
+  .task.sub { padding-left: 40px; }
+  .check { width: 21px; height: 21px; }
+  .task-actions { gap: 8px; }
+  .task-actions button { font-size: 12px; padding: 5px 6px; }
+  .scroll { padding-bottom: calc(40px + env(safe-area-inset-bottom)); }
+
+  /* inputs at 16px so iOS Safari doesn't zoom the page on focus */
+  .input { font-size: 16px; }
+
+  /* calendar: compact grid, title fills the header, agenda holds the detail */
+  .cal-head { gap: 8px; padding-top: 10px; padding-bottom: 10px; }
+  .cal-head .spacer { display: none; }
+  .cal-title {
+    flex: 1; min-width: 0; font-size: 17px; text-align: right;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .cal-dow { padding: 5px 4px; text-align: center; }
+  .cal-cell { min-height: 46px; padding: 3px 4px; gap: 2px; }
+
+  /* modals become bottom sheets */
+  .overlay { align-items: flex-end; padding: 0; }
+  .modal {
+    width: 100%; max-height: 92dvh; overflow-y: auto;
+    border-left: 0; border-right: 0; border-bottom: 0;
+    padding-bottom: calc(18px + env(safe-area-inset-bottom));
+  }
+  .field-row { flex-direction: column; gap: 12px; }
 }

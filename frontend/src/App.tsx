@@ -23,6 +23,9 @@ export function App() {
 
   const applyTheme = useCallback((next: string) => {
     document.documentElement.dataset.theme = next
+    // Keep mobile browser chrome (status bar / URL bar) matching the theme.
+    document.querySelector('meta[name="theme-color"]')
+      ?.setAttribute('content', next === 'dark' ? '#0C0C10' : '#FBFAF7')
     try { localStorage.setItem('tasks-theme', next) } catch { /* ignore */ }
     setTheme(next)
   }, [])
