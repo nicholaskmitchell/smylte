@@ -65,9 +65,14 @@ export interface CalEvent {
 // Which slice of a recurring series a write applies to.
 export type EventScope = 'all' | 'this' | 'thisandfuture'
 
+// How the tasks pane lays out: a flat list, or date columns (3-day / week).
+export type TasksViewMode = 'list' | 'day3' | 'week'
+
 // Account-synced UI preferences (stored server-side, not per-browser).
 export interface Settings {
   theme?: 'light' | 'dark'
+  tasks_view?: TasksViewMode
+  sidebar_collapsed?: boolean
 }
 
 async function j<T>(method: string, path: string, body?: unknown): Promise<T> {

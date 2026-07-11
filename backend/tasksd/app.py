@@ -130,6 +130,8 @@ class EditEvent(Repeat):
 class SettingsPatch(BaseModel):
     # Account-synced UI preferences. Extend with new keys as settings are added.
     theme: str | None = None          # 'light' | 'dark'
+    tasks_view: str | None = None     # 'list' | 'day3' | 'week'
+    sidebar_collapsed: bool | None = None
 
 
 def _parse_datelike(s: str | None) -> date | datetime | None:
