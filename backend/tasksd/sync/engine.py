@@ -189,6 +189,65 @@ class SyncEngine:
     def edit_event(self, collection_href: str, uid: str, edit: ical.EventEdit) -> str:
         return self._edit(collection_href, uid, ical.apply_event_changes, edit, kind="event")
 
+    def override_event(
+        self, collection_href: str, uid: str, recurrence_id: str, edit: ical.EventEdit
+    ) -> str:
+        """Edit a single occurrence ("this event") via a RECURRENCE-ID override."""
+        return self._edit(
+            collection_href, uid,
+            lambda raw, e: ical.apply_occurrence_override(raw, recurrence_id, e),
+            edit, kind="event",
+        )
+
+    def exclude_event_occurrence(
+        self, collection_href: str, uid: str, recurrence_id: str
+    ) -> str:
+        """Delete a single occurrence ("this event") via an EXDATE on the master."""
+        return self._edit(
+            collection_href, uid,
+            lambda raw, _e: ical.exclude_occurrence(raw, recurrence_id),
+            None, kind="event",
+        )
+
+    def split_event(
+        self,
+        collection_href: str,
+        uid: str,
+        recurrence_id: str,
+        edit: ical.EventEdit,
+        *,
+        delete_tail: bool = False,
+    ) -> str:
+        """"This and following": bound the existing series before `recurrence_id`
+        and (unless deleting) write the remainder as a new resource. Head and tail
+        are always derived from the same source revision so they stay consistent;
+        a 412 re-derives both from the fresh copy (invariant #5)."""
+        row = store.get_item(self.conn, collection_href, uid)
+        if row is None:
+            raise KeyError(f"unknown event {uid} in {collection_href}")
+        href = row["href"]
+
+        def build(raw):
+            return ical.split_series(raw, recurrence_id, edit)
+
+        head, tail = build(row["raw_ics"])
+        try:
+            self.dav.put(href, head, if_match=row["etag"])
+        except PreconditionFailed:
+            fresh = self.dav.get(href)
+            head, tail = build(fresh.data)
+            try:
+                self.dav.put(href, head, if_match=fresh.etag)
+            except PreconditionFailed as e:
+                raise ConflictError(f"edit conflict on {uid}: retry the change") from e
+        self._refresh_from_wire(collection_href, href)
+        if not delete_tail:
+            slug = uuid.uuid4().hex
+            tail_href = f"{collection_href}{slug}.ics"
+            self.dav.put(tail_href, tail, if_none_match="*")
+            self._refresh_from_wire(collection_href, tail_href)
+        return uid
+
     def _edit(self, collection_href: str, uid: str, apply_fn, edit, *, kind: str) -> str:
         row = store.get_item(self.conn, collection_href, uid)
         if row is None:

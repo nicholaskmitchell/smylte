@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type CSSProperties } from 'react'
-import { api, type CalEvent, type List } from '../api'
+import { api, type CalEvent, type EventScope, type List } from '../api'
 import { makeGuard, ymd } from '../util'
 import { Sidebar } from './Sidebar'
 
@@ -61,7 +61,9 @@ export function CalendarView({ rev, onExpire }: { rev: number; onExpire: () => v
     else await guard(() => api.createEvent(sel, body))
     setDraft(null); reload()
   }
-  const del = async (uid: string) => { await guard(() => api.deleteEvent(sel, uid)); setDraft(null); reload() }
+  const del = async (uid: string, opts?: { recurrence_id?: string | null; scope?: EventScope }) => {
+    await guard(() => api.deleteEvent(sel, uid, opts)); setDraft(null); reload()
+  }
   const calApi = {
     create: (name: string) => guard(() => api.createCalendar(name)),
     update: (id: string, body: { name?: string; color?: string | null }) =>
@@ -102,12 +104,13 @@ export function CalendarView({ rev, onExpire }: { rev: number; onExpire: () => v
                   onClick={() => setDraft({ date: key })}>
                   <span className="daynum">{d.getDate()}</span>
                   {dayEvents.slice(0, 4).map((e) => (
-                    <div key={e.uid} className={`cal-ev ${e.all_day ? 'allday' : ''}`}
-                      title={e.summary || ''}
+                    <div key={e.id} className={`cal-ev ${e.all_day ? 'allday' : ''}`}
+                      title={e.is_recurring ? `${e.summary || ''} (repeating)` : (e.summary || '')}
                       onClick={(ev) => { ev.stopPropagation(); setDraft({ event: e }) }}>
                       {!e.all_day && e.start && (
                         <span className="t">{new Date(e.start).toLocaleTimeString([], { hour: 'numeric' })}</span>
                       )}
+                      {e.is_recurring && <span className="recur" aria-hidden="true">↻ </span>}
                       {e.summary || '(untitled)'}
                     </div>
                   ))}
@@ -127,11 +130,18 @@ export function CalendarView({ rev, onExpire }: { rev: number; onExpire: () => v
   )
 }
 
+const REPEATS: ReadonlyArray<readonly [string, string]> = [
+  ['none', 'Does not repeat'], ['daily', 'Daily'], ['weekly', 'Weekly'],
+  ['monthly', 'Monthly'], ['yearly', 'Yearly'],
+]
+
 function EventModal({ draft, onClose, onSave, onDelete }: {
   draft: Draft; onClose: () => void
-  onSave: (body: Record<string, unknown>, uid?: string) => void; onDelete: (uid: string) => void
+  onSave: (body: Record<string, unknown>, uid?: string) => void
+  onDelete: (uid: string, opts?: { recurrence_id?: string | null; scope?: EventScope }) => void
 }) {
   const e = draft.event
+  const recurring = !!e?.is_recurring
   const [summary, setSummary] = useState(e?.summary || '')
   const [allDay, setAllDay] = useState(e ? e.all_day : false)
   const baseDate = draft.date || (e?.start ? e.start.slice(0, 10) : ymd(new Date()))
@@ -144,63 +154,130 @@ function EventModal({ draft, onClose, onSave, onDelete }: {
   const [location, setLocation] = useState(e?.location || '')
   const [description, setDescription] = useState(e?.description || '')
   const [tags, setTags] = useState((e?.tags || []).join(', '))
+  // A new/non-recurring event picks a concrete cadence; an existing recurring one
+  // defaults to "keep" — we don't surface its exact FREQ, so leaving it untouched
+  // preserves the rule.
+  const [repeat, setRepeat] = useState<string>(recurring ? 'keep' : 'none')
+  const [repeatUntil, setRepeatUntil] = useState('')
+  const [scopeAsk, setScopeAsk] = useState<null | 'save' | 'delete'>(null)
 
   // Keep start/end input formats consistent with the all-day toggle.
   const startVal = allDay ? start.slice(0, 10) : (start.includes('T') ? start : `${start}T09:00`)
   const endVal = allDay ? end.slice(0, 10) : (end.includes('T') ? end : `${end}T10:00`)
 
-  const save = () => {
-    const tagList = tags.split(',').map((s) => s.trim()).filter(Boolean)
-    if (e) {
-      onSave({ summary, start: startVal, end: endVal || null, location, description, tags: tagList }, e.uid)
-    } else {
-      onSave({ summary, all_day: allDay, start: startVal, end: allDay ? null : endVal, location, description, tags: tagList })
+  const tagList = () => tags.split(',').map((s) => s.trim()).filter(Boolean)
+  const repeatFields = (): Record<string, unknown> => {
+    if (repeat === 'keep') return {}          // leave the existing rule untouched
+    const b: Record<string, unknown> = { repeat }
+    if (repeat !== 'none' && repeatUntil) b.repeat_until = repeatUntil
+    return b
+  }
+
+  const commit = (scope: EventScope) => {
+    if (!e) {
+      onSave({ summary, all_day: allDay, start: startVal, end: allDay ? null : endVal,
+               location, description, tags: tagList(), ...repeatFields() })
+      return
     }
+    const details = { summary, location, description, tags: tagList() }
+    if (recurring && scope === 'all') {
+      // Edit-safety: never resend an occurrence's start/end as the series master
+      // start (that would slide the whole series). "All events" edits details and
+      // the repeat rule only; move a single instance with "This event".
+      onSave({ ...details, ...repeatFields(), scope: 'all' }, e.uid)
+    } else if (recurring) {
+      onSave({ ...details, start: startVal, end: allDay ? null : endVal,
+               recurrence_id: e.recurrence_id, scope }, e.uid)
+    } else {
+      onSave({ ...details, start: startVal, end: allDay ? null : endVal, ...repeatFields() }, e.uid)
+    }
+  }
+
+  const onSaveClick = () => { if (recurring) setScopeAsk('save'); else commit('all') }
+  const onDeleteClick = () => { if (!e) return; recurring ? setScopeAsk('delete') : onDelete(e.uid) }
+  const pickScope = (scope: EventScope) => {
+    if (scopeAsk === 'delete' && e) onDelete(e.uid, { recurrence_id: e.recurrence_id, scope })
+    else commit(scope)
+    setScopeAsk(null)
   }
 
   return (
     <div className="overlay" onClick={onClose}>
       <div className="modal" onClick={(ev) => ev.stopPropagation()}>
         <div className="modal-head">
-          <span className="modal-title">{e ? 'Event' : 'New event'}</span>
+          <span className="modal-title">{e ? (recurring ? 'Repeating event' : 'Event') : 'New event'}</span>
           <button className="icon-btn" onClick={onClose}>✕</button>
         </div>
-        <div className="field">
-          <label className="label">Title</label>
-          <input className="input" autoFocus value={summary} onChange={(ev) => setSummary(ev.target.value)} />
-        </div>
-        <label className="chip" style={{ alignSelf: 'flex-start', cursor: 'pointer' }}>
-          <input type="checkbox" checked={allDay} onChange={(ev) => setAllDay(ev.target.checked)} /> all day
-        </label>
-        <div className="field-row">
-          <div className="field">
-            <label className="label">Start</label>
-            <input className="input" type={allDay ? 'date' : 'datetime-local'} value={startVal}
-              onChange={(ev) => setStart(ev.target.value)} />
+
+        {scopeAsk ? (
+          <div className="scope-choose">
+            <p className="scope-q">
+              {scopeAsk === 'delete' ? 'Delete which events?' : 'Apply changes to which events?'}
+            </p>
+            <button className="btn" onClick={() => pickScope('this')}>This event</button>
+            <button className="btn" onClick={() => pickScope('thisandfuture')}>This &amp; following</button>
+            <button className="btn" onClick={() => pickScope('all')}>All events</button>
+            <button className="btn ghost" onClick={() => setScopeAsk(null)}>Cancel</button>
           </div>
-          <div className="field">
-            <label className="label">End</label>
-            <input className="input" type={allDay ? 'date' : 'datetime-local'} value={endVal}
-              onChange={(ev) => setEnd(ev.target.value)} />
-          </div>
-        </div>
-        <div className="field">
-          <label className="label">Location</label>
-          <input className="input" value={location} onChange={(ev) => setLocation(ev.target.value)} />
-        </div>
-        <div className="field">
-          <label className="label">Notes</label>
-          <textarea className="input" rows={2} value={description} onChange={(ev) => setDescription(ev.target.value)} />
-        </div>
-        <div className="field">
-          <label className="label">Tags (comma-separated)</label>
-          <input className="input" value={tags} onChange={(ev) => setTags(ev.target.value)} />
-        </div>
-        <div className="modal-actions">
-          {e && <button className="btn ghost" onClick={() => onDelete(e.uid)}>Delete</button>}
-          <span className="spacer" />
-          <button className="btn" onClick={save}>Save</button>
-        </div>
+        ) : (
+          <>
+            <div className="field">
+              <label className="label">Title</label>
+              <input className="input" autoFocus value={summary} onChange={(ev) => setSummary(ev.target.value)} />
+            </div>
+            <label className="chip" style={{ alignSelf: 'flex-start', cursor: 'pointer' }}>
+              <input type="checkbox" checked={allDay} onChange={(ev) => setAllDay(ev.target.checked)} /> all day
+            </label>
+            <div className="field-row">
+              <div className="field">
+                <label className="label">Start</label>
+                <input className="input" type={allDay ? 'date' : 'datetime-local'} value={startVal}
+                  onChange={(ev) => setStart(ev.target.value)} />
+              </div>
+              <div className="field">
+                <label className="label">End</label>
+                <input className="input" type={allDay ? 'date' : 'datetime-local'} value={endVal}
+                  onChange={(ev) => setEnd(ev.target.value)} />
+              </div>
+            </div>
+            <div className="field">
+              <label className="label">Repeat</label>
+              <select className="input" value={repeat} onChange={(ev) => setRepeat(ev.target.value)}>
+                {recurring && <option value="keep">Keep current schedule</option>}
+                {REPEATS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+              </select>
+            </div>
+            {repeat !== 'keep' && repeat !== 'none' && (
+              <div className="field">
+                <label className="label">Repeat until (optional)</label>
+                <input className="input" type="date" value={repeatUntil}
+                  onChange={(ev) => setRepeatUntil(ev.target.value)} />
+              </div>
+            )}
+            <div className="field">
+              <label className="label">Location</label>
+              <input className="input" value={location} onChange={(ev) => setLocation(ev.target.value)} />
+            </div>
+            <div className="field">
+              <label className="label">Notes</label>
+              <textarea className="input" rows={2} value={description} onChange={(ev) => setDescription(ev.target.value)} />
+            </div>
+            <div className="field">
+              <label className="label">Tags (comma-separated)</label>
+              <input className="input" value={tags} onChange={(ev) => setTags(ev.target.value)} />
+            </div>
+            {recurring && (
+              <p className="scope-hint">
+                “All events” changes details &amp; repeat only — use “This event” to move a single occurrence.
+              </p>
+            )}
+            <div className="modal-actions">
+              {e && <button className="btn ghost" onClick={onDeleteClick}>Delete</button>}
+              <span className="spacer" />
+              <button className="btn" onClick={onSaveClick}>Save</button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   )

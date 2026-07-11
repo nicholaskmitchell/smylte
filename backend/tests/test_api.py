@@ -115,6 +115,89 @@ def test_calendar_event_crud(client):
     assert after == {"Meeting (moved)"}
 
 
+def _events(client, cid, start="2026-07-01", end="2026-08-01"):
+    return client.get(f"/api/calendars/{cid}/events", params={"start": start, "end": end}).json()
+
+
+def test_recurring_event_authoring_and_expansion(client):
+    cid = _cal(client)["id"]
+    ev = client.post(f"/api/calendars/{cid}/events", json={
+        "summary": "Standup", "start": "2026-07-06T09:00:00", "end": "2026-07-06T09:15:00",
+        "repeat": "weekly",
+    }).json()
+    assert ev["is_recurring"] and ev["has_rrule"]
+    # A month starting weeks AFTER the first occurrence still lists every instance
+    # (the bug we fixed: a past master used to vanish).
+    aug = [e for e in _events(client, cid, "2026-08-01", "2026-09-01") if e["summary"] == "Standup"]
+    assert len(aug) >= 4
+    assert all(e["is_recurring"] for e in aug)
+    assert len({e["id"] for e in aug}) == len(aug)      # distinct per-occurrence ids
+    assert {e["uid"] for e in aug} == {ev["uid"]}       # all share the base resource
+
+
+def test_recurring_per_occurrence_edit_and_delete(client):
+    cid = _cal(client)["id"]
+    ev = client.post(f"/api/calendars/{cid}/events", json={
+        "summary": "Sync", "start": "2026-07-06T09:00:00", "end": "2026-07-06T09:30:00",
+        "repeat": "weekly",
+    }).json()
+    uid = ev["uid"]
+    occ = sorted((e for e in _events(client, cid) if e["summary"] == "Sync"), key=lambda e: e["start"])
+    assert len(occ) >= 4
+    base_count = len(occ)
+
+    # "This event": move + rename only the 2nd occurrence.
+    client.patch(f"/api/calendars/{cid}/events/{uid}", json={
+        "summary": "Sync (moved)", "start": "2026-07-14T11:00:00", "end": "2026-07-14T11:30:00",
+        "recurrence_id": occ[1]["recurrence_id"], "scope": "this",
+    })
+    after = _events(client, cid)
+    moved = [e for e in after if e["summary"] == "Sync (moved)"]
+    assert len(moved) == 1 and moved[0]["start"].startswith("2026-07-14T11:00")
+    assert sum(1 for e in after if e["summary"] == "Sync") == base_count - 1
+
+    # "This event" delete: punch a hole at the first occurrence.
+    client.request("DELETE", f"/api/calendars/{cid}/events/{uid}",
+                   params={"recurrence_id": occ[0]["recurrence_id"], "scope": "this"})
+    assert not any(e["start"].startswith("2026-07-06") for e in _events(client, cid))
+
+    # "All events": delete the whole series.
+    assert client.delete(f"/api/calendars/{cid}/events/{uid}").status_code == 204
+    assert [e for e in _events(client, cid) if e["uid"] == uid] == []
+
+
+def test_recurring_this_and_following(client):
+    cid = _cal(client)["id"]
+    ev = client.post(f"/api/calendars/{cid}/events", json={
+        "summary": "Class", "start": "2026-07-06T18:00:00", "end": "2026-07-06T19:00:00",
+        "repeat": "weekly",
+    }).json()
+    uid = ev["uid"]
+    occ = sorted((e for e in _events(client, cid) if e["summary"] == "Class"), key=lambda e: e["start"])
+    split_at = occ[2]["recurrence_id"]   # 3rd occurrence onward
+
+    client.patch(f"/api/calendars/{cid}/events/{uid}", json={
+        "summary": "Class (new room)", "start": occ[2]["start"], "end": occ[2]["end"],
+        "recurrence_id": split_at, "scope": "thisandfuture",
+    })
+    after = _events(client, cid)
+    old = sorted(e["start"] for e in after if e["summary"] == "Class")
+    new = sorted(e["start"] for e in after if e["summary"] == "Class (new room)")
+    assert len(old) == 2 and len(new) >= 2          # head keeps the first two; tail continues
+    assert max(old) < min(new)                       # clean split at the boundary
+    # Head and tail are distinct resources.
+    assert len({e["uid"] for e in after if e["summary"].startswith("Class")}) == 2
+
+
+def test_settings_sync(client):
+    r = client.put("/api/settings", json={"theme": "dark"})
+    assert r.status_code == 200 and r.json().get("theme") == "dark"
+    assert client.get("/api/settings").json().get("theme") == "dark"
+    # Merge, not replace: a second key coexists.
+    client.put("/api/settings", json={"theme": "light"})
+    assert client.get("/api/settings").json().get("theme") == "light"
+
+
 def test_tabs_are_separated(client):
     lst = _list(client)
     cal = _cal(client)

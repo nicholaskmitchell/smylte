@@ -52,10 +52,20 @@ def parse_calendar(raw: bytes | str) -> Calendar:
 
 
 def find_component(cal: Calendar):
-    """Return (component, name) for the first VTODO or VEVENT, else (None, None)."""
+    """Return (component, name) for the series *master* — the first VTODO/VEVENT
+    that has no RECURRENCE-ID. A recurring resource carries the master plus zero or
+    more override components (each with a RECURRENCE-ID, RFC 4791); the cache
+    columns must reflect the master, not an override. Falls back to the first
+    component of that type if every instance is an override (malformed, but safe).
+    Returns (None, None) when neither component type is present."""
     for name in CACHED_COMPONENTS:
-        for comp in cal.walk(name):
-            return comp, name
+        comps = list(cal.walk(name))
+        if not comps:
+            continue
+        for comp in comps:
+            if "RECURRENCE-ID" not in comp:
+                return comp, name
+        return comps[0], name
     return None, None
 
 
@@ -126,7 +136,9 @@ def extract(cal: Calendar) -> ItemFields | None:
         f.created = _iso(comp.get("CREATED"))[0]
     if "LAST-MODIFIED" in comp:
         f.last_modified = _iso(comp.get("LAST-MODIFIED"))[0]
-    f.has_rrule = "RRULE" in comp
+    # "Has a recurrence set" — RRULE or RDATE. Drives whether the read path
+    # expands the resource into occurrences (recur.expand_occurrences).
+    f.has_rrule = ("RRULE" in comp) or ("RDATE" in comp)
     f.categories = _categories(comp.get("CATEGORIES"))
     f.related_parent = _related_parent(comp)
     if name == "VTODO":
