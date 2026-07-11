@@ -45,18 +45,25 @@ export function Sidebar({ title, placeholder, items, sel, countOf, onSelect, onI
     if (l) { onItems([...items, l]); onSelect(l.id) }
   }
 
+  // Rename/recolor/delete paint immediately (the modal closes at once); the
+  // request settles behind, and a failure restores the previous items.
   const save = async (id: string, body: { name?: string; color?: string | null }) => {
-    const updated = await api.update(id, body)
-    if (updated) onItems(items.map((l) => (l.id === id ? updated : l)))
     setEditing(null)
+    const prev = items
+    onItems(items.map((l) => (l.id === id
+      ? { ...l, name: body.name ?? l.name, color: body.color === undefined ? l.color : body.color }
+      : l)))
+    const updated = await api.update(id, body)
+    if (!updated) onItems(prev)
   }
 
   const remove = async (id: string) => {
-    await api.remove(id)
+    setEditing(null)
+    const prev = items
     const left = items.filter((l) => l.id !== id)
     onItems(left)
     if (sel === id) onSelect(left[0]?.id || '')
-    setEditing(null)
+    if ((await api.remove(id)) === undefined) onItems(prev)
   }
 
   const drop = (targetId: string) => {

@@ -138,18 +138,65 @@ export function CalendarView({ rev, onExpire, sideCollapsed, onToggleSide }: {
     return m
   }, [events, days])
 
+  // Optimistically paint an edit onto the events we can represent locally: a
+  // non-recurring event, or a single occurrence (scope "this"). Series-wide
+  // edits return false — the caller reloads for those instead.
+  const applyLocal = (uid: string, body: Record<string, unknown>): boolean => {
+    const single = body.scope === 'this' && !!body.recurrence_id
+    if (!single && events.some((e) => e.uid === uid && e.is_recurring)) return false
+    setEvents((evs) => evs.map((e) => {
+      if (e.uid !== uid) return e
+      if (single && e.id !== `${uid}::${body.recurrence_id}`) return e
+      const n = { ...e }
+      if (typeof body.summary === 'string') n.summary = body.summary
+      if (typeof body.location === 'string') n.location = body.location
+      if (typeof body.description === 'string') n.description = body.description
+      if (Array.isArray(body.tags)) n.tags = body.tags as string[]
+      if (typeof body.start === 'string') {
+        n.start = body.start
+        n.start_is_date = !body.start.includes('T')
+        n.all_day = n.start_is_date
+      }
+      if (typeof body.end === 'string') {
+        n.end = body.end
+        n.end_is_date = !body.end.includes('T')
+      }
+      return n
+    }))
+    return true
+  }
+
   // Create in `cal`, or patch `uid` there — then relocate the resource if the
-  // modal picked a different calendar.
+  // modal picked a different calendar. The modal closes and the grid updates
+  // immediately; the request settles behind, and a reload reconciles whenever
+  // the local paint can't be exact (series edits, moves) or the write failed.
   const save = async (body: Record<string, unknown>, cal: string, uid?: string, moveTo?: string) => {
-    if (!uid) await guard(() => api.createEvent(cal, body))
-    else {
-      await guard(() => api.patchEvent(cal, uid, body))
-      if (moveTo && moveTo !== cal) await guard(() => api.moveEvent(cal, uid, moveTo))
+    setDraft(null)
+    if (!uid) {
+      const created = await guard(() => api.createEvent(cal, body))
+      if (!created) return
+      if (created.is_recurring) reload()          // occurrences expand server-side
+      else setEvents((evs) => [...evs, created])
+      return
     }
-    setDraft(null); reload()
+    const painted = applyLocal(uid, body)
+    const ok = await guard(() => api.patchEvent(cal, uid, body))
+    const moved = !!(ok && moveTo && moveTo !== cal)
+    if (moved) await guard(() => api.moveEvent(cal, uid, moveTo!))
+    if (!ok || !painted || moved) reload()
   }
   const del = async (cal: string, uid: string, opts?: { recurrence_id?: string | null; scope?: EventScope }) => {
-    await guard(() => api.deleteEvent(cal, uid, opts)); setDraft(null); reload()
+    setDraft(null)
+    // Drop the affected instances right away; reload rolls back on failure.
+    const rid = opts?.recurrence_id
+    const scope = opts?.scope || 'all'
+    setEvents((evs) => evs.filter((e) => {
+      if (e.uid !== uid) return true
+      if (scope === 'this' && rid) return e.id !== `${uid}::${rid}`
+      if (scope === 'thisandfuture' && rid) return (e.recurrence_id || '') < rid
+      return false
+    }))
+    if ((await guard(() => api.deleteEvent(cal, uid, opts))) === undefined) reload()
   }
 
   // Desktop drag: move an event chip to another day cell, or drag its resize

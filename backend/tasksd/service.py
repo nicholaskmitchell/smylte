@@ -21,6 +21,7 @@ from typing import Any
 from .config import Settings
 from .dav import xml as davxml
 from .dav.client import DavClient
+from .dav.errors import NotFound as DavNotFound
 from .db import store
 from .ical import PRIORITY, UNSET, EventEdit, TaskEdit, recur
 from .sync import SyncEngine, SyncStats
@@ -101,9 +102,22 @@ class TaskService:
                 self._engine.sync(row["href"])
 
     def sync_all(self) -> list[SyncStats]:
+        # Lock per collection, not for the whole sweep: interactive requests
+        # (which serialize on the same lock) interleave between slices instead
+        # of stalling for the full background pass every poll interval.
         with self._lock:
             self._engine.discover()
-            stats = [self._engine.sync(r["href"]) for r in store.get_collections(self._conn)]
+            hrefs = [r["href"] for r in store.get_collections(self._conn)]
+        stats: list[SyncStats] = []
+        for href in hrefs:
+            with self._lock:
+                if not store.has_collection(self._conn, href):
+                    continue
+                try:
+                    stats.append(self._engine.sync(href))
+                except DavNotFound:
+                    # Deleted from under us between slices; discover next pass.
+                    continue
         if any(s.upserted or s.removed for s in stats):
             self._publish({"type": "sync"})
         return stats

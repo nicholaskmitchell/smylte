@@ -72,9 +72,16 @@ export function App() {
   }, [sideCollapsed])
 
   // Live updates: any server-side change bumps `rev`, which the views watch.
+  // One user action can publish several events in a burst (e.g. a move is a
+  // delete + create) — debounce so they coalesce into a single refetch pass.
   useEffect(() => {
     if (auth !== 'in') return
-    return subscribe(() => setRev((r) => r + 1))
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const unsubscribe = subscribe(() => {
+      clearTimeout(timer)
+      timer = setTimeout(() => setRev((r) => r + 1), 250)
+    })
+    return () => { clearTimeout(timer); unsubscribe() }
   }, [auth])
 
   // Dismiss the settings menu on an outside click or Escape (like Søren's).
