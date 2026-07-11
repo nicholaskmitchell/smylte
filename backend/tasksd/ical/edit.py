@@ -402,6 +402,129 @@ def exclude_occurrence(
     return cal.to_ical()
 
 
+_WEEKDAYS = ("MO", "TU", "WE", "TH", "FR", "SA", "SU")
+
+
+def _wall_delta(a: date | datetime, b: date | datetime) -> timedelta:
+    """Wall-clock difference a − b, tolerating mixed tz-awareness: the app
+    writes floating local times while a foreign master may be zone-aware, and
+    "shift the series by what the user dragged" is a wall-clock notion."""
+    if isinstance(a, datetime) and isinstance(b, datetime):
+        return a.replace(tzinfo=None) - b.replace(tzinfo=None)
+    return a - b
+
+
+def _shift_datelike(event: Event, key: str, delta: timedelta) -> None:
+    prop = event.get(key)
+    if prop is None:
+        return
+    old = prop.dt
+    _replace(event, key)
+    # Adding to the original value keeps its type and tzinfo, so a zone-aware
+    # series keeps its wall-clock time across DST boundaries.
+    event.add(key, old + delta)
+
+
+def _shift_datelist(event: Event, key: str, delta: timedelta) -> None:
+    """Shift every EXDATE/RDATE entry (possibly several property lines)."""
+    prop = event.get(key)
+    if prop is None:
+        return
+    lists = prop if isinstance(prop, list) else [prop]
+    values = [entry.dt + delta for lst in lists for entry in lst.dts]
+    _replace(event, key)
+    if values:
+        event.add(key, values)
+
+
+def _shift_rrule(master: Event, delta: timedelta, day_delta: int) -> None:
+    """UNTIL moves with the series (preserving the occurrence count), and a
+    WEEKLY BYDAY list rotates with the day offset so "every Mon" dragged one
+    day becomes "every Tue". Other BY* parts (foreign clients only — our own
+    rules never carry them) are left untouched."""
+    rule = _rrule_dict(master)
+    if rule is None:
+        return
+    changed = False
+    if "UNTIL" in rule:
+        rule["UNTIL"] = [u + delta for u in rule["UNTIL"]]
+        changed = True
+    freq = [str(f).upper() for f in rule.get("FREQ", [])]
+    if day_delta % 7 and "WEEKLY" in freq and "BYDAY" in rule:
+        codes = [str(d).upper() for d in rule["BYDAY"]]
+        if all(c in _WEEKDAYS for c in codes):
+            rule["BYDAY"] = [_WEEKDAYS[(_WEEKDAYS.index(c) + day_delta) % 7] for c in codes]
+            changed = True
+    if changed:
+        _set_rrule(master, rule)
+
+
+def shift_series(
+    raw: bytes | str, recurrence_id: str, edit: EventEdit, *, now: datetime | None = None
+) -> bytes:
+    """Reschedule a whole series ("all events" with a time change): move every
+    occurrence by the offset the user applied to one of them. The base slot is
+    the dragged occurrence's current start (its override's DTSTART if it was
+    moved, else the `recurrence_id` anchor), so the visual offset and the series
+    offset agree. Master DTSTART/DTEND, RRULE UNTIL, EXDATE/RDATE, and every
+    override's RECURRENCE-ID and times shift together so no anchor orphans.
+    Date-ness is preserved — an all-day series stays all-day, and switching a
+    series between all-day and timed is rejected. A new end changes the master's
+    duration (a resize); remaining non-time fields apply to the master as usual.
+    """
+    if edit.dtstart is UNSET or edit.dtstart is None:
+        raise ValueError("rescheduling a series requires a new start")
+    now = now or datetime.now(timezone.utc)
+    anchor = _anchor_from_iso(recurrence_id)
+    if isinstance(anchor, datetime) != isinstance(edit.dtstart, datetime):
+        raise ValueError(
+            "cannot switch a series between all-day and timed with 'all events'; "
+            "edit single occurrences instead"
+        )
+
+    cal = Calendar.from_ical(raw)
+    master = _find_master_event(cal)
+    if master is None or master.get("DTSTART") is None:
+        raise ValueError("resource has no dated VEVENT to edit")
+
+    override = _find_override(cal, anchor)
+    base = override.get("DTSTART").dt if override is not None and override.get("DTSTART") else anchor
+    delta = _wall_delta(edit.dtstart, base)
+    old_start = master.get("DTSTART").dt
+    new_start = old_start + delta
+    day_delta = (
+        (new_start.date() if isinstance(new_start, datetime) else new_start)
+        - (old_start.date() if isinstance(old_start, datetime) else old_start)
+    ).days
+    duration = None
+    if edit.dtend is not UNSET and edit.dtend is not None:
+        duration = _wall_delta(edit.dtend, edit.dtstart)
+
+    for ev in cal.walk("VEVENT"):
+        is_master = "RECURRENCE-ID" not in ev
+        _shift_datelike(ev, "RECURRENCE-ID", delta)
+        _shift_datelike(ev, "DTSTART", delta)
+        if duration is not None and is_master:
+            # Resize: the master's span becomes the new duration; overrides keep
+            # their own explicit times (shifted, but not re-sized).
+            _replace(ev, "DURATION")
+            _replace(ev, "DTEND")
+            ev.add("DTEND", ev.get("DTSTART").dt + duration)
+        else:
+            _shift_datelike(ev, "DTEND", delta)
+        if is_master:
+            _shift_datelist(ev, "EXDATE", delta)
+            _shift_datelist(ev, "RDATE", delta)
+            _shift_rrule(ev, delta, day_delta)
+        else:
+            _stamp(ev, now)
+
+    # Non-time fields (summary, rrule change, …) land on the master, which also
+    # picks up its stamp here.
+    _apply_event_fields(master, replace(edit, dtstart=UNSET, dtend=UNSET), now)
+    return cal.to_ical()
+
+
 def _until_before(anchor) -> date | datetime:
     if isinstance(anchor, datetime):
         return _as_utc(anchor - timedelta(seconds=1))

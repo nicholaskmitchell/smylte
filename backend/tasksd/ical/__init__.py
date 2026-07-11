@@ -14,6 +14,7 @@ from .edit import (
     build_new_event,
     exclude_occurrence,
     rrule_from_spec,
+    shift_series,
     split_series,
 )
 from .read import (
@@ -45,5 +46,6 @@ __all__ = [
     "build_new_event",
     "exclude_occurrence",
     "rrule_from_spec",
+    "shift_series",
     "split_series",
 ]

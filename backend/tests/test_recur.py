@@ -10,6 +10,7 @@ from __future__ import annotations
 import time
 from datetime import date, datetime, timezone
 
+import pytest
 from helpers import foreign_event_raw
 
 from tasksd.dav.client import CollectionInfo, Item
@@ -19,6 +20,7 @@ from tasksd.ical import (
     apply_occurrence_override,
     exclude_occurrence,
     recur,
+    shift_series,
     split_series,
 )
 from tasksd.ical.read import extract_from_raw
@@ -240,6 +242,108 @@ def test_split_delete_truncates_head():
     head, _tail = split_series(_series(), "2026-01-20T09:00:00+00:00", EventEdit())
     starts = [o.start for o in recur.expand_occurrences(head, *_WIN)]
     assert starts == ["2026-01-06T09:00:00+00:00", "2026-01-13T09:00:00+00:00"]
+
+
+# ── whole-series reschedule (shift_series) ────────────────────────────────────
+
+def test_shift_series_moves_rule_exdate_and_override_together():
+    raw = foreign_event_raw(
+        "sh", "Std", rrule="FREQ=WEEKLY;UNTIL=20260203T090000Z",
+        exdate="20260113T090000Z",
+        overrides=((
+            "RECURRENCE-ID:20260120T090000Z",
+            "DTSTART:20260121T110000Z",
+            "DTEND:20260121T113000Z",
+            "SUMMARY:Moved",
+        ),),
+    )
+    # The UI sends floating local times (as the modal does): +2 days.
+    shifted = shift_series(raw, "2026-01-06T09:00:00+00:00",
+                           EventEdit(dtstart=datetime(2026, 1, 8, 9, 0),
+                                     dtend=datetime(2026, 1, 8, 9, 30)))
+    occs = recur.expand_occurrences(shifted, *_WIN)
+    by_anchor = {o.recurrence_id: o for o in occs}
+    # 5 slots (1/8..2/5) minus the shifted EXDATE (1/15) = 4 occurrences.
+    assert sorted(by_anchor) == [
+        "2026-01-08T09:00:00+00:00", "2026-01-22T09:00:00+00:00",
+        "2026-01-29T09:00:00+00:00", "2026-02-05T09:00:00+00:00",
+    ]
+    # The override stayed attached to its slot and moved by the same offset.
+    moved = by_anchor["2026-01-22T09:00:00+00:00"]
+    assert moved.start == "2026-01-23T11:00:00+00:00"
+    assert moved.summary == "Moved" and moved.is_override
+    assert b"X-FOREIGN-KEEP" in shifted  # invariant #2
+
+
+def test_shift_series_base_is_the_overridden_start():
+    # Dragging an occurrence that was already moved shifts the series by the
+    # offset from where the user *sees* it, not from its original slot.
+    raw = foreign_event_raw(
+        "shov", rrule="FREQ=WEEKLY;COUNT=3",
+        overrides=((
+            "RECURRENCE-ID:20260113T090000Z",
+            "DTSTART:20260114T110000Z",
+            "DTEND:20260114T113000Z",
+        ),),
+    )
+    shifted = shift_series(raw, "2026-01-13T09:00:00+00:00",
+                           EventEdit(dtstart=datetime(2026, 1, 16, 11, 0)))
+    starts = _starts(recur.expand_occurrences(shifted, *_WIN))
+    # Visual offset was +2 days: masters 1/6 -> 1/8, override 1/14 11:00 -> 1/16 11:00.
+    assert starts == [
+        "2026-01-08T09:00:00+00:00", "2026-01-16T11:00:00+00:00",
+        "2026-01-22T09:00:00+00:00",
+    ]
+
+
+def test_shift_series_all_day():
+    raw = foreign_event_raw("shad", dtstart="20260106", dtend="20260107",
+                            all_day=True, rrule="FREQ=WEEKLY;COUNT=3")
+    shifted = shift_series(raw, "2026-01-06", EventEdit(dtstart=date(2026, 1, 9)))
+    occs = recur.expand_occurrences(shifted, *_WIN)
+    assert _starts(occs) == ["2026-01-09", "2026-01-16", "2026-01-23"]
+    assert all(o.start_is_date and o.end_is_date for o in occs)
+
+
+def test_shift_series_resize_changes_master_duration():
+    shifted = shift_series(_series(), "2026-01-06T09:00:00+00:00",
+                           EventEdit(dtstart=datetime(2026, 1, 6, 9, 0),
+                                     dtend=datetime(2026, 1, 6, 10, 30)))
+    occs = recur.expand_occurrences(shifted, *_WIN)
+    assert _starts(occs)[0] == "2026-01-06T09:00:00+00:00"  # delta 0: dates unchanged
+    assert all(o.end == o.start.replace("T09:00", "T10:30") for o in occs)
+
+
+def test_shift_series_dst_wall_clock_preserved():
+    raw = foreign_event_raw(
+        "shdst", dtstart="TZID=America/Chicago:20260304T090000",
+        dtend=None, rrule="FREQ=WEEKLY;COUNT=3", vtimezone=_CHICAGO_VTZ,
+    )
+    shifted = shift_series(raw, "2026-03-04T09:00:00-06:00",
+                           EventEdit(dtstart=datetime(2026, 3, 5, 9, 0)))
+    occs = recur.expand_occurrences(shifted, date(2026, 3, 1), date(2026, 3, 25))
+    # 09:00 local survives the 2026-03-08 spring-forward; the offset flips.
+    assert occs[0].start.startswith("2026-03-05T09:00:00-06:00")
+    assert occs[1].start.startswith("2026-03-12T09:00:00-05:00")
+    assert occs[2].start.startswith("2026-03-19T09:00:00-05:00")
+
+
+def test_shift_series_rotates_weekly_byday():
+    raw = foreign_event_raw("shbd", rrule="FREQ=WEEKLY;BYDAY=TU;COUNT=3")  # 1/6 is a Tuesday
+    shifted = shift_series(raw, "2026-01-06T09:00:00+00:00",
+                           EventEdit(dtstart=datetime(2026, 1, 7, 9, 0)))
+    assert b"BYDAY=WE" in shifted
+    starts = _starts(recur.expand_occurrences(shifted, *_WIN))
+    assert starts == [
+        "2026-01-07T09:00:00+00:00", "2026-01-14T09:00:00+00:00",
+        "2026-01-21T09:00:00+00:00",
+    ]
+
+
+def test_shift_series_rejects_dateness_switch():
+    with pytest.raises(ValueError):
+        shift_series(_series(), "2026-01-06T09:00:00+00:00",
+                     EventEdit(dtstart=date(2026, 1, 8)))
 
 
 def _seed(conn, uid, raw):

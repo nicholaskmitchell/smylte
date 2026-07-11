@@ -264,6 +264,10 @@ function EventModal({ draft, onClose, onSave, onDelete }: {
   const [repeat, setRepeat] = useState<string>(recurring ? 'keep' : 'none')
   const [repeatUntil, setRepeatUntil] = useState('')
   const [scopeAsk, setScopeAsk] = useState<null | 'save' | 'delete'>(null)
+  // Snapshot the initial time fields so an "All events" save can tell a real
+  // time change (shift the series) from a detail-only edit (leave times alone).
+  const [initial] = useState(() => ({ start, end, allDay }))
+  const timeChanged = start !== initial.start || end !== initial.end || allDay !== initial.allDay
 
   // Keep start/end input formats consistent with the all-day toggle.
   const startVal = allDay ? start.slice(0, 10) : (start.includes('T') ? start : `${start}T09:00`)
@@ -305,10 +309,14 @@ function EventModal({ draft, onClose, onSave, onDelete }: {
     }
     const details = { summary, location, description, tags: tagList() }
     if (recurring && scope === 'all') {
-      // Edit-safety: never resend an occurrence's start/end as the series master
-      // start (that would slide the whole series). "All events" edits details and
-      // the repeat rule only; move a single instance with "This event".
-      onSave({ ...details, ...repeatFields(), scope: 'all' }, e.uid)
+      // A changed time plus recurrence_id tells the server to shift the whole
+      // series by the same offset (EXDATEs and overrides move along). Untouched
+      // times are omitted — resending an occurrence's slot as the master start
+      // would slide the series arbitrarily.
+      const times = timeChanged
+        ? { start: startOut, end: endOut, recurrence_id: e.recurrence_id }
+        : {}
+      onSave({ ...details, ...times, ...repeatFields(), scope: 'all' }, e.uid)
     } else if (recurring) {
       onSave({ ...details, start: startOut, end: endOut,
                recurrence_id: e.recurrence_id, scope }, e.uid)
@@ -392,7 +400,7 @@ function EventModal({ draft, onClose, onSave, onDelete }: {
             </div>
             {recurring && (
               <p className="scope-hint">
-                “All events” changes details &amp; repeat only — use “This event” to move a single occurrence.
+                “All events” moves every occurrence by the same offset — use “This event” to move just one.
               </p>
             )}
             <div className="modal-actions">

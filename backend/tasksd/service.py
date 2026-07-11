@@ -22,7 +22,7 @@ from .config import Settings
 from .dav import xml as davxml
 from .dav.client import DavClient
 from .db import store
-from .ical import PRIORITY, EventEdit, TaskEdit, recur
+from .ical import PRIORITY, UNSET, EventEdit, TaskEdit, recur
 from .sync import SyncEngine, SyncStats
 
 log = logging.getLogger("tasksd.service")
@@ -443,6 +443,10 @@ class TaskService:
                 self._engine.override_event(href, uid, recurrence_id, edit)
             elif scope == "thisandfuture" and recurrence_id:
                 self._engine.split_event(href, uid, recurrence_id, edit)
+            elif scope == "all" and recurrence_id and edit.dtstart is not UNSET:
+                # A time change with "all events" moves the whole series by the
+                # same offset (the master edit below never touches times).
+                self._engine.shift_event(href, uid, recurrence_id, edit)
             else:
                 self._engine.edit_event(href, uid, edit)
         self._publish({"type": "event_updated", "list": _slug(href), "uid": uid})
