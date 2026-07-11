@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { api, subscribe } from './api'
+import { api, subscribe, type TasksViewMode } from './api'
 import { Login } from './components/Login'
 import { TasksView } from './components/TasksView'
 import { CalendarView } from './components/CalendarView'
@@ -12,6 +12,8 @@ export function App() {
   const [user, setUser] = useState('')
   const [tab, setTab] = useState<Tab>('tasks')
   const [theme, setTheme] = useState(() => document.documentElement.dataset.theme || 'light')
+  const [tasksView, setTasksView] = useState<TasksViewMode>('list')
+  const [sideCollapsed, setSideCollapsed] = useState(false)
   const [rev, setRev] = useState(0)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const settingsRef = useRef<HTMLDivElement>(null)
@@ -35,9 +37,26 @@ export function App() {
   useEffect(() => {
     if (auth !== 'in') return
     api.getSettings()
-      .then((s) => { if (s.theme === 'dark' || s.theme === 'light') applyTheme(s.theme) })
+      .then((s) => {
+        if (s.theme === 'dark' || s.theme === 'light') applyTheme(s.theme)
+        if (s.tasks_view === 'list' || s.tasks_view === 'day3' || s.tasks_view === 'week') {
+          setTasksView(s.tasks_view)
+        }
+        if (typeof s.sidebar_collapsed === 'boolean') setSideCollapsed(s.sidebar_collapsed)
+      })
       .catch(() => { /* keep the locally-cached theme */ })
   }, [auth, applyTheme])
+
+  const changeTasksView = useCallback((v: TasksViewMode) => {
+    setTasksView(v)
+    api.putSettings({ tasks_view: v }).catch(() => { /* stays local if offline */ })
+  }, [])
+
+  const toggleSide = useCallback(() => {
+    const next = !sideCollapsed
+    setSideCollapsed(next)
+    api.putSettings({ sidebar_collapsed: next }).catch(() => { /* stays local if offline */ })
+  }, [sideCollapsed])
 
   // Live updates: any server-side change bumps `rev`, which the views watch.
   useEffect(() => {
@@ -123,8 +142,10 @@ export function App() {
         )}
       </div>
       {tab === 'tasks'
-        ? <TasksView rev={rev} onExpire={onExpire} />
-        : <CalendarView rev={rev} onExpire={onExpire} />}
+        ? <TasksView rev={rev} onExpire={onExpire} view={tasksView} onView={changeTasksView}
+            sideCollapsed={sideCollapsed} onToggleSide={toggleSide} />
+        : <CalendarView rev={rev} onExpire={onExpire}
+            sideCollapsed={sideCollapsed} onToggleSide={toggleSide} />}
     </div>
   )
 }

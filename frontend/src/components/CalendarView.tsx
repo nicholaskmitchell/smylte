@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type CSSProperties } from 'react'
 import { api, type CalEvent, type EventScope, type List } from '../api'
-import { makeGuard, pad, ymd } from '../util'
+import { addDays, makeGuard, pad, ymd } from '../util'
 import { useIsMobile } from '../hooks'
 import { Sidebar } from './Sidebar'
 
@@ -10,7 +10,26 @@ const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June',
 
 interface Draft { event?: CalEvent; date?: string }
 
-export function CalendarView({ rev, onExpire }: { rev: number; onExpire: () => void }) {
+// A calendar-cell entry: `cont` marks days after the first of a multi-day span.
+type DayEv = CalEvent & { cont?: boolean }
+
+const shiftYmd = (day: string, n: number) => ymd(addDays(new Date(`${day}T00:00`), n))
+
+// Last visible day of an event. DTEND is exclusive for all-day events, and a
+// timed event ending exactly at midnight shouldn't spill into the next day.
+function lastDayOf(e: CalEvent): string {
+  const startDay = e.start!.slice(0, 10)
+  if (!e.end) return startDay
+  const endDay = e.end.slice(0, 10)
+  const exclusive = e.end_is_date || e.end.slice(11, 16) === '00:00'
+  const last = exclusive ? shiftYmd(endDay, -1) : endDay
+  return last < startDay ? startDay : last
+}
+
+export function CalendarView({ rev, onExpire, sideCollapsed, onToggleSide }: {
+  rev: number; onExpire: () => void
+  sideCollapsed: boolean; onToggleSide: () => void
+}) {
   const guard = makeGuard(onExpire)
   const isMobile = useIsMobile()
   const [cals, setCals] = useState<List[]>([])
@@ -60,15 +79,23 @@ export function CalendarView({ rev, onExpire }: { rev: number; onExpire: () => v
   })
 
   const byDay = useMemo(() => {
-    const m: Record<string, CalEvent[]> = {}
+    const m: Record<string, DayEv[]> = {}
+    const first = ymd(days[0])
+    const last = ymd(days[41])
     for (const e of events) {
       if (!e.start) continue
-      const key = e.start.slice(0, 10)
-      ;(m[key] ||= []).push(e)
+      const startDay = e.start.slice(0, 10)
+      const endDay = lastDayOf(e)
+      // Walk every day the event covers, clipped to the visible 6-week window.
+      let day = startDay < first ? first : startDay
+      const stop = endDay > last ? last : endDay
+      for (let i = 0; day <= stop && i < 42; i++, day = shiftYmd(day, 1)) {
+        ;(m[day] ||= []).push(day === startDay ? e : { ...e, cont: true })
+      }
     }
     for (const k of Object.keys(m)) m[k].sort((a, b) => (a.start || '').localeCompare(b.start || ''))
     return m
-  }, [events])
+  }, [events, days])
 
   const save = async (body: Record<string, unknown>, uid?: string) => {
     if (uid) await guard(() => api.patchEvent(sel, uid, body))
@@ -92,7 +119,8 @@ export function CalendarView({ rev, onExpire }: { rev: number; onExpire: () => v
   return (
     <div className="work">
       <Sidebar title="Calendars" placeholder="Calendar" items={cals} sel={sel}
-        countOf={(c) => c.event_count} onSelect={setSel} onItems={setCals} api={calApi} />
+        countOf={(c) => c.event_count} onSelect={setSel} onItems={setCals} api={calApi}
+        collapsed={sideCollapsed} onToggle={onToggleSide} />
 
       <div className="content">
         <div className="cal-head">
@@ -135,13 +163,14 @@ export function CalendarView({ rev, onExpire }: { rev: number; onExpire: () => v
                     ) : (
                       <>
                         {dayEvents.slice(0, 4).map((e) => (
-                          <div key={e.id} className={`cal-ev ${e.all_day ? 'allday' : ''}`}
+                          <div key={e.id} className={`cal-ev ${e.all_day ? 'allday' : ''} ${e.cont ? 'cont' : ''}`}
                             title={e.is_recurring ? `${e.summary || ''} (repeating)` : (e.summary || '')}
                             onClick={(ev) => { ev.stopPropagation(); setDraft({ event: e }) }}>
-                            {!e.all_day && e.start && (
+                            {!e.all_day && e.start && !e.cont && (
                               <span className="t">{new Date(e.start).toLocaleTimeString([], { hour: 'numeric' })}</span>
                             )}
                             {e.is_recurring && <span className="recur" aria-hidden="true">↻ </span>}
+                            {e.cont && <span className="t" aria-hidden="true">‥ </span>}
                             {e.summary || '(untitled)'}
                           </div>
                         ))}
@@ -164,9 +193,14 @@ export function CalendarView({ rev, onExpire }: { rev: number; onExpire: () => v
                 {(byDay[focusDay] || []).map((e) => (
                   <button key={e.id} className="agenda-ev" onClick={() => setDraft({ event: e })}>
                     <span className="t">
-                      {e.all_day ? 'all day' : e.start
-                        ? new Date(e.start).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
-                        : ''}
+                      {e.all_day ? 'all day'
+                        : e.cont
+                          ? (e.end && !e.end_is_date && e.end.slice(0, 10) === focusDay
+                            ? `– ${new Date(e.end).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
+                            : 'all day')
+                          : e.start
+                            ? new Date(e.start).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+                            : ''}
                     </span>
                     <span>
                       {e.is_recurring && <span className="recur" aria-hidden="true">↻ </span>}
@@ -209,9 +243,14 @@ function EventModal({ draft, onClose, onSave, onDelete }: {
   const [start, setStart] = useState(
     e?.start ? (e.start.includes('T') ? e.start.slice(0, 16) : e.start) : `${baseDate}T09:00`,
   )
-  const [end, setEnd] = useState(
-    e?.end ? (e.end.includes('T') ? e.end.slice(0, 16) : e.end) : `${baseDate}T10:00`,
-  )
+  const [end, setEnd] = useState(() => {
+    if (!e?.end) return `${baseDate}T10:00`
+    if (e.end.includes('T')) return e.end.slice(0, 16)
+    // All-day DTEND is exclusive — show the inclusive last day in the picker.
+    const inclusive = shiftYmd(e.end.slice(0, 10), -1)
+    const startDay = e.start ? e.start.slice(0, 10) : inclusive
+    return inclusive < startDay ? startDay : inclusive
+  })
   const [location, setLocation] = useState(e?.location || '')
   const [description, setDescription] = useState(e?.description || '')
   const [tags, setTags] = useState((e?.tags || []).join(', '))
@@ -226,6 +265,26 @@ function EventModal({ draft, onClose, onSave, onDelete }: {
   const startVal = allDay ? start.slice(0, 10) : (start.includes('T') ? start : `${start}T09:00`)
   const endVal = allDay ? end.slice(0, 10) : (end.includes('T') ? end : `${end}T10:00`)
 
+  // Moving the start drags the end along, preserving the event's duration — no
+  // more fixing the end by hand after every start change.
+  const changeStart = (v: string) => {
+    setStart(v)
+    if (!v) return
+    const oldS = new Date(allDay ? `${startVal}T00:00` : startVal)
+    const oldE = new Date(allDay ? `${endVal}T00:00` : endVal)
+    const newS = new Date(allDay ? `${v}T00:00` : v)
+    if (isNaN(oldS.getTime()) || isNaN(oldE.getTime()) || isNaN(newS.getTime())) return
+    const shifted = new Date(newS.getTime() + Math.max(0, oldE.getTime() - oldS.getTime()))
+    setEnd(allDay ? ymd(shifted)
+      : `${ymd(shifted)}T${pad(shifted.getHours())}:${pad(shifted.getMinutes())}`)
+  }
+
+  // What actually goes on the wire: end never precedes start, and an all-day
+  // range converts back from the inclusive picker to an exclusive DTEND.
+  const clampedEnd = endVal < startVal ? startVal : endVal
+  const startOut = startVal
+  const endOut = allDay ? shiftYmd(clampedEnd, 1) : clampedEnd
+
   const tagList = () => tags.split(',').map((s) => s.trim()).filter(Boolean)
   const repeatFields = (): Record<string, unknown> => {
     if (repeat === 'keep') return {}          // leave the existing rule untouched
@@ -236,7 +295,7 @@ function EventModal({ draft, onClose, onSave, onDelete }: {
 
   const commit = (scope: EventScope) => {
     if (!e) {
-      onSave({ summary, all_day: allDay, start: startVal, end: allDay ? null : endVal,
+      onSave({ summary, all_day: allDay, start: startOut, end: endOut,
                location, description, tags: tagList(), ...repeatFields() })
       return
     }
@@ -247,10 +306,10 @@ function EventModal({ draft, onClose, onSave, onDelete }: {
       // the repeat rule only; move a single instance with "This event".
       onSave({ ...details, ...repeatFields(), scope: 'all' }, e.uid)
     } else if (recurring) {
-      onSave({ ...details, start: startVal, end: allDay ? null : endVal,
+      onSave({ ...details, start: startOut, end: endOut,
                recurrence_id: e.recurrence_id, scope }, e.uid)
     } else {
-      onSave({ ...details, start: startVal, end: allDay ? null : endVal, ...repeatFields() }, e.uid)
+      onSave({ ...details, start: startOut, end: endOut, ...repeatFields() }, e.uid)
     }
   }
 
@@ -293,12 +352,12 @@ function EventModal({ draft, onClose, onSave, onDelete }: {
               <div className="field">
                 <label className="label">Start</label>
                 <input className="input" type={allDay ? 'date' : 'datetime-local'} value={startVal}
-                  onChange={(ev) => setStart(ev.target.value)} />
+                  onChange={(ev) => changeStart(ev.target.value)} />
               </div>
               <div className="field">
-                <label className="label">End</label>
+                <label className="label">{allDay ? 'End (last day)' : 'End'}</label>
                 <input className="input" type={allDay ? 'date' : 'datetime-local'} value={endVal}
-                  onChange={(ev) => setEnd(ev.target.value)} />
+                  min={startVal} onChange={(ev) => setEnd(ev.target.value)} />
               </div>
             </div>
             <div className="field">
