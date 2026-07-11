@@ -199,6 +199,25 @@ class SyncEngine:
             edit, kind="event",
         )
 
+    def move_event(self, src_href: str, dst_href: str, uid: str) -> str:
+        """Move a whole event resource (including any overrides) to another
+        calendar. Copy-then-delete: the destination PUT is If-None-Match guarded
+        so an existing resource is never clobbered, and the source delete is
+        etag-guarded (invariant #2: the raw bytes move untouched)."""
+        if not store.has_collection(self.conn, dst_href):
+            raise ValueError(f"collection {dst_href} is unknown; run discover() first")
+        row = store.get_item(self.conn, src_href, uid)
+        if row is None:
+            raise KeyError(f"unknown event {uid} in {src_href}")
+        basename = row["href"].rstrip("/").rsplit("/", 1)[-1]
+        new_href = f"{dst_href}{basename}"
+        try:
+            self.dav.put(new_href, row["raw_ics"], if_none_match="*")
+        except PreconditionFailed as e:
+            raise ConflictError(f"event {uid} already exists in the target calendar") from e
+        self.delete_task(src_href, uid)     # etag-guarded delete + cache cleanup
+        return self._refresh_from_wire(dst_href, new_href)
+
     def shift_event(
         self, collection_href: str, uid: str, recurrence_id: str, edit: ical.EventEdit
     ) -> str:
