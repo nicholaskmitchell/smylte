@@ -138,6 +138,9 @@ export const api = {
     j<CalEvent>('POST', `/api/calendars/${calId}/events`, body),
   patchEvent: (calId: string, uid: string, body: Record<string, unknown>) =>
     j<CalEvent>('PATCH', `/api/calendars/${calId}/events/${encodeURIComponent(uid)}`, body),
+  moveEvent: (calId: string, uid: string, toCalId: string) =>
+    j<CalEvent>('POST', `/api/calendars/${calId}/events/${encodeURIComponent(uid)}/move`,
+      { calendar: toCalId }),
   deleteEvent: (calId: string, uid: string,
     opts?: { recurrence_id?: string | null; scope?: EventScope }) => {
     const p = new URLSearchParams()
