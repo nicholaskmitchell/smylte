@@ -265,13 +265,21 @@ def set_sidecar(conn: sqlite3.Connection, collection_href: str, uid: str, **fiel
 # ── search / queries ─────────────────────────────────────────────────────────
 
 def search(conn: sqlite3.Connection, query: str) -> list[sqlite3.Row]:
-    """FTS across summary/description/categories, joined back to live items."""
+    """FTS across summary/description/categories, joined back to live items.
+
+    User text is never passed to MATCH raw — FTS5 operator characters ('"',
+    parentheses, NEAR/AND) would raise. Each whitespace token becomes a quoted
+    prefix phrase, so 'proj mee' matches "project meeting"."""
+    terms = [t for t in query.split() if t]
+    if not terms:
+        return []
+    match = " ".join('"{}"*'.format(t.replace('"', '""')) for t in terms)
     return list(
         conn.execute(
             """SELECT i.* FROM items_fts f
                JOIN items i ON i.collection_href=f.collection_href AND i.uid=f.uid
                WHERE items_fts MATCH ? ORDER BY rank""",
-            (query,),
+            (match,),
         )
     )
 

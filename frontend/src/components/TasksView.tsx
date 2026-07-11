@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type KeyboardEvent } from 'react'
 import { api, type List, type Task, type TasksViewMode } from '../api'
-import { addDays, fmtDue, isOverdue, makeGuard, ymd } from '../util'
+import { addDays, dayKey, fmtDue, isOverdue, makeGuard, toLocalInput, ymd } from '../util'
 import { Sidebar } from './Sidebar'
 
 const PRIORITIES = ['none', 'low', 'medium', 'high']
@@ -74,7 +74,7 @@ export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggle
   }, [anchor, view, span])
 
   const todayKey = ymd(new Date())
-  const dueDay = (t: Task) => (t.due ? t.due.slice(0, 10) : null)
+  const dueDay = (t: Task) => (t.due ? dayKey(t.due) : null)
   const byDue = (a: Task, b: Task) => (a.due || '').localeCompare(b.due || '')
   const openOn = (key: string) =>
     tasks.filter((t) => !t.completed && !t.cancelled && dueDay(t) === key).sort(byDue)
@@ -153,6 +153,14 @@ export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggle
               <div className="undated-hint">
                 {undated.length} undated {undated.length === 1 ? 'task' : 'tasks'} not shown —{' '}
                 <button onClick={() => onView('list')}>switch to List</button>
+              </div>
+            )}
+            {/* Overdue tasks pool on today's column; when the visible window
+                doesn't include today they'd silently vanish — point back. */}
+            {overdue.length > 0 && !days.some((d) => ymd(d) === todayKey) && (
+              <div className="undated-hint">
+                {overdue.length} overdue {overdue.length === 1 ? 'task' : 'tasks'} not shown —{' '}
+                <button onClick={() => setAnchor(new Date())}>jump to today</button>
               </div>
             )}
             <div className={`day-cols cols-${span}`}>
@@ -276,7 +284,7 @@ function DayCard({ task, showDate, onToggle, onOpen }: {
               </span>
             )}
             {!showDate && timed && (
-              <span className={`due ${isOverdue(task.due) && !task.completed ? 'overdue' : ''}`}>
+              <span className={`due ${isOverdue(task.due, task.due_is_date) && !task.completed ? 'overdue' : ''}`}>
                 {new Date(task.due!).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
               </span>
             )}
@@ -307,7 +315,7 @@ function TaskRow({ task, sub, onToggle, onRemove, onOpen, onAddSub }: {
         {(task.due || task.child_count > 0 || task.tags.length > 0) && (
           <div className="task-meta">
             {task.due && (
-              <span className={`due ${isOverdue(task.due) && !task.completed ? 'overdue' : ''}`}>
+              <span className={`due ${isOverdue(task.due, task.due_is_date) && !task.completed ? 'overdue' : ''}`}>
                 ◷ {fmtDue(task.due, task.due_is_date)}
               </span>
             )}
@@ -363,15 +371,18 @@ function TaskDetail({ task, onClose, onSave, onDelete }: {
   const [summary, setSummary] = useState(task.summary || '')
   const [notes, setNotes] = useState(task.notes || '')
   const [priority, setPriority] = useState(task.priority_label)
-  const initDue = task.due ? (task.due.includes('T') ? task.due.slice(0, 16) : `${task.due}T00:00`) : ''
-  const [due, setDue] = useState(initDue)
+  // Date and time stay separate so an all-day due survives a save as a bare
+  // date instead of silently becoming a timed midnight due.
+  const hasTime = !!task.due && !task.due_is_date && task.due.includes('T')
+  const [dueDate, setDueDate] = useState(task.due ? dayKey(task.due) : '')
+  const [dueTime, setDueTime] = useState(hasTime ? toLocalInput(task.due!).slice(11, 16) : '')
   const [tags, setTags] = useState(task.tags.join(', '))
 
   const save = () => onSave({
     summary,
     notes,
     priority,
-    due: due || null,
+    due: dueDate ? (dueTime ? `${dueDate}T${dueTime}` : dueDate) : null,
     tags: tags.split(',').map((s) => s.trim()).filter(Boolean),
   })
 
@@ -399,7 +410,11 @@ function TaskDetail({ task, onClose, onSave, onDelete }: {
           </div>
           <div className="field">
             <label className="label">Due</label>
-            <input className="input" type="datetime-local" value={due} onChange={(e) => setDue(e.target.value)} />
+            <input className="input" type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
+          </div>
+          <div className="field">
+            <label className="label">Time (optional)</label>
+            <input className="input" type="time" value={dueTime} onChange={(e) => setDueTime(e.target.value)} />
           </div>
         </div>
         <div className="field">
