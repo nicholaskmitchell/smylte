@@ -50,6 +50,17 @@ export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggle
   const saveDetail = async (uid: string, patch: Record<string, unknown>) => {
     await guard(() => api.patchTask(sel, uid, patch)); reload()
   }
+  // Day-column drag: dropping a card on a column reschedules it to that day.
+  // A timed due keeps its local time-of-day; an all-day due stays all-day.
+  const [dragUid, setDragUid] = useState<string | null>(null)
+  const dropOnDay = (key: string) => {
+    const t = tasks.find((x) => x.uid === dragUid)
+    setDragUid(null)
+    if (!t) return
+    if (t.due && dayKey(t.due) === key) return
+    const timed = !!t.due && t.due.includes('T') && !t.due_is_date
+    saveDetail(t.uid, { due: timed ? `${key}T${toLocalInput(t.due!).slice(11, 16)}` : key })
+  }
   const listApi = {
     create: (name: string) => guard(() => api.createList(name)),
     update: (id: string, body: { name?: string; color?: string | null }) =>
@@ -171,7 +182,9 @@ export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggle
                     open={openOn(key)} done={doneOn(key)}
                     overdue={key === todayKey ? overdue : []}
                     onToggle={toggle} onOpen={setDetail}
-                    onAdd={(summary) => addTask(summary, key)} />
+                    onAdd={(summary) => addTask(summary, key)}
+                    dragActive={dragUid !== null} onDropTask={() => dropOnDay(key)}
+                    onDragTask={setDragUid} />
                 )
               })}
             </div>
@@ -211,15 +224,22 @@ function TaskGroup({ task, kids, onToggle, onRemove, onOpen, onAddSub }: {
   )
 }
 
-function DayColumn({ date, isToday, open, done, overdue, onToggle, onOpen, onAdd }: {
+function DayColumn({ date, isToday, open, done, overdue, onToggle, onOpen, onAdd,
+  dragActive, onDropTask, onDragTask }: {
   date: Date; isToday: boolean
   open: Task[]; done: Task[]; overdue: Task[]
   onToggle: (t: Task) => void; onOpen: (t: Task) => void
   onAdd: (summary: string) => void
+  dragActive: boolean; onDropTask: () => void; onDragTask: (uid: string | null) => void
 }) {
   const [adding, setAdding] = useState(false)
+  // dragover bubbles up from the cards, so entering a child re-asserts `over`.
+  const [over, setOver] = useState(false)
   return (
-    <div className={`day-col ${isToday ? 'today' : ''}`}>
+    <div className={`day-col ${isToday ? 'today' : ''} ${over && dragActive ? 'drag-over' : ''}`}
+      onDragOver={(e) => { if (!dragActive) return; e.preventDefault(); setOver(true) }}
+      onDragLeave={() => setOver(false)}
+      onDrop={(e) => { e.preventDefault(); setOver(false); onDropTask() }}>
       <div className="day-col-head">
         <span className="dow">{date.toLocaleDateString(undefined, { weekday: 'short' })}</span>
         <span className="dnum">{date.getDate()}</span>
@@ -232,19 +252,24 @@ function DayColumn({ date, isToday, open, done, overdue, onToggle, onOpen, onAdd
           <>
             <div className="col-label label overdue">Overdue</div>
             {overdue.map((t) => (
-              <DayCard key={t.uid} task={t} showDate onToggle={onToggle} onOpen={onOpen} />
+              <DayCard key={t.uid} task={t} showDate onToggle={onToggle} onOpen={onOpen}
+                onDrag={onDragTask} />
             ))}
             {open.length > 0 && <div className="col-label label">Today</div>}
           </>
         )}
-        {open.map((t) => <DayCard key={t.uid} task={t} onToggle={onToggle} onOpen={onOpen} />)}
+        {open.map((t) => (
+          <DayCard key={t.uid} task={t} onToggle={onToggle} onOpen={onOpen} onDrag={onDragTask} />
+        ))}
         {open.length + overdue.length + done.length === 0 && !adding && (
           <div className="col-empty">—</div>
         )}
         {done.length > 0 && (
           <>
             <div className="col-label label">Done · {done.length}</div>
-            {done.map((t) => <DayCard key={t.uid} task={t} onToggle={onToggle} onOpen={onOpen} />)}
+            {done.map((t) => (
+              <DayCard key={t.uid} task={t} onToggle={onToggle} onOpen={onOpen} onDrag={onDragTask} />
+            ))}
           </>
         )}
         {adding ? (
@@ -261,16 +286,19 @@ function DayColumn({ date, isToday, open, done, overdue, onToggle, onOpen, onAdd
   )
 }
 
-function DayCard({ task, showDate, onToggle, onOpen }: {
+function DayCard({ task, showDate, onToggle, onOpen, onDrag }: {
   task: Task; showDate?: boolean
   onToggle: (t: Task) => void; onOpen: (t: Task) => void
+  onDrag: (uid: string | null) => void
 }) {
   const pri = task.priority_label
   const priClass = pri === 'high' ? 'pri-high' : pri === 'medium' ? 'pri-med' : pri === 'low' ? 'pri-low' : ''
   const done = task.completed || task.cancelled
   const timed = !!task.due && task.due.includes('T') && !task.due_is_date
   return (
-    <div className={`day-card ${done ? 'done' : ''}`}>
+    <div className={`day-card ${done ? 'done' : ''}`} draggable
+      onDragStart={(e) => { onDrag(task.uid); e.dataTransfer.effectAllowed = 'move' }}
+      onDragEnd={() => onDrag(null)}>
       <div className={`pri-bar ${priClass}`} />
       <button className={`check ${task.completed ? 'on' : ''}`} title="Toggle complete"
         onClick={() => onToggle(task)}>✓</button>

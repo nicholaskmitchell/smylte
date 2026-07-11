@@ -209,9 +209,11 @@
 .col-label { padding: 6px 2px 1px; }
 .col-label.overdue { color: var(--warn); }
 .col-empty { color: var(--fg-faint); font-size: 13px; padding: 4px 2px; }
+.day-col.drag-over { box-shadow: inset 0 0 0 1px var(--accent); }
 .day-card {
   display: flex; align-items: flex-start; gap: 8px; padding: 7px 8px 7px 6px;
   background: var(--bg-elev); border: 1px solid var(--rule-faint);
+  cursor: grab;
 }
 .day-card:hover { border-color: var(--rule); }
 .day-card .check { margin-top: 1px; }
