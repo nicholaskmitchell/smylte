@@ -39,16 +39,52 @@ export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggle
   }, [sel, rev])
 
   const reload = () => guard(async () => { const ts = await api.tasks(sel); if (ts) setTasks(ts) })
-  const addTask = async (summary: string, due?: string) => {
-    await guard(() => api.createTask(sel, due ? { summary, due } : { summary })); reload()
+
+  // Writes are optimistic: paint the change immediately, then reconcile with
+  // the server's canonical DTO when it lands — or reload on failure so the UI
+  // never lies. The SSE `rev` bump refetches shortly after as a safety net
+  // (and fixes derived fields like a parent's subtask progress).
+  const patchLocal = (uid: string, patch: Partial<Task>) =>
+    setTasks((ts) => ts.map((t) => (t.uid === uid ? { ...t, ...patch } : t)))
+  const settle = (dto: Task | undefined) => {
+    if (dto) setTasks((ts) => ts.map((t) => (t.uid === dto.uid ? dto : t)))
+    else reload()
   }
-  const toggle = async (t: Task) => { await guard(() => api.complete(sel, t.uid, !t.completed)); reload() }
-  const remove = async (t: Task) => { await guard(() => api.deleteTask(sel, t.uid)); reload() }
+
+  const addTask = async (summary: string, due?: string) => {
+    const t = await guard(() => api.createTask(sel, due ? { summary, due } : { summary }))
+    if (t) setTasks((ts) => [...ts, t])
+  }
+  const toggle = async (t: Task) => {
+    const done = !t.completed
+    patchLocal(t.uid, { completed: done, cancelled: false, status: done ? 'COMPLETED' : 'NEEDS-ACTION' })
+    settle(await guard(() => api.complete(sel, t.uid, done)))
+  }
+  const remove = async (t: Task) => {
+    setTasks((ts) => ts.filter((x) => x.uid !== t.uid))
+    if ((await guard(() => api.deleteTask(sel, t.uid))) === undefined) reload()
+  }
   const addSub = async (parent: string, summary: string) => {
-    await guard(() => api.createTask(sel, { summary, parent })); reload()
+    const t = await guard(() => api.createTask(sel, { summary, parent }))
+    if (t) setTasks((ts) => [...ts, t])
   }
   const saveDetail = async (uid: string, patch: Record<string, unknown>) => {
-    await guard(() => api.patchTask(sel, uid, patch)); reload()
+    const opt: Partial<Task> = {}
+    if ('summary' in patch) opt.summary = patch.summary as string
+    if ('notes' in patch) opt.notes = (patch.notes as string) ?? null
+    if ('tags' in patch) opt.tags = patch.tags as string[]
+    if ('priority' in patch) opt.priority_label = (patch.priority as string) || 'none'
+    if ('due' in patch) {
+      opt.due = (patch.due as string) ?? null
+      opt.due_is_date = typeof patch.due === 'string' && !patch.due.includes('T')
+    }
+    if ('status' in patch) {
+      opt.status = patch.status as string
+      opt.completed = patch.status === 'COMPLETED'
+      opt.cancelled = patch.status === 'CANCELLED'
+    }
+    patchLocal(uid, opt)
+    settle(await guard(() => api.patchTask(sel, uid, patch)))
   }
   // Day-column drag: dropping a card on a column reschedules it to that day.
   // A timed due keeps its local time-of-day; an all-day due stays all-day.
