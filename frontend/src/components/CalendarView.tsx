@@ -162,6 +162,9 @@ export function CalendarView({ rev, onExpire, sideCollapsed, onToggleSide }: {
     save({ ...moveAsk.body, recurrence_id: moveAsk.ev.recurrence_id, scope }, moveAsk.ev.uid)
     setMoveAsk(null)
   }
+
+  // Desktop "+N more": a popover anchored to the day cell listing every event.
+  const [more, setMore] = useState<{ day: string; x: number; y: number } | null>(null)
   const calApi = {
     create: (name: string) => guard(() => api.createCalendar(name)),
     update: (id: string, body: { name?: string; color?: string | null }) =>
@@ -255,7 +258,13 @@ export function CalendarView({ rev, onExpire, sideCollapsed, onToggleSide }: {
                             </div>
                           )
                         })}
-                        {dayEvents.length > 4 && <span className="child-progress">+{dayEvents.length - 4} more</span>}
+                        {dayEvents.length > 4 && (
+                          <button className="cal-more" onClick={(ev) => {
+                            ev.stopPropagation()
+                            const r = ev.currentTarget.closest('.cal-cell')!.getBoundingClientRect()
+                            setMore({ day: key, x: r.left, y: r.top })
+                          }}>+{dayEvents.length - 4} more</button>
+                        )}
                       </>
                     )}
                   </div>
@@ -303,6 +312,12 @@ export function CalendarView({ rev, onExpire, sideCollapsed, onToggleSide }: {
           onSave={(body, uid) => save(body, uid)} onDelete={del} />
       )}
 
+      {more && (
+        <DayPopover day={more.day} x={more.x} y={more.y} events={byDay[more.day] || []}
+          onOpen={(e) => { setMore(null); setDraft({ event: e }) }}
+          onClose={() => setMore(null)} />
+      )}
+
       {moveAsk && (
         <div className="overlay" onClick={() => setMoveAsk(null)}>
           <div className="modal" onClick={(ev) => ev.stopPropagation()}>
@@ -320,6 +335,50 @@ export function CalendarView({ rev, onExpire, sideCollapsed, onToggleSide }: {
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+// Anchored day popover behind the desktop "+N more" — the full event list for
+// one cell, since the cell itself shows at most four rows.
+function DayPopover({ day, x, y, events, onOpen, onClose }: {
+  day: string; x: number; y: number; events: DayEv[]
+  onOpen: (e: CalEvent) => void; onClose: () => void
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+  // Clamp to the viewport so edge cells don't push the popover off-screen.
+  const left = Math.max(8, Math.min(x, window.innerWidth - 268))
+  const top = Math.max(8, Math.min(y, window.innerHeight - 328))
+  return (
+    <div className="pop-backdrop" onClick={onClose}>
+      <div className="day-pop" style={{ left, top }} onClick={(ev) => ev.stopPropagation()}>
+        <div className="day-pop-head">
+          {new Date(`${day}T00:00`).toLocaleDateString(undefined,
+            { weekday: 'short', month: 'short', day: 'numeric' })}
+        </div>
+        {events.map((e) => (
+          <button key={e.id} className="agenda-ev" onClick={() => onOpen(e)}>
+            <span className="t">
+              {e.all_day ? 'all day'
+                : e.cont
+                  ? (e.end && !e.end_is_date && dayKey(e.end) === day
+                    ? `– ${new Date(e.end).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
+                    : 'all day')
+                  : e.start
+                    ? new Date(e.start).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+                    : ''}
+            </span>
+            <span>
+              {e.is_recurring && <span className="recur" aria-hidden="true">↻ </span>}
+              {e.summary || '(untitled)'}
+            </span>
+          </button>
+        ))}
+      </div>
     </div>
   )
 }
