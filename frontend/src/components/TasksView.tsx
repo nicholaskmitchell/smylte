@@ -297,7 +297,11 @@ function DayCard({ task, showDate, onToggle, onOpen, onDrag }: {
   const timed = !!task.due && task.due.includes('T') && !task.due_is_date
   return (
     <div className={`day-card ${done ? 'done' : ''}`} draggable
-      onDragStart={(e) => { onDrag(task.uid); e.dataTransfer.effectAllowed = 'move' }}
+      onDragStart={(e) => {
+        onDrag(task.uid)
+        e.dataTransfer.setData('text/plain', task.uid)  // Firefox needs data to start a drag
+        e.dataTransfer.effectAllowed = 'move'
+      }}
       onDragEnd={() => onDrag(null)}>
       <div className={`pri-bar ${priClass}`} />
       <button className={`check ${task.completed ? 'on' : ''}`} title="Toggle complete"

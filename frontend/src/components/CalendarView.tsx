@@ -235,6 +235,7 @@ export function CalendarView({ rev, onExpire, sideCollapsed, onToggleSide }: {
                               draggable
                               onDragStart={(ev) => {
                                 ev.stopPropagation()
+                                ev.dataTransfer.setData('text/plain', e.id)  // Firefox needs data to start a drag
                                 ev.dataTransfer.effectAllowed = 'move'
                                 setDrag({ ev: e, fromDay: key, mode: 'move' })
                               }}
@@ -251,6 +252,7 @@ export function CalendarView({ rev, onExpire, sideCollapsed, onToggleSide }: {
                                   draggable
                                   onDragStart={(ev) => {
                                     ev.stopPropagation()
+                                    ev.dataTransfer.setData('text/plain', e.id)
                                     ev.dataTransfer.effectAllowed = 'move'
                                     setDrag({ ev: e, fromDay: key, mode: 'resize' })
                                   }} />
