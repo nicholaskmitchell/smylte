@@ -13,15 +13,19 @@ A tiny pub/sub pushes "changed" events to SSE subscribers after any mutation.
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
+from datetime import date, datetime
 from typing import Any
 
 from .config import Settings
 from .dav import xml as davxml
 from .dav.client import DavClient
 from .db import store
-from .ical import PRIORITY, EventEdit, TaskEdit
+from .ical import PRIORITY, EventEdit, TaskEdit, recur
 from .sync import SyncEngine, SyncStats
+
+log = logging.getLogger("tasksd.service")
 
 # Reverse of ical.PRIORITY, bucketed to four levels (RFC 5545: 1 highest, 9 lowest).
 _PRIORITY_LABEL = {0: "none", 1: "high", 5: "medium", 9: "low"}
@@ -39,6 +43,14 @@ def _priority_label(value: int | None) -> str:
 
 def _slug(href: str) -> str:
     return href.rstrip("/").rsplit("/", 1)[-1]
+
+
+def _parse_window(s: str) -> date | datetime:
+    """A calendar range bound: bare ISO date (all-day boundary) or ISO datetime."""
+    s = s.strip()
+    if "T" in s or " " in s:
+        return datetime.fromisoformat(s.replace(" ", "T"))
+    return date.fromisoformat(s)
 
 
 class TaskService:
@@ -331,7 +343,22 @@ class TaskService:
         with self._lock:
             rows = store.get_events_in_range(self._conn, href, start_iso, end_iso)
             cats = store.get_all_categories(self._conn, href)
-        return [self._event_dto(r, cats) for r in rows]
+        win_start, win_end = _parse_window(start_iso), _parse_window(end_iso)
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            if not r["has_rrule"]:
+                out.append(self._event_dto(r, cats))          # one row, one instance
+                continue
+            # Recurring: fan the cached raw_ics out into per-occurrence rows. A
+            # single malformed resource must not blank the whole month — fall back
+            # to showing its master row.
+            try:
+                for occ in recur.expand_occurrences(r["raw_ics"], win_start, win_end):
+                    out.append(self._occurrence_dto(r, occ, cats))
+            except Exception:  # noqa: BLE001
+                log.warning("recurrence expansion failed for %s; showing master", r["uid"])
+                out.append(self._event_dto(r, cats))
+        return out
 
     def get_event(self, href: str, uid: str) -> dict[str, Any] | None:
         with self._lock:
@@ -345,6 +372,10 @@ class TaskService:
         uid = it["uid"]
         return {
             "uid": uid,
+            "id": uid,                       # non-recurring: instance id == uid
+            "master_uid": uid,
+            "recurrence_id": None,
+            "is_recurring": bool(it["has_rrule"]),
             "calendar": it["collection_href"],
             "summary": it["summary"],
             "description": it["description"],
@@ -364,6 +395,38 @@ class TaskService:
             "last_modified": it["last_modified"],
         }
 
+    def _occurrence_dto(self, it, occ: recur.Occurrence, cats) -> dict[str, Any]:
+        """One expanded occurrence of a recurring series. Same keys as
+        ``_event_dto`` (so the frontend stays uniform), but ``id`` is unique per
+        instance and ``start``/``end`` are this occurrence's times; per-instance
+        text falls back to the master's when an override omits a field. ``uid`` /
+        ``href`` stay the base resource so series-level edit/delete still work."""
+        uid = it["uid"]
+        return {
+            "uid": uid,
+            "id": f"{uid}::{occ.recurrence_id}",
+            "master_uid": uid,
+            "recurrence_id": occ.recurrence_id,
+            "is_recurring": True,
+            "calendar": it["collection_href"],
+            "summary": occ.summary if occ.summary is not None else it["summary"],
+            "description": occ.description if occ.description is not None else it["description"],
+            "location": occ.location if occ.location is not None else it["location"],
+            "start": occ.start,
+            "start_is_date": occ.start_is_date,
+            "end": occ.end,
+            "end_is_date": occ.end_is_date,
+            "duration": None,
+            "all_day": occ.start_is_date,
+            "status": occ.status if occ.status is not None else it["status"],
+            "tags": cats.get(uid, []),
+            "has_rrule": True,
+            "href": it["href"],
+            "etag": it["etag"],
+            "created": it["created"],
+            "last_modified": it["last_modified"],
+        }
+
     def create_event(self, href: str, summary: str, *, dtstart, dtend=None,
                      edit: EventEdit | None = None) -> dict[str, Any] | None:
         with self._lock:
@@ -371,16 +434,44 @@ class TaskService:
         self._publish({"type": "event_created", "list": _slug(href), "uid": uid})
         return self.get_event(href, uid)
 
-    def edit_event(self, href: str, uid: str, edit: EventEdit) -> dict[str, Any] | None:
+    def edit_event(
+        self, href: str, uid: str, edit: EventEdit,
+        *, recurrence_id: str | None = None, scope: str = "all",
+    ) -> dict[str, Any] | None:
         with self._lock:
-            self._engine.edit_event(href, uid, edit)
+            if scope == "this" and recurrence_id:
+                self._engine.override_event(href, uid, recurrence_id, edit)
+            elif scope == "thisandfuture" and recurrence_id:
+                self._engine.split_event(href, uid, recurrence_id, edit)
+            else:
+                self._engine.edit_event(href, uid, edit)
         self._publish({"type": "event_updated", "list": _slug(href), "uid": uid})
         return self.get_event(href, uid)
 
-    def delete_event(self, href: str, uid: str) -> None:
+    def delete_event(
+        self, href: str, uid: str,
+        *, recurrence_id: str | None = None, scope: str = "all",
+    ) -> None:
         with self._lock:
-            self._engine.delete_task(href, uid)   # deletion is component-agnostic (by href)
+            if scope == "this" and recurrence_id:
+                self._engine.exclude_event_occurrence(href, uid, recurrence_id)
+            elif scope == "thisandfuture" and recurrence_id:
+                self._engine.split_event(href, uid, recurrence_id, EventEdit(), delete_tail=True)
+            else:
+                self._engine.delete_task(href, uid)   # whole resource (by href)
         self._publish({"type": "event_deleted", "list": _slug(href), "uid": uid})
+
+    # ── app settings (account-synced) ─────────────────────────────────────────
+    def get_settings(self) -> dict[str, Any]:
+        with self._lock:
+            return store.get_settings(self._conn)
+
+    def update_settings(self, patch: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            settings = store.update_settings(self._conn, patch)
+        # Notify other open tabs/devices so the change syncs live.
+        self._publish({"type": "settings_updated"})
+        return settings
 
 
 def priority_from_label(label: str | None) -> int | None:

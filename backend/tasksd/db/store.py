@@ -8,6 +8,7 @@ delete-and-recreate survival requirement).
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 
@@ -288,13 +289,21 @@ def get_items(conn: sqlite3.Connection, collection_href: str) -> list[sqlite3.Ro
 def get_events_in_range(
     conn: sqlite3.Connection, collection_href: str, start_iso: str, end_iso: str
 ) -> list[sqlite3.Row]:
-    """VEVENTs overlapping [start, end): event_start <= end AND event_end >= start.
-    ISO strings compare correctly here. Recurrence expansion is out of scope
-    (spec §6, gated) — a recurring master matches only by its own DTSTART."""
+    """Candidate VEVENTs for the window [start, end).
+
+    Non-recurring events use the precise interval-overlap test
+    (event_start <= end AND event_end >= start). A recurring master, however,
+    projects occurrences *forward* past its own DTEND, so the lower bound would
+    wrongly drop a weekly series whose first instance is months in the past —
+    hence recurring rows (has_rrule=1) are admitted on the upper bound alone and
+    then precisely filtered in Python by recur.expand_occurrences. A series whose
+    UNTIL is already past still passes here but expands to zero occurrences, so it
+    is dropped downstream. ISO strings order correctly on the leading date."""
     return list(
         conn.execute(
             "SELECT * FROM items WHERE collection_href=? AND component='VEVENT' "
-            "AND dtstart <= ? AND COALESCE(dtend, dtstart) >= ? ORDER BY dtstart",
+            "AND dtstart <= ? AND (has_rrule=1 OR COALESCE(dtend, dtstart) >= ?) "
+            "ORDER BY dtstart",
             (collection_href, end_iso, start_iso),
         )
     )
@@ -337,6 +346,41 @@ def distinct_categories(conn: sqlite3.Connection, collection_href: str | None = 
             (collection_href,),
         )
     return [r["category"] for r in rows]
+
+
+# ── app settings (server-side, account-synced) ───────────────────────────────
+#
+# UI preferences (e.g. theme) live server-side so they follow the user across
+# browsers/devices instead of being trapped in one browser's localStorage. The
+# app is single-user (one auth account, one DB), so a single global blob in the
+# `meta` table is the account's settings; key by user here if it ever goes
+# multi-user.
+
+_SETTINGS_KEY = "app_settings"
+
+
+def get_settings(conn: sqlite3.Connection) -> dict:
+    row = conn.execute("SELECT value FROM meta WHERE key=?", (_SETTINGS_KEY,)).fetchone()
+    if row is None or not row["value"]:
+        return {}
+    try:
+        data = json.loads(row["value"])
+    except (ValueError, TypeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def update_settings(conn: sqlite3.Connection, patch: dict) -> dict:
+    """Merge `patch` into the stored settings (keys with None are ignored) and
+    return the full settings dict."""
+    current = get_settings(conn)
+    current.update({k: v for k, v in patch.items() if v is not None})
+    conn.execute(
+        "INSERT INTO meta (key, value) VALUES (?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (_SETTINGS_KEY, json.dumps(current)),
+    )
+    return current
 
 
 def count_items(conn: sqlite3.Connection, collection_href: str | None = None) -> int:

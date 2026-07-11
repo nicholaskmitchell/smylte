@@ -43,6 +43,9 @@ export interface Task {
 
 export interface CalEvent {
   uid: string
+  id: string                 // unique per rendered instance (uid, or `uid::recurrence_id`)
+  recurrence_id: string | null
+  is_recurring: boolean
   calendar: string
   summary: string | null
   description: string | null
@@ -57,6 +60,14 @@ export interface CalEvent {
   has_rrule: boolean
   href: string
   etag: string
+}
+
+// Which slice of a recurring series a write applies to.
+export type EventScope = 'all' | 'this' | 'thisandfuture'
+
+// Account-synced UI preferences (stored server-side, not per-browser).
+export interface Settings {
+  theme?: 'light' | 'dark'
 }
 
 async function j<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -122,8 +133,19 @@ export const api = {
     j<CalEvent>('POST', `/api/calendars/${calId}/events`, body),
   patchEvent: (calId: string, uid: string, body: Record<string, unknown>) =>
     j<CalEvent>('PATCH', `/api/calendars/${calId}/events/${encodeURIComponent(uid)}`, body),
-  deleteEvent: (calId: string, uid: string) =>
-    j<null>('DELETE', `/api/calendars/${calId}/events/${encodeURIComponent(uid)}`),
+  deleteEvent: (calId: string, uid: string,
+    opts?: { recurrence_id?: string | null; scope?: EventScope }) => {
+    const p = new URLSearchParams()
+    if (opts?.scope) p.set('scope', opts.scope)
+    if (opts?.recurrence_id) p.set('recurrence_id', opts.recurrence_id)
+    const qs = p.toString()
+    return j<null>('DELETE',
+      `/api/calendars/${calId}/events/${encodeURIComponent(uid)}${qs ? `?${qs}` : ''}`)
+  },
+
+  // settings (account-synced UI preferences)
+  getSettings: () => j<Settings>('GET', '/api/settings'),
+  putSettings: (patch: Settings) => j<Settings>('PUT', '/api/settings', patch),
 
   // misc
   tags: () => j<string[]>('GET', '/api/tags'),

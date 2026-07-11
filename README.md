@@ -12,7 +12,11 @@ is a disposable cache** (except the app-only sidecar — see `docs/phase0-findin
   round-trip with fidelity guarantees, SQLite cache + sidecar, sync engine
   (incremental + full resync + invalid-token fallback + orphan GC), and the
   write path with 412 merge. 24 tests green, incl. a concurrent-writer fuzz.
-- Phases 1–6: not started. Recurrence (§6) is gated pending real-device captures.
+- Web layer (FastAPI + React SPA): tasks and calendar, account-synced settings.
+- **Calendar-event (VEVENT) recurrence: implemented** — expand across the month,
+  author repeats, and edit/delete a single occurrence or the whole series
+  (`docs/recurrence-findings.md`). **Task (VTODO) recurrence (§6) stays gated**
+  pending real-device captures.
 
 ## Layout
 

@@ -6,6 +6,11 @@ icalendar>=6.0
 # round-trip fidelity comparison reflects what the server round-trips.
 vobject==0.9.9
 python-dateutil>=2.9
+# Recurrence (spec §6): expand RRULE/RDATE/EXDATE/RECURRENCE-ID against a window,
+# on top of the icalendar objects we already parse. tzdata makes bare-TZID
+# resolution (and the DST unit test) deterministic on containers lacking the OS db.
+recurring-ical-events>=3.3,<4
+tzdata
 # Phase 1 web layer.
 fastapi>=0.115
 uvicorn[standard]>=0.30

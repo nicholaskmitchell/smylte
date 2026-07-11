@@ -9,8 +9,12 @@ from .edit import (
     UNSET,
     apply_changes,
     apply_event_changes,
+    apply_occurrence_override,
     build_new,
     build_new_event,
+    exclude_occurrence,
+    rrule_from_spec,
+    split_series,
 )
 from .read import (
     ItemFields,
@@ -36,6 +40,10 @@ __all__ = [
     "PRIORITY",
     "apply_changes",
     "apply_event_changes",
+    "apply_occurrence_override",
     "build_new",
     "build_new_event",
+    "exclude_occurrence",
+    "rrule_from_spec",
+    "split_series",
 ]

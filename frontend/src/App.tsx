@@ -21,6 +21,21 @@ export function App() {
     api.me().then((m) => { setUser(m.user); setAuth('in') }).catch(() => setAuth('out'))
   }, [])
 
+  const applyTheme = useCallback((next: string) => {
+    document.documentElement.dataset.theme = next
+    try { localStorage.setItem('tasks-theme', next) } catch { /* ignore */ }
+    setTheme(next)
+  }, [])
+
+  // Settings are account-synced: once authenticated, the server is the source of
+  // truth (localStorage is only the pre-paint cache to avoid a flash).
+  useEffect(() => {
+    if (auth !== 'in') return
+    api.getSettings()
+      .then((s) => { if (s.theme === 'dark' || s.theme === 'light') applyTheme(s.theme) })
+      .catch(() => { /* keep the locally-cached theme */ })
+  }, [auth, applyTheme])
+
   // Live updates: any server-side change bumps `rev`, which the views watch.
   useEffect(() => {
     if (auth !== 'in') return
@@ -47,13 +62,11 @@ export function App() {
   }, [settingsOpen])
 
   const toggleTheme = useCallback(() => {
-    setTheme((t) => {
-      const next = t === 'dark' ? 'light' : 'dark'
-      document.documentElement.dataset.theme = next
-      try { localStorage.setItem('tasks-theme', next) } catch { /* ignore */ }
-      return next
-    })
-  }, [])
+    const next = theme === 'dark' ? 'light' : 'dark'
+    applyTheme(next)
+    // Persist to the account so the choice follows the user to other browsers.
+    api.putSettings({ theme: next }).catch(() => { /* stays local if offline */ })
+  }, [theme, applyTheme])
 
   const onExpire = useCallback(() => setAuth('out'), [])
   const onLogout = async () => { try { await api.logout() } finally { setAuth('out') } }

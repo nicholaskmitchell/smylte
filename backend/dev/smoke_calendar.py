@@ -46,9 +46,35 @@ def main() -> None:
             }).json()
             print("created all-day event:", hol["summary"], hol["start"], "| all_day:", hol["all_day"])
 
+            rec = c.post(f"/api/calendars/{cid}/events", json={
+                "summary": "Standup", "start": "2026-07-06T09:00:00",
+                "end": "2026-07-06T09:15:00", "repeat": "weekly",
+            }).json()
+            print("created recurring event:", rec["summary"], "| is_recurring:", rec["is_recurring"])
+
             month = c.get(f"/api/calendars/{cid}/events",
                           params={"start": "2026-07-01", "end": "2026-08-01"}).json()
             print("events in July:", sorted((e["summary"], e["start"]) for e in month))
+
+            # The weekly series expands across a month that starts weeks after the
+            # first occurrence (the recurrence fix).
+            aug = c.get(f"/api/calendars/{cid}/events",
+                        params={"start": "2026-08-01", "end": "2026-09-01"}).json()
+            print("August 'Standup' occurrences:",
+                  sorted(e["start"] for e in aug if e["summary"] == "Standup"))
+
+            # Edit just one occurrence ("this event").
+            second = sorted((e for e in month if e["summary"] == "Standup"),
+                            key=lambda e: e["start"])[1]
+            c.patch(f"/api/calendars/{cid}/events/{rec['uid']}", json={
+                "summary": "Standup (1:1)", "start": "2026-07-13T10:00:00",
+                "end": "2026-07-13T10:30:00", "recurrence_id": second["recurrence_id"],
+                "scope": "this",
+            })
+            july2 = c.get(f"/api/calendars/{cid}/events",
+                          params={"start": "2026-07-01", "end": "2026-08-01"}).json()
+            print("after per-occurrence edit:",
+                  sorted((e["summary"], e["start"]) for e in july2 if "Standup" in (e["summary"] or "")))
 
             moved = c.patch(f"/api/calendars/{cid}/events/{ev['uid']}",
                             json={"start": "2026-07-10T16:00:00", "end": "2026-07-10T17:00:00",
