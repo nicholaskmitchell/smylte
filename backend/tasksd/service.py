@@ -317,9 +317,12 @@ class TaskService:
         self._publish({"type": "list_deleted", "list": _slug(href)})
 
     def create_task(self, href: str, summary: str, *, edit: TaskEdit | None = None,
-                    parent_uid: str | None = None) -> dict[str, Any]:
+                    parent_uid: str | None = None,
+                    client_id: str | None = None) -> dict[str, Any]:
         with self._lock:
-            uid = self._engine.create_task(href, summary, edit=edit, parent_uid=parent_uid)
+            uid = self._engine.create_task(
+                href, summary, edit=edit, parent_uid=parent_uid, slug=client_id
+            )
         self._publish({"type": "task_created", "list": _slug(href), "uid": uid})
         return self.get_task(href, uid)
 
@@ -442,9 +445,12 @@ class TaskService:
         }
 
     def create_event(self, href: str, summary: str, *, dtstart, dtend=None,
-                     edit: EventEdit | None = None) -> dict[str, Any] | None:
+                     edit: EventEdit | None = None,
+                     client_id: str | None = None) -> dict[str, Any] | None:
         with self._lock:
-            uid = self._engine.create_event(href, summary, dtstart=dtstart, dtend=dtend, edit=edit)
+            uid = self._engine.create_event(
+                href, summary, dtstart=dtstart, dtend=dtend, edit=edit, slug=client_id
+            )
         self._publish({"type": "event_created", "list": _slug(href), "uid": uid})
         return self.get_event(href, uid)
 

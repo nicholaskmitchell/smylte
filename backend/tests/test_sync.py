@@ -117,3 +117,28 @@ def test_dropped_radicale_cache_triggers_full_resync(engine, dav, collection, db
     if dropped:
         # Radicale 3.7.4 invalidates tokens when its cache is dropped.
         assert stats.full_resync is True
+
+
+# ── idempotent creates: a caller-supplied slug makes replays safe ────────────
+
+def test_create_replay_with_same_slug_is_idempotent(engine, collection, db):
+    engine.discover()
+    slug = "ab" * 16
+    uid1 = engine.create_task(collection.href, "Once", slug=slug)
+    uid2 = engine.create_task(collection.href, "Once", slug=slug)   # lost-response retry
+    assert uid1 == uid2 == f"{slug}@tasksd"
+    items = store.get_items(db, collection.href)
+    assert sum(1 for i in items if i["uid"] == uid1) == 1
+    # first write wins: the replay must not clobber the stored resource
+    assert store.get_item(db, collection.href, uid1)["summary"] == "Once"
+
+
+def test_create_slug_occupied_by_foreign_resource_conflicts(engine, dav, collection):
+    from tasksd.sync.engine import ConflictError
+
+    engine.discover()
+    slug = "cd" * 16
+    dav.put(f"{collection.href}{slug}.ics", foreign_raw("theirs@foreign", "Theirs"),
+            if_none_match="*")
+    with pytest.raises(ConflictError):
+        engine.create_task(collection.href, "Mine", slug=slug)

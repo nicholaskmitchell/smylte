@@ -374,3 +374,38 @@ def test_dav_outage_is_502(client, monkeypatch):
     r = client.get("/api/lists")
     assert r.status_code == 502
     assert "connection refused" not in r.json()["detail"]   # internals stay internal
+
+
+# ── idempotent creates: replaying a create with the same client_id is safe ───
+
+def test_create_task_replay_is_idempotent(client):
+    lid = _list(client)["id"]
+    body = {"summary": "only once", "client_id": uuid.uuid4().hex}
+    r1 = client.post(f"/api/lists/{lid}/tasks", json=body)
+    r2 = client.post(f"/api/lists/{lid}/tasks", json=body)
+    assert r1.status_code == 201 and r2.status_code == 201
+    assert r1.json()["uid"] == r2.json()["uid"]
+    tasks = client.get(f"/api/lists/{lid}/tasks").json()
+    assert sum(1 for t in tasks if t["summary"] == "only once") == 1
+    client.delete(f"/api/lists/{lid}")
+
+
+def test_create_event_replay_is_idempotent(client):
+    cid = _cal(client)["id"]
+    body = {"summary": "standup", "start": "2026-07-13T09:00", "end": "2026-07-13T09:15",
+            "client_id": uuid.uuid4().hex}
+    r1 = client.post(f"/api/calendars/{cid}/events", json=body)
+    r2 = client.post(f"/api/calendars/{cid}/events", json=body)
+    assert r1.status_code == 201 and r2.status_code == 201
+    assert r1.json()["uid"] == r2.json()["uid"]
+    evs = client.get(f"/api/calendars/{cid}/events?start=2026-07-12&end=2026-07-14").json()
+    assert sum(1 for e in evs if e["summary"] == "standup") == 1
+    client.delete(f"/api/calendars/{cid}")
+
+
+def test_create_bad_client_id_is_422(client):
+    lid = _list(client)["id"]
+    for bad in ("Not Hex!", "short", "A" * 32, "x" * 200):
+        r = client.post(f"/api/lists/{lid}/tasks", json={"summary": "x", "client_id": bad})
+        assert r.status_code == 422, bad
+    client.delete(f"/api/lists/{lid}")

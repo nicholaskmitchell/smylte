@@ -81,6 +81,17 @@ class CreateTask(BaseModel):
     start: str | None = None
     tags: list[str] | None = None
     parent: str | None = None         # parent task UID (subtask/checklist item)
+    client_id: str | None = None      # idempotency: a replayed create reuses the slug
+
+
+# The client-supplied creation id becomes the resource's href slug, so it must
+# stay in Radicale's canonical URL-safe form (plain hex — see engine.create_task).
+_CLIENT_ID_RE = re.compile(r"^[0-9a-f]{16,64}$")
+
+
+def _check_client_id(cid: str | None) -> None:
+    if cid is not None and not _CLIENT_ID_RE.match(cid):
+        raise HTTPException(422, "client_id must be 16-64 lowercase hex characters")
 
 
 class EditTask(BaseModel):
@@ -117,6 +128,7 @@ class CreateEvent(Repeat):
     location: str | None = None
     description: str | None = None
     tags: list[str] | None = None
+    client_id: str | None = None      # idempotency: a replayed create reuses the slug
 
 
 class EditEvent(Repeat):
@@ -448,9 +460,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @api.post("/lists/{list_id}/tasks", status_code=201)
     async def post_task(request: Request, list_id: str, body: CreateTask):
         href = _href(request, list_id)
+        _check_client_id(body.client_id)
         return await _run(
             _svc(request).create_task, href, body.summary,
             edit=_edit_from_create(body), parent_uid=body.parent,
+            client_id=body.client_id,
         )
 
     @api.get("/lists/{list_id}/tasks/{uid}")
@@ -511,11 +525,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @api.post("/calendars/{cal_id}/events", status_code=201)
     async def post_event(request: Request, cal_id: str, body: CreateEvent):
         href = _href(request, cal_id)
+        _check_client_id(body.client_id)
         return await _run(
             _svc(request).create_event, href, body.summary,
             dtstart=_event_dt(body.start, body.all_day),
             dtend=_event_dt(body.end, body.all_day),
             edit=_event_edit_from_create(body),
+            client_id=body.client_id,
         )
 
     @api.get("/calendars/{cal_id}/events/{uid}")
