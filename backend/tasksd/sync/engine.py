@@ -199,6 +199,16 @@ class SyncEngine:
             edit, kind="event",
         )
 
+    def shift_event(
+        self, collection_href: str, uid: str, recurrence_id: str, edit: ical.EventEdit
+    ) -> str:
+        """Reschedule a whole series ("all events" with a time change)."""
+        return self._edit(
+            collection_href, uid,
+            lambda raw, e: ical.shift_series(raw, recurrence_id, e),
+            edit, kind="event",
+        )
+
     def exclude_event_occurrence(
         self, collection_href: str, uid: str, recurrence_id: str
     ) -> str:

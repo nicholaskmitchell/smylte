@@ -526,10 +526,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def patch_event(request: Request, cal_id: str, uid: str, body: EditEvent):
         href = _href(request, cal_id)
         _check_scope(body.scope or "all")
-        dto = await _run(
-            _svc(request).edit_event, href, uid, _event_edit_from_patch(body),
-            recurrence_id=body.recurrence_id, scope=body.scope or "all",
-        )
+        try:
+            dto = await _run(
+                _svc(request).edit_event, href, uid, _event_edit_from_patch(body),
+                recurrence_id=body.recurrence_id, scope=body.scope or "all",
+            )
+        except ValueError as e:
+            # e.g. a series shift that would switch all-day <-> timed
+            raise HTTPException(422, str(e)) from None
         if dto is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown event {uid}")
         return dto
