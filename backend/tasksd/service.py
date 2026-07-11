@@ -452,6 +452,16 @@ class TaskService:
         self._publish({"type": "event_updated", "list": _slug(href), "uid": uid})
         return self.get_event(href, uid)
 
+    def move_event(self, src_href: str, dst_href: str, uid: str) -> dict[str, Any] | None:
+        if src_href == dst_href:
+            return self.get_event(src_href, uid)
+        with self._lock:
+            self._engine.move_event(src_href, dst_href, uid)
+        # Both calendars changed: gone from one, appeared in the other.
+        self._publish({"type": "event_deleted", "list": _slug(src_href), "uid": uid})
+        self._publish({"type": "event_created", "list": _slug(dst_href), "uid": uid})
+        return self.get_event(dst_href, uid)
+
     def delete_event(
         self, href: str, uid: str,
         *, recurrence_id: str | None = None, scope: str = "all",

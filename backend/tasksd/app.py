@@ -132,6 +132,10 @@ class EditEvent(Repeat):
     scope: str | None = None          # all|this|thisandfuture (default: all)
 
 
+class MoveEvent(BaseModel):
+    calendar: str                     # destination calendar id
+
+
 class SettingsPatch(BaseModel):
     # Account-synced UI preferences. Extend with new keys as settings are added.
     theme: Literal["light", "dark"] | None = None
@@ -534,6 +538,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except ValueError as e:
             # e.g. a series shift that would switch all-day <-> timed
             raise HTTPException(422, str(e)) from None
+        if dto is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown event {uid}")
+        return dto
+
+    @api.post("/calendars/{cal_id}/events/{uid}/move")
+    async def move_event(request: Request, cal_id: str, uid: str, body: MoveEvent):
+        src = _href(request, cal_id)
+        dst = _href(request, body.calendar)
+        dto = await _run(_svc(request).move_event, src, dst, uid)
         if dto is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown event {uid}")
         return dto
