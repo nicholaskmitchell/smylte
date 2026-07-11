@@ -17,3 +17,12 @@ def test_settings_merge_and_persist(db):
     merged = store.update_settings(db, {"theme": "light", "density": "compact"})
     assert merged == {"theme": "light", "density": "compact"}
     assert store.get_settings(db) == {"theme": "light", "density": "compact"}
+
+
+def test_settings_false_is_a_value_not_a_clear(db):
+    # Booleans must round-trip: False is stored (only None is "unset").
+    store.update_settings(db, {"sidebar_collapsed": True})
+    assert store.update_settings(db, {"sidebar_collapsed": False}) == {
+        "sidebar_collapsed": False
+    }
+    assert store.get_settings(db) == {"sidebar_collapsed": False}

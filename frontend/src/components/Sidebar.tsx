@@ -1,5 +1,6 @@
 import { useState, type DragEvent, type KeyboardEvent } from 'react'
 import type { List } from '../api'
+import { useIsMobile } from '../hooks'
 
 // Preset collection colors — muted, editorial, distinct from the accent.
 const SWATCHES = [
@@ -14,7 +15,8 @@ export interface CollectionApi {
   reorder: (ids: string[]) => Promise<unknown>
 }
 
-export function Sidebar({ title, placeholder, items, sel, countOf, onSelect, onItems, api }: {
+export function Sidebar({ title, placeholder, items, sel, countOf, onSelect, onItems, api,
+  collapsed, onToggle }: {
   title: string
   placeholder: string
   items: List[]
@@ -23,7 +25,10 @@ export function Sidebar({ title, placeholder, items, sel, countOf, onSelect, onI
   onSelect: (id: string) => void
   onItems: (items: List[]) => void
   api: CollectionApi
+  collapsed?: boolean
+  onToggle?: () => void
 }) {
+  const isMobile = useIsMobile()
   const [adding, setAdding] = useState(false)
   const [editing, setEditing] = useState<List | null>(null)
   const [dragId, setDragId] = useState<string | null>(null)
@@ -62,12 +67,37 @@ export function Sidebar({ title, placeholder, items, sel, countOf, onSelect, onI
     api.reorder(next.map((l) => l.id))
   }
 
+  // Collapsed: a thin rail of color dots — lists stay one click away. The mobile
+  // layout is already a compact strip, so collapse is a desktop-only affordance.
+  if (collapsed && !isMobile) {
+    return (
+      <div className="side collapsed">
+        <button className="icon-btn side-toggle" title="Expand sidebar"
+          aria-label="Expand sidebar" onClick={onToggle}>»</button>
+        <div className="side-rail">
+          {items.map((l) => (
+            <button key={l.id} className={`rail-dot ${l.id === sel ? 'active' : ''}`}
+              title={l.name} onClick={() => onSelect(l.id)}>
+              <span className="swatch" style={l.color ? { background: l.color } : undefined} />
+            </button>
+          ))}
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="side">
       <div className="side-head">
         <span className="label">{title}</span>
-        <button className="icon-btn" title={`New ${placeholder.toLowerCase()}`}
-          onClick={() => setAdding(true)}>+</button>
+        <span className="side-head-actions">
+          <button className="icon-btn" title={`New ${placeholder.toLowerCase()}`}
+            onClick={() => setAdding(true)}>+</button>
+          {onToggle && (
+            <button className="icon-btn side-toggle" title="Collapse sidebar"
+              aria-label="Collapse sidebar" onClick={onToggle}>«</button>
+          )}
+        </span>
       </div>
       <div className="side-list">
         {items.map((l) => (
