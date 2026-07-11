@@ -8,6 +8,10 @@ const SWATCHES = [
   '#00838F', '#1565C0', '#6A1B9A', '#546E7A',
 ]
 
+// Selection id for the pinned "all collections" row (rendered when the view
+// supports a combined mode) — never collides with a real collection id.
+export const ALL_ID = '*'
+
 export interface CollectionApi {
   create: (name: string) => Promise<List | undefined>
   update: (id: string, body: { name?: string; color?: string | null }) => Promise<List | undefined>
@@ -16,7 +20,7 @@ export interface CollectionApi {
 }
 
 export function Sidebar({ title, placeholder, items, sel, countOf, onSelect, onItems, api,
-  collapsed, onToggle }: {
+  collapsed, onToggle, allLabel }: {
   title: string
   placeholder: string
   items: List[]
@@ -27,6 +31,7 @@ export function Sidebar({ title, placeholder, items, sel, countOf, onSelect, onI
   api: CollectionApi
   collapsed?: boolean
   onToggle?: () => void
+  allLabel?: string                 // when set, a pinned "all" row selects ALL_ID
 }) {
   const isMobile = useIsMobile()
   const [adding, setAdding] = useState(false)
@@ -75,6 +80,12 @@ export function Sidebar({ title, placeholder, items, sel, countOf, onSelect, onI
         <button className="icon-btn side-toggle" title="Expand sidebar"
           aria-label="Expand sidebar" onClick={onToggle}>»</button>
         <div className="side-rail">
+          {allLabel && items.length > 1 && (
+            <button className={`rail-dot ${sel === ALL_ID ? 'active' : ''}`}
+              title={allLabel} onClick={() => onSelect(ALL_ID)}>
+              <span className="swatch swatch-all" />
+            </button>
+          )}
           {items.map((l) => (
             <button key={l.id} className={`rail-dot ${l.id === sel ? 'active' : ''}`}
               title={l.name} onClick={() => onSelect(l.id)}>
@@ -100,6 +111,14 @@ export function Sidebar({ title, placeholder, items, sel, countOf, onSelect, onI
         </span>
       </div>
       <div className="side-list">
+        {allLabel && items.length > 1 && (
+          <div className={`side-item ${sel === ALL_ID ? 'active' : ''}`}
+            onClick={() => onSelect(ALL_ID)}>
+            <span className="swatch swatch-all" />
+            <span className="name">{allLabel}</span>
+            <span className="count">{items.reduce((n, l) => n + countOf(l), 0)}</span>
+          </div>
+        )}
         {items.map((l) => (
           <div key={l.id}
             className={`side-item ${l.id === sel ? 'active' : ''} ${overId === l.id && dragId !== l.id ? 'drag-over' : ''}`}

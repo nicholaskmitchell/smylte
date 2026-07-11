@@ -73,6 +73,11 @@
 .side-item:hover { background: var(--bg-elev); }
 .side-item.active { border-left-color: var(--accent); background: var(--bg-elev); }
 .side-item .swatch { width: 8px; height: 8px; flex: none; background: var(--fg-faint); }
+/* the pinned "All" row's swatch — a ring of the preset collection colors */
+.swatch.swatch-all {
+  background: conic-gradient(#D9480F, #B8860B, #2E7D32, #00838F, #1565C0, #6A1B9A, #D9480F);
+  border-radius: 50%;
+}
 .side-item .name { flex: 1; min-width: 0; font-size: 14px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .side-item .count { font-family: var(--mono); font-size: 11px; color: var(--fg-faint); }

@@ -119,6 +119,45 @@ def _events(client, cid, start="2026-07-01", end="2026-08-01"):
     return client.get(f"/api/calendars/{cid}/events", params={"start": start, "end": end}).json()
 
 
+def test_move_event_between_calendars(client):
+    src, dst = _cal(client), _cal(client)
+    ev = client.post(f"/api/calendars/{src['id']}/events", json={
+        "summary": "Movable", "start": "2026-07-10T14:00:00", "end": "2026-07-10T15:00:00",
+    }).json()
+
+    moved = client.post(f"/api/calendars/{src['id']}/events/{ev['uid']}/move",
+                        json={"calendar": dst["id"]})
+    assert moved.status_code == 200, moved.text
+    assert moved.json()["uid"] == ev["uid"]
+    assert not _events(client, src["id"])
+    assert [e["summary"] for e in _events(client, dst["id"])] == ["Movable"]
+
+    # A recurring series moves whole — rule and overrides ride along.
+    rec = client.post(f"/api/calendars/{dst['id']}/events", json={
+        "summary": "Weekly", "start": "2026-07-06T09:00:00", "end": "2026-07-06T09:30:00",
+        "repeat": "weekly",
+    }).json()
+    occ2 = sorted((e for e in _events(client, dst["id"]) if e["summary"] == "Weekly"),
+                  key=lambda e: e["start"])[1]
+    client.patch(f"/api/calendars/{dst['id']}/events/{rec['uid']}", json={
+        "summary": "Weekly (moved)", "start": "2026-07-14T10:00:00", "end": "2026-07-14T10:30:00",
+        "recurrence_id": occ2["recurrence_id"], "scope": "this",
+    })
+    client.post(f"/api/calendars/{dst['id']}/events/{rec['uid']}/move",
+                json={"calendar": src["id"]})
+    weekly = [e for e in _events(client, src["id"]) if e["uid"] == rec["uid"]]
+    assert len(weekly) == 4
+    assert any(e["summary"] == "Weekly (moved)" and e["start"].startswith("2026-07-14T10:00")
+               for e in weekly)
+    assert not any(e["uid"] == rec["uid"] for e in _events(client, dst["id"]))
+
+    # Unknown destination -> 404; the event stays put.
+    r = client.post(f"/api/calendars/{src['id']}/events/{rec['uid']}/move",
+                    json={"calendar": "nope"})
+    assert r.status_code == 404
+    assert any(e["uid"] == rec["uid"] for e in _events(client, src["id"]))
+
+
 def test_recurring_event_authoring_and_expansion(client):
     cid = _cal(client)["id"]
     ev = client.post(f"/api/calendars/{cid}/events", json={
