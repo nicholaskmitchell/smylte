@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type CSSProperties } from 'react'
 import { api, type CalEvent, type EventScope, type List } from '../api'
 import { addDays, dayKey, makeGuard, pad, parseDate, toLocalInput, ymd } from '../util'
 import { useIsMobile } from '../hooks'
-import { Sidebar } from './Sidebar'
+import { ALL_ID, Sidebar } from './Sidebar'
 
 const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June',
@@ -76,22 +76,48 @@ export function CalendarView({ rev, onExpire, sideCollapsed, onToggleSide }: {
     guard(async () => {
       const cs = await api.calendars()
       setCals(cs)
-      setSel((s) => s || cs[0]?.id || '')
+      // Land on the combined view when there is more than one calendar, and
+      // fall back to a real one when the selection disappears (or the All row
+      // does, once a deletion leaves a single calendar behind).
+      setSel((s) => {
+        const fallback = cs.length > 1 ? ALL_ID : cs[0]?.id || ''
+        if (!s || (s === ALL_ID && cs.length <= 1)) return fallback
+        if (s !== ALL_ID && !cs.some((c) => c.id === s)) return fallback
+        return s
+      })
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rev])
 
-  useEffect(() => {
-    if (!sel) { setEvents([]); return }
+  // The combined view merges every calendar's window; events carry their
+  // collection href, so each one still knows where it lives.
+  const fetchEvents = async (): Promise<CalEvent[]> => {
     const end = new Date(days[41]); end.setDate(end.getDate() + 1)
-    guard(async () => setEvents(await api.events(sel, ymd(days[0]), ymd(end))))
+    const from = ymd(days[0]); const to = ymd(end)
+    if (sel !== ALL_ID) return api.events(sel, from, to)
+    const per = await Promise.all(cals.map((c) => api.events(c.id, from, to)))
+    return per.flat()
+  }
+
+  const calsKey = cals.map((c) => c.id).join(',')
+  useEffect(() => {
+    if (!sel || (sel === ALL_ID && !cals.length)) { setEvents([]); return }
+    guard(async () => setEvents(await fetchEvents()))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sel, cursor, rev])
+  }, [sel, cursor, rev, calsKey])
 
   const reload = () => guard(async () => {
-    const end = new Date(days[41]); end.setDate(end.getDate() + 1)
-    const evs = await api.events(sel, ymd(days[0]), ymd(end)); if (evs) setEvents(evs)
+    const evs = await fetchEvents(); if (evs) setEvents(evs)
   })
+
+  const calByHref = useMemo(() => new Map(cals.map((c) => [c.href, c] as const)), [cals])
+  // Which calendar an event lives in (the selection itself outside the All view).
+  const calIdOf = (e: CalEvent) => calByHref.get(e.calendar)?.id || (sel === ALL_ID ? '' : sel)
+  // Per-event tint, so the combined view keeps each calendar's color.
+  const evStyle = (e: CalEvent): CSSProperties | undefined => {
+    const c = calByHref.get(e.calendar)?.color
+    return c ? { '--ev-c': c } as CSSProperties : undefined
+  }
 
   const byDay = useMemo(() => {
     const m: Record<string, DayEv[]> = {}
@@ -112,13 +138,18 @@ export function CalendarView({ rev, onExpire, sideCollapsed, onToggleSide }: {
     return m
   }, [events, days])
 
-  const save = async (body: Record<string, unknown>, uid?: string) => {
-    if (uid) await guard(() => api.patchEvent(sel, uid, body))
-    else await guard(() => api.createEvent(sel, body))
+  // Create in `cal`, or patch `uid` there — then relocate the resource if the
+  // modal picked a different calendar.
+  const save = async (body: Record<string, unknown>, cal: string, uid?: string, moveTo?: string) => {
+    if (!uid) await guard(() => api.createEvent(cal, body))
+    else {
+      await guard(() => api.patchEvent(cal, uid, body))
+      if (moveTo && moveTo !== cal) await guard(() => api.moveEvent(cal, uid, moveTo))
+    }
     setDraft(null); reload()
   }
-  const del = async (uid: string, opts?: { recurrence_id?: string | null; scope?: EventScope }) => {
-    await guard(() => api.deleteEvent(sel, uid, opts)); setDraft(null); reload()
+  const del = async (cal: string, uid: string, opts?: { recurrence_id?: string | null; scope?: EventScope }) => {
+    await guard(() => api.deleteEvent(cal, uid, opts)); setDraft(null); reload()
   }
 
   // Desktop drag: move an event chip to another day cell, or drag its resize
@@ -155,11 +186,12 @@ export function CalendarView({ rev, onExpire, sideCollapsed, onToggleSide }: {
       body = { start, end }
     }
     if (d.ev.is_recurring) setMoveAsk({ ev: d.ev, body })
-    else save(body, d.ev.uid)
+    else save(body, calIdOf(d.ev), d.ev.uid)
   }
   const pickMoveScope = (scope: EventScope) => {
     if (!moveAsk) return
-    save({ ...moveAsk.body, recurrence_id: moveAsk.ev.recurrence_id, scope }, moveAsk.ev.uid)
+    save({ ...moveAsk.body, recurrence_id: moveAsk.ev.recurrence_id, scope },
+      calIdOf(moveAsk.ev), moveAsk.ev.uid)
     setMoveAsk(null)
   }
 
@@ -181,7 +213,7 @@ export function CalendarView({ rev, onExpire, sideCollapsed, onToggleSide }: {
     <div className="work">
       <Sidebar title="Calendars" placeholder="Calendar" items={cals} sel={sel}
         countOf={(c) => c.event_count} onSelect={setSel} onItems={setCals} api={calApi}
-        collapsed={sideCollapsed} onToggle={onToggleSide} />
+        collapsed={sideCollapsed} onToggle={onToggleSide} allLabel="All calendars" />
 
       <div className="content">
         <div className="cal-head">
@@ -190,7 +222,9 @@ export function CalendarView({ rev, onExpire, sideCollapsed, onToggleSide }: {
           <button className="icon-btn" onClick={() => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1))}>›</button>
           <span className="cal-title">{MONTHS[cursor.getMonth()]} {cursor.getFullYear()}</span>
           <span className="spacer" />
-          {sel && !isMobile && <button className="btn" onClick={() => setDraft({ date: todayKey })}>New event</button>}
+          {sel && cals.length > 0 && !isMobile && (
+            <button className="btn" onClick={() => setDraft({ date: todayKey })}>New event</button>
+          )}
         </div>
         {!sel ? (
           <div className="empty">Create a calendar to get started.</div>
@@ -220,7 +254,7 @@ export function CalendarView({ rev, onExpire, sideCollapsed, onToggleSide }: {
                       dayEvents.length > 0 && (
                         <span className="ev-dots">
                           {dayEvents.slice(0, 6).map((e) => (
-                            <i key={e.id} className={`ev-dot ${e.all_day ? 'allday' : ''}`} />
+                            <i key={e.id} className={`ev-dot ${e.all_day ? 'allday' : ''}`} style={evStyle(e)} />
                           ))}
                         </span>
                       )
@@ -231,6 +265,7 @@ export function CalendarView({ rev, onExpire, sideCollapsed, onToggleSide }: {
                           const resizable = key === (evLast > lastKey ? lastKey : evLast)
                           return (
                             <div key={e.id} className={`cal-ev ${e.all_day ? 'allday' : ''} ${e.cont ? 'cont' : ''}`}
+                              style={evStyle(e)}
                               title={e.is_recurring ? `${e.summary || ''} (repeating)` : (e.summary || '')}
                               draggable
                               onDragStart={(ev) => {
@@ -283,7 +318,8 @@ export function CalendarView({ rev, onExpire, sideCollapsed, onToggleSide }: {
                   <button className="btn" onClick={() => setDraft({ date: focusDay })}>+ Event</button>
                 </div>
                 {(byDay[focusDay] || []).map((e) => (
-                  <button key={e.id} className="agenda-ev" onClick={() => setDraft({ event: e })}>
+                  <button key={e.id} className="agenda-ev" style={evStyle(e)}
+                    onClick={() => setDraft({ event: e })}>
                     <span className="t">
                       {e.all_day ? 'all day'
                         : e.cont
@@ -310,12 +346,20 @@ export function CalendarView({ rev, onExpire, sideCollapsed, onToggleSide }: {
       </div>
 
       {draft && (
-        <EventModal draft={draft} onClose={() => setDraft(null)}
-          onSave={(body, uid) => save(body, uid)} onDelete={del} />
+        <EventModal draft={draft} cals={cals} onClose={() => setDraft(null)}
+          initialCal={draft.event ? calIdOf(draft.event) : (sel === ALL_ID ? cals[0]?.id || '' : sel)}
+          onSave={(body, cal, uid) => {
+            // Existing events are patched where they live, then relocated if a
+            // different calendar was picked; new events go straight to the pick.
+            if (uid && draft.event) save(body, calIdOf(draft.event), uid, cal)
+            else save(body, cal)
+          }}
+          onDelete={(uid, opts) => del(draft.event ? calIdOf(draft.event) : sel, uid, opts)} />
       )}
 
       {more && (
         <DayPopover day={more.day} x={more.x} y={more.y} events={byDay[more.day] || []}
+          styleOf={evStyle}
           onOpen={(e) => { setMore(null); setDraft({ event: e }) }}
           onClose={() => setMore(null)} />
       )}
@@ -343,8 +387,9 @@ export function CalendarView({ rev, onExpire, sideCollapsed, onToggleSide }: {
 
 // Anchored day popover behind the desktop "+N more" — the full event list for
 // one cell, since the cell itself shows at most four rows.
-function DayPopover({ day, x, y, events, onOpen, onClose }: {
+function DayPopover({ day, x, y, events, styleOf, onOpen, onClose }: {
   day: string; x: number; y: number; events: DayEv[]
+  styleOf: (e: CalEvent) => CSSProperties | undefined
   onOpen: (e: CalEvent) => void; onClose: () => void
 }) {
   useEffect(() => {
@@ -363,7 +408,7 @@ function DayPopover({ day, x, y, events, onOpen, onClose }: {
             { weekday: 'short', month: 'short', day: 'numeric' })}
         </div>
         {events.map((e) => (
-          <button key={e.id} className="agenda-ev" onClick={() => onOpen(e)}>
+          <button key={e.id} className="agenda-ev" style={styleOf(e)} onClick={() => onOpen(e)}>
             <span className="t">
               {e.all_day ? 'all day'
                 : e.cont
@@ -390,13 +435,16 @@ const REPEATS: ReadonlyArray<readonly [string, string]> = [
   ['monthly', 'Monthly'], ['yearly', 'Yearly'],
 ]
 
-function EventModal({ draft, onClose, onSave, onDelete }: {
-  draft: Draft; onClose: () => void
-  onSave: (body: Record<string, unknown>, uid?: string) => void
+function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete }: {
+  draft: Draft; cals: List[]; initialCal: string; onClose: () => void
+  onSave: (body: Record<string, unknown>, cal: string, uid?: string) => void
   onDelete: (uid: string, opts?: { recurrence_id?: string | null; scope?: EventScope }) => void
 }) {
   const e = draft.event
   const recurring = !!e?.is_recurring
+  // Where the event goes: a new event is created here, an existing one is
+  // moved here (whole resource — a series always changes calendar as one).
+  const [calPick, setCalPick] = useState(initialCal)
   const [summary, setSummary] = useState(e?.summary || '')
   const [allDay, setAllDay] = useState(e ? e.all_day : false)
   const baseDate = draft.date || (e?.start ? dayKey(e.start) : ymd(new Date()))
@@ -460,7 +508,7 @@ function EventModal({ draft, onClose, onSave, onDelete }: {
   const commit = (scope: EventScope) => {
     if (!e) {
       onSave({ summary, all_day: allDay, start: startOut, end: endOut,
-               location, description, tags: tagList(), ...repeatFields() })
+               location, description, tags: tagList(), ...repeatFields() }, calPick)
       return
     }
     const details = { summary, location, description, tags: tagList() }
@@ -472,12 +520,12 @@ function EventModal({ draft, onClose, onSave, onDelete }: {
       const times = timeChanged
         ? { start: startOut, end: endOut, recurrence_id: e.recurrence_id }
         : {}
-      onSave({ ...details, ...times, ...repeatFields(), scope: 'all' }, e.uid)
+      onSave({ ...details, ...times, ...repeatFields(), scope: 'all' }, calPick, e.uid)
     } else if (recurring) {
       onSave({ ...details, start: startOut, end: endOut,
-               recurrence_id: e.recurrence_id, scope }, e.uid)
+               recurrence_id: e.recurrence_id, scope }, calPick, e.uid)
     } else {
-      onSave({ ...details, start: startOut, end: endOut, ...repeatFields() }, e.uid)
+      onSave({ ...details, start: startOut, end: endOut, ...repeatFields() }, calPick, e.uid)
     }
   }
 
@@ -540,6 +588,14 @@ function EventModal({ draft, onClose, onSave, onDelete }: {
                 <label className="label">Repeat until (optional)</label>
                 <input className="input" type="date" value={repeatUntil}
                   onChange={(ev) => setRepeatUntil(ev.target.value)} />
+              </div>
+            )}
+            {cals.length > 1 && (
+              <div className="field">
+                <label className="label">Calendar</label>
+                <select className="input" value={calPick} onChange={(ev) => setCalPick(ev.target.value)}>
+                  {cals.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
               </div>
             )}
             <div className="field">
