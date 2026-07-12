@@ -75,6 +75,11 @@ export interface Settings {
   sidebar_collapsed?: boolean
 }
 
+// Creates carry a client-generated id that becomes the CalDAV resource slug,
+// so a replayed request (retry after a lost response, transport resend) lands
+// on the same resource instead of duplicating it. Hex only — it is an href.
+const clientId = () => crypto.randomUUID().replace(/-/g, '')
+
 async function j<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(path, {
     method,
@@ -114,7 +119,7 @@ export const api = {
   tasks: (listId: string, includeDone = true) =>
     j<Task[]>('GET', `/api/lists/${listId}/tasks?include_done=${includeDone}`),
   createTask: (listId: string, body: Record<string, unknown>) =>
-    j<Task>('POST', `/api/lists/${listId}/tasks`, body),
+    j<Task>('POST', `/api/lists/${listId}/tasks`, { client_id: clientId(), ...body }),
   patchTask: (listId: string, uid: string, body: Record<string, unknown>) =>
     j<Task>('PATCH', `/api/lists/${listId}/tasks/${encodeURIComponent(uid)}`, body),
   complete: (listId: string, uid: string, done = true) =>
@@ -135,7 +140,7 @@ export const api = {
   events: (calId: string, start: string, end: string) =>
     j<CalEvent[]>('GET', `/api/calendars/${calId}/events?start=${start}&end=${end}`),
   createEvent: (calId: string, body: Record<string, unknown>) =>
-    j<CalEvent>('POST', `/api/calendars/${calId}/events`, body),
+    j<CalEvent>('POST', `/api/calendars/${calId}/events`, { client_id: clientId(), ...body }),
   patchEvent: (calId: string, uid: string, body: Record<string, unknown>) =>
     j<CalEvent>('PATCH', `/api/calendars/${calId}/events/${encodeURIComponent(uid)}`, body),
   moveEvent: (calId: string, uid: string, toCalId: string) =>

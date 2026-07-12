@@ -148,6 +148,7 @@ class SyncEngine:
         *,
         edit: ical.TaskEdit | None = None,
         parent_uid: str | None = None,
+        slug: str | None = None,
     ) -> str:
         if not store.has_collection(self.conn, collection_href):
             raise ValueError(f"collection {collection_href} is unknown; run discover() first")
@@ -156,11 +157,11 @@ class SyncEngine:
         # characters (e.g. '@' -> '%40'), which would otherwise make the href we
         # cache at create time differ from the one sync reports. The UID may still
         # carry '@'; it is the join key, never the href (invariant #4).
-        slug = uuid.uuid4().hex
+        slug = slug or uuid.uuid4().hex
         uid = f"{slug}@tasksd"
         raw = ical.build_new(uid, summary=summary, edit=edit, related_parent=parent_uid)
         href = f"{collection_href}{slug}.ics"
-        self.dav.put(href, raw, if_none_match="*")
+        self._put_new(href, uid, raw)
         self._refresh_from_wire(collection_href, href)
         return uid
 
@@ -172,16 +173,32 @@ class SyncEngine:
         dtstart,
         dtend=None,
         edit: ical.EventEdit | None = None,
+        slug: str | None = None,
     ) -> str:
         if not store.has_collection(self.conn, collection_href):
             raise ValueError(f"collection {collection_href} is unknown; run discover() first")
-        slug = uuid.uuid4().hex
+        slug = slug or uuid.uuid4().hex
         uid = f"{slug}@tasksd"
         raw = ical.build_new_event(uid, summary=summary, dtstart=dtstart, dtend=dtend, edit=edit)
         href = f"{collection_href}{slug}.ics"
-        self.dav.put(href, raw, if_none_match="*")
+        self._put_new(href, uid, raw)
         self._refresh_from_wire(collection_href, href)
         return uid
+
+    def _put_new(self, href: str, uid: str, raw: str) -> None:
+        """First write of a new resource. With a caller-supplied slug the href is
+        deterministic per logical create, so a replay (retry after a lost
+        response, transport-level resend) finds the resource already on the
+        server — that is the create succeeding, not a conflict, as long as the
+        occupant is ours (same UID). A slug collision with someone else's
+        resource is the only true conflict."""
+        try:
+            self.dav.put(href, raw, if_none_match="*")
+        except PreconditionFailed as e:
+            stored = self.dav.get(href)
+            fields = ical.extract_from_raw(stored.data)
+            if fields is None or fields.uid != uid:
+                raise ConflictError(f"a different resource already exists at {href}") from e
 
     def edit_task(self, collection_href: str, uid: str, edit: ical.TaskEdit) -> str:
         return self._edit(collection_href, uid, ical.apply_changes, edit, kind="task")
