@@ -393,11 +393,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         verifier.verify(cf_token)  # optional extra layer; no-op unless access_required
 
     def _client_ip(request: Request) -> str:
-        # Behind Cloudflare the real client is in CF-Connecting-IP; the socket peer
-        # is just the tunnel. Fall back to the peer for local runs.
-        return request.headers.get("CF-Connecting-IP") or (
-            request.client.host if request.client else "unknown"
-        )
+        # The app binds 127.0.0.1 only (uvicorn host + host firewall), so the sole
+        # socket peer is Caddy on loopback. Caddy sets X-Real-IP to the true client's
+        # socket address and OVERWRITES it (header_up replaces any client-sent value),
+        # so a remote client cannot spoof it. Trust it only when the peer is loopback;
+        # otherwise fall back to the peer (defence in depth if the loopback-bind
+        # invariant is ever broken). CF-Connecting-IP is no longer trusted: once served
+        # directly it is attacker-controlled, and the tunnel path now maps it to
+        # X-Real-IP in Caddy.
+        peer = request.client.host if request.client else "unknown"
+        if peer in ("127.0.0.1", "::1"):
+            real = request.headers.get("X-Real-IP")
+            if real:
+                return real.split(",")[0].strip()
+        return peer
 
     api = APIRouter(prefix="/api", dependencies=[Depends(require_auth)])
 
