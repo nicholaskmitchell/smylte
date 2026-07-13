@@ -28,8 +28,21 @@
 		}
 	}
 
+	# The Radicale storage hook (POST /internal/changed) is host-local only:
+	# tasks-notify curls 127.0.0.1:8080 directly, bypassing this proxy. It must
+	# never be reachable through the public tunnel.
+	handle /internal* {
+		respond 403
+	}
+
 	# Everything else -> the Tasks + Calendar web app.
 	handle {
-		reverse_proxy 127.0.0.1:8080
+		reverse_proxy 127.0.0.1:8080 {
+			# The app rate-limits per client IP and trusts X-Real-IP only from a
+			# loopback peer (that's us). Set it from Cloudflare's edge-verified
+			# CF-Connecting-IP and OVERWRITE any client-supplied value, so a remote
+			# client can't rotate X-Real-IP to bypass the login/booking limiter.
+			header_up X-Real-IP {http.request.header.CF-Connecting-IP}
+		}
 	}
 }
