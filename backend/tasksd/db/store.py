@@ -262,6 +262,106 @@ def set_sidecar(conn: sqlite3.Connection, collection_href: str, uid: str, **fiel
         )
 
 
+# ── scheduling (booking links + booking ledger; sidecar-class) ──────────────
+
+_LINK_FIELDS = {
+    "title", "description", "calendar_href", "duration_minutes", "timezone",
+    "availability", "show_busy", "buffer_minutes", "min_notice_hours",
+    "horizon_days", "enabled",
+}
+
+
+def create_booking_link(conn: sqlite3.Connection, token: str, fields: dict) -> sqlite3.Row:
+    bad = set(fields) - _LINK_FIELDS
+    if bad:
+        raise ValueError(f"unknown booking link fields: {bad}")
+    cols = ["token", *fields.keys()]
+    conn.execute(
+        f"INSERT INTO booking_links ({', '.join(cols)}) "
+        f"VALUES ({', '.join('?' * len(cols))})",
+        (token, *fields.values()),
+    )
+    return get_booking_link(conn, token)
+
+
+def get_booking_link(conn: sqlite3.Connection, token: str) -> sqlite3.Row | None:
+    return conn.execute(
+        "SELECT * FROM booking_links WHERE token=?", (token,)
+    ).fetchone()
+
+
+def list_booking_links(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    return list(conn.execute("SELECT * FROM booking_links ORDER BY created_at"))
+
+
+def update_booking_link(
+    conn: sqlite3.Connection, token: str, fields: dict
+) -> sqlite3.Row | None:
+    bad = set(fields) - _LINK_FIELDS
+    if bad:
+        raise ValueError(f"unknown booking link fields: {bad}")
+    if get_booking_link(conn, token) is None:
+        return None
+    for k, v in fields.items():
+        conn.execute(
+            f"UPDATE booking_links SET {k}=?, "
+            "updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE token=?",
+            (v, token),
+        )
+    return get_booking_link(conn, token)
+
+
+def delete_booking_link(conn: sqlite3.Connection, token: str) -> bool:
+    return conn.execute(
+        "DELETE FROM booking_links WHERE token=?", (token,)
+    ).rowcount > 0
+
+
+def insert_booking(
+    conn: sqlite3.Connection, *, id: str, link_token: str, calendar_href: str,
+    event_uid: str, client_name: str, client_email: str, notes: str | None,
+    start_at: str, end_at: str,
+) -> None:
+    conn.execute(
+        """INSERT INTO bookings (id, link_token, calendar_href, event_uid,
+             client_name, client_email, notes, start_at, end_at)
+           VALUES (?,?,?,?,?,?,?,?,?)""",
+        (id, link_token, calendar_href, event_uid, client_name, client_email,
+         notes, start_at, end_at),
+    )
+
+
+def get_booking_by_event(conn: sqlite3.Connection, event_uid: str) -> sqlite3.Row | None:
+    """A booking by the VEVENT it created — the idempotency hook for replayed
+    booking POSTs (the client_id determines the event UID)."""
+    return conn.execute(
+        "SELECT * FROM bookings WHERE event_uid=?", (event_uid,)
+    ).fetchone()
+
+
+def list_bookings(
+    conn: sqlite3.Connection, link_token: str | None = None, *, after: str | None = None
+) -> list[sqlite3.Row]:
+    q = "SELECT * FROM bookings"
+    where, params = [], []
+    if link_token is not None:
+        where.append("link_token=?")
+        params.append(link_token)
+    if after is not None:
+        where.append("start_at>=?")
+        params.append(after)
+    if where:
+        q += " WHERE " + " AND ".join(where)
+    return list(conn.execute(q + " ORDER BY start_at", params))
+
+
+def bookings_count_by_link(conn: sqlite3.Connection) -> dict[str, int]:
+    return {
+        r["link_token"]: r["n"]
+        for r in conn.execute("SELECT link_token, COUNT(*) AS n FROM bookings GROUP BY link_token")
+    }
+
+
 # ── search / queries ─────────────────────────────────────────────────────────
 
 def search(conn: sqlite3.Connection, query: str) -> list[sqlite3.Row]:

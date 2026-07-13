@@ -13,11 +13,16 @@ A tiny pub/sub pushes "changed" events to SSE subscribers after any mutation.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import secrets
 import threading
-from datetime import date, datetime
+import uuid
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
+from . import scheduling
 from .config import Settings
 from .dav import xml as davxml
 from .dav.client import DavClient
@@ -494,6 +499,252 @@ class TaskService:
             else:
                 self._engine.delete_task(href, uid)   # whole resource (by href)
         self._publish({"type": "event_deleted", "list": _slug(href), "uid": uid})
+
+    # ── scheduling (booking links) ─────────────────────────────────────────────
+    def list_booking_links(self) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = store.list_booking_links(self._conn)
+            counts = store.bookings_count_by_link(self._conn)
+            names = {r["href"]: r["displayname"] for r in store.get_collections(self._conn)}
+            return [self._link_dto(r, counts, names) for r in rows]
+
+    @staticmethod
+    def _link_dto(row, counts: dict[str, int], names: dict[str, str]) -> dict[str, Any]:
+        return {
+            "token": row["token"],
+            "title": row["title"],
+            "description": row["description"],
+            "calendar": _slug(row["calendar_href"]),
+            "calendar_name": names.get(row["calendar_href"]),
+            "duration_minutes": row["duration_minutes"],
+            "timezone": row["timezone"],
+            "availability": json.loads(row["availability"] or "{}"),
+            "show_busy": bool(row["show_busy"]),
+            "buffer_minutes": row["buffer_minutes"],
+            "min_notice_hours": row["min_notice_hours"],
+            "horizon_days": row["horizon_days"],
+            "enabled": bool(row["enabled"]),
+            "booking_count": counts.get(row["token"], 0),
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+
+    def _normalize_link_fields(self, fields: dict[str, Any]) -> dict[str, Any]:
+        """Validate/canonicalize link fields. Raises ValueError (routes → 422)."""
+        out = dict(fields)
+        if "timezone" in out:
+            try:
+                ZoneInfo(out["timezone"])
+            except Exception:  # noqa: BLE001 — ZoneInfoNotFoundError, bad type, …
+                raise ValueError(f"unknown timezone {out['timezone']!r}") from None
+        if "availability" in out:
+            parsed = scheduling.parse_availability(out["availability"])
+            out["availability"] = json.dumps({
+                str(day): [f"{s:%H:%M}-{e:%H:%M}" for s, e in ranges]
+                for day, ranges in parsed.items()
+            })
+        if "calendar_href" in out:
+            row = self._conn.execute(
+                "SELECT components FROM collections WHERE href=? AND deleted=0",
+                (out["calendar_href"],),
+            ).fetchone()
+            if row is None or "VEVENT" not in (row["components"] or ""):
+                raise ValueError("calendar must be an existing event calendar")
+        for k in ("show_busy", "enabled"):
+            if k in out:
+                out[k] = int(bool(out[k]))
+        return out
+
+    def create_booking_link(self, fields: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            token = secrets.token_urlsafe(16)
+            store.create_booking_link(self._conn, token, self._normalize_link_fields(fields))
+        self._publish({"type": "booking_link_created", "link": token})
+        return self.list_booking_links_one(token)
+
+    def update_booking_link(self, token: str, fields: dict[str, Any]) -> dict[str, Any] | None:
+        with self._lock:
+            row = store.update_booking_link(
+                self._conn, token, self._normalize_link_fields(fields)
+            )
+            if row is None:
+                return None
+        self._publish({"type": "booking_link_updated", "link": token})
+        return self.list_booking_links_one(token)
+
+    def list_booking_links_one(self, token: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = store.get_booking_link(self._conn, token)
+            if row is None:
+                return None
+            counts = store.bookings_count_by_link(self._conn)
+            names = {r["href"]: r["displayname"] for r in store.get_collections(self._conn)}
+            return self._link_dto(row, counts, names)
+
+    def delete_booking_link(self, token: str) -> bool:
+        with self._lock:
+            ok = store.delete_booking_link(self._conn, token)
+        if ok:
+            self._publish({"type": "booking_link_deleted", "link": token})
+        return ok
+
+    def list_bookings(self, link_token: str | None = None) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = store.list_bookings(self._conn, link_token)
+            titles = {r["token"]: r["title"] for r in store.list_booking_links(self._conn)}
+        return [{
+            "id": r["id"],
+            "link": r["link_token"],
+            "link_title": titles.get(r["link_token"]),
+            "event_uid": r["event_uid"],
+            "calendar": _slug(r["calendar_href"]),
+            "name": r["client_name"],
+            "email": r["client_email"],
+            "notes": r["notes"],
+            "start": r["start_at"],
+            "end": r["end_at"],
+            "created_at": r["created_at"],
+        } for r in rows]
+
+    def _link_busy(self, tz: ZoneInfo, window: scheduling.Interval) -> list[scheduling.Interval]:
+        """Busy intervals across ALL event calendars (double-booking prevention
+        is global, not per target calendar). The SQL range scan compares ISO
+        strings against mostly-naive dtstart values, so the bounds are naive
+        link-local widened by ±1 day; scheduling.py then filters precisely."""
+        start_iso = (window.start - timedelta(days=1)).replace(tzinfo=None).isoformat()
+        end_iso = (window.end + timedelta(days=1)).replace(tzinfo=None).isoformat()
+        events: list[dict[str, Any]] = []
+        with self._lock:
+            for row in store.get_collections(self._conn):
+                if "VEVENT" not in (row["components"] or ""):
+                    continue
+                events.extend(self.events_in_range(row["href"], start_iso, end_iso))
+        return scheduling.busy_intervals(events, tz)
+
+    def public_link_info(self, token: str, *, now: datetime | None = None) -> dict[str, Any] | None:
+        """The public booking page payload, or None for an unknown OR disabled
+        link (the route maps both to the same 404 — no probing oracle). Nothing
+        beyond title/description/duration/timezone/slots (+ redacted busy) ever
+        leaves the server here."""
+        with self._lock:
+            link = store.get_booking_link(self._conn, token)
+            if link is None or not link["enabled"]:
+                return None
+            tz = ZoneInfo(link["timezone"])
+            now = now or datetime.now(timezone.utc)
+            local_now = now.astimezone(tz)
+            day0 = datetime.combine(local_now.date(), time.min, tzinfo=tz)
+            window = scheduling.Interval(
+                local_now, day0 + timedelta(days=link["horizon_days"] + 1)
+            )
+            busy = self._link_busy(tz, window)
+            slots = scheduling.generate_slots(
+                availability=scheduling.parse_availability(link["availability"]),
+                duration_minutes=link["duration_minutes"],
+                busy=busy,
+                buffer_minutes=link["buffer_minutes"],
+                tz=tz,
+                now=now,
+                min_notice_hours=link["min_notice_hours"],
+                horizon_days=link["horizon_days"],
+            )
+        out: dict[str, Any] = {
+            "token": token,
+            "title": link["title"],
+            "description": link["description"],
+            "duration_minutes": link["duration_minutes"],
+            "timezone": link["timezone"],
+            "slots": [{"start": s.start.isoformat(), "end": s.end.isoformat()} for s in slots],
+        }
+        if link["show_busy"]:
+            # Redacted: merged time ranges only — no titles, no counts, and no
+            # buffer padding (that would leak the buffer setting).
+            out["busy"] = [
+                {"start": b.start.isoformat(), "end": b.end.isoformat()}
+                for b in scheduling.clip(busy, window)
+            ]
+        return out
+
+    def book_slot(
+        self, token: str, *, start_iso: str, name: str, email: str,
+        notes: str | None = None, client_id: str | None = None,
+        now: datetime | None = None,
+    ) -> dict[str, Any] | None:
+        """Book a slot: re-validate under the lock, write the VEVENT, record the
+        booking. Returns None for unknown/disabled links; raises ValueError for
+        a malformed start (→ 422) and scheduling.SlotTaken when the requested
+        time isn't an open slot (→ 409)."""
+        with self._lock:
+            link = store.get_booking_link(self._conn, token)
+            if link is None or not link["enabled"]:
+                return None
+            # Replay (same client_id ⇒ same event UID): return the original
+            # confirmation instead of failing the re-validation as taken.
+            if client_id:
+                prior = store.get_booking_by_event(self._conn, f"{client_id}@tasksd")
+                if prior is not None:
+                    return self._confirmation(link, prior)
+            tz = ZoneInfo(link["timezone"])
+            req = datetime.fromisoformat(start_iso)
+            if req.tzinfo is None:
+                raise ValueError("start must be an ISO datetime with a UTC offset")
+            req = req.astimezone(tz)
+            now = now or datetime.now(timezone.utc)
+            day0 = datetime.combine(req.date(), time.min, tzinfo=tz)
+            busy = self._link_busy(tz, scheduling.Interval(day0, day0 + timedelta(days=1)))
+            slots = scheduling.generate_slots(
+                availability=scheduling.parse_availability(link["availability"]),
+                duration_minutes=link["duration_minutes"],
+                busy=busy,
+                buffer_minutes=link["buffer_minutes"],
+                tz=tz,
+                now=now,
+                min_notice_hours=link["min_notice_hours"],
+                horizon_days=link["horizon_days"],
+                only_day=req.date(),
+            )
+            if not any(s.start == req for s in slots):
+                raise scheduling.SlotTaken("that time is not available")
+
+            end = req + timedelta(minutes=link["duration_minutes"])
+            desc = [f'Booked via scheduling link "{link["title"]}".', "",
+                    f"Name: {name}", f"Email: {email}"]
+            if notes:
+                desc += ["", f"Notes: {notes}"]
+            event = self.create_event(
+                link["calendar_href"], f"{link['title']} — {name}",
+                dtstart=req.replace(tzinfo=None),          # floating local, the app's own convention
+                dtend=end.replace(tzinfo=None),
+                edit=EventEdit(description="\n".join(desc)),
+                client_id=client_id,
+            )
+            booking_id = uuid.uuid4().hex
+            store.insert_booking(
+                self._conn, id=booking_id, link_token=token,
+                calendar_href=link["calendar_href"], event_uid=event["uid"],
+                client_name=name, client_email=email, notes=notes,
+                start_at=req.isoformat(), end_at=end.isoformat(),
+            )
+        self._publish({"type": "booking_created", "link": token})
+        return {
+            "id": booking_id,
+            "start": req.isoformat(),
+            "end": end.isoformat(),
+            "title": link["title"],
+            "duration_minutes": link["duration_minutes"],
+            "timezone": link["timezone"],
+        }
+
+    @staticmethod
+    def _confirmation(link, booking) -> dict[str, Any]:
+        return {
+            "id": booking["id"],
+            "start": booking["start_at"],
+            "end": booking["end_at"],
+            "title": link["title"],
+            "duration_minutes": link["duration_minutes"],
+            "timezone": link["timezone"],
+        }
 
     # ── app settings (account-synced) ─────────────────────────────────────────
     def get_settings(self) -> dict[str, Any]:
