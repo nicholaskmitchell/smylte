@@ -40,3 +40,22 @@ def test_settings_hidden_calendars_roundtrip(db):
         "hidden_calendars": []
     }
     assert store.get_settings(db) == {"hidden_calendars": []}
+
+
+def test_settings_archived_calendars_roundtrip(db):
+    # Archived calendars are stored the same way as hidden ones: a list of ids
+    # in the account settings blob (the collections themselves stay on the wire).
+    assert store.update_settings(db, {"archived_calendars": ["a", "b"]}) == {
+        "archived_calendars": ["a", "b"]
+    }
+    assert store.get_settings(db) == {"archived_calendars": ["a", "b"]}
+    # An empty list is a real value (everything restored), not an omission.
+    assert store.update_settings(db, {"archived_calendars": []}) == {
+        "archived_calendars": []
+    }
+    assert store.get_settings(db) == {"archived_calendars": []}
+    # Archived and hidden are independent keys that coexist in the blob.
+    merged = store.update_settings(
+        db, {"hidden_calendars": ["x"], "archived_calendars": ["y"]}
+    )
+    assert merged == {"hidden_calendars": ["x"], "archived_calendars": ["y"]}

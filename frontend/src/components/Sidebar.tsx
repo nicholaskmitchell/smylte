@@ -20,7 +20,7 @@ export interface CollectionApi {
 }
 
 export function Sidebar({ title, placeholder, items, sel = '', countOf, onSelect, onItems, api,
-  collapsed, onToggle, allLabel, hiddenIds, onToggleVisible }: {
+  collapsed, onToggle, allLabel, hiddenIds, onToggleVisible, onArchive, archivedIds }: {
   title: string
   placeholder: string
   items: List[]
@@ -37,9 +37,20 @@ export function Sidebar({ title, placeholder, items, sel = '', countOf, onSelect
   // pinned "all" row is dropped. hiddenIds holds the ids currently hidden.
   hiddenIds?: Set<string>
   onToggleVisible?: (id: string) => void
+  // Archive (opt-in): when provided, the edit modal offers a non-destructive
+  // "Archive" alongside Delete. Only the Calendar view wires this.
+  onArchive?: (id: string) => void
+  // Archived rows are removed from the rail/list entirely (unlike hidden ones,
+  // which stay dimmed). `items` still holds the full set so reorder/drag operate
+  // on the real order — this only filters what renders.
+  archivedIds?: Set<string>
 }) {
   const isMobile = useIsMobile()
   const visMode = !!onToggleVisible
+  // What actually renders: the full `items` minus any archived ids. Mutation
+  // handlers (create/save/remove/drop) keep using `items` so the full set and
+  // wire order stay intact.
+  const shown = archivedIds ? items.filter((l) => !archivedIds.has(l.id)) : items
   const [adding, setAdding] = useState(false)
   const [editing, setEditing] = useState<List | null>(null)
   const [dragId, setDragId] = useState<string | null>(null)
@@ -110,7 +121,7 @@ export function Sidebar({ title, placeholder, items, sel = '', countOf, onSelect
               <span className="swatch swatch-all" />
             </button>
           )}
-          {items.map((l) => {
+          {shown.map((l) => {
             const hidden = visMode && !!hiddenIds?.has(l.id)
             return (
               <button key={l.id}
@@ -149,7 +160,7 @@ export function Sidebar({ title, placeholder, items, sel = '', countOf, onSelect
             <span className="count">{items.reduce((n, l) => n + countOf(l), 0)}</span>
           </div>
         )}
-        {items.map((l) => {
+        {shown.map((l) => {
           const hidden = visMode && !!hiddenIds?.has(l.id)
           const toggle = () => (visMode ? onToggleVisible!(l.id) : onSelect?.(l.id))
           return (
@@ -176,7 +187,7 @@ export function Sidebar({ title, placeholder, items, sel = '', countOf, onSelect
           </div>
           )
         })}
-        {items.length === 0 && !adding && (
+        {shown.length === 0 && !adding && (
           <div className="empty" style={{ padding: '14px 16px' }}>Nothing here yet.</div>
         )}
       </div>
@@ -193,18 +204,20 @@ export function Sidebar({ title, placeholder, items, sel = '', countOf, onSelect
       )}
       {editing && (
         <EditModal item={editing} placeholder={placeholder}
-          onClose={() => setEditing(null)} onSave={save} onDelete={remove} />
+          onClose={() => setEditing(null)} onSave={save} onDelete={remove}
+          onArchive={onArchive && ((id) => { setEditing(null); onArchive(id) })} />
       )}
     </div>
   )
 }
 
-function EditModal({ item, placeholder, onClose, onSave, onDelete }: {
+function EditModal({ item, placeholder, onClose, onSave, onDelete, onArchive }: {
   item: List
   placeholder: string
   onClose: () => void
   onSave: (id: string, body: { name?: string; color?: string | null }) => void
   onDelete: (id: string) => void
+  onArchive?: (id: string) => void
 }) {
   const [name, setName] = useState(item.name)
   // Wire colors may carry an alpha byte (#RRGGBBAA); compare on the RGB part.
@@ -242,6 +255,10 @@ function EditModal({ item, placeholder, onClose, onSave, onDelete }: {
             onClick={() => (confirming ? onDelete(item.id) : setConfirming(true))}>
             {confirming ? 'Really delete?' : 'Delete'}
           </button>
+          {onArchive && !confirming && (
+            <button className="btn ghost" title="Hide without deleting — restore later from Settings"
+              onClick={() => onArchive(item.id)}>Archive</button>
+          )}
           <span className="spacer" />
           <button className="btn" onClick={save}>Save</button>
         </div>

@@ -5,6 +5,7 @@ import { Login } from './components/Login'
 import { TasksView } from './components/TasksView'
 import { CalendarView } from './components/CalendarView'
 import { SchedulingView } from './components/SchedulingView'
+import { ArchivedCalendarsModal } from './components/ArchivedCalendarsModal'
 
 type Auth = 'loading' | 'in' | 'out'
 type Tab = 'tasks' | 'calendar' | 'scheduling'
@@ -17,8 +18,10 @@ export function App() {
   const [tasksView, setTasksView] = useState<TasksViewMode>('list')
   const [sideCollapsed, setSideCollapsed] = useState(false)
   const [hiddenCals, setHiddenCals] = useState<string[]>([])
+  const [archivedCals, setArchivedCals] = useState<string[]>([])
   const [rev, setRev] = useState(0)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [archivedOpen, setArchivedOpen] = useState(false)
   const [toast, setToast] = useState<string | null>(null)
   const toastTimer = useRef<ReturnType<typeof setTimeout>>()
   const settingsRef = useRef<HTMLDivElement>(null)
@@ -61,6 +64,9 @@ export function App() {
         if (Array.isArray(s.hidden_calendars)) {
           setHiddenCals(s.hidden_calendars.filter((x) => typeof x === 'string'))
         }
+        if (Array.isArray(s.archived_calendars)) {
+          setArchivedCals(s.archived_calendars.filter((x) => typeof x === 'string'))
+        }
       })
       .catch(() => { /* keep the locally-cached theme */ })
   }, [auth, applyTheme])
@@ -80,6 +86,13 @@ export function App() {
   const changeHiddenCals = useCallback((next: string[]) => {
     setHiddenCals(next)
     api.putSettings({ hidden_calendars: next }).catch(() => { /* stays local if offline */ })
+  }, [])
+
+  // Archived calendars follow the account too. Archive/restore is just a write
+  // to this list — the CalDAV collection is never touched.
+  const changeArchivedCals = useCallback((next: string[]) => {
+    setArchivedCals(next)
+    api.putSettings({ archived_calendars: next }).catch(() => { /* stays local if offline */ })
   }, [])
 
   // Live updates: any server-side change bumps `rev`, which the views watch.
@@ -165,6 +178,13 @@ export function App() {
               <label>Signed in as</label>
               <span className="menu-value">{user}</span>
             </div>
+            <div className="menu-row">
+              <label>Archived calendars</label>
+              <button className="menu-toggle"
+                onClick={() => { setSettingsOpen(false); setArchivedOpen(true) }}>
+                {archivedCals.length > 0 ? `View (${archivedCals.length})` : 'View'}
+              </button>
+            </div>
             <div className="hintline">
               Lists and calendars live on the Radicale CalDAV server — changes here
               show up in every connected client.
@@ -182,9 +202,14 @@ export function App() {
       {tab === 'calendar' && (
         <CalendarView rev={rev} onExpire={onExpire}
           sideCollapsed={sideCollapsed} onToggleSide={toggleSide}
-          hiddenCalendars={hiddenCals} onHiddenCalendarsChange={changeHiddenCals} />
+          hiddenCalendars={hiddenCals} onHiddenCalendarsChange={changeHiddenCals}
+          archivedCalendars={archivedCals} onArchivedCalendarsChange={changeArchivedCals} />
       )}
       {tab === 'scheduling' && <SchedulingView rev={rev} onExpire={onExpire} />}
+      {archivedOpen && (
+        <ArchivedCalendarsModal archived={archivedCals} onChange={changeArchivedCals}
+          onExpire={onExpire} onClose={() => setArchivedOpen(false)} />
+      )}
       {toast && (
         <div className="toast" role="alert">
           <span>{toast}</span>
