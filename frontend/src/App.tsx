@@ -16,6 +16,7 @@ export function App() {
   const [theme, setTheme] = useState(() => document.documentElement.dataset.theme || 'light')
   const [tasksView, setTasksView] = useState<TasksViewMode>('list')
   const [sideCollapsed, setSideCollapsed] = useState(false)
+  const [hiddenCals, setHiddenCals] = useState<string[]>([])
   const [rev, setRev] = useState(0)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [toast, setToast] = useState<string | null>(null)
@@ -57,6 +58,9 @@ export function App() {
           setTasksView(s.tasks_view)
         }
         if (typeof s.sidebar_collapsed === 'boolean') setSideCollapsed(s.sidebar_collapsed)
+        if (Array.isArray(s.hidden_calendars)) {
+          setHiddenCals(s.hidden_calendars.filter((x) => typeof x === 'string'))
+        }
       })
       .catch(() => { /* keep the locally-cached theme */ })
   }, [auth, applyTheme])
@@ -71,6 +75,12 @@ export function App() {
     setSideCollapsed(next)
     api.putSettings({ sidebar_collapsed: next }).catch(() => { /* stays local if offline */ })
   }, [sideCollapsed])
+
+  // Per-calendar visibility follows the account like the other prefs above.
+  const changeHiddenCals = useCallback((next: string[]) => {
+    setHiddenCals(next)
+    api.putSettings({ hidden_calendars: next }).catch(() => { /* stays local if offline */ })
+  }, [])
 
   // Live updates: any server-side change bumps `rev`, which the views watch.
   // One user action can publish several events in a burst (e.g. a move is a
@@ -171,7 +181,8 @@ export function App() {
       )}
       {tab === 'calendar' && (
         <CalendarView rev={rev} onExpire={onExpire}
-          sideCollapsed={sideCollapsed} onToggleSide={toggleSide} />
+          sideCollapsed={sideCollapsed} onToggleSide={toggleSide}
+          hiddenCalendars={hiddenCals} onHiddenCalendarsChange={changeHiddenCals} />
       )}
       {tab === 'scheduling' && <SchedulingView rev={rev} onExpire={onExpire} />}
       {toast && (
