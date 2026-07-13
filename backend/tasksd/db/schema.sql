@@ -131,6 +131,43 @@ CREATE TABLE IF NOT EXISTS completions (
     PRIMARY KEY (collection_href, uid, completed_at)
 );
 
+-- ── scheduling (SIDECAR: app-only booking links + booking ledger) ────────────
+--
+-- Booking links exist nowhere on the wire; the events they create do (they are
+-- ordinary VEVENTs on the target calendar). The bookings table is a ledger of
+-- who booked what — it survives link deletion (no FK) so history is kept.
+
+CREATE TABLE IF NOT EXISTS booking_links (
+    token            TEXT PRIMARY KEY,           -- secrets.token_urlsafe(16); the public URL key
+    title            TEXT NOT NULL,
+    description      TEXT,
+    calendar_href    TEXT NOT NULL,              -- target VEVENT collection for bookings
+    duration_minutes INTEGER NOT NULL DEFAULT 30,
+    timezone         TEXT NOT NULL,              -- IANA name; slot math happens in this zone
+    availability     TEXT NOT NULL DEFAULT '{}', -- JSON {"0":["09:00-12:00","13:00-17:00"],...}, keys "0"(Mon).."6"(Sun)
+    show_busy        INTEGER NOT NULL DEFAULT 0, -- public page shows redacted busy blocks
+    buffer_minutes   INTEGER NOT NULL DEFAULT 0, -- padding around busy events
+    min_notice_hours INTEGER NOT NULL DEFAULT 24,
+    horizon_days     INTEGER NOT NULL DEFAULT 30,
+    enabled          INTEGER NOT NULL DEFAULT 1,
+    created_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE TABLE IF NOT EXISTS bookings (
+    id            TEXT PRIMARY KEY,              -- uuid4 hex
+    link_token    TEXT NOT NULL,                 -- no FK: ledger survives link deletion
+    calendar_href TEXT NOT NULL,
+    event_uid     TEXT NOT NULL,                 -- the VEVENT this booking created
+    client_name   TEXT NOT NULL,
+    client_email  TEXT NOT NULL,
+    notes         TEXT,
+    start_at      TEXT NOT NULL,                 -- ISO datetime WITH offset (link tz)
+    end_at        TEXT NOT NULL,
+    created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+CREATE INDEX IF NOT EXISTS idx_bookings_link ON bookings(link_token, start_at);
+
 -- Local blob store index (Phase 5). ATTACH on the wire is a URI, never base64.
 CREATE TABLE IF NOT EXISTS attachments (
     id              TEXT PRIMARY KEY,

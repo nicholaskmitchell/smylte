@@ -4,9 +4,10 @@ import { setErrorNotifier } from './util'
 import { Login } from './components/Login'
 import { TasksView } from './components/TasksView'
 import { CalendarView } from './components/CalendarView'
+import { SchedulingView } from './components/SchedulingView'
 
 type Auth = 'loading' | 'in' | 'out'
-type Tab = 'tasks' | 'calendar'
+type Tab = 'tasks' | 'calendar' | 'scheduling'
 
 export function App() {
   const [auth, setAuth] = useState<Auth>('loading')
@@ -127,6 +128,9 @@ export function App() {
           <button className={`tab ${tab === 'calendar' ? 'active' : ''}`} onClick={() => setTab('calendar')}>
             Calendar
           </button>
+          <button className={`tab ${tab === 'scheduling' ? 'active' : ''}`} onClick={() => setTab('scheduling')}>
+            Scheduling
+          </button>
         </div>
         <span className="spacer" />
         <button ref={gearRef} className={`icon-btn ${settingsOpen ? 'active' : ''}`}
@@ -161,11 +165,15 @@ export function App() {
           </div>
         )}
       </div>
-      {tab === 'tasks'
-        ? <TasksView rev={rev} onExpire={onExpire} view={tasksView} onView={changeTasksView}
-            sideCollapsed={sideCollapsed} onToggleSide={toggleSide} />
-        : <CalendarView rev={rev} onExpire={onExpire}
-            sideCollapsed={sideCollapsed} onToggleSide={toggleSide} />}
+      {tab === 'tasks' && (
+        <TasksView rev={rev} onExpire={onExpire} view={tasksView} onView={changeTasksView}
+          sideCollapsed={sideCollapsed} onToggleSide={toggleSide} />
+      )}
+      {tab === 'calendar' && (
+        <CalendarView rev={rev} onExpire={onExpire}
+          sideCollapsed={sideCollapsed} onToggleSide={toggleSide} />
+      )}
+      {tab === 'scheduling' && <SchedulingView rev={rev} onExpire={onExpire} />}
       {toast && (
         <div className="toast" role="alert">
           <span>{toast}</span>

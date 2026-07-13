@@ -27,17 +27,18 @@ from fastapi import (
     Request,
     status,
 )
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .access import AccessVerifier
-from .auth import Authenticator, hash_password
+from .auth import Authenticator, RateLimiter, hash_password
 from .config import Settings
 from .dav.errors import AuthError as DavAuthError
 from .dav.errors import DavError
 from .dav.errors import NotFound as DavNotFound
 from .ical import EventEdit, TaskEdit, rrule_from_spec
+from .scheduling import SlotTaken
 from .service import TaskService, priority_from_label
 from .sync.engine import ConflictError
 
@@ -146,6 +147,46 @@ class EditEvent(Repeat):
 
 class MoveEvent(BaseModel):
     calendar: str                     # destination calendar id
+
+
+class CreateBookingLink(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=2000)
+    calendar: str                                     # calendar id or href
+    duration_minutes: int = Field(default=30, ge=5, le=480)
+    timezone: str = Field(min_length=1, max_length=64)   # IANA name
+    availability: dict[str, list[str]] = Field(default_factory=dict)
+    show_busy: bool = False
+    buffer_minutes: int = Field(default=0, ge=0, le=240)
+    min_notice_hours: int = Field(default=24, ge=0, le=720)
+    horizon_days: int = Field(default=30, ge=1, le=180)
+    enabled: bool = True
+
+
+class EditBookingLink(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=2000)
+    calendar: str | None = None
+    duration_minutes: int | None = Field(default=None, ge=5, le=480)
+    timezone: str | None = Field(default=None, min_length=1, max_length=64)
+    availability: dict[str, list[str]] | None = None
+    show_busy: bool | None = None
+    buffer_minutes: int | None = Field(default=None, ge=0, le=240)
+    min_notice_hours: int | None = Field(default=None, ge=0, le=720)
+    horizon_days: int | None = Field(default=None, ge=1, le=180)
+    enabled: bool | None = None
+
+
+class PublicBook(BaseModel):
+    start: str                                        # ISO datetime WITH offset
+    name: str = Field(min_length=1, max_length=200)
+    email: str = Field(min_length=3, max_length=320)
+    notes: str | None = Field(default=None, max_length=2000)
+    client_id: str | None = None                      # idempotency, like event creates
+
+
+# Deliberately modest — enough to catch typos without embedding RFC 5322.
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
 class SettingsPatch(BaseModel):
@@ -356,6 +397,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # so ConflictError/NotFound/AuthError win over the DavError catch-all.
     @app.exception_handler(ConflictError)
     async def _conflict(request: Request, exc: ConflictError):
+        return JSONResponse(status_code=409, content={"detail": str(exc)})
+
+    @app.exception_handler(SlotTaken)
+    async def _slot_taken(request: Request, exc: SlotTaken):
         return JSONResponse(status_code=409, content={"detail": str(exc)})
 
     @app.exception_handler(KeyError)
@@ -590,6 +635,48 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         return JSONResponse(status_code=204, content=None)
 
+    # -- scheduling (booking links; owner side) --
+    _LINK_SIMPLE_FIELDS = ("title", "description", "duration_minutes", "timezone",
+                           "availability", "show_busy", "buffer_minutes",
+                           "min_notice_hours", "horizon_days", "enabled")
+
+    @api.get("/scheduling/links")
+    async def get_booking_links(request: Request):
+        return await _run(_svc(request).list_booking_links)
+
+    @api.post("/scheduling/links", status_code=201)
+    async def post_booking_link(request: Request, body: CreateBookingLink):
+        fields = {k: getattr(body, k) for k in _LINK_SIMPLE_FIELDS}
+        fields["calendar_href"] = _href(request, body.calendar)
+        try:
+            return await _run(_svc(request).create_booking_link, fields)
+        except ValueError as e:
+            raise HTTPException(422, str(e)) from None
+
+    @api.patch("/scheduling/links/{token}")
+    async def patch_booking_link(request: Request, token: str, body: EditBookingLink):
+        fs = body.model_fields_set          # only fields the client actually sent
+        fields = {k: getattr(body, k) for k in _LINK_SIMPLE_FIELDS if k in fs}
+        if "calendar" in fs:
+            fields["calendar_href"] = _href(request, body.calendar)
+        try:
+            dto = await _run(_svc(request).update_booking_link, token, fields)
+        except ValueError as e:
+            raise HTTPException(422, str(e)) from None
+        if dto is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown booking link {token}")
+        return dto
+
+    @api.delete("/scheduling/links/{token}", status_code=204)
+    async def delete_booking_link(request: Request, token: str):
+        if not await _run(_svc(request).delete_booking_link, token):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown booking link {token}")
+        return JSONResponse(status_code=204, content=None)
+
+    @api.get("/scheduling/bookings")
+    async def get_bookings(request: Request, link: str | None = Query(default=None)):
+        return await _run(_svc(request).list_bookings, link)
+
     # -- settings (account-synced UI preferences) --
     @api.get("/settings")
     async def get_settings(request: Request):
@@ -685,6 +772,53 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "not authenticated")
         return {"authenticated": True, "user": authenticator.user, "auth_enabled": True}
 
+    # -- public booking pages (token-gated, deliberately NOT behind require_auth) --
+    #
+    # The token is the whole secret (token_urlsafe(16) = 128 bits — enumeration
+    # is infeasible), and unknown vs disabled links are indistinguishable 404s.
+    # Per-app limiter instances (not module globals) so tests don't share state.
+    public_get_limiter = RateLimiter(max_fails=120, window_s=300, lockout_s=300)
+    public_post_limiter = RateLimiter(max_fails=15, window_s=3600, lockout_s=3600)
+
+    def _public_throttle(request: Request, limiter: RateLimiter) -> None:
+        ip = _client_ip(request)
+        if not limiter.allowed(ip):
+            raise HTTPException(
+                status.HTTP_429_TOO_MANY_REQUESTS,
+                "too many requests, try later",
+                headers={"Retry-After": str(limiter.retry_after(ip))},
+            )
+        limiter.record_failure(ip)   # every request counts: request-rate semantics
+
+    @app.get("/api/public/booking/{token}")
+    async def public_booking_info(request: Request, token: str):
+        _public_throttle(request, public_get_limiter)
+        info = await _run(_svc(request).public_link_info, token)
+        if info is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "unknown booking link")
+        return info
+
+    @app.post("/api/public/booking/{token}/book", status_code=201)
+    async def public_booking_book(request: Request, token: str, body: PublicBook):
+        _public_throttle(request, public_post_limiter)
+        _check_client_id(body.client_id)
+        if not _EMAIL_RE.match(body.email.strip()):
+            raise HTTPException(422, "invalid email address")
+        if not body.name.strip():
+            raise HTTPException(422, "name is required")
+        try:
+            result = await _run(
+                _svc(request).book_slot, token,
+                start_iso=body.start, name=body.name.strip(),
+                email=body.email.strip(), notes=body.notes,
+                client_id=body.client_id,
+            )
+        except ValueError as e:
+            raise HTTPException(422, str(e)) from None
+        if result is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "unknown booking link")
+        return result
+
     # -- internal change hook (localhost only, shared secret; NOT behind Access) --
     @app.post("/internal/changed", status_code=202)
     async def internal_changed(
@@ -701,6 +835,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/healthz")
     async def healthz():
         return {"ok": True}
+
+    # -- public booking deep link: serve the SPA shell (StaticFiles only maps
+    #    real paths, so /book/<token> needs an explicit route) --
+    @app.get("/book/{token}")
+    async def booking_spa(token: str):
+        index = os.path.join(settings.static_dir, "index.html")
+        if not os.path.isfile(index):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "frontend not built")
+        return FileResponse(index)
 
     # -- static SPA (built frontend), mounted last so /api wins --
     if os.path.isdir(settings.static_dir):

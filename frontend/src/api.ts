@@ -65,6 +65,82 @@ export interface CalEvent {
 // Which slice of a recurring series a write applies to.
 export type EventScope = 'all' | 'this' | 'thisandfuture'
 
+// ── client scheduling (booking links) ──────────────────────────────────────
+
+// Weekly availability: keys "0" (Monday) … "6" (Sunday) → "HH:MM-HH:MM" ranges.
+export type Availability = Record<string, string[]>
+
+export interface BookingLink {
+  token: string
+  title: string
+  description: string | null
+  calendar: string                 // target calendar id
+  calendar_name: string | null
+  duration_minutes: number
+  timezone: string                 // IANA name
+  availability: Availability
+  show_busy: boolean
+  buffer_minutes: number
+  min_notice_hours: number
+  horizon_days: number
+  enabled: boolean
+  booking_count: number
+  created_at: string
+  updated_at: string
+}
+
+export interface BookingLinkInput {
+  title: string
+  description?: string | null
+  calendar: string
+  duration_minutes?: number
+  timezone: string
+  availability?: Availability
+  show_busy?: boolean
+  buffer_minutes?: number
+  min_notice_hours?: number
+  horizon_days?: number
+  enabled?: boolean
+}
+
+export interface Booking {
+  id: string
+  link: string
+  link_title: string | null
+  event_uid: string
+  calendar: string
+  name: string
+  email: string
+  notes: string | null
+  start: string                    // ISO with offset (link tz)
+  end: string
+  created_at: string
+}
+
+export interface PublicSlot {
+  start: string                    // ISO with offset — Date() parses it directly
+  end: string
+}
+
+export interface PublicBookingInfo {
+  token: string
+  title: string
+  description: string | null
+  duration_minutes: number
+  timezone: string
+  slots: PublicSlot[]
+  busy?: PublicSlot[]              // redacted: times only, present when the owner opted in
+}
+
+export interface PublicBookingResult {
+  id: string
+  start: string
+  end: string
+  title: string
+  duration_minutes: number
+  timezone: string
+}
+
 // How the tasks pane lays out: a flat list, or date columns (3-day / week).
 export type TasksViewMode = 'list' | 'day3' | 'week'
 
@@ -155,6 +231,25 @@ export const api = {
     return j<null>('DELETE',
       `/api/calendars/${calId}/events/${encodeURIComponent(uid)}${qs ? `?${qs}` : ''}`)
   },
+
+  // client scheduling (owner side)
+  schedulingLinks: () => j<BookingLink[]>('GET', '/api/scheduling/links'),
+  createSchedulingLink: (body: BookingLinkInput) =>
+    j<BookingLink>('POST', '/api/scheduling/links', body),
+  patchSchedulingLink: (token: string, body: Partial<BookingLinkInput>) =>
+    j<BookingLink>('PATCH', `/api/scheduling/links/${encodeURIComponent(token)}`, body),
+  deleteSchedulingLink: (token: string) =>
+    j<null>('DELETE', `/api/scheduling/links/${encodeURIComponent(token)}`),
+  schedulingBookings: (token?: string) =>
+    j<Booking[]>('GET',
+      `/api/scheduling/bookings${token ? `?link=${encodeURIComponent(token)}` : ''}`),
+
+  // client scheduling (public booking page — no session needed)
+  publicBookingInfo: (token: string) =>
+    j<PublicBookingInfo>('GET', `/api/public/booking/${encodeURIComponent(token)}`),
+  publicBook: (token: string, body: { start: string; name: string; email: string; notes?: string }) =>
+    j<PublicBookingResult>('POST',
+      `/api/public/booking/${encodeURIComponent(token)}/book`, { client_id: clientId(), ...body }),
 
   // settings (account-synced UI preferences)
   getSettings: () => j<Settings>('GET', '/api/settings'),
