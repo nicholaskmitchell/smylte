@@ -25,7 +25,7 @@ export function Login({ onLogin }: { onLogin: (user: string) => void }) {
   return (
     <div className="login-wrap">
       <form className="login-card" onSubmit={submit}>
-        <div className="login-brand">Radicale<span className="dot">.</span></div>
+        <div className="login-brand">Smylte<span className="dot">.</span></div>
         <div className="field">
           <label className="label">Username</label>
           <input className="input" value={username} autoFocus autoComplete="username"

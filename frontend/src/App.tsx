@@ -119,7 +119,7 @@ export function App() {
   return (
     <div className="shell">
       <div className="topbar">
-        <span className="brand">Radicale<span className="dot">.</span></span>
+        <span className="brand">Smylte<span className="dot">.</span></span>
         <div className="tabs">
           <button className={`tab ${tab === 'tasks' ? 'active' : ''}`} onClick={() => setTab('tasks')}>
             Tasks

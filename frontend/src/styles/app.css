@@ -316,13 +316,16 @@
 /* ---- modal / panel ---- */
 .overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.32);
   display: flex; align-items: center; justify-content: center; z-index: 100; padding: 20px; }
-.modal { background: var(--bg-elev); border: 1px solid var(--rule); width: 420px; max-width: 100%;
+.modal { background: var(--bg-elev); border: 1px solid var(--rule); width: 520px; max-width: 100%;
   box-shadow: 0 12px 40px rgba(0,0,0,0.25); padding: 18px; display: flex; flex-direction: column; gap: 12px; }
 .modal-head { display: flex; align-items: baseline; justify-content: space-between; }
 .modal-title { font-family: var(--serif); font-size: 18px; font-weight: 500; }
 .field { display: flex; flex-direction: column; gap: 5px; }
 .field-row { display: flex; gap: 10px; }
-.field-row > .field { flex: 1; }
+/* min-width: 0 lets the fields shrink below the native datetime picker's
+   intrinsic width, which otherwise pushes the End input past the modal edge */
+.field-row > .field { flex: 1; min-width: 0; }
+.field-row .input { min-width: 0; }
 .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
 .btn.ghost.danger { color: var(--warn); border-color: var(--warn); }
 .btn.ghost.danger:hover { color: var(--bg); background: var(--warn); }
