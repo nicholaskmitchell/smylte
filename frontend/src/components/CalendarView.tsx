@@ -324,7 +324,7 @@ export function CalendarView({ rev, onExpire, sideCollapsed, onToggleSide }: {
                               onDragEnd={() => { setDrag(null); setOverDay(null) }}
                               onClick={(ev) => { ev.stopPropagation(); setDraft({ event: e }) }}>
                               {!e.all_day && e.start && !e.cont && (
-                                <span className="t">{new Date(e.start).toLocaleTimeString([], { hour: 'numeric' })}</span>
+                                <span className="t">{new Date(e.start).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</span>
                               )}
                               {e.is_recurring && <span className="recur" aria-hidden="true">↻ </span>}
                               {e.cont && <span className="t" aria-hidden="true">‥ </span>}
