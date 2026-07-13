@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hmac
 import json
 import logging
 import os
@@ -375,6 +376,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ttl_s=settings.session_ttl_s,
         )
 
+    # The Radicale storage hook (POST /internal/changed) is gated by this secret.
+    # Never accept the well-known dev default in a real deployment: fall back to an
+    # ephemeral secret (fails CLOSED — the hook simply won't authenticate) rather
+    # than leaving the endpoint open to anyone who knows the default.
+    hook_secret = settings.hook_secret
+    if not hook_secret or hook_secret == "dev-hook-secret":
+        hook_secret = secrets.token_hex(32)
+        log.warning(
+            "hook: TASKS_HOOK_SECRET is unset or the insecure default — using an "
+            "ephemeral secret; the Radicale storage hook won't authenticate until "
+            "TASKS_HOOK_SECRET (and /etc/tasks/hook-secret) are set to match."
+        )
+
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI):
         svc = TaskService(settings)
@@ -439,13 +453,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     def _client_ip(request: Request) -> str:
         # The app binds 127.0.0.1 only (uvicorn host + host firewall), so the sole
-        # socket peer is Caddy on loopback. Caddy sets X-Real-IP to the true client's
-        # socket address and OVERWRITES it (header_up replaces any client-sent value),
-        # so a remote client cannot spoof it. Trust it only when the peer is loopback;
-        # otherwise fall back to the peer (defence in depth if the loopback-bind
-        # invariant is ever broken). CF-Connecting-IP is no longer trusted: once served
-        # directly it is attacker-controlled, and the tunnel path now maps it to
-        # X-Real-IP in Caddy.
+        # socket peer is Caddy on loopback. Caddy OVERWRITES X-Real-IP with
+        # Cloudflare's edge-verified CF-Connecting-IP — see deploy/Caddyfile.snippet:
+        # `header_up X-Real-IP {http.request.header.CF-Connecting-IP}` — which
+        # replaces any client-sent X-Real-IP, so a remote client cannot spoof it to
+        # dodge the login/booking rate limiter. Trust it only when the peer is
+        # loopback; otherwise fall back to the peer (defence in depth if the
+        # loopback-bind invariant is ever broken).
         peer = request.client.host if request.client else "unknown"
         if peer in ("127.0.0.1", "::1"):
             real = request.headers.get("X-Real-IP")
@@ -826,8 +840,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         secret: str | None = Header(default=None, alias="X-Tasks-Hook-Secret"),
     ):
         # Must return instantly — the Radicale hook fires this while the storage
-        # is locked (spec §4). Just wake the sync loop.
-        if secret != settings.hook_secret:
+        # is locked (spec §4). Just wake the sync loop. Constant-time compare so
+        # the secret can't be recovered by timing the response.
+        if not (secret and hmac.compare_digest(secret, hook_secret)):
             raise HTTPException(status.HTTP_403_FORBIDDEN, "bad hook secret")
         request.app.state.sync_trigger.set()
         return {"queued": True}

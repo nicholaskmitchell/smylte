@@ -246,6 +246,31 @@ def test_rate_limiter_locks_out():
     assert rl.retry_after("ip") > 0
 
 
+def test_rate_limiter_evicts_stale_keys():
+    # Keys are client-supplied (per-IP); the limiter must not retain an entry
+    # per key forever, or rotating source IPs would exhaust memory.
+    import time as _t
+
+    rl = RateLimiter(max_fails=5, window_s=100, lockout_s=100)
+    for i in range(1000):
+        rl.record_failure(f"ip-{i}")          # one failure each — none lock out
+    assert len(rl._fails) == 1000
+    # A sweep well past the window drops every stale, unlocked key.
+    rl._sweep(_t.monotonic() + 10_000)
+    assert rl._fails == {} and rl._locked == {}
+
+
+def test_rate_limiter_keeps_locked_keys_through_sweep():
+    import time as _t
+
+    rl = RateLimiter(max_fails=2, window_s=100, lockout_s=10_000)
+    rl.record_failure("ip")
+    rl.record_failure("ip")                    # -> locked out
+    # Past the fail window but inside the lockout: the key must survive the sweep.
+    rl._sweep(_t.monotonic() + 500)
+    assert not rl.allowed("ip")
+
+
 # ── HTTP integration (scratch Radicale; session-scoped `client` fixture) ─────
 
 pytestmark_http = pytest.mark.radicale

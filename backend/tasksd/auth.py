@@ -57,7 +57,15 @@ def verify_password(password: str, stored: str) -> bool:
 
 
 class RateLimiter:
-    """Per-key sliding-window failure counter with a fixed lockout."""
+    """Per-key sliding-window failure counter with a fixed lockout.
+
+    Keys are caller-supplied (a per-client-IP key), so the maps must stay
+    bounded: an attacker rotating source IPs — or simply a large IPv6 range, or
+    steady public traffic that never "succeeds" — would otherwise accumulate a
+    permanent entry per key and exhaust memory. A periodic sweep drops keys with
+    no live failures and no active lockout, so the maps are bounded by the
+    *recently active* client set, not the total ever seen.
+    """
 
     def __init__(self, max_fails: int = 5, window_s: int = 900, lockout_s: int = 900):
         self.max_fails = max_fails
@@ -65,10 +73,36 @@ class RateLimiter:
         self.lockout = lockout_s
         self._fails: dict[str, list[float]] = {}
         self._locked: dict[str, float] = {}
+        self._last_sweep = 0.0
+
+    def _sweep(self, now: float) -> None:
+        """Evict expired lockouts and keys whose failures have all aged out."""
+        for key, until in list(self._locked.items()):
+            if until <= now:
+                del self._locked[key]
+        horizon = now - self.window
+        for key, times in list(self._fails.items()):
+            recent = [t for t in times if t > horizon]
+            if recent:
+                self._fails[key] = recent
+            elif key not in self._locked:
+                del self._fails[key]
+        self._last_sweep = now
+
+    def _maybe_sweep(self, now: float) -> None:
+        # Amortised: at most one O(n) pass per window, so the maps can't grow
+        # past the active-client set no matter how many distinct keys arrive.
+        if now - self._last_sweep >= self.window:
+            self._sweep(now)
 
     def allowed(self, key: str) -> bool:
+        now = time.monotonic()
+        self._maybe_sweep(now)
         until = self._locked.get(key)
-        return not (until and time.monotonic() < until)
+        if until is not None and until <= now:
+            del self._locked[key]
+            return True
+        return not (until and now < until)
 
     def retry_after(self, key: str) -> int:
         until = self._locked.get(key)
@@ -76,12 +110,14 @@ class RateLimiter:
 
     def record_failure(self, key: str) -> None:
         now = time.monotonic()
+        self._maybe_sweep(now)
         recent = [t for t in self._fails.get(key, []) if now - t < self.window]
         recent.append(now)
-        self._fails[key] = recent
         if len(recent) >= self.max_fails:
             self._locked[key] = now + self.lockout
-            self._fails[key] = []
+            self._fails.pop(key, None)      # tracked by _locked now; drop the list
+        else:
+            self._fails[key] = recent
 
     def record_success(self, key: str) -> None:
         self._fails.pop(key, None)
