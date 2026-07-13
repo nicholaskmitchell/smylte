@@ -149,6 +149,7 @@ export interface Settings {
   theme?: 'light' | 'dark'
   tasks_view?: TasksViewMode
   sidebar_collapsed?: boolean
+  hidden_calendars?: string[]      // calendar ids hidden in the calendar view
 }
 
 // Creates carry a client-generated id that becomes the CalDAV resource slug,

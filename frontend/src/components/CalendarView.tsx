@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type CSSProperties } from 'react'
 import { api, type CalEvent, type EventScope, type List } from '../api'
 import { addDays, dayKey, makeGuard, pad, parseDate, toLocalInput, ymd } from '../util'
 import { useIsMobile } from '../hooks'
-import { ALL_ID, Sidebar } from './Sidebar'
+import { Sidebar } from './Sidebar'
 
 const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June',
@@ -41,14 +41,18 @@ function lastDayOf(e: CalEvent): string {
   return last < startDay ? startDay : last
 }
 
-export function CalendarView({ rev, onExpire, sideCollapsed, onToggleSide }: {
+export function CalendarView({ rev, onExpire, sideCollapsed, onToggleSide,
+  hiddenCalendars, onHiddenCalendarsChange }: {
   rev: number; onExpire: () => void
   sideCollapsed: boolean; onToggleSide: () => void
+  hiddenCalendars: string[]; onHiddenCalendarsChange: (next: string[]) => void
 }) {
   const guard = makeGuard(onExpire)
   const isMobile = useIsMobile()
   const [cals, setCals] = useState<List[]>([])
-  const [sel, setSel] = useState('')
+  // Every calendar is visible by default; this holds the ids the user hid, so a
+  // brand-new calendar shows up without any extra write.
+  const hidden = useMemo(() => new Set(hiddenCalendars), [hiddenCalendars])
   const [cursor, setCursor] = useState(() => { const n = new Date(); return new Date(n.getFullYear(), n.getMonth(), 1) })
   const [events, setEvents] = useState<CalEvent[]>([])
   const [draft, setDraft] = useState<Draft | null>(null)
@@ -76,54 +80,56 @@ export function CalendarView({ rev, onExpire, sideCollapsed, onToggleSide }: {
     guard(async () => {
       const cs = await api.calendars()
       setCals(cs)
-      // Land on the combined view when there is more than one calendar, and
-      // fall back to a real one when the selection disappears (or the All row
-      // does, once a deletion leaves a single calendar behind).
-      setSel((s) => {
-        const fallback = cs.length > 1 ? ALL_ID : cs[0]?.id || ''
-        if (!s || (s === ALL_ID && cs.length <= 1)) return fallback
-        if (s !== ALL_ID && !cs.some((c) => c.id === s)) return fallback
-        return s
-      })
+      // Drop hidden ids for calendars that no longer exist so the stored set
+      // doesn't accumulate cruft (ids are random, so a stale one can't leak
+      // onto a future calendar).
+      const valid = hiddenCalendars.filter((id) => cs.some((c) => c.id === id))
+      if (valid.length !== hiddenCalendars.length) onHiddenCalendarsChange(valid)
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rev])
 
-  // The combined view merges every calendar's window; events carry their
-  // collection href, so each one still knows where it lives.
+  // Fetch every calendar's window and merge; events carry their collection
+  // href, so each one still knows where it lives. Visibility is applied as a
+  // pure filter afterwards, so toggling a calendar never triggers a refetch.
   const fetchEvents = async (): Promise<CalEvent[]> => {
     const end = new Date(days[41]); end.setDate(end.getDate() + 1)
     const from = ymd(days[0]); const to = ymd(end)
-    if (sel !== ALL_ID) return api.events(sel, from, to)
     const per = await Promise.all(cals.map((c) => api.events(c.id, from, to)))
     return per.flat()
   }
 
   const calsKey = cals.map((c) => c.id).join(',')
   useEffect(() => {
-    if (!sel || (sel === ALL_ID && !cals.length)) { setEvents([]); return }
+    if (!cals.length) { setEvents([]); return }
     guard(async () => setEvents(await fetchEvents()))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sel, cursor, rev, calsKey])
+  }, [cursor, rev, calsKey])
 
   const reload = () => guard(async () => {
     const evs = await fetchEvents(); if (evs) setEvents(evs)
   })
 
   const calByHref = useMemo(() => new Map(cals.map((c) => [c.href, c] as const)), [cals])
-  // Which calendar an event lives in (the selection itself outside the All view).
-  const calIdOf = (e: CalEvent) => calByHref.get(e.calendar)?.id || (sel === ALL_ID ? '' : sel)
+  // Which calendar an event lives in — every event now comes from a real fetch.
+  const calIdOf = (e: CalEvent) => calByHref.get(e.calendar)?.id || ''
   // Per-event tint, so the combined view keeps each calendar's color.
   const evStyle = (e: CalEvent): CSSProperties | undefined => {
     const c = calByHref.get(e.calendar)?.color
     return c ? { '--ev-c': c } as CSSProperties : undefined
   }
 
+  // Hidden calendars drop out here — a pure filter, so toggling is instant.
+  const visibleEvents = useMemo(
+    () => events.filter((e) => !hidden.has(calByHref.get(e.calendar)?.id || '')),
+    [events, hidden, calByHref],
+  )
+
   const byDay = useMemo(() => {
     const m: Record<string, DayEv[]> = {}
     const first = ymd(days[0])
     const last = ymd(days[41])
-    for (const e of events) {
+    for (const e of visibleEvents) {
       if (!e.start) continue
       const startDay = dayKey(e.start)
       const endDay = lastDayOf(e)
@@ -136,7 +142,7 @@ export function CalendarView({ rev, onExpire, sideCollapsed, onToggleSide }: {
     }
     for (const k of Object.keys(m)) m[k].sort((a, b) => (a.start || '').localeCompare(b.start || ''))
     return m
-  }, [events, days])
+  }, [visibleEvents, days])
 
   // Optimistically paint an edit onto the events we can represent locally: a
   // non-recurring event, or a single occurrence (scope "this"). Series-wide
@@ -175,6 +181,8 @@ export function CalendarView({ rev, onExpire, sideCollapsed, onToggleSide }: {
     if (!uid) {
       const created = await guard(() => api.createEvent(cal, body))
       if (!created) return
+      // Don't let a fresh event vanish into a hidden calendar — reveal it.
+      if (hidden.has(cal)) onHiddenCalendarsChange(hiddenCalendars.filter((x) => x !== cal))
       if (created.is_recurring) reload()          // occurrences expand server-side
       else setEvents((evs) => [...evs, created])
       return
@@ -254,13 +262,17 @@ export function CalendarView({ rev, onExpire, sideCollapsed, onToggleSide }: {
 
   const todayKey = ymd(new Date())
   const lastKey = ymd(days[41])            // final visible day, for resize grips
-  const curCal = cals.find((c) => c.id === sel)
+  // Where new events land by default: the first visible calendar, else the first.
+  const defaultCal = cals.find((c) => !hidden.has(c.id))?.id || cals[0]?.id || ''
+  const toggleVisible = (id: string) => onHiddenCalendarsChange(
+    hidden.has(id) ? hiddenCalendars.filter((x) => x !== id) : [...hiddenCalendars, id])
 
   return (
     <div className="work">
-      <Sidebar title="Calendars" placeholder="Calendar" items={cals} sel={sel}
-        countOf={(c) => c.event_count} onSelect={setSel} onItems={setCals} api={calApi}
-        collapsed={sideCollapsed} onToggle={onToggleSide} allLabel="All calendars" />
+      <Sidebar title="Calendars" placeholder="Calendar" items={cals}
+        countOf={(c) => c.event_count} onItems={setCals} api={calApi}
+        collapsed={sideCollapsed} onToggle={onToggleSide}
+        hiddenIds={hidden} onToggleVisible={toggleVisible} />
 
       <div className="content">
         <div className="cal-head">
@@ -269,15 +281,14 @@ export function CalendarView({ rev, onExpire, sideCollapsed, onToggleSide }: {
           <button className="icon-btn" onClick={() => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1))}>›</button>
           <span className="cal-title">{MONTHS[cursor.getMonth()]} {cursor.getFullYear()}</span>
           <span className="spacer" />
-          {sel && cals.length > 0 && !isMobile && (
+          {cals.length > 0 && !isMobile && (
             <button className="btn" onClick={() => setDraft({ date: todayKey })}>New event</button>
           )}
         </div>
-        {!sel ? (
+        {cals.length === 0 ? (
           <div className="empty">Create a calendar to get started.</div>
         ) : (
-          <div className="cal-scroll"
-            style={curCal?.color ? { '--ev-c': curCal.color } as CSSProperties : undefined}>
+          <div className="cal-scroll">
             <div className="cal-grid">
               {DOW.map((d) => <div key={d} className="cal-dow">{d}</div>)}
               {days.map((d) => {
@@ -394,14 +405,14 @@ export function CalendarView({ rev, onExpire, sideCollapsed, onToggleSide }: {
 
       {draft && (
         <EventModal draft={draft} cals={cals} onClose={() => setDraft(null)}
-          initialCal={draft.event ? calIdOf(draft.event) : (sel === ALL_ID ? cals[0]?.id || '' : sel)}
+          initialCal={draft.event ? calIdOf(draft.event) : defaultCal}
           onSave={(body, cal, uid) => {
             // Existing events are patched where they live, then relocated if a
             // different calendar was picked; new events go straight to the pick.
             if (uid && draft.event) save(body, calIdOf(draft.event), uid, cal)
             else save(body, cal)
           }}
-          onDelete={(uid, opts) => del(draft.event ? calIdOf(draft.event) : sel, uid, opts)} />
+          onDelete={(uid, opts) => del(draft.event ? calIdOf(draft.event) : defaultCal, uid, opts)} />
       )}
 
       {more && (

@@ -1,4 +1,4 @@
-import { useState, type DragEvent, type KeyboardEvent } from 'react'
+import { useState, type CSSProperties, type DragEvent, type KeyboardEvent } from 'react'
 import type { List } from '../api'
 import { useIsMobile } from '../hooks'
 
@@ -19,21 +19,27 @@ export interface CollectionApi {
   reorder: (ids: string[]) => Promise<unknown>
 }
 
-export function Sidebar({ title, placeholder, items, sel, countOf, onSelect, onItems, api,
-  collapsed, onToggle, allLabel }: {
+export function Sidebar({ title, placeholder, items, sel = '', countOf, onSelect, onItems, api,
+  collapsed, onToggle, allLabel, hiddenIds, onToggleVisible }: {
   title: string
   placeholder: string
   items: List[]
-  sel: string
+  sel?: string
   countOf: (l: List) => number
-  onSelect: (id: string) => void
+  onSelect?: (id: string) => void
   onItems: (items: List[]) => void
   api: CollectionApi
   collapsed?: boolean
   onToggle?: () => void
   allLabel?: string                 // when set, a pinned "all" row selects ALL_ID
+  // Visibility mode (opt-in): when onToggleVisible is provided, each row becomes
+  // a show/hide toggle (checkbox-like) instead of a single-select item, and the
+  // pinned "all" row is dropped. hiddenIds holds the ids currently hidden.
+  hiddenIds?: Set<string>
+  onToggleVisible?: (id: string) => void
 }) {
   const isMobile = useIsMobile()
+  const visMode = !!onToggleVisible
   const [adding, setAdding] = useState(false)
   const [editing, setEditing] = useState<List | null>(null)
   const [dragId, setDragId] = useState<string | null>(null)
@@ -42,7 +48,9 @@ export function Sidebar({ title, placeholder, items, sel, countOf, onSelect, onI
   const create = async (name: string) => {
     const l = await api.create(name)
     setAdding(false)
-    if (l) { onItems([...items, l]); onSelect(l.id) }
+    // In visibility mode a new item is simply not in hiddenIds, so it shows by
+    // default — there is no selection to move.
+    if (l) { onItems([...items, l]); onSelect?.(l.id) }
   }
 
   // Rename/recolor/delete paint immediately (the modal closes at once); the
@@ -62,7 +70,7 @@ export function Sidebar({ title, placeholder, items, sel, countOf, onSelect, onI
     const prev = items
     const left = items.filter((l) => l.id !== id)
     onItems(left)
-    if (sel === id) onSelect(left[0]?.id || '')
+    if (!visMode && sel === id) onSelect?.(left[0]?.id || '')
     if ((await api.remove(id)) === undefined) onItems(prev)
   }
 
@@ -79,6 +87,15 @@ export function Sidebar({ title, placeholder, items, sel, countOf, onSelect, onI
     api.reorder(next.map((l) => l.id))
   }
 
+  // Swatch fill: a visible item shows its solid color; a hidden one (visibility
+  // mode) shows a hollow ring so the color still reads at a glance.
+  const swatchStyle = (l: List): CSSProperties | undefined => {
+    if (visMode && hiddenIds?.has(l.id)) {
+      return { background: 'transparent', boxShadow: `inset 0 0 0 1.5px ${l.color || 'var(--fg-faint)'}` }
+    }
+    return l.color ? { background: l.color } : undefined
+  }
+
   // Collapsed: a thin rail of color dots — lists stay one click away. The mobile
   // layout is already a compact strip, so collapse is a desktop-only affordance.
   if (collapsed && !isMobile) {
@@ -87,18 +104,24 @@ export function Sidebar({ title, placeholder, items, sel, countOf, onSelect, onI
         <button className="icon-btn side-toggle" title="Expand sidebar"
           aria-label="Expand sidebar" onClick={onToggle}>»</button>
         <div className="side-rail">
-          {allLabel && items.length > 1 && (
+          {!visMode && allLabel && items.length > 1 && (
             <button className={`rail-dot ${sel === ALL_ID ? 'active' : ''}`}
-              title={allLabel} onClick={() => onSelect(ALL_ID)}>
+              title={allLabel} onClick={() => onSelect?.(ALL_ID)}>
               <span className="swatch swatch-all" />
             </button>
           )}
-          {items.map((l) => (
-            <button key={l.id} className={`rail-dot ${l.id === sel ? 'active' : ''}`}
-              title={l.name} onClick={() => onSelect(l.id)}>
-              <span className="swatch" style={l.color ? { background: l.color } : undefined} />
-            </button>
-          ))}
+          {items.map((l) => {
+            const hidden = visMode && !!hiddenIds?.has(l.id)
+            return (
+              <button key={l.id}
+                className={`rail-dot ${!visMode && l.id === sel ? 'active' : ''} ${hidden ? 'cal-hidden' : ''}`}
+                title={l.name}
+                aria-pressed={visMode ? !hidden : undefined}
+                onClick={() => (visMode ? onToggleVisible!(l.id) : onSelect?.(l.id))}>
+                <span className="swatch" style={swatchStyle(l)} />
+              </button>
+            )
+          })}
         </div>
       </div>
     )
@@ -118,31 +141,41 @@ export function Sidebar({ title, placeholder, items, sel, countOf, onSelect, onI
         </span>
       </div>
       <div className="side-list">
-        {allLabel && items.length > 1 && (
+        {!visMode && allLabel && items.length > 1 && (
           <div className={`side-item ${sel === ALL_ID ? 'active' : ''}`}
-            onClick={() => onSelect(ALL_ID)}>
+            onClick={() => onSelect?.(ALL_ID)}>
             <span className="swatch swatch-all" />
             <span className="name">{allLabel}</span>
             <span className="count">{items.reduce((n, l) => n + countOf(l), 0)}</span>
           </div>
         )}
-        {items.map((l) => (
+        {items.map((l) => {
+          const hidden = visMode && !!hiddenIds?.has(l.id)
+          const toggle = () => (visMode ? onToggleVisible!(l.id) : onSelect?.(l.id))
+          return (
           <div key={l.id}
-            className={`side-item ${l.id === sel ? 'active' : ''} ${overId === l.id && dragId !== l.id ? 'drag-over' : ''}`}
+            className={`side-item ${!visMode && l.id === sel ? 'active' : ''} ${hidden ? 'cal-hidden' : ''} ${overId === l.id && dragId !== l.id ? 'drag-over' : ''}`}
             draggable
+            role={visMode ? 'checkbox' : undefined}
+            aria-checked={visMode ? !hidden : undefined}
+            tabIndex={visMode ? 0 : undefined}
+            onKeyDown={visMode ? (e: KeyboardEvent) => {
+              if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); toggle() }
+            } : undefined}
             onDragStart={(e: DragEvent) => { setDragId(l.id); e.dataTransfer.effectAllowed = 'move' }}
             onDragOver={(e: DragEvent) => { e.preventDefault(); setOverId(l.id) }}
             onDragLeave={() => setOverId((o) => (o === l.id ? null : o))}
             onDrop={(e: DragEvent) => { e.preventDefault(); drop(l.id); setDragId(null); setOverId(null) }}
             onDragEnd={() => { setDragId(null); setOverId(null) }}
-            onClick={() => onSelect(l.id)}>
-            <span className="swatch" style={l.color ? { background: l.color } : undefined} />
+            onClick={toggle}>
+            <span className="swatch" style={swatchStyle(l)} />
             <span className="name">{l.name}</span>
             <span className="count">{countOf(l)}</span>
             <button className="side-edit" title="Edit"
               onClick={(e) => { e.stopPropagation(); setEditing(l) }}>⋯</button>
           </div>
-        ))}
+          )
+        })}
         {items.length === 0 && !adding && (
           <div className="empty" style={{ padding: '14px 16px' }}>Nothing here yet.</div>
         )}

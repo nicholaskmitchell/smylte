@@ -26,3 +26,17 @@ def test_settings_false_is_a_value_not_a_clear(db):
         "sidebar_collapsed": False
     }
     assert store.get_settings(db) == {"sidebar_collapsed": False}
+
+
+def test_settings_hidden_calendars_roundtrip(db):
+    # A list value round-trips as-is (whole array replaced on each write).
+    assert store.update_settings(db, {"hidden_calendars": ["a", "b"]}) == {
+        "hidden_calendars": ["a", "b"]
+    }
+    assert store.get_settings(db) == {"hidden_calendars": ["a", "b"]}
+    # An empty list is a real value (all calendars visible again), not an
+    # omission — the store must store it rather than skip it like None.
+    assert store.update_settings(db, {"hidden_calendars": []}) == {
+        "hidden_calendars": []
+    }
+    assert store.get_settings(db) == {"hidden_calendars": []}

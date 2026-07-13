@@ -88,6 +88,10 @@
 .side-item:hover .side-edit { opacity: 1; }
 .side-item .side-edit:hover { color: var(--accent); }
 .side-item.drag-over { box-shadow: inset 0 2px 0 var(--accent); }
+/* visibility mode: a hidden calendar dims its label; the swatch (inline) hollows */
+.side-item.cal-hidden .name,
+.side-item.cal-hidden .count { opacity: .45; }
+.side-item[role="checkbox"]:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .side-add { display: flex; gap: 6px; padding: 8px 12px; border-top: 1px solid var(--rule); }
 .side-head-actions { display: flex; align-items: center; gap: 4px; }
 
@@ -104,6 +108,7 @@
 }
 .rail-dot:hover { background: var(--bg-elev); }
 .rail-dot.active { border-left-color: var(--accent); background: var(--bg-elev); }
+.rail-dot.cal-hidden { opacity: .55; }
 .rail-dot .swatch { width: 9px; height: 9px; flex: none; background: var(--fg-faint); }
 
 /* color picker (collection edit modal) */

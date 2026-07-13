@@ -195,6 +195,10 @@ class SettingsPatch(BaseModel):
     theme: Literal["light", "dark"] | None = None
     tasks_view: Literal["list", "day3", "week"] | None = None
     sidebar_collapsed: bool | None = None
+    # Ids of calendars the user has hidden in the calendar view. Empty/absent
+    # means every calendar is visible (the default) — an empty list is a real
+    # value that clears the set, since the store merge only skips None.
+    hidden_calendars: list[str] | None = None
 
 
 _SCOPES = ("all", "this", "thisandfuture")
