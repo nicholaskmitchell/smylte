@@ -199,6 +199,11 @@ class SettingsPatch(BaseModel):
     # means every calendar is visible (the default) — an empty list is a real
     # value that clears the set, since the store merge only skips None.
     hidden_calendars: list[str] | None = None
+    # Ids of calendars the user has archived: hidden from the calendar view but
+    # NOT deleted on the wire (the collection stays intact on Radicale, so its
+    # events are still viewable and it can be restored). Like hidden_calendars,
+    # an empty list is a real value that clears the set.
+    archived_calendars: list[str] | None = None
 
 
 _SCOPES = ("all", "this", "thisandfuture")

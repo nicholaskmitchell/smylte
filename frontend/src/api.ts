@@ -150,6 +150,7 @@ export interface Settings {
   tasks_view?: TasksViewMode
   sidebar_collapsed?: boolean
   hidden_calendars?: string[]      // calendar ids hidden in the calendar view
+  archived_calendars?: string[]    // calendar ids archived (hidden + listed in settings, restorable)
 }
 
 // Creates carry a client-generated id that becomes the CalDAV resource slug,

@@ -237,6 +237,17 @@ def test_settings_sync(client):
     assert client.get("/api/settings").json().get("theme") == "light"
 
 
+def test_settings_archived_calendars_sync(client):
+    # The SettingsPatch field must survive the HTTP round-trip — a store-level
+    # test wouldn't catch a missing/renamed field on the model (it's key-agnostic).
+    r = client.put("/api/settings", json={"archived_calendars": ["a", "b"]})
+    assert r.status_code == 200 and r.json().get("archived_calendars") == ["a", "b"]
+    assert client.get("/api/settings").json().get("archived_calendars") == ["a", "b"]
+    # An empty list is a real value (everything restored), not an omission.
+    client.put("/api/settings", json={"archived_calendars": []})
+    assert client.get("/api/settings").json().get("archived_calendars") == []
+
+
 def test_tabs_are_separated(client):
     lst = _list(client)
     cal = _cal(client)
