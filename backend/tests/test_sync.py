@@ -94,7 +94,7 @@ def test_invalid_token_falls_back_to_full_resync(engine, dav, collection, db):
     assert store.get_item(db, collection.href, "post@x") is not None
 
 
-def test_dropped_radicale_cache_triggers_full_resync(engine, dav, collection, db):
+def test_dropped_radicale_cache_recovers_consistently(engine, dav, collection, db):
     if not os.path.isdir(SCRATCH_STORAGE):
         pytest.skip(f"scratch storage not at {SCRATCH_STORAGE}")
     engine.discover()
@@ -102,21 +102,21 @@ def test_dropped_radicale_cache_triggers_full_resync(engine, dav, collection, db
     _put(dav, collection.href, "d@x", "Delta")
     engine.sync(collection.href)  # token now reflects Delta
 
-    # Remove Radicale's on-disk cache -> the persisted token becomes invalid (#6).
-    dropped = 0
+    # Drop Radicale's on-disk cache under the collection — the real-world #6
+    # scenario (a pruned/rebuilt cache). Whether that invalidates the persisted
+    # sync token is a Radicale-version detail, not our engine's contract: it
+    # invalidates on 3.7.6 but not on the 3.7.4 the CI image pins, so this test
+    # does NOT assert on stats.full_resync — the deterministic invalid-token
+    # fallback is covered by test_invalid_token_falls_back_to_full_resync above.
+    # What must always hold is that the next sync ends consistent with the wire
+    # (incrementally or via full resync) and never crashes.
     for root, dirs, _ in os.walk(SCRATCH_STORAGE):
         if os.path.basename(root) == ".Radicale.cache":
             shutil.rmtree(root, ignore_errors=True)
-            dropped += 1
     _put(dav, collection.href, "e@x", "Epsilon")
-    stats = engine.sync(collection.href)
-    # Whether or not the cache actually held the token, the engine must end
-    # consistent with the wire and never crash.
+    engine.sync(collection.href)
     assert store.get_item(db, collection.href, "e@x") is not None
     assert store.count_items(db, collection.href) == 2
-    if dropped:
-        # Radicale 3.7.4 invalidates tokens when its cache is dropped.
-        assert stats.full_resync is True
 
 
 # ── idempotent creates: a caller-supplied slug makes replays safe ────────────
