@@ -152,7 +152,9 @@ def extract(cal: Calendar) -> ItemFields | None:
         if "DTEND" in comp:
             f.dtend, f.dtend_is_date = _iso(comp.get("DTEND"))
         if "DURATION" in comp:
-            f.duration = str(comp.get("DURATION"))
+            # str() on a parsed vDDDTypes yields its repr, not the RFC 5545 form;
+            # busy/interval math re-parses this column, so store canonical text.
+            f.duration = comp.get("DURATION").to_ical().decode()
     return f
 
 

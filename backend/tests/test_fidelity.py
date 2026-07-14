@@ -96,6 +96,28 @@ def test_extract_fields_tasks_org():
     assert tf.priority == 5
 
 
+def test_edit_recurring_task_targets_master_not_override():
+    # A foreign client may serialize a RECURRENCE-ID override BEFORE the master
+    # (valid ordering); the edit must land on the master — the read side
+    # (find_component) already skips overrides, so writing to one makes the
+    # edit invisible and corrupts the override.
+    raw = (
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//foreign//EN\r\n"
+        "BEGIN:VTODO\r\nUID:rt@x\r\nRECURRENCE-ID:20260113T090000Z\r\n"
+        "DTSTART:20260113T090000Z\r\nSUMMARY:Override copy\r\nEND:VTODO\r\n"
+        "BEGIN:VTODO\r\nUID:rt@x\r\nDTSTART:20260106T090000Z\r\n"
+        "RRULE:FREQ=WEEKLY\r\nSUMMARY:Master\r\nEND:VTODO\r\n"
+        "END:VCALENDAR\r\n"
+    ).encode()
+    edited = apply_changes(raw, TaskEdit(summary="Edited"))
+    cal = parse_calendar(edited)
+    by_kind = {("override" if "RECURRENCE-ID" in c else "master"): str(c.get("SUMMARY"))
+               for c in cal.walk("VTODO")}
+    assert by_kind == {"master": "Edited", "override": "Override copy"}
+    # And the read path agrees the edit took (same component the cache indexes).
+    assert extract_from_raw(edited).summary == "Edited"
+
+
 def test_build_new_is_wellformed():
     raw = build_new("new-uid-123", summary="Call mom", edit=TaskEdit(priority=1))
     tf = extract_from_raw(raw)

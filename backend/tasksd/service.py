@@ -123,6 +123,11 @@ class TaskService:
                 except DavNotFound:
                     # Deleted from under us between slices; discover next pass.
                     continue
+                except Exception as e:  # noqa: BLE001 — one bad collection must
+                    # not stall the rest of the sweep; record it where /api/sync
+                    # and future tooling can see it and move on.
+                    log.warning("sync failed for %s: %s", href, e)
+                    store.set_sync_error(self._conn, href, str(e))
         if any(s.upserted or s.removed for s in stats):
             self._publish({"type": "sync"})
         return stats
