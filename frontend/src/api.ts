@@ -156,7 +156,9 @@ export interface Settings {
 // Creates carry a client-generated id that becomes the CalDAV resource slug,
 // so a replayed request (retry after a lost response, transport resend) lands
 // on the same resource instead of duplicating it. Hex only — it is an href.
-const clientId = () => crypto.randomUUID().replace(/-/g, '')
+// Exported so optimistic UIs can mint the id up front and key the pending row
+// by it — a client_id passed in the create body wins over the generated one.
+export const clientId = () => crypto.randomUUID().replace(/-/g, '')
 
 async function j<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(path, {

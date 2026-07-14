@@ -123,6 +123,11 @@ class TaskService:
                 except DavNotFound:
                     # Deleted from under us between slices; discover next pass.
                     continue
+                except Exception as e:  # noqa: BLE001 — one bad collection must
+                    # not stall the rest of the sweep; record it where /api/sync
+                    # and future tooling can see it and move on.
+                    log.warning("sync failed for %s: %s", href, e)
+                    store.set_sync_error(self._conn, href, str(e))
         if any(s.upserted or s.removed for s in stats):
             self._publish({"type": "sync"})
         return stats
@@ -606,17 +611,23 @@ class TaskService:
             "created_at": r["created_at"],
         } for r in rows]
 
-    def _link_busy(self, tz: ZoneInfo, window: scheduling.Interval) -> list[scheduling.Interval]:
+    def _link_busy(
+        self, tz: ZoneInfo, window: scheduling.Interval, *, only_href: str | None = None
+    ) -> list[scheduling.Interval]:
         """Busy intervals across ALL event calendars (double-booking prevention
-        is global, not per target calendar). The SQL range scan compares ISO
-        strings against mostly-naive dtstart values, so the bounds are naive
-        link-local widened by ±1 day; scheduling.py then filters precisely."""
+        is global, not per target calendar), or across just ``only_href`` (the
+        redacted busy shown publicly — see public_link_info). The SQL range scan
+        compares ISO strings against mostly-naive dtstart values, so the bounds
+        are naive link-local widened by ±1 day; scheduling.py then filters
+        precisely."""
         start_iso = (window.start - timedelta(days=1)).replace(tzinfo=None).isoformat()
         end_iso = (window.end + timedelta(days=1)).replace(tzinfo=None).isoformat()
         events: list[dict[str, Any]] = []
         with self._lock:
             for row in store.get_collections(self._conn):
                 if "VEVENT" not in (row["components"] or ""):
+                    continue
+                if only_href is not None and row["href"] != only_href:
                     continue
                 events.extend(self.events_in_range(row["href"], start_iso, end_iso))
         return scheduling.busy_intervals(events, tz)
@@ -658,10 +669,15 @@ class TaskService:
         }
         if link["show_busy"]:
             # Redacted: merged time ranges only — no titles, no counts, and no
-            # buffer padding (that would leak the buffer setting).
+            # buffer padding (that would leak the buffer setting). Scoped to the
+            # link's OWN calendar: the conflict-check busy above is deliberately
+            # global, but publishing that union would leak the time-shape of
+            # every other calendar (personal, archived, …) to anyone with the
+            # link URL.
+            shown = self._link_busy(tz, window, only_href=link["calendar_href"])
             out["busy"] = [
                 {"start": b.start.isoformat(), "end": b.end.isoformat()}
-                for b in scheduling.clip(busy, window)
+                for b in scheduling.clip(shown, window)
             ]
         return out
 
@@ -679,11 +695,16 @@ class TaskService:
             if link is None or not link["enabled"]:
                 return None
             # Replay (same client_id ⇒ same event UID): return the original
-            # confirmation instead of failing the re-validation as taken.
+            # confirmation instead of failing the re-validation as taken. Only
+            # for THIS link — a client_id reused against a different link is
+            # not a replay of anything and must not disclose the other
+            # booking's times (nor collide with its event resource).
             if client_id:
                 prior = store.get_booking_by_event(self._conn, f"{client_id}@tasksd")
                 if prior is not None:
-                    return self._confirmation(link, prior)
+                    if prior["link_token"] == token:
+                        return self._confirmation(link, prior)
+                    raise ValueError("client_id already used")
             tz = ZoneInfo(link["timezone"])
             req = datetime.fromisoformat(start_iso)
             if req.tzinfo is None:
@@ -711,10 +732,15 @@ class TaskService:
                     f"Name: {name}", f"Email: {email}"]
             if notes:
                 desc += ["", f"Notes: {notes}"]
+            # Zone-aware on the wire (UTC — every client parses `Z`, no
+            # VTIMEZONE needed): a booking is an absolute instant. Floating
+            # local would be re-read relative to whichever link's zone next
+            # parses it, so two links in different zones wouldn't reliably
+            # block each other's booked slots.
             event = self.create_event(
                 link["calendar_href"], f"{link['title']} — {name}",
-                dtstart=req.replace(tzinfo=None),          # floating local, the app's own convention
-                dtend=end.replace(tzinfo=None),
+                dtstart=req.astimezone(timezone.utc),
+                dtend=end.astimezone(timezone.utc),
                 edit=EventEdit(description="\n".join(desc)),
                 client_id=client_id,
             )

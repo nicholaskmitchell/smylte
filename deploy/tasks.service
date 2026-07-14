@@ -17,17 +17,36 @@ Restart=on-failure
 RestartSec=3
 
 # Hardening. ProtectHome=read-only keeps the app from writing anywhere under
-# /home except the one path it needs (the SQLite cache).
+# /home except the one path it needs (the SQLite cache). The app parses
+# attacker-influenced iCalendar/HTTP and is internet-reachable through the
+# tunnel, so the sandbox is tight: no capabilities (it binds 127.0.0.1:8080,
+# nothing privileged), no devices, no namespaces, loopback only.
 NoNewPrivileges=true
 PrivateTmp=true
+PrivateDevices=true
 ProtectSystem=strict
 ProtectHome=read-only
 ReadWritePaths=/home/nicholaskmitchell/tasks/backend
 ProtectKernelTunables=true
 ProtectKernelModules=true
+ProtectKernelLogs=true
 ProtectControlGroups=true
+ProtectHostname=true
+ProtectClock=true
+ProtectProc=invisible
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
 LockPersonality=true
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+UMask=0077
+# Loopback only: Caddy in, Radicale out. If TASKS_ACCESS_REQUIRED is ever
+# turned on, DELETE these two lines — the Cloudflare Access JWKS fetch needs
+# outbound HTTPS.
+IPAddressAllow=localhost
+IPAddressDeny=any
 
 [Install]
 WantedBy=multi-user.target

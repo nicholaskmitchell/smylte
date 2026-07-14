@@ -33,7 +33,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .access import AccessVerifier
-from .auth import Authenticator, RateLimiter, hash_password
+from .auth import Authenticator, RateLimiter, hash_password, limiter_key
 from .config import Settings
 from .dav.errors import AuthError as DavAuthError
 from .dav.errors import DavError
@@ -214,6 +214,21 @@ def _check_scope(scope: str) -> None:
         raise HTTPException(422, f"scope must be one of {', '.join(_SCOPES)}")
 
 
+# RFC 5545 STATUS vocabularies. Anything else would be written verbatim onto the
+# wire and confuse other CalDAV clients, so reject it at the edge.
+_TASK_STATUS = ("NEEDS-ACTION", "IN-PROCESS", "COMPLETED", "CANCELLED")
+_EVENT_STATUS = ("CONFIRMED", "TENTATIVE", "CANCELLED")
+
+
+def _check_status(value: str | None, allowed: tuple[str, ...]) -> str | None:
+    if value is None:
+        return None
+    v = value.strip().upper()
+    if v not in allowed:
+        raise HTTPException(422, f"status must be one of {', '.join(allowed)}")
+    return v
+
+
 def _parse_datelike(s: str | None) -> date | datetime | None:
     if s is None:
         return None
@@ -259,7 +274,7 @@ def _edit_from_patch(req: EditTask) -> TaskEdit:
     if "tags" in fs:
         kw["categories"] = req.tags
     if "status" in fs:
-        kw["status"] = req.status
+        kw["status"] = _check_status(req.status, _TASK_STATUS)
     return TaskEdit(**kw)
 
 
@@ -315,7 +330,7 @@ def _event_edit_from_patch(req: EditEvent) -> EventEdit:
     if "tags" in fs:
         kw["categories"] = req.tags
     if "status" in fs:
-        kw["status"] = req.status
+        kw["status"] = _check_status(req.status, _EVENT_STATUS)
     if "repeat" in fs:
         kw["rrule"] = _rrule_from_repeat(req)
     return EventEdit(**kw)
@@ -383,6 +398,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             password_hash=password_hash,
             secret=session_secret,
             ttl_s=settings.session_ttl_s,
+        )
+    elif not settings.access_required:
+        # Deliberate dev/test posture, but loud: nothing gates /api at all.
+        log.warning(
+            "auth: TASKS_AUTH_ENABLED=false and TASKS_ACCESS_REQUIRED=false — "
+            "the entire API is open to anyone who can reach this listener."
         )
 
     # The Radicale storage hook (POST /internal/changed) is gated by this secret.
@@ -759,20 +780,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def login(request: Request, body: Login):
         if authenticator is None:
             return {"authenticated": True, "user": "dev", "auth_enabled": False}
-        ip = _client_ip(request)
-        if not authenticator.limiter.allowed(ip):
+        key = limiter_key(_client_ip(request))   # IPv6 collapses to its /64
+        if not authenticator.limiter.allowed(key):
             raise HTTPException(
                 status.HTTP_429_TOO_MANY_REQUESTS,
                 "too many attempts, try later",
-                headers={"Retry-After": str(authenticator.limiter.retry_after(ip))},
+                headers={"Retry-After": str(authenticator.limiter.retry_after(key))},
             )
         ok = await asyncio.to_thread(
             authenticator.check_credentials, body.username, body.password
         )
         if not ok:
-            authenticator.limiter.record_failure(ip)
+            authenticator.limiter.record_failure(key)
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid credentials")
-        authenticator.limiter.record_success(ip)
+        authenticator.limiter.record_success(key)
         resp = JSONResponse({"authenticated": True, "user": authenticator.user})
         resp.set_cookie(
             "tasks_session", authenticator.issue_session(),
@@ -802,16 +823,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # Per-app limiter instances (not module globals) so tests don't share state.
     public_get_limiter = RateLimiter(max_fails=120, window_s=300, lockout_s=300)
     public_post_limiter = RateLimiter(max_fails=15, window_s=3600, lockout_s=3600)
+    # Second layer for the write path: a per-LINK ceiling. The per-client
+    # limiter keys on the /64 (limiter_key), but an attacker with many
+    # prefixes/botnet nodes gets a fresh counter each — this cap bounds the
+    # total junk-event rate a single link can produce regardless of source.
+    # Generous for real clients (30 bookings/h on one personal link).
+    public_post_link_limiter = RateLimiter(max_fails=30, window_s=3600, lockout_s=1800)
 
-    def _public_throttle(request: Request, limiter: RateLimiter) -> None:
-        ip = _client_ip(request)
-        if not limiter.allowed(ip):
+    def _throttle(key: str, limiter: RateLimiter) -> None:
+        if not limiter.allowed(key):
             raise HTTPException(
                 status.HTTP_429_TOO_MANY_REQUESTS,
                 "too many requests, try later",
-                headers={"Retry-After": str(limiter.retry_after(ip))},
+                headers={"Retry-After": str(limiter.retry_after(key))},
             )
-        limiter.record_failure(ip)   # every request counts: request-rate semantics
+        limiter.record_failure(key)   # every request counts: request-rate semantics
+
+    def _public_throttle(request: Request, limiter: RateLimiter) -> None:
+        _throttle(limiter_key(_client_ip(request)), limiter)
 
     @app.get("/api/public/booking/{token}")
     async def public_booking_info(request: Request, token: str):
@@ -824,6 +853,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/api/public/booking/{token}/book", status_code=201)
     async def public_booking_book(request: Request, token: str, body: PublicBook):
         _public_throttle(request, public_post_limiter)
+        _throttle(f"link:{token}", public_post_link_limiter)
         _check_client_id(body.client_id)
         if not _EMAIL_RE.match(body.email.strip()):
             raise HTTPException(422, "invalid email address")
@@ -850,8 +880,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ):
         # Must return instantly — the Radicale hook fires this while the storage
         # is locked (spec §4). Just wake the sync loop. Constant-time compare so
-        # the secret can't be recovered by timing the response.
-        if not (secret and hmac.compare_digest(secret, hook_secret)):
+        # the secret can't be recovered by timing the response; on bytes, since
+        # compare_digest raises on non-ASCII str (a stray header byte would 500).
+        if not (secret and hmac.compare_digest(secret.encode(), hook_secret.encode())):
             raise HTTPException(status.HTTP_403_FORBIDDEN, "bad hook secret")
         request.app.state.sync_trigger.set()
         return {"queued": True}

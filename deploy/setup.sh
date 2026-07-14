@@ -25,7 +25,13 @@ else
   read -rsp "Radicale password for $USER_NAME: " RADPW; echo
   read -rp  "App login username [nick]: " AUSER; AUSER=${AUSER:-nick}
   echo "Set the APP login password:"
-  HASH=$(sudo -u "$USER_NAME" "$PY" -m tasksd hash-password)
+  # NB: a failing command substitution inside an assignment does NOT trip
+  # `set -e` — check explicitly, or a mismatched/aborted prompt would write
+  # an empty TASKS_AUTH_PASSWORD_HASH and the service would refuse to start.
+  if ! HASH=$(sudo -u "$USER_NAME" "$PY" -m tasksd hash-password) || [ -z "$HASH" ]; then
+    echo "password hashing failed — env file not written; re-run setup" >&2
+    exit 1
+  fi
   umask 077
   cat > "$ENVFILE" <<EOF
 RADICALE_URL=http://127.0.0.1:5232

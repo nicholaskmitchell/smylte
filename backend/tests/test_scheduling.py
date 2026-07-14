@@ -99,6 +99,23 @@ def test_busy_intervals_duration_fallback():
     assert scheduling.busy_intervals([ev], TZ) == [_iv(10, 0, 11, 0)]
 
 
+def test_busy_intervals_duration_from_real_ics():
+    # Regression: a DURATION-only VEVENT (DAVx5/phone-client style) must block,
+    # end-to-end through the same extraction the cache uses. str() of the parsed
+    # property used to store a repr that busy_intervals silently skipped.
+    from tasksd.ical import extract_from_raw
+
+    f = extract_from_raw(
+        b"BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//t//t//EN\r\n"
+        b"BEGIN:VEVENT\r\nUID:dur-1\r\nDTSTART:20260713T100000\r\n"
+        b"DURATION:PT1H30M\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+    )
+    assert f.duration == "PT1H30M"
+    ev = _ev(start=f.dtstart, duration=f.duration, status=f.status,
+             start_is_date=f.dtstart_is_date, all_day=f.dtstart_is_date)
+    assert scheduling.busy_intervals([ev], TZ) == [_iv(10, 0, 11, 30)]
+
+
 def test_merge_and_pad():
     ivs = [_iv(10, 0, 11, 0), _iv(10, 30, 11, 30), _iv(13, 0, 14, 0)]
     assert scheduling.merge(ivs) == [_iv(10, 0, 11, 30), _iv(13, 0, 14, 0)]
@@ -357,7 +374,7 @@ def test_public_page_requires_no_auth_and_leaks_nothing(client):
 @pytest.mark.radicale
 def test_busy_event_blocks_slot_and_redacts(client):
     cal = _cal(client)
-    other = _cal(client)          # busy comes from ALL calendars, not just the target
+    other = _cal(client)          # conflict-checking is global; disclosure is not
     link = _mklink(client, cal["id"], show_busy=True)
 
     info = client.get(f"/api/public/booking/{link['token']}", headers=_NO_COOKIE).json()
@@ -370,16 +387,31 @@ def test_busy_event_blocks_slot_and_redacts(client):
     assert ev.status_code == 201, ev.text
 
     info2 = client.get(f"/api/public/booking/{link['token']}", headers=_NO_COOKIE).json()
+    # The other calendar's event still blocks the slot (global conflict check)…
     assert taken not in [s["start"] for s in info2["slots"]]
-    # Redaction merges adjacent blocks (events from other suite tests share the
-    # session app), so assert coverage of the event, not exact bounds.
+    # …but is NOT disclosed: the public busy list is scoped to the link's own
+    # calendar, so the time-shape of every other calendar stays private.
     t0 = datetime.fromisoformat(taken)
     t1 = t0 + timedelta(minutes=30)
-    assert any(datetime.fromisoformat(b["start"]) <= t0
-               and datetime.fromisoformat(b["end"]) >= t1 for b in info2["busy"])
-    for b in info2["busy"]:
+    assert not any(datetime.fromisoformat(b["start"]) <= t0
+                   and datetime.fromisoformat(b["end"]) >= t1 for b in info2["busy"])
+
+    # An event on the link's OWN calendar does show, redacted to times only.
+    own = info2["slots"][0]["start"]
+    own_naive = own.replace("+00:00", "")
+    r = client.post(f"/api/calendars/{cal['id']}/events", json={
+        "summary": "SECRET own-cal", "start": own_naive,
+        "end": (datetime.fromisoformat(own_naive) + timedelta(minutes=30)).isoformat(),
+    })
+    assert r.status_code == 201, r.text
+    info3 = client.get(f"/api/public/booking/{link['token']}", headers=_NO_COOKIE).json()
+    o0 = datetime.fromisoformat(own)
+    o1 = o0 + timedelta(minutes=30)
+    assert any(datetime.fromisoformat(b["start"]) <= o0
+               and datetime.fromisoformat(b["end"]) >= o1 for b in info3["busy"])
+    for b in info3["busy"]:
         assert set(b) == {"start", "end"}                 # redacted: times only
-    assert "SECRET" not in str(info2)
+    assert "SECRET" not in str(info2) + str(info3)
 
 
 @pytest.mark.radicale
@@ -398,11 +430,11 @@ def test_book_flow_conflict_and_replay(client):
     booked = r.json()
     assert booked["start"] == slot["start"] and booked["title"] == "Coffee chat"
 
-    # The event landed on the owner's calendar with the client's details.
-    naive = slot["start"].replace("+00:00", "")
-    day = naive[:10]
+    # The event landed on the owner's calendar with the client's details,
+    # written as an absolute UTC instant (zone-aware, not floating local).
+    day = slot["start"][:10]
     events = client.get(f"/api/calendars/{cal['id']}/events?start={day}&end={day}T23:59:59").json()
-    match = [e for e in events if e["start"] == naive]
+    match = [e for e in events if e["start"] == slot["start"]]
     assert match and match[0]["summary"] == "Coffee chat — Ada Lovelace"
     assert "ada@example.com" in match[0]["description"]
     assert "bring diagrams" in match[0]["description"]

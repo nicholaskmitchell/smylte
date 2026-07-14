@@ -16,6 +16,7 @@ Write side (synchronous, no outbox — spec §3):
 """
 from __future__ import annotations
 
+import logging
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -24,6 +25,8 @@ from .. import ical
 from ..dav.client import CollectionInfo, DavClient
 from ..dav.errors import DavError, InvalidSyncToken, NotFound, PreconditionFailed
 from ..db import store
+
+log = logging.getLogger("tasksd.sync")
 
 
 class ConflictError(DavError):
@@ -35,7 +38,9 @@ class SyncStats:
     collection_href: str
     upserted: int = 0
     removed: int = 0
+    skipped: int = 0                  # malformed resources left uncached this pass
     full_resync: bool = False
+    last_error: str | None = None     # recorded in sync_state.last_error
 
 
 @contextmanager
@@ -90,14 +95,15 @@ class SyncEngine:
         bodies = self._multiget(collection_href, [i.href for i in result.changed])
         with _tx(self.conn):
             for item in bodies:
-                if self._upsert_body(collection_href, item):
+                if self._upsert_body(collection_href, item, stats):
                     stats.upserted += 1
             for href in result.removed:
                 uid = store.delete_item_by_href(self.conn, collection_href, href)
                 if uid:
                     store.orphan_sidecar(self.conn, collection_href, uid)
                     stats.removed += 1
-            store.set_sync_token(self.conn, collection_href, result.token)
+            store.set_sync_token(self.conn, collection_href, result.token,
+                                 error=stats.last_error)
         return stats
 
     def full_resync(self, collection_href: str) -> SyncStats:
@@ -109,7 +115,7 @@ class SyncEngine:
         bodies = self._multiget(collection_href, to_fetch)
         with _tx(self.conn):
             for item in bodies:
-                if self._upsert_body(collection_href, item):
+                if self._upsert_body(collection_href, item, stats):
                     stats.upserted += 1
             # After upserts, any cached href no longer on the wire is a real
             # deletion. A delete-and-recreated UID already moved to its new href,
@@ -119,16 +125,27 @@ class SyncEngine:
                     store.delete_item_by_href(self.conn, collection_href, href)
                     store.orphan_sidecar(self.conn, collection_href, uid)
                     stats.removed += 1
-            store.set_sync_token(self.conn, collection_href, result.token, full=True)
+            store.set_sync_token(self.conn, collection_href, result.token, full=True,
+                                 error=stats.last_error)
             store.gc_orphans(self.conn)
         return stats
 
-    def _upsert_body(self, collection_href: str, item) -> bool:
+    def _upsert_body(self, collection_href: str, item, stats: SyncStats) -> bool:
         """Extract + cache one resource. Returns False for non-VTODO resources
-        (e.g. a VEVENT sharing a mixed collection) — they are simply not tracked."""
+        (e.g. a VJOURNAL sharing a mixed collection) — they are simply not tracked.
+        A resource that fails to parse is skipped the same way (logged + counted):
+        one malformed foreign write must not wedge the collection's sync forever.
+        The token still advances; the resource is re-attempted whenever its etag
+        next changes, and the failure is visible in sync_state.last_error."""
         if not item.data:
             return False
-        fields = ical.extract_from_raw(item.data)
+        try:
+            fields = ical.extract_from_raw(item.data)
+        except Exception as e:  # noqa: BLE001 — foreign clients can PUT anything
+            log.warning("skipping malformed resource %s: %s", item.href, e)
+            stats.skipped += 1
+            stats.last_error = f"malformed resource {item.href}: {e}"
+            return False
         if fields is None or not fields.uid:
             return False
         store.upsert_item(self.conn, collection_href, item, fields)
@@ -277,20 +294,32 @@ class SyncEngine:
             return ical.split_series(raw, recurrence_id, edit)
 
         head, tail = build(row["raw_ics"])
+        # Write the tail BEFORE truncating the head: a crash or transport error
+        # between the two PUTs then leaves visible, recoverable duplicate
+        # occurrences instead of silently deleting every "following" one.
+        tail_href: str | None = None
+        if not delete_tail:
+            tail_href = f"{collection_href}{uuid.uuid4().hex}.ics"
+            self.dav.put(tail_href, tail, if_none_match="*")
         try:
             self.dav.put(href, head, if_match=row["etag"])
         except PreconditionFailed:
             fresh = self.dav.get(href)
             head, tail = build(fresh.data)
+            if tail_href is not None:
+                self.dav.put(tail_href, tail)   # replace our own just-written tail
             try:
                 self.dav.put(href, head, if_match=fresh.etag)
             except PreconditionFailed as e:
+                if tail_href is not None:
+                    # Don't strand a tail next to an untruncated head.
+                    try:
+                        self.dav.delete(tail_href)
+                    except DavError:
+                        pass
                 raise ConflictError(f"edit conflict on {uid}: retry the change") from e
         self._refresh_from_wire(collection_href, href)
-        if not delete_tail:
-            slug = uuid.uuid4().hex
-            tail_href = f"{collection_href}{slug}.ics"
-            self.dav.put(tail_href, tail, if_none_match="*")
+        if tail_href is not None:
             self._refresh_from_wire(collection_href, tail_href)
         return uid
 
