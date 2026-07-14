@@ -1,6 +1,7 @@
 # Gate for the autopull deploy: main only ever receives commits that passed the
-# full backend suite (against a real scratch Radicale) and a frontend
-# typecheck + build.
+# full backend suite (against a real scratch Radicale), the frontend unit +
+# rendering tests, a typecheck + build, and the security checks (dependency
+# audits on both stacks and bandit static analysis on the backend).
 name: CI
 
 on:
@@ -48,4 +49,33 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
       - run: npm run typecheck
+      - name: Unit + rendering tests (vitest)
+        run: npm test
       - run: npm run build
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Audit Python dependencies (pip-audit)
+        # Resolves requirements.txt in an isolated venv and checks the whole
+        # tree against the vulnerability databases. Fails on any known CVE.
+        run: |
+          pip install pip-audit
+          pip-audit -r backend/requirements.txt
+      - name: Static security analysis (bandit)
+        # Medium+ severity fails the build. Known-safe sites (allowlisted
+        # column names in store.py) carry reviewed `# nosec` annotations.
+        run: |
+          pip install bandit
+          bandit -r tasksd -ll
+        working-directory: backend
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Audit npm dependencies
+        run: npm audit --audit-level=high
+        working-directory: frontend

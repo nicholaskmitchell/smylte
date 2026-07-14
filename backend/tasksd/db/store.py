@@ -256,7 +256,8 @@ def set_sidecar(conn: sqlite3.Connection, collection_href: str, uid: str, **fiel
     )
     for k, v in fields.items():
         conn.execute(
-            f"UPDATE sidecar SET {k}=?, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') "
+            # {k} is vetted against the `allowed` set above — not attacker input.
+            f"UPDATE sidecar SET {k}=?, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') "  # nosec B608
             "WHERE collection_href=? AND uid=?",
             (v, collection_href, uid),
         )
@@ -277,7 +278,8 @@ def create_booking_link(conn: sqlite3.Connection, token: str, fields: dict) -> s
         raise ValueError(f"unknown booking link fields: {bad}")
     cols = ["token", *fields.keys()]
     conn.execute(
-        f"INSERT INTO booking_links ({', '.join(cols)}) "
+        # cols are vetted against _LINK_FIELDS above — not attacker input.
+        f"INSERT INTO booking_links ({', '.join(cols)}) "  # nosec B608
         f"VALUES ({', '.join('?' * len(cols))})",
         (token, *fields.values()),
     )
@@ -304,7 +306,8 @@ def update_booking_link(
         return None
     for k, v in fields.items():
         conn.execute(
-            f"UPDATE booking_links SET {k}=?, "
+            # {k} is vetted against _LINK_FIELDS above — not attacker input.
+            f"UPDATE booking_links SET {k}=?, "  # nosec B608
             "updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE token=?",
             (v, token),
         )
