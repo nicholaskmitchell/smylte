@@ -17,10 +17,11 @@ from __future__ import annotations
 
 import copy
 from dataclasses import dataclass, replace
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
+from dateutil.rrule import rrulestr
 from icalendar import Calendar, Event, Todo, vRecur
 
 # Sentinel: a field left UNSET is not touched; None means "clear this property".
@@ -132,13 +133,22 @@ def _set_status(todo: Todo, status: str | None, now: datetime) -> None:
             _set_int(todo, "PERCENT-COMPLETE", 0)
 
 
+def _find_master_todo(cal: Calendar):
+    """The series master: the first VTODO without a RECURRENCE-ID. A recurring
+    task's resource may carry override components — and a foreign client may
+    serialize them before the master — so "first in walk order" is not safe.
+    Mirrors ``_find_master_event`` (and ``read.find_component``, the read side)."""
+    todos = list(cal.walk("VTODO"))
+    for td in todos:
+        if "RECURRENCE-ID" not in td:
+            return td
+    return todos[0] if todos else None
+
+
 def apply_changes(raw: bytes | str, edit: TaskEdit, *, now: datetime | None = None) -> bytes:
     now = now or datetime.now(timezone.utc)
     cal = Calendar.from_ical(raw)
-    todo = None
-    for comp in cal.walk("VTODO"):
-        todo = comp
-        break
+    todo = _find_master_todo(cal)
     if todo is None:
         raise ValueError("resource has no VTODO to edit")
 
@@ -293,11 +303,24 @@ def build_new_event(
 
 # ── per-occurrence editing (RECURRENCE-ID overrides / EXDATE / split) ──────────
 
-def _anchor_from_iso(recurrence_id: str) -> date | datetime:
+def _anchor_from_iso(recurrence_id: str, master: Event | None = None) -> date | datetime:
     """Parse an occurrence anchor (the ISO the read path emitted) back to a
-    date (all-day) or datetime (timed)."""
+    date (all-day) or datetime (timed).
+
+    An aware ISO carries only a numeric offset, so ``fromisoformat`` yields a
+    fixed-offset tzinfo — which icalendar would serialize as a fabricated
+    ``TZID="UTC-06:00"``: unparseable by other clients and unmatchable against
+    the series. Re-express the anchor in the master DTSTART's real zone so
+    RECURRENCE-ID / EXDATE / DTSTART values written from it stay in the
+    series' own TZID (the instant is unchanged)."""
     s = recurrence_id.strip()
-    return datetime.fromisoformat(s) if "T" in s else date.fromisoformat(s)
+    anchor = datetime.fromisoformat(s) if "T" in s else date.fromisoformat(s)
+    if isinstance(anchor, datetime) and anchor.tzinfo is not None and master is not None:
+        ds = master.get("DTSTART")
+        mdt = ds.dt if ds is not None else None
+        if isinstance(mdt, datetime) and mdt.tzinfo is not None:
+            anchor = anchor.astimezone(mdt.tzinfo)
+    return anchor
 
 
 def _as_utc(dt: datetime) -> datetime:
@@ -306,6 +329,12 @@ def _as_utc(dt: datetime) -> datetime:
 
 def _same_instant(a, b) -> bool:
     if isinstance(a, datetime) and isinstance(b, datetime):
+        if (a.tzinfo is None) != (b.tzinfo is None):
+            # One side lost its zone (e.g. a RECURRENCE-ID whose TZID an old
+            # write fabricated and no longer resolves): fall back to wall-clock
+            # so the occurrence is still addressable rather than silently
+            # spawning a duplicate override.
+            return a.replace(tzinfo=None) == b.replace(tzinfo=None)
         return _as_utc(a) == _as_utc(b)
     if isinstance(a, datetime) or isinstance(b, datetime):
         return False
@@ -368,7 +397,7 @@ def apply_occurrence_override(
     master = _find_master_event(cal)
     if master is None:
         raise ValueError("resource has no VEVENT to edit")
-    anchor = _anchor_from_iso(recurrence_id)
+    anchor = _anchor_from_iso(recurrence_id, master)
     override = _find_override(cal, anchor)
     if override is None:
         override = _new_override(master, anchor)
@@ -388,7 +417,7 @@ def exclude_occurrence(
     master = _find_master_event(cal)
     if master is None:
         raise ValueError("resource has no VEVENT to edit")
-    anchor = _anchor_from_iso(recurrence_id)
+    anchor = _anchor_from_iso(recurrence_id, master)
     master.add("EXDATE", anchor)
     cal.subcomponents = [
         c for c in cal.subcomponents
@@ -475,20 +504,29 @@ def shift_series(
     if edit.dtstart is UNSET or edit.dtstart is None:
         raise ValueError("rescheduling a series requires a new start")
     now = now or datetime.now(timezone.utc)
-    anchor = _anchor_from_iso(recurrence_id)
-    if isinstance(anchor, datetime) != isinstance(edit.dtstart, datetime):
-        raise ValueError(
-            "cannot switch a series between all-day and timed with 'all events'; "
-            "edit single occurrences instead"
-        )
 
     cal = Calendar.from_ical(raw)
     master = _find_master_event(cal)
     if master is None or master.get("DTSTART") is None:
         raise ValueError("resource has no dated VEVENT to edit")
 
+    anchor = _anchor_from_iso(recurrence_id, master)
+    if isinstance(anchor, datetime) != isinstance(edit.dtstart, datetime):
+        raise ValueError(
+            "cannot switch a series between all-day and timed with 'all events'; "
+            "edit single occurrences instead"
+        )
+
     override = _find_override(cal, anchor)
     base = override.get("DTSTART").dt if override is not None and override.get("DTSTART") else anchor
+    # A foreign client may have given this occurrence's override a different
+    # dateness than the series (a timed override on an all-day series, say);
+    # the drag delta is a series-dateness notion, so coerce the base to match
+    # the anchor rather than crashing on date − datetime.
+    if isinstance(anchor, datetime) and not isinstance(base, datetime):
+        base = datetime.combine(base, time())
+    elif not isinstance(anchor, datetime) and isinstance(base, datetime):
+        base = base.date()
     delta = _wall_delta(edit.dtstart, base)
     old_start = master.get("DTSTART").dt
     new_start = old_start + delta
@@ -552,6 +590,44 @@ def _drop_overrides(cal: Calendar, anchor, *, keep_before: bool) -> None:
     cal.subcomponents = kept
 
 
+def _partition_datelist(event: Event, key: str, anchor, *, keep_before: bool) -> None:
+    """Keep only the RDATE/EXDATE entries on one side of the split anchor.
+    UNTIL bounds the RRULE only — list-based instances ignore it, so without
+    this a post-anchor RDATE would survive in the head AND duplicate into the
+    tail."""
+    prop = event.get(key)
+    if prop is None:
+        return
+    lists = prop if isinstance(prop, list) else [prop]
+    values = [entry.dt for lst in lists for entry in lst.dts]
+    keep = [v for v in values if _at_or_after(v, anchor) != keep_before]
+    if len(keep) == len(values):
+        return
+    _replace(event, key)
+    if keep:
+        event.add(key, keep)
+
+
+def _count_consumed(rule: dict, dtstart: date | datetime, anchor) -> int:
+    """How many RRULE-generated occurrences fall strictly before `anchor` — the
+    head's share of a COUNT-bounded series. (EXDATE'd instances still consume
+    COUNT per RFC 5545, and RDATE additions never do, so the raw rule is the
+    right thing to enumerate.)"""
+    def _dt(v):
+        return v if isinstance(v, datetime) else datetime.combine(v, time())
+
+    start, end = _dt(dtstart), _dt(anchor)
+    if (start.tzinfo is None) != (end.tzinfo is None):
+        start, end = start.replace(tzinfo=None), end.replace(tzinfo=None)
+    rr = rrulestr(vRecur(rule).to_ical().decode(), dtstart=start)
+    consumed = 0
+    for occ in rr:                      # finite: the rule carries COUNT
+        if occ >= end:
+            break
+        consumed += 1
+    return consumed
+
+
 def split_series(
     raw: bytes | str, recurrence_id: str, edit: EventEdit, *, now: datetime | None = None
 ) -> tuple[bytes, bytes]:
@@ -559,24 +635,28 @@ def split_series(
     (head_ics, tail_ics): the head is the original resource with its rule bounded
     to end just before the anchor; the tail is a brand-new resource (new UID)
     starting at the anchor with the remaining recurrence and the edits applied.
+    A COUNT-bounded rule keeps its overall length: the tail's COUNT is the
+    original minus the occurrences the head consumed. RDATE/EXDATE entries are
+    partitioned by the anchor alongside the overrides.
 
-    Note: a COUNT-bounded rule's tail is emitted without the COUNT bound (it keeps
-    FREQ/INTERVAL/BY*/UNTIL). Delete-this-and-following passes an empty edit and
-    the caller PUTs only the head, discarding the tail."""
+    Delete-this-and-following passes an empty edit and the caller PUTs only the
+    head, discarding the tail."""
     now = now or datetime.now(timezone.utc)
-    anchor = _anchor_from_iso(recurrence_id)
 
     # Head: bound the master rule with UNTIL, keep only earlier overrides.
     head = Calendar.from_ical(raw)
     hmaster = _find_master_event(head)
     if hmaster is None:
         raise ValueError("resource has no VEVENT to edit")
+    anchor = _anchor_from_iso(recurrence_id, hmaster)
     rule = _rrule_dict(hmaster)
     if rule is not None:
         rule.pop("COUNT", None)
         rule["UNTIL"] = [_until_before(anchor)]
         _set_rrule(hmaster, rule)
     _drop_overrides(head, anchor, keep_before=True)
+    _partition_datelist(hmaster, "RDATE", anchor, keep_before=True)
+    _partition_datelist(hmaster, "EXDATE", anchor, keep_before=True)
     _stamp(hmaster, now)
 
     # Tail: fresh UID, DTSTART=anchor, remaining rule, later overrides re-homed.
@@ -584,6 +664,7 @@ def split_series(
     tmaster = _find_master_event(tail)
     new_uid = f"{uuid4().hex}@tasksd"
     dur = _event_duration(tmaster)
+    orig_start = tmaster.get("DTSTART").dt if tmaster.get("DTSTART") is not None else anchor
     _replace(tmaster, "DTSTART")
     tmaster.add("DTSTART", anchor)
     _replace(tmaster, "DURATION")
@@ -592,9 +673,17 @@ def split_series(
         tmaster.add("DTEND", anchor + dur)
     tail_rule = _rrule_dict(tmaster)
     if tail_rule is not None:
-        tail_rule.pop("COUNT", None)
+        if "COUNT" in tail_rule:
+            remaining = int(tail_rule["COUNT"][0]) - _count_consumed(
+                tail_rule, orig_start, anchor
+            )
+            # The anchor is an occurrence, so ≥1 remains for any sane split;
+            # clamp defensively so a bad anchor can't emit COUNT=0 (invalid).
+            tail_rule["COUNT"] = [max(remaining, 1)]
         _set_rrule(tmaster, tail_rule)
     _drop_overrides(tail, anchor, keep_before=False)
+    _partition_datelist(tmaster, "RDATE", anchor, keep_before=False)
+    _partition_datelist(tmaster, "EXDATE", anchor, keep_before=False)
     for ev in tail.walk("VEVENT"):
         _replace(ev, "UID")
         ev.add("UID", new_uid)

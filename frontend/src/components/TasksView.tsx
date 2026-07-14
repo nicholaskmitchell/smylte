@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState, type KeyboardEvent } from 'react'
-import { api, type List, type Task, type TasksViewMode } from '../api'
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
+import { api, clientId, type List, type Task, type TasksViewMode } from '../api'
 import { addDays, dayKey, fmtDue, isOverdue, makeGuard, toLocalInput, ymd } from '../util'
 import { Sidebar } from './Sidebar'
 
@@ -32,43 +32,92 @@ export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggle
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rev])
 
+  // In-flight task fetches carry a token: a response commits only while its
+  // token is still the newest and its list is still the selected one, so an
+  // out-of-order response can never clobber a later fetch. Writes bump the
+  // token too, so a refetch whose snapshot predates an optimistic paint is
+  // dropped instead of wiping it (the mutation's own SSE `rev` bump refetches
+  // again once the server has published the change).
+  const fetchToken = useRef(0)
+  const selRef = useRef(sel)
+  selRef.current = sel
+  const invalidateFetches = () => { fetchToken.current += 1 }
+
+  const refetch = (listId: string) => {
+    const token = ++fetchToken.current
+    return guard(async () => {
+      const ts = await api.tasks(listId)
+      if (token === fetchToken.current && listId === selRef.current) setTasks(ts)
+    })
+  }
+
   useEffect(() => {
     if (!sel) { setTasks([]); return }
-    guard(async () => setTasks(await api.tasks(sel)))
+    refetch(sel)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sel, rev])
 
-  const reload = () => guard(async () => { const ts = await api.tasks(sel); if (ts) setTasks(ts) })
-
   // Writes are optimistic: paint the change immediately, then reconcile with
-  // the server's canonical DTO when it lands — or reload on failure so the UI
-  // never lies. The SSE `rev` bump refetches shortly after as a safety net
-  // (and fixes derived fields like a parent's subtask progress).
+  // the server's canonical DTO when it lands — or roll the touched task back
+  // on failure (the guard has already raised the error toast) so the UI never
+  // lies. The SSE `rev` bump refetches shortly after as a safety net (and
+  // fixes derived fields like a parent's subtask progress). Rollbacks restore
+  // only the affected task — never a whole-array snapshot, which would clobber
+  // interleaved changes to other tasks.
   const patchLocal = (uid: string, patch: Partial<Task>) =>
     setTasks((ts) => ts.map((t) => (t.uid === uid ? { ...t, ...patch } : t)))
-  const settle = (dto: Task | undefined) => {
-    if (dto) setTasks((ts) => ts.map((t) => (t.uid === dto.uid ? dto : t)))
-    else reload()
-  }
+  const settle = (dto: Task | undefined, orig: Task) =>
+    setTasks((ts) => ts.map((t) => (t.uid === orig.uid ? (dto ?? orig) : t)))
 
-  const addTask = async (summary: string, due?: string) => {
-    const t = await guard(() => api.createTask(sel, due ? { summary, due } : { summary }))
-    if (t) setTasks((ts) => [...ts, t])
+  // A pending create renders immediately as a local stand-in keyed by the
+  // create's client_id (the idempotency slug the server derives its uid from),
+  // so success can swap in the server DTO — and failure remove it — by uid.
+  const draftTask = (uid: string, body: { summary: string; due?: string; parent?: string }): Task => ({
+    uid, list: sel, summary: body.summary, notes: null, status: 'NEEDS-ACTION',
+    completed: false, cancelled: false, priority: null, priority_label: 'none',
+    percent_complete: null, due: body.due ?? null,
+    due_is_date: !!body.due && !body.due.includes('T'),
+    start: null, tags: [], parent: body.parent ?? null, children: [],
+    child_count: 0, completed_child_count: 0, derived_percent: null,
+    pinned: false, href: '', etag: '',
+  })
+  const create = async (body: { summary: string; due?: string; parent?: string }) => {
+    const cid = clientId()
+    invalidateFetches()
+    setTasks((ts) => [...ts, draftTask(cid, body)])
+    const t = await guard(() => api.createTask(sel, { ...body, client_id: cid }))
+    if (!t) { setTasks((ts) => ts.filter((x) => x.uid !== cid)); return }
+    const here = sel === selRef.current   // the user may have switched lists mid-flight
+    setTasks((ts) => {
+      if (ts.some((x) => x.uid === cid)) return ts.map((x) => (x.uid === cid ? t : x))
+      // Stand-in already gone — a refetch brought the real task, or the list
+      // changed. Re-append only when it belongs here and isn't shown yet.
+      return here && !ts.some((x) => x.uid === t.uid) ? [...ts, t] : ts
+    })
   }
+  const addTask = (summary: string, due?: string) => create(due ? { summary, due } : { summary })
+  const addSub = (parent: string, summary: string) => create({ summary, parent })
+
   const toggle = async (t: Task) => {
     const done = !t.completed
+    invalidateFetches()
     patchLocal(t.uid, { completed: done, cancelled: false, status: done ? 'COMPLETED' : 'NEEDS-ACTION' })
-    settle(await guard(() => api.complete(sel, t.uid, done)))
+    settle(await guard(() => api.complete(sel, t.uid, done)), t)
   }
   const remove = async (t: Task) => {
+    const at = tasks.findIndex((x) => x.uid === t.uid)  // where to restore it on failure
+    invalidateFetches()
     setTasks((ts) => ts.filter((x) => x.uid !== t.uid))
-    if ((await guard(() => api.deleteTask(sel, t.uid))) === undefined) reload()
+    if ((await guard(() => api.deleteTask(sel, t.uid))) === undefined && sel === selRef.current) {
+      setTasks((ts) => {
+        if (ts.some((x) => x.uid === t.uid)) return ts
+        const next = ts.slice()
+        next.splice(at < 0 ? next.length : Math.min(at, next.length), 0, t)
+        return next
+      })
+    }
   }
-  const addSub = async (parent: string, summary: string) => {
-    const t = await guard(() => api.createTask(sel, { summary, parent }))
-    if (t) setTasks((ts) => [...ts, t])
-  }
-  const saveDetail = async (uid: string, patch: Record<string, unknown>) => {
+  const saveDetail = async (t: Task, patch: Record<string, unknown>) => {
     const opt: Partial<Task> = {}
     if ('summary' in patch) opt.summary = patch.summary as string
     if ('notes' in patch) opt.notes = (patch.notes as string) ?? null
@@ -83,8 +132,9 @@ export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggle
       opt.completed = patch.status === 'COMPLETED'
       opt.cancelled = patch.status === 'CANCELLED'
     }
-    patchLocal(uid, opt)
-    settle(await guard(() => api.patchTask(sel, uid, patch)))
+    invalidateFetches()
+    patchLocal(t.uid, opt)
+    settle(await guard(() => api.patchTask(sel, t.uid, patch)), t)
   }
   // Day-column drag: dropping a card on a column reschedules it to that day.
   // A timed due keeps its local time-of-day; an all-day due stays all-day.
@@ -95,7 +145,7 @@ export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggle
     if (!t) return
     if (t.due && dayKey(t.due) === key) return
     const timed = !!t.due && t.due.includes('T') && !t.due_is_date
-    saveDetail(t.uid, { due: timed ? `${key}T${toLocalInput(t.due!).slice(11, 16)}` : key })
+    saveDetail(t, { due: timed ? `${key}T${toLocalInput(t.due!).slice(11, 16)}` : key })
   }
   const listApi = {
     create: (name: string) => guard(() => api.createList(name)),
@@ -230,7 +280,7 @@ export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggle
 
       {detail && (
         <TaskDetail task={detail} onClose={() => setDetail(null)}
-          onSave={(patch) => { saveDetail(detail.uid, patch); setDetail(null) }}
+          onSave={(patch) => { saveDetail(detail, patch); setDetail(null) }}
           onDelete={() => { remove(detail); setDetail(null) }} />
       )}
     </div>

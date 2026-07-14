@@ -74,8 +74,12 @@ hook = /usr/local/bin/tasks-notify %(path)s
 Optionally also `use_mtime_and_size_for_item_cache = True` (a Pi win, spec §9).
 Then `sudo systemctl restart radicale`.
 
-The hook backgrounds a `curl --max-time 1` and exits instantly, so it never
-blocks Radicale's locked write. **Søren note:** the restart briefly interrupts
+The hook POSTs **synchronously** (`curl --max-time 2`) and then exits — do NOT
+"optimize" it into a backgrounded curl: Radicale SIGKILLs the hook's whole
+process group the moment the script returns, so a backgrounded request dies
+before it connects (see the header comment in `deploy/tasks-notify`). The
+bounded max-time keeps the locked write from stalling more than ~2s even if
+the app is down. **Søren note:** the restart briefly interrupts
 Søren's calendar tools (transient); and Søren should be reloaded once so it picks
 up its hardened `tools/radicale.py` (see the tasks-app-stack memory). Neither is
 urgent.
@@ -95,10 +99,13 @@ DAVx⁵ / Thunderbird base URL: `https://radicale.nicholaskmitchell.com/dav`
 ## Backups (spec §9 — important)
 Back up **both**:
 - `~/radicale/collections` — the source of truth (all `.ics`).
-- the app's **sidecar tables** (`sidecar`, `list_settings`, `completions`,
-  `attachments`) from `~/tasks/backend/tasks.db`. These are app-only state that a
-  resync CANNOT rebuild (see docs/phase0-findings.md). The cache tables are
-  disposable; the sidecar is not.
+- the app's **sidecar-class tables** from `~/tasks/backend/tasks.db`:
+  `sidecar`, `list_settings`, `completions`, `attachments`, **`booking_links`**
+  and **`bookings`** (every scheduling-link config plus client names/emails/
+  notes — this exists nowhere on the wire). All of these are app-only state
+  that a resync CANNOT rebuild (see docs/phase0-findings.md). Only the *cache*
+  tables (items/collections/sync_state/FTS) are disposable — "the DB is a
+  disposable cache" stopped being the whole truth when scheduling landed.
 
 ## Rollback
 `sudo systemctl disable --now tasks.service`; remove the Caddy snippet + reload;
