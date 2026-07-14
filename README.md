@@ -54,7 +54,7 @@ backend/
     sync/       sync engine (incremental / full resync / invalid-token
                 fallback / orphan GC) + write path with 412 merge
     scheduling.py, auth.py, access.py, config.py
-  tests/        api + sync + concurrency + fidelity + scheduling (pytest)
+  tests/        api + security + sync + concurrency + fidelity + scheduling (pytest)
   dev/          empirical probes (fidelity comparison, normalization, smokes)
 frontend/
   src/
@@ -91,6 +91,7 @@ backend serves statically (`TASKS_STATIC`) so the whole app is one origin.
 # tests — integration tests target the scratch Radicale on :5233 and skip if
 # it is down. Task-recurrence tests stay gated pending real-device captures.
 cd backend && .venv/bin/python -m pytest        # incl. a concurrent-writer fuzz
+cd frontend && npm test                          # vitest: unit + rendering (jsdom)
 
 # handy probes
 .venv/bin/python -m dev.ical_fidelity           # icalendar vs vobject scorecard
