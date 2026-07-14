@@ -190,6 +190,16 @@ class PublicBook(BaseModel):
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
+class TaskGroup(BaseModel):
+    # A named, ordered grouping of task lists in the sidebar. Purely a UI
+    # construct — lists stay first-class CalDAV collections; the group only
+    # records which list ids sit under one collapsible header. `lists` is a
+    # membership set (render order still comes from the global list order).
+    id: str = Field(min_length=1, max_length=64)
+    name: str = Field(min_length=1, max_length=120)
+    lists: list[str] = Field(default_factory=list)
+
+
 class SettingsPatch(BaseModel):
     # Account-synced UI preferences. Extend with new keys as settings are added.
     theme: Literal["light", "dark"] | None = None
@@ -204,6 +214,16 @@ class SettingsPatch(BaseModel):
     # events are still viewable and it can be restored). Like hidden_calendars,
     # an empty list is a real value that clears the set.
     archived_calendars: list[str] | None = None
+    # Ids of task lists hidden from the combined "All lists" view — the tasks
+    # analogue of hidden_calendars. A focused single-list view ignores this set;
+    # it only filters the merged view. Empty is a real value (all lists shown).
+    hidden_lists: list[str] | None = None
+    # Named groupings of task lists shown in the tasks sidebar (see TaskGroup).
+    # The whole array is replaced on each write; an empty list clears grouping.
+    task_groups: list[TaskGroup] | None = None
+    # Ids of task groups the user has collapsed in the sidebar (member lists
+    # hidden from the rail until expanded). Empty means every group is expanded.
+    collapsed_groups: list[str] | None = None
 
 
 _SCOPES = ("all", "this", "thisandfuture")

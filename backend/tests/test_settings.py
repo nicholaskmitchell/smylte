@@ -59,3 +59,31 @@ def test_settings_archived_calendars_roundtrip(db):
         db, {"hidden_calendars": ["x"], "archived_calendars": ["y"]}
     )
     assert merged == {"hidden_calendars": ["x"], "archived_calendars": ["y"]}
+
+
+def test_settings_hidden_lists_roundtrip(db):
+    # The tasks-side analogue of hidden_calendars: a plain list of list ids in
+    # the settings blob (the collections themselves are untouched on the wire).
+    assert store.update_settings(db, {"hidden_lists": ["a", "b"]}) == {
+        "hidden_lists": ["a", "b"]
+    }
+    assert store.get_settings(db) == {"hidden_lists": ["a", "b"]}
+    # An empty list is a real value (every list visible again), not an omission.
+    assert store.update_settings(db, {"hidden_lists": []}) == {"hidden_lists": []}
+    assert store.get_settings(db) == {"hidden_lists": []}
+
+
+def test_settings_task_groups_roundtrip(db):
+    # Groups are stored as an ordered array of {id, name, lists} objects. The
+    # whole array is replaced on each write (membership + order in one blob).
+    groups = [
+        {"id": "g1", "name": "Work", "lists": ["l1", "l2"]},
+        {"id": "g2", "name": "Home", "lists": []},
+    ]
+    assert store.update_settings(db, {"task_groups": groups}) == {"task_groups": groups}
+    assert store.get_settings(db) == {"task_groups": groups}
+    # Collapsed-group ids coexist as an independent key.
+    merged = store.update_settings(db, {"collapsed_groups": ["g2"]})
+    assert merged == {"task_groups": groups, "collapsed_groups": ["g2"]}
+    # An empty array clears grouping (a real value, not an omission).
+    assert store.update_settings(db, {"task_groups": []})["task_groups"] == []

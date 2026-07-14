@@ -111,6 +111,66 @@
 .rail-dot.cal-hidden { opacity: .55; }
 .rail-dot .swatch { width: 9px; height: 9px; flex: none; background: var(--fg-faint); }
 
+/* pinned "All lists / All calendars" combined row — a touch of extra weight */
+.side-item.all-row .name { font-weight: 500; }
+
+/* swatch-as-checkbox (Tasks combined view): the swatch doubles as the per-list
+   visibility toggle, so no extra column widens the rail. */
+.swatch-btn {
+  background: none; border: 0; padding: 3px; margin: -3px 0 -3px -3px;
+  cursor: pointer; display: flex; line-height: 0; flex: none;
+}
+.swatch-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+.swatch-btn:hover .swatch { box-shadow: 0 0 0 3px var(--bg-elev), 0 0 0 4px var(--rule); }
+
+/* task-list groups — collapsible headers that lists sit under */
+.side-group.drag-over,
+.ungrouped.drag-over { box-shadow: inset 2px 0 0 var(--accent); background: var(--bg-elev); }
+.group-head { display: flex; align-items: center; gap: 6px; padding: 12px 16px 4px; }
+.group-caret {
+  background: none; border: 0; padding: 0; cursor: pointer; color: var(--fg-faint);
+  display: flex; align-items: center;
+}
+.group-caret .caret { font-size: 9px; transition: transform 0.12s; display: inline-block; }
+.group-caret .caret.open { transform: rotate(90deg); }
+.group-name {
+  flex: 1; min-width: 0; text-align: left; background: none; border: 0; cursor: pointer;
+  font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em;
+  color: var(--fg-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0;
+}
+.group-head:hover .group-name { color: var(--fg-muted); }
+.group-head .count { font-family: var(--mono); font-size: 11px; color: var(--fg-faint); }
+.group-eye {
+  background: none; border: 0; cursor: pointer; color: var(--fg-faint);
+  font-size: 12px; line-height: 1; padding: 0 1px;
+}
+.group-eye:hover { color: var(--accent); }
+.group-eye[aria-pressed="false"] { opacity: 0.5; }
+.group-actions { display: flex; gap: 1px; opacity: 0; transition: opacity 0.12s; }
+.group-head:hover .group-actions,
+.group-head:focus-within .group-actions { opacity: 1; }
+.group-btn {
+  background: none; border: 0; color: var(--fg-faint); cursor: pointer;
+  font-size: 12px; line-height: 1; padding: 0 3px;
+}
+.group-btn:hover { color: var(--accent); }
+.group-btn.danger { color: var(--warn); font-family: var(--mono); font-size: 10px; }
+.group-empty {
+  padding: 3px 16px 6px 34px; font-size: 12px; color: var(--fg-faint); font-style: italic;
+}
+.group-rename { padding-top: 4px; padding-bottom: 4px; }
+
+/* per-list color dot shown on tasks in the combined "All lists" view */
+.list-dot {
+  display: inline-block; width: 7px; height: 7px; flex: none; margin-right: 6px;
+  vertical-align: baseline; background: var(--fg-faint);
+}
+.day-card-title .list-dot { margin-right: 5px; }
+
+/* combined quick-add: the compact target-list picker beside the input. Allowed
+   to shrink so the input + picker + button row never overflows a phone. */
+.quickadd-list { flex: 0 1 auto; max-width: 160px; min-width: 84px; }
+
 /* color picker (collection edit modal) */
 .color-row { display: flex; gap: 7px; flex-wrap: wrap; }
 .color-dot {

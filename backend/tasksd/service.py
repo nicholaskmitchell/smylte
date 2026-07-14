@@ -212,7 +212,10 @@ class TaskService:
         derived = round(100 * done_kids / len(kids)) if kids else None
         return {
             "uid": uid,
-            "list": it["collection_href"],
+            # The list's short id (same key as List.id and the SSE payloads), so
+            # the combined "All lists" view can map a task back to its list for
+            # color and visibility. resolve_list still accepts the full href too.
+            "list": _slug(it["collection_href"]),
             "summary": it["summary"],
             "notes": it["description"],
             "status": status,

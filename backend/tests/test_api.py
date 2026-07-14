@@ -248,6 +248,43 @@ def test_settings_archived_calendars_sync(client):
     assert client.get("/api/settings").json().get("archived_calendars") == []
 
 
+def test_settings_task_grouping_sync(client):
+    # hidden_lists, task_groups, and collapsed_groups must survive the HTTP
+    # round-trip — the model has to accept and re-emit each key (a store test
+    # is key-agnostic and wouldn't catch a missing/renamed SettingsPatch field).
+    groups = [{"id": "g1", "name": "Work", "lists": ["l1", "l2"]}]
+    r = client.put("/api/settings", json={
+        "hidden_lists": ["l3"], "task_groups": groups, "collapsed_groups": ["g1"],
+    })
+    assert r.status_code == 200
+    body = r.json()
+    assert body.get("hidden_lists") == ["l3"]
+    assert body.get("task_groups") == groups
+    assert body.get("collapsed_groups") == ["g1"]
+    got = client.get("/api/settings").json()
+    assert got.get("task_groups") == groups
+    # A malformed group (missing the required name) is rejected, not stored.
+    assert client.put("/api/settings", json={
+        "task_groups": [{"id": "x", "lists": []}]}).status_code == 422
+    # Empty arrays are real values (grouping cleared), not omissions.
+    client.put("/api/settings", json={"task_groups": [], "hidden_lists": []})
+    after = client.get("/api/settings").json()
+    assert after.get("task_groups") == [] and after.get("hidden_lists") == []
+
+
+def test_task_list_field_matches_list_id(client):
+    # The combined "All lists" view maps each task back to its list by this id
+    # (for color + visibility), so a task's `list` must equal its List.id — not
+    # the raw collection href. resolve_list still accepts either form for writes.
+    lst = _list(client)
+    lid = lst["id"]
+    created = client.post(f"/api/lists/{lid}/tasks", json={"summary": "anchor"}).json()
+    assert created["list"] == lid
+    fetched = client.get(f"/api/lists/{lid}/tasks").json()
+    assert fetched and all(t["list"] == lid for t in fetched)
+    client.delete(f"/api/lists/{lid}")
+
+
 def test_tabs_are_separated(client):
     lst = _list(client)
     cal = _cal(client)
