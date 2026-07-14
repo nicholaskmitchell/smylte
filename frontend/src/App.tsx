@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { api, subscribe, type TasksViewMode } from './api'
+import { api, subscribe, type TaskGroup, type TasksViewMode } from './api'
 import { setErrorNotifier } from './util'
 import { Login } from './components/Login'
 import { TasksView } from './components/TasksView'
@@ -19,6 +19,9 @@ export function App() {
   const [sideCollapsed, setSideCollapsed] = useState(false)
   const [hiddenCals, setHiddenCals] = useState<string[]>([])
   const [archivedCals, setArchivedCals] = useState<string[]>([])
+  const [hiddenLists, setHiddenLists] = useState<string[]>([])
+  const [taskGroups, setTaskGroups] = useState<TaskGroup[]>([])
+  const [collapsedGroups, setCollapsedGroups] = useState<string[]>([])
   const [rev, setRev] = useState(0)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [archivedOpen, setArchivedOpen] = useState(false)
@@ -67,6 +70,21 @@ export function App() {
         if (Array.isArray(s.archived_calendars)) {
           setArchivedCals(s.archived_calendars.filter((x) => typeof x === 'string'))
         }
+        if (Array.isArray(s.hidden_lists)) {
+          setHiddenLists(s.hidden_lists.filter((x) => typeof x === 'string'))
+        }
+        if (Array.isArray(s.task_groups)) {
+          // Defend against a malformed blob (hand-edited settings, an old
+          // schema): keep only well-formed groups with a real id and name.
+          setTaskGroups(s.task_groups.filter((g): g is TaskGroup =>
+            !!g && typeof g.id === 'string' && typeof g.name === 'string' &&
+            Array.isArray(g.lists)).map((g) => ({
+              id: g.id, name: g.name, lists: g.lists.filter((x) => typeof x === 'string'),
+            })))
+        }
+        if (Array.isArray(s.collapsed_groups)) {
+          setCollapsedGroups(s.collapsed_groups.filter((x) => typeof x === 'string'))
+        }
       })
       .catch(() => { /* keep the locally-cached theme */ })
   }, [auth, applyTheme])
@@ -93,6 +111,22 @@ export function App() {
   const changeArchivedCals = useCallback((next: string[]) => {
     setArchivedCals(next)
     api.putSettings({ archived_calendars: next }).catch(() => { /* stays local if offline */ })
+  }, [])
+
+  // Tasks-side sidebar prefs — hidden lists (combined-view visibility), the
+  // group definitions, and which groups are collapsed. All account-synced like
+  // the calendar prefs above; none of them touch the CalDAV collections.
+  const changeHiddenLists = useCallback((next: string[]) => {
+    setHiddenLists(next)
+    api.putSettings({ hidden_lists: next }).catch(() => { /* stays local if offline */ })
+  }, [])
+  const changeTaskGroups = useCallback((next: TaskGroup[]) => {
+    setTaskGroups(next)
+    api.putSettings({ task_groups: next }).catch(() => { /* stays local if offline */ })
+  }, [])
+  const changeCollapsedGroups = useCallback((next: string[]) => {
+    setCollapsedGroups(next)
+    api.putSettings({ collapsed_groups: next }).catch(() => { /* stays local if offline */ })
   }, [])
 
   // Live updates: any server-side change bumps `rev`, which the views watch.
@@ -197,7 +231,10 @@ export function App() {
       </div>
       {tab === 'tasks' && (
         <TasksView rev={rev} onExpire={onExpire} view={tasksView} onView={changeTasksView}
-          sideCollapsed={sideCollapsed} onToggleSide={toggleSide} />
+          sideCollapsed={sideCollapsed} onToggleSide={toggleSide}
+          hiddenLists={hiddenLists} onHiddenListsChange={changeHiddenLists}
+          groups={taskGroups} onGroupsChange={changeTaskGroups}
+          collapsedGroups={collapsedGroups} onCollapsedGroupsChange={changeCollapsedGroups} />
       )}
       {tab === 'calendar' && (
         <CalendarView rev={rev} onExpire={onExpire}
