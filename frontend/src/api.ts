@@ -144,6 +144,16 @@ export interface PublicBookingResult {
 // How the tasks pane lays out: a flat list, or date columns (3-day / week).
 export type TasksViewMode = 'list' | 'day3' | 'week'
 
+// A named grouping of task lists in the sidebar. Purely a UI construct — the
+// lists stay first-class CalDAV collections; a group only records which list
+// ids sit under one collapsible header. `lists` is a membership set (render
+// order still follows the global list order, so drag-reorder keeps working).
+export interface TaskGroup {
+  id: string
+  name: string
+  lists: string[]
+}
+
 // Account-synced UI preferences (stored server-side, not per-browser).
 export interface Settings {
   theme?: 'light' | 'dark'
@@ -151,6 +161,9 @@ export interface Settings {
   sidebar_collapsed?: boolean
   hidden_calendars?: string[]      // calendar ids hidden in the calendar view
   archived_calendars?: string[]    // calendar ids archived (hidden + listed in settings, restorable)
+  hidden_lists?: string[]          // task-list ids hidden from the combined "All lists" view
+  task_groups?: TaskGroup[]        // named, collapsible groupings of task lists
+  collapsed_groups?: string[]      // ids of task groups currently collapsed in the sidebar
 }
 
 // Creates carry a client-generated id that becomes the CalDAV resource slug,

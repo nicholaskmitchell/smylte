@@ -276,8 +276,6 @@ export function CalendarView({ rev, onExpire, sideCollapsed, onToggleSide,
   // Where new events land by default: the first shown (non-hidden) calendar,
   // among those not archived; else the first visible one.
   const defaultCal = visibleCals.find((c) => !hidden.has(c.id))?.id || visibleCals[0]?.id || ''
-  const toggleVisible = (id: string) => onHiddenCalendarsChange(
-    hidden.has(id) ? hiddenCalendars.filter((x) => x !== id) : [...hiddenCalendars, id])
   // Archive supersedes the eye-toggle: also drop any stale hidden entry so a
   // restored calendar always comes back fully visible, not dimmed.
   const archiveCal = (id: string) => {
@@ -293,7 +291,7 @@ export function CalendarView({ rev, onExpire, sideCollapsed, onToggleSide,
       <Sidebar title="Calendars" placeholder="Calendar" items={cals}
         countOf={(c) => c.event_count} onItems={setCals} api={calApi}
         collapsed={sideCollapsed} onToggle={onToggleSide}
-        hiddenIds={hidden} onToggleVisible={toggleVisible}
+        hiddenIds={hidden} onHiddenChange={onHiddenCalendarsChange}
         archivedIds={archived} onArchive={archiveCal} />
 
       <div className="content">
