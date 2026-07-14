@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import ipaddress
 import secrets
 import time
 from datetime import datetime, timedelta, timezone
@@ -54,6 +55,24 @@ def verify_password(password: str, stored: str) -> bool:
         return hmac.compare_digest(dk.hex(), hash_hex)
     except Exception:  # noqa: BLE001 — any parse/format error is a failed verify
         return False
+
+
+def limiter_key(ip: str) -> str:
+    """Normalise a client IP into a rate-limit key. IPv4 keys as-is; IPv6
+    collapses to its /64 — the standard single-customer allocation — so an
+    attacker rotating through their own 2^64 addresses shares one counter
+    instead of getting a fresh limiter per request. An unparseable value
+    (e.g. the 'unknown' placeholder) keys on itself."""
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return ip
+    if isinstance(addr, ipaddress.IPv6Address):
+        mapped = addr.ipv4_mapped
+        if mapped is not None:      # ::ffff:a.b.c.d is really that IPv4 client
+            return str(mapped)
+        return str(ipaddress.ip_network((addr, 64), strict=False))
+    return ip
 
 
 class RateLimiter:
@@ -138,7 +157,10 @@ class Authenticator:
 
     def check_credentials(self, user: str, password: str) -> bool:
         # Always run the hash (even on a wrong username) to avoid a timing oracle.
-        user_ok = hmac.compare_digest(user or "", self._user)
+        # Compare bytes: compare_digest raises TypeError on non-ASCII str, which
+        # would turn a stray Unicode username into a 500 (skipping lockout
+        # accounting) instead of a clean 401.
+        user_ok = hmac.compare_digest((user or "").encode(), self._user.encode())
         pass_ok = verify_password(password or "", self._password_hash)
         return user_ok and pass_ok
 
