@@ -346,6 +346,108 @@ def test_shift_series_rejects_dateness_switch():
                      EventEdit(dtstart=date(2026, 1, 8)))
 
 
+def test_shift_series_tolerates_timed_override_on_all_day_series():
+    # A foreign client gave one instance of an all-day series a timed override;
+    # dragging the series via that occurrence must not crash (date − datetime).
+    raw = foreign_event_raw(
+        "shmx", dtstart="20260106", dtend=None, all_day=True,
+        rrule="FREQ=WEEKLY;COUNT=3",
+        overrides=((
+            "RECURRENCE-ID;VALUE=DATE:20260113",
+            "DTSTART:20260114T110000Z",
+            "DTEND:20260114T113000Z",
+        ),),
+    )
+    shifted = shift_series(raw, "2026-01-13", EventEdit(dtstart=date(2026, 1, 16)))
+    occs = recur.expand_occurrences(shifted, *_WIN)
+    # The visual base is the override's day (1/14), so the drag is +2 days.
+    assert len(occs) == 3
+    assert occs[0].start == "2026-01-08"
+
+
+# ── TZID series: per-occurrence ops must stay in the series' zone ─────────────
+
+def _chicago_series() -> bytes:
+    """Weekly 09:00 America/Chicago, 4 occurrences straddling the 2026-03-08
+    spring-forward (3/4 CST, then 3/11, 3/18, 3/25 CDT)."""
+    return foreign_event_raw(
+        "ctz", "Std", dtstart="TZID=America/Chicago:20260304T090000",
+        dtend=None, rrule="FREQ=WEEKLY;COUNT=4", vtimezone=_CHICAGO_VTZ,
+    )
+
+
+_MARCH = (date(2026, 3, 1), date(2026, 4, 1))
+
+
+def test_override_on_tzid_series_keeps_zone_and_edits_twice():
+    # The anchor arrives as a fixed-offset ISO; the override written from it
+    # must carry the series' real TZID, not a fabricated numeric one.
+    raw = apply_occurrence_override(
+        _chicago_series(), "2026-03-04T09:00:00-06:00", EventEdit(summary="Moved"))
+    assert b'TZID="UTC-06:00"' not in raw
+    assert raw.count(b"RECURRENCE-ID;TZID=America/Chicago:20260304T090000") == 1
+    # Editing the same occurrence again must find that override (not append a
+    # duplicate whose edit the expander silently ignores).
+    raw2 = apply_occurrence_override(
+        raw, "2026-03-04T09:00:00-06:00", EventEdit(summary="Moved again"))
+    assert raw2.count(b"RECURRENCE-ID") == 1
+    occs = {o.recurrence_id: o for o in recur.expand_occurrences(raw2, *_MARCH)}
+    assert occs["2026-03-04T09:00:00-06:00"].summary == "Moved again"
+
+
+def test_exclude_on_tzid_series_keeps_zone():
+    raw = exclude_occurrence(_chicago_series(), "2026-03-11T09:00:00-05:00")
+    assert b'TZID="UTC-05:00"' not in raw
+    assert _starts(recur.expand_occurrences(raw, *_MARCH)) == [
+        "2026-03-04T09:00:00-06:00",
+        "2026-03-18T09:00:00-05:00", "2026-03-25T09:00:00-05:00",
+    ]
+
+
+def test_split_tzid_series_tail_keeps_zone():
+    head, tail = split_series(_chicago_series(), "2026-03-11T09:00:00-05:00", EventEdit())
+    assert b'TZID="UTC-05:00"' not in head and b'TZID="UTC-05:00"' not in tail
+    assert b"DTSTART;TZID=America/Chicago:20260311T090000" in tail
+    assert _starts(recur.expand_occurrences(head, *_MARCH)) == ["2026-03-04T09:00:00-06:00"]
+    # The tail stays zone-aware — real offsets, DST-correct — not floating.
+    assert _starts(recur.expand_occurrences(tail, *_MARCH)) == [
+        "2026-03-11T09:00:00-05:00", "2026-03-18T09:00:00-05:00",
+        "2026-03-25T09:00:00-05:00",
+    ]
+
+
+# ── split bookkeeping: COUNT stays bounded, RDATE/EXDATE are partitioned ──────
+
+def test_split_count_series_tail_is_bounded():
+    # COUNT=5 split at the 3rd: 2 stay in the head, 3 in the tail. The tail
+    # must NOT become an unbounded forever-series.
+    _head, tail = split_series(_series(), "2026-01-20T09:00:00+00:00", EventEdit())
+    assert b"COUNT=3" in tail
+    assert _starts(recur.expand_occurrences(tail, date(2026, 1, 1), date(2027, 1, 1))) == [
+        "2026-01-20T09:00:00+00:00", "2026-01-27T09:00:00+00:00",
+        "2026-02-03T09:00:00+00:00",
+    ]
+
+
+def test_split_partitions_rdate_and_exdate():
+    raw = foreign_event_raw(
+        "rdx", rrule="FREQ=WEEKLY;COUNT=4",
+        rdate="20260220T090000Z", exdate="20260127T090000Z",
+    )
+    head, tail = split_series(raw, "2026-01-13T09:00:00+00:00", EventEdit())
+    wide = (date(2026, 1, 1), date(2026, 12, 1))
+    # The post-anchor RDATE belongs to the tail — UNTIL only bounds the RRULE,
+    # so without partitioning the 2/20 instance would survive in the head (and
+    # "delete this and following" would resurrect it) AND duplicate in the tail.
+    assert _starts(recur.expand_occurrences(head, *wide)) == ["2026-01-06T09:00:00+00:00"]
+    # Tail: 1/13, 1/20 (1/27 is EXDATE'd — it moved here too), plus the RDATE.
+    # (sorted: the expander doesn't order RDATE instances chronologically)
+    assert sorted(_starts(recur.expand_occurrences(tail, *wide))) == [
+        "2026-01-13T09:00:00+00:00", "2026-01-20T09:00:00+00:00",
+        "2026-02-20T09:00:00+00:00",
+    ]
+
+
 def _seed(conn, uid, raw):
     fields = extract_from_raw(raw)
     item = Item(href=f"/cal/{uid}.ics", etag=f'"{uid}"', data=raw)

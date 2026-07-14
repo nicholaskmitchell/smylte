@@ -99,6 +99,23 @@ def test_busy_intervals_duration_fallback():
     assert scheduling.busy_intervals([ev], TZ) == [_iv(10, 0, 11, 0)]
 
 
+def test_busy_intervals_duration_from_real_ics():
+    # Regression: a DURATION-only VEVENT (DAVx5/phone-client style) must block,
+    # end-to-end through the same extraction the cache uses. str() of the parsed
+    # property used to store a repr that busy_intervals silently skipped.
+    from tasksd.ical import extract_from_raw
+
+    f = extract_from_raw(
+        b"BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//t//t//EN\r\n"
+        b"BEGIN:VEVENT\r\nUID:dur-1\r\nDTSTART:20260713T100000\r\n"
+        b"DURATION:PT1H30M\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+    )
+    assert f.duration == "PT1H30M"
+    ev = _ev(start=f.dtstart, duration=f.duration, status=f.status,
+             start_is_date=f.dtstart_is_date, all_day=f.dtstart_is_date)
+    assert scheduling.busy_intervals([ev], TZ) == [_iv(10, 0, 11, 30)]
+
+
 def test_merge_and_pad():
     ivs = [_iv(10, 0, 11, 0), _iv(10, 30, 11, 30), _iv(13, 0, 14, 0)]
     assert scheduling.merge(ivs) == [_iv(10, 0, 11, 30), _iv(13, 0, 14, 0)]
