@@ -17,9 +17,9 @@ and serves a React + Vite single-page app.
 subtasks, due dates (all-day or timed), priority, tags, and notes. List /
 3-Day / Week layouts, quick-add, and drag-to-reschedule across day columns.
 A combined **"All lists"** view merges every list into one pane, dotted by
-list color, with per-list visibility toggles (the swatch doubles as the
-checkbox) — plus collapsible **groups** to organize lists without widening the
-sidebar. Full-text search and tags.
+list color, with a calendar-style colored checkbox on each list to show or hide
+it individually — plus collapsible **groups** to organize lists without widening
+the sidebar. Full-text search and tags.
 
 **Calendar.** Month grid across multiple calendars, each with a
 visibility toggle and non-destructive **archive** (hide without deleting;
