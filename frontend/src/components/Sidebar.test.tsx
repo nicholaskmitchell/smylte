@@ -17,66 +17,51 @@ const noopApi = {
   reorder: vi.fn(async () => undefined),
 }
 
+// Both the Tasks and Calendar sidebars use the same visibility-toggle config:
+// every collection is shown, and the whole row is a checkbox that hides/shows it.
+const toggleSidebar = (props: {
+  hidden?: Set<string>
+  onHiddenChange?: (next: string[]) => void
+}) => (
+  <Sidebar title="Lists" placeholder="List"
+    items={[list('work', 'Work'), list('home', 'Home')]}
+    countOf={(l) => l.open_count} onItems={() => {}} api={noopApi}
+    hiddenIds={props.hidden ?? new Set()} onHiddenChange={props.onHiddenChange ?? (() => {})} />
+)
+
 describe('<Sidebar> per-collection visibility toggles', () => {
-  // Tasks: the combined "All lists" view shows every list with its own checkbox.
-  it('toggles a single list off from the combined Tasks view without changing focus', async () => {
-    const onHiddenChange = vi.fn()
-    const onSelect = vi.fn()
-    render(
-      <Sidebar title="Lists" placeholder="List" allLabel="All lists"
-        items={[list('work', 'Work'), list('home', 'Home')]} sel="*"
-        countOf={(l) => l.open_count} onSelect={onSelect} onItems={() => {}}
-        api={noopApi} hiddenIds={new Set()} onHiddenChange={onHiddenChange} />,
-    )
-    // Every list gets a labelled checkbox — the calendar-style toggle.
-    const boxes = screen.getAllByRole('button', { name: 'Hide from All lists' })
-    expect(boxes).toHaveLength(2)
-    expect(boxes[0]).toHaveAttribute('aria-pressed', 'true')
-
-    // Clicking a list's checkbox hides just that list — and does NOT focus it.
-    await userEvent.click(boxes[0])
-    expect(onHiddenChange).toHaveBeenCalledWith(['work'])
-    expect(onSelect).not.toHaveBeenCalled()
-  })
-
-  it('focuses a single list when its name is clicked (toggle stays independent)', async () => {
-    const onHiddenChange = vi.fn()
-    const onSelect = vi.fn()
-    render(
-      <Sidebar title="Lists" placeholder="List" allLabel="All lists"
-        items={[list('work', 'Work'), list('home', 'Home')]} sel="*"
-        countOf={(l) => l.open_count} onSelect={onSelect} onItems={() => {}}
-        api={noopApi} hiddenIds={new Set()} onHiddenChange={onHiddenChange} />,
-    )
-    await userEvent.click(screen.getByText('Home'))
-    expect(onSelect).toHaveBeenCalledWith('home')
-    expect(onHiddenChange).not.toHaveBeenCalled()
-  })
-
-  it('a hidden list offers to be shown again', () => {
-    render(
-      <Sidebar title="Lists" placeholder="List" allLabel="All lists"
-        items={[list('work', 'Work'), list('home', 'Home')]} sel="*"
-        countOf={(l) => l.open_count} onSelect={() => {}} onItems={() => {}}
-        api={noopApi} hiddenIds={new Set(['work'])} onHiddenChange={() => {}} />,
-    )
-    const shown = screen.getByRole('button', { name: 'Show in All lists' })
-    expect(shown).toHaveAttribute('aria-pressed', 'false')
-  })
-
-  // Calendar: no per-calendar focus, so the whole row is the checkbox.
-  it('toggles a calendar by clicking its row (whole row is the checkbox)', async () => {
-    const onHiddenChange = vi.fn()
-    render(
-      <Sidebar title="Calendars" placeholder="Calendar"
-        items={[list('cal-a', 'Personal'), list('cal-b', 'Team')]}
-        countOf={(l) => l.event_count} onItems={() => {}}
-        api={noopApi} hiddenIds={new Set()} onHiddenChange={onHiddenChange} />,
-    )
+  it('shows every collection as a checkbox row — no separate "All" row', () => {
+    render(toggleSidebar({}))
     const rows = screen.getAllByRole('checkbox')
-    expect(rows).toHaveLength(2)
-    expect(rows[0]).toHaveAttribute('aria-checked', 'true')
-    await userEvent.click(rows[1])
-    expect(onHiddenChange).toHaveBeenCalledWith(['cal-b'])
+    expect(rows).toHaveLength(2)              // Work + Home, and nothing else
+    expect(screen.queryByText('All lists')).not.toBeInTheDocument()
+    // Every list is on by default.
+    rows.forEach((r) => expect(r).toHaveAttribute('aria-checked', 'true'))
+  })
+
+  it('hides a single list when its row is clicked anywhere', async () => {
+    const onHiddenChange = vi.fn()
+    render(toggleSidebar({ onHiddenChange }))
+    // Click the list's *name* (not a tiny box) — the whole row is the toggle.
+    await userEvent.click(screen.getByText('Work'))
+    expect(onHiddenChange).toHaveBeenCalledWith(['work'])
+  })
+
+  it('reflects a hidden list and toggles it back on', async () => {
+    const onHiddenChange = vi.fn()
+    render(toggleSidebar({ hidden: new Set(['work']), onHiddenChange }))
+    const workRow = screen.getByRole('checkbox', { name: /Work/ })
+    expect(workRow).toHaveAttribute('aria-checked', 'false')
+    await userEvent.click(workRow)
+    expect(onHiddenChange).toHaveBeenCalledWith([])   // 'work' removed from hidden
+  })
+
+  it('toggles from the keyboard (Space)', async () => {
+    const onHiddenChange = vi.fn()
+    render(toggleSidebar({ onHiddenChange }))
+    const homeRow = screen.getByRole('checkbox', { name: /Home/ })
+    homeRow.focus()
+    await userEvent.keyboard(' ')
+    expect(onHiddenChange).toHaveBeenCalledWith(['home'])
   })
 })

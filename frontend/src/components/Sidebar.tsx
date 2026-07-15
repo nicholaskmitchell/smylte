@@ -170,29 +170,21 @@ export function Sidebar({ title, placeholder, items, sel = '', countOf, onSelect
     return l.color ? { background: l.color } : undefined
   }
 
-  // The color that tints a row's visibility checkbox — the collection's own
-  // color, or a neutral tone when it has none.
-  const checkColor = (l: List) => l.color || 'var(--fg-muted)'
-
-  // One collection row — reused by both the grouped and ungrouped sections. Every
-  // toggleable view leads with a calendar-style colored checkbox that shows/hides
-  // the collection: filled with a check when shown, a hollow ring when hidden.
-  //   • Calendar: the whole row is the checkbox (there's no per-calendar focus).
-  //   • Tasks: the checkbox toggles the list's visibility in the combined "All
-  //     lists" view; clicking the rest of the row still focuses that one list.
+  // One collection row — reused by both the grouped and ungrouped sections. In
+  // visibility mode (Tasks + Calendar) the whole row is a checkbox: clicking
+  // anywhere shows/hides that collection, its color swatch solid when shown and
+  // a hollow ring when hidden. Where a view also selects (unused today) the row
+  // single-selects instead.
   const renderRow = (l: List) => {
     const isHidden = canToggle && hidden.has(l.id)
-    const visible = !isHidden
     const primary = () => (canSelect ? onSelect?.(l.id) : canToggle ? toggleVisible(l.id) : undefined)
-    const rowToggles = canToggle && !canSelect        // Calendar: row is the toggle
-    const checkToggles = canToggle && canSelect        // Tasks: the checkbox toggles, the row focuses
-    const checkStyle = { '--c': checkColor(l) } as CSSProperties
+    const rowToggles = canToggle && !canSelect        // the whole row is the toggle
     return (
       <div key={l.id}
         className={`side-item ${canSelect && l.id === sel ? 'active' : ''} ${isHidden ? 'cal-hidden' : ''} ${overId === l.id && dragId !== l.id ? 'drag-over' : ''}`}
         draggable
         role={rowToggles ? 'checkbox' : undefined}
-        aria-checked={rowToggles ? visible : undefined}
+        aria-checked={rowToggles ? !isHidden : undefined}
         tabIndex={rowToggles ? 0 : undefined}
         onKeyDown={rowToggles ? (e: KeyboardEvent) => {
           if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); primary() }
@@ -205,20 +197,7 @@ export function Sidebar({ title, placeholder, items, sel = '', countOf, onSelect
         onDrop={(e: DragEvent) => { e.preventDefault(); e.stopPropagation(); drop(l.id); setDragId(null); setOverId(null); setOverGroup(null) }}
         onDragEnd={() => { setDragId(null); setOverId(null); setOverGroup(null) }}
         onClick={primary}>
-        {checkToggles ? (
-          <button className={`vis-check ${visible ? 'on' : ''}`} style={checkStyle}
-            title={isHidden ? 'Show in All lists' : 'Hide from All lists'}
-            aria-label={isHidden ? 'Show in All lists' : 'Hide from All lists'}
-            aria-pressed={visible}
-            onClick={(e) => { e.stopPropagation(); toggleVisible(l.id) }}>
-            <span aria-hidden="true">✓</span>
-          </button>
-        ) : canToggle ? (
-          // Calendar: the enclosing row is the checkbox; this only reflects state.
-          <span className={`vis-check ${visible ? 'on' : ''}`} style={checkStyle} aria-hidden="true">✓</span>
-        ) : (
-          <span className="swatch" style={swatchStyle(l)} />
-        )}
+        <span className="swatch" style={swatchStyle(l)} />
         <span className="name">{l.name}</span>
         <span className="count">{countOf(l)}</span>
         <button className="side-edit" title="Edit"

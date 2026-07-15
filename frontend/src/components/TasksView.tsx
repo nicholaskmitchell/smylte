@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { api, clientId, type List, type Task, type TaskGroup, type TasksViewMode } from '../api'
 import { addDays, dayKey, fmtDue, isOverdue, makeGuard, toLocalInput, ymd } from '../util'
-import { ALL_ID, Sidebar } from './Sidebar'
+import { Sidebar } from './Sidebar'
 
 const PRIORITIES = ['none', 'low', 'medium', 'high']
 
@@ -21,29 +21,22 @@ export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggle
 }) {
   const guard = makeGuard(onExpire)
   const [lists, setLists] = useState<List[]>([])
-  const [sel, setSel] = useState('')
   const [tasks, setTasks] = useState<Task[]>([])
   const [detail, setDetail] = useState<Task | null>(null)
   // Multi-day views window from here: day3 starts on the anchor day itself,
   // week snaps to the anchor's Sunday (same week start as the calendar grid).
   const [anchor, setAnchor] = useState(() => new Date())
 
-  // The combined "All lists" mode merges every list's tasks into one view,
-  // colored by list, with per-list visibility toggles — the tasks analogue of
-  // the calendar's multi-calendar grid.
-  const combined = sel === ALL_ID
+  // The Tasks view always merges every list into one pane, colored by list, with
+  // per-list visibility toggles in the sidebar — the tasks analogue of the
+  // calendar's multi-calendar grid. Every list shows until the user hides it;
+  // toggling one off is an instant client-side filter (no refetch).
   const hiddenSet = useMemo(() => new Set(hiddenLists), [hiddenLists])
   const visibleLists = useMemo(() => lists.filter((l) => !hiddenSet.has(l.id)), [lists, hiddenSet])
   const colorOf = (listId: string) => lists.find((l) => l.id === listId)?.color ?? null
 
   useEffect(() => {
-    guard(async () => {
-      const ls = await api.lists()
-      setLists(ls)
-      // Land in the combined view when there's more than one list (the headline
-      // "see all my tasks" case); a single-list account opens straight into it.
-      setSel((s) => s || (ls.length > 1 ? ALL_ID : ls[0]?.id || ''))
-    })
+    guard(async () => setLists(await api.lists()))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rev])
 
@@ -75,9 +68,9 @@ export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggle
   // Writes bump the token too, so a refetch whose snapshot predates an
   // optimistic paint is dropped instead of wiping it (the mutation's own SSE
   // `rev` bump refetches again once the server has published the change).
-  // Combined mode fetches every list and filters hidden ones client-side, so a
-  // visibility toggle is instant (no refetch) — exactly like the calendar grid.
-  const loadKey = combined ? `*|${lists.map((l) => l.id).join(',')}` : sel
+  // Fetch every list and filter hidden ones client-side, so a visibility toggle
+  // is instant (no refetch) — exactly like the calendar grid.
+  const loadKey = `*|${lists.map((l) => l.id).join(',')}`
   const keyRef = useRef(loadKey)
   keyRef.current = loadKey
   const fetchToken = useRef(0)
@@ -87,16 +80,13 @@ export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggle
     const token = ++fetchToken.current
     const key = loadKey
     return guard(async () => {
-      const ts = combined
-        ? (await Promise.all(lists.map((l) => api.tasks(l.id)))).flat()
-        : await api.tasks(sel)
+      const ts = (await Promise.all(lists.map((l) => api.tasks(l.id)))).flat()
       if (token === fetchToken.current && key === keyRef.current) setTasks(ts)
     })
   }
 
   useEffect(() => {
-    if (!combined && !sel) { setTasks([]); return }
-    if (combined && lists.length === 0) { setTasks([]); return }
+    if (lists.length === 0) { setTasks([]); return }
     load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadKey, rev])
@@ -209,20 +199,18 @@ export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggle
     reorder: (ids: string[]) => guard(() => api.reorderLists(ids)),
   }
 
-  // The combined view keeps every fetched list in `tasks` and drops hidden ones
-  // here, so toggling a list is an instant client-side filter (no refetch). A
-  // focused single-list view shows exactly its own tasks and ignores hidden.
-  const shownTasks = combined ? tasks.filter((t) => !hiddenSet.has(t.list)) : tasks
+  // Keep every fetched list in `tasks` and drop hidden ones here, so toggling a
+  // list is an instant client-side filter (no refetch).
+  const shownTasks = tasks.filter((t) => !hiddenSet.has(t.list))
   const tops = shownTasks.filter((t) => !t.parent)
   const childrenOf = (uid: string) => shownTasks.filter((t) => t.parent === uid)
   const active = tops.filter((t) => !t.completed && !t.cancelled)
   const done = tops.filter((t) => t.completed || t.cancelled)
-  const cur = combined ? null : lists.find((l) => l.id === sel)
-  // Where combined-mode adds land by default (first visible list); the list
-  // view's quick-add offers a picker, day columns fall back to this.
-  const defaultList = combined ? (visibleLists[0]?.id ?? '') : sel
-  // In combined mode each row shows a small dot in its list's color.
-  const dotFor = (t: Task) => (combined ? colorOf(t.list) : undefined)
+  // Where new tasks land by default (first visible list); the list view's
+  // quick-add offers a picker, day columns fall back to this.
+  const defaultList = visibleLists[0]?.id ?? ''
+  // Each row shows a small dot in its list's color.
+  const dotFor = (t: Task) => colorOf(t.list)
 
   // ---- multi-day (3-day / week) bucketing: tasks land on their due date ----
   const span = view === 'week' ? 7 : 3
@@ -255,17 +243,16 @@ export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggle
 
   return (
     <div className="work">
-      <Sidebar title="Lists" placeholder="List" items={lists} sel={sel}
-        countOf={(l) => l.open_count} onSelect={setSel} onItems={setLists} api={listApi}
-        collapsed={sideCollapsed} onToggle={onToggleSide} allLabel="All lists"
+      <Sidebar title="Lists" placeholder="List" items={lists}
+        countOf={(l) => l.open_count} onItems={setLists} api={listApi}
+        collapsed={sideCollapsed} onToggle={onToggleSide}
         hiddenIds={hiddenSet} onHiddenChange={onHiddenListsChange}
         groups={groups} onGroupsChange={onGroupsChange}
         collapsedGroups={collapsedGroups} onCollapsedGroupsChange={onCollapsedGroupsChange} />
 
       <div className="content">
         <div className="content-head">
-          {cur?.color && <span className="title-dot" style={{ background: cur.color }} />}
-          <span className="content-title">{combined ? 'All lists' : cur ? cur.name : 'Tasks'}</span>
+          <span className="content-title">All lists</span>
           <span className="content-sub">
             {view === 'list' ? `${active.length} open` : `${fmtD(days[0])} – ${fmtD(days[span - 1])}`}
           </span>
@@ -288,7 +275,7 @@ export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggle
           </div>
         </div>
 
-        {combined && visibleLists.length === 0 ? (
+        {visibleLists.length === 0 ? (
           <div className="empty">
             {lists.length === 0
               ? 'Create a list to get started.'
@@ -297,15 +284,14 @@ export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggle
         ) : view === 'list' ? (
           <>
             {defaultList && (
-              <QuickAdd onSubmit={addTask} defaultList={defaultList}
-                lists={combined ? visibleLists : undefined} />
+              <QuickAdd onSubmit={addTask} defaultList={defaultList} lists={visibleLists} />
             )}
             <div className="scroll">
               {active.map((t) => (
                 <TaskGroup key={t.uid} task={t} kids={childrenOf(t.uid)} dot={dotFor(t)}
                   onToggle={toggle} onRemove={remove} onOpen={setDetail} onAddSub={addSub} />
               ))}
-              {active.length === 0 && (combined || sel) && <div className="empty">Nothing to do here.</div>}
+              {active.length === 0 && <div className="empty">Nothing to do here.</div>}
               {done.length > 0 && (
                 <>
                   <div className="section-label label">Completed · {done.length}</div>
@@ -317,8 +303,6 @@ export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggle
               )}
             </div>
           </>
-        ) : !combined && !sel ? (
-          <div className="empty">Create a list to get started.</div>
         ) : (
           <>
             {undated.length > 0 && (
