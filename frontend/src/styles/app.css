@@ -114,21 +114,6 @@
 /* pinned "All lists / All calendars" combined row — a touch of extra weight */
 .side-item.all-row .name { font-weight: 500; }
 
-/* per-collection visibility checkbox (Tasks + Calendar sidebars) — the
-   calendar-style toggle that shows or hides a list / calendar. Tinted with the
-   collection's own color (via --c): a filled check when shown, a hollow ring of
-   that color when hidden. */
-.vis-check {
-  width: 15px; height: 15px; flex: none; padding: 0;
-  display: inline-flex; align-items: center; justify-content: center;
-  border: 1.5px solid var(--c, var(--fg-muted));
-  background: none; color: transparent; line-height: 1; font-size: 10px;
-}
-.vis-check.on { background: var(--c, var(--fg-muted)); color: #fff; }
-button.vis-check { cursor: pointer; }
-button.vis-check:hover { box-shadow: 0 0 0 3px var(--bg-elev), 0 0 0 4px var(--rule); }
-button.vis-check:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-
 /* task-list groups — collapsible headers that lists sit under */
 .side-group.drag-over,
 .ungrouped.drag-over { box-shadow: inset 2px 0 0 var(--accent); background: var(--bg-elev); }
