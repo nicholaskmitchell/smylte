@@ -151,10 +151,12 @@
 }
 .group-rename { padding-top: 4px; padding-bottom: 4px; }
 
-/* per-list color dot shown on tasks in the combined "All lists" view */
+/* per-list color dot shown on tasks in the combined "All lists" view.
+   vertical-align: middle centers the dot with the title text — baseline would
+   drop it onto the letters' baseline (visibly low). */
 .list-dot {
   display: inline-block; width: 7px; height: 7px; flex: none; margin-right: 6px;
-  vertical-align: baseline; background: var(--fg-faint);
+  vertical-align: middle; background: var(--fg-faint);
 }
 .day-card-title .list-dot { margin-right: 5px; }
 
