@@ -152,11 +152,13 @@
 .group-rename { padding-top: 4px; padding-bottom: 4px; }
 
 /* per-list color dot shown on tasks in the combined "All lists" view.
-   vertical-align: middle centers the dot with the title text — baseline would
-   drop it onto the letters' baseline (visibly low). */
+   vertical-align: middle centers on the text's x-height; the -1px lift raises it
+   to the capital-letter optical center, so it lines up with the completion
+   checkbox to its left instead of sitting low. (top: shifts it visually without
+   affecting layout.) */
 .list-dot {
   display: inline-block; width: 7px; height: 7px; flex: none; margin-right: 6px;
-  vertical-align: middle; background: var(--fg-faint);
+  vertical-align: middle; position: relative; top: -1px; background: var(--fg-faint);
 }
 .day-card-title .list-dot { margin-right: 5px; }
 
