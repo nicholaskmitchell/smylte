@@ -164,6 +164,7 @@ export interface Settings {
   hidden_lists?: string[]          // task-list ids hidden from the combined "All lists" view
   task_groups?: TaskGroup[]        // named, collapsible groupings of task lists
   collapsed_groups?: string[]      // ids of task groups currently collapsed in the sidebar
+  show_completed_tasks?: boolean   // show completed/cancelled tasks inline in the main view (default hidden)
 }
 
 // Creates carry a client-generated id that becomes the CalDAV resource slug,

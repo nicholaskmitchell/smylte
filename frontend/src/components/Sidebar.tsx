@@ -21,7 +21,8 @@ export interface CollectionApi {
 
 export function Sidebar({ title, placeholder, items, sel = '', countOf, onSelect, onItems, api,
   collapsed, onToggle, allLabel, hiddenIds, onHiddenChange, onArchive, archivedIds,
-  groups, onGroupsChange, collapsedGroups, onCollapsedGroupsChange }: {
+  groups, onGroupsChange, collapsedGroups, onCollapsedGroupsChange,
+  completedActive, onToggleCompleted }: {
   title: string
   placeholder: string
   items: List[]
@@ -54,6 +55,11 @@ export function Sidebar({ title, placeholder, items, sel = '', countOf, onSelect
   onGroupsChange?: (next: TaskGroup[]) => void
   collapsedGroups?: string[]
   onCollapsedGroupsChange?: (next: string[]) => void
+  // Completed view (opt-in, Tasks only): a footer button beneath the lists and
+  // groups that opens a dedicated "just completed tasks" pane. When provided,
+  // `completedActive` reflects whether that pane is currently showing.
+  completedActive?: boolean
+  onToggleCompleted?: () => void
 }) {
   const isMobile = useIsMobile()
   const canSelect = !!onSelect
@@ -236,6 +242,11 @@ export function Sidebar({ title, placeholder, items, sel = '', countOf, onSelect
             )
           })}
         </div>
+        {onToggleCompleted && (
+          <button className={`icon-btn side-completed-rail ${completedActive ? 'active' : ''}`}
+            title={completedActive ? 'Back to tasks' : 'View completed'}
+            aria-pressed={completedActive} onClick={onToggleCompleted}>✓</button>
+        )}
       </div>
     )
   }
@@ -328,6 +339,12 @@ export function Sidebar({ title, placeholder, items, sel = '', countOf, onSelect
           <div className="empty" style={{ padding: '14px 16px' }}>Nothing here yet.</div>
         )}
       </div>
+      {onToggleCompleted && (
+        <button className={`side-completed ${completedActive ? 'active' : ''}`}
+          aria-pressed={completedActive} onClick={onToggleCompleted}>
+          {completedActive ? '← Back to tasks' : '✓ View completed'}
+        </button>
+      )}
       {addingGroup && (
         <div className="side-add">
           <input className="input" autoFocus placeholder="Group name"

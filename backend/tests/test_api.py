@@ -248,6 +248,16 @@ def test_settings_archived_calendars_sync(client):
     assert client.get("/api/settings").json().get("archived_calendars") == []
 
 
+def test_settings_show_completed_sync(client):
+    # The boolean must survive the HTTP round-trip via SettingsPatch, and False
+    # has to persist (only an omitted/None key is "unset" — see the store merge).
+    r = client.put("/api/settings", json={"show_completed_tasks": True})
+    assert r.status_code == 200 and r.json().get("show_completed_tasks") is True
+    assert client.get("/api/settings").json().get("show_completed_tasks") is True
+    client.put("/api/settings", json={"show_completed_tasks": False})
+    assert client.get("/api/settings").json().get("show_completed_tasks") is False
+
+
 def test_settings_task_grouping_sync(client):
     # hidden_lists, task_groups, and collapsed_groups must survive the HTTP
     # round-trip — the model has to accept and re-emit each key (a store test

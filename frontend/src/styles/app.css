@@ -94,6 +94,15 @@
 .side-item[role="checkbox"]:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .side-add { display: flex; gap: 6px; padding: 8px 12px; border-top: 1px solid var(--rule); }
 .side-head-actions { display: flex; align-items: center; gap: 4px; }
+/* footer button beneath the lists/groups — opens the "just completed" pane */
+.side-completed {
+  display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%;
+  padding: 10px 12px; border: 0; border-top: 1px solid var(--rule); background: none;
+  cursor: pointer; font-family: var(--mono); font-size: 11px; text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--fg-muted); transition: color 0.15s, background 0.15s;
+}
+.side-completed:hover,
+.side-completed.active { color: var(--accent); background: var(--bg-elev); }
 
 /* collapsed sidebar — a thin rail of collection dots (desktop only) */
 .side.collapsed { width: 44px; align-items: center; padding-top: 10px; gap: 10px; }
@@ -107,6 +116,14 @@
   padding: 9px 0; cursor: pointer; display: flex; justify-content: center;
 }
 .rail-dot:hover { background: var(--bg-elev); }
+/* collapsed-rail twin of .side-completed — keeps the pane reachable when the
+   sidebar is a thin rail */
+.side-completed-rail {
+  width: 100%; border: 0; border-radius: 0; border-top: 1px solid var(--rule);
+  padding: 10px 0; color: var(--fg-muted);
+}
+.side-completed-rail:hover,
+.side-completed-rail.active { color: var(--accent); background: var(--bg-elev); }
 .rail-dot.active { border-left-color: var(--accent); background: var(--bg-elev); }
 .rail-dot.cal-hidden { opacity: .55; }
 .rail-dot .swatch { width: 9px; height: 9px; flex: none; background: var(--fg-faint); }
@@ -471,6 +488,11 @@
   .side-add {
     border-top: 0; border-left: 1px solid var(--rule);
     flex: none; width: 190px; align-items: center;
+  }
+  /* strip layout: sit inline at the end of the row, not a full-width footer */
+  .side-completed {
+    border-top: 0; border-left: 1px solid var(--rule);
+    flex: none; width: auto; white-space: nowrap;
   }
 
   /* the sidebar strip is already compact — no collapse affordance on phones */
