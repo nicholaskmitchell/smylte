@@ -61,6 +61,16 @@ def test_settings_archived_calendars_roundtrip(db):
     assert merged == {"hidden_calendars": ["x"], "archived_calendars": ["y"]}
 
 
+def test_settings_show_completed_roundtrip(db):
+    # Whether completed tasks show inline in the main view. Booleans must
+    # round-trip and False must persist (only None is "unset" — see the merge).
+    store.update_settings(db, {"show_completed_tasks": True})
+    assert store.update_settings(db, {"show_completed_tasks": False}) == {
+        "show_completed_tasks": False
+    }
+    assert store.get_settings(db) == {"show_completed_tasks": False}
+
+
 def test_settings_hidden_lists_roundtrip(db):
     # The tasks-side analogue of hidden_calendars: a plain list of list ids in
     # the settings blob (the collections themselves are untouched on the wire).
