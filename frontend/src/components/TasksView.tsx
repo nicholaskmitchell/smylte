@@ -11,18 +11,23 @@ const VIEWS: ReadonlyArray<readonly [TasksViewMode, string]> = [
 
 export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggleSide,
   hiddenLists, onHiddenListsChange, groups, onGroupsChange,
-  collapsedGroups, onCollapsedGroupsChange }: {
+  collapsedGroups, onCollapsedGroupsChange, showCompleted }: {
   rev: number; onExpire: () => void
   view: TasksViewMode; onView: (v: TasksViewMode) => void
   sideCollapsed: boolean; onToggleSide: () => void
   hiddenLists: string[]; onHiddenListsChange: (next: string[]) => void
   groups: TaskGroup[]; onGroupsChange: (next: TaskGroup[]) => void
   collapsedGroups: string[]; onCollapsedGroupsChange: (next: string[]) => void
+  showCompleted: boolean
 }) {
   const guard = makeGuard(onExpire)
   const [lists, setLists] = useState<List[]>([])
   const [tasks, setTasks] = useState<Task[]>([])
   const [detail, setDetail] = useState<Task | null>(null)
+  // A transient browsing mode (not persisted): the sidebar's "View completed"
+  // button flips this to show a dedicated pane of just the completed tasks,
+  // regardless of the show-completed setting.
+  const [completedOnly, setCompletedOnly] = useState(false)
   // Multi-day views window from here: day3 starts on the anchor day itself,
   // week snaps to the anchor's Sunday (same week start as the calendar grid).
   const [anchor, setAnchor] = useState(() => new Date())
@@ -224,6 +229,9 @@ export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggle
   const todayKey = ymd(new Date())
   const dueDay = (t: Task) => (t.due ? dayKey(t.due) : null)
   const byDue = (a: Task, b: Task) => (a.due || '').localeCompare(b.due || '')
+  // The dedicated "View completed" pane: every done/cancelled top-level task
+  // (respecting hidden lists via `done`), most-recent due first, undated last.
+  const completedTasks = [...done].sort(byDue).reverse()
   const openOn = (key: string) =>
     shownTasks.filter((t) => !t.completed && !t.cancelled && dueDay(t) === key).sort(byDue)
   const doneOn = (key: string) =>
@@ -248,16 +256,19 @@ export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggle
         collapsed={sideCollapsed} onToggle={onToggleSide}
         hiddenIds={hiddenSet} onHiddenChange={onHiddenListsChange}
         groups={groups} onGroupsChange={onGroupsChange}
-        collapsedGroups={collapsedGroups} onCollapsedGroupsChange={onCollapsedGroupsChange} />
+        collapsedGroups={collapsedGroups} onCollapsedGroupsChange={onCollapsedGroupsChange}
+        completedActive={completedOnly} onToggleCompleted={() => setCompletedOnly((v) => !v)} />
 
       <div className="content">
         <div className="content-head">
-          <span className="content-title">All lists</span>
+          <span className="content-title">{completedOnly ? 'Completed' : 'All lists'}</span>
           <span className="content-sub">
-            {view === 'list' ? `${active.length} open` : `${fmtD(days[0])} – ${fmtD(days[span - 1])}`}
+            {completedOnly
+              ? `${completedTasks.length} completed`
+              : view === 'list' ? `${active.length} open` : `${fmtD(days[0])} – ${fmtD(days[span - 1])}`}
           </span>
           <span className="spacer" />
-          {view !== 'list' && (
+          {!completedOnly && view !== 'list' && (
             <div className="range-nav">
               <button className="icon-btn" title="Earlier" aria-label="Earlier"
                 onClick={() => setAnchor(addDays(days[0], -span))}>‹</button>
@@ -266,16 +277,26 @@ export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggle
                 onClick={() => setAnchor(addDays(days[0], span))}>›</button>
             </div>
           )}
-          <div className="view-tabs" role="tablist" aria-label="Task view">
-            {VIEWS.map(([v, label]) => (
-              <button key={v} role="tab" aria-selected={view === v}
-                className={`view-tab ${view === v ? 'active' : ''}`}
-                onClick={() => onView(v)}>{label}</button>
-            ))}
-          </div>
+          {!completedOnly && (
+            <div className="view-tabs" role="tablist" aria-label="Task view">
+              {VIEWS.map(([v, label]) => (
+                <button key={v} role="tab" aria-selected={view === v}
+                  className={`view-tab ${view === v ? 'active' : ''}`}
+                  onClick={() => onView(v)}>{label}</button>
+              ))}
+            </div>
+          )}
         </div>
 
-        {visibleLists.length === 0 ? (
+        {completedOnly ? (
+          <div className="scroll">
+            {completedTasks.length === 0 && <div className="empty">No completed tasks.</div>}
+            {completedTasks.map((t) => (
+              <TaskGroup key={t.uid} task={t} kids={childrenOf(t.uid)} dot={dotFor(t)}
+                onToggle={toggle} onRemove={remove} onOpen={setDetail} onAddSub={addSub} />
+            ))}
+          </div>
+        ) : visibleLists.length === 0 ? (
           <div className="empty">
             {lists.length === 0
               ? 'Create a list to get started.'
@@ -292,7 +313,7 @@ export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggle
                   onToggle={toggle} onRemove={remove} onOpen={setDetail} onAddSub={addSub} />
               ))}
               {active.length === 0 && <div className="empty">Nothing to do here.</div>}
-              {done.length > 0 && (
+              {showCompleted && done.length > 0 && (
                 <>
                   <div className="section-label label">Completed · {done.length}</div>
                   {done.map((t) => (
@@ -324,7 +345,7 @@ export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggle
                 const key = ymd(d)
                 return (
                   <DayColumn key={key} date={d} isToday={key === todayKey}
-                    open={openOn(key)} done={doneOn(key)}
+                    open={openOn(key)} done={showCompleted ? doneOn(key) : []}
                     overdue={key === todayKey ? overdue : []} dotOf={dotFor}
                     onToggle={toggle} onOpen={setDetail}
                     onAdd={(summary) => addTask(defaultList, summary, key)}

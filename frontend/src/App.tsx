@@ -22,6 +22,7 @@ export function App() {
   const [hiddenLists, setHiddenLists] = useState<string[]>([])
   const [taskGroups, setTaskGroups] = useState<TaskGroup[]>([])
   const [collapsedGroups, setCollapsedGroups] = useState<string[]>([])
+  const [showCompleted, setShowCompleted] = useState(false)
   const [rev, setRev] = useState(0)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [archivedOpen, setArchivedOpen] = useState(false)
@@ -85,6 +86,7 @@ export function App() {
         if (Array.isArray(s.collapsed_groups)) {
           setCollapsedGroups(s.collapsed_groups.filter((x) => typeof x === 'string'))
         }
+        if (typeof s.show_completed_tasks === 'boolean') setShowCompleted(s.show_completed_tasks)
       })
       .catch(() => { /* keep the locally-cached theme */ })
   }, [auth, applyTheme])
@@ -128,6 +130,14 @@ export function App() {
     setCollapsedGroups(next)
     api.putSettings({ collapsed_groups: next }).catch(() => { /* stays local if offline */ })
   }, [])
+
+  // Whether completed tasks show inline in the main view. Hidden by default; the
+  // sidebar's "View completed" button always works regardless of this choice.
+  const toggleShowCompleted = useCallback(() => {
+    const next = !showCompleted
+    setShowCompleted(next)
+    api.putSettings({ show_completed_tasks: next }).catch(() => { /* stays local if offline */ })
+  }, [showCompleted])
 
   // Live updates: any server-side change bumps `rev`, which the views watch.
   // One user action can publish several events in a burst (e.g. a move is a
@@ -209,6 +219,13 @@ export function App() {
               </button>
             </div>
             <div className="menu-row">
+              <label>Completed tasks</label>
+              <button className="menu-toggle" onClick={toggleShowCompleted}
+                aria-pressed={showCompleted}>
+                {showCompleted ? 'Shown' : 'Hidden'}
+              </button>
+            </div>
+            <div className="menu-row">
               <label>Signed in as</label>
               <span className="menu-value">{user}</span>
             </div>
@@ -234,7 +251,8 @@ export function App() {
           sideCollapsed={sideCollapsed} onToggleSide={toggleSide}
           hiddenLists={hiddenLists} onHiddenListsChange={changeHiddenLists}
           groups={taskGroups} onGroupsChange={changeTaskGroups}
-          collapsedGroups={collapsedGroups} onCollapsedGroupsChange={changeCollapsedGroups} />
+          collapsedGroups={collapsedGroups} onCollapsedGroupsChange={changeCollapsedGroups}
+          showCompleted={showCompleted} />
       )}
       {tab === 'calendar' && (
         <CalendarView rev={rev} onExpire={onExpire}

@@ -65,3 +65,32 @@ describe('<Sidebar> per-collection visibility toggles', () => {
     expect(onHiddenChange).toHaveBeenCalledWith(['home'])
   })
 })
+
+describe('<Sidebar> "View completed" footer button', () => {
+  const withCompleted = (props: { active?: boolean; onToggle?: () => void }) => (
+    <Sidebar title="Lists" placeholder="List" items={[list('work', 'Work')]}
+      countOf={(l) => l.open_count} onItems={() => {}} api={noopApi}
+      hiddenIds={new Set()} onHiddenChange={() => {}}
+      completedActive={props.active} onToggleCompleted={props.onToggle ?? (() => {})} />
+  )
+
+  it('renders only when onToggleCompleted is provided', () => {
+    const { rerender } = render(
+      <Sidebar title="Lists" placeholder="List" items={[list('work', 'Work')]}
+        countOf={(l) => l.open_count} onItems={() => {}} api={noopApi}
+        hiddenIds={new Set()} onHiddenChange={() => {}} />,
+    )
+    expect(screen.queryByText(/View completed/)).not.toBeInTheDocument()
+    rerender(withCompleted({}))
+    expect(screen.getByText(/View completed/)).toBeInTheDocument()
+  })
+
+  it('calls onToggleCompleted when clicked, and flips its label when active', async () => {
+    const onToggle = vi.fn()
+    const { rerender } = render(withCompleted({ onToggle }))
+    await userEvent.click(screen.getByText(/View completed/))
+    expect(onToggle).toHaveBeenCalledTimes(1)
+    rerender(withCompleted({ onToggle, active: true }))
+    expect(screen.getByText(/Back to tasks/)).toBeInTheDocument()
+  })
+})
