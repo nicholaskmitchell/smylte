@@ -77,6 +77,11 @@ export function Sidebar({ title, placeholder, items, sel = '', countOf, onSelect
   const [dragId, setDragId] = useState<string | null>(null)
   const [overId, setOverId] = useState<string | null>(null)
   const [overGroup, setOverGroup] = useState<string | null>(null)
+  // Mobile only: the vertical management drawer (bottom sheet). On phones the
+  // sidebar is a single trigger bar; tapping it opens this drawer, which reuses
+  // the full desktop layout — groups, per-row edit, add — so everything the
+  // desktop rail can do (rename, recolor, delete, group) is reachable on touch.
+  const [drawerOpen, setDrawerOpen] = useState(false)
 
   const create = async (name: string) => {
     const l = await api.create(name)
@@ -206,9 +211,204 @@ export function Sidebar({ title, placeholder, items, sel = '', countOf, onSelect
         <span className="swatch" style={swatchStyle(l)} />
         <span className="name">{l.name}</span>
         <span className="count">{countOf(l)}</span>
-        <button className="side-edit" title="Edit"
+        <button className="side-edit" title="Edit" aria-label={`Edit ${l.name}`}
           onClick={(e) => { e.stopPropagation(); setEditing(l) }}>⋯</button>
       </div>
+    )
+  }
+
+  // The scrollable body of collections (groups + lists) — shared by the desktop
+  // sidebar and the mobile drawer. The grouped layout renders wherever groups
+  // are enabled; on the phone drawer that means groups are finally reachable
+  // (create / rename / delete / collapse), where the old horizontal strip had
+  // no room for them at all.
+  const collectionsBody = (
+    <>
+      {allLabel && items.length > 1 && (
+        <div className={`side-item all-row ${sel === ALL_ID ? 'active' : ''}`}
+          onClick={() => onSelect?.(ALL_ID)}>
+          <span className="swatch swatch-all" />
+          <span className="name">{allLabel}</span>
+          <span className="count">
+            {items.reduce((n, l) => n + (canToggle && hidden.has(l.id) ? 0 : countOf(l)), 0)}
+          </span>
+        </div>
+      )}
+
+      {groupsOn ? (
+        <>
+          {groups!.map((g) => {
+            const members = membersOf(g)
+            const isCollapsed = collapsedSet.has(g.id)
+            const anyVisible = canToggle && members.some((l) => !hidden.has(l.id))
+            return (
+              <div key={g.id} className={`side-group ${overGroup === g.id ? 'drag-over' : ''}`}
+                onDragOver={(e: DragEvent) => { if (dragId) { e.preventDefault(); setOverGroup(g.id) } }}
+                onDragLeave={() => setOverGroup((o) => (o === g.id ? null : o))}
+                onDrop={(e: DragEvent) => {
+                  e.preventDefault()
+                  if (dragId) moveListToGroup(dragId, g.id)
+                  setDragId(null); setOverId(null); setOverGroup(null)
+                }}>
+                <GroupHeader group={g} count={members.reduce((n, l) => n + countOf(l), 0)}
+                  collapsed={isCollapsed} canToggle={canToggle} anyVisible={anyVisible}
+                  onToggleCollapse={() => toggleCollapse(g.id)}
+                  onToggleVisible={() => setHiddenBulk(members.map((l) => l.id), anyVisible)}
+                  onRename={(name) => renameGroup(g.id, name)}
+                  onDelete={() => removeGroup(g.id)} />
+                {!isCollapsed && members.map(renderRow)}
+                {!isCollapsed && members.length === 0 && (
+                  <div className="group-empty">
+                    {isMobile
+                      ? `Empty — assign a ${placeholder.toLowerCase()} from its ⋯ menu`
+                      : `Drag a ${placeholder.toLowerCase()} here`}
+                  </div>
+                )}
+              </div>
+            )
+          })}
+          {/* Ungrouped lists — a drop target here pulls a list back out of its group. */}
+          <div className={`ungrouped ${overGroup === '' ? 'drag-over' : ''}`}
+            onDragOver={(e: DragEvent) => { if (dragId) { e.preventDefault(); setOverGroup('') } }}
+            onDragLeave={() => setOverGroup((o) => (o === '' ? null : o))}
+            onDrop={(e: DragEvent) => {
+              e.preventDefault()
+              if (dragId) moveListToGroup(dragId, null)
+              setDragId(null); setOverId(null); setOverGroup(null)
+            }}>
+            {ungrouped.map(renderRow)}
+          </div>
+        </>
+      ) : (
+        shown.map(renderRow)
+      )}
+
+      {shown.length === 0 && !adding && (
+        <div className="empty" style={{ padding: '14px 16px' }}>Nothing here yet.</div>
+      )}
+    </>
+  )
+
+  // The inline "add a group" / "add a collection" text inputs, shared by both
+  // layouts. They live just below the collection list.
+  const addInputs = (
+    <>
+      {addingGroup && (
+        <div className="side-add">
+          <input className="input" autoFocus placeholder="Group name"
+            onBlur={(e) => { if (!e.target.value.trim()) setAddingGroup(false) }}
+            onKeyDown={(e: KeyboardEvent<HTMLInputElement>) => {
+              const v = (e.target as HTMLInputElement).value
+              if (e.key === 'Enter' && v.trim()) createGroup(v.trim())
+              if (e.key === 'Escape') setAddingGroup(false)
+            }} />
+        </div>
+      )}
+      {adding && (
+        <div className="side-add">
+          <input className="input" autoFocus placeholder={placeholder}
+            onBlur={(e) => { if (!e.target.value.trim()) setAdding(false) }}
+            onKeyDown={(e: KeyboardEvent<HTMLInputElement>) => {
+              const v = (e.target as HTMLInputElement).value
+              if (e.key === 'Enter' && v.trim()) create(v.trim())
+              if (e.key === 'Escape') setAdding(false)
+            }} />
+        </div>
+      )}
+    </>
+  )
+
+  const completedFooter = onToggleCompleted && (
+    <button className={`side-completed ${completedActive ? 'active' : ''}`}
+      aria-pressed={completedActive} onClick={onToggleCompleted}>
+      {completedActive ? '← Back to tasks' : '✓ View completed'}
+    </button>
+  )
+
+  const editModal = editing && (
+    <EditModal item={editing} placeholder={placeholder}
+      groups={groupsOn ? groups! : undefined}
+      groupId={groupsOn ? (groupOf.get(editing.id) ?? null) : undefined}
+      onSetGroup={groupsOn ? (gid) => moveListToGroup(editing.id, gid) : undefined}
+      onClose={() => setEditing(null)} onSave={save} onDelete={remove}
+      onArchive={onArchive && ((id) => { setEditing(null); onArchive(id) })} />
+  )
+
+  // ── mobile: a trigger bar that opens a full-height management drawer ────────
+  // The phone layout used to be a horizontal chip strip with no room to rename,
+  // delete, or group anything (the edit affordance was hover-only and unreachable
+  // on touch). Instead we surface a single bar; tapping it opens a bottom-sheet
+  // drawer that reuses the desktop vertical layout, where every action lives.
+  if (isMobile) {
+    const total = shown.length
+    const shownCount = canToggle ? shown.filter((l) => !hidden.has(l.id)).length : total
+    const summary = total === 0
+      ? 'None yet'
+      : canToggle ? `${shownCount} of ${total} shown` : `${total}`
+    const closeDrawer = () => { setDrawerOpen(false); setAdding(false); setAddingGroup(false) }
+    return (
+      <>
+        <div className="side-mobilebar">
+          <button className="side-mobiletrigger" onClick={() => setDrawerOpen(true)}
+            aria-haspopup="dialog" aria-expanded={drawerOpen}>
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
+              strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <line x1="4" y1="7" x2="20" y2="7" /><line x1="4" y1="12" x2="20" y2="12" />
+              <line x1="4" y1="17" x2="20" y2="17" />
+            </svg>
+            <span className="mb-title">{title}</span>
+            <span className="mb-summary">{summary}</span>
+            <span className="mb-caret" aria-hidden="true">▾</span>
+          </button>
+          {completedFooter && (
+            <button className={`side-mobile-completed ${completedActive ? 'active' : ''}`}
+              title={completedActive ? 'Back to tasks' : 'View completed'}
+              aria-pressed={completedActive} onClick={onToggleCompleted}>✓</button>
+          )}
+          <button className="side-mobile-add" title={`New ${placeholder.toLowerCase()}`}
+            aria-label={`New ${placeholder.toLowerCase()}`}
+            onClick={() => { setDrawerOpen(true); setAdding(true) }}>+</button>
+        </div>
+
+        {drawerOpen && (
+          <div className="overlay drawer-overlay" onClick={closeDrawer}>
+            <div className="side drawer" role="dialog" aria-label={`Manage ${title.toLowerCase()}`}
+              onClick={(e) => e.stopPropagation()}>
+              <div className="side-head">
+                <span className="label">{title}</span>
+                <span className="side-head-actions">
+                  {groupsOn && (
+                    <button className="icon-btn" title="New group" aria-label="New group"
+                      onClick={() => setAddingGroup(true)}>
+                      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
+                        strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M3 7a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v3" />
+                        <path d="M3 7v11a2 2 0 0 0 2 2h6" />
+                        <path d="M16 16h6M19 13v6" />
+                      </svg>
+                    </button>
+                  )}
+                  <button className="icon-btn" title={`New ${placeholder.toLowerCase()}`}
+                    aria-label={`New ${placeholder.toLowerCase()}`}
+                    onClick={() => setAdding(true)}>+</button>
+                  <button className="icon-btn" title="Done" aria-label="Close"
+                    onClick={closeDrawer}>✕</button>
+                </span>
+              </div>
+              {canToggle && (
+                <p className="drawer-hint">
+                  Tap a {placeholder.toLowerCase()} to show or hide it. Tap ⋯ to rename,
+                  recolor{onArchive ? ', archive' : ''} or delete.
+                </p>
+              )}
+              <div className="side-list">{collectionsBody}</div>
+              {addInputs}
+              {completedFooter}
+            </div>
+          </div>
+        )}
+        {editModal}
+      </>
     )
   }
 
@@ -216,7 +416,7 @@ export function Sidebar({ title, placeholder, items, sel = '', countOf, onSelect
   // mobile layout is already a compact strip, so collapse is a desktop-only
   // affordance. Groups don't render here (the rail is too thin); every list dot
   // still shows so nothing becomes unreachable.
-  if (collapsed && !isMobile) {
+  if (collapsed) {
     return (
       <div className="side collapsed">
         <button className="icon-btn side-toggle" title="Expand sidebar"
@@ -256,7 +456,7 @@ export function Sidebar({ title, placeholder, items, sel = '', countOf, onSelect
       <div className="side-head">
         <span className="label">{title}</span>
         <span className="side-head-actions">
-          {groupsOn && !isMobile && (
+          {groupsOn && (
             <button className="icon-btn" title="New group"
               aria-label="New group" onClick={() => setAddingGroup(true)}>
               <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor"
@@ -275,106 +475,10 @@ export function Sidebar({ title, placeholder, items, sel = '', countOf, onSelect
           )}
         </span>
       </div>
-      <div className="side-list">
-        {allLabel && items.length > 1 && (
-          <div className={`side-item all-row ${sel === ALL_ID ? 'active' : ''}`}
-            onClick={() => onSelect?.(ALL_ID)}>
-            <span className="swatch swatch-all" />
-            <span className="name">{allLabel}</span>
-            <span className="count">
-              {items.reduce((n, l) => n + (canToggle && hidden.has(l.id) ? 0 : countOf(l)), 0)}
-            </span>
-          </div>
-        )}
-
-        {/* Groups are a desktop organizational layer. On the mobile horizontal
-            strip (and for views without grouping, e.g. Calendar) every list
-            renders flat so nothing nests inside a wrapper that would break the
-            chip strip or hide a collapsed list with no way to reopen it. */}
-        {groupsOn && !isMobile ? (
-          <>
-            {groups!.map((g) => {
-              const members = membersOf(g)
-              const isCollapsed = collapsedSet.has(g.id)
-              const anyVisible = canToggle && members.some((l) => !hidden.has(l.id))
-              return (
-                <div key={g.id} className={`side-group ${overGroup === g.id ? 'drag-over' : ''}`}
-                  onDragOver={(e: DragEvent) => { if (dragId) { e.preventDefault(); setOverGroup(g.id) } }}
-                  onDragLeave={() => setOverGroup((o) => (o === g.id ? null : o))}
-                  onDrop={(e: DragEvent) => {
-                    e.preventDefault()
-                    if (dragId) moveListToGroup(dragId, g.id)
-                    setDragId(null); setOverId(null); setOverGroup(null)
-                  }}>
-                  <GroupHeader group={g} count={members.reduce((n, l) => n + countOf(l), 0)}
-                    collapsed={isCollapsed} canToggle={canToggle} anyVisible={anyVisible}
-                    onToggleCollapse={() => toggleCollapse(g.id)}
-                    onToggleVisible={() => setHiddenBulk(members.map((l) => l.id), anyVisible)}
-                    onRename={(name) => renameGroup(g.id, name)}
-                    onDelete={() => removeGroup(g.id)} />
-                  {!isCollapsed && members.map(renderRow)}
-                  {!isCollapsed && members.length === 0 && (
-                    <div className="group-empty">Drag a {placeholder.toLowerCase()} here</div>
-                  )}
-                </div>
-              )
-            })}
-            {/* Ungrouped lists — a drop target here pulls a list back out of its group. */}
-            <div className={`ungrouped ${overGroup === '' ? 'drag-over' : ''}`}
-              onDragOver={(e: DragEvent) => { if (dragId) { e.preventDefault(); setOverGroup('') } }}
-              onDragLeave={() => setOverGroup((o) => (o === '' ? null : o))}
-              onDrop={(e: DragEvent) => {
-                e.preventDefault()
-                if (dragId) moveListToGroup(dragId, null)
-                setDragId(null); setOverId(null); setOverGroup(null)
-              }}>
-              {ungrouped.map(renderRow)}
-            </div>
-          </>
-        ) : (
-          shown.map(renderRow)
-        )}
-
-        {shown.length === 0 && !adding && (
-          <div className="empty" style={{ padding: '14px 16px' }}>Nothing here yet.</div>
-        )}
-      </div>
-      {onToggleCompleted && (
-        <button className={`side-completed ${completedActive ? 'active' : ''}`}
-          aria-pressed={completedActive} onClick={onToggleCompleted}>
-          {completedActive ? '← Back to tasks' : '✓ View completed'}
-        </button>
-      )}
-      {addingGroup && (
-        <div className="side-add">
-          <input className="input" autoFocus placeholder="Group name"
-            onBlur={(e) => { if (!e.target.value.trim()) setAddingGroup(false) }}
-            onKeyDown={(e: KeyboardEvent<HTMLInputElement>) => {
-              const v = (e.target as HTMLInputElement).value
-              if (e.key === 'Enter' && v.trim()) createGroup(v.trim())
-              if (e.key === 'Escape') setAddingGroup(false)
-            }} />
-        </div>
-      )}
-      {adding && (
-        <div className="side-add">
-          <input className="input" autoFocus placeholder={placeholder}
-            onBlur={(e) => { if (!e.target.value.trim()) setAdding(false) }}
-            onKeyDown={(e: KeyboardEvent<HTMLInputElement>) => {
-              const v = (e.target as HTMLInputElement).value
-              if (e.key === 'Enter' && v.trim()) create(v.trim())
-              if (e.key === 'Escape') setAdding(false)
-            }} />
-        </div>
-      )}
-      {editing && (
-        <EditModal item={editing} placeholder={placeholder}
-          groups={groupsOn ? groups! : undefined}
-          groupId={groupsOn ? (groupOf.get(editing.id) ?? null) : undefined}
-          onSetGroup={groupsOn ? (gid) => moveListToGroup(editing.id, gid) : undefined}
-          onClose={() => setEditing(null)} onSave={save} onDelete={remove}
-          onArchive={onArchive && ((id) => { setEditing(null); onArchive(id) })} />
-      )}
+      <div className="side-list">{collectionsBody}</div>
+      {completedFooter}
+      {addInputs}
+      {editModal}
     </div>
   )
 }
