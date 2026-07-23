@@ -463,40 +463,74 @@
   .brand { font-size: 19px; }
   .menu { right: 14px; }
 
-  /* panes stack; the sidebar becomes a horizontal collection strip */
+  /* panes stack; on phones the sidebar is a compact trigger bar plus a
+     bottom-sheet management drawer (Sidebar.tsx) — not a cramped chip strip.
+     The drawer reuses the desktop vertical layout, so rename / recolor /
+     delete / group are finally reachable on touch. */
   .work { flex-direction: column; }
-  .side {
-    width: 100%; flex-direction: row; align-items: stretch;
-    border-right: 0; border-bottom: 1px solid var(--rule);
-  }
-  .side-head { padding: 8px 4px 8px 14px; align-items: center; }
-  .side-head .label { display: none; }
-  .side-list {
-    display: flex; align-items: center; gap: 8px;
-    padding: 8px 14px 8px 8px; overflow-x: auto; overflow-y: hidden;
-    scrollbar-width: none;
-  }
-  .side-list::-webkit-scrollbar { display: none; }
-  .side-item {
-    flex: none; padding: 7px 11px;
-    border: 1px solid var(--rule); border-left-width: 1px;
-  }
-  .side-item.active { border-color: var(--accent); }
-  .side-item .name { flex: none; max-width: 40vw; }
-  .side-item .side-edit { display: none; }
-  .side-item.active .side-edit { display: inline; opacity: 1; padding: 0 2px 0 4px; }
-  .side-add {
-    border-top: 0; border-left: 1px solid var(--rule);
-    flex: none; width: 190px; align-items: center;
-  }
-  /* strip layout: sit inline at the end of the row, not a full-width footer */
-  .side-completed {
-    border-top: 0; border-left: 1px solid var(--rule);
-    flex: none; width: auto; white-space: nowrap;
-  }
 
-  /* the sidebar strip is already compact — no collapse affordance on phones */
-  .side-toggle { display: none; }
+  /* the bar that opens the drawer — title, a "N of M shown" summary, and
+     shortcuts for completed + new collection */
+  .side-mobilebar {
+    display: flex; align-items: stretch; flex: none;
+    background: var(--paper); border-bottom: 1px solid var(--rule);
+  }
+  .side-mobiletrigger {
+    flex: 1; min-width: 0; display: flex; align-items: center; gap: 9px;
+    background: none; border: 0; cursor: pointer; color: var(--fg);
+    padding: 11px 14px; text-align: left;
+  }
+  .side-mobiletrigger svg { flex: none; color: var(--fg-muted); }
+  .side-mobiletrigger .mb-title {
+    font-family: var(--mono); font-size: 11px; text-transform: uppercase;
+    letter-spacing: 0.08em; color: var(--fg-muted); flex: none;
+  }
+  .side-mobiletrigger .mb-summary {
+    font-family: var(--mono); font-size: 11px; color: var(--fg-faint);
+    min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .side-mobiletrigger .mb-caret {
+    margin-left: auto; flex: none; color: var(--fg-faint); font-size: 11px;
+  }
+  .side-mobile-completed, .side-mobile-add {
+    flex: none; background: none; border: 0; border-left: 1px solid var(--rule);
+    color: var(--fg-muted); cursor: pointer; padding: 0 16px; font-size: 18px; line-height: 1;
+  }
+  .side-mobile-completed.active { color: var(--accent); }
+  .side-mobile-add:hover, .side-mobile-completed:hover { color: var(--accent); }
+
+  /* the drawer itself: a bottom sheet that reuses .side / .side-item / .group-* */
+  .drawer-overlay { align-items: flex-end; padding: 0; }
+  .side.drawer {
+    width: 100%; max-height: 88dvh; flex-direction: column; overflow: hidden;
+    background: var(--bg-elev); border: 0; border-top: 1px solid var(--rule);
+    box-shadow: 0 -12px 40px rgba(0, 0, 0, 0.28);
+    padding-bottom: env(safe-area-inset-bottom);
+    animation: sheet-up 0.18s ease-out;
+  }
+  @keyframes sheet-up {
+    from { transform: translateY(16px); opacity: 0.5; }
+    to { transform: none; opacity: 1; }
+  }
+  .side.drawer .side-head { padding: 14px 14px 8px; }
+  .side.drawer .drawer-hint {
+    margin: 0; padding: 0 16px 10px; font-size: 12.5px; line-height: 1.4; color: var(--fg-muted);
+  }
+  .side.drawer .side-list { flex: 1 1 auto; overflow-y: auto; padding-bottom: 8px; }
+  /* full-width, touch-sized rows with an always-visible edit affordance */
+  .side.drawer .side-item { padding: 13px 16px; gap: 11px; }
+  .side.drawer .side-item .name { flex: 1; max-width: none; font-size: 15px; }
+  .side.drawer .side-item .swatch { width: 10px; height: 10px; }
+  .side.drawer .side-item .side-edit {
+    display: inline; opacity: 1; padding: 6px 8px; font-size: 17px; color: var(--fg-muted);
+  }
+  .side.drawer .side-add { border-top: 1px solid var(--rule); }
+  .side.drawer .side-completed { flex: none; }
+  /* comfortable group headers + controls on touch (no hover to reveal them) */
+  .side.drawer .group-head { padding: 14px 16px 5px; }
+  .side.drawer .group-actions { opacity: 1; }
+  .side.drawer .group-btn, .side.drawer .group-eye { padding: 6px 7px; font-size: 15px; }
+  .side.drawer .group-caret { padding: 4px 2px; }
 
   /* content spacing + touch targets */
   .task, .quickadd, .content-head, .cal-head, .empty, .banner { padding-left: 14px; padding-right: 14px; }
