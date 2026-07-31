@@ -14,6 +14,16 @@ def _bool(name: str, default: bool) -> bool:
     return os.environ.get(name, str(default)).strip().lower() in ("1", "true", "yes", "on")
 
 
+def normalize_dav_url(raw: str) -> str:
+    """Where raw CalDAV lives, as clients must reach it. Path or absolute URL,
+    always with a trailing slash (it is a collection, and RFC 6764 discovery
+    redirects to a *context path*, not a file)."""
+    v = (raw or "").strip() or "/dav/"
+    if not v.startswith(("http://", "https://", "/")):
+        v = "/" + v
+    return v if v.endswith("/") else v + "/"
+
+
 @dataclass(frozen=True)
 class Settings:
     radicale_url: str          # origin, e.g. http://127.0.0.1:5233 (no trailing slash)
@@ -37,6 +47,10 @@ class Settings:
     access_required: bool
     access_team_domain: str
     access_aud: str
+    # Where raw CalDAV is published for device clients (the reverse proxy's
+    # /dav split, or an absolute URL if DAV lives on its own host). Only used
+    # to answer RFC 6764 discovery — see the discovery routes in app.py.
+    dav_public_url: str = "/dav/"
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -61,4 +75,5 @@ class Settings:
             access_required=_bool("TASKS_ACCESS_REQUIRED", False),
             access_team_domain=os.environ.get("TASKS_ACCESS_TEAM_DOMAIN", ""),
             access_aud=os.environ.get("TASKS_ACCESS_AUD", ""),
+            dav_public_url=normalize_dav_url(os.environ.get("TASKS_DAV_URL", "/dav/")),
         )
