@@ -28,6 +28,35 @@
 		}
 	}
 
+	# RFC 6764 discovery, so clients that CANNOT be given a path still connect.
+	# Apple is the case that forces this: macOS Calendar and iOS ask for a
+	# "Server Address" that takes a host and nothing more, so you cannot type
+	# `radicale.nicholaskmitchell.com/dav` at all. Those clients probe the host
+	# root instead — /.well-known/caldav first, then bare DAV verbs on / — and
+	# follow the redirect they expect to find. Without these two blocks both
+	# probes fall through to the web app and setup fails with "cannot verify
+	# account settings". DAVx5/Thunderbird take the full URL and never get here.
+	#
+	# tasksd answers the same probes itself (backend/tasksd/app.py) so discovery
+	# survives behind a different proxy; handling it at the edge keeps device
+	# setup off the app entirely. Keep the two in step if /dav ever moves.
+	handle /.well-known/caldav* {
+		redir * /dav/ permanent
+	}
+	handle /.well-known/carddav* {
+		redir * /dav/ permanent
+	}
+
+	# The fallback probe: PROPFIND / for DAV:current-user-principal. Matched on
+	# METHOD, so browsers loading the app at / are unaffected.
+	@dav_root {
+		method PROPFIND PROPPATCH REPORT OPTIONS
+		path /
+	}
+	handle @dav_root {
+		redir * /dav/ permanent
+	}
+
 	# The Radicale storage hook (POST /internal/changed) is host-local only:
 	# tasks-notify curls 127.0.0.1:8080 directly, bypassing this proxy. It must
 	# never be reachable through the public tunnel.
