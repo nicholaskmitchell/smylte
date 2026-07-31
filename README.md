@@ -2,7 +2,8 @@
 
 A self-hosted **tasks + calendar** web app (TickTick-style) backed by the
 existing Radicale CalDAV server, live at `radicale.nicholaskmitchell.com`
-(raw CalDAV for devices lives under `/dav`). It is one CalDAV client among
+(raw CalDAV for devices lives under `/dav`; clients that take only a hostname —
+Apple's — find it via RFC 6764 discovery at the root). It is one CalDAV client among
 several — Tasks.org (DAVx⁵), jtx Board, and Thunderbird share the same
 collections and have equal rights. **Radicale is the source of truth; SQLite
 is a disposable cache** (except the app-only sidecar — pins and app-only

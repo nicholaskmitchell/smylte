@@ -28,13 +28,18 @@ from fastapi import (
     Request,
     status,
 )
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import (
+    FileResponse,
+    JSONResponse,
+    RedirectResponse,
+    StreamingResponse,
+)
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .access import AccessVerifier
 from .auth import Authenticator, RateLimiter, hash_password, limiter_key
-from .config import Settings
+from .config import Settings, normalize_dav_url
 from .dav.errors import AuthError as DavAuthError
 from .dav.errors import DavError
 from .dav.errors import NotFound as DavNotFound
@@ -914,6 +919,48 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/healthz")
     async def healthz():
         return {"ok": True}
+
+    # -- RFC 6764 CalDAV/CardDAV discovery (no auth: it precedes it) ----------
+    # Raw CalDAV is published under a path (`/dav`), and a large share of DAV
+    # clients cannot be pointed at one. Apple's is the sharp case: macOS and iOS
+    # ask for a *Server Address*, accept a host (optionally :port) and nothing
+    # else, so `radicale.example.com/dav` is simply untypeable. What they do
+    # instead is probe the host root — `/.well-known/caldav` first, then bare
+    # DAV verbs on `/` — and follow the redirect they expect to find there.
+    # Without these routes both probes land on the SPA mount (405/404) and
+    # account setup dead-ends with "cannot verify account settings".
+    #
+    # In production Caddy answers these before the app ever sees them (see
+    # deploy/Caddyfile.snippet); these routes keep discovery working behind any
+    # other proxy, and are what the tests exercise. They disclose only the DAV
+    # base path, which is public deployment information — the collections behind
+    # it still need Radicale credentials.
+    dav_base = normalize_dav_url(settings.dav_public_url)
+    # 301 per RFC 6764 §6, the code every DAV client in the wild understands;
+    # `redirect_slashes` can't help here because the SPA mount at "/" swallows
+    # unmatched paths, so the trailing-slash spellings are registered too.
+    discovery_methods = ["GET", "HEAD", "OPTIONS", "PROPFIND", "REPORT"]
+
+    async def dav_discovery():
+        return RedirectResponse(dav_base, status_code=301)
+
+    for _wk in ("/.well-known/caldav", "/.well-known/caldav/",
+                "/.well-known/carddav", "/.well-known/carddav/"):
+        app.add_api_route(
+            _wk, dav_discovery, methods=discovery_methods, include_in_schema=False
+        )
+
+    # Clients that skip well-known and PROPFIND the root for DAV:current-user-
+    # principal. Matching on METHOD is what keeps this off the web app: on a DAV
+    # verb this route wins because it is registered ahead of the SPA mount, and
+    # on GET/HEAD it is only a partial (path-but-not-method) match, which
+    # Starlette discards in favour of the mount's full one.
+    app.add_api_route(
+        "/",
+        dav_discovery,
+        methods=["OPTIONS", "PROPFIND", "PROPPATCH", "REPORT"],
+        include_in_schema=False,
+    )
 
     # -- public booking deep link: serve the SPA shell (StaticFiles only maps
     #    real paths, so /book/<token> needs an explicit route) --
