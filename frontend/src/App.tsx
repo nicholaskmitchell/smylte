@@ -1,14 +1,21 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { api, subscribe, type TaskGroup, type TasksViewMode } from './api'
+import { api, subscribe, type DashboardModule, type TaskGroup, type TasksViewMode } from './api'
 import { setErrorNotifier } from './util'
+import {
+  applyTokens, cacheAppearance, ensureFonts, readCachedAppearance, resolve,
+  sanitizeAppearance, syncThemeColor, type Appearance, type Mode,
+} from './appearance'
+import { sanitizeLayout } from './dashboard'
 import { Login } from './components/Login'
 import { TasksView } from './components/TasksView'
 import { CalendarView } from './components/CalendarView'
 import { SchedulingView } from './components/SchedulingView'
+import { HomeView } from './components/HomeView'
+import { AppearancePanel } from './components/AppearancePanel'
 import { ArchivedCalendarsModal } from './components/ArchivedCalendarsModal'
 
 type Auth = 'loading' | 'in' | 'out'
-type Tab = 'tasks' | 'calendar' | 'scheduling'
+type Tab = 'tasks' | 'calendar' | 'scheduling' | 'home'
 
 export function App() {
   const [auth, setAuth] = useState<Auth>('loading')
@@ -26,6 +33,11 @@ export function App() {
   const [rev, setRev] = useState(0)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [archivedOpen, setArchivedOpen] = useState(false)
+  const [appearanceOpen, setAppearanceOpen] = useState(false)
+  // Seeded from the pre-paint cache so the editor opens showing what is already
+  // on screen; the server overwrites it a moment later like every other setting.
+  const [appearance, setAppearance] = useState<Appearance>(() => readCachedAppearance() ?? {})
+  const [dashboard, setDashboard] = useState<DashboardModule[]>([])
   const [toast, setToast] = useState<string | null>(null)
   const toastTimer = useRef<ReturnType<typeof setTimeout>>()
   const settingsRef = useRef<HTMLDivElement>(null)
@@ -47,12 +59,22 @@ export function App() {
 
   const applyTheme = useCallback((next: string) => {
     document.documentElement.dataset.theme = next
-    // Keep mobile browser chrome (status bar / URL bar) matching the theme.
-    document.querySelector('meta[name="theme-color"]')
-      ?.setAttribute('content', next === 'dark' ? '#0C0C10' : '#FBFAF7')
     try { localStorage.setItem('tasks-theme', next) } catch { /* ignore */ }
     setTheme(next)
   }, [])
+
+  // The one place custom appearance reaches the DOM. Overrides are inline
+  // properties on <html>, so they win over :root in tokens.css without
+  // replacing it — an empty map (no active theme) restores the shipped design
+  // exactly. Re-runs on a light/dark flip too, since a theme carries a separate
+  // map per mode.
+  useEffect(() => {
+    const mode: Mode = theme === 'dark' ? 'dark' : 'light'
+    const tokens = resolve(appearance, mode)
+    applyTokens(document.documentElement, tokens)
+    ensureFonts(tokens)
+    syncThemeColor()
+  }, [appearance, theme])
 
   // Settings are account-synced: once authenticated, the server is the source of
   // truth (localStorage is only the pre-paint cache to avoid a flash).
@@ -87,9 +109,32 @@ export function App() {
           setCollapsedGroups(s.collapsed_groups.filter((x) => typeof x === 'string'))
         }
         if (typeof s.show_completed_tasks === 'boolean') setShowCompleted(s.show_completed_tasks)
+        // Both blobs are re-validated here rather than trusted: they are the
+        // two settings a user can hand-edit or import a file into, and an
+        // unknown token or a garbage grid cell should degrade to the default
+        // instead of reaching the CSSOM or the layout engine.
+        if (s.appearance) {
+          const clean = sanitizeAppearance(s.appearance)
+          setAppearance(clean)
+          cacheAppearance(clean)
+        }
+        if (Array.isArray(s.dashboard)) setDashboard(sanitizeLayout(s.dashboard))
       })
-      .catch(() => { /* keep the locally-cached theme */ })
+      .catch(() => { /* keep the locally-cached theme + appearance */ })
   }, [auth, applyTheme])
+
+  // Appearance is account-synced like the rest, plus mirrored to localStorage
+  // for the pre-paint script in index.html (which runs before this bundle).
+  const changeAppearance = useCallback((next: Appearance) => {
+    setAppearance(next)
+    cacheAppearance(next)
+    api.putSettings({ appearance: next }).catch(() => { /* stays local if offline */ })
+  }, [])
+
+  const changeDashboard = useCallback((next: DashboardModule[]) => {
+    setDashboard(next)
+    api.putSettings({ dashboard: next }).catch(() => { /* stays local if offline */ })
+  }, [])
 
   const changeTasksView = useCallback((v: TasksViewMode) => {
     setTasksView(v)
@@ -171,12 +216,15 @@ export function App() {
     }
   }, [settingsOpen])
 
-  const toggleTheme = useCallback(() => {
-    const next = theme === 'dark' ? 'light' : 'dark'
+  const changeTheme = useCallback((next: 'light' | 'dark') => {
     applyTheme(next)
     // Persist to the account so the choice follows the user to other browsers.
     api.putSettings({ theme: next }).catch(() => { /* stays local if offline */ })
-  }, [theme, applyTheme])
+  }, [applyTheme])
+
+  const toggleTheme = useCallback(() => {
+    changeTheme(theme === 'dark' ? 'light' : 'dark')
+  }, [theme, changeTheme])
 
   const onExpire = useCallback(() => setAuth('out'), [])
   const onLogout = async () => { try { await api.logout() } finally { setAuth('out') } }
@@ -198,6 +246,9 @@ export function App() {
           <button className={`tab ${tab === 'scheduling' ? 'active' : ''}`} onClick={() => setTab('scheduling')}>
             Scheduling
           </button>
+          <button className={`tab ${tab === 'home' ? 'active' : ''}`} onClick={() => setTab('home')}>
+            Home
+          </button>
         </div>
         <span className="spacer" />
         <button ref={gearRef} className={`icon-btn ${settingsOpen ? 'active' : ''}`}
@@ -216,6 +267,13 @@ export function App() {
               <label>Theme</label>
               <button className="menu-toggle" onClick={toggleTheme}>
                 {theme === 'dark' ? 'Dark' : 'Light'}
+              </button>
+            </div>
+            <div className="menu-row">
+              <label>Appearance</label>
+              <button className="menu-toggle"
+                onClick={() => { setSettingsOpen(false); setAppearanceOpen(true) }}>
+                Customize…
               </button>
             </div>
             <div className="menu-row">
@@ -261,6 +319,15 @@ export function App() {
           archivedCalendars={archivedCals} onArchivedCalendarsChange={changeArchivedCals} />
       )}
       {tab === 'scheduling' && <SchedulingView rev={rev} onExpire={onExpire} />}
+      {tab === 'home' && (
+        <HomeView rev={rev} onExpire={onExpire}
+          layout={dashboard} onLayoutChange={changeDashboard} />
+      )}
+      {appearanceOpen && (
+        <AppearancePanel appearance={appearance} onChange={changeAppearance}
+          mode={theme === 'dark' ? 'dark' : 'light'} onMode={changeTheme}
+          onClose={() => setAppearanceOpen(false)} />
+      )}
       {archivedOpen && (
         <ArchivedCalendarsModal archived={archivedCals} onChange={changeArchivedCals}
           onExpire={onExpire} onClose={() => setArchivedOpen(false)} />

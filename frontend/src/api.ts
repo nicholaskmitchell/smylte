@@ -1,6 +1,13 @@
 // Typed client for the tasksd API. Same-origin: the session cookie rides along
 // automatically, so there are no tokens to manage in JS (it's HttpOnly anyway).
 
+// Both shapes are defined next to the code that gives them meaning — the token
+// allowlist and the grid math — and re-exported here so the wire contract still
+// reads in one place. The backend mirrors them in SettingsPatch.
+import type { Appearance } from './appearance'
+import type { DashboardModule } from './dashboard'
+export type { Appearance, DashboardModule }
+
 export class AuthError extends Error {}
 
 export interface List {
@@ -157,6 +164,8 @@ export interface TaskGroup {
 // Account-synced UI preferences (stored server-side, not per-browser).
 export interface Settings {
   theme?: 'light' | 'dark'
+  appearance?: Appearance          // custom theme overrides (see appearance.ts)
+  dashboard?: DashboardModule[]    // Home tab module arrangement (see dashboard.ts)
   tasks_view?: TasksViewMode
   sidebar_collapsed?: boolean
   hidden_calendars?: string[]      // calendar ids hidden in the calendar view

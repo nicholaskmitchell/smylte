@@ -467,3 +467,95 @@ def test_create_bad_client_id_is_422(client):
         r = client.post(f"/api/lists/{lid}/tasks", json={"summary": "x", "client_id": bad})
         assert r.status_code == 422, bad
     client.delete(f"/api/lists/{lid}")
+
+
+# ── appearance + dashboard (custom UI) ──────────────────────────────────────
+
+
+def test_settings_appearance_sync(client):
+    theme = {
+        "id": "t1",
+        "name": "Midnight",
+        "base": "dark",
+        "light": {"--accent": "#ff0000"},
+        "dark": {"--accent": "oklch(0.72 0.16 45)", "--radius": "6px"},
+    }
+    r = client.put("/api/settings", json={"appearance": {"active": "t1", "themes": [theme]}})
+    assert r.status_code == 200
+    got = client.get("/api/settings").json()["appearance"]
+    assert got["active"] == "t1"
+    assert got["themes"][0]["dark"] == theme["dark"]
+
+
+def test_settings_appearance_default_is_absence_not_a_theme(client):
+    # "Reset to Smylte" stores active=None. The shipped design is never written
+    # as a theme, which is what makes it impossible to edit away.
+    client.put("/api/settings", json={"appearance": {"active": "t1", "themes": []}})
+    body = client.get("/api/settings").json()["appearance"]
+    assert body["active"] == "t1" and body["themes"] == []
+
+
+def test_settings_appearance_rejects_unknown_tokens(client):
+    # Filtered, not 422: a theme authored against a newer token set should still
+    # import the parts this build understands.
+    r = client.put("/api/settings", json={"appearance": {"themes": [
+        {"id": "t1", "name": "x", "light": {"--accent": "#ff0000", "--not-a-token": "red"}}
+    ]}})
+    assert r.status_code == 200
+    assert r.json()["appearance"]["themes"][0]["light"] == {"--accent": "#ff0000"}
+
+
+def test_settings_appearance_strips_css_injection(client):
+    # The stored blob is read back by a pre-paint script that writes it straight
+    # into the CSSOM, so a url() beacon or a property break-out must never land.
+    hostile = {
+        "--bg": "url(https://evil.example/beacon.png)",
+        "--fg": "red; background: url(//evil)",
+        "--paper": "red}html{display:none",
+        "--accent": "@import 'evil.css'",
+        "--warn": "expression(alert(1))",
+        "--ok": "x" * 200,
+    }
+    r = client.put("/api/settings", json={"appearance": {"themes": [
+        {"id": "t1", "name": "x", "light": hostile}
+    ]}})
+    assert r.status_code == 200
+    assert r.json()["appearance"]["themes"][0]["light"] == {}
+
+
+def test_settings_appearance_caps_theme_count(client):
+    many = [{"id": f"t{i}", "name": f"n{i}"} for i in range(30)]
+    r = client.put("/api/settings", json={"appearance": {"themes": many}})
+    assert r.status_code == 422
+
+
+def test_settings_dashboard_sync(client):
+    layout = [
+        {"id": "m1", "kind": "today", "x": 0, "y": 0, "w": 4, "h": 6},
+        {"id": "m2", "kind": "mini_calendar", "x": 4, "y": 0, "w": 8, "h": 6},
+    ]
+    r = client.put("/api/settings", json={"dashboard": layout})
+    assert r.status_code == 200 and r.json()["dashboard"] == layout
+    assert client.get("/api/settings").json()["dashboard"] == layout
+    # An empty list is a real value (back to the stock arrangement).
+    client.put("/api/settings", json={"dashboard": []})
+    assert client.get("/api/settings").json()["dashboard"] == []
+
+
+def test_settings_dashboard_rejects_bad_geometry(client):
+    for bad in (
+        {"id": "m1", "kind": "today", "x": 99, "y": 0, "w": 4, "h": 6},    # off-grid
+        {"id": "m1", "kind": "today", "x": 0, "y": 0, "w": 0, "h": 6},     # zero width
+        {"id": "m1", "kind": "today", "x": 0, "y": 0, "w": 4, "h": 999},   # absurd height
+        {"id": "m1", "kind": "nonsense", "x": 0, "y": 0, "w": 4, "h": 6},  # unknown module
+        {"id": "", "kind": "today", "x": 0, "y": 0, "w": 4, "h": 6},       # empty id
+    ):
+        assert client.put("/api/settings", json={"dashboard": [bad]}).status_code == 422
+
+
+def test_settings_dashboard_caps_module_count(client):
+    many = [
+        {"id": f"m{i}", "kind": "today", "x": 0, "y": i, "w": 4, "h": 1}
+        for i in range(50)
+    ]
+    assert client.put("/api/settings", json={"dashboard": many}).status_code == 422

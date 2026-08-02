@@ -24,6 +24,30 @@
   --serif: "Fraunces", Georgia, "Times New Roman", serif;
   --sans: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
   --mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+
+  /* ---- customizable shape / rhythm / elevation ----
+     Every value below is the literal this file and app.css used before they
+     were tokenized, so the shipped look is unchanged. The Appearance editor
+     (see appearance.ts) overrides these as inline properties on <html>, which
+     outranks :root without editing it — so "reset" is just dropping the
+     overrides and the default theme is always recoverable. */
+
+  /* Corner radius. Sharp corners are the design's rule, hence 0. */
+  --radius: 0px;
+
+  /* Global type multiplier. Every font-size in the app is
+     `calc(<literal> * var(--fs-scale))`, so one number scales the whole UI
+     proportionally without disturbing the relative type tiers. */
+  --fs-scale: 1;
+
+  /* Density. --gutter is the horizontal content margin, --row-y the vertical
+     padding of a task row — the two levers that actually set the app's
+     breathing room. */
+  --gutter: 26px;
+  --row-y: 9px;
+
+  --shadow: 0 10px 30px rgba(0, 0, 0, 0.20);
+  --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.25);
 }
 
 :root[data-theme="dark"] {
@@ -49,7 +73,7 @@ body {
   background: var(--bg);
   color: var(--fg);
   font-family: var(--sans);
-  font-size: 15px;
+  font-size: calc(15px * var(--fs-scale));
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   -webkit-tap-highlight-color: transparent;
@@ -62,15 +86,15 @@ input, select, textarea { font-family: inherit; }
 
 /* ---- primitives ---- */
 .label {
-  font-family: var(--mono); font-size: 10px; text-transform: uppercase;
+  font-family: var(--mono); font-size: calc(10px * var(--fs-scale)); text-transform: uppercase;
   letter-spacing: 0.1em; color: var(--fg-faint);
 }
 .mono { font-family: var(--mono); }
 .serif { font-family: var(--serif); }
 
 .btn {
-  background: var(--fg); color: var(--bg); border: 0; border-radius: 0;
-  font-family: var(--mono); font-size: 11px; font-weight: 500; text-transform: uppercase;
+  background: var(--fg); color: var(--bg); border: 0; border-radius: var(--radius);
+  font-family: var(--mono); font-size: calc(11px * var(--fs-scale)); font-weight: 500; text-transform: uppercase;
   letter-spacing: 0.06em; padding: 9px 13px; cursor: pointer;
 }
 .btn:hover { background: var(--accent); }
@@ -79,7 +103,7 @@ input, select, textarea { font-family: inherit; }
 .btn.ghost:hover { color: var(--accent); border-color: var(--accent); background: none; }
 
 .icon-btn {
-  background: none; color: var(--fg-muted); border: 1px solid var(--rule); border-radius: 0;
+  background: none; color: var(--fg-muted); border: 1px solid var(--rule); border-radius: var(--radius);
   padding: 7px; display: inline-flex; align-items: center; justify-content: center;
   cursor: pointer; transition: color 0.15s, border-color 0.15s;
 }
@@ -87,8 +111,8 @@ input, select, textarea { font-family: inherit; }
 .icon-btn.active { color: var(--bg); background: var(--accent); border-color: var(--accent); }
 
 .input {
-  background: var(--bg); color: var(--fg); border: 1px solid var(--rule); border-radius: 0;
-  padding: 8px 10px; font-size: 14px; width: 100%;
+  background: var(--bg); color: var(--fg); border: 1px solid var(--rule); border-radius: var(--radius);
+  padding: 8px 10px; font-size: calc(14px * var(--fs-scale)); width: 100%;
 }
 .input:focus { outline: none; border-color: var(--accent); }
 
@@ -96,6 +120,6 @@ select.input { appearance: none; -webkit-appearance: none; cursor: pointer; }
 
 .chip {
   display: inline-flex; align-items: center; gap: 4px;
-  font-family: var(--mono); font-size: 10px; letter-spacing: 0.04em;
+  font-family: var(--mono); font-size: calc(10px * var(--fs-scale)); letter-spacing: 0.04em;
   color: var(--fg-muted); border: 1px solid var(--rule); padding: 2px 6px;
 }

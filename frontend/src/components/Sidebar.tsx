@@ -3,10 +3,21 @@ import { clientId, type List, type TaskGroup } from '../api'
 import { useIsMobile } from '../hooks'
 
 // Preset collection colors — muted, editorial, distinct from the accent.
-const SWATCHES = [
+export const SWATCHES = [
   '#D9480F', '#C0392B', '#B8860B', '#2E7D32',
   '#00838F', '#1565C0', '#6A1B9A', '#546E7A',
 ]
+
+// The pinned "All" row's swatch is a ring of the preset colors. Built here from
+// SWATCHES rather than hand-written as a second copy in app.css, so the palette
+// has exactly one definition — the two used to drift independently. The second
+// red and the grey are dropped (at 8px the near-duplicate red muddies the ring
+// and the grey reads as a gap), and the first color repeats to close the loop.
+const RING_SKIP = new Set(['#C0392B', '#546E7A'])
+const RING = SWATCHES.filter((c) => !RING_SKIP.has(c))
+export const ALL_SWATCH_STYLE: CSSProperties = {
+  background: `conic-gradient(${[...RING, RING[0]].join(', ')})`,
+}
 
 // Selection id for the pinned "all collections" row (rendered when the view
 // supports a combined mode) — never collides with a real collection id.
@@ -227,7 +238,7 @@ export function Sidebar({ title, placeholder, items, sel = '', countOf, onSelect
       {allLabel && items.length > 1 && (
         <div className={`side-item all-row ${sel === ALL_ID ? 'active' : ''}`}
           onClick={() => onSelect?.(ALL_ID)}>
-          <span className="swatch swatch-all" />
+          <span className="swatch swatch-all" style={ALL_SWATCH_STYLE} />
           <span className="name">{allLabel}</span>
           <span className="count">
             {items.reduce((n, l) => n + (canToggle && hidden.has(l.id) ? 0 : countOf(l)), 0)}
@@ -425,7 +436,7 @@ export function Sidebar({ title, placeholder, items, sel = '', countOf, onSelect
           {allLabel && items.length > 1 && (
             <button className={`rail-dot ${sel === ALL_ID ? 'active' : ''}`}
               title={allLabel} onClick={() => onSelect?.(ALL_ID)}>
-              <span className="swatch swatch-all" />
+              <span className="swatch swatch-all" style={ALL_SWATCH_STYLE} />
             </button>
           )}
           {shown.map((l) => {
