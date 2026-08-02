@@ -1,0 +1,417 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { api, clientId, type Booking, type BookingLink, type CalEvent, type List, type Task } from '../api'
+import { useAllTasks, useIsMobile } from '../hooks'
+import { makeGuard, addDays, dayKey, fmtDue, isOverdue, parseDate, ymd } from '../util'
+import {
+  COLS, DEFAULT_LAYOUT, GAP, MODULE_KINDS, MODULE_SPECS, ROW_H, addModule, layoutRows,
+  moveModule, pxToCellDelta, removeModule, resizeModule, sanitizeLayout,
+  type DashboardModule, type ModuleKind,
+} from '../dashboard'
+
+// A drag in flight. Kept in a ref (not state) while the pointer moves so the
+// grid re-renders off `preview` alone — the raw pixel origin never needs to
+// round-trip through React.
+interface DragState {
+  id: string
+  mode: 'move' | 'resize'
+  startX: number
+  startY: number
+  origin: DashboardModule
+}
+
+export function HomeView({ rev, onExpire, layout, onLayoutChange }: {
+  rev: number
+  onExpire: () => void
+  layout: DashboardModule[]
+  onLayoutChange: (next: DashboardModule[]) => void
+}) {
+  const isMobile = useIsMobile()
+  const [arranging, setArranging] = useState(false)
+  const [picking, setPicking] = useState(false)
+  // The layout as it looks mid-drag. Null when nothing is being dragged, so the
+  // committed prop is what renders.
+  const [preview, setPreview] = useState<DashboardModule[] | null>(null)
+  const drag = useRef<DragState | null>(null)
+  const gridRef = useRef<HTMLDivElement>(null)
+
+  // An account that has never arranged anything gets the stock arrangement
+  // rather than an empty page. It is not written back until the user actually
+  // changes something — an untouched dashboard stays "unset" server-side.
+  const committed = layout.length ? layout : DEFAULT_LAYOUT
+  const mods = preview ?? committed
+  const rows = layoutRows(mods)
+
+  const commit = useCallback((next: DashboardModule[]) => {
+    setPreview(null)
+    onLayoutChange(sanitizeLayout(next))
+  }, [onLayoutChange])
+
+  // ── pointer drag / resize ────────────────────────────────────────────────
+  // Pointer Events rather than HTML5 drag-and-drop (which the rest of the app
+  // uses for list-to-list drops): a free canvas needs continuous coordinates
+  // and a live ghost, and pointer capture gives that without a dependency.
+  const onPointerDown = (e: React.PointerEvent, m: DashboardModule, mode: 'move' | 'resize') => {
+    if (!arranging) return
+    e.preventDefault()
+    e.stopPropagation()
+    ;(e.target as Element).setPointerCapture(e.pointerId)
+    drag.current = { id: m.id, mode, startX: e.clientX, startY: e.clientY, origin: m }
+  }
+
+  const onPointerMove = (e: React.PointerEvent) => {
+    const d = drag.current
+    const width = gridRef.current?.clientWidth ?? 0
+    if (!d || !width) return
+    const { dx, dy } = pxToCellDelta(e.clientX - d.startX, e.clientY - d.startY, width)
+    const next = d.mode === 'move'
+      ? moveModule(committed, d.id, d.origin.x + dx, d.origin.y + dy)
+      : resizeModule(committed, d.id, d.origin.w + dx, d.origin.h + dy)
+    setPreview(next)
+  }
+
+  const endDrag = () => {
+    if (!drag.current) return
+    drag.current = null
+    if (preview) commit(preview)
+    else setPreview(null)
+  }
+
+  // A pointer released outside the grid (or a cancelled gesture) must not leave
+  // the layout stuck in preview.
+  useEffect(() => {
+    if (!arranging) { drag.current = null; setPreview(null) }
+  }, [arranging])
+
+  const add = (kind: ModuleKind) => {
+    setPicking(false)
+    commit(addModule(committed, kind, `m-${clientId().slice(0, 12)}`))
+  }
+
+  const placed = useMemo(() => new Set(mods.map((m) => m.kind)), [mods])
+  const available = MODULE_KINDS.filter((k) => !placed.has(k))
+
+  // ── data ─────────────────────────────────────────────────────────────────
+  const { lists, tasks, loading } = useAllTasks(rev, onExpire)
+  const [events, setEvents] = useState<CalEvent[]>([])
+  const [links, setLinks] = useState<BookingLink[]>([])
+  const [bookings, setBookings] = useState<Booking[]>([])
+
+  const needs = useMemo(() => new Set(mods.map((m) => m.kind)), [mods])
+  const needsCal = needs.has('mini_calendar')
+  const needsSched = needs.has('booking_links') || needs.has('bookings')
+
+  // Only fetch what the current arrangement actually shows — a dashboard with
+  // no scheduling module should not be polling the scheduling endpoints.
+  useEffect(() => {
+    if (!needsCal) { setEvents([]); return }
+    const guard = makeGuard(onExpire)
+    guard(async () => {
+      const cals = await api.calendars()
+      const now = new Date()
+      const from = ymd(new Date(now.getFullYear(), now.getMonth(), 1))
+      const to = ymd(new Date(now.getFullYear(), now.getMonth() + 1, 0))
+      const evs = (await Promise.all(cals.map((c) => api.events(c.id, from, to)))).flat()
+      setEvents(evs)
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rev, needsCal])
+
+  useEffect(() => {
+    if (!needsSched) { setLinks([]); setBookings([]); return }
+    const guard = makeGuard(onExpire)
+    guard(async () => {
+      setLinks(await api.schedulingLinks())
+      setBookings(await api.schedulingBookings())
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rev, needsSched])
+
+  const colorOf = useCallback(
+    (listId: string) => lists.find((l) => l.id === listId)?.color ?? null, [lists])
+
+  const body = (m: DashboardModule) => (
+    <ModuleBody kind={m.kind} tasks={tasks} lists={lists} events={events}
+      links={links} bookings={bookings} colorOf={colorOf} onExpire={onExpire}
+      loading={loading} />
+  )
+
+  // ── mobile: a plain stack ────────────────────────────────────────────────
+  // Arranging is desktop-only for now, so phones get the same modules in the
+  // saved reading order with none of the drag affordances.
+  if (isMobile) {
+    const ordered = [...mods].sort((a, b) => (a.y - b.y) || (a.x - b.x))
+    return (
+      <div className="content">
+        <div className="content-head">
+          <span className="content-title">Home</span>
+          <span className="content-sub">{ordered.length} modules</span>
+        </div>
+        <div className="scroll dash-stack">
+          {ordered.map((m) => (
+            <section key={m.id} className="dash-mod">
+              <header className="dash-mod-head">
+                <span className="label">{MODULE_SPECS[m.kind].label}</span>
+              </header>
+              <div className="dash-mod-body">{body(m)}</div>
+            </section>
+          ))}
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="content">
+      <div className="content-head">
+        <span className="content-title">Home</span>
+        <span className="content-sub">
+          {arranging ? 'Drag to move · corner to resize' : `${mods.length} modules`}
+        </span>
+        <span className="spacer" />
+        {arranging && (
+          <>
+            <button className="btn ghost" onClick={() => setPicking((p) => !p)}
+              disabled={!available.length} aria-expanded={picking}>
+              Add module
+            </button>
+            <button className="btn ghost" onClick={() => commit(DEFAULT_LAYOUT)}>Reset layout</button>
+          </>
+        )}
+        <button className={`view-tab ${arranging ? 'active' : ''}`} aria-pressed={arranging}
+          onClick={() => { setArranging((a) => !a); setPicking(false) }}>
+          {arranging ? 'Done' : 'Arrange'}
+        </button>
+      </div>
+
+      {picking && (
+        <div className="dash-picker" role="dialog" aria-label="Add a module">
+          {available.map((k) => (
+            <button key={k} className="dash-pick" onClick={() => add(k)}>
+              <span className="dash-pick-name">{MODULE_SPECS[k].label}</span>
+              <span className="dash-pick-blurb">{MODULE_SPECS[k].blurb}</span>
+            </button>
+          ))}
+        </div>
+      )}
+
+      <div className="scroll">
+        <div ref={gridRef} className={`dash-grid ${arranging ? 'arranging' : ''}`}
+          style={{ height: rows * (ROW_H + GAP) }}
+          onPointerMove={onPointerMove} onPointerUp={endDrag} onPointerCancel={endDrag}>
+          {mods.map((m) => (
+            // Cells are laid out as percentages of the grid's own width (so the
+            // 12 columns stay proportional at any window size), with the gutter
+            // subtracted off each module's width/height rather than added
+            // between them — that keeps column edges on exact percentages.
+            <section key={m.id} className="dash-mod" style={{
+              left: `${(m.x / COLS) * 100}%`,
+              width: `calc(${(m.w / COLS) * 100}% - ${GAP}px)`,
+              top: m.y * (ROW_H + GAP),
+              height: m.h * (ROW_H + GAP) - GAP,
+            }}>
+              <header className="dash-mod-head"
+                onPointerDown={(e) => onPointerDown(e, m, 'move')}>
+                <span className="label">{MODULE_SPECS[m.kind].label}</span>
+                {arranging && (
+                  <button className="dash-remove" title="Remove"
+                    aria-label={`Remove ${MODULE_SPECS[m.kind].label}`}
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onClick={() => commit(removeModule(committed, m.id))}>✕</button>
+                )}
+              </header>
+              <div className="dash-mod-body">{body(m)}</div>
+              {arranging && (
+                <span className="dash-grip" aria-hidden="true"
+                  onPointerDown={(e) => onPointerDown(e, m, 'resize')} />
+              )}
+            </section>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── module bodies ──────────────────────────────────────────────────────────
+
+function ModuleBody({ kind, tasks, lists, events, links, bookings, colorOf, onExpire, loading }: {
+  kind: ModuleKind
+  tasks: Task[]
+  lists: List[]
+  events: CalEvent[]
+  links: BookingLink[]
+  bookings: Booking[]
+  colorOf: (listId: string) => string | null
+  onExpire: () => void
+  loading: boolean
+}) {
+  const today = ymd(new Date())
+  // Top-level only, mirroring the Tasks pane — a dashboard card is a summary,
+  // and subtasks read as duplicates without their parent for context.
+  const tops = tasks.filter((t) => !t.parent)
+  const open = tops.filter((t) => !t.completed && !t.cancelled)
+  const byDue = (a: Task, b: Task) => (a.due || '￿').localeCompare(b.due || '￿')
+
+  switch (kind) {
+    case 'today':
+      return <TaskList items={open.filter((t) => t.due && dayKey(t.due) === today).sort(byDue)}
+        colorOf={colorOf} empty="Nothing due today." loading={loading} />
+    case 'overdue':
+      return <TaskList items={open.filter((t) => isOverdue(t.due, t.due_is_date)).sort(byDue)}
+        colorOf={colorOf} empty="Nothing overdue." overdue loading={loading} />
+    case 'upcoming': {
+      const end = ymd(addDays(new Date(), 7))
+      return <TaskList
+        items={open
+          .filter((t) => t.due && dayKey(t.due) > today && dayKey(t.due) <= end)
+          .sort(byDue)}
+        colorOf={colorOf} empty="Nothing in the next seven days." loading={loading} />
+    }
+    case 'completed':
+      // There is no completion timestamp on the wire, so "recent" is by due date
+      // descending — the same proxy the Tasks pane's completed view uses.
+      return <TaskList
+        items={tops.filter((t) => t.completed || t.cancelled).sort(byDue).reverse().slice(0, 40)}
+        colorOf={colorOf} empty="Nothing completed yet." done loading={loading} />
+    case 'mini_calendar':
+      return <MiniCalendar events={events} />
+    case 'booking_links':
+      return <LinkList links={links} />
+    case 'bookings':
+      return <BookingList bookings={bookings} />
+    case 'quick_add':
+      return <QuickAddModule lists={lists} onExpire={onExpire} />
+    default:
+      return null
+  }
+}
+
+function TaskList({ items, colorOf, empty, overdue, done, loading }: {
+  items: Task[]
+  colorOf: (listId: string) => string | null
+  empty: string
+  overdue?: boolean
+  done?: boolean
+  loading?: boolean
+}) {
+  // Stay blank until the first fetch lands: "Nothing due today." flashing up and
+  // then being replaced by a list of tasks reads as a bug.
+  if (loading && !items.length) return null
+  if (!items.length) return <p className="dash-empty">{empty}</p>
+  return (
+    <ul className="dash-tasks">
+      {items.map((t) => {
+        const c = colorOf(t.list)
+        return (
+          <li key={`${t.list}:${t.uid}`} className={`dash-task ${done ? 'done' : ''}`}>
+            <span className="list-dot" style={c ? { background: c } : undefined} />
+            <span className="dash-task-title">{t.summary || '(untitled)'}</span>
+            {t.due && (
+              <span className={`dash-task-due mono ${overdue ? 'overdue' : ''}`}>
+                {fmtDue(t.due, t.due_is_date)}
+              </span>
+            )}
+          </li>
+        )
+      })}
+    </ul>
+  )
+}
+
+function MiniCalendar({ events }: { events: CalEvent[] }) {
+  const now = new Date()
+  const first = new Date(now.getFullYear(), now.getMonth(), 1)
+  const start = addDays(first, -first.getDay())
+  const today = ymd(now)
+  const busy = new Set<string>()
+  for (const e of events) {
+    if (!e.start) continue
+    // A span dots every day it covers, so a week-long event is not invisible on
+    // the six days after the one it starts.
+    const from = parseDate(e.start)
+    const to = e.end ? parseDate(e.end) : from
+    if (isNaN(from.getTime())) continue
+    for (let d = new Date(from); d <= to; d = addDays(d, 1)) busy.add(ymd(d))
+  }
+  const days = Array.from({ length: 42 }, (_, i) => addDays(start, i))
+  return (
+    <div className="mini-cal">
+      <div className="mini-cal-head">
+        {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((d, i) => (
+          <span key={i} className="label">{d}</span>
+        ))}
+      </div>
+      <div className="mini-cal-grid">
+        {days.map((d) => {
+          const key = ymd(d)
+          const cls = [
+            'mini-day',
+            d.getMonth() === now.getMonth() ? '' : 'dim',
+            key === today ? 'today' : '',
+            busy.has(key) ? 'busy' : '',
+          ].filter(Boolean).join(' ')
+          return <span key={key} className={cls}>{d.getDate()}</span>
+        })}
+      </div>
+    </div>
+  )
+}
+
+function LinkList({ links }: { links: BookingLink[] }) {
+  if (!links.length) return <p className="dash-empty">No booking links yet.</p>
+  return (
+    <ul className="dash-tasks">
+      {links.map((l) => (
+        <li key={l.token} className={`dash-task ${l.enabled ? '' : 'done'}`}>
+          <span className="dash-task-title">{l.title}</span>
+          <span className="dash-task-due mono">{l.duration_minutes}m</span>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+function BookingList({ bookings }: { bookings: Booking[] }) {
+  const upcoming = bookings
+    .filter((b) => new Date(b.start).getTime() >= Date.now())
+    .sort((a, b) => a.start.localeCompare(b.start))
+    .slice(0, 20)
+  if (!upcoming.length) return <p className="dash-empty">No upcoming bookings.</p>
+  return (
+    <ul className="dash-tasks">
+      {upcoming.map((b) => (
+        <li key={b.id} className="dash-task">
+          <span className="dash-task-title">{b.name}</span>
+          <span className="dash-task-due mono">{fmtDue(b.start, false)}</span>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+function QuickAddModule({ lists, onExpire }: { lists: List[]; onExpire: () => void }) {
+  const [text, setText] = useState('')
+  const [listId, setListId] = useState('')
+  const target = listId || lists[0]?.id || ''
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    const summary = text.trim()
+    if (!summary || !target) return
+    setText('')
+    await makeGuard(onExpire)(() => api.createTask(target, { summary }))
+  }
+
+  if (!lists.length) return <p className="dash-empty">Create a list first.</p>
+  return (
+    <form className="dash-quickadd" onSubmit={submit}>
+      <input className="input" value={text} onChange={(e) => setText(e.target.value)}
+        placeholder="Add a task…" aria-label="Add a task" />
+      <select className="input quickadd-list" value={target}
+        onChange={(e) => setListId(e.target.value)} aria-label="List">
+        {lists.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+      </select>
+      <button className="btn" type="submit" disabled={!text.trim()}>Add</button>
+    </form>
+  )
+}

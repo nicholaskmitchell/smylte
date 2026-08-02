@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { Sidebar } from './Sidebar'
+import { ALL_SWATCH_STYLE, Sidebar, SWATCHES } from './Sidebar'
 import type { List, TaskGroup } from '../api'
 
 // A bare list; only the fields the sidebar reads matter here.
@@ -192,5 +192,22 @@ describe('<Sidebar> mobile management drawer', () => {
     await userEvent.click(screen.getByTitle('Delete group'))
     await userEvent.click(screen.getByRole('button', { name: /delete\?/ }))
     expect(onGroupsChange).toHaveBeenLastCalledWith([])
+  })
+})
+
+describe('the "All" swatch ring', () => {
+  it('reproduces the gradient it replaced in app.css exactly', () => {
+    // The ring used to be a second, hand-written copy of the palette in CSS.
+    // It is now built from SWATCHES so there is one definition — this pins the
+    // rendered result to the string that shipped, byte for byte.
+    expect(ALL_SWATCH_STYLE.background).toBe(
+      'conic-gradient(#D9480F, #B8860B, #2E7D32, #00838F, #1565C0, #6A1B9A, #D9480F)')
+  })
+
+  it('draws the ring from the same palette the color picker offers', () => {
+    for (const color of ['#D9480F', '#B8860B', '#2E7D32']) {
+      expect(SWATCHES).toContain(color)
+      expect(ALL_SWATCH_STYLE.background).toContain(color)
+    }
   })
 })

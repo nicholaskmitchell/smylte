@@ -35,7 +35,7 @@ from fastapi.responses import (
     StreamingResponse,
 )
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .access import AccessVerifier
 from .auth import Authenticator, RateLimiter, hash_password, limiter_key
@@ -205,9 +205,95 @@ class TaskGroup(BaseModel):
     lists: list[str] = Field(default_factory=list)
 
 
+# ── appearance customization ────────────────────────────────────────────────
+# Mirrors frontend/src/appearance.ts. The client validates too, but that guard
+# is for the person typing; this one is the boundary — the stored blob is read
+# back by a pre-paint script that writes straight into the CSSOM, so a value
+# that gets past here reaches a stylesheet on the next page load.
+
+_APPEARANCE_TOKENS = {
+    "--bg", "--bg-elev", "--paper",
+    "--fg", "--fg-muted", "--fg-faint",
+    "--rule", "--rule-faint",
+    "--accent", "--warn", "--ok",
+    "--pri-high", "--pri-med", "--pri-low",
+    "--serif", "--sans", "--mono",
+    "--radius", "--fs-scale", "--gutter", "--row-y",
+}
+# url()/image() would let a stored theme beacon out to a third party on every
+# load; the punctuation would let it break out of the property it is written
+# into. Neither has any business in a color, length or font stack.
+_TOKEN_VALUE_BAD = re.compile(
+    r"url\(|image\(|expression\(|javascript:|@import|[;{}<>\\]|/\*", re.I
+)
+_MAX_TOKEN_VALUE = 120
+_MAX_THEMES = 24
+_MAX_DASHBOARD_MODULES = 40
+
+
+def _clean_tokens(raw: dict[str, str]) -> dict[str, str]:
+    """Drop every override that is not a known token with a safe value."""
+    out: dict[str, str] = {}
+    for key, value in raw.items():
+        if key not in _APPEARANCE_TOKENS or not isinstance(value, str):
+            continue
+        v = value.strip()
+        if not v or len(v) > _MAX_TOKEN_VALUE or _TOKEN_VALUE_BAD.search(v):
+            continue
+        out[key] = v
+    return out
+
+
+class CustomTheme(BaseModel):
+    # A user-authored palette. `light`/`dark` are sparse override maps — only
+    # the tokens actually changed — so a theme never has to restate the design.
+    id: str = Field(min_length=1, max_length=64)
+    name: str = Field(min_length=1, max_length=120)
+    base: Literal["light", "dark"] = "light"
+    light: dict[str, str] = Field(default_factory=dict)
+    dark: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("light", "dark")
+    @classmethod
+    def _validate_tokens(cls, v: dict[str, str]) -> dict[str, str]:
+        # Filter rather than reject: a theme written by a newer client that
+        # knows a token this build does not should still import what it can.
+        return _clean_tokens(v)
+
+
+class Appearance(BaseModel):
+    # `active` is null for the shipped Smylte design — the default is not stored
+    # as a theme, it is the absence of one, which is what makes reset lossless.
+    active: str | None = Field(default=None, max_length=64)
+    themes: list[CustomTheme] = Field(default_factory=list, max_length=_MAX_THEMES)
+
+
+class DashboardModule(BaseModel):
+    # One card on the Home tab's 12-column grid. Bounds mirror dashboard.ts;
+    # they exist so a malformed layout cannot ask the client to lay out a
+    # module a million rows tall.
+    id: str = Field(min_length=1, max_length=64)
+    kind: Literal[
+        "today", "overdue", "upcoming", "mini_calendar",
+        "completed", "booking_links", "bookings", "quick_add",
+    ]
+    x: int = Field(ge=0, le=11)
+    y: int = Field(ge=0, le=200)
+    w: int = Field(ge=1, le=12)
+    h: int = Field(ge=1, le=40)
+
+
 class SettingsPatch(BaseModel):
     # Account-synced UI preferences. Extend with new keys as settings are added.
     theme: Literal["light", "dark"] | None = None
+    # Custom appearance: named themes plus which one is active. Absent means the
+    # shipped design, which is never stored and so can never be edited away.
+    appearance: Appearance | None = None
+    # Home tab layout. An empty list is a real value (clears the arrangement
+    # back to the stock one), same as the other list-valued settings below.
+    dashboard: list[DashboardModule] | None = Field(
+        default=None, max_length=_MAX_DASHBOARD_MODULES
+    )
     tasks_view: Literal["list", "day3", "week"] | None = None
     sidebar_collapsed: bool | None = None
     # Ids of calendars the user has hidden in the calendar view. Empty/absent
