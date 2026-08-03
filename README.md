@@ -131,3 +131,10 @@ the app on `127.0.0.1:8080`. The app authenticates to Radicale as you over
 localhost; Radicale is never exposed except through `/dav`. Auto-deploys from
 `main` via `~/tasks-autopull.sh` (cron, every minute). Full runbook, systemd
 unit, and Caddy/cloudflared config in `docs/DEPLOY.md` and `deploy/`.
+
+## Disclosure
+
+Smylte was built with the assistance of AI coding tools — primarily
+Anthropic's Claude, via Claude Code. The design decisions, the review, and
+what ultimately ships are mine. Commits made with AI assistance carry a
+`Co-Authored-By` trailer, so the record lives in `git log`, not just here.
