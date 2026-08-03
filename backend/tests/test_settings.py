@@ -97,3 +97,36 @@ def test_settings_task_groups_roundtrip(db):
     assert merged == {"task_groups": groups, "collapsed_groups": ["g2"]}
     # An empty array clears grouping (a real value, not an omission).
     assert store.update_settings(db, {"task_groups": []})["task_groups"] == []
+
+
+def test_settings_appearance_blob_roundtrip(db):
+    # Nested dicts survive the JSON blob unchanged — the store is schema-blind,
+    # so shape enforcement lives in SettingsPatch (see tests/test_api.py).
+    appearance = {
+        "active": "t1",
+        "themes": [{
+            "id": "t1", "name": "Midnight", "base": "dark",
+            "light": {"--accent": "#ff0000"},
+            "dark": {"--accent": "oklch(0.72 0.16 45)"},
+        }],
+    }
+    assert store.update_settings(db, {"appearance": appearance})["appearance"] == appearance
+    assert store.get_settings(db)["appearance"] == appearance
+
+
+def test_settings_appearance_and_dashboard_are_independent(db):
+    # Writing one must not disturb the other — the merge is per-key, and losing
+    # a theme because the layout moved would be a very annoying bug.
+    store.update_settings(db, {"appearance": {"active": "t1", "themes": []}})
+    store.update_settings(db, {"dashboard": [{"id": "m1", "kind": "today"}]})
+    settings = store.get_settings(db)
+    assert settings["appearance"]["active"] == "t1"
+    assert settings["dashboard"][0]["id"] == "m1"
+    # And a later appearance write leaves the layout alone.
+    store.update_settings(db, {"appearance": {"active": None, "themes": []}})
+    assert store.get_settings(db)["dashboard"][0]["id"] == "m1"
+
+
+def test_settings_dashboard_empty_list_is_a_value(db):
+    store.update_settings(db, {"dashboard": [{"id": "m1", "kind": "today"}]})
+    assert store.update_settings(db, {"dashboard": []})["dashboard"] == []

@@ -19,15 +19,59 @@
       href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,400;1,9..144,500&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap"
     />
     <script>
-      // Apply persisted theme before paint (no flash) — Søren's pattern.
+      // Apply persisted theme + appearance overrides before paint (no flash) —
+      // Søren's pattern, extended for custom themes.
+      //
+      // This runs before the bundle, so it cannot import src/appearance.ts and
+      // has to restate the token list and the value guard inline. Both are
+      // asserted against the real ones by src/appearance.test.ts, which fails
+      // the build if the two copies drift.
+      //
+      // The guard is not decoration: localStorage is writable by anything that
+      // ever gets script execution on this origin, and these values go straight
+      // into the CSSOM. Only known token names are honoured, and only values
+      // free of url()/braces/semicolons and under 120 chars.
       (function () {
+        var TOKENS = [
+          '--bg', '--bg-elev', '--paper', '--fg', '--fg-muted', '--fg-faint',
+          '--rule', '--rule-faint', '--accent', '--warn', '--ok',
+          '--pri-high', '--pri-med', '--pri-low',
+          '--serif', '--sans', '--mono',
+          '--radius', '--fs-scale', '--gutter', '--row-y'
+        ]
+        var BAD = /url\(|image\(|expression\(|javascript:|@import|[;{}<>\\]|\/\*/i
+        var root = document.documentElement
+        var mode = 'light'
         try {
           var t = localStorage.getItem('tasks-theme')
-          if (t === 'dark' || t === 'light') document.documentElement.dataset.theme = t
-          if (t === 'dark') {
-            var m = document.querySelector('meta[name="theme-color"]')
-            if (m) m.setAttribute('content', '#0C0C10')
+          if (t === 'dark' || t === 'light') { root.dataset.theme = t; mode = t }
+        } catch (_) {}
+        // tokens.css is imported by the bundle, so nothing is in the cascade yet
+        // and getComputedStyle('--bg') would come back empty here. Carry the two
+        // shipped backgrounds instead, and let a custom --bg override them.
+        var bg = mode === 'dark' ? '#0C0C10' : '#FBFAF7'
+        try {
+          var raw = localStorage.getItem('tasks-appearance')
+          if (raw) {
+            var a = JSON.parse(raw)
+            var themes = (a && a.themes) || []
+            for (var i = 0; i < themes.length; i++) {
+              if (!themes[i] || themes[i].id !== a.active) continue
+              var map = themes[i][mode] || {}
+              for (var k = 0; k < TOKENS.length; k++) {
+                var v = map[TOKENS[k]]
+                if (typeof v === 'string' && v && v.length <= 120 && !BAD.test(v)) {
+                  root.style.setProperty(TOKENS[k], v)
+                  if (TOKENS[k] === '--bg') bg = v
+                }
+              }
+              break
+            }
           }
+        } catch (_) {}
+        try {
+          var m = document.querySelector('meta[name="theme-color"]')
+          if (m) m.setAttribute('content', bg)
         } catch (_) {}
       })()
     </script>

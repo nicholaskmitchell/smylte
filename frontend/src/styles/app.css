@@ -10,20 +10,20 @@
 }
 .brand {
   font-family: var(--serif); font-style: italic; font-weight: 500;
-  font-size: 22px; line-height: 1; letter-spacing: -0.01em; color: var(--fg);
+  font-size: calc(22px * var(--fs-scale)); line-height: 1; letter-spacing: -0.01em; color: var(--fg);
   user-select: none;
 }
 .brand .dot { color: var(--accent); font-style: normal; }
 .tabs { display: flex; gap: 2px; }
 .tab {
   background: none; border: 0; border-bottom: 2px solid transparent;
-  font-family: var(--mono); font-size: 11px; text-transform: uppercase;
+  font-family: var(--mono); font-size: calc(11px * var(--fs-scale)); text-transform: uppercase;
   letter-spacing: 0.08em; color: var(--fg-muted); padding: 6px 10px 8px; cursor: pointer;
 }
 .tab:hover { color: var(--fg); }
 .tab.active { color: var(--fg); border-bottom-color: var(--accent); }
 .spacer { flex: 1; }
-.topbar-meta { font-family: var(--mono); font-size: 10px; color: var(--fg-faint);
+.topbar-meta { font-family: var(--mono); font-size: calc(10px * var(--fs-scale)); color: var(--fg-faint);
   text-transform: uppercase; letter-spacing: 0.06em; }
 
 /* ---- settings menu — popover anchored under the gear (Søren's layout) ---- */
@@ -31,27 +31,27 @@
   position: absolute; top: calc(100% + 6px); right: 24px; z-index: 50;
   width: 300px; max-width: calc(100vw - 36px);
   background: var(--bg-elev); border: 1px solid var(--rule);
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.20);
+  box-shadow: var(--shadow);
   padding: 14px; display: flex; flex-direction: column; gap: 8px;
 }
 .settings-menu { width: 320px; max-height: 82vh; overflow-y: auto; }
 .menu-head {
-  font-family: var(--mono); font-size: 10px; text-transform: uppercase;
+  font-family: var(--mono); font-size: calc(10px * var(--fs-scale)); text-transform: uppercase;
   letter-spacing: 0.1em; color: var(--fg-faint);
 }
 .menu-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .menu-row label {
-  font-family: var(--mono); font-size: 11px; text-transform: uppercase;
+  font-family: var(--mono); font-size: calc(11px * var(--fs-scale)); text-transform: uppercase;
   letter-spacing: 0.06em; color: var(--fg-muted);
 }
-.menu-value { font-family: var(--mono); font-size: 11px; color: var(--fg); }
+.menu-value { font-family: var(--mono); font-size: calc(11px * var(--fs-scale)); color: var(--fg); }
 .menu-toggle {
-  font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
+  font-family: var(--mono); font-size: calc(11px * var(--fs-scale)); text-transform: uppercase; letter-spacing: 0.06em;
   background: none; color: var(--fg-muted); border: 1px solid var(--rule);
   padding: 6px 11px; cursor: pointer; transition: color 0.15s, border-color 0.15s, background 0.15s;
 }
 .menu-toggle:hover { color: var(--accent); border-color: var(--accent); }
-.hintline { font-size: 12px; color: var(--fg-faint); line-height: 1.4; }
+.hintline { font-size: calc(12px * var(--fs-scale)); color: var(--fg-faint); line-height: 1.4; }
 .menu-actions { display: flex; justify-content: flex-end; margin-top: 2px; }
 
 /* ---- work area ---- */
@@ -73,17 +73,16 @@
 .side-item:hover { background: var(--bg-elev); }
 .side-item.active { border-left-color: var(--accent); background: var(--bg-elev); }
 .side-item .swatch { width: 8px; height: 8px; flex: none; background: var(--fg-faint); }
-/* the pinned "All" row's swatch — a ring of the preset collection colors */
-.swatch.swatch-all {
-  background: conic-gradient(#D9480F, #B8860B, #2E7D32, #00838F, #1565C0, #6A1B9A, #D9480F);
-  border-radius: 50%;
-}
-.side-item .name { flex: 1; min-width: 0; font-size: 14px;
+/* the pinned "All" row's swatch — a ring of the preset collection colors. The
+   gradient itself is an inline style built from SWATCHES in Sidebar.tsx (one
+   definition of the palette); only the circle shape belongs here. */
+.swatch.swatch-all { border-radius: 50%; }
+.side-item .name { flex: 1; min-width: 0; font-size: calc(14px * var(--fs-scale));
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.side-item .count { font-family: var(--mono); font-size: 11px; color: var(--fg-faint); }
+.side-item .count { font-family: var(--mono); font-size: calc(11px * var(--fs-scale)); color: var(--fg-faint); }
 .side-item .side-edit {
   background: none; border: 0; color: var(--fg-faint); cursor: pointer;
-  font-size: 13px; line-height: 1; padding: 0 2px; opacity: 0; transition: opacity 0.12s;
+  font-size: calc(13px * var(--fs-scale)); line-height: 1; padding: 0 2px; opacity: 0; transition: opacity 0.12s;
 }
 .side-item:hover .side-edit { opacity: 1; }
 .side-item .side-edit:hover { color: var(--accent); }
@@ -98,7 +97,7 @@
 .side-completed {
   display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%;
   padding: 10px 12px; border: 0; border-top: 1px solid var(--rule); background: none;
-  cursor: pointer; font-family: var(--mono); font-size: 11px; text-transform: uppercase;
+  cursor: pointer; font-family: var(--mono); font-size: calc(11px * var(--fs-scale)); text-transform: uppercase;
   letter-spacing: 0.06em; color: var(--fg-muted); transition: color 0.15s, background 0.15s;
 }
 .side-completed:hover,
@@ -119,7 +118,7 @@
 /* collapsed-rail twin of .side-completed — keeps the pane reachable when the
    sidebar is a thin rail */
 .side-completed-rail {
-  width: 100%; border: 0; border-radius: 0; border-top: 1px solid var(--rule);
+  width: 100%; border: 0; border-radius: var(--radius); border-top: 1px solid var(--rule);
   padding: 10px 0; color: var(--fg-muted);
 }
 .side-completed-rail:hover,
@@ -139,18 +138,18 @@
   background: none; border: 0; padding: 0; cursor: pointer; color: var(--fg-faint);
   display: flex; align-items: center;
 }
-.group-caret .caret { font-size: 9px; transition: transform 0.12s; display: inline-block; }
+.group-caret .caret { font-size: calc(9px * var(--fs-scale)); transition: transform 0.12s; display: inline-block; }
 .group-caret .caret.open { transform: rotate(90deg); }
 .group-name {
   flex: 1; min-width: 0; text-align: left; background: none; border: 0; cursor: pointer;
-  font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em;
+  font-family: var(--mono); font-size: calc(10px * var(--fs-scale)); text-transform: uppercase; letter-spacing: 0.1em;
   color: var(--fg-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0;
 }
 .group-head:hover .group-name { color: var(--fg-muted); }
-.group-head .count { font-family: var(--mono); font-size: 11px; color: var(--fg-faint); }
+.group-head .count { font-family: var(--mono); font-size: calc(11px * var(--fs-scale)); color: var(--fg-faint); }
 .group-eye {
   background: none; border: 0; cursor: pointer; color: var(--fg-faint);
-  font-size: 12px; line-height: 1; padding: 0 1px;
+  font-size: calc(12px * var(--fs-scale)); line-height: 1; padding: 0 1px;
 }
 .group-eye:hover { color: var(--accent); }
 .group-eye[aria-pressed="false"] { opacity: 0.5; }
@@ -159,12 +158,12 @@
 .group-head:focus-within .group-actions { opacity: 1; }
 .group-btn {
   background: none; border: 0; color: var(--fg-faint); cursor: pointer;
-  font-size: 12px; line-height: 1; padding: 0 3px;
+  font-size: calc(12px * var(--fs-scale)); line-height: 1; padding: 0 3px;
 }
 .group-btn:hover { color: var(--accent); }
-.group-btn.danger { color: var(--warn); font-family: var(--mono); font-size: 10px; }
+.group-btn.danger { color: var(--warn); font-family: var(--mono); font-size: calc(10px * var(--fs-scale)); }
 .group-empty {
-  padding: 3px 16px 6px 34px; font-size: 12px; color: var(--fg-faint); font-style: italic;
+  padding: 3px 16px 6px 34px; font-size: calc(12px * var(--fs-scale)); color: var(--fg-faint); font-style: italic;
 }
 .group-rename { padding-top: 4px; padding-bottom: 4px; }
 
@@ -186,31 +185,31 @@
 /* color picker (collection edit modal) */
 .color-row { display: flex; gap: 7px; flex-wrap: wrap; }
 .color-dot {
-  width: 22px; height: 22px; border: 1px solid var(--rule); border-radius: 0;
+  width: 22px; height: 22px; border: 1px solid var(--rule); border-radius: var(--radius);
   cursor: pointer; padding: 0; flex: none;
 }
 .color-dot.on { outline: 2px solid var(--accent); outline-offset: 1px; }
-.color-dot.none { background: none; color: var(--fg-faint); font-size: 11px; line-height: 1; }
+.color-dot.none { background: none; color: var(--fg-faint); font-size: calc(11px * var(--fs-scale)); line-height: 1; }
 
 /* main content */
 .content { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
 .content-head {
-  padding: 16px 26px 10px; display: flex; align-items: baseline; gap: 12px;
+  padding: 16px var(--gutter) 10px; display: flex; align-items: baseline; gap: 12px;
   border-bottom: 1px solid var(--rule-faint);
 }
-.content-title { font-family: var(--serif); font-size: 24px; font-weight: 500; letter-spacing: -0.01em; }
+.content-title { font-family: var(--serif); font-size: calc(24px * var(--fs-scale)); font-weight: 500; letter-spacing: -0.01em; }
 .title-dot { width: 10px; height: 10px; flex: none; align-self: center; }
-.content-sub { font-family: var(--mono); font-size: 11px; color: var(--fg-faint);
+.content-sub { font-family: var(--mono); font-size: calc(11px * var(--fs-scale)); color: var(--fg-faint);
   text-transform: uppercase; letter-spacing: 0.06em; }
 .scroll { flex: 1; overflow-y: auto; padding: 6px 0 40px; }
 
 /* quick add */
-.quickadd { display: flex; gap: 8px; padding: 12px 26px; }
+.quickadd { display: flex; gap: 8px; padding: 12px var(--gutter); }
 .quickadd .input { flex: 1; }
 
 /* ---- task rows ---- */
 .task {
-  display: flex; align-items: flex-start; gap: 11px; padding: 9px 26px;
+  display: flex; align-items: flex-start; gap: 11px; padding: var(--row-y) var(--gutter);
   border-bottom: 1px solid var(--rule-faint);
 }
 .task:hover { background: var(--bg-elev); }
@@ -218,7 +217,7 @@
 .task.done .task-title { color: var(--fg-faint); text-decoration: line-through; }
 .check {
   width: 17px; height: 17px; flex: none; margin-top: 2px; border: 1px solid var(--fg-faint);
-  border-radius: 0; background: none; cursor: pointer; display: inline-flex;
+  border-radius: var(--radius); background: none; cursor: pointer; display: inline-flex;
   align-items: center; justify-content: center; color: transparent;
 }
 .check:hover { border-color: var(--accent); }
@@ -228,36 +227,36 @@
 .pri-med { background: var(--pri-med); }
 .pri-low { background: var(--pri-low); }
 .task-body { flex: 1; min-width: 0; }
-.task-title { font-size: 15px; color: var(--fg); }
+.task-title { font-size: calc(15px * var(--fs-scale)); color: var(--fg); }
 .task-meta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 3px; align-items: center; }
-.task-meta .due { font-family: var(--mono); font-size: 11px; color: var(--fg-muted); }
+.task-meta .due { font-family: var(--mono); font-size: calc(11px * var(--fs-scale)); color: var(--fg-muted); }
 .task-meta .due.overdue { color: var(--warn); }
-.task-notes { font-size: 13px; color: var(--fg-muted); margin-top: 2px; white-space: pre-wrap; }
+.task-notes { font-size: calc(13px * var(--fs-scale)); color: var(--fg-muted); margin-top: 2px; white-space: pre-wrap; }
 .task-actions { display: flex; gap: 4px; opacity: 0; transition: opacity 0.12s; }
 .task:hover .task-actions { opacity: 1; }
 .task-actions button { background: none; border: 0; color: var(--fg-faint); cursor: pointer;
-  font-family: var(--mono); font-size: 11px; padding: 2px 4px; }
+  font-family: var(--mono); font-size: calc(11px * var(--fs-scale)); padding: 2px 4px; }
 .task-actions button:hover { color: var(--accent); }
 .task-actions button.danger:hover { color: var(--warn); }
-.child-progress { font-family: var(--mono); font-size: 10px; color: var(--fg-faint); }
+.child-progress { font-family: var(--mono); font-size: calc(10px * var(--fs-scale)); color: var(--fg-faint); }
 
-.empty { padding: 40px 26px; color: var(--fg-faint); font-size: 14px; }
-.section-label { padding: 14px 26px 4px; }
+.empty { padding: 40px var(--gutter); color: var(--fg-faint); font-size: calc(14px * var(--fs-scale)); }
+.section-label { padding: 14px var(--gutter) 4px; }
 
 /* ---- tasks view switcher (List / 3-Day / Week) ---- */
 .view-tabs { display: flex; gap: 2px; align-self: center; }
 .view-tab {
   background: none; border: 1px solid var(--rule); cursor: pointer;
-  font-family: var(--mono); font-size: 10px; text-transform: uppercase;
+  font-family: var(--mono); font-size: calc(10px * var(--fs-scale)); text-transform: uppercase;
   letter-spacing: 0.06em; color: var(--fg-muted); padding: 5px 9px;
 }
 .view-tab:hover { color: var(--accent); border-color: var(--accent); }
 .view-tab.active { color: var(--bg); background: var(--fg); border-color: var(--fg); }
 .range-nav { display: flex; gap: 6px; align-items: center; align-self: center; }
-.undated-hint { font-size: 12px; color: var(--fg-faint); padding: 8px 26px 0; }
+.undated-hint { font-size: calc(12px * var(--fs-scale)); color: var(--fg-faint); padding: 8px var(--gutter) 0; }
 .undated-hint button {
   background: none; border: 0; padding: 0; cursor: pointer;
-  font-size: 12px; color: var(--fg-muted); text-decoration: underline;
+  font-size: calc(12px * var(--fs-scale)); color: var(--fg-muted); text-decoration: underline;
 }
 .undated-hint button:hover { color: var(--accent); }
 
@@ -278,19 +277,19 @@
   padding: 8px 10px; background: var(--paper); border-bottom: 1px solid var(--rule-faint);
 }
 .day-col-head .dow {
-  font-family: var(--mono); font-size: 10px; text-transform: uppercase;
+  font-family: var(--mono); font-size: calc(10px * var(--fs-scale)); text-transform: uppercase;
   letter-spacing: 0.08em; color: var(--fg-faint);
 }
-.day-col-head .dnum { font-family: var(--serif); font-size: 16px; font-weight: 500; }
+.day-col-head .dnum { font-family: var(--serif); font-size: calc(16px * var(--fs-scale)); font-weight: 500; }
 .day-col.today .day-col-head .dow, .day-col.today .day-col-head .dnum { color: var(--accent); }
-.day-col-head .count { font-family: var(--mono); font-size: 10px; color: var(--fg-faint); margin-left: auto; }
+.day-col-head .count { font-family: var(--mono); font-size: calc(10px * var(--fs-scale)); color: var(--fg-faint); margin-left: auto; }
 .day-col-body {
   flex: 1; overflow-y: auto; padding: 8px 7px 16px;
   display: flex; flex-direction: column; gap: 5px;
 }
 .col-label { padding: 6px 2px 1px; }
 .col-label.overdue { color: var(--warn); }
-.col-empty { color: var(--fg-faint); font-size: 13px; padding: 4px 2px; }
+.col-empty { color: var(--fg-faint); font-size: calc(13px * var(--fs-scale)); padding: 4px 2px; }
 .day-col.drag-over { box-shadow: inset 0 0 0 1px var(--accent); }
 .day-card {
   display: flex; align-items: flex-start; gap: 8px; padding: 7px 8px 7px 6px;
@@ -300,22 +299,22 @@
 .day-card:hover { border-color: var(--rule); }
 .day-card .check { margin-top: 1px; }
 .day-card-body { flex: 1; min-width: 0; cursor: pointer; }
-.day-card-title { font-size: 13px; line-height: 1.35; overflow-wrap: break-word; }
+.day-card-title { font-size: calc(13px * var(--fs-scale)); line-height: 1.35; overflow-wrap: break-word; }
 .day-card.done .day-card-title { color: var(--fg-faint); text-decoration: line-through; }
 .col-add {
   background: none; border: 1px dashed var(--rule); color: var(--fg-faint); cursor: pointer;
-  font-family: var(--mono); font-size: 10px; text-transform: uppercase;
+  font-family: var(--mono); font-size: calc(10px * var(--fs-scale)); text-transform: uppercase;
   letter-spacing: 0.06em; padding: 6px; margin-top: 2px;
 }
 .col-add:hover { color: var(--accent); border-color: var(--accent); }
 
 /* ---- calendar ---- */
-.cal-head { display: flex; align-items: center; gap: 12px; padding: 14px 26px; }
-.cal-title { font-family: var(--serif); font-size: 22px; font-weight: 500; min-width: 220px; }
+.cal-head { display: flex; align-items: center; gap: 12px; padding: 14px var(--gutter); }
+.cal-title { font-family: var(--serif); font-size: calc(22px * var(--fs-scale)); font-weight: 500; min-width: 220px; }
 .cal-scroll { flex: 1; min-height: 0; overflow-y: auto; }
 .cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); border-top: 1px solid var(--rule);
   border-left: 1px solid var(--rule); }
-.cal-dow { font-family: var(--mono); font-size: 10px; text-transform: uppercase;
+.cal-dow { font-family: var(--mono); font-size: calc(10px * var(--fs-scale)); text-transform: uppercase;
   letter-spacing: 0.08em; color: var(--fg-faint); padding: 6px 8px; text-align: right;
   border-right: 1px solid var(--rule); border-bottom: 1px solid var(--rule); background: var(--paper); }
 .cal-cell {
@@ -325,13 +324,13 @@
 .cal-cell:hover { background: var(--bg-elev); }
 .cal-cell.dim { background: var(--paper); }
 .cal-cell.today .daynum { color: var(--bg); background: var(--accent); }
-.daynum { font-family: var(--mono); font-size: 11px; color: var(--fg-muted); align-self: flex-end;
+.daynum { font-family: var(--mono); font-size: calc(11px * var(--fs-scale)); color: var(--fg-muted); align-self: flex-end;
   padding: 1px 5px; }
 /* Events tint from the calendar's own color (--ev-c, set on .cal-scroll);
    uncolored calendars fall back to the accent / ok tints. */
 .cal-cell.drag-over { box-shadow: inset 0 0 0 1px var(--accent); }
 .cal-ev {
-  font-size: 11px; color: var(--fg);
+  font-size: calc(11px * var(--fs-scale)); color: var(--fg);
   background: color-mix(in oklch, var(--ev-c, var(--accent)) 16%, transparent);
   border-left: 2px solid var(--ev-c, var(--accent));
   padding: 1px 5px; white-space: nowrap; overflow: hidden;
@@ -352,7 +351,7 @@
 
 .cal-more {
   background: none; border: 0; padding: 0 5px; text-align: left; cursor: pointer;
-  font-family: var(--mono); font-size: 10px; color: var(--fg-faint);
+  font-family: var(--mono); font-size: calc(10px * var(--fs-scale)); color: var(--fg-faint);
 }
 .cal-more:hover { color: var(--accent); }
 /* "+N more" day popover — fixed so .cal-scroll can't clip it */
@@ -360,13 +359,13 @@
 .day-pop {
   position: fixed; width: 260px; max-height: 320px; overflow-y: auto;
   background: var(--bg-elev); border: 1px solid var(--rule);
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.20); padding-bottom: 4px;
+  box-shadow: var(--shadow); padding-bottom: 4px;
 }
 .day-pop-head {
-  font-family: var(--mono); font-size: 10px; text-transform: uppercase;
+  font-family: var(--mono); font-size: calc(10px * var(--fs-scale)); text-transform: uppercase;
   letter-spacing: 0.08em; color: var(--fg-faint); padding: 10px 14px 4px;
 }
-.day-pop .agenda-ev { padding: 8px 14px; font-size: 13px; }
+.day-pop .agenda-ev { padding: 8px 14px; font-size: calc(13px * var(--fs-scale)); }
 
 /* mobile calendar: cells carry square event dots, a tap focuses the day and its
    events list in the agenda below the grid (only rendered on small screens) */
@@ -383,20 +382,20 @@
   display: flex; align-items: baseline; gap: 10px; width: 100%; text-align: left;
   background: none; border: 0; border-bottom: 1px solid var(--rule-faint);
   border-left: 2px solid var(--ev-c, var(--accent));
-  padding: 12px 14px; font-size: 15px; color: var(--fg); cursor: pointer;
+  padding: 12px 14px; font-size: calc(15px * var(--fs-scale)); color: var(--fg); cursor: pointer;
 }
 .agenda-ev:hover { background: var(--bg-elev); }
-.agenda-ev .t { font-family: var(--mono); font-size: 11px; color: var(--fg-muted); min-width: 58px; flex: none; }
+.agenda-ev .t { font-family: var(--mono); font-size: calc(11px * var(--fs-scale)); color: var(--fg-muted); min-width: 58px; flex: none; }
 .agenda-ev .recur { color: var(--fg-muted); font-weight: 600; }
-.agenda-empty { padding: 12px 14px; color: var(--fg-faint); font-size: 14px; }
+.agenda-empty { padding: 12px 14px; color: var(--fg-faint); font-size: calc(14px * var(--fs-scale)); }
 
 /* ---- modal / panel ---- */
 .overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.32);
   display: flex; align-items: center; justify-content: center; z-index: 100; padding: 20px; }
 .modal { background: var(--bg-elev); border: 1px solid var(--rule); width: 520px; max-width: 100%;
-  box-shadow: 0 12px 40px rgba(0,0,0,0.25); padding: 18px; display: flex; flex-direction: column; gap: 12px; }
+  box-shadow: var(--shadow-lg); padding: 18px; display: flex; flex-direction: column; gap: 12px; }
 .modal-head { display: flex; align-items: baseline; justify-content: space-between; }
-.modal-title { font-family: var(--serif); font-size: 18px; font-weight: 500; }
+.modal-title { font-family: var(--serif); font-size: calc(18px * var(--fs-scale)); font-weight: 500; }
 .field { display: flex; flex-direction: column; gap: 5px; }
 .field-row { display: flex; gap: 10px; }
 /* min-width: 0 lets the fields shrink below the native datetime picker's
@@ -409,8 +408,8 @@
 
 /* recurring-event scope chooser (this / this & following / all) */
 .scope-choose { display: flex; flex-direction: column; gap: 8px; }
-.scope-q { font-family: var(--serif); font-size: 15px; margin: 2px 0 4px; }
-.scope-hint { font-size: 12px; color: var(--fg-muted); margin: -2px 0 2px; line-height: 1.35; }
+.scope-q { font-family: var(--serif); font-size: calc(15px * var(--fs-scale)); margin: 2px 0 4px; }
+.scope-hint { font-size: calc(12px * var(--fs-scale)); color: var(--fg-muted); margin: -2px 0 2px; line-height: 1.35; }
 
 /* ---- archived calendars (settings modal) ---- */
 .arch-list { display: flex; flex-direction: column; max-height: 60vh; overflow-y: auto; }
@@ -420,36 +419,36 @@
 }
 .arch-row .swatch { width: 8px; height: 8px; flex: none; background: var(--fg-faint); }
 .arch-row .name {
-  flex: 1; min-width: 0; font-size: 14px;
+  flex: 1; min-width: 0; font-size: calc(14px * var(--fs-scale));
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.arch-row .count { font-family: var(--mono); font-size: 11px; color: var(--fg-faint); }
-.arch-empty { padding: 22px 2px; color: var(--fg-faint); font-size: 14px; text-align: center; }
+.arch-row .count { font-family: var(--mono); font-size: calc(11px * var(--fs-scale)); color: var(--fg-faint); }
+.arch-empty { padding: 22px 2px; color: var(--fg-faint); font-size: calc(14px * var(--fs-scale)); text-align: center; }
 .arch-caption {
   display: flex; align-items: center; justify-content: space-between; gap: 10px;
-  font-size: 12px; color: var(--fg-muted);
+  font-size: calc(12px * var(--fs-scale)); color: var(--fg-muted);
   padding-bottom: 8px; border-bottom: 1px solid var(--rule);
 }
 .arch-events { max-height: 55vh; overflow-y: auto; margin: 0 -18px -18px; }
 .arch-day-head {
-  font-family: var(--mono); font-size: 10px; text-transform: uppercase;
+  font-family: var(--mono); font-size: calc(10px * var(--fs-scale)); text-transform: uppercase;
   letter-spacing: 0.08em; color: var(--fg-faint);
   padding: 12px 18px 4px; position: sticky; top: 0; background: var(--bg-elev);
 }
 /* the previews are read-only, so drop the interactive affordances */
-.arch-events .agenda-ev { cursor: default; padding: 9px 18px; font-size: 14px; }
+.arch-events .agenda-ev { cursor: default; padding: 9px 18px; font-size: calc(14px * var(--fs-scale)); }
 .arch-events .agenda-ev:hover { background: none; }
 
 /* ---- login ---- */
 .login-wrap { height: 100dvh; display: flex; align-items: center; justify-content: center; padding: 20px; }
 .login-card { width: 340px; max-width: 100%; border: 1px solid var(--rule); background: var(--bg-elev);
   padding: 28px; display: flex; flex-direction: column; gap: 14px; }
-.login-brand { font-family: var(--serif); font-style: italic; font-size: 30px; text-align: center; }
+.login-brand { font-family: var(--serif); font-style: italic; font-size: calc(30px * var(--fs-scale)); text-align: center; }
 .login-brand .dot { color: var(--accent); font-style: normal; }
-.login-err { font-family: var(--mono); font-size: 11px; color: var(--warn); }
+.login-err { font-family: var(--mono); font-size: calc(11px * var(--fs-scale)); color: var(--warn); }
 
-.banner { font-family: var(--mono); font-size: 11px; color: var(--warn);
-  padding: 6px 26px; border-bottom: 1px solid var(--rule); background: color-mix(in oklch, var(--warn) 10%, transparent); }
+.banner { font-family: var(--mono); font-size: calc(11px * var(--fs-scale)); color: var(--warn);
+  padding: 6px var(--gutter); border-bottom: 1px solid var(--rule); background: color-mix(in oklch, var(--warn) 10%, transparent); }
 
 /* ---- touch devices: hover-revealed controls must always be visible ---- */
 @media (hover: none) {
@@ -460,7 +459,7 @@
 /* ---- mobile ---- */
 @media (max-width: 720px) {
   .topbar { gap: 14px; padding: 10px 14px; }
-  .brand { font-size: 19px; }
+  .brand { font-size: calc(19px * var(--fs-scale)); }
   .menu { right: 14px; }
 
   /* panes stack; on phones the sidebar is a compact trigger bar plus a
@@ -482,19 +481,19 @@
   }
   .side-mobiletrigger svg { flex: none; color: var(--fg-muted); }
   .side-mobiletrigger .mb-title {
-    font-family: var(--mono); font-size: 11px; text-transform: uppercase;
+    font-family: var(--mono); font-size: calc(11px * var(--fs-scale)); text-transform: uppercase;
     letter-spacing: 0.08em; color: var(--fg-muted); flex: none;
   }
   .side-mobiletrigger .mb-summary {
-    font-family: var(--mono); font-size: 11px; color: var(--fg-faint);
+    font-family: var(--mono); font-size: calc(11px * var(--fs-scale)); color: var(--fg-faint);
     min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   .side-mobiletrigger .mb-caret {
-    margin-left: auto; flex: none; color: var(--fg-faint); font-size: 11px;
+    margin-left: auto; flex: none; color: var(--fg-faint); font-size: calc(11px * var(--fs-scale));
   }
   .side-mobile-completed, .side-mobile-add {
     flex: none; background: none; border: 0; border-left: 1px solid var(--rule);
-    color: var(--fg-muted); cursor: pointer; padding: 0 16px; font-size: 18px; line-height: 1;
+    color: var(--fg-muted); cursor: pointer; padding: 0 16px; font-size: calc(18px * var(--fs-scale)); line-height: 1;
   }
   .side-mobile-completed.active { color: var(--accent); }
   .side-mobile-add:hover, .side-mobile-completed:hover { color: var(--accent); }
@@ -514,22 +513,22 @@
   }
   .side.drawer .side-head { padding: 14px 14px 8px; }
   .side.drawer .drawer-hint {
-    margin: 0; padding: 0 16px 10px; font-size: 12.5px; line-height: 1.4; color: var(--fg-muted);
+    margin: 0; padding: 0 16px 10px; font-size: calc(12.5px * var(--fs-scale)); line-height: 1.4; color: var(--fg-muted);
   }
   .side.drawer .side-list { flex: 1 1 auto; overflow-y: auto; padding-bottom: 8px; }
   /* full-width, touch-sized rows with an always-visible edit affordance */
   .side.drawer .side-item { padding: 13px 16px; gap: 11px; }
-  .side.drawer .side-item .name { flex: 1; max-width: none; font-size: 15px; }
+  .side.drawer .side-item .name { flex: 1; max-width: none; font-size: calc(15px * var(--fs-scale)); }
   .side.drawer .side-item .swatch { width: 10px; height: 10px; }
   .side.drawer .side-item .side-edit {
-    display: inline; opacity: 1; padding: 6px 8px; font-size: 17px; color: var(--fg-muted);
+    display: inline; opacity: 1; padding: 6px 8px; font-size: calc(17px * var(--fs-scale)); color: var(--fg-muted);
   }
   .side.drawer .side-add { border-top: 1px solid var(--rule); }
   .side.drawer .side-completed { flex: none; }
   /* comfortable group headers + controls on touch (no hover to reveal them) */
   .side.drawer .group-head { padding: 14px 16px 5px; }
   .side.drawer .group-actions { opacity: 1; }
-  .side.drawer .group-btn, .side.drawer .group-eye { padding: 6px 7px; font-size: 15px; }
+  .side.drawer .group-btn, .side.drawer .group-eye { padding: 6px 7px; font-size: calc(15px * var(--fs-scale)); }
   .side.drawer .group-caret { padding: 4px 2px; }
 
   /* content spacing + touch targets */
@@ -552,17 +551,19 @@
   .task.sub { padding-left: 40px; }
   .check { width: 21px; height: 21px; }
   .task-actions { gap: 8px; }
-  .task-actions button { font-size: 12px; padding: 5px 6px; }
+  .task-actions button { font-size: calc(12px * var(--fs-scale)); padding: 5px 6px; }
   .scroll { padding-bottom: calc(40px + env(safe-area-inset-bottom)); }
 
-  /* inputs at 16px so iOS Safari doesn't zoom the page on focus */
-  .input { font-size: 16px; }
+  /* inputs at 16px so iOS Safari doesn't zoom the page on focus. The floor is
+     load-bearing: a text scale below 1 would drop under 16px and bring the
+     zoom-on-focus back, so this one size only ever scales up. */
+  .input { font-size: max(16px, calc(16px * var(--fs-scale))); }
 
   /* calendar: compact grid, title fills the header, agenda holds the detail */
   .cal-head { gap: 8px; padding-top: 10px; padding-bottom: 10px; }
   .cal-head .spacer { display: none; }
   .cal-title {
-    flex: 1; min-width: 0; font-size: 17px; text-align: right;
+    flex: 1; min-width: 0; font-size: calc(17px * var(--fs-scale)); text-align: right;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   .cal-dow { padding: 5px 4px; text-align: center; }
@@ -585,44 +586,44 @@
   max-width: min(480px, calc(100vw - 32px));
   padding: 10px 12px;
   background: var(--bg-elev); border: 1px solid var(--warn);
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.20);
-  font-family: var(--mono); font-size: 12px; color: var(--warn);
+  box-shadow: var(--shadow);
+  font-family: var(--mono); font-size: calc(12px * var(--fs-scale)); color: var(--warn);
 }
 .toast span { min-width: 0; overflow-wrap: break-word; }
 .toast .icon-btn { flex: none; }
 
 /* ---- client scheduling: owner view ---- */
-.sched-list { display: flex; flex-wrap: wrap; gap: 12px; padding: 6px 26px; }
+.sched-list { display: flex; flex-wrap: wrap; gap: 12px; padding: 6px var(--gutter); }
 .sched-card {
   width: 340px; max-width: 100%; border: 1px solid var(--rule); background: var(--bg-elev);
   padding: 14px 16px; display: flex; flex-direction: column; gap: 6px;
 }
 .sched-card.off { opacity: 0.6; }
 .sched-card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
-.sched-card-title { font-family: var(--serif); font-size: 17px; font-weight: 500; min-width: 0;
+.sched-card-title { font-family: var(--serif); font-size: calc(17px * var(--fs-scale)); font-weight: 500; min-width: 0;
   overflow-wrap: break-word; }
 .sched-toggle {
   display: inline-flex; align-items: center; gap: 5px; cursor: pointer; flex: none;
-  font-family: var(--mono); font-size: 10px; text-transform: uppercase;
+  font-family: var(--mono); font-size: calc(10px * var(--fs-scale)); text-transform: uppercase;
   letter-spacing: 0.06em; color: var(--fg-muted);
 }
 .sched-card.off .sched-toggle { color: var(--fg-faint); }
 .sched-card:not(.off) .sched-toggle { color: var(--ok); }
-.sched-card-meta { font-size: 12px; color: var(--fg-muted); overflow-wrap: break-word; }
-.sched-card-meta .mono { font-size: 11px; color: var(--fg-faint); }
+.sched-card-meta { font-size: calc(12px * var(--fs-scale)); color: var(--fg-muted); overflow-wrap: break-word; }
+.sched-card-meta .mono { font-size: calc(11px * var(--fs-scale)); color: var(--fg-faint); }
 .sched-card-actions { display: flex; gap: 8px; margin-top: 6px; }
 
-.sched-bookings { padding: 4px 26px 30px; display: flex; flex-direction: column; }
+.sched-bookings { padding: 4px var(--gutter) 30px; display: flex; flex-direction: column; }
 .sched-booking {
   display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px;
   padding: 10px 0; border-bottom: 1px solid var(--rule-faint);
 }
-.sched-booking .when { font-size: 11px; color: var(--fg-muted); min-width: 150px; }
-.sched-booking .who { font-size: 14px; }
-.sched-booking .who .email { color: var(--fg-muted); font-size: 12px; margin-left: 6px; }
-.sched-booking .via { font-family: var(--mono); font-size: 10px; text-transform: uppercase;
+.sched-booking .when { font-size: calc(11px * var(--fs-scale)); color: var(--fg-muted); min-width: 150px; }
+.sched-booking .who { font-size: calc(14px * var(--fs-scale)); }
+.sched-booking .who .email { color: var(--fg-muted); font-size: calc(12px * var(--fs-scale)); margin-left: 6px; }
+.sched-booking .via { font-family: var(--mono); font-size: calc(10px * var(--fs-scale)); text-transform: uppercase;
   letter-spacing: 0.06em; color: var(--fg-faint); }
-.sched-booking .notes { flex-basis: 100%; font-size: 12px; color: var(--fg-muted);
+.sched-booking .notes { flex-basis: 100%; font-size: calc(12px * var(--fs-scale)); color: var(--fg-muted);
   white-space: pre-wrap; }
 
 /* create/edit modal: weekly availability editor */
@@ -635,21 +636,21 @@
 .sched-day-name {
   display: inline-flex; align-items: center; gap: 7px; cursor: pointer; flex: none;
   width: 64px; padding-top: 6px;
-  font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
+  font-family: var(--mono); font-size: calc(11px * var(--fs-scale)); text-transform: uppercase; letter-spacing: 0.06em;
 }
 .sched-day.off .sched-day-name { color: var(--fg-faint); }
 .sched-ranges { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
 .sched-range { display: inline-flex; align-items: center; gap: 4px; color: var(--fg-faint); }
-.sched-range .input { width: auto; padding: 5px 6px; font-size: 13px; }
-.sched-range .icon-btn { padding: 4px 6px; font-size: 10px; }
+.sched-range .input { width: auto; padding: 5px 6px; font-size: calc(13px * var(--fs-scale)); }
+.sched-range .icon-btn { padding: 4px 6px; font-size: calc(10px * var(--fs-scale)); }
 .sched-add-range {
   background: none; border: 1px dashed var(--rule); color: var(--fg-faint); cursor: pointer;
-  font-family: var(--mono); font-size: 10px; text-transform: uppercase;
+  font-family: var(--mono); font-size: calc(10px * var(--fs-scale)); text-transform: uppercase;
   letter-spacing: 0.06em; padding: 5px 8px;
 }
 .sched-add-range:hover { color: var(--accent); border-color: var(--accent); }
-.sched-unavail { font-size: 12px; color: var(--fg-faint); padding-top: 7px; }
-.sched-check { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: 14px; }
+.sched-unavail { font-size: calc(12px * var(--fs-scale)); color: var(--fg-faint); padding-top: 7px; }
+.sched-check { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: calc(14px * var(--fs-scale)); }
 
 /* ---- client scheduling: public booking page (/book/<token>) ---- */
 .booking-wrap {
@@ -662,15 +663,15 @@
   border: 1px solid var(--rule); background: var(--bg-elev);
   padding: 28px; display: flex; flex-direction: column; gap: 14px;
 }
-.booking-title { font-family: var(--serif); font-size: 28px; font-weight: 500; margin: 0;
+.booking-title { font-family: var(--serif); font-size: calc(28px * var(--fs-scale)); font-weight: 500; margin: 0;
   letter-spacing: -0.01em; }
-.booking-desc { margin: 0; font-size: 14px; color: var(--fg-muted); white-space: pre-wrap; }
-.booking-lead { margin: 0; font-family: var(--serif); font-size: 17px; }
+.booking-desc { margin: 0; font-size: calc(14px * var(--fs-scale)); color: var(--fg-muted); white-space: pre-wrap; }
+.booking-lead { margin: 0; font-family: var(--serif); font-size: calc(17px * var(--fs-scale)); }
 .booking-meta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.booking-tz { font-family: var(--mono); font-size: 10px; color: var(--fg-faint);
+.booking-tz { font-family: var(--mono); font-size: calc(10px * var(--fs-scale)); color: var(--fg-faint);
   text-transform: uppercase; letter-spacing: 0.06em; }
 .booking-err {
-  font-family: var(--mono); font-size: 12px; color: var(--warn);
+  font-family: var(--mono); font-size: calc(12px * var(--fs-scale)); color: var(--warn);
   border: 1px solid var(--warn); padding: 8px 10px;
   background: color-mix(in oklch, var(--warn) 8%, transparent);
 }
@@ -683,21 +684,21 @@
 }
 .booking-day:hover { border-color: var(--accent); }
 .booking-day.active { border-color: var(--accent); background: color-mix(in oklch, var(--accent) 10%, transparent); }
-.booking-day .dow { font-family: var(--mono); font-size: 10px; text-transform: uppercase;
+.booking-day .dow { font-family: var(--mono); font-size: calc(10px * var(--fs-scale)); text-transform: uppercase;
   letter-spacing: 0.08em; color: var(--fg-faint); }
-.booking-day .dnum { font-family: var(--serif); font-size: 14px; font-weight: 500; }
+.booking-day .dnum { font-family: var(--serif); font-size: calc(14px * var(--fs-scale)); font-weight: 500; }
 
-.booking-daytitle { font-family: var(--serif); font-size: 16px; font-weight: 500; margin-top: 2px; }
+.booking-daytitle { font-family: var(--serif); font-size: calc(16px * var(--fs-scale)); font-weight: 500; margin-top: 2px; }
 .booking-busy { display: flex; flex-wrap: wrap; gap: 6px; }
 .busy-chip {
-  font-family: var(--mono); font-size: 10px; letter-spacing: 0.04em;
+  font-family: var(--mono); font-size: calc(10px * var(--fs-scale)); letter-spacing: 0.04em;
   color: var(--fg-faint); border: 1px solid var(--rule-faint);
   background: var(--paper); padding: 3px 7px;
 }
 .booking-slots { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 7px; }
 .slot-btn {
   background: none; border: 1px solid var(--rule); cursor: pointer;
-  font-family: var(--mono); font-size: 12px; padding: 9px 6px; color: var(--fg);
+  font-family: var(--mono); font-size: calc(12px * var(--fs-scale)); padding: 9px 6px; color: var(--fg);
 }
 .slot-btn:hover { border-color: var(--accent); color: var(--accent); }
 
@@ -705,7 +706,7 @@
   display: flex; align-items: center; justify-content: space-between; gap: 10px;
   border: 1px solid var(--accent); padding: 10px 12px;
   background: color-mix(in oklch, var(--accent) 8%, transparent);
-  font-family: var(--serif); font-size: 15px;
+  font-family: var(--serif); font-size: calc(15px * var(--fs-scale));
 }
 .booking-card textarea.input { resize: vertical; }
 
@@ -717,3 +718,141 @@
   .booking-wrap { padding-top: 16px; }
   .booking-card { padding: 18px; }
 }
+
+/* ---- Home dashboard ---------------------------------------------------
+   A 12-column canvas of absolutely-positioned modules. Percentages keep the
+   columns proportional at any width; the row height and gap are mirrored from
+   dashboard.ts (ROW_H / GAP) — change them in both places or drags will land
+   a row off. Arranging is desktop-only, so none of the affordances below have
+   a mobile counterpart; phones get .dash-stack instead. */
+.dash-grid { position: relative; margin: 8px var(--gutter) 40px; }
+.dash-grid.arranging { background-image:
+    repeating-linear-gradient(to bottom, var(--rule-faint) 0 1px, transparent 1px 56px); }
+.dash-mod {
+  position: absolute; display: flex; flex-direction: column; overflow: hidden;
+  background: var(--bg-elev); border: 1px solid var(--rule-faint);
+}
+.dash-grid.arranging .dash-mod { border-color: var(--rule); }
+.dash-mod-head {
+  flex: none; display: flex; align-items: center; gap: 8px;
+  padding: 9px 12px; border-bottom: 1px solid var(--rule-faint);
+}
+.dash-grid.arranging .dash-mod-head { cursor: grab; background: var(--paper); }
+.dash-grid.arranging .dash-mod-head:active { cursor: grabbing; }
+.dash-mod-body { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 0; }
+.dash-remove {
+  margin-left: auto; background: none; border: 0; cursor: pointer;
+  color: var(--fg-faint); font-size: calc(12px * var(--fs-scale)); line-height: 1; padding: 2px 4px;
+}
+.dash-remove:hover { color: var(--warn); }
+/* resize grip — a corner wedge, drawn only while arranging */
+.dash-grip {
+  position: absolute; right: 0; bottom: 0; width: 16px; height: 16px;
+  cursor: nwse-resize;
+  background: linear-gradient(135deg, transparent 50%, var(--rule) 50%);
+}
+.dash-grip:hover { background: linear-gradient(135deg, transparent 50%, var(--accent) 50%); }
+
+/* module picker — a strip of cards under the header */
+.dash-picker {
+  display: flex; flex-wrap: wrap; gap: 8px; padding: 10px var(--gutter);
+  border-bottom: 1px solid var(--rule-faint); background: var(--paper);
+}
+.dash-pick {
+  width: 220px; text-align: left; cursor: pointer; padding: 9px 11px;
+  background: var(--bg-elev); border: 1px solid var(--rule);
+  display: flex; flex-direction: column; gap: 3px;
+}
+.dash-pick:hover { border-color: var(--accent); }
+.dash-pick-name { font-size: calc(14px * var(--fs-scale)); color: var(--fg); }
+.dash-pick-blurb { font-size: calc(12px * var(--fs-scale)); color: var(--fg-muted); line-height: 1.35; }
+
+/* module contents */
+.dash-empty { padding: 14px 12px; color: var(--fg-faint); font-size: calc(13px * var(--fs-scale)); margin: 0; }
+.dash-tasks { list-style: none; margin: 0; padding: 0; }
+.dash-task {
+  display: flex; align-items: baseline; gap: 8px; padding: 6px 12px;
+  border-bottom: 1px solid var(--rule-faint);
+}
+.dash-task:last-child { border-bottom: 0; }
+.dash-task.done .dash-task-title { color: var(--fg-faint); text-decoration: line-through; }
+.dash-task-title { flex: 1; min-width: 0; font-size: calc(13px * var(--fs-scale));
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dash-task-due { flex: none; font-size: calc(11px * var(--fs-scale)); color: var(--fg-muted); }
+.dash-task-due.overdue { color: var(--warn); }
+.dash-quickadd { display: flex; gap: 8px; padding: 10px 12px; }
+.dash-quickadd .input { flex: 1; min-width: 0; }
+
+/* mini calendar */
+.mini-cal { padding: 6px 10px 10px; }
+.mini-cal-head, .mini-cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); }
+.mini-cal-head { padding-bottom: 4px; }
+.mini-cal-head .label { text-align: center; }
+.mini-day {
+  text-align: center; padding: 4px 0; font-family: var(--mono);
+  font-size: calc(11px * var(--fs-scale)); color: var(--fg-muted); position: relative;
+}
+.mini-day.dim { color: var(--fg-faint); opacity: 0.5; }
+.mini-day.today { color: var(--bg); background: var(--accent); }
+/* a busy day carries a dot beneath the number, so "has events" survives the
+   today highlight instead of competing with it */
+.mini-day.busy::after {
+  content: ''; position: absolute; left: 50%; bottom: 1px; transform: translateX(-50%);
+  width: 3px; height: 3px; background: var(--accent);
+}
+.mini-day.today.busy::after { background: var(--bg); }
+
+/* mobile: modules stack full-width, read-only (arranging is desktop-only) */
+.dash-stack { display: flex; flex-direction: column; gap: 12px; padding: 12px 14px; }
+.dash-stack .dash-mod { position: static; height: auto; max-height: 60vh; }
+
+/* ---- appearance editor ------------------------------------------------- */
+.appearance-modal { width: 640px; max-height: 88vh; overflow-y: auto; }
+.appear-bar { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.appear-bar .input { flex: 1; min-width: 140px; width: auto; }
+.appear-modes { display: flex; gap: 6px; align-items: center; }
+.appear-groups { display: flex; flex-direction: column; gap: 14px; }
+.appear-group { display: flex; flex-direction: column; gap: 6px; }
+.appear-row { display: flex; align-items: center; gap: 12px; }
+.appear-label {
+  flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px;
+  font-size: calc(14px * var(--fs-scale)); color: var(--fg);
+}
+.appear-hint { font-size: calc(12px * var(--fs-scale)); color: var(--fg-faint); line-height: 1.3; }
+.appear-control { flex: none; display: flex; align-items: center; gap: 6px; width: 300px; }
+.appear-control .input { width: auto; flex: 1; min-width: 0; }
+.appear-swatch {
+  flex: none; width: 30px; height: 30px; padding: 0; cursor: pointer;
+  background: none; border: 1px solid var(--rule);
+}
+.appear-text { font-size: calc(12px * var(--fs-scale)); }
+/* a value that will not validate is refused, not silently applied — say so */
+.appear-text.bad { border-color: var(--warn); color: var(--warn); }
+.appear-range { flex: 1; min-width: 0; accent-color: var(--accent); }
+.appear-num { flex: none; width: 52px; text-align: right; font-size: calc(11px * var(--fs-scale)); color: var(--fg-muted); }
+.appear-clear {
+  flex: none; background: none; border: 1px solid var(--rule); cursor: pointer;
+  color: var(--fg-muted); padding: 5px 7px; font-size: calc(12px * var(--fs-scale)); line-height: 1;
+}
+.appear-clear:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); }
+.appear-clear:disabled { opacity: 0.25; cursor: default; }
+
+@media (max-width: 720px) {
+  .appearance-modal { width: 100%; }
+  .appear-row { flex-direction: column; align-items: stretch; gap: 5px; }
+  .appear-control { width: 100%; }
+}
+
+/* ---- corner radius ----------------------------------------------------
+   Smylte ships square (--radius: 0px), and every rule below is a no-op at
+   that default. They live together at the end of the file, rather than
+   scattered through it, so the set of things the Appearance editor's corner
+   slider actually reaches is auditable in one place — and so this whole
+   block can be read as "the rounding opt-in" instead of hunting for stray
+   border-radius declarations. The micro indicators (.swatch, .list-dot,
+   .ev-dot, .pri-bar) are deliberately excluded: they are 3-9px marks, and
+   rounding them just turns them into dots regardless of the chosen radius. */
+.menu, .day-pop, .modal, .toast, .login-card, .booking-card, .sched-card,
+.day-card, .cal-ev, .view-tab, .col-add, .sched-add-range, .booking-day,
+.slot-btn, .busy-chip, .booking-err, .booking-picked, .side.drawer,
+.dash-mod { border-radius: var(--radius); }
