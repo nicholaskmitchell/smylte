@@ -17,6 +17,9 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,               // lets testing-library auto-cleanup between tests
     setupFiles: './src/test/setup.ts',
+    // Stylesheets are stubbed — nothing asserts on rendered styles, and
+    // processing them is pure cost. Note this defeats `?raw` on .css too, so
+    // appearance.test.ts reads tokens.css off disk rather than importing it.
     css: false,
   },
 })
