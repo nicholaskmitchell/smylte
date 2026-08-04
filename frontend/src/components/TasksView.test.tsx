@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { TasksView } from './TasksView'
 import { api, AuthError, type List, type Task, type TasksViewMode } from '../api'
@@ -138,6 +138,58 @@ describe('<TasksView> "Add multiple"', () => {
     // Row 2 is never attempted, and neither stand-in is left painted.
     expect(m.createTask).toHaveBeenCalledTimes(1)
     expect(screen.queryByText('alpha')).not.toBeInTheDocument()
+  })
+
+  it('shares its property controls with the task editor', async () => {
+    // Both forms render from one FIELDS table, so the editor must offer the
+    // same properties (bar the list, which PATCH can't move) under the same
+    // accessible names the composer uses.
+    m.tasks.mockResolvedValue([task({ summary: 'Ship it', priority_label: 'high' })])
+    const { user } = setup()
+    await user.click(await screen.findByText('Ship it'))
+    const dialog = await screen.findByRole('dialog', { name: 'Task' })
+    for (const name of ['Due date', 'Due time', 'Start date', 'Priority', 'Tags']) {
+      expect(within(dialog).getByLabelText(name)).toBeInTheDocument()
+    }
+    expect(within(dialog).getByLabelText('Title')).toHaveValue('Ship it')
+    expect(within(dialog).getByLabelText('Priority')).toHaveValue('high')
+    // The list picker belongs to the composer alone.
+    expect(within(dialog).queryByLabelText('List')).not.toBeInTheDocument()
+  })
+
+  it('saves a start date, which nothing exposed before', async () => {
+    m.tasks.mockResolvedValue([task({ summary: 'Ship it' })])
+    m.patchTask.mockResolvedValue(task({ summary: 'Ship it', start: '2026-08-09' }))
+    const { user } = setup()
+    await user.click(await screen.findByText('Ship it'))
+    await user.type(screen.getByLabelText('Start date'), '2026-08-09')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => expect(m.patchTask).toHaveBeenCalled())
+    expect(m.patchTask).toHaveBeenCalledWith('l1', 'u1',
+      expect.objectContaining({ summary: 'Ship it', start: '2026-08-09' }))
+  })
+
+  it('still round-trips an all-day due as a bare date and a timed one with a T', async () => {
+    m.tasks.mockResolvedValue([task({ summary: 'Ship it', due: '2026-08-10', due_is_date: true })])
+    m.patchTask.mockResolvedValue(task())
+    const { user } = setup()
+    await user.click(await screen.findByText('Ship it'))
+    expect(screen.getByLabelText('Due date')).toHaveValue('2026-08-10')
+    await user.type(screen.getByLabelText('Due time'), '09:30')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => expect(m.patchTask).toHaveBeenCalled())
+    expect(m.patchTask.mock.calls[0][2]).toMatchObject({ due: '2026-08-10T09:30' })
+  })
+
+  it('deletes from the editor', async () => {
+    m.tasks.mockResolvedValue([task({ summary: 'Ship it' })])
+    m.deleteTask.mockResolvedValue(null)
+    const { user } = setup()
+    await user.click(await screen.findByText('Ship it'))
+    await user.click(screen.getByRole('button', { name: 'Delete' }))
+    await waitFor(() => expect(m.deleteTask).toHaveBeenCalledWith('l1', 'u1'))
   })
 
   it('leaves the plain quick-add sending a minimal body', async () => {

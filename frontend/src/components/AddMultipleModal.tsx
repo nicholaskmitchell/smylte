@@ -29,15 +29,15 @@ interface Row extends RowValues {
   summary: string
 }
 
-const blankValues = (listId: string): RowValues => ({
+export const blankValues = (listId: string): RowValues => ({
   listId, dueDate: '', dueTime: '', startDate: '', priority: 'none', tags: '', notes: '',
 })
 const blankRow = (listId: string): Row =>
   ({ ...blankValues(listId), key: clientId().slice(0, 8), summary: '' })
 
-interface FieldCtx { lists: List[]; where: string; disabled: boolean }
+export interface FieldCtx { lists: List[]; where: string; disabled: boolean }
 
-interface FieldSpec {
+export interface FieldSpec {
   key: FieldKey
   label: string
   // The RowValues keys this field owns. Multi-slot fields switch together: a
@@ -54,9 +54,10 @@ interface FieldSpec {
 // controls of the same property.
 const FOR_ALL = ', for all tasks'
 
-// One table drives the toggle strip, the shared controls, the column headers
-// and the per-row cells — so adding a property is one entry, not five edits.
-const FIELDS: readonly FieldSpec[] = [
+// One table drives the toggle strip, the shared controls, the column headers,
+// the per-row cells — and the single-task editor in TasksView — so adding a
+// property is one entry rather than an edit in five places.
+export const FIELDS: readonly FieldSpec[] = [
   {
     key: 'list', label: 'List', slots: ['listId'],
     render: (v, set, { lists, where, disabled }) => (
@@ -299,31 +300,35 @@ export function AddMultipleModal({ lists, defaultList, onSubmit, onClose }: {
     // close it and lose everything typed.
     <div className="overlay"
       onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) onClose() }}>
-      <div className="modal bulk-modal" role="dialog" aria-modal="true"
+      <div className="modal task-modal" role="dialog" aria-modal="true"
         aria-label="Add multiple tasks">
         <div className="modal-head">
           <span className="modal-title">Add multiple</span>
           <button className="icon-btn" onClick={onClose} disabled={busy} aria-label="Close">✕</button>
         </div>
 
-        <div className="bulk-shared">
-          <span className="bulk-shared-lead label">Same for all</span>
-          {FIELDS.map((f) => (
-            <div key={f.key}
-              className={`bulk-shared-item bulk-s-${f.key} ${sharedOn[f.key] ? '' : 'off'}`}>
-              <label className="bulk-check">
-                <input type="checkbox" checked={sharedOn[f.key]} disabled={busy}
-                  onChange={() => toggleShared(f)} />
-                {f.label}
-              </label>
-              {sharedOn[f.key] && (
-                <span className="bulk-controls">
-                  {f.render(shared, (p) => setShared((v) => ({ ...v, ...p })),
-                    { lists, where: FOR_ALL, disabled: busy })}
-                </span>
-              )}
-            </div>
-          ))}
+        {/* A plain field with a micro-label heading, exactly like the weekly
+            availability editor in Scheduling — not a panel. */}
+        <div className="field">
+          <label className="label">Same for all</label>
+          <div className="task-props">
+            {FIELDS.map((f) => (
+              <div key={f.key}
+                className={`task-prop prop-${f.key} ${sharedOn[f.key] ? '' : 'off'}`}>
+                <label className="bulk-toggle">
+                  <input type="checkbox" checked={sharedOn[f.key]} disabled={busy}
+                    onChange={() => toggleShared(f)} />
+                  <span>{f.label}</span>
+                </label>
+                {sharedOn[f.key] && (
+                  <span className="task-prop-controls">
+                    {f.render(shared, (p) => setShared((v) => ({ ...v, ...p })),
+                      { lists, where: FOR_ALL, disabled: busy })}
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
         </div>
 
         <div className="bulk-head">
@@ -367,9 +372,9 @@ export function AddMultipleModal({ lists, defaultList, onSubmit, onClose }: {
         </div>
 
         <div className="bulk-foot">
-          <button className="btn ghost" onClick={() => addRow()}
-            disabled={busy || rows.length >= MAX_ROWS}>+ Row</button>
-          <span className="bulk-note">
+          <button className="bulk-add-row" title="Add another row"
+            onClick={() => addRow()} disabled={busy || rows.length >= MAX_ROWS}>+ row</button>
+          <span className="hintline">
             {truncated
               ? `Only the first ${MAX_ROWS} rows were kept.`
               : 'Paste a list of titles to fill several rows at once.'}
@@ -388,7 +393,6 @@ export function AddMultipleModal({ lists, defaultList, onSubmit, onClose }: {
         <div className="modal-actions">
           {busy && <span className="bulk-progress">{done} / {live.length}</span>}
           <span className="spacer" />
-          <button className="btn ghost" onClick={onClose} disabled={busy}>Cancel</button>
           <button className="btn" onClick={submit} disabled={busy || !live.length}>
             {busy ? 'Adding…'
               : live.length ? `Add ${live.length} ${live.length === 1 ? 'task' : 'tasks'}`
