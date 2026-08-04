@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import {
-  api, AuthError, clientId, PRIORITIES,
+  api, AuthError, clientId,
   type CreateTaskBody, type List, type Task, type TaskGroup, type TasksViewMode,
 } from '../api'
 import { addDays, dayKey, fmtDue, isOverdue, makeGuard, toLocalInput, ymd } from '../util'
-import { AddMultipleModal } from './AddMultipleModal'
+import { AddMultipleModal, blankValues, FIELDS, type RowValues } from './AddMultipleModal'
 import { Sidebar } from './Sidebar'
 
 const VIEWS: ReadonlyArray<readonly [TasksViewMode, string]> = [
@@ -232,6 +232,7 @@ export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggle
       opt.due = (patch.due as string) ?? null
       opt.due_is_date = typeof patch.due === 'string' && !patch.due.includes('T')
     }
+    if ('start' in patch) opt.start = (patch.start as string) ?? null
     if ('status' in patch) {
       opt.status = patch.status as string
       opt.completed = patch.status === 'COMPLETED'
@@ -659,56 +660,65 @@ function TaskDetail({ task, onClose, onSave, onDelete }: {
 }) {
   const [summary, setSummary] = useState(task.summary || '')
   const [notes, setNotes] = useState(task.notes || '')
-  const [priority, setPriority] = useState(task.priority_label)
-  // Date and time stay separate so an all-day due survives a save as a bare
+  // Every other property lives in the same bag the bulk composer uses, and is
+  // rendered by the same FIELDS table — one form at two multiplicities. Date
+  // and time stay separate slots so an all-day due survives a save as a bare
   // date instead of silently becoming a timed midnight due.
   const hasTime = !!task.due && !task.due_is_date && task.due.includes('T')
-  const [dueDate, setDueDate] = useState(task.due ? dayKey(task.due) : '')
-  const [dueTime, setDueTime] = useState(hasTime ? toLocalInput(task.due!).slice(11, 16) : '')
-  const [tags, setTags] = useState(task.tags.join(', '))
+  const [vals, setVals] = useState<RowValues>(() => ({
+    ...blankValues(task.list),
+    priority: task.priority_label,
+    dueDate: task.due ? dayKey(task.due) : '',
+    dueTime: hasTime ? toLocalInput(task.due!).slice(11, 16) : '',
+    startDate: task.start ? dayKey(task.start) : '',
+    tags: task.tags.join(', '),
+  }))
+  const patch = (p: Partial<RowValues>) => setVals((v) => ({ ...v, ...p }))
+
+  // The list picker is the composer's alone: moving a task between lists means
+  // moving it between CalDAV collections, which PATCH doesn't do. Notes keeps
+  // its full-width textarea — the composer's one-line notes input is a density
+  // concession a single-task form doesn't need.
+  const props = FIELDS.filter((f) => f.key !== 'list' && f.key !== 'notes')
 
   const save = () => onSave({
     summary,
     notes,
-    priority,
-    due: dueDate ? (dueTime ? `${dueDate}T${dueTime}` : dueDate) : null,
-    tags: tags.split(',').map((s) => s.trim()).filter(Boolean),
+    priority: vals.priority,
+    due: vals.dueDate ? (vals.dueTime ? `${vals.dueDate}T${vals.dueTime}` : vals.dueDate) : null,
+    start: vals.startDate || null,
+    tags: vals.tags.split(',').map((s) => s.trim()).filter(Boolean),
   })
 
   return (
     <div className="overlay" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+      <div className="modal task-modal" role="dialog" aria-modal="true" aria-label="Task"
+        onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
           <span className="modal-title">Task</span>
-          <button className="icon-btn" onClick={onClose}>✕</button>
+          <button className="icon-btn" onClick={onClose} aria-label="Close">✕</button>
+        </div>
+        {/* Title and notes are the two controls FIELDS doesn't render, so they
+            carry their own htmlFor/id pair — only one editor is ever open. */}
+        <div className="field">
+          <label className="label" htmlFor="task-title">Title</label>
+          <input id="task-title" className="input" value={summary}
+            onChange={(e) => setSummary(e.target.value)} />
+        </div>
+        <div className="task-props">
+          {props.map((f) => (
+            <div key={f.key} className={`task-prop prop-${f.key}`}>
+              <label className="label">{f.label}</label>
+              <span className="task-prop-controls">
+                {f.render(vals, patch, { lists: [], where: '', disabled: false })}
+              </span>
+            </div>
+          ))}
         </div>
         <div className="field">
-          <label className="label">Title</label>
-          <input className="input" value={summary} onChange={(e) => setSummary(e.target.value)} />
-        </div>
-        <div className="field">
-          <label className="label">Notes</label>
-          <textarea className="input" rows={3} value={notes} onChange={(e) => setNotes(e.target.value)} />
-        </div>
-        <div className="field-row">
-          <div className="field">
-            <label className="label">Priority</label>
-            <select className="input" value={priority} onChange={(e) => setPriority(e.target.value)}>
-              {PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
-            </select>
-          </div>
-          <div className="field">
-            <label className="label">Due</label>
-            <input className="input" type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
-          </div>
-          <div className="field">
-            <label className="label">Time (optional)</label>
-            <input className="input" type="time" value={dueTime} onChange={(e) => setDueTime(e.target.value)} />
-          </div>
-        </div>
-        <div className="field">
-          <label className="label">Tags (comma-separated)</label>
-          <input className="input" value={tags} onChange={(e) => setTags(e.target.value)} />
+          <label className="label" htmlFor="task-notes">Notes</label>
+          <textarea id="task-notes" className="input" rows={3} value={notes}
+            onChange={(e) => setNotes(e.target.value)} />
         </div>
         <div className="modal-actions">
           <button className="btn ghost" onClick={onDelete}>Delete</button>

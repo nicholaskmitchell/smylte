@@ -76,6 +76,19 @@ describe('AddMultipleModal', () => {
     expect(add()).toBeDisabled()
   })
 
+  it('follows the app\'s modal conventions', () => {
+    setup()
+    // A plain labelled field, like Scheduling's "Weekly availability" — the
+    // shared controls are not fenced off in a panel of their own.
+    expect(screen.getByText('Same for all')).toBeInTheDocument()
+    // Row-adding uses the app's dashed "+ noun" affordance.
+    expect(screen.getByRole('button', { name: '+ row' })).toBeInTheDocument()
+    // No modal in this app has a Cancel button — ✕, Escape and the backdrop
+    // are how you leave.
+    expect(screen.queryByRole('button', { name: /cancel/i })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Close' })).toBeInTheDocument()
+  })
+
   it('sends only the rows with a title, in order', async () => {
     const { onSubmit, user } = setup()
     await user.type(title(1), 'first')
