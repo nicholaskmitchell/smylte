@@ -48,6 +48,25 @@ export interface Task {
   etag: string
 }
 
+// The priority vocabulary the backend maps to iCal PRIORITY ints (edit.py's
+// PRIORITY table). Lives here rather than in a view so the task list and the
+// bulk composer can share it without importing each other.
+export const PRIORITIES = ['none', 'low', 'medium', 'high'] as const
+
+// Everything POST /lists/{id}/tasks accepts (backend CreateTask), minus the
+// client_id the api client mints. Optional keys are *omitted* to mean "leave
+// unset" — the backend only copies non-None fields onto the VTODO, so sending
+// notes: '' would write an empty DESCRIPTION rather than no description.
+export interface CreateTaskBody {
+  summary: string
+  notes?: string
+  priority?: string          // 'low' | 'medium' | 'high' ('none' is omitted)
+  due?: string               // 'YYYY-MM-DD' (all-day) or 'YYYY-MM-DDTHH:MM' (timed)
+  start?: string             // 'YYYY-MM-DD'
+  tags?: string[]
+  parent?: string            // parent task uid, for subtasks
+}
+
 export interface CalEvent {
   uid: string
   id: string                 // unique per rendered instance (uid, or `uid::recurrence_id`)
