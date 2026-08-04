@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
-import { api, clientId, type List, type Task, type TaskGroup, type TasksViewMode } from '../api'
+import {
+  api, AuthError, clientId,
+  type CreateTaskBody, type List, type Task, type TaskGroup, type TasksViewMode,
+} from '../api'
 import { addDays, dayKey, fmtDue, isOverdue, makeGuard, toLocalInput, ymd } from '../util'
+import { AddMultipleModal, blankValues, FIELDS, type RowValues } from './AddMultipleModal'
 import { Sidebar } from './Sidebar'
-
-const PRIORITIES = ['none', 'low', 'medium', 'high']
 
 const VIEWS: ReadonlyArray<readonly [TasksViewMode, string]> = [
   ['list', 'List'], ['day3', '3-Day'], ['week', 'Week'],
@@ -24,6 +26,9 @@ export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggle
   const [lists, setLists] = useState<List[]>([])
   const [tasks, setTasks] = useState<Task[]>([])
   const [detail, setDetail] = useState<Task | null>(null)
+  // The "Add multiple" composer. Null means closed; open, it holds the list the
+  // quick-add picker was showing, which seeds the modal's shared-list control.
+  const [bulkList, setBulkList] = useState<string | null>(null)
   // A transient browsing mode (not persisted): the sidebar's "View completed"
   // button flips this to show a dedicated pane of just the completed tasks,
   // regardless of the show-completed setting.
@@ -114,16 +119,31 @@ export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggle
   // Every task carries its own list id (`list`), so writes below target the
   // task's own list rather than a single "selected" one — essential once the
   // combined view mixes tasks from several lists.
-  const draftTask = (uid: string, listId: string, body: { summary: string; due?: string; parent?: string }): Task => ({
-    uid, list: listId, summary: body.summary, notes: null, status: 'NEEDS-ACTION',
-    completed: false, cancelled: false, priority: null, priority_label: 'none',
+  const draftTask = (uid: string, listId: string, body: CreateTaskBody): Task => ({
+    uid, list: listId, summary: body.summary, notes: body.notes ?? null, status: 'NEEDS-ACTION',
+    completed: false, cancelled: false,
+    // `priority` is the numeric iCal field the server derives; the rows render
+    // `priority_label`, so the stand-in paints the right stripe right away and
+    // the server's DTO fills the number in when it lands.
+    priority: null, priority_label: body.priority || 'none',
     percent_complete: null, due: body.due ?? null,
     due_is_date: !!body.due && !body.due.includes('T'),
-    start: null, tags: [], parent: body.parent ?? null, children: [],
+    start: body.start ?? null, tags: body.tags ?? [], parent: body.parent ?? null, children: [],
     child_count: 0, completed_child_count: 0, derived_percent: null,
     pinned: false, href: '', etag: '',
   })
-  const create = async (listId: string, body: { summary: string; due?: string; parent?: string }) => {
+  // Swap a settled server DTO in for its stand-in. `key` is the loadKey the
+  // create was issued under — the user may have switched views mid-flight.
+  const settleCreate = (cid: string, key: string, t: Task) => {
+    const here = key === keyRef.current
+    setTasks((ts) => {
+      if (ts.some((x) => x.uid === cid)) return ts.map((x) => (x.uid === cid ? t : x))
+      // Stand-in already gone — a refetch brought the real task, or the view
+      // changed. Re-append only when it belongs here and isn't shown yet.
+      return here && !ts.some((x) => x.uid === t.uid) ? [...ts, t] : ts
+    })
+  }
+  const create = async (listId: string, body: CreateTaskBody) => {
     if (!listId) return
     const cid = clientId()
     const key = loadKey                   // the view this create belongs to
@@ -131,13 +151,49 @@ export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggle
     setTasks((ts) => [...ts, draftTask(cid, listId, body)])
     const t = await guard(() => api.createTask(listId, { ...body, client_id: cid }))
     if (!t) { setTasks((ts) => ts.filter((x) => x.uid !== cid)); return }
-    const here = key === keyRef.current    // the user may have switched views mid-flight
-    setTasks((ts) => {
-      if (ts.some((x) => x.uid === cid)) return ts.map((x) => (x.uid === cid ? t : x))
-      // Stand-in already gone — a refetch brought the real task, or the view
-      // changed. Re-append only when it belongs here and isn't shown yet.
-      return here && !ts.some((x) => x.uid === t.uid) ? [...ts, t] : ts
-    })
+    settleCreate(cid, key, t)
+  }
+  // Create many tasks in one go, for the "Add multiple" composer: one optimistic
+  // paint for the whole batch, then one request per task, in order.
+  //
+  // Sequential on purpose. TaskService holds a single lock around every engine
+  // call and each create is a CalDAV PUT plus a re-read GET, so parallel POSTs
+  // would queue server-side anyway; going one at a time costs nothing and buys
+  // an honest progress count, per-row failure attribution, and a clean stop when
+  // the session expires mid-batch.
+  //
+  // Deliberately bypasses `guard`: a nine-row batch that fails would raise nine
+  // toasts. Failures come back as indexes instead and the modal reports them in
+  // place, against the rows that produced them.
+  const createMany = async (
+    items: Array<{ listId: string; body: CreateTaskBody }>,
+    onProgress: (done: number) => void,
+  ): Promise<number[]> => {
+    const key = loadKey
+    const cids = items.map(() => clientId())
+    invalidateFetches()
+    setTasks((ts) => [...ts, ...items.map((it, i) => draftTask(cids[i], it.listId, it.body))])
+    const failed: number[] = []
+    for (let i = 0; i < items.length; i++) {
+      try {
+        const t = await api.createTask(items[i].listId, { ...items[i].body, client_id: cids[i] })
+        settleCreate(cids[i], key, t)
+      } catch (e) {
+        if (e instanceof AuthError) {
+          // Session died mid-batch. Drop every stand-in that can no longer land
+          // and hand the rest back as failures, so nothing is left painted.
+          const rest = cids.slice(i)
+          setTasks((ts) => ts.filter((x) => !rest.includes(x.uid)))
+          onExpire()
+          return [...failed, ...items.map((_, n) => n).filter((n) => n >= i)]
+        }
+        console.error(e)
+        failed.push(i)
+        setTasks((ts) => ts.filter((x) => x.uid !== cids[i]))
+      }
+      onProgress(i + 1)
+    }
+    return failed
   }
   const addTask = (listId: string, summary: string, due?: string) =>
     create(listId, due ? { summary, due } : { summary })
@@ -176,6 +232,7 @@ export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggle
       opt.due = (patch.due as string) ?? null
       opt.due_is_date = typeof patch.due === 'string' && !patch.due.includes('T')
     }
+    if ('start' in patch) opt.start = (patch.start as string) ?? null
     if ('status' in patch) {
       opt.status = patch.status as string
       opt.completed = patch.status === 'COMPLETED'
@@ -305,7 +362,8 @@ export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggle
         ) : view === 'list' ? (
           <>
             {defaultList && (
-              <QuickAdd onSubmit={addTask} defaultList={defaultList} lists={visibleLists} />
+              <QuickAdd onSubmit={addTask} onMultiple={setBulkList}
+                defaultList={defaultList} lists={visibleLists} />
             )}
             <div className="scroll">
               {active.map((t) => (
@@ -362,6 +420,11 @@ export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggle
         <TaskDetail task={detail} onClose={() => setDetail(null)}
           onSave={(patch) => { saveDetail(detail, patch); setDetail(null) }}
           onDelete={() => { remove(detail); setDetail(null) }} />
+      )}
+
+      {bulkList !== null && (
+        <AddMultipleModal lists={visibleLists} defaultList={bulkList}
+          onSubmit={createMany} onClose={() => setBulkList(null)} />
       )}
     </div>
   )
@@ -537,8 +600,10 @@ function TaskRow({ task, sub, dot, onToggle, onRemove, onOpen, onAddSub }: {
   )
 }
 
-function QuickAdd({ onSubmit, defaultList, lists }: {
+function QuickAdd({ onSubmit, onMultiple, defaultList, lists }: {
   onSubmit: (listId: string, v: string) => void
+  // Opens the bulk composer, seeded with whichever list is selected here.
+  onMultiple: (listId: string) => void
   defaultList: string
   // When provided (combined view), a compact picker chooses the target list;
   // otherwise the single focused list is implied.
@@ -565,6 +630,9 @@ function QuickAdd({ onSubmit, defaultList, lists }: {
         </select>
       )}
       <button className="btn" onClick={go}>Add</button>
+      <button className="btn ghost quickadd-multi" onClick={() => onMultiple(target)}>
+        Add multiple
+      </button>
     </div>
   )
 }
@@ -592,56 +660,65 @@ function TaskDetail({ task, onClose, onSave, onDelete }: {
 }) {
   const [summary, setSummary] = useState(task.summary || '')
   const [notes, setNotes] = useState(task.notes || '')
-  const [priority, setPriority] = useState(task.priority_label)
-  // Date and time stay separate so an all-day due survives a save as a bare
+  // Every other property lives in the same bag the bulk composer uses, and is
+  // rendered by the same FIELDS table — one form at two multiplicities. Date
+  // and time stay separate slots so an all-day due survives a save as a bare
   // date instead of silently becoming a timed midnight due.
   const hasTime = !!task.due && !task.due_is_date && task.due.includes('T')
-  const [dueDate, setDueDate] = useState(task.due ? dayKey(task.due) : '')
-  const [dueTime, setDueTime] = useState(hasTime ? toLocalInput(task.due!).slice(11, 16) : '')
-  const [tags, setTags] = useState(task.tags.join(', '))
+  const [vals, setVals] = useState<RowValues>(() => ({
+    ...blankValues(task.list),
+    priority: task.priority_label,
+    dueDate: task.due ? dayKey(task.due) : '',
+    dueTime: hasTime ? toLocalInput(task.due!).slice(11, 16) : '',
+    startDate: task.start ? dayKey(task.start) : '',
+    tags: task.tags.join(', '),
+  }))
+  const patch = (p: Partial<RowValues>) => setVals((v) => ({ ...v, ...p }))
+
+  // The list picker is the composer's alone: moving a task between lists means
+  // moving it between CalDAV collections, which PATCH doesn't do. Notes keeps
+  // its full-width textarea — the composer's one-line notes input is a density
+  // concession a single-task form doesn't need.
+  const props = FIELDS.filter((f) => f.key !== 'list' && f.key !== 'notes')
 
   const save = () => onSave({
     summary,
     notes,
-    priority,
-    due: dueDate ? (dueTime ? `${dueDate}T${dueTime}` : dueDate) : null,
-    tags: tags.split(',').map((s) => s.trim()).filter(Boolean),
+    priority: vals.priority,
+    due: vals.dueDate ? (vals.dueTime ? `${vals.dueDate}T${vals.dueTime}` : vals.dueDate) : null,
+    start: vals.startDate || null,
+    tags: vals.tags.split(',').map((s) => s.trim()).filter(Boolean),
   })
 
   return (
     <div className="overlay" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+      <div className="modal task-modal" role="dialog" aria-modal="true" aria-label="Task"
+        onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
           <span className="modal-title">Task</span>
-          <button className="icon-btn" onClick={onClose}>✕</button>
+          <button className="icon-btn" onClick={onClose} aria-label="Close">✕</button>
+        </div>
+        {/* Title and notes are the two controls FIELDS doesn't render, so they
+            carry their own htmlFor/id pair — only one editor is ever open. */}
+        <div className="field">
+          <label className="label" htmlFor="task-title">Title</label>
+          <input id="task-title" className="input" value={summary}
+            onChange={(e) => setSummary(e.target.value)} />
+        </div>
+        <div className="task-props">
+          {props.map((f) => (
+            <div key={f.key} className={`task-prop prop-${f.key}`}>
+              <label className="label">{f.label}</label>
+              <span className="task-prop-controls">
+                {f.render(vals, patch, { lists: [], where: '', disabled: false })}
+              </span>
+            </div>
+          ))}
         </div>
         <div className="field">
-          <label className="label">Title</label>
-          <input className="input" value={summary} onChange={(e) => setSummary(e.target.value)} />
-        </div>
-        <div className="field">
-          <label className="label">Notes</label>
-          <textarea className="input" rows={3} value={notes} onChange={(e) => setNotes(e.target.value)} />
-        </div>
-        <div className="field-row">
-          <div className="field">
-            <label className="label">Priority</label>
-            <select className="input" value={priority} onChange={(e) => setPriority(e.target.value)}>
-              {PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
-            </select>
-          </div>
-          <div className="field">
-            <label className="label">Due</label>
-            <input className="input" type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
-          </div>
-          <div className="field">
-            <label className="label">Time (optional)</label>
-            <input className="input" type="time" value={dueTime} onChange={(e) => setDueTime(e.target.value)} />
-          </div>
-        </div>
-        <div className="field">
-          <label className="label">Tags (comma-separated)</label>
-          <input className="input" value={tags} onChange={(e) => setTags(e.target.value)} />
+          <label className="label" htmlFor="task-notes">Notes</label>
+          <textarea id="task-notes" className="input" rows={3} value={notes}
+            onChange={(e) => setNotes(e.target.value)} />
         </div>
         <div className="modal-actions">
           <button className="btn ghost" onClick={onDelete}>Delete</button>
