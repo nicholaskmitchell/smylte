@@ -621,7 +621,7 @@ function QuickAdd({ onSubmit, onExpand, defaultList, lists }: {
   onSubmit: (listId: string, v: string) => void
   // Opens the full single-task form, carrying whatever is typed here and the
   // list selected here. Enter still creates outright — that's the fast path,
-  // and this button is the way to reach the rest of a task's properties.
+  // and the button ("New…") is the way to reach a task's other properties.
   onExpand: (listId: string, v: string) => void
   defaultList: string
   // When provided (combined view), a compact picker chooses the target list;
@@ -648,7 +648,10 @@ function QuickAdd({ onSubmit, onExpand, defaultList, lists }: {
           {lists.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
         </select>
       )}
-      <button className="btn" onClick={() => { onExpand(target, v.trim()); setV('') }}>Add</button>
+      {/* Labelled with an ellipsis because it opens the form rather than
+          creating outright — Enter in the field is the instant path. */}
+      <button className="btn" title="Open the full form for a new task"
+        onClick={() => { onExpand(target, v.trim()); setV('') }}>New…</button>
     </div>
   )
 }
