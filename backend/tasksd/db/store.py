@@ -61,7 +61,24 @@ def upsert_collection(conn: sqlite3.Connection, ci: CollectionInfo) -> None:
 
 
 def has_collection(conn: sqlite3.Connection, href: str) -> bool:
-    return conn.execute("SELECT 1 FROM collections WHERE href=?", (href,)).fetchone() is not None
+    """Is this collection present AND live? A deleted collection keeps its row
+    (sync marks `deleted`, it is not dropped), so answering on existence alone
+    let writes and booking links target a calendar that is gone from the server —
+    every attempt failing at the DAV layer as an opaque 502."""
+    return conn.execute(
+        "SELECT 1 FROM collections WHERE href=? AND deleted=0", (href,)
+    ).fetchone() is not None
+
+
+def disable_links_for_collection(conn: sqlite3.Connection, href: str) -> int:
+    """Disable every booking link aimed at a collection that has gone away.
+    Disabled rather than deleted: the link keeps its history and settings so it
+    can be pointed at another calendar."""
+    cur = conn.execute(
+        "UPDATE booking_links SET enabled=0 WHERE calendar_href=? AND enabled=1", (href,)
+    )
+    conn.commit()
+    return cur.rowcount
 
 
 def get_collections(conn: sqlite3.Connection, *, include_deleted: bool = False) -> list[sqlite3.Row]:
