@@ -40,11 +40,19 @@ function setup(view: TasksViewMode = 'list') {
   return { onExpire, user: userEvent.setup() }
 }
 
-/** Open the bulk composer and put a title in each of the first `n` rows. */
+/** Quick-add's Add button opens the single-task form. */
+async function openAdd(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(await screen.findByRole('button', { name: 'Add' }))
+  return screen.findByRole('dialog', { name: 'Add task' })
+}
+
+/** …and "Add multiple" inside it hands off to the composer. */
 async function openBulk(user: ReturnType<typeof userEvent.setup>, titles: string[]) {
-  await user.click(await screen.findByRole('button', { name: 'Add multiple' }))
+  await openAdd(user)
+  await user.click(screen.getByRole('button', { name: 'Add multiple' }))
   await screen.findByRole('dialog', { name: /add multiple tasks/i })
   for (const [i, t] of titles.entries()) {
+    await user.clear(screen.getByLabelText(`Title, row ${i + 1}`))
     await user.type(screen.getByLabelText(`Title, row ${i + 1}`), t)
   }
 }
@@ -64,18 +72,62 @@ beforeEach(() => {
 
 afterEach(() => errSpy.mockRestore())
 
-describe('<TasksView> "Add multiple"', () => {
-  it('sits beside the quick-add in List view only', async () => {
+describe('<TasksView> creating', () => {
+  it('opens the single-task form from quick-add, carrying what was typed', async () => {
     const { user } = setup()
-    expect(await screen.findByRole('button', { name: 'Add multiple' })).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Add multiple' }))
-    expect(screen.getByRole('dialog', { name: /add multiple tasks/i })).toBeInTheDocument()
+    await user.type(await screen.findByPlaceholderText('Add a task…'), 'buy milk')
+    const dialog = await openAdd(user)
+    expect(within(dialog).getByLabelText('Title')).toHaveValue('buy milk')
+    // The title moved into the form rather than being left behind in the bar.
+    expect(screen.getByPlaceholderText('Add a task…')).toHaveValue('')
+    // Creating offers the list picker and the route to bulk, not Delete.
+    expect(within(dialog).getByLabelText('List')).toBeInTheDocument()
+    expect(within(dialog).getByRole('button', { name: 'Add multiple' })).toBeInTheDocument()
+    expect(within(dialog).queryByRole('button', { name: 'Delete' })).not.toBeInTheDocument()
   })
 
-  it('is absent from the day-column views, which have no quick-add', async () => {
+  it('keeps Enter as the fast path — straight to a task, no modal', async () => {
+    m.createTask.mockResolvedValue(task({ summary: 'solo' }))
+    const { user } = setup()
+    await user.type(await screen.findByPlaceholderText('Add a task…'), 'solo{Enter}')
+    await waitFor(() => expect(m.createTask).toHaveBeenCalledTimes(1))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('creates from the single-task form with its properties', async () => {
+    m.createTask.mockResolvedValue(task({ summary: 'with props' }))
+    const { user } = setup()
+    await user.type(await screen.findByPlaceholderText('Add a task…'), 'with props')
+    const dialog = await openAdd(user)
+    await user.selectOptions(screen.getByLabelText('Priority'), 'high')
+    await user.type(screen.getByLabelText('Due date'), '2026-08-10')
+    await user.type(screen.getByLabelText('Tags'), 'a, b')
+    // Scoped: the quick-add bar behind the modal has an "Add" button too.
+    await user.click(within(dialog).getByRole('button', { name: 'Add' }))
+
+    await waitFor(() => expect(m.createTask).toHaveBeenCalledTimes(1))
+    expect(m.createTask.mock.calls[0][1]).toEqual({
+      summary: 'with props', priority: 'high', due: '2026-08-10', tags: ['a', 'b'],
+      client_id: expect.any(String),
+    })
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('hands the typed title on to the bulk composer', async () => {
+    const { user } = setup()
+    await user.type(await screen.findByPlaceholderText('Add a task…'), 'carried over')
+    await openAdd(user)
+    await user.click(screen.getByRole('button', { name: 'Add multiple' }))
+    const bulk = await screen.findByRole('dialog', { name: /add multiple tasks/i })
+    expect(within(bulk).getByLabelText('Title, row 1')).toHaveValue('carried over')
+    // Only one dialog at a time — the single form gave way to the composer.
+    expect(screen.getAllByRole('dialog')).toHaveLength(1)
+  })
+
+  it('has no quick-add at all in the day-column views', async () => {
     setup('day3')
     await screen.findByRole('button', { name: 'Today' })
-    expect(screen.queryByRole('button', { name: 'Add multiple' })).not.toBeInTheDocument()
+    expect(screen.queryByPlaceholderText('Add a task…')).not.toBeInTheDocument()
   })
 
   it('creates every row, then closes and paints the results', async () => {
