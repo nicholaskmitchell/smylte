@@ -1,6 +1,8 @@
 """Account-synced settings store — pure sqlite (the `db` fixture), no Radicale."""
 from __future__ import annotations
 
+import pytest
+
 from tasksd.db import store
 
 
@@ -130,3 +132,32 @@ def test_settings_appearance_and_dashboard_are_independent(db):
 def test_settings_dashboard_empty_list_is_a_value(db):
     store.update_settings(db, {"dashboard": [{"id": "m1", "kind": "today"}]})
     assert store.update_settings(db, {"dashboard": []})["dashboard"] == []
+
+
+def test_bool_env_refuses_a_value_it_cannot_read():
+    """auth_enabled, cookie_secure and access_required all come through _bool, so
+    treating an unrecognised value as "not true" made every one of them fail
+    OPEN — `TASKS_AUTH_ENABLED=Y` or a plain typo silently turned off the API
+    auth gate on an internet-facing deployment."""
+    import os
+
+    from tasksd.config import _bool
+
+    key = "TASKS_TEST_BOOL"
+    try:
+        for v in ("1", "true", "TRUE", "yes", "Y", "on", " true "):
+            os.environ[key] = v
+            assert _bool(key, False) is True, v
+        for v in ("0", "false", "no", "n", "off"):
+            os.environ[key] = v
+            assert _bool(key, True) is False, v
+        for v in ("enabled", "ture", "maybe", "2"):
+            os.environ[key] = v
+            with pytest.raises(ValueError, match="not a boolean"):
+                _bool(key, True)
+        os.environ[key] = ""            # unset-ish: fall back to the default
+        assert _bool(key, True) is True
+        del os.environ[key]
+        assert _bool(key, True) is True
+    finally:
+        os.environ.pop(key, None)

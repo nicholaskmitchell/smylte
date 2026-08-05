@@ -593,3 +593,25 @@ def test_settings_dashboard_caps_module_count(client):
         for i in range(50)
     ]
     assert client.put("/api/settings", json={"dashboard": many}).status_code == 422
+
+
+def test_required_window_bounds_and_non_finite_sidecar_are_422(client):
+    """Two shapes that reached past validation and 500ed in the service. The
+    sidecar one persisted: a stored Infinity is legal to json.loads and illegal
+    to json.dumps, so every later read of that whole list failed — and the
+    sidecar is the one thing a cache drop cannot rebuild."""
+    cid = _cal(client)["id"]
+    lid = _list(client)["id"]
+    for start, end in (("", "2026-08-01"), ("   ", "2026-08-01"), ("2026-07-01", "")):
+        r = client.get(f"/api/calendars/{cid}/events", params={"start": start, "end": end})
+        assert r.status_code == 422, (start, end, r.status_code)
+
+    t = client.post(f"/api/lists/{lid}/tasks", json={"summary": "sc"}).json()
+    for literal in ("NaN", "Infinity", "-Infinity"):
+        r = client.put(f"/api/lists/{lid}/tasks/{t['uid']}/sidecar",
+                       content=f'{{"sort_order": {literal}}}',
+                       headers={"Content-Type": "application/json"})
+        assert r.status_code == 422, (literal, r.status_code)
+        # And the list is still readable — rendering the 422 must not blow up
+        # either, which it did while the handler echoed the offending value back.
+        assert client.get(f"/api/lists/{lid}/tasks").status_code == 200

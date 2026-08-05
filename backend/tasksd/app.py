@@ -28,6 +28,7 @@ from fastapi import (
     Request,
     status,
 )
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import (
     FileResponse,
     JSONResponse,
@@ -117,7 +118,10 @@ class EditTask(BaseModel):
 class Sidecar(BaseModel):
     pinned: bool | None = None
     kanban_column: str | None = None
-    sort_order: float | None = None
+    # Non-finite floats survive JSON parsing but not JSON *serialization*, so an
+    # Infinity stored here 500ed every subsequent read of the whole list — the
+    # sidecar is the one thing a cache drop cannot rebuild.
+    sort_order: float | None = Field(default=None, allow_inf_nan=False)
     estimated_minutes: int | None = None
     repeat_from_completion: bool | None = None
 
@@ -592,6 +596,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app = FastAPI(title="tasksd", version="0.1.0-phase1", lifespan=lifespan)
 
+    @app.exception_handler(RequestValidationError)
+    async def _invalid_request(request: Request, exc: RequestValidationError):
+        # FastAPI's default handler echoes the offending input back in the body.
+        # A non-finite float round-trips through json.loads but not json.dumps,
+        # so rendering the 422 itself raised and the client got a 500 instead —
+        # on a validation failure, of all things. Keep what a client can act on
+        # (where it was and what was wrong) and drop the echoed value.
+        return JSONResponse(
+            status_code=422,
+            content={"detail": [
+                {"type": e.get("type"), "loc": list(e.get("loc", ())), "msg": e.get("msg")}
+                for e in exc.errors()
+            ]},
+        )
+
     # Domain exceptions → meaningful statuses. Starlette matches handlers by MRO,
     # so ConflictError/NotFound/AuthError win over the DavError catch-all.
     @app.exception_handler(ConflictError)
@@ -772,7 +791,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def get_events(request: Request, cal_id: str,
                          start: str = Query(...), end: str = Query(...)):
         href = _href(request, cal_id)
-        _parse_datelike(start), _parse_datelike(end)   # 422 on a bad window bound
+        # 422 on a bad window bound. _parse_datelike reads "" as "unset", which
+        # is right for an optional field but not for a required bound — the empty
+        # string went straight through to the service and 500ed there.
+        for name, value in (("start", start), ("end", end)):
+            if _parse_datelike(value) is None:
+                raise HTTPException(422, f"{name} is required (YYYY-MM-DD)")
         return await _run(_svc(request).events_in_range, href, start, end)
 
     @api.post("/calendars/{cal_id}/events", status_code=201)
