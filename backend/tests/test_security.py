@@ -196,6 +196,42 @@ def test_login_lockout_and_spoofed_ip_header(make_app):
 
 
 @pytest.mark.radicale
+def test_concurrent_logins_cannot_outrun_the_lockout(make_app):
+    """The limit must bound how many guesses are EVALUATED, not just how many
+    are counted afterwards. `allowed()` reserved nothing, so with the scrypt
+    verification behind an await every request arriving during the hash passed
+    the gate on one credit: 200 concurrent guesses all got a real verdict
+    against a limit of 5."""
+    import asyncio
+    from collections import Counter
+
+    import httpx
+
+    async def hammer():
+        transport = httpx.ASGITransport(app=make_app())
+        async with httpx.AsyncClient(transport=transport, base_url="http://t") as c:
+            async def guess(i):
+                r = await c.post("/api/login",
+                                 json={"username": "admin", "password": f"guess-{i}"})
+                return r.status_code
+            return Counter(await asyncio.gather(*[guess(i) for i in range(60)]))
+
+    codes = asyncio.run(hammer())
+    # 5 evaluated (401), the rest turned away before hashing (429).
+    assert codes[401] == 5, codes
+    assert codes[401] + codes[429] == 60, codes
+
+
+@pytest.mark.radicale
+def test_oversized_login_body_is_rejected(make_app):
+    """The only request model here that used to be unbounded — a rejected guess
+    should never make the server hash a multi-megabyte password."""
+    with TestClient(make_app()) as c:
+        r = c.post("/api/login", json={"username": "admin", "password": "x" * 5000})
+        assert r.status_code == 422
+
+
+@pytest.mark.radicale
 def test_login_error_does_not_reveal_which_field_failed(make_app):
     with TestClient(make_app()) as c:
         bad_user = c.post("/api/login", json={"username": "nobody", "password": "testpass123"})

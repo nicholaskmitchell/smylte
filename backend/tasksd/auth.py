@@ -127,6 +127,36 @@ class RateLimiter:
         until = self._locked.get(key)
         return max(0, int(until - time.monotonic())) if until else 0
 
+    def attempt(self, key: str) -> bool:
+        """Reserve one attempt up front; False if the key is already locked out.
+
+        Use this, not ``allowed()``, whenever the thing being rate-limited is
+        awaited. ``allowed()`` is a pure read — it reserves nothing — so with the
+        verification behind an ``await`` every request that arrives during it
+        passes the gate, and the counter only moves once the first one comes
+        back. The window is the whole password hash, which is deliberately slow,
+        so the bypass is wide: 200 concurrent guesses were all evaluated against
+        a limit of 5. Recording before the await closes it.
+
+        A correct password still clears the reservation via ``record_success``,
+        so an honest user is never penalised for their own successful logins.
+        """
+        now = time.monotonic()
+        self._maybe_sweep(now)
+        until = self._locked.get(key)
+        if until is not None:
+            if now < until:
+                return False
+            del self._locked[key]
+        recent = [t for t in self._fails.get(key, []) if now - t < self.window]
+        recent.append(now)
+        if len(recent) >= self.max_fails:
+            self._locked[key] = now + self.lockout
+            self._fails.pop(key, None)      # tracked by _locked now; drop the list
+        else:
+            self._fails[key] = recent
+        return True
+
     def record_failure(self, key: str) -> None:
         now = time.monotonic()
         self._maybe_sweep(now)
