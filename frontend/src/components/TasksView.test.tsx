@@ -228,8 +228,45 @@ describe('<TasksView> creating', () => {
     await user.click(screen.getByRole('button', { name: 'Save' }))
 
     await waitFor(() => expect(m.patchTask).toHaveBeenCalled())
-    expect(m.patchTask).toHaveBeenCalledWith('l1', 'u1',
-      expect.objectContaining({ summary: 'Ship it', start: '2026-08-09' }))
+    expect(m.patchTask).toHaveBeenCalledWith('l1', 'u1', { start: '2026-08-09' })
+  })
+
+  it('sends only what changed, so a rename cannot rewrite other properties', async () => {
+    // Every value in this form has round-tripped through a lossy representation:
+    // a TZID-anchored DUE arrives as the viewer's naive wall clock, PRIORITY:3
+    // collapses to "high" and back to 1, a category holding an escaped comma
+    // splits in two. Resending an untouched field therefore rewrites a property
+    // another CalDAV client authored.
+    m.tasks.mockResolvedValue([task({
+      summary: 'Ship it', due: '2026-08-10T09:30:00+02:00', due_is_date: false,
+      priority: 3, priority_label: 'high', tags: ['Home,Garden'],
+    })])
+    m.patchTask.mockResolvedValue(task({ summary: 'Ship it now' }))
+    const { user } = setup()
+    await user.click(await screen.findByText('Ship it'))
+    const title = screen.getByLabelText('Title')
+    await user.clear(title)
+    await user.type(title, 'Ship it now')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => expect(m.patchTask).toHaveBeenCalled())
+    expect(m.patchTask).toHaveBeenCalledWith('l1', 'u1', { summary: 'Ship it now' })
+  })
+
+  it('keeps a timed start editable instead of flattening it to a date', async () => {
+    m.tasks.mockResolvedValue([task({ summary: 'Ship it', start: '2026-08-09T14:30:00' })])
+    m.patchTask.mockResolvedValue(task({ summary: 'Ship it' }))
+    const { user } = setup()
+    await user.click(await screen.findByText('Ship it'))
+    expect((screen.getByLabelText('Start time') as HTMLInputElement).value).toBe('14:30')
+
+    // Touch only the date; the time rides along instead of being dropped.
+    await user.clear(screen.getByLabelText('Start date'))
+    await user.type(screen.getByLabelText('Start date'), '2026-08-11')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => expect(m.patchTask).toHaveBeenCalled())
+    expect(m.patchTask).toHaveBeenCalledWith('l1', 'u1', { start: '2026-08-11T14:30' })
   })
 
   it('still round-trips an all-day due as a bare date and a timed one with a T', async () => {
