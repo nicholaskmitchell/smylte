@@ -54,8 +54,11 @@ log = logging.getLogger("tasksd")
 # ── request models ───────────────────────────────────────────────────────────
 
 class Login(BaseModel):
-    username: str
-    password: str
+    # Bounded like every other model here. Unbounded, a rejected guess could
+    # still make the server hash a multi-megabyte body — and this is the one
+    # route an unauthenticated caller can drive.
+    username: str = Field(max_length=256)
+    password: str = Field(max_length=1024)
 
 
 class CreateList(BaseModel):
@@ -930,22 +933,33 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(api)
 
     # -- auth (login/logout/me are deliberately NOT behind require_auth) --
+    # Caps concurrent password hashes. Per-app (not a module global) so tests
+    # don't share it, matching the limiter instances below.
+    login_hashes = asyncio.Semaphore(4)
     @app.post("/api/login")
     async def login(request: Request, body: Login):
         if authenticator is None:
             return {"authenticated": True, "user": "dev", "auth_enabled": False}
         key = limiter_key(_client_ip(request))   # IPv6 collapses to its /64
-        if not authenticator.limiter.allowed(key):
+        # Reserve the attempt BEFORE the hash, not after the verdict: the hash is
+        # awaited, so a read-only check would let every request that arrives
+        # during it through on one credit. Same reserve-first shape the public
+        # booking routes already use in _throttle.
+        if not authenticator.limiter.attempt(key):
             raise HTTPException(
                 status.HTTP_429_TOO_MANY_REQUESTS,
                 "too many attempts, try later",
                 headers={"Retry-After": str(authenticator.limiter.retry_after(key))},
             )
-        ok = await asyncio.to_thread(
-            authenticator.check_credentials, body.username, body.password
-        )
+        # scrypt is memory-hard by design (~16 MiB a call), so unbounded
+        # concurrency is an unauthenticated memory amplifier — and every other
+        # endpoint shares this thread pool.
+        async with login_hashes:
+            ok = await asyncio.to_thread(
+                authenticator.check_credentials, body.username, body.password
+            )
         if not ok:
-            authenticator.limiter.record_failure(key)
+            # The attempt is already recorded by attempt() above.
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid credentials")
         authenticator.limiter.record_success(key)
         resp = JSONResponse({"authenticated": True, "user": authenticator.user})
