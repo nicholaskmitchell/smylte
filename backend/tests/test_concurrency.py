@@ -9,7 +9,7 @@ import pytest
 from tasksd import ical
 from tasksd.db import connect, init_db
 from tasksd.sync import ConflictError, SyncEngine
-from tests.helpers import foreign_raw
+from tests.helpers import foreign_event_raw, foreign_raw
 
 pytestmark = pytest.mark.radicale
 
@@ -91,3 +91,40 @@ def test_fuzz_interleaved_writers_never_lose_foreign_props(
             assert "X-MOZ-GENERATION" in wire, f"round {n}: X-MOZ-GENERATION lost"
     finally:
         conn_b.close()
+
+
+def test_move_event_carries_a_foreign_edit_made_since_the_last_sync(engine, dav, db, tmp_path):
+    """The cache lags Radicale by up to one poll, and another CalDAV client
+    editing inside that window is the normal case, not a rare race. Moving used
+    to copy the CACHED body to the destination and then force-delete the current
+    source revision, so the foreign edit was destroyed and the move still
+    reported success."""
+    src = dav.create_task_collection(f"mv-a-{random.randrange(1 << 32):x}",
+                                     components=("VEVENT",))
+    dst = dav.create_task_collection(f"mv-b-{random.randrange(1 << 32):x}",
+                                     components=("VEVENT",))
+    try:
+        engine.discover()
+        uid = "mv@x"
+        href = f"{src.href}{uid}.ics"
+        dav.put(href, foreign_event_raw(uid, "Standup"), if_none_match="*")
+        engine.sync(src.href)                     # cache now matches the wire
+
+        # Another client edits it. No sync follows, so the cache is stale — which
+        # is exactly the state the app is in between polls.
+        item = dav.get(href)
+        edited = item.data.decode().replace("SUMMARY:Standup",
+                                            "LOCATION:Room 4\r\nSUMMARY:Standup")
+        assert edited != item.data.decode()
+        dav.put(href, edited.encode(), if_match=item.etag)
+
+        engine.move_event(src.href, dst.href, uid)
+
+        moved = dav.get(f"{dst.href}{uid}.ics").data.decode()
+        assert "LOCATION:Room 4" in moved, "the foreign edit was lost in the move"
+    finally:
+        for c in (src, dst):
+            try:
+                dav.delete_collection(c.href)
+            except Exception:  # noqa: BLE001
+                pass
