@@ -775,6 +775,18 @@ class TaskService:
             "timezone": link["timezone"],
         }
 
+    # ── session revocation (explicit logout) ─────────────────────────────────
+    def revoke_session(self, jti: str, expires_at: float) -> None:
+        with self._lock:
+            store.revoke_session(self._conn, jti, expires_at)
+
+    def live_revocations(self) -> dict[str, float]:
+        # `time` here is datetime.time (imported for the scheduling maths), so
+        # take the epoch from datetime rather than the shadowed module.
+        now = datetime.now(timezone.utc).timestamp()
+        with self._lock:
+            return store.live_revocations(self._conn, now=now)
+
     # ── app settings (account-synced) ─────────────────────────────────────────
     def get_settings(self) -> dict[str, Any]:
         with self._lock:

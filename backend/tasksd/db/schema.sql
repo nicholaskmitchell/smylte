@@ -180,3 +180,14 @@ CREATE TABLE IF NOT EXISTS attachments (
     url             TEXT,
     created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
+
+-- Sessions withdrawn by an explicit logout. A JWT is self-contained and cannot be
+-- recalled, so the only way to make "log out" mean something is to remember the
+-- token id until its own exp passes — after that the token is refused on its own
+-- merits and the row is swept. Persisted rather than held in memory: a restart
+-- would otherwise resurrect every logged-out session.
+CREATE TABLE IF NOT EXISTS revoked_sessions (
+    jti        TEXT PRIMARY KEY,
+    expires_at REAL NOT NULL           -- the token's own exp, as a UNIX timestamp
+);
+CREATE INDEX IF NOT EXISTS idx_revoked_sessions_exp ON revoked_sessions(expires_at);

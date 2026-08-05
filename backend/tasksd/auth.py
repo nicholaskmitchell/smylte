@@ -180,6 +180,8 @@ class Authenticator:
         self._secret = secret
         self._ttl = ttl_s
         self.limiter = RateLimiter()
+        self._revoked: dict[str, float] = {}      # jti -> the token's own exp
+        self._last_revoked_sweep = 0.0
 
     @property
     def user(self) -> str:
@@ -197,16 +199,57 @@ class Authenticator:
     def issue_session(self) -> str:
         now = datetime.now(timezone.utc)
         return jwt.encode(
-            {"sub": self._user, "iat": now, "exp": now + timedelta(seconds=self._ttl)},
+            {
+                "sub": self._user,
+                "iat": now,
+                "exp": now + timedelta(seconds=self._ttl),
+                # Names this session so logout can withdraw exactly it, and not
+                # the ones on your other devices.
+                "jti": secrets.token_hex(16),
+            },
             self._secret,
             algorithm="HS256",
         )
 
-    def verify_session(self, token: str | None) -> bool:
+    def session_claims(self, token: str | None) -> dict | None:
+        """The claims of a usable session cookie, else None — bad signature,
+        expired, or withdrawn by an explicit logout."""
         if not token:
-            return False
+            return None
         try:
-            jwt.decode(token, self._secret, algorithms=["HS256"])
-            return True
+            claims = jwt.decode(token, self._secret, algorithms=["HS256"])
         except Exception:  # noqa: BLE001
-            return False
+            return None
+        if self.is_revoked(claims.get("jti")):
+            return None
+        return claims
+
+    def verify_session(self, token: str | None) -> bool:
+        return self.session_claims(token) is not None
+
+    # ── revocation ────────────────────────────────────────────────────────────
+    # A JWT is self-contained: clearing the cookie only asks the browser to
+    # forget it, so a copy kept anywhere else stayed valid for the rest of the
+    # TTL. Logout records the token id here instead, until its own exp makes the
+    # point moot. Kept in memory so the check on every request stays a dict
+    # lookup, and mirrored into SQLite so a restart cannot resurrect a session
+    # the owner ended.
+
+    def is_revoked(self, jti: str | None) -> bool:
+        if not jti:
+            return False        # pre-jti token: nothing to name, let exp retire it
+        self._sweep_revoked()
+        return jti in self._revoked
+
+    def revoke(self, jti: str, expires_at: float) -> None:
+        self._revoked[jti] = float(expires_at)
+
+    def load_revocations(self, rows: dict[str, float]) -> None:
+        self._revoked.update(rows)
+
+    def _sweep_revoked(self) -> None:
+        now = time.time()
+        if now - self._last_revoked_sweep < 3600:
+            return
+        self._revoked = {j: e for j, e in self._revoked.items() if e > now}
+        self._last_revoked_sweep = now

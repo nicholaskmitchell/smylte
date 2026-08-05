@@ -584,6 +584,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         svc.bind_loop(asyncio.get_running_loop())
         app.state.service = svc
         app.state.sync_trigger = asyncio.Event()
+        if authenticator is not None:
+            # Sessions ended before this process started stay ended.
+            authenticator.load_revocations(await asyncio.to_thread(svc.live_revocations))
         await asyncio.to_thread(svc.bootstrap)
         loop_task = asyncio.create_task(_sync_loop(app))
         try:
@@ -995,7 +998,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return resp
 
     @app.post("/api/logout")
-    async def logout():
+    async def logout(
+        request: Request,
+        session: str | None = Cookie(default=None, alias="tasks_session"),
+    ):
+        # Clearing the cookie only asks the browser to forget the token; the
+        # token itself stays valid for the rest of its TTL. Withdraw this one by
+        # name so a copy of it is refused too — other devices keep their own.
+        if authenticator is not None and session:
+            claims = authenticator.session_claims(session)
+            jti, exp = (claims or {}).get("jti"), (claims or {}).get("exp")
+            if jti and exp:
+                authenticator.revoke(jti, float(exp))
+                await _run(_svc(request).revoke_session, jti, float(exp))
         resp = JSONResponse({"authenticated": False})
         resp.delete_cookie("tasks_session", path="/")
         return resp
