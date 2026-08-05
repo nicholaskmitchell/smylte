@@ -404,7 +404,11 @@
 .field-row .input { min-width: 0; }
 .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
 .btn.ghost.danger { color: var(--warn); border-color: var(--warn); }
-.btn.ghost.danger:hover { color: var(--bg); background: var(--warn); }
+/* hover-guarded like the other button states — see tokens.css */
+@media (hover: hover) {
+  .btn.ghost.danger:hover { color: var(--bg); background: var(--warn); }
+}
+.btn.ghost.danger:active { color: var(--bg); background: var(--warn); }
 
 /* recurring-event scope chooser (this / this & following / all) */
 .scope-choose { display: flex; flex-direction: column; gap: 8px; }
