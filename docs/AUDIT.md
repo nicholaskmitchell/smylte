@@ -13,7 +13,7 @@ and task-edit dirty-tracking).
 Severity is the verifiers' rating. `minor` marks a fix that is a few
 obviously-correct lines needing no design decision — a reasonable place to start.
 
-**31 open.**
+**32 open.**
 
 ## iCalendar read + edit path
 
@@ -766,6 +766,25 @@ daysBetween(oldStartDay, oldEndDay)` and `setEnd(shiftYmd(v, n))`. (`daysBetween
 line 18 already rounds the DST-skewed millisecond delta to whole days correctly.)
 
 ## Tasks view
+
+### [ ] A due date, priority or tag the user *edits* still round-trips lossily
+
+`frontend/src/components/TasksView.tsx:729` · **medium** · bug
+
+Partly addressed: the modal now sends only the fields the user touched, so a rename no
+longer rewrites anything else. The representations themselves are still lossy, so
+editing one of these fields rewrites it through the same funnel:
+
+- **DUE loses its timezone anchor.** `DUE;TZID=Europe/Berlin:20260810T093000` reads back
+  as `2026-08-10T09:30:00+02:00`, `toLocalInput` renders it in the *viewer's* wall clock,
+  and the save sends a naive string — emitting `DUE:20260810T033000`, floating, with no
+  TZID. Fix: resend the original offset and teach `_parse_datelike` to preserve it.
+- **PRIORITY is quantised.** The four-way label bucket maps 1-4 to "high" and "high" back
+  to 1, so a task carrying `PRIORITY:3` returns as `PRIORITY:1`. Fix: keep the integer and
+  only map when the user picks a new label.
+- **Tags split on commas.** `CATEGORIES:Home\,Garden` is one category; the comma-joined
+  input splits it in two on save. Fix: a chip editor, or a delimiter a category cannot
+  contain.
 
 ### [ ] Retrying a failed bulk create mints a fresh client_id, so a lost response duplicates the task
 
