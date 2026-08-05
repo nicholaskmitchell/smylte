@@ -182,14 +182,55 @@ def test_dst_transition_keeps_local_wall_time():
 
 # ── guards / passthrough ──────────────────────────────────────────────────────
 
-def test_subdaily_rule_is_capped_and_fast():
+def test_subdaily_rule_is_refused_not_expanded():
+    """A sub-daily rule is declined up front rather than expanded to a capped
+    prefix. The cap bounded how many occurrences were *kept*, not the work done
+    to find them: the library skips from DTSTART to the window one instance at a
+    time before it yields anything, so cost grew with the DTSTART→window gap and
+    no cap or `except` could bound it."""
     raw = foreign_event_raw("min", dtend="20260106T090100Z", rrule="FREQ=MINUTELY")
     t = time.monotonic()
-    occs = recur.expand_occurrences(raw, date(2026, 1, 6), date(2026, 2, 17),
-                                    max_occurrences=50)
-    elapsed = time.monotonic() - t
-    assert len(occs) == 50
-    assert elapsed < 2.0  # bounded, lazy prefix — never enumerates the full set
+    with pytest.raises(ValueError, match="instances/day"):
+        recur.expand_occurrences(raw, date(2026, 1, 6), date(2026, 2, 17), max_occurrences=50)
+    assert time.monotonic() - t < 2.0
+
+
+def test_subdaily_rule_starting_long_before_the_window_is_still_fast():
+    """The shape the old cap missed. With DTSTART at the window start the skip
+    was empty and the guard looked fine; years earlier it ran unbounded."""
+    raw = foreign_event_raw("sec", dtstart="20200101T000000Z", dtend="20200101T000100Z",
+                            rrule="FREQ=SECONDLY")
+    t = time.monotonic()
+    with pytest.raises(ValueError, match="instances/day"):
+        recur.expand_occurrences(raw, date(2026, 1, 6), date(2026, 2, 17), max_occurrences=50)
+    assert time.monotonic() - t < 2.0
+
+
+@pytest.mark.parametrize("rrule, per_day", [
+    ("FREQ=DAILY;BYHOUR=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23"
+     ";BYMINUTE=0,15,30,45", 96),
+    ("FREQ=WEEKLY;BYHOUR=9,10,11;BYMINUTE=0,10,20,30,40,50;BYSECOND=0,30", 36),
+])
+def test_by_part_density_cannot_bypass_the_guard(rrule, per_day):
+    """BY* parts multiply a coarse FREQ, so a rule that never looks sub-daily can
+    still reach thousands of instances a day. Judging on FREQ alone let these
+    through to the materializing path, which built the whole expansion before the
+    occurrence cap was ever consulted."""
+    raw = foreign_event_raw(f"by{per_day}", rrule=rrule)
+    t = time.monotonic()
+    with pytest.raises(ValueError, match="instances/day"):
+        recur.expand_occurrences(raw, date(2026, 1, 1), date(2026, 2, 12))
+    assert time.monotonic() - t < 2.0
+
+
+@pytest.mark.parametrize("rrule", [
+    "FREQ=HOURLY",                                   # 24/day — the densest allowed
+    "FREQ=DAILY;BYHOUR=9,12,15;BYMINUTE=0,30",       # 6/day
+    "FREQ=WEEKLY;BYDAY=MO,WE,FR",                    # BYDAY does not inflate a day
+])
+def test_ordinary_density_still_expands(rrule):
+    raw = foreign_event_raw("ok", rrule=rrule)
+    assert recur.expand_occurrences(raw, date(2026, 1, 1), date(2026, 2, 1))
 
 
 @pytest.mark.parametrize("interval", ["0", "-1", "notanumber"])
