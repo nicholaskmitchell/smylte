@@ -97,18 +97,31 @@ input, select, textarea { font-family: inherit; }
   font-family: var(--mono); font-size: calc(11px * var(--fs-scale)); font-weight: 500; text-transform: uppercase;
   letter-spacing: 0.06em; padding: 9px 13px; cursor: pointer;
 }
-.btn:hover { background: var(--accent); }
 .btn:disabled { opacity: 0.5; cursor: default; }
 .btn.ghost { background: none; color: var(--fg-muted); border: 1px solid var(--rule); }
-.btn.ghost:hover { color: var(--accent); border-color: var(--accent); background: none; }
 
 .icon-btn {
   background: none; color: var(--fg-muted); border: 1px solid var(--rule); border-radius: var(--radius);
   padding: 7px; display: inline-flex; align-items: center; justify-content: center;
   cursor: pointer; transition: color 0.15s, border-color 0.15s;
 }
-.icon-btn:hover { color: var(--accent); border-color: var(--accent); }
 .icon-btn.active { color: var(--bg); background: var(--accent); border-color: var(--accent); }
+
+/* ---- press feedback ----------------------------------------------------
+   :hover only where a pointer can actually hover. On a touchscreen there is
+   no pointer to leave, so a tapped control keeps its hover styling until
+   something else is tapped — a solid accent-filled button that stays filled
+   reads as stuck, or as a button that swallowed the tap. :active gives touch
+   the same affordance and releases it. Disabled controls never go :active,
+   so they need no guard. */
+@media (hover: hover) {
+  .btn:hover { background: var(--accent); }
+  .btn.ghost:hover { color: var(--accent); border-color: var(--accent); background: none; }
+  .icon-btn:hover { color: var(--accent); border-color: var(--accent); }
+}
+.btn:active { background: var(--accent); }
+.btn.ghost:active { color: var(--accent); border-color: var(--accent); background: none; }
+.icon-btn:active { color: var(--accent); border-color: var(--accent); }
 
 .input {
   background: var(--bg); color: var(--fg); border: 1px solid var(--rule); border-radius: var(--radius);
