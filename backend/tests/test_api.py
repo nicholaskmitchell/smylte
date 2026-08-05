@@ -379,6 +379,40 @@ def test_invalid_input_is_422(client):
     assert client.request("DELETE", f"/api/calendars/{cid}/events/whatever",
                           params={"scope": "everything"}).status_code == 422
     assert client.put("/api/settings", json={"theme": "blue"}).status_code == 422
+    # An empty/whitespace start is "unset" to the parser but unbuildable as a
+    # DTSTART, so it used to reach icalendar and 500 rather than 422.
+    for blank in ("", "   "):
+        assert client.post(f"/api/calendars/{cid}/events",
+                           json={"summary": "x", "start": blank}).status_code == 422
+    # A cleared end still means "no DTEND", not a bad request.
+    assert client.post(f"/api/calendars/{cid}/events", json={
+        "summary": "x", "start": "2026-07-01T09:00:00", "end": "",
+    }).status_code == 201
+
+
+def test_per_occurrence_scope_requires_a_valid_anchor(client):
+    """`scope=this` dispatches on a truthy recurrence_id, so a missing one used
+    to fall through to the whole-resource branch and delete the entire series,
+    and a non-ISO one escaped as a 500 from deep in the edit path."""
+    cid = _cal(client)["id"]
+    ev = client.post(f"/api/calendars/{cid}/events", json={
+        "summary": "Standup", "start": "2026-07-06T09:00:00", "end": "2026-07-06T09:15:00",
+        "repeat": "weekly",
+    }).json()
+    uid = ev["uid"]
+    for scope in ("this", "thisandfuture"):
+        for bad in (None, "", "   ", "garbage", "2026-13-45", "not-a-date"):
+            params = {"scope": scope}
+            if bad is not None:
+                params["recurrence_id"] = bad
+            r = client.request("DELETE", f"/api/calendars/{cid}/events/{uid}", params=params)
+            assert r.status_code == 422, (scope, bad, r.status_code)
+            r = client.patch(f"/api/calendars/{cid}/events/{uid}",
+                             json={"summary": "x", "scope": scope,
+                                   **({} if bad is None else {"recurrence_id": bad})})
+            assert r.status_code == 422, (scope, bad, r.status_code)
+    # The series is untouched by every rejected request.
+    assert client.get(f"/api/calendars/{cid}/events/{uid}").status_code == 200
 
 
 def test_search_operator_characters_do_not_crash(client):

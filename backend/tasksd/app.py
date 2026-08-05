@@ -329,6 +329,32 @@ def _check_scope(scope: str) -> None:
         raise HTTPException(422, f"scope must be one of {', '.join(_SCOPES)}")
 
 
+def _check_recurrence_id(recurrence_id: str | None, scope: str) -> None:
+    """A per-occurrence scope is only meaningful with an anchor to aim it at.
+
+    The service dispatches on ``scope == "this" and recurrence_id``, so a missing
+    or empty anchor falls through to the whole-resource branch: a request that
+    says "delete this occurrence" would delete the *entire series*, and answer
+    204. That is reachable — ``events_in_range`` falls back to the master DTO
+    (``is_recurring`` true, ``recurrence_id`` null) whenever expansion fails on
+    a resource another CalDAV client wrote, and the UI then offers the scope
+    picker with no anchor to send.
+
+    A non-ISO anchor is the other half: it reaches ``date.fromisoformat`` deep in
+    the edit path, where the ValueError has no handler and escapes as a 500.
+    Reject both here, where the client still gets a usable error.
+    """
+    if scope not in ("this", "thisandfuture"):
+        return
+    s = (recurrence_id or "").strip()
+    if not s:
+        raise HTTPException(422, f"recurrence_id is required for scope={scope}")
+    try:
+        datetime.fromisoformat(s) if "T" in s else date.fromisoformat(s)
+    except ValueError:
+        raise HTTPException(422, f"invalid recurrence_id: {s!r}") from None
+
+
 # RFC 5545 STATUS vocabularies. Anything else would be written verbatim onto the
 # wire and confuse other CalDAV clients, so reject it at the edge.
 _TASK_STATUS = ("NEEDS-ACTION", "IN-PROCESS", "COMPLETED", "CANCELLED")
@@ -393,11 +419,22 @@ def _edit_from_patch(req: EditTask) -> TaskEdit:
     return TaskEdit(**kw)
 
 
-def _event_dt(s: str | None, all_day: bool) -> date | datetime | None:
+def _event_dt(s: str | None, all_day: bool, *, required: bool = False) -> date | datetime | None:
+    """Parse an event DTSTART/DTEND. ``required`` for DTSTART only: an empty or
+    whitespace string is "unset" to ``_parse_datelike``, which is right for a
+    cleared DTEND but not for a start — a None DTSTART reaches
+    ``icalendar``'s ``add()`` and raises TypeError, which no handler maps, so the
+    client sees a 500 where the all-day branch below already answers 422."""
     if s is None:
+        if required:
+            raise HTTPException(422, "start is required")
         return None
     if not all_day:
-        return _parse_datelike(s)
+        dt = _parse_datelike(s)
+        if dt is None and required:
+            raise HTTPException(422, f"invalid date/datetime: {s!r}")
+        return dt
+
     try:
         return date.fromisoformat(s.strip())
     except ValueError:
@@ -741,7 +778,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         _check_client_id(body.client_id)
         return await _run(
             _svc(request).create_event, href, body.summary,
-            dtstart=_event_dt(body.start, body.all_day),
+            dtstart=_event_dt(body.start, body.all_day, required=True),
             dtend=_event_dt(body.end, body.all_day),
             edit=_event_edit_from_create(body),
             client_id=body.client_id,
@@ -759,6 +796,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def patch_event(request: Request, cal_id: str, uid: str, body: EditEvent):
         href = _href(request, cal_id)
         _check_scope(body.scope or "all")
+        _check_recurrence_id(body.recurrence_id, body.scope or "all")
         try:
             dto = await _run(
                 _svc(request).edit_event, href, uid, _event_edit_from_patch(body),
@@ -788,6 +826,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ):
         href = _href(request, cal_id)
         _check_scope(scope)
+        _check_recurrence_id(recurrence_id, scope)
         await _run(
             _svc(request).delete_event, href, uid,
             recurrence_id=recurrence_id, scope=scope,

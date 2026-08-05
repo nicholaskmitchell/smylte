@@ -192,6 +192,25 @@ def test_subdaily_rule_is_capped_and_fast():
     assert elapsed < 2.0  # bounded, lazy prefix — never enumerates the full set
 
 
+@pytest.mark.parametrize("interval", ["0", "-1", "notanumber"])
+def test_nonpositive_interval_is_rejected_not_expanded(interval):
+    """INTERVAL=0 is invalid per RFC 5545 but Radicale accepts it on the wire, so
+    any client sharing the collection can write one. Expanding it never returns:
+    the rule advances by nothing, so neither the occurrence cap nor the caller's
+    `except Exception` can stop it. It must raise promptly instead — the caller
+    then degrades to showing the master."""
+    raw = foreign_event_raw("iv", rrule=f"FREQ=DAILY;INTERVAL={interval}")
+    t = time.monotonic()
+    with pytest.raises(ValueError):
+        recur.expand_occurrences(raw, date(2026, 1, 1), date(2026, 2, 1))
+    assert time.monotonic() - t < 2.0     # rejected up front, never expanded
+
+
+def test_positive_interval_still_expands():
+    raw = foreign_event_raw("iv2", rrule="FREQ=DAILY;INTERVAL=7;COUNT=3")
+    assert len(recur.expand_occurrences(raw, date(2026, 1, 1), date(2026, 3, 1))) == 3
+
+
 def test_non_recurring_in_and_out_of_window():
     raw = foreign_event_raw("plain")  # no rrule
     assert len(recur.expand_occurrences(raw, date(2026, 1, 1), date(2026, 2, 1))) == 1

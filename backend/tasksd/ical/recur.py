@@ -74,6 +74,28 @@ def _override_anchors(cal: Calendar) -> set[str]:
     return out
 
 
+def _has_nonpositive_interval(cal: Calendar) -> bool:
+    """RFC 5545 §3.3.10 requires INTERVAL to be a positive integer, but Radicale
+    accepts ``INTERVAL=0`` on the wire — so any client sharing the collection can
+    write one. Expanding it never terminates: the rule advances by nothing, and
+    neither the occurrence cap (never reached) nor the caller's ``except
+    Exception`` (never raised) can stop a loop that does not end. Detect it up
+    front so the caller can degrade to showing the master instead of pinning a
+    worker forever."""
+    for comp in cal.walk("VEVENT"):
+        rrules = comp.get("RRULE")
+        if rrules is None:
+            continue
+        for r in rrules if isinstance(rrules, list) else [rrules]:
+            for iv in r.get("INTERVAL") or []:
+                try:
+                    if int(iv) < 1:
+                        return True
+                except (TypeError, ValueError):
+                    return True      # unparseable INTERVAL is malformed too
+    return False
+
+
 def _has_explosive_freq(cal: Calendar) -> bool:
     for comp in cal.walk("VEVENT"):
         rrules = comp.get("RRULE")
@@ -116,6 +138,8 @@ def expand_occurrences(
     window_end)``, most-relevant first. Returns ``[]`` when the series produces
     nothing in the window (e.g. a rule whose UNTIL is already past)."""
     cal = Calendar.from_ical(raw_ics)
+    if _has_nonpositive_interval(cal):
+        raise ValueError("RRULE INTERVAL must be a positive integer")
     override_anchors = _override_anchors(cal)
     query = recurring_ical_events.of(cal, components=["VEVENT"])
 
