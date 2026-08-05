@@ -86,3 +86,53 @@ def test_malformed_resource_is_skipped_not_wedging_sync():
         "SELECT last_error FROM sync_state WHERE collection_href=?", (COL,)
     ).fetchone()["last_error"]
     assert err is None
+
+
+_POISON = (b"BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//x//x//EN\r\n"
+           b"BEGIN:VTODO\r\nUID:u-1\r\nPRIORITY:HIGH\r\n"
+           b"END:VTODO\r\nEND:VCALENDAR\r\n")
+
+
+def test_resync_keeps_a_recreated_item_whose_new_body_is_malformed():
+    """full_resync sweeps cached hrefs absent from the wire, on the assumption
+    that a delete-and-recreated UID already moved to its new href. That only
+    holds if the move landed: a body we cannot extract leaves the row at the OLD
+    href, so sweeping on href alone deleted a UID that is alive on the server —
+    and orphaned the sidecar, which no resync can rebuild."""
+    conn = _db()
+    engine = SyncEngine(_FakeDav([Item(f"{COL}A.ics", '"e1"', _vtodo("u-1", "Ship it"))]), conn)
+    engine.sync(COL)
+    store.set_sidecar(conn, COL, "u-1", kanban_column="doing", sort_order=2.5)
+
+    # Another client delete-and-recreates u-1 at a new href, with a poison body.
+    engine2 = SyncEngine(_FakeDav([Item(f"{COL}B.ics", '"e2"', _POISON)]), conn)
+    stats = engine2.full_resync(COL)
+
+    assert stats.skipped == 1
+    assert stats.removed == 0, "a live item was swept out of the cache"
+    assert store.get_item(conn, COL, "u-1") is not None
+    sidecar = store.get_sidecar(conn, COL, "u-1")
+    assert sidecar is not None and sidecar["orphaned_at"] is None
+
+
+def test_resync_does_not_gc_sidecars_off_an_incomplete_pass():
+    """gc_orphans is the only permanent deletion of state nothing can rebuild,
+    so it must not run on a pass that skipped resources."""
+    conn = _db()
+    engine = SyncEngine(_FakeDav([Item(f"{COL}A.ics", '"e1"', _vtodo("gone-1", "Old"))]), conn)
+    engine.sync(COL)
+    store.set_sidecar(conn, COL, "gone-1", kanban_column="doing")
+
+    # gone-1 really is deleted, and a *different* resource is malformed.
+    engine2 = SyncEngine(_FakeDav([Item(f"{COL}B.ics", '"e2"', _POISON)]), conn)
+    engine2.full_resync(COL)
+    conn.execute("UPDATE sidecar SET orphaned_at = orphaned_at - 8*86400 WHERE uid='gone-1'")
+    conn.commit()
+    engine2.full_resync(COL)
+
+    assert conn.execute("SELECT 1 FROM sidecar WHERE uid='gone-1'").fetchone() is not None
+
+    # Once the collection reads cleanly, the orphan ages out as before.
+    engine3 = SyncEngine(_FakeDav([]), conn)
+    engine3.full_resync(COL)
+    assert conn.execute("SELECT 1 FROM sidecar WHERE uid='gone-1'").fetchone() is None
