@@ -4,7 +4,7 @@ import {
   type CreateTaskBody, type List, type Task, type TaskGroup, type TasksViewMode,
 } from '../api'
 import { addDays, dayKey, fmtDue, isOverdue, makeGuard, toLocalInput, ymd } from '../util'
-import { AddMultipleModal, blankValues, FIELDS, type RowValues } from './AddMultipleModal'
+import { AddMultipleModal, blankValues, bodyFrom, FIELDS, type RowValues } from './AddMultipleModal'
 import { Sidebar } from './Sidebar'
 
 const VIEWS: ReadonlyArray<readonly [TasksViewMode, string]> = [
@@ -26,9 +26,11 @@ export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggle
   const [lists, setLists] = useState<List[]>([])
   const [tasks, setTasks] = useState<Task[]>([])
   const [detail, setDetail] = useState<Task | null>(null)
-  // The "Add multiple" composer. Null means closed; open, it holds the list the
-  // quick-add picker was showing, which seeds the modal's shared-list control.
-  const [bulkList, setBulkList] = useState<string | null>(null)
+  // The two create surfaces, both null when closed. `adding` is the single-task
+  // form; `bulk` is the multi-row composer. Each carries the list and the title
+  // typed into quick-add, so text moves between them instead of being lost.
+  const [adding, setAdding] = useState<{ listId: string; summary: string } | null>(null)
+  const [bulk, setBulk] = useState<{ listId: string; summary: string } | null>(null)
   // A transient browsing mode (not persisted): the sidebar's "View completed"
   // button flips this to show a dedicated pane of just the completed tasks,
   // regardless of the show-completed setting.
@@ -362,7 +364,8 @@ export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggle
         ) : view === 'list' ? (
           <>
             {defaultList && (
-              <QuickAdd onSubmit={addTask} onMultiple={setBulkList}
+              <QuickAdd onSubmit={addTask}
+                onExpand={(listId, summary) => setAdding({ listId, summary })}
                 defaultList={defaultList} lists={visibleLists} />
             )}
             <div className="scroll">
@@ -417,14 +420,28 @@ export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggle
       </div>
 
       {detail && (
-        <TaskDetail task={detail} onClose={() => setDetail(null)}
+        <TaskModal task={detail} lists={visibleLists} defaultList={detail.list}
+          onClose={() => setDetail(null)}
+          onCreate={() => {}}
           onSave={(patch) => { saveDetail(detail, patch); setDetail(null) }}
-          onDelete={() => { remove(detail); setDetail(null) }} />
+          onDelete={() => { remove(detail); setDetail(null) }}
+          onMultiple={() => {}} />
       )}
 
-      {bulkList !== null && (
-        <AddMultipleModal lists={visibleLists} defaultList={bulkList}
-          onSubmit={createMany} onClose={() => setBulkList(null)} />
+      {adding && (
+        <TaskModal task={null} lists={visibleLists} defaultList={adding.listId}
+          initialTitle={adding.summary}
+          onClose={() => setAdding(null)}
+          onCreate={create}
+          onSave={() => {}}
+          onDelete={() => {}}
+          onMultiple={(listId, summary) => { setAdding(null); setBulk({ listId, summary }) }} />
+      )}
+
+      {bulk && (
+        <AddMultipleModal lists={visibleLists} defaultList={bulk.listId}
+          initialTitle={bulk.summary}
+          onSubmit={createMany} onClose={() => setBulk(null)} />
       )}
     </div>
   )
@@ -600,10 +617,12 @@ function TaskRow({ task, sub, dot, onToggle, onRemove, onOpen, onAddSub }: {
   )
 }
 
-function QuickAdd({ onSubmit, onMultiple, defaultList, lists }: {
+function QuickAdd({ onSubmit, onExpand, defaultList, lists }: {
   onSubmit: (listId: string, v: string) => void
-  // Opens the bulk composer, seeded with whichever list is selected here.
-  onMultiple: (listId: string) => void
+  // Opens the full single-task form, carrying whatever is typed here and the
+  // list selected here. Enter still creates outright — that's the fast path,
+  // and the button ("New…") is the way to reach a task's other properties.
+  onExpand: (listId: string, v: string) => void
   defaultList: string
   // When provided (combined view), a compact picker chooses the target list;
   // otherwise the single focused list is implied.
@@ -629,10 +648,10 @@ function QuickAdd({ onSubmit, onMultiple, defaultList, lists }: {
           {lists.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
         </select>
       )}
-      <button className="btn" onClick={go}>Add</button>
-      <button className="btn ghost quickadd-multi" onClick={() => onMultiple(target)}>
-        Add multiple
-      </button>
+      {/* Labelled with an ellipsis because it opens the form rather than
+          creating outright — Enter in the field is the instant path. */}
+      <button className="btn" title="Open the full form for a new task"
+        onClick={() => { onExpand(target, v.trim()); setV('') }}>New…</button>
     </div>
   )
 }
@@ -654,63 +673,92 @@ function InlineCreate({ placeholder, onSubmit, onCancel, grow }: {
   )
 }
 
-function TaskDetail({ task, onClose, onSave, onDelete }: {
-  task: Task; onClose: () => void
-  onSave: (patch: Record<string, unknown>) => void; onDelete: () => void
+/**
+ * The single-task form, for both creating and editing — one property table and
+ * one layout, so "add a task" and "edit a task" are the same form in two modes.
+ * `task === null` means creating: the list picker appears (you're choosing where
+ * it lands) and the footer offers the route to the bulk composer instead of
+ * Delete.
+ */
+function TaskModal({ task, lists, defaultList, initialTitle, onClose, onCreate, onSave, onDelete, onMultiple }: {
+  task: Task | null
+  lists: List[]
+  defaultList: string
+  initialTitle?: string
+  onClose: () => void
+  onCreate: (listId: string, body: CreateTaskBody) => void
+  onSave: (patch: Record<string, unknown>) => void
+  onDelete: () => void
+  onMultiple: (listId: string, summary: string) => void
 }) {
-  const [summary, setSummary] = useState(task.summary || '')
-  const [notes, setNotes] = useState(task.notes || '')
+  const creating = task === null
+  const [summary, setSummary] = useState(task?.summary || initialTitle || '')
+  const [notes, setNotes] = useState(task?.notes || '')
   // Every other property lives in the same bag the bulk composer uses, and is
   // rendered by the same FIELDS table — one form at two multiplicities. Date
   // and time stay separate slots so an all-day due survives a save as a bare
   // date instead of silently becoming a timed midnight due.
-  const hasTime = !!task.due && !task.due_is_date && task.due.includes('T')
+  const hasTime = !!task?.due && !task.due_is_date && task.due.includes('T')
   const [vals, setVals] = useState<RowValues>(() => ({
-    ...blankValues(task.list),
-    priority: task.priority_label,
-    dueDate: task.due ? dayKey(task.due) : '',
-    dueTime: hasTime ? toLocalInput(task.due!).slice(11, 16) : '',
-    startDate: task.start ? dayKey(task.start) : '',
-    tags: task.tags.join(', '),
+    ...blankValues(task?.list || defaultList),
+    priority: task?.priority_label ?? 'none',
+    dueDate: task?.due ? dayKey(task.due) : '',
+    dueTime: hasTime ? toLocalInput(task!.due!).slice(11, 16) : '',
+    startDate: task?.start ? dayKey(task.start) : '',
+    tags: task?.tags.join(', ') ?? '',
   }))
   const patch = (p: Partial<RowValues>) => setVals((v) => ({ ...v, ...p }))
 
-  // The list picker is the composer's alone: moving a task between lists means
-  // moving it between CalDAV collections, which PATCH doesn't do. Notes keeps
-  // its full-width textarea — the composer's one-line notes input is a density
-  // concession a single-task form doesn't need.
-  const props = FIELDS.filter((f) => f.key !== 'list' && f.key !== 'notes')
+  // The list picker only makes sense while creating: moving an existing task
+  // between lists means moving it between CalDAV collections, which PATCH
+  // doesn't do. Notes keeps its full-width textarea either way — the composer's
+  // one-line notes input is a density concession a single-task form needn't make.
+  const props = FIELDS.filter((f) => f.key !== 'notes' && (creating || f.key !== 'list'))
+  const listId = vals.listId || defaultList
 
-  const save = () => onSave({
-    summary,
-    notes,
-    priority: vals.priority,
-    due: vals.dueDate ? (vals.dueTime ? `${vals.dueDate}T${vals.dueTime}` : vals.dueDate) : null,
-    start: vals.startDate || null,
-    tags: vals.tags.split(',').map((s) => s.trim()).filter(Boolean),
-  })
+  // Creating omits empty fields (bodyFrom's rule — the backend treats a missing
+  // key as "leave unset"); editing sends explicit nulls, which is how a value
+  // gets cleared.
+  const submit = () => {
+    if (creating) {
+      if (!summary.trim()) return
+      onCreate(listId, bodyFrom(summary.trim(), { ...vals, notes }))
+      onClose()
+      return
+    }
+    onSave({
+      summary,
+      notes,
+      priority: vals.priority,
+      due: vals.dueDate ? (vals.dueTime ? `${vals.dueDate}T${vals.dueTime}` : vals.dueDate) : null,
+      start: vals.startDate || null,
+      tags: vals.tags.split(',').map((s) => s.trim()).filter(Boolean),
+    })
+  }
 
   return (
     <div className="overlay" onClick={onClose}>
-      <div className="modal task-modal" role="dialog" aria-modal="true" aria-label="Task"
+      <div className="modal task-modal" role="dialog" aria-modal="true"
+        aria-label={creating ? 'Add task' : 'Task'}
         onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
-          <span className="modal-title">Task</span>
+          <span className="modal-title">{creating ? 'Add task' : 'Task'}</span>
           <button className="icon-btn" onClick={onClose} aria-label="Close">✕</button>
         </div>
         {/* Title and notes are the two controls FIELDS doesn't render, so they
-            carry their own htmlFor/id pair — only one editor is ever open. */}
+            carry their own htmlFor/id pair — only one form is ever open. */}
         <div className="field">
           <label className="label" htmlFor="task-title">Title</label>
-          <input id="task-title" className="input" value={summary}
-            onChange={(e) => setSummary(e.target.value)} />
+          <input id="task-title" className="input" value={summary} autoFocus={creating}
+            onChange={(e) => setSummary(e.target.value)}
+            onKeyDown={(e: KeyboardEvent) => { if (e.key === 'Enter') submit() }} />
         </div>
         <div className="task-props">
           {props.map((f) => (
             <div key={f.key} className={`task-prop prop-${f.key}`}>
               <label className="label">{f.label}</label>
               <span className="task-prop-controls">
-                {f.render(vals, patch, { lists: [], where: '', disabled: false })}
+                {f.render(vals, patch, { lists, where: '', disabled: false })}
               </span>
             </div>
           ))}
@@ -721,9 +769,17 @@ function TaskDetail({ task, onClose, onSave, onDelete }: {
             onChange={(e) => setNotes(e.target.value)} />
         </div>
         <div className="modal-actions">
-          <button className="btn ghost" onClick={onDelete}>Delete</button>
+          {creating ? (
+            <button className="btn ghost" onClick={() => onMultiple(listId, summary)}>
+              Add multiple
+            </button>
+          ) : (
+            <button className="btn ghost" onClick={onDelete}>Delete</button>
+          )}
           <span className="spacer" />
-          <button className="btn" onClick={save}>Save</button>
+          <button className="btn" onClick={submit} disabled={creating && !summary.trim()}>
+            {creating ? 'Add' : 'Save'}
+          </button>
         </div>
       </div>
     </div>
