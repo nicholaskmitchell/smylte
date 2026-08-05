@@ -237,7 +237,17 @@ class SyncEngine:
         """Move a whole event resource (including any overrides) to another
         calendar. Copy-then-delete: the destination PUT is If-None-Match guarded
         so an existing resource is never clobbered, and the source delete is
-        etag-guarded (invariant #2: the raw bytes move untouched)."""
+        etag-guarded (invariant #2: the raw bytes move untouched).
+
+        The bytes come off the WIRE, not the cache. The cache lags Radicale by up
+        to one poll, and it is normal for another CalDAV client to edit an event
+        inside that window — copying ``raw_ics`` wrote the pre-edit body to the
+        destination. The source delete could not save it either: ``delete_task``
+        answers its own 412 by re-reading the current etag and deleting anyway,
+        which is right for an explicit user delete but here destroyed the only
+        copy of the newer revision. Measured before this change: a foreign
+        LOCATION + time change vanished and the move still returned 200.
+        """
         if not store.has_collection(self.conn, dst_href):
             raise ValueError(f"collection {dst_href} is unknown; run discover() first")
         row = store.get_item(self.conn, src_href, uid)
@@ -245,11 +255,24 @@ class SyncEngine:
             raise KeyError(f"unknown event {uid} in {src_href}")
         basename = row["href"].rstrip("/").rsplit("/", 1)[-1]
         new_href = f"{dst_href}{basename}"
+        current = self.dav.get(row["href"])      # NotFound => already gone; surfaces as 404
         try:
-            self.dav.put(new_href, row["raw_ics"], if_none_match="*")
+            self.dav.put(new_href, current.data, if_none_match="*")
         except PreconditionFailed as e:
             raise ConflictError(f"event {uid} already exists in the target calendar") from e
-        self.delete_task(src_href, uid)     # etag-guarded delete + cache cleanup
+        try:
+            self.dav.delete(row["href"], if_match=current.etag)
+        except PreconditionFailed as e:
+            # Edited again between our GET and the DELETE. Undo the copy and make
+            # the caller retry rather than silently discarding that revision.
+            try:
+                self.dav.delete(new_href, if_match=None)
+            except DavError:
+                log.warning("move_event: could not roll back the copy at %s", new_href)
+            raise ConflictError(f"event {uid} changed during the move; retry") from e
+        with _tx(self.conn):
+            store.delete_item_by_href(self.conn, src_href, row["href"])
+            store.orphan_sidecar(self.conn, src_href, uid)
         return self._refresh_from_wire(dst_href, new_href)
 
     def shift_event(
