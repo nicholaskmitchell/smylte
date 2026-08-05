@@ -1020,6 +1020,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 email=body.email.strip(), notes=body.notes,
                 client_id=body.client_id,
             )
+        except OverflowError:
+            # A syntactically valid but extreme ISO start (year 9999, year 1)
+            # parses fine and only blows up in the tz conversion inside
+            # book_slot. OverflowError is not a ValueError, so it escaped as a
+            # 500 — on the one route an unauthenticated caller can reach.
+            raise HTTPException(422, "start is out of range") from None
         except ValueError as e:
             raise HTTPException(422, str(e)) from None
         if result is None:

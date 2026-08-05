@@ -502,3 +502,24 @@ def test_disabled_link_is_indistinguishable_404(client):
     assert client.post(f"/api/public/booking/{link['token']}/book", headers=_NO_COOKIE, json={
         "start": "2026-07-14T09:00:00+00:00", "name": "X", "email": "x@example.com",
     }).status_code == 404
+
+
+@pytest.mark.radicale
+@pytest.mark.parametrize("start", [
+    "9999-12-31T00:00:00+00:00",
+    "9999-12-30T00:00:00+00:00",
+    "0001-01-01T00:00:00+00:00",
+    "0001-01-02T00:00:00+00:00",
+])
+def test_extreme_start_is_422_not_500(client, start):
+    """The booking POST is the one write path an unauthenticated caller reaches,
+    so it must not 500. These parse cleanly as ISO and only overflow in the tz
+    conversion inside book_slot — and OverflowError is not a ValueError, so it
+    escaped the handler that catches malformed starts."""
+    cal = _cal(client)
+    link = _mklink(client, cal["id"])
+    r = client.post(f"/api/public/booking/{link['token']}/book", headers=_NO_COOKIE,
+                    json={"start": start, "name": "X", "email": "x@example.com"})
+    # 422 where the conversion overflows, 409 where it does not and the instant
+    # simply is not an open slot. Never a 5xx.
+    assert r.status_code in (409, 422), (start, r.status_code, r.text)
