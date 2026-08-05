@@ -161,9 +161,12 @@ export function bodyFrom(summary: string, v: RowValues): CreateTaskBody {
  * the grid. Everything starts shared, so the modal opens as title-only rows and
  * widens only for the properties the user deliberately varies.
  */
-export function AddMultipleModal({ lists, defaultList, onSubmit, onClose }: {
+export function AddMultipleModal({ lists, defaultList, initialTitle, onSubmit, onClose }: {
   lists: List[]
   defaultList: string
+  /** Carried over when the single-task form hands off to this one, so a title
+   *  already typed there isn't lost in the switch. */
+  initialTitle?: string
   /** Resolves to the indexes (into `items`) that failed; [] means all landed. */
   onSubmit: (
     items: Array<{ listId: string; body: CreateTaskBody }>,
@@ -171,8 +174,10 @@ export function AddMultipleModal({ lists, defaultList, onSubmit, onClose }: {
   ) => Promise<number[]>
   onClose: () => void
 }) {
-  const [rows, setRows] = useState<Row[]>(
-    () => [blankRow(defaultList), blankRow(defaultList), blankRow(defaultList)])
+  const [rows, setRows] = useState<Row[]>(() => [
+    { ...blankRow(defaultList), summary: initialTitle?.trim() || '' },
+    blankRow(defaultList), blankRow(defaultList),
+  ])
   const [shared, setShared] = useState<RowValues>(() => blankValues(defaultList))
   const [sharedOn, setSharedOn] = useState<Record<FieldKey, boolean>>({
     list: true, due: true, start: true, priority: true, tags: true, notes: true,

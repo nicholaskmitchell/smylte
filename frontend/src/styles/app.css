@@ -205,10 +205,7 @@
 
 /* quick add */
 .quickadd { display: flex; gap: 8px; padding: 12px var(--gutter); }
-/* min-width: 0 so the "Add multiple" button shrinks the field rather than
-   pushing itself off the end of the bar */
 .quickadd .input { flex: 1; min-width: 0; }
-.quickadd-multi { flex: none; white-space: nowrap; }
 
 /* ---- task rows ---- */
 .task {
@@ -407,7 +404,11 @@
 .field-row .input { min-width: 0; }
 .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
 .btn.ghost.danger { color: var(--warn); border-color: var(--warn); }
-.btn.ghost.danger:hover { color: var(--bg); background: var(--warn); }
+/* hover-guarded like the other button states — see tokens.css */
+@media (hover: hover) {
+  .btn.ghost.danger:hover { color: var(--bg); background: var(--warn); }
+}
+.btn.ghost.danger:active { color: var(--bg); background: var(--warn); }
 
 /* recurring-event scope chooser (this / this & following / all) */
 .scope-choose { display: flex; flex-direction: column; gap: 8px; }
@@ -916,6 +917,14 @@
   .task-modal { width: 100%; }
   /* the property strip stacks one per line, like .field-row above it */
   .task-prop { flex-basis: 100%; }
+  /* Put back the 16px floor these dense-row rules outrank. `.bulk-row .input`
+     and `.sched-range .input` are (0,2,0) selectors, so they beat the plain
+     `.input` rule that sets the floor no matter where it sits — which silently
+     reintroduces iOS Safari's zoom-on-focus, the one thing that floor exists to
+     stop. Once Safari zooms it does not zoom back, so every later tap lands
+     offset from what the user sees and the modal reads as broken. Rows stack
+     into cards at this width, so the taller control costs nothing. */
+  .bulk-row .input, .sched-range .input { font-size: max(16px, calc(16px * var(--fs-scale))); }
   /* the modal is already a scrolling bottom sheet — a nested scroller inside
      one is miserable on touch, so let the rows flow into it instead */
   .bulk-rows { max-height: none; overflow: visible; gap: 10px; }
@@ -931,9 +940,6 @@
   .bulk-x { order: -1; margin-left: auto; }
   .bulk-f-title { flex: 1 1 100%; }
   .bulk-cell-label { display: block; flex: 1 0 100%; }
-  /* the quick-add row now carries two buttons — give the field its own line */
-  .quickadd { flex-wrap: wrap; }
-  .quickadd .input { flex: 1 1 100%; }
 }
 
 /* ---- corner radius ----------------------------------------------------
