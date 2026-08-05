@@ -229,6 +229,28 @@ def orphan_sidecar(conn: sqlite3.Connection, collection_href: str, uid: str) -> 
     )
 
 
+# ── revoked sessions (explicit logout) ───────────────────────────────────────
+
+def revoke_session(conn: sqlite3.Connection, jti: str, expires_at: float) -> None:
+    """Remember a logged-out token id until its own exp passes."""
+    conn.execute(
+        "INSERT OR IGNORE INTO revoked_sessions (jti, expires_at) VALUES (?, ?)",
+        (jti, float(expires_at)),
+    )
+    conn.commit()
+
+
+def live_revocations(conn: sqlite3.Connection, *, now: float) -> dict[str, float]:
+    """Revocations that still matter, sweeping the ones that no longer do: past
+    its own exp a token is refused anyway, so the row stops earning its keep."""
+    conn.execute("DELETE FROM revoked_sessions WHERE expires_at <= ?", (now,))
+    conn.commit()
+    return {
+        r["jti"]: r["expires_at"]
+        for r in conn.execute("SELECT jti, expires_at FROM revoked_sessions")
+    }
+
+
 def gc_orphans(conn: sqlite3.Connection, *, keep_days: int = 7) -> int:
     """Drop sidecar rows orphaned longer than keep_days. Returns the count."""
     cur = conn.execute(
