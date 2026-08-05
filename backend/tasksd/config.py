@@ -10,8 +10,35 @@ import os
 from dataclasses import dataclass
 
 
+_TRUE = frozenset({"1", "true", "yes", "y", "on"})
+_FALSE = frozenset({"0", "false", "no", "n", "off"})
+
+
 def _bool(name: str, default: bool) -> bool:
-    return os.environ.get(name, str(default)).strip().lower() in ("1", "true", "yes", "on")
+    """Parse a boolean env var, refusing anything it does not recognise.
+
+    Every caller here gates a security control — auth_enabled, cookie_secure,
+    access_required — and treating an unrecognised value as "not true" made all
+    three fail OPEN. `TASKS_AUTH_ENABLED=Y`, `=enabled`, or a plain typo turned
+    off the whole API auth gate on an internet-facing deployment, silently and
+    with no way to tell from the outside but to try it.
+
+    An unusable value is now a startup error, which matches how the app already
+    treats missing Access configuration: refuse to come up rather than come up
+    unprotected.
+    """
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    v = raw.strip().lower()
+    if v in _TRUE:
+        return True
+    if v in _FALSE:
+        return False
+    raise ValueError(
+        f"{name}={raw!r} is not a boolean; use one of "
+        f"{sorted(_TRUE)} or {sorted(_FALSE)}"
+    )
 
 
 def normalize_dav_url(raw: str) -> str:
