@@ -523,3 +523,37 @@ def test_extreme_start_is_422_not_500(client, start):
     # 422 where the conversion overflows, 409 where it does not and the instant
     # simply is not an open slot. Never a 5xx.
     assert r.status_code in (409, 422), (start, r.status_code, r.text)
+
+
+@pytest.mark.radicale
+def test_link_is_disabled_and_unbookable_once_its_calendar_is_deleted(client):
+    """A link outliving its calendar kept advertising every slot as free, and a
+    booking attempt failed at the DAV layer as a 502 'try again shortly' — a
+    transient-sounding error for a permanent condition, so a booker would retry
+    forever."""
+    cal = _cal(client)
+    link = _mklink(client, cal["id"])
+    tok = link["token"]
+
+    before = client.get(f"/api/public/booking/{tok}", headers=_NO_COOKIE)
+    assert before.status_code == 200 and before.json()["slots"]
+
+    assert client.delete(f"/api/calendars/{cal['id']}").status_code == 204
+
+    # Public surface: indistinguishable from an unknown or disabled link.
+    dead = client.get(f"/api/public/booking/{tok}", headers=_NO_COOKIE)
+    ghost = client.get("/api/public/booking/never-existed", headers=_NO_COOKIE)
+    assert dead.status_code == ghost.status_code == 404
+    assert dead.json() == ghost.json()
+
+    booked = client.post(f"/api/public/booking/{tok}/book", headers=_NO_COOKIE, json={
+        "start": before.json()["slots"][0]["start"],
+        "name": "Mallory", "email": "m@example.com",
+    })
+    assert booked.status_code == 404, booked.text   # not a 502
+
+    # Owner side: the link survives, disabled, and says why.
+    mine = [x for x in client.get("/api/scheduling/links").json() if x["token"] == tok]
+    assert len(mine) == 1
+    assert mine[0]["enabled"] is False
+    assert mine[0]["calendar_missing"] is True

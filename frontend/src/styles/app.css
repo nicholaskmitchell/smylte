@@ -615,6 +615,9 @@
 .sched-card:not(.off) .sched-toggle { color: var(--ok); }
 .sched-card-meta { font-size: calc(12px * var(--fs-scale)); color: var(--fg-muted); overflow-wrap: break-word; }
 .sched-card-meta .mono { font-size: calc(11px * var(--fs-scale)); color: var(--fg-faint); }
+/* A link whose target calendar was deleted: disabled server-side, and said so
+   here rather than left looking like an ordinary switched-off link. */
+.sched-card-meta .warn { color: var(--warn); }
 .sched-card-actions { display: flex; gap: 8px; margin-top: 6px; }
 
 .sched-bookings { padding: 4px var(--gutter) 30px; display: flex; flex-direction: column; }

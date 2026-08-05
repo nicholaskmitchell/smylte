@@ -102,6 +102,7 @@ export interface BookingLink {
   description: string | null
   calendar: string                 // target calendar id
   calendar_name: string | null
+  calendar_missing: boolean          // target calendar is gone; the link is disabled until repointed
   duration_minutes: number
   timezone: string                 // IANA name
   availability: Availability

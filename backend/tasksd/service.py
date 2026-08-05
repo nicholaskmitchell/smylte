@@ -327,6 +327,13 @@ class TaskService:
         with self._lock:
             self._dav.delete_collection(href)
             self._engine.discover()   # marks it deleted in the cache
+            # Any booking link aimed here is now unbookable. Disable it rather
+            # than leaving it advertising slots on a calendar that is gone — it
+            # keeps its history and can be repointed.
+            disabled = store.disable_links_for_collection(self._conn, href)
+        if disabled:
+            log.info("disabled %d booking link(s) for deleted collection %s", disabled, href)
+            self._publish({"type": "booking_link_updated", "link": ""})
         self._publish({"type": "list_deleted", "list": _slug(href)})
 
     def create_task(self, href: str, summary: str, *, edit: TaskEdit | None = None,
@@ -524,6 +531,10 @@ class TaskService:
             "description": row["description"],
             "calendar": _slug(row["calendar_href"]),
             "calendar_name": names.get(row["calendar_href"]),
+            # The target is gone from the server, so the link was disabled and
+            # cannot be re-enabled until it is pointed at a calendar that exists.
+            # Surfaced so Settings can say that instead of showing an inert toggle.
+            "calendar_missing": row["calendar_href"] not in names,
             "duration_minutes": row["duration_minutes"],
             "timezone": row["timezone"],
             "availability": json.loads(row["availability"] or "{}"),
@@ -635,6 +646,15 @@ class TaskService:
                 events.extend(self.events_in_range(row["href"], start_iso, end_iso))
         return scheduling.busy_intervals(events, tz)
 
+    def _link_is_live(self, link) -> bool:
+        """Bookable at all? Disabled links and links whose target calendar has
+        gone away are indistinguishable 404s to the public — an unbookable link
+        must not advertise slots, and must not become an oracle for which of the
+        two it is. Called under the lock."""
+        return bool(link["enabled"]) and store.has_collection(
+            self._conn, link["calendar_href"]
+        )
+
     def public_link_info(self, token: str, *, now: datetime | None = None) -> dict[str, Any] | None:
         """The public booking page payload, or None for an unknown OR disabled
         link (the route maps both to the same 404 — no probing oracle). Nothing
@@ -642,7 +662,7 @@ class TaskService:
         leaves the server here."""
         with self._lock:
             link = store.get_booking_link(self._conn, token)
-            if link is None or not link["enabled"]:
+            if link is None or not self._link_is_live(link):
                 return None
             tz = ZoneInfo(link["timezone"])
             now = now or datetime.now(timezone.utc)
@@ -695,7 +715,7 @@ class TaskService:
         time isn't an open slot (→ 409)."""
         with self._lock:
             link = store.get_booking_link(self._conn, token)
-            if link is None or not link["enabled"]:
+            if link is None or not self._link_is_live(link):
                 return None
             # Replay (same client_id ⇒ same event UID): return the original
             # confirmation instead of failing the re-validation as taken. Only
