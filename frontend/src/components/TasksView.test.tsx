@@ -40,9 +40,9 @@ function setup(view: TasksViewMode = 'list') {
   return { onExpire, user: userEvent.setup() }
 }
 
-/** Quick-add's Add button opens the single-task form. */
+/** Quick-add's "New…" button opens the single-task form. */
 async function openAdd(user: ReturnType<typeof userEvent.setup>) {
-  await user.click(await screen.findByRole('button', { name: 'Add' }))
+  await user.click(await screen.findByRole('button', { name: 'New…' }))
   return screen.findByRole('dialog', { name: 'Add task' })
 }
 
@@ -94,6 +94,17 @@ describe('<TasksView> creating', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 
+  it('opens the form from an empty bar instead of doing nothing', async () => {
+    // The original report: tapping the bar's button with nothing typed was a
+    // silent no-op, so the button read as broken. It must always do something.
+    const { user } = setup()
+    await openAdd(user)
+    expect(screen.getByRole('dialog', { name: 'Add task' })).toBeInTheDocument()
+    expect(m.createTask).not.toHaveBeenCalled()
+    // …and creating is refused until the form has a title.
+    expect(screen.getByRole('button', { name: 'Add' })).toBeDisabled()
+  })
+
   it('creates from the single-task form with its properties', async () => {
     m.createTask.mockResolvedValue(task({ summary: 'with props' }))
     const { user } = setup()
@@ -102,7 +113,6 @@ describe('<TasksView> creating', () => {
     await user.selectOptions(screen.getByLabelText('Priority'), 'high')
     await user.type(screen.getByLabelText('Due date'), '2026-08-10')
     await user.type(screen.getByLabelText('Tags'), 'a, b')
-    // Scoped: the quick-add bar behind the modal has an "Add" button too.
     await user.click(within(dialog).getByRole('button', { name: 'Add' }))
 
     await waitFor(() => expect(m.createTask).toHaveBeenCalledTimes(1))
