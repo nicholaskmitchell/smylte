@@ -21,7 +21,7 @@ judged up front and the resource renders as its master row).
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime
 
 import recurring_ical_events
@@ -179,10 +179,24 @@ def expand_occurrences(
     comps = query.between(window_start, window_end)
 
     out: list[Occurrence] = []
+    seen: set[str] = set()
     for comp in comps:
         if str(comp.get("STATUS") or "").upper() == "CANCELLED":
             continue
-        out.append(_occurrence(comp, override_anchors))
+        occ = _occurrence(comp, override_anchors)
+        if occ.recurrence_id in seen:
+            # A RANGE=THISANDFUTURE override (RFC 5545 §3.2.13, written by Apple
+            # Calendar and Thunderbird for "this and all future events") applies
+            # to its own slot AND every later one, and the library hands back a
+            # component per slot all carrying the SAME RECURRENCE-ID. The anchor
+            # both keys the UI row and addresses the instance for a
+            # per-occurrence edit, so sharing one would make "delete this event"
+            # on a later occurrence hit the anchor slot instead. Fall back to the
+            # instance's own start, which is distinct by construction. The
+            # is_override flag stays as computed from the original anchor.
+            occ = replace(occ, recurrence_id=occ.start or occ.recurrence_id)
+        seen.add(occ.recurrence_id)
+        out.append(occ)
         if len(out) >= max_occurrences:
             break
     return out
