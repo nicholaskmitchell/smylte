@@ -17,6 +17,7 @@ Write side (synchronous, no outbox — spec §3):
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -27,6 +28,20 @@ from ..dav.errors import DavError, InvalidSyncToken, NotFound, PreconditionFaile
 from ..db import store
 
 log = logging.getLogger("tasksd.sync")
+
+# Unfolded UID lines, read textually. Only used for a resource whose extraction
+# already failed: we still need to know which UIDs it claims so the resync sweep
+# does not conclude they left the server. Deliberately cheap and forgiving — the
+# body we cannot parse is exactly the one we cannot ask nicely.
+_UID_RE = re.compile(rb"^UID:(.+?)\r?$", re.MULTILINE)
+
+
+def _uids_in(raw: bytes | None) -> set[str]:
+    return {
+        m.group(1).decode("utf-8", "replace").strip()
+        for m in _UID_RE.finditer(raw or b"")
+        if m.group(1).strip()
+    }
 
 
 class ConflictError(DavError):
@@ -113,24 +128,37 @@ class SyncEngine:
         known = store.known_etags(self.conn, collection_href)
         to_fetch = [h for h, etag in wire.items() if known.get(h) != etag]
         bodies = self._multiget(collection_href, to_fetch)
+        skipped_uids: set[str] = set()
         with _tx(self.conn):
             for item in bodies:
-                if self._upsert_body(collection_href, item, stats):
+                if self._upsert_body(collection_href, item, stats, skipped_uids):
                     stats.upserted += 1
             # After upserts, any cached href no longer on the wire is a real
             # deletion. A delete-and-recreated UID already moved to its new href,
             # so it is NOT swept here (invariant #4 / sidecar survival).
+            #
+            # That holds only if the move actually landed. A body we could not
+            # extract leaves its row at the OLD href, and sweeping on href alone
+            # then deleted a UID that is alive on the server — precisely the
+            # delete-and-recreate case, with a malformed new body. So a UID any
+            # skipped resource claims is treated as still present.
             for href, uid in store.href_uid_map(self.conn, collection_href).items():
-                if href not in wire:
-                    store.delete_item_by_href(self.conn, collection_href, href)
-                    store.orphan_sidecar(self.conn, collection_href, uid)
-                    stats.removed += 1
+                if href in wire or uid in skipped_uids:
+                    continue
+                store.delete_item_by_href(self.conn, collection_href, href)
+                store.orphan_sidecar(self.conn, collection_href, uid)
+                stats.removed += 1
             store.set_sync_token(self.conn, collection_href, result.token, full=True,
                                  error=stats.last_error)
-            store.gc_orphans(self.conn)
+            # gc_orphans is the only permanent deletion of non-derivable state in
+            # the app — pins, kanban column, manual order, which no resync can
+            # rebuild. Never run it off an incomplete enumeration.
+            if not stats.skipped:
+                store.gc_orphans(self.conn)
         return stats
 
-    def _upsert_body(self, collection_href: str, item, stats: SyncStats) -> bool:
+    def _upsert_body(self, collection_href: str, item, stats: SyncStats,
+                     skipped_uids: set[str] | None = None) -> bool:
         """Extract + cache one resource. Returns False for non-VTODO resources
         (e.g. a VJOURNAL sharing a mixed collection) — they are simply not tracked.
         A resource that fails to parse is skipped the same way (logged + counted):
@@ -145,6 +173,8 @@ class SyncEngine:
             log.warning("skipping malformed resource %s: %s", item.href, e)
             stats.skipped += 1
             stats.last_error = f"malformed resource {item.href}: {e}"
+            if skipped_uids is not None:
+                skipped_uids |= _uids_in(item.data)
             return False
         if fields is None or not fields.uid:
             return False
@@ -237,7 +267,17 @@ class SyncEngine:
         """Move a whole event resource (including any overrides) to another
         calendar. Copy-then-delete: the destination PUT is If-None-Match guarded
         so an existing resource is never clobbered, and the source delete is
-        etag-guarded (invariant #2: the raw bytes move untouched)."""
+        etag-guarded (invariant #2: the raw bytes move untouched).
+
+        The bytes come off the WIRE, not the cache. The cache lags Radicale by up
+        to one poll, and it is normal for another CalDAV client to edit an event
+        inside that window — copying ``raw_ics`` wrote the pre-edit body to the
+        destination. The source delete could not save it either: ``delete_task``
+        answers its own 412 by re-reading the current etag and deleting anyway,
+        which is right for an explicit user delete but here destroyed the only
+        copy of the newer revision. Measured before this change: a foreign
+        LOCATION + time change vanished and the move still returned 200.
+        """
         if not store.has_collection(self.conn, dst_href):
             raise ValueError(f"collection {dst_href} is unknown; run discover() first")
         row = store.get_item(self.conn, src_href, uid)
@@ -245,11 +285,24 @@ class SyncEngine:
             raise KeyError(f"unknown event {uid} in {src_href}")
         basename = row["href"].rstrip("/").rsplit("/", 1)[-1]
         new_href = f"{dst_href}{basename}"
+        current = self.dav.get(row["href"])      # NotFound => already gone; surfaces as 404
         try:
-            self.dav.put(new_href, row["raw_ics"], if_none_match="*")
+            self.dav.put(new_href, current.data, if_none_match="*")
         except PreconditionFailed as e:
             raise ConflictError(f"event {uid} already exists in the target calendar") from e
-        self.delete_task(src_href, uid)     # etag-guarded delete + cache cleanup
+        try:
+            self.dav.delete(row["href"], if_match=current.etag)
+        except PreconditionFailed as e:
+            # Edited again between our GET and the DELETE. Undo the copy and make
+            # the caller retry rather than silently discarding that revision.
+            try:
+                self.dav.delete(new_href, if_match=None)
+            except DavError:
+                log.warning("move_event: could not roll back the copy at %s", new_href)
+            raise ConflictError(f"event {uid} changed during the move; retry") from e
+        with _tx(self.conn):
+            store.delete_item_by_href(self.conn, src_href, row["href"])
+            store.orphan_sidecar(self.conn, src_href, uid)
         return self._refresh_from_wire(dst_href, new_href)
 
     def shift_event(

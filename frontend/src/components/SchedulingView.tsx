@@ -96,13 +96,23 @@ export function SchedulingView({ rev, onExpire }: { rev: number; onExpire: () =>
               <div key={l.token} className={`sched-card ${l.enabled ? '' : 'off'}`}>
                 <div className="sched-card-head">
                   <span className="sched-card-title">{l.title}</span>
-                  <label className="sched-toggle" title={l.enabled ? 'Link is live' : 'Link is off'}>
-                    <input type="checkbox" checked={l.enabled} onChange={() => toggleEnabled(l)} />
-                    <span>{l.enabled ? 'Live' : 'Off'}</span>
+                  {/* A link whose calendar is gone was disabled server-side and
+                      cannot be switched back on until it is repointed, so the
+                      toggle says why rather than sitting there inert. */}
+                  <label className="sched-toggle"
+                    title={l.calendar_missing
+                      ? 'The calendar this link books into no longer exists'
+                      : l.enabled ? 'Link is live' : 'Link is off'}>
+                    <input type="checkbox" checked={l.enabled} disabled={l.calendar_missing}
+                      onChange={() => toggleEnabled(l)} />
+                    <span>{l.calendar_missing ? 'No calendar' : l.enabled ? 'Live' : 'Off'}</span>
                   </label>
                 </div>
                 <div className="sched-card-meta">
-                  {l.duration_minutes} min · {l.calendar_name || l.calendar} · {l.timezone}
+                  {l.duration_minutes} min ·{' '}
+                  {l.calendar_missing
+                    ? <span className="warn">calendar deleted — pick another to re-enable</span>
+                    : (l.calendar_name || l.calendar)} · {l.timezone}
                   {l.show_busy ? ' · shows busy times' : ''}
                 </div>
                 <div className="sched-card-meta">

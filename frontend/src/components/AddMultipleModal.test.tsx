@@ -42,7 +42,8 @@ describe('splitPasteLines', () => {
 
 describe('bodyFrom', () => {
   const v = {
-    listId: 'l1', dueDate: '', dueTime: '', startDate: '', priority: 'none', tags: '', notes: '',
+    listId: 'l1', dueDate: '', dueTime: '', startDate: '', startTime: '',
+    priority: 'none', tags: '', notes: '',
   }
 
   it('omits every empty field rather than sending it blank', () => {
@@ -61,6 +62,15 @@ describe('bodyFrom', () => {
 
   it('splits tags on commas and drops the empties', () => {
     expect(bodyFrom('x', { ...v, tags: 'a, b ,,' }).tags).toEqual(['a', 'b'])
+  })
+
+  it('sends a bare date for an all-day start and a T-joined one when timed', () => {
+    // A task's DTSTART can be timed, and other CalDAV clients write one; with a
+    // date-only control the time had nowhere to live.
+    expect(bodyFrom('x', { ...v, startDate: '2026-08-10' }).start).toBe('2026-08-10')
+    expect(bodyFrom('x', { ...v, startDate: '2026-08-10', startTime: '14:30' }).start)
+      .toBe('2026-08-10T14:30')
+    expect(bodyFrom('x', { ...v, startTime: '14:30' }).start).toBeUndefined()
   })
 })
 

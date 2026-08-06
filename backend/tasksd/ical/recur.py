@@ -14,11 +14,12 @@ DTEND vs DURATION, and VTIMEZONE/TZID. Every occurrence it returns carries a
 RECURRENCE-ID equal to that instance's *original* slot — we use it as the stable
 anchor that both keys the UI row and (Tier 3) addresses a single instance for a
 per-occurrence edit. Two things we still do ourselves: drop CANCELLED instances,
-and refuse to enumerate a pathological sub-daily RRULE.
+and refuse to enumerate a pathological RRULE (see ``_pathological_rule`` — the
+cost of such a rule cannot be bounded after expansion starts, so the shape is
+judged up front and the resource renders as its master row).
 """
 from __future__ import annotations
 
-import itertools
 import logging
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -30,9 +31,14 @@ from .read import _iso, _text
 
 log = logging.getLogger("tasksd.recur")
 
-# Sub-daily frequencies enumerate enormous instance counts over a month window
-# (FREQ=SECONDLY across 42 days is millions). We never expand these eagerly.
-_EXPLOSIVE_FREQ = {"SECONDLY", "MINUTELY"}
+# Instances one day of a rule may yield before we call it pathological and
+# decline to expand it. Hourly (24) is the densest shape a person plausibly puts
+# on a calendar; past that the cost is unbounded in practice, so the resource
+# renders as its master row instead (see _pathological_rule).
+_MAX_PER_DAY = 24
+
+# How many instances each FREQ yields per day before BY* parts are applied.
+_FREQ_PER_DAY = {"SECONDLY": 86400, "MINUTELY": 1440, "HOURLY": 24}
 
 
 @dataclass
@@ -74,16 +80,62 @@ def _override_anchors(cal: Calendar) -> set[str]:
     return out
 
 
-def _has_explosive_freq(cal: Calendar) -> bool:
+def _per_day(rule) -> float:
+    """Upper bound on the instances one day of ``rule`` can yield.
+
+    BY* parts multiply a coarse FREQ — RFC 5545 lets ``FREQ=DAILY`` with
+    BYHOUR/BYMINUTE/BYSECOND reach 86400 instances a day without the FREQ itself
+    ever looking sub-daily. Where a BY* part *restricts* rather than expands (
+    BYSECOND under FREQ=SECONDLY) this overestimates, which is the safe
+    direction: it only ever declines to expand something.
+    """
+    freq = str((rule.get("FREQ") or ["DAILY"])[0]).upper()
+    per_day = _FREQ_PER_DAY.get(freq, 1)
+    for part in ("BYHOUR", "BYMINUTE", "BYSECOND"):
+        vals = rule.get(part)
+        if vals:
+            per_day *= len(vals if isinstance(vals, list) else [vals])
+    return per_day
+
+
+def _pathological_rule(cal: Calendar) -> str | None:
+    """Why this resource must not be expanded, or None if it is safe.
+
+    Both shapes below are writable through Radicale by any client sharing the
+    collection, and both are reachable unauthenticated: ``GET
+    /api/public/booking/{token}`` → ``public_link_info`` → ``_link_busy`` →
+    ``events_in_range``, with ``_link_busy`` holding the service lock for the
+    duration — so one poisoned resource stalls every request in the process.
+
+    Neither can be caught after the fact. The occurrence cap bounds how many
+    results are *kept*, not the work done to find them: a dense rule whose
+    DTSTART precedes the window spends its time inside the library before it
+    yields anything, and ``query.between`` materializes the whole expansion
+    before the cap is consulted (measured: FREQ=DAILY at 3600/day over a 42-day
+    grid took 13.9 s and 354 MB; FREQ=SECONDLY from a 2020 DTSTART did not
+    finish). So the decision has to be made up front, from the rule's shape.
+
+    Declining means the caller shows the master row — the same degradation it
+    already applies to a resource it cannot parse.
+    """
     for comp in cal.walk("VEVENT"):
         rrules = comp.get("RRULE")
         if rrules is None:
             continue
         for r in rrules if isinstance(rrules, list) else [rrules]:
-            for f in r.get("FREQ") or []:
-                if str(f).upper() in _EXPLOSIVE_FREQ:
-                    return True
-    return False
+            # RFC 5545 §3.3.10 requires a positive INTERVAL, but Radicale accepts
+            # INTERVAL=0 — and expanding it never terminates at all, since the
+            # rule advances by nothing.
+            for iv in r.get("INTERVAL") or []:
+                try:
+                    if int(iv) < 1:
+                        return f"RRULE INTERVAL must be a positive integer, got {iv!r}"
+                except (TypeError, ValueError):
+                    return f"unparseable RRULE INTERVAL {iv!r}"
+            per_day = _per_day(r)
+            if per_day > _MAX_PER_DAY:
+                return f"RRULE yields up to {per_day:g} instances/day (limit {_MAX_PER_DAY})"
+    return None
 
 
 def _occurrence(comp, override_anchors: set[str]) -> Occurrence:
@@ -114,18 +166,17 @@ def expand_occurrences(
 ) -> list[Occurrence]:
     """Occurrences of the resource's VEVENT series within ``[window_start,
     window_end)``, most-relevant first. Returns ``[]`` when the series produces
-    nothing in the window (e.g. a rule whose UNTIL is already past)."""
+    nothing in the window (e.g. a rule whose UNTIL is already past).
+
+    Raises ``ValueError`` for a rule too dense or too malformed to expand within
+    a bounded cost — the caller degrades to the master row."""
     cal = Calendar.from_ical(raw_ics)
+    why = _pathological_rule(cal)
+    if why is not None:
+        raise ValueError(f"refusing to expand recurrence: {why}")
     override_anchors = _override_anchors(cal)
     query = recurring_ical_events.of(cal, components=["VEVENT"])
-
-    if _has_explosive_freq(cal):
-        # Bounded, lazy prefix from the window start — the event still shows
-        # without the server enumerating millions of sub-daily instances.
-        comps = list(itertools.islice(query.after(window_start), max_occurrences))
-        log.warning("recurrence: sub-daily RRULE capped at %d occurrences", max_occurrences)
-    else:
-        comps = query.between(window_start, window_end)
+    comps = query.between(window_start, window_end)
 
     out: list[Occurrence] = []
     for comp in comps:

@@ -61,7 +61,24 @@ def upsert_collection(conn: sqlite3.Connection, ci: CollectionInfo) -> None:
 
 
 def has_collection(conn: sqlite3.Connection, href: str) -> bool:
-    return conn.execute("SELECT 1 FROM collections WHERE href=?", (href,)).fetchone() is not None
+    """Is this collection present AND live? A deleted collection keeps its row
+    (sync marks `deleted`, it is not dropped), so answering on existence alone
+    let writes and booking links target a calendar that is gone from the server —
+    every attempt failing at the DAV layer as an opaque 502."""
+    return conn.execute(
+        "SELECT 1 FROM collections WHERE href=? AND deleted=0", (href,)
+    ).fetchone() is not None
+
+
+def disable_links_for_collection(conn: sqlite3.Connection, href: str) -> int:
+    """Disable every booking link aimed at a collection that has gone away.
+    Disabled rather than deleted: the link keeps its history and settings so it
+    can be pointed at another calendar."""
+    cur = conn.execute(
+        "UPDATE booking_links SET enabled=0 WHERE calendar_href=? AND enabled=1", (href,)
+    )
+    conn.commit()
+    return cur.rowcount
 
 
 def get_collections(conn: sqlite3.Connection, *, include_deleted: bool = False) -> list[sqlite3.Row]:
@@ -227,6 +244,28 @@ def orphan_sidecar(conn: sqlite3.Connection, collection_href: str, uid: str) -> 
         "WHERE collection_href=? AND uid=? AND orphaned_at IS NULL",
         (collection_href, uid),
     )
+
+
+# ── revoked sessions (explicit logout) ───────────────────────────────────────
+
+def revoke_session(conn: sqlite3.Connection, jti: str, expires_at: float) -> None:
+    """Remember a logged-out token id until its own exp passes."""
+    conn.execute(
+        "INSERT OR IGNORE INTO revoked_sessions (jti, expires_at) VALUES (?, ?)",
+        (jti, float(expires_at)),
+    )
+    conn.commit()
+
+
+def live_revocations(conn: sqlite3.Connection, *, now: float) -> dict[str, float]:
+    """Revocations that still matter, sweeping the ones that no longer do: past
+    its own exp a token is refused anyway, so the row stops earning its keep."""
+    conn.execute("DELETE FROM revoked_sessions WHERE expires_at <= ?", (now,))
+    conn.commit()
+    return {
+        r["jti"]: r["expires_at"]
+        for r in conn.execute("SELECT jti, expires_at FROM revoked_sessions")
+    }
 
 
 def gc_orphans(conn: sqlite3.Connection, *, keep_days: int = 7) -> int:

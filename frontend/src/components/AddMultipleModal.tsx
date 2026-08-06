@@ -19,6 +19,7 @@ export interface RowValues {
   dueDate: string      // yyyy-mm-dd
   dueTime: string      // HH:MM
   startDate: string    // yyyy-mm-dd
+  startTime: string    // HH:MM
   priority: string     // one of PRIORITIES
   tags: string         // comma-separated, same convention as the task editor
   notes: string
@@ -30,7 +31,8 @@ interface Row extends RowValues {
 }
 
 export const blankValues = (listId: string): RowValues => ({
-  listId, dueDate: '', dueTime: '', startDate: '', priority: 'none', tags: '', notes: '',
+  listId, dueDate: '', dueTime: '', startDate: '', startTime: '', priority: 'none',
+  tags: '', notes: '',
 })
 const blankRow = (listId: string): Row =>
   ({ ...blankValues(listId), key: clientId().slice(0, 8), summary: '' })
@@ -81,10 +83,18 @@ export const FIELDS: readonly FieldSpec[] = [
     ),
   },
   {
-    key: 'start', label: 'Start', slots: ['startDate'],
+    // Two slots like Due: a task's DTSTART can be timed, and other CalDAV
+    // clients routinely write one. With a date-only control the time had
+    // nowhere to live and any save silently dropped it.
+    key: 'start', label: 'Start', slots: ['startDate', 'startTime'],
     render: (v, set, { where, disabled }) => (
-      <input className="input" type="date" aria-label={`Start date${where}`} value={v.startDate}
-        disabled={disabled} onChange={(e) => set({ startDate: e.target.value })} />
+      <>
+        <input className="input" type="date" aria-label={`Start date${where}`} value={v.startDate}
+          disabled={disabled} onChange={(e) => set({ startDate: e.target.value })} />
+        {/* A time with no date isn't expressible as a start, same as Due. */}
+        <input className="input" type="time" aria-label={`Start time${where}`} value={v.startTime}
+          disabled={disabled || !v.startDate} onChange={(e) => set({ startTime: e.target.value })} />
+      </>
     ),
   },
   {
@@ -149,7 +159,7 @@ export function bodyFrom(summary: string, v: RowValues): CreateTaskBody {
   // Same rule as the task editor: a bare date stays all-day, a date with a time
   // goes timed, and a time with no date is dropped.
   if (v.dueDate) body.due = v.dueTime ? `${v.dueDate}T${v.dueTime}` : v.dueDate
-  if (v.startDate) body.start = v.startDate
+  if (v.startDate) body.start = v.startTime ? `${v.startDate}T${v.startTime}` : v.startDate
   const tags = v.tags.split(',').map((s) => s.trim()).filter(Boolean)
   if (tags.length) body.tags = tags
   return body
