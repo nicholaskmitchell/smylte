@@ -699,15 +699,27 @@ function TaskModal({ task, lists, defaultList, initialTitle, onClose, onCreate, 
   // and time stay separate slots so an all-day due survives a save as a bare
   // date instead of silently becoming a timed midnight due.
   const hasTime = !!task?.due && !task.due_is_date && task.due.includes('T')
-  const [vals, setVals] = useState<RowValues>(() => ({
+  const startHasTime = !!task?.start && task.start.includes('T')
+  const initial = (): RowValues => ({
     ...blankValues(task?.list || defaultList),
     priority: task?.priority_label ?? 'none',
     dueDate: task?.due ? dayKey(task.due) : '',
     dueTime: hasTime ? toLocalInput(task!.due!).slice(11, 16) : '',
     startDate: task?.start ? dayKey(task.start) : '',
+    startTime: startHasTime ? toLocalInput(task!.start!).slice(11, 16) : '',
     tags: task?.tags.join(', ') ?? '',
-  }))
-  const patch = (p: Partial<RowValues>) => setVals((v) => ({ ...v, ...p }))
+  })
+  const [vals, setVals] = useState<RowValues>(initial)
+  // Which slots the user actually touched. Every value here has round-tripped
+  // through a lossy form representation — a timezone-anchored DUE becomes the
+  // viewer's naive wall clock, PRIORITY:3 becomes "high" becomes 1, a category
+  // holding an escaped comma splits in two — so resending an untouched field
+  // rewrites a property another CalDAV client authored. Send only what changed.
+  const [touched, setTouched] = useState<Set<keyof RowValues>>(new Set())
+  const patch = (p: Partial<RowValues>) => {
+    setTouched((t) => new Set([...t, ...(Object.keys(p) as (keyof RowValues)[])]))
+    setVals((v) => ({ ...v, ...p }))
+  }
 
   // The list picker only makes sense while creating: moving an existing task
   // between lists means moving it between CalDAV collections, which PATCH
@@ -726,14 +738,26 @@ function TaskModal({ task, lists, defaultList, initialTitle, onClose, onCreate, 
       onClose()
       return
     }
-    onSave({
-      summary,
-      notes,
-      priority: vals.priority,
-      due: vals.dueDate ? (vals.dueTime ? `${vals.dueDate}T${vals.dueTime}` : vals.dueDate) : null,
-      start: vals.startDate || null,
-      tags: vals.tags.split(',').map((s) => s.trim()).filter(Boolean),
-    })
+    // Omit anything untouched: the backend treats an absent key as "leave
+    // unset", so a rename now rewrites the summary and nothing else.
+    const body: Record<string, unknown> = {}
+    if (summary !== (task?.summary || '')) body.summary = summary
+    if (notes !== (task?.notes || '')) body.notes = notes
+    if (touched.has('priority')) body.priority = vals.priority
+    if (touched.has('dueDate') || touched.has('dueTime')) {
+      body.due = vals.dueDate
+        ? (vals.dueTime ? `${vals.dueDate}T${vals.dueTime}` : vals.dueDate)
+        : null
+    }
+    if (touched.has('startDate') || touched.has('startTime')) {
+      body.start = vals.startDate
+        ? (vals.startTime ? `${vals.startDate}T${vals.startTime}` : vals.startDate)
+        : null
+    }
+    if (touched.has('tags')) {
+      body.tags = vals.tags.split(',').map((s) => s.trim()).filter(Boolean)
+    }
+    onSave(body)
   }
 
   return (

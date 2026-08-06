@@ -318,22 +318,41 @@ function TaskList({ items, colorOf, empty, overdue, done, loading }: {
   )
 }
 
+/** Which of the mini calendar's `days` carry an event, as `ymd` keys.
+ *
+ * A span dots every day it covers, so a week-long event is not invisible on the
+ * six days after the one it starts. The walk is clamped to the rendered grid at
+ * both ends: an event may legitimately run from years ago to years ahead, and
+ * stepping a day at a time to reach a far DTEND — trivially written by another
+ * CalDAV client — would freeze the tab building dots nothing renders. */
+export function busyDays(events: CalEvent[], days: Date[]): Set<string> {
+  const busy = new Set<string>()
+  if (!days.length) return busy
+  // Whole days throughout: the keys are `ymd`, and the grid bounds are midnight,
+  // so carrying an event's time-of-day into the comparison would drop its last
+  // day whenever the end falls earlier in the day than the start.
+  const midnight = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate())
+  const gridStart = midnight(days[0])
+  const gridEnd = midnight(days[days.length - 1])
+  for (const e of events) {
+    if (!e.start) continue
+    const from = parseDate(e.start)
+    const to = e.end ? parseDate(e.end) : from
+    if (isNaN(from.getTime()) || isNaN(to.getTime())) continue
+    const head = from < gridStart ? gridStart : midnight(from)
+    const tail = midnight(to)
+    for (let d = head; d <= tail && d <= gridEnd; d = addDays(d, 1)) busy.add(ymd(d))
+  }
+  return busy
+}
+
 function MiniCalendar({ events }: { events: CalEvent[] }) {
   const now = new Date()
   const first = new Date(now.getFullYear(), now.getMonth(), 1)
   const start = addDays(first, -first.getDay())
   const today = ymd(now)
-  const busy = new Set<string>()
-  for (const e of events) {
-    if (!e.start) continue
-    // A span dots every day it covers, so a week-long event is not invisible on
-    // the six days after the one it starts.
-    const from = parseDate(e.start)
-    const to = e.end ? parseDate(e.end) : from
-    if (isNaN(from.getTime())) continue
-    for (let d = new Date(from); d <= to; d = addDays(d, 1)) busy.add(ymd(d))
-  }
   const days = Array.from({ length: 42 }, (_, i) => addDays(start, i))
+  const busy = busyDays(events, days)
   return (
     <div className="mini-cal">
       <div className="mini-cal-head">

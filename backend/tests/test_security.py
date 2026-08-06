@@ -196,6 +196,91 @@ def test_login_lockout_and_spoofed_ip_header(make_app):
 
 
 @pytest.mark.radicale
+def test_concurrent_logins_cannot_outrun_the_lockout(make_app):
+    """The limit must bound how many guesses are EVALUATED, not just how many
+    are counted afterwards. `allowed()` reserved nothing, so with the scrypt
+    verification behind an await every request arriving during the hash passed
+    the gate on one credit: 200 concurrent guesses all got a real verdict
+    against a limit of 5."""
+    import asyncio
+    from collections import Counter
+
+    import httpx
+
+    async def hammer():
+        transport = httpx.ASGITransport(app=make_app())
+        async with httpx.AsyncClient(transport=transport, base_url="http://t") as c:
+            async def guess(i):
+                r = await c.post("/api/login",
+                                 json={"username": "admin", "password": f"guess-{i}"})
+                return r.status_code
+            return Counter(await asyncio.gather(*[guess(i) for i in range(60)]))
+
+    codes = asyncio.run(hammer())
+    # 5 evaluated (401), the rest turned away before hashing (429).
+    assert codes[401] == 5, codes
+    assert codes[401] + codes[429] == 60, codes
+
+
+@pytest.mark.radicale
+def test_oversized_login_body_is_rejected(make_app):
+    """The only request model here that used to be unbounded — a rejected guess
+    should never make the server hash a multi-megabyte password."""
+    with TestClient(make_app()) as c:
+        r = c.post("/api/login", json={"username": "admin", "password": "x" * 5000})
+        assert r.status_code == 422
+
+
+@pytest.mark.radicale
+def test_logout_withdraws_the_token_not_just_the_cookie(make_app):
+    """delete_cookie only asks the browser to forget the token. The token is
+    self-contained and stayed valid for the rest of its 7-day TTL, so anyone
+    holding a copy — the point of logging out — kept full access."""
+    app = make_app()
+    with TestClient(app) as c:
+        assert c.post("/api/login", json=LOGIN).status_code == 200
+        stolen = c.cookies["tasks_session"]
+        assert c.get("/api/me").status_code == 200
+
+        c.post("/api/logout")
+
+        # Replay the captured cookie against a client that never logged out.
+        with TestClient(app) as replay:
+            replay.cookies.set("tasks_session", stolen)
+            assert replay.get("/api/me").status_code == 401
+            assert replay.get("/api/lists").status_code == 401
+
+
+@pytest.mark.radicale
+def test_logout_on_one_device_leaves_other_sessions_alone(make_app):
+    """Withdrawal is per token, so signing out of one browser must not sign the
+    others out — each login carries its own jti."""
+    app = make_app()
+    with TestClient(app) as phone, TestClient(app) as desktop:
+        assert phone.post("/api/login", json=LOGIN).status_code == 200
+        assert desktop.post("/api/login", json=LOGIN).status_code == 200
+
+        phone.post("/api/logout")
+        assert phone.get("/api/me").status_code == 401
+        assert desktop.get("/api/me").status_code == 200
+
+
+@pytest.mark.radicale
+def test_a_withdrawn_session_stays_withdrawn_across_a_restart(make_app, tmp_path):
+    """Revocations live in SQLite as well as memory: a process restart must not
+    resurrect a session the owner ended."""
+    db = str(tmp_path / "revoke.db")
+    with TestClient(make_app(db_path=db)) as c:
+        assert c.post("/api/login", json=LOGIN).status_code == 200
+        stolen = c.cookies["tasks_session"]
+        c.post("/api/logout")
+
+    with TestClient(make_app(db_path=db)) as restarted:   # same DB, fresh process
+        restarted.cookies.set("tasks_session", stolen)
+        assert restarted.get("/api/me").status_code == 401
+
+
+@pytest.mark.radicale
 def test_login_error_does_not_reveal_which_field_failed(make_app):
     with TestClient(make_app()) as c:
         bad_user = c.post("/api/login", json={"username": "nobody", "password": "testpass123"})

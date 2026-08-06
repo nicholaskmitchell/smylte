@@ -182,14 +182,74 @@ def test_dst_transition_keeps_local_wall_time():
 
 # ── guards / passthrough ──────────────────────────────────────────────────────
 
-def test_subdaily_rule_is_capped_and_fast():
+def test_subdaily_rule_is_refused_not_expanded():
+    """A sub-daily rule is declined up front rather than expanded to a capped
+    prefix. The cap bounded how many occurrences were *kept*, not the work done
+    to find them: the library skips from DTSTART to the window one instance at a
+    time before it yields anything, so cost grew with the DTSTART→window gap and
+    no cap or `except` could bound it."""
     raw = foreign_event_raw("min", dtend="20260106T090100Z", rrule="FREQ=MINUTELY")
     t = time.monotonic()
-    occs = recur.expand_occurrences(raw, date(2026, 1, 6), date(2026, 2, 17),
-                                    max_occurrences=50)
-    elapsed = time.monotonic() - t
-    assert len(occs) == 50
-    assert elapsed < 2.0  # bounded, lazy prefix — never enumerates the full set
+    with pytest.raises(ValueError, match="instances/day"):
+        recur.expand_occurrences(raw, date(2026, 1, 6), date(2026, 2, 17), max_occurrences=50)
+    assert time.monotonic() - t < 2.0
+
+
+def test_subdaily_rule_starting_long_before_the_window_is_still_fast():
+    """The shape the old cap missed. With DTSTART at the window start the skip
+    was empty and the guard looked fine; years earlier it ran unbounded."""
+    raw = foreign_event_raw("sec", dtstart="20200101T000000Z", dtend="20200101T000100Z",
+                            rrule="FREQ=SECONDLY")
+    t = time.monotonic()
+    with pytest.raises(ValueError, match="instances/day"):
+        recur.expand_occurrences(raw, date(2026, 1, 6), date(2026, 2, 17), max_occurrences=50)
+    assert time.monotonic() - t < 2.0
+
+
+@pytest.mark.parametrize("rrule, per_day", [
+    ("FREQ=DAILY;BYHOUR=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23"
+     ";BYMINUTE=0,15,30,45", 96),
+    ("FREQ=WEEKLY;BYHOUR=9,10,11;BYMINUTE=0,10,20,30,40,50;BYSECOND=0,30", 36),
+])
+def test_by_part_density_cannot_bypass_the_guard(rrule, per_day):
+    """BY* parts multiply a coarse FREQ, so a rule that never looks sub-daily can
+    still reach thousands of instances a day. Judging on FREQ alone let these
+    through to the materializing path, which built the whole expansion before the
+    occurrence cap was ever consulted."""
+    raw = foreign_event_raw(f"by{per_day}", rrule=rrule)
+    t = time.monotonic()
+    with pytest.raises(ValueError, match="instances/day"):
+        recur.expand_occurrences(raw, date(2026, 1, 1), date(2026, 2, 12))
+    assert time.monotonic() - t < 2.0
+
+
+@pytest.mark.parametrize("rrule", [
+    "FREQ=HOURLY",                                   # 24/day — the densest allowed
+    "FREQ=DAILY;BYHOUR=9,12,15;BYMINUTE=0,30",       # 6/day
+    "FREQ=WEEKLY;BYDAY=MO,WE,FR",                    # BYDAY does not inflate a day
+])
+def test_ordinary_density_still_expands(rrule):
+    raw = foreign_event_raw("ok", rrule=rrule)
+    assert recur.expand_occurrences(raw, date(2026, 1, 1), date(2026, 2, 1))
+
+
+@pytest.mark.parametrize("interval", ["0", "-1", "notanumber"])
+def test_nonpositive_interval_is_rejected_not_expanded(interval):
+    """INTERVAL=0 is invalid per RFC 5545 but Radicale accepts it on the wire, so
+    any client sharing the collection can write one. Expanding it never returns:
+    the rule advances by nothing, so neither the occurrence cap nor the caller's
+    `except Exception` can stop it. It must raise promptly instead — the caller
+    then degrades to showing the master."""
+    raw = foreign_event_raw("iv", rrule=f"FREQ=DAILY;INTERVAL={interval}")
+    t = time.monotonic()
+    with pytest.raises(ValueError):
+        recur.expand_occurrences(raw, date(2026, 1, 1), date(2026, 2, 1))
+    assert time.monotonic() - t < 2.0     # rejected up front, never expanded
+
+
+def test_positive_interval_still_expands():
+    raw = foreign_event_raw("iv2", rrule="FREQ=DAILY;INTERVAL=7;COUNT=3")
+    assert len(recur.expand_occurrences(raw, date(2026, 1, 1), date(2026, 3, 1))) == 3
 
 
 def test_non_recurring_in_and_out_of_window():
@@ -469,3 +529,93 @@ def test_range_query_admits_past_recurring_master(db):
     uids = {r["uid"] for r in rows}
     assert "recur" in uids       # admitted on the upper bound alone (fixed)
     assert "onceoff" not in uids  # precise overlap still excludes a truly-past single
+
+
+# ── split_series: the tail moves as a unit ───────────────────────────────────
+# CalendarView sends start/end on EVERY "this and following" save, using the
+# times the occurrence is DISPLAYED at. For an occurrence a previous override
+# moved, that start differs from the anchor — so these are the ordinary paths,
+# not edge cases.
+
+def _overridden_series() -> bytes:
+    """Weekly 09:00-10:00 from 2026-02-02 (COUNT=6), with 2026-02-09 overridden
+    to 14:00-15:30 and retitled."""
+    return (
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//x//EN\r\n"
+        "BEGIN:VEVENT\r\nUID:s@x\r\nDTSTAMP:20260101T000000Z\r\n"
+        "DTSTART:20260202T090000Z\r\nDTEND:20260202T100000Z\r\n"
+        "SUMMARY:standup\r\nRRULE:FREQ=WEEKLY;COUNT=6\r\nEND:VEVENT\r\n"
+        "BEGIN:VEVENT\r\nUID:s@x\r\nDTSTAMP:20260101T000000Z\r\n"
+        "RECURRENCE-ID:20260209T090000Z\r\n"
+        "DTSTART:20260209T140000Z\r\nDTEND:20260209T153000Z\r\n"
+        "SUMMARY:special\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+    ).encode()
+
+
+_FEB = (date(2026, 2, 1), date(2026, 3, 20))
+
+
+def test_split_retitling_an_overridden_occurrence_leaves_the_schedule_alone():
+    """A pure title edit. The modal still sends the occurrence's displayed
+    14:00 start, which is not the 09:00 anchor — that difference used to be
+    written onto the tail master as an absolute DTSTART, dragging every later
+    occurrence to 14:00 and lengthening them to 90 minutes."""
+    _head, tail = split_series(
+        _overridden_series(), "2026-02-09T09:00:00+00:00",
+        EventEdit(summary="renamed",
+                  dtstart=datetime(2026, 2, 9, 14, 0, tzinfo=timezone.utc),
+                  dtend=datetime(2026, 2, 9, 15, 30, tzinfo=timezone.utc)),
+    )
+    occs = recur.expand_occurrences(tail, *_FEB)
+    assert _starts(occs) == [
+        "2026-02-09T14:00:00+00:00",     # the override, untouched
+        "2026-02-16T09:00:00+00:00",     # the cadence, untouched
+        "2026-02-23T09:00:00+00:00",
+        "2026-03-02T09:00:00+00:00",
+        "2026-03-09T09:00:00+00:00",
+    ]
+    # And 2026-02-09 appears once: the re-homed override still replaces its slot
+    # rather than sitting beside a generated instance.
+    assert sum(1 for o in occs if o.start.startswith("2026-02-09")) == 1
+
+
+def test_split_with_a_real_time_change_still_moves_the_whole_tail():
+    """The other half — this must keep working."""
+    _head, tail = split_series(
+        _overridden_series(), "2026-02-16T09:00:00+00:00",
+        EventEdit(dtstart=datetime(2026, 2, 16, 11, 0, tzinfo=timezone.utc),
+                  dtend=datetime(2026, 2, 16, 12, 0, tzinfo=timezone.utc)),
+    )
+    assert _starts(recur.expand_occurrences(tail, *_FEB)) == [
+        "2026-02-16T11:00:00+00:00", "2026-02-23T11:00:00+00:00",
+        "2026-03-02T11:00:00+00:00", "2026-03-09T11:00:00+00:00",
+    ]
+
+
+def test_split_time_change_carries_the_tail_exdates_and_overrides():
+    """Shifting the master alone left the partitioned EXDATE matching no
+    generated slot, so a deleted occurrence came back, and left the re-homed
+    override's RECURRENCE-ID replacing nothing, so it doubled."""
+    raw = (
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//x//EN\r\n"
+        "BEGIN:VEVENT\r\nUID:s@x\r\nDTSTAMP:20260101T000000Z\r\n"
+        "DTSTART:20260202T090000Z\r\nDTEND:20260202T100000Z\r\n"
+        "SUMMARY:standup\r\nRRULE:FREQ=WEEKLY;COUNT=6\r\n"
+        "EXDATE:20260216T090000Z\r\nEND:VEVENT\r\n"
+        "BEGIN:VEVENT\r\nUID:s@x\r\nDTSTAMP:20260101T000000Z\r\n"
+        "RECURRENCE-ID:20260223T090000Z\r\n"
+        "DTSTART:20260223T140000Z\r\nDTEND:20260223T150000Z\r\n"
+        "SUMMARY:special\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+    ).encode()
+    _head, tail = split_series(
+        raw, "2026-02-02T09:00:00+00:00",
+        EventEdit(dtstart=datetime(2026, 2, 3, 9, 0, tzinfo=timezone.utc),
+                  dtend=datetime(2026, 2, 3, 10, 0, tzinfo=timezone.utc)),
+    )
+    starts = _starts(recur.expand_occurrences(tail, *_FEB))
+    assert not any(s.startswith("2026-02-17") for s in starts), "the EXDATE hole came back"
+    assert starts == [
+        "2026-02-03T09:00:00+00:00", "2026-02-10T09:00:00+00:00",
+        "2026-02-24T14:00:00+00:00",      # the override, shifted with the tail
+        "2026-03-03T09:00:00+00:00", "2026-03-10T09:00:00+00:00",
+    ]

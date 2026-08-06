@@ -102,6 +102,7 @@ export interface BookingLink {
   description: string | null
   calendar: string                 // target calendar id
   calendar_name: string | null
+  calendar_missing: boolean          // target calendar is gone; the link is disabled until repointed
   duration_minutes: number
   timezone: string                 // IANA name
   availability: Availability
@@ -307,15 +308,59 @@ export const api = {
 }
 
 // Server-Sent Events: fires the callback whenever the server reports a change.
+//
+// EventSource only retries by itself when an ESTABLISHED stream drops. If the
+// response is anything but a 200 text/event-stream — a 401 once the session TTL
+// lapses, a 502 while the server is restarting — the spec has it *fail* the
+// connection: readyState goes CLOSED and it never tries again. Nothing else in
+// the SPA polls, so that silently froze live updates for the life of the page.
+// Reconnect on a capped, jittered backoff instead, and refetch on the way back
+// up: events published while we were disconnected are gone, so the reconnect
+// itself has to stand in for them.
+const _SSE_MAX_BACKOFF_MS = 30_000
+
 export function subscribe(onChange: () => void): () => void {
-  const es = new EventSource('/api/events')
-  es.onmessage = (e) => {
-    try {
-      const data = JSON.parse(e.data)
-      if (data.type && data.type !== 'hello') onChange()
-    } catch {
-      /* ignore keepalives */
+  let es: EventSource | null = null
+  let retry: ReturnType<typeof setTimeout> | undefined
+  let attempts = 0
+  let missed = false        // disconnected at least once since the last open
+  let stopped = false
+
+  const open = () => {
+    if (stopped) return
+    es = new EventSource('/api/events')
+    es.onopen = () => {
+      attempts = 0
+      if (missed) {
+        missed = false
+        onChange()          // resync whatever changed while we were away
+      }
+    }
+    es.onmessage = (e) => {
+      try {
+        const data = JSON.parse(e.data)
+        if (data.type && data.type !== 'hello') onChange()
+      } catch {
+        /* ignore keepalives */
+      }
+    }
+    es.onerror = () => {
+      missed = true
+      // Still CONNECTING means the browser is handling the retry itself.
+      if (es && es.readyState !== EventSource.CLOSED) return
+      es?.close()
+      es = null
+      if (stopped) return
+      const backoff = Math.min(_SSE_MAX_BACKOFF_MS, 1000 * 2 ** attempts)
+      attempts++
+      retry = setTimeout(open, backoff * (0.5 + Math.random() / 2))
     }
   }
-  return () => es.close()
+
+  open()
+  return () => {
+    stopped = true
+    clearTimeout(retry)
+    es?.close()
+  }
 }

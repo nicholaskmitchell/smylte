@@ -379,6 +379,40 @@ def test_invalid_input_is_422(client):
     assert client.request("DELETE", f"/api/calendars/{cid}/events/whatever",
                           params={"scope": "everything"}).status_code == 422
     assert client.put("/api/settings", json={"theme": "blue"}).status_code == 422
+    # An empty/whitespace start is "unset" to the parser but unbuildable as a
+    # DTSTART, so it used to reach icalendar and 500 rather than 422.
+    for blank in ("", "   "):
+        assert client.post(f"/api/calendars/{cid}/events",
+                           json={"summary": "x", "start": blank}).status_code == 422
+    # A cleared end still means "no DTEND", not a bad request.
+    assert client.post(f"/api/calendars/{cid}/events", json={
+        "summary": "x", "start": "2026-07-01T09:00:00", "end": "",
+    }).status_code == 201
+
+
+def test_per_occurrence_scope_requires_a_valid_anchor(client):
+    """`scope=this` dispatches on a truthy recurrence_id, so a missing one used
+    to fall through to the whole-resource branch and delete the entire series,
+    and a non-ISO one escaped as a 500 from deep in the edit path."""
+    cid = _cal(client)["id"]
+    ev = client.post(f"/api/calendars/{cid}/events", json={
+        "summary": "Standup", "start": "2026-07-06T09:00:00", "end": "2026-07-06T09:15:00",
+        "repeat": "weekly",
+    }).json()
+    uid = ev["uid"]
+    for scope in ("this", "thisandfuture"):
+        for bad in (None, "", "   ", "garbage", "2026-13-45", "not-a-date"):
+            params = {"scope": scope}
+            if bad is not None:
+                params["recurrence_id"] = bad
+            r = client.request("DELETE", f"/api/calendars/{cid}/events/{uid}", params=params)
+            assert r.status_code == 422, (scope, bad, r.status_code)
+            r = client.patch(f"/api/calendars/{cid}/events/{uid}",
+                             json={"summary": "x", "scope": scope,
+                                   **({} if bad is None else {"recurrence_id": bad})})
+            assert r.status_code == 422, (scope, bad, r.status_code)
+    # The series is untouched by every rejected request.
+    assert client.get(f"/api/calendars/{cid}/events/{uid}").status_code == 200
 
 
 def test_search_operator_characters_do_not_crash(client):
@@ -559,3 +593,25 @@ def test_settings_dashboard_caps_module_count(client):
         for i in range(50)
     ]
     assert client.put("/api/settings", json={"dashboard": many}).status_code == 422
+
+
+def test_required_window_bounds_and_non_finite_sidecar_are_422(client):
+    """Two shapes that reached past validation and 500ed in the service. The
+    sidecar one persisted: a stored Infinity is legal to json.loads and illegal
+    to json.dumps, so every later read of that whole list failed — and the
+    sidecar is the one thing a cache drop cannot rebuild."""
+    cid = _cal(client)["id"]
+    lid = _list(client)["id"]
+    for start, end in (("", "2026-08-01"), ("   ", "2026-08-01"), ("2026-07-01", "")):
+        r = client.get(f"/api/calendars/{cid}/events", params={"start": start, "end": end})
+        assert r.status_code == 422, (start, end, r.status_code)
+
+    t = client.post(f"/api/lists/{lid}/tasks", json={"summary": "sc"}).json()
+    for literal in ("NaN", "Infinity", "-Infinity"):
+        r = client.put(f"/api/lists/{lid}/tasks/{t['uid']}/sidecar",
+                       content=f'{{"sort_order": {literal}}}',
+                       headers={"Content-Type": "application/json"})
+        assert r.status_code == 422, (literal, r.status_code)
+        # And the list is still readable — rendering the 422 must not blow up
+        # either, which it did while the handler echoed the offending value back.
+        assert client.get(f"/api/lists/{lid}/tasks").status_code == 200

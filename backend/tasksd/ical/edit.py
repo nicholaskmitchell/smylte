@@ -687,5 +687,66 @@ def split_series(
     for ev in tail.walk("VEVENT"):
         _replace(ev, "UID")
         ev.add("UID", new_uid)
-    _apply_event_fields(tmaster, edit, now)
+
+    # A time change with "this and following" moves the whole tail, so the tail
+    # has to move as a unit — the way shift_series already moves a whole series.
+    # Letting _apply_event_fields write edit.dtstart/dtend onto the master alone
+    # left every other anchor in the tail pinned to the old slots: the
+    # partitioned EXDATE/RDATE stopped matching any generated slot (so a deleted
+    # occurrence came back) and each re-homed override's RECURRENCE-ID stopped
+    # replacing anything (so it rendered as a duplicate alongside the generated
+    # instance).
+    #
+    # The offset is measured from the anchor occurrence's CURRENT start — its
+    # override's DTSTART if one moved it, else the anchor itself — as in
+    # shift_series. That also fixes a pure title edit: CalendarView sends the
+    # displayed times on every "this and following" save, so an occurrence a
+    # previous override had moved reported a start that differed from the anchor
+    # and silently rescheduled the entire tail.
+    delta = timedelta(0)
+    if edit.dtstart is not UNSET and edit.dtstart is not None:
+        base = anchor
+        src_override = _find_override(Calendar.from_ical(raw), anchor)
+        if src_override is not None and src_override.get("DTSTART") is not None:
+            base = src_override.get("DTSTART").dt
+        if isinstance(anchor, datetime) and not isinstance(base, datetime):
+            base = datetime.combine(base, time())
+        elif not isinstance(anchor, datetime) and isinstance(base, datetime):
+            base = base.date()
+        delta = _wall_delta(edit.dtstart, base)
+
+    # A new end resizes the tail master (overrides keep their own spans).
+    duration = None
+    if edit.dtend is not UNSET and edit.dtend is not None:
+        if edit.dtstart is not UNSET and edit.dtstart is not None:
+            duration = _wall_delta(edit.dtend, edit.dtstart)
+        elif dur is not None:
+            duration = dur
+
+    if delta or duration is not None:
+        tail_start = tmaster.get("DTSTART").dt
+        shifted = tail_start + delta
+        day_delta = (
+            (shifted.date() if isinstance(shifted, datetime) else shifted)
+            - (tail_start.date() if isinstance(tail_start, datetime) else tail_start)
+        ).days
+        for ev in tail.walk("VEVENT"):
+            is_master = "RECURRENCE-ID" not in ev
+            _shift_datelike(ev, "RECURRENCE-ID", delta)
+            _shift_datelike(ev, "DTSTART", delta)
+            if duration is not None and is_master:
+                _replace(ev, "DURATION")
+                _replace(ev, "DTEND")
+                ev.add("DTEND", ev.get("DTSTART").dt + duration)
+            else:
+                _shift_datelike(ev, "DTEND", delta)
+            if is_master:
+                _shift_datelist(ev, "EXDATE", delta)
+                _shift_datelist(ev, "RDATE", delta)
+                _shift_rrule(ev, delta, day_delta)
+            else:
+                _stamp(ev, now)
+
+    # Non-time fields land on the master, which also picks up its stamp here.
+    _apply_event_fields(tmaster, replace(edit, dtstart=UNSET, dtend=UNSET), now)
     return head.to_ical(), tail.to_ical()

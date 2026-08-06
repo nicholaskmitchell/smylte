@@ -28,6 +28,7 @@ from fastapi import (
     Request,
     status,
 )
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import (
     FileResponse,
     JSONResponse,
@@ -54,8 +55,11 @@ log = logging.getLogger("tasksd")
 # ── request models ───────────────────────────────────────────────────────────
 
 class Login(BaseModel):
-    username: str
-    password: str
+    # Bounded like every other model here. Unbounded, a rejected guess could
+    # still make the server hash a multi-megabyte body — and this is the one
+    # route an unauthenticated caller can drive.
+    username: str = Field(max_length=256)
+    password: str = Field(max_length=1024)
 
 
 class CreateList(BaseModel):
@@ -114,7 +118,10 @@ class EditTask(BaseModel):
 class Sidecar(BaseModel):
     pinned: bool | None = None
     kanban_column: str | None = None
-    sort_order: float | None = None
+    # Non-finite floats survive JSON parsing but not JSON *serialization*, so an
+    # Infinity stored here 500ed every subsequent read of the whole list — the
+    # sidecar is the one thing a cache drop cannot rebuild.
+    sort_order: float | None = Field(default=None, allow_inf_nan=False)
     estimated_minutes: int | None = None
     repeat_from_completion: bool | None = None
 
@@ -329,6 +336,32 @@ def _check_scope(scope: str) -> None:
         raise HTTPException(422, f"scope must be one of {', '.join(_SCOPES)}")
 
 
+def _check_recurrence_id(recurrence_id: str | None, scope: str) -> None:
+    """A per-occurrence scope is only meaningful with an anchor to aim it at.
+
+    The service dispatches on ``scope == "this" and recurrence_id``, so a missing
+    or empty anchor falls through to the whole-resource branch: a request that
+    says "delete this occurrence" would delete the *entire series*, and answer
+    204. That is reachable — ``events_in_range`` falls back to the master DTO
+    (``is_recurring`` true, ``recurrence_id`` null) whenever expansion fails on
+    a resource another CalDAV client wrote, and the UI then offers the scope
+    picker with no anchor to send.
+
+    A non-ISO anchor is the other half: it reaches ``date.fromisoformat`` deep in
+    the edit path, where the ValueError has no handler and escapes as a 500.
+    Reject both here, where the client still gets a usable error.
+    """
+    if scope not in ("this", "thisandfuture"):
+        return
+    s = (recurrence_id or "").strip()
+    if not s:
+        raise HTTPException(422, f"recurrence_id is required for scope={scope}")
+    try:
+        datetime.fromisoformat(s) if "T" in s else date.fromisoformat(s)
+    except ValueError:
+        raise HTTPException(422, f"invalid recurrence_id: {s!r}") from None
+
+
 # RFC 5545 STATUS vocabularies. Anything else would be written verbatim onto the
 # wire and confuse other CalDAV clients, so reject it at the edge.
 _TASK_STATUS = ("NEEDS-ACTION", "IN-PROCESS", "COMPLETED", "CANCELLED")
@@ -393,11 +426,22 @@ def _edit_from_patch(req: EditTask) -> TaskEdit:
     return TaskEdit(**kw)
 
 
-def _event_dt(s: str | None, all_day: bool) -> date | datetime | None:
+def _event_dt(s: str | None, all_day: bool, *, required: bool = False) -> date | datetime | None:
+    """Parse an event DTSTART/DTEND. ``required`` for DTSTART only: an empty or
+    whitespace string is "unset" to ``_parse_datelike``, which is right for a
+    cleared DTEND but not for a start — a None DTSTART reaches
+    ``icalendar``'s ``add()`` and raises TypeError, which no handler maps, so the
+    client sees a 500 where the all-day branch below already answers 422."""
     if s is None:
+        if required:
+            raise HTTPException(422, "start is required")
         return None
     if not all_day:
-        return _parse_datelike(s)
+        dt = _parse_datelike(s)
+        if dt is None and required:
+            raise HTTPException(422, f"invalid date/datetime: {s!r}")
+        return dt
+
     try:
         return date.fromisoformat(s.strip())
     except ValueError:
@@ -540,6 +584,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         svc.bind_loop(asyncio.get_running_loop())
         app.state.service = svc
         app.state.sync_trigger = asyncio.Event()
+        if authenticator is not None:
+            # Sessions ended before this process started stay ended.
+            authenticator.load_revocations(await asyncio.to_thread(svc.live_revocations))
         await asyncio.to_thread(svc.bootstrap)
         loop_task = asyncio.create_task(_sync_loop(app))
         try:
@@ -551,6 +598,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             svc.close()
 
     app = FastAPI(title="tasksd", version="0.1.0-phase1", lifespan=lifespan)
+
+    @app.exception_handler(RequestValidationError)
+    async def _invalid_request(request: Request, exc: RequestValidationError):
+        # FastAPI's default handler echoes the offending input back in the body.
+        # A non-finite float round-trips through json.loads but not json.dumps,
+        # so rendering the 422 itself raised and the client got a 500 instead —
+        # on a validation failure, of all things. Keep what a client can act on
+        # (where it was and what was wrong) and drop the echoed value.
+        return JSONResponse(
+            status_code=422,
+            content={"detail": [
+                {"type": e.get("type"), "loc": list(e.get("loc", ())), "msg": e.get("msg")}
+                for e in exc.errors()
+            ]},
+        )
 
     # Domain exceptions → meaningful statuses. Starlette matches handlers by MRO,
     # so ConflictError/NotFound/AuthError win over the DavError catch-all.
@@ -732,7 +794,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def get_events(request: Request, cal_id: str,
                          start: str = Query(...), end: str = Query(...)):
         href = _href(request, cal_id)
-        _parse_datelike(start), _parse_datelike(end)   # 422 on a bad window bound
+        # 422 on a bad window bound. _parse_datelike reads "" as "unset", which
+        # is right for an optional field but not for a required bound — the empty
+        # string went straight through to the service and 500ed there.
+        for name, value in (("start", start), ("end", end)):
+            if _parse_datelike(value) is None:
+                raise HTTPException(422, f"{name} is required (YYYY-MM-DD)")
         return await _run(_svc(request).events_in_range, href, start, end)
 
     @api.post("/calendars/{cal_id}/events", status_code=201)
@@ -741,7 +808,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         _check_client_id(body.client_id)
         return await _run(
             _svc(request).create_event, href, body.summary,
-            dtstart=_event_dt(body.start, body.all_day),
+            dtstart=_event_dt(body.start, body.all_day, required=True),
             dtend=_event_dt(body.end, body.all_day),
             edit=_event_edit_from_create(body),
             client_id=body.client_id,
@@ -759,6 +826,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def patch_event(request: Request, cal_id: str, uid: str, body: EditEvent):
         href = _href(request, cal_id)
         _check_scope(body.scope or "all")
+        _check_recurrence_id(body.recurrence_id, body.scope or "all")
         try:
             dto = await _run(
                 _svc(request).edit_event, href, uid, _event_edit_from_patch(body),
@@ -788,6 +856,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ):
         href = _href(request, cal_id)
         _check_scope(scope)
+        _check_recurrence_id(recurrence_id, scope)
         await _run(
             _svc(request).delete_event, href, uid,
             recurrence_id=recurrence_id, scope=scope,
@@ -891,22 +960,33 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(api)
 
     # -- auth (login/logout/me are deliberately NOT behind require_auth) --
+    # Caps concurrent password hashes. Per-app (not a module global) so tests
+    # don't share it, matching the limiter instances below.
+    login_hashes = asyncio.Semaphore(4)
     @app.post("/api/login")
     async def login(request: Request, body: Login):
         if authenticator is None:
             return {"authenticated": True, "user": "dev", "auth_enabled": False}
         key = limiter_key(_client_ip(request))   # IPv6 collapses to its /64
-        if not authenticator.limiter.allowed(key):
+        # Reserve the attempt BEFORE the hash, not after the verdict: the hash is
+        # awaited, so a read-only check would let every request that arrives
+        # during it through on one credit. Same reserve-first shape the public
+        # booking routes already use in _throttle.
+        if not authenticator.limiter.attempt(key):
             raise HTTPException(
                 status.HTTP_429_TOO_MANY_REQUESTS,
                 "too many attempts, try later",
                 headers={"Retry-After": str(authenticator.limiter.retry_after(key))},
             )
-        ok = await asyncio.to_thread(
-            authenticator.check_credentials, body.username, body.password
-        )
+        # scrypt is memory-hard by design (~16 MiB a call), so unbounded
+        # concurrency is an unauthenticated memory amplifier — and every other
+        # endpoint shares this thread pool.
+        async with login_hashes:
+            ok = await asyncio.to_thread(
+                authenticator.check_credentials, body.username, body.password
+            )
         if not ok:
-            authenticator.limiter.record_failure(key)
+            # The attempt is already recorded by attempt() above.
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid credentials")
         authenticator.limiter.record_success(key)
         resp = JSONResponse({"authenticated": True, "user": authenticator.user})
@@ -918,7 +998,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return resp
 
     @app.post("/api/logout")
-    async def logout():
+    async def logout(
+        request: Request,
+        session: str | None = Cookie(default=None, alias="tasks_session"),
+    ):
+        # Clearing the cookie only asks the browser to forget the token; the
+        # token itself stays valid for the rest of its TTL. Withdraw this one by
+        # name so a copy of it is refused too — other devices keep their own.
+        if authenticator is not None and session:
+            claims = authenticator.session_claims(session)
+            jti, exp = (claims or {}).get("jti"), (claims or {}).get("exp")
+            if jti and exp:
+                authenticator.revoke(jti, float(exp))
+                await _run(_svc(request).revoke_session, jti, float(exp))
         resp = JSONResponse({"authenticated": False})
         resp.delete_cookie("tasks_session", path="/")
         return resp
@@ -981,6 +1073,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 email=body.email.strip(), notes=body.notes,
                 client_id=body.client_id,
             )
+        except OverflowError:
+            # A syntactically valid but extreme ISO start (year 9999, year 1)
+            # parses fine and only blows up in the tz conversion inside
+            # book_slot. OverflowError is not a ValueError, so it escaped as a
+            # 500 — on the one route an unauthenticated caller can reach.
+            raise HTTPException(422, "start is out of range") from None
         except ValueError as e:
             raise HTTPException(422, str(e)) from None
         if result is None:
