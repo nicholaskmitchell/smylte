@@ -300,3 +300,50 @@ describe('<TasksView> creating', () => {
     expect(m.createTask.mock.calls[0][1]).toEqual({ summary: 'solo', client_id: expect.any(String) })
   })
 })
+
+// ── a retry must replay the create, not author a second task ────────────────
+// `client_id` is the idempotency slug the server derives the CalDAV resource
+// name from. Minting a fresh one per attempt meant a create whose response was
+// lost on the way back — indistinguishable from one that never landed, and the
+// exact failure the composer invites you to retry — arrived twice.
+
+describe('<TasksView> retrying a bulk create', () => {
+  it('replays the same client_id for a row that failed', async () => {
+    m.createTask
+      .mockImplementationOnce(async () => task({ uid: 'u1', summary: 'alpha' }))
+      .mockRejectedValueOnce(new Error('boom'))
+    const { user } = setup()
+    await openBulk(user, ['alpha', 'bravo'])
+    await user.click(bulkAdd(2))
+    await screen.findByRole('alert')
+
+    const firstTry = m.createTask.mock.calls[1][1].client_id
+    m.createTask.mockClear()
+    m.createTask.mockImplementation(async () => task({ uid: 'u2', summary: 'bravo' }))
+    await user.click(bulkAdd(1))
+
+    await waitFor(() => expect(m.createTask).toHaveBeenCalledTimes(1))
+    expect(m.createTask.mock.calls[0][1].client_id).toBe(firstTry)
+  })
+
+  it('mints a new client_id when the row is retitled before the retry', async () => {
+    // A different title is a different task, and the server answers a replayed
+    // slug by confirming the resource already written under it — which would
+    // silently discard the edit.
+    m.createTask.mockRejectedValueOnce(new Error('boom'))
+    const { user } = setup()
+    await openBulk(user, ['alpha'])
+    await user.click(bulkAdd(1))
+    await screen.findByRole('alert')
+
+    const firstTry = m.createTask.mock.calls[0][1].client_id
+    m.createTask.mockClear()
+    m.createTask.mockImplementation(async () => task({ uid: 'u2', summary: 'alpha fixed' }))
+    await user.type(screen.getByLabelText('Title, row 1'), ' fixed')
+    await user.click(bulkAdd(1))
+
+    await waitFor(() => expect(m.createTask).toHaveBeenCalledTimes(1))
+    expect(m.createTask.mock.calls[0][1].client_id).not.toBe(firstTry)
+  })
+})
+

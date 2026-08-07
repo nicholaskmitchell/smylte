@@ -115,7 +115,7 @@ describe('AddMultipleModal', () => {
     await user.type(title(1), 'a')
     await user.type(title(2), 'b')
     await user.click(add())
-    expect(itemsOf(onSubmit)).toEqual([
+    expect(itemsOf(onSubmit).map(({ listId, body }) => ({ listId, body }))).toEqual([
       { listId: 'l2', body: { summary: 'a', priority: 'high', due: '2026-08-10' } },
       { listId: 'l2', body: { summary: 'b', priority: 'high', due: '2026-08-10' } },
     ])

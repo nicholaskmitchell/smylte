@@ -168,11 +168,15 @@ export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggle
   // toasts. Failures come back as indexes instead and the modal reports them in
   // place, against the rows that produced them.
   const createMany = async (
-    items: Array<{ listId: string; body: CreateTaskBody }>,
+    items: Array<{ listId: string; body: CreateTaskBody; cid: string }>,
     onProgress: (done: number) => void,
   ): Promise<number[]> => {
     const key = loadKey
-    const cids = items.map(() => clientId())
+    // The ids come from the rows, which keep them across a retry. Minting them
+    // here meant every attempt carried a new idempotency slug, so a create whose
+    // response was lost on the way back — the failure the composer explicitly
+    // invites you to retry — landed a second time as a distinct task.
+    const cids = items.map((it) => it.cid)
     invalidateFetches()
     setTasks((ts) => [...ts, ...items.map((it, i) => draftTask(cids[i], it.listId, it.body))])
     const failed: number[] = []
