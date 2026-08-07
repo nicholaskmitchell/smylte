@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import time
 from datetime import date, datetime, timezone
+from zoneinfo import ZoneInfo
 
 import pytest
 from helpers import foreign_event_raw
@@ -19,6 +20,7 @@ from tasksd.ical import (
     EventEdit,
     apply_occurrence_override,
     exclude_occurrence,
+    parse_calendar,
     recur,
     shift_series,
     split_series,
@@ -26,6 +28,17 @@ from tasksd.ical import (
 from tasksd.ical.read import extract_from_raw
 
 _WIN = (date(2026, 1, 1), date(2026, 3, 1))
+
+
+def _master(raw: bytes):
+    """The series master component (the VEVENT with no RECURRENCE-ID)."""
+    return next(ev for ev in parse_calendar(raw).walk("VEVENT")
+                if "RECURRENCE-ID" not in ev)
+
+
+def _overrides(raw: bytes) -> list:
+    return [ev for ev in parse_calendar(raw).walk("VEVENT")
+            if "RECURRENCE-ID" in ev]
 
 
 def _series() -> bytes:
@@ -619,3 +632,161 @@ def test_split_time_change_carries_the_tail_exdates_and_overrides():
         "2026-02-24T14:00:00+00:00",      # the override, shifted with the tail
         "2026-03-03T09:00:00+00:00", "2026-03-10T09:00:00+00:00",
     ]
+
+
+# ── EXDATE/RDATE property lines survive a rewrite intact ─────────────────────
+# Rewriting a date-list used to flatten every property line into one, so
+# icalendar derived a single TZID for the whole set (the last entry's zone)
+# while still serializing each value in its own wall time — silently moving
+# every exclusion that came from a different zone.
+
+def _paris_exdate_series() -> bytes:
+    """Weekly 09:00 America/New_York with two exclusions a foreign client wrote
+    in different zones — ordinary in a shared collection."""
+    return foreign_event_raw(
+        "mz", "Std", dtstart="TZID=America/New_York:20260105T090000",
+        dtend="TZID=America/New_York:20260105T093000", rrule="FREQ=WEEKLY",
+        extra=(
+            "EXDATE;TZID=America/New_York:20260112T090000",
+            "EXDATE;TZID=Europe/Paris:20260119T150000",
+        ),
+    )
+
+
+def _exdate_instants(raw: bytes) -> list[str]:
+    """Every EXDATE value, re-parsed and normalized to UTC. Compares the
+    *instants* the property names, which is what a wrong TZID label corrupts —
+    a string compare would not notice."""
+    prop = _master(raw).get("EXDATE")
+    return sorted(
+        entry.dt.astimezone(timezone.utc).isoformat()
+        for lst in (prop if isinstance(prop, list) else [prop])
+        for entry in lst.dts
+    )
+
+
+def test_shift_series_keeps_each_exdate_in_its_own_zone():
+    raw = _paris_exdate_series()
+    assert _exdate_instants(raw) == [
+        "2026-01-12T14:00:00+00:00", "2026-01-19T14:00:00+00:00",
+    ]
+    shifted = shift_series(raw, "2026-01-05T09:00:00-05:00",
+                           EventEdit(dtstart=datetime(2026, 1, 5, 10, 0),
+                                     dtend=datetime(2026, 1, 5, 11, 0)))
+    # Both exclusions moved by the same +1h the series did — and no more.
+    assert _exdate_instants(shifted) == [
+        "2026-01-12T15:00:00+00:00", "2026-01-19T15:00:00+00:00",
+    ]
+    # Still two property lines, each labelled with the zone it was written in.
+    lines = [ln for ln in shifted.decode().replace("\r\n", "\n").split("\n")
+             if ln.startswith("EXDATE")]
+    assert lines == [
+        "EXDATE;TZID=America/New_York:20260112T100000",
+        "EXDATE;TZID=Europe/Paris:20260119T160000",
+    ]
+
+
+def test_shift_series_never_puts_a_tzid_on_a_utc_exdate():
+    """RFC 5545 §3.2.19 forbids TZID on a UTC value; merging the lines produced
+    exactly that, so other CalDAV clients rejected the resource outright."""
+    raw = foreign_event_raw(
+        "uz", "Std", dtstart="TZID=America/New_York:20260105T090000",
+        dtend="TZID=America/New_York:20260105T093000", rrule="FREQ=WEEKLY",
+        extra=(
+            "EXDATE:20260119T140000Z",
+            "EXDATE;TZID=America/New_York:20260126T090000",
+        ),
+    )
+    shifted = shift_series(raw, "2026-01-05T09:00:00-05:00",
+                           EventEdit(dtstart=datetime(2026, 1, 5, 10, 0)))
+    lines = [ln for ln in shifted.decode().replace("\r\n", "\n").split("\n")
+             if ln.startswith("EXDATE")]
+    assert lines == [
+        "EXDATE:20260119T150000Z",
+        "EXDATE;TZID=America/New_York:20260126T100000",
+    ]
+
+
+def test_split_partitioning_keeps_each_exdate_in_its_own_zone():
+    # _partition_datelist had the same flattening bug as _shift_datelist, so the
+    # side that keeps entries from two zones is the one that has to be asserted.
+    raw = foreign_event_raw(
+        "mz3", "Std", dtstart="TZID=America/New_York:20260105T090000",
+        dtend="TZID=America/New_York:20260105T093000", rrule="FREQ=WEEKLY",
+        extra=(
+            "EXDATE;TZID=America/New_York:20260112T090000",
+            "EXDATE;TZID=Europe/Paris:20260119T150000",
+            "EXDATE;TZID=America/New_York:20260126T090000",
+        ),
+    )
+    head, tail = split_series(raw, "2026-01-19T15:00:00+01:00", EventEdit())
+    assert _exdate_instants(head) == ["2026-01-12T14:00:00+00:00"]
+    assert _exdate_instants(tail) == [
+        "2026-01-19T14:00:00+00:00", "2026-01-26T14:00:00+00:00",
+    ]
+    assert b"EXDATE;TZID=America/New_York:20260112T090000" in head
+    assert b"EXDATE;TZID=Europe/Paris:20260119T150000" in tail
+    assert b"EXDATE;TZID=America/New_York:20260126T090000" in tail
+
+
+# ── RDATE;VALUE=PERIOD (a tuple value, not a datetime) ───────────────────────
+# vDDDTypes.dt is a (start, end) or (start, duration) tuple for a PERIOD, which
+# used to raise TypeError in the shift and partition helpers — a 500 that made
+# such an event permanently uneditable.
+
+def _period_series() -> bytes:
+    return foreign_event_raw(
+        "per", "P", dtstart="20260101T090000Z", dtend="20260101T110000Z",
+        rrule="FREQ=WEEKLY",
+        extra=("RDATE;VALUE=PERIOD:20260210T090000Z/20260210T110000Z,"
+               "20260217T090000Z/PT2H",),
+    )
+
+
+def _rdate_lines(raw: bytes) -> list[str]:
+    return [ln for ln in raw.decode().replace("\r\n", "\n").split("\n")
+            if ln.startswith("RDATE")]
+
+
+def test_shift_series_moves_a_period_rdate():
+    shifted = shift_series(_period_series(), "2026-01-01T09:00:00+00:00",
+                           EventEdit(dtstart=datetime(2026, 1, 1, 10, 0)))
+    # Both ends of an explicit period move; a duration is a span, so it stays.
+    assert _rdate_lines(shifted) == [
+        "RDATE;VALUE=PERIOD:20260210T100000Z/20260210T120000Z,"
+        "20260217T100000Z/PT2H"
+    ]
+
+
+def test_split_series_partitions_a_period_rdate():
+    # The periods (2/10, 2/17) both sit after the anchor, so they belong to the
+    # tail — addressed by where each period starts.
+    head, tail = split_series(_period_series(), "2026-01-08T09:00:00+00:00",
+                              EventEdit())
+    assert _rdate_lines(head) == []
+    assert _rdate_lines(tail) == _rdate_lines(_period_series())
+
+
+# ── property parameters survive a shift (RANGE=THISANDFUTURE) ────────────────
+
+def test_shift_series_preserves_recurrence_id_parameters():
+    """`_shift_datelike` re-added only the value, so RANGE=THISANDFUTURE — "this
+    override covers this and every later occurrence" — was dropped and every
+    later occurrence silently reverted to the master."""
+    raw = foreign_event_raw(
+        "tf", "Std", dtstart="TZID=America/New_York:20260105T090000",
+        dtend="TZID=America/New_York:20260105T093000", rrule="FREQ=WEEKLY;COUNT=4",
+        overrides=((
+            "RECURRENCE-ID;RANGE=THISANDFUTURE;TZID=America/New_York:20260112T090000",
+            "DTSTART;TZID=America/New_York:20260112T110000",
+            "DTEND;TZID=America/New_York:20260112T113000",
+            "SUMMARY:TF",
+        ),),
+    )
+    shifted = shift_series(raw, "2026-01-05T09:00:00-05:00",
+                           EventEdit(dtstart=datetime(2026, 1, 5, 10, 0)))
+    rid = _overrides(shifted)[0].get("RECURRENCE-ID")
+    assert rid.params.get("RANGE") == "THISANDFUTURE"
+    # TZID is re-derived from the shifted value, never carried over verbatim.
+    assert rid.params.get("TZID") == "America/New_York"
+    assert rid.dt == datetime(2026, 1, 12, 10, 0, tzinfo=ZoneInfo("America/New_York"))

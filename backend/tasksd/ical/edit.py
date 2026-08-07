@@ -341,8 +341,16 @@ def _same_instant(a, b) -> bool:
     return a == b
 
 
+def _period_start(value):
+    """The instant a date-list entry identifies. An RDATE;VALUE=PERIOD entry
+    parses as a ``(start, end)`` or ``(start, duration)`` tuple, and a period is
+    addressed by where it starts."""
+    return value[0] if isinstance(value, tuple) else value
+
+
 def _at_or_after(a, anchor) -> bool:
     """True if instant/date `a` is on or after `anchor` (used to split a series)."""
+    a, anchor = _period_start(a), _period_start(anchor)
     if isinstance(a, datetime) and isinstance(anchor, datetime):
         return _as_utc(a) >= _as_utc(anchor)
     da = a.date() if isinstance(a, datetime) else a
@@ -443,27 +451,96 @@ def _wall_delta(a: date | datetime, b: date | datetime) -> timedelta:
     return a - b
 
 
+def _keep_params(params) -> dict:
+    """A property's parameters minus the two icalendar re-derives from the value.
+
+    TZID has to go: icalendar writes it from the value's tzinfo, so carrying the
+    source line's copy onto a rewritten value relabels the instant. VALUE too —
+    it follows the value's type, and a stale ``VALUE=DATE-TIME`` left on a DATE
+    is invalid iCalendar. Everything else rides along, which is the point:
+    ``RANGE=THISANDFUTURE`` on a RECURRENCE-ID (RFC 5545 §3.2.13, written by
+    Apple Calendar and others) means "this override covers this and every later
+    occurrence", so dropping it silently collapses the override to one instance
+    and every later occurrence reverts to the master."""
+    return {k: v for k, v in params.items() if k.upper() not in ("TZID", "VALUE")}
+
+
+def _shift_value(value, delta: timedelta):
+    """Shift a date, datetime, or RDATE period by ``delta``. Adding to the
+    original value keeps its type and tzinfo, so a zone-aware series keeps its
+    wall-clock time across DST boundaries."""
+    if isinstance(value, tuple):
+        start, second = value
+        # A period is (start, end) or (start, duration); a duration is a span,
+        # not an instant, so only the start moves.
+        return (start + delta, second if isinstance(second, timedelta) else second + delta)
+    return value + delta
+
+
 def _shift_datelike(event: Event, key: str, delta: timedelta) -> None:
     prop = event.get(key)
     if prop is None:
         return
-    old = prop.dt
+    old, params = prop.dt, _keep_params(prop.params)
     _replace(event, key)
-    # Adding to the original value keeps its type and tzinfo, so a zone-aware
-    # series keeps its wall-clock time across DST boundaries.
-    event.add(key, old + delta)
+    event.add(key, _shift_value(old, delta), parameters=params)
 
 
-def _shift_datelist(event: Event, key: str, delta: timedelta) -> None:
-    """Shift every EXDATE/RDATE entry (possibly several property lines)."""
+def _datelist_group(value) -> tuple:
+    """Values that can share one EXDATE/RDATE property line: same value type and
+    same zone. icalendar derives a single TZID for a whole property, so a line
+    must never mix them."""
+    if isinstance(value, tuple):
+        return ("PERIOD", str(getattr(value[0], "tzinfo", None)))
+    if isinstance(value, datetime):
+        return ("DATE-TIME", str(value.tzinfo))
+    return ("DATE", None)
+
+
+def _rebuild_datelist(event: Event, key: str, fn) -> None:
+    """Rewrite every EXDATE/RDATE entry through ``fn`` — which returns a new
+    value, or None to drop that entry — emitting one property line per source
+    line. Leaves the property untouched when ``fn`` changed nothing.
+
+    Rebuilding per line is load-bearing. Flattening every line into one property
+    lets icalendar derive a single TZID for the whole set (it takes the last
+    entry's zone) while still serializing each value in its own local wall time,
+    so entries written in another zone come back out labelled as a different
+    instant — and a UTC value beside a TZID one emits ``EXDATE;TZID=...:...Z``,
+    which RFC 5545 §3.2.19 forbids outright. Mixed zones are ordinary in a
+    shared collection: an exclusion written before the user changed the event's
+    zone sits right next to one written after."""
     prop = event.get(key)
     if prop is None:
         return
     lists = prop if isinstance(prop, list) else [prop]
-    values = [entry.dt + delta for lst in lists for entry in lst.dts]
+    rebuilt: list[tuple[list, dict]] = []
+    changed = False
+    for lst in lists:
+        params = _keep_params(lst.params)
+        groups: dict[tuple, list] = {}
+        for entry in lst.dts:
+            new = fn(entry.dt)
+            if new is None:
+                changed = True
+                continue
+            changed = changed or new != entry.dt
+            groups.setdefault(_datelist_group(new), []).append(new)
+        for group, values in groups.items():
+            line = dict(params)
+            if group[0] == "PERIOD":
+                line["VALUE"] = "PERIOD"   # the one VALUE icalendar cannot re-derive
+            rebuilt.append((values, line))
+    if not changed:
+        return
     _replace(event, key)
-    if values:
-        event.add(key, values)
+    for values, line in rebuilt:
+        event.add(key, values, parameters=line)
+
+
+def _shift_datelist(event: Event, key: str, delta: timedelta) -> None:
+    """Shift every EXDATE/RDATE entry (possibly across several property lines)."""
+    _rebuild_datelist(event, key, lambda v: _shift_value(v, delta))
 
 
 def _shift_rrule(master: Event, delta: timedelta, day_delta: int) -> None:
@@ -595,17 +672,9 @@ def _partition_datelist(event: Event, key: str, anchor, *, keep_before: bool) ->
     UNTIL bounds the RRULE only — list-based instances ignore it, so without
     this a post-anchor RDATE would survive in the head AND duplicate into the
     tail."""
-    prop = event.get(key)
-    if prop is None:
-        return
-    lists = prop if isinstance(prop, list) else [prop]
-    values = [entry.dt for lst in lists for entry in lst.dts]
-    keep = [v for v in values if _at_or_after(v, anchor) != keep_before]
-    if len(keep) == len(values):
-        return
-    _replace(event, key)
-    if keep:
-        event.add(key, keep)
+    _rebuild_datelist(
+        event, key, lambda v: v if _at_or_after(v, anchor) != keep_before else None
+    )
 
 
 def _count_consumed(rule: dict, dtstart: date | datetime, anchor) -> int:
