@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { bucketByDay, lastDayOf, monthGrid } from './calendar'
+import {
+  bucketByDay, dragBody, daysBetween, endIsExclusive, lastDayOf, monthGrid, shiftIso,
+} from './calendar'
 import type { CalEvent } from './api'
 
 const ev = (start: string | null, end: string | null,
@@ -121,5 +123,158 @@ describe('monthGrid', () => {
     const days = monthGrid(new Date(2026, 10, 20))    // November 2026 starts Sunday
     expect(days[0].getMonth()).toBe(10)
     expect(days[0].getDate()).toBe(1)
+  })
+})
+
+// The suite is pinned to America/New_York (vite.config.ts) so these are real
+// transitions: 2026-03-08 springs forward, 2026-11-01 falls back.
+describe('daysBetween', () => {
+  it('counts plain days', () => {
+    expect(daysBetween('2026-08-03', '2026-08-06')).toBe(3)
+    expect(daysBetween('2026-08-06', '2026-08-03')).toBe(-3)
+    expect(daysBetween('2026-08-03', '2026-08-03')).toBe(0)
+  })
+
+  it('counts whole days across a spring-forward, not 23-hour days', () => {
+    // The raw quotient here is 2.958 — truncating loses the day.
+    expect((new Date('2026-03-10T00:00').getTime()
+      - new Date('2026-03-07T00:00').getTime()) / 86400000).toBeCloseTo(2.958, 2)
+    expect(daysBetween('2026-03-07', '2026-03-10')).toBe(3)
+  })
+
+  it('counts whole days across a fall-back', () => {
+    expect(daysBetween('2026-10-31', '2026-11-03')).toBe(3)
+  })
+})
+
+describe('shiftIso', () => {
+  it('shifts a date-only value', () => {
+    expect(shiftIso('2026-08-03', 2)).toBe('2026-08-05')
+    expect(shiftIso('2026-08-03', -2)).toBe('2026-08-01')
+  })
+
+  it('shifts a datetime and returns floating local wall time', () => {
+    expect(shiftIso('2026-08-03T09:30:00', 2)).toBe('2026-08-05T09:30')
+  })
+
+  it('keeps the wall-clock time across a spring-forward', () => {
+    // 09:00 stays 09:00 — a meeting does not move to 10:00 because the clocks did.
+    expect(shiftIso('2026-03-07T09:00:00', 2)).toBe('2026-03-09T09:00')
+  })
+
+  it('keeps the wall-clock time across a fall-back', () => {
+    expect(shiftIso('2026-10-31T09:00:00', 2)).toBe('2026-11-02T09:00')
+  })
+})
+
+describe('endIsExclusive', () => {
+  it.each([
+    ['no end', { end: null, end_is_date: false }, false],
+    ['all-day end', { end: '2026-08-06', end_is_date: true }, true],
+    ['timed end at midnight', { end: '2026-08-06T00:00:00', end_is_date: false }, true],
+    ['timed end mid-day', { end: '2026-08-06T17:00:00', end_is_date: false }, false],
+    ['timed end at 00:30', { end: '2026-08-06T00:30:00', end_is_date: false }, false],
+  ])('%s', (_label, e, expected) => {
+    expect(endIsExclusive(e as Parameters<typeof endIsExclusive>[0])).toBe(expected)
+  })
+})
+
+describe('dragBody: move', () => {
+  const timed = ev('2026-08-03T09:00:00', '2026-08-03T10:00:00')
+
+  it('shifts start and end by the whole-day delta', () => {
+    expect(dragBody(timed, '2026-08-03', '2026-08-06', 'move'))
+      .toEqual({ start: '2026-08-06T09:00', end: '2026-08-06T10:00' })
+  })
+
+  it('is a no-op when the event is dropped on its own day', () => {
+    expect(dragBody(timed, '2026-08-03', '2026-08-03', 'move')).toBeNull()
+  })
+
+  it('omits the end for an event that has none', () => {
+    expect(dragBody(ev('2026-08-03T09:00:00', null), '2026-08-03', '2026-08-04', 'move'))
+      .toEqual({ start: '2026-08-04T09:00' })
+  })
+
+  it('anchors the delta to the dragged segment, not the event start', () => {
+    // Dragging the 08-05 continuation segment of an 08-03..08-05 span onto 08-06
+    // moves the whole event by one day, not by three.
+    const span = ev('2026-08-03T09:00:00', '2026-08-05T10:00:00')
+    expect(dragBody(span, '2026-08-05', '2026-08-06', 'move'))
+      .toEqual({ start: '2026-08-04T09:00', end: '2026-08-06T10:00' })
+  })
+
+  it('keeps the wall-clock time when the move crosses a spring-forward', () => {
+    expect(dragBody(ev('2026-03-07T09:00:00', '2026-03-07T10:00:00'),
+      '2026-03-07', '2026-03-09', 'move'))
+      .toEqual({ start: '2026-03-09T09:00', end: '2026-03-09T10:00' })
+  })
+
+  it('moves an all-day event by whole days', () => {
+    const allDay = ev('2026-08-03', '2026-08-04',
+      { all_day: true, start_is_date: true, end_is_date: true })
+    expect(dragBody(allDay, '2026-08-03', '2026-08-06', 'move'))
+      .toEqual({ start: '2026-08-06', end: '2026-08-07' })
+  })
+
+  it('returns null for an event with no start', () => {
+    expect(dragBody(ev(null, null), '2026-08-03', '2026-08-06', 'move')).toBeNull()
+  })
+})
+
+describe('dragBody: resize', () => {
+  it('keeps an all-day DTEND exclusive', () => {
+    const allDay = ev('2026-08-03', '2026-08-04',
+      { all_day: true, start_is_date: true, end_is_date: true })
+    expect(dragBody(allDay, '2026-08-03', '2026-08-06', 'resize'))
+      .toEqual({ start: '2026-08-03', end: '2026-08-07' })
+  })
+
+  it('resizes a plain timed event to the drop day', () => {
+    expect(dragBody(ev('2026-08-03T09:00:00', '2026-08-03T17:00:00'),
+      '2026-08-03', '2026-08-05', 'resize'))
+      .toEqual({ start: '2026-08-03T09:00', end: '2026-08-05T17:00' })
+  })
+
+  it('clamps a drop before the start day back to the start day', () => {
+    expect(dragBody(ev('2026-08-03T09:00:00', '2026-08-05T17:00:00'),
+      '2026-08-05', '2026-08-01', 'resize'))
+      .toEqual({ start: '2026-08-03T09:00', end: '2026-08-03T17:00' })
+  })
+
+  it('is a no-op when the end would not move', () => {
+    expect(dragBody(ev('2026-08-03T09:00:00', '2026-08-05T17:00:00'),
+      '2026-08-05', '2026-08-05', 'resize')).toBeNull()
+  })
+
+  it('is a no-op when the new end would not clear the start', () => {
+    expect(dragBody(ev('2026-08-03T09:00:00', '2026-08-03T08:00:00'),
+      '2026-08-03', '2026-08-03', 'resize')).toBeNull()
+  })
+
+  // A 20:00-24:00 block — trivially authored in Thunderbird or Apple Calendar.
+  // Its DTEND is exclusive, so it renders (correctly) only on 03-02, and the
+  // resize grip sits there. Building the new end as `${day}T00:00` named the day
+  // *before* the drop: one day out compared equal to the old end and vanished,
+  // and further out landed a day short.
+  const midnight = ev('2026-03-02T20:00:00', '2026-03-03T00:00:00')
+
+  it('renders a midnight-ending event on its start day only', () => {
+    expect(lastDayOf(midnight)).toBe('2026-03-02')
+  })
+
+  it('extends a midnight-ending event by one day instead of discarding the drag', () => {
+    const body = dragBody(midnight, '2026-03-02', '2026-03-03', 'resize')
+    expect(body).toEqual({ start: '2026-03-02T20:00', end: '2026-03-04T00:00' })
+    expect(lastDayOf({ ...midnight, end: body!.end as string })).toBe('2026-03-03')
+  })
+
+  it('ends a midnight-ending event on the day it was dropped on', () => {
+    const body = dragBody(midnight, '2026-03-02', '2026-03-05', 'resize')
+    expect(lastDayOf({ ...midnight, end: body!.end as string })).toBe('2026-03-05')
+  })
+
+  it('is still a no-op when a midnight-ending event is dropped on its own last day', () => {
+    expect(dragBody(midnight, '2026-03-02', '2026-03-02', 'resize')).toBeNull()
   })
 })

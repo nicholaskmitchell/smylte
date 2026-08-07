@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import time
 from datetime import date, datetime, timezone
+from zoneinfo import ZoneInfo
 
 import pytest
 from helpers import foreign_event_raw
@@ -17,15 +18,30 @@ from tasksd.dav.client import CollectionInfo, Item
 from tasksd.db import store
 from tasksd.ical import (
     EventEdit,
+    apply_event_changes,
     apply_occurrence_override,
+    build_new_event,
     exclude_occurrence,
+    parse_calendar,
     recur,
+    rrule_from_spec,
     shift_series,
     split_series,
 )
 from tasksd.ical.read import extract_from_raw
 
 _WIN = (date(2026, 1, 1), date(2026, 3, 1))
+
+
+def _master(raw: bytes):
+    """The series master component (the VEVENT with no RECURRENCE-ID)."""
+    return next(ev for ev in parse_calendar(raw).walk("VEVENT")
+                if "RECURRENCE-ID" not in ev)
+
+
+def _overrides(raw: bytes) -> list:
+    return [ev for ev in parse_calendar(raw).walk("VEVENT")
+            if "RECURRENCE-ID" in ev]
 
 
 def _series() -> bytes:
@@ -619,3 +635,445 @@ def test_split_time_change_carries_the_tail_exdates_and_overrides():
         "2026-02-24T14:00:00+00:00",      # the override, shifted with the tail
         "2026-03-03T09:00:00+00:00", "2026-03-10T09:00:00+00:00",
     ]
+
+
+# ── EXDATE/RDATE property lines survive a rewrite intact ─────────────────────
+# Rewriting a date-list used to flatten every property line into one, so
+# icalendar derived a single TZID for the whole set (the last entry's zone)
+# while still serializing each value in its own wall time — silently moving
+# every exclusion that came from a different zone.
+
+def _paris_exdate_series() -> bytes:
+    """Weekly 09:00 America/New_York with two exclusions a foreign client wrote
+    in different zones — ordinary in a shared collection."""
+    return foreign_event_raw(
+        "mz", "Std", dtstart="TZID=America/New_York:20260105T090000",
+        dtend="TZID=America/New_York:20260105T093000", rrule="FREQ=WEEKLY",
+        extra=(
+            "EXDATE;TZID=America/New_York:20260112T090000",
+            "EXDATE;TZID=Europe/Paris:20260119T150000",
+        ),
+    )
+
+
+def _exdate_instants(raw: bytes) -> list[str]:
+    """Every EXDATE value, re-parsed and normalized to UTC. Compares the
+    *instants* the property names, which is what a wrong TZID label corrupts —
+    a string compare would not notice."""
+    prop = _master(raw).get("EXDATE")
+    return sorted(
+        entry.dt.astimezone(timezone.utc).isoformat()
+        for lst in (prop if isinstance(prop, list) else [prop])
+        for entry in lst.dts
+    )
+
+
+def test_shift_series_keeps_each_exdate_in_its_own_zone():
+    raw = _paris_exdate_series()
+    assert _exdate_instants(raw) == [
+        "2026-01-12T14:00:00+00:00", "2026-01-19T14:00:00+00:00",
+    ]
+    shifted = shift_series(raw, "2026-01-05T09:00:00-05:00",
+                           EventEdit(dtstart=datetime(2026, 1, 5, 10, 0),
+                                     dtend=datetime(2026, 1, 5, 11, 0)))
+    # Both exclusions moved by the same +1h the series did — and no more.
+    assert _exdate_instants(shifted) == [
+        "2026-01-12T15:00:00+00:00", "2026-01-19T15:00:00+00:00",
+    ]
+    # Still two property lines, each labelled with the zone it was written in.
+    lines = [ln for ln in shifted.decode().replace("\r\n", "\n").split("\n")
+             if ln.startswith("EXDATE")]
+    assert lines == [
+        "EXDATE;TZID=America/New_York:20260112T100000",
+        "EXDATE;TZID=Europe/Paris:20260119T160000",
+    ]
+
+
+def test_shift_series_never_puts_a_tzid_on_a_utc_exdate():
+    """RFC 5545 §3.2.19 forbids TZID on a UTC value; merging the lines produced
+    exactly that, so other CalDAV clients rejected the resource outright."""
+    raw = foreign_event_raw(
+        "uz", "Std", dtstart="TZID=America/New_York:20260105T090000",
+        dtend="TZID=America/New_York:20260105T093000", rrule="FREQ=WEEKLY",
+        extra=(
+            "EXDATE:20260119T140000Z",
+            "EXDATE;TZID=America/New_York:20260126T090000",
+        ),
+    )
+    shifted = shift_series(raw, "2026-01-05T09:00:00-05:00",
+                           EventEdit(dtstart=datetime(2026, 1, 5, 10, 0)))
+    lines = [ln for ln in shifted.decode().replace("\r\n", "\n").split("\n")
+             if ln.startswith("EXDATE")]
+    assert lines == [
+        "EXDATE:20260119T150000Z",
+        "EXDATE;TZID=America/New_York:20260126T100000",
+    ]
+
+
+def test_split_partitioning_keeps_each_exdate_in_its_own_zone():
+    # _partition_datelist had the same flattening bug as _shift_datelist, so the
+    # side that keeps entries from two zones is the one that has to be asserted.
+    raw = foreign_event_raw(
+        "mz3", "Std", dtstart="TZID=America/New_York:20260105T090000",
+        dtend="TZID=America/New_York:20260105T093000", rrule="FREQ=WEEKLY",
+        extra=(
+            "EXDATE;TZID=America/New_York:20260112T090000",
+            "EXDATE;TZID=Europe/Paris:20260119T150000",
+            "EXDATE;TZID=America/New_York:20260126T090000",
+        ),
+    )
+    head, tail = split_series(raw, "2026-01-19T15:00:00+01:00", EventEdit())
+    assert _exdate_instants(head) == ["2026-01-12T14:00:00+00:00"]
+    assert _exdate_instants(tail) == [
+        "2026-01-19T14:00:00+00:00", "2026-01-26T14:00:00+00:00",
+    ]
+    assert b"EXDATE;TZID=America/New_York:20260112T090000" in head
+    assert b"EXDATE;TZID=Europe/Paris:20260119T150000" in tail
+    assert b"EXDATE;TZID=America/New_York:20260126T090000" in tail
+
+
+# ── RDATE;VALUE=PERIOD (a tuple value, not a datetime) ───────────────────────
+# vDDDTypes.dt is a (start, end) or (start, duration) tuple for a PERIOD, which
+# used to raise TypeError in the shift and partition helpers — a 500 that made
+# such an event permanently uneditable.
+
+def _period_series() -> bytes:
+    return foreign_event_raw(
+        "per", "P", dtstart="20260101T090000Z", dtend="20260101T110000Z",
+        rrule="FREQ=WEEKLY",
+        extra=("RDATE;VALUE=PERIOD:20260210T090000Z/20260210T110000Z,"
+               "20260217T090000Z/PT2H",),
+    )
+
+
+def _rdate_lines(raw: bytes) -> list[str]:
+    return [ln for ln in raw.decode().replace("\r\n", "\n").split("\n")
+            if ln.startswith("RDATE")]
+
+
+def test_shift_series_moves_a_period_rdate():
+    shifted = shift_series(_period_series(), "2026-01-01T09:00:00+00:00",
+                           EventEdit(dtstart=datetime(2026, 1, 1, 10, 0)))
+    # Both ends of an explicit period move; a duration is a span, so it stays.
+    assert _rdate_lines(shifted) == [
+        "RDATE;VALUE=PERIOD:20260210T100000Z/20260210T120000Z,"
+        "20260217T100000Z/PT2H"
+    ]
+
+
+def test_split_series_partitions_a_period_rdate():
+    # The periods (2/10, 2/17) both sit after the anchor, so they belong to the
+    # tail — addressed by where each period starts.
+    head, tail = split_series(_period_series(), "2026-01-08T09:00:00+00:00",
+                              EventEdit())
+    assert _rdate_lines(head) == []
+    assert _rdate_lines(tail) == _rdate_lines(_period_series())
+
+
+# ── property parameters survive a shift (RANGE=THISANDFUTURE) ────────────────
+
+def test_shift_series_preserves_recurrence_id_parameters():
+    """`_shift_datelike` re-added only the value, so RANGE=THISANDFUTURE — "this
+    override covers this and every later occurrence" — was dropped and every
+    later occurrence silently reverted to the master."""
+    raw = foreign_event_raw(
+        "tf", "Std", dtstart="TZID=America/New_York:20260105T090000",
+        dtend="TZID=America/New_York:20260105T093000", rrule="FREQ=WEEKLY;COUNT=4",
+        overrides=((
+            "RECURRENCE-ID;RANGE=THISANDFUTURE;TZID=America/New_York:20260112T090000",
+            "DTSTART;TZID=America/New_York:20260112T110000",
+            "DTEND;TZID=America/New_York:20260112T113000",
+            "SUMMARY:TF",
+        ),),
+    )
+    shifted = shift_series(raw, "2026-01-05T09:00:00-05:00",
+                           EventEdit(dtstart=datetime(2026, 1, 5, 10, 0)))
+    rid = _overrides(shifted)[0].get("RECURRENCE-ID")
+    assert rid.params.get("RANGE") == "THISANDFUTURE"
+    # TZID is re-derived from the shifted value, never carried over verbatim.
+    assert rid.params.get("TZID") == "America/New_York"
+    assert rid.dt == datetime(2026, 1, 12, 10, 0, tzinfo=ZoneInfo("America/New_York"))
+
+
+# ── UNTIL matches DTSTART's value type (RFC 5545 §3.3.10) ────────────────────
+# The "Repeat until" field is an <input type="date">, so a timed series used to
+# get `UNTIL=20260302` against a DATE-TIME DTSTART — read as that day's midnight,
+# dropping the occurrence on the very day the user picked.
+
+def _rrule_line(raw: bytes) -> str:
+    return next(ln for ln in raw.decode().replace("\r\n", "\n").split("\n")
+                if ln.startswith("RRULE"))
+
+
+_UNTIL_WIN = (date(2026, 1, 1), date(2026, 4, 1))
+
+
+def test_until_day_is_included_on_a_floating_timed_series():
+    raw = build_new_event(
+        "u@f", summary="S", dtstart=datetime(2026, 2, 2, 9, 0),
+        edit=EventEdit(rrule=rrule_from_spec("weekly", until=date(2026, 3, 2))),
+    )
+    assert _rrule_line(raw) == "RRULE:FREQ=WEEKLY;UNTIL=20260302T235959"
+    assert _starts(recur.expand_occurrences(raw, *_UNTIL_WIN))[-1] == "2026-03-02T09:00:00"
+
+
+def test_until_is_utc_and_covers_the_local_day_on_a_zone_aware_series():
+    """DTSTART is not floating, so RFC 5545 requires a UTC UNTIL — but the day
+    the user picked is a *local* day, so it has to be widened in the series' own
+    zone before conversion, not in UTC."""
+    raw = build_new_event(
+        "u@z", summary="S",
+        dtstart=datetime(2026, 2, 2, 9, 0, tzinfo=ZoneInfo("America/New_York")),
+        edit=EventEdit(rrule=rrule_from_spec("weekly", until=date(2026, 3, 2))),
+    )
+    # 2026-03-02 23:59:59 New York, expressed as the UTC instant it is.
+    assert _rrule_line(raw) == "RRULE:FREQ=WEEKLY;UNTIL=20260303T045959Z"
+    assert _starts(recur.expand_occurrences(raw, *_UNTIL_WIN))[-1] == \
+        "2026-03-02T09:00:00-05:00"
+
+
+def test_until_stays_a_bare_date_on_an_all_day_series():
+    raw = build_new_event(
+        "u@a", summary="A", dtstart=date(2026, 2, 2), dtend=date(2026, 2, 3),
+        edit=EventEdit(rrule=rrule_from_spec("weekly", until=date(2026, 3, 2))),
+    )
+    assert _rrule_line(raw) == "RRULE:FREQ=WEEKLY;UNTIL=20260302"
+    assert _starts(recur.expand_occurrences(raw, *_UNTIL_WIN))[-1] == "2026-03-02"
+
+
+def test_a_foreign_until_is_not_rewritten_by_an_unrelated_edit():
+    # Already the right value type: renaming the event must leave it byte-identical
+    # (invariant #2 — we only touch what the user changed).
+    raw = foreign_event_raw("u@k", "F", rrule="FREQ=WEEKLY;UNTIL=20260302T090000Z")
+    assert _rrule_line(apply_event_changes(raw, EventEdit(summary="renamed"))) == \
+        "RRULE:FREQ=WEEKLY;UNTIL=20260302T090000Z"
+
+
+def test_shifting_a_series_keeps_until_in_dtstarts_value_type():
+    raw = build_new_event(
+        "u@s", summary="S", dtstart=datetime(2026, 2, 2, 9, 0),
+        edit=EventEdit(rrule=rrule_from_spec("weekly", until=date(2026, 3, 2))),
+    )
+    shifted = shift_series(raw, "2026-02-02T09:00:00",
+                           EventEdit(dtstart=datetime(2026, 2, 3, 9, 0)))
+    # UNTIL moved with the series and stayed a floating DATE-TIME.
+    assert _rrule_line(shifted) == "RRULE:FREQ=WEEKLY;UNTIL=20260303T235959"
+    assert _starts(recur.expand_occurrences(shifted, *_UNTIL_WIN))[-1] == \
+        "2026-03-03T09:00:00"
+
+
+# ── RANGE=THISANDFUTURE: one override, several distinct instances ────────────
+# Such an override covers its own slot and every later one, so the expander
+# emits several instances that all carry the *same* RECURRENCE-ID. The anchor
+# both keys the UI row and addresses the instance for a per-occurrence write, so
+# a shared one meant "delete this event" on the last instance EXDATE'd the first.
+
+def _thisandfuture_series() -> bytes:
+    """Weekly 09:00Z of 4; from the 2nd on, an Apple-style "this and all future
+    events" override moves them to 10:00 and renames them."""
+    return foreign_event_raw(
+        "tf@x", "Std", rrule="FREQ=WEEKLY;COUNT=4",
+        overrides=((
+            "RECURRENCE-ID;RANGE=THISANDFUTURE:20260113T090000Z",
+            "DTSTART:20260113T100000Z",
+            "DTEND:20260113T103000Z",
+            "SUMMARY:TF",
+        ),),
+    )
+
+
+_TF_WIN = (date(2026, 1, 1), date(2026, 2, 10))
+
+
+def test_thisandfuture_instances_get_their_own_rule_slot():
+    occs = recur.expand_occurrences(_thisandfuture_series(), *_TF_WIN)
+    assert len({o.recurrence_id for o in occs}) == len(occs), "duplicate anchors"
+    # Each anchor is the slot the master's RRULE generates for that instance —
+    # 09:00, not the 10:00 the override moved it to.
+    assert [(o.recurrence_id, o.start) for o in occs] == [
+        ("2026-01-06T09:00:00+00:00", "2026-01-06T09:00:00+00:00"),
+        ("2026-01-13T09:00:00+00:00", "2026-01-13T10:00:00+00:00"),
+        ("2026-01-20T09:00:00+00:00", "2026-01-20T10:00:00+00:00"),
+        ("2026-01-27T09:00:00+00:00", "2026-01-27T10:00:00+00:00"),
+    ]
+    # Every instance the override covers is still flagged as override-backed —
+    # it is where their summary and times come from — even though each now
+    # anchors on its own slot.
+    assert [o.is_override for o in occs] == [False, True, True, True]
+
+
+def test_deleting_a_thisandfuture_instance_removes_that_one():
+    """The anchor has to be the value an EXDATE must carry to name this
+    instance. Sharing the first override's anchor meant deleting the last
+    occurrence silently deleted the first instead."""
+    series = _thisandfuture_series()
+    # Address it exactly as the SPA does: with the anchor the expander handed it
+    # for the row the user clicked (the last one, on 2026-01-27).
+    clicked = recur.expand_occurrences(series, *_TF_WIN)[-1]
+    assert clicked.start.startswith("2026-01-27")
+    raw = exclude_occurrence(series, clicked.recurrence_id)
+    assert _starts(recur.expand_occurrences(raw, *_TF_WIN)) == [
+        "2026-01-06T09:00:00+00:00", "2026-01-13T10:00:00+00:00",
+        "2026-01-20T10:00:00+00:00",
+    ]
+
+
+def test_editing_a_thisandfuture_instance_edits_that_one():
+    raw = apply_occurrence_override(
+        _thisandfuture_series(), "2026-01-20T09:00:00+00:00",
+        EventEdit(summary="just this one"),
+    )
+    by_anchor = {o.recurrence_id: o.summary
+                 for o in recur.expand_occurrences(raw, *_TF_WIN)}
+    assert by_anchor["2026-01-20T09:00:00+00:00"] == "just this one"
+    # The occurrences on either side still belong to the THISANDFUTURE override.
+    assert by_anchor["2026-01-13T09:00:00+00:00"] == "TF"
+    assert by_anchor["2026-01-27T09:00:00+00:00"] == "TF"
+
+
+def test_a_plain_override_anchors_on_its_recurrence_id_exactly():
+    """The common path: a single-slot override still anchors on the slot it
+    replaces, not on the time it moved to — that is what lets a second edit find
+    the override instead of appending a duplicate."""
+    raw = foreign_event_raw(
+        "p1", "Std", rrule="FREQ=WEEKLY;COUNT=3",
+        overrides=((
+            "RECURRENCE-ID:20260113T090000Z",
+            "DTSTART:20260114T110000Z",
+            "DTEND:20260114T113000Z",
+            "SUMMARY:Moved",
+        ),),
+    )
+    occs = {o.recurrence_id: o for o in recur.expand_occurrences(raw, *_TF_WIN)}
+    moved = occs["2026-01-13T09:00:00+00:00"]
+    assert moved.start == "2026-01-14T11:00:00+00:00" and moved.is_override
+
+
+def test_thisandfuture_on_an_all_day_series_still_gets_distinct_anchors():
+    raw = foreign_event_raw(
+        "tfa", "Std", dtstart="20260106", dtend="20260107", all_day=True,
+        rrule="FREQ=WEEKLY;COUNT=3",
+        overrides=((
+            "RECURRENCE-ID;RANGE=THISANDFUTURE;VALUE=DATE:20260113",
+            "DTSTART;VALUE=DATE:20260114",
+            "DTEND;VALUE=DATE:20260115",
+            "SUMMARY:TF",
+        ),),
+    )
+    occs = recur.expand_occurrences(raw, *_TF_WIN)
+    assert [(o.recurrence_id, o.start) for o in occs] == [
+        ("2026-01-06", "2026-01-06"),
+        ("2026-01-13", "2026-01-14"),
+        ("2026-01-20", "2026-01-21"),
+    ]
+
+
+# ── changing the repeat reconciles the overrides it orphans ──────────────────
+
+def _overridden_weekly() -> bytes:
+    """Weekly standup with one occurrence moved to the afternoon and renamed."""
+    return foreign_event_raw(
+        "rc", "standup", dtstart="20260202T090000Z", dtend="20260202T093000Z",
+        rrule="FREQ=WEEKLY",
+        overrides=((
+            "RECURRENCE-ID:20260209T090000Z",
+            "DTSTART:20260209T140000Z",
+            "DTEND:20260209T143000Z",
+            "SUMMARY:special",
+        ),),
+    )
+
+
+_RC_WIN = (date(2026, 2, 1), date(2026, 3, 10))
+
+
+def test_changing_the_repeat_drops_the_orphaned_override():
+    """Weekly -> monthly: the 2/9 override belongs to a schedule that no longer
+    exists, but the expander still emitted it — a phantom event the user had no
+    way to delete."""
+    raw = apply_event_changes(_overridden_weekly(),
+                              EventEdit(rrule=rrule_from_spec("monthly")))
+    assert [(o.start, o.summary) for o in recur.expand_occurrences(raw, *_RC_WIN)] == [
+        ("2026-02-02T09:00:00+00:00", "standup"),
+        ("2026-03-02T09:00:00+00:00", "standup"),
+    ]
+
+
+def test_clearing_the_repeat_drops_every_override():
+    raw = apply_event_changes(_overridden_weekly(), EventEdit(rrule=None))
+    assert [(o.start, o.summary) for o in recur.expand_occurrences(raw, *_RC_WIN)] == [
+        ("2026-02-02T09:00:00+00:00", "standup"),
+    ]
+
+
+def test_an_override_the_new_rule_still_generates_survives():
+    # Weekly -> every-two-weeks, which still lands on 2/16 but not 2/9.
+    raw = foreign_event_raw(
+        "rc2", "standup", dtstart="20260202T090000Z", dtend="20260202T093000Z",
+        rrule="FREQ=WEEKLY",
+        overrides=(
+            ("RECURRENCE-ID:20260209T090000Z", "DTSTART:20260209T140000Z",
+             "DTEND:20260209T143000Z", "SUMMARY:orphaned"),
+            ("RECURRENCE-ID:20260216T090000Z", "DTSTART:20260216T140000Z",
+             "DTEND:20260216T143000Z", "SUMMARY:kept"),
+        ),
+    )
+    edited = apply_event_changes(
+        raw, EventEdit(rrule=rrule_from_spec("weekly", interval=2)))
+    summaries = [o.summary for o in recur.expand_occurrences(edited, *_RC_WIN)]
+    assert "kept" in summaries and "orphaned" not in summaries
+
+
+def test_an_override_anchored_on_an_rdate_survives():
+    # RDATE additions are part of the recurrence set independently of the rule.
+    raw = foreign_event_raw(
+        "rc3", "standup", dtstart="20260202T090000Z", dtend="20260202T093000Z",
+        rrule="FREQ=WEEKLY", rdate="20260220T090000Z",
+        overrides=(("RECURRENCE-ID:20260220T090000Z", "DTSTART:20260220T140000Z",
+                    "DTEND:20260220T143000Z", "SUMMARY:on the rdate"),),
+    )
+    edited = apply_event_changes(raw, EventEdit(rrule=rrule_from_spec("monthly")))
+    assert "on the rdate" in [o.summary
+                              for o in recur.expand_occurrences(edited, *_RC_WIN)]
+
+
+def test_an_unrelated_edit_never_reconciles():
+    """The modal resends its whole repeat state on every save, so `edit.rrule`
+    is set even on a pure rename. Reconciling then would let an unrelated edit
+    drop an override a foreign client anchored at an odd slot."""
+    raw = foreign_event_raw(
+        "rc4", "standup", dtstart="20260202T090000Z", dtend="20260202T093000Z",
+        rrule="FREQ=WEEKLY",
+        # RFC-wise this RECURRENCE-ID names no generated slot, but it is a real
+        # thing a foreign client wrote and invariant #2 says we do not touch it.
+        overrides=(("RECURRENCE-ID:20260210T113000Z", "DTSTART:20260210T113000Z",
+                    "DTEND:20260210T120000Z", "SUMMARY:odd slot"),),
+    )
+    renamed = apply_event_changes(
+        raw, EventEdit(summary="renamed", rrule=rrule_from_spec("weekly")))
+    assert b"20260210T113000Z" in renamed
+    assert _master(renamed).get("SUMMARY") == "renamed"
+
+
+def test_a_foreign_rule_keeps_its_overrides():
+    """A rule outside our repeat vocabulary is not enumerated to test membership
+    — that is the unbounded cost `_pathological_rule` refuses up front — so its
+    overrides are left alone."""
+    raw = foreign_event_raw(
+        "rc5", "standup", dtstart="20260202T090000Z", dtend="20260202T093000Z",
+        rrule="FREQ=WEEKLY;BYDAY=MO,WE",
+        overrides=(("RECURRENCE-ID:20260209T090000Z", "DTSTART:20260209T140000Z",
+                    "DTEND:20260209T143000Z", "SUMMARY:special"),),
+    )
+    # Switching to an hourly rule we could never have authored ourselves.
+    edited = apply_event_changes(raw, EventEdit(rrule={"FREQ": ["HOURLY"]}))
+    assert b"SUMMARY:special" in edited
+
+
+def test_shifting_a_series_without_a_repeat_change_keeps_its_overrides():
+    shifted = shift_series(
+        _overridden_weekly(), "2026-02-02T09:00:00+00:00",
+        EventEdit(dtstart=datetime(2026, 2, 3, 9, 0, tzinfo=timezone.utc),
+                  rrule=rrule_from_spec("weekly")),
+    )
+    assert "special" in [o.summary for o in recur.expand_occurrences(shifted, *_RC_WIN)]

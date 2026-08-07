@@ -13,11 +13,12 @@ and task-edit dirty-tracking).
 Severity is the verifiers' rating. `minor` marks a fix that is a few
 obviously-correct lines needing no design decision — a reasonable place to start.
 
-**32 open.**
+**16 open** (a ticked box is fixed and covered by a test; its evidence stays
+here so the issue linking to it still resolves).
 
 ## iCalendar read + edit path
 
-### [ ] "Repeat until <date>" writes a DATE-valued UNTIL onto a timed series, dropping the last occurrence the user asked for
+### [x] "Repeat until <date>" writes a DATE-valued UNTIL onto a timed series, dropping the last occurrence the user asked for
 
 `backend/tasksd/ical/edit.py:61` · **medium** · bug
 
@@ -44,7 +45,7 @@ supplied `date` to end-of-day in the series' zone (or UTC 23:59:59Z) before writ
 keep a bare DATE only for all-day series. Add a test asserting the UNTIL day's
 occurrence is included.
 
-### [ ] _shift_datelike drops property parameters — RECURRENCE-ID;RANGE=THISANDFUTURE silently becomes a single-instance override
+### [x] _shift_datelike drops property parameters — RECURRENCE-ID;RANGE=THISANDFUTURE silently becomes a single-instance override
 
 `backend/tasksd/ical/edit.py:454` · **medium** · bug · `minor`
 
@@ -74,7 +75,7 @@ Same loss applies to any X- parameter or VALUE parameter a foreign client attach
 before `_replace`, then `event.add(key, old + delta, parameters={k: v for k, v in
 params.items() if k.upper() != 'TZID'})` (let icalendar re-derive TZID from tzinfo).
 
-### [ ] RDATE;VALUE=PERIOD makes shift_series and split_series raise TypeError (500 on any series edit)
+### [x] RDATE;VALUE=PERIOD makes shift_series and split_series raise TypeError (500 on any series edit)
 
 `backend/tasksd/ical/edit.py:463` · **medium** · bug · `minor`
 
@@ -102,7 +103,7 @@ E.split_series(raw, '2026-01-08T09:00:00+00:00', EventEdit()) ->
 **Suggested fix.** Handle the tuple form in both helpers: shift both ends of a period (`(s+delta,
 e+delta)`) and compare a period against the anchor using its start.
 
-### [ ] Shifting/partitioning EXDATE or RDATE merges several property lines into one and relabels them with a single TZID, corrupting the excluded instants
+### [x] Shifting/partitioning EXDATE or RDATE merges several property lines into one and relabels them with a single TZID, corrupting the excluded instants
 
 `backend/tasksd/ical/edit.py:466` · **medium** · bug
 
@@ -130,7 +131,7 @@ With a UTC EXDATE next to a TZID one the output is also invalid iCalendar: `EXDA
 emit one property per group — instead of `_replace(key)` followed by a single
 `event.add(key, values)`.
 
-### [ ] RECURRENCE-ID;RANGE=THISANDFUTURE makes several occurrences share one recurrence_id, so the SPA renders duplicate React keys and per-occurrence edit/delete hits the wrong instance
+### [x] RECURRENCE-ID;RANGE=THISANDFUTURE makes several occurrences share one recurrence_id, so the SPA renders duplicate React keys and per-occurrence edit/delete hits the wrong instance
 
 `backend/tasksd/ical/recur.py:115` · **medium** · bug
 
@@ -175,7 +176,7 @@ collision, use the instance's own start as the anchor (still exact for the norma
 single-slot override case). Add a test asserting `len({o.recurrence_id for o in occs})
 == len(occs)`.
 
-### [ ] Changing a series' repeat rule leaves stale RECURRENCE-ID overrides behind as phantom events
+### [x] Changing a series' repeat rule leaves stale RECURRENCE-ID overrides behind as phantom events
 
 `backend/tasksd/ical/edit.py:260` · **low** · rendering
 
@@ -204,7 +205,7 @@ implement — and cover it with a test.
 
 ## Sync engine
 
-### [ ] Test gap: gc_orphans — the only code path that permanently deletes non-derivable sidecar state — has zero coverage
+### [x] Test gap: gc_orphans — the only code path that permanently deletes non-derivable sidecar state — has zero coverage
 
 `backend/tasksd/sync/engine.py:130` · **medium** · test-gap · `minor`
 
@@ -247,7 +248,7 @@ asserting `gc_orphans` never touches a row with `orphaned_at IS NULL`. Then add 
 engine-level test that a full_resync in which one resource was skipped (`stats.skipped >
 0`) does not delete sidecar rows.
 
-### [ ] A resource corrupted in place leaves a permanent ghost cache row that never converges and 500s on edit
+### [x] A resource corrupted in place leaves a permanent ghost cache row that never converges and 500s on edit
 
 `backend/tasksd/sync/engine.py:144` · **medium** · bug
 
@@ -298,7 +299,7 @@ showing data the wire no longer has. Option (a) is preferable — it stops the e
 refetch loop and keeps the sidecar. Either way, also wrap `patch_task`/`patch_event` so
 an ical `ValueError` becomes a 409/422 with a readable message rather than a 500.
 
-### [ ] A resource that becomes unparseable/non-VTODO leaves a permanently stale cache row that 500s on every edit
+### [x] A resource that becomes unparseable/non-VTODO leaves a permanently stale cache row that 500s on every edit
 
 `backend/tasksd/sync/engine.py:149` · **medium** · bug
 
@@ -332,7 +333,7 @@ Also catch `ValueError` in the task edit routes so the merge path cannot 500.
 
 ## SQLite cache
 
-### [ ] Deleting a list/calendar never purges its cached items — search and tags keep serving them forever
+### [x] Deleting a list/calendar never purges its cached items — search and tags keep serving them forever
 
 `backend/tasksd/db/store.py:75` · **medium** · bug
 
@@ -372,7 +373,7 @@ delete its `items` / `items_fts` / `categories` rows (the cache is disposable by
 — a resync rebuilds it if the collection comes back). At minimum, filter `deleted=0` in
 `search`, `distinct_categories` and `count_items` by joining `collections`.
 
-### [ ] A NUL byte in the search query escapes the FTS quoting and 500s
+### [x] A NUL byte in the search query escapes the FTS quoting and 500s
 
 `backend/tasksd/db/store.py:379` · **low** · bug · `minor`
 
@@ -494,7 +495,7 @@ and `EditList.name` so it fails as a 422.
 
 ## Service layer
 
-### [ ] Deleting a collection leaves all of its items in the SQLite cache forever (cache/source divergence)
+### [x] Deleting a collection leaves all of its items in the SQLite cache forever (cache/source divergence)
 
 `backend/tasksd/service.py:329` · **medium** · bug
 
@@ -627,7 +628,7 @@ capture the cookie value, `POST /api/logout`, then re-send the captured cookie t
 
 ## Calendar view
 
-### [ ] Test gap: CalendarView has no tests at all, including the date math the other findings live in
+### [x] Test gap: CalendarView has no tests at all, including the date math the other findings live in
 
 `frontend/src/components/CalendarView.tsx:33` · **medium** · test-gap
 
@@ -666,7 +667,7 @@ edges, DST spring-forward and fall-back drags, and one render test per recurrenc
 asserting the exact `{scope, recurrence_id, start, end}` handed to `api.patchEvent` /
 `api.deleteEvent`.
 
-### [ ] Rapid month navigation can render the wrong month's events (unordered fetches, no staleness guard)
+### [x] Rapid month navigation can render the wrong month's events (unordered fetches, no staleness guard)
 
 `frontend/src/components/CalendarView.tsx:116` · **medium** · bug · `minor`
 
@@ -698,7 +699,7 @@ Sequence: user clicks › (fetch A for April starts), clicks › again ~100ms la
 fetchEvents(); if (live) setEvents(evs) }); return () => { live = false }` — and apply
 the same guard inside `reload()` (or route reload through a bumped generation counter).
 
-### [ ] Resizing a timed event that ends at midnight is off by one day
+### [x] Resizing a timed event that ends at midnight is off by one day
 
 `frontend/src/components/CalendarView.tsx:247` · **medium** · bug · `minor`
 
@@ -733,7 +734,7 @@ target the day after the drop: when the original end's local time is 00:00, use 
 ${shiftYmd(day,1)}T00:00`. Compare against `oldEnd` after that normalization so a
 genuine one-day extension is not swallowed.
 
-### [ ] Editing an all-day event's start silently drops a day when the original span crosses a DST spring-forward
+### [x] Editing an all-day event's start silently drops a day when the original span crosses a DST spring-forward
 
 `frontend/src/components/CalendarView.tsx:571` · **low** · bug · `minor`
 

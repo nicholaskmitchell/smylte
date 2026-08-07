@@ -437,9 +437,34 @@ def test_per_occurrence_scope_requires_a_valid_anchor(client):
 
 
 def test_search_operator_characters_do_not_crash(client):
-    for q in ['"unbalanced', "NEAR(", "(((", 'x"y', "a AND", "*", "-"]:
+    # A NUL truncates the C string FTS5 parses, so the closing quote the operator
+    # guard adds was never seen — the one input the quoting scheme was supposed
+    # to make safe was the one that 500'd.
+    for q in ['"unbalanced', "NEAR(", "(((", 'x"y', "a AND", "*", "-",
+              "\x00", "\x00hi", "hi\x00there", "\x07\x1f"]:
         r = client.get("/api/search", params={"q": q})
         assert r.status_code == 200, (q, r.text)
+
+
+def test_deleting_a_list_removes_its_tasks_from_search_and_tags(client):
+    """The list vanishes from /api/lists, but its contents used to stay in the
+    cache forever — queryable through /api/search with a list id that no longer
+    resolves, and still advertising their tags."""
+    token = uuid.uuid4().hex[:10]
+    doomed, kept = _list(client), _list(client)
+    # FTS matches prefixes, so the token leads each summary.
+    client.post(f"/api/lists/{doomed['id']}/tasks",
+                json={"summary": f"{token} gone", "tags": [f"{token}gonetag"]})
+    client.post(f"/api/lists/{kept['id']}/tasks",
+                json={"summary": f"{token} stays", "tags": [f"{token}stakes"]})
+    assert len(client.get("/api/search", params={"q": token}).json()) == 2
+
+    assert client.delete(f"/api/lists/{doomed['id']}").status_code == 204
+
+    hits = client.get("/api/search", params={"q": token}).json()
+    assert [h["summary"] for h in hits] == [f"{token} stays"]
+    tags = client.get("/api/tags").json()
+    assert f"{token}gonetag" not in tags and f"{token}stakes" in tags
 
 
 def test_search_matches_prefixes(client):
