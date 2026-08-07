@@ -13,8 +13,9 @@ and task-edit dirty-tracking).
 Severity is the verifiers' rating. `minor` marks a fix that is a few
 obviously-correct lines needing no design decision — a reasonable place to start.
 
-**5 open** (a ticked box is fixed and covered by a test; its evidence stays
-here so the issue linking to it still resolves).
+**0 open.** Every finding from the sweep is fixed and covered by a test. The
+evidence stays here — a ticked box records what the bug was and why it
+mattered, and the issues that link into these sections still resolve.
 
 ## iCalendar read + edit path
 
@@ -404,7 +405,7 @@ case to `test_search_operator_characters_do_not_crash`.
 
 ## Scheduling
 
-### [ ] DST: slot math uses wall-clock timedelta arithmetic, producing duplicate, negative-length, and over-length bookable slots
+### [x] DST: slot math uses wall-clock timedelta arithmetic, producing duplicate, negative-length, and over-length bookable slots
 
 `backend/tasksd/scheduling.py:188` · **medium** · bug
 
@@ -456,7 +457,7 @@ instant as a belt-and-braces guard.
 
 ## CalDAV client
 
-### [ ] A list name containing a control character crashes the PROPPATCH builder with an unhandled ValueError (500)
+### [x] A list name containing a control character crashes the PROPPATCH builder with an unhandled ValueError (500)
 
 `backend/tasksd/dav/xml.py:121` · **low** · bug · `minor`
 
@@ -532,7 +533,7 @@ from /api/search and /api/tags.
 
 ## API routes
 
-### [ ] Public booking link can be permanently disabled by anyone who has the link (per-link limiter counts every request, not just failures)
+### [x] Public booking link can be permanently disabled by anyone who has the link (per-link limiter counts every request, not just failures)
 
 `backend/tasksd/app.py:946` · **medium** · bug
 
@@ -571,7 +572,7 @@ owner.
 
 ## Backend test gaps
 
-### [ ] The DST regression test cannot fail on a negative-duration slot
+### [x] The DST regression test cannot fail on a negative-duration slot
 
 `backend/tests/test_scheduling.py:188` · **medium** · test-gap · `minor`
 
@@ -597,7 +598,7 @@ s.start.astimezone(UTC) == timedelta(minutes=duration)`), assert
 (2026-11-01, America/Chicago, window covering 00:00-05:00) asserting both the exact
 duration and that the repeated 07:00Z hour is offered.
 
-### [ ] Test gap: the two fail-closed startup invariants and post-logout cookie replay are untested
+### [x] Test gap: the two fail-closed startup invariants and post-logout cookie replay are untested
 
 `backend/tests/test_security.py:126` · **low** · test-gap
 
