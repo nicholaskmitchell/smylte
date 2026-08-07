@@ -13,7 +13,7 @@ and task-edit dirty-tracking).
 Severity is the verifiers' rating. `minor` marks a fix that is a few
 obviously-correct lines needing no design decision — a reasonable place to start.
 
-**26 open** (a ticked box is fixed and covered by a test; its evidence stays
+**22 open** (a ticked box is fixed and covered by a test; its evidence stays
 here so the issue linking to it still resolves).
 
 ## iCalendar read + edit path
@@ -628,7 +628,7 @@ capture the cookie value, `POST /api/logout`, then re-send the captured cookie t
 
 ## Calendar view
 
-### [ ] Test gap: CalendarView has no tests at all, including the date math the other findings live in
+### [x] Test gap: CalendarView has no tests at all, including the date math the other findings live in
 
 `frontend/src/components/CalendarView.tsx:33` · **medium** · test-gap
 
@@ -667,7 +667,7 @@ edges, DST spring-forward and fall-back drags, and one render test per recurrenc
 asserting the exact `{scope, recurrence_id, start, end}` handed to `api.patchEvent` /
 `api.deleteEvent`.
 
-### [ ] Rapid month navigation can render the wrong month's events (unordered fetches, no staleness guard)
+### [x] Rapid month navigation can render the wrong month's events (unordered fetches, no staleness guard)
 
 `frontend/src/components/CalendarView.tsx:116` · **medium** · bug · `minor`
 
@@ -699,7 +699,7 @@ Sequence: user clicks › (fetch A for April starts), clicks › again ~100ms la
 fetchEvents(); if (live) setEvents(evs) }); return () => { live = false }` — and apply
 the same guard inside `reload()` (or route reload through a bumped generation counter).
 
-### [ ] Resizing a timed event that ends at midnight is off by one day
+### [x] Resizing a timed event that ends at midnight is off by one day
 
 `frontend/src/components/CalendarView.tsx:247` · **medium** · bug · `minor`
 
@@ -734,7 +734,7 @@ target the day after the drop: when the original end's local time is 00:00, use 
 ${shiftYmd(day,1)}T00:00`. Compare against `oldEnd` after that normalization so a
 genuine one-day extension is not swallowed.
 
-### [ ] Editing an all-day event's start silently drops a day when the original span crosses a DST spring-forward
+### [x] Editing an all-day event's start silently drops a day when the original span crosses a DST spring-forward
 
 `frontend/src/components/CalendarView.tsx:571` · **low** · bug · `minor`
 
