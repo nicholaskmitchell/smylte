@@ -5,6 +5,7 @@ from __future__ import annotations
 from .edit import (
     PRIORITY,
     EventEdit,
+    NotEditable,
     TaskEdit,
     UNSET,
     apply_changes,
@@ -37,6 +38,7 @@ __all__ = [
     "find_vtodo",
     "TaskEdit",
     "EventEdit",
+    "NotEditable",
     "UNSET",
     "PRIORITY",
     "apply_changes",

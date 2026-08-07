@@ -157,6 +157,33 @@ class SyncEngine:
                 store.gc_orphans(self.conn)
         return stats
 
+    def _drop_uncacheable(self, collection_href: str, href: str, stats: SyncStats) -> None:
+        """Evict the cache row at ``href``, if the body we just read means we can
+        no longer back it.
+
+        A resource that is already cached and is then rewritten on the wire into
+        something we cannot extract used to leave its row completely untouched —
+        old summary, old raw_ics, and old etag. The href is still on the wire, so
+        the resync sweep never removed it either: the cache diverged from the
+        source of truth permanently, the incremental path advanced its token past
+        the change, and every full resync re-fetched (etag mismatch) and
+        re-skipped forever. The stale etag also made every write on it fail, and
+        the merge path then re-applied the edit to a body with nothing to edit —
+        an opaque 500 on a task the UI insisted existed.
+
+        Scoped to this href on purpose. A delete-and-recreate leaves the cached
+        row at the OLD href while the new body arrives at a new one, so there is
+        nothing here to drop and the row keeps surviving via ``skipped_uids`` as
+        designed. Dropping (rather than flagging the row stale) is what keeps
+        invariant #1: a never-cached poison resource is not cached either, so a
+        wiped DB replayed from scratch reaches the same state as this one."""
+        uid = store.delete_item_by_href(self.conn, collection_href, href)
+        if uid is None:
+            return
+        store.orphan_sidecar(self.conn, collection_href, uid)
+        stats.removed += 1
+        log.info("dropped cache row for %s: its body is no longer readable", href)
+
     def _upsert_body(self, collection_href: str, item, stats: SyncStats,
                      skipped_uids: set[str] | None = None) -> bool:
         """Extract + cache one resource. Returns False for non-VTODO resources
@@ -164,7 +191,10 @@ class SyncEngine:
         A resource that fails to parse is skipped the same way (logged + counted):
         one malformed foreign write must not wedge the collection's sync forever.
         The token still advances; the resource is re-attempted whenever its etag
-        next changes, and the failure is visible in sync_state.last_error."""
+        next changes, and the failure is visible in sync_state.last_error.
+
+        Either way, anything we already cached for this href goes — see
+        ``_drop_uncacheable``."""
         if not item.data:
             return False
         try:
@@ -175,8 +205,13 @@ class SyncEngine:
             stats.last_error = f"malformed resource {item.href}: {e}"
             if skipped_uids is not None:
                 skipped_uids |= _uids_in(item.data)
+            self._drop_uncacheable(collection_href, item.href, stats)
             return False
         if fields is None or not fields.uid:
+            # Not a failure: the resource simply is not a task or event any more.
+            # A complete, understood enumeration, so `skipped` stays untouched and
+            # gc_orphans is still allowed to run at the end of the pass.
+            self._drop_uncacheable(collection_href, item.href, stats)
             return False
         store.upsert_item(self.conn, collection_href, item, fields)
         return True
@@ -381,7 +416,16 @@ class SyncEngine:
         if row is None:
             raise KeyError(f"unknown {kind} {uid} in {collection_href}")
         href = row["href"]
-        body = apply_fn(row["raw_ics"], edit)
+        # A body with no component left to edit is a conflict with what another
+        # client did, not a bad request: someone rewrote the resource into
+        # something that is no longer a task or an event between our last sync
+        # and this write. Unhandled, the ValueError escaped as a 500. Only
+        # NotEditable is remapped — the other ValueErrors from these helpers (an
+        # all-day <-> timed series switch) are about the request and keep their 422.
+        try:
+            body = apply_fn(row["raw_ics"], edit)
+        except ical.NotEditable as e:
+            raise ConflictError(f"{kind} {uid} can no longer be edited: {e}") from e
         try:
             self.dav.put(href, body, if_match=row["etag"])
         except PreconditionFailed:
@@ -389,7 +433,10 @@ class SyncEngine:
             # field intent onto the fresh copy (preserving the other writer's
             # fields), retry exactly once, then surface a conflict.
             fresh = self.dav.get(href)
-            merged = apply_fn(fresh.data, edit)
+            try:
+                merged = apply_fn(fresh.data, edit)
+            except ical.NotEditable as e:
+                raise ConflictError(f"{kind} {uid} can no longer be edited: {e}") from e
             try:
                 self.dav.put(href, merged, if_match=fresh.etag)
             except PreconditionFailed as e:
