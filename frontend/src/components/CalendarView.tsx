@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState, type CSSProperties } from 'react'
 import { api, type CalEvent, type EventScope, type List } from '../api'
-import { addDays, dayKey, makeGuard, pad, parseDate, toLocalInput, ymd } from '../util'
-import { bucketByDay, lastDayOf, monthGrid, shiftYmd, type DayEv } from '../calendar'
+import { dayKey, makeGuard, pad, toLocalInput, ymd } from '../util'
+import {
+  bucketByDay, dragBody, daysBetween, lastDayOf, monthGrid, shiftYmd, type DayEv,
+} from '../calendar'
 import { useIsMobile } from '../hooks'
 import { AgendaEvent, DayPopover } from './DayPopover'
 import { Sidebar } from './Sidebar'
@@ -11,17 +13,6 @@ const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June',
   'July', 'August', 'September', 'October', 'November', 'December']
 
 interface Draft { event?: CalEvent; date?: string }
-
-const daysBetween = (a: string, b: string) =>
-  Math.round((new Date(`${b}T00:00`).getTime() - new Date(`${a}T00:00`).getTime()) / 86400000)
-
-// Shift an ISO date or datetime by n days. Datetimes come back as floating
-// local wall time — the same form the edit modal writes.
-const shiftIso = (v: string, n: number) => {
-  if (!v.includes('T')) return shiftYmd(v, n)
-  const d = addDays(parseDate(v), n)
-  return `${ymd(d)}T${pad(d.getHours())}:${pad(d.getMinutes())}`
-}
 
 export function CalendarView({ rev, onExpire, sideCollapsed, onToggleSide,
   hiddenCalendars, onHiddenCalendarsChange,
@@ -191,28 +182,11 @@ export function CalendarView({ rev, onExpire, sideCollapsed, onToggleSide,
   const dropOnDay = (key: string) => {
     const d = drag
     setDrag(null); setOverDay(null)
-    if (!d?.ev.start) return
-    let body: Record<string, unknown>
-    if (d.mode === 'move') {
-      const delta = daysBetween(d.fromDay, key)
-      if (!delta) return
-      body = { start: shiftIso(d.ev.start, delta) }
-      if (d.ev.end) body.end = shiftIso(d.ev.end, delta)
-    } else {
-      const startDay = dayKey(d.ev.start)
-      const day = key < startDay ? startDay : key
-      const start = d.ev.all_day ? d.ev.start.slice(0, 10) : toLocalInput(d.ev.start)
-      let end: string
-      if (d.ev.all_day) {
-        end = shiftYmd(day, 1)              // DTEND stays exclusive
-      } else {
-        end = `${day}T${toLocalInput(d.ev.end || d.ev.start).slice(11, 16)}`
-        if (end <= start) return            // the end must stay after the start
-      }
-      const oldEnd = d.ev.end && (d.ev.all_day ? d.ev.end.slice(0, 10) : toLocalInput(d.ev.end))
-      if (end === oldEnd) return
-      body = { start, end }
-    }
+    if (!d) return
+    // The date arithmetic lives in calendar.ts, where it is tested directly;
+    // null means the drag changed nothing.
+    const body = dragBody(d.ev, d.fromDay, key, d.mode)
+    if (!body) return
     if (d.ev.is_recurring) setMoveAsk({ ev: d.ev, body })
     else save(body, calIdOf(d.ev), d.ev.uid)
   }
