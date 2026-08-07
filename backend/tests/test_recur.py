@@ -860,3 +860,109 @@ def test_shifting_a_series_keeps_until_in_dtstarts_value_type():
     assert _rrule_line(shifted) == "RRULE:FREQ=WEEKLY;UNTIL=20260303T235959"
     assert _starts(recur.expand_occurrences(shifted, *_UNTIL_WIN))[-1] == \
         "2026-03-03T09:00:00"
+
+
+# ── RANGE=THISANDFUTURE: one override, several distinct instances ────────────
+# Such an override covers its own slot and every later one, so the expander
+# emits several instances that all carry the *same* RECURRENCE-ID. The anchor
+# both keys the UI row and addresses the instance for a per-occurrence write, so
+# a shared one meant "delete this event" on the last instance EXDATE'd the first.
+
+def _thisandfuture_series() -> bytes:
+    """Weekly 09:00Z of 4; from the 2nd on, an Apple-style "this and all future
+    events" override moves them to 10:00 and renames them."""
+    return foreign_event_raw(
+        "tf@x", "Std", rrule="FREQ=WEEKLY;COUNT=4",
+        overrides=((
+            "RECURRENCE-ID;RANGE=THISANDFUTURE:20260113T090000Z",
+            "DTSTART:20260113T100000Z",
+            "DTEND:20260113T103000Z",
+            "SUMMARY:TF",
+        ),),
+    )
+
+
+_TF_WIN = (date(2026, 1, 1), date(2026, 2, 10))
+
+
+def test_thisandfuture_instances_get_their_own_rule_slot():
+    occs = recur.expand_occurrences(_thisandfuture_series(), *_TF_WIN)
+    assert len({o.recurrence_id for o in occs}) == len(occs), "duplicate anchors"
+    # Each anchor is the slot the master's RRULE generates for that instance —
+    # 09:00, not the 10:00 the override moved it to.
+    assert [(o.recurrence_id, o.start) for o in occs] == [
+        ("2026-01-06T09:00:00+00:00", "2026-01-06T09:00:00+00:00"),
+        ("2026-01-13T09:00:00+00:00", "2026-01-13T10:00:00+00:00"),
+        ("2026-01-20T09:00:00+00:00", "2026-01-20T10:00:00+00:00"),
+        ("2026-01-27T09:00:00+00:00", "2026-01-27T10:00:00+00:00"),
+    ]
+    # Every instance the override covers is still flagged as override-backed —
+    # it is where their summary and times come from — even though each now
+    # anchors on its own slot.
+    assert [o.is_override for o in occs] == [False, True, True, True]
+
+
+def test_deleting_a_thisandfuture_instance_removes_that_one():
+    """The anchor has to be the value an EXDATE must carry to name this
+    instance. Sharing the first override's anchor meant deleting the last
+    occurrence silently deleted the first instead."""
+    series = _thisandfuture_series()
+    # Address it exactly as the SPA does: with the anchor the expander handed it
+    # for the row the user clicked (the last one, on 2026-01-27).
+    clicked = recur.expand_occurrences(series, *_TF_WIN)[-1]
+    assert clicked.start.startswith("2026-01-27")
+    raw = exclude_occurrence(series, clicked.recurrence_id)
+    assert _starts(recur.expand_occurrences(raw, *_TF_WIN)) == [
+        "2026-01-06T09:00:00+00:00", "2026-01-13T10:00:00+00:00",
+        "2026-01-20T10:00:00+00:00",
+    ]
+
+
+def test_editing_a_thisandfuture_instance_edits_that_one():
+    raw = apply_occurrence_override(
+        _thisandfuture_series(), "2026-01-20T09:00:00+00:00",
+        EventEdit(summary="just this one"),
+    )
+    by_anchor = {o.recurrence_id: o.summary
+                 for o in recur.expand_occurrences(raw, *_TF_WIN)}
+    assert by_anchor["2026-01-20T09:00:00+00:00"] == "just this one"
+    # The occurrences on either side still belong to the THISANDFUTURE override.
+    assert by_anchor["2026-01-13T09:00:00+00:00"] == "TF"
+    assert by_anchor["2026-01-27T09:00:00+00:00"] == "TF"
+
+
+def test_a_plain_override_anchors_on_its_recurrence_id_exactly():
+    """The common path: a single-slot override still anchors on the slot it
+    replaces, not on the time it moved to — that is what lets a second edit find
+    the override instead of appending a duplicate."""
+    raw = foreign_event_raw(
+        "p1", "Std", rrule="FREQ=WEEKLY;COUNT=3",
+        overrides=((
+            "RECURRENCE-ID:20260113T090000Z",
+            "DTSTART:20260114T110000Z",
+            "DTEND:20260114T113000Z",
+            "SUMMARY:Moved",
+        ),),
+    )
+    occs = {o.recurrence_id: o for o in recur.expand_occurrences(raw, *_TF_WIN)}
+    moved = occs["2026-01-13T09:00:00+00:00"]
+    assert moved.start == "2026-01-14T11:00:00+00:00" and moved.is_override
+
+
+def test_thisandfuture_on_an_all_day_series_still_gets_distinct_anchors():
+    raw = foreign_event_raw(
+        "tfa", "Std", dtstart="20260106", dtend="20260107", all_day=True,
+        rrule="FREQ=WEEKLY;COUNT=3",
+        overrides=((
+            "RECURRENCE-ID;RANGE=THISANDFUTURE;VALUE=DATE:20260113",
+            "DTSTART;VALUE=DATE:20260114",
+            "DTEND;VALUE=DATE:20260115",
+            "SUMMARY:TF",
+        ),),
+    )
+    occs = recur.expand_occurrences(raw, *_TF_WIN)
+    assert [(o.recurrence_id, o.start) for o in occs] == [
+        ("2026-01-06", "2026-01-06"),
+        ("2026-01-13", "2026-01-14"),
+        ("2026-01-20", "2026-01-21"),
+    ]
