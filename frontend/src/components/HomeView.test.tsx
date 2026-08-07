@@ -201,14 +201,25 @@ const cal = (id: string, color: string | null): import('../api').List => ({
 })
 
 const event = (calId: string, id: string, summary: string, hour = 9,
-  day: Date = busyDay): import('../api').CalEvent => ({
+  day: Date = busyDay, over: Partial<import('../api').CalEvent> = {},
+): import('../api').CalEvent => ({
   uid: id, id, recurrence_id: null, is_recurring: false, calendar: `/${calId}/`,
   summary, description: null, location: null,
   start: `${key(day)}T${p2(hour)}:00:00`, start_is_date: false,
   end: `${key(day)}T${p2(hour + 1)}:00:00`, end_is_date: false,
   all_day: false, status: null, tags: [], has_rrule: false,
-  href: `/${calId}/${id}.ics`, etag: '"1"',
+  href: `/${calId}/${id}.ics`, etag: '"1"', ...over,
 })
+
+/** An all-day event over `days` days, written the way the wire does it: DTEND
+ *  is EXCLUSIVE, so a one-day event ends on the following date. */
+const allDayEvent = (calId: string, id: string, day: Date, days = 1) => {
+  const end = new Date(day.getFullYear(), day.getMonth(), day.getDate() + days)
+  return event(calId, id, 'All day', 0, day, {
+    start: key(day), start_is_date: true,
+    end: key(end), end_is_date: true, all_day: true,
+  })
+}
 
 /** Mock the calendar endpoints, routing each calendar's events by id. */
 function withCalendars(cals: import('../api').List[],
@@ -311,5 +322,45 @@ describe('mini calendar', () => {
     await waitFor(() => expect(dayButton(busyDay)).toBeEnabled())
     expect(m.events).toHaveBeenCalledTimes(1)
     expect(m.events).toHaveBeenCalledWith('c1', expect.any(String), expect.any(String))
+  })
+})
+
+// ── the mini calendar must not dot a day the event does not cover ───────────
+// An all-day DTEND is exclusive, and a timed end sitting exactly on midnight
+// belongs to the previous day. Walking to the end date inclusive dotted one day
+// past every such event — a birthday marked tomorrow busy too. The rule lives
+// in calendar.lastDayOf now, shared with the month grid, rather than in a
+// second copy here; these pin it at this level, which is where it went wrong.
+
+describe('mini calendar spans', () => {
+  const dayButton = (d: Date) =>
+    screen.getByRole('button', { name: new RegExp(`^${longLabel(d)}`) })
+  const isBusy = (d: Date) => dayButton(d).querySelectorAll('.mini-dot').length > 0
+
+  it('dots exactly one day for a one-day all-day event', async () => {
+    withCalendars([cal('c1', '#1565C0')], { c1: [allDayEvent('c1', 'a', busyDay)] })
+    setup(MINI)
+    await waitFor(() => expect(dayButton(busyDay)).toBeEnabled())
+    expect(isBusy(busyDay)).toBe(true)
+    expect(isBusy(quietDay)).toBe(false)
+  })
+
+  it('dots exactly three days for a three-day all-day event', async () => {
+    const [d1, d2, d3, d4] = [15, 16, 17, 18].map((n) => grid.find((d) => d.getDate() === n)!)
+    withCalendars([cal('c1', '#1565C0')], { c1: [allDayEvent('c1', 'a', d1, 3)] })
+    setup(MINI)
+    await waitFor(() => expect(dayButton(d1)).toBeEnabled())
+    expect([isBusy(d1), isBusy(d2), isBusy(d3), isBusy(d4)]).toEqual([true, true, true, false])
+  })
+
+  it('dots only its own day for a timed event ending at midnight', async () => {
+    const next = new Date(busyDay.getFullYear(), busyDay.getMonth(), busyDay.getDate() + 1)
+    withCalendars([cal('c1', '#1565C0')], {
+      c1: [event('c1', 'a', 'Evening', 20, busyDay, { end: `${key(next)}T00:00:00` })],
+    })
+    setup(MINI)
+    await waitFor(() => expect(dayButton(busyDay)).toBeEnabled())
+    expect(isBusy(busyDay)).toBe(true)
+    expect(isBusy(quietDay)).toBe(false)
   })
 })
