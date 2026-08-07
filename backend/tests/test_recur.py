@@ -966,3 +966,114 @@ def test_thisandfuture_on_an_all_day_series_still_gets_distinct_anchors():
         ("2026-01-13", "2026-01-14"),
         ("2026-01-20", "2026-01-21"),
     ]
+
+
+# ── changing the repeat reconciles the overrides it orphans ──────────────────
+
+def _overridden_weekly() -> bytes:
+    """Weekly standup with one occurrence moved to the afternoon and renamed."""
+    return foreign_event_raw(
+        "rc", "standup", dtstart="20260202T090000Z", dtend="20260202T093000Z",
+        rrule="FREQ=WEEKLY",
+        overrides=((
+            "RECURRENCE-ID:20260209T090000Z",
+            "DTSTART:20260209T140000Z",
+            "DTEND:20260209T143000Z",
+            "SUMMARY:special",
+        ),),
+    )
+
+
+_RC_WIN = (date(2026, 2, 1), date(2026, 3, 10))
+
+
+def test_changing_the_repeat_drops_the_orphaned_override():
+    """Weekly -> monthly: the 2/9 override belongs to a schedule that no longer
+    exists, but the expander still emitted it — a phantom event the user had no
+    way to delete."""
+    raw = apply_event_changes(_overridden_weekly(),
+                              EventEdit(rrule=rrule_from_spec("monthly")))
+    assert [(o.start, o.summary) for o in recur.expand_occurrences(raw, *_RC_WIN)] == [
+        ("2026-02-02T09:00:00+00:00", "standup"),
+        ("2026-03-02T09:00:00+00:00", "standup"),
+    ]
+
+
+def test_clearing_the_repeat_drops_every_override():
+    raw = apply_event_changes(_overridden_weekly(), EventEdit(rrule=None))
+    assert [(o.start, o.summary) for o in recur.expand_occurrences(raw, *_RC_WIN)] == [
+        ("2026-02-02T09:00:00+00:00", "standup"),
+    ]
+
+
+def test_an_override_the_new_rule_still_generates_survives():
+    # Weekly -> every-two-weeks, which still lands on 2/16 but not 2/9.
+    raw = foreign_event_raw(
+        "rc2", "standup", dtstart="20260202T090000Z", dtend="20260202T093000Z",
+        rrule="FREQ=WEEKLY",
+        overrides=(
+            ("RECURRENCE-ID:20260209T090000Z", "DTSTART:20260209T140000Z",
+             "DTEND:20260209T143000Z", "SUMMARY:orphaned"),
+            ("RECURRENCE-ID:20260216T090000Z", "DTSTART:20260216T140000Z",
+             "DTEND:20260216T143000Z", "SUMMARY:kept"),
+        ),
+    )
+    edited = apply_event_changes(
+        raw, EventEdit(rrule=rrule_from_spec("weekly", interval=2)))
+    summaries = [o.summary for o in recur.expand_occurrences(edited, *_RC_WIN)]
+    assert "kept" in summaries and "orphaned" not in summaries
+
+
+def test_an_override_anchored_on_an_rdate_survives():
+    # RDATE additions are part of the recurrence set independently of the rule.
+    raw = foreign_event_raw(
+        "rc3", "standup", dtstart="20260202T090000Z", dtend="20260202T093000Z",
+        rrule="FREQ=WEEKLY", rdate="20260220T090000Z",
+        overrides=(("RECURRENCE-ID:20260220T090000Z", "DTSTART:20260220T140000Z",
+                    "DTEND:20260220T143000Z", "SUMMARY:on the rdate"),),
+    )
+    edited = apply_event_changes(raw, EventEdit(rrule=rrule_from_spec("monthly")))
+    assert "on the rdate" in [o.summary
+                              for o in recur.expand_occurrences(edited, *_RC_WIN)]
+
+
+def test_an_unrelated_edit_never_reconciles():
+    """The modal resends its whole repeat state on every save, so `edit.rrule`
+    is set even on a pure rename. Reconciling then would let an unrelated edit
+    drop an override a foreign client anchored at an odd slot."""
+    raw = foreign_event_raw(
+        "rc4", "standup", dtstart="20260202T090000Z", dtend="20260202T093000Z",
+        rrule="FREQ=WEEKLY",
+        # RFC-wise this RECURRENCE-ID names no generated slot, but it is a real
+        # thing a foreign client wrote and invariant #2 says we do not touch it.
+        overrides=(("RECURRENCE-ID:20260210T113000Z", "DTSTART:20260210T113000Z",
+                    "DTEND:20260210T120000Z", "SUMMARY:odd slot"),),
+    )
+    renamed = apply_event_changes(
+        raw, EventEdit(summary="renamed", rrule=rrule_from_spec("weekly")))
+    assert b"20260210T113000Z" in renamed
+    assert _master(renamed).get("SUMMARY") == "renamed"
+
+
+def test_a_foreign_rule_keeps_its_overrides():
+    """A rule outside our repeat vocabulary is not enumerated to test membership
+    — that is the unbounded cost `_pathological_rule` refuses up front — so its
+    overrides are left alone."""
+    raw = foreign_event_raw(
+        "rc5", "standup", dtstart="20260202T090000Z", dtend="20260202T093000Z",
+        rrule="FREQ=WEEKLY;BYDAY=MO,WE",
+        overrides=(("RECURRENCE-ID:20260209T090000Z", "DTSTART:20260209T140000Z",
+                    "DTEND:20260209T143000Z", "SUMMARY:special"),),
+    )
+    # Switching to an hourly rule we could never have authored ourselves.
+    edited = apply_event_changes(raw, EventEdit(rrule={"FREQ": ["HOURLY"]}))
+    assert b"SUMMARY:special" in edited
+
+
+def test_shifting_a_series_without_a_repeat_change_keeps_its_overrides():
+    shifted = shift_series(
+        _overridden_weekly(), "2026-02-02T09:00:00+00:00",
+        EventEdit(dtstart=datetime(2026, 2, 3, 9, 0, tzinfo=timezone.utc),
+                  rrule=rrule_from_spec("weekly")),
+    )
+    assert "special" in [o.summary for o in recur.expand_occurrences(shifted, *_RC_WIN)]

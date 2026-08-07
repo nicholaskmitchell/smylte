@@ -242,17 +242,107 @@ def _coerce_until(until, dtstart) -> date | datetime:
     return _as_utc(until) if dtstart.tzinfo is not None else until.replace(tzinfo=None)
 
 
+def _normalized_rule(rule: dict | None, event: Event) -> dict | None:
+    """``rule`` with UNTIL expressed the way it will actually be written."""
+    ds = event.get("DTSTART")
+    if rule and rule.get("UNTIL") and ds is not None:
+        return dict(rule, UNTIL=[_coerce_until(u, ds.dt) for u in rule["UNTIL"]])
+    return rule
+
+
 def _set_rrule(event: Event, rule: dict | None) -> None:
     """Write the master's RRULE. The single choke point for every rule write —
     `_apply_event_fields`, `_shift_rrule`, and both of `split_series`' rewrites —
     so UNTIL is normalized against DTSTART here, once."""
     _replace(event, "RRULE")
-    if not rule:
-        return
-    ds = event.get("DTSTART")
-    if rule.get("UNTIL") and ds is not None:
-        rule = dict(rule, UNTIL=[_coerce_until(u, ds.dt) for u in rule["UNTIL"]])
-    event.add("RRULE", vRecur(rule))
+    rule = _normalized_rule(rule, event)
+    if rule:
+        event.add("RRULE", vRecur(rule))
+
+
+def _rule_changed(master: Event, new_rule: dict | None) -> bool:
+    """Is ``new_rule`` actually a different repeat from the one on ``master``?
+
+    The modal resends its whole repeat state on every save, so ``edit.rrule`` is
+    set on a pure rename or drag too. Asking this before reconciling keeps an
+    unrelated edit from dropping an override a foreign client anchored at an odd
+    slot — or one an older write of ours mislabelled with a fabricated TZID."""
+    def _ical(rule):
+        return vRecur(rule).to_ical() if rule else None
+
+    return _ical(_rrule_dict(master)) != _ical(_normalized_rule(new_rule, master))
+
+
+def _datelist_values(event: Event, key: str) -> list:
+    """Every value of a (possibly multi-line) EXDATE/RDATE property."""
+    prop = event.get(key)
+    if prop is None:
+        return []
+    lists = prop if isinstance(prop, list) else [prop]
+    return [entry.dt for lst in lists for entry in lst.dts]
+
+
+def _comparable(dtstart, moment) -> tuple[datetime, datetime]:
+    """(dtstart, moment) as datetimes dateutil can compare — all-day values
+    become midnight, and a mixed-awareness pair drops to wall clock rather than
+    raising."""
+    def _dt(v):
+        return v if isinstance(v, datetime) else datetime.combine(v, time())
+
+    start, at = _dt(dtstart), _dt(moment)
+    if (start.tzinfo is None) != (at.tzinfo is None):
+        start, at = start.replace(tzinfo=None), at.replace(tzinfo=None)
+    return start, at
+
+
+def _reconcile_overrides(cal: Calendar, master: Event) -> None:
+    """Drop the override components the master's *new* recurrence rule no longer
+    generates.
+
+    Changing an event's repeat left its RECURRENCE-ID overrides behind. An
+    override whose slot the new rule never produces is not part of the
+    recurrence set at all, yet the expander still emits it — so the calendar
+    showed an event belonging to a schedule the user had just deleted, with no
+    way to get rid of it. Apple and Google clients reconcile here; so do we.
+
+    Only rules from our own repeat vocabulary are reconciled. ``edit.rrule`` can
+    carry nothing else (``rrule_from_spec`` builds it), and testing membership of
+    a foreign rule means letting dateutil iterate from its DTSTART — the
+    unbounded cost ``recur._pathological_rule`` refuses up front. An exotic rule
+    keeps its overrides untouched, which is the safe direction to err: a phantom
+    renders, where a wrong drop destroys an edit the user made.
+    """
+    rule = _rrule_dict(master)
+    dtstart = master.get("DTSTART")
+    if rule is not None:
+        if not {str(f).upper() for f in rule.get("FREQ", [])} <= set(_FREQ.values()):
+            return
+        if dtstart is None:
+            return
+
+    # RDATE additions are part of the recurrence set too, independently of the rule.
+    rdates = _datelist_values(master, "RDATE")
+
+    def _generated(anchor) -> bool:
+        if any(_same_instant(_period_start(r), anchor) for r in rdates):
+            return True
+        if rule is None:
+            return False        # repeat cleared: only the master and its RDATEs remain
+        # Re-anchored per override, because dateutil needs both ends of the probe
+        # to agree on tz-awareness and an override's RECURRENCE-ID need not agree
+        # with the master's (an older write may have lost or fabricated a zone).
+        start, at = _comparable(dtstart.dt, anchor)
+        rr = rrulestr(vRecur(rule).to_ical().decode(), dtstart=start)
+        return bool(rr.between(at, at, inc=True))
+
+    cal.subcomponents = [
+        c for c in cal.subcomponents
+        if not (
+            getattr(c, "name", "") == "VEVENT"
+            and c.get("RECURRENCE-ID") is not None
+            and not _generated(c.get("RECURRENCE-ID").dt)
+        )
+    ]
 
 
 def _stamp(event: Event, now: datetime) -> None:
@@ -295,7 +385,11 @@ def apply_event_changes(raw: bytes | str, edit: EventEdit, *, now: datetime | No
     event = _find_master_event(cal)
     if event is None:
         raise ValueError("resource has no VEVENT to edit")
+    # Asked before the write, while the master still carries the old rule.
+    repeat_changed = edit.rrule is not UNSET and _rule_changed(event, edit.rrule)
     _apply_event_fields(event, edit, now)
+    if repeat_changed:
+        _reconcile_overrides(cal, event)
     return cal.to_ical()
 
 
@@ -621,6 +715,7 @@ def shift_series(
             "edit single occurrences instead"
         )
 
+    repeat_changed = edit.rrule is not UNSET and _rule_changed(master, edit.rrule)
     override = _find_override(cal, anchor)
     base = override.get("DTSTART").dt if override is not None and override.get("DTSTART") else anchor
     # A foreign client may have given this occurrence's override a different
@@ -662,8 +757,11 @@ def shift_series(
             _stamp(ev, now)
 
     # Non-time fields (summary, rrule change, …) land on the master, which also
-    # picks up its stamp here.
+    # picks up its stamp here. Reconciling last, so it judges the overrides by
+    # the RECURRENCE-IDs the shift above just gave them.
     _apply_event_fields(master, replace(edit, dtstart=UNSET, dtend=UNSET), now)
+    if repeat_changed:
+        _reconcile_overrides(cal, master)
     return cal.to_ical()
 
 
@@ -709,12 +807,7 @@ def _count_consumed(rule: dict, dtstart: date | datetime, anchor) -> int:
     head's share of a COUNT-bounded series. (EXDATE'd instances still consume
     COUNT per RFC 5545, and RDATE additions never do, so the raw rule is the
     right thing to enumerate.)"""
-    def _dt(v):
-        return v if isinstance(v, datetime) else datetime.combine(v, time())
-
-    start, end = _dt(dtstart), _dt(anchor)
-    if (start.tzinfo is None) != (end.tzinfo is None):
-        start, end = start.replace(tzinfo=None), end.replace(tzinfo=None)
+    start, end = _comparable(dtstart, anchor)
     rr = rrulestr(vRecur(rule).to_ical().decode(), dtstart=start)
     consumed = 0
     for occ in rr:                      # finite: the rule carries COUNT
@@ -758,6 +851,7 @@ def split_series(
     # Tail: fresh UID, DTSTART=anchor, remaining rule, later overrides re-homed.
     tail = Calendar.from_ical(raw)
     tmaster = _find_master_event(tail)
+    repeat_changed = edit.rrule is not UNSET and _rule_changed(tmaster, edit.rrule)
     new_uid = f"{uuid4().hex}@tasksd"
     dur = _event_duration(tmaster)
     orig_start = tmaster.get("DTSTART").dt if tmaster.get("DTSTART") is not None else anchor
@@ -845,4 +939,6 @@ def split_series(
 
     # Non-time fields land on the master, which also picks up its stamp here.
     _apply_event_fields(tmaster, replace(edit, dtstart=UNSET, dtend=UNSET), now)
+    if repeat_changed:
+        _reconcile_overrides(tail, tmaster)
     return head.to_ical(), tail.to_ical()
