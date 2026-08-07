@@ -6,9 +6,12 @@ in Clark notation (``{namespace}local``) throughout.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from lxml import etree
+
+from .errors import DavError
 
 # --- namespaces ---------------------------------------------------------------
 DAV = "DAV:"
@@ -98,15 +101,32 @@ def build_mkcalendar(
     here — it is protected and cannot be PROPPATCHed later (invariant #8)."""
     root = _root(MKCALENDAR)
     prop = etree.SubElement(etree.SubElement(root, cl(DAV, "set")), PROP)
-    etree.SubElement(prop, DISPLAYNAME).text = displayname
+    _text(etree.SubElement(prop, DISPLAYNAME), displayname)
     comp_set = etree.SubElement(prop, SUPPORTED_COMPONENT_SET)
     for comp in components:
         etree.SubElement(comp_set, COMP).set("name", comp)
     if description is not None:
-        etree.SubElement(prop, CALENDAR_DESCRIPTION).text = description
+        _text(etree.SubElement(prop, CALENDAR_DESCRIPTION), description)
     if color is not None:
-        etree.SubElement(prop, CALENDAR_COLOR).text = color
+        _text(etree.SubElement(prop, CALENDAR_COLOR), color)
     return _tostring(root)
+
+
+# Characters lxml refuses at assignment time. It raises a bare ValueError, which
+# is outside the DavError taxonomy the app's handlers know about, so a name
+# carrying one escaped every handler and surfaced as a 500 with a traceback.
+_XML_FORBIDDEN = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+
+
+def _text(el, value: str) -> None:
+    """Assign element text, refusing what XML cannot carry.
+
+    Callers should reject this at the edge (the API models do, as a 422); this is
+    the backstop, so no path can turn a stray control byte into an unhandled
+    crash deep in the DAV client."""
+    if _XML_FORBIDDEN.search(value):
+        raise DavError("value contains characters that cannot be represented in XML")
+    el.text = value
 
 
 def build_proppatch(props: dict[str, str | None]) -> bytes:
@@ -118,7 +138,7 @@ def build_proppatch(props: dict[str, str | None]) -> bytes:
     if to_set:
         prop = etree.SubElement(etree.SubElement(root, cl(DAV, "set")), PROP)
         for name, value in to_set.items():
-            etree.SubElement(prop, name).text = value
+            _text(etree.SubElement(prop, name), value)
     if to_remove:
         prop = etree.SubElement(etree.SubElement(root, cl(DAV, "remove")), PROP)
         for name in to_remove:

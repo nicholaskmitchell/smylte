@@ -116,10 +116,28 @@ def _set_int(todo: Todo, key: str, value: int | None) -> None:
 
 
 def _set_datelike(todo: Todo, key: str, value: date | datetime | None) -> None:
+    """Write a DUE/DTSTART/DTEND, keeping the zone the property already had.
+
+    The API serves a zone-anchored DUE as an ISO string with a numeric offset,
+    which is all a browser can send back. Writing that offset verbatim makes
+    icalendar fabricate ``TZID="UTC+02:00"`` — a zone name no other CalDAV
+    client can resolve, and the same trap ``_anchor_from_iso`` documents for
+    RECURRENCE-ID. Re-expressing the instant in the property's own tzinfo keeps
+    ``DUE;TZID=Europe/Berlin`` intact and moves it to exactly the moment the
+    user picked.
+
+    Only applies when both sides are zone-aware: a floating value stays floating
+    (the app's own writes are floating local), and an all-day DATE is untouched."""
+    old = todo.get(key)
+    old_dt = old.dt if old is not None and hasattr(old, "dt") else None
     _replace(todo, key)
-    if value is not None:
-        # icalendar emits VALUE=DATE for a date and DATE-TIME for a datetime (spec §5).
-        todo.add(key, value)
+    if value is None:
+        return
+    if (isinstance(value, datetime) and value.tzinfo is not None
+            and isinstance(old_dt, datetime) and old_dt.tzinfo is not None):
+        value = value.astimezone(old_dt.tzinfo)
+    # icalendar emits VALUE=DATE for a date and DATE-TIME for a datetime (spec §5).
+    todo.add(key, value)
 
 
 def _set_categories(todo: Todo, cats: list[str] | None) -> None:

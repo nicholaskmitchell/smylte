@@ -17,6 +17,10 @@ import {
 // default is active forks it into a new theme first (`Custom`), so "Smylte" can
 // never be edited out from under the user — reverting is always one click.
 
+// Every path that would need to create a theme says the same thing when there
+// is no room for one, rather than each failing its own silent way.
+const AT_CAP = `You can keep ${MAX_THEMES} themes — delete one first.`
+
 export function AppearancePanel({ appearance, onChange, mode, onMode, onClose }: {
   appearance: Appearance
   onChange: (next: Appearance) => void
@@ -43,7 +47,11 @@ export function AppearancePanel({ appearance, onChange, mode, onMode, onClose }:
       onChange({ active: active.id, themes: themes.map((t) => (t.id === active.id ? next : t)) })
       return
     }
-    if (themes.length >= MAX_THEMES) return
+    // Editing the shipped design forks a new theme, so with no room for one
+    // there is nothing to write. This used to be a bare `return`: the panel
+    // stayed fully interactive, the sliders moved and the color field accepted
+    // typing, and nothing was ever applied or saved.
+    if (themes.length >= MAX_THEMES) { window.alert(AT_CAP); return }
     const fork: CustomTheme = {
       id: clientId().slice(0, 16),
       name: 'Custom',
@@ -58,7 +66,8 @@ export function AppearancePanel({ appearance, onChange, mode, onMode, onClose }:
   const selectTheme = (id: string) => onChange({ ...appearance, active: id || null })
 
   const saveAs = () => {
-    if (!active || themes.length >= MAX_THEMES) return
+    if (!active) return
+    if (themes.length >= MAX_THEMES) { window.alert(AT_CAP); return }
     const copy: CustomTheme = {
       ...active, id: clientId().slice(0, 16), name: `${active.name} copy`.slice(0, MAX_NAME_LEN),
     }
@@ -103,7 +112,7 @@ export function AppearancePanel({ appearance, onChange, mode, onMode, onClose }:
   const importTheme = async (file: File) => {
     const parsed = parseTheme(await file.text(), clientId().slice(0, 16))
     if (!parsed) { window.alert('That file is not a Smylte theme.'); return }
-    if (themes.length >= MAX_THEMES) { window.alert(`You can keep ${MAX_THEMES} themes.`); return }
+    if (themes.length >= MAX_THEMES) { window.alert(AT_CAP); return }
     onChange({ active: parsed.id, themes: [...themes, parsed] })
   }
 

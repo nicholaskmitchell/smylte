@@ -3,13 +3,35 @@ import {
   api, AuthError, clientId,
   type CreateTaskBody, type List, type Task, type TaskGroup, type TasksViewMode,
 } from '../api'
-import { addDays, dayKey, fmtDue, isOverdue, makeGuard, toLocalInput, ymd } from '../util'
+import {
+  addDays, dayKey, fmtDue, hasZone, instantFromLocal, isOverdue, makeGuard, toLocalInput, ymd,
+} from '../util'
 import { AddMultipleModal, blankValues, bodyFrom, FIELDS, type RowValues } from './AddMultipleModal'
 import { Sidebar } from './Sidebar'
 
 const VIEWS: ReadonlyArray<readonly [TasksViewMode, string]> = [
   ['list', 'List'], ['day3', '3-Day'], ['week', 'Week'],
 ]
+
+/** Done or won't-do — both take a task out of the active list. */
+const isDone = (t: Task) => t.completed || t.cancelled
+
+/**
+ * A date+time pair as the wire should carry it.
+ *
+ * A bare date stays all-day. A timed value is sent as a naive local string —
+ * which is what the app's own writes are — *unless* the property it replaces was
+ * anchored to a zone by another CalDAV client, in which case the instant goes
+ * instead so the server can put it back in that zone. Sending the naive string
+ * there dropped the TZID and silently moved the deadline to the viewer's
+ * wall clock: `DUE;TZID=Europe/Berlin:20260810T093000` came back as
+ * `DUE:20260810T033000` for a reader in New York.
+ */
+const dateOut = (date: string, time: string, original: string | null | undefined) => {
+  if (!date) return null
+  if (!time) return date
+  return hasZone(original) ? instantFromLocal(date, time) : `${date}T${time}`
+}
 
 export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggleSide,
   hiddenLists, onHiddenListsChange, groups, onGroupsChange,
@@ -168,11 +190,15 @@ export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggle
   // toasts. Failures come back as indexes instead and the modal reports them in
   // place, against the rows that produced them.
   const createMany = async (
-    items: Array<{ listId: string; body: CreateTaskBody }>,
+    items: Array<{ listId: string; body: CreateTaskBody; cid: string }>,
     onProgress: (done: number) => void,
   ): Promise<number[]> => {
     const key = loadKey
-    const cids = items.map(() => clientId())
+    // The ids come from the rows, which keep them across a retry. Minting them
+    // here meant every attempt carried a new idempotency slug, so a create whose
+    // response was lost on the way back — the failure the composer explicitly
+    // invites you to retry — landed a second time as a distinct task.
+    const cids = items.map((it) => it.cid)
     invalidateFetches()
     setTasks((ts) => [...ts, ...items.map((it, i) => draftTask(cids[i], it.listId, it.body))])
     const failed: number[] = []
@@ -266,8 +292,22 @@ export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggle
   // Keep every fetched list in `tasks` and drop hidden ones here, so toggling a
   // list is an instant client-side filter (no refetch).
   const shownTasks = tasks.filter((t) => !hiddenSet.has(t.list))
-  const tops = shownTasks.filter((t) => !t.parent)
   const childrenOf = (uid: string) => shownTasks.filter((t) => t.parent === uid)
+  // A subtask reaches the DOM only underneath its own parent's row, so anything
+  // whose parent isn't here has to stand on its own or it is not rendered at
+  // all — invisible, and so uncompletable, uneditable and undeletable, while
+  // the sidebar count still includes it. That is not a hostile-data edge case:
+  // `parent` is a raw RELATED-TO UID with no existence check, another client
+  // can delete a parent without cascading or point one across lists, and the
+  // ordinary path is a completed parent with an open subtask while "show
+  // completed" is off (the default) — the parent lands in `done`, which isn't
+  // rendered, and the subtask goes with it.
+  const byUid = new Map(shownTasks.map((t) => [t.uid, t] as const))
+  const parentIsRendered = (t: Task) => {
+    const p = t.parent ? byUid.get(t.parent) : undefined
+    return !!p && (showCompleted || !isDone(p))
+  }
+  const tops = shownTasks.filter((t) => !parentIsRendered(t))
   const active = tops.filter((t) => !t.completed && !t.cancelled)
   const done = tops.filter((t) => t.completed || t.cancelled)
   // Where new tasks land by default (first visible list); the list view's
@@ -707,19 +747,21 @@ function TaskModal({ task, lists, defaultList, initialTitle, onClose, onCreate, 
     dueTime: hasTime ? toLocalInput(task!.due!).slice(11, 16) : '',
     startDate: task?.start ? dayKey(task.start) : '',
     startTime: startHasTime ? toLocalInput(task!.start!).slice(11, 16) : '',
-    tags: task?.tags.join(', ') ?? '',
+    tags: task?.tags ?? [],
   })
-  const [vals, setVals] = useState<RowValues>(initial)
-  // Which slots the user actually touched. Every value here has round-tripped
-  // through a lossy form representation — a timezone-anchored DUE becomes the
-  // viewer's naive wall clock, PRIORITY:3 becomes "high" becomes 1, a category
-  // holding an escaped comma splits in two — so resending an untouched field
-  // rewrites a property another CalDAV client authored. Send only what changed.
-  const [touched, setTouched] = useState<Set<keyof RowValues>>(new Set())
-  const patch = (p: Partial<RowValues>) => {
-    setTouched((t) => new Set([...t, ...(Object.keys(p) as (keyof RowValues)[])]))
-    setVals((v) => ({ ...v, ...p }))
-  }
+  const [start] = useState<RowValues>(initial)
+  const [vals, setVals] = useState<RowValues>(start)
+  // Every value here has round-tripped through a lossy form representation, so
+  // resending an unchanged field rewrites a property another CalDAV client
+  // authored. Compared against the opening values rather than tracked as
+  // "touched": a field edited and then put back is unchanged, and sending it
+  // would quantise a PRIORITY:3 the four-way picker can only render as "high".
+  const same = (a: string | string[], b: string | string[]) =>
+    Array.isArray(a) && Array.isArray(b)
+      ? a.length === b.length && a.every((x, i) => x === b[i])
+      : a === b
+  const changed = (...keys: (keyof RowValues)[]) => keys.some((k) => !same(vals[k], start[k]))
+  const patch = (p: Partial<RowValues>) => setVals((v) => ({ ...v, ...p }))
 
   // The list picker only makes sense while creating: moving an existing task
   // between lists means moving it between CalDAV collections, which PATCH
@@ -738,25 +780,17 @@ function TaskModal({ task, lists, defaultList, initialTitle, onClose, onCreate, 
       onClose()
       return
     }
-    // Omit anything untouched: the backend treats an absent key as "leave
-    // unset", so a rename now rewrites the summary and nothing else.
+    // Omit anything unchanged: the backend treats an absent key as "leave
+    // unset", so a rename rewrites the summary and nothing else.
     const body: Record<string, unknown> = {}
     if (summary !== (task?.summary || '')) body.summary = summary
     if (notes !== (task?.notes || '')) body.notes = notes
-    if (touched.has('priority')) body.priority = vals.priority
-    if (touched.has('dueDate') || touched.has('dueTime')) {
-      body.due = vals.dueDate
-        ? (vals.dueTime ? `${vals.dueDate}T${vals.dueTime}` : vals.dueDate)
-        : null
+    if (changed('priority')) body.priority = vals.priority
+    if (changed('dueDate', 'dueTime')) body.due = dateOut(vals.dueDate, vals.dueTime, task?.due)
+    if (changed('startDate', 'startTime')) {
+      body.start = dateOut(vals.startDate, vals.startTime, task?.start)
     }
-    if (touched.has('startDate') || touched.has('startTime')) {
-      body.start = vals.startDate
-        ? (vals.startTime ? `${vals.startDate}T${vals.startTime}` : vals.startDate)
-        : null
-    }
-    if (touched.has('tags')) {
-      body.tags = vals.tags.split(',').map((s) => s.trim()).filter(Boolean)
-    }
+    if (changed('tags')) body.tags = vals.tags
     onSave(body)
   }
 

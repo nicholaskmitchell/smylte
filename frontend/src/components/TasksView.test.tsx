@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { TasksView } from './TasksView'
 import { api, AuthError, type List, type Task, type TasksViewMode } from '../api'
@@ -27,7 +27,7 @@ const list: List = {
   open_count: 0, task_count: 0, event_count: 0, total: 0, color: '#D9480F',
 }
 
-function setup(view: TasksViewMode = 'list') {
+function setup(view: TasksViewMode = 'list', showCompleted = false) {
   const onExpire = vi.fn()
   render(
     <TasksView rev={0} onExpire={onExpire} view={view} onView={vi.fn()}
@@ -35,7 +35,7 @@ function setup(view: TasksViewMode = 'list') {
       hiddenLists={[]} onHiddenListsChange={vi.fn()}
       groups={[]} onGroupsChange={vi.fn()}
       collapsedGroups={[]} onCollapsedGroupsChange={vi.fn()}
-      showCompleted={false} />,
+      showCompleted={showCompleted} />,
   )
   return { onExpire, user: userEvent.setup() }
 }
@@ -232,11 +232,9 @@ describe('<TasksView> creating', () => {
   })
 
   it('sends only what changed, so a rename cannot rewrite other properties', async () => {
-    // Every value in this form has round-tripped through a lossy representation:
-    // a TZID-anchored DUE arrives as the viewer's naive wall clock, PRIORITY:3
-    // collapses to "high" and back to 1, a category holding an escaped comma
-    // splits in two. Resending an untouched field therefore rewrites a property
-    // another CalDAV client authored.
+    // Every value in this form has round-tripped through a lossy representation,
+    // so resending an unchanged field would rewrite a property another CalDAV
+    // client authored.
     m.tasks.mockResolvedValue([task({
       summary: 'Ship it', due: '2026-08-10T09:30:00+02:00', due_is_date: false,
       priority: 3, priority_label: 'high', tags: ['Home,Garden'],
@@ -298,5 +296,202 @@ describe('<TasksView> creating', () => {
     await waitFor(() => expect(m.createTask).toHaveBeenCalledTimes(1))
     // The widened create path must not start sending empty notes/tags/priority.
     expect(m.createTask.mock.calls[0][1]).toEqual({ summary: 'solo', client_id: expect.any(String) })
+  })
+})
+
+// ── a retry must replay the create, not author a second task ────────────────
+// `client_id` is the idempotency slug the server derives the CalDAV resource
+// name from. Minting a fresh one per attempt meant a create whose response was
+// lost on the way back — indistinguishable from one that never landed, and the
+// exact failure the composer invites you to retry — arrived twice.
+
+describe('<TasksView> retrying a bulk create', () => {
+  it('replays the same client_id for a row that failed', async () => {
+    m.createTask
+      .mockImplementationOnce(async () => task({ uid: 'u1', summary: 'alpha' }))
+      .mockRejectedValueOnce(new Error('boom'))
+    const { user } = setup()
+    await openBulk(user, ['alpha', 'bravo'])
+    await user.click(bulkAdd(2))
+    await screen.findByRole('alert')
+
+    const firstTry = m.createTask.mock.calls[1][1].client_id
+    m.createTask.mockClear()
+    m.createTask.mockImplementation(async () => task({ uid: 'u2', summary: 'bravo' }))
+    await user.click(bulkAdd(1))
+
+    await waitFor(() => expect(m.createTask).toHaveBeenCalledTimes(1))
+    expect(m.createTask.mock.calls[0][1].client_id).toBe(firstTry)
+  })
+
+  it('mints a new client_id when the row is retitled before the retry', async () => {
+    // A different title is a different task, and the server answers a replayed
+    // slug by confirming the resource already written under it — which would
+    // silently discard the edit.
+    m.createTask.mockRejectedValueOnce(new Error('boom'))
+    const { user } = setup()
+    await openBulk(user, ['alpha'])
+    await user.click(bulkAdd(1))
+    await screen.findByRole('alert')
+
+    const firstTry = m.createTask.mock.calls[0][1].client_id
+    m.createTask.mockClear()
+    m.createTask.mockImplementation(async () => task({ uid: 'u2', summary: 'alpha fixed' }))
+    await user.type(screen.getByLabelText('Title, row 1'), ' fixed')
+    await user.click(bulkAdd(1))
+
+    await waitFor(() => expect(m.createTask).toHaveBeenCalledTimes(1))
+    expect(m.createTask.mock.calls[0][1].client_id).not.toBe(firstTry)
+  })
+})
+
+// ── a subtask must reach the DOM even when its parent row does not ──────────
+// A subtask renders only underneath its own parent. Anything whose parent is
+// not rendered was absent from the List view entirely — invisible, and so
+// uncompletable, uneditable and undeletable — while the sidebar count still
+// included it.
+
+describe('<TasksView> orphaned subtasks', () => {
+  it('shows an open subtask whose parent is completed and hidden', async () => {
+    // The default: showCompleted is off, so the parent is not rendered.
+    m.tasks.mockResolvedValue([
+      task({ uid: 'p1', summary: 'Trip planning', completed: true, status: 'COMPLETED' }),
+      task({ uid: 'c1', summary: 'Book flight', parent: 'p1' }),
+    ])
+    setup()
+    expect(await screen.findByText('Book flight')).toBeInTheDocument()
+    expect(screen.queryByText('Trip planning')).not.toBeInTheDocument()
+  })
+
+  it('shows a subtask whose parent does not exist at all', async () => {
+    // Another client can write RELATED-TO pointing at a deleted parent, or at a
+    // task in a different list; `parent` is that raw UID with no existence check.
+    m.tasks.mockResolvedValue([task({ uid: 'c1', summary: 'Orphan', parent: 'ghost' })])
+    setup()
+    expect(await screen.findByText('Orphan')).toBeInTheDocument()
+  })
+
+  it('still nests a subtask under a parent that is rendered', async () => {
+    m.tasks.mockResolvedValue([
+      task({ uid: 'p1', summary: 'Trip planning' }),
+      task({ uid: 'c1', summary: 'Book flight', parent: 'p1' }),
+    ])
+    setup()
+    await screen.findByText('Trip planning')
+    // Rendered once, as a child — not promoted to a second top-level row.
+    expect(screen.getAllByText('Book flight')).toHaveLength(1)
+    expect(screen.getByText('Book flight').closest('.task')).toHaveClass('sub')
+  })
+
+  it('nests it under a completed parent once completed tasks are shown', async () => {
+    m.tasks.mockResolvedValue([
+      task({ uid: 'p1', summary: 'Trip planning', completed: true, status: 'COMPLETED' }),
+      task({ uid: 'c1', summary: 'Book flight', parent: 'p1' }),
+    ])
+    setup('list', true)
+    await screen.findByText('Trip planning')
+    expect(screen.getAllByText('Book flight')).toHaveLength(1)
+    expect(screen.getByText('Book flight').closest('.task')).toHaveClass('sub')
+  })
+})
+
+// ── what the editor sends for a value it cannot represent exactly ───────────
+
+describe('<TasksView> lossy round-trips', () => {
+  const zoned = () => task({
+    summary: 'Pay rent', due: '2026-08-10T09:30:00+02:00', due_is_date: false,
+    priority: 3, priority_label: 'high', tags: ['Home,Garden', 'Errands'],
+  })
+
+  async function openTask(user: ReturnType<typeof userEvent.setup>, t = zoned()) {
+    m.tasks.mockResolvedValue([t])
+    m.patchTask.mockResolvedValue(t)
+    await user.click(await screen.findByText(t.summary!))
+    return screen.findByRole('dialog', { name: 'Task' })
+  }
+
+  it('sends the instant, not a naive wall clock, for a zone-anchored due', async () => {
+    // The suite runs in America/New_York, so Berlin 09:30 shows as 03:30 here.
+    // Sending "2026-08-10T04:30" naive would strip the TZID and move the
+    // deadline; sending the instant lets the server put it back in Berlin.
+    const { user } = setup()
+    await openTask(user)
+    expect(screen.getByLabelText('Due time')).toHaveValue('03:30')
+    fireEvent.change(screen.getByLabelText('Due time'), { target: { value: '04:30' } })
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => expect(m.patchTask).toHaveBeenCalled())
+    expect(m.patchTask.mock.calls[0][2]).toEqual({ due: '2026-08-10T08:30:00.000Z' })
+  })
+
+  it('sends a naive local string for a due that was already floating', async () => {
+    const { user } = setup()
+    await openTask(user, task({
+      summary: 'Floating', due: '2026-08-10T09:30:00', due_is_date: false,
+    }))
+    fireEvent.change(screen.getByLabelText('Due time'), { target: { value: '10:30' } })
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => expect(m.patchTask).toHaveBeenCalled())
+    expect(m.patchTask.mock.calls[0][2]).toEqual({ due: '2026-08-10T10:30' })
+  })
+
+  it('keeps an all-day due a bare date', async () => {
+    const { user } = setup()
+    await openTask(user, task({ summary: 'All day', due: '2026-08-10', due_is_date: true }))
+    fireEvent.change(screen.getByLabelText('Due date'), { target: { value: '2026-08-12' } })
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => expect(m.patchTask).toHaveBeenCalled())
+    expect(m.patchTask.mock.calls[0][2]).toEqual({ due: '2026-08-12' })
+  })
+
+  it('keeps a category containing a comma whole', async () => {
+    // `CATEGORIES:Home\,Garden` is ONE tag. The comma-joined text field read it
+    // back as "Home,Garden, Errands" and saved that as three.
+    const { user } = setup()
+    await openTask(user)
+    expect(screen.getByRole('button', { name: 'Remove Home,Garden' })).toBeInTheDocument()
+    await user.type(screen.getByLabelText('Tags'), 'urgent{Enter}')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => expect(m.patchTask).toHaveBeenCalled())
+    expect(m.patchTask.mock.calls[0][2]).toEqual({ tags: ['Home,Garden', 'Errands', 'urgent'] })
+  })
+
+  it('removes exactly the tag whose chip was dismissed', async () => {
+    const { user } = setup()
+    await openTask(user)
+    await user.click(screen.getByRole('button', { name: 'Remove Errands' }))
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => expect(m.patchTask).toHaveBeenCalled())
+    expect(m.patchTask.mock.calls[0][2]).toEqual({ tags: ['Home,Garden'] })
+  })
+
+  it('does not send a priority the user changed and then put back', async () => {
+    // PRIORITY:3 can only be rendered as "high" by a four-way picker, so
+    // resending "high" would quantise it to 1. Nothing changed, so nothing goes.
+    const { user } = setup()
+    await openTask(user)
+    await user.selectOptions(screen.getByLabelText('Priority'), 'low')
+    await user.selectOptions(screen.getByLabelText('Priority'), 'high')
+    const title = screen.getByLabelText('Title')
+    await user.clear(title)
+    await user.type(title, 'Pay rent now')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => expect(m.patchTask).toHaveBeenCalled())
+    expect(m.patchTask.mock.calls[0][2]).toEqual({ summary: 'Pay rent now' })
+  })
+
+  it('still sends a priority the user genuinely changed', async () => {
+    const { user } = setup()
+    await openTask(user)
+    await user.selectOptions(screen.getByLabelText('Priority'), 'low')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => expect(m.patchTask).toHaveBeenCalled())
+    expect(m.patchTask.mock.calls[0][2]).toEqual({ priority: 'low' })
   })
 })

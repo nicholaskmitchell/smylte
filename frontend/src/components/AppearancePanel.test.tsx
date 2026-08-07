@@ -1,8 +1,8 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest'
+import { describe, expect, it, vi, afterEach, beforeEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { AppearancePanel } from './AppearancePanel'
-import { DEFAULTS, type Appearance, type CustomTheme } from '../appearance'
+import { DEFAULTS, MAX_THEMES, type Appearance, type CustomTheme } from '../appearance'
 
 const theme = (o: Partial<CustomTheme> = {}): CustomTheme => ({
   id: 't1', name: 'Mine', base: 'light',
@@ -143,5 +143,47 @@ describe('<AppearancePanel> theme management', () => {
     const { onMode } = setup({ active: 't1', themes: [theme()] })
     await userEvent.click(screen.getByRole('button', { name: 'Dark' }))
     expect(onMode).toHaveBeenCalledWith('dark')
+  })
+})
+
+// ── at the theme cap, the panel must say so ─────────────────────────────────
+// Editing the shipped design forks a new theme, so with no room for one there
+// is nothing to write. That used to be a bare `return`: the panel stayed fully
+// interactive — sliders moved, the color field accepted typing — and nothing
+// was ever applied or saved, with no explanation.
+
+describe('<AppearancePanel> at the theme cap', () => {
+  const full = () => Array.from({ length: MAX_THEMES }, (_, i) => ({
+    id: `t${i}`, name: `Theme ${i}`, base: 'light' as const, light: {}, dark: {},
+  }))
+
+  let alertSpy: ReturnType<typeof vi.spyOn>
+  beforeEach(() => { alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {}) })
+  afterEach(() => alertSpy.mockRestore())
+
+  it('explains why editing the shipped design does nothing', async () => {
+    const { onChange } = setup({ active: null, themes: full() })
+    const field = accentField()
+    await userEvent.clear(field)
+    await userEvent.type(field, '#00ff00')
+    expect(alertSpy).toHaveBeenCalledWith(expect.stringContaining(String(MAX_THEMES)))
+    expect(onChange).not.toHaveBeenCalled()
+  })
+
+  it('explains why Duplicate does nothing', async () => {
+    const themes = full()
+    const { onChange } = setup({ active: themes[0].id, themes })
+    await userEvent.click(screen.getByRole('button', { name: /duplicate/i }))
+    expect(alertSpy).toHaveBeenCalledWith(expect.stringContaining(String(MAX_THEMES)))
+    expect(onChange).not.toHaveBeenCalled()
+  })
+
+  it('still edits normally with room to spare', async () => {
+    const { onChange } = setup({ active: null, themes: full().slice(0, 2) })
+    const field = accentField()
+    await userEvent.clear(field)
+    await userEvent.type(field, '#00ff00')
+    expect(alertSpy).not.toHaveBeenCalled()
+    expect(onChange).toHaveBeenCalled()
   })
 })
