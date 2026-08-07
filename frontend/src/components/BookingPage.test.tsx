@@ -2,7 +2,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { BookingPage } from './BookingPage'
-import { api, type PublicBookingInfo } from '../api'
+import { api, HttpError, type PublicBookingInfo } from '../api'
 
 vi.mock('../api', async (importOriginal) => {
   const mod = await importOriginal<typeof import('../api')>()
@@ -33,7 +33,7 @@ beforeEach(() => {
 
 describe('<BookingPage>', () => {
   it('shows the not-found card when the link is dead (404)', async () => {
-    infoMock.mockRejectedValue(new Error('unknown booking link'))
+    infoMock.mockRejectedValue(new HttpError(404, 'unknown booking link'))
     render(<BookingPage token="dead" />)
     expect(await screen.findByText(/no longer available/i)).toBeInTheDocument()
   })
@@ -118,5 +118,53 @@ describe('<BookingPage>', () => {
     expect(await screen.findByText(/just taken/i)).toBeInTheDocument()
     expect(infoMock).toHaveBeenCalledTimes(2)     // reloaded availability
     expect(document.querySelectorAll('.slot-btn').length).toBeGreaterThan(0)
+  })
+})
+
+// ── a transient failure is not a dead link ──────────────────────────────────
+// The card the visitor used to get on ANY load failure told them the host had
+// removed the link and to ask for a fresh one. The backend rate-limits this
+// endpoint and counts every request, not just failures, so 121 loads in five
+// minutes from one address — a shared office NAT, or one visitor reloading —
+// gave everyone behind it a terminal, unrecoverable dead-end.
+
+describe('<BookingPage> load failures', () => {
+  it.each([
+    ['a rate limit', new HttpError(429, 'too many requests')],
+    ['a server error', new HttpError(502, 'bad gateway')],
+    ['a dropped connection', new TypeError('Failed to fetch')],
+  ])('offers a retry after %s rather than declaring the link dead', async (_l, err) => {
+    infoMock.mockRejectedValue(err)
+    render(<BookingPage token="tok" />)
+    expect(await screen.findByText(/couldn’t load this page just now/i)).toBeInTheDocument()
+    expect(screen.queryByText(/no longer available/i)).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /try again/i })).toBeInTheDocument()
+  })
+
+  it('recovers when the retry succeeds', async () => {
+    infoMock.mockRejectedValueOnce(new HttpError(429, 'too many requests'))
+    infoMock.mockResolvedValue(INFO)
+    render(<BookingPage token="tok" />)
+    await userEvent.click(await screen.findByRole('button', { name: /try again/i }))
+    expect(await screen.findByText('Intro call')).toBeInTheDocument()
+  })
+
+  it('does not let a failed refresh bury the lost-the-race message', async () => {
+    // submit()'s recovery reloads availability behind the message it just set;
+    // a failure there used to replace it with the dead-link card.
+    infoMock.mockResolvedValueOnce(INFO).mockRejectedValue(new HttpError(429, 'slow down'))
+    bookMock.mockRejectedValue(new Error('slot not available'))
+    render(<BookingPage token="tok" />)
+    await screen.findByText('Intro call')
+
+    await userEvent.click(document.querySelectorAll('.slot-btn')[0] as HTMLElement)
+    await userEvent.type(screen.getAllByRole('textbox')[0], 'Ada')
+    const email = document.querySelector('input[type="email"]') as HTMLInputElement
+    await userEvent.type(email, 'ada@example.com')
+    await userEvent.click(screen.getByRole('button', { name: /confirm booking/i }))
+
+    expect(await screen.findByText(/just taken/i)).toBeInTheDocument()
+    expect(screen.queryByText(/no longer available/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/couldn’t load this page/i)).not.toBeInTheDocument()
   })
 })
