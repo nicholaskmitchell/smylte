@@ -346,10 +346,17 @@ def _cal(client) -> dict:
 
 
 def _mklink(client, cal_id, **kw) -> dict:
+    # Availability spans the whole day on purpose. Busy-checking is deliberately
+    # GLOBAL across every calendar (so two links can't double-book the owner),
+    # which means events other test files leave on the scratch server — a weekly
+    # recurring standup, say — project into this link's window and can empty it.
+    # A narrow 09:00-17:00 window made these tests pass alone and fail in a full
+    # run, on the order the files happen to execute in. A full-day window leaves
+    # far more slots than any stray fixture can block.
     body = {
         "title": "Coffee chat", "calendar": cal_id, "duration_minutes": 30,
         "timezone": "UTC",
-        "availability": {str(d): ["09:00-17:00"] for d in range(7)},
+        "availability": {str(d): ["00:00-23:30"] for d in range(7)},
         "min_notice_hours": 0, "horizon_days": 3,
     }
     body.update(kw)
@@ -369,7 +376,7 @@ def test_owner_link_crud(client):
     link = _mklink(client, cal["id"])
     assert link["token"] and link["calendar"] == cal["id"]
     assert link["calendar_name"] == cal["name"]
-    assert link["availability"]["0"] == ["09:00-17:00"]
+    assert link["availability"]["0"] == ["00:00-23:30"]
 
     tokens = {l["token"] for l in client.get("/api/scheduling/links").json()}
     assert link["token"] in tokens
@@ -624,16 +631,21 @@ def many_ips(client):
 
     # X-Real-IP is trusted only from a loopback peer (Caddy overwrites it), so
     # present as loopback and vary the header.
-    with TestClient(client.app, client=("127.0.0.1", 1)) as c:
-        n = 0
+    #
+    # NOT used as a context manager: entering one runs the app's lifespan, and
+    # leaving it runs shutdown — which would close the session-scoped app this
+    # borrows, breaking every test that follows. The session fixture already
+    # started it; this only needs a second transport onto the same app.
+    c = TestClient(client.app, client=("127.0.0.1", 1))
+    n = 0
 
-        def post(url, **kw):
-            nonlocal n
-            n += 1
-            headers = {**_NO_COOKIE, "X-Real-IP": f"198.51.100.{n % 250}"}
-            return c.post(url, headers=headers, **kw)
+    def post(url, **kw):
+        nonlocal n
+        n += 1
+        headers = {**_NO_COOKIE, "X-Real-IP": f"198.51.100.{n % 250}"}
+        return c.post(url, headers=headers, **kw)
 
-        yield post
+    return post
 
 
 def _book_body(slot, **over):
@@ -651,9 +663,12 @@ def _book_body(slot, **over):
 ])
 def test_refused_bookings_do_not_spend_the_links_budget(client, many_ips, label, bad, expected):
     cal = _cal(client)
-    link = _mklink(client, cal["id"])
+    # A long horizon for the same reason the ceiling test uses one: busy is
+    # global, so a short window depends on what other tests left behind.
+    link = _mklink(client, cal["id"], horizon_days=30)
     info = client.get(f"/api/public/booking/{link['token']}", headers=_NO_COOKIE).json()
     url = f"/api/public/booking/{link['token']}/book"
+    assert info["slots"], "no free slots to test against"
 
     # Well past the 30-booking ceiling, none of which is a booking.
     for i in range(40):
@@ -670,9 +685,13 @@ def test_the_per_link_ceiling_still_bounds_real_bookings(client, many_ips):
     """The cap's actual job — bounding junk events written to the owner's
     calendar regardless of source — has to keep working."""
     cal = _cal(client)
-    link = _mklink(client, cal["id"], duration_minutes=15)
+    # Short slots over a long horizon: this needs 35 free ones, and busy is
+    # global, so a link with only a day or two of availability would depend on
+    # what every other test happens to have left on the scratch server.
+    link = _mklink(client, cal["id"], duration_minutes=5, horizon_days=30)
     info = client.get(f"/api/public/booking/{link['token']}", headers=_NO_COOKIE).json()
     url = f"/api/public/booking/{link['token']}/book"
+    assert len(info["slots"]) >= 35, "not enough free slots to reach the ceiling"
 
     codes = []
     for slot in info["slots"][:35]:
