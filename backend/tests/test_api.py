@@ -248,6 +248,27 @@ def test_settings_archived_calendars_sync(client):
     assert client.get("/api/settings").json().get("archived_calendars") == []
 
 
+def test_settings_tabs_sync(client):
+    # The tab strip's three keys must survive the HTTP round-trip via
+    # SettingsPatch — a store-level test is key-agnostic and wouldn't catch a
+    # missing or renamed field on the model.
+    r = client.put("/api/settings", json={
+        "tab_order": ["calendar", "home", "tasks", "scheduling"],
+        "start_tab": "last",
+        "last_tab": "calendar",
+    })
+    assert r.status_code == 200
+    body = client.get("/api/settings").json()
+    assert body.get("tab_order") == ["calendar", "home", "tasks", "scheduling"]
+    assert body.get("start_tab") == "last"
+    assert body.get("last_tab") == "calendar"
+    # A tab that doesn't exist is rejected rather than stored for the client to
+    # trip over. "last" is only meaningful as a start, never as a remembered tab.
+    assert client.put("/api/settings", json={"start_tab": "gantt"}).status_code == 422
+    assert client.put("/api/settings", json={"tab_order": ["gantt"]}).status_code == 422
+    assert client.put("/api/settings", json={"last_tab": "last"}).status_code == 422
+
+
 def test_settings_show_completed_sync(client):
     # The boolean must survive the HTTP round-trip via SettingsPatch, and False
     # has to persist (only an omitted/None key is "unset" — see the store merge).
