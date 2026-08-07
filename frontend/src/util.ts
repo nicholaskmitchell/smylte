@@ -48,6 +48,23 @@ export function toLocalInput(iso: string): string {
   return `${ymd(d)}T${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
+// Does this ISO datetime name an instant (carries a UTC offset or Z), rather
+// than a floating local wall time? A property another CalDAV client anchored to
+// a zone reads back with an offset; one the app wrote itself is floating.
+export function hasZone(iso: string | null | undefined): boolean {
+  if (!iso || !iso.includes('T')) return false
+  const time = iso.slice(iso.indexOf('T') + 1)
+  return time.endsWith('Z') || /[+-]\d{2}:?\d{2}$/.test(time)
+}
+
+// A local date+time (as the pickers hold them) sent back as the instant it
+// names, so the server can re-express it in the property's original zone. A
+// naive string would arrive floating and strip the TZID a foreign client set.
+export function instantFromLocal(date: string, time: string): string {
+  const d = new Date(`${date}T${time}`)
+  return isNaN(d.getTime()) ? `${date}T${time}` : d.toISOString()
+}
+
 export function fmtDue(iso: string | null, isDate: boolean): string {
   if (!iso) return ''
   const d = parseDate(iso)
