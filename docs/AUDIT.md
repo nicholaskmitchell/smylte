@@ -13,7 +13,7 @@ and task-edit dirty-tracking).
 Severity is the verifiers' rating. `minor` marks a fix that is a few
 obviously-correct lines needing no design decision — a reasonable place to start.
 
-**16 open** (a ticked box is fixed and covered by a test; its evidence stays
+**11 open** (a ticked box is fixed and covered by a test; its evidence stays
 here so the issue linking to it still resolves).
 
 ## iCalendar read + edit path
@@ -768,7 +768,7 @@ line 18 already rounds the DST-skewed millisecond delta to whole days correctly.
 
 ## Tasks view
 
-### [ ] A due date, priority or tag the user *edits* still round-trips lossily
+### [x] A due date, priority or tag the user *edits* still round-trips lossily
 
 `frontend/src/components/TasksView.tsx:729` · **medium** · bug
 
@@ -787,7 +787,7 @@ editing one of these fields rewrites it through the same funnel:
   input splits it in two on save. Fix: a chip editor, or a delimiter a category cannot
   contain.
 
-### [ ] Retrying a failed bulk create mints a fresh client_id, so a lost response duplicates the task
+### [x] Retrying a failed bulk create mints a fresh client_id, so a lost response duplicates the task
 
 `frontend/src/components/TasksView.tsx:175` · **medium** · bug
 
@@ -826,7 +826,7 @@ so a retry replays the identical id. Keep regenerating only when the user edits 
 row's title. Add a test that fails the second create with a non-Auth error, retries, and
 asserts the same `client_id` is sent.
 
-### [ ] Subtasks vanish from the List view whenever their parent row isn't rendered
+### [x] Subtasks vanish from the List view whenever their parent row isn't rendered
 
 `frontend/src/components/TasksView.tsx:269` · **medium** · bug
 
@@ -872,7 +872,7 @@ with `showCompleted={false}`.
 
 ## Home / dashboard
 
-### [ ] Mini calendar dots one day too many: exclusive all-day DTEND treated as inclusive
+### [x] Mini calendar dots one day too many: exclusive all-day DTEND treated as inclusive
 
 `frontend/src/components/HomeView.tsx:340` · **medium** · rendering · `minor`
 
@@ -907,7 +907,7 @@ So a single all-day event (a birthday, a one-day trip) marks the *next* day busy
 `tail` back one day, floored at the start day. Export/share `lastDayOf` rather than
 duplicating the rule in two places.
 
-### [ ] Test gap: busyDays has no all-day (exclusive DTEND) case; its helper hardcodes end_is_date:false
+### [x] Test gap: busyDays has no all-day (exclusive DTEND) case; its helper hardcodes end_is_date:false
 
 `frontend/src/components/HomeView.test.tsx:188` · **low** · test-gap · `minor`
 
