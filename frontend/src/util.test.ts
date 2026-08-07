@@ -1,9 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AuthError } from './api'
-import {
-  addDays, dayKey, fmtDue, isOverdue, makeGuard, pad, parseDate,
-  setErrorNotifier, toLocalInput, ymd,
-} from './util'
+import { addDays, dayKey, fmtDue, hasZone, instantFromLocal, isOverdue, makeGuard, pad, parseDate, setErrorNotifier, toLocalInput, ymd } from './util'
 
 describe('parseDate', () => {
   it('parses date-only strings as LOCAL midnight, not UTC', () => {
@@ -87,5 +84,36 @@ describe('makeGuard', () => {
       .resolves.toBeUndefined()
     expect(notify).toHaveBeenCalledWith('server exploded')
     expect(onExpire).not.toHaveBeenCalled()
+  })
+})
+
+describe('hasZone', () => {
+  it.each([
+    ['2026-08-10T09:30:00+02:00', true],
+    ['2026-08-10T09:30:00-04:00', true],
+    ['2026-08-10T09:30:00+0200', true],
+    ['2026-08-10T09:30:00Z', true],
+    ['2026-08-10T09:30:00', false],      // floating — what the app writes itself
+    ['2026-08-10T09:30', false],
+    ['2026-08-10', false],               // all-day
+    [null, false],
+    [undefined, false],
+  ])('%s -> %s', (iso, expected) => {
+    expect(hasZone(iso as string | null | undefined)).toBe(expected)
+  })
+
+  it('is not fooled by the dashes in the date half', () => {
+    expect(hasZone('2026-08-10T09:30:00')).toBe(false)
+  })
+})
+
+describe('instantFromLocal', () => {
+  it('names the instant the local wall clock picks out', () => {
+    // The suite runs in America/New_York, so 04:30 local is 08:30Z.
+    expect(instantFromLocal('2026-08-10', '04:30')).toBe('2026-08-10T08:30:00.000Z')
+  })
+
+  it('hands an unparseable pair straight back rather than inventing a date', () => {
+    expect(instantFromLocal('nonsense', '04:30')).toBe('nonsenseT04:30')
   })
 })

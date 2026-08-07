@@ -43,7 +43,7 @@ describe('splitPasteLines', () => {
 describe('bodyFrom', () => {
   const v = {
     listId: 'l1', dueDate: '', dueTime: '', startDate: '', startTime: '',
-    priority: 'none', tags: '', notes: '',
+    priority: 'none', tags: [], notes: '',
   }
 
   it('omits every empty field rather than sending it blank', () => {
@@ -60,8 +60,11 @@ describe('bodyFrom', () => {
     expect(bodyFrom('x', { ...v, dueTime: '09:30' }).due).toBeUndefined()
   })
 
-  it('splits tags on commas and drops the empties', () => {
-    expect(bodyFrom('x', { ...v, tags: 'a, b ,,' }).tags).toEqual(['a', 'b'])
+  it('carries the tag list through verbatim', () => {
+    expect(bodyFrom('x', { ...v, tags: ['a', 'b'] }).tags).toEqual(['a', 'b'])
+    // A category may contain a comma; it must survive as one tag.
+    expect(bodyFrom('x', { ...v, tags: ['Home,Garden'] }).tags).toEqual(['Home,Garden'])
+    expect(bodyFrom('x', { ...v, tags: [] }).tags).toBeUndefined()
   })
 
   it('sends a bare date for an all-day start and a T-joined one when timed', () => {
@@ -160,10 +163,10 @@ describe('AddMultipleModal', () => {
   it('restores per-row values when a property goes back to per-row', async () => {
     const { user } = setup()
     await user.click(screen.getByRole('checkbox', { name: 'Tags' }))
-    await user.type(screen.getByLabelText('Tags, row 2'), 'errand')
+    await user.type(screen.getByLabelText('Tags, row 2'), 'errand{Enter}')
     await user.click(screen.getByRole('checkbox', { name: 'Tags' }))
     await user.click(screen.getByRole('checkbox', { name: 'Tags' }))
-    expect(screen.getByLabelText('Tags, row 2')).toHaveValue('errand')
+    expect(screen.getByRole('button', { name: 'Remove errand' })).toBeInTheDocument()
   })
 
   it('fans a multi-line paste out into one row per line', async () => {

@@ -3,7 +3,9 @@ import {
   api, AuthError, clientId,
   type CreateTaskBody, type List, type Task, type TaskGroup, type TasksViewMode,
 } from '../api'
-import { addDays, dayKey, fmtDue, isOverdue, makeGuard, toLocalInput, ymd } from '../util'
+import {
+  addDays, dayKey, fmtDue, hasZone, instantFromLocal, isOverdue, makeGuard, toLocalInput, ymd,
+} from '../util'
 import { AddMultipleModal, blankValues, bodyFrom, FIELDS, type RowValues } from './AddMultipleModal'
 import { Sidebar } from './Sidebar'
 
@@ -13,6 +15,23 @@ const VIEWS: ReadonlyArray<readonly [TasksViewMode, string]> = [
 
 /** Done or won't-do — both take a task out of the active list. */
 const isDone = (t: Task) => t.completed || t.cancelled
+
+/**
+ * A date+time pair as the wire should carry it.
+ *
+ * A bare date stays all-day. A timed value is sent as a naive local string —
+ * which is what the app's own writes are — *unless* the property it replaces was
+ * anchored to a zone by another CalDAV client, in which case the instant goes
+ * instead so the server can put it back in that zone. Sending the naive string
+ * there dropped the TZID and silently moved the deadline to the viewer's
+ * wall clock: `DUE;TZID=Europe/Berlin:20260810T093000` came back as
+ * `DUE:20260810T033000` for a reader in New York.
+ */
+const dateOut = (date: string, time: string, original: string | null | undefined) => {
+  if (!date) return null
+  if (!time) return date
+  return hasZone(original) ? instantFromLocal(date, time) : `${date}T${time}`
+}
 
 export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggleSide,
   hiddenLists, onHiddenListsChange, groups, onGroupsChange,
@@ -728,19 +747,21 @@ function TaskModal({ task, lists, defaultList, initialTitle, onClose, onCreate, 
     dueTime: hasTime ? toLocalInput(task!.due!).slice(11, 16) : '',
     startDate: task?.start ? dayKey(task.start) : '',
     startTime: startHasTime ? toLocalInput(task!.start!).slice(11, 16) : '',
-    tags: task?.tags.join(', ') ?? '',
+    tags: task?.tags ?? [],
   })
-  const [vals, setVals] = useState<RowValues>(initial)
-  // Which slots the user actually touched. Every value here has round-tripped
-  // through a lossy form representation — a timezone-anchored DUE becomes the
-  // viewer's naive wall clock, PRIORITY:3 becomes "high" becomes 1, a category
-  // holding an escaped comma splits in two — so resending an untouched field
-  // rewrites a property another CalDAV client authored. Send only what changed.
-  const [touched, setTouched] = useState<Set<keyof RowValues>>(new Set())
-  const patch = (p: Partial<RowValues>) => {
-    setTouched((t) => new Set([...t, ...(Object.keys(p) as (keyof RowValues)[])]))
-    setVals((v) => ({ ...v, ...p }))
-  }
+  const [start] = useState<RowValues>(initial)
+  const [vals, setVals] = useState<RowValues>(start)
+  // Every value here has round-tripped through a lossy form representation, so
+  // resending an unchanged field rewrites a property another CalDAV client
+  // authored. Compared against the opening values rather than tracked as
+  // "touched": a field edited and then put back is unchanged, and sending it
+  // would quantise a PRIORITY:3 the four-way picker can only render as "high".
+  const same = (a: string | string[], b: string | string[]) =>
+    Array.isArray(a) && Array.isArray(b)
+      ? a.length === b.length && a.every((x, i) => x === b[i])
+      : a === b
+  const changed = (...keys: (keyof RowValues)[]) => keys.some((k) => !same(vals[k], start[k]))
+  const patch = (p: Partial<RowValues>) => setVals((v) => ({ ...v, ...p }))
 
   // The list picker only makes sense while creating: moving an existing task
   // between lists means moving it between CalDAV collections, which PATCH
@@ -759,25 +780,17 @@ function TaskModal({ task, lists, defaultList, initialTitle, onClose, onCreate, 
       onClose()
       return
     }
-    // Omit anything untouched: the backend treats an absent key as "leave
-    // unset", so a rename now rewrites the summary and nothing else.
+    // Omit anything unchanged: the backend treats an absent key as "leave
+    // unset", so a rename rewrites the summary and nothing else.
     const body: Record<string, unknown> = {}
     if (summary !== (task?.summary || '')) body.summary = summary
     if (notes !== (task?.notes || '')) body.notes = notes
-    if (touched.has('priority')) body.priority = vals.priority
-    if (touched.has('dueDate') || touched.has('dueTime')) {
-      body.due = vals.dueDate
-        ? (vals.dueTime ? `${vals.dueDate}T${vals.dueTime}` : vals.dueDate)
-        : null
+    if (changed('priority')) body.priority = vals.priority
+    if (changed('dueDate', 'dueTime')) body.due = dateOut(vals.dueDate, vals.dueTime, task?.due)
+    if (changed('startDate', 'startTime')) {
+      body.start = dateOut(vals.startDate, vals.startTime, task?.start)
     }
-    if (touched.has('startDate') || touched.has('startTime')) {
-      body.start = vals.startDate
-        ? (vals.startTime ? `${vals.startDate}T${vals.startTime}` : vals.startDate)
-        : null
-    }
-    if (touched.has('tags')) {
-      body.tags = vals.tags.split(',').map((s) => s.trim()).filter(Boolean)
-    }
+    if (changed('tags')) body.tags = vals.tags
     onSave(body)
   }
 
