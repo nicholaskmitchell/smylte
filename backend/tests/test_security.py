@@ -11,6 +11,7 @@ Two tiers:
 from __future__ import annotations
 
 import dataclasses
+import uuid
 from datetime import datetime, timedelta, timezone
 
 import jwt
@@ -356,3 +357,93 @@ def test_502_bodies_never_leak_internals(make_app, monkeypatch):
         r = c.get("/api/lists")
         assert r.status_code == 502
         assert "5233" not in r.text and "testpass" not in r.text
+
+
+# ── fail-closed at startup ───────────────────────────────────────────────────
+# Two refusals in create_app that exist precisely so a misconfiguration cannot
+# boot into an open server. Neither had a test, so a refactor that reordered the
+# password fallback, or dropped the well-known-default comparison, would have
+# left the whole suite green with the gate gone.
+
+def _settings(**overrides):
+    """Settings for construction only — create_app touches no network."""
+    return dataclasses.replace(api_settings("/tmp/unused-startup.db"), **overrides)
+
+
+def test_auth_enabled_with_no_password_refuses_to_start():
+    with pytest.raises(RuntimeError, match="no password set"):
+        create_app(_settings(auth_password_hash="", auth_password=""))
+
+
+def test_auth_enabled_accepts_either_a_hash_or_a_plaintext_password():
+    # The refusal must fire only when BOTH are absent — the fallback that hashes
+    # TASKS_AUTH_PASSWORD at startup has to keep working.
+    assert create_app(_settings(auth_password_hash="", auth_password="testpass123"))
+    assert create_app(_settings(
+        auth_password_hash=hash_password("testpass123"), auth_password=""))
+
+
+def test_auth_can_be_turned_off_deliberately_without_a_password():
+    # Running open is a choice, not a misconfiguration; it must not raise.
+    assert create_app(_settings(
+        auth_enabled=False, auth_password_hash="", auth_password=""))
+
+
+@pytest.mark.radicale
+@pytest.mark.parametrize("configured", ["dev-hook-secret", ""])
+def test_the_well_known_hook_secret_is_never_accepted(make_app, configured):
+    """The published default (and an unset one) must fail CLOSED: the app swaps
+    in an ephemeral secret, so the hook simply cannot authenticate rather than
+    standing open to anyone who read the deploy docs."""
+    with TestClient(make_app(hook_secret=configured)) as c:
+        for attempt in ("dev-hook-secret", ""):
+            r = c.post("/internal/changed", headers={"X-Tasks-Hook-Secret": attempt})
+            assert r.status_code == 403, (configured, attempt, r.text)
+        assert c.post("/internal/changed").status_code == 403
+
+
+@pytest.mark.radicale
+def test_a_configured_hook_secret_still_works(make_app):
+    with TestClient(make_app(hook_secret="a-real-secret")) as c:
+        assert c.post("/internal/changed",
+                      headers={"X-Tasks-Hook-Secret": "a-real-secret"}).status_code == 202
+
+
+# ── a name XML cannot carry must not reach the DAV client ───────────────────
+# A collection name goes onto the wire as XML text. lxml refuses control
+# characters at assignment time with a bare ValueError — outside the DavError
+# taxonomy, so it escaped every handler registered in create_app and came back
+# as a 500 with a traceback. JSON carries them happily, and these names get
+# pasted from other clients.
+
+@pytest.mark.radicale
+@pytest.mark.parametrize("bad", ["Work\x00x", "Work\x0bb", "Work\x1fx", "\x08"])
+def test_a_control_character_in_a_list_name_is_rejected_not_a_500(client, bad):
+    assert client.post("/api/lists", json={"name": bad}).status_code == 422
+    lid = client.post("/api/lists", json={"name": f"L-{uuid.uuid4().hex[:8]}"}).json()["id"]
+    assert client.patch(f"/api/lists/{lid}", json={"name": bad}).status_code == 422
+    assert client.post("/api/calendars", json={"name": bad}).status_code == 422
+
+
+@pytest.mark.radicale
+def test_ordinary_unicode_names_still_work(client):
+    # The guard must reject control bytes, not punctuation or non-Latin text.
+    for good in ["Trabajo — año", "日本語のリスト", "Work\tTab", "emoji 🎉"]:
+        r = client.post("/api/lists", json={"name": good})
+        assert r.status_code == 201, (good, r.text)
+        assert r.json()["name"] == good
+
+
+def test_the_xml_builders_refuse_what_lxml_cannot_serialize():
+    """Backstop beneath the 422: no caller should be able to turn a stray byte
+    into an unhandled crash deep in the DAV client."""
+    from tasksd.dav import xml as X
+    from tasksd.dav.errors import DavError
+
+    for bad in ("a\x00b", "a\x0bb", "a\x1fb"):
+        with pytest.raises(DavError):
+            X.build_proppatch({X.DISPLAYNAME: bad})
+        with pytest.raises(DavError):
+            X.build_mkcalendar(displayname=bad, components=("VTODO",))
+    # …and still builds for everything legal.
+    assert X.build_proppatch({X.DISPLAYNAME: "Work — ok ✓"})
