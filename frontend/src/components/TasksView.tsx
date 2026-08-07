@@ -11,6 +11,9 @@ const VIEWS: ReadonlyArray<readonly [TasksViewMode, string]> = [
   ['list', 'List'], ['day3', '3-Day'], ['week', 'Week'],
 ]
 
+/** Done or won't-do — both take a task out of the active list. */
+const isDone = (t: Task) => t.completed || t.cancelled
+
 export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggleSide,
   hiddenLists, onHiddenListsChange, groups, onGroupsChange,
   collapsedGroups, onCollapsedGroupsChange, showCompleted }: {
@@ -270,8 +273,22 @@ export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggle
   // Keep every fetched list in `tasks` and drop hidden ones here, so toggling a
   // list is an instant client-side filter (no refetch).
   const shownTasks = tasks.filter((t) => !hiddenSet.has(t.list))
-  const tops = shownTasks.filter((t) => !t.parent)
   const childrenOf = (uid: string) => shownTasks.filter((t) => t.parent === uid)
+  // A subtask reaches the DOM only underneath its own parent's row, so anything
+  // whose parent isn't here has to stand on its own or it is not rendered at
+  // all — invisible, and so uncompletable, uneditable and undeletable, while
+  // the sidebar count still includes it. That is not a hostile-data edge case:
+  // `parent` is a raw RELATED-TO UID with no existence check, another client
+  // can delete a parent without cascading or point one across lists, and the
+  // ordinary path is a completed parent with an open subtask while "show
+  // completed" is off (the default) — the parent lands in `done`, which isn't
+  // rendered, and the subtask goes with it.
+  const byUid = new Map(shownTasks.map((t) => [t.uid, t] as const))
+  const parentIsRendered = (t: Task) => {
+    const p = t.parent ? byUid.get(t.parent) : undefined
+    return !!p && (showCompleted || !isDone(p))
+  }
+  const tops = shownTasks.filter((t) => !parentIsRendered(t))
   const active = tops.filter((t) => !t.completed && !t.cancelled)
   const done = tops.filter((t) => t.completed || t.cancelled)
   // Where new tasks land by default (first visible list); the list view's

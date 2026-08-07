@@ -27,7 +27,7 @@ const list: List = {
   open_count: 0, task_count: 0, event_count: 0, total: 0, color: '#D9480F',
 }
 
-function setup(view: TasksViewMode = 'list') {
+function setup(view: TasksViewMode = 'list', showCompleted = false) {
   const onExpire = vi.fn()
   render(
     <TasksView rev={0} onExpire={onExpire} view={view} onView={vi.fn()}
@@ -35,7 +35,7 @@ function setup(view: TasksViewMode = 'list') {
       hiddenLists={[]} onHiddenListsChange={vi.fn()}
       groups={[]} onGroupsChange={vi.fn()}
       collapsedGroups={[]} onCollapsedGroupsChange={vi.fn()}
-      showCompleted={false} />,
+      showCompleted={showCompleted} />,
   )
   return { onExpire, user: userEvent.setup() }
 }
@@ -347,3 +347,52 @@ describe('<TasksView> retrying a bulk create', () => {
   })
 })
 
+// ── a subtask must reach the DOM even when its parent row does not ──────────
+// A subtask renders only underneath its own parent. Anything whose parent is
+// not rendered was absent from the List view entirely — invisible, and so
+// uncompletable, uneditable and undeletable — while the sidebar count still
+// included it.
+
+describe('<TasksView> orphaned subtasks', () => {
+  it('shows an open subtask whose parent is completed and hidden', async () => {
+    // The default: showCompleted is off, so the parent is not rendered.
+    m.tasks.mockResolvedValue([
+      task({ uid: 'p1', summary: 'Trip planning', completed: true, status: 'COMPLETED' }),
+      task({ uid: 'c1', summary: 'Book flight', parent: 'p1' }),
+    ])
+    setup()
+    expect(await screen.findByText('Book flight')).toBeInTheDocument()
+    expect(screen.queryByText('Trip planning')).not.toBeInTheDocument()
+  })
+
+  it('shows a subtask whose parent does not exist at all', async () => {
+    // Another client can write RELATED-TO pointing at a deleted parent, or at a
+    // task in a different list; `parent` is that raw UID with no existence check.
+    m.tasks.mockResolvedValue([task({ uid: 'c1', summary: 'Orphan', parent: 'ghost' })])
+    setup()
+    expect(await screen.findByText('Orphan')).toBeInTheDocument()
+  })
+
+  it('still nests a subtask under a parent that is rendered', async () => {
+    m.tasks.mockResolvedValue([
+      task({ uid: 'p1', summary: 'Trip planning' }),
+      task({ uid: 'c1', summary: 'Book flight', parent: 'p1' }),
+    ])
+    setup()
+    await screen.findByText('Trip planning')
+    // Rendered once, as a child — not promoted to a second top-level row.
+    expect(screen.getAllByText('Book flight')).toHaveLength(1)
+    expect(screen.getByText('Book flight').closest('.task')).toHaveClass('sub')
+  })
+
+  it('nests it under a completed parent once completed tasks are shown', async () => {
+    m.tasks.mockResolvedValue([
+      task({ uid: 'p1', summary: 'Trip planning', completed: true, status: 'COMPLETED' }),
+      task({ uid: 'c1', summary: 'Book flight', parent: 'p1' }),
+    ])
+    setup('list', true)
+    await screen.findByText('Trip planning')
+    expect(screen.getAllByText('Book flight')).toHaveLength(1)
+    expect(screen.getByText('Book flight').closest('.task')).toHaveClass('sub')
+  })
+})
