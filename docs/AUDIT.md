@@ -13,11 +13,12 @@ and task-edit dirty-tracking).
 Severity is the verifiers' rating. `minor` marks a fix that is a few
 obviously-correct lines needing no design decision — a reasonable place to start.
 
-**32 open.**
+**26 open** (a ticked box is fixed and covered by a test; its evidence stays
+here so the issue linking to it still resolves).
 
 ## iCalendar read + edit path
 
-### [ ] "Repeat until <date>" writes a DATE-valued UNTIL onto a timed series, dropping the last occurrence the user asked for
+### [x] "Repeat until <date>" writes a DATE-valued UNTIL onto a timed series, dropping the last occurrence the user asked for
 
 `backend/tasksd/ical/edit.py:61` · **medium** · bug
 
@@ -44,7 +45,7 @@ supplied `date` to end-of-day in the series' zone (or UTC 23:59:59Z) before writ
 keep a bare DATE only for all-day series. Add a test asserting the UNTIL day's
 occurrence is included.
 
-### [ ] _shift_datelike drops property parameters — RECURRENCE-ID;RANGE=THISANDFUTURE silently becomes a single-instance override
+### [x] _shift_datelike drops property parameters — RECURRENCE-ID;RANGE=THISANDFUTURE silently becomes a single-instance override
 
 `backend/tasksd/ical/edit.py:454` · **medium** · bug · `minor`
 
@@ -74,7 +75,7 @@ Same loss applies to any X- parameter or VALUE parameter a foreign client attach
 before `_replace`, then `event.add(key, old + delta, parameters={k: v for k, v in
 params.items() if k.upper() != 'TZID'})` (let icalendar re-derive TZID from tzinfo).
 
-### [ ] RDATE;VALUE=PERIOD makes shift_series and split_series raise TypeError (500 on any series edit)
+### [x] RDATE;VALUE=PERIOD makes shift_series and split_series raise TypeError (500 on any series edit)
 
 `backend/tasksd/ical/edit.py:463` · **medium** · bug · `minor`
 
@@ -102,7 +103,7 @@ E.split_series(raw, '2026-01-08T09:00:00+00:00', EventEdit()) ->
 **Suggested fix.** Handle the tuple form in both helpers: shift both ends of a period (`(s+delta,
 e+delta)`) and compare a period against the anchor using its start.
 
-### [ ] Shifting/partitioning EXDATE or RDATE merges several property lines into one and relabels them with a single TZID, corrupting the excluded instants
+### [x] Shifting/partitioning EXDATE or RDATE merges several property lines into one and relabels them with a single TZID, corrupting the excluded instants
 
 `backend/tasksd/ical/edit.py:466` · **medium** · bug
 
@@ -130,7 +131,7 @@ With a UTC EXDATE next to a TZID one the output is also invalid iCalendar: `EXDA
 emit one property per group — instead of `_replace(key)` followed by a single
 `event.add(key, values)`.
 
-### [ ] RECURRENCE-ID;RANGE=THISANDFUTURE makes several occurrences share one recurrence_id, so the SPA renders duplicate React keys and per-occurrence edit/delete hits the wrong instance
+### [x] RECURRENCE-ID;RANGE=THISANDFUTURE makes several occurrences share one recurrence_id, so the SPA renders duplicate React keys and per-occurrence edit/delete hits the wrong instance
 
 `backend/tasksd/ical/recur.py:115` · **medium** · bug
 
@@ -175,7 +176,7 @@ collision, use the instance's own start as the anchor (still exact for the norma
 single-slot override case). Add a test asserting `len({o.recurrence_id for o in occs})
 == len(occs)`.
 
-### [ ] Changing a series' repeat rule leaves stale RECURRENCE-ID overrides behind as phantom events
+### [x] Changing a series' repeat rule leaves stale RECURRENCE-ID overrides behind as phantom events
 
 `backend/tasksd/ical/edit.py:260` · **low** · rendering
 
