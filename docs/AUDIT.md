@@ -13,7 +13,7 @@ and task-edit dirty-tracking).
 Severity is the verifiers' rating. `minor` marks a fix that is a few
 obviously-correct lines needing no design decision — a reasonable place to start.
 
-**22 open** (a ticked box is fixed and covered by a test; its evidence stays
+**16 open** (a ticked box is fixed and covered by a test; its evidence stays
 here so the issue linking to it still resolves).
 
 ## iCalendar read + edit path
@@ -205,7 +205,7 @@ implement — and cover it with a test.
 
 ## Sync engine
 
-### [ ] Test gap: gc_orphans — the only code path that permanently deletes non-derivable sidecar state — has zero coverage
+### [x] Test gap: gc_orphans — the only code path that permanently deletes non-derivable sidecar state — has zero coverage
 
 `backend/tasksd/sync/engine.py:130` · **medium** · test-gap · `minor`
 
@@ -248,7 +248,7 @@ asserting `gc_orphans` never touches a row with `orphaned_at IS NULL`. Then add 
 engine-level test that a full_resync in which one resource was skipped (`stats.skipped >
 0`) does not delete sidecar rows.
 
-### [ ] A resource corrupted in place leaves a permanent ghost cache row that never converges and 500s on edit
+### [x] A resource corrupted in place leaves a permanent ghost cache row that never converges and 500s on edit
 
 `backend/tasksd/sync/engine.py:144` · **medium** · bug
 
@@ -299,7 +299,7 @@ showing data the wire no longer has. Option (a) is preferable — it stops the e
 refetch loop and keeps the sidecar. Either way, also wrap `patch_task`/`patch_event` so
 an ical `ValueError` becomes a 409/422 with a readable message rather than a 500.
 
-### [ ] A resource that becomes unparseable/non-VTODO leaves a permanently stale cache row that 500s on every edit
+### [x] A resource that becomes unparseable/non-VTODO leaves a permanently stale cache row that 500s on every edit
 
 `backend/tasksd/sync/engine.py:149` · **medium** · bug
 
@@ -333,7 +333,7 @@ Also catch `ValueError` in the task edit routes so the merge path cannot 500.
 
 ## SQLite cache
 
-### [ ] Deleting a list/calendar never purges its cached items — search and tags keep serving them forever
+### [x] Deleting a list/calendar never purges its cached items — search and tags keep serving them forever
 
 `backend/tasksd/db/store.py:75` · **medium** · bug
 
@@ -373,7 +373,7 @@ delete its `items` / `items_fts` / `categories` rows (the cache is disposable by
 — a resync rebuilds it if the collection comes back). At minimum, filter `deleted=0` in
 `search`, `distinct_categories` and `count_items` by joining `collections`.
 
-### [ ] A NUL byte in the search query escapes the FTS quoting and 500s
+### [x] A NUL byte in the search query escapes the FTS quoting and 500s
 
 `backend/tasksd/db/store.py:379` · **low** · bug · `minor`
 
@@ -495,7 +495,7 @@ and `EditList.name` so it fails as a 422.
 
 ## Service layer
 
-### [ ] Deleting a collection leaves all of its items in the SQLite cache forever (cache/source divergence)
+### [x] Deleting a collection leaves all of its items in the SQLite cache forever (cache/source divergence)
 
 `backend/tasksd/service.py:329` · **medium** · bug
 
