@@ -13,7 +13,7 @@ and task-edit dirty-tracking).
 Severity is the verifiers' rating. `minor` marks a fix that is a few
 obviously-correct lines needing no design decision — a reasonable place to start.
 
-**11 open** (a ticked box is fixed and covered by a test; its evidence stays
+**5 open** (a ticked box is fixed and covered by a test; its evidence stays
 here so the issue linking to it still resolves).
 
 ## iCalendar read + edit path
@@ -935,7 +935,7 @@ exactly three; a timed event ending 00:00 dots only its own day.
 
 ## Frontend, other
 
-### [ ] All settings writes swallow every failure, including 401 — an expired session silently discards preference changes and never returns to the login form
+### [x] All settings writes swallow every failure, including 401 — an expired session silently discards preference changes and never returns to the login form
 
 `frontend/src/App.tsx:128` · **medium** · bug · `minor`
 
@@ -970,7 +970,7 @@ otherwise surface the message through the existing toast notifier (and roll the 
 state back, or at least mark it unsaved). Also reconcile the dashboard height clamp with
 the backend bound (both 40, or both 200).
 
-### [ ] Every settings write triggers a full lists+tasks refetch in every open tab, so one appearance-slider drag fires a request storm
+### [x] Every settings write triggers a full lists+tasks refetch in every open tab, so one appearance-slider drag fires a request storm
 
 `frontend/src/App.tsx:190` · **medium** · bug
 
@@ -1002,7 +1002,7 @@ re-run `api.getSettings()` (or be ignored entirely in the originating tab), neve
 `rev`. Independently, debounce the appearance/dashboard PUTs (commit on pointerup /
 trailing-edge debounce) so a slider drag is one write, not fifty-six.
 
-### [ ] Every appearance control silently does nothing when 24 themes exist and the shipped design is active
+### [x] Every appearance control silently does nothing when 24 themes exist and the shipped design is active
 
 `frontend/src/components/AppearancePanel.tsx:46` · **low** · bug · `minor`
 
@@ -1040,7 +1040,7 @@ e.g. `window.alert(\`You can keep ${MAX_THEMES} themes — delete one first.\`)`
 returning, or compute `const atCap = !active && themes.length >= MAX_THEMES` and pass it
 down to disable the TokenRow controls with a hint line.
 
-### [ ] Booking page reports every load failure as "this link is no longer available", including 429 rate-limits and network blips
+### [x] Booking page reports every load failure as "this link is no longer available", including 429 rate-limits and network blips
 
 `frontend/src/components/BookingPage.tsx:40` · **low** · rendering · `minor`
 
@@ -1075,7 +1075,7 @@ enter `notfound` on a real 404; for 429/5xx/network errors show a distinct "coul
 load right now" state with a Retry button (and honour `Retry-After`). In `submit()`'s
 race branch, don't let a failing `load()` clobber the already-set error message.
 
-### [ ] Wrong password shows the raw string "unauthenticated" instead of a friendly message; the Login test asserts an error the client can never produce
+### [x] Wrong password shows the raw string "unauthenticated" instead of a friendly message; the Login test asserts an error the client can never produce
 
 `frontend/src/components/Login.tsx:19` · **low** · rendering · `minor`
 
@@ -1108,7 +1108,7 @@ the AuthError message. Then fix Login.test.tsx to reject with `new
 AuthError('unauthenticated')` so the test exercises the shape the client actually
 throws.
 
-### [ ] Editing a list silently strips the alpha byte from a #RRGGBBAA color written by another client
+### [x] Editing a list silently strips the alpha byte from a #RRGGBBAA color written by another client
 
 `frontend/src/components/Sidebar.tsx:566` · **low** · bug · `minor`
 
