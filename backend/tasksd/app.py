@@ -301,6 +301,15 @@ class SettingsPatch(BaseModel):
     dashboard: list[DashboardModule] | None = Field(
         default=None, max_length=_MAX_DASHBOARD_MODULES
     )
+    # Top-nav tab strip: the order the tabs sit in, which one the app opens on
+    # ("last" reopens wherever the user left off), and that remembered tab.
+    # The client sanitizes the order on read — an unknown or missing entry there
+    # is a display bug, not a data one — so this only bounds the blob's size.
+    tab_order: list[Literal["home", "tasks", "calendar", "scheduling"]] | None = Field(
+        default=None, max_length=8
+    )
+    start_tab: Literal["home", "tasks", "calendar", "scheduling", "last"] | None = None
+    last_tab: Literal["home", "tasks", "calendar", "scheduling"] | None = None
     tasks_view: Literal["list", "day3", "week"] | None = None
     sidebar_collapsed: bool | None = None
     # Ids of calendars the user has hidden in the calendar view. Empty/absent

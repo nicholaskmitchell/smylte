@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState, type CSSProperties } from 'react'
 import { api, type CalEvent, type EventScope, type List } from '../api'
 import { addDays, dayKey, makeGuard, pad, parseDate, toLocalInput, ymd } from '../util'
+import { bucketByDay, lastDayOf, monthGrid, shiftYmd, type DayEv } from '../calendar'
 import { useIsMobile } from '../hooks'
+import { AgendaEvent, DayPopover } from './DayPopover'
 import { Sidebar } from './Sidebar'
 
 const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
@@ -9,11 +11,6 @@ const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June',
   'July', 'August', 'September', 'October', 'November', 'December']
 
 interface Draft { event?: CalEvent; date?: string }
-
-// A calendar-cell entry: `cont` marks days after the first of a multi-day span.
-type DayEv = CalEvent & { cont?: boolean }
-
-const shiftYmd = (day: string, n: number) => ymd(addDays(new Date(`${day}T00:00`), n))
 
 const daysBetween = (a: string, b: string) =>
   Math.round((new Date(`${b}T00:00`).getTime() - new Date(`${a}T00:00`).getTime()) / 86400000)
@@ -24,21 +21,6 @@ const shiftIso = (v: string, n: number) => {
   if (!v.includes('T')) return shiftYmd(v, n)
   const d = addDays(parseDate(v), n)
   return `${ymd(d)}T${pad(d.getHours())}:${pad(d.getMinutes())}`
-}
-
-// Last visible day of an event. DTEND is exclusive for all-day events, and a
-// timed event ending exactly at midnight shouldn't spill into the next day.
-// Days come from dayKey/parseDate so events written with a UTC offset (e.g. by
-// another CalDAV client) land on the viewer's local day.
-function lastDayOf(e: CalEvent): string {
-  const startDay = dayKey(e.start!)
-  if (!e.end) return startDay
-  const end = parseDate(e.end)
-  const endDay = ymd(end)
-  const exclusive = e.end_is_date ||
-    (e.end.includes('T') && end.getHours() === 0 && end.getMinutes() === 0)
-  const last = exclusive ? shiftYmd(endDay, -1) : endDay
-  return last < startDay ? startDay : last
 }
 
 export function CalendarView({ rev, onExpire, sideCollapsed, onToggleSide,
@@ -76,12 +58,7 @@ export function CalendarView({ rev, onExpire, sideCollapsed, onToggleSide,
     })
   }, [cursor])
 
-  const days = useMemo(() => {
-    const first = new Date(cursor.getFullYear(), cursor.getMonth(), 1)
-    const start = new Date(first)
-    start.setDate(first.getDate() - first.getDay())
-    return Array.from({ length: 42 }, (_, i) => { const d = new Date(start); d.setDate(start.getDate() + i); return d })
-  }, [cursor])
+  const days = useMemo(() => monthGrid(cursor), [cursor])
 
   useEffect(() => {
     guard(async () => {
@@ -136,24 +113,9 @@ export function CalendarView({ rev, onExpire, sideCollapsed, onToggleSide,
     [events, hidden, calByHref],
   )
 
-  const byDay = useMemo(() => {
-    const m: Record<string, DayEv[]> = {}
-    const first = ymd(days[0])
-    const last = ymd(days[41])
-    for (const e of visibleEvents) {
-      if (!e.start) continue
-      const startDay = dayKey(e.start)
-      const endDay = lastDayOf(e)
-      // Walk every day the event covers, clipped to the visible 6-week window.
-      let day = startDay < first ? first : startDay
-      const stop = endDay > last ? last : endDay
-      for (let i = 0; day <= stop && i < 42; i++, day = shiftYmd(day, 1)) {
-        ;(m[day] ||= []).push(day === startDay ? e : { ...e, cont: true })
-      }
-    }
-    for (const k of Object.keys(m)) m[k].sort((a, b) => (a.start || '').localeCompare(b.start || ''))
-    return m
-  }, [visibleEvents, days])
+  const byDay = useMemo(() => bucketByDay(visibleEvents, days), [visibleEvents, days])
+  // The mobile agenda's day, read twice below (rows and the empty state).
+  const focusEvents = byDay.get(focusDay) ?? []
 
   // Optimistically paint an edit onto the events we can represent locally: a
   // non-recurring event, or a single occurrence (scope "this"). Series-wide
@@ -318,7 +280,7 @@ export function CalendarView({ rev, onExpire, sideCollapsed, onToggleSide,
               {days.map((d) => {
                 const key = ymd(d)
                 const inMonth = d.getMonth() === cursor.getMonth()
-                const dayEvents = byDay[key] || []
+                const dayEvents = byDay.get(key) ?? []
                 return (
                   <div key={key}
                     className={`cal-cell ${inMonth ? '' : 'dim'} ${key === todayKey ? 'today' : ''} ${isMobile && key === focusDay ? 'focus' : ''} ${drag && overDay === key ? 'drag-over' : ''}`}
@@ -399,26 +361,11 @@ export function CalendarView({ rev, onExpire, sideCollapsed, onToggleSide,
                   </span>
                   <button className="btn" onClick={() => setDraft({ date: focusDay })}>+ Event</button>
                 </div>
-                {(byDay[focusDay] || []).map((e) => (
-                  <button key={e.id} className="agenda-ev" style={evStyle(e)}
-                    onClick={() => setDraft({ event: e })}>
-                    <span className="t">
-                      {e.all_day ? 'all day'
-                        : e.cont
-                          ? (e.end && !e.end_is_date && dayKey(e.end) === focusDay
-                            ? `– ${new Date(e.end).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
-                            : 'all day')
-                          : e.start
-                            ? new Date(e.start).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
-                            : ''}
-                    </span>
-                    <span>
-                      {e.is_recurring && <span className="recur" aria-hidden="true">↻ </span>}
-                      {e.summary || '(untitled)'}
-                    </span>
-                  </button>
+                {focusEvents.map((e) => (
+                  <AgendaEvent key={e.id} ev={e} day={focusDay} style={evStyle(e)}
+                    onOpen={() => setDraft({ event: e })} />
                 ))}
-                {(byDay[focusDay] || []).length === 0 && (
+                {focusEvents.length === 0 && (
                   <div className="agenda-empty">No events this day.</div>
                 )}
               </div>
@@ -440,7 +387,7 @@ export function CalendarView({ rev, onExpire, sideCollapsed, onToggleSide,
       )}
 
       {more && (
-        <DayPopover day={more.day} x={more.x} y={more.y} events={byDay[more.day] || []}
+        <DayPopover day={more.day} x={more.x} y={more.y} events={byDay.get(more.day) ?? []}
           styleOf={evStyle}
           onOpen={(e) => { setMore(null); setDraft({ event: e }) }}
           onClose={() => setMore(null)} />
@@ -463,51 +410,6 @@ export function CalendarView({ rev, onExpire, sideCollapsed, onToggleSide,
           </div>
         </div>
       )}
-    </div>
-  )
-}
-
-// Anchored day popover behind the desktop "+N more" — the full event list for
-// one cell, since the cell itself shows at most four rows.
-function DayPopover({ day, x, y, events, styleOf, onOpen, onClose }: {
-  day: string; x: number; y: number; events: DayEv[]
-  styleOf: (e: CalEvent) => CSSProperties | undefined
-  onOpen: (e: CalEvent) => void; onClose: () => void
-}) {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
-  // Clamp to the viewport so edge cells don't push the popover off-screen.
-  const left = Math.max(8, Math.min(x, window.innerWidth - 268))
-  const top = Math.max(8, Math.min(y, window.innerHeight - 328))
-  return (
-    <div className="pop-backdrop" onClick={onClose}>
-      <div className="day-pop" style={{ left, top }} onClick={(ev) => ev.stopPropagation()}>
-        <div className="day-pop-head">
-          {new Date(`${day}T00:00`).toLocaleDateString(undefined,
-            { weekday: 'short', month: 'short', day: 'numeric' })}
-        </div>
-        {events.map((e) => (
-          <button key={e.id} className="agenda-ev" style={styleOf(e)} onClick={() => onOpen(e)}>
-            <span className="t">
-              {e.all_day ? 'all day'
-                : e.cont
-                  ? (e.end && !e.end_is_date && dayKey(e.end) === day
-                    ? `– ${new Date(e.end).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
-                    : 'all day')
-                  : e.start
-                    ? new Date(e.start).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
-                    : ''}
-            </span>
-            <span>
-              {e.is_recurring && <span className="recur" aria-hidden="true">↻ </span>}
-              {e.summary || '(untitled)'}
-            </span>
-          </button>
-        ))}
-      </div>
     </div>
   )
 }

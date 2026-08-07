@@ -6,6 +6,10 @@ import {
   sanitizeAppearance, syncThemeColor, type Appearance, type Mode,
 } from './appearance'
 import { sanitizeLayout } from './dashboard'
+import {
+  DEFAULT_TAB_ORDER, DEFAULT_TAB_START, TAB_LABELS, cacheTab, isTab, readCachedTab,
+  resolveStartTab, sanitizeTabOrder, sanitizeTabStart, type Tab, type TabStart,
+} from './tabs'
 import { Login } from './components/Login'
 import { TasksView } from './components/TasksView'
 import { CalendarView } from './components/CalendarView'
@@ -13,14 +17,21 @@ import { SchedulingView } from './components/SchedulingView'
 import { HomeView } from './components/HomeView'
 import { AppearancePanel } from './components/AppearancePanel'
 import { ArchivedCalendarsModal } from './components/ArchivedCalendarsModal'
+import { TabsModal } from './components/TabsModal'
 
 type Auth = 'loading' | 'in' | 'out'
-type Tab = 'tasks' | 'calendar' | 'scheduling' | 'home'
 
 export function App() {
   const [auth, setAuth] = useState<Auth>('loading')
   const [user, setUser] = useState('')
-  const [tab, setTab] = useState<Tab>('tasks')
+  // Seeded from the boot cache so the app paints the tab it will settle on,
+  // rather than flashing the default while the settings fetch is in flight.
+  const [tab, setTab] = useState<Tab>(() => readCachedTab() ?? DEFAULT_TAB_ORDER[0])
+  const [tabOrder, setTabOrder] = useState<Tab[]>(DEFAULT_TAB_ORDER)
+  const [startTab, setStartTab] = useState<TabStart>(DEFAULT_TAB_START)
+  // A tab picked while settings were still loading wins over the stored choice —
+  // nothing is more jarring than the view changing under a deliberate click.
+  const tabTouched = useRef(false)
   const [theme, setTheme] = useState(() => document.documentElement.dataset.theme || 'light')
   const [tasksView, setTasksView] = useState<TasksViewMode>('list')
   const [sideCollapsed, setSideCollapsed] = useState(false)
@@ -33,6 +44,7 @@ export function App() {
   const [rev, setRev] = useState(0)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [archivedOpen, setArchivedOpen] = useState(false)
+  const [tabsOpen, setTabsOpen] = useState(false)
   const [appearanceOpen, setAppearanceOpen] = useState(false)
   // Seeded from the pre-paint cache so the editor opens showing what is already
   // on screen; the server overwrites it a moment later like every other setting.
@@ -83,6 +95,15 @@ export function App() {
     api.getSettings()
       .then((s) => {
         if (s.theme === 'dark' || s.theme === 'light') applyTheme(s.theme)
+        const order = sanitizeTabOrder(s.tab_order)
+        const start = sanitizeTabStart(s.start_tab)
+        setTabOrder(order)
+        setStartTab(start)
+        if (!tabTouched.current) {
+          const opening = resolveStartTab(start, isTab(s.last_tab) ? s.last_tab : undefined, order)
+          setTab(opening)
+          cacheTab(opening)
+        }
         if (s.tasks_view === 'list' || s.tasks_view === 'day3' || s.tasks_view === 'week') {
           setTasksView(s.tasks_view)
         }
@@ -135,6 +156,30 @@ export function App() {
     setDashboard(next)
     api.putSettings({ dashboard: next }).catch(() => { /* stays local if offline */ })
   }, [])
+
+  // Switching tabs only touches the server while the app is set to reopen where
+  // the user left off — a fixed start tab has nothing to remember.
+  const changeTab = useCallback((next: Tab) => {
+    tabTouched.current = true
+    setTab(next)
+    if (startTab !== 'last') return
+    cacheTab(next)
+    api.putSettings({ last_tab: next }).catch(() => { /* stays local if offline */ })
+  }, [startTab])
+
+  const changeTabOrder = useCallback((next: Tab[]) => {
+    setTabOrder(next)
+    api.putSettings({ tab_order: next }).catch(() => { /* stays local if offline */ })
+  }, [])
+
+  const changeStartTab = useCallback((next: TabStart) => {
+    setStartTab(next)
+    // Keep the boot cache honest straight away: "last" means the current tab,
+    // anything else means itself.
+    cacheTab(next === 'last' ? tab : next)
+    api.putSettings({ start_tab: next, ...(next === 'last' ? { last_tab: tab } : {}) })
+      .catch(() => { /* stays local if offline */ })
+  }, [tab])
 
   const changeTasksView = useCallback((v: TasksViewMode) => {
     setTasksView(v)
@@ -237,18 +282,12 @@ export function App() {
       <div className="topbar">
         <span className="brand">Smylte<span className="dot">.</span></span>
         <div className="tabs">
-          <button className={`tab ${tab === 'tasks' ? 'active' : ''}`} onClick={() => setTab('tasks')}>
-            Tasks
-          </button>
-          <button className={`tab ${tab === 'calendar' ? 'active' : ''}`} onClick={() => setTab('calendar')}>
-            Calendar
-          </button>
-          <button className={`tab ${tab === 'scheduling' ? 'active' : ''}`} onClick={() => setTab('scheduling')}>
-            Scheduling
-          </button>
-          <button className={`tab ${tab === 'home' ? 'active' : ''}`} onClick={() => setTab('home')}>
-            Home
-          </button>
+          {tabOrder.map((t) => (
+            <button key={t} className={`tab ${tab === t ? 'active' : ''}`}
+              onClick={() => changeTab(t)}>
+              {TAB_LABELS[t]}
+            </button>
+          ))}
         </div>
         <span className="spacer" />
         <button ref={gearRef} className={`icon-btn ${settingsOpen ? 'active' : ''}`}
@@ -271,8 +310,15 @@ export function App() {
             </div>
             <div className="menu-row">
               <label>Appearance</label>
-              <button className="menu-toggle"
+              <button className="menu-toggle" aria-label="Customize appearance"
                 onClick={() => { setSettingsOpen(false); setAppearanceOpen(true) }}>
+                Customize…
+              </button>
+            </div>
+            <div className="menu-row">
+              <label>Tabs</label>
+              <button className="menu-toggle" aria-label="Customize tabs"
+                onClick={() => { setSettingsOpen(false); setTabsOpen(true) }}>
                 Customize…
               </button>
             </div>
@@ -321,7 +367,8 @@ export function App() {
       {tab === 'scheduling' && <SchedulingView rev={rev} onExpire={onExpire} />}
       {tab === 'home' && (
         <HomeView rev={rev} onExpire={onExpire}
-          layout={dashboard} onLayoutChange={changeDashboard} />
+          layout={dashboard} onLayoutChange={changeDashboard}
+          hiddenCalendars={hiddenCals} archivedCalendars={archivedCals} />
       )}
       {appearanceOpen && (
         <AppearancePanel appearance={appearance} onChange={changeAppearance}
@@ -331,6 +378,10 @@ export function App() {
       {archivedOpen && (
         <ArchivedCalendarsModal archived={archivedCals} onChange={changeArchivedCals}
           onExpire={onExpire} onClose={() => setArchivedOpen(false)} />
+      )}
+      {tabsOpen && (
+        <TabsModal order={tabOrder} start={startTab} onOrderChange={changeTabOrder}
+          onStartChange={changeStartTab} onClose={() => setTabsOpen(false)} />
       )}
       {toast && (
         <div className="toast" role="alert">
