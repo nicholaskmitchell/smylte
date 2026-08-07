@@ -21,8 +21,8 @@ judged up front and the resource renders as its master row).
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
-from datetime import date, datetime
+from dataclasses import dataclass, replace
+from datetime import date, datetime, timedelta
 
 import recurring_ical_events
 from icalendar import Calendar
@@ -77,6 +77,30 @@ def _override_anchors(cal: Calendar) -> set[str]:
             iso = _iso(rid)[0]
             if iso is not None:
                 out.add(iso)
+    return out
+
+
+def _thisandfuture_shifts(cal: Calendar) -> dict[str, timedelta]:
+    """ISO RECURRENCE-ID -> the offset each ``RANGE=THISANDFUTURE`` override
+    applies (its own DTSTART minus its RECURRENCE-ID).
+
+    Such an override (RFC 5545 §3.2.13, written by Apple Calendar and
+    Thunderbird for "this and all future events") covers its own slot *and every
+    later one*, so ``recurring_ical_events`` correctly emits several instances
+    from it — but every one of them carries the same RECURRENCE-ID. Knowing the
+    offset lets ``_occurrence`` subtract it back off each instance's start to
+    recover the distinct rule slot that instance actually stands for."""
+    out: dict[str, timedelta] = {}
+    for comp in cal.walk("VEVENT"):
+        rid, dtstart = comp.get("RECURRENCE-ID"), comp.get("DTSTART")
+        if rid is None or dtstart is None:
+            continue
+        if str(rid.params.get("RANGE", "")).upper() != "THISANDFUTURE":
+            continue
+        iso = _iso(rid)[0]
+        if iso is None or isinstance(rid.dt, datetime) != isinstance(dtstart.dt, datetime):
+            continue                      # mismatched dateness: no meaningful offset
+        out[iso] = dtstart.dt - rid.dt
     return out
 
 
@@ -138,18 +162,31 @@ def _pathological_rule(cal: Calendar) -> str | None:
     return None
 
 
-def _occurrence(comp, override_anchors: set[str]) -> Occurrence:
+def _occurrence(comp, override_anchors: set[str], tf_shifts: dict[str, timedelta]) -> Occurrence:
     start, start_is_date = _iso(comp.get("DTSTART"))
     end, end_is_date = _end_fields(comp)
     rid = comp.get("RECURRENCE-ID")
-    anchor = (_iso(rid)[0] if rid is not None else start) or start or ""
+    rid_iso = _iso(rid)[0] if rid is not None else None
+    anchor = rid_iso or start or ""
+    is_override = bool(anchor) and rid_iso in override_anchors
+    shift = tf_shifts.get(rid_iso) if rid_iso is not None else None
+    if shift is not None and comp.get("DTSTART") is not None:
+        # A RANGE=THISANDFUTURE override stamps its own RECURRENCE-ID on every
+        # instance it covers. Undoing the offset it applied recovers the rule
+        # slot *this* instance stands for — the anchor the master's RRULE
+        # actually generates, so it is both unique per instance and the value an
+        # EXDATE or a new override has to carry to address it. (For the override's
+        # own slot this reproduces the RECURRENCE-ID exactly.)
+        recovered = _iso(comp.get("DTSTART").dt - shift)[0]
+        if recovered is not None:
+            anchor = recovered
     return Occurrence(
         start=start,
         start_is_date=start_is_date,
         end=end,
         end_is_date=end_is_date,
         recurrence_id=anchor,
-        is_override=bool(anchor) and anchor in override_anchors,
+        is_override=is_override,
         summary=_text(comp, "SUMMARY"),
         description=_text(comp, "DESCRIPTION"),
         location=_text(comp, "LOCATION"),
@@ -175,14 +212,26 @@ def expand_occurrences(
     if why is not None:
         raise ValueError(f"refusing to expand recurrence: {why}")
     override_anchors = _override_anchors(cal)
+    tf_shifts = _thisandfuture_shifts(cal)
     query = recurring_ical_events.of(cal, components=["VEVENT"])
     comps = query.between(window_start, window_end)
 
     out: list[Occurrence] = []
+    seen: set[str] = set()
     for comp in comps:
         if str(comp.get("STATUS") or "").upper() == "CANCELLED":
             continue
-        out.append(_occurrence(comp, override_anchors))
+        occ = _occurrence(comp, override_anchors, tf_shifts)
+        if occ.recurrence_id in seen:
+            # The anchor keys the UI row and addresses the instance for a
+            # per-occurrence edit or delete, so a duplicate is not cosmetic: two
+            # rows would share a React key, and acting on one would write to the
+            # other. `_occurrence` resolves the shape that causes this, but a
+            # resource can always be malformed in a way it cannot — fall back to
+            # the instance's own start rather than emit a collision.
+            occ = replace(occ, recurrence_id=occ.start or occ.recurrence_id)
+        seen.add(occ.recurrence_id)
+        out.append(occ)
         if len(out) >= max_occurrences:
             break
     return out
