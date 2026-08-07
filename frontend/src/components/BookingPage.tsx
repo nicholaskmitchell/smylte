@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { api, AuthError, type PublicBookingInfo, type PublicSlot } from '../api'
+import { api, AuthError, HttpError, type PublicBookingInfo, type PublicSlot } from '../api'
 import { ymd } from '../util'
 
 // The public client-facing page at /book/<token>. Standalone by design: no
@@ -7,7 +7,10 @@ import { ymd } from '../util'
 // link timezone's offset, so Date() lands them in the visitor's local time and
 // everything renders in THEIR timezone (noted in the header).
 
-type Phase = 'loading' | 'notfound' | 'pick' | 'confirm' | 'done'
+// 'notfound' is terminal — the link really is gone. 'unavailable' is not: a
+// rate-limit, a 5xx or a dropped connection says nothing about the link, and
+// telling a visitor to go ask for a fresh one is both wrong and unrecoverable.
+type Phase = 'loading' | 'notfound' | 'unavailable' | 'pick' | 'confirm' | 'done'
 
 const fmtTime = (iso: string) =>
   new Date(iso).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
@@ -30,14 +33,23 @@ export function BookingPage({ token }: { token: string }) {
   const [error, setError] = useState<string | null>(null)
   const [booked, setBooked] = useState<{ start: string; end: string } | null>(null)
 
-  const load = async (): Promise<PublicBookingInfo | null> => {
+  const load = async (opts: { keepPhase?: boolean } = {}): Promise<PublicBookingInfo | null> => {
     try {
       const i = await api.publicBookingInfo(token)
       setInfo(i)
-      setPhase('pick')
+      if (!opts.keepPhase) setPhase('pick')
       return i
     } catch (e) {
-      if (!(e instanceof AuthError)) setPhase('notfound')
+      if (e instanceof AuthError) return null
+      // Only a 404 means the link is gone. The backend rate-limits this exact
+      // endpoint and counts every request, not just failures, so 121 loads in
+      // five minutes from one address — a shared office NAT, or one visitor
+      // reloading — used to tell everyone behind it that the host had removed
+      // the link. A refresh that fails behind an already-shown message (the
+      // race-recovery path) must not replace it either.
+      if (!opts.keepPhase) {
+        setPhase(e instanceof HttpError && e.status === 404 ? 'notfound' : 'unavailable')
+      }
       return null
     }
   }
@@ -85,7 +97,7 @@ export function BookingPage({ token }: { token: string }) {
         setError('That time was just taken — please pick another.')
         setSlot(null)
         setPhase('pick')
-        await load()
+        await load({ keepPhase: true })
       } else {
         setError(msg)
       }
@@ -106,6 +118,24 @@ export function BookingPage({ token }: { token: string }) {
             It may have been turned off or removed. Ask the person who sent it
             for a fresh link.
           </p>
+        </div>
+      </div>
+    )
+  }
+
+  if (phase === 'unavailable') {
+    return (
+      <div className="booking-wrap">
+        <div className="booking-card">
+          <div className="login-brand">Smylte<span className="dot">.</span></div>
+          <p className="booking-lead">Couldn’t load this page just now.</p>
+          <p className="hintline">
+            The link is probably fine — something went wrong on the way. Try again
+            in a moment.
+          </p>
+          <button className="btn" onClick={() => { setPhase('loading'); load() }}>
+            Try again
+          </button>
         </div>
       </div>
     )
