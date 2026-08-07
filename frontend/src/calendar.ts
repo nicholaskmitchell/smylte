@@ -4,12 +4,41 @@
 // month, so they share one definition of "which days does this event cover".
 
 import type { CalEvent } from './api'
-import { addDays, dayKey, parseDate, ymd } from './util'
+import { addDays, dayKey, pad, parseDate, toLocalInput, ymd } from './util'
 
 /** A calendar-cell entry: `cont` marks days after the first of a multi-day span. */
 export type DayEv = CalEvent & { cont?: boolean }
 
 export const shiftYmd = (day: string, n: number) => ymd(addDays(new Date(`${day}T00:00`), n))
+
+/** Whole calendar days from day `a` to day `b`.
+ *
+ * The rounding is load-bearing, not defensive: a span containing a DST
+ * transition is 23 or 25 hours long, so the raw millisecond quotient comes out
+ * at 2.958 or 3.042 days. Anything that wants a day count — not an elapsed
+ * duration — has to round, or it loses a day across a spring-forward. */
+export const daysBetween = (a: string, b: string) =>
+  Math.round((new Date(`${b}T00:00`).getTime() - new Date(`${a}T00:00`).getTime()) / 86400000)
+
+/** Shift an ISO date or datetime by n days. Datetimes come back as floating
+ * local wall time — the same form the edit modal writes. */
+export const shiftIso = (v: string, n: number) => {
+  if (!v.includes('T')) return shiftYmd(v, n)
+  const d = addDays(parseDate(v), n)
+  return `${ymd(d)}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+/** Is this event's DTEND exclusive — i.e. does it name an instant the event does
+ * not actually cover? True for an all-day end (RFC 5545) and for a timed end
+ * sitting exactly on local midnight, which belongs to the previous day.
+ * `lastDayOf` backs both off by a day; anything writing a new end has to put it
+ * back the same way, or the event lands a day short of where the user put it. */
+export function endIsExclusive(e: Pick<CalEvent, 'end' | 'end_is_date'>): boolean {
+  if (!e.end) return false
+  if (e.end_is_date) return true
+  const end = parseDate(e.end)
+  return e.end.includes('T') && end.getHours() === 0 && end.getMinutes() === 0
+}
 
 // Last visible day of an event. DTEND is exclusive for all-day events, and a
 // timed event ending exactly at midnight shouldn't spill into the next day.
@@ -18,11 +47,8 @@ export const shiftYmd = (day: string, n: number) => ymd(addDays(new Date(`${day}
 export function lastDayOf(e: CalEvent): string {
   const startDay = dayKey(e.start!)
   if (!e.end) return startDay
-  const end = parseDate(e.end)
-  const endDay = ymd(end)
-  const exclusive = e.end_is_date ||
-    (e.end.includes('T') && end.getHours() === 0 && end.getMinutes() === 0)
-  const last = exclusive ? shiftYmd(endDay, -1) : endDay
+  const endDay = ymd(parseDate(e.end))
+  const last = endIsExclusive(e) ? shiftYmd(endDay, -1) : endDay
   return last < startDay ? startDay : last
 }
 
@@ -67,4 +93,52 @@ export function bucketByDay(events: CalEvent[], days: Date[]): Map<string, DayEv
   }
   for (const evs of m.values()) evs.sort((a, b) => (a.start || '').localeCompare(b.start || ''))
   return m
+}
+
+/** The PATCH body for a desktop drag, or null when the drag is a no-op.
+ *
+ * Split out of CalendarView's `dropOnDay` so the date arithmetic — which is
+ * where every drag bug in this view has lived — can be exercised directly
+ * rather than through a synthetic drag event. The component keeps the parts
+ * that are genuinely about the component: reading drag state, and routing a
+ * recurring event to the scope prompt.
+ *
+ * `mode: 'move'` shifts start and end together by the whole-day delta from the
+ * dragged segment's own cell (so a continuation segment of a multi-day span, or
+ * one clipped by the grid window, still moves by what the user sees).
+ * `mode: 'resize'` pins the start and puts the last day on `toDay`.
+ */
+export function dragBody(
+  ev: CalEvent, fromDay: string, toDay: string, mode: 'move' | 'resize',
+): Record<string, unknown> | null {
+  if (!ev.start) return null
+
+  if (mode === 'move') {
+    const delta = daysBetween(fromDay, toDay)
+    if (!delta) return null
+    const body: Record<string, unknown> = { start: shiftIso(ev.start, delta) }
+    if (ev.end) body.end = shiftIso(ev.end, delta)
+    return body
+  }
+
+  const startDay = dayKey(ev.start)
+  const day = toDay < startDay ? startDay : toDay      // never drag the end past the start
+  const start = ev.all_day ? ev.start.slice(0, 10) : toLocalInput(ev.start)
+  let end: string
+  if (ev.all_day) {
+    end = shiftYmd(day, 1)                             // DTEND stays exclusive
+  } else if (endIsExclusive(ev)) {
+    // A timed event ending exactly at midnight ends *at the start of* that day,
+    // so the day the user dropped on is only covered if the end moves past it.
+    // Writing `${day}T00:00` instead named the day before: dragging the grip one
+    // day out compared equal to the old end and was silently discarded, and
+    // dragging it further landed the event a day short of the drop.
+    end = `${shiftYmd(day, 1)}T00:00`
+  } else {
+    end = `${day}T${toLocalInput(ev.end || ev.start).slice(11, 16)}`
+    if (end <= start) return null                      // the end must stay after the start
+  }
+  const oldEnd = ev.end && (ev.all_day ? ev.end.slice(0, 10) : toLocalInput(ev.end))
+  if (end === oldEnd) return null
+  return { start, end }
 }
