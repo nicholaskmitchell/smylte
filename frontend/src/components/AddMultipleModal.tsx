@@ -27,15 +27,23 @@ export interface RowValues {
 
 interface Row extends RowValues {
   key: string          // stable across inserts and removals — never the index
+  // The create's idempotency id, minted once per row and carried across a
+  // retry. It becomes the CalDAV resource slug, so replaying it lands on the
+  // same resource; minting a fresh one per attempt is what turned a retry after
+  // a lost response into a duplicate task. Regenerated when the title changes —
+  // then the row is a different task, and the server (which answers a replayed
+  // slug by confirming the existing resource) would otherwise discard the edit.
+  cid: string
   summary: string
 }
+
 
 export const blankValues = (listId: string): RowValues => ({
   listId, dueDate: '', dueTime: '', startDate: '', startTime: '', priority: 'none',
   tags: '', notes: '',
 })
 const blankRow = (listId: string): Row =>
-  ({ ...blankValues(listId), key: clientId().slice(0, 8), summary: '' })
+  ({ ...blankValues(listId), key: clientId().slice(0, 8), cid: clientId(), summary: '' })
 
 export interface FieldCtx { lists: List[]; where: string; disabled: boolean }
 
@@ -179,7 +187,7 @@ export function AddMultipleModal({ lists, defaultList, initialTitle, onSubmit, o
   initialTitle?: string
   /** Resolves to the indexes (into `items`) that failed; [] means all landed. */
   onSubmit: (
-    items: Array<{ listId: string; body: CreateTaskBody }>,
+    items: Array<{ listId: string; body: CreateTaskBody; cid: string }>,
     onProgress: (done: number) => void,
   ) => Promise<number[]>
   onClose: () => void
@@ -215,7 +223,15 @@ export function AddMultipleModal({ lists, defaultList, initialTitle, onSubmit, o
   }, [focusKey])
 
   const patchRow = (key: string, patch: Partial<Row>) =>
-    setRows((rs) => rs.map((r) => (r.key === key ? { ...r, ...patch } : r)))
+    setRows((rs) => rs.map((r) => {
+      if (r.key !== key) return r
+      // Retitling makes it a different task, so it needs its own idempotency id:
+      // replaying the old one would be answered by confirming the resource
+      // already written under it, silently discarding the new title.
+      const retitled = patch.summary !== undefined && patch.summary !== r.summary
+      return { ...r, ...patch, ...(retitled ? { cid: clientId() } : {}) }
+    }))
+
 
   const addRow = (after?: number) => {
     const row = blankRow(defaultList)
@@ -239,14 +255,16 @@ export function AddMultipleModal({ lists, defaultList, initialTitle, onSubmit, o
     setBusy(true); setDone(0); setFailed([]); setTruncated(false)
     const items = live.map((r) => {
       const v = effectiveValues(r, shared, sharedOn)
-      return { listId: v.listId || defaultList, body: bodyFrom(r.summary.trim(), v) }
+      return { listId: v.listId || defaultList, body: bodyFrom(r.summary.trim(), v), cid: r.cid }
     })
     const bad = await onSubmit(items, setDone)
     setBusy(false)
     if (!bad.length) { onClose(); return }
     // Keep exactly what didn't land — with everything typed into it intact —
-    // plus any blank rows, so the grid doesn't collapse. Retrying is safe: a
-    // failed create never landed, and each attempt mints a fresh client_id.
+    // plus any blank rows, so the grid doesn't collapse. The kept row carries
+    // its original `cid`, so a retry replays the same create rather than
+    // authoring a second task: a failure here does NOT mean the write missed,
+    // and a response lost on the way back looks exactly like one that failed.
     const badKeys = new Set(bad.map((i) => live[i].key))
     setFailed([...badKeys])
     setRows((rs) => {
