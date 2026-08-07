@@ -4,7 +4,7 @@ anywhere, plus HTTP integration tests against scratch Radicale (skipped when
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -175,17 +175,63 @@ def test_only_day_restricts_but_keeps_rules():
     assert _slots(horizon_days=6, only_day=monday_next) == []
 
 
-def test_dst_spring_forward_is_sane():
-    # US DST 2026: clocks jump 02:00→03:00 on Sunday March 8. A window over the
-    # gap must not crash; slots stay within the (shrunken) real window.
-    av = scheduling.parse_availability({"6": ["01:00-04:00"]})
-    now = datetime(2026, 3, 8, 0, 0, tzinfo=TZ)
-    slots = scheduling.generate_slots(availability=av, duration_minutes=60, busy=[],
-                                      buffer_minutes=0, tz=TZ, now=now,
-                                      min_notice_hours=0, horizon_days=0)
-    assert slots, "spring-forward day produced no slots at all"
+# ── DST: every emitted slot is exactly `duration` of ABSOLUTE time ──────────
+# The previous assertion here was one-sided (`<= timedelta(hours=1)`), which a
+# slot whose end instant *precedes* its start satisfies trivially — the exact
+# defect it was written to guard. These assert equality, distinctness, and both
+# transitions.
+
+def _dst_slots(day: date, duration_minutes: int, window: str = "00:00-05:00"):
+    av = scheduling.parse_availability({str(day.weekday()): [window]})
+    return scheduling.generate_slots(
+        availability=av, duration_minutes=duration_minutes, busy=[], buffer_minutes=0,
+        tz=TZ, now=datetime(day.year, day.month, day.day, tzinfo=TZ) - timedelta(days=1),
+        min_notice_hours=0, horizon_days=2, only_day=day,
+    )
+
+
+@pytest.mark.parametrize("label, day", [
+    ("spring-forward", date(2026, 3, 8)),      # clocks jump 02:00 -> 03:00
+    ("fall-back", date(2026, 11, 1)),          # clocks repeat 01:00 -> 02:00
+    ("ordinary day", date(2026, 3, 15)),
+])
+@pytest.mark.parametrize("duration", [30, 60])
+def test_dst_slots_are_exactly_the_advertised_length(label, day, duration):
+    slots = _dst_slots(day, duration)
+    assert slots, f"{label} produced no slots at all"
     for s in slots:
-        assert s.end.astimezone(UTC) - s.start.astimezone(UTC) <= timedelta(hours=1)
+        actual = s.end.astimezone(UTC) - s.start.astimezone(UTC)
+        assert actual == timedelta(minutes=duration), (
+            f"{label}: {s.start.isoformat()} -> {s.end.isoformat()} is {actual}"
+        )
+
+
+@pytest.mark.parametrize("label, day", [
+    ("spring-forward", date(2026, 3, 8)),
+    ("fall-back", date(2026, 11, 1)),
+])
+def test_dst_slots_name_distinct_instants(label, day):
+    # Spring-forward used to emit 08:00Z and 08:30Z twice each: two buttons at
+    # the same clock time, one of which could never be booked.
+    slots = _dst_slots(day, 30)
+    starts = [s.start.astimezone(UTC) for s in slots]
+    assert len(set(starts)) == len(starts), f"{label}: duplicate slot instants"
+
+
+def test_fall_back_offers_the_repeated_hour():
+    # 01:00-02:00 local happens twice; both passes are real bookable time and
+    # wall-clock stepping skipped the second entirely.
+    starts = {s.start.astimezone(UTC).isoformat() for s in _dst_slots(date(2026, 11, 1), 30)}
+    assert "2026-11-01T07:00:00+00:00" in starts
+    assert "2026-11-01T07:30:00+00:00" in starts
+
+
+def test_dst_day_lengths_differ_by_the_transition():
+    # A 25-hour day offers two more 30-minute slots than a 23-hour one, over the
+    # same local window — the arithmetic check behind the cases above.
+    spring = len(_dst_slots(date(2026, 3, 8), 30, "00:00-23:30"))
+    fall = len(_dst_slots(date(2026, 11, 1), 30, "00:00-23:30"))
+    assert fall - spring == 4
 
 
 def test_empty_availability_no_slots():
@@ -300,10 +346,17 @@ def _cal(client) -> dict:
 
 
 def _mklink(client, cal_id, **kw) -> dict:
+    # Availability spans the whole day on purpose. Busy-checking is deliberately
+    # GLOBAL across every calendar (so two links can't double-book the owner),
+    # which means events other test files leave on the scratch server — a weekly
+    # recurring standup, say — project into this link's window and can empty it.
+    # A narrow 09:00-17:00 window made these tests pass alone and fail in a full
+    # run, on the order the files happen to execute in. A full-day window leaves
+    # far more slots than any stray fixture can block.
     body = {
         "title": "Coffee chat", "calendar": cal_id, "duration_minutes": 30,
         "timezone": "UTC",
-        "availability": {str(d): ["09:00-17:00"] for d in range(7)},
+        "availability": {str(d): ["00:00-23:30"] for d in range(7)},
         "min_notice_hours": 0, "horizon_days": 3,
     }
     body.update(kw)
@@ -323,7 +376,7 @@ def test_owner_link_crud(client):
     link = _mklink(client, cal["id"])
     assert link["token"] and link["calendar"] == cal["id"]
     assert link["calendar_name"] == cal["name"]
-    assert link["availability"]["0"] == ["09:00-17:00"]
+    assert link["availability"]["0"] == ["00:00-23:30"]
 
     tokens = {l["token"] for l in client.get("/api/scheduling/links").json()}
     assert link["token"] in tokens
@@ -557,3 +610,91 @@ def test_link_is_disabled_and_unbookable_once_its_calendar_is_deleted(client):
     assert len(mine) == 1
     assert mine[0]["enabled"] is False
     assert mine[0]["calendar_missing"] is True
+
+
+
+# ── the per-link ceiling counts bookings, not requests ──────────────────────
+# A booking link is meant to be published, so holding the token proves nothing.
+# When every request spent the link's budget, anyone who received the link could
+# exhaust it and keep every real visitor on a 429 — a denial of service against
+# the owner, using only the URL they handed out. At ~1 request a minute, within
+# reach of two or three addresses, the link stayed dead indefinitely.
+
+@pytest.fixture
+def many_ips(client):
+    """A client whose requests each appear to come from a fresh address.
+
+    The per-CLIENT limiter (15/h) would otherwise mask the per-LINK one. Varying
+    the source is exactly the attacker's move the per-link cap exists to stop —
+    the audit's scenario is two IPs, or two IPv6 /64s from one VPS."""
+    from fastapi.testclient import TestClient
+
+    # X-Real-IP is trusted only from a loopback peer (Caddy overwrites it), so
+    # present as loopback and vary the header.
+    #
+    # NOT used as a context manager: entering one runs the app's lifespan, and
+    # leaving it runs shutdown — which would close the session-scoped app this
+    # borrows, breaking every test that follows. The session fixture already
+    # started it; this only needs a second transport onto the same app.
+    c = TestClient(client.app, client=("127.0.0.1", 1))
+    n = 0
+
+    def post(url, **kw):
+        nonlocal n
+        n += 1
+        headers = {**_NO_COOKIE, "X-Real-IP": f"198.51.100.{n % 250}"}
+        return c.post(url, headers=headers, **kw)
+
+    return post
+
+
+def _book_body(slot, **over):
+    body = {"start": slot["start"], "name": "Ada", "email": "ada@example.com",
+            "client_id": uuid.uuid4().hex}
+    body.update(over)
+    return body
+
+
+@pytest.mark.radicale
+@pytest.mark.parametrize("label, bad, expected", [
+    ("a start that is not an open slot", {"start": "2020-01-01T09:00:00+00:00"}, 409),
+    ("a malformed email", {"email": "not-an-email"}, 422),
+    ("a blank name", {"name": "  "}, 422),
+])
+def test_refused_bookings_do_not_spend_the_links_budget(client, many_ips, label, bad, expected):
+    cal = _cal(client)
+    # A long horizon for the same reason the ceiling test uses one: busy is
+    # global, so a short window depends on what other tests left behind.
+    link = _mklink(client, cal["id"], horizon_days=30)
+    info = client.get(f"/api/public/booking/{link['token']}", headers=_NO_COOKIE).json()
+    url = f"/api/public/booking/{link['token']}/book"
+    assert info["slots"], "no free slots to test against"
+
+    # Well past the 30-booking ceiling, none of which is a booking.
+    for i in range(40):
+        r = many_ips(url, json=_book_body(info["slots"][0], **bad))
+        assert r.status_code == expected, (label, i, r.status_code, r.text)
+
+    # …and a real visitor can still book.
+    r = many_ips(url, json=_book_body(info["slots"][0]))
+    assert r.status_code == 201, (label, r.text)
+
+
+@pytest.mark.radicale
+def test_the_per_link_ceiling_still_bounds_real_bookings(client, many_ips):
+    """The cap's actual job — bounding junk events written to the owner's
+    calendar regardless of source — has to keep working."""
+    cal = _cal(client)
+    # Short slots over a long horizon: this needs 35 free ones, and busy is
+    # global, so a link with only a day or two of availability would depend on
+    # what every other test happens to have left on the scratch server.
+    link = _mklink(client, cal["id"], duration_minutes=5, horizon_days=30)
+    info = client.get(f"/api/public/booking/{link['token']}", headers=_NO_COOKIE).json()
+    url = f"/api/public/booking/{link['token']}/book"
+    assert len(info["slots"]) >= 35, "not enough free slots to reach the ceiling"
+
+    codes = []
+    for slot in info["slots"][:35]:
+        codes.append(many_ips(url, json=_book_body(slot)).status_code)
+    assert 429 in codes, "the per-link ceiling never engaged"
+    assert codes.count(201) <= 30, codes

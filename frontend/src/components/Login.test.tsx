@@ -2,7 +2,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { Login } from './Login'
-import { api } from '../api'
+import { api, AuthError, HttpError } from '../api'
 
 vi.mock('../api', async (importOriginal) => {
   const mod = await importOriginal<typeof import('../api')>()
@@ -44,7 +44,10 @@ describe('<Login>', () => {
   })
 
   it('shows a friendly message on bad credentials and stays on the form', async () => {
-    loginMock.mockRejectedValue(new Error('invalid credentials'))
+    // The shape the api client actually throws for a 401. This used to reject
+    // with a plain Error('invalid credentials'), which `j()` can never produce —
+    // so the test passed while the real form rendered the word 'unauthenticated'.
+    loginMock.mockRejectedValue(new AuthError('invalid credentials'))
     const onLogin = vi.fn()
     render(<Login onLogin={onLogin} />)
     const { username, password, button } = fields()
@@ -62,4 +65,29 @@ describe('<Login>', () => {
     await userEvent.click(fields().button)
     expect(await screen.findByText('too many attempts, try later')).toBeInTheDocument()
   })
+})
+
+it('never shows the api client’s internal token to the user', async () => {
+  // `j()` throws AuthError for every 401. It used to carry a fixed
+  // 'unauthenticated' regardless of what the endpoint said, so the login card
+  // rendered that word at whoever mistyped their password.
+  loginMock.mockRejectedValue(new AuthError('unauthenticated'))
+  render(<Login onLogin={vi.fn()} />)
+  const { username, password, button } = fields()
+  await userEvent.type(username, 'admin')
+  await userEvent.type(password, 'wrong')
+  await userEvent.click(button)
+  expect(await screen.findByText('Invalid credentials')).toBeInTheDocument()
+  expect(screen.queryByText('unauthenticated')).not.toBeInTheDocument()
+})
+
+it('shows a lockout message from the server verbatim', async () => {
+  // 429 is not intercepted, so the server's own wording reaches the user.
+  loginMock.mockRejectedValue(new HttpError(429, 'too many attempts, try later'))
+  render(<Login onLogin={vi.fn()} />)
+  const { username, password, button } = fields()
+  await userEvent.type(username, 'admin')
+  await userEvent.type(password, 'wrong')
+  await userEvent.click(button)
+  expect(await screen.findByText('too many attempts, try later')).toBeInTheDocument()
 })

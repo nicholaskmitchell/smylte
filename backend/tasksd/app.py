@@ -15,7 +15,7 @@ import os
 import re
 import secrets
 from datetime import date, datetime
-from typing import Literal
+from typing import Annotated, Literal
 
 from fastapi import (
     APIRouter,
@@ -62,13 +62,25 @@ class Login(BaseModel):
     password: str = Field(max_length=1024)
 
 
+# A collection name goes onto the wire as XML text in a PROPPATCH/MKCALENDAR
+# body, and lxml refuses control characters at assignment time with a bare
+# ValueError — outside the DavError taxonomy, so it escaped every handler and
+# came back as a 500. JSON happily carries them, and these names are routinely
+# pasted from other CalDAV clients, so reject them here where the client still
+# gets an answer it can act on. Length is bounded like every other model.
+CollectionName = Annotated[
+    str,
+    Field(min_length=1, max_length=200, pattern=r"^[^\x00-\x08\x0b\x0c\x0e-\x1f]*$"),
+]
+
+
 class CreateList(BaseModel):
-    name: str
+    name: CollectionName
     color: str | None = None          # #RRGGBB or #RRGGBBAA
 
 
 class EditList(BaseModel):
-    name: str | None = None
+    name: CollectionName | None = None
     color: str | None = None          # explicit null clears the color
 
 
@@ -1044,15 +1056,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # prefixes/botnet nodes gets a fresh counter each — this cap bounds the
     # total junk-event rate a single link can produce regardless of source.
     # Generous for real clients (30 bookings/h on one personal link).
+    #
+    # It counts BOOKINGS, not requests. A booking link is meant to be published,
+    # so holding the token is not evidence of anything: when every request spent
+    # the budget, anyone who received the link could burn it down and — at about
+    # one request a minute, within reach of a couple of addresses — keep it
+    # locked out permanently, with the owner seeing nothing but 429s. Spending it
+    # only on a booking that actually landed keeps the ceiling on what it was
+    # written to bound (events written) and takes the denial-of-service away.
     public_post_link_limiter = RateLimiter(max_fails=30, window_s=3600, lockout_s=1800)
 
-    def _throttle(key: str, limiter: RateLimiter) -> None:
+    def _gate(key: str, limiter: RateLimiter) -> None:
+        """Refuse if the key is already locked out. Spends nothing."""
         if not limiter.allowed(key):
             raise HTTPException(
                 status.HTTP_429_TOO_MANY_REQUESTS,
                 "too many requests, try later",
                 headers={"Retry-After": str(limiter.retry_after(key))},
             )
+
+    def _throttle(key: str, limiter: RateLimiter) -> None:
+        _gate(key, limiter)
         limiter.record_failure(key)   # every request counts: request-rate semantics
 
     def _public_throttle(request: Request, limiter: RateLimiter) -> None:
@@ -1069,7 +1093,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/api/public/booking/{token}/book", status_code=201)
     async def public_booking_book(request: Request, token: str, body: PublicBook):
         _public_throttle(request, public_post_limiter)
-        _throttle(f"link:{token}", public_post_link_limiter)
+        _gate(f"link:{token}", public_post_link_limiter)
         _check_client_id(body.client_id)
         if not _EMAIL_RE.match(body.email.strip()):
             raise HTTPException(422, "invalid email address")
@@ -1092,6 +1116,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(422, str(e)) from None
         if result is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "unknown booking link")
+        # Charged here: the booking landed on the owner's calendar.
+        public_post_link_limiter.record_failure(f"link:{token}")
         return result
 
     # -- internal change hook (localhost only, shared secret; NOT behind Access) --

@@ -750,7 +750,12 @@ class TaskService:
             if not any(s.start == req for s in slots):
                 raise scheduling.SlotTaken("that time is not available")
 
-            end = req + timedelta(minutes=link["duration_minutes"])
+            # In UTC for the same reason generate_slots steps in UTC: adding a
+            # timedelta to a zone-aware local time is wall-clock arithmetic, so
+            # a booking made across a fall-back transition wrote a 90-minute
+            # VEVENT for a 30-minute link.
+            end = (req.astimezone(timezone.utc)
+                   + timedelta(minutes=link["duration_minutes"])).astimezone(tz)
             desc = [f'Booked via scheduling link "{link["title"]}".', "",
                     f"Name: {name}", f"Email: {email}"]
             if notes:

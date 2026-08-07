@@ -13,8 +13,9 @@ and task-edit dirty-tracking).
 Severity is the verifiers' rating. `minor` marks a fix that is a few
 obviously-correct lines needing no design decision — a reasonable place to start.
 
-**16 open** (a ticked box is fixed and covered by a test; its evidence stays
-here so the issue linking to it still resolves).
+**0 open.** Every finding from the sweep is fixed and covered by a test. The
+evidence stays here — a ticked box records what the bug was and why it
+mattered, and the issues that link into these sections still resolve.
 
 ## iCalendar read + edit path
 
@@ -404,7 +405,7 @@ case to `test_search_operator_characters_do_not_crash`.
 
 ## Scheduling
 
-### [ ] DST: slot math uses wall-clock timedelta arithmetic, producing duplicate, negative-length, and over-length bookable slots
+### [x] DST: slot math uses wall-clock timedelta arithmetic, producing duplicate, negative-length, and over-length bookable slots
 
 `backend/tasksd/scheduling.py:188` · **medium** · bug
 
@@ -456,7 +457,7 @@ instant as a belt-and-braces guard.
 
 ## CalDAV client
 
-### [ ] A list name containing a control character crashes the PROPPATCH builder with an unhandled ValueError (500)
+### [x] A list name containing a control character crashes the PROPPATCH builder with an unhandled ValueError (500)
 
 `backend/tasksd/dav/xml.py:121` · **low** · bug · `minor`
 
@@ -532,7 +533,7 @@ from /api/search and /api/tags.
 
 ## API routes
 
-### [ ] Public booking link can be permanently disabled by anyone who has the link (per-link limiter counts every request, not just failures)
+### [x] Public booking link can be permanently disabled by anyone who has the link (per-link limiter counts every request, not just failures)
 
 `backend/tasksd/app.py:946` · **medium** · bug
 
@@ -571,7 +572,7 @@ owner.
 
 ## Backend test gaps
 
-### [ ] The DST regression test cannot fail on a negative-duration slot
+### [x] The DST regression test cannot fail on a negative-duration slot
 
 `backend/tests/test_scheduling.py:188` · **medium** · test-gap · `minor`
 
@@ -597,7 +598,7 @@ s.start.astimezone(UTC) == timedelta(minutes=duration)`), assert
 (2026-11-01, America/Chicago, window covering 00:00-05:00) asserting both the exact
 duration and that the repeated 07:00Z hour is offered.
 
-### [ ] Test gap: the two fail-closed startup invariants and post-logout cookie replay are untested
+### [x] Test gap: the two fail-closed startup invariants and post-logout cookie replay are untested
 
 `backend/tests/test_security.py:126` · **low** · test-gap
 
@@ -768,7 +769,7 @@ line 18 already rounds the DST-skewed millisecond delta to whole days correctly.
 
 ## Tasks view
 
-### [ ] A due date, priority or tag the user *edits* still round-trips lossily
+### [x] A due date, priority or tag the user *edits* still round-trips lossily
 
 `frontend/src/components/TasksView.tsx:729` · **medium** · bug
 
@@ -787,7 +788,7 @@ editing one of these fields rewrites it through the same funnel:
   input splits it in two on save. Fix: a chip editor, or a delimiter a category cannot
   contain.
 
-### [ ] Retrying a failed bulk create mints a fresh client_id, so a lost response duplicates the task
+### [x] Retrying a failed bulk create mints a fresh client_id, so a lost response duplicates the task
 
 `frontend/src/components/TasksView.tsx:175` · **medium** · bug
 
@@ -826,7 +827,7 @@ so a retry replays the identical id. Keep regenerating only when the user edits 
 row's title. Add a test that fails the second create with a non-Auth error, retries, and
 asserts the same `client_id` is sent.
 
-### [ ] Subtasks vanish from the List view whenever their parent row isn't rendered
+### [x] Subtasks vanish from the List view whenever their parent row isn't rendered
 
 `frontend/src/components/TasksView.tsx:269` · **medium** · bug
 
@@ -872,7 +873,7 @@ with `showCompleted={false}`.
 
 ## Home / dashboard
 
-### [ ] Mini calendar dots one day too many: exclusive all-day DTEND treated as inclusive
+### [x] Mini calendar dots one day too many: exclusive all-day DTEND treated as inclusive
 
 `frontend/src/components/HomeView.tsx:340` · **medium** · rendering · `minor`
 
@@ -907,7 +908,7 @@ So a single all-day event (a birthday, a one-day trip) marks the *next* day busy
 `tail` back one day, floored at the start day. Export/share `lastDayOf` rather than
 duplicating the rule in two places.
 
-### [ ] Test gap: busyDays has no all-day (exclusive DTEND) case; its helper hardcodes end_is_date:false
+### [x] Test gap: busyDays has no all-day (exclusive DTEND) case; its helper hardcodes end_is_date:false
 
 `frontend/src/components/HomeView.test.tsx:188` · **low** · test-gap · `minor`
 
@@ -935,7 +936,7 @@ exactly three; a timed event ending 00:00 dots only its own day.
 
 ## Frontend, other
 
-### [ ] All settings writes swallow every failure, including 401 — an expired session silently discards preference changes and never returns to the login form
+### [x] All settings writes swallow every failure, including 401 — an expired session silently discards preference changes and never returns to the login form
 
 `frontend/src/App.tsx:128` · **medium** · bug · `minor`
 
@@ -970,7 +971,7 @@ otherwise surface the message through the existing toast notifier (and roll the 
 state back, or at least mark it unsaved). Also reconcile the dashboard height clamp with
 the backend bound (both 40, or both 200).
 
-### [ ] Every settings write triggers a full lists+tasks refetch in every open tab, so one appearance-slider drag fires a request storm
+### [x] Every settings write triggers a full lists+tasks refetch in every open tab, so one appearance-slider drag fires a request storm
 
 `frontend/src/App.tsx:190` · **medium** · bug
 
@@ -1002,7 +1003,7 @@ re-run `api.getSettings()` (or be ignored entirely in the originating tab), neve
 `rev`. Independently, debounce the appearance/dashboard PUTs (commit on pointerup /
 trailing-edge debounce) so a slider drag is one write, not fifty-six.
 
-### [ ] Every appearance control silently does nothing when 24 themes exist and the shipped design is active
+### [x] Every appearance control silently does nothing when 24 themes exist and the shipped design is active
 
 `frontend/src/components/AppearancePanel.tsx:46` · **low** · bug · `minor`
 
@@ -1040,7 +1041,7 @@ e.g. `window.alert(\`You can keep ${MAX_THEMES} themes — delete one first.\`)`
 returning, or compute `const atCap = !active && themes.length >= MAX_THEMES` and pass it
 down to disable the TokenRow controls with a hint line.
 
-### [ ] Booking page reports every load failure as "this link is no longer available", including 429 rate-limits and network blips
+### [x] Booking page reports every load failure as "this link is no longer available", including 429 rate-limits and network blips
 
 `frontend/src/components/BookingPage.tsx:40` · **low** · rendering · `minor`
 
@@ -1075,7 +1076,7 @@ enter `notfound` on a real 404; for 429/5xx/network errors show a distinct "coul
 load right now" state with a Retry button (and honour `Retry-After`). In `submit()`'s
 race branch, don't let a failing `load()` clobber the already-set error message.
 
-### [ ] Wrong password shows the raw string "unauthenticated" instead of a friendly message; the Login test asserts an error the client can never produce
+### [x] Wrong password shows the raw string "unauthenticated" instead of a friendly message; the Login test asserts an error the client can never produce
 
 `frontend/src/components/Login.tsx:19` · **low** · rendering · `minor`
 
@@ -1108,7 +1109,7 @@ the AuthError message. Then fix Login.test.tsx to reject with `new
 AuthError('unauthenticated')` so the test exercises the shape the client actually
 throws.
 
-### [ ] Editing a list silently strips the alpha byte from a #RRGGBBAA color written by another client
+### [x] Editing a list silently strips the alpha byte from a #RRGGBBAA color written by another client
 
 `frontend/src/components/Sidebar.tsx:566` · **low** · bug · `minor`
 

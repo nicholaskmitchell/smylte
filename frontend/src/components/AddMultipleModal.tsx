@@ -21,21 +21,28 @@ export interface RowValues {
   startDate: string    // yyyy-mm-dd
   startTime: string    // HH:MM
   priority: string     // one of PRIORITIES
-  tags: string         // comma-separated, same convention as the task editor
+  tags: string[]       // one entry per category; see TagInput
   notes: string
 }
 
 interface Row extends RowValues {
   key: string          // stable across inserts and removals — never the index
+  // The create's idempotency id, minted once per row and carried across a
+  // retry. It becomes the CalDAV resource slug, so replaying it lands on the
+  // same resource; minting a fresh one per attempt is what turned a retry after
+  // a lost response into a duplicate task. Regenerated when the title changes —
+  // then the row is a different task, and the server (which answers a replayed
+  // slug by confirming the existing resource) would otherwise discard the edit.
+  cid: string
   summary: string
 }
 
 export const blankValues = (listId: string): RowValues => ({
   listId, dueDate: '', dueTime: '', startDate: '', startTime: '', priority: 'none',
-  tags: '', notes: '',
+  tags: [], notes: '',
 })
 const blankRow = (listId: string): Row =>
-  ({ ...blankValues(listId), key: clientId().slice(0, 8), summary: '' })
+  ({ ...blankValues(listId), key: clientId().slice(0, 8), cid: clientId(), summary: '' })
 
 export interface FieldCtx { lists: List[]; where: string; disabled: boolean }
 
@@ -50,6 +57,61 @@ export interface FieldSpec {
   // the accessible name so each control is uniquely addressable — including
   // against the toggle checkbox beside it, which is named for the property too.
   render: (v: RowValues, set: (patch: Partial<RowValues>) => void, ctx: FieldCtx) => ReactNode
+}
+
+/**
+ * Tags as removable chips rather than one comma-joined string.
+ *
+ * A category may legally contain a comma — `CATEGORIES:Home\,Garden` is a
+ * single tag — so any delimiter-joined text field corrupts it: reading gave
+ * "Home,Garden, Errands" and saving split that into three. Chips hold each
+ * category whole, so whatever another CalDAV client wrote round-trips exactly.
+ *
+ * Comma and Enter both commit the typed text (comma because that is the habit
+ * the old field taught), and Backspace on an empty box takes the last chip back
+ * so the keyboard alone is enough.
+ */
+export function TagInput({ label, value, disabled, onChange }: {
+  label: string
+  value: string[]
+  disabled?: boolean
+  onChange: (next: string[]) => void
+}) {
+  const [text, setText] = useState('')
+  const commit = (raw: string) => {
+    const tag = raw.trim()
+    setText('')
+    if (tag && !value.includes(tag)) onChange([...value, tag])
+  }
+  return (
+    <div className="tag-input">
+      {value.map((t) => (
+        <span key={t} className="chip">
+          #{t}
+          <button type="button" className="chip-x" aria-label={`Remove ${t}`} disabled={disabled}
+            onClick={() => onChange(value.filter((x) => x !== t))}>×</button>
+        </span>
+      ))}
+      <input className="input" aria-label={label} placeholder="Add a tag…"
+        value={text} disabled={disabled}
+        onChange={(e) => {
+          // A pasted "a, b, c" commits every complete tag and leaves the tail
+          // being typed, so paste behaves the way the old field did.
+          const parts = e.target.value.split(',')
+          setText(parts.pop() ?? '')
+          for (const part of parts) commit(part)
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') { e.preventDefault(); commit(text) }
+          else if (e.key === 'Backspace' && !text && value.length) {
+            onChange(value.slice(0, -1))
+          }
+        }}
+        // Leaving the field commits what is in it: a tag typed and then
+        // abandoned by clicking Save would otherwise be silently dropped.
+        onBlur={() => commit(text)} />
+    </div>
+  )
 }
 
 // Distinguishes a shared control from both its own toggle and the per-row
@@ -109,8 +171,8 @@ export const FIELDS: readonly FieldSpec[] = [
   {
     key: 'tags', label: 'Tags', slots: ['tags'],
     render: (v, set, { where, disabled }) => (
-      <input className="input" aria-label={`Tags${where}`} placeholder="comma, separated"
-        value={v.tags} disabled={disabled} onChange={(e) => set({ tags: e.target.value })} />
+      <TagInput label={`Tags${where}`} value={v.tags} disabled={disabled}
+        onChange={(tags) => set({ tags })} />
     ),
   },
   {
@@ -142,7 +204,12 @@ export function effectiveValues(
   row: RowValues, shared: RowValues, on: Record<FieldKey, boolean>,
 ): RowValues {
   const out = { ...row }
-  for (const f of FIELDS) if (on[f.key]) for (const s of f.slots) out[s] = shared[s]
+  // Slots are heterogeneous now (tags is a list), so copy them generically —
+  // the key type already guarantees each side is the same slot.
+  for (const f of FIELDS) {
+    if (!on[f.key]) continue
+    for (const s of f.slots) Object.assign(out, { [s]: shared[s] })
+  }
   return out
 }
 
@@ -160,7 +227,7 @@ export function bodyFrom(summary: string, v: RowValues): CreateTaskBody {
   // goes timed, and a time with no date is dropped.
   if (v.dueDate) body.due = v.dueTime ? `${v.dueDate}T${v.dueTime}` : v.dueDate
   if (v.startDate) body.start = v.startTime ? `${v.startDate}T${v.startTime}` : v.startDate
-  const tags = v.tags.split(',').map((s) => s.trim()).filter(Boolean)
+  const tags = v.tags
   if (tags.length) body.tags = tags
   return body
 }
@@ -179,7 +246,7 @@ export function AddMultipleModal({ lists, defaultList, initialTitle, onSubmit, o
   initialTitle?: string
   /** Resolves to the indexes (into `items`) that failed; [] means all landed. */
   onSubmit: (
-    items: Array<{ listId: string; body: CreateTaskBody }>,
+    items: Array<{ listId: string; body: CreateTaskBody; cid: string }>,
     onProgress: (done: number) => void,
   ) => Promise<number[]>
   onClose: () => void
@@ -215,7 +282,14 @@ export function AddMultipleModal({ lists, defaultList, initialTitle, onSubmit, o
   }, [focusKey])
 
   const patchRow = (key: string, patch: Partial<Row>) =>
-    setRows((rs) => rs.map((r) => (r.key === key ? { ...r, ...patch } : r)))
+    setRows((rs) => rs.map((r) => {
+      if (r.key !== key) return r
+      // Retitling makes it a different task, so it needs its own idempotency id:
+      // replaying the old one would be answered by confirming the resource
+      // already written under it, silently discarding the new title.
+      const retitled = patch.summary !== undefined && patch.summary !== r.summary
+      return { ...r, ...patch, ...(retitled ? { cid: clientId() } : {}) }
+    }))
 
   const addRow = (after?: number) => {
     const row = blankRow(defaultList)
@@ -239,14 +313,16 @@ export function AddMultipleModal({ lists, defaultList, initialTitle, onSubmit, o
     setBusy(true); setDone(0); setFailed([]); setTruncated(false)
     const items = live.map((r) => {
       const v = effectiveValues(r, shared, sharedOn)
-      return { listId: v.listId || defaultList, body: bodyFrom(r.summary.trim(), v) }
+      return { listId: v.listId || defaultList, body: bodyFrom(r.summary.trim(), v), cid: r.cid }
     })
     const bad = await onSubmit(items, setDone)
     setBusy(false)
     if (!bad.length) { onClose(); return }
     // Keep exactly what didn't land — with everything typed into it intact —
-    // plus any blank rows, so the grid doesn't collapse. Retrying is safe: a
-    // failed create never landed, and each attempt mints a fresh client_id.
+    // plus any blank rows, so the grid doesn't collapse. The kept row carries
+    // its original `cid`, so a retry replays the same create rather than
+    // authoring a second task: a failure here does NOT mean the write missed,
+    // and a response lost on the way back looks exactly like one that failed.
     const badKeys = new Set(bad.map((i) => live[i].key))
     setFailed([...badKeys])
     setRows((rs) => {

@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { api, subscribe, type DashboardModule, type TaskGroup, type TasksViewMode } from './api'
+import {
+  api, AuthError, HttpError, subscribe,
+  type DashboardModule, type Settings, type TaskGroup, type TasksViewMode,
+} from './api'
 import { setErrorNotifier } from './util'
 import {
   applyTokens, cacheAppearance, ensureFonts, readCachedAppearance, resolve,
@@ -55,15 +58,17 @@ export function App() {
   const settingsRef = useRef<HTMLDivElement>(null)
   const gearRef = useRef<HTMLButtonElement>(null)
 
+  const showToast = useCallback((msg: string) => {
+    setToast(msg)
+    clearTimeout(toastTimer.current)
+    toastTimer.current = setTimeout(() => setToast(null), 6000)
+  }, [])
+
   // Failed saves/deletes anywhere in the app surface here (see makeGuard).
   useEffect(() => {
-    setErrorNotifier((msg) => {
-      setToast(msg)
-      clearTimeout(toastTimer.current)
-      toastTimer.current = setTimeout(() => setToast(null), 6000)
-    })
+    setErrorNotifier(showToast)
     return () => { setErrorNotifier(null); clearTimeout(toastTimer.current) }
-  }, [])
+  }, [showToast])
 
   useEffect(() => {
     api.me().then((m) => { setUser(m.user); setAuth('in') }).catch(() => setAuth('out'))
@@ -144,18 +149,44 @@ export function App() {
       .catch(() => { /* keep the locally-cached theme + appearance */ })
   }, [auth, applyTheme])
 
+  // Every UI preference is written the same way, so the failure handling lives
+  // in one place. These used to be `.catch(() => {})` — which swallowed an
+  // AuthError just as happily as a dropped connection, so a tab open past the
+  // session TTL kept accepting preference changes, never fell back to the login
+  // form, and lost every one of them on the next reload with no explanation.
+  // A 422 (a layout the server's bounds reject) vanished the same way.
+  const saveSettings = useCallback((patch: Settings) => {
+    api.putSettings(patch).catch((e) => {
+      if (e instanceof AuthError) { setAuth('out'); return }
+      // Offline is the ordinary case and the local state stands in fine; a
+      // rejection from a server we *did* reach is what the user needs to know.
+      if (e instanceof HttpError) showToast(`Couldn't save your preferences: ${e.message}`)
+    })
+  }, [showToast])
+
+  // The two settings a continuous gesture writes: an appearance slider fires
+  // onChange on every step (a drag across one range is up to 56 of them) and a
+  // dashboard drag on every grid cell crossed. Paint locally at once, but let
+  // the write settle on the trailing edge, so one gesture is one PUT.
+  const saveTimer = useRef<ReturnType<typeof setTimeout>>()
+  const saveSettingsSoon = useCallback((patch: Settings) => {
+    clearTimeout(saveTimer.current)
+    saveTimer.current = setTimeout(() => saveSettings(patch), 400)
+  }, [saveSettings])
+  useEffect(() => () => clearTimeout(saveTimer.current), [])
+
   // Appearance is account-synced like the rest, plus mirrored to localStorage
   // for the pre-paint script in index.html (which runs before this bundle).
   const changeAppearance = useCallback((next: Appearance) => {
     setAppearance(next)
     cacheAppearance(next)
-    api.putSettings({ appearance: next }).catch(() => { /* stays local if offline */ })
-  }, [])
+    saveSettingsSoon({ appearance: next })
+  }, [saveSettingsSoon])
 
   const changeDashboard = useCallback((next: DashboardModule[]) => {
     setDashboard(next)
-    api.putSettings({ dashboard: next }).catch(() => { /* stays local if offline */ })
-  }, [])
+    saveSettingsSoon({ dashboard: next })
+  }, [saveSettingsSoon])
 
   // Switching tabs only touches the server while the app is set to reopen where
   // the user left off — a fixed start tab has nothing to remember.
@@ -164,12 +195,12 @@ export function App() {
     setTab(next)
     if (startTab !== 'last') return
     cacheTab(next)
-    api.putSettings({ last_tab: next }).catch(() => { /* stays local if offline */ })
+    saveSettings({ last_tab: next })
   }, [startTab])
 
   const changeTabOrder = useCallback((next: Tab[]) => {
     setTabOrder(next)
-    api.putSettings({ tab_order: next }).catch(() => { /* stays local if offline */ })
+    saveSettings({ tab_order: next })
   }, [])
 
   const changeStartTab = useCallback((next: TabStart) => {
@@ -177,32 +208,31 @@ export function App() {
     // Keep the boot cache honest straight away: "last" means the current tab,
     // anything else means itself.
     cacheTab(next === 'last' ? tab : next)
-    api.putSettings({ start_tab: next, ...(next === 'last' ? { last_tab: tab } : {}) })
-      .catch(() => { /* stays local if offline */ })
+    saveSettings({ start_tab: next, ...(next === 'last' ? { last_tab: tab } : {}) })
   }, [tab])
 
   const changeTasksView = useCallback((v: TasksViewMode) => {
     setTasksView(v)
-    api.putSettings({ tasks_view: v }).catch(() => { /* stays local if offline */ })
+    saveSettings({ tasks_view: v })
   }, [])
 
   const toggleSide = useCallback(() => {
     const next = !sideCollapsed
     setSideCollapsed(next)
-    api.putSettings({ sidebar_collapsed: next }).catch(() => { /* stays local if offline */ })
+    saveSettings({ sidebar_collapsed: next })
   }, [sideCollapsed])
 
   // Per-calendar visibility follows the account like the other prefs above.
   const changeHiddenCals = useCallback((next: string[]) => {
     setHiddenCals(next)
-    api.putSettings({ hidden_calendars: next }).catch(() => { /* stays local if offline */ })
+    saveSettings({ hidden_calendars: next })
   }, [])
 
   // Archived calendars follow the account too. Archive/restore is just a write
   // to this list — the CalDAV collection is never touched.
   const changeArchivedCals = useCallback((next: string[]) => {
     setArchivedCals(next)
-    api.putSettings({ archived_calendars: next }).catch(() => { /* stays local if offline */ })
+    saveSettings({ archived_calendars: next })
   }, [])
 
   // Tasks-side sidebar prefs — hidden lists (combined-view visibility), the
@@ -210,15 +240,15 @@ export function App() {
   // the calendar prefs above; none of them touch the CalDAV collections.
   const changeHiddenLists = useCallback((next: string[]) => {
     setHiddenLists(next)
-    api.putSettings({ hidden_lists: next }).catch(() => { /* stays local if offline */ })
+    saveSettings({ hidden_lists: next })
   }, [])
   const changeTaskGroups = useCallback((next: TaskGroup[]) => {
     setTaskGroups(next)
-    api.putSettings({ task_groups: next }).catch(() => { /* stays local if offline */ })
+    saveSettings({ task_groups: next })
   }, [])
   const changeCollapsedGroups = useCallback((next: string[]) => {
     setCollapsedGroups(next)
-    api.putSettings({ collapsed_groups: next }).catch(() => { /* stays local if offline */ })
+    saveSettings({ collapsed_groups: next })
   }, [])
 
   // Whether completed tasks show inline in the main view. Hidden by default; the
@@ -226,16 +256,25 @@ export function App() {
   const toggleShowCompleted = useCallback(() => {
     const next = !showCompleted
     setShowCompleted(next)
-    api.putSettings({ show_completed_tasks: next }).catch(() => { /* stays local if offline */ })
+    saveSettings({ show_completed_tasks: next })
   }, [showCompleted])
 
-  // Live updates: any server-side change bumps `rev`, which the views watch.
-  // One user action can publish several events in a burst (e.g. a move is a
-  // delete + create) — debounce so they coalesce into a single refetch pass.
+  // Live updates: a server-side *data* change bumps `rev`, which the views
+  // watch. One user action can publish several events in a burst (e.g. a move
+  // is a delete + create) — debounce so they coalesce into a single refetch pass.
+  //
+  // A settings write is not a data change. It is published to every subscriber
+  // including the tab that made it, and bumping `rev` for it cost 1 + N requests
+  // per event in TasksView (and 1 + N more in HomeView) — so one drag of an
+  // appearance slider, which writes on every step, became a request storm that
+  // also replaced the tasks array under any optimistic paint in flight. UI
+  // preferences have nothing to say about task data, so they are not a reason
+  // to refetch it.
   useEffect(() => {
     if (auth !== 'in') return
     let timer: ReturnType<typeof setTimeout> | undefined
-    const unsubscribe = subscribe(() => {
+    const unsubscribe = subscribe((type) => {
+      if (type === 'settings_updated') return
       clearTimeout(timer)
       timer = setTimeout(() => setRev((r) => r + 1), 250)
     })
@@ -264,7 +303,7 @@ export function App() {
   const changeTheme = useCallback((next: 'light' | 'dark') => {
     applyTheme(next)
     // Persist to the account so the choice follows the user to other browsers.
-    api.putSettings({ theme: next }).catch(() => { /* stays local if offline */ })
+    saveSettings({ theme: next })
   }, [applyTheme])
 
   const toggleTheme = useCallback(() => {

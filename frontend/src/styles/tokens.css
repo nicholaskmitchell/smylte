@@ -136,3 +136,25 @@ select.input { appearance: none; -webkit-appearance: none; cursor: pointer; }
   font-family: var(--mono); font-size: calc(10px * var(--fs-scale)); letter-spacing: 0.04em;
   color: var(--fg-muted); border: 1px solid var(--rule); padding: 2px 6px;
 }
+
+/* Tags as chips. A category may contain a comma, so it cannot be edited as one
+   delimited string — each one is held whole, with its own remove control. */
+.tag-input {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  background: var(--bg); border: 1px solid var(--rule); border-radius: var(--radius);
+  padding: 5px 6px;
+}
+.tag-input:focus-within { border-color: var(--accent); }
+/* The text box is the flexible tail, and shrinks onto a new row once the chips
+   fill the line rather than pushing the field wider. */
+.tag-input .input {
+  flex: 1 1 8ch; min-width: 8ch; width: auto;
+  border: none; background: none; padding: 2px 0;
+}
+.tag-input .input:focus { outline: none; }
+.chip-x {
+  border: none; background: none; cursor: pointer; padding: 0 0 0 2px;
+  color: inherit; font-size: inherit; line-height: 1;
+}
+.chip-x:hover { color: var(--fg); }
+.chip-x:disabled { cursor: default; opacity: 0.4; }

@@ -562,12 +562,21 @@ function EditModal({ item, placeholder, groups, groupId, onSetGroup, onClose, on
   onArchive?: (id: string) => void
 }) {
   const [name, setName] = useState(item.name)
-  // Wire colors may carry an alpha byte (#RRGGBBAA); compare on the RGB part.
-  const [color, setColor] = useState<string | null>(item.color ? item.color.slice(0, 7) : null)
+  // Hold the wire value as written. It may carry an alpha byte (#RRGGBBAA —
+  // Apple Calendar and DAVx5 both write one); truncating it for the swatch
+  // comparison and then saving *that* meant opening this modal to rename a list
+  // PROPPATCHed the shortened color back and dropped the alpha for every other
+  // client. Compare on the RGB prefix instead, and keep the original intact.
+  const [color, setColor] = useState<string | null>(item.color)
   const [confirming, setConfirming] = useState(false)
+  const isSwatch = (c: string) => color?.slice(0, 7).toLowerCase() === c.toLowerCase()
 
   const save = () => {
-    onSave(item.id, { name: name.trim() || item.name, color })
+    // Send the color only when the user actually picked one, so a rename never
+    // rewrites a color it merely displayed.
+    const body: { name?: string; color?: string | null } = { name: name.trim() || item.name }
+    if (color !== item.color) body.color = color
+    onSave(item.id, body)
   }
 
   return (
@@ -589,7 +598,7 @@ function EditModal({ item, placeholder, groups, groupId, onSetGroup, onClose, on
             <button className={`color-dot none ${color === null ? 'on' : ''}`} title="No color"
               onClick={() => setColor(null)}>✕</button>
             {SWATCHES.map((c) => (
-              <button key={c} className={`color-dot ${color === c ? 'on' : ''}`}
+              <button key={c} className={`color-dot ${isSwatch(c) ? 'on' : ''}`}
                 style={{ background: c }} title={c} onClick={() => setColor(c)} />
             ))}
           </div>

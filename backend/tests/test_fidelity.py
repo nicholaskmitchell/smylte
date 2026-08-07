@@ -5,6 +5,7 @@ own output. If any of these fail, no UI work should proceed.
 """
 from __future__ import annotations
 
+from datetime import date, datetime
 from pathlib import Path
 
 import pytest
@@ -126,3 +127,62 @@ def test_build_new_is_wellformed():
     assert tf.summary == "Call mom"
     assert tf.status == "NEEDS-ACTION"
     assert tf.priority == 1
+
+
+# ── a zone-anchored DUE keeps its zone across an edit ────────────────────────
+# The API serves DUE;TZID=Europe/Berlin as an ISO string with a numeric offset,
+# which is all a browser can send back. Writing that offset verbatim makes
+# icalendar fabricate TZID="UTC+02:00" — a zone no other client resolves — and
+# sending the viewer's naive wall clock instead drops the TZID altogether and
+# silently moves the deadline.
+
+_BERLIN_DUE = (
+    "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//foreign//EN\r\n"
+    "BEGIN:VTODO\r\nUID:tz@x\r\nSUMMARY:Pay rent\r\n"
+    "DUE;TZID=Europe/Berlin:20260810T093000\r\n"
+    "END:VTODO\r\nEND:VCALENDAR\r\n"
+).encode()
+
+
+def _due_lines(raw: bytes) -> list[str]:
+    return [ln for ln in raw.decode().split("\r\n") if ln.startswith("DUE")]
+
+
+def test_editing_a_zoned_due_keeps_its_tzid():
+    # The viewer is in New York, sees 03:30, and moves it to 04:30 — sent as the
+    # instant that names, which is 10:30 in the series' own zone.
+    edited = apply_changes(
+        _BERLIN_DUE, TaskEdit(due=datetime.fromisoformat("2026-08-10T04:30:00-04:00")))
+    assert _due_lines(edited) == ["DUE;TZID=Europe/Berlin:20260810T103000"]
+
+
+def test_editing_a_zoned_due_never_fabricates_a_numeric_tzid():
+    edited = apply_changes(
+        _BERLIN_DUE, TaskEdit(due=datetime.fromisoformat("2026-08-10T04:30:00-04:00")))
+    assert b'TZID="UTC' not in edited
+
+
+def test_a_floating_due_stays_floating():
+    """The app's own writes are floating local; nothing should anchor them."""
+    raw = _BERLIN_DUE.replace(b"DUE;TZID=Europe/Berlin:20260810T093000", b"DUE:20260810T093000")
+    edited = apply_changes(raw, TaskEdit(due=datetime(2026, 8, 10, 10, 30)))
+    assert _due_lines(edited) == ["DUE:20260810T103000"]
+
+
+def test_an_all_day_due_stays_a_bare_date():
+    raw = _BERLIN_DUE.replace(b"DUE;TZID=Europe/Berlin:20260810T093000", b"DUE;VALUE=DATE:20260810")
+    edited = apply_changes(raw, TaskEdit(due=date(2026, 8, 12)))
+    assert _due_lines(edited) == ["DUE;VALUE=DATE:20260812"]
+
+
+def test_clearing_a_zoned_due_still_clears_it():
+    assert _due_lines(apply_changes(_BERLIN_DUE, TaskEdit(due=None))) == []
+
+
+def test_a_zoned_dtstart_keeps_its_tzid_too():
+    raw = _BERLIN_DUE.replace(b"DUE;TZID=", b"DTSTART;TZID=")
+    edited = apply_changes(
+        raw, TaskEdit(dtstart=datetime.fromisoformat("2026-08-10T04:30:00-04:00")))
+    assert [ln for ln in edited.decode().split("\r\n") if ln.startswith("DTSTART")] == [
+        "DTSTART;TZID=Europe/Berlin:20260810T103000"
+    ]

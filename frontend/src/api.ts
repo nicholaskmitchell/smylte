@@ -11,6 +11,19 @@ export type { Appearance, DashboardModule }
 
 export class AuthError extends Error {}
 
+/** A non-2xx the server actually answered, carrying its status.
+ *
+ * Without it every failure looked alike to callers: a 429 from the booking
+ * rate-limiter was indistinguishable from a genuine 404, and a dropped
+ * connection from a rejected request. Callers that need to tell them apart
+ * (retryable vs terminal) check `status`; a network failure is still a plain
+ * Error, because nothing answered at all. */
+export class HttpError extends Error {
+  constructor(readonly status: number, message: string) {
+    super(message)
+  }
+}
+
 export interface List {
   id: string
   href: string
@@ -214,7 +227,6 @@ async function j<T>(method: string, path: string, body?: unknown): Promise<T> {
     body: body !== undefined ? JSON.stringify(body) : undefined,
     credentials: 'same-origin',
   })
-  if (res.status === 401) throw new AuthError('unauthenticated')
   if (!res.ok) {
     let msg = res.statusText
     try {
@@ -223,7 +235,12 @@ async function j<T>(method: string, path: string, body?: unknown): Promise<T> {
     } catch {
       /* ignore */
     }
-    throw new Error(msg)
+    // The server's own words carry through a 401 too. Throwing a fixed
+    // 'unauthenticated' before reading the body meant the login form rendered
+    // that internal token at the user instead of the endpoint's "invalid
+    // credentials".
+    if (res.status === 401) throw new AuthError(msg)
+    throw new HttpError(res.status, msg)
   }
   if (res.status === 204) return null as T
   return res.json() as Promise<T>
@@ -323,7 +340,7 @@ export const api = {
 // itself has to stand in for them.
 const _SSE_MAX_BACKOFF_MS = 30_000
 
-export function subscribe(onChange: () => void): () => void {
+export function subscribe(onChange: (type: string) => void): () => void {
   let es: EventSource | null = null
   let retry: ReturnType<typeof setTimeout> | undefined
   let attempts = 0
@@ -337,13 +354,16 @@ export function subscribe(onChange: () => void): () => void {
       attempts = 0
       if (missed) {
         missed = false
-        onChange()          // resync whatever changed while we were away
+        onChange('reconnect')   // resync whatever changed while we were away
       }
     }
     es.onmessage = (e) => {
       try {
         const data = JSON.parse(e.data)
-        if (data.type && data.type !== 'hello') onChange()
+        // The type goes to the caller: not every published event is a data
+        // change, and treating them alike made a UI-preference write refetch
+        // every list and task in every open tab.
+        if (data.type && data.type !== 'hello') onChange(String(data.type))
       } catch {
         /* ignore keepalives */
       }

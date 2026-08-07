@@ -57,7 +57,12 @@ export const DEFAULT_LAYOUT: DashboardModule[] = [
 ]
 
 const MAX_MODULES = 40
+// How far down the grid a module may sit, and how tall it may be. These are two
+// different bounds and were sharing one: clamping HEIGHT to 200 rows let the
+// editor build a module the server's `h: le=40` rejects, so the whole settings
+// PUT 422'd and the layout was silently kept local and lost on reload.
 const MAX_ROWS = 200
+const MAX_MODULE_H = 40
 
 // ── geometry ────────────────────────────────────────────────────────────────
 
@@ -71,7 +76,7 @@ export function clampToGrid(m: DashboardModule): DashboardModule {
   const minW = spec?.minW ?? 2
   const minH = spec?.minH ?? 2
   const w = Math.min(COLS, Math.max(minW, Math.round(m.w) || minW))
-  const h = Math.min(MAX_ROWS, Math.max(minH, Math.round(m.h) || minH))
+  const h = Math.min(MAX_MODULE_H, Math.max(minH, Math.round(m.h) || minH))
   const x = Math.min(COLS - w, Math.max(0, Math.round(m.x) || 0))
   const y = Math.min(MAX_ROWS, Math.max(0, Math.round(m.y) || 0))
   return { ...m, x, y, w, h }
