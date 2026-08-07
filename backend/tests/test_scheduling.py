@@ -4,7 +4,7 @@ anywhere, plus HTTP integration tests against scratch Radicale (skipped when
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -175,17 +175,63 @@ def test_only_day_restricts_but_keeps_rules():
     assert _slots(horizon_days=6, only_day=monday_next) == []
 
 
-def test_dst_spring_forward_is_sane():
-    # US DST 2026: clocks jump 02:00→03:00 on Sunday March 8. A window over the
-    # gap must not crash; slots stay within the (shrunken) real window.
-    av = scheduling.parse_availability({"6": ["01:00-04:00"]})
-    now = datetime(2026, 3, 8, 0, 0, tzinfo=TZ)
-    slots = scheduling.generate_slots(availability=av, duration_minutes=60, busy=[],
-                                      buffer_minutes=0, tz=TZ, now=now,
-                                      min_notice_hours=0, horizon_days=0)
-    assert slots, "spring-forward day produced no slots at all"
+# ── DST: every emitted slot is exactly `duration` of ABSOLUTE time ──────────
+# The previous assertion here was one-sided (`<= timedelta(hours=1)`), which a
+# slot whose end instant *precedes* its start satisfies trivially — the exact
+# defect it was written to guard. These assert equality, distinctness, and both
+# transitions.
+
+def _dst_slots(day: date, duration_minutes: int, window: str = "00:00-05:00"):
+    av = scheduling.parse_availability({str(day.weekday()): [window]})
+    return scheduling.generate_slots(
+        availability=av, duration_minutes=duration_minutes, busy=[], buffer_minutes=0,
+        tz=TZ, now=datetime(day.year, day.month, day.day, tzinfo=TZ) - timedelta(days=1),
+        min_notice_hours=0, horizon_days=2, only_day=day,
+    )
+
+
+@pytest.mark.parametrize("label, day", [
+    ("spring-forward", date(2026, 3, 8)),      # clocks jump 02:00 -> 03:00
+    ("fall-back", date(2026, 11, 1)),          # clocks repeat 01:00 -> 02:00
+    ("ordinary day", date(2026, 3, 15)),
+])
+@pytest.mark.parametrize("duration", [30, 60])
+def test_dst_slots_are_exactly_the_advertised_length(label, day, duration):
+    slots = _dst_slots(day, duration)
+    assert slots, f"{label} produced no slots at all"
     for s in slots:
-        assert s.end.astimezone(UTC) - s.start.astimezone(UTC) <= timedelta(hours=1)
+        actual = s.end.astimezone(UTC) - s.start.astimezone(UTC)
+        assert actual == timedelta(minutes=duration), (
+            f"{label}: {s.start.isoformat()} -> {s.end.isoformat()} is {actual}"
+        )
+
+
+@pytest.mark.parametrize("label, day", [
+    ("spring-forward", date(2026, 3, 8)),
+    ("fall-back", date(2026, 11, 1)),
+])
+def test_dst_slots_name_distinct_instants(label, day):
+    # Spring-forward used to emit 08:00Z and 08:30Z twice each: two buttons at
+    # the same clock time, one of which could never be booked.
+    slots = _dst_slots(day, 30)
+    starts = [s.start.astimezone(UTC) for s in slots]
+    assert len(set(starts)) == len(starts), f"{label}: duplicate slot instants"
+
+
+def test_fall_back_offers_the_repeated_hour():
+    # 01:00-02:00 local happens twice; both passes are real bookable time and
+    # wall-clock stepping skipped the second entirely.
+    starts = {s.start.astimezone(UTC).isoformat() for s in _dst_slots(date(2026, 11, 1), 30)}
+    assert "2026-11-01T07:00:00+00:00" in starts
+    assert "2026-11-01T07:30:00+00:00" in starts
+
+
+def test_dst_day_lengths_differ_by_the_transition():
+    # A 25-hour day offers two more 30-minute slots than a 23-hour one, over the
+    # same local window — the arithmetic check behind the cases above.
+    spring = len(_dst_slots(date(2026, 3, 8), 30, "00:00-23:30"))
+    fall = len(_dst_slots(date(2026, 11, 1), 30, "00:00-23:30"))
+    assert fall - spring == 4
 
 
 def test_empty_availability_no_slots():

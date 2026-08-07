@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Iterable
 from zoneinfo import ZoneInfo
 
@@ -183,14 +183,23 @@ def generate_slots(
                 datetime.combine(day, w_start, tzinfo=tz),
                 datetime.combine(day, w_end, tzinfo=tz),
             )
-            s = win.start
-            while s + duration <= win.end:
-                slot = Interval(s, s + duration)
+            # Step in UTC, not wall clock. `aware_dt + timedelta` adds to the
+            # naive fields and re-derives the offset, so across a transition a
+            # "30-minute" slot is not 30 minutes: spring-forward produced one
+            # whose end instant PRECEDED its start (and two slots naming the
+            # same instant), and fall-back produced a 90-minute slot — on the
+            # only unauthenticated write path into the owner's calendar. UTC has
+            # no such discontinuity; the local values are derived back from it
+            # for display and for matching a booking request.
+            s_utc = win.start.astimezone(timezone.utc)
+            end_utc = win.end.astimezone(timezone.utc)
+            while s_utc + duration <= end_utc:
+                slot = Interval(s_utc.astimezone(tz), (s_utc + duration).astimezone(tz))
                 if slot.start >= open_from and not _overlaps_any(slot, blocked):
                     slots.append(slot)
                     if len(slots) >= max_slots:
                         return slots
-                s += duration
+                s_utc += duration
         day += timedelta(days=1)
     return slots
 
