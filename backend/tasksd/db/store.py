@@ -9,6 +9,7 @@ delete-and-recreate survival requirement).
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from pathlib import Path
 
@@ -16,6 +17,9 @@ from ..dav.client import CollectionInfo, Item
 from ..ical.read import TaskFields
 
 _SCHEMA = (Path(__file__).parent / "schema.sql").read_text(encoding="utf-8")
+
+# C0 control bytes, stripped from search terms (see `search`).
+_CTRL = re.compile(r"[\x00-\x1f\x7f]")
 
 
 def connect(db_path: str) -> sqlite3.Connection:
@@ -90,7 +94,39 @@ def get_collections(conn: sqlite3.Connection, *, include_deleted: bool = False) 
 
 
 def mark_collection_deleted(conn: sqlite3.Connection, href: str) -> None:
+    """The collection is gone from the server: soft-delete its row and purge the
+    cache it projected.
+
+    The collections row itself stays (the deleted flag is what stops it being
+    listed or written to), which is exactly why the purge has to be explicit:
+    `items.collection_href REFERENCES collections(href) ON DELETE CASCADE` only
+    fires on a real DELETE, so a soft delete left every item, FTS row and
+    category behind. `search` and `distinct_categories` do not filter on the
+    collection, so a deleted list's tasks stayed queryable through /api/search
+    and their tags kept showing in /api/tags — carrying a list id that no longer
+    resolves — and their full raw_ics bodies stayed on disk for the life of the
+    DB. Purging is the right answer rather than filtering: the cache is a
+    disposable projection (invariant #1), and a resync rebuilds it if the
+    collection ever comes back."""
     conn.execute("UPDATE collections SET deleted=1 WHERE href=?", (href,))
+    # Sidecar first — it is app-only state no resync can rebuild, so it is
+    # orphaned for the 7-day grace period rather than deleted, and it has no FK
+    # to items (invariant #4) so nothing below would touch it anyway.
+    conn.execute(
+        "UPDATE sidecar SET orphaned_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') "
+        "WHERE collection_href=? AND orphaned_at IS NULL",
+        (href,),
+    )
+    conn.execute("DELETE FROM items WHERE collection_href=?", (href,))   # cascades categories
+    conn.execute("DELETE FROM items_fts WHERE collection_href=?", (href,))  # virtual: no FK
+    # Forget the sync token. If the collection returns, `upsert_collection`
+    # clears `deleted` but leaves sync_state alone, so the next sync would resume
+    # *incrementally* from this token and never re-fetch the bodies just purged —
+    # the collection would come back permanently empty. A null token forces the
+    # full resync that rebuilds them.
+    conn.execute(
+        "UPDATE sync_state SET sync_token=NULL WHERE collection_href=?", (href,)
+    )
 
 
 # ── sync state ───────────────────────────────────────────────────────────────
@@ -411,8 +447,16 @@ def search(conn: sqlite3.Connection, query: str) -> list[sqlite3.Row]:
 
     User text is never passed to MATCH raw — FTS5 operator characters ('"',
     parentheses, NEAR/AND) would raise. Each whitespace token becomes a quoted
-    prefix phrase, so 'proj mee' matches "project meeting"."""
-    terms = [t for t in query.split() if t]
+    prefix phrase, so 'proj mee' matches "project meeting".
+
+    Quoting alone was not enough. A NUL byte inside a token truncates the C
+    string FTS5 parses, so the closing quote was never seen and `?q=%00` came
+    back as an unhandled OperationalError — a 500 on the one input the quoting
+    scheme was supposed to make safe. Control bytes are never meaningful search
+    text, so they are dropped, and a term that was nothing but control bytes
+    drops with them (leaving no terms at all is an empty result, not a malformed
+    MATCH)."""
+    terms = [t for t in (_CTRL.sub("", t) for t in query.split()) if t]
     if not terms:
         return []
     match = " ".join('"{}"*'.format(t.replace('"', '""')) for t in terms)

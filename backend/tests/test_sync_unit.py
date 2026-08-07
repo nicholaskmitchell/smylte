@@ -136,3 +136,32 @@ def test_resync_does_not_gc_sidecars_off_an_incomplete_pass():
     engine3 = SyncEngine(_FakeDav([]), conn)
     engine3.full_resync(COL)
     assert conn.execute("SELECT 1 FROM sidecar WHERE uid='gone-1'").fetchone() is None
+
+
+def test_a_collection_that_comes_back_rebuilds_its_items():
+    """Deleting a collection purges its cached rows, so the token it was synced
+    to must go with them: `upsert_collection` clears `deleted` when the
+    collection returns but leaves sync_state alone, and an incremental resume
+    from the old token reports no changes — the list would come back
+    permanently empty."""
+    conn = _db()
+    items = [Item(f"{COL}A.ics", '"e1"', _vtodo("u-1", "Ship it"))]
+    engine = SyncEngine(_FakeDav(items), conn)
+    engine.sync(COL)
+    store.set_sidecar(conn, COL, "u-1", kanban_column="doing")
+
+    # The collection disappears from the server, then comes back with the same
+    # contents (a restore, or a transient discovery blip).
+    store.mark_collection_deleted(conn, COL)
+    assert store.get_item(conn, COL, "u-1") is None
+    assert store.get_sidecar(conn, COL, "u-1")["orphaned_at"] is not None
+    store.upsert_collection(
+        conn, CollectionInfo(href=COL, displayname="Cal", components={"VTODO"}))
+
+    stats = engine.sync(COL)
+    assert stats.full_resync is True, "resumed incrementally from a stale token"
+    assert store.get_item(conn, COL, "u-1")["summary"] == "Ship it"
+    # The purge orphaned the sidecar rather than dropping it, so the returning
+    # UID rejoins its kanban column instead of losing it.
+    side = store.get_sidecar(conn, COL, "u-1")
+    assert side["kanban_column"] == "doing" and side["orphaned_at"] is None
