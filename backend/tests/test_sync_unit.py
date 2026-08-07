@@ -5,9 +5,16 @@ hard to provoke through a real server (e.g. malformed foreign resources).
 """
 from __future__ import annotations
 
+from datetime import date
+
+import pytest
+from helpers import foreign_event_raw
+
+from tasksd import ical
 from tasksd.dav.client import CollectionInfo, Item, SyncResult
 from tasksd.db import store
 from tasksd.sync import SyncEngine
+from tasksd.sync.engine import ConflictError
 
 COL = "/u/cal/"
 
@@ -126,7 +133,13 @@ def test_resync_does_not_gc_sidecars_off_an_incomplete_pass():
     # gone-1 really is deleted, and a *different* resource is malformed.
     engine2 = SyncEngine(_FakeDav([Item(f"{COL}B.ics", '"e2"', _POISON)]), conn)
     engine2.full_resync(COL)
-    conn.execute("UPDATE sidecar SET orphaned_at = orphaned_at - 8*86400 WHERE uid='gone-1'")
+    # Backdate as a real ISO string. `orphaned_at - 8*86400` coerced the string
+    # to a number and left '-689174' in the column, which reads as older only
+    # because SQLite sorts INTEGER below TEXT — so the date comparison this is
+    # meant to drive was never actually performed.
+    conn.execute(
+        "UPDATE sidecar SET orphaned_at=strftime('%Y-%m-%dT%H:%M:%fZ','now','-8 days') "
+        "WHERE uid='gone-1'")
     conn.commit()
     engine2.full_resync(COL)
 
@@ -136,3 +149,191 @@ def test_resync_does_not_gc_sidecars_off_an_incomplete_pass():
     engine3 = SyncEngine(_FakeDav([]), conn)
     engine3.full_resync(COL)
     assert conn.execute("SELECT 1 FROM sidecar WHERE uid='gone-1'").fetchone() is None
+
+
+def test_a_collection_that_comes_back_rebuilds_its_items():
+    """Deleting a collection purges its cached rows, so the token it was synced
+    to must go with them: `upsert_collection` clears `deleted` when the
+    collection returns but leaves sync_state alone, and an incremental resume
+    from the old token reports no changes — the list would come back
+    permanently empty."""
+    conn = _db()
+    items = [Item(f"{COL}A.ics", '"e1"', _vtodo("u-1", "Ship it"))]
+    engine = SyncEngine(_FakeDav(items), conn)
+    engine.sync(COL)
+    store.set_sidecar(conn, COL, "u-1", kanban_column="doing")
+
+    # The collection disappears from the server, then comes back with the same
+    # contents (a restore, or a transient discovery blip).
+    store.mark_collection_deleted(conn, COL)
+    assert store.get_item(conn, COL, "u-1") is None
+    assert store.get_sidecar(conn, COL, "u-1")["orphaned_at"] is not None
+    store.upsert_collection(
+        conn, CollectionInfo(href=COL, displayname="Cal", components={"VTODO"}))
+
+    stats = engine.sync(COL)
+    assert stats.full_resync is True, "resumed incrementally from a stale token"
+    assert store.get_item(conn, COL, "u-1")["summary"] == "Ship it"
+    # The purge orphaned the sidecar rather than dropping it, so the returning
+    # UID rejoins its kanban column instead of losing it.
+    side = store.get_sidecar(conn, COL, "u-1")
+    assert side["kanban_column"] == "doing" and side["orphaned_at"] is None
+
+
+# ── a body that stops being readable must not leave a ghost row ──────────────
+# A resource that is already cached and is then rewritten *in place* into
+# something we cannot extract used to leave its row wholly untouched: old
+# summary, old raw_ics, old etag. Its href is still on the wire, so the resync
+# sweep never removed it either — permanent divergence, and the stale etag made
+# every write on it fail with an opaque 500.
+
+_VJOURNAL = (b"BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//jtx//EN\r\n"
+             b"BEGIN:VJOURNAL\r\nUID:u-1\r\nSUMMARY:a note\r\n"
+             b"END:VJOURNAL\r\nEND:VCALENDAR\r\n")
+
+
+def _cached_then_rewritten(new_body: bytes):
+    """Cache one VTODO with a sidecar, then rewrite it at the SAME href."""
+    conn = _db()
+    engine = SyncEngine(_FakeDav([Item(f"{COL}x.ics", '"e1"', _vtodo("u-1", "Pay rent"))]), conn)
+    engine.sync(COL)
+    store.set_sidecar(conn, COL, "u-1", kanban_column="doing", pinned=1)
+    engine.dav = _FakeDav([Item(f"{COL}x.ics", '"e2"', new_body)])
+    return conn, engine
+
+
+@pytest.mark.parametrize("body, label", [
+    (_VJOURNAL, "no longer a task"),
+    (b"this is not an icalendar resource at all", "unparseable"),
+])
+def test_a_body_that_stops_being_readable_drops_its_cache_row(body, label):
+    conn, engine = _cached_then_rewritten(body)
+
+    engine.sync(COL)
+
+    assert store.get_item(conn, COL, "u-1") is None, f"ghost row survived ({label})"
+    # The sidecar is orphaned, not dropped: nothing can rebuild it, and the UID
+    # may come back within the 7-day grace.
+    side = store.get_sidecar(conn, COL, "u-1")
+    assert side is not None and side["orphaned_at"] is not None
+    assert side["kanban_column"] == "doing" and side["pinned"] == 1
+
+
+def test_dropping_a_ghost_row_leaves_the_next_resync_stable():
+    # Before, every full resync re-fetched (etag mismatch) and re-skipped
+    # forever, and the row never went.
+    conn, engine = _cached_then_rewritten(_VJOURNAL)
+    engine.sync(COL)
+
+    stats = engine.full_resync(COL)
+    assert (stats.upserted, stats.removed, stats.skipped) == (0, 0, 0)
+    assert store.get_item(conn, COL, "u-1") is None
+
+
+def test_a_resource_that_is_not_a_task_does_not_block_the_orphan_gc():
+    """`fields is None` is a complete, understood enumeration — this simply is
+    not a task any more — so it must not set `skipped`, which exists to stop
+    gc_orphans running off a pass that failed to read something."""
+    conn, engine = _cached_then_rewritten(_VJOURNAL)
+    stats = engine.full_resync(COL)
+    assert stats.skipped == 0 and stats.removed == 1
+
+
+def test_an_unreadable_body_still_blocks_the_orphan_gc():
+    # The parse-error path is a genuinely incomplete read, so it keeps counting.
+    conn, engine = _cached_then_rewritten(b"not an icalendar resource")
+    assert engine.full_resync(COL).skipped == 1
+
+
+def test_editing_a_resource_with_nothing_to_edit_is_a_conflict_not_a_500():
+    """Reachable in the race where the body is rewritten between our sync and
+    our write: the 412 merge path re-GETs and re-applies onto a body that has no
+    component left. The ValueError had no handler and escaped as a 500."""
+    conn = _db()
+    store.upsert_item(
+        conn, COL, Item(f"{COL}x.ics", '"e1"', _VJOURNAL),
+        # Seed the row directly: the sync path would (correctly) refuse to cache
+        # this body at all, and the point is what `_edit` does when it meets one.
+        ical.extract_from_raw(_vtodo("u-1", "Pay rent")),
+    )
+    engine = SyncEngine(_FakeDav([]), conn)
+    with pytest.raises(ConflictError):
+        engine.edit_task(COL, "u-1", ical.TaskEdit(status="COMPLETED"))
+
+
+def test_a_bad_request_on_a_readable_resource_is_still_a_ValueError():
+    """Only "nothing here to edit" becomes a conflict. A series shift that would
+    switch all-day <-> timed is about the *request*, and the API answers it 422."""
+    raw = foreign_event_raw("e-1", "Standup", rrule="FREQ=WEEKLY")
+    with pytest.raises(ValueError) as exc:
+        ical.shift_series(raw, "2026-01-06T09:00:00+00:00",
+                          ical.EventEdit(dtstart=date(2026, 1, 7)))
+    assert not isinstance(exc.value, ical.NotEditable)
+
+
+# ── gc_orphans: the only irreversible deletion in the cache layer ────────────
+# It permanently drops sidecar rows — pins, kanban column, manual sort,
+# estimated minutes — none of which a resync can rebuild, and nothing called it.
+
+def _orphan_aged(conn, uid: str, days: int) -> None:
+    """Orphan `uid` and backdate it by `days`, as a real ISO string.
+
+    Deliberately not `orphaned_at - N*86400`: SQLite coerces the ISO string to a
+    number, leaving something like '-689174' in the column. That compares older
+    than any timestamp only because INTEGER sorts below TEXT, so the ISO
+    comparison gc_orphans actually performs is never exercised — which is the
+    exact format drift the retention test needs to be able to catch."""
+    store.set_sidecar(conn, COL, uid, kanban_column="doing")
+    conn.execute(
+        "UPDATE sidecar SET orphaned_at=strftime('%Y-%m-%dT%H:%M:%fZ','now',?) "
+        "WHERE collection_href=? AND uid=?",
+        (f"-{days} days", COL, uid),
+    )
+
+
+def _sidecar_uids(conn) -> list[str]:
+    return sorted(r["uid"] for r in conn.execute("SELECT uid FROM sidecar"))
+
+
+def test_gc_orphans_deletes_only_past_the_retention_window():
+    conn = _db()
+    _orphan_aged(conn, "old-1", 8)          # past the 7-day window
+    _orphan_aged(conn, "recent-1", 6)       # inside it
+
+    assert store.gc_orphans(conn) == 1
+    assert _sidecar_uids(conn) == ["recent-1"]
+
+
+def test_gc_orphans_honours_a_custom_retention_window():
+    conn = _db()
+    _orphan_aged(conn, "old-1", 8)
+    _orphan_aged(conn, "recent-1", 6)
+
+    assert store.gc_orphans(conn, keep_days=3) == 2
+    assert _sidecar_uids(conn) == []
+
+
+def test_gc_orphans_never_touches_a_live_row():
+    conn = _db()
+    store.set_sidecar(conn, COL, "live-1", kanban_column="doing", pinned=1)
+    conn.execute(
+        "UPDATE sidecar SET updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now','-400 days')")
+
+    assert store.gc_orphans(conn) == 0
+    assert _sidecar_uids(conn) == ["live-1"]
+
+
+def test_a_uid_that_came_back_is_spared_by_the_gc():
+    """`upsert_item` clears `orphaned_at` when a UID reappears. Without that the
+    row would still be swept on its original clock, silently losing kanban/sort
+    state for an item that is alive — the half of the contract
+    test_delete_and_recreate_same_uid_keeps_sidecar does not assert."""
+    conn = _db()
+    _orphan_aged(conn, "u-1", 8)
+
+    engine = SyncEngine(_FakeDav([Item(f"{COL}A.ics", '"e1"', _vtodo("u-1", "Back"))]), conn)
+    engine.sync(COL)
+
+    assert store.get_sidecar(conn, COL, "u-1")["orphaned_at"] is None
+    assert store.gc_orphans(conn) == 0
+    assert _sidecar_uids(conn) == ["u-1"]

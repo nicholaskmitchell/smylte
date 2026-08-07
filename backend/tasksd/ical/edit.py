@@ -27,6 +27,18 @@ from icalendar import Calendar, Event, Todo, vRecur
 # Sentinel: a field left UNSET is not touched; None means "clear this property".
 UNSET: Any = object()
 
+
+class NotEditable(ValueError):
+    """The resource holds no component this edit can be applied to.
+
+    Distinct from the other ValueErrors raised here (an all-day <-> timed series
+    switch, an unknown repeat frequency), which are about the *request* and
+    which the API answers 422. This one is about the stored bytes: a foreign
+    client rewrote the resource into something that is no longer a task or an
+    event, so there is nothing to edit. Subclasses ValueError so every existing
+    handler keeps working."""
+
+
 _PRODID = "-//tasksd//Task Manager//EN"
 
 # Our four-level priority vocabulary -> RFC 5545 PRIORITY (spec §5).
@@ -150,7 +162,7 @@ def apply_changes(raw: bytes | str, edit: TaskEdit, *, now: datetime | None = No
     cal = Calendar.from_ical(raw)
     todo = _find_master_todo(cal)
     if todo is None:
-        raise ValueError("resource has no VTODO to edit")
+        raise NotEditable("resource has no VTODO to edit")
 
     if edit.summary is not UNSET:
         _set_text(todo, "SUMMARY", edit.summary)
@@ -222,10 +234,127 @@ def _find_master_event(cal: Calendar):
     return events[0] if events else None
 
 
+def _coerce_until(until, dtstart) -> date | datetime:
+    """UNTIL, expressed in the value type RFC 5545 §3.3.10 requires of it.
+
+    The rule is that UNTIL must match DTSTART's value type, and must be UTC
+    whenever DTSTART is not floating. The UI's "Repeat until" field is an
+    ``<input type="date">``, so a timed series arrives here asking to repeat
+    until a bare *day* — and an expander reads a DATE as that day's midnight,
+    which drops the very occurrence the user picked the day for. Widening the
+    day to its last second (in the series' own zone, so "until Mar 2" means the
+    end of Mar 2 where the user lives) keeps it."""
+    if not isinstance(dtstart, datetime):
+        # All-day series: UNTIL stays a bare DATE.
+        return until.date() if isinstance(until, datetime) else until
+    if not isinstance(until, datetime):
+        until = datetime.combine(until, time(23, 59, 59), tzinfo=dtstart.tzinfo)
+    elif until.tzinfo is None and dtstart.tzinfo is not None:
+        until = until.replace(tzinfo=dtstart.tzinfo)
+    return _as_utc(until) if dtstart.tzinfo is not None else until.replace(tzinfo=None)
+
+
+def _normalized_rule(rule: dict | None, event: Event) -> dict | None:
+    """``rule`` with UNTIL expressed the way it will actually be written."""
+    ds = event.get("DTSTART")
+    if rule and rule.get("UNTIL") and ds is not None:
+        return dict(rule, UNTIL=[_coerce_until(u, ds.dt) for u in rule["UNTIL"]])
+    return rule
+
+
 def _set_rrule(event: Event, rule: dict | None) -> None:
+    """Write the master's RRULE. The single choke point for every rule write —
+    `_apply_event_fields`, `_shift_rrule`, and both of `split_series`' rewrites —
+    so UNTIL is normalized against DTSTART here, once."""
     _replace(event, "RRULE")
+    rule = _normalized_rule(rule, event)
     if rule:
         event.add("RRULE", vRecur(rule))
+
+
+def _rule_changed(master: Event, new_rule: dict | None) -> bool:
+    """Is ``new_rule`` actually a different repeat from the one on ``master``?
+
+    The modal resends its whole repeat state on every save, so ``edit.rrule`` is
+    set on a pure rename or drag too. Asking this before reconciling keeps an
+    unrelated edit from dropping an override a foreign client anchored at an odd
+    slot — or one an older write of ours mislabelled with a fabricated TZID."""
+    def _ical(rule):
+        return vRecur(rule).to_ical() if rule else None
+
+    return _ical(_rrule_dict(master)) != _ical(_normalized_rule(new_rule, master))
+
+
+def _datelist_values(event: Event, key: str) -> list:
+    """Every value of a (possibly multi-line) EXDATE/RDATE property."""
+    prop = event.get(key)
+    if prop is None:
+        return []
+    lists = prop if isinstance(prop, list) else [prop]
+    return [entry.dt for lst in lists for entry in lst.dts]
+
+
+def _comparable(dtstart, moment) -> tuple[datetime, datetime]:
+    """(dtstart, moment) as datetimes dateutil can compare — all-day values
+    become midnight, and a mixed-awareness pair drops to wall clock rather than
+    raising."""
+    def _dt(v):
+        return v if isinstance(v, datetime) else datetime.combine(v, time())
+
+    start, at = _dt(dtstart), _dt(moment)
+    if (start.tzinfo is None) != (at.tzinfo is None):
+        start, at = start.replace(tzinfo=None), at.replace(tzinfo=None)
+    return start, at
+
+
+def _reconcile_overrides(cal: Calendar, master: Event) -> None:
+    """Drop the override components the master's *new* recurrence rule no longer
+    generates.
+
+    Changing an event's repeat left its RECURRENCE-ID overrides behind. An
+    override whose slot the new rule never produces is not part of the
+    recurrence set at all, yet the expander still emits it — so the calendar
+    showed an event belonging to a schedule the user had just deleted, with no
+    way to get rid of it. Apple and Google clients reconcile here; so do we.
+
+    Only rules from our own repeat vocabulary are reconciled. ``edit.rrule`` can
+    carry nothing else (``rrule_from_spec`` builds it), and testing membership of
+    a foreign rule means letting dateutil iterate from its DTSTART — the
+    unbounded cost ``recur._pathological_rule`` refuses up front. An exotic rule
+    keeps its overrides untouched, which is the safe direction to err: a phantom
+    renders, where a wrong drop destroys an edit the user made.
+    """
+    rule = _rrule_dict(master)
+    dtstart = master.get("DTSTART")
+    if rule is not None:
+        if not {str(f).upper() for f in rule.get("FREQ", [])} <= set(_FREQ.values()):
+            return
+        if dtstart is None:
+            return
+
+    # RDATE additions are part of the recurrence set too, independently of the rule.
+    rdates = _datelist_values(master, "RDATE")
+
+    def _generated(anchor) -> bool:
+        if any(_same_instant(_period_start(r), anchor) for r in rdates):
+            return True
+        if rule is None:
+            return False        # repeat cleared: only the master and its RDATEs remain
+        # Re-anchored per override, because dateutil needs both ends of the probe
+        # to agree on tz-awareness and an override's RECURRENCE-ID need not agree
+        # with the master's (an older write may have lost or fabricated a zone).
+        start, at = _comparable(dtstart.dt, anchor)
+        rr = rrulestr(vRecur(rule).to_ical().decode(), dtstart=start)
+        return bool(rr.between(at, at, inc=True))
+
+    cal.subcomponents = [
+        c for c in cal.subcomponents
+        if not (
+            getattr(c, "name", "") == "VEVENT"
+            and c.get("RECURRENCE-ID") is not None
+            and not _generated(c.get("RECURRENCE-ID").dt)
+        )
+    ]
 
 
 def _stamp(event: Event, now: datetime) -> None:
@@ -267,8 +396,12 @@ def apply_event_changes(raw: bytes | str, edit: EventEdit, *, now: datetime | No
     cal = Calendar.from_ical(raw)
     event = _find_master_event(cal)
     if event is None:
-        raise ValueError("resource has no VEVENT to edit")
+        raise NotEditable("resource has no VEVENT to edit")
+    # Asked before the write, while the master still carries the old rule.
+    repeat_changed = edit.rrule is not UNSET and _rule_changed(event, edit.rrule)
     _apply_event_fields(event, edit, now)
+    if repeat_changed:
+        _reconcile_overrides(cal, event)
     return cal.to_ical()
 
 
@@ -341,8 +474,16 @@ def _same_instant(a, b) -> bool:
     return a == b
 
 
+def _period_start(value):
+    """The instant a date-list entry identifies. An RDATE;VALUE=PERIOD entry
+    parses as a ``(start, end)`` or ``(start, duration)`` tuple, and a period is
+    addressed by where it starts."""
+    return value[0] if isinstance(value, tuple) else value
+
+
 def _at_or_after(a, anchor) -> bool:
     """True if instant/date `a` is on or after `anchor` (used to split a series)."""
+    a, anchor = _period_start(a), _period_start(anchor)
     if isinstance(a, datetime) and isinstance(anchor, datetime):
         return _as_utc(a) >= _as_utc(anchor)
     da = a.date() if isinstance(a, datetime) else a
@@ -396,7 +537,7 @@ def apply_occurrence_override(
     cal = Calendar.from_ical(raw)
     master = _find_master_event(cal)
     if master is None:
-        raise ValueError("resource has no VEVENT to edit")
+        raise NotEditable("resource has no VEVENT to edit")
     anchor = _anchor_from_iso(recurrence_id, master)
     override = _find_override(cal, anchor)
     if override is None:
@@ -416,7 +557,7 @@ def exclude_occurrence(
     cal = Calendar.from_ical(raw)
     master = _find_master_event(cal)
     if master is None:
-        raise ValueError("resource has no VEVENT to edit")
+        raise NotEditable("resource has no VEVENT to edit")
     anchor = _anchor_from_iso(recurrence_id, master)
     master.add("EXDATE", anchor)
     cal.subcomponents = [
@@ -443,27 +584,96 @@ def _wall_delta(a: date | datetime, b: date | datetime) -> timedelta:
     return a - b
 
 
+def _keep_params(params) -> dict:
+    """A property's parameters minus the two icalendar re-derives from the value.
+
+    TZID has to go: icalendar writes it from the value's tzinfo, so carrying the
+    source line's copy onto a rewritten value relabels the instant. VALUE too —
+    it follows the value's type, and a stale ``VALUE=DATE-TIME`` left on a DATE
+    is invalid iCalendar. Everything else rides along, which is the point:
+    ``RANGE=THISANDFUTURE`` on a RECURRENCE-ID (RFC 5545 §3.2.13, written by
+    Apple Calendar and others) means "this override covers this and every later
+    occurrence", so dropping it silently collapses the override to one instance
+    and every later occurrence reverts to the master."""
+    return {k: v for k, v in params.items() if k.upper() not in ("TZID", "VALUE")}
+
+
+def _shift_value(value, delta: timedelta):
+    """Shift a date, datetime, or RDATE period by ``delta``. Adding to the
+    original value keeps its type and tzinfo, so a zone-aware series keeps its
+    wall-clock time across DST boundaries."""
+    if isinstance(value, tuple):
+        start, second = value
+        # A period is (start, end) or (start, duration); a duration is a span,
+        # not an instant, so only the start moves.
+        return (start + delta, second if isinstance(second, timedelta) else second + delta)
+    return value + delta
+
+
 def _shift_datelike(event: Event, key: str, delta: timedelta) -> None:
     prop = event.get(key)
     if prop is None:
         return
-    old = prop.dt
+    old, params = prop.dt, _keep_params(prop.params)
     _replace(event, key)
-    # Adding to the original value keeps its type and tzinfo, so a zone-aware
-    # series keeps its wall-clock time across DST boundaries.
-    event.add(key, old + delta)
+    event.add(key, _shift_value(old, delta), parameters=params)
 
 
-def _shift_datelist(event: Event, key: str, delta: timedelta) -> None:
-    """Shift every EXDATE/RDATE entry (possibly several property lines)."""
+def _datelist_group(value) -> tuple:
+    """Values that can share one EXDATE/RDATE property line: same value type and
+    same zone. icalendar derives a single TZID for a whole property, so a line
+    must never mix them."""
+    if isinstance(value, tuple):
+        return ("PERIOD", str(getattr(value[0], "tzinfo", None)))
+    if isinstance(value, datetime):
+        return ("DATE-TIME", str(value.tzinfo))
+    return ("DATE", None)
+
+
+def _rebuild_datelist(event: Event, key: str, fn) -> None:
+    """Rewrite every EXDATE/RDATE entry through ``fn`` — which returns a new
+    value, or None to drop that entry — emitting one property line per source
+    line. Leaves the property untouched when ``fn`` changed nothing.
+
+    Rebuilding per line is load-bearing. Flattening every line into one property
+    lets icalendar derive a single TZID for the whole set (it takes the last
+    entry's zone) while still serializing each value in its own local wall time,
+    so entries written in another zone come back out labelled as a different
+    instant — and a UTC value beside a TZID one emits ``EXDATE;TZID=...:...Z``,
+    which RFC 5545 §3.2.19 forbids outright. Mixed zones are ordinary in a
+    shared collection: an exclusion written before the user changed the event's
+    zone sits right next to one written after."""
     prop = event.get(key)
     if prop is None:
         return
     lists = prop if isinstance(prop, list) else [prop]
-    values = [entry.dt + delta for lst in lists for entry in lst.dts]
+    rebuilt: list[tuple[list, dict]] = []
+    changed = False
+    for lst in lists:
+        params = _keep_params(lst.params)
+        groups: dict[tuple, list] = {}
+        for entry in lst.dts:
+            new = fn(entry.dt)
+            if new is None:
+                changed = True
+                continue
+            changed = changed or new != entry.dt
+            groups.setdefault(_datelist_group(new), []).append(new)
+        for group, values in groups.items():
+            line = dict(params)
+            if group[0] == "PERIOD":
+                line["VALUE"] = "PERIOD"   # the one VALUE icalendar cannot re-derive
+            rebuilt.append((values, line))
+    if not changed:
+        return
     _replace(event, key)
-    if values:
-        event.add(key, values)
+    for values, line in rebuilt:
+        event.add(key, values, parameters=line)
+
+
+def _shift_datelist(event: Event, key: str, delta: timedelta) -> None:
+    """Shift every EXDATE/RDATE entry (possibly across several property lines)."""
+    _rebuild_datelist(event, key, lambda v: _shift_value(v, delta))
 
 
 def _shift_rrule(master: Event, delta: timedelta, day_delta: int) -> None:
@@ -508,7 +718,7 @@ def shift_series(
     cal = Calendar.from_ical(raw)
     master = _find_master_event(cal)
     if master is None or master.get("DTSTART") is None:
-        raise ValueError("resource has no dated VEVENT to edit")
+        raise NotEditable("resource has no dated VEVENT to edit")
 
     anchor = _anchor_from_iso(recurrence_id, master)
     if isinstance(anchor, datetime) != isinstance(edit.dtstart, datetime):
@@ -517,6 +727,7 @@ def shift_series(
             "edit single occurrences instead"
         )
 
+    repeat_changed = edit.rrule is not UNSET and _rule_changed(master, edit.rrule)
     override = _find_override(cal, anchor)
     base = override.get("DTSTART").dt if override is not None and override.get("DTSTART") else anchor
     # A foreign client may have given this occurrence's override a different
@@ -558,8 +769,11 @@ def shift_series(
             _stamp(ev, now)
 
     # Non-time fields (summary, rrule change, …) land on the master, which also
-    # picks up its stamp here.
+    # picks up its stamp here. Reconciling last, so it judges the overrides by
+    # the RECURRENCE-IDs the shift above just gave them.
     _apply_event_fields(master, replace(edit, dtstart=UNSET, dtend=UNSET), now)
+    if repeat_changed:
+        _reconcile_overrides(cal, master)
     return cal.to_ical()
 
 
@@ -595,17 +809,9 @@ def _partition_datelist(event: Event, key: str, anchor, *, keep_before: bool) ->
     UNTIL bounds the RRULE only — list-based instances ignore it, so without
     this a post-anchor RDATE would survive in the head AND duplicate into the
     tail."""
-    prop = event.get(key)
-    if prop is None:
-        return
-    lists = prop if isinstance(prop, list) else [prop]
-    values = [entry.dt for lst in lists for entry in lst.dts]
-    keep = [v for v in values if _at_or_after(v, anchor) != keep_before]
-    if len(keep) == len(values):
-        return
-    _replace(event, key)
-    if keep:
-        event.add(key, keep)
+    _rebuild_datelist(
+        event, key, lambda v: v if _at_or_after(v, anchor) != keep_before else None
+    )
 
 
 def _count_consumed(rule: dict, dtstart: date | datetime, anchor) -> int:
@@ -613,12 +819,7 @@ def _count_consumed(rule: dict, dtstart: date | datetime, anchor) -> int:
     head's share of a COUNT-bounded series. (EXDATE'd instances still consume
     COUNT per RFC 5545, and RDATE additions never do, so the raw rule is the
     right thing to enumerate.)"""
-    def _dt(v):
-        return v if isinstance(v, datetime) else datetime.combine(v, time())
-
-    start, end = _dt(dtstart), _dt(anchor)
-    if (start.tzinfo is None) != (end.tzinfo is None):
-        start, end = start.replace(tzinfo=None), end.replace(tzinfo=None)
+    start, end = _comparable(dtstart, anchor)
     rr = rrulestr(vRecur(rule).to_ical().decode(), dtstart=start)
     consumed = 0
     for occ in rr:                      # finite: the rule carries COUNT
@@ -647,7 +848,7 @@ def split_series(
     head = Calendar.from_ical(raw)
     hmaster = _find_master_event(head)
     if hmaster is None:
-        raise ValueError("resource has no VEVENT to edit")
+        raise NotEditable("resource has no VEVENT to edit")
     anchor = _anchor_from_iso(recurrence_id, hmaster)
     rule = _rrule_dict(hmaster)
     if rule is not None:
@@ -662,6 +863,7 @@ def split_series(
     # Tail: fresh UID, DTSTART=anchor, remaining rule, later overrides re-homed.
     tail = Calendar.from_ical(raw)
     tmaster = _find_master_event(tail)
+    repeat_changed = edit.rrule is not UNSET and _rule_changed(tmaster, edit.rrule)
     new_uid = f"{uuid4().hex}@tasksd"
     dur = _event_duration(tmaster)
     orig_start = tmaster.get("DTSTART").dt if tmaster.get("DTSTART") is not None else anchor
@@ -749,4 +951,6 @@ def split_series(
 
     # Non-time fields land on the master, which also picks up its stamp here.
     _apply_event_fields(tmaster, replace(edit, dtstart=UNSET, dtend=UNSET), now)
+    if repeat_changed:
+        _reconcile_overrides(tail, tmaster)
     return head.to_ical(), tail.to_ical()

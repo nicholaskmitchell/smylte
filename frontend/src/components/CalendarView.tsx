@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useState, type CSSProperties } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { api, type CalEvent, type EventScope, type List } from '../api'
-import { addDays, dayKey, makeGuard, pad, parseDate, toLocalInput, ymd } from '../util'
-import { bucketByDay, lastDayOf, monthGrid, shiftYmd, type DayEv } from '../calendar'
+import { dayKey, makeGuard, pad, toLocalInput, ymd } from '../util'
+import {
+  bucketByDay, dragBody, daysBetween, lastDayOf, monthGrid, shiftYmd, type DayEv,
+} from '../calendar'
 import { useIsMobile } from '../hooks'
 import { AgendaEvent, DayPopover } from './DayPopover'
 import { Sidebar } from './Sidebar'
@@ -11,17 +13,6 @@ const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June',
   'July', 'August', 'September', 'October', 'November', 'December']
 
 interface Draft { event?: CalEvent; date?: string }
-
-const daysBetween = (a: string, b: string) =>
-  Math.round((new Date(`${b}T00:00`).getTime() - new Date(`${a}T00:00`).getTime()) / 86400000)
-
-// Shift an ISO date or datetime by n days. Datetimes come back as floating
-// local wall time — the same form the edit modal writes.
-const shiftIso = (v: string, n: number) => {
-  if (!v.includes('T')) return shiftYmd(v, n)
-  const d = addDays(parseDate(v), n)
-  return `${ymd(d)}T${pad(d.getHours())}:${pad(d.getMinutes())}`
-}
 
 export function CalendarView({ rev, onExpire, sideCollapsed, onToggleSide,
   hiddenCalendars, onHiddenCalendarsChange,
@@ -85,18 +76,37 @@ export function CalendarView({ rev, onExpire, sideCollapsed, onToggleSide,
     return per.flat()
   }
 
+  // Every load is stamped, and only the newest one is allowed to land. A fetch
+  // fans out one request per visible calendar and awaits them all, so two clicks
+  // on › put two batches in flight and whichever settles last used to win. When
+  // the older batch settled second the grid held the previous month's events —
+  // and since `bucketByDay` clips to the visible six weeks, almost none of them
+  // matched a rendered day, so the month came up *empty*. Nothing corrected it
+  // either: the SSE `rev` bump only fires on a server-side write, so a
+  // read-only user sat on a blank month until they navigated again.
+  const loadGen = useRef(0)
+  const load = () => {
+    const mine = ++loadGen.current
+    return guard(async () => {
+      const evs = await fetchEvents()
+      if (loadGen.current === mine && evs) setEvents(evs)
+    })
+  }
+
   // Archiving/restoring changes which calendars are fetched, so key on the
   // visible set (not the full one) to retrigger the events effect.
   const calsKey = visibleCals.map((c) => c.id).join(',')
   useEffect(() => {
     if (!visibleCals.length) { setEvents([]); return }
-    guard(async () => setEvents(await fetchEvents()))
+    load()
+    // Navigating away invalidates this run, so a batch that settles after the
+    // move can no longer paint the month the user just left.
+    return () => { loadGen.current++ }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cursor, rev, calsKey])
 
-  const reload = () => guard(async () => {
-    const evs = await fetchEvents(); if (evs) setEvents(evs)
-  })
+  // Same guard: a reload racing a month change must not repaint the old month.
+  const reload = () => load()
 
   const calByHref = useMemo(() => new Map(cals.map((c) => [c.href, c] as const)), [cals])
   // Which calendar an event lives in — every event now comes from a real fetch.
@@ -191,28 +201,11 @@ export function CalendarView({ rev, onExpire, sideCollapsed, onToggleSide,
   const dropOnDay = (key: string) => {
     const d = drag
     setDrag(null); setOverDay(null)
-    if (!d?.ev.start) return
-    let body: Record<string, unknown>
-    if (d.mode === 'move') {
-      const delta = daysBetween(d.fromDay, key)
-      if (!delta) return
-      body = { start: shiftIso(d.ev.start, delta) }
-      if (d.ev.end) body.end = shiftIso(d.ev.end, delta)
-    } else {
-      const startDay = dayKey(d.ev.start)
-      const day = key < startDay ? startDay : key
-      const start = d.ev.all_day ? d.ev.start.slice(0, 10) : toLocalInput(d.ev.start)
-      let end: string
-      if (d.ev.all_day) {
-        end = shiftYmd(day, 1)              // DTEND stays exclusive
-      } else {
-        end = `${day}T${toLocalInput(d.ev.end || d.ev.start).slice(11, 16)}`
-        if (end <= start) return            // the end must stay after the start
-      }
-      const oldEnd = d.ev.end && (d.ev.all_day ? d.ev.end.slice(0, 10) : toLocalInput(d.ev.end))
-      if (end === oldEnd) return
-      body = { start, end }
-    }
+    if (!d) return
+    // The date arithmetic lives in calendar.ts, where it is tested directly;
+    // null means the drag changed nothing.
+    const body = dragBody(d.ev, d.fromDay, key, d.mode)
+    if (!body) return
     if (d.ev.is_recurring) setMoveAsk({ ev: d.ev, body })
     else save(body, calIdOf(d.ev), d.ev.uid)
   }
@@ -466,13 +459,25 @@ function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete }: {
   const changeStart = (v: string) => {
     setStart(v)
     if (!v) return
-    const oldS = new Date(allDay ? `${startVal}T00:00` : startVal)
-    const oldE = new Date(allDay ? `${endVal}T00:00` : endVal)
-    const newS = new Date(allDay ? `${v}T00:00` : v)
+    if (allDay) {
+      // An all-day span's length is a whole number of calendar *days*, not of
+      // milliseconds. Measuring it in milliseconds made a span containing a
+      // spring-forward come out at 47h instead of 48h, so re-anchoring it to a
+      // date outside that week landed the end a day short — the event quietly
+      // lost a day when the user had only touched the start.
+      const n = daysBetween(startVal, endVal)
+      if (isNaN(n)) return
+      setEnd(shiftYmd(v, Math.max(0, n)))
+      return
+    }
+    const oldS = new Date(startVal)
+    const oldE = new Date(endVal)
+    const newS = new Date(v)
     if (isNaN(oldS.getTime()) || isNaN(oldE.getTime()) || isNaN(newS.getTime())) return
+    // A timed event's duration really is an elapsed span, so milliseconds are
+    // the right unit here — an hour-long meeting stays an hour across a DST edge.
     const shifted = new Date(newS.getTime() + Math.max(0, oldE.getTime() - oldS.getTime()))
-    setEnd(allDay ? ymd(shifted)
-      : `${ymd(shifted)}T${pad(shifted.getHours())}:${pad(shifted.getMinutes())}`)
+    setEnd(`${ymd(shifted)}T${pad(shifted.getHours())}:${pad(shifted.getMinutes())}`)
   }
 
   // What actually goes on the wire: end never precedes start, and an all-day
@@ -523,10 +528,12 @@ function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete }: {
 
   return (
     <div className="overlay" onClick={onClose}>
-      <div className="modal" onClick={(ev) => ev.stopPropagation()}>
+      <div className="modal" role="dialog" aria-modal="true"
+        aria-label={e ? (recurring ? 'Repeating event' : 'Event') : 'New event'}
+        onClick={(ev) => ev.stopPropagation()}>
         <div className="modal-head">
           <span className="modal-title">{e ? (recurring ? 'Repeating event' : 'Event') : 'New event'}</span>
-          <button className="icon-btn" onClick={onClose}>✕</button>
+          <button className="icon-btn" onClick={onClose} aria-label="Close">✕</button>
         </div>
 
         {scopeAsk ? (
@@ -542,57 +549,57 @@ function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete }: {
         ) : (
           <>
             <div className="field">
-              <label className="label">Title</label>
-              <input className="input" autoFocus value={summary} onChange={(ev) => setSummary(ev.target.value)} />
+              <label className="label" htmlFor="ev-title">Title</label>
+              <input className="input" id="ev-title" autoFocus value={summary} onChange={(ev) => setSummary(ev.target.value)} />
             </div>
             <label className="chip" style={{ alignSelf: 'flex-start', cursor: 'pointer' }}>
               <input type="checkbox" checked={allDay} onChange={(ev) => setAllDay(ev.target.checked)} /> all day
             </label>
             <div className="field-row">
               <div className="field">
-                <label className="label">Start</label>
-                <input className="input" type={allDay ? 'date' : 'datetime-local'} value={startVal}
+                <label className="label" htmlFor="ev-start">Start</label>
+                <input className="input" id="ev-start" type={allDay ? 'date' : 'datetime-local'} value={startVal}
                   onChange={(ev) => changeStart(ev.target.value)} />
               </div>
               <div className="field">
-                <label className="label">{allDay ? 'End (last day)' : 'End'}</label>
-                <input className="input" type={allDay ? 'date' : 'datetime-local'} value={endVal}
+                <label className="label" htmlFor="ev-end">{allDay ? 'End (last day)' : 'End'}</label>
+                <input className="input" id="ev-end" type={allDay ? 'date' : 'datetime-local'} value={endVal}
                   min={startVal} onChange={(ev) => setEnd(ev.target.value)} />
               </div>
             </div>
             <div className="field">
-              <label className="label">Repeat</label>
-              <select className="input" value={repeat} onChange={(ev) => setRepeat(ev.target.value)}>
+              <label className="label" htmlFor="ev-repeat">Repeat</label>
+              <select className="input" id="ev-repeat" value={repeat} onChange={(ev) => setRepeat(ev.target.value)}>
                 {recurring && <option value="keep">Keep current schedule</option>}
                 {REPEATS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
               </select>
             </div>
             {repeat !== 'keep' && repeat !== 'none' && (
               <div className="field">
-                <label className="label">Repeat until (optional)</label>
-                <input className="input" type="date" value={repeatUntil}
+                <label className="label" htmlFor="ev-until">Repeat until (optional)</label>
+                <input className="input" id="ev-until" type="date" value={repeatUntil}
                   onChange={(ev) => setRepeatUntil(ev.target.value)} />
               </div>
             )}
             {cals.length > 1 && (
               <div className="field">
-                <label className="label">Calendar</label>
-                <select className="input" value={calPick} onChange={(ev) => setCalPick(ev.target.value)}>
+                <label className="label" htmlFor="ev-cal">Calendar</label>
+                <select className="input" id="ev-cal" value={calPick} onChange={(ev) => setCalPick(ev.target.value)}>
                   {cals.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
                 </select>
               </div>
             )}
             <div className="field">
-              <label className="label">Location</label>
-              <input className="input" value={location} onChange={(ev) => setLocation(ev.target.value)} />
+              <label className="label" htmlFor="ev-location">Location</label>
+              <input className="input" id="ev-location" value={location} onChange={(ev) => setLocation(ev.target.value)} />
             </div>
             <div className="field">
-              <label className="label">Notes</label>
-              <textarea className="input" rows={2} value={description} onChange={(ev) => setDescription(ev.target.value)} />
+              <label className="label" htmlFor="ev-notes">Notes</label>
+              <textarea className="input" id="ev-notes" rows={2} value={description} onChange={(ev) => setDescription(ev.target.value)} />
             </div>
             <div className="field">
-              <label className="label">Tags (comma-separated)</label>
-              <input className="input" value={tags} onChange={(ev) => setTags(ev.target.value)} />
+              <label className="label" htmlFor="ev-tags">Tags (comma-separated)</label>
+              <input className="input" id="ev-tags" value={tags} onChange={(ev) => setTags(ev.target.value)} />
             </div>
             {recurring && (
               <p className="scope-hint">
