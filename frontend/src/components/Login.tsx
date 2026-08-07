@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react'
-import { api } from '../api'
+import { api, AuthError } from '../api'
 
 export function Login({ onLogin }: { onLogin: (user: string) => void }) {
   const [username, setUsername] = useState('')
@@ -15,8 +15,12 @@ export function Login({ onLogin }: { onLogin: (user: string) => void }) {
       const r = await api.login(username, password)
       onLogin(r.user)
     } catch (ex) {
-      const msg = (ex as Error).message
-      setErr(msg === 'Unauthorized' || msg === 'invalid credentials' ? 'Invalid credentials' : msg)
+      // A 401 is the wrong-password case and the only one worth rewording. It
+      // used to arrive as a fixed AuthError('unauthenticated') — the client
+      // threw before reading the body — so the login card rendered that
+      // internal token at the user, matching neither string this checked for.
+      // Everything else (a 429 lockout, a 5xx) is shown as the server put it.
+      setErr(ex instanceof AuthError ? 'Invalid credentials' : (ex as Error).message)
     } finally {
       setBusy(false)
     }
