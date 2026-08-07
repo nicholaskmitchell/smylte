@@ -155,7 +155,8 @@ describe('<Sidebar> mobile management drawer', () => {
     await userEvent.clear(nameField)
     await userEvent.type(nameField, 'Workflow')
     await userEvent.click(screen.getByRole('button', { name: 'Save' }))
-    expect(api.update).toHaveBeenCalledWith('work', { name: 'Workflow', color: null })
+    // Only the field the user changed — the color is not resent.
+    expect(api.update).toHaveBeenCalledWith('work', { name: 'Workflow' })
   })
 
   it('deletes a list from the drawer (two-tap confirm)', async () => {
@@ -209,5 +210,72 @@ describe('the "All" swatch ring', () => {
       expect(SWATCHES).toContain(color)
       expect(ALL_SWATCH_STYLE.background).toContain(color)
     }
+  })
+})
+
+// ── a wire color may carry an alpha byte, and must survive an edit ──────────
+// Apple Calendar and DAVx5 write calendar-color as #RRGGBBAA. The modal
+// truncated it to the RGB prefix for the swatch comparison and then saved THAT,
+// so opening the modal to rename a list PROPPATCHed the shortened color back and
+// dropped the alpha for every other client.
+
+describe('<Sidebar> edit modal colors', () => {
+  const editApi = () => ({
+    create: vi.fn(async () => undefined),
+    update: vi.fn(async () => list('work', 'Work')),
+    remove: vi.fn(async () => undefined),
+    reorder: vi.fn(async () => undefined),
+  })
+
+  const withColor = (color: string | null, api: ReturnType<typeof editApi>) => (
+    <Sidebar title="Lists" placeholder="List" items={[list('work', 'Work', color)]}
+      countOf={(l) => l.open_count} onItems={() => {}} api={api}
+      hiddenIds={new Set()} onHiddenChange={() => {}} />
+  )
+
+  const openEdit = async () =>
+    userEvent.click(screen.getByRole('button', { name: 'Edit Work' }))
+
+  it('does not resend a color the user never touched', async () => {
+    const api = editApi()
+    render(withColor('#FF9500FF', api))
+    await openEdit()
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+    expect(api.update).toHaveBeenCalledWith('work', { name: 'Work' })
+  })
+
+  it('keeps the alpha byte when only the name changes', async () => {
+    const api = editApi()
+    render(withColor('#FF9500FF', api))
+    await openEdit()
+    const nameField = screen.getByDisplayValue('Work')
+    await userEvent.clear(nameField)
+    await userEvent.type(nameField, 'Workflow')
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+    expect(api.update).toHaveBeenCalledWith('work', { name: 'Workflow' })
+  })
+
+  it('still marks the matching swatch active despite the alpha byte', async () => {
+    render(withColor('#D9480FFF', editApi()))
+    await openEdit()
+    expect(document.querySelector('.color-dot.on')).toHaveAttribute('title', '#D9480F')
+  })
+
+  it('sends the new color when the user actually picks one', async () => {
+    const api = editApi()
+    render(withColor('#FF9500FF', api))
+    await openEdit()
+    await userEvent.click(screen.getByTitle('#1565C0'))
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+    expect(api.update).toHaveBeenCalledWith('work', { name: 'Work', color: '#1565C0' })
+  })
+
+  it('sends null when the user clears the color', async () => {
+    const api = editApi()
+    render(withColor('#FF9500FF', api))
+    await openEdit()
+    await userEvent.click(screen.getByTitle('No color'))
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+    expect(api.update).toHaveBeenCalledWith('work', { name: 'Work', color: null })
   })
 })
