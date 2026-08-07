@@ -27,6 +27,18 @@ from icalendar import Calendar, Event, Todo, vRecur
 # Sentinel: a field left UNSET is not touched; None means "clear this property".
 UNSET: Any = object()
 
+
+class NotEditable(ValueError):
+    """The resource holds no component this edit can be applied to.
+
+    Distinct from the other ValueErrors raised here (an all-day <-> timed series
+    switch, an unknown repeat frequency), which are about the *request* and
+    which the API answers 422. This one is about the stored bytes: a foreign
+    client rewrote the resource into something that is no longer a task or an
+    event, so there is nothing to edit. Subclasses ValueError so every existing
+    handler keeps working."""
+
+
 _PRODID = "-//tasksd//Task Manager//EN"
 
 # Our four-level priority vocabulary -> RFC 5545 PRIORITY (spec §5).
@@ -150,7 +162,7 @@ def apply_changes(raw: bytes | str, edit: TaskEdit, *, now: datetime | None = No
     cal = Calendar.from_ical(raw)
     todo = _find_master_todo(cal)
     if todo is None:
-        raise ValueError("resource has no VTODO to edit")
+        raise NotEditable("resource has no VTODO to edit")
 
     if edit.summary is not UNSET:
         _set_text(todo, "SUMMARY", edit.summary)
@@ -384,7 +396,7 @@ def apply_event_changes(raw: bytes | str, edit: EventEdit, *, now: datetime | No
     cal = Calendar.from_ical(raw)
     event = _find_master_event(cal)
     if event is None:
-        raise ValueError("resource has no VEVENT to edit")
+        raise NotEditable("resource has no VEVENT to edit")
     # Asked before the write, while the master still carries the old rule.
     repeat_changed = edit.rrule is not UNSET and _rule_changed(event, edit.rrule)
     _apply_event_fields(event, edit, now)
@@ -525,7 +537,7 @@ def apply_occurrence_override(
     cal = Calendar.from_ical(raw)
     master = _find_master_event(cal)
     if master is None:
-        raise ValueError("resource has no VEVENT to edit")
+        raise NotEditable("resource has no VEVENT to edit")
     anchor = _anchor_from_iso(recurrence_id, master)
     override = _find_override(cal, anchor)
     if override is None:
@@ -545,7 +557,7 @@ def exclude_occurrence(
     cal = Calendar.from_ical(raw)
     master = _find_master_event(cal)
     if master is None:
-        raise ValueError("resource has no VEVENT to edit")
+        raise NotEditable("resource has no VEVENT to edit")
     anchor = _anchor_from_iso(recurrence_id, master)
     master.add("EXDATE", anchor)
     cal.subcomponents = [
@@ -706,7 +718,7 @@ def shift_series(
     cal = Calendar.from_ical(raw)
     master = _find_master_event(cal)
     if master is None or master.get("DTSTART") is None:
-        raise ValueError("resource has no dated VEVENT to edit")
+        raise NotEditable("resource has no dated VEVENT to edit")
 
     anchor = _anchor_from_iso(recurrence_id, master)
     if isinstance(anchor, datetime) != isinstance(edit.dtstart, datetime):
@@ -836,7 +848,7 @@ def split_series(
     head = Calendar.from_ical(raw)
     hmaster = _find_master_event(head)
     if hmaster is None:
-        raise ValueError("resource has no VEVENT to edit")
+        raise NotEditable("resource has no VEVENT to edit")
     anchor = _anchor_from_iso(recurrence_id, hmaster)
     rule = _rrule_dict(hmaster)
     if rule is not None:
