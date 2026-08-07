@@ -38,7 +38,7 @@ export const MODULE_SPECS: Record<ModuleKind, ModuleSpec> = {
   today: { label: 'Today', blurb: 'Tasks due today, across every list.', w: 4, h: 6, minW: 3, minH: 3 },
   overdue: { label: 'Overdue', blurb: 'Anything past its due date.', w: 4, h: 5, minW: 3, minH: 3 },
   upcoming: { label: 'Upcoming', blurb: 'The next seven days of tasks.', w: 4, h: 6, minW: 3, minH: 3 },
-  mini_calendar: { label: 'Mini calendar', blurb: 'This month, dotted where events fall.', w: 4, h: 6, minW: 3, minH: 5 },
+  mini_calendar: { label: 'Mini calendar', blurb: "This month, dotted in each calendar's color.", w: 4, h: 6, minW: 3, minH: 5 },
   completed: { label: 'Recently completed', blurb: 'What you have finished lately.', w: 4, h: 5, minW: 3, minH: 3 },
   booking_links: { label: 'Booking links', blurb: 'Your scheduling links and their state.', w: 6, h: 5, minW: 3, minH: 3 },
   bookings: { label: 'Upcoming bookings', blurb: 'Who has booked time with you.', w: 6, h: 5, minW: 3, minH: 3 },
