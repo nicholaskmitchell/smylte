@@ -1,8 +1,8 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { App } from './App'
-import { api, subscribe } from './api'
+import { api, AuthError, HttpError, subscribe } from './api'
 
 // Mock the whole API module: every method becomes a vi.fn() so the shell and
 // whichever view mounts never touch the network (jsdom has no EventSource).
@@ -231,5 +231,82 @@ describe('<App> tab preferences', () => {
     settle({ start_tab: 'calendar' })
     await waitFor(() => expect(m.getSettings).toHaveBeenCalled())
     expect(active()).toBe('Tasks')
+  })
+})
+
+// ── SSE routing: a preference write is not a data change ────────────────────
+
+describe('<App> live updates', () => {
+  /** Grab the handler App passed to subscribe, so events can be delivered. */
+  const emit = () => vi.mocked(subscribe).mock.calls[0][0]
+
+  it('refetches task data on a data event', async () => {
+    render(<App />)
+    await screen.findByRole('button', { name: 'Tasks' })
+    await waitFor(() => expect(subscribe).toHaveBeenCalled())
+    const before = m.lists.mock.calls.length
+
+    await act(async () => {
+      emit()('task_updated')
+      await new Promise((r) => setTimeout(r, 300))   // past the coalescing debounce
+    })
+    await waitFor(() => expect(m.lists.mock.calls.length).toBeGreaterThan(before))
+  })
+
+  it('does not refetch anything for a settings write', async () => {
+    // The server publishes settings_updated to every subscriber including the
+    // tab that made the write, and this used to bump `rev` — 1 + N requests per
+    // event in TasksView alone, so one appearance-slider drag (which writes on
+    // every step) became a request storm over data the change cannot affect.
+    render(<App />)
+    await screen.findByRole('button', { name: 'Tasks' })
+    await waitFor(() => expect(subscribe).toHaveBeenCalled())
+    const before = m.lists.mock.calls.length
+
+    await act(async () => {
+      emit()('settings_updated')
+      await new Promise((r) => setTimeout(r, 300))
+    })
+    expect(m.lists.mock.calls.length).toBe(before)
+  })
+})
+
+// ── a settings write that fails must not be swallowed ───────────────────────
+
+describe('<App> settings writes', () => {
+  it('returns to the login form when the session has expired', async () => {
+    // These were `.catch(() => {})`, which ate an AuthError as happily as an
+    // offline blip: the tab kept accepting preference changes, never fell back
+    // to the login form, and lost every one of them on the next reload.
+    m.putSettings.mockRejectedValue(new AuthError('unauthenticated'))
+    render(<App />)
+    await screen.findByRole('button', { name: 'Tasks' })
+    await userEvent.click(screen.getByRole('button', { name: 'Settings' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Customize tabs' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Move Calendar left' }))
+    expect(await screen.findByRole('button', { name: /sign in/i })).toBeInTheDocument()
+  })
+
+  it('surfaces a rejection from a server it did reach', async () => {
+    m.putSettings.mockRejectedValue(new HttpError(422, 'dashboard.0.h: less than or equal to 40'))
+    render(<App />)
+    await screen.findByRole('button', { name: 'Tasks' })
+    await userEvent.click(screen.getByRole('button', { name: 'Settings' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Customize tabs' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Move Calendar left' }))
+    expect(await screen.findByText(/couldn't save your preferences/i)).toBeInTheDocument()
+  })
+
+  it('stays quiet when the request never reached a server', async () => {
+    // Offline is ordinary and the local state stands in fine.
+    m.putSettings.mockRejectedValue(new TypeError('Failed to fetch'))
+    render(<App />)
+    await screen.findByRole('button', { name: 'Tasks' })
+    await userEvent.click(screen.getByRole('button', { name: 'Settings' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Customize tabs' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Move Calendar left' }))
+    await waitFor(() => expect(m.putSettings).toHaveBeenCalled())
+    expect(screen.queryByText(/couldn't save/i)).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /sign in/i })).not.toBeInTheDocument()
   })
 })
