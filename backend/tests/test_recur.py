@@ -18,10 +18,13 @@ from tasksd.dav.client import CollectionInfo, Item
 from tasksd.db import store
 from tasksd.ical import (
     EventEdit,
+    apply_event_changes,
     apply_occurrence_override,
+    build_new_event,
     exclude_occurrence,
     parse_calendar,
     recur,
+    rrule_from_spec,
     shift_series,
     split_series,
 )
@@ -790,3 +793,70 @@ def test_shift_series_preserves_recurrence_id_parameters():
     # TZID is re-derived from the shifted value, never carried over verbatim.
     assert rid.params.get("TZID") == "America/New_York"
     assert rid.dt == datetime(2026, 1, 12, 10, 0, tzinfo=ZoneInfo("America/New_York"))
+
+
+# ── UNTIL matches DTSTART's value type (RFC 5545 §3.3.10) ────────────────────
+# The "Repeat until" field is an <input type="date">, so a timed series used to
+# get `UNTIL=20260302` against a DATE-TIME DTSTART — read as that day's midnight,
+# dropping the occurrence on the very day the user picked.
+
+def _rrule_line(raw: bytes) -> str:
+    return next(ln for ln in raw.decode().replace("\r\n", "\n").split("\n")
+                if ln.startswith("RRULE"))
+
+
+_UNTIL_WIN = (date(2026, 1, 1), date(2026, 4, 1))
+
+
+def test_until_day_is_included_on_a_floating_timed_series():
+    raw = build_new_event(
+        "u@f", summary="S", dtstart=datetime(2026, 2, 2, 9, 0),
+        edit=EventEdit(rrule=rrule_from_spec("weekly", until=date(2026, 3, 2))),
+    )
+    assert _rrule_line(raw) == "RRULE:FREQ=WEEKLY;UNTIL=20260302T235959"
+    assert _starts(recur.expand_occurrences(raw, *_UNTIL_WIN))[-1] == "2026-03-02T09:00:00"
+
+
+def test_until_is_utc_and_covers_the_local_day_on_a_zone_aware_series():
+    """DTSTART is not floating, so RFC 5545 requires a UTC UNTIL — but the day
+    the user picked is a *local* day, so it has to be widened in the series' own
+    zone before conversion, not in UTC."""
+    raw = build_new_event(
+        "u@z", summary="S",
+        dtstart=datetime(2026, 2, 2, 9, 0, tzinfo=ZoneInfo("America/New_York")),
+        edit=EventEdit(rrule=rrule_from_spec("weekly", until=date(2026, 3, 2))),
+    )
+    # 2026-03-02 23:59:59 New York, expressed as the UTC instant it is.
+    assert _rrule_line(raw) == "RRULE:FREQ=WEEKLY;UNTIL=20260303T045959Z"
+    assert _starts(recur.expand_occurrences(raw, *_UNTIL_WIN))[-1] == \
+        "2026-03-02T09:00:00-05:00"
+
+
+def test_until_stays_a_bare_date_on_an_all_day_series():
+    raw = build_new_event(
+        "u@a", summary="A", dtstart=date(2026, 2, 2), dtend=date(2026, 2, 3),
+        edit=EventEdit(rrule=rrule_from_spec("weekly", until=date(2026, 3, 2))),
+    )
+    assert _rrule_line(raw) == "RRULE:FREQ=WEEKLY;UNTIL=20260302"
+    assert _starts(recur.expand_occurrences(raw, *_UNTIL_WIN))[-1] == "2026-03-02"
+
+
+def test_a_foreign_until_is_not_rewritten_by_an_unrelated_edit():
+    # Already the right value type: renaming the event must leave it byte-identical
+    # (invariant #2 — we only touch what the user changed).
+    raw = foreign_event_raw("u@k", "F", rrule="FREQ=WEEKLY;UNTIL=20260302T090000Z")
+    assert _rrule_line(apply_event_changes(raw, EventEdit(summary="renamed"))) == \
+        "RRULE:FREQ=WEEKLY;UNTIL=20260302T090000Z"
+
+
+def test_shifting_a_series_keeps_until_in_dtstarts_value_type():
+    raw = build_new_event(
+        "u@s", summary="S", dtstart=datetime(2026, 2, 2, 9, 0),
+        edit=EventEdit(rrule=rrule_from_spec("weekly", until=date(2026, 3, 2))),
+    )
+    shifted = shift_series(raw, "2026-02-02T09:00:00",
+                           EventEdit(dtstart=datetime(2026, 2, 3, 9, 0)))
+    # UNTIL moved with the series and stayed a floating DATE-TIME.
+    assert _rrule_line(shifted) == "RRULE:FREQ=WEEKLY;UNTIL=20260303T235959"
+    assert _starts(recur.expand_occurrences(shifted, *_UNTIL_WIN))[-1] == \
+        "2026-03-03T09:00:00"

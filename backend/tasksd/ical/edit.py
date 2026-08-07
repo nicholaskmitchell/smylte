@@ -222,10 +222,37 @@ def _find_master_event(cal: Calendar):
     return events[0] if events else None
 
 
+def _coerce_until(until, dtstart) -> date | datetime:
+    """UNTIL, expressed in the value type RFC 5545 §3.3.10 requires of it.
+
+    The rule is that UNTIL must match DTSTART's value type, and must be UTC
+    whenever DTSTART is not floating. The UI's "Repeat until" field is an
+    ``<input type="date">``, so a timed series arrives here asking to repeat
+    until a bare *day* — and an expander reads a DATE as that day's midnight,
+    which drops the very occurrence the user picked the day for. Widening the
+    day to its last second (in the series' own zone, so "until Mar 2" means the
+    end of Mar 2 where the user lives) keeps it."""
+    if not isinstance(dtstart, datetime):
+        # All-day series: UNTIL stays a bare DATE.
+        return until.date() if isinstance(until, datetime) else until
+    if not isinstance(until, datetime):
+        until = datetime.combine(until, time(23, 59, 59), tzinfo=dtstart.tzinfo)
+    elif until.tzinfo is None and dtstart.tzinfo is not None:
+        until = until.replace(tzinfo=dtstart.tzinfo)
+    return _as_utc(until) if dtstart.tzinfo is not None else until.replace(tzinfo=None)
+
+
 def _set_rrule(event: Event, rule: dict | None) -> None:
+    """Write the master's RRULE. The single choke point for every rule write —
+    `_apply_event_fields`, `_shift_rrule`, and both of `split_series`' rewrites —
+    so UNTIL is normalized against DTSTART here, once."""
     _replace(event, "RRULE")
-    if rule:
-        event.add("RRULE", vRecur(rule))
+    if not rule:
+        return
+    ds = event.get("DTSTART")
+    if rule.get("UNTIL") and ds is not None:
+        rule = dict(rule, UNTIL=[_coerce_until(u, ds.dt) for u in rule["UNTIL"]])
+    event.add("RRULE", vRecur(rule))
 
 
 def _stamp(event: Event, now: datetime) -> None:
