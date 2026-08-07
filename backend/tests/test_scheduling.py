@@ -603,3 +603,79 @@ def test_link_is_disabled_and_unbookable_once_its_calendar_is_deleted(client):
     assert len(mine) == 1
     assert mine[0]["enabled"] is False
     assert mine[0]["calendar_missing"] is True
+
+
+
+# ── the per-link ceiling counts bookings, not requests ──────────────────────
+# A booking link is meant to be published, so holding the token proves nothing.
+# When every request spent the link's budget, anyone who received the link could
+# exhaust it and keep every real visitor on a 429 — a denial of service against
+# the owner, using only the URL they handed out. At ~1 request a minute, within
+# reach of two or three addresses, the link stayed dead indefinitely.
+
+@pytest.fixture
+def many_ips(client):
+    """A client whose requests each appear to come from a fresh address.
+
+    The per-CLIENT limiter (15/h) would otherwise mask the per-LINK one. Varying
+    the source is exactly the attacker's move the per-link cap exists to stop —
+    the audit's scenario is two IPs, or two IPv6 /64s from one VPS."""
+    from fastapi.testclient import TestClient
+
+    # X-Real-IP is trusted only from a loopback peer (Caddy overwrites it), so
+    # present as loopback and vary the header.
+    with TestClient(client.app, client=("127.0.0.1", 1)) as c:
+        n = 0
+
+        def post(url, **kw):
+            nonlocal n
+            n += 1
+            headers = {**_NO_COOKIE, "X-Real-IP": f"198.51.100.{n % 250}"}
+            return c.post(url, headers=headers, **kw)
+
+        yield post
+
+
+def _book_body(slot, **over):
+    body = {"start": slot["start"], "name": "Ada", "email": "ada@example.com",
+            "client_id": uuid.uuid4().hex}
+    body.update(over)
+    return body
+
+
+@pytest.mark.radicale
+@pytest.mark.parametrize("label, bad, expected", [
+    ("a start that is not an open slot", {"start": "2020-01-01T09:00:00+00:00"}, 409),
+    ("a malformed email", {"email": "not-an-email"}, 422),
+    ("a blank name", {"name": "  "}, 422),
+])
+def test_refused_bookings_do_not_spend_the_links_budget(client, many_ips, label, bad, expected):
+    cal = _cal(client)
+    link = _mklink(client, cal["id"])
+    info = client.get(f"/api/public/booking/{link['token']}", headers=_NO_COOKIE).json()
+    url = f"/api/public/booking/{link['token']}/book"
+
+    # Well past the 30-booking ceiling, none of which is a booking.
+    for i in range(40):
+        r = many_ips(url, json=_book_body(info["slots"][0], **bad))
+        assert r.status_code == expected, (label, i, r.status_code, r.text)
+
+    # …and a real visitor can still book.
+    r = many_ips(url, json=_book_body(info["slots"][0]))
+    assert r.status_code == 201, (label, r.text)
+
+
+@pytest.mark.radicale
+def test_the_per_link_ceiling_still_bounds_real_bookings(client, many_ips):
+    """The cap's actual job — bounding junk events written to the owner's
+    calendar regardless of source — has to keep working."""
+    cal = _cal(client)
+    link = _mklink(client, cal["id"], duration_minutes=15)
+    info = client.get(f"/api/public/booking/{link['token']}", headers=_NO_COOKIE).json()
+    url = f"/api/public/booking/{link['token']}/book"
+
+    codes = []
+    for slot in info["slots"][:35]:
+        codes.append(many_ips(url, json=_book_body(slot)).status_code)
+    assert 429 in codes, "the per-link ceiling never engaged"
+    assert codes.count(201) <= 30, codes
