@@ -34,11 +34,15 @@ gated** pending real-device captures.
 minimum notice, and a horizon, with a public booking page at `/book/{token}`
 that writes a real event onto the target calendar.
 
-**Home.** An optional dashboard tab: a 12-column canvas of modules — Today,
-Overdue, Upcoming, mini calendar, recently completed, booking links, upcoming
-bookings, quick add — that you drag, resize and add/remove in **Arrange** mode.
-The layout is account-synced. Arranging is desktop-only for now; phones render
-the same modules stacked in the saved order. Tasks stays the landing tab.
+**Home.** The landing tab: a 12-column canvas of modules — Today, Overdue,
+Upcoming, mini calendar, recently completed, booking links, upcoming bookings,
+quick add — that you drag, resize and add/remove in **Arrange** mode. The layout
+is account-synced. Arranging is desktop-only for now; phones render the same
+modules stacked in the saved order. The mini calendar dots each day in its
+calendars' colors, and a day opens a read-only list of its events.
+
+**Tabs.** Settings → Tabs reorders the top strip and picks which tab the app
+opens on — a fixed one, or wherever you left off. Both follow the account.
 
 **Appearance.** Settings → Appearance opens a live editor over the design
 system: every color token (with a picker and a raw OKLCH/hex field), corner

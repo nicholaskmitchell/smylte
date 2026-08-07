@@ -6,6 +6,7 @@
 // reads in one place. The backend mirrors them in SettingsPatch.
 import type { Appearance } from './appearance'
 import type { DashboardModule } from './dashboard'
+import type { Tab, TabStart } from './tabs'
 export type { Appearance, DashboardModule }
 
 export class AuthError extends Error {}
@@ -186,6 +187,9 @@ export interface Settings {
   theme?: 'light' | 'dark'
   appearance?: Appearance          // custom theme overrides (see appearance.ts)
   dashboard?: DashboardModule[]    // Home tab module arrangement (see dashboard.ts)
+  tab_order?: Tab[]                // top-nav order, sanitized on read (see tabs.ts)
+  start_tab?: TabStart             // which tab the app opens on; 'last' remembers
+  last_tab?: Tab                   // where the user left off; only written while start_tab is 'last'
   tasks_view?: TasksViewMode
   sidebar_collapsed?: boolean
   hidden_calendars?: string[]      // calendar ids hidden in the calendar view

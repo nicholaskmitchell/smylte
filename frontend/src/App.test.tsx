@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { App } from './App'
 import { api, subscribe } from './api'
@@ -26,6 +26,9 @@ beforeEach(() => {
   m.lists.mockResolvedValue([])
   m.tasks.mockResolvedValue([])
   m.calendars.mockResolvedValue([])
+  m.events.mockResolvedValue([])
+  m.schedulingLinks.mockResolvedValue([])
+  m.schedulingBookings.mockResolvedValue([])
 })
 
 describe('<App> auth gate', () => {
@@ -46,14 +49,23 @@ describe('<App> auth gate', () => {
     expect(screen.getByRole('button', { name: 'Scheduling' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Home' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /sign in/i })).not.toBeInTheDocument()
-    expect(m.lists).toHaveBeenCalled()          // default tab (Tasks) loaded
+    expect(m.calendars).toHaveBeenCalled()      // default tab (Home) loaded
     expect(subscribe).toHaveBeenCalledOnce()    // live updates wired up
   })
 
-  it('still opens on Tasks — adding Home does not move anyone', async () => {
+  it('opens on Home, at the head of the strip', async () => {
     render(<App />)
-    const tasks = await screen.findByRole('button', { name: 'Tasks' })
-    expect(tasks.className).toContain('active')
+    const home = await screen.findByRole('button', { name: 'Home' })
+    expect(home.className).toContain('active')
+    expect(screen.getByRole('button', { name: 'Tasks' }).className).not.toContain('active')
+    expect([...document.querySelectorAll('.tabs .tab')].map((b) => b.textContent))
+      .toEqual(['Home', 'Tasks', 'Calendar', 'Scheduling'])
+  })
+
+  it('switches tabs on a click', async () => {
+    render(<App />)
+    await userEvent.click(await screen.findByRole('button', { name: 'Tasks' }))
+    expect(screen.getByRole('button', { name: 'Tasks' }).className).toContain('active')
     expect(screen.getByRole('button', { name: 'Home' }).className).not.toContain('active')
   })
 
@@ -116,5 +128,108 @@ describe('<App> auth gate', () => {
     await userEvent.click(screen.getByRole('button', { name: /log out/i }))
     expect(m.logout).toHaveBeenCalledOnce()
     expect(await screen.findByRole('button', { name: /sign in/i })).toBeInTheDocument()
+  })
+})
+
+describe('<App> tab preferences', () => {
+  const strip = () => [...document.querySelectorAll('.tabs .tab')].map((b) => b.textContent)
+  const active = () =>
+    document.querySelector('.tabs .tab.active')?.textContent ?? null
+
+  it('renders the account’s saved order', async () => {
+    m.getSettings.mockResolvedValue({ tab_order: ['calendar', 'scheduling', 'home', 'tasks'] })
+    render(<App />)
+    await screen.findByRole('button', { name: 'Tasks' })
+    await waitFor(() => expect(strip()).toEqual(['Calendar', 'Scheduling', 'Home', 'Tasks']))
+  })
+
+  it('repairs a stored order that lost a tab', async () => {
+    m.getSettings.mockResolvedValue({ tab_order: ['scheduling'] as never })
+    render(<App />)
+    await screen.findByRole('button', { name: 'Tasks' })
+    // A missing tab would leave its view unreachable, so it is appended.
+    await waitFor(() => expect(strip()).toEqual(['Scheduling', 'Home', 'Tasks', 'Calendar']))
+  })
+
+  it('opens on the chosen tab', async () => {
+    m.getSettings.mockResolvedValue({ start_tab: 'calendar' })
+    render(<App />)
+    await screen.findByRole('button', { name: 'Tasks' })
+    await waitFor(() => expect(active()).toBe('Calendar'))
+  })
+
+  it('reopens where the user left off', async () => {
+    m.getSettings.mockResolvedValue({ start_tab: 'last', last_tab: 'scheduling' })
+    render(<App />)
+    await screen.findByRole('button', { name: 'Tasks' })
+    await waitFor(() => expect(active()).toBe('Scheduling'))
+  })
+
+  it('falls back to the first tab when there is nothing to remember', async () => {
+    m.getSettings.mockResolvedValue({ start_tab: 'last', tab_order: ['calendar', 'home'] })
+    render(<App />)
+    await screen.findByRole('button', { name: 'Tasks' })
+    await waitFor(() => expect(active()).toBe('Calendar'))
+  })
+
+  it('remembers the tab only while set to reopen on the last one', async () => {
+    m.getSettings.mockResolvedValue({ start_tab: 'last' })
+    render(<App />)
+    await screen.findByRole('button', { name: 'Tasks' })
+    await waitFor(() => expect(m.getSettings).toHaveBeenCalled())
+    await userEvent.click(screen.getByRole('button', { name: 'Calendar' }))
+    expect(m.putSettings).toHaveBeenCalledWith({ last_tab: 'calendar' })
+  })
+
+  it('writes nothing on a tab click when the start tab is fixed', async () => {
+    render(<App />)
+    await screen.findByRole('button', { name: 'Tasks' })
+    await waitFor(() => expect(m.getSettings).toHaveBeenCalled())
+    await userEvent.click(screen.getByRole('button', { name: 'Calendar' }))
+    expect(m.putSettings).not.toHaveBeenCalled()
+  })
+
+  it('saves a reorder from the tabs editor', async () => {
+    render(<App />)
+    await screen.findByRole('button', { name: 'Tasks' })
+    await userEvent.click(screen.getByRole('button', { name: 'Settings' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Customize tabs' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Move Calendar left' }))
+    expect(m.putSettings).toHaveBeenCalledWith({
+      tab_order: ['home', 'calendar', 'tasks', 'scheduling'],
+    })
+    await waitFor(() => expect(strip()).toEqual(['Home', 'Calendar', 'Tasks', 'Scheduling']))
+  })
+
+  it('saves the tab to open on', async () => {
+    render(<App />)
+    await screen.findByRole('button', { name: 'Tasks' })
+    await userEvent.click(screen.getByRole('button', { name: 'Settings' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Customize tabs' }))
+    await userEvent.selectOptions(screen.getByLabelText('Opens on'), 'scheduling')
+    expect(m.putSettings).toHaveBeenCalledWith({ start_tab: 'scheduling' })
+  })
+
+  it('paints the remembered tab before the settings fetch lands', async () => {
+    // The boot cache exists only to avoid a flash of the wrong tab; the server
+    // still gets the last word a moment later.
+    localStorage.setItem('smylte-tab', 'scheduling')
+    let settle: (v: unknown) => void = () => {}
+    m.getSettings.mockReturnValue(new Promise((r) => { settle = r }) as never)
+    render(<App />)
+    await screen.findByRole('button', { name: 'Tasks' })
+    expect(active()).toBe('Scheduling')
+    settle({ start_tab: 'calendar' })
+    await waitFor(() => expect(active()).toBe('Calendar'))
+  })
+
+  it('does not yank the view away from a tab clicked while loading', async () => {
+    let settle: (v: unknown) => void = () => {}
+    m.getSettings.mockReturnValue(new Promise((r) => { settle = r }) as never)
+    render(<App />)
+    await userEvent.click(await screen.findByRole('button', { name: 'Tasks' }))
+    settle({ start_tab: 'calendar' })
+    await waitFor(() => expect(m.getSettings).toHaveBeenCalled())
+    expect(active()).toBe('Tasks')
   })
 })

@@ -1,8 +1,9 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
-import { render, screen, within } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { HomeView, busyDays } from './HomeView'
+import { HomeView } from './HomeView'
 import { api } from '../api'
+import { monthGrid } from '../calendar'
 import { DEFAULT_LAYOUT, type DashboardModule } from '../dashboard'
 
 vi.mock('../api', async (importOriginal) => {
@@ -25,9 +26,11 @@ const list = { id: 'l1', href: '/l1/', name: 'Work', is_task_list: true, is_cale
   open_count: 1, task_count: 1, event_count: 0, total: 1, color: '#D9480F' }
 
 /** Render with a controlled layout so assertions can watch it change. */
-function setup(initial: DashboardModule[] = DEFAULT_LAYOUT) {
+function setup(initial: DashboardModule[] = DEFAULT_LAYOUT,
+  props: { hiddenCalendars?: string[]; archivedCalendars?: string[] } = {}) {
   const onLayoutChange = vi.fn()
-  render(<HomeView rev={0} onExpire={vi.fn()} layout={initial} onLayoutChange={onLayoutChange} />)
+  render(<HomeView rev={0} onExpire={vi.fn()} layout={initial}
+    onLayoutChange={onLayoutChange} {...props} />)
   return { onLayoutChange }
 }
 
@@ -179,56 +182,134 @@ describe('<HomeView> module contents', () => {
   })
 })
 
-describe('busyDays', () => {
-  const grid = Array.from({ length: 42 }, (_, i) => {
-    const d = new Date(2026, 6, 28)      // 2026-07-28 .. 2026-09-07
-    d.setDate(d.getDate() + i)
-    return d
-  })
-  const ev = (start: string | null, end: string | null): import('../api').CalEvent => ({
-    uid: 'e', id: 'e', recurrence_id: null, is_recurring: false, calendar: 'c',
-    summary: 'E', description: null, location: null,
-    start, start_is_date: false, end, end_is_date: false,
-    all_day: false, status: null, tags: [], has_rrule: false, href: '/c/e.ics', etag: '"1"',
+// ── mini calendar ──────────────────────────────────────────────────────────
+// The module always renders the current month, so fixtures are built from
+// today rather than a fixed date — the same trick as `today()` above.
+
+const grid = monthGrid(new Date())
+const p2 = (n: number) => String(n).padStart(2, '0')
+const key = (d: Date) => `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`
+/** A day comfortably inside the rendered month, and a quiet one after it. */
+const busyDay = grid.find((d) => d.getDate() === 15)!
+const quietDay = grid.find((d) => d.getDate() === 16)!
+const longLabel = (d: Date) =>
+  d.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })
+
+const cal = (id: string, color: string | null): import('../api').List => ({
+  id, href: `/${id}/`, name: id, is_task_list: false, is_calendar: true,
+  open_count: 0, task_count: 0, event_count: 1, total: 1, color,
+})
+
+const event = (calId: string, id: string, summary: string, hour = 9,
+  day: Date = busyDay): import('../api').CalEvent => ({
+  uid: id, id, recurrence_id: null, is_recurring: false, calendar: `/${calId}/`,
+  summary, description: null, location: null,
+  start: `${key(day)}T${p2(hour)}:00:00`, start_is_date: false,
+  end: `${key(day)}T${p2(hour + 1)}:00:00`, end_is_date: false,
+  all_day: false, status: null, tags: [], has_rrule: false,
+  href: `/${calId}/${id}.ics`, etag: '"1"',
+})
+
+/** Mock the calendar endpoints, routing each calendar's events by id. */
+function withCalendars(cals: import('../api').List[],
+  events: Record<string, import('../api').CalEvent[]>) {
+  m.calendars.mockResolvedValue(cals)
+  m.events.mockImplementation(async (id: string) => events[id] ?? [])
+}
+
+const MINI: DashboardModule[] = [{ id: 'x', kind: 'mini_calendar', x: 0, y: 0, w: 4, h: 6 }]
+
+describe('mini calendar', () => {
+  const dayButton = (d: Date) =>
+    screen.getByRole('button', { name: new RegExp(`^${longLabel(d)}`) })
+
+  it('fetches the whole rendered grid, not just the current month', async () => {
+    withCalendars([cal('c1', '#1565C0')], {})
+    setup(MINI)
+    await waitFor(() => expect(m.events).toHaveBeenCalled())
+    // The grid's first and last cells belong to the neighbouring months; before
+    // this they were fetched out of range and could never carry a dot.
+    expect(m.events).toHaveBeenCalledWith('c1', key(grid[0]), key(new Date(
+      grid[41].getFullYear(), grid[41].getMonth(), grid[41].getDate() + 1)))
   })
 
-  it('dots every day a span covers', () => {
-    const days = busyDays([ev('2026-08-03T09:00:00', '2026-08-05T10:00:00')], grid)
-    expect([...days].sort()).toEqual(['2026-08-03', '2026-08-04', '2026-08-05'])
+  it('dots a day in each of its calendars’ colors, deduped', async () => {
+    withCalendars([cal('c1', '#1565C0'), cal('c2', '#D9480F')], {
+      // Two events on c1: one dot, not two — the strip says which calendars.
+      c1: [event('c1', 'a', 'Standup'), event('c1', 'b', 'Retro', 11)],
+      c2: [event('c2', 'c', 'Dentist', 14)],
+    })
+    setup(MINI)
+    await waitFor(() => expect(dayButton(busyDay)).toBeEnabled())
+    const dots = dayButton(busyDay).querySelectorAll('.mini-dot')
+    expect(dots).toHaveLength(2)
+    expect(dots[0].getAttribute('style')).toContain('--ev-c: #1565C0')
+    expect(dots[1].getAttribute('style')).toContain('--ev-c: #D9480F')
   })
 
-  it('dots a single day for an event with no end', () => {
-    expect([...busyDays([ev('2026-08-03T09:00:00', null)], grid)]).toEqual(['2026-08-03'])
+  it('caps the dots at three however many calendars land on a day', async () => {
+    const cals = ['c1', 'c2', 'c3', 'c4'].map((id, i) =>
+      cal(id, ['#1565C0', '#D9480F', '#2E7D32', '#6A1B9A'][i]))
+    withCalendars(cals, Object.fromEntries(
+      cals.map((c, i) => [c.id, [event(c.id, `e${i}`, `Event ${i}`, 9 + i)]])))
+    setup(MINI)
+    await waitFor(() => expect(dayButton(busyDay)).toBeEnabled())
+    expect(dayButton(busyDay).querySelectorAll('.mini-dot')).toHaveLength(3)
+    // The count the dots can't show still reaches a screen reader.
+    expect(dayButton(busyDay)).toHaveAccessibleName(`${longLabel(busyDay)}, 4 events`)
   })
 
-  it('dots the final day even when the end is earlier in the day than the start', () => {
-    // Whole-day comparison: carrying the 09:00 start into the bound check used
-    // to drop 08-05 here, because 08-05T09:00 sorts after the 08:00 end.
-    expect([...busyDays([ev('2026-08-03T09:00:00', '2026-08-05T08:00:00')], grid)].sort())
-      .toEqual(['2026-08-03', '2026-08-04', '2026-08-05'])
+  it('opens a read-only popover of the day’s events', async () => {
+    withCalendars([cal('c1', '#1565C0')], { c1: [event('c1', 'a', 'Standup')] })
+    setup(MINI)
+    await waitFor(() => expect(dayButton(busyDay)).toBeEnabled())
+    await userEvent.click(dayButton(busyDay))
+    const pop = screen.getByRole('dialog')
+    expect(within(pop).getByText('Standup')).toBeInTheDocument()
+    // Home shows the day; the Calendar tab is where it gets edited.
+    expect(within(pop).queryByRole('button')).toBeNull()
   })
 
-  it('clamps a span that runs far past the grid instead of walking to its end', () => {
-    // A DTEND millennia out is trivially written by another CalDAV client.
-    // Unclamped this stepped a day at a time to reach it and froze the tab.
-    const t = performance.now()
-    const days = busyDays([ev('2026-08-03T09:00:00', '9999-12-31T10:00:00')], grid)
-    expect(performance.now() - t).toBeLessThan(500)
-    expect(days.size).toBe(36)                  // 2026-08-03 .. 2026-09-07, no further
-    expect(days.has('2026-09-07')).toBe(true)
-    expect(days.has('2026-09-08')).toBe(false)
+  it('closes the popover on Escape and returns focus to the day', async () => {
+    withCalendars([cal('c1', '#1565C0')], { c1: [event('c1', 'a', 'Standup')] })
+    setup(MINI)
+    await waitFor(() => expect(dayButton(busyDay)).toBeEnabled())
+    await userEvent.click(dayButton(busyDay))
+    await userEvent.keyboard('{Escape}')
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(dayButton(busyDay)).toHaveFocus()
   })
 
-  it('clamps a span that started long before the grid', () => {
-    const t = performance.now()
-    const days = busyDays([ev('1900-01-01T09:00:00', '2026-08-01T10:00:00')], grid)
-    expect(performance.now() - t).toBeLessThan(500)
-    expect([...days].sort()).toEqual(['2026-07-28', '2026-07-29', '2026-07-30',
-      '2026-07-31', '2026-08-01'])
+  it('leaves a day with no events inert', async () => {
+    withCalendars([cal('c1', '#1565C0')], { c1: [event('c1', 'a', 'Standup')] })
+    setup(MINI)
+    await waitFor(() => expect(dayButton(busyDay)).toBeEnabled())
+    expect(dayButton(quietDay)).toBeDisabled()
+    expect(dayButton(quietDay).querySelector('.mini-dot')).toBeNull()
   })
 
-  it('skips events whose dates do not parse', () => {
-    expect(busyDays([ev('nonsense', 'also-nonsense')], grid).size).toBe(0)
-    expect(busyDays([ev('2026-08-03T09:00:00', 'nonsense')], grid).size).toBe(0)
+  it('drops a hidden calendar’s dots without refetching', async () => {
+    withCalendars([cal('c1', '#1565C0'), cal('c2', '#D9480F')], {
+      c1: [event('c1', 'a', 'Standup')],
+      c2: [event('c2', 'c', 'Dentist', 14)],
+    })
+    setup(MINI, { hiddenCalendars: ['c2'] })
+    await waitFor(() => expect(dayButton(busyDay)).toBeEnabled())
+    const dots = dayButton(busyDay).querySelectorAll('.mini-dot')
+    expect(dots).toHaveLength(1)
+    expect(dots[0].getAttribute('style')).toContain('--ev-c: #1565C0')
+    // Visibility is a pure filter — hiding a calendar costs no round trip.
+    expect(m.events).toHaveBeenCalledTimes(2)
+  })
+
+  it('never fetches an archived calendar', async () => {
+    withCalendars([cal('c1', '#1565C0'), cal('c2', '#D9480F')], {
+      c1: [event('c1', 'a', 'Standup')],
+      c2: [event('c2', 'c', 'Dentist', 14)],
+    })
+    setup(MINI, { archivedCalendars: ['c2'] })
+    await waitFor(() => expect(dayButton(busyDay)).toBeEnabled())
+    expect(m.events).toHaveBeenCalledTimes(1)
+    expect(m.events).toHaveBeenCalledWith('c1', expect.any(String), expect.any(String))
   })
 })
