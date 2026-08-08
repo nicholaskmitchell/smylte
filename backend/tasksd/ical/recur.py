@@ -37,6 +37,12 @@ log = logging.getLogger("tasksd.recur")
 # renders as its master row instead (see _pathological_rule).
 _MAX_PER_DAY = 24
 
+# Ceiling on the *total* walk from a rule's DTSTART to the end of the requested
+# window. Generous enough for any real series (a decade of daily standups is
+# ~3.6k, 24/day for five years is ~44k) while refusing the ancient-DTSTART dense
+# rules whose skip phase dominates everything. See _instances_before.
+_MAX_TOTAL_INSTANCES = 200_000
+
 # How many instances each FREQ yields per day before BY* parts are applied.
 _FREQ_PER_DAY = {"SECONDLY": 86400, "MINUTELY": 1440, "HOURLY": 24}
 
@@ -122,7 +128,31 @@ def _per_day(rule) -> float:
     return per_day
 
 
-def _pathological_rule(cal: Calendar) -> str | None:
+def _instances_before(rule, dtstart, window_end: date | datetime | None) -> float:
+    """Roughly how many instances the library must step through to reach
+    ``window_end``. ``query.between`` pays for the whole DTSTART -> window skip
+    before it yields anything, so this — not the window width — is the real cost.
+    Returns 0 when it cannot be judged (no DTSTART, or no window supplied)."""
+    if window_end is None or dtstart is None:
+        return 0.0
+    start = getattr(dtstart, "dt", dtstart)
+    end = window_end
+    # Compare like with like: dates and datetimes, aware and naive.
+    if isinstance(start, datetime) != isinstance(end, datetime):
+        start = start.date() if isinstance(start, datetime) else start
+        end = end.date() if isinstance(end, datetime) else end
+    if isinstance(start, datetime) and isinstance(end, datetime):
+        if (start.tzinfo is None) != (end.tzinfo is None):
+            start = start.replace(tzinfo=None)
+            end = end.replace(tzinfo=None)
+    try:
+        days = (end - start).total_seconds() / 86400 if isinstance(start, datetime) else (end - start).days
+    except (TypeError, ValueError, OverflowError):
+        return 0.0
+    return max(0.0, days) * _per_day(rule)
+
+
+def _pathological_rule(cal: Calendar, window_end: date | datetime | None = None) -> str | None:
     """Why this resource must not be expanded, or None if it is safe.
 
     Both shapes below are writable through Radicale by any client sharing the
@@ -159,6 +189,20 @@ def _pathological_rule(cal: Calendar) -> str | None:
             per_day = _per_day(r)
             if per_day > _MAX_PER_DAY:
                 return f"RRULE yields up to {per_day:g} instances/day (limit {_MAX_PER_DAY})"
+            # Density alone is not the cost. A rule inside the allowed 1..24/day
+            # band whose DTSTART is decades before the window still makes the
+            # library step through every instance in between before it yields
+            # anything, and that skip is paid in full even for a one-day query:
+            # measured, FREQ=HOURLY from a year-0001 DTSTART burned 72 s and
+            # 1.3 GB to return 24 occurrences. _link_busy holds the service lock
+            # across this for every collection, and both public booking routes
+            # reach it, so bound the total walk as well as its density.
+            total = _instances_before(r, comp.get("DTSTART"), window_end)
+            if total > _MAX_TOTAL_INSTANCES:
+                return (
+                    f"RRULE would step through ~{total:.0f} instances to reach the "
+                    f"window (limit {_MAX_TOTAL_INSTANCES})"
+                )
     return None
 
 
@@ -208,7 +252,7 @@ def expand_occurrences(
     Raises ``ValueError`` for a rule too dense or too malformed to expand within
     a bounded cost — the caller degrades to the master row."""
     cal = Calendar.from_ical(raw_ics)
-    why = _pathological_rule(cal)
+    why = _pathological_rule(cal, window_end)
     if why is not None:
         raise ValueError(f"refusing to expand recurrence: {why}")
     override_anchors = _override_anchors(cal)

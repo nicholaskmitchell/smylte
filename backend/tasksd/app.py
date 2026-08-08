@@ -33,6 +33,7 @@ from fastapi.responses import (
     FileResponse,
     JSONResponse,
     RedirectResponse,
+    Response,
     StreamingResponse,
 )
 from fastapi.staticfiles import StaticFiles
@@ -134,16 +135,24 @@ class Sidecar(BaseModel):
     # Infinity stored here 500ed every subsequent read of the whole list — the
     # sidecar is the one thing a cache drop cannot rebuild.
     sort_order: float | None = Field(default=None, allow_inf_nan=False)
-    estimated_minutes: int | None = None
+    # Bounded for the same reason sort_order is: an integer past SQLite's INTEGER
+    # range raises OverflowError inside the write, which is outside the DavError
+    # taxonomy every handler is built around, so it surfaced as a 500 instead of
+    # a 422. A minute count has no business being astronomical anyway.
+    estimated_minutes: int | None = Field(default=None, ge=0, le=100_000_000)
     repeat_from_completion: bool | None = None
 
 
 class Repeat(BaseModel):
     # Structured recurrence — translated to an RFC 5545 RRULE server-side.
     repeat: str | None = None         # none|daily|weekly|monthly|yearly
-    repeat_interval: int = 1          # every N periods
+    # Bounded: these go straight into an RRULE. An out-of-range INTERVAL raised
+    # on the way to the wire (a 500 rather than a 422), and a zero or negative
+    # COUNT wrote a rule that yields nothing — RFC 5545 requires both to be
+    # positive, so refuse them here where the client still gets an answer.
+    repeat_interval: int = Field(default=1, ge=1, le=1000)
     repeat_until: str | None = None   # ISO date/datetime the series ends on
-    repeat_count: int | None = None   # number of occurrences (exclusive with until)
+    repeat_count: int | None = Field(default=None, ge=1, le=10_000)
 
 
 class CreateEvent(Repeat):
@@ -738,7 +747,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def delete_list(request: Request, list_id: str):
         href = _href(request, list_id)
         await _run(_svc(request).delete_collection, href)
-        return JSONResponse(status_code=204, content=None)
+        # A bare Response, never JSONResponse: a 204 carries no body (RFC 9110
+        # 6.4.1), and `content=None` renders b"null". uvicorn then aborts with
+        # "Response content longer than Content-Length" and tears down the
+        # connection, so every delete cost the client its keep-alive socket.
+        # TestClient bypasses the protocol layer, which is why the suite is green
+        # either way — check against a real server if you touch this.
+        return Response(status_code=204)
 
     @api.post("/lists/reorder")
     @api.post("/calendars/reorder")
@@ -793,7 +808,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def delete_task(request: Request, list_id: str, uid: str):
         href = _href(request, list_id)
         await _run(_svc(request).delete_task, href, uid)
-        return JSONResponse(status_code=204, content=None)
+        return Response(status_code=204)
 
     @api.put("/lists/{list_id}/tasks/{uid}/sidecar")
     async def put_sidecar(request: Request, list_id: str, uid: str, body: Sidecar):
@@ -882,7 +897,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             _svc(request).delete_event, href, uid,
             recurrence_id=recurrence_id, scope=scope,
         )
-        return JSONResponse(status_code=204, content=None)
+        return Response(status_code=204)
 
     # -- scheduling (booking links; owner side) --
     _LINK_SIMPLE_FIELDS = ("title", "description", "duration_minutes", "timezone",
@@ -920,7 +935,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def delete_booking_link(request: Request, token: str):
         if not await _run(_svc(request).delete_booking_link, token):
             raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown booking link {token}")
-        return JSONResponse(status_code=204, content=None)
+        return Response(status_code=204)
 
     @api.get("/scheduling/bookings")
     async def get_bookings(request: Request, link: str | None = Query(default=None)):
