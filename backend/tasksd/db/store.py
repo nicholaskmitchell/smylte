@@ -169,13 +169,39 @@ def set_sync_error(conn: sqlite3.Connection, collection_href: str, error: str) -
 
 # ── items ────────────────────────────────────────────────────────────────────
 
+def _evict_uid(conn: sqlite3.Connection, collection_href: str, uid: str) -> None:
+    """Drop a UID's derived cache rows and mark its sidecar orphaned. Used when a
+    href starts carrying a different UID: the old UID is gone from that resource,
+    so its cache state must go with it, but the sidecar is only *marked* (never
+    deleted here) — gc_orphans owns that, and only off a complete enumeration."""
+    conn.execute("DELETE FROM items WHERE collection_href=? AND uid=?", (collection_href, uid))
+    conn.execute("DELETE FROM items_fts WHERE collection_href=? AND uid=?", (collection_href, uid))
+    conn.execute("DELETE FROM categories WHERE collection_href=? AND uid=?", (collection_href, uid))
+    orphan_sidecar(conn, collection_href, uid)
+
+
 def upsert_item(
     conn: sqlite3.Connection, collection_href: str, item: Item, fields: TaskFields
 ) -> None:
     """Insert/replace the cache row for a resource, keyed on (collection, UID).
     A returning UID (delete-and-recreate) updates the same row and naturally
     rejoins its sidecar. Also refreshes categories + FTS. If the UID had a live
-    sidecar orphan mark, clear it — it's back."""
+    sidecar orphan mark, clear it — it's back.
+
+    Rows are keyed on UID but a resource is addressed by href, so a href that
+    starts carrying a *different* UID (a foreign client rewriting the body in
+    place, or a restored .ics landing at an existing path) would otherwise leave
+    the old UID's row behind at that same href. Nothing could then reach it: the
+    resync sweep iterates ``href_uid_map``, a dict keyed on href, so one of the
+    two rows is invisible to it, and the href is still on the wire so it is never
+    swept. The ghost survives every resync and restart — and because it hands out
+    the live resource's href, deleting or editing the ghost operates on the live
+    resource. One row per href, enforced here."""
+    for stale in conn.execute(
+        "SELECT uid FROM items WHERE collection_href=? AND href=? AND uid<>?",
+        (collection_href, item.href, fields.uid),
+    ).fetchall():
+        _evict_uid(conn, collection_href, stale["uid"])
     conn.execute(
         """INSERT INTO items (collection_href, uid, href, etag, raw_ics, component, summary,
              description, status, priority, percent_complete, completed, due,
@@ -492,11 +518,21 @@ def get_events_in_range(
     hence recurring rows (has_rrule=1) are admitted on the upper bound alone and
     then precisely filtered in Python by recur.expand_occurrences. A series whose
     UNTIL is already past still passes here but expands to zero occurrences, so it
-    is dropped downstream. ISO strings order correctly on the leading date."""
+    is dropped downstream. ISO strings order correctly on the leading date.
+
+    An event whose length is a DURATION rather than a DTEND has dtend NULL, so
+    COALESCE would collapse its effective end onto its start and drop it from
+    every window that does not contain its first day. That shape is ordinary
+    foreign-client output (DAVx5/phone clients — see test_scheduling.py), and the
+    row feeds the booking conflict check, so losing it let an anonymous visitor
+    book straight over a multi-day block. Admit it on the upper bound alone, like
+    a recurring master, and let scheduling.busy_intervals — which already parses
+    `duration` — do the precise interval math."""
     return list(
         conn.execute(
             "SELECT * FROM items WHERE collection_href=? AND component='VEVENT' "
-            "AND dtstart <= ? AND (has_rrule=1 OR COALESCE(dtend, dtstart) >= ?) "
+            "AND dtstart <= ? AND (has_rrule=1 OR duration IS NOT NULL "
+            "OR COALESCE(dtend, dtstart) >= ?) "
             "ORDER BY dtstart",
             (collection_href, end_iso, start_iso),
         )

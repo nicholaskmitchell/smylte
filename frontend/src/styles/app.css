@@ -588,7 +588,11 @@
 
 /* ---- error toast (failed saves/deletes surface here, see makeGuard) ---- */
 .toast {
-  position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 90;
+  /* Above .overlay (100): the toast is the app's only error channel, and every
+     modal that can fail a save is rendered inside an overlay. Below 90 it
+     painted under the scrim, and a click aimed at its dismiss button hit the
+     backdrop and closed the modal instead. */
+  position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 120;
   display: flex; align-items: center; gap: 10px;
   max-width: min(480px, calc(100vw - 32px));
   padding: 10px 12px;

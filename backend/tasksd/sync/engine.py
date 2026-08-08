@@ -451,11 +451,26 @@ class SyncEngine:
         try:
             self.dav.delete(href, if_match=row["etag"])
         except PreconditionFailed:
-            # Changed under us — delete the current revision instead of blind force.
+            # Changed under us. Deleting "the current revision" is only correct if
+            # the current revision is still the resource we were asked to delete:
+            # a href can start carrying a different UID (a foreign client
+            # rewriting the body in place, or a restored .ics landing at an
+            # existing path), and force-deleting then destroys somebody else's
+            # live resource on a delete of ours. Re-read and check identity first.
             try:
-                self.dav.delete(href, if_match=self.dav.head_etag(href))
+                fresh = self.dav.get(href)
             except NotFound:
-                pass
+                fresh = None
+            if fresh is not None:
+                current = ical.extract_from_raw(fresh.data)
+                if current is not None and current.uid != uid:
+                    raise ConflictError(
+                        f"{href} no longer holds {uid} (now {current.uid}); refusing to delete it"
+                    )
+                try:
+                    self.dav.delete(href, if_match=fresh.etag)
+                except NotFound:
+                    pass
         with _tx(self.conn):
             store.delete_item_by_href(self.conn, collection_href, href)
             store.orphan_sidecar(self.conn, collection_href, uid)
