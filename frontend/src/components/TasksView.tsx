@@ -279,7 +279,13 @@ export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggle
     if (!t) return
     if (t.due && dayKey(t.due) === key) return
     const timed = !!t.due && t.due.includes('T') && !t.due_is_date
-    saveDetail(t, { due: timed ? `${key}T${toLocalInput(t.due!).slice(11, 16)}` : key })
+    // Through dateOut, not a raw wall-clock string: when the DUE another CalDAV
+    // client wrote is zone-anchored, sending a naive value strips its TZID and
+    // moves the deadline (the backend only re-expresses a value in the original
+    // zone when the incoming one is itself aware). Same reason the editor uses it.
+    saveDetail(t, {
+      due: timed ? dateOut(key, toLocalInput(t.due!).slice(11, 16), t.due) : key,
+    })
   }
   const listApi = {
     create: (name: string) => guard(() => api.createList(name)),

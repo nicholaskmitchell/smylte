@@ -117,3 +117,77 @@ def test_a_query_of_only_control_bytes_finds_nothing(seeded):
 def test_stripping_control_bytes_keeps_the_rest_of_the_term_searchable(seeded):
     # The bytes are dropped, not the term: "confid\x00ential" still matches.
     assert [r["uid"] for r in store.search(seeded, "confid\x00ential")] == ["a1@x", "b1@x"]
+
+
+# ── one cache row per href ───────────────────────────────────────────────────
+
+def test_a_href_that_starts_carrying_a_new_uid_leaves_no_ghost_row(db):
+    """Rows are keyed on UID, but a resource is addressed by href. When a href
+    starts carrying a different UID — a foreign client rewriting the body in
+    place, or a restored .ics landing at an existing path — the old UID's row
+    used to survive at that same href, and nothing could reach it: the resync
+    sweep iterates `href_uid_map`, a dict keyed on href, so one of the two rows
+    is invisible to it, and the href is still on the wire so it is never swept.
+    Worse, `get_item(old_uid)` kept handing out the *live* resource's href, so
+    deleting the ghost deleted the live resource off the server."""
+    store.upsert_collection(
+        db, CollectionInfo(href=COL_A, displayname="C", components={"VTODO"}))
+    href = f"{COL_A}resource.ics"
+    for uid, etag in (("UID-A", '"v1"'), ("UID-B", '"v2"')):
+        raw = _vtodo(uid, uid)
+        store.upsert_item(db, COL_A, Item(href, etag, raw), extract_from_raw(raw))
+
+    rows = db.execute(
+        "SELECT uid FROM items WHERE collection_href=? AND href=?", (COL_A, href)
+    ).fetchall()
+    assert [r["uid"] for r in rows] == ["UID-B"], "one row per href"
+    assert store.get_item(db, COL_A, "UID-A") is None, "the ghost must not resolve"
+    # href_uid_map is the sweep's view; it must agree with the table.
+    assert store.href_uid_map(db, COL_A) == {href: "UID-B"}
+
+
+def test_evicting_a_ghost_uid_also_clears_its_derived_rows(db):
+    """The eviction has to take the UID's FTS and category rows with it, or a
+    search keeps returning a task that no longer exists anywhere."""
+    store.upsert_collection(
+        db, CollectionInfo(href=COL_A, displayname="C", components={"VTODO"}))
+    href = f"{COL_A}resource.ics"
+    raw_a = _vtodo("UID-A", "findmeplease", category="alpha")
+    store.upsert_item(db, COL_A, Item(href, '"v1"', raw_a), extract_from_raw(raw_a))
+    assert [r["uid"] for r in store.search(db, "findmeplease")] == ["UID-A"]
+
+    raw_b = _vtodo("UID-B", "somethingelse")
+    store.upsert_item(db, COL_A, Item(href, '"v2"', raw_b), extract_from_raw(raw_b))
+
+    assert store.search(db, "findmeplease") == []
+    assert db.execute(
+        "SELECT COUNT(*) c FROM categories WHERE collection_href=? AND uid=?", (COL_A, "UID-A")
+    ).fetchone()["c"] == 0
+
+
+def test_a_duration_only_event_is_visible_in_windows_after_its_start_day(db):
+    """A VEVENT whose length is a DURATION has dtend NULL, so the old
+    COALESCE(dtend, dtstart) upper bound collapsed its end onto its start and hid
+    it from every window that did not contain its first day. That row feeds
+    `_link_busy`, which widens the query by only +/-1 day, so a multi-day block
+    written by a phone client stopped blocking booking slots on its later days —
+    an anonymous visitor could book straight over the owner's calendar."""
+    store.upsert_collection(
+        db, CollectionInfo(href=COL_A, displayname="C", components={"VEVENT"}))
+
+    def _vevent(uid: str, tail: str) -> bytes:
+        return (
+            f"BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:{uid}\r\n"
+            f"SUMMARY:{uid}\r\nDTSTART:20260710T100000\r\n{tail}\r\n"
+            f"END:VEVENT\r\nEND:VCALENDAR\r\n"
+        ).encode()
+
+    for uid, tail in (("dur", "DURATION:P3D"), ("dtend", "DTEND:20260713T100000")):
+        raw = _vevent(uid, tail)
+        store.upsert_item(db, COL_A, Item(f"{COL_A}{uid}.ics", '"1"', raw),
+                          extract_from_raw(raw))
+
+    # A window over the block's *second* day contains neither event's DTSTART.
+    found = store.get_events_in_range(db, COL_A, "2026-07-12T00:00:00", "2026-07-13T00:00:00")
+    assert sorted(r["uid"] for r in found) == ["dtend", "dur"], \
+        "the DURATION-only block must be a booking-conflict candidate like its DTEND twin"

@@ -495,3 +495,46 @@ describe('<TasksView> lossy round-trips', () => {
     expect(m.patchTask.mock.calls[0][2]).toEqual({ priority: 'low' })
   })
 })
+
+// ── drag-to-reschedule across day columns ───────────────────────────────────
+// The day-column drag writes a DUE to a real CalDAV resource and had no test at
+// all, which is how it kept bypassing `dateOut` long after the editor was fixed.
+
+describe('<TasksView> day-column drag', () => {
+  // Pin the clock: the day columns are relative to "today", so an absolute due
+  // date would drift out of the window and make this test rot.
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    vi.setSystemTime(new Date('2026-08-10T12:00:00-04:00'))
+  })
+  afterEach(() => vi.useRealTimers())
+
+  const dragTaskTo = async (t: ReturnType<typeof task>, dayIndex: number) => {
+    m.tasks.mockResolvedValue([t])
+    m.patchTask.mockResolvedValue(t)
+    setup('day3')
+    const card = await screen.findByText(t.summary!)
+    // jsdom builds no DataTransfer; the card's onDragStart calls setData on it.
+    const dataTransfer = { setData: vi.fn(), getData: vi.fn(), effectAllowed: '' }
+    fireEvent.dragStart(card.closest('.day-card') || card, { dataTransfer })
+    fireEvent.drop(document.querySelectorAll('.day-col')[dayIndex])
+    await waitFor(() => expect(m.patchTask).toHaveBeenCalled())
+    return m.patchTask.mock.calls[0][2] as { due?: string }
+  }
+
+  it('sends the instant for a zone-anchored due, not the viewer wall clock', async () => {
+    // DUE;TZID=Europe/Berlin 09:30 on the 10th reads as 03:30 in the suite's
+    // New York zone. A naive "2026-08-11T03:30" would land on the wire verbatim
+    // and strip the TZID, moving the deadline six hours for every other client
+    // sharing the collection.
+    const body = await dragTaskTo(
+      task({ summary: 'Pay rent', due: '2026-08-10T09:30:00+02:00', due_is_date: false }), 1)
+    expect(body.due).toMatch(/Z$/)
+  })
+
+  it('still sends a plain day key for an all-day due', async () => {
+    const body = await dragTaskTo(
+      task({ summary: 'Bin day', due: '2026-08-10', due_is_date: true }), 1)
+    expect(body.due).not.toContain('T')
+  })
+})

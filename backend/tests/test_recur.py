@@ -249,6 +249,30 @@ def test_ordinary_density_still_expands(rrule):
     assert recur.expand_occurrences(raw, date(2026, 1, 1), date(2026, 2, 1))
 
 
+def test_dense_rule_with_ancient_dtstart_is_refused_promptly():
+    """Density alone does not bound the cost. FREQ=HOURLY sits exactly at the
+    24/day limit, so the density guard passes it — but `query.between` pays the
+    whole DTSTART -> window skip before yielding anything, and that skip is
+    charged in full even for a one-day query. Measured before the total-walk
+    bound existed: a year-0001 DTSTART burned 72 s and 1.3 GB of RSS to return
+    24 occurrences, inside the service lock, reachable from the unauthenticated
+    booking routes."""
+    raw = foreign_event_raw("ancient", dtstart="00010101T000000Z",
+                            dtend="00010101T003000Z", rrule="FREQ=HOURLY")
+    t = time.monotonic()
+    with pytest.raises(ValueError, match="instances to reach the window"):
+        recur.expand_occurrences(raw, date(2026, 8, 1), date(2026, 8, 2))
+    assert time.monotonic() - t < 2.0
+
+
+def test_dense_rule_from_a_recent_dtstart_still_expands():
+    """The total-walk bound must not swallow ordinary series: an hourly rule
+    running for a couple of years is well inside budget and still expands."""
+    raw = foreign_event_raw("recent", dtstart="20240101T000000Z",
+                            dtend="20240101T003000Z", rrule="FREQ=HOURLY")
+    assert recur.expand_occurrences(raw, date(2026, 1, 1), date(2026, 1, 2))
+
+
 @pytest.mark.parametrize("interval", ["0", "-1", "notanumber"])
 def test_nonpositive_interval_is_rejected_not_expanded(interval):
     """INTERVAL=0 is invalid per RFC 5545 but Radicale accepts it on the wire, so
