@@ -133,6 +133,13 @@
 /* task-list groups — collapsible headers that lists sit under */
 .side-group.drag-over,
 .ungrouped.drag-over { box-shadow: inset 2px 0 0 var(--accent); background: var(--bg-elev); }
+/* A hairline between adjacent sections so it reads where one group ends and the
+   next — or the ungrouped remainder — begins. Only *between* sections: no rule
+   above the first group, and none above an ungrouped block that has no rows. */
+.side-group + .side-group,
+.side-group + .ungrouped:not(.is-empty) { border-top: 1px solid var(--rule); margin-top: 10px; }
+/* the group header carries its own top padding; a bare list of rows does not */
+.side-group + .ungrouped:not(.is-empty) { padding-top: 10px; }
 .group-head { display: flex; align-items: center; gap: 6px; padding: 12px 16px 4px; }
 .group-caret {
   background: none; border: 0; padding: 0; cursor: pointer; color: var(--fg-faint);

@@ -196,6 +196,37 @@ describe('<Sidebar> mobile management drawer', () => {
   })
 })
 
+// Groups are visually separated by a hairline rule (CSS on `.side-group +
+// .side-group` / `.side-group + .ungrouped`). The one bit of state the
+// stylesheet cannot work out on its own is whether the trailing ungrouped
+// block actually holds any rows — an empty one must not draw a dangling rule.
+describe('<Sidebar> group dividers', () => {
+  const grouped = (groups: TaskGroup[]) => (
+    <Sidebar title="Lists" placeholder="List"
+      items={[list('work', 'Work'), list('home', 'Home')]}
+      countOf={(l) => l.open_count} onItems={() => {}} api={noopApi}
+      hiddenIds={new Set()} onHiddenChange={() => {}}
+      groups={groups} onGroupsChange={() => {}}
+      collapsedGroups={[]} onCollapsedGroupsChange={() => {}} />
+  )
+
+  it('marks the ungrouped block empty only when nothing is left ungrouped', () => {
+    const { container, rerender } = render(grouped([{ id: 'g1', name: 'Focus', lists: ['work'] }]))
+    // 'Home' is still ungrouped, so the block draws its divider.
+    expect(container.querySelector('.ungrouped')).not.toHaveClass('is-empty')
+    rerender(grouped([{ id: 'g1', name: 'Focus', lists: ['work', 'home'] }]))
+    expect(container.querySelector('.ungrouped')).toHaveClass('is-empty')
+  })
+
+  it('renders one .side-group per group, so adjacent groups get a rule between them', () => {
+    const { container } = render(grouped([
+      { id: 'g1', name: 'Focus', lists: ['work'] },
+      { id: 'g2', name: 'Later', lists: ['home'] },
+    ]))
+    expect(container.querySelectorAll('.side-group')).toHaveLength(2)
+  })
+})
+
 describe('the "All" swatch ring', () => {
   it('reproduces the gradient it replaced in app.css exactly', () => {
     // The ring used to be a second, hand-written copy of the palette in CSS.

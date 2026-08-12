@@ -279,7 +279,7 @@ export function Sidebar({ title, placeholder, items, sel = '', countOf, onSelect
             )
           })}
           {/* Ungrouped lists — a drop target here pulls a list back out of its group. */}
-          <div className={`ungrouped ${overGroup === '' ? 'drag-over' : ''}`}
+          <div className={`ungrouped ${ungrouped.length === 0 ? 'is-empty' : ''} ${overGroup === '' ? 'drag-over' : ''}`}
             onDragOver={(e: DragEvent) => { if (dragId) { e.preventDefault(); setOverGroup('') } }}
             onDragLeave={() => setOverGroup((o) => (o === '' ? null : o))}
             onDrop={(e: DragEvent) => {
