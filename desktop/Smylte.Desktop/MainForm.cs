@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 
@@ -19,6 +20,8 @@ public sealed class MainForm : Form
         Text = "Starting…",
     };
 
+    private readonly Panel _notice = new() { Dock = DockStyle.Top, Height = 36, Visible = false };
+
     private LocalServer? _server;
 
     public MainForm(Settings settings)
@@ -35,11 +38,73 @@ public sealed class MainForm : Form
         try { Icon = new Icon(typeof(MainForm), "app.ico"); }
         catch (Exception) { /* cosmetic */ }
 
+        BuildNotice();
+
+        // Docking follows z-order, so set it explicitly rather than relying on the
+        // order things were added: the notice strip claims the top, and whichever
+        // of splash / web is visible fills what is left.
         Controls.Add(_web);
         Controls.Add(_splash);
-        _splash.BringToFront();
+        Controls.Add(_notice);
+        Controls.SetChildIndex(_notice, 0);
+        Controls.SetChildIndex(_splash, 1);
+        Controls.SetChildIndex(_web, 2);
 
         Load += async (_, _) => await InitialiseAsync().ConfigureAwait(true);
+    }
+
+    /// Shown when the published exe is a different binary from this one. The
+    /// client cannot replace itself while running, so the honest thing is to say
+    /// so and link to the download rather than pretend it is handled.
+    private void BuildNotice()
+    {
+        _notice.BackColor = Color.FromArgb(255, 244, 214);
+        _notice.Padding = new Padding(12, 0, 8, 0);
+
+        var message = new Label
+        {
+            Text = "A newer Smylte client is available. The app itself is up to date — "
+                 + "this updates the window around it.",
+            Dock = DockStyle.Fill,
+            TextAlign = ContentAlignment.MiddleLeft,
+            ForeColor = Color.FromArgb(90, 60, 0),
+            AutoEllipsis = true,
+        };
+
+        var dismiss = new Button
+        {
+            Text = "Not now",
+            Dock = DockStyle.Right,
+            Width = 90,
+            FlatStyle = FlatStyle.Flat,
+        };
+        dismiss.Click += (_, _) => _notice.Visible = false;
+
+        var download = new Button
+        {
+            Text = "Download",
+            Dock = DockStyle.Right,
+            Width = 100,
+            FlatStyle = FlatStyle.Flat,
+        };
+        download.Click += (_, _) =>
+        {
+            try
+            {
+                Process.Start(new ProcessStartInfo(Updater.ReleaseUrl) { UseShellExecute = true });
+            }
+            catch (Exception)
+            {
+                MessageBox.Show(this, Updater.ReleaseUrl, "Smylte — download link");
+            }
+        };
+
+        // Docking consumes space in z-order, so the Fill has to be added last or
+        // it claims the whole strip and the buttons never appear. Index 0 docks
+        // furthest right, which puts "Not now" on the outside.
+        _notice.Controls.Add(dismiss);
+        _notice.Controls.Add(download);
+        _notice.Controls.Add(message);
     }
 
     private async Task InitialiseAsync()
@@ -47,7 +112,7 @@ public sealed class MainForm : Form
         var progress = new Progress<string>(text => _splash.Text = text);
         try
         {
-            await Updater
+            var update = await Updater
                 .EnsureWebAssetsAsync(_settings, progress, CancellationToken.None)
                 .ConfigureAwait(true);
 
@@ -74,7 +139,7 @@ public sealed class MainForm : Form
             _web.CoreWebView2.Navigate(_server.Origin + "/");
             _splash.Visible = false;
             _web.Visible = true;
-            _web.BringToFront();
+            _notice.Visible = update.ClientOutdated;
         }
         catch (WebView2RuntimeNotFoundException)
         {

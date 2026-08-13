@@ -42,9 +42,20 @@ rolling release has changed. If it has, it downloads and swaps it in; if the
 network is unreachable it just runs the copy it already has. So a push to `main`
 reaches the desktop on the next start, with nothing to redeploy by hand.
 
-The **exe itself** does not self-update — that needs a second process to replace
-a running binary, which is deliberately out of scope for now. It should rarely
-need to change, since all the app's actual behaviour lives in the web build.
+The **exe itself** does not replace itself — that needs a second process to
+overwrite a running binary, which is deliberately out of scope. It does notice,
+though: the same release check compares the published `Smylte.exe` against the
+running one and shows a strip along the top of the window with a download link
+when they differ. "Not now" hides it until the next launch.
+
+That comparison is by content hash, not a version number, because a version
+number has to be remembered and a forgotten bump would ship a client nobody is
+told about. It costs nothing extra — GitHub publishes a SHA-256 for every release
+asset, and the exe's own hash is computed once and cached against its write time
+rather than re-read on every launch.
+
+The exe should rarely need to change, since everything the app actually does
+lives in the web build.
 
 ## Files it writes
 
