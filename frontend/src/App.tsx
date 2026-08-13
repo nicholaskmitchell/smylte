@@ -4,6 +4,8 @@ import {
   type DashboardModule, type Settings, type TaskGroup, type TasksViewMode,
 } from './api'
 import { setErrorNotifier } from './util'
+import { DataProvider } from './data'
+import { clearCache, setCacheUser, sweepOldVersions } from './cache'
 import {
   applyTokens, cacheAppearance, ensureFonts, presetSlug, readCachedAppearance,
   resolve, sanitizeAppearance, syncThemeColor, type Appearance, type Mode,
@@ -53,6 +55,11 @@ export function App() {
   // on screen; the server overwrites it a moment later like every other setting.
   const [appearance, setAppearance] = useState<Appearance>(() => readCachedAppearance() ?? {})
   const [dashboard, setDashboard] = useState<DashboardModule[]>([])
+  // The calendar month, held here so returning to the Calendar tab lands where
+  // you left it rather than snapping back to today.
+  const [cursor, setCursor] = useState(() => {
+    const n = new Date(); return new Date(n.getFullYear(), n.getMonth(), 1)
+  })
   const [toast, setToast] = useState<string | null>(null)
   const toastTimer = useRef<ReturnType<typeof setTimeout>>()
   const settingsRef = useRef<HTMLDivElement>(null)
@@ -71,7 +78,14 @@ export function App() {
   }, [showToast])
 
   useEffect(() => {
-    api.me().then((m) => { setUser(m.user); setAuth('in') }).catch(() => setAuth('out'))
+    // The cache is per-account and keyed by name, so a different user simply
+    // misses rather than reading someone else's rows; clearing on a change is
+    // quota hygiene. `setCacheUser` runs before `setAuth('in')` so the views —
+    // which seed from the cache as they mount — never race it.
+    sweepOldVersions()
+    api.me()
+      .then((m) => { setCacheUser(m.user); setUser(m.user); setAuth('in') })
+      .catch(() => setAuth('out'))
   }, [])
 
   const applyTheme = useCallback((next: string) => {
@@ -317,12 +331,32 @@ export function App() {
   }, [theme, changeTheme])
 
   const onExpire = useCallback(() => setAuth('out'), [])
-  const onLogout = async () => { try { await api.logout() } finally { setAuth('out') } }
+  // Logging out clears the mirror; an expired session deliberately does not,
+  // since it is usually the same person about to sign back in and keeping it
+  // makes that instant.
+  const onLogout = async () => {
+    try { await api.logout() } finally { clearCache(); setCacheUser(''); setAuth('out') }
+  }
 
-  if (auth === 'loading') return null
-  if (auth === 'out') return <Login onLogin={(u) => { setUser(u); setAuth('in') }} />
+  // While /api/me is in flight the shell paints anyway — the tab strip is real
+  // (seeded from the boot cache) and a click on it sticks, on the app's own
+  // rule that a deliberate choice beats a stored one. This used to be
+  // `return null`: a blank page for the first of four sequential round trips.
+  const booting = auth === 'loading'
 
+  // The provider sits above the auth branch, not inside the signed-in one:
+  // inside, resolving the session would swap the root element type and remount
+  // everything under it. `enabled` is what keeps it from talking to a server
+  // that has not yet said who we are.
   return (
+    <DataProvider rev={rev} onExpire={onExpire} enabled={auth === 'in'}>
+      {auth === 'out'
+        ? <Login onLogin={(u) => { setCacheUser(u); setUser(u); setAuth('in') }} />
+        : (
+    // One shell for both booting and signed in, rather than two trees swapped
+    // over: React reconciles by element type, so a different root would throw
+    // the boot markup away and mount a fresh tree — losing the very frame this
+    // exists to paint (and any click already in flight against it).
     <div className="shell">
       <div className="topbar">
         <span className="brand">Smylte<span className="dot">.</span></span>
@@ -335,6 +369,7 @@ export function App() {
           ))}
         </div>
         <span className="spacer" />
+        {booting ? null : (
         <button ref={gearRef} className={`icon-btn ${settingsOpen ? 'active' : ''}`}
           title="Settings" aria-label="Settings" onClick={() => setSettingsOpen((o) => !o)}>
           <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
@@ -343,6 +378,7 @@ export function App() {
             <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
           </svg>
         </button>
+        )}
 
         {settingsOpen && (
           <div ref={settingsRef} className="menu settings-menu" role="dialog" aria-label="Settings">
@@ -395,22 +431,23 @@ export function App() {
           </div>
         )}
       </div>
-      {tab === 'tasks' && (
-        <TasksView rev={rev} onExpire={onExpire} view={tasksView} onView={changeTasksView}
+      {booting && <div className="work"><div className="content" aria-busy="true" /></div>}
+      {!booting && tab === 'tasks' && (
+        <TasksView onExpire={onExpire} view={tasksView} onView={changeTasksView}
           sideCollapsed={sideCollapsed} onToggleSide={toggleSide}
           hiddenLists={hiddenLists} onHiddenListsChange={changeHiddenLists}
           groups={taskGroups} onGroupsChange={changeTaskGroups}
           collapsedGroups={collapsedGroups} onCollapsedGroupsChange={changeCollapsedGroups}
           showCompleted={showCompleted} />
       )}
-      {tab === 'calendar' && (
-        <CalendarView rev={rev} onExpire={onExpire}
+      {!booting && tab === 'calendar' && (
+        <CalendarView onExpire={onExpire} cursor={cursor} onCursorChange={setCursor}
           sideCollapsed={sideCollapsed} onToggleSide={toggleSide}
           hiddenCalendars={hiddenCals} onHiddenCalendarsChange={changeHiddenCals}
           archivedCalendars={archivedCals} onArchivedCalendarsChange={changeArchivedCals} />
       )}
-      {tab === 'scheduling' && <SchedulingView rev={rev} onExpire={onExpire} />}
-      {tab === 'home' && (
+      {!booting && tab === 'scheduling' && <SchedulingView rev={rev} onExpire={onExpire} />}
+      {!booting && tab === 'home' && (
         <HomeView rev={rev} onExpire={onExpire}
           layout={dashboard} onLayoutChange={changeDashboard}
           hiddenCalendars={hiddenCals} archivedCalendars={archivedCals} />
@@ -435,5 +472,9 @@ export function App() {
         </div>
       )}
     </div>
+        )}
+    </DataProvider>
   )
 }
+
+

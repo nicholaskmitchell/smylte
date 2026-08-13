@@ -1,8 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
-import {
-  api, AuthError, clientId, uidFor,
-  type CreateTaskBody, type List, type Task, type TaskGroup, type TasksViewMode,
-} from '../api'
+import { api, uidFor, type CreateTaskBody, type List, type Task, type TaskGroup, type TasksViewMode } from '../api'
+import { useTaskData } from '../data'
 import {
   addDays, dayKey, fmtDue, hasZone, instantFromLocal, isOverdue, makeGuard, toLocalInput, ymd,
 } from '../util'
@@ -41,10 +39,10 @@ const dateOut = (date: string, time: string, original: string | null | undefined
   return hasZone(original) ? instantFromLocal(date, time) : `${date}T${time}`
 }
 
-export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggleSide,
+export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
   hiddenLists, onHiddenListsChange, groups, onGroupsChange,
   collapsedGroups, onCollapsedGroupsChange, showCompleted }: {
-  rev: number; onExpire: () => void
+  onExpire: () => void
   view: TasksViewMode; onView: (v: TasksViewMode) => void
   sideCollapsed: boolean; onToggleSide: () => void
   hiddenLists: string[]; onHiddenListsChange: (next: string[]) => void
@@ -53,8 +51,13 @@ export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggle
   showCompleted: boolean
 }) {
   const guard = makeGuard(onExpire)
-  const [lists, setLists] = useState<List[]>([])
-  const [tasks, setTasks] = useState<Task[]>([])
+  // Lists, tasks and every write against them live above the tab strip, so
+  // switching away and back neither drops them nor refetches from empty — and
+  // Home reads the same copy rather than fanning out a second one.
+  const {
+    lists, tasks, listsLoaded, loaded, setLists,
+    create, createMany, addSub, toggle, remove, saveDetail,
+  } = useTaskData()
   const [detail, setDetail] = useState<Task | null>(null)
   // The two create surfaces, both null when closed. `adding` is the single-task
   // form; `bulk` is the multi-row composer. Each carries the list and the title
@@ -77,17 +80,13 @@ export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggle
   const visibleLists = useMemo(() => lists.filter((l) => !hiddenSet.has(l.id)), [lists, hiddenSet])
   const colorOf = (listId: string) => lists.find((l) => l.id === listId)?.color ?? null
 
-  useEffect(() => {
-    guard(async () => setLists(await api.lists()))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rev])
-
   // Prune settings that reference lists (or groups) that no longer exist, so a
   // deletion here or in another CalDAV client doesn't leave the blob accreting
-  // stale ids. Guarded on a non-empty fetch so the initial empty state can't
-  // wipe real prefs before the lists arrive.
+  // stale ids. Gated on a real fetch having landed: the initial empty state
+  // must not wipe prefs before the lists arrive, and neither must the cached
+  // seed, which is a snapshot that may predate a list created elsewhere.
   useEffect(() => {
-    if (!lists.length) return
+    if (!listsLoaded || !lists.length) return
     const ids = new Set(lists.map((l) => l.id))
     const keptHidden = hiddenLists.filter((id) => ids.has(id))
     if (keptHidden.length !== hiddenLists.length) onHiddenListsChange(keptHidden)
@@ -102,225 +101,11 @@ export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggle
     const keptCollapsed = collapsedGroups.filter((id) => gids.has(id))
     if (keptCollapsed.length !== collapsedGroups.length) onCollapsedGroupsChange(keptCollapsed)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lists])
+  }, [lists, listsLoaded])
 
-  // In-flight task fetches carry a token: a response commits only while its
-  // token is still the newest and the view it was issued for (`loadKey`) is
-  // still current, so an out-of-order response can never clobber a later fetch.
-  // Writes bump the token too, so a refetch whose snapshot predates an
-  // optimistic paint is dropped instead of wiping it (the mutation's own SSE
-  // `rev` bump refetches again once the server has published the change).
-  // Fetch every list and filter hidden ones client-side, so a visibility toggle
-  // is instant (no refetch) — exactly like the calendar grid.
-  const loadKey = `*|${lists.map((l) => l.id).join(',')}`
-  const keyRef = useRef(loadKey)
-  keyRef.current = loadKey
-  const fetchToken = useRef(0)
-  const invalidateFetches = () => { fetchToken.current += 1 }
-
-  const load = () => {
-    const token = ++fetchToken.current
-    const key = loadKey
-    return guard(async () => {
-      const ts = (await Promise.all(lists.map((l) => api.tasks(l.id)))).flat()
-      if (token === fetchToken.current && key === keyRef.current) setTasks(ts)
-    })
-  }
-
-  useEffect(() => {
-    if (lists.length === 0) { setTasks([]); return }
-    load()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loadKey, rev])
-
-  // Writes are optimistic: paint the change immediately, then reconcile with
-  // the server's canonical DTO when it lands — or roll the touched task back
-  // on failure (the guard has already raised the error toast) so the UI never
-  // lies. The SSE `rev` bump refetches shortly after as a safety net (and
-  // fixes derived fields like a parent's subtask progress). Rollbacks restore
-  // only the affected task — never a whole-array snapshot, which would clobber
-  // interleaved changes to other tasks.
-  const patchLocal = (uid: string, patch: Partial<Task>) =>
-    setTasks((ts) => ts.map((t) => (t.uid === uid ? { ...t, ...patch } : t)))
-  const settle = (dto: Task | undefined, orig: Task) =>
-    setTasks((ts) => ts.map((t) => (t.uid === orig.uid ? (dto ?? orig) : t)))
-
-  // A pending create renders immediately as a local stand-in carrying the uid
-  // the server *will* give it (`uidFor`, from the same client_id the request
-  // sends), so success can swap in the server DTO — and failure remove it — by
-  // uid. The stand-in used to wear the bare client_id instead, which made every
-  // write issued against the row before it settled name a resource that did not
-  // exist: completing it 404'd, and a subtask added to it wrote a RELATED-TO
-  // pointing at nothing, orphaning the child in CalDAV for good.
-  // Every task carries its own list id (`list`), so writes below target the
-  // task's own list rather than a single "selected" one — essential once the
-  // combined view mixes tasks from several lists.
-  const draftTask = (uid: string, listId: string, body: CreateTaskBody): Task => ({
-    uid, list: listId, summary: body.summary, notes: body.notes ?? null, status: 'NEEDS-ACTION',
-    completed: false, cancelled: false,
-    // `priority` is the numeric iCal field the server derives; the rows render
-    // `priority_label`, so the stand-in paints the right stripe right away and
-    // the server's DTO fills the number in when it lands.
-    priority: null, priority_label: body.priority || 'none',
-    percent_complete: null, due: body.due ?? null,
-    due_is_date: !!body.due && !body.due.includes('T'),
-    start: body.start ?? null, tags: body.tags ?? [], parent: body.parent ?? null, children: [],
-    child_count: 0, completed_child_count: 0, derived_percent: null,
-    pinned: false, href: '', etag: '',
-  })
-  // Swap a settled server DTO in for its stand-in, in place. `key` is the
-  // loadKey the create was issued under — the user may have switched views
-  // mid-flight. Since the stand-in already carries the DTO's uid, a refetch
-  // that landed between the paint and the settle can have brought the real task
-  // in alongside it; collapse both onto one row rather than mapping each to the
-  // DTO, which would leave two identical rows fighting over one React key.
-  const settleCreate = (uid: string, key: string, t: Task) => {
-    const here = key === keyRef.current
-    setTasks((ts) => {
-      let placed = false
-      const next: Task[] = []
-      for (const x of ts) {
-        if (x.uid !== uid && x.uid !== t.uid) { next.push(x); continue }
-        if (placed) continue
-        placed = true
-        next.push(t)
-      }
-      // Stand-in already gone and no twin to replace — the view changed under
-      // it. Append only when it still belongs here.
-      if (!placed && here) next.push(t)
-      return next
-    })
-  }
-
-  // Creates still in flight, keyed by the uid their stand-in already carries.
-  // A subtask waits on its parent's entry before its own request goes out:
-  // RELATED-TO is written verbatim with no existence check, so a child whose
-  // parent never lands would be orphaned in the CalDAV data rather than merely
-  // mispainted. The UI only offers "+ sub" on top-level rows, so the chain is
-  // one deep today; nothing here assumes that.
-  const pending = useRef(new Map<string, Promise<Task | undefined>>())
-
-  const create = async (listId: string, body: CreateTaskBody,
-    after?: Promise<Task | undefined>): Promise<Task | undefined> => {
-    if (!listId) return undefined
-    const cid = clientId()
-    const uid = uidFor(cid)
-    const key = loadKey                   // the view this create belongs to
-    invalidateFetches()
-    setTasks((ts) => [...ts, draftTask(uid, listId, body)])
-    const settled = (async () => {
-      // Awaited after the paint, never before it — the point of the whole
-      // exercise is that the subtask appears the instant it is typed.
-      if (after && !(await after)) {
-        setTasks((ts) => ts.filter((x) => x.uid !== uid))
-        return undefined
-      }
-      invalidateFetches()          // a refetch may have started while we waited
-      const t = await guard(() => api.createTask(listId, { ...body, client_id: cid }))
-      if (!t) { setTasks((ts) => ts.filter((x) => x.uid !== uid)); return undefined }
-      settleCreate(uid, key, t)
-      return t
-    })()
-    pending.current.set(uid, settled)
-    void settled.finally(() => {
-      if (pending.current.get(uid) === settled) pending.current.delete(uid)
-    })
-    return settled
-  }
-  // Create many tasks in one go, for the "Add multiple" composer: one optimistic
-  // paint for the whole batch, then one request per task, in order.
-  //
-  // Sequential on purpose. TaskService holds a single lock around every engine
-  // call and each create is a CalDAV PUT plus a re-read GET, so parallel POSTs
-  // would queue server-side anyway; going one at a time costs nothing and buys
-  // an honest progress count, per-row failure attribution, and a clean stop when
-  // the session expires mid-batch.
-  //
-  // Deliberately bypasses `guard`: a nine-row batch that fails would raise nine
-  // toasts. Failures come back as indexes instead and the modal reports them in
-  // place, against the rows that produced them.
-  const createMany = async (
-    items: Array<{ listId: string; body: CreateTaskBody; cid: string }>,
-    onProgress: (done: number) => void,
-  ): Promise<number[]> => {
-    const key = loadKey
-    // The ids come from the rows, which keep them across a retry. Minting them
-    // here meant every attempt carried a new idempotency slug, so a create whose
-    // response was lost on the way back — the failure the composer explicitly
-    // invites you to retry — landed a second time as a distinct task.
-    const cids = items.map((it) => it.cid)
-    const uids = cids.map(uidFor)
-    invalidateFetches()
-    setTasks((ts) => [...ts, ...items.map((it, i) => draftTask(uids[i], it.listId, it.body))])
-    const failed: number[] = []
-    for (let i = 0; i < items.length; i++) {
-      try {
-        const t = await api.createTask(items[i].listId, { ...items[i].body, client_id: cids[i] })
-        settleCreate(uids[i], key, t)
-      } catch (e) {
-        if (e instanceof AuthError) {
-          // Session died mid-batch. Drop every stand-in that can no longer land
-          // and hand the rest back as failures, so nothing is left painted.
-          const rest = uids.slice(i)
-          setTasks((ts) => ts.filter((x) => !rest.includes(x.uid)))
-          onExpire()
-          return [...failed, ...items.map((_, n) => n).filter((n) => n >= i)]
-        }
-        console.error(e)
-        failed.push(i)
-        setTasks((ts) => ts.filter((x) => x.uid !== uids[i]))
-      }
-      onProgress(i + 1)
-    }
-    return failed
-  }
+  // A one-line convenience over the shared create; day columns pass a due.
   const addTask = (listId: string, summary: string, due?: string) =>
     create(listId, due ? { summary, due } : { summary })
-  const addSub = (parent: string, summary: string) => {
-    const p = tasks.find((x) => x.uid === parent)   // a subtask lives in its parent's list
-    if (p) void create(p.list, { summary, parent }, pending.current.get(parent))
-  }
-
-  const toggle = async (t: Task) => {
-    const done = !t.completed
-    invalidateFetches()
-    patchLocal(t.uid, { completed: done, cancelled: false, status: done ? 'COMPLETED' : 'NEEDS-ACTION' })
-    settle(await guard(() => api.complete(t.list, t.uid, done)), t)
-  }
-  const remove = async (t: Task) => {
-    const at = tasks.findIndex((x) => x.uid === t.uid)  // where to restore it on failure
-    const key = loadKey
-    invalidateFetches()
-    setTasks((ts) => ts.filter((x) => x.uid !== t.uid))
-    if ((await guard(() => api.deleteTask(t.list, t.uid))) === undefined && key === keyRef.current) {
-      setTasks((ts) => {
-        if (ts.some((x) => x.uid === t.uid)) return ts
-        const next = ts.slice()
-        next.splice(at < 0 ? next.length : Math.min(at, next.length), 0, t)
-        return next
-      })
-    }
-  }
-  const saveDetail = async (t: Task, patch: Record<string, unknown>) => {
-    const opt: Partial<Task> = {}
-    if ('summary' in patch) opt.summary = patch.summary as string
-    if ('notes' in patch) opt.notes = (patch.notes as string) ?? null
-    if ('tags' in patch) opt.tags = patch.tags as string[]
-    if ('priority' in patch) opt.priority_label = (patch.priority as string) || 'none'
-    if ('due' in patch) {
-      opt.due = (patch.due as string) ?? null
-      opt.due_is_date = typeof patch.due === 'string' && !patch.due.includes('T')
-    }
-    if ('start' in patch) opt.start = (patch.start as string) ?? null
-    if ('status' in patch) {
-      opt.status = patch.status as string
-      opt.completed = patch.status === 'COMPLETED'
-      opt.cancelled = patch.status === 'CANCELLED'
-    }
-    invalidateFetches()
-    patchLocal(t.uid, opt)
-    settle(await guard(() => api.patchTask(t.list, t.uid, patch)), t)
-  }
   // Day-column drag: dropping a card on a column reschedules it to that day.
   // A timed due keeps its local time-of-day; an all-day due stays all-day.
   const [dragUid, setDragUid] = useState<string | null>(null)
@@ -338,37 +123,6 @@ export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggle
       due: timed ? dateOut(key, toLocalInput(t.due!).slice(11, 16), t.due) : key,
     })
   }
-
-  // Repair, once per row, the subtasks written before `uidFor` existed: their
-  // RELATED-TO holds the create's client_id rather than the uid derived from
-  // it, so it resolves to nothing. Reinterpreting them at render (below) makes
-  // them nest again here, but the stored pointer is what the server counts and
-  // what every other CalDAV client on these collections reads — Tasks.org and
-  // jtx Board show the same orphan until this lands.
-  //
-  // The signature is exact: bare client_id shape, naming no task, while
-  // `${value}@tasksd` names one in the same list. A RELATED-TO another client
-  // authored cannot match it without that sibling existing, so this never
-  // rewrites someone else's data. Attempts are remembered whether or not they
-  // succeed, so a row the server refuses is not retried in a loop.
-  const repaired = useRef(new Set<string>())
-  useEffect(() => {
-    const byUid = new Map(tasks.map((t) => [t.uid, t] as const))
-    for (const t of tasks) {
-      const p = t.parent
-      if (!p || byUid.has(p) || repaired.current.has(t.uid)) continue
-      if (!LEGACY_PARENT.test(p)) continue
-      const real = byUid.get(uidFor(p))
-      if (!real || real.list !== t.list) continue
-      repaired.current.add(t.uid)
-      console.info(`repairing subtask ${t.uid}: parent ${p} → ${real.uid}`)
-      // Painted locally too, so the row settles on the repaired parent rather
-      // than waiting for the write's own SSE bump to come back around.
-      patchLocal(t.uid, { parent: real.uid })
-      void guard(() => api.patchTask(t.list, t.uid, { parent: real.uid }))
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tasks])
 
   const listApi = {
     create: (name: string) => guard(() => api.createList(name)),
@@ -532,10 +286,16 @@ export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggle
             ))}
           </div>
         ) : visibleLists.length === 0 ? (
-          <div className="empty">
-            {lists.length === 0
-              ? 'Create a list to get started.'
-              : 'Every list is hidden — toggle one on from the sidebar.'}
+          // Three states, not two. Before a fetch has landed there is nothing
+          // to say about the account: telling a user with a dozen lists to
+          // "create a list to get started" was the loudest thing on screen
+          // during every cold load and every tab switch.
+          <div className="empty" aria-busy={!listsLoaded || undefined}>
+            {!listsLoaded
+              ? 'Loading…'
+              : lists.length === 0
+                ? 'Create a list to get started.'
+                : 'Every list is hidden — toggle one on from the sidebar.'}
           </div>
         ) : view === 'list' ? (
           <>
@@ -549,7 +309,11 @@ export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggle
                 <TaskGroup key={t.uid} task={t} kids={childrenOf(t.uid)} dot={dotFor(t)}
                   progress={progressOf(t.uid)} onToggle={toggle} onRemove={remove} onOpen={setDetail} onAddSub={addSub} />
               ))}
-              {active.length === 0 && <div className="empty">Nothing to do here.</div>}
+              {active.length === 0 && (
+                <div className="empty" aria-busy={!loaded || undefined}>
+                  {loaded ? 'Nothing to do here.' : 'Loading…'}
+                </div>
+              )}
               {showCompleted && done.length > 0 && (
                 <>
                   <div className="section-label label">Completed · {done.length}</div>
