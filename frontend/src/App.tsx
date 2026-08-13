@@ -5,8 +5,8 @@ import {
 } from './api'
 import { setErrorNotifier } from './util'
 import {
-  applyTokens, cacheAppearance, ensureFonts, readCachedAppearance, resolve,
-  sanitizeAppearance, syncThemeColor, type Appearance, type Mode,
+  applyTokens, cacheAppearance, ensureFonts, presetSlug, readCachedAppearance,
+  resolve, sanitizeAppearance, syncThemeColor, type Appearance, type Mode,
 } from './appearance'
 import { sanitizeLayout } from './dashboard'
 import {
@@ -80,16 +80,22 @@ export function App() {
     setTheme(next)
   }, [])
 
-  // The one place custom appearance reaches the DOM. Overrides are inline
-  // properties on <html>, so they win over :root in tokens.css without
-  // replacing it — an empty map (no active theme) restores the shipped design
-  // exactly. Re-runs on a light/dark flip too, since a theme carries a separate
-  // map per mode.
+  // The one place appearance reaches the DOM, by both of its routes. A shipped
+  // preset is an attribute, because it is a whole alternative design and lives
+  // in tokens.css; a saved theme is a sparse map of inline properties on <html>,
+  // which wins over :root without replacing it. The two are mutually exclusive,
+  // and clearing both restores the shipped design exactly. Re-runs on a
+  // light/dark flip too, since either route carries a separate map per mode.
   useEffect(() => {
     const mode: Mode = theme === 'dark' ? 'dark' : 'light'
+    const slug = presetSlug(appearance?.active)
+    if (slug) document.documentElement.dataset.preset = slug
+    else delete document.documentElement.dataset.preset
     const tokens = resolve(appearance, mode)
     applyTokens(document.documentElement, tokens)
     ensureFonts(tokens)
+    // Reads the resolved --bg back off the element, so it is correct whichever
+    // route set it — hence last.
     syncThemeColor()
   }, [appearance, theme])
 

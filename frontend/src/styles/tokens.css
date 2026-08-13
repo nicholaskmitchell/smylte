@@ -46,6 +46,17 @@
   --gutter: 26px;
   --row-y: 9px;
 
+  /* The micro-label signature: uppercase mono with wide tracking, on buttons,
+     .label, .chip, column heads and the rest. It is the loudest editorial
+     marker in the app, so it is a lever rather than 24 hardcoded declarations
+     — a theme that wants sentence case sets --label-case: none, and --tracking
+     scales every one of those letter-spacings at once (each is authored as
+     `calc(<literal> * var(--tracking))`, so the relative tiers survive). The
+     three negative tracking values on display type are not label tracking and
+     are deliberately left alone. */
+  --label-case: uppercase;   /* uppercase | none */
+  --tracking: 1;
+
   --shadow: 0 10px 30px rgba(0, 0, 0, 0.20);
   --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.25);
 }
@@ -67,6 +78,81 @@
   --pri-low: oklch(0.72 0.11 245);
 }
 
+/* ---- shipped presets --------------------------------------------------
+   A preset is a second *design*, not a customization: it is a shipped variant
+   of everything above, carried by an attribute on <html> rather than by the
+   inline override layer. That is what keeps it un-editable — there is nothing
+   of the user's to edit — and what lets a palette fix reach everyone on the
+   next deploy instead of being frozen into their stored settings.
+
+   The values are mirrored in appearance.ts (PRESETS), because the Appearance
+   editor has to show what a token *is* under a preset and forking one has to
+   seed from it. appearance.test.ts parses these two blocks and fails the build
+   if the copies drift, exactly as it does for :root.
+
+   Order matters. `:root[data-preset=…]` has the same specificity as the dark
+   block above, so it must come after it to win in light mode; the dark variant
+   below carries one more attribute and so wins over both in dark mode. The
+   user's own overrides are inline properties on <html> and outrank all four. */
+
+:root[data-preset="workspace"] {
+  --bg: #FBFBFC;
+  --bg-elev: #FFFFFF;
+  --paper: #F5F5F7;
+  --fg: #1D1D1F;
+  --fg-muted: rgba(29, 29, 31, 0.62);
+  --fg-faint: rgba(29, 29, 31, 0.38);
+  --rule: rgba(29, 29, 31, 0.11);
+  --rule-faint: rgba(29, 29, 31, 0.06);
+  --accent: oklch(0.56 0.16 253);
+  --warn: oklch(0.55 0.19 27);
+  --ok: oklch(0.56 0.12 155);
+  --pri-high: oklch(0.56 0.18 25);
+  --pri-med: oklch(0.66 0.12 72);
+  --pri-low: oklch(0.58 0.08 250);
+
+  /* One family in all three slots, which is what the reference designs do —
+     they separate the tiers by weight and size, not by typeface. */
+  --serif: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --mono: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+
+  --radius: 6px;
+  --fs-scale: 1;
+  --gutter: 24px;
+  --row-y: 11px;
+  --label-case: none;
+  --tracking: 0;
+}
+
+:root[data-preset="workspace"][data-theme="dark"] {
+  --bg: #191919;
+  --bg-elev: #232323;
+  --paper: #202020;
+  --fg: #F5F5F5;
+  --fg-muted: rgba(245, 245, 245, 0.60);
+  --fg-faint: rgba(245, 245, 245, 0.36);
+  --rule: rgba(245, 245, 245, 0.13);
+  --rule-faint: rgba(245, 245, 245, 0.07);
+  --accent: oklch(0.70 0.14 253);
+  --warn: oklch(0.68 0.17 28);
+  --ok: oklch(0.70 0.12 158);
+  --pri-high: oklch(0.66 0.18 22);
+  --pri-med: oklch(0.78 0.12 78);
+  --pri-low: oklch(0.70 0.09 252);
+
+  --serif: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --mono: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+
+  --radius: 6px;
+  --fs-scale: 1;
+  --gutter: 24px;
+  --row-y: 11px;
+  --label-case: none;
+  --tracking: 0;
+}
+
 * { box-sizing: border-box; }
 html, body, #root { margin: 0; padding: 0; height: 100%; }
 body {
@@ -86,16 +172,16 @@ input, select, textarea { font-family: inherit; }
 
 /* ---- primitives ---- */
 .label {
-  font-family: var(--mono); font-size: calc(10px * var(--fs-scale)); text-transform: uppercase;
-  letter-spacing: 0.1em; color: var(--fg-faint);
+  font-family: var(--mono); font-size: calc(10px * var(--fs-scale)); text-transform: var(--label-case);
+  letter-spacing: calc(0.1em * var(--tracking)); color: var(--fg-faint);
 }
 .mono { font-family: var(--mono); }
 .serif { font-family: var(--serif); }
 
 .btn {
   background: var(--fg); color: var(--bg); border: 0; border-radius: var(--radius);
-  font-family: var(--mono); font-size: calc(11px * var(--fs-scale)); font-weight: 500; text-transform: uppercase;
-  letter-spacing: 0.06em; padding: 9px 13px; cursor: pointer;
+  font-family: var(--mono); font-size: calc(11px * var(--fs-scale)); font-weight: 500; text-transform: var(--label-case);
+  letter-spacing: calc(0.06em * var(--tracking)); padding: 9px 13px; cursor: pointer;
 }
 .btn:disabled { opacity: 0.5; cursor: default; }
 .btn.ghost { background: none; color: var(--fg-muted); border: 1px solid var(--rule); }
@@ -133,7 +219,7 @@ select.input { appearance: none; -webkit-appearance: none; cursor: pointer; }
 
 .chip {
   display: inline-flex; align-items: center; gap: 4px;
-  font-family: var(--mono); font-size: calc(10px * var(--fs-scale)); letter-spacing: 0.04em;
+  font-family: var(--mono); font-size: calc(10px * var(--fs-scale)); letter-spacing: calc(0.04em * var(--tracking));
   color: var(--fg-muted); border: 1px solid var(--rule); padding: 2px 6px;
 }
 

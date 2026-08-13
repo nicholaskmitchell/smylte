@@ -8,12 +8,19 @@
 // removeProperty() loop rather than a rebuild, and it means a corrupt or
 // hostile stored blob degrades to the default look instead of a broken one.
 //
+// Shipped *presets* (see PRESETS) are the one thing that does not work this
+// way. They are alternative designs rather than customizations, so they live in
+// tokens.css under `:root[data-preset=…]` and are selected by an attribute on
+// <html>. That keeps them as un-editable as the default, and keeps a preset out
+// of the user's stored settings entirely — a palette fix ships with the next
+// deploy instead of being frozen into whatever they saved.
+//
 // Everything here is pure except applyTokens/syncThemeColor/ensureFont, which
 // are the only three functions that touch the DOM.
 
 export type Mode = 'light' | 'dark'
 
-export type TokenKind = 'color' | 'length' | 'scale' | 'font'
+export type TokenKind = 'color' | 'length' | 'scale' | 'font' | 'keyword'
 
 export interface TokenSpec {
   label: string
@@ -22,6 +29,10 @@ export interface TokenSpec {
   /** Inclusive bounds for `length` (px) and `scale` (multiplier) tokens. */
   min?: number
   max?: number
+  /** The complete set of legal values for a `keyword` token. */
+  values?: string[]
+  /** How to name those values in the editor, where the CSS keyword is opaque. */
+  valueLabels?: Record<string, string>
   /** One-line explanation shown under the control in the editor. */
   hint?: string
 }
@@ -83,6 +94,12 @@ export const TOKENS: Record<string, TokenSpec> = {
 
   '--radius': { label: 'Corners', group: 'Shape', kind: 'length', min: 0, max: 24 },
   '--fs-scale': { label: 'Text size', group: 'Shape', kind: 'scale', min: 0.8, max: 1.4 },
+  '--label-case': { label: 'Labels', group: 'Shape', kind: 'keyword',
+    values: ['uppercase', 'none'],
+    valueLabels: { uppercase: 'Uppercase', none: 'Sentence case' },
+    hint: 'Buttons, micro-labels and column heads.' },
+  '--tracking': { label: 'Label tracking', group: 'Shape', kind: 'scale', min: 0, max: 1.5,
+    hint: 'Letter-spacing on those same labels. 0 closes it up.' },
   '--gutter': { label: 'Gutter', group: 'Density', kind: 'length', min: 8, max: 64,
     hint: 'Horizontal breathing room around content.' },
   '--row-y': { label: 'Row height', group: 'Density', kind: 'length', min: 2, max: 24,
@@ -144,11 +161,107 @@ export const SHARED_DEFAULTS: ThemeTokens = {
   '--fs-scale': '1',
   '--gutter': '26px',
   '--row-y': '9px',
+  '--label-case': 'uppercase',
+  '--tracking': '1',
 }
 
 /** The effective shipped value of `token` in `mode`, whatever kind it is. */
 export function defaultValue(token: string, mode: Mode): string {
   return DEFAULTS[mode][token] ?? SHARED_DEFAULTS[token] ?? ''
+}
+
+// ── shipped presets ─────────────────────────────────────────────────────────
+// Alternative designs, not customizations. The values below are a mirror of the
+// `:root[data-preset=…]` blocks in tokens.css — which is what the browser
+// actually applies — and exist here because the editor must show what a token
+// *is* under a preset, and forking one has to seed from it. appearance.test.ts
+// parses tokens.css and fails the build if the two copies drift.
+//
+// Ids live in their own namespace so `active` stays a single string across all
+// three cases (null, a preset, a saved theme) and a stored theme can never
+// shadow one. No preset value may contain a single quote: the drift test that
+// pins index.html's copy of the slugs matches on quoted pairs.
+
+export const PRESET_PREFIX = 'preset:'
+
+// Byte-identical to FONT_CHOICES.sans' "System sans", and offered in the serif
+// and mono tiers too — a preset that puts one family in every slot has to land
+// on a named option in each, not on "Custom (…)".
+const SYSTEM_SANS = '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
+
+/** Both maps are dense — a preset restates the whole design, unlike a theme. */
+export const PRESETS: readonly CustomTheme[] = [
+  {
+    id: 'preset:workspace',
+    name: 'Workspace',
+    base: 'light',
+    light: {
+      '--bg': '#FBFBFC',
+      '--bg-elev': '#FFFFFF',
+      '--paper': '#F5F5F7',
+      '--fg': '#1D1D1F',
+      '--fg-muted': 'rgba(29, 29, 31, 0.62)',
+      '--fg-faint': 'rgba(29, 29, 31, 0.38)',
+      '--rule': 'rgba(29, 29, 31, 0.11)',
+      '--rule-faint': 'rgba(29, 29, 31, 0.06)',
+      '--accent': 'oklch(0.56 0.16 253)',
+      '--warn': 'oklch(0.55 0.19 27)',
+      '--ok': 'oklch(0.56 0.12 155)',
+      '--pri-high': 'oklch(0.56 0.18 25)',
+      '--pri-med': 'oklch(0.66 0.12 72)',
+      '--pri-low': 'oklch(0.58 0.08 250)',
+      '--serif': SYSTEM_SANS,
+      '--sans': SYSTEM_SANS,
+      '--mono': SYSTEM_SANS,
+      '--radius': '6px',
+      '--fs-scale': '1',
+      '--gutter': '24px',
+      '--row-y': '11px',
+      '--label-case': 'none',
+      '--tracking': '0',
+    },
+    dark: {
+      '--bg': '#191919',
+      '--bg-elev': '#232323',
+      '--paper': '#202020',
+      '--fg': '#F5F5F5',
+      '--fg-muted': 'rgba(245, 245, 245, 0.60)',
+      '--fg-faint': 'rgba(245, 245, 245, 0.36)',
+      '--rule': 'rgba(245, 245, 245, 0.13)',
+      '--rule-faint': 'rgba(245, 245, 245, 0.07)',
+      '--accent': 'oklch(0.70 0.14 253)',
+      '--warn': 'oklch(0.68 0.17 28)',
+      '--ok': 'oklch(0.70 0.12 158)',
+      '--pri-high': 'oklch(0.66 0.18 22)',
+      '--pri-med': 'oklch(0.78 0.12 78)',
+      '--pri-low': 'oklch(0.70 0.09 252)',
+      '--serif': SYSTEM_SANS,
+      '--sans': SYSTEM_SANS,
+      '--mono': SYSTEM_SANS,
+      '--radius': '6px',
+      '--fs-scale': '1',
+      '--gutter': '24px',
+      '--row-y': '11px',
+      '--label-case': 'none',
+      '--tracking': '0',
+    },
+  },
+]
+
+/** The shipped preset `id` names, or null. */
+export function findPreset(id: string | null | undefined): CustomTheme | null {
+  if (typeof id !== 'string' || !id) return null
+  return PRESETS.find((p) => p.id === id) ?? null
+}
+
+/**
+ * The `<html data-preset>` value for `id` — `preset:workspace` → `workspace` —
+ * or null for the shipped default and for saved themes, which are applied as
+ * inline properties instead.
+ */
+export function presetSlug(id: string | null | undefined): string | null {
+  const preset = findPreset(id)
+  return preset ? preset.id.slice(PRESET_PREFIX.length) : null
 }
 
 // ── validation ──────────────────────────────────────────────────────────────
@@ -201,6 +314,10 @@ export function isValidValue(kind: TokenKind, raw: string): boolean {
     case 'font': return isFontStack(v)
     case 'length': return /^\d{1,3}(\.\d+)?px$/.test(v)
     case 'scale': return /^\d(\.\d+)?$/.test(v)
+    // A keyword is only ever legal against its own token's `values`, which this
+    // signature cannot see — isValidToken does that check. Refusing here means
+    // the kind can never be waved through by a caller that only knows the kind.
+    case 'keyword': return false
     default: return false
   }
 }
@@ -209,6 +326,7 @@ export function isValidValue(kind: TokenKind, raw: string): boolean {
 export function isValidToken(token: string, value: unknown): boolean {
   const spec = TOKENS[token]
   if (!spec || typeof value !== 'string') return false
+  if (spec.kind === 'keyword') return (spec.values ?? []).includes(value.trim())
   if (!isValidValue(spec.kind, value)) return false
   if (spec.min !== undefined || spec.max !== undefined) {
     const n = parseFloat(value)
@@ -240,6 +358,11 @@ export function sanitizeAppearance(raw: unknown): Appearance {
       const o = t as Record<string, unknown>
       if (typeof o.id !== 'string' || !o.id) continue
       if (typeof o.name !== 'string' || !o.name) continue
+      // The preset namespace is reserved. Without this, a hand-edited blob
+      // could carry a saved theme called `preset:workspace` that the attribute
+      // path silently shadows. clientId() never emits a colon, so nothing the
+      // app itself created is ever dropped here.
+      if (o.id.startsWith(PRESET_PREFIX)) continue
       themes.push({
         id: o.id.slice(0, 64),
         name: o.name.slice(0, MAX_NAME_LEN),
@@ -249,9 +372,11 @@ export function sanitizeAppearance(raw: unknown): Appearance {
       })
     }
   }
-  // An `active` pointing at a theme that no longer exists falls back to the
-  // shipped default rather than rendering nothing.
-  const active = typeof src.active === 'string' && themes.some((t) => t.id === src.active)
+  // An `active` pointing at a theme that no longer exists — or at a preset this
+  // build has dropped — falls back to the shipped default rather than rendering
+  // nothing.
+  const active = typeof src.active === 'string'
+    && (!!findPreset(src.active) || themes.some((t) => t.id === src.active))
     ? src.active
     : null
   return { active, themes }
@@ -259,7 +384,12 @@ export function sanitizeAppearance(raw: unknown): Appearance {
 
 // ── resolution + application ────────────────────────────────────────────────
 
-/** The flat override map for the active theme in `mode`. Empty = shipped default. */
+/**
+ * The flat override map for the active theme in `mode`. Empty = nothing to
+ * override with, which covers both the shipped default and a preset — a preset
+ * is carried by `<html data-preset>` (see presetSlug), so the inline layer must
+ * be cleared for it rather than written to.
+ */
 export function resolve(appearance: Appearance | null | undefined, mode: Mode): ThemeTokens {
   if (!appearance?.active) return {}
   const theme = appearance.themes?.find((t) => t.id === appearance.active)
@@ -399,6 +529,10 @@ export const FONT_CHOICES: Record<'serif' | 'sans' | 'mono', FontChoice[]> = {
     { label: 'Fraunces (default)', stack: SHARED_DEFAULTS['--serif'] },
     { label: 'Georgia', stack: 'Georgia, "Times New Roman", serif' },
     { label: 'System serif', stack: 'ui-serif, Iowan Old Style, Palatino, serif' },
+    // Also in the sans tier. A theme that wants one family in every slot — the
+    // Workspace preset does — needs it offered here too, or forking it lands on
+    // "Custom (…)" for a stack the app itself ships.
+    { label: 'System sans', stack: SYSTEM_SANS },
     { label: 'Lora', stack: '"Lora", Georgia, serif', google: 'Lora:wght@400;500;600' },
     { label: 'EB Garamond', stack: '"EB Garamond", Georgia, serif', google: 'EB+Garamond:wght@400;500;600' },
     { label: 'Playfair Display', stack: '"Playfair Display", Georgia, serif', google: 'Playfair+Display:wght@400;500;600' },
@@ -406,7 +540,7 @@ export const FONT_CHOICES: Record<'serif' | 'sans' | 'mono', FontChoice[]> = {
   ],
   sans: [
     { label: 'Inter (default)', stack: SHARED_DEFAULTS['--sans'] },
-    { label: 'System sans', stack: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' },
+    { label: 'System sans', stack: SYSTEM_SANS },
     { label: 'IBM Plex Sans', stack: '"IBM Plex Sans", sans-serif', google: 'IBM+Plex+Sans:wght@400;500;600' },
     { label: 'Work Sans', stack: '"Work Sans", sans-serif', google: 'Work+Sans:wght@400;500;600' },
     { label: 'Public Sans', stack: '"Public Sans", sans-serif', google: 'Public+Sans:wght@400;500;600' },
@@ -416,6 +550,7 @@ export const FONT_CHOICES: Record<'serif' | 'sans' | 'mono', FontChoice[]> = {
   mono: [
     { label: 'JetBrains Mono (default)', stack: SHARED_DEFAULTS['--mono'] },
     { label: 'System mono', stack: 'ui-monospace, Menlo, Consolas, monospace' },
+    { label: 'System sans', stack: SYSTEM_SANS },
     { label: 'IBM Plex Mono', stack: '"IBM Plex Mono", monospace', google: 'IBM+Plex+Mono:wght@400;500' },
     { label: 'Source Code Pro', stack: '"Source Code Pro", monospace', google: 'Source+Code+Pro:wght@400;500' },
     { label: 'Space Mono', stack: '"Space Mono", monospace', google: 'Space+Mono:wght@400;700' },

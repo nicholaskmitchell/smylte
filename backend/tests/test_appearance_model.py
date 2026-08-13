@@ -96,6 +96,17 @@ def test_appearance_defaults_to_the_shipped_design():
     assert a.active is None and a.themes == []
 
 
+def test_active_may_name_a_shipped_preset():
+    # A built-in theme is resolved entirely client-side, so `active` carries a
+    # `preset:` id pointing at nothing in `themes`. This asserts the model keeps
+    # it: tightening `active` to point into `themes` would look like a sensible
+    # hardening and would silently drop every user on a preset back to Smylte.
+    a = Appearance(active="preset:workspace", themes=[])
+    assert a.active == "preset:workspace"
+    dumped = SettingsPatch(appearance=a).model_dump(exclude_unset=True)
+    assert dumped["appearance"]["active"] == "preset:workspace"
+
+
 def test_appearance_caps_stored_themes():
     with pytest.raises(ValidationError):
         Appearance(themes=[theme(id=f"t{i}", name=f"n{i}") for i in range(30)])

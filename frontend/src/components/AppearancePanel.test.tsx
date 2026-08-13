@@ -2,7 +2,7 @@ import { describe, expect, it, vi, afterEach, beforeEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { AppearancePanel } from './AppearancePanel'
-import { DEFAULTS, MAX_THEMES, type Appearance, type CustomTheme } from '../appearance'
+import { DEFAULTS, MAX_THEMES, PRESETS, type Appearance, type CustomTheme } from '../appearance'
 
 const theme = (o: Partial<CustomTheme> = {}): CustomTheme => ({
   id: 't1', name: 'Mine', base: 'light',
@@ -152,6 +152,75 @@ describe('<AppearancePanel> theme management', () => {
 // interactive — sliders moved, the color field accepted typing — and nothing
 // was ever applied or saved, with no explanation.
 
+// A built-in preset is shipped design, so it gets the same protection the
+// default does — with one difference that carries the whole feature: a fork of
+// the default starts empty (empty *is* the default), while a fork of a preset
+// has to carry that preset's values or it snaps back to Smylte on first touch.
+describe('<AppearancePanel> built-in presets', () => {
+  const preset = PRESETS[0]
+  const onPreset = (mode: 'light' | 'dark' = 'light') =>
+    setup({ active: preset.id, themes: [] }, mode)
+
+  it('offers every shipped preset, and selects one', async () => {
+    const { onChange } = setup()
+    const picker = screen.getByRole('combobox', { name: 'Theme' })
+    expect(screen.getByRole('option', { name: preset.name })).toBeInTheDocument()
+    await userEvent.selectOptions(picker, preset.id)
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ active: preset.id }))
+  })
+
+  it('shows the preset’s own values, not Smylte’s', () => {
+    onPreset()
+    expect(screen.getByRole('combobox', { name: 'Theme' })).toHaveValue(preset.id)
+    expect(accentField()).toHaveValue(preset.light['--accent'])
+    expect(accentField()).not.toHaveValue(DEFAULTS.light['--accent'])
+  })
+
+  it('forks a copy carrying both modes, not just the token touched', async () => {
+    // The bug this pins: seeding only the mode being edited, or replacing the
+    // seed with the patch, either of which leaves the fork looking like Smylte
+    // the instant the user nudges one control.
+    const { onChange } = onPreset()
+    const field = accentField()
+    await userEvent.clear(field)
+    await userEvent.type(field, '#00ff00')
+
+    const last = onChange.mock.calls[onChange.mock.calls.length - 1][0] as Appearance
+    expect(last.themes).toHaveLength(1)
+    const fork = last.themes![0]
+    expect(last.active).toBe(fork.id)
+    expect(fork.id).not.toBe(preset.id)              // never squats the namespace
+    expect(fork.light['--accent']).toBe('#00ff00')   // the edit
+    expect(fork.light['--bg']).toBe(preset.light['--bg'])          // the seed
+    expect(fork.dark).toEqual(preset.dark)                         // the other mode
+  })
+
+  it('duplicates into a theme of the user’s own', async () => {
+    const { onChange } = onPreset()
+    await userEvent.click(screen.getByRole('button', { name: /duplicate/i }))
+    const last = onChange.mock.calls[onChange.mock.calls.length - 1][0] as Appearance
+    const copy = last.themes![0]
+    expect(copy.name).toBe(`${preset.name} copy`)
+    expect(copy.light).toEqual(preset.light)
+    expect(copy.dark).toEqual(preset.dark)
+    expect(last.active).toBe(copy.id)
+  })
+
+  it('offers nothing that would edit or destroy it', () => {
+    onPreset()
+    expect(screen.getByRole('button', { name: /rename/i })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /duplicate/i })).toBeEnabled()
+    expect(screen.getByRole('button', { name: /export/i })).toBeEnabled()
+    expect(screen.queryByRole('button', { name: /delete theme/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /reset light/i })).not.toBeInTheDocument()
+    // Nothing of the user's is in force, so every per-token reset is inert.
+    expect(screen.getByRole('button', { name: /reset accent/i })).toBeDisabled()
+    // The override counter has nothing to count, and says so.
+    expect(screen.getByText('Built-in theme')).toBeInTheDocument()
+    expect(screen.queryByText(/overrides in light/i)).not.toBeInTheDocument()
+  })
+})
+
 describe('<AppearancePanel> at the theme cap', () => {
   const full = () => Array.from({ length: MAX_THEMES }, (_, i) => ({
     id: `t${i}`, name: `Theme ${i}`, base: 'light' as const, light: {}, dark: {},
@@ -174,6 +243,15 @@ describe('<AppearancePanel> at the theme cap', () => {
     const themes = full()
     const { onChange } = setup({ active: themes[0].id, themes })
     await userEvent.click(screen.getByRole('button', { name: /duplicate/i }))
+    expect(alertSpy).toHaveBeenCalledWith(expect.stringContaining(String(MAX_THEMES)))
+    expect(onChange).not.toHaveBeenCalled()
+  })
+
+  it('explains why editing a preset does nothing', async () => {
+    const { onChange } = setup({ active: PRESETS[0].id, themes: full() })
+    const field = accentField()
+    await userEvent.clear(field)
+    await userEvent.type(field, '#00ff00')
     expect(alertSpy).toHaveBeenCalledWith(expect.stringContaining(String(MAX_THEMES)))
     expect(onChange).not.toHaveBeenCalled()
   })

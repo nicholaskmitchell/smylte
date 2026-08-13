@@ -46,18 +46,30 @@ opens on — a fixed one, or wherever you left off. Both follow the account.
 
 **Appearance.** Settings → Appearance opens a live editor over the design
 system: every color token (with a picker and a raw OKLCH/hex field), corner
-radius, text scale, gutter and row density, and the serif / sans / mono
-families. Save named themes, export and import them as JSON, reset a single
-token, one mode, or everything. A theme carries separate light and dark maps.
+radius, text scale, gutter and row density, the serif / sans / mono families,
+and whether micro-labels are uppercase and how far they track. Save named
+themes, export and import them as JSON, reset a single token, one mode, or
+everything. A theme carries separate light and dark maps.
 
-**The shipped design is never edited.** Customization is a sparse override
+Two designs ship. **Smylte** is the default and the editorial one — warm
+off-white, orange accent, Fraunces headlines, sharp corners, uppercase mono
+micro-labels. **Workspace** is the restrained alternative: neutral greys, a
+blue accent, one system sans in every type slot, 6px corners and sentence-case
+labels.
+
+**Neither shipped design is ever edited.** Customization is a sparse override
 layer written as inline custom properties on `<html>`, so `styles/tokens.css`
 stays the product's design and "Reset to Smylte" is simply dropping the
-overrides. Editing while the default is active forks a new theme rather than
-modifying it. Overrides are validated against a token allowlist on both sides
-of the wire — the blob is re-read by a pre-paint script that writes straight
-into the CSSOM, so a `url()` beacon or a property break-out must never survive
-storage. `appearance.test.ts` asserts the defaults still match `tokens.css`.
+overrides. A preset is not a stored theme either — it lives in `tokens.css`
+under `:root[data-preset=…]` and is selected by an attribute, which is what
+keeps it un-editable and lets a palette fix reach everyone on the next deploy.
+Editing while either is active forks a new theme rather than modifying it; a
+fork of a preset is seeded with that preset's values, so it starts out
+identical. Overrides are validated against a token allowlist on both sides of
+the wire — the blob is re-read by a pre-paint script that writes straight into
+the CSSOM, so a `url()` beacon or a property break-out must never survive
+storage. `appearance.test.ts` asserts the defaults *and* the presets still
+match `tokens.css`.
 
 **Across the app.** Optimistic writes (paint immediately, reconcile with the
 server DTO, roll back on failure), live updates over Server-Sent Events, and

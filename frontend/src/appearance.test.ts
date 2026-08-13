@@ -11,10 +11,11 @@ const read = (rel: string) =>
 const tokensCss = read('./styles/tokens.css')
 const indexHtml = read('../index.html')
 import {
-  APPEARANCE_KEY, DEFAULTS, GROUPS, MAX_THEMES, SHARED_DEFAULTS, TOKENS, TOKEN_NAMES,
-  applyTokens, cacheAppearance, defaultValue, isValidToken, isValidValue,
-  parseTheme, readCachedAppearance, resolve, sanitizeAppearance, sanitizeTokens,
-  serializeTheme, type CustomTheme,
+  APPEARANCE_KEY, DEFAULTS, FONT_CHOICES, GROUPS, MAX_THEMES, PRESETS, PRESET_PREFIX,
+  SHARED_DEFAULTS, TOKENS, TOKEN_NAMES,
+  applyTokens, cacheAppearance, defaultValue, findPreset, isValidToken, isValidValue,
+  parseTheme, presetSlug, readCachedAppearance, resolve, sanitizeAppearance,
+  sanitizeTokens, serializeTheme, type CustomTheme, type Mode,
 } from './appearance'
 
 /** Pull `--name: value;` pairs out of one CSS rule block. */
@@ -75,6 +76,79 @@ describe('shipped defaults', () => {
   })
 })
 
+// ── the shipped presets ─────────────────────────────────────────────────────
+// A preset is applied by tokens.css, not by this module, so the module's copy of
+// it is *only* ever read by the editor — which means a value that drifted off
+// the stylesheet would show a wrong number in the panel and seed a fork that
+// does not match what the user was looking at, with nothing else going wrong.
+// That is precisely the kind of bug that survives a manual pass, hence these.
+
+describe('shipped presets', () => {
+  it('mirror the tokens.css block they are applied from', () => {
+    for (const preset of PRESETS) {
+      const slug = preset.id.slice(PRESET_PREFIX.length)
+      const light = parseBlock(tokensCss, `:root[data-preset="${slug}"]`)
+      const dark = parseBlock(tokensCss, `:root[data-preset="${slug}"][data-theme="dark"]`)
+      expect(preset.light, `${preset.id} light drifted from tokens.css`).toEqual(light)
+      expect(preset.dark, `${preset.id} dark drifted from tokens.css`).toEqual(dark)
+    }
+  })
+
+  it('restate the whole design in both modes', () => {
+    // Unlike a theme, a preset is not sparse — a token it forgets would fall
+    // through to Smylte's value and read as a rendering bug in one mode only.
+    for (const preset of PRESETS) {
+      expect(Object.keys(preset.light).sort()).toEqual([...TOKEN_NAMES].sort())
+      expect(Object.keys(preset.dark).sort()).toEqual([...TOKEN_NAMES].sort())
+    }
+  })
+
+  it('survive the validator they will be seeded through', () => {
+    // A typo'd oklch() would otherwise be dropped silently when a fork is
+    // sanitized on its way to the server.
+    for (const preset of PRESETS) {
+      expect(sanitizeTokens(preset.light), `${preset.id} light`).toEqual(preset.light)
+      expect(sanitizeTokens(preset.dark), `${preset.id} dark`).toEqual(preset.dark)
+    }
+  })
+
+  it('take ids in the reserved namespace, unique and short enough to store', () => {
+    const seen = new Set<string>()
+    for (const preset of PRESETS) {
+      expect(preset.id.startsWith(PRESET_PREFIX)).toBe(true)
+      expect(preset.id.length).toBeLessThanOrEqual(64)   // the backend's max_length
+      expect(seen.has(preset.id), `${preset.id} is declared twice`).toBe(false)
+      seen.add(preset.id)
+    }
+  })
+
+  it('name font stacks the editor actually offers', () => {
+    // Otherwise forking a preset lands the type controls on "Custom (…)" for a
+    // stack the app itself ships.
+    const tiers = { '--serif': 'serif', '--sans': 'sans', '--mono': 'mono' } as const
+    for (const preset of PRESETS) {
+      for (const [token, tier] of Object.entries(tiers)) {
+        for (const mode of ['light', 'dark'] as Mode[]) {
+          const stack = preset[mode][token]
+          expect(FONT_CHOICES[tier].some((c) => c.stack === stack),
+            `${preset.id} ${mode} ${token} is not in FONT_CHOICES.${tier}`).toBe(true)
+        }
+      }
+    }
+  })
+
+  it('resolve to an attribute, not to inline overrides', () => {
+    // The whole point of the split: applyTokens must *clear* the inline layer
+    // for a preset, or a saved theme's leftovers would sit on top of it.
+    const app = { active: PRESETS[0].id, themes: [] }
+    expect(resolve(app, 'light')).toEqual({})
+    expect(presetSlug(app.active)).toBe('workspace')
+    expect(presetSlug('preset:nope')).toBe(null)
+    expect(presetSlug(null)).toBe(null)
+    expect(findPreset(PRESETS[0].id)).toEqual(PRESETS[0])
+  })
+})
+
 // ── the pre-paint script ────────────────────────────────────────────────────
 // index.html restates the token list and the value guard because it runs before
 // the bundle exists. Two copies of a security check is exactly the kind of thing
@@ -110,6 +184,28 @@ describe('pre-paint script in index.html', () => {
 
   it('reads the same localStorage key the app writes', () => {
     expect(html).toContain(`'${APPEARANCE_KEY}'`)
+  })
+
+  it('knows every preset slug, and its background in both modes', () => {
+    // This copy is what stops a preset flashing Smylte on every load, and it
+    // doubles as the allowlist of attribute values the script will write — so a
+    // preset missing here fails open (default look) rather than closed.
+    const start = html.indexOf('var PRESET_BG = {')
+    expect(start, 'no PRESET_BG found in the pre-paint script').toBeGreaterThan(-1)
+    const literal = html.slice(start, html.indexOf('\n        }', start))
+    const inline: Record<string, Record<string, string>> = {}
+    for (const m of literal.matchAll(
+      /'([\w-]+)':\s*\{\s*'light':\s*'([^']*)',\s*'dark':\s*'([^']*)'\s*\}/g
+    )) {
+      inline[m[1]] = { light: m[2], dark: m[3] }
+    }
+    expect(Object.keys(inline).sort())
+      .toEqual(PRESETS.map((p) => p.id.slice(PRESET_PREFIX.length)).sort())
+    for (const preset of PRESETS) {
+      const slug = preset.id.slice(PRESET_PREFIX.length)
+      expect(inline[slug].light, `${slug} light background drifted`).toBe(preset.light['--bg'])
+      expect(inline[slug].dark, `${slug} dark background drifted`).toBe(preset.dark['--bg'])
+    }
   })
 })
 
@@ -169,6 +265,25 @@ describe('isValidToken', () => {
     expect(isValidToken('--accent', '12px')).toBe(false)
     expect(isValidToken('--radius', 'oklch(0.6 0.1 40)')).toBe(false)
   })
+
+  it('holds a keyword token to its own closed set', () => {
+    expect(isValidToken('--label-case', 'uppercase')).toBe(true)
+    expect(isValidToken('--label-case', 'none')).toBe(true)
+    // Real CSS keywords that are simply not offered, and a value of another kind.
+    expect(isValidToken('--label-case', 'lowercase')).toBe(false)
+    expect(isValidToken('--label-case', 'capitalize')).toBe(false)
+    expect(isValidToken('--label-case', '#fff')).toBe(false)
+    // A bare keyword is a legal *color*, so the kind must not be waved through
+    // on the strength of the value alone.
+    expect(isValidValue('keyword', 'uppercase')).toBe(false)
+  })
+
+  it('bounds label tracking', () => {
+    expect(isValidToken('--tracking', '0')).toBe(true)
+    expect(isValidToken('--tracking', '1.5')).toBe(true)
+    expect(isValidToken('--tracking', '4')).toBe(false)     // max 1.5
+    expect(isValidToken('--tracking', '2px')).toBe(false)
+  })
 })
 
 describe('sanitizeTokens', () => {
@@ -217,6 +332,27 @@ describe('sanitizeAppearance', () => {
       themes: [theme({ light: { '--bg': 'url(//evil)', '--accent': '#00ff00' } })],
     })
     expect(out.themes![0].light).toEqual({ '--accent': '#00ff00' })
+  })
+
+  it('keeps an active preset id even with no themes of the user’s own', () => {
+    const out = sanitizeAppearance({ active: PRESETS[0].id, themes: [] })
+    expect(out.active).toBe(PRESETS[0].id)
+  })
+
+  it('clears an active preset id this build does not ship', () => {
+    expect(sanitizeAppearance({ active: 'preset:gone', themes: [] }).active).toBe(null)
+  })
+
+  it('drops a saved theme squatting in the preset namespace', () => {
+    // Otherwise a hand-edited blob could park a theme on a preset's id, where
+    // the attribute path would quietly shadow it — a theme that is selected,
+    // editable, and has no effect.
+    const out = sanitizeAppearance({
+      active: PRESETS[0].id,
+      themes: [theme({ id: PRESETS[0].id, name: 'Impostor' }), theme()],
+    })
+    expect(out.themes!.map((t) => t.id)).toEqual(['t1'])
+    expect(out.active).toBe(PRESETS[0].id)
   })
 
   it('survives junk', () => {
@@ -298,6 +434,14 @@ describe('the pre-paint cache', () => {
     cacheAppearance({ active: null, themes: [] })
     expect(localStorage.getItem(APPEARANCE_KEY)).toBe(null)
     expect(readCachedAppearance()).toBe(null)
+  })
+
+  it('keeps the key for a preset, which has no themes to store', () => {
+    // The `!active` shortcut that clears the key for the default must not also
+    // clear it for a preset — that would flash Smylte on every reload.
+    cacheAppearance({ active: PRESETS[0].id, themes: [] })
+    expect(localStorage.getItem(APPEARANCE_KEY)).toBeTruthy()
+    expect(readCachedAppearance()!.active).toBe(PRESETS[0].id)
   })
 
   it('returns null rather than throwing on a corrupt blob', () => {
