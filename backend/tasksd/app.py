@@ -126,6 +126,7 @@ class EditTask(BaseModel):
     start: str | None = None
     tags: list[str] | None = None
     status: str | None = None         # NEEDS-ACTION|IN-PROCESS|COMPLETED|CANCELLED
+    parent: str | None = None         # parent task UID; explicit null unparents
 
 
 class Sidecar(BaseModel):
@@ -462,6 +463,8 @@ def _edit_from_patch(req: EditTask) -> TaskEdit:
         kw["categories"] = req.tags
     if "status" in fs:
         kw["status"] = _check_status(req.status, _TASK_STATUS)
+    if "parent" in fs:
+        kw["related_parent"] = req.parent           # explicit null unparents
     return TaskEdit(**kw)
 
 
@@ -727,6 +730,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def _run(fn, *a, **kw):
         return await asyncio.to_thread(fn, *a, **kw)
 
+    async def _check_parent(request: Request, href: str, parent: str | None,
+                            *, uid: str | None = None) -> None:
+        """Refuse a parent that names nothing in this collection.
+
+        RELATED-TO goes onto the VTODO verbatim, so an unresolvable value is not
+        a display bug a refetch repairs — it is a subtask orphaned in the
+        collection for every client that reads it, ours included. That failure
+        was silent, which is how it survived long enough to be reported as a UI
+        bug. `_children_map` joins within one collection, so that is the scope
+        the check uses."""
+        if parent is None:
+            return
+        if uid is not None and parent == uid:
+            raise HTTPException(422, "a task cannot be its own parent")
+        if not await _run(_svc(request).has_task, href, parent):
+            raise HTTPException(422, f"unknown parent task {parent}")
+
     # -- lists --
     @api.get("/lists")
     async def get_lists(request: Request):
@@ -781,16 +801,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def post_task(request: Request, list_id: str, body: CreateTask):
         href = _href(request, list_id)
         _check_client_id(body.client_id)
-        # A parent naming nothing is refused rather than written. RELATED-TO
-        # goes onto the VTODO verbatim, so an unresolvable value is not a
-        # display bug that a refetch fixes — it is a subtask orphaned in the
-        # collection for every client that reads it, us included. Answering 422
-        # is what makes a client sending the wrong uid fail loudly instead of
-        # quietly corrupting the data.
-        if body.parent is not None and not await _run(
-            _svc(request).has_task, href, body.parent
-        ):
-            raise HTTPException(422, f"unknown parent task {body.parent}")
+        await _check_parent(request, href, body.parent)
         return await _run(
             _svc(request).create_task, href, body.summary,
             edit=_edit_from_create(body), parent_uid=body.parent,
@@ -808,6 +819,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @api.patch("/lists/{list_id}/tasks/{uid}")
     async def patch_task(request: Request, list_id: str, uid: str, body: EditTask):
         href = _href(request, list_id)
+        await _check_parent(request, href, body.parent, uid=uid)
         dto = await _run(_svc(request).edit_task, href, uid, _edit_from_patch(body))
         if dto is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown task {uid}")

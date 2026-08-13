@@ -338,6 +338,38 @@ export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggle
       due: timed ? dateOut(key, toLocalInput(t.due!).slice(11, 16), t.due) : key,
     })
   }
+
+  // Repair, once per row, the subtasks written before `uidFor` existed: their
+  // RELATED-TO holds the create's client_id rather than the uid derived from
+  // it, so it resolves to nothing. Reinterpreting them at render (below) makes
+  // them nest again here, but the stored pointer is what the server counts and
+  // what every other CalDAV client on these collections reads — Tasks.org and
+  // jtx Board show the same orphan until this lands.
+  //
+  // The signature is exact: bare client_id shape, naming no task, while
+  // `${value}@tasksd` names one in the same list. A RELATED-TO another client
+  // authored cannot match it without that sibling existing, so this never
+  // rewrites someone else's data. Attempts are remembered whether or not they
+  // succeed, so a row the server refuses is not retried in a loop.
+  const repaired = useRef(new Set<string>())
+  useEffect(() => {
+    const byUid = new Map(tasks.map((t) => [t.uid, t] as const))
+    for (const t of tasks) {
+      const p = t.parent
+      if (!p || byUid.has(p) || repaired.current.has(t.uid)) continue
+      if (!LEGACY_PARENT.test(p)) continue
+      const real = byUid.get(uidFor(p))
+      if (!real || real.list !== t.list) continue
+      repaired.current.add(t.uid)
+      console.info(`repairing subtask ${t.uid}: parent ${p} → ${real.uid}`)
+      // Painted locally too, so the row settles on the repaired parent rather
+      // than waiting for the write's own SSE bump to come back around.
+      patchLocal(t.uid, { parent: real.uid })
+      void guard(() => api.patchTask(t.list, t.uid, { parent: real.uid }))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tasks])
+
   const listApi = {
     create: (name: string) => guard(() => api.createList(name)),
     update: (id: string, body: { name?: string; color?: string | null }) =>
@@ -350,45 +382,46 @@ export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggle
   // list is an instant client-side filter (no refetch).
   const shownTasks = tasks.filter((t) => !hiddenSet.has(t.list))
 
-  // Every task on the account, for resolving parents. Deliberately not
-  // `shownTasks`: hiding a list must not orphan a child onto the top level.
-  const allByUid = useMemo(() => new Map(tasks.map((t) => [t.uid, t] as const)), [tasks])
-  // Subtasks written before `uidFor` existed carry the create's client_id where
-  // the parent's uid belongs, so they point at a task that never existed and
-  // read back as top-level ones. Reinterpret those at render time — recognised
-  // only when the value has exactly the shape this app mints (the backend's
-  // _CLIENT_ID_RE), names no task, and `${value}@tasksd` names one. The stored
-  // RELATED-TO is repaired separately; this is what makes them nest at once,
-  // and what covers a row the repair hasn't reached yet.
-  const legacyParent = (t: Task): string | null => {
-    const p = t.parent
-    if (!p || allByUid.has(p)) return p
-    return LEGACY_PARENT.test(p) && allByUid.has(uidFor(p)) ? uidFor(p) : p
-  }
-  const parentOf = (t: Task) => legacyParent(t)
-
-  // Subtask progress is derived here rather than read off the DTO. The server's
-  // child_count/completed_child_count are a snapshot of the last refetch, so a
-  // subtask created or ticked just now left its parent's x/y stale until the
-  // SSE bump landed a whole refetch later. Built from the full `tasks` array so
-  // the number still matches the server's: this view fetches every list, and a
-  // child in a hidden list is one the server is counting too.
-  const kidsByParent = useMemo(() => {
+  // One pass over every fetched task resolves both questions the rows below
+  // ask: which parent a subtask really belongs to, and which children a parent
+  // really has. Built from `tasks`, not `shownTasks` — hiding a list is a
+  // display choice and must not change what a task's parent *is*.
+  //
+  // Two rules decide a match, and both mirror the server so the counts agree
+  // with it exactly:
+  //
+  //  - The parent must sit in the same list. `_children_map` groups within one
+  //    collection, so a RELATED-TO pointing across lists counts for nothing
+  //    there and must count for nothing here.
+  //  - A `parent` with exactly the shape of a client_id (the backend's
+  //    _CLIENT_ID_RE) that names no task, while `${value}@tasksd` names one, is
+  //    read as that task. Those are the subtasks written before `uidFor`
+  //    existed, pointing at the create id instead of the uid derived from it.
+  //    They are repaired on the wire above; this is what nests them at once,
+  //    and what covers a row the repair has not reached or was refused.
+  const { parentByUid, kidsByParent } = useMemo(() => {
     const byUid = new Map(tasks.map((t) => [t.uid, t] as const))
-    const m = new Map<string, Task[]>()
+    const parents = new Map<string, string>()
+    const kids = new Map<string, Task[]>()
     for (const t of tasks) {
-      let p = t.parent
-      if (!p) continue
-      if (!byUid.has(p)) {
-        if (!LEGACY_PARENT.test(p) || !byUid.has(uidFor(p))) continue
-        p = uidFor(p)
-      }
-      const kids = m.get(p)
-      if (kids) kids.push(t)
-      else m.set(p, [t])
+      const raw = t.parent
+      if (!raw) continue
+      const p = byUid.get(raw) ?? (LEGACY_PARENT.test(raw) ? byUid.get(uidFor(raw)) : undefined)
+      if (!p || p.list !== t.list) continue
+      parents.set(t.uid, p.uid)
+      const mine = kids.get(p.uid)
+      if (mine) mine.push(t)
+      else kids.set(p.uid, [t])
     }
-    return m
+    return { parentByUid: parents, kidsByParent: kids }
   }, [tasks])
+  const parentOf = (t: Task) => parentByUid.get(t.uid) ?? null
+
+  // Subtask progress is derived from that map rather than read off the DTO.
+  // The server's child_count/completed_child_count are a snapshot of the last
+  // refetch, so a subtask created or ticked just now left its parent's x/y
+  // stale until an SSE bump landed a whole refetch later — while the nesting
+  // beside it, already computed locally, had moved.
   const progressOf = (uid: string) => {
     const kids = kidsByParent.get(uid)
     return kids ? { total: kids.length, done: kids.filter(isDone).length } : null

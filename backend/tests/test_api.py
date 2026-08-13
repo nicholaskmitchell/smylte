@@ -120,6 +120,30 @@ def test_create_rejects_a_parent_that_names_nothing(client):
     assert client.get(f"/api/lists/{lid}/tasks/{parent['uid']}").json()["child_count"] == 1
 
 
+def test_patch_reparents_a_task(client):
+    """Repointing a subtask is what repairs one written against a bad parent."""
+    lid = _list(client)["id"]
+    a = client.post(f"/api/lists/{lid}/tasks", json={"summary": "trip"}).json()
+    b = client.post(f"/api/lists/{lid}/tasks", json={"summary": "errands"}).json()
+    sub = client.post(f"/api/lists/{lid}/tasks",
+                      json={"summary": "book flight", "parent": a["uid"]}).json()
+
+    moved = client.patch(f"/api/lists/{lid}/tasks/{sub['uid']}",
+                         json={"parent": b["uid"]})
+    assert moved.status_code == 200, moved.text
+    assert moved.json()["parent"] == b["uid"]
+    assert client.get(f"/api/lists/{lid}/tasks/{a['uid']}").json()["child_count"] == 0
+    assert client.get(f"/api/lists/{lid}/tasks/{b['uid']}").json()["child_count"] == 1
+
+    # An explicit null unparents; a parent naming nothing, or itself, is refused.
+    assert client.patch(f"/api/lists/{lid}/tasks/{sub['uid']}",
+                        json={"parent": None}).json()["parent"] is None
+    assert client.patch(f"/api/lists/{lid}/tasks/{sub['uid']}",
+                        json={"parent": "ghost@tasksd"}).status_code == 422
+    assert client.patch(f"/api/lists/{lid}/tasks/{sub['uid']}",
+                        json={"parent": sub["uid"]}).status_code == 422
+
+
 def test_search_and_tags(client):
     lst = _list(client)
     token = uuid.uuid4().hex[:10]
