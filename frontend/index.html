@@ -23,9 +23,9 @@
       // Søren's pattern, extended for custom themes.
       //
       // This runs before the bundle, so it cannot import src/appearance.ts and
-      // has to restate the token list and the value guard inline. Both are
-      // asserted against the real ones by src/appearance.test.ts, which fails
-      // the build if the two copies drift.
+      // has to restate the token list, the value guard and the shipped presets
+      // inline. All three are asserted against the real ones by
+      // src/appearance.test.ts, which fails the build if the copies drift.
       //
       // The guard is not decoration: localStorage is writable by anything that
       // ever gets script execution on this origin, and these values go straight
@@ -37,9 +37,18 @@
           '--rule', '--rule-faint', '--accent', '--warn', '--ok',
           '--pri-high', '--pri-med', '--pri-low',
           '--serif', '--sans', '--mono',
-          '--radius', '--fs-scale', '--gutter', '--row-y'
+          '--radius', '--fs-scale', '--gutter', '--row-y',
+          '--label-case', '--tracking'
         ]
         var BAD = /url\(|image\(|expression\(|javascript:|@import|[;{}<>\\]|\/\*/i
+        // A preset is a whole design and lives in tokens.css, so only its slug
+        // has to survive here. The backgrounds are carried for the same reason
+        // the two shipped ones below are: theme-color has to be set before the
+        // stylesheet is in the cascade. Doubling as the allowlist of known
+        // slugs is what stops a tampered blob writing an arbitrary attribute.
+        var PRESET_BG = {
+          'workspace': { 'light': '#FBFBFC', 'dark': '#191919' }
+        }
         var root = document.documentElement
         var mode = 'light'
         try {
@@ -54,18 +63,27 @@
           var raw = localStorage.getItem('tasks-appearance')
           if (raw) {
             var a = JSON.parse(raw)
-            var themes = (a && a.themes) || []
-            for (var i = 0; i < themes.length; i++) {
-              if (!themes[i] || themes[i].id !== a.active) continue
-              var map = themes[i][mode] || {}
-              for (var k = 0; k < TOKENS.length; k++) {
-                var v = map[TOKENS[k]]
-                if (typeof v === 'string' && v && v.length <= 120 && !BAD.test(v)) {
-                  root.style.setProperty(TOKENS[k], v)
-                  if (TOKENS[k] === '--bg') bg = v
+            var act = (a && typeof a.active === 'string') ? a.active : ''
+            var slug = act.indexOf('preset:') === 0 ? act.slice(7) : ''
+            if (Object.prototype.hasOwnProperty.call(PRESET_BG, slug)) {
+              // A preset and a saved theme are mutually exclusive, and nothing
+              // is written inline for one — tokens.css does the work.
+              root.dataset.preset = slug
+              bg = PRESET_BG[slug][mode]
+            } else {
+              var themes = (a && a.themes) || []
+              for (var i = 0; i < themes.length; i++) {
+                if (!themes[i] || themes[i].id !== a.active) continue
+                var map = themes[i][mode] || {}
+                for (var k = 0; k < TOKENS.length; k++) {
+                  var v = map[TOKENS[k]]
+                  if (typeof v === 'string' && v && v.length <= 120 && !BAD.test(v)) {
+                    root.style.setProperty(TOKENS[k], v)
+                    if (TOKENS[k] === '--bg') bg = v
+                  }
                 }
+                break
               }
-              break
             }
           }
         } catch (_) {}

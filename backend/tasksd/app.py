@@ -247,6 +247,7 @@ _APPEARANCE_TOKENS = {
     "--pri-high", "--pri-med", "--pri-low",
     "--serif", "--sans", "--mono",
     "--radius", "--fs-scale", "--gutter", "--row-y",
+    "--label-case", "--tracking",
 }
 # url()/image() would let a stored theme beacon out to a third party on every
 # load; the punctuation would let it break out of the property it is written
@@ -290,8 +291,16 @@ class CustomTheme(BaseModel):
 
 
 class Appearance(BaseModel):
-    # `active` is null for the shipped Smylte design — the default is not stored
-    # as a theme, it is the absence of one, which is what makes reset lossless.
+    # `active` is one of three things: null for the shipped Smylte design — the
+    # default is not stored as a theme, it is the absence of one, which is what
+    # makes reset lossless — `preset:<slug>` for a built-in theme, which is
+    # shipped design resolved entirely client-side and so has no palette here
+    # either, or the id of a theme in `themes` below.
+    #
+    # Deliberately not validated as to which. The client re-checks on read and
+    # degrades an unresolvable `active` to the default, so the only thing a
+    # check here would buy is rejecting a settings blob written by a newer
+    # client that ships a preset this build has not heard of.
     active: str | None = Field(default=None, max_length=64)
     themes: list[CustomTheme] = Field(default_factory=list, max_length=_MAX_THEMES)
 
