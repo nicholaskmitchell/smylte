@@ -49,7 +49,9 @@ describe('<App> auth gate', () => {
     expect(screen.getByRole('button', { name: 'Scheduling' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Home' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /sign in/i })).not.toBeInTheDocument()
-    expect(m.calendars).toHaveBeenCalled()      // default tab (Home) loaded
+    // The strip paints while /api/me is still in flight now, so the data layer
+    // starting up is a beat behind it rather than a precondition of it.
+    await waitFor(() => expect(m.calendars).toHaveBeenCalled())
     expect(subscribe).toHaveBeenCalledOnce()    // live updates wired up
   })
 
@@ -128,6 +130,38 @@ describe('<App> auth gate', () => {
     await userEvent.click(screen.getByRole('button', { name: /log out/i }))
     expect(m.logout).toHaveBeenCalledOnce()
     expect(await screen.findByRole('button', { name: /sign in/i })).toBeInTheDocument()
+  })
+})
+
+describe('<App> session length', () => {
+  const openSettings = async () => {
+    render(<App />)
+    await screen.findByRole('button', { name: 'Tasks' })
+    await userEvent.click(screen.getByRole('button', { name: 'Settings' }))
+    return screen.getByRole('button', { name: 'How long to stay signed in' })
+  }
+
+  it('opens on the shipped default when the account has not chosen', async () => {
+    expect(await openSettings()).toHaveTextContent('7 days')
+  })
+
+  it('shows the stored choice', async () => {
+    m.getSettings.mockResolvedValue({ session_ttl_s: 24 * 3600 })
+    await waitFor(async () => expect(await openSettings()).toHaveTextContent('1 day'))
+  })
+
+  it('cycles the choice and writes it through', async () => {
+    const btn = await openSettings()
+    await userEvent.click(btn)
+    expect(btn).toHaveTextContent('30 days')
+    expect(m.putSettings).toHaveBeenCalledWith({ session_ttl_s: 30 * 24 * 3600 })
+  })
+
+  it('ignores a stored value the server would refuse', async () => {
+    // The blob is hand-editable and this one decides how long a login lives;
+    // showing it back would make the menu lie about what is in force.
+    m.getSettings.mockResolvedValue({ session_ttl_s: 99 as never })
+    expect(await openSettings()).toHaveTextContent('7 days')
   })
 })
 

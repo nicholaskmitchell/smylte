@@ -9,10 +9,13 @@
  * The suite runs pinned to America/New_York (vite.config.ts), so the DST cases
  * below cross a real spring-forward.
  */
+import { useState } from 'react'
 import { describe, expect, it, vi, afterEach, beforeEach } from 'vitest'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { CalendarView } from './CalendarView'
+import { DataProvider } from '../data'
+import { setCacheUser } from '../cache'
 import { api, type CalEvent, type List } from '../api'
 
 vi.mock('../api', async (importOriginal) => {
@@ -49,14 +52,24 @@ const occurrence = (o: Partial<CalEvent> = {}) => ev({
 const setField = (label: string, value: string) =>
   fireEvent.change(screen.getByLabelText(label), { target: { value } })
 
+function Harness() {
+  const now = new Date()
+  const [cursor, setCursor] = useState(() => new Date(now.getFullYear(), now.getMonth(), 1))
+  return (
+    <DataProvider rev={0} onExpire={vi.fn()}>
+      <CalendarView onExpire={vi.fn()} cursor={cursor} onCursorChange={setCursor}
+        sideCollapsed={false} onToggleSide={vi.fn()}
+        hiddenCalendars={[]} onHiddenCalendarsChange={vi.fn()}
+        archivedCalendars={[]} onArchivedCalendarsChange={vi.fn()} />
+    </DataProvider>
+  )
+}
+
 function setup(events?: CalEvent[]) {
   if (events) m.events.mockResolvedValue(events)
-  render(
-    <CalendarView rev={0} onExpire={vi.fn()}
-      sideCollapsed={false} onToggleSide={vi.fn()}
-      hiddenCalendars={[]} onHiddenCalendarsChange={vi.fn()}
-      archivedCalendars={[]} onArchivedCalendarsChange={vi.fn()} />,
-  )
+  // The month lives in App now, so the harness has to hold it — a fixed cursor
+  // would make the ‹ › buttons no-ops and quietly pass the navigation tests.
+  render(<Harness />)
   return userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
 }
 

@@ -84,6 +84,7 @@ class TaskEdit:
     dtstart: Any = UNSET              # date | datetime | None
     categories: Any = UNSET           # list[str] | None
     percent_complete: Any = UNSET     # int | None
+    related_parent: Any = UNSET       # parent task UID, or None to unparent
 
 
 @dataclass
@@ -138,6 +139,31 @@ def _set_datelike(todo: Todo, key: str, value: date | datetime | None) -> None:
         value = value.astimezone(old_dt.tzinfo)
     # icalendar emits VALUE=DATE for a date and DATE-TIME for a datetime (spec §5).
     todo.add(key, value)
+
+
+def _set_related_parent(todo: Todo, uid: str | None) -> None:
+    """Repoint the RELTYPE=PARENT relation, leaving every other RELATED-TO be.
+
+    Invariant #2: a property another client authored is not ours to drop, and a
+    VTODO may carry several relations (CHILD, SIBLING, a foreign RELTYPE we have
+    no opinion about). Only the parent link is rewritten; the rest are read off
+    and put back with their parameters intact.
+
+    RFC 5545 makes PARENT the default when RELTYPE is absent, so a bare
+    RELATED-TO is the parent relation and is replaced too — the same reading
+    ``read._related_parent`` uses, which is what makes the round trip agree."""
+    rel = todo.get("RELATED-TO")
+    kept = []
+    if rel is not None:
+        for r in rel if isinstance(rel, list) else [rel]:
+            params = dict(getattr(r, "params", {}) or {})
+            if str(params.get("RELTYPE", "PARENT")).upper() != "PARENT":
+                kept.append((str(r), params))
+    _replace(todo, "RELATED-TO")
+    for value, params in kept:
+        todo.add("RELATED-TO", value, parameters=params)
+    if uid:
+        todo.add("RELATED-TO", uid, parameters={"RELTYPE": "PARENT"})
 
 
 def _set_categories(todo: Todo, cats: list[str] | None) -> None:
@@ -198,6 +224,8 @@ def apply_changes(raw: bytes | str, edit: TaskEdit, *, now: datetime | None = No
         _set_int(todo, "PERCENT-COMPLETE", edit.percent_complete)
     if edit.status is not UNSET:
         _set_status(todo, edit.status, now)
+    if edit.related_parent is not UNSET:
+        _set_related_parent(todo, edit.related_parent)
 
     # Every edit stamps modification metadata and bumps the sequence.
     _replace(todo, "LAST-MODIFIED")

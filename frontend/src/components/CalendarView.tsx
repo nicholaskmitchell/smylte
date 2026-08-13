@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
-import { api, type CalEvent, type EventScope, type List } from '../api'
+import { api, clientId, uidFor, type CalEvent, type EventScope, type List } from '../api'
+import { useCalendarData } from '../data'
 import { dayKey, makeGuard, pad, toLocalInput, ymd } from '../util'
 import {
   bucketByDay, dragBody, daysBetween, lastDayOf, monthGrid, shiftYmd, type DayEv,
@@ -14,17 +15,48 @@ const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June',
 
 interface Draft { event?: CalEvent; date?: string }
 
-export function CalendarView({ rev, onExpire, sideCollapsed, onToggleSide,
+/**
+ * The local stand-in for an event whose create is still in flight, carrying the
+ * uid the server will derive from the same client_id (see `uidFor`).
+ *
+ * `calendar` is the collection *href*, not the calendar id: `calByHref` is what
+ * maps an event back to the calendar whose color it wears and whose visibility
+ * it obeys, so a stand-in holding the id would paint colorless and then be
+ * filtered straight out of the grid it was meant to appear in.
+ */
+function draftEvent(uid: string, calHref: string, body: Record<string, unknown>): CalEvent {
+  const start = typeof body.start === 'string' ? body.start : null
+  const end = typeof body.end === 'string' ? body.end : null
+  const allDay = body.all_day === true
+  return {
+    uid, id: uid, recurrence_id: null, is_recurring: false, calendar: calHref,
+    summary: typeof body.summary === 'string' ? body.summary : null,
+    description: typeof body.description === 'string' ? body.description : null,
+    location: typeof body.location === 'string' ? body.location : null,
+    start, start_is_date: !!start && !start.includes('T'),
+    end, end_is_date: !!end && !end.includes('T'),
+    all_day: allDay, status: null,
+    tags: Array.isArray(body.tags) ? (body.tags as string[]) : [],
+    has_rrule: false, href: '', etag: '',
+  }
+}
+
+export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
+  cursor, onCursorChange,
   hiddenCalendars, onHiddenCalendarsChange,
   archivedCalendars, onArchivedCalendarsChange }: {
-  rev: number; onExpire: () => void
+  onExpire: () => void
+  // The month lives above the tab strip too, so coming back to Calendar returns
+  // to where you were rather than snapping to today.
+  cursor: Date; onCursorChange: (d: Date) => void
   sideCollapsed: boolean; onToggleSide: () => void
   hiddenCalendars: string[]; onHiddenCalendarsChange: (next: string[]) => void
   archivedCalendars: string[]; onArchivedCalendarsChange: (next: string[]) => void
 }) {
   const guard = makeGuard(onExpire)
   const isMobile = useIsMobile()
-  const [cals, setCals] = useState<List[]>([])
+  const { cals, loaded, setCals, eventsFor, requestWindow, setEvents, reload } = useCalendarData()
+  const setCursor = onCursorChange
   // Every calendar is visible by default; this holds the ids the user hid, so a
   // brand-new calendar shows up without any extra write.
   const hidden = useMemo(() => new Set(hiddenCalendars), [hiddenCalendars])
@@ -33,8 +65,6 @@ export function CalendarView({ rev, onExpire, sideCollapsed, onToggleSide,
   // `visibleCals` is what the view actually renders and fetches events for.
   const archived = useMemo(() => new Set(archivedCalendars), [archivedCalendars])
   const visibleCals = useMemo(() => cals.filter((c) => !archived.has(c.id)), [cals, archived])
-  const [cursor, setCursor] = useState(() => { const n = new Date(); return new Date(n.getFullYear(), n.getMonth(), 1) })
-  const [events, setEvents] = useState<CalEvent[]>([])
   const [draft, setDraft] = useState<Draft | null>(null)
   // Mobile shows a day agenda under the grid; this is the day it follows.
   const [focusDay, setFocusDay] = useState(() => ymd(new Date()))
@@ -51,64 +81,44 @@ export function CalendarView({ rev, onExpire, sideCollapsed, onToggleSide,
 
   const days = useMemo(() => monthGrid(cursor), [cursor])
 
+  // The window the grid shows, as the API wants it: the six-week span plus one
+  // exclusive day. Both halves of the pair are derived once so the fetch and
+  // the cache lookup can never disagree about which window is on screen.
+  const from = ymd(days[0])
+  const to = useMemo(() => {
+    const end = new Date(days[41]); end.setDate(end.getDate() + 1); return ymd(end)
+  }, [days])
+
+  // Prune hidden/archived ids for calendars that no longer exist, so the stored
+  // sets don't accumulate cruft (ids are random, so a stale one can't leak onto
+  // a future calendar). Gated on a real fetch: neither the initial empty state
+  // nor the cached seed is evidence a calendar is gone.
   useEffect(() => {
-    guard(async () => {
-      const cs = await api.calendars()
-      setCals(cs)
-      // Drop hidden ids for calendars that no longer exist so the stored set
-      // doesn't accumulate cruft (ids are random, so a stale one can't leak
-      // onto a future calendar). Same hygiene for the archived set.
-      const valid = hiddenCalendars.filter((id) => cs.some((c) => c.id === id))
-      if (valid.length !== hiddenCalendars.length) onHiddenCalendarsChange(valid)
-      const validArch = archivedCalendars.filter((id) => cs.some((c) => c.id === id))
-      if (validArch.length !== archivedCalendars.length) onArchivedCalendarsChange(validArch)
-    })
+    if (!loaded || !cals.length) return
+    const valid = hiddenCalendars.filter((id) => cals.some((c) => c.id === id))
+    if (valid.length !== hiddenCalendars.length) onHiddenCalendarsChange(valid)
+    const validArch = archivedCalendars.filter((id) => cals.some((c) => c.id === id))
+    if (validArch.length !== archivedCalendars.length) onArchivedCalendarsChange(validArch)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rev])
+  }, [cals, loaded])
 
-  // Fetch every calendar's window and merge; events carry their collection
-  // href, so each one still knows where it lives. Visibility is applied as a
-  // pure filter afterwards, so toggling a calendar never triggers a refetch.
-  const fetchEvents = async (): Promise<CalEvent[]> => {
-    const end = new Date(days[41]); end.setDate(end.getDate() + 1)
-    const from = ymd(days[0]); const to = ymd(end)
-    const per = await Promise.all(visibleCals.map((c) => api.events(c.id, from, to)))
-    return per.flat()
-  }
-
-  // Every load is stamped, and only the newest one is allowed to land. A fetch
-  // fans out one request per visible calendar and awaits them all, so two clicks
-  // on › put two batches in flight and whichever settles last used to win. When
-  // the older batch settled second the grid held the previous month's events —
-  // and since `bucketByDay` clips to the visible six weeks, almost none of them
-  // matched a rendered day, so the month came up *empty*. Nothing corrected it
-  // either: the SSE `rev` bump only fires on a server-side write, so a
-  // read-only user sat on a blank month until they navigated again.
-  const loadGen = useRef(0)
-  const load = () => {
-    const mine = ++loadGen.current
-    return guard(async () => {
-      const evs = await fetchEvents()
-      if (loadGen.current === mine && evs) setEvents(evs)
-    })
-  }
-
-  // Archiving/restoring changes which calendars are fetched, so key on the
-  // visible set (not the full one) to retrigger the events effect.
-  const calsKey = visibleCals.map((c) => c.id).join(',')
+  // Every calendar's window is fetched and merged; events carry their
+  // collection href, so each one still knows where it lives. Visibility is
+  // applied as a pure filter afterwards, so toggling a calendar never triggers
+  // a refetch. Archiving does, which is why the visible set is what is asked
+  // for. The provider owns the request, so a window already fetched this
+  // session — or mirrored to disk — paints without going near the network.
+  const events = eventsFor(from, to)
   useEffect(() => {
-    if (!visibleCals.length) { setEvents([]); return }
-    load()
-    // Navigating away invalidates this run, so a batch that settles after the
-    // move can no longer paint the month the user just left.
-    return () => { loadGen.current++ }
+    requestWindow(from, to, visibleCals)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cursor, rev, calsKey])
+  }, [from, to, visibleCals.map((c) => c.id).join(',')])
 
-  // Same guard: a reload racing a month change must not repaint the old month.
-  const reload = () => load()
+  const reloadHere = () => reload(from, to, visibleCals)
+  const patchEvents = (next: (prev: CalEvent[]) => CalEvent[]) => setEvents(from, to, next)
 
   const calByHref = useMemo(() => new Map(cals.map((c) => [c.href, c] as const)), [cals])
+  const calHref = (id: string) => cals.find((c) => c.id === id)?.href ?? ''
   // Which calendar an event lives in — every event now comes from a real fetch.
   const calIdOf = (e: CalEvent) => calByHref.get(e.calendar)?.id || ''
   // Per-event tint, so the combined view keeps each calendar's color.
@@ -133,7 +143,7 @@ export function CalendarView({ rev, onExpire, sideCollapsed, onToggleSide,
   const applyLocal = (uid: string, body: Record<string, unknown>): boolean => {
     const single = body.scope === 'this' && !!body.recurrence_id
     if (!single && events.some((e) => e.uid === uid && e.is_recurring)) return false
-    setEvents((evs) => evs.map((e) => {
+    patchEvents((evs) => evs.map((e) => {
       if (e.uid !== uid) return e
       if (single && e.id !== `${uid}::${body.recurrence_id}`) return e
       const n = { ...e }
@@ -162,32 +172,46 @@ export function CalendarView({ rev, onExpire, sideCollapsed, onToggleSide,
   const save = async (body: Record<string, unknown>, cal: string, uid?: string, moveTo?: string) => {
     setDraft(null)
     if (!uid) {
-      const created = await guard(() => api.createEvent(cal, body))
-      if (!created) return
-      // Don't let a fresh event vanish into a hidden calendar — reveal it.
+      // Reveal before painting, not after: a stand-in landing in a calendar the
+      // filter is still dropping would flicker in from nowhere a moment later.
       if (hidden.has(cal)) onHiddenCalendarsChange(hiddenCalendars.filter((x) => x !== cal))
-      if (created.is_recurring) reload()          // occurrences expand server-side
-      else setEvents((evs) => [...evs, created])
+      // A repeating create fans out into occurrences server-side, and there is
+      // nothing honest to stand in for that — so it alone still waits.
+      const repeating = typeof body.repeat === 'string' && body.repeat !== 'none'
+      const cid = clientId()
+      const uidNew = uidFor(cid)
+      if (!repeating) patchEvents((evs) => [...evs, draftEvent(uidNew, calHref(cal), body)])
+      const created = await guard(() => api.createEvent(cal, { ...body, client_id: cid }))
+      if (!created || created.is_recurring) {
+        patchEvents((evs) => evs.filter((e) => e.uid !== uidNew))
+        if (created) reloadHere()
+        return
+      }
+      patchEvents((evs) => {
+        const next = evs.filter((e) => e.uid !== uidNew && e.uid !== created.uid)
+        next.push(created)
+        return next
+      })
       return
     }
     const painted = applyLocal(uid, body)
     const ok = await guard(() => api.patchEvent(cal, uid, body))
     const moved = !!(ok && moveTo && moveTo !== cal)
     if (moved) await guard(() => api.moveEvent(cal, uid, moveTo!))
-    if (!ok || !painted || moved) reload()
+    if (!ok || !painted || moved) reloadHere()
   }
   const del = async (cal: string, uid: string, opts?: { recurrence_id?: string | null; scope?: EventScope }) => {
     setDraft(null)
     // Drop the affected instances right away; reload rolls back on failure.
     const rid = opts?.recurrence_id
     const scope = opts?.scope || 'all'
-    setEvents((evs) => evs.filter((e) => {
+    patchEvents((evs) => evs.filter((e) => {
       if (e.uid !== uid) return true
       if (scope === 'this' && rid) return e.id !== `${uid}::${rid}`
       if (scope === 'thisandfuture' && rid) return (e.recurrence_id || '') < rid
       return false
     }))
-    if ((await guard(() => api.deleteEvent(cal, uid, opts))) === undefined) reload()
+    if ((await guard(() => api.deleteEvent(cal, uid, opts))) === undefined) reloadHere()
   }
 
   // Desktop drag: move an event chip to another day cell, or drag its resize
@@ -261,10 +285,14 @@ export function CalendarView({ rev, onExpire, sideCollapsed, onToggleSide,
           )}
         </div>
         {visibleCals.length === 0 ? (
-          <div className="empty">
-            {cals.length === 0
-              ? 'Create a calendar to get started.'
-              : 'All calendars are archived — restore one from Settings.'}
+          // Same three-way as the tasks pane: an empty `cals` before the fetch
+          // lands is ignorance, not an empty account.
+          <div className="empty" aria-busy={!loaded || undefined}>
+            {!loaded
+              ? 'Loading…'
+              : cals.length === 0
+                ? 'Create a calendar to get started.'
+                : 'All calendars are archived — restore one from Settings.'}
           </div>
         ) : (
           <div className="cal-scroll">

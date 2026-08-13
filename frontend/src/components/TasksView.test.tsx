@@ -1,8 +1,11 @@
+import { useState } from 'react'
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { TasksView } from './TasksView'
-import { api, AuthError, type List, type Task, type TasksViewMode } from '../api'
+import { DataProvider } from '../data'
+import { cacheLists, cacheTasks, setCacheUser } from '../cache'
+import { api, AuthError, type List, type Task, type TaskGroup, type TasksViewMode } from '../api'
 
 // Mock the whole API module: every method becomes a vi.fn() so the view never
 // touches the network.
@@ -27,17 +30,52 @@ const list: List = {
   open_count: 0, task_count: 0, event_count: 0, total: 0, color: '#D9480F',
 }
 
-function setup(view: TasksViewMode = 'list', showCompleted = false) {
+function setup(view: TasksViewMode = 'list', showCompleted = false, collapsedTasks: string[] = []) {
   const onExpire = vi.fn()
+  const onCollapsedTasksChange = vi.fn()
+  // The data lives in the provider now, so the harness mounts one — with the
+  // same mocked `api` the assertions below already speak to. `collapsedTasks`
+  // is held here for the same reason App holds it: it is a controlled prop, so
+  // a harness that never fed the change back would test a control that appears
+  // to do nothing.
+  const Harness = ({ rev }: { rev: number }) => {
+    const [collapsed, setCollapsed] = useState(collapsedTasks)
+    return (
+      <DataProvider rev={rev} onExpire={onExpire}>
+        <TasksView onExpire={onExpire} view={view} onView={vi.fn()}
+          sideCollapsed={false} onToggleSide={vi.fn()}
+          hiddenLists={[]} onHiddenListsChange={vi.fn()}
+          groups={[]} onGroupsChange={vi.fn()}
+          collapsedGroups={[]} onCollapsedGroupsChange={vi.fn()}
+          collapsedTasks={collapsed}
+          onCollapsedTasksChange={(next) => { onCollapsedTasksChange(next); setCollapsed(next) }}
+          showCompleted={showCompleted} />
+      </DataProvider>
+    )
+  }
+  const { rerender } = render(<Harness rev={0} />)
+  // Bumping `rev` is how the app tells the view a server-side change landed, so
+  // it is also how a test replays one without reaching for the SSE mock.
+  return {
+    onExpire, onCollapsedTasksChange, user: userEvent.setup(),
+    bumpRev: (rev: number) => rerender(<Harness rev={rev} />),
+  }
+}
+
+/** The default harness passes no groups; this one does, so the sidebar renders
+ *  its grouped layout and the picker order can be compared against it. */
+function setupGrouped(groups: TaskGroup[]) {
   render(
-    <TasksView rev={0} onExpire={onExpire} view={view} onView={vi.fn()}
-      sideCollapsed={false} onToggleSide={vi.fn()}
-      hiddenLists={[]} onHiddenListsChange={vi.fn()}
-      groups={[]} onGroupsChange={vi.fn()}
-      collapsedGroups={[]} onCollapsedGroupsChange={vi.fn()}
-      showCompleted={showCompleted} />,
+    <DataProvider rev={0} onExpire={vi.fn()} taskGroups={groups}>
+      <TasksView onExpire={vi.fn()} view="list" onView={vi.fn()}
+        sideCollapsed={false} onToggleSide={vi.fn()}
+        hiddenLists={[]} onHiddenListsChange={vi.fn()}
+        groups={groups} onGroupsChange={vi.fn()}
+        collapsedGroups={[]} onCollapsedGroupsChange={vi.fn()}
+        collapsedTasks={[]} onCollapsedTasksChange={vi.fn()}
+        showCompleted={false} />
+    </DataProvider>,
   )
-  return { onExpire, user: userEvent.setup() }
 }
 
 /** Quick-add's "New…" button opens the single-task form. */
@@ -64,6 +102,9 @@ let errSpy: ReturnType<typeof vi.spyOn>
 
 beforeEach(() => {
   vi.clearAllMocks()
+  // No cache user, so nothing seeds from disk and each test starts cold.
+  setCacheUser('')
+  localStorage.clear()
   m.lists.mockResolvedValue([list])
   m.tasks.mockResolvedValue([])
   // createMany logs non-auth failures rather than raising N toasts.
@@ -392,6 +433,580 @@ describe('<TasksView> orphaned subtasks', () => {
     await screen.findByText('Trip planning')
     expect(screen.getAllByText('Book flight')).toHaveLength(1)
     expect(screen.getByText('Book flight').closest('.task')).toHaveClass('sub')
+  })
+})
+
+// ── a write issued against a row whose create is still in flight ────────────
+// The stand-in used to wear the bare client_id while the task the server was
+// actually writing carried `${client_id}@tasksd`. Every write aimed at the row
+// in that window therefore named a resource that did not exist. For a subtask
+// that meant a RELATED-TO pointing at nothing — persisted to CalDAV, so the
+// child came back as its own top-level task and no reload ever fixed it.
+
+describe('<TasksView> creates still in flight', () => {
+  /** A server that answers like the real one: uid derived from the slug sent. */
+  const echoServer = () =>
+    m.createTask.mockImplementation(async (_l: string, b: Record<string, unknown>) =>
+      task({
+        uid: `${b.client_id as string}@tasksd`,
+        list: 'l1',
+        summary: b.summary as string,
+        parent: (b.parent as string) ?? null,
+      }))
+
+  /** A parent whose response stays open until the returned `release` is called.
+   *
+   *  Holding it is the whole point: let the create settle first and the row is
+   *  already wearing its server uid by the time the subtask is typed, so the
+   *  window the bug lived in is never entered and the test passes against the
+   *  broken code too. */
+  const heldParent = () => {
+    const held = { cid: '', release: () => {} }
+    m.createTask.mockImplementationOnce((_l: string, b: Record<string, unknown>) =>
+      new Promise<Task>((res) => {
+        held.cid = b.client_id as string
+        held.release = () => res(task({ uid: `${held.cid}@tasksd`, list: 'l1', summary: 'trip' }))
+      }))
+    echoServer()
+    return held
+  }
+
+  /** Quick-add a top-level task and add a subtask to the row it paints. */
+  const addParentThenSub = async (user: ReturnType<typeof userEvent.setup>) => {
+    await user.type(await screen.findByPlaceholderText('Add a task…'), 'trip{Enter}')
+    await user.click(await screen.findByTitle('Add subtask'))
+    await user.type(await screen.findByPlaceholderText('Subtask'), 'book flight{Enter}')
+  }
+
+  it('sends the uid the server will derive, not the create id', async () => {
+    const parent = heldParent()
+    const { user } = setup()
+    await addParentThenSub(user)
+    parent.release()
+    await waitFor(() => expect(m.createTask).toHaveBeenCalledTimes(2))
+    // The assertion is about the relationship between the two requests, so the
+    // id is read back off the first rather than guessed.
+    expect(m.createTask.mock.calls[1][1].parent).toBe(`${parent.cid}@tasksd`)
+  })
+
+  it('keeps the subtask nested once both creates settle', async () => {
+    const parent = heldParent()
+    const { user } = setup()
+    await addParentThenSub(user)
+    parent.release()
+    await waitFor(() => expect(m.createTask).toHaveBeenCalledTimes(2))
+    // The reported symptom, exactly: the child became its own top-level task.
+    // Note this holds by two routes — the uid sent is right, and the legacy
+    // heal would rescue the display even if it weren't. The wire value itself
+    // is pinned by the test above, which is the one that matters to the other
+    // CalDAV clients reading the same collection.
+    await waitFor(() =>
+      expect(screen.getByText('book flight').closest('.task')).toHaveClass('sub'))
+    expect(screen.getAllByText('book flight')).toHaveLength(1)
+    expect(document.querySelectorAll('.task:not(.sub)')).toHaveLength(1)
+  })
+
+  it('orders the subtask behind its parent rather than racing it', async () => {
+    const parent = heldParent()
+    const { user } = setup()
+    await addParentThenSub(user)
+    // Both rows are painted, but only the parent's request has gone out — a
+    // subtask sent now would reach a server that has never heard of its parent.
+    expect(await screen.findByText('book flight')).toBeInTheDocument()
+    expect(m.createTask).toHaveBeenCalledTimes(1)
+    parent.release()
+    await waitFor(() => expect(m.createTask).toHaveBeenCalledTimes(2))
+  })
+
+  it('drops a pending subtask when its parent create fails, unsent', async () => {
+    let rejectParent: (e: Error) => void = () => {}
+    m.createTask.mockImplementationOnce(
+      () => new Promise<Task>((_res, rej) => { rejectParent = rej }))
+    echoServer()
+    const { user } = setup()
+    await addParentThenSub(user)
+    expect(await screen.findByText('book flight')).toBeInTheDocument()
+    rejectParent(new Error('boom'))
+    // The child would otherwise have been written against a parent uid that
+    // will never exist — orphaned on the server for good.
+    await waitFor(() => expect(screen.queryByText('book flight')).not.toBeInTheDocument())
+    expect(screen.queryByText('trip')).not.toBeInTheDocument()
+    expect(m.createTask).toHaveBeenCalledTimes(1)
+  })
+
+  it('completes a row whose create has not settled, by its real uid', async () => {
+    // Not just subtasks: toggle, delete and edit all send the rendered uid too.
+    let release: (t: Task) => void = () => {}
+    let cid = ''
+    m.createTask.mockImplementation((_l: string, b: Record<string, unknown>) =>
+      new Promise<Task>((res) => {
+        cid = b.client_id as string
+        release = () => res(task({ uid: `${cid}@tasksd`, summary: 'solo' }))
+      }))
+    m.complete.mockResolvedValue(task({ uid: 'ignored', completed: true }))
+    const { user } = setup()
+    await user.type(await screen.findByPlaceholderText('Add a task…'), 'solo{Enter}')
+    await user.click(await screen.findByTitle('Toggle complete'))
+    await waitFor(() => expect(m.complete).toHaveBeenCalledTimes(1))
+    expect(m.complete.mock.calls[0][1]).toBe(`${cid}@tasksd`)
+    release(task())
+  })
+
+  it('shows one row when a refetch lands between the paint and the settle', async () => {
+    // The SSE bump can bring the real task in while the create is still open.
+    // Both now share a uid, so a naive settle would leave two identical rows.
+    let release: (t: Task) => void = () => {}
+    let landed: Task | null = null
+    m.createTask.mockImplementation((_l: string, b: Record<string, unknown>) =>
+      new Promise<Task>((res) => {
+        landed = task({ uid: `${b.client_id as string}@tasksd`, summary: 'solo' })
+        release = () => res(landed!)
+      }))
+    const { user } = setup()
+    await user.type(await screen.findByPlaceholderText('Add a task…'), 'solo{Enter}')
+    await waitFor(() => expect(m.createTask).toHaveBeenCalledTimes(1))
+    m.tasks.mockResolvedValue([landed!])
+    release(landed!)
+    await waitFor(() => expect(screen.getAllByText('solo')).toHaveLength(1))
+  })
+})
+
+// ── subtask progress, counted from the tasks on hand ────────────────────────
+// The badge used to render the server's child_count, a snapshot of the last
+// refetch — so it stayed stale until an SSE bump landed a whole refetch later,
+// while the nesting beside it (computed locally) had already moved.
+
+describe('<TasksView> subtask progress', () => {
+  const parent = task({ uid: 'p1', summary: 'Trip planning' })
+
+  it('counts the children on hand, not the DTO field', async () => {
+    // The server field is deliberately wrong here: the local count must win.
+    m.tasks.mockResolvedValue([
+      task({ ...parent, child_count: 99, completed_child_count: 99 }),
+      task({ uid: 'c1', summary: 'Book flight', parent: 'p1' }),
+      task({ uid: 'c2', summary: 'Pack', parent: 'p1', completed: true, status: 'COMPLETED' }),
+    ])
+    setup()
+    expect(await screen.findByText('1/2')).toBeInTheDocument()
+  })
+
+  it('moves the moment a subtask is added, with no refetch', async () => {
+    m.tasks.mockResolvedValue([parent])
+    m.createTask.mockImplementation(async (_l: string, b: Record<string, unknown>) =>
+      task({ uid: `${b.client_id as string}@tasksd`, summary: 'Book flight', parent: 'p1' }))
+    const { user } = setup()
+    await screen.findByText('Trip planning')
+    const fetches = m.tasks.mock.calls.length
+    await user.click(screen.getByTitle('Add subtask'))
+    await user.type(await screen.findByPlaceholderText('Subtask'), 'Book flight{Enter}')
+    expect(await screen.findByText('0/1')).toBeInTheDocument()
+    expect(m.tasks).toHaveBeenCalledTimes(fetches)
+  })
+
+  it('moves when a subtask is ticked', async () => {
+    const child = task({ uid: 'c1', summary: 'Book flight', parent: 'p1' })
+    m.tasks.mockResolvedValue([parent, child])
+    m.complete.mockResolvedValue({ ...child, completed: true, status: 'COMPLETED' })
+    const { user } = setup()
+    expect(await screen.findByText('0/1')).toBeInTheDocument()
+    const row = screen.getByText('Book flight').closest('.task')!
+    await user.click(within(row as HTMLElement).getByTitle('Toggle complete'))
+    expect(await screen.findByText('1/1')).toBeInTheDocument()
+  })
+
+  it('drops the badge when the last subtask is deleted', async () => {
+    const child = task({ uid: 'c1', summary: 'Book flight', parent: 'p1' })
+    m.tasks.mockResolvedValue([parent, child])
+    m.deleteTask.mockResolvedValue(null)
+    const { user } = setup()
+    expect(await screen.findByText('0/1')).toBeInTheDocument()
+    const row = screen.getByText('Book flight').closest('.task')!
+    await user.click(within(row as HTMLElement).getByTitle('Delete'))
+    await waitFor(() => expect(screen.queryByText('0/1')).not.toBeInTheDocument())
+  })
+
+  it('ignores a child pointing across lists, as the server does', async () => {
+    // child_count is a join within one collection, so a RELATED-TO reaching
+    // into another list counts for nothing there. Counting it here would put a
+    // number on the row that no other client — and no reload — agrees with.
+    m.lists.mockResolvedValue([list, { ...list, id: 'l2', href: '/l2/', name: 'Personal' }])
+    m.tasks.mockImplementation(async (id: string) =>
+      id === 'l1'
+        ? [parent]
+        : [task({ uid: 'c1', list: 'l2', summary: 'Book flight', parent: 'p1' })])
+    setup()
+    await screen.findByText('Trip planning')
+    expect(screen.queryByText('0/1')).not.toBeInTheDocument()
+    // …and it stands on its own rather than being hidden under a parent that
+    // is not really its parent.
+    expect(screen.getByText('Book flight').closest('.task')).not.toHaveClass('sub')
+  })
+})
+
+// ── the list pickers follow the sidebar, not the fetch order ───────────────
+// `GET /api/lists` sorts by manual calendar-order then name, and the sidebar
+// renders that *through* the groups — each group's members, then the rest. So
+// the moment a group exists the two orders diverge, and the pickers were
+// following the one nobody can see.
+
+describe('<TasksView> list picker order', () => {
+  const l = (id: string, name: string): List => ({ ...list, id, href: `/${id}/`, name })
+  const four = [l('a', 'Alpha'), l('b', 'Bravo'), l('c', 'Charlie'), l('d', 'Delta')]
+  const groups: TaskGroup[] = [
+    { id: 'g1', name: 'Work', lists: ['c'] },
+    { id: 'g2', name: 'Home', lists: ['a'] },
+  ]
+
+  /** The sidebar's rows, top to bottom — the order the user actually sees. */
+  const sidebarOrder = () =>
+    [...document.querySelectorAll('.side-list .side-item .name')].map((n) => n.textContent)
+  const pickerOrder = () =>
+    [...screen.getByTitle('List for the new task').querySelectorAll('option')]
+      .map((o) => o.textContent)
+
+  it('offers the lists in the order the sidebar shows them', async () => {
+    m.lists.mockResolvedValue(four)
+    setupGrouped(groups)
+    await screen.findByPlaceholderText('Add a task…')
+    // Asserted against the rendered sidebar rather than a hardcoded sequence,
+    // so the two cannot drift apart again without this failing.
+    await waitFor(() => expect(pickerOrder()).toEqual(sidebarOrder()))
+    expect(pickerOrder()).toEqual(['Charlie', 'Alpha', 'Bravo', 'Delta'])
+  })
+
+  it('leaves the order alone when nothing is grouped', async () => {
+    m.lists.mockResolvedValue(four)
+    setupGrouped([])
+    await screen.findByPlaceholderText('Add a task…')
+    await waitFor(() => expect(pickerOrder()).toEqual(['Alpha', 'Bravo', 'Charlie', 'Delta']))
+  })
+
+  it('reorders on the wire in server order, not the grouped one', async () => {
+    // Dragging a row PROPPATCHes calendar-order onto every collection in
+    // Radicale. Task groups are an app-only construct, so sending the grouped
+    // flattening would rewrite the order Tasks.org and jtx Board read to match
+    // a grouping none of them can see.
+    m.lists.mockResolvedValue(four)
+    m.reorderLists.mockResolvedValue({})
+    setupGrouped(groups)
+    await screen.findByPlaceholderText('Add a task…')
+    await waitFor(() => expect(sidebarOrder()).toEqual(['Charlie', 'Alpha', 'Bravo', 'Delta']))
+
+    const rowFor = (name: string) =>
+      [...document.querySelectorAll('.side-list .side-item')]
+        .find((r) => r.querySelector('.name')?.textContent === name)!
+    // jsdom builds a DragEvent with no dataTransfer, and the handler sets
+    // effectAllowed on it — so without a stub the drag throws asynchronously,
+    // which vitest reports as an unhandled error and a non-zero exit even
+    // though every assertion passed.
+    const dataTransfer = { setData: vi.fn(), getData: vi.fn(), effectAllowed: '' }
+    fireEvent.dragStart(rowFor('Delta'), { dataTransfer })
+    fireEvent.drop(rowFor('Alpha'), { dataTransfer })
+
+    await waitFor(() => expect(m.reorderLists).toHaveBeenCalledTimes(1))
+    // Delta moved onto Alpha's slot within the *server* sequence a,b,c,d.
+    expect(m.reorderLists.mock.calls[0][0]).toEqual(['d', 'a', 'b', 'c'])
+  })
+})
+
+// ── a subtask can have subtasks of its own ─────────────────────────────────
+// RELATED-TO has always allowed a chain; only the flat parent-plus-children
+// render stood in the way, so anything past one level was flattened onto the
+// top level as though its parent were missing.
+
+describe('<TasksView> nested subtasks', () => {
+  /** Move house → Pack the kitchen → Buy boxes → Measure the cupboards. */
+  const chain = [
+    task({ uid: 'p1', summary: 'Move house' }),
+    task({ uid: 'c1', summary: 'Pack the kitchen', parent: 'p1' }),
+    task({ uid: 'g1', summary: 'Buy boxes', parent: 'c1' }),
+    task({ uid: 'gg1', summary: 'Measure the cupboards', parent: 'g1' }),
+  ]
+  const depthOf = (title: string) => {
+    const row = screen.getByText(title).closest('.task') as HTMLElement
+    return row.style.getPropertyValue('--task-depth') || '0'
+  }
+
+  it('renders a chain as a tree, each level indented past the last', async () => {
+    m.tasks.mockResolvedValue(chain)
+    setup()
+    await screen.findByText('Move house')
+    expect(depthOf('Move house')).toBe('0')
+    expect(depthOf('Pack the kitchen')).toBe('1')
+    expect(depthOf('Buy boxes')).toBe('2')
+    expect(depthOf('Measure the cupboards')).toBe('3')
+    // Every row appears once — none promoted to the top level for want of a
+    // renderer that could nest it.
+    expect(document.querySelectorAll('.task:not(.sub)')).toHaveLength(1)
+  })
+
+  it('counts each level against its own parent, not the whole subtree', async () => {
+    // The server joins RELATED-TO one level at a time, so the badge must too.
+    m.tasks.mockResolvedValue(chain)
+    setup()
+    await screen.findByText('Move house')
+    expect(screen.getAllByText('0/1')).toHaveLength(3)
+  })
+
+  it('offers "+ sub" on a subtask, so a tree can be grown from any row', async () => {
+    m.tasks.mockResolvedValue(chain)
+    m.createTask.mockImplementation(async (_l: string, b: Record<string, unknown>) =>
+      task({ uid: `${b.client_id as string}@tasksd`, summary: b.summary as string,
+        parent: (b.parent as string) ?? null }))
+    const { user } = setup()
+    await screen.findByText('Buy boxes')
+    const row = screen.getByText('Buy boxes').closest('.task') as HTMLElement
+    await user.click(within(row).getByTitle('Add subtask'))
+    await user.type(await screen.findByPlaceholderText('Subtask'), 'Tape{Enter}')
+    await waitFor(() => expect(m.createTask).toHaveBeenCalledTimes(1))
+    expect(m.createTask.mock.calls[0][1].parent).toBe('g1')
+    await waitFor(() => expect(depthOf('Tape')).toBe('3'))
+  })
+
+  it('survives a parent cycle another client authored', async () => {
+    // Nothing on either side of the wire checks RELATED-TO for loops, so a
+    // recursive render has to refuse to walk one twice rather than recurse
+    // until the stack gives out.
+    m.tasks.mockResolvedValue([
+      task({ uid: 'a', summary: 'Alpha', parent: 'b' }),
+      task({ uid: 'b', summary: 'Bravo', parent: 'a' }),
+    ])
+    setup()
+    await screen.findByText('Alpha')
+    expect(screen.getAllByText('Alpha')).toHaveLength(1)
+    expect(screen.getAllByText('Bravo')).toHaveLength(1)
+  })
+
+  it('takes a promoted subtask\'s own descendants with it', async () => {
+    // The parent is completed and hidden, so the child stands on its own — and
+    // the grandchild has to follow it rather than vanish with the parent.
+    m.tasks.mockResolvedValue([
+      task({ uid: 'p1', summary: 'Move house', completed: true, status: 'COMPLETED' }),
+      task({ uid: 'c1', summary: 'Pack the kitchen', parent: 'p1' }),
+      task({ uid: 'g1', summary: 'Buy boxes', parent: 'c1' }),
+    ])
+    setup()
+    await screen.findByText('Pack the kitchen')
+    expect(screen.queryByText('Move house')).not.toBeInTheDocument()
+    expect(depthOf('Pack the kitchen')).toBe('0')
+    expect(depthOf('Buy boxes')).toBe('1')
+  })
+})
+
+// ── folding a subtask tree away ─────────────────────────────────────────────
+
+describe('<TasksView> collapsing subtasks', () => {
+  const chain = [
+    task({ uid: 'p1', summary: 'Move house' }),
+    task({ uid: 'c1', summary: 'Pack the kitchen', parent: 'p1' }),
+    task({ uid: 'g1', summary: 'Buy boxes', parent: 'c1' }),
+  ]
+
+  it('hides the whole subtree beneath the row that was folded', async () => {
+    m.tasks.mockResolvedValue(chain)
+    const { user, onCollapsedTasksChange } = setup()
+    await screen.findByText('Buy boxes')
+    await user.click(screen.getByRole('button', { name: 'Hide subtasks of Move house' }))
+    expect(screen.queryByText('Pack the kitchen')).not.toBeInTheDocument()
+    expect(screen.queryByText('Buy boxes')).not.toBeInTheDocument()
+    expect(screen.getByText('Move house')).toBeInTheDocument()
+    // Written through to the account, like the sidebar's collapsed groups.
+    expect(onCollapsedTasksChange).toHaveBeenCalledWith(['p1'])
+  })
+
+  it('opens folded from a stored set, and expands again', async () => {
+    m.tasks.mockResolvedValue(chain)
+    const { user, onCollapsedTasksChange } = setup('list', false, ['c1'])
+    await screen.findByText('Pack the kitchen')
+    expect(screen.queryByText('Buy boxes')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Show subtasks of Pack the kitchen' }))
+    expect(onCollapsedTasksChange).toHaveBeenCalledWith([])
+  })
+
+  it('gives a row with no children no control to fold', async () => {
+    m.tasks.mockResolvedValue([task({ uid: 'p1', summary: 'Solo' })])
+    setup()
+    await screen.findByText('Solo')
+    expect(screen.queryByRole('button', { name: /subtasks of Solo/ })).not.toBeInTheDocument()
+  })
+
+  it('unfolds a row to show the subtask being added to it', async () => {
+    // Otherwise "+ sub" on a folded row types into nowhere.
+    m.tasks.mockResolvedValue(chain)
+    const { user, onCollapsedTasksChange } = setup('list', false, ['p1'])
+    await screen.findByText('Move house')
+    const row = screen.getByText('Move house').closest('.task') as HTMLElement
+    await user.click(within(row).getByTitle('Add subtask'))
+    expect(onCollapsedTasksChange).toHaveBeenCalledWith([])
+  })
+
+  it('drops a stored uid that no longer names a task with children', async () => {
+    // Nothing ever re-creates a uid, so a set that only grows is a leak.
+    m.tasks.mockResolvedValue(chain)
+    const { user, onCollapsedTasksChange } = setup('list', false, ['gone', 'c1'])
+    await screen.findByText('Move house')
+    await user.click(screen.getByRole('button', { name: 'Hide subtasks of Move house' }))
+    expect(onCollapsedTasksChange).toHaveBeenCalledWith(['c1', 'p1'])
+  })
+})
+
+// ── subtasks written before the uid contract was honoured ───────────────────
+
+describe('<TasksView> legacy orphans', () => {
+  const cid = 'a'.repeat(32)
+
+  it('repairs the stored pointer, not just the display', async () => {
+    // The nesting below is cosmetic and local; the RELATED-TO on the wire is
+    // what the server counts and what Tasks.org and jtx Board read.
+    m.tasks.mockResolvedValue([
+      task({ uid: `${cid}@tasksd`, summary: 'Trip planning' }),
+      task({ uid: 'c1', summary: 'Book flight', parent: cid }),
+    ])
+    m.patchTask.mockResolvedValue(task({ uid: 'c1', summary: 'Book flight', parent: `${cid}@tasksd` }))
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {})
+    setup()
+    await waitFor(() => expect(m.patchTask).toHaveBeenCalledTimes(1))
+    expect(m.patchTask).toHaveBeenCalledWith('l1', 'c1', { parent: `${cid}@tasksd` })
+    infoSpy.mockRestore()
+  })
+
+  it('repairs a row once, even across refetches', async () => {
+    m.tasks.mockResolvedValue([
+      task({ uid: `${cid}@tasksd`, summary: 'Trip planning' }),
+      task({ uid: 'c1', summary: 'Book flight', parent: cid }),
+    ])
+    // The write fails, so the server keeps serving the broken row. Retrying it
+    // on every refetch would be an endless loop of failing PATCHes.
+    m.patchTask.mockRejectedValue(new Error('boom'))
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {})
+    const { bumpRev } = setup()
+    await waitFor(() => expect(m.patchTask).toHaveBeenCalledTimes(1))
+    const fetches = m.tasks.mock.calls.length
+    bumpRev(1)
+    await waitFor(() => expect(m.tasks.mock.calls.length).toBeGreaterThan(fetches))
+    expect(m.patchTask).toHaveBeenCalledTimes(1)
+    infoSpy.mockRestore()
+  })
+
+  it('leaves a parent in another list alone', async () => {
+    // child_count is a per-collection join, so a cross-list match is not the
+    // signature of this bug and must not be rewritten.
+    m.lists.mockResolvedValue([list, { ...list, id: 'l2', href: '/l2/', name: 'Personal' }])
+    m.tasks.mockImplementation(async (id: string) =>
+      id === 'l1'
+        ? [task({ uid: `${cid}@tasksd`, summary: 'Trip planning' })]
+        : [task({ uid: 'c1', list: 'l2', summary: 'Book flight', parent: cid })])
+    setup()
+    await screen.findByText('Trip planning')
+    expect(m.patchTask).not.toHaveBeenCalled()
+  })
+
+  it('nests a subtask whose parent is the bare create id', async () => {
+    m.tasks.mockResolvedValue([
+      task({ uid: `${cid}@tasksd`, summary: 'Trip planning' }),
+      task({ uid: 'c1', summary: 'Book flight', parent: cid }),
+    ])
+    setup()
+    await screen.findByText('Trip planning')
+    expect(screen.getByText('Book flight').closest('.task')).toHaveClass('sub')
+    expect(await screen.findByText('0/1')).toBeInTheDocument()
+  })
+
+  it('leaves a parent that is not a create id alone', async () => {
+    // A foreign client's RELATED-TO must never be reinterpreted.
+    m.tasks.mockResolvedValue([
+      task({ uid: 'not-hex@tasksd', summary: 'Trip planning' }),
+      task({ uid: 'c1', summary: 'Orphan', parent: 'not-hex' }),
+    ])
+    setup()
+    await screen.findByText('Trip planning')
+    expect(screen.getByText('Orphan').closest('.task')).not.toHaveClass('sub')
+  })
+
+  it('leaves a bare-hex parent alone when no task matches it', async () => {
+    m.tasks.mockResolvedValue([task({ uid: 'c1', summary: 'Orphan', parent: cid })])
+    setup()
+    expect(await screen.findByText('Orphan')).toBeInTheDocument()
+    expect(screen.getByText('Orphan').closest('.task')).not.toHaveClass('sub')
+  })
+})
+
+// ── nothing on screen may claim the account is empty before it is known ─────
+// An empty `lists` before the first fetch is ignorance, not an empty account.
+// Telling a user with a dozen lists to "create a list to get started" was the
+// loudest thing on screen during every cold load and every tab switch.
+
+describe('<TasksView> loading versus empty', () => {
+  it('says nothing about the account while the lists are in flight', async () => {
+    m.lists.mockReturnValue(new Promise(() => {}))     // never settles
+    setup()
+    expect(await screen.findByText('Loading…')).toBeInTheDocument()
+    expect(screen.queryByText('Create a list to get started.')).not.toBeInTheDocument()
+  })
+
+  it('offers the call to action once the fetch says the account is empty', async () => {
+    m.lists.mockResolvedValue([])
+    setup()
+    expect(await screen.findByText('Create a list to get started.')).toBeInTheDocument()
+  })
+
+  it('holds "Nothing to do here." until the tasks have actually landed', async () => {
+    m.tasks.mockReturnValue(new Promise(() => {}))
+    setup()
+    // Re-queried rather than awaited once: the pane swaps from the no-lists
+    // branch to the list branch as the lists land, and both say "Loading…" —
+    // from different nodes.
+    await waitFor(() => expect(m.tasks).toHaveBeenCalled())
+    await waitFor(() => expect(screen.getByText('Loading…')).toBeInTheDocument())
+    expect(screen.queryByText('Nothing to do here.')).not.toBeInTheDocument()
+  })
+
+  it('paints cached rows on the first frame, before any fetch resolves', async () => {
+    // What the mirror is for: a reload lands on content, not on a blank pane
+    // and a misleading instruction.
+    setCacheUser('nick')
+    cacheLists([list])
+    cacheTasks([task({ uid: 'u1', summary: 'From the cache' })])
+    m.lists.mockReturnValue(new Promise(() => {}))
+    m.tasks.mockReturnValue(new Promise(() => {}))
+    setup()
+    expect(screen.getByText('From the cache')).toBeInTheDocument()
+    expect(screen.queryByText('Create a list to get started.')).not.toBeInTheDocument()
+  })
+
+  it('lets the server replace what the cache seeded', async () => {
+    setCacheUser('nick')
+    cacheLists([list])
+    cacheTasks([task({ uid: 'u1', summary: 'Stale' })])
+    m.tasks.mockResolvedValue([task({ uid: 'u2', summary: 'Fresh' })])
+    setup()
+    expect(screen.getByText('Stale')).toBeInTheDocument()
+    expect(await screen.findByText('Fresh')).toBeInTheDocument()
+    await waitFor(() => expect(screen.queryByText('Stale')).not.toBeInTheDocument())
+  })
+
+  it('does not prune list-scoped settings against a cached snapshot', async () => {
+    // The seed can predate a list created in another client, so pruning against
+    // it would delete a perfectly live `hidden_lists` entry. Only a real fetch
+    // is evidence that a list is gone.
+    setCacheUser('nick')
+    cacheLists([list])
+    cacheTasks([task()])
+    const onHiddenListsChange = vi.fn()
+    m.lists.mockReturnValue(new Promise(() => {}))
+    render(
+      <DataProvider rev={0} onExpire={vi.fn()}>
+        <TasksView onExpire={vi.fn()} view="list" onView={vi.fn()}
+          sideCollapsed={false} onToggleSide={vi.fn()}
+          hiddenLists={['l-elsewhere']} onHiddenListsChange={onHiddenListsChange}
+          groups={[]} onGroupsChange={vi.fn()}
+          collapsedGroups={[]} onCollapsedGroupsChange={vi.fn()}
+          collapsedTasks={[]} onCollapsedTasksChange={vi.fn()}
+          showCompleted={false} />
+      </DataProvider>,
+    )
+    await screen.findByText('Ship it')
+    expect(onHiddenListsChange).not.toHaveBeenCalled()
   })
 })
 

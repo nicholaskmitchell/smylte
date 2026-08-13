@@ -2,7 +2,9 @@
 FastAPI app with username/password auth ON."""
 from __future__ import annotations
 
+import time
 import uuid
+from unittest import mock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -74,6 +76,144 @@ def test_task_crud_and_subtasks(client):
     assert client.delete(f"/api/lists/{lid}/tasks/{sub['uid']}").status_code == 204
     remaining = {x["uid"] for x in client.get(f"/api/lists/{lid}/tasks").json()}
     assert sub["uid"] not in remaining
+
+
+def test_client_id_determines_uid(client):
+    """The uid a create lands on is `{client_id}@tasksd`, and nothing else.
+
+    The web client mints the same string up front (`uidFor` in api.ts) so a row
+    whose create is still in flight already wears the identity it will keep —
+    which is what lets a subtask added in that window write a RELATED-TO that
+    resolves. That prediction is only legitimate while this holds, so pin it
+    here rather than leaving it an implementation detail of the sync engine.
+    """
+    lid = _list(client)["id"]
+    cid = uuid.uuid4().hex
+    t = client.post(f"/api/lists/{lid}/tasks",
+                    json={"summary": "trip", "client_id": cid}).json()
+    assert t["uid"] == f"{cid}@tasksd"
+
+    # …and the same slug names an event's uid, which the calendar view predicts
+    # the same way.
+    ecid = uuid.uuid4().hex
+    cal = _cal(client)
+    e = client.post(f"/api/calendars/{cal['id']}/events",
+                    json={"summary": "lunch", "start": "2026-07-15", "all_day": True,
+                          "client_id": ecid}).json()
+    assert e["uid"] == f"{ecid}@tasksd"
+
+
+def test_create_rejects_a_parent_that_names_nothing(client):
+    """RELATED-TO is written verbatim, so an unresolvable parent is an orphan
+    persisted to the collection — not something a refetch repairs. Refuse it."""
+    lid = _list(client)["id"]
+    cid = uuid.uuid4().hex
+    # The exact shape of the old bug: the client_id, where the uid belongs.
+    r = client.post(f"/api/lists/{lid}/tasks", json={"summary": "sub", "parent": cid})
+    assert r.status_code == 422, r.text
+    assert not client.get(f"/api/lists/{lid}/tasks").json()
+
+    # The derived uid is accepted, and counts against its parent.
+    parent = client.post(f"/api/lists/{lid}/tasks",
+                         json={"summary": "trip", "client_id": cid}).json()
+    sub = client.post(f"/api/lists/{lid}/tasks",
+                      json={"summary": "sub", "parent": parent["uid"]})
+    assert sub.status_code == 201, sub.text
+    assert client.get(f"/api/lists/{lid}/tasks/{parent['uid']}").json()["child_count"] == 1
+
+
+def test_patch_reparents_a_task(client):
+    """Repointing a subtask is what repairs one written against a bad parent."""
+    lid = _list(client)["id"]
+    a = client.post(f"/api/lists/{lid}/tasks", json={"summary": "trip"}).json()
+    b = client.post(f"/api/lists/{lid}/tasks", json={"summary": "errands"}).json()
+    sub = client.post(f"/api/lists/{lid}/tasks",
+                      json={"summary": "book flight", "parent": a["uid"]}).json()
+
+    moved = client.patch(f"/api/lists/{lid}/tasks/{sub['uid']}",
+                         json={"parent": b["uid"]})
+    assert moved.status_code == 200, moved.text
+    assert moved.json()["parent"] == b["uid"]
+    assert client.get(f"/api/lists/{lid}/tasks/{a['uid']}").json()["child_count"] == 0
+    assert client.get(f"/api/lists/{lid}/tasks/{b['uid']}").json()["child_count"] == 1
+
+    # An explicit null unparents; a parent naming nothing, or itself, is refused.
+    assert client.patch(f"/api/lists/{lid}/tasks/{sub['uid']}",
+                        json={"parent": None}).json()["parent"] is None
+    assert client.patch(f"/api/lists/{lid}/tasks/{sub['uid']}",
+                        json={"parent": "ghost@tasksd"}).status_code == 422
+    assert client.patch(f"/api/lists/{lid}/tasks/{sub['uid']}",
+                        json={"parent": sub["uid"]}).status_code == 422
+
+
+def test_settings_carry_collapsed_task_trees(client):
+    """Subtasks nest arbitrarily deep, so which trees are folded away has to
+    follow the account like every other UI preference — the alternative is a
+    large tree unfolding itself on every device, every load."""
+    r = client.put("/api/settings", json={"collapsed_tasks": ["a@tasksd", "b@tasksd"]})
+    assert r.status_code == 200, r.text
+    assert r.json()["collapsed_tasks"] == ["a@tasksd", "b@tasksd"]
+    assert client.get("/api/settings").json()["collapsed_tasks"] == ["a@tasksd", "b@tasksd"]
+    # Empty is a real value (everything expanded), not an omission.
+    assert client.put("/api/settings", json={"collapsed_tasks": []}).json()["collapsed_tasks"] == []
+
+
+def test_session_length_is_a_setting(client):
+    """The session length moved from a deploy-time env var to a setting."""
+    day, week, month = 24 * 3600, 7 * 24 * 3600, 30 * 24 * 3600
+    never = 10 * 365 * 24 * 3600
+    for ttl in (day, week, month, never):
+        r = client.put("/api/settings", json={"session_ttl_s": ttl})
+        assert r.status_code == 200, r.text
+        assert r.json()["session_ttl_s"] == ttl
+    assert client.get("/api/settings").json()["session_ttl_s"] == never
+
+
+def test_session_length_is_an_allowlist(client):
+    """Not a range. This decides how long a login survives and is reachable
+    through a settings PUT, so anything but the offered values is refused —
+    a bounds check would still let a hand-edited blob ask for a century."""
+    for bad in (1, 0, -1, 10**9, 3600, "week", 604800.5, True):
+        r = client.put("/api/settings", json={"session_ttl_s": bad})
+        assert r.status_code == 422, f"{bad!r} was accepted: {r.text}"
+    # …and a refused write leaves the stored value alone.
+    client.put("/api/settings", json={"session_ttl_s": 7 * 24 * 3600})
+    client.put("/api/settings", json={"session_ttl_s": 99})
+    assert client.get("/api/settings").json()["session_ttl_s"] == 7 * 24 * 3600
+    # An explicit null is not a bad value: it clears the choice and hands the
+    # question back to the deployment's own TASKS_SESSION_TTL.
+    assert client.put("/api/settings", json={"session_ttl_s": None}).status_code == 200
+
+
+def test_shortening_the_session_ends_the_one_already_open(_scratch_up, tmp_path):
+    """The point of the setting, and the part a stateless token makes awkward.
+
+    The `exp` in a JWT cannot be moved once issued, so "log me out sooner" would
+    otherwise mean "…starting with your next sign-in", leaving the session you
+    were worried about running for its original week. The server judges a token
+    against the length in force instead, so shortening bites at once — here, and
+    on every other device holding a cookie.
+    """
+    day, month = 24 * 3600, 30 * 24 * 3600
+    app = create_app(api_settings(str(tmp_path / "ttl.db")))
+    with TestClient(app) as c:
+        assert c.post("/api/login",
+                      json={"username": "admin", "password": "testpass123"}).status_code == 200
+        c.put("/api/settings", json={"session_ttl_s": month})
+        # Re-issued under the long setting, then aged past a short one.
+        c.post("/api/login", json={"username": "admin", "password": "testpass123"})
+        assert c.get("/api/me").status_code == 200
+
+        c.put("/api/settings", json={"session_ttl_s": day})
+        # Still inside a day, so the same cookie is still good.
+        assert c.get("/api/me").status_code == 200
+
+        with mock.patch("tasksd.auth.time.time", return_value=time.time() + day + 60):
+            assert c.get("/api/me").status_code == 401
+        # …and it comes back once the setting is long again, because the token's
+        # own exp still has a month to run. Lengthening is the direction that
+        # cannot be applied retroactively; this is the one that can.
+        assert c.get("/api/me").status_code == 200
 
 
 def test_search_and_tags(client):
