@@ -24,6 +24,11 @@ __pycache__/
 /frontend/node_modules/
 /frontend/dist/
 
+# ── .NET / Windows client build artifacts (built by CI, never committed) ─────
+/desktop/**/bin/
+/desktop/**/obj/
+/desktop/**/publish/
+
 # ── Logs & OS cruft ──────────────────────────────────────────────────────────
 *.log
 .DS_Store

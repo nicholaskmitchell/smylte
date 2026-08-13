@@ -1,0 +1,51 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>Smylte</AssemblyName>
+    <RootNamespace>Smylte.Desktop</RootNamespace>
+    <ApplicationIcon>app.ico</ApplicationIcon>
+    <Version>1.0.0</Version>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <FileVersion>1.0.0.0</FileVersion>
+
+    <!-- Self-contained single file: the target machine needs no .NET install.
+         Not trimmed — WinForms reflects over its own types, and trimming it is a
+         reliable way to produce an exe that starts and then dies on a dialog.
+
+         That costs size: ~156 MB uncompressed, ~69 MB with the bundle compressed
+         below. A framework-dependent build would be 1.4 MB, but only runs after
+         someone installs the .NET Desktop Runtime, which Windows does not ship.
+         Trading 69 MB for "download it and double-click" is the right way round
+         here, because the exe is fetched once — every later update replaces the
+         web assets, not this file. -->
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- ApplicationIcon above stamps the *file* icon; this embeds the same file
+         so `new Icon(typeof(MainForm), "app.ico")` can find it for the window.
+         RootNamespace makes the resource name Smylte.Desktop.app.ico, which is
+         what that constructor looks for. -->
+    <EmbeddedResource Include="app.ico" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The WebView2 *runtime* ships with Windows 10/11; this is only the
+         managed wrapper. Floating on 1.0.* because the SDK revs constantly and
+         nothing here depends on a specific build. -->
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.*" />
+    <!-- DPAPI. Not in the base framework on .NET 8 — it is its own package. -->
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
+  </ItemGroup>
+
+</Project>
