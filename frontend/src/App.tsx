@@ -188,14 +188,26 @@ export function App() {
     })
   }, [showToast])
 
-  // The two settings a continuous gesture writes: an appearance slider fires
-  // onChange on every step (a drag across one range is up to 56 of them) and a
-  // dashboard drag on every grid cell crossed. Paint locally at once, but let
-  // the write settle on the trailing edge, so one gesture is one PUT.
+  // The settings a repeated gesture writes: an appearance slider fires onChange
+  // on every step (a drag across one range is up to 56 of them), a dashboard
+  // drag on every grid cell crossed, and folding a run of subtask trees is one
+  // gesture as far as the user is concerned. Paint locally at once, but let the
+  // write settle on the trailing edge, so one gesture is one PUT.
+  //
+  // Patches accumulate rather than replace one another. They used to replace,
+  // which was harmless while only two continuous gestures existed (you cannot
+  // drag an appearance slider and the dashboard at once) but silently dropped
+  // the earlier of any two *different* preferences written inside the window.
   const saveTimer = useRef<ReturnType<typeof setTimeout>>()
+  const pendingPatch = useRef<Settings>({})
   const saveSettingsSoon = useCallback((patch: Settings) => {
+    pendingPatch.current = { ...pendingPatch.current, ...patch }
     clearTimeout(saveTimer.current)
-    saveTimer.current = setTimeout(() => saveSettings(patch), 400)
+    saveTimer.current = setTimeout(() => {
+      const next = pendingPatch.current
+      pendingPatch.current = {}
+      saveSettings(next)
+    }, 400)
   }, [saveSettings])
   useEffect(() => () => clearTimeout(saveTimer.current), [])
 
