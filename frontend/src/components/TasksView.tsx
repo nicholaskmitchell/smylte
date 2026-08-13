@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import {
-  api, AuthError, clientId,
-  type CreateTaskBody, type List, type Task, type TaskGroup, type TasksViewMode,
-} from '../api'
+  useCallback, useEffect, useMemo, useState, type CSSProperties, type KeyboardEvent,
+} from 'react'
+import { api, uidFor, type CreateTaskBody, type List, type Task, type TaskGroup, type TasksViewMode } from '../api'
+import { useTaskData } from '../data'
 import {
   addDays, dayKey, fmtDue, hasZone, instantFromLocal, isOverdue, makeGuard, toLocalInput, ymd,
 } from '../util'
@@ -15,6 +15,14 @@ const VIEWS: ReadonlyArray<readonly [TasksViewMode, string]> = [
 
 /** Done or won't-do — both take a task out of the active list. */
 const isDone = (t: Task) => t.completed || t.cancelled
+
+/** The shape a bare client_id has, matching the backend's `_CLIENT_ID_RE`.
+ *  Only a `parent` looking exactly like this is a candidate for the legacy
+ *  reinterpretation below — a real uid always carries the `@tasksd` suffix. */
+const LEGACY_PARENT = /^[0-9a-f]{16,64}$/
+
+/** A parent's subtask tally, or null when it has none to show. */
+type Progress = { total: number; done: number } | null
 
 /**
  * A date+time pair as the wire should carry it.
@@ -33,20 +41,27 @@ const dateOut = (date: string, time: string, original: string | null | undefined
   return hasZone(original) ? instantFromLocal(date, time) : `${date}T${time}`
 }
 
-export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggleSide,
+export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
   hiddenLists, onHiddenListsChange, groups, onGroupsChange,
-  collapsedGroups, onCollapsedGroupsChange, showCompleted }: {
-  rev: number; onExpire: () => void
+  collapsedGroups, onCollapsedGroupsChange,
+  collapsedTasks, onCollapsedTasksChange, showCompleted }: {
+  onExpire: () => void
   view: TasksViewMode; onView: (v: TasksViewMode) => void
   sideCollapsed: boolean; onToggleSide: () => void
   hiddenLists: string[]; onHiddenListsChange: (next: string[]) => void
   groups: TaskGroup[]; onGroupsChange: (next: TaskGroup[]) => void
   collapsedGroups: string[]; onCollapsedGroupsChange: (next: string[]) => void
+  collapsedTasks: string[]; onCollapsedTasksChange: (next: string[]) => void
   showCompleted: boolean
 }) {
   const guard = makeGuard(onExpire)
-  const [lists, setLists] = useState<List[]>([])
-  const [tasks, setTasks] = useState<Task[]>([])
+  // Lists, tasks and every write against them live above the tab strip, so
+  // switching away and back neither drops them nor refetches from empty — and
+  // Home reads the same copy rather than fanning out a second one.
+  const {
+    lists, serverOrderedLists, tasks, listsLoaded, loaded, setLists,
+    create, createMany, addSub, toggle, remove, saveDetail,
+  } = useTaskData()
   const [detail, setDetail] = useState<Task | null>(null)
   // The two create surfaces, both null when closed. `adding` is the single-task
   // form; `bulk` is the multi-row composer. Each carries the list and the title
@@ -69,17 +84,13 @@ export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggle
   const visibleLists = useMemo(() => lists.filter((l) => !hiddenSet.has(l.id)), [lists, hiddenSet])
   const colorOf = (listId: string) => lists.find((l) => l.id === listId)?.color ?? null
 
-  useEffect(() => {
-    guard(async () => setLists(await api.lists()))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rev])
-
   // Prune settings that reference lists (or groups) that no longer exist, so a
   // deletion here or in another CalDAV client doesn't leave the blob accreting
-  // stale ids. Guarded on a non-empty fetch so the initial empty state can't
-  // wipe real prefs before the lists arrive.
+  // stale ids. Gated on a real fetch having landed: the initial empty state
+  // must not wipe prefs before the lists arrive, and neither must the cached
+  // seed, which is a snapshot that may predate a list created elsewhere.
   useEffect(() => {
-    if (!lists.length) return
+    if (!listsLoaded || !lists.length) return
     const ids = new Set(lists.map((l) => l.id))
     const keptHidden = hiddenLists.filter((id) => ids.has(id))
     if (keptHidden.length !== hiddenLists.length) onHiddenListsChange(keptHidden)
@@ -94,182 +105,11 @@ export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggle
     const keptCollapsed = collapsedGroups.filter((id) => gids.has(id))
     if (keptCollapsed.length !== collapsedGroups.length) onCollapsedGroupsChange(keptCollapsed)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lists])
+  }, [lists, listsLoaded])
 
-  // In-flight task fetches carry a token: a response commits only while its
-  // token is still the newest and the view it was issued for (`loadKey`) is
-  // still current, so an out-of-order response can never clobber a later fetch.
-  // Writes bump the token too, so a refetch whose snapshot predates an
-  // optimistic paint is dropped instead of wiping it (the mutation's own SSE
-  // `rev` bump refetches again once the server has published the change).
-  // Fetch every list and filter hidden ones client-side, so a visibility toggle
-  // is instant (no refetch) — exactly like the calendar grid.
-  const loadKey = `*|${lists.map((l) => l.id).join(',')}`
-  const keyRef = useRef(loadKey)
-  keyRef.current = loadKey
-  const fetchToken = useRef(0)
-  const invalidateFetches = () => { fetchToken.current += 1 }
-
-  const load = () => {
-    const token = ++fetchToken.current
-    const key = loadKey
-    return guard(async () => {
-      const ts = (await Promise.all(lists.map((l) => api.tasks(l.id)))).flat()
-      if (token === fetchToken.current && key === keyRef.current) setTasks(ts)
-    })
-  }
-
-  useEffect(() => {
-    if (lists.length === 0) { setTasks([]); return }
-    load()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loadKey, rev])
-
-  // Writes are optimistic: paint the change immediately, then reconcile with
-  // the server's canonical DTO when it lands — or roll the touched task back
-  // on failure (the guard has already raised the error toast) so the UI never
-  // lies. The SSE `rev` bump refetches shortly after as a safety net (and
-  // fixes derived fields like a parent's subtask progress). Rollbacks restore
-  // only the affected task — never a whole-array snapshot, which would clobber
-  // interleaved changes to other tasks.
-  const patchLocal = (uid: string, patch: Partial<Task>) =>
-    setTasks((ts) => ts.map((t) => (t.uid === uid ? { ...t, ...patch } : t)))
-  const settle = (dto: Task | undefined, orig: Task) =>
-    setTasks((ts) => ts.map((t) => (t.uid === orig.uid ? (dto ?? orig) : t)))
-
-  // A pending create renders immediately as a local stand-in keyed by the
-  // create's client_id (the idempotency slug the server derives its uid from),
-  // so success can swap in the server DTO — and failure remove it — by uid.
-  // Every task carries its own list id (`list`), so writes below target the
-  // task's own list rather than a single "selected" one — essential once the
-  // combined view mixes tasks from several lists.
-  const draftTask = (uid: string, listId: string, body: CreateTaskBody): Task => ({
-    uid, list: listId, summary: body.summary, notes: body.notes ?? null, status: 'NEEDS-ACTION',
-    completed: false, cancelled: false,
-    // `priority` is the numeric iCal field the server derives; the rows render
-    // `priority_label`, so the stand-in paints the right stripe right away and
-    // the server's DTO fills the number in when it lands.
-    priority: null, priority_label: body.priority || 'none',
-    percent_complete: null, due: body.due ?? null,
-    due_is_date: !!body.due && !body.due.includes('T'),
-    start: body.start ?? null, tags: body.tags ?? [], parent: body.parent ?? null, children: [],
-    child_count: 0, completed_child_count: 0, derived_percent: null,
-    pinned: false, href: '', etag: '',
-  })
-  // Swap a settled server DTO in for its stand-in. `key` is the loadKey the
-  // create was issued under — the user may have switched views mid-flight.
-  const settleCreate = (cid: string, key: string, t: Task) => {
-    const here = key === keyRef.current
-    setTasks((ts) => {
-      if (ts.some((x) => x.uid === cid)) return ts.map((x) => (x.uid === cid ? t : x))
-      // Stand-in already gone — a refetch brought the real task, or the view
-      // changed. Re-append only when it belongs here and isn't shown yet.
-      return here && !ts.some((x) => x.uid === t.uid) ? [...ts, t] : ts
-    })
-  }
-  const create = async (listId: string, body: CreateTaskBody) => {
-    if (!listId) return
-    const cid = clientId()
-    const key = loadKey                   // the view this create belongs to
-    invalidateFetches()
-    setTasks((ts) => [...ts, draftTask(cid, listId, body)])
-    const t = await guard(() => api.createTask(listId, { ...body, client_id: cid }))
-    if (!t) { setTasks((ts) => ts.filter((x) => x.uid !== cid)); return }
-    settleCreate(cid, key, t)
-  }
-  // Create many tasks in one go, for the "Add multiple" composer: one optimistic
-  // paint for the whole batch, then one request per task, in order.
-  //
-  // Sequential on purpose. TaskService holds a single lock around every engine
-  // call and each create is a CalDAV PUT plus a re-read GET, so parallel POSTs
-  // would queue server-side anyway; going one at a time costs nothing and buys
-  // an honest progress count, per-row failure attribution, and a clean stop when
-  // the session expires mid-batch.
-  //
-  // Deliberately bypasses `guard`: a nine-row batch that fails would raise nine
-  // toasts. Failures come back as indexes instead and the modal reports them in
-  // place, against the rows that produced them.
-  const createMany = async (
-    items: Array<{ listId: string; body: CreateTaskBody; cid: string }>,
-    onProgress: (done: number) => void,
-  ): Promise<number[]> => {
-    const key = loadKey
-    // The ids come from the rows, which keep them across a retry. Minting them
-    // here meant every attempt carried a new idempotency slug, so a create whose
-    // response was lost on the way back — the failure the composer explicitly
-    // invites you to retry — landed a second time as a distinct task.
-    const cids = items.map((it) => it.cid)
-    invalidateFetches()
-    setTasks((ts) => [...ts, ...items.map((it, i) => draftTask(cids[i], it.listId, it.body))])
-    const failed: number[] = []
-    for (let i = 0; i < items.length; i++) {
-      try {
-        const t = await api.createTask(items[i].listId, { ...items[i].body, client_id: cids[i] })
-        settleCreate(cids[i], key, t)
-      } catch (e) {
-        if (e instanceof AuthError) {
-          // Session died mid-batch. Drop every stand-in that can no longer land
-          // and hand the rest back as failures, so nothing is left painted.
-          const rest = cids.slice(i)
-          setTasks((ts) => ts.filter((x) => !rest.includes(x.uid)))
-          onExpire()
-          return [...failed, ...items.map((_, n) => n).filter((n) => n >= i)]
-        }
-        console.error(e)
-        failed.push(i)
-        setTasks((ts) => ts.filter((x) => x.uid !== cids[i]))
-      }
-      onProgress(i + 1)
-    }
-    return failed
-  }
+  // A one-line convenience over the shared create; day columns pass a due.
   const addTask = (listId: string, summary: string, due?: string) =>
     create(listId, due ? { summary, due } : { summary })
-  const addSub = (parent: string, summary: string) => {
-    const p = tasks.find((x) => x.uid === parent)   // a subtask lives in its parent's list
-    if (p) create(p.list, { summary, parent })
-  }
-
-  const toggle = async (t: Task) => {
-    const done = !t.completed
-    invalidateFetches()
-    patchLocal(t.uid, { completed: done, cancelled: false, status: done ? 'COMPLETED' : 'NEEDS-ACTION' })
-    settle(await guard(() => api.complete(t.list, t.uid, done)), t)
-  }
-  const remove = async (t: Task) => {
-    const at = tasks.findIndex((x) => x.uid === t.uid)  // where to restore it on failure
-    const key = loadKey
-    invalidateFetches()
-    setTasks((ts) => ts.filter((x) => x.uid !== t.uid))
-    if ((await guard(() => api.deleteTask(t.list, t.uid))) === undefined && key === keyRef.current) {
-      setTasks((ts) => {
-        if (ts.some((x) => x.uid === t.uid)) return ts
-        const next = ts.slice()
-        next.splice(at < 0 ? next.length : Math.min(at, next.length), 0, t)
-        return next
-      })
-    }
-  }
-  const saveDetail = async (t: Task, patch: Record<string, unknown>) => {
-    const opt: Partial<Task> = {}
-    if ('summary' in patch) opt.summary = patch.summary as string
-    if ('notes' in patch) opt.notes = (patch.notes as string) ?? null
-    if ('tags' in patch) opt.tags = patch.tags as string[]
-    if ('priority' in patch) opt.priority_label = (patch.priority as string) || 'none'
-    if ('due' in patch) {
-      opt.due = (patch.due as string) ?? null
-      opt.due_is_date = typeof patch.due === 'string' && !patch.due.includes('T')
-    }
-    if ('start' in patch) opt.start = (patch.start as string) ?? null
-    if ('status' in patch) {
-      opt.status = patch.status as string
-      opt.completed = patch.status === 'COMPLETED'
-      opt.cancelled = patch.status === 'CANCELLED'
-    }
-    invalidateFetches()
-    patchLocal(t.uid, opt)
-    settle(await guard(() => api.patchTask(t.list, t.uid, patch)), t)
-  }
   // Day-column drag: dropping a card on a column reschedules it to that day.
   // A timed due keeps its local time-of-day; an all-day due stays all-day.
   const [dragUid, setDragUid] = useState<string | null>(null)
@@ -287,6 +127,7 @@ export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggle
       due: timed ? dateOut(key, toLocalInput(t.due!).slice(11, 16), t.due) : key,
     })
   }
+
   const listApi = {
     create: (name: string) => guard(() => api.createList(name)),
     update: (id: string, body: { name?: string; color?: string | null }) =>
@@ -298,7 +139,52 @@ export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggle
   // Keep every fetched list in `tasks` and drop hidden ones here, so toggling a
   // list is an instant client-side filter (no refetch).
   const shownTasks = tasks.filter((t) => !hiddenSet.has(t.list))
-  const childrenOf = (uid: string) => shownTasks.filter((t) => t.parent === uid)
+
+  // One pass over every fetched task resolves both questions the rows below
+  // ask: which parent a subtask really belongs to, and which children a parent
+  // really has. Built from `tasks`, not `shownTasks` — hiding a list is a
+  // display choice and must not change what a task's parent *is*.
+  //
+  // Two rules decide a match, and both mirror the server so the counts agree
+  // with it exactly:
+  //
+  //  - The parent must sit in the same list. `_children_map` groups within one
+  //    collection, so a RELATED-TO pointing across lists counts for nothing
+  //    there and must count for nothing here.
+  //  - A `parent` with exactly the shape of a client_id (the backend's
+  //    _CLIENT_ID_RE) that names no task, while `${value}@tasksd` names one, is
+  //    read as that task. Those are the subtasks written before `uidFor`
+  //    existed, pointing at the create id instead of the uid derived from it.
+  //    They are repaired on the wire above; this is what nests them at once,
+  //    and what covers a row the repair has not reached or was refused.
+  const { parentByUid, kidsByParent } = useMemo(() => {
+    const byUid = new Map(tasks.map((t) => [t.uid, t] as const))
+    const parents = new Map<string, string>()
+    const kids = new Map<string, Task[]>()
+    for (const t of tasks) {
+      const raw = t.parent
+      if (!raw) continue
+      const p = byUid.get(raw) ?? (LEGACY_PARENT.test(raw) ? byUid.get(uidFor(raw)) : undefined)
+      if (!p || p.list !== t.list) continue
+      parents.set(t.uid, p.uid)
+      const mine = kids.get(p.uid)
+      if (mine) mine.push(t)
+      else kids.set(p.uid, [t])
+    }
+    return { parentByUid: parents, kidsByParent: kids }
+  }, [tasks])
+  const parentOf = (t: Task) => parentByUid.get(t.uid) ?? null
+
+  // Subtask progress is derived from that map rather than read off the DTO.
+  // The server's child_count/completed_child_count are a snapshot of the last
+  // refetch, so a subtask created or ticked just now left its parent's x/y
+  // stale until an SSE bump landed a whole refetch later — while the nesting
+  // beside it, already computed locally, had moved.
+  const progressOf = (uid: string) => {
+    const kids = kidsByParent.get(uid)
+    return kids ? { total: kids.length, done: kids.filter(isDone).length } : null
+  }
+
   // A subtask reaches the DOM only underneath its own parent's row, so anything
   // whose parent isn't here has to stand on its own or it is not rendered at
   // all — invisible, and so uncompletable, uneditable and undeletable, while
@@ -309,11 +195,63 @@ export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggle
   // completed" is off (the default) — the parent lands in `done`, which isn't
   // rendered, and the subtask goes with it.
   const byUid = new Map(shownTasks.map((t) => [t.uid, t] as const))
+  const rendersUnder = (t: Task) => {
+    const parent = parentOf(t)
+    const p = parent ? byUid.get(parent) : undefined
+    return p && (showCompleted || !isDone(p)) ? p : undefined
+  }
+  // A RELATED-TO loop — which nothing on either side of the wire prevents —
+  // leaves every task in it with a rendered parent, so a plain "no parent here"
+  // test puts none of them at the top level and the whole ring disappears from
+  // the pane. Walking up until the chain repeats finds the loop; its lowest uid
+  // is elected the root, deterministically, so exactly one row anchors it and
+  // the rest hang beneath (TaskGroup's `seen` stops the ring closing again).
   const parentIsRendered = (t: Task) => {
-    const p = t.parent ? byUid.get(t.parent) : undefined
-    return !!p && (showCompleted || !isDone(p))
+    const seen = new Set<string>([t.uid])
+    for (let cur = rendersUnder(t); cur; cur = rendersUnder(cur)) {
+      if (!seen.has(cur.uid)) { seen.add(cur.uid); continue }
+      // `seen` now holds the whole ring plus the tail that led into it; only
+      // the ring matters, and re-walking from `cur` collects exactly that.
+      const ring: string[] = []
+      for (let x: Task | undefined = cur; x && !ring.includes(x.uid); x = rendersUnder(x)) {
+        ring.push(x.uid)
+      }
+      return t.uid !== ring.reduce((a, b) => (a < b ? a : b))
+    }
+    return !!rendersUnder(t)
   }
   const tops = shownTasks.filter((t) => !parentIsRendered(t))
+
+  // Nesting goes as deep as the data does: a subtask can have subtasks of its
+  // own, so the rows render as a tree rather than one parent and a flat run of
+  // children. Built once here, keyed by the parent each row actually renders
+  // under (so a child promoted to the top level takes its own descendants with
+  // it rather than being orphaned twice over).
+  const kidRows = useMemo(() => {
+    const m = new Map<string, Task[]>()
+    for (const t of shownTasks) {
+      if (!parentIsRendered(t)) continue
+      const p = parentOf(t)!
+      const mine = m.get(p)
+      if (mine) mine.push(t)
+      else m.set(p, [t])
+    }
+    return m
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tasks, hiddenSet, showCompleted, parentByUid])
+  const childrenOf = useCallback((uid: string) => kidRows.get(uid) ?? [], [kidRows])
+
+  // Folded subtask trees. Account-synced like the sidebar's collapsed groups,
+  // so a tree you tidied away stays tidy on the next load and in the next
+  // browser. Only uids that still name a task with children are kept: a task
+  // deleted here or in another client would otherwise leave the set growing
+  // forever, and re-creating a uid is impossible anyway.
+  const collapsedSet = useMemo(() => new Set(collapsedTasks), [collapsedTasks])
+  const setCollapsed = useCallback((uid: string, next: boolean) => {
+    if (next === collapsedSet.has(uid)) return
+    const kept = collapsedTasks.filter((x) => x !== uid && kidRows.has(x))
+    onCollapsedTasksChange(next ? [...kept, uid] : kept)
+  }, [collapsedSet, collapsedTasks, kidRows, onCollapsedTasksChange])
   const active = tops.filter((t) => !t.completed && !t.cancelled)
   const done = tops.filter((t) => t.completed || t.cancelled)
   // Where new tasks land by default (first visible list); the list view's
@@ -356,7 +294,12 @@ export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggle
 
   return (
     <div className="work">
-      <Sidebar title="Lists" placeholder="List" items={lists}
+      {/* The raw order, not `lists`: dragging a row here PROPPATCHes
+          calendar-order onto every collection in Radicale, and the grouped
+          order is an app-only view that has no business rewriting what other
+          CalDAV clients read. The rail looks identical either way — its group
+          sections are filters, so they preserve relative order. */}
+      <Sidebar title="Lists" placeholder="List" items={serverOrderedLists}
         countOf={(l) => l.open_count} onItems={setLists} api={listApi}
         collapsed={sideCollapsed} onToggle={onToggleSide}
         hiddenIds={hiddenSet} onHiddenChange={onHiddenListsChange}
@@ -397,15 +340,22 @@ export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggle
           <div className="scroll">
             {completedTasks.length === 0 && <div className="empty">No completed tasks.</div>}
             {completedTasks.map((t) => (
-              <TaskGroup key={t.uid} task={t} kids={childrenOf(t.uid)} dot={dotFor(t)}
+              <TaskGroup key={t.uid} task={t} childrenOf={childrenOf} dot={dotFor(t)}
+                progressOf={progressOf} collapsed={collapsedSet} onCollapse={setCollapsed}
                 onToggle={toggle} onRemove={remove} onOpen={setDetail} onAddSub={addSub} />
             ))}
           </div>
         ) : visibleLists.length === 0 ? (
-          <div className="empty">
-            {lists.length === 0
-              ? 'Create a list to get started.'
-              : 'Every list is hidden — toggle one on from the sidebar.'}
+          // Three states, not two. Before a fetch has landed there is nothing
+          // to say about the account: telling a user with a dozen lists to
+          // "create a list to get started" was the loudest thing on screen
+          // during every cold load and every tab switch.
+          <div className="empty" aria-busy={!listsLoaded || undefined}>
+            {!listsLoaded
+              ? 'Loading…'
+              : lists.length === 0
+                ? 'Create a list to get started.'
+                : 'Every list is hidden — toggle one on from the sidebar.'}
           </div>
         ) : view === 'list' ? (
           <>
@@ -416,15 +366,21 @@ export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggle
             )}
             <div className="scroll">
               {active.map((t) => (
-                <TaskGroup key={t.uid} task={t} kids={childrenOf(t.uid)} dot={dotFor(t)}
+                <TaskGroup key={t.uid} task={t} childrenOf={childrenOf} dot={dotFor(t)}
+                  progressOf={progressOf} collapsed={collapsedSet} onCollapse={setCollapsed}
                   onToggle={toggle} onRemove={remove} onOpen={setDetail} onAddSub={addSub} />
               ))}
-              {active.length === 0 && <div className="empty">Nothing to do here.</div>}
+              {active.length === 0 && (
+                <div className="empty" aria-busy={!loaded || undefined}>
+                  {loaded ? 'Nothing to do here.' : 'Loading…'}
+                </div>
+              )}
               {showCompleted && done.length > 0 && (
                 <>
                   <div className="section-label label">Completed · {done.length}</div>
                   {done.map((t) => (
-                    <TaskGroup key={t.uid} task={t} kids={childrenOf(t.uid)} dot={dotFor(t)}
+                    <TaskGroup key={t.uid} task={t} childrenOf={childrenOf} dot={dotFor(t)}
+                      progressOf={progressOf} collapsed={collapsedSet} onCollapse={setCollapsed}
                       onToggle={toggle} onRemove={remove} onOpen={setDetail} onAddSub={addSub} />
                   ))}
                 </>
@@ -493,20 +449,53 @@ export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggle
   )
 }
 
-function TaskGroup({ task, kids, dot, onToggle, onRemove, onOpen, onAddSub }: {
-  task: Task; kids: Task[]; dot?: string | null
+/** How far in a row may be indented before the titles have nowhere left to go.
+ *  Deeper tasks still render, they just stop stepping right. */
+const MAX_INDENT = 6
+
+/**
+ * One task and everything beneath it.
+ *
+ * Recursive, because a subtask can have subtasks of its own — the wire has
+ * always allowed it (RELATED-TO is just a UID) and the flat parent-plus-children
+ * render was the only thing standing in the way. `seen` carries the ancestors on
+ * the current path: RELATED-TO has no cycle check on either side of the wire, so
+ * a loop authored by another client would otherwise recurse until the stack
+ * gave out. A row already on its own path is dropped rather than repeated.
+ */
+function TaskGroup({ task, childrenOf, dot, progressOf, depth = 0, seen,
+  collapsed, onCollapse, onToggle, onRemove, onOpen, onAddSub }: {
+  task: Task
+  childrenOf: (uid: string) => Task[]
+  dot?: string | null
+  progressOf: (uid: string) => Progress
+  depth?: number
+  seen?: ReadonlySet<string>
+  collapsed: ReadonlySet<string>
+  onCollapse: (uid: string, next: boolean) => void
   onToggle: (t: Task) => void; onRemove: (t: Task) => void
   onOpen: (t: Task) => void; onAddSub: (parent: string, summary: string) => void
 }) {
   const [adding, setAdding] = useState(false)
+  const kids = childrenOf(task.uid).filter((k) => !seen?.has(k.uid))
+  const isCollapsed = collapsed.has(task.uid)
+  const path = useMemo(() => new Set([...(seen ?? []), task.uid]), [seen, task.uid])
+  const indent = Math.min(depth, MAX_INDENT)
   return (
     <div>
-      <TaskRow task={task} dot={dot} onToggle={onToggle} onRemove={onRemove} onOpen={onOpen} onAddSub={() => setAdding(true)} />
-      {kids.map((k) => (
-        <TaskRow key={k.uid} task={k} sub dot={dot} onToggle={onToggle} onRemove={onRemove} onOpen={onOpen} />
+      <TaskRow task={task} dot={dot} depth={indent} progress={progressOf(task.uid)}
+        collapsed={kids.length > 0 ? isCollapsed : undefined}
+        onCollapse={(next) => onCollapse(task.uid, next)}
+        onToggle={onToggle} onRemove={onRemove} onOpen={onOpen}
+        onAddSub={() => { onCollapse(task.uid, false); setAdding(true) }} />
+      {!isCollapsed && kids.map((k) => (
+        <TaskGroup key={k.uid} task={k} childrenOf={childrenOf} dot={dot}
+          progressOf={progressOf} depth={depth + 1} seen={path}
+          collapsed={collapsed} onCollapse={onCollapse}
+          onToggle={onToggle} onRemove={onRemove} onOpen={onOpen} onAddSub={onAddSub} />
       ))}
-      {adding && (
-        <div className="task sub">
+      {!isCollapsed && adding && (
+        <div className="task" style={indentStyle(indent + 1)}>
           <InlineCreate placeholder="Subtask" grow
             onSubmit={(v) => { onAddSub(task.uid, v); setAdding(false) }}
             onCancel={() => setAdding(false)} />
@@ -515,6 +504,10 @@ function TaskGroup({ task, kids, dot, onToggle, onRemove, onOpen, onAddSub }: {
     </div>
   )
 }
+
+/** Indent a row by its depth in the tree. Level 0 keeps the pane's own gutter. */
+const indentStyle = (depth: number) =>
+  (depth > 0 ? { '--task-depth': depth } as CSSProperties : undefined)
 
 function DayColumn({ date, isToday, open, done, overdue, dotOf, onToggle, onOpen, onAdd,
   dragActive, onDropTask, onDragTask }: {
@@ -624,39 +617,59 @@ function DayCard({ task, showDate, dot, onToggle, onOpen, onDrag }: {
   )
 }
 
-function TaskRow({ task, sub, dot, onToggle, onRemove, onOpen, onAddSub }: {
-  task: Task; sub?: boolean; dot?: string | null
+function TaskRow({ task, depth = 0, dot, progress, collapsed, onCollapse,
+  onToggle, onRemove, onOpen, onAddSub }: {
+  task: Task
+  /** Depth in the tree; 0 is a top-level row. Drives the indent only. */
+  depth?: number
+  dot?: string | null
+  // Derived from the tasks on hand, not read off the DTO — see `progressOf`.
+  progress?: Progress
+  /** Undefined when the row has no children to hide. */
+  collapsed?: boolean
+  onCollapse?: (next: boolean) => void
   onToggle: (t: Task) => void; onRemove: (t: Task) => void
   onOpen: (t: Task) => void; onAddSub?: () => void
 }) {
   const pri = task.priority_label
   const priClass = pri === 'high' ? 'pri-high' : pri === 'medium' ? 'pri-med' : pri === 'low' ? 'pri-low' : ''
+  const label = task.summary || '(untitled)'
   return (
-    <div className={`task ${sub ? 'sub' : ''} ${task.completed || task.cancelled ? 'done' : ''}`}>
+    <div className={`task ${depth > 0 ? 'sub' : ''} ${task.completed || task.cancelled ? 'done' : ''}`}
+      style={indentStyle(depth)}>
       <div className={`pri-bar ${priClass}`} />
+      {/* The twisty holds its column whether or not the row has children, so a
+          tree of mixed rows keeps one straight edge down the left. */}
+      {collapsed === undefined ? <span className="twisty-gap" /> : (
+        <button className={`twisty ${collapsed ? '' : 'open'}`}
+          aria-expanded={!collapsed}
+          title={collapsed ? `Show subtasks of ${label}` : `Hide subtasks of ${label}`}
+          aria-label={collapsed ? `Show subtasks of ${label}` : `Hide subtasks of ${label}`}
+          onClick={() => onCollapse?.(!collapsed)}>›</button>
+      )}
       <button className={`check ${task.completed ? 'on' : ''}`} title="Toggle complete"
         onClick={() => onToggle(task)}>✓</button>
       <div className="task-body" style={{ cursor: 'pointer' }} onClick={() => onOpen(task)}>
         <div className="task-title">
           {dot !== undefined && <span className="list-dot" style={dot ? { background: dot } : undefined} />}
-          {task.summary || '(untitled)'} {task.cancelled && <span className="chip">won't do</span>}
+          {label} {task.cancelled && <span className="chip">won't do</span>}
         </div>
-        {(task.due || task.child_count > 0 || task.tags.length > 0) && (
+        {(task.due || progress || task.tags.length > 0) && (
           <div className="task-meta">
             {task.due && (
               <span className={`due ${isOverdue(task.due, task.due_is_date) && !task.completed ? 'overdue' : ''}`}>
                 ◷ {fmtDue(task.due, task.due_is_date)}
               </span>
             )}
-            {task.child_count > 0 && (
-              <span className="child-progress">{task.completed_child_count}/{task.child_count}</span>
+            {progress && (
+              <span className="child-progress">{progress.done}/{progress.total}</span>
             )}
             {task.tags.map((tg) => <span key={tg} className="chip">#{tg}</span>)}
           </div>
         )}
       </div>
       <div className="task-actions">
-        {!sub && onAddSub && <button onClick={onAddSub} title="Add subtask">+ sub</button>}
+        {onAddSub && <button onClick={onAddSub} title="Add subtask">+ sub</button>}
         <button className="danger" onClick={() => onRemove(task)} title="Delete">del</button>
       </div>
     </div>

@@ -118,6 +118,24 @@ def _check_client_id(cid: str | None) -> None:
         raise HTTPException(422, "client_id must be 16-64 lowercase hex characters")
 
 
+# How long a session may live, as the Settings menu offers it. An allowlist
+# rather than a range: this is a security-relevant field reachable through
+# PUT /api/settings, and a bounds check still lets a hand-edited blob — or an
+# older client — ask for a century. "Never" is a very long TTL rather than a
+# token without `exp`: an exp-less JWT is immortal, and the revocation sweep
+# retires entries by their token's own expiry, so logout would leak forever.
+SESSION_TTL_NEVER = 10 * 365 * 24 * 3600
+_SESSION_TTLS = frozenset({24 * 3600, 7 * 24 * 3600, 30 * 24 * 3600, SESSION_TTL_NEVER})
+
+
+def _check_session_ttl(ttl: int | None) -> None:
+    # `bool` is an int subclass, and JSON `true` would otherwise read as 1.
+    if ttl is None:
+        return
+    if isinstance(ttl, bool) or ttl not in _SESSION_TTLS:
+        raise HTTPException(422, f"session_ttl_s must be one of {sorted(_SESSION_TTLS)}")
+
+
 class EditTask(BaseModel):
     summary: str | None = None
     notes: str | None = None
@@ -126,6 +144,7 @@ class EditTask(BaseModel):
     start: str | None = None
     tags: list[str] | None = None
     status: str | None = None         # NEEDS-ACTION|IN-PROCESS|COMPLETED|CANCELLED
+    parent: str | None = None         # parent task UID; explicit null unparents
 
 
 class Sidecar(BaseModel):
@@ -361,6 +380,14 @@ class SettingsPatch(BaseModel):
     # Ids of task groups the user has collapsed in the sidebar (member lists
     # hidden from the rail until expanded). Empty means every group is expanded.
     collapsed_groups: list[str] | None = None
+    # UIDs of tasks whose subtasks are folded away in the tasks view. Nesting is
+    # arbitrarily deep, so this is how a large tree stays readable; empty means
+    # everything is expanded. Pruned client-side against the tasks on hand.
+    collapsed_tasks: list[str] | None = None
+    # How long a login lasts before it has to be repeated, in seconds. Only the
+    # values in _SESSION_TTLS are accepted. Absent means the deployment's own
+    # TASKS_SESSION_TTL, which is what this used to be the only way to set.
+    session_ttl_s: int | None = None
     # Whether completed/cancelled tasks show inline in the main tasks view.
     # Absent means the default (hidden); False is a real value the merge keeps,
     # so an explicit "show" survives. The "View completed" button ignores this.
@@ -462,6 +489,8 @@ def _edit_from_patch(req: EditTask) -> TaskEdit:
         kw["categories"] = req.tags
     if "status" in fs:
         kw["status"] = _check_status(req.status, _TASK_STATUS)
+    if "parent" in fs:
+        kw["related_parent"] = req.parent           # explicit null unparents
     return TaskEdit(**kw)
 
 
@@ -566,6 +595,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # Primary gate: the app's own username/password. Secure-by-default — with auth
     # enabled and no password configured, we refuse to start rather than run open.
     authenticator: Authenticator | None = None
+    session_ttl: dict[str, int] = {"value": settings.session_ttl_s}
+
+    def _refresh_session_ttl(stored: dict) -> None:
+        """Adopt the stored session length, or fall back to the env default.
+
+        Re-validated on the way in rather than trusted: the settings blob is a
+        single JSON document that an older client, a restored backup or a hand
+        edit can put anything into, and this one decides how long a login
+        survives."""
+        value = stored.get("session_ttl_s")
+        ok = isinstance(value, int) and not isinstance(value, bool) and value in _SESSION_TTLS
+        session_ttl["value"] = value if ok else settings.session_ttl_s
     if settings.auth_enabled:
         password_hash = settings.auth_password_hash
         if not password_hash and settings.auth_password:
@@ -591,11 +632,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "auth: TASKS_SESSION_SECRET is under 32 bytes — use a longer random secret "
                 "(e.g. `python -c 'import secrets;print(secrets.token_hex(32))'`)."
             )
+        # The session length is a setting, so the Authenticator reads it
+        # through this rather than being handed a number at construction. Held
+        # in memory — it is consulted on every authenticated request, and a
+        # SQLite read per request to answer "how long is a session" would be a
+        # poor trade. Seeded at startup, refreshed on every settings write.
+        session_ttl["value"] = settings.session_ttl_s
         authenticator = Authenticator(
             user=settings.auth_user,
             password_hash=password_hash,
             secret=session_secret,
-            ttl_s=settings.session_ttl_s,
+            ttl_s=lambda: session_ttl["value"],
         )
     elif not settings.access_required:
         # Deliberate dev/test posture, but loud: nothing gates /api at all.
@@ -626,6 +673,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if authenticator is not None:
             # Sessions ended before this process started stay ended.
             authenticator.load_revocations(await asyncio.to_thread(svc.live_revocations))
+            _refresh_session_ttl(await asyncio.to_thread(svc.get_settings))
         await asyncio.to_thread(svc.bootstrap)
         loop_task = asyncio.create_task(_sync_loop(app))
         try:
@@ -727,6 +775,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def _run(fn, *a, **kw):
         return await asyncio.to_thread(fn, *a, **kw)
 
+    async def _check_parent(request: Request, href: str, parent: str | None,
+                            *, uid: str | None = None) -> None:
+        """Refuse a parent that names nothing in this collection.
+
+        RELATED-TO goes onto the VTODO verbatim, so an unresolvable value is not
+        a display bug a refetch repairs — it is a subtask orphaned in the
+        collection for every client that reads it, ours included. That failure
+        was silent, which is how it survived long enough to be reported as a UI
+        bug. `_children_map` joins within one collection, so that is the scope
+        the check uses."""
+        if parent is None:
+            return
+        if uid is not None and parent == uid:
+            raise HTTPException(422, "a task cannot be its own parent")
+        if not await _run(_svc(request).has_task, href, parent):
+            raise HTTPException(422, f"unknown parent task {parent}")
+
     # -- lists --
     @api.get("/lists")
     async def get_lists(request: Request):
@@ -781,6 +846,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def post_task(request: Request, list_id: str, body: CreateTask):
         href = _href(request, list_id)
         _check_client_id(body.client_id)
+        await _check_parent(request, href, body.parent)
         return await _run(
             _svc(request).create_task, href, body.summary,
             edit=_edit_from_create(body), parent_uid=body.parent,
@@ -798,6 +864,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @api.patch("/lists/{list_id}/tasks/{uid}")
     async def patch_task(request: Request, list_id: str, uid: str, body: EditTask):
         href = _href(request, list_id)
+        await _check_parent(request, href, body.parent, uid=uid)
         dto = await _run(_svc(request).edit_task, href, uid, _edit_from_patch(body))
         if dto is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown task {uid}")
@@ -957,7 +1024,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @api.put("/settings")
     async def put_settings(request: Request, body: SettingsPatch):
-        return await _run(_svc(request).update_settings, body.model_dump(exclude_unset=True))
+        _check_session_ttl(body.session_ttl_s)
+        merged = await _run(_svc(request).update_settings, body.model_dump(exclude_unset=True))
+        # Adopted straight away, so shortening the session takes effect on the
+        # next request rather than the next restart.
+        _refresh_session_ttl(merged)
+        return merged
 
     # -- tags / search / sync --
     @api.get("/tags")
@@ -1037,7 +1109,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         resp = JSONResponse({"authenticated": True, "user": authenticator.user})
         resp.set_cookie(
             "tasks_session", authenticator.issue_session(),
-            max_age=settings.session_ttl_s, httponly=True,
+            max_age=authenticator.ttl_s, httponly=True,
             secure=settings.cookie_secure, samesite="strict", path="/",
         )
         return resp
