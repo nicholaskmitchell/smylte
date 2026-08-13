@@ -119,6 +119,73 @@ def test_edit_recurring_task_targets_master_not_override():
     assert extract_from_raw(edited).summary == "Edited"
 
 
+# ── repointing the parent leaves every other relation alone ──────────────────
+# Re-parenting is how a subtask written against a uid that never existed gets
+# repaired. A VTODO may carry several RELATED-TO values, and only the PARENT one
+# is ours to touch (invariant #2) — dropping a foreign CHILD or SIBLING link
+# while fixing our own mistake would trade one corruption for another.
+
+_MANY_RELATIONS = (
+    "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//foreign//EN\r\n"
+    "BEGIN:VTODO\r\nUID:kid@x\r\nSUMMARY:Book flight\r\n"
+    "RELATED-TO;RELTYPE=PARENT:old-parent\r\n"
+    "RELATED-TO;RELTYPE=CHILD:some-child\r\n"
+    "RELATED-TO;RELTYPE=SIBLING:some-sibling\r\n"
+    "END:VTODO\r\nEND:VCALENDAR\r\n"
+).encode()
+
+
+def _relations(raw: bytes) -> set[tuple[str, str]]:
+    todo = next(iter(parse_calendar(raw).walk("VTODO")))
+    rel = todo.get("RELATED-TO")
+    if rel is None:
+        return set()
+    return {
+        (str(dict(getattr(r, "params", {}) or {}).get("RELTYPE", "PARENT")).upper(), str(r))
+        for r in (rel if isinstance(rel, list) else [rel])
+    }
+
+
+def test_reparent_replaces_only_the_parent_relation():
+    edited = apply_changes(_MANY_RELATIONS, TaskEdit(related_parent="new-parent@tasksd"))
+    assert _relations(edited) == {
+        ("PARENT", "new-parent@tasksd"),
+        ("CHILD", "some-child"),
+        ("SIBLING", "some-sibling"),
+    }
+    # The read side, which is what the cache indexes, agrees.
+    assert extract_from_raw(edited).related_parent == "new-parent@tasksd"
+
+
+def test_unparent_drops_only_the_parent_relation():
+    edited = apply_changes(_MANY_RELATIONS, TaskEdit(related_parent=None))
+    assert _relations(edited) == {("CHILD", "some-child"), ("SIBLING", "some-sibling")}
+    assert extract_from_raw(edited).related_parent is None
+
+
+def test_reparent_replaces_a_bare_related_to():
+    # RFC 5545 defaults RELTYPE to PARENT, so a bare RELATED-TO *is* the parent
+    # link — the same reading the extractor uses. Leaving it in place alongside
+    # the new one would give the task two parents.
+    raw = (
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//foreign//EN\r\n"
+        "BEGIN:VTODO\r\nUID:kid@x\r\nSUMMARY:Book flight\r\n"
+        "RELATED-TO:bare-old\r\nEND:VTODO\r\nEND:VCALENDAR\r\n"
+    ).encode()
+    edited = apply_changes(raw, TaskEdit(related_parent="new@tasksd"))
+    assert _relations(edited) == {("PARENT", "new@tasksd")}
+
+
+def test_an_unrelated_edit_leaves_the_parent_alone():
+    # related_parent is UNSET on an ordinary rename, so RELATED-TO is untouched.
+    edited = apply_changes(_MANY_RELATIONS, TaskEdit(summary="Renamed"))
+    assert _relations(edited) == {
+        ("PARENT", "old-parent"),
+        ("CHILD", "some-child"),
+        ("SIBLING", "some-sibling"),
+    }
+
+
 def test_build_new_is_wellformed():
     raw = build_new("new-uid-123", summary="Call mom", edit=TaskEdit(priority=1))
     tf = extract_from_raw(raw)

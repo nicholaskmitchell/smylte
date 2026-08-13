@@ -29,15 +29,18 @@ const list: List = {
 
 function setup(view: TasksViewMode = 'list', showCompleted = false) {
   const onExpire = vi.fn()
-  render(
-    <TasksView rev={0} onExpire={onExpire} view={view} onView={vi.fn()}
+  const ui = (rev: number) => (
+    <TasksView rev={rev} onExpire={onExpire} view={view} onView={vi.fn()}
       sideCollapsed={false} onToggleSide={vi.fn()}
       hiddenLists={[]} onHiddenListsChange={vi.fn()}
       groups={[]} onGroupsChange={vi.fn()}
       collapsedGroups={[]} onCollapsedGroupsChange={vi.fn()}
-      showCompleted={showCompleted} />,
+      showCompleted={showCompleted} />
   )
-  return { onExpire, user: userEvent.setup() }
+  const { rerender } = render(ui(0))
+  // Bumping `rev` is how the app tells the view a server-side change landed, so
+  // it is also how a test replays one without reaching for the SSE mock.
+  return { onExpire, user: userEvent.setup(), bumpRev: (rev: number) => rerender(ui(rev)) }
 }
 
 /** Quick-add's "New…" button opens the single-task form. */
@@ -584,18 +587,21 @@ describe('<TasksView> subtask progress', () => {
     await waitFor(() => expect(screen.queryByText('0/1')).not.toBeInTheDocument())
   })
 
-  it('counts a subtask sitting in a hidden list', async () => {
-    // The server counts every child in the collection regardless of what this
-    // browser is showing, so the badge has to as well — otherwise hiding a list
-    // would silently renumber a parent that is still visible.
+  it('ignores a child pointing across lists, as the server does', async () => {
+    // child_count is a join within one collection, so a RELATED-TO reaching
+    // into another list counts for nothing there. Counting it here would put a
+    // number on the row that no other client — and no reload — agrees with.
     m.lists.mockResolvedValue([list, { ...list, id: 'l2', href: '/l2/', name: 'Personal' }])
     m.tasks.mockImplementation(async (id: string) =>
       id === 'l1'
         ? [parent]
         : [task({ uid: 'c1', list: 'l2', summary: 'Book flight', parent: 'p1' })])
     setup()
-    // The row itself is filtered out, but it is still one of the parent's kids.
-    expect(await screen.findByText('0/1')).toBeInTheDocument()
+    await screen.findByText('Trip planning')
+    expect(screen.queryByText('0/1')).not.toBeInTheDocument()
+    // …and it stands on its own rather than being hidden under a parent that
+    // is not really its parent.
+    expect(screen.getByText('Book flight').closest('.task')).not.toHaveClass('sub')
   })
 })
 
@@ -603,6 +609,52 @@ describe('<TasksView> subtask progress', () => {
 
 describe('<TasksView> legacy orphans', () => {
   const cid = 'a'.repeat(32)
+
+  it('repairs the stored pointer, not just the display', async () => {
+    // The nesting below is cosmetic and local; the RELATED-TO on the wire is
+    // what the server counts and what Tasks.org and jtx Board read.
+    m.tasks.mockResolvedValue([
+      task({ uid: `${cid}@tasksd`, summary: 'Trip planning' }),
+      task({ uid: 'c1', summary: 'Book flight', parent: cid }),
+    ])
+    m.patchTask.mockResolvedValue(task({ uid: 'c1', summary: 'Book flight', parent: `${cid}@tasksd` }))
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {})
+    setup()
+    await waitFor(() => expect(m.patchTask).toHaveBeenCalledTimes(1))
+    expect(m.patchTask).toHaveBeenCalledWith('l1', 'c1', { parent: `${cid}@tasksd` })
+    infoSpy.mockRestore()
+  })
+
+  it('repairs a row once, even across refetches', async () => {
+    m.tasks.mockResolvedValue([
+      task({ uid: `${cid}@tasksd`, summary: 'Trip planning' }),
+      task({ uid: 'c1', summary: 'Book flight', parent: cid }),
+    ])
+    // The write fails, so the server keeps serving the broken row. Retrying it
+    // on every refetch would be an endless loop of failing PATCHes.
+    m.patchTask.mockRejectedValue(new Error('boom'))
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {})
+    const { bumpRev } = setup()
+    await waitFor(() => expect(m.patchTask).toHaveBeenCalledTimes(1))
+    const fetches = m.tasks.mock.calls.length
+    bumpRev(1)
+    await waitFor(() => expect(m.tasks.mock.calls.length).toBeGreaterThan(fetches))
+    expect(m.patchTask).toHaveBeenCalledTimes(1)
+    infoSpy.mockRestore()
+  })
+
+  it('leaves a parent in another list alone', async () => {
+    // child_count is a per-collection join, so a cross-list match is not the
+    // signature of this bug and must not be rewritten.
+    m.lists.mockResolvedValue([list, { ...list, id: 'l2', href: '/l2/', name: 'Personal' }])
+    m.tasks.mockImplementation(async (id: string) =>
+      id === 'l1'
+        ? [task({ uid: `${cid}@tasksd`, summary: 'Trip planning' })]
+        : [task({ uid: 'c1', list: 'l2', summary: 'Book flight', parent: cid })])
+    setup()
+    await screen.findByText('Trip planning')
+    expect(m.patchTask).not.toHaveBeenCalled()
+  })
 
   it('nests a subtask whose parent is the bare create id', async () => {
     m.tasks.mockResolvedValue([
