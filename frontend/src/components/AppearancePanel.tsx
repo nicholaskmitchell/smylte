@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { clientId } from '../api'
 import {
-  DEFAULTS, FONT_CHOICES, GROUPS, MAX_NAME_LEN, MAX_THEMES, SHARED_DEFAULTS, TOKENS,
-  defaultValue, ensureFont, isValidToken, parseTheme, serializeTheme, toSwatchHex,
+  DEFAULTS, FONT_CHOICES, GROUPS, MAX_NAME_LEN, MAX_THEMES, PRESETS, SHARED_DEFAULTS,
+  TOKENS, defaultValue, ensureFont, findPreset, isValidToken, parseTheme,
+  serializeTheme, toSwatchHex,
   type Appearance, type CustomTheme, type Mode, type ThemeTokens, type TokenSpec,
 } from '../appearance'
 
@@ -16,6 +17,12 @@ import {
 // Editing always targets a custom theme. Touching a control while the shipped
 // default is active forks it into a new theme first (`Custom`), so "Smylte" can
 // never be edited out from under the user — reverting is always one click.
+//
+// A built-in preset is as un-editable as Smylte itself and for the same reason:
+// it is shipped design, not the user's data. It differs only in what a fork
+// seeds from — a copy of Smylte starts empty, because empty *is* Smylte, while a
+// copy of a preset has to carry that preset's values or it would snap back to
+// the default look the moment a slider moved.
 
 // Every path that would need to create a theme says the same thing when there
 // is no room for one, rather than each failing its own silent way.
@@ -29,7 +36,11 @@ export function AppearancePanel({ appearance, onChange, mode, onMode, onClose }:
   onClose: () => void
 }) {
   const themes = appearance.themes ?? []
-  const active = themes.find((t) => t.id === appearance.active) ?? null
+  // A preset's id *is* `appearance.active`, so everything downstream that reads
+  // `active` — the picker's value, `current`, export — works unchanged.
+  const preset = findPreset(appearance.active)
+  const active = preset ?? themes.find((t) => t.id === appearance.active) ?? null
+  const isPreset = !!preset
   const fileRef = useRef<HTMLInputElement>(null)
   const [renaming, setRenaming] = useState(false)
   const [name, setName] = useState('')
@@ -40,26 +51,33 @@ export function AppearancePanel({ appearance, onChange, mode, onMode, onClose }:
     return () => document.removeEventListener('keydown', onKey)
   }, [onClose])
 
+  /**
+   * A new theme carrying everything `source` has, or an empty one when there is
+   * no source — which is how a copy of Smylte stays lossless.
+   */
+  const seedFork = (source: CustomTheme | null): CustomTheme => ({
+    id: clientId().slice(0, 16),
+    name: (source ? `${source.name} copy` : 'Custom').slice(0, MAX_NAME_LEN),
+    base: source?.base ?? mode,
+    light: { ...(source?.light ?? {}) },
+    dark: { ...(source?.dark ?? {}) },
+  })
+
   /** Write `tokens` into the active theme for the current mode, forking first. */
   const edit = (patch: ThemeTokens) => {
-    if (active) {
+    if (active && !isPreset) {
       const next = { ...active, [mode]: { ...active[mode], ...patch } }
       onChange({ active: active.id, themes: themes.map((t) => (t.id === active.id ? next : t)) })
       return
     }
-    // Editing the shipped design forks a new theme, so with no room for one
-    // there is nothing to write. This used to be a bare `return`: the panel
-    // stayed fully interactive, the sliders moved and the color field accepted
-    // typing, and nothing was ever applied or saved.
+    // Editing a shipped design — the default or a preset — forks a new theme, so
+    // with no room for one there is nothing to write. This used to be a bare
+    // `return`: the panel stayed fully interactive, the sliders moved and the
+    // color field accepted typing, and nothing was ever applied or saved.
     if (themes.length >= MAX_THEMES) { window.alert(AT_CAP); return }
-    const fork: CustomTheme = {
-      id: clientId().slice(0, 16),
-      name: 'Custom',
-      base: mode,
-      light: {},
-      dark: {},
-      [mode]: patch,
-    }
+    const fork = seedFork(preset)
+    // Merged, not replaced: the seed has to survive the very edit that made it.
+    fork[mode] = { ...fork[mode], ...patch }
     onChange({ active: fork.id, themes: [...themes, fork] })
   }
 
@@ -68,14 +86,12 @@ export function AppearancePanel({ appearance, onChange, mode, onMode, onClose }:
   const saveAs = () => {
     if (!active) return
     if (themes.length >= MAX_THEMES) { window.alert(AT_CAP); return }
-    const copy: CustomTheme = {
-      ...active, id: clientId().slice(0, 16), name: `${active.name} copy`.slice(0, MAX_NAME_LEN),
-    }
+    const copy = seedFork(active)
     onChange({ active: copy.id, themes: [...themes, copy] })
   }
 
   const rename = (to: string) => {
-    if (!active) return
+    if (!active || isPreset) return
     const clean = to.trim().slice(0, MAX_NAME_LEN)
     if (!clean) return
     onChange({
@@ -85,13 +101,13 @@ export function AppearancePanel({ appearance, onChange, mode, onMode, onClose }:
   }
 
   const remove = () => {
-    if (!active) return
+    if (!active || isPreset) return
     onChange({ active: null, themes: themes.filter((t) => t.id !== active.id) })
   }
 
   /** Drop every override for this mode — back to the shipped values. */
   const resetMode = () => {
-    if (!active) return
+    if (!active || isPreset) return
     onChange({
       active: active.id,
       themes: themes.map((t) => (t.id === active.id ? { ...t, [mode]: {} } : t)),
@@ -126,7 +142,9 @@ export function AppearancePanel({ appearance, onChange, mode, onMode, onClose }:
     return out
   }, [active, mode])
 
-  const overridden = active?.[mode] ?? {}
+  // A preset's own values are not overrides — nothing of the user's is in play,
+  // so every per-token reset is inert and the counter has nothing to count.
+  const overridden = isPreset ? {} : (active?.[mode] ?? {})
 
   return (
     <div className="overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}>
@@ -140,12 +158,20 @@ export function AppearancePanel({ appearance, onChange, mode, onMode, onClose }:
         <div className="appear-bar">
           <select className="input" value={active?.id ?? ''} aria-label="Theme"
             onChange={(e) => selectTheme(e.target.value)}>
+            {/* Outside every group, and first: the way back is never buried. */}
             <option value="">Smylte (default)</option>
-            {themes.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+            <optgroup label="Built in">
+              {PRESETS.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </optgroup>
+            {themes.length > 0 && (
+              <optgroup label="Your themes">
+                {themes.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+              </optgroup>
+            )}
           </select>
           <button className="btn ghost" onClick={saveAs} disabled={!active}>Duplicate</button>
           <button className="btn ghost" onClick={() => { setName(active?.name ?? ''); setRenaming(true) }}
-            disabled={!active}>Rename</button>
+            disabled={!active || isPreset}>Rename</button>
           <button className="btn ghost" onClick={exportTheme} disabled={!active}>Export</button>
           <button className="btn ghost" onClick={() => fileRef.current?.click()}>Import</button>
           <input ref={fileRef} type="file" accept="application/json,.json" hidden
@@ -156,7 +182,7 @@ export function AppearancePanel({ appearance, onChange, mode, onMode, onClose }:
             }} />
         </div>
 
-        {renaming && active && (
+        {renaming && active && !isPreset && (
           <div className="appear-bar">
             <input className="input" value={name} autoFocus maxLength={MAX_NAME_LEN}
               aria-label="Theme name" onChange={(e) => setName(e.target.value)}
@@ -167,9 +193,11 @@ export function AppearancePanel({ appearance, onChange, mode, onMode, onClose }:
         )}
 
         <p className="hintline">
-          {active
-            ? 'Editing this theme. Smylte’s own design is never modified — switch back to it any time.'
-            : 'Smylte’s shipped design. Change anything below and it forks into a theme of your own.'}
+          {isPreset
+            ? `${active!.name} is a built-in theme. Change anything below and it forks into a theme of your own.`
+            : active
+              ? 'Editing this theme. Smylte’s own design is never modified — switch back to it any time.'
+              : 'Smylte’s shipped design. Change anything below and it forks into a theme of your own.'}
         </p>
 
         {/* ---- which mode am I editing ---- */}
@@ -182,7 +210,9 @@ export function AppearancePanel({ appearance, onChange, mode, onMode, onClose }:
           ))}
           <span className="spacer" />
           <span className="hintline">
-            {Object.keys(overridden).length} override{Object.keys(overridden).length === 1 ? '' : 's'} in {mode}
+            {isPreset
+              ? 'Built-in theme'
+              : `${Object.keys(overridden).length} override${Object.keys(overridden).length === 1 ? '' : 's'} in ${mode}`}
           </span>
         </div>
 
@@ -199,7 +229,7 @@ export function AppearancePanel({ appearance, onChange, mode, onMode, onClose }:
                     value={current[token]} isOverride={token in overridden}
                     onChange={(v) => edit({ [token]: v })}
                     onClear={() => {
-                      if (!active) return
+                      if (!active || isPreset) return
                       const next = { ...overridden }
                       delete next[token]
                       onChange({
@@ -214,8 +244,10 @@ export function AppearancePanel({ appearance, onChange, mode, onMode, onClose }:
         </div>
 
         <div className="modal-actions">
-          {active && <button className="btn ghost" onClick={resetMode}>Reset {mode}</button>}
-          {active && <button className="btn ghost danger" onClick={remove}>Delete theme</button>}
+          {/* Neither applies to a preset: there is nothing of the user's to
+              clear, and leaving one is just selecting something else. */}
+          {active && !isPreset && <button className="btn ghost" onClick={resetMode}>Reset {mode}</button>}
+          {active && !isPreset && <button className="btn ghost danger" onClick={remove}>Delete theme</button>}
           <button className="btn" onClick={onClose}>Done</button>
         </div>
       </div>
@@ -242,6 +274,7 @@ function TokenRow({ token, spec, value, isOverride, onChange, onClear }: {
       <div className="appear-control">
         {spec.kind === 'color' && <ColorControl id={token} value={value} onChange={onChange} />}
         {spec.kind === 'font' && <FontControl id={token} token={token} value={value} onChange={onChange} />}
+        {spec.kind === 'keyword' && <KeywordControl id={token} spec={spec} value={value} onChange={onChange} />}
         {(spec.kind === 'length' || spec.kind === 'scale') &&
           <RangeControl id={token} token={token} spec={spec} value={value} onChange={onChange} />}
         <button className="appear-clear" onClick={onClear} disabled={!isOverride}
@@ -290,6 +323,21 @@ function FontControl({ id, token, value, onChange }: {
       onChange={(e) => { ensureFont(e.target.value); onChange(e.target.value) }}>
       {!known && <option value="">Custom ({value.split(',')[0].replace(/"/g, '')})</option>}
       {choices.map((c) => <option key={c.label} value={c.stack}>{c.label}</option>)}
+    </select>
+  )
+}
+
+/** A closed set of CSS keywords — the token's `values` and nothing else. */
+function KeywordControl({ id, spec, value, onChange }: {
+  id: string; spec: TokenSpec; value: string; onChange: (v: string) => void
+}) {
+  const choices = spec.values ?? []
+  return (
+    <select id={`tok${id}`} className="input" value={value}
+      onChange={(e) => onChange(e.target.value)}>
+      {choices.map((v) => (
+        <option key={v} value={v}>{spec.valueLabels?.[v] ?? v}</option>
+      ))}
     </select>
   )
 }
