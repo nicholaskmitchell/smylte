@@ -1,0 +1,134 @@
+/* Self-hosted type — the three shipped families.
+
+   This replaces the render-blocking <link> to fonts.googleapis.com that used to
+   sit in index.html. A cold load paid a DNS lookup and a TLS handshake to
+   Google, waited for a stylesheet, then paid a *second* set of both to
+   fonts.gstatic.com for the files that stylesheet pointed at — all before a
+   single glyph could paint. Serving the same bytes from our own origin removes
+   two third-party round trips from the critical path and stops handing every
+   visitor to a third party on the way in.
+
+   These are the same variable fonts Google was serving, subset the same way:
+   two files per face, split on `unicode-range`, so the latin-ext half is only
+   fetched when a character inside it is actually on screen. A task titled in
+   Polish or a guest named Şahin costs one extra request; nobody else ever sees
+   it. That is why it is cheap to carry the wider coverage — 472 KB sits in the
+   repo, ~156 KB is what a typical session actually downloads.
+
+   The weight ranges are each font's full axis rather than the three weights
+   app.css hard-codes. A variable file costs the same either way, and the
+   Appearance editor can put any weight on screen.
+
+   Only the *shipped* families live here. The optional ones in FONT_CHOICES
+   (appearance.ts) are still fetched from Google on first use — they are opt-in,
+   they load without blocking paint, and self-hosting all fifteen would spend
+   megabytes on fonts almost nobody selects.
+
+   Two things that look like omissions and are not. Fraunces carries an
+   optical-size axis, but needs no `font-optical-sizing` declaration: `auto` is
+   the default and already picks by font-size. And Inter and JetBrains Mono ship
+   roman only — index.html never requested their italics either, so the browser
+   was already synthesizing the oblique at app.css:173, and that is unchanged.
+
+   Fraunces, Inter and JetBrains Mono are all SIL Open Font License 1.1; the
+   license text and attribution ship alongside the files in public/fonts/OFL.md.
+
+   `?v=` matches the cache-busting convention the favicons already use in
+   index.html — public/ is copied verbatim by Vite, so these URLs carry no
+   content hash and a swapped file needs the query bumped to be picked up. */
+
+/* ── Fraunces (--serif) ─────────────────────────────────────────────────── */
+
+@font-face {
+  font-family: 'Fraunces';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('/fonts/fraunces-latin.woff2?v=1') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+    U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: 'Fraunces';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('/fonts/fraunces-latin-ext.woff2?v=1') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF,
+    U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020,
+    U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+/* Fraunces has no italic axis — the italics are a separate family file. */
+
+@font-face {
+  font-family: 'Fraunces';
+  font-style: italic;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('/fonts/fraunces-italic-latin.woff2?v=1') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+    U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: 'Fraunces';
+  font-style: italic;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('/fonts/fraunces-italic-latin-ext.woff2?v=1') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF,
+    U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020,
+    U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+/* ── Inter (--sans) ─────────────────────────────────────────────────────── */
+
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('/fonts/inter-latin.woff2?v=1') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+    U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('/fonts/inter-latin-ext.woff2?v=1') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF,
+    U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020,
+    U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+/* ── JetBrains Mono (--mono) ────────────────────────────────────────────── */
+
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 100 800;
+  font-display: swap;
+  src: url('/fonts/jetbrains-mono-latin.woff2?v=1') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+    U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 100 800;
+  font-display: swap;
+  src: url('/fonts/jetbrains-mono-latin-ext.woff2?v=1') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF,
+    U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020,
+    U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
