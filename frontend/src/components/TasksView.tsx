@@ -1,4 +1,6 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
+import {
+  useCallback, useEffect, useMemo, useState, type CSSProperties, type KeyboardEvent,
+} from 'react'
 import { api, uidFor, type CreateTaskBody, type List, type Task, type TaskGroup, type TasksViewMode } from '../api'
 import { useTaskData } from '../data'
 import {
@@ -41,13 +43,15 @@ const dateOut = (date: string, time: string, original: string | null | undefined
 
 export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
   hiddenLists, onHiddenListsChange, groups, onGroupsChange,
-  collapsedGroups, onCollapsedGroupsChange, showCompleted }: {
+  collapsedGroups, onCollapsedGroupsChange,
+  collapsedTasks, onCollapsedTasksChange, showCompleted }: {
   onExpire: () => void
   view: TasksViewMode; onView: (v: TasksViewMode) => void
   sideCollapsed: boolean; onToggleSide: () => void
   hiddenLists: string[]; onHiddenListsChange: (next: string[]) => void
   groups: TaskGroup[]; onGroupsChange: (next: TaskGroup[]) => void
   collapsedGroups: string[]; onCollapsedGroupsChange: (next: string[]) => void
+  collapsedTasks: string[]; onCollapsedTasksChange: (next: string[]) => void
   showCompleted: boolean
 }) {
   const guard = makeGuard(onExpire)
@@ -181,7 +185,6 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
     return kids ? { total: kids.length, done: kids.filter(isDone).length } : null
   }
 
-  const childrenOf = (uid: string) => shownTasks.filter((t) => parentOf(t) === uid)
   // A subtask reaches the DOM only underneath its own parent's row, so anything
   // whose parent isn't here has to stand on its own or it is not rendered at
   // all — invisible, and so uncompletable, uneditable and undeletable, while
@@ -192,12 +195,63 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
   // completed" is off (the default) — the parent lands in `done`, which isn't
   // rendered, and the subtask goes with it.
   const byUid = new Map(shownTasks.map((t) => [t.uid, t] as const))
-  const parentIsRendered = (t: Task) => {
+  const rendersUnder = (t: Task) => {
     const parent = parentOf(t)
     const p = parent ? byUid.get(parent) : undefined
-    return !!p && (showCompleted || !isDone(p))
+    return p && (showCompleted || !isDone(p)) ? p : undefined
+  }
+  // A RELATED-TO loop — which nothing on either side of the wire prevents —
+  // leaves every task in it with a rendered parent, so a plain "no parent here"
+  // test puts none of them at the top level and the whole ring disappears from
+  // the pane. Walking up until the chain repeats finds the loop; its lowest uid
+  // is elected the root, deterministically, so exactly one row anchors it and
+  // the rest hang beneath (TaskGroup's `seen` stops the ring closing again).
+  const parentIsRendered = (t: Task) => {
+    const seen = new Set<string>([t.uid])
+    for (let cur = rendersUnder(t); cur; cur = rendersUnder(cur)) {
+      if (!seen.has(cur.uid)) { seen.add(cur.uid); continue }
+      // `seen` now holds the whole ring plus the tail that led into it; only
+      // the ring matters, and re-walking from `cur` collects exactly that.
+      const ring: string[] = []
+      for (let x: Task | undefined = cur; x && !ring.includes(x.uid); x = rendersUnder(x)) {
+        ring.push(x.uid)
+      }
+      return t.uid !== ring.reduce((a, b) => (a < b ? a : b))
+    }
+    return !!rendersUnder(t)
   }
   const tops = shownTasks.filter((t) => !parentIsRendered(t))
+
+  // Nesting goes as deep as the data does: a subtask can have subtasks of its
+  // own, so the rows render as a tree rather than one parent and a flat run of
+  // children. Built once here, keyed by the parent each row actually renders
+  // under (so a child promoted to the top level takes its own descendants with
+  // it rather than being orphaned twice over).
+  const kidRows = useMemo(() => {
+    const m = new Map<string, Task[]>()
+    for (const t of shownTasks) {
+      if (!parentIsRendered(t)) continue
+      const p = parentOf(t)!
+      const mine = m.get(p)
+      if (mine) mine.push(t)
+      else m.set(p, [t])
+    }
+    return m
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tasks, hiddenSet, showCompleted, parentByUid])
+  const childrenOf = useCallback((uid: string) => kidRows.get(uid) ?? [], [kidRows])
+
+  // Folded subtask trees. Account-synced like the sidebar's collapsed groups,
+  // so a tree you tidied away stays tidy on the next load and in the next
+  // browser. Only uids that still name a task with children are kept: a task
+  // deleted here or in another client would otherwise leave the set growing
+  // forever, and re-creating a uid is impossible anyway.
+  const collapsedSet = useMemo(() => new Set(collapsedTasks), [collapsedTasks])
+  const setCollapsed = useCallback((uid: string, next: boolean) => {
+    if (next === collapsedSet.has(uid)) return
+    const kept = collapsedTasks.filter((x) => x !== uid && kidRows.has(x))
+    onCollapsedTasksChange(next ? [...kept, uid] : kept)
+  }, [collapsedSet, collapsedTasks, kidRows, onCollapsedTasksChange])
   const active = tops.filter((t) => !t.completed && !t.cancelled)
   const done = tops.filter((t) => t.completed || t.cancelled)
   // Where new tasks land by default (first visible list); the list view's
@@ -281,8 +335,9 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
           <div className="scroll">
             {completedTasks.length === 0 && <div className="empty">No completed tasks.</div>}
             {completedTasks.map((t) => (
-              <TaskGroup key={t.uid} task={t} kids={childrenOf(t.uid)} dot={dotFor(t)}
-                progress={progressOf(t.uid)} onToggle={toggle} onRemove={remove} onOpen={setDetail} onAddSub={addSub} />
+              <TaskGroup key={t.uid} task={t} childrenOf={childrenOf} dot={dotFor(t)}
+                progressOf={progressOf} collapsed={collapsedSet} onCollapse={setCollapsed}
+                onToggle={toggle} onRemove={remove} onOpen={setDetail} onAddSub={addSub} />
             ))}
           </div>
         ) : visibleLists.length === 0 ? (
@@ -306,8 +361,9 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
             )}
             <div className="scroll">
               {active.map((t) => (
-                <TaskGroup key={t.uid} task={t} kids={childrenOf(t.uid)} dot={dotFor(t)}
-                  progress={progressOf(t.uid)} onToggle={toggle} onRemove={remove} onOpen={setDetail} onAddSub={addSub} />
+                <TaskGroup key={t.uid} task={t} childrenOf={childrenOf} dot={dotFor(t)}
+                  progressOf={progressOf} collapsed={collapsedSet} onCollapse={setCollapsed}
+                  onToggle={toggle} onRemove={remove} onOpen={setDetail} onAddSub={addSub} />
               ))}
               {active.length === 0 && (
                 <div className="empty" aria-busy={!loaded || undefined}>
@@ -318,8 +374,9 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
                 <>
                   <div className="section-label label">Completed · {done.length}</div>
                   {done.map((t) => (
-                    <TaskGroup key={t.uid} task={t} kids={childrenOf(t.uid)} dot={dotFor(t)}
-                      progress={progressOf(t.uid)} onToggle={toggle} onRemove={remove} onOpen={setDetail} onAddSub={addSub} />
+                    <TaskGroup key={t.uid} task={t} childrenOf={childrenOf} dot={dotFor(t)}
+                      progressOf={progressOf} collapsed={collapsedSet} onCollapse={setCollapsed}
+                      onToggle={toggle} onRemove={remove} onOpen={setDetail} onAddSub={addSub} />
                   ))}
                 </>
               )}
@@ -387,21 +444,53 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
   )
 }
 
-function TaskGroup({ task, kids, dot, progress, onToggle, onRemove, onOpen, onAddSub }: {
-  task: Task; kids: Task[]; dot?: string | null
-  progress: Progress
+/** How far in a row may be indented before the titles have nowhere left to go.
+ *  Deeper tasks still render, they just stop stepping right. */
+const MAX_INDENT = 6
+
+/**
+ * One task and everything beneath it.
+ *
+ * Recursive, because a subtask can have subtasks of its own — the wire has
+ * always allowed it (RELATED-TO is just a UID) and the flat parent-plus-children
+ * render was the only thing standing in the way. `seen` carries the ancestors on
+ * the current path: RELATED-TO has no cycle check on either side of the wire, so
+ * a loop authored by another client would otherwise recurse until the stack
+ * gave out. A row already on its own path is dropped rather than repeated.
+ */
+function TaskGroup({ task, childrenOf, dot, progressOf, depth = 0, seen,
+  collapsed, onCollapse, onToggle, onRemove, onOpen, onAddSub }: {
+  task: Task
+  childrenOf: (uid: string) => Task[]
+  dot?: string | null
+  progressOf: (uid: string) => Progress
+  depth?: number
+  seen?: ReadonlySet<string>
+  collapsed: ReadonlySet<string>
+  onCollapse: (uid: string, next: boolean) => void
   onToggle: (t: Task) => void; onRemove: (t: Task) => void
   onOpen: (t: Task) => void; onAddSub: (parent: string, summary: string) => void
 }) {
   const [adding, setAdding] = useState(false)
+  const kids = childrenOf(task.uid).filter((k) => !seen?.has(k.uid))
+  const isCollapsed = collapsed.has(task.uid)
+  const path = useMemo(() => new Set([...(seen ?? []), task.uid]), [seen, task.uid])
+  const indent = Math.min(depth, MAX_INDENT)
   return (
     <div>
-      <TaskRow task={task} dot={dot} progress={progress} onToggle={onToggle} onRemove={onRemove} onOpen={onOpen} onAddSub={() => setAdding(true)} />
-      {kids.map((k) => (
-        <TaskRow key={k.uid} task={k} sub dot={dot} onToggle={onToggle} onRemove={onRemove} onOpen={onOpen} />
+      <TaskRow task={task} dot={dot} depth={indent} progress={progressOf(task.uid)}
+        collapsed={kids.length > 0 ? isCollapsed : undefined}
+        onCollapse={(next) => onCollapse(task.uid, next)}
+        onToggle={onToggle} onRemove={onRemove} onOpen={onOpen}
+        onAddSub={() => { onCollapse(task.uid, false); setAdding(true) }} />
+      {!isCollapsed && kids.map((k) => (
+        <TaskGroup key={k.uid} task={k} childrenOf={childrenOf} dot={dot}
+          progressOf={progressOf} depth={depth + 1} seen={path}
+          collapsed={collapsed} onCollapse={onCollapse}
+          onToggle={onToggle} onRemove={onRemove} onOpen={onOpen} onAddSub={onAddSub} />
       ))}
-      {adding && (
-        <div className="task sub">
+      {!isCollapsed && adding && (
+        <div className="task" style={indentStyle(indent + 1)}>
           <InlineCreate placeholder="Subtask" grow
             onSubmit={(v) => { onAddSub(task.uid, v); setAdding(false) }}
             onCancel={() => setAdding(false)} />
@@ -410,6 +499,10 @@ function TaskGroup({ task, kids, dot, progress, onToggle, onRemove, onOpen, onAd
     </div>
   )
 }
+
+/** Indent a row by its depth in the tree. Level 0 keeps the pane's own gutter. */
+const indentStyle = (depth: number) =>
+  (depth > 0 ? { '--task-depth': depth } as CSSProperties : undefined)
 
 function DayColumn({ date, isToday, open, done, overdue, dotOf, onToggle, onOpen, onAdd,
   dragActive, onDropTask, onDragTask }: {
@@ -519,25 +612,42 @@ function DayCard({ task, showDate, dot, onToggle, onOpen, onDrag }: {
   )
 }
 
-function TaskRow({ task, sub, dot, progress, onToggle, onRemove, onOpen, onAddSub }: {
-  task: Task; sub?: boolean; dot?: string | null
+function TaskRow({ task, depth = 0, dot, progress, collapsed, onCollapse,
+  onToggle, onRemove, onOpen, onAddSub }: {
+  task: Task
+  /** Depth in the tree; 0 is a top-level row. Drives the indent only. */
+  depth?: number
+  dot?: string | null
   // Derived from the tasks on hand, not read off the DTO — see `progressOf`.
-  // Absent for a subtask row, which never shows a count of its own.
   progress?: Progress
+  /** Undefined when the row has no children to hide. */
+  collapsed?: boolean
+  onCollapse?: (next: boolean) => void
   onToggle: (t: Task) => void; onRemove: (t: Task) => void
   onOpen: (t: Task) => void; onAddSub?: () => void
 }) {
   const pri = task.priority_label
   const priClass = pri === 'high' ? 'pri-high' : pri === 'medium' ? 'pri-med' : pri === 'low' ? 'pri-low' : ''
+  const label = task.summary || '(untitled)'
   return (
-    <div className={`task ${sub ? 'sub' : ''} ${task.completed || task.cancelled ? 'done' : ''}`}>
+    <div className={`task ${depth > 0 ? 'sub' : ''} ${task.completed || task.cancelled ? 'done' : ''}`}
+      style={indentStyle(depth)}>
       <div className={`pri-bar ${priClass}`} />
+      {/* The twisty holds its column whether or not the row has children, so a
+          tree of mixed rows keeps one straight edge down the left. */}
+      {collapsed === undefined ? <span className="twisty-gap" /> : (
+        <button className={`twisty ${collapsed ? '' : 'open'}`}
+          aria-expanded={!collapsed}
+          title={collapsed ? `Show subtasks of ${label}` : `Hide subtasks of ${label}`}
+          aria-label={collapsed ? `Show subtasks of ${label}` : `Hide subtasks of ${label}`}
+          onClick={() => onCollapse?.(!collapsed)}>›</button>
+      )}
       <button className={`check ${task.completed ? 'on' : ''}`} title="Toggle complete"
         onClick={() => onToggle(task)}>✓</button>
       <div className="task-body" style={{ cursor: 'pointer' }} onClick={() => onOpen(task)}>
         <div className="task-title">
           {dot !== undefined && <span className="list-dot" style={dot ? { background: dot } : undefined} />}
-          {task.summary || '(untitled)'} {task.cancelled && <span className="chip">won't do</span>}
+          {label} {task.cancelled && <span className="chip">won't do</span>}
         </div>
         {(task.due || progress || task.tags.length > 0) && (
           <div className="task-meta">
@@ -554,7 +664,7 @@ function TaskRow({ task, sub, dot, progress, onToggle, onRemove, onOpen, onAddSu
         )}
       </div>
       <div className="task-actions">
-        {!sub && onAddSub && <button onClick={onAddSub} title="Add subtask">+ sub</button>}
+        {onAddSub && <button onClick={onAddSub} title="Add subtask">+ sub</button>}
         <button className="danger" onClick={() => onRemove(task)} title="Delete">del</button>
       </div>
     </div>

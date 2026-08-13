@@ -144,6 +144,18 @@ def test_patch_reparents_a_task(client):
                         json={"parent": sub["uid"]}).status_code == 422
 
 
+def test_settings_carry_collapsed_task_trees(client):
+    """Subtasks nest arbitrarily deep, so which trees are folded away has to
+    follow the account like every other UI preference — the alternative is a
+    large tree unfolding itself on every device, every load."""
+    r = client.put("/api/settings", json={"collapsed_tasks": ["a@tasksd", "b@tasksd"]})
+    assert r.status_code == 200, r.text
+    assert r.json()["collapsed_tasks"] == ["a@tasksd", "b@tasksd"]
+    assert client.get("/api/settings").json()["collapsed_tasks"] == ["a@tasksd", "b@tasksd"]
+    # Empty is a real value (everything expanded), not an omission.
+    assert client.put("/api/settings", json={"collapsed_tasks": []}).json()["collapsed_tasks"] == []
+
+
 def test_search_and_tags(client):
     lst = _list(client)
     token = uuid.uuid4().hex[:10]
