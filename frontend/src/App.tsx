@@ -45,6 +45,7 @@ export function App() {
   const [hiddenLists, setHiddenLists] = useState<string[]>([])
   const [taskGroups, setTaskGroups] = useState<TaskGroup[]>([])
   const [collapsedGroups, setCollapsedGroups] = useState<string[]>([])
+  const [collapsedTasks, setCollapsedTasks] = useState<string[]>([])
   const [showCompleted, setShowCompleted] = useState(false)
   const [rev, setRev] = useState(0)
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -153,6 +154,9 @@ export function App() {
         }
         if (Array.isArray(s.collapsed_groups)) {
           setCollapsedGroups(s.collapsed_groups.filter((x) => typeof x === 'string'))
+        }
+        if (Array.isArray(s.collapsed_tasks)) {
+          setCollapsedTasks(s.collapsed_tasks.filter((x) => typeof x === 'string'))
         }
         if (typeof s.show_completed_tasks === 'boolean') setShowCompleted(s.show_completed_tasks)
         // Both blobs are re-validated here rather than trusted: they are the
@@ -270,6 +274,13 @@ export function App() {
     setCollapsedGroups(next)
     saveSettings({ collapsed_groups: next })
   }, [])
+  // Which subtask trees are folded away. Follows the account like the rest, and
+  // is written on the trailing edge because collapsing several in a row is one
+  // gesture as far as the user is concerned.
+  const changeCollapsedTasks = useCallback((next: string[]) => {
+    setCollapsedTasks(next)
+    saveSettingsSoon({ collapsed_tasks: next })
+  }, [saveSettingsSoon])
 
   // Whether completed tasks show inline in the main view. Hidden by default; the
   // sidebar's "View completed" button always works regardless of this choice.
@@ -438,6 +449,7 @@ export function App() {
           hiddenLists={hiddenLists} onHiddenListsChange={changeHiddenLists}
           groups={taskGroups} onGroupsChange={changeTaskGroups}
           collapsedGroups={collapsedGroups} onCollapsedGroupsChange={changeCollapsedGroups}
+          collapsedTasks={collapsedTasks} onCollapsedTasksChange={changeCollapsedTasks}
           showCompleted={showCompleted} />
       )}
       {!booting && tab === 'calendar' && (

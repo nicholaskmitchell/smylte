@@ -362,6 +362,10 @@ class SettingsPatch(BaseModel):
     # Ids of task groups the user has collapsed in the sidebar (member lists
     # hidden from the rail until expanded). Empty means every group is expanded.
     collapsed_groups: list[str] | None = None
+    # UIDs of tasks whose subtasks are folded away in the tasks view. Nesting is
+    # arbitrarily deep, so this is how a large tree stays readable; empty means
+    # everything is expanded. Pruned client-side against the tasks on hand.
+    collapsed_tasks: list[str] | None = None
     # Whether completed/cancelled tasks show inline in the main tasks view.
     # Absent means the default (hidden); False is a real value the merge keeps,
     # so an explicit "show" survives. The "View completed" button ignores this.

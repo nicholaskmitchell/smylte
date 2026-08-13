@@ -220,8 +220,21 @@
   border-bottom: 1px solid var(--rule-faint);
 }
 .task:hover { background: var(--bg-elev); }
-.task.sub { padding-left: 52px; }
+/* Nesting is arbitrarily deep, so the indent is a step per level rather than
+   one fixed inset. Capped in TasksView (MAX_INDENT) so a deep tree still leaves
+   the titles somewhere to go. */
+.task.sub { padding-left: calc(var(--gutter) + var(--task-depth, 1) * 26px); }
 .task.done .task-title { color: var(--fg-faint); text-decoration: line-through; }
+/* The disclosure sits in its own column, present either way, so a run of mixed
+   rows keeps one straight edge down the left. */
+.twisty, .twisty-gap { width: 14px; flex: none; margin-top: 2px; }
+.twisty {
+  background: none; border: 0; padding: 0; cursor: pointer; color: var(--fg-faint);
+  font-size: calc(13px * var(--fs-scale)); line-height: 17px; text-align: center;
+  transition: transform 0.12s, color 0.12s;
+}
+.twisty:hover { color: var(--accent); }
+.twisty.open { transform: rotate(90deg); }
 .check {
   width: 17px; height: 17px; flex: none; margin-top: 2px; border: 1px solid var(--fg-faint);
   border-radius: var(--radius); background: none; cursor: pointer; display: inline-flex;
@@ -562,7 +575,7 @@
   }
   .day-col-body { padding-bottom: calc(24px + env(safe-area-inset-bottom)); }
   .task { padding-top: 11px; padding-bottom: 11px; }
-  .task.sub { padding-left: 40px; }
+  .task.sub { padding-left: calc(var(--gutter) + var(--task-depth, 1) * 18px); }
   .check { width: 21px; height: 21px; }
   .task-actions { gap: 8px; }
   .task-actions button { font-size: calc(12px * var(--fs-scale)); padding: 5px 6px; }

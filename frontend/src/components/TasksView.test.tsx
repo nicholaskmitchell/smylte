@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -29,24 +30,36 @@ const list: List = {
   open_count: 0, task_count: 0, event_count: 0, total: 0, color: '#D9480F',
 }
 
-function setup(view: TasksViewMode = 'list', showCompleted = false) {
+function setup(view: TasksViewMode = 'list', showCompleted = false, collapsedTasks: string[] = []) {
   const onExpire = vi.fn()
+  const onCollapsedTasksChange = vi.fn()
   // The data lives in the provider now, so the harness mounts one — with the
-  // same mocked `api` the assertions below already speak to.
-  const ui = (rev: number) => (
-    <DataProvider rev={rev} onExpire={onExpire}>
-      <TasksView onExpire={onExpire} view={view} onView={vi.fn()}
-        sideCollapsed={false} onToggleSide={vi.fn()}
-        hiddenLists={[]} onHiddenListsChange={vi.fn()}
-        groups={[]} onGroupsChange={vi.fn()}
-        collapsedGroups={[]} onCollapsedGroupsChange={vi.fn()}
-        showCompleted={showCompleted} />
-    </DataProvider>
-  )
-  const { rerender } = render(ui(0))
+  // same mocked `api` the assertions below already speak to. `collapsedTasks`
+  // is held here for the same reason App holds it: it is a controlled prop, so
+  // a harness that never fed the change back would test a control that appears
+  // to do nothing.
+  const Harness = ({ rev }: { rev: number }) => {
+    const [collapsed, setCollapsed] = useState(collapsedTasks)
+    return (
+      <DataProvider rev={rev} onExpire={onExpire}>
+        <TasksView onExpire={onExpire} view={view} onView={vi.fn()}
+          sideCollapsed={false} onToggleSide={vi.fn()}
+          hiddenLists={[]} onHiddenListsChange={vi.fn()}
+          groups={[]} onGroupsChange={vi.fn()}
+          collapsedGroups={[]} onCollapsedGroupsChange={vi.fn()}
+          collapsedTasks={collapsed}
+          onCollapsedTasksChange={(next) => { onCollapsedTasksChange(next); setCollapsed(next) }}
+          showCompleted={showCompleted} />
+      </DataProvider>
+    )
+  }
+  const { rerender } = render(<Harness rev={0} />)
   // Bumping `rev` is how the app tells the view a server-side change landed, so
   // it is also how a test replays one without reaching for the SSE mock.
-  return { onExpire, user: userEvent.setup(), bumpRev: (rev: number) => rerender(ui(rev)) }
+  return {
+    onExpire, onCollapsedTasksChange, user: userEvent.setup(),
+    bumpRev: (rev: number) => rerender(<Harness rev={rev} />),
+  }
 }
 
 /** Quick-add's "New…" button opens the single-task form. */
@@ -614,6 +627,147 @@ describe('<TasksView> subtask progress', () => {
   })
 })
 
+// ── a subtask can have subtasks of its own ─────────────────────────────────
+// RELATED-TO has always allowed a chain; only the flat parent-plus-children
+// render stood in the way, so anything past one level was flattened onto the
+// top level as though its parent were missing.
+
+describe('<TasksView> nested subtasks', () => {
+  /** Move house → Pack the kitchen → Buy boxes → Measure the cupboards. */
+  const chain = [
+    task({ uid: 'p1', summary: 'Move house' }),
+    task({ uid: 'c1', summary: 'Pack the kitchen', parent: 'p1' }),
+    task({ uid: 'g1', summary: 'Buy boxes', parent: 'c1' }),
+    task({ uid: 'gg1', summary: 'Measure the cupboards', parent: 'g1' }),
+  ]
+  const depthOf = (title: string) => {
+    const row = screen.getByText(title).closest('.task') as HTMLElement
+    return row.style.getPropertyValue('--task-depth') || '0'
+  }
+
+  it('renders a chain as a tree, each level indented past the last', async () => {
+    m.tasks.mockResolvedValue(chain)
+    setup()
+    await screen.findByText('Move house')
+    expect(depthOf('Move house')).toBe('0')
+    expect(depthOf('Pack the kitchen')).toBe('1')
+    expect(depthOf('Buy boxes')).toBe('2')
+    expect(depthOf('Measure the cupboards')).toBe('3')
+    // Every row appears once — none promoted to the top level for want of a
+    // renderer that could nest it.
+    expect(document.querySelectorAll('.task:not(.sub)')).toHaveLength(1)
+  })
+
+  it('counts each level against its own parent, not the whole subtree', async () => {
+    // The server joins RELATED-TO one level at a time, so the badge must too.
+    m.tasks.mockResolvedValue(chain)
+    setup()
+    await screen.findByText('Move house')
+    expect(screen.getAllByText('0/1')).toHaveLength(3)
+  })
+
+  it('offers "+ sub" on a subtask, so a tree can be grown from any row', async () => {
+    m.tasks.mockResolvedValue(chain)
+    m.createTask.mockImplementation(async (_l: string, b: Record<string, unknown>) =>
+      task({ uid: `${b.client_id as string}@tasksd`, summary: b.summary as string,
+        parent: (b.parent as string) ?? null }))
+    const { user } = setup()
+    await screen.findByText('Buy boxes')
+    const row = screen.getByText('Buy boxes').closest('.task') as HTMLElement
+    await user.click(within(row).getByTitle('Add subtask'))
+    await user.type(await screen.findByPlaceholderText('Subtask'), 'Tape{Enter}')
+    await waitFor(() => expect(m.createTask).toHaveBeenCalledTimes(1))
+    expect(m.createTask.mock.calls[0][1].parent).toBe('g1')
+    await waitFor(() => expect(depthOf('Tape')).toBe('3'))
+  })
+
+  it('survives a parent cycle another client authored', async () => {
+    // Nothing on either side of the wire checks RELATED-TO for loops, so a
+    // recursive render has to refuse to walk one twice rather than recurse
+    // until the stack gives out.
+    m.tasks.mockResolvedValue([
+      task({ uid: 'a', summary: 'Alpha', parent: 'b' }),
+      task({ uid: 'b', summary: 'Bravo', parent: 'a' }),
+    ])
+    setup()
+    await screen.findByText('Alpha')
+    expect(screen.getAllByText('Alpha')).toHaveLength(1)
+    expect(screen.getAllByText('Bravo')).toHaveLength(1)
+  })
+
+  it('takes a promoted subtask\'s own descendants with it', async () => {
+    // The parent is completed and hidden, so the child stands on its own — and
+    // the grandchild has to follow it rather than vanish with the parent.
+    m.tasks.mockResolvedValue([
+      task({ uid: 'p1', summary: 'Move house', completed: true, status: 'COMPLETED' }),
+      task({ uid: 'c1', summary: 'Pack the kitchen', parent: 'p1' }),
+      task({ uid: 'g1', summary: 'Buy boxes', parent: 'c1' }),
+    ])
+    setup()
+    await screen.findByText('Pack the kitchen')
+    expect(screen.queryByText('Move house')).not.toBeInTheDocument()
+    expect(depthOf('Pack the kitchen')).toBe('0')
+    expect(depthOf('Buy boxes')).toBe('1')
+  })
+})
+
+// ── folding a subtask tree away ─────────────────────────────────────────────
+
+describe('<TasksView> collapsing subtasks', () => {
+  const chain = [
+    task({ uid: 'p1', summary: 'Move house' }),
+    task({ uid: 'c1', summary: 'Pack the kitchen', parent: 'p1' }),
+    task({ uid: 'g1', summary: 'Buy boxes', parent: 'c1' }),
+  ]
+
+  it('hides the whole subtree beneath the row that was folded', async () => {
+    m.tasks.mockResolvedValue(chain)
+    const { user, onCollapsedTasksChange } = setup()
+    await screen.findByText('Buy boxes')
+    await user.click(screen.getByRole('button', { name: 'Hide subtasks of Move house' }))
+    expect(screen.queryByText('Pack the kitchen')).not.toBeInTheDocument()
+    expect(screen.queryByText('Buy boxes')).not.toBeInTheDocument()
+    expect(screen.getByText('Move house')).toBeInTheDocument()
+    // Written through to the account, like the sidebar's collapsed groups.
+    expect(onCollapsedTasksChange).toHaveBeenCalledWith(['p1'])
+  })
+
+  it('opens folded from a stored set, and expands again', async () => {
+    m.tasks.mockResolvedValue(chain)
+    const { user, onCollapsedTasksChange } = setup('list', false, ['c1'])
+    await screen.findByText('Pack the kitchen')
+    expect(screen.queryByText('Buy boxes')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Show subtasks of Pack the kitchen' }))
+    expect(onCollapsedTasksChange).toHaveBeenCalledWith([])
+  })
+
+  it('gives a row with no children no control to fold', async () => {
+    m.tasks.mockResolvedValue([task({ uid: 'p1', summary: 'Solo' })])
+    setup()
+    await screen.findByText('Solo')
+    expect(screen.queryByRole('button', { name: /subtasks of Solo/ })).not.toBeInTheDocument()
+  })
+
+  it('unfolds a row to show the subtask being added to it', async () => {
+    // Otherwise "+ sub" on a folded row types into nowhere.
+    m.tasks.mockResolvedValue(chain)
+    const { user, onCollapsedTasksChange } = setup('list', false, ['p1'])
+    await screen.findByText('Move house')
+    const row = screen.getByText('Move house').closest('.task') as HTMLElement
+    await user.click(within(row).getByTitle('Add subtask'))
+    expect(onCollapsedTasksChange).toHaveBeenCalledWith([])
+  })
+
+  it('drops a stored uid that no longer names a task with children', async () => {
+    // Nothing ever re-creates a uid, so a set that only grows is a leak.
+    m.tasks.mockResolvedValue(chain)
+    const { user, onCollapsedTasksChange } = setup('list', false, ['gone', 'c1'])
+    await screen.findByText('Move house')
+    await user.click(screen.getByRole('button', { name: 'Hide subtasks of Move house' }))
+    expect(onCollapsedTasksChange).toHaveBeenCalledWith(['c1', 'p1'])
+  })
+})
+
 // ── subtasks written before the uid contract was honoured ───────────────────
 
 describe('<TasksView> legacy orphans', () => {
@@ -765,6 +919,7 @@ describe('<TasksView> loading versus empty', () => {
           hiddenLists={['l-elsewhere']} onHiddenListsChange={onHiddenListsChange}
           groups={[]} onGroupsChange={vi.fn()}
           collapsedGroups={[]} onCollapsedGroupsChange={vi.fn()}
+          collapsedTasks={[]} onCollapsedTasksChange={vi.fn()}
           showCompleted={false} />
       </DataProvider>,
     )

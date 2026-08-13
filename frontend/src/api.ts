@@ -210,6 +210,7 @@ export interface Settings {
   hidden_lists?: string[]          // task-list ids hidden from the combined "All lists" view
   task_groups?: TaskGroup[]        // named, collapsible groupings of task lists
   collapsed_groups?: string[]      // ids of task groups currently collapsed in the sidebar
+  collapsed_tasks?: string[]       // uids of tasks whose subtask trees are folded away
   show_completed_tasks?: boolean   // show completed/cancelled tasks inline in the main view (default hidden)
 }
 
