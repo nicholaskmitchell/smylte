@@ -2,6 +2,8 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { HomeView } from './HomeView'
+import { DataProvider } from '../data'
+import { setCacheUser } from '../cache'
 import { api } from '../api'
 import { monthGrid } from '../calendar'
 import { DEFAULT_LAYOUT, type DashboardModule } from '../dashboard'
@@ -29,8 +31,12 @@ const list = { id: 'l1', href: '/l1/', name: 'Work', is_task_list: true, is_cale
 function setup(initial: DashboardModule[] = DEFAULT_LAYOUT,
   props: { hiddenCalendars?: string[]; archivedCalendars?: string[] } = {}) {
   const onLayoutChange = vi.fn()
-  render(<HomeView rev={0} onExpire={vi.fn()} layout={initial}
-    onLayoutChange={onLayoutChange} {...props} />)
+  render(
+    <DataProvider rev={0} onExpire={vi.fn()}>
+      <HomeView rev={0} onExpire={vi.fn()} layout={initial}
+        onLayoutChange={onLayoutChange} {...props} />
+    </DataProvider>,
+  )
   return { onLayoutChange }
 }
 
@@ -42,6 +48,8 @@ const today = () => {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  setCacheUser('')
+  localStorage.clear()
   m.lists.mockResolvedValue([list])
   m.tasks.mockResolvedValue([])
   m.calendars.mockResolvedValue([])
@@ -160,9 +168,11 @@ describe('<HomeView> module contents', () => {
   it('only fetches what the arrangement actually shows', async () => {
     setup([{ id: 'x', kind: 'today', x: 0, y: 0, w: 6, h: 6 }])
     await screen.findByText('Nothing due today.')
-    // No calendar or scheduling module is on the board, so those endpoints
-    // should never be touched.
-    expect(m.calendars).not.toHaveBeenCalled()
+    // No calendar or scheduling module is on the board, so nothing here should
+    // pull a month of events or poll the scheduling endpoints. The calendar
+    // *list* is fetched once for the whole app by the provider, so it is not
+    // this view's to avoid — the per-calendar events fan-out is.
+    expect(m.events).not.toHaveBeenCalled()
     expect(m.schedulingLinks).not.toHaveBeenCalled()
   })
 
@@ -178,7 +188,10 @@ describe('<HomeView> module contents', () => {
     const input = await screen.findByRole('textbox', { name: /add a task/i })
     await userEvent.type(input, 'New thing')
     await userEvent.click(screen.getByRole('button', { name: 'Add' }))
-    expect(m.createTask).toHaveBeenCalledWith('l1', { summary: 'New thing' })
+    // Through the shared optimistic create, so the body carries the idempotency
+    // slug the stand-in's uid is derived from.
+    expect(m.createTask).toHaveBeenCalledWith('l1',
+      expect.objectContaining({ summary: 'New thing', client_id: expect.any(String) }))
   })
 })
 

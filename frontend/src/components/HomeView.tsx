@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { api, clientId, type Booking, type BookingLink, type CalEvent, type List, type Task } from '../api'
-import { useAllTasks, useIsMobile } from '../hooks'
+import { useIsMobile } from '../hooks'
+import { useCalendarData, useTaskData, type TaskData } from '../data'
 import { makeGuard, addDays, dayKey, fmtDue, isOverdue, ymd } from '../util'
 import { bucketByDay, monthGrid, type DayEv } from '../calendar'
 import { DayPopover } from './DayPopover'
@@ -99,9 +100,12 @@ export function HomeView({ rev, onExpire, layout, onLayoutChange,
   const available = MODULE_KINDS.filter((k) => !placed.has(k))
 
   // ── data ─────────────────────────────────────────────────────────────────
-  const { lists, tasks, loading } = useAllTasks(rev, onExpire)
-  const [cals, setCals] = useState<List[]>([])
-  const [events, setEvents] = useState<CalEvent[]>([])
+  // The same lists and tasks the Tasks pane holds — one fetch, not two, and it
+  // survives the tab switch that used to send both views back to an empty array.
+  const { lists, tasks, loaded, create } = useTaskData()
+  // The mini calendar reads the same calendars and window the Calendar tab
+  // does, so opening one after the other costs no second fan-out.
+  const { cals, eventsFor, requestWindow } = useCalendarData()
   const [links, setLinks] = useState<BookingLink[]>([])
   const [bookings, setBookings] = useState<Booking[]>([])
 
@@ -116,27 +120,22 @@ export function HomeView({ rev, onExpire, layout, onLayoutChange,
   const hidden = useMemo(() => new Set(hiddenCalendars), [hiddenCalendars])
   const archivedKey = archivedCalendars.join(',')
 
-  // Only fetch what the current arrangement actually shows — a dashboard with
-  // no scheduling module should not be polling the scheduling endpoints.
+  // Only ask for what the current arrangement actually shows — a dashboard with
+  // no calendar module should not be pulling a month of events, and one with no
+  // scheduling module should not be polling the scheduling endpoints.
+  const from = ymd(days[0])
+  const to = ymd(addDays(days[41], 1))
+  // Archived calendars are dropped before the fetch (like the calendar view's
+  // `visibleCals`); merely hidden ones are filtered at render, so toggling one
+  // never costs a round trip.
+  const wanted = useMemo(
+    () => (needsCal ? cals.filter((c) => !archived.has(c.id)) : []), [needsCal, cals, archived])
+  const events = needsCal ? eventsFor(from, to) : []
   useEffect(() => {
-    if (!needsCal) { setCals([]); setEvents([]); return }
-    const guard = makeGuard(onExpire)
-    guard(async () => {
-      // Archived calendars are dropped before the fetch (like the calendar
-      // view's `visibleCals`); merely hidden ones are filtered at render, so
-      // toggling one never costs a round trip.
-      const all = await api.calendars()
-      const visible = all.filter((c) => !archived.has(c.id))
-      const from = ymd(days[0])
-      const to = ymd(addDays(days[41], 1))
-      const evs = (await Promise.all(visible.map((c) => api.events(c.id, from, to)))).flat()
-      // Both together, so the grid never paints a frame that knows the colors
-      // but not the events it should paint them on.
-      setCals(all)
-      setEvents(evs)
-    })
+    if (!needsCal) return
+    requestWindow(from, to, wanted)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rev, needsCal, archivedKey])
+  }, [needsCal, from, to, wanted.map((c) => c.id).join(',')])
 
   useEffect(() => {
     if (!needsSched) { setLinks([]); setBookings([]); return }
@@ -164,7 +163,7 @@ export function HomeView({ rev, onExpire, layout, onLayoutChange,
   const body = (m: DashboardModule) => (
     <ModuleBody kind={m.kind} tasks={tasks} lists={lists} days={days} byDay={byDay}
       links={links} bookings={bookings} colorOf={colorOf} eventColor={eventColor}
-      onExpire={onExpire} loading={loading} />
+      onExpire={onExpire} loaded={loaded} create={create} />
   )
 
   // ── mobile: a plain stack ────────────────────────────────────────────────
@@ -267,7 +266,7 @@ export function HomeView({ rev, onExpire, layout, onLayoutChange,
 // ── module bodies ──────────────────────────────────────────────────────────
 
 function ModuleBody({ kind, tasks, lists, days, byDay, links, bookings, colorOf,
-  eventColor, onExpire, loading }: {
+  eventColor, onExpire, loaded, create }: {
   kind: ModuleKind
   tasks: Task[]
   lists: List[]
@@ -278,7 +277,8 @@ function ModuleBody({ kind, tasks, lists, days, byDay, links, bookings, colorOf,
   colorOf: (listId: string) => string | null
   eventColor: (e: CalEvent) => string | null
   onExpire: () => void
-  loading: boolean
+  loaded: boolean
+  create: TaskData['create']
 }) {
   const today = ymd(new Date())
   // Top-level only, mirroring the Tasks pane — a dashboard card is a summary,
@@ -290,24 +290,24 @@ function ModuleBody({ kind, tasks, lists, days, byDay, links, bookings, colorOf,
   switch (kind) {
     case 'today':
       return <TaskList items={open.filter((t) => t.due && dayKey(t.due) === today).sort(byDue)}
-        colorOf={colorOf} empty="Nothing due today." loading={loading} />
+        colorOf={colorOf} empty="Nothing due today." loaded={loaded} />
     case 'overdue':
       return <TaskList items={open.filter((t) => isOverdue(t.due, t.due_is_date)).sort(byDue)}
-        colorOf={colorOf} empty="Nothing overdue." overdue loading={loading} />
+        colorOf={colorOf} empty="Nothing overdue." overdue loaded={loaded} />
     case 'upcoming': {
       const end = ymd(addDays(new Date(), 7))
       return <TaskList
         items={open
           .filter((t) => t.due && dayKey(t.due) > today && dayKey(t.due) <= end)
           .sort(byDue)}
-        colorOf={colorOf} empty="Nothing in the next seven days." loading={loading} />
+        colorOf={colorOf} empty="Nothing in the next seven days." loaded={loaded} />
     }
     case 'completed':
       // There is no completion timestamp on the wire, so "recent" is by due date
       // descending — the same proxy the Tasks pane's completed view uses.
       return <TaskList
         items={tops.filter((t) => t.completed || t.cancelled).sort(byDue).reverse().slice(0, 40)}
-        colorOf={colorOf} empty="Nothing completed yet." done loading={loading} />
+        colorOf={colorOf} empty="Nothing completed yet." done loaded={loaded} />
     case 'mini_calendar':
       return <MiniCalendar days={days} byDay={byDay} eventColor={eventColor} />
     case 'booking_links':
@@ -315,23 +315,26 @@ function ModuleBody({ kind, tasks, lists, days, byDay, links, bookings, colorOf,
     case 'bookings':
       return <BookingList bookings={bookings} />
     case 'quick_add':
-      return <QuickAddModule lists={lists} onExpire={onExpire} />
+      return <QuickAddModule lists={lists} create={create} />
     default:
       return null
   }
 }
 
-function TaskList({ items, colorOf, empty, overdue, done, loading }: {
+function TaskList({ items, colorOf, empty, overdue, done, loaded }: {
   items: Task[]
   colorOf: (listId: string) => string | null
   empty: string
   overdue?: boolean
   done?: boolean
-  loading?: boolean
+  loaded?: boolean
 }) {
   // Stay blank until the first fetch lands: "Nothing due today." flashing up and
-  // then being replaced by a list of tasks reads as a bug.
-  if (loading && !items.length) return null
+  // then being replaced by a list of tasks reads as a bug. Keyed on `loaded`
+  // rather than a `loading` flag that only ever cleared on the success path —
+  // one failed request used to leave every module here blank permanently, with
+  // no empty state and no error.
+  if (!loaded && !items.length) return null
   if (!items.length) return <p className="dash-empty">{empty}</p>
   return (
     <ul className="dash-tasks">
@@ -486,9 +489,15 @@ function BookingList({ bookings }: { bookings: Booking[] }) {
   )
 }
 
-function QuickAddModule({ lists, onExpire }: { lists: List[]; onExpire: () => void }) {
+function QuickAddModule({ lists, create }: { lists: List[]; create: TaskData['create'] }) {
   const [text, setText] = useState('')
   const [listId, setListId] = useState('')
+  // What the last submit did, cleared on the next keystroke. A task added here
+  // lands on a list, but every task module on this dashboard filters by due
+  // date or completion — so an undated one appears in none of them, and without
+  // a word the form looks like it swallowed the entry. Confirming beats an
+  // optimistic paint on a card that would not have shown it either way.
+  const [added, setAdded] = useState<string | null>(null)
   const target = listId || lists[0]?.id || ''
 
   const submit = async (e: React.FormEvent) => {
@@ -496,19 +505,26 @@ function QuickAddModule({ lists, onExpire }: { lists: List[]; onExpire: () => vo
     const summary = text.trim()
     if (!summary || !target) return
     setText('')
-    await makeGuard(onExpire)(() => api.createTask(target, { summary }))
+    setAdded(null)
+    const t = await create(target, { summary })
+    // Put the text back rather than losing it: a failed add used to be
+    // indistinguishable from a successful one apart from a toast.
+    if (!t) { setText(summary); return }
+    setAdded(lists.find((l) => l.id === target)?.name ?? null)
   }
 
   if (!lists.length) return <p className="dash-empty">Create a list first.</p>
   return (
     <form className="dash-quickadd" onSubmit={submit}>
-      <input className="input" value={text} onChange={(e) => setText(e.target.value)}
+      <input className="input" value={text}
+        onChange={(e) => { setText(e.target.value); setAdded(null) }}
         placeholder="Add a task…" aria-label="Add a task" />
       <select className="input quickadd-list" value={target}
         onChange={(e) => setListId(e.target.value)} aria-label="List">
         {lists.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
       </select>
       <button className="btn" type="submit" disabled={!text.trim()}>Add</button>
+      {added && <p className="dash-added" role="status">Added to {added}.</p>}
     </form>
   )
 }

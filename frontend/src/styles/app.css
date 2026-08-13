@@ -807,8 +807,12 @@
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dash-task-due { flex: none; font-size: calc(11px * var(--fs-scale)); color: var(--fg-muted); }
 .dash-task-due.overdue { color: var(--warn); }
-.dash-quickadd { display: flex; gap: 8px; padding: 10px 12px; }
+.dash-quickadd { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 12px; }
 .dash-quickadd .input { flex: 1; min-width: 0; }
+/* A task added here is undated, so no module on this board shows it — the
+   confirmation is the only sign the add landed. */
+.dash-added { flex-basis: 100%; margin: 0; font-size: calc(11px * var(--fs-scale));
+  color: var(--fg-muted); }
 
 /* mini calendar */
 .mini-cal { padding: 6px 10px 10px; }

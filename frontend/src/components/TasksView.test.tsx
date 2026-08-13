@@ -2,6 +2,8 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { TasksView } from './TasksView'
+import { DataProvider } from '../data'
+import { cacheLists, cacheTasks, setCacheUser } from '../cache'
 import { api, AuthError, type List, type Task, type TasksViewMode } from '../api'
 
 // Mock the whole API module: every method becomes a vi.fn() so the view never
@@ -29,13 +31,17 @@ const list: List = {
 
 function setup(view: TasksViewMode = 'list', showCompleted = false) {
   const onExpire = vi.fn()
+  // The data lives in the provider now, so the harness mounts one — with the
+  // same mocked `api` the assertions below already speak to.
   const ui = (rev: number) => (
-    <TasksView rev={rev} onExpire={onExpire} view={view} onView={vi.fn()}
-      sideCollapsed={false} onToggleSide={vi.fn()}
-      hiddenLists={[]} onHiddenListsChange={vi.fn()}
-      groups={[]} onGroupsChange={vi.fn()}
-      collapsedGroups={[]} onCollapsedGroupsChange={vi.fn()}
-      showCompleted={showCompleted} />
+    <DataProvider rev={rev} onExpire={onExpire}>
+      <TasksView onExpire={onExpire} view={view} onView={vi.fn()}
+        sideCollapsed={false} onToggleSide={vi.fn()}
+        hiddenLists={[]} onHiddenListsChange={vi.fn()}
+        groups={[]} onGroupsChange={vi.fn()}
+        collapsedGroups={[]} onCollapsedGroupsChange={vi.fn()}
+        showCompleted={showCompleted} />
+    </DataProvider>
   )
   const { rerender } = render(ui(0))
   // Bumping `rev` is how the app tells the view a server-side change landed, so
@@ -67,6 +73,9 @@ let errSpy: ReturnType<typeof vi.spyOn>
 
 beforeEach(() => {
   vi.clearAllMocks()
+  // No cache user, so nothing seeds from disk and each test starts cold.
+  setCacheUser('')
+  localStorage.clear()
   m.lists.mockResolvedValue([list])
   m.tasks.mockResolvedValue([])
   // createMany logs non-auth failures rather than raising N toasts.
@@ -683,6 +692,84 @@ describe('<TasksView> legacy orphans', () => {
     setup()
     expect(await screen.findByText('Orphan')).toBeInTheDocument()
     expect(screen.getByText('Orphan').closest('.task')).not.toHaveClass('sub')
+  })
+})
+
+// ── nothing on screen may claim the account is empty before it is known ─────
+// An empty `lists` before the first fetch is ignorance, not an empty account.
+// Telling a user with a dozen lists to "create a list to get started" was the
+// loudest thing on screen during every cold load and every tab switch.
+
+describe('<TasksView> loading versus empty', () => {
+  it('says nothing about the account while the lists are in flight', async () => {
+    m.lists.mockReturnValue(new Promise(() => {}))     // never settles
+    setup()
+    expect(await screen.findByText('Loading…')).toBeInTheDocument()
+    expect(screen.queryByText('Create a list to get started.')).not.toBeInTheDocument()
+  })
+
+  it('offers the call to action once the fetch says the account is empty', async () => {
+    m.lists.mockResolvedValue([])
+    setup()
+    expect(await screen.findByText('Create a list to get started.')).toBeInTheDocument()
+  })
+
+  it('holds "Nothing to do here." until the tasks have actually landed', async () => {
+    m.tasks.mockReturnValue(new Promise(() => {}))
+    setup()
+    // Re-queried rather than awaited once: the pane swaps from the no-lists
+    // branch to the list branch as the lists land, and both say "Loading…" —
+    // from different nodes.
+    await waitFor(() => expect(m.tasks).toHaveBeenCalled())
+    await waitFor(() => expect(screen.getByText('Loading…')).toBeInTheDocument())
+    expect(screen.queryByText('Nothing to do here.')).not.toBeInTheDocument()
+  })
+
+  it('paints cached rows on the first frame, before any fetch resolves', async () => {
+    // What the mirror is for: a reload lands on content, not on a blank pane
+    // and a misleading instruction.
+    setCacheUser('nick')
+    cacheLists([list])
+    cacheTasks([task({ uid: 'u1', summary: 'From the cache' })])
+    m.lists.mockReturnValue(new Promise(() => {}))
+    m.tasks.mockReturnValue(new Promise(() => {}))
+    setup()
+    expect(screen.getByText('From the cache')).toBeInTheDocument()
+    expect(screen.queryByText('Create a list to get started.')).not.toBeInTheDocument()
+  })
+
+  it('lets the server replace what the cache seeded', async () => {
+    setCacheUser('nick')
+    cacheLists([list])
+    cacheTasks([task({ uid: 'u1', summary: 'Stale' })])
+    m.tasks.mockResolvedValue([task({ uid: 'u2', summary: 'Fresh' })])
+    setup()
+    expect(screen.getByText('Stale')).toBeInTheDocument()
+    expect(await screen.findByText('Fresh')).toBeInTheDocument()
+    await waitFor(() => expect(screen.queryByText('Stale')).not.toBeInTheDocument())
+  })
+
+  it('does not prune list-scoped settings against a cached snapshot', async () => {
+    // The seed can predate a list created in another client, so pruning against
+    // it would delete a perfectly live `hidden_lists` entry. Only a real fetch
+    // is evidence that a list is gone.
+    setCacheUser('nick')
+    cacheLists([list])
+    cacheTasks([task()])
+    const onHiddenListsChange = vi.fn()
+    m.lists.mockReturnValue(new Promise(() => {}))
+    render(
+      <DataProvider rev={0} onExpire={vi.fn()}>
+        <TasksView onExpire={vi.fn()} view="list" onView={vi.fn()}
+          sideCollapsed={false} onToggleSide={vi.fn()}
+          hiddenLists={['l-elsewhere']} onHiddenListsChange={onHiddenListsChange}
+          groups={[]} onGroupsChange={vi.fn()}
+          collapsedGroups={[]} onCollapsedGroupsChange={vi.fn()}
+          showCompleted={false} />
+      </DataProvider>,
+    )
+    await screen.findByText('Ship it')
+    expect(onHiddenListsChange).not.toHaveBeenCalled()
   })
 })
 

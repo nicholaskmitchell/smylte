@@ -49,7 +49,9 @@ describe('<App> auth gate', () => {
     expect(screen.getByRole('button', { name: 'Scheduling' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Home' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /sign in/i })).not.toBeInTheDocument()
-    expect(m.calendars).toHaveBeenCalled()      // default tab (Home) loaded
+    // The strip paints while /api/me is still in flight now, so the data layer
+    // starting up is a beat behind it rather than a precondition of it.
+    await waitFor(() => expect(m.calendars).toHaveBeenCalled())
     expect(subscribe).toHaveBeenCalledOnce()    // live updates wired up
   })
 
