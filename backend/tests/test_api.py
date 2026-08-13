@@ -2,7 +2,9 @@
 FastAPI app with username/password auth ON."""
 from __future__ import annotations
 
+import time
 import uuid
+from unittest import mock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -154,6 +156,64 @@ def test_settings_carry_collapsed_task_trees(client):
     assert client.get("/api/settings").json()["collapsed_tasks"] == ["a@tasksd", "b@tasksd"]
     # Empty is a real value (everything expanded), not an omission.
     assert client.put("/api/settings", json={"collapsed_tasks": []}).json()["collapsed_tasks"] == []
+
+
+def test_session_length_is_a_setting(client):
+    """The session length moved from a deploy-time env var to a setting."""
+    day, week, month = 24 * 3600, 7 * 24 * 3600, 30 * 24 * 3600
+    never = 10 * 365 * 24 * 3600
+    for ttl in (day, week, month, never):
+        r = client.put("/api/settings", json={"session_ttl_s": ttl})
+        assert r.status_code == 200, r.text
+        assert r.json()["session_ttl_s"] == ttl
+    assert client.get("/api/settings").json()["session_ttl_s"] == never
+
+
+def test_session_length_is_an_allowlist(client):
+    """Not a range. This decides how long a login survives and is reachable
+    through a settings PUT, so anything but the offered values is refused —
+    a bounds check would still let a hand-edited blob ask for a century."""
+    for bad in (1, 0, -1, 10**9, 3600, "week", 604800.5, True):
+        r = client.put("/api/settings", json={"session_ttl_s": bad})
+        assert r.status_code == 422, f"{bad!r} was accepted: {r.text}"
+    # …and a refused write leaves the stored value alone.
+    client.put("/api/settings", json={"session_ttl_s": 7 * 24 * 3600})
+    client.put("/api/settings", json={"session_ttl_s": 99})
+    assert client.get("/api/settings").json()["session_ttl_s"] == 7 * 24 * 3600
+    # An explicit null is not a bad value: it clears the choice and hands the
+    # question back to the deployment's own TASKS_SESSION_TTL.
+    assert client.put("/api/settings", json={"session_ttl_s": None}).status_code == 200
+
+
+def test_shortening_the_session_ends_the_one_already_open(_scratch_up, tmp_path):
+    """The point of the setting, and the part a stateless token makes awkward.
+
+    The `exp` in a JWT cannot be moved once issued, so "log me out sooner" would
+    otherwise mean "…starting with your next sign-in", leaving the session you
+    were worried about running for its original week. The server judges a token
+    against the length in force instead, so shortening bites at once — here, and
+    on every other device holding a cookie.
+    """
+    day, month = 24 * 3600, 30 * 24 * 3600
+    app = create_app(api_settings(str(tmp_path / "ttl.db")))
+    with TestClient(app) as c:
+        assert c.post("/api/login",
+                      json={"username": "admin", "password": "testpass123"}).status_code == 200
+        c.put("/api/settings", json={"session_ttl_s": month})
+        # Re-issued under the long setting, then aged past a short one.
+        c.post("/api/login", json={"username": "admin", "password": "testpass123"})
+        assert c.get("/api/me").status_code == 200
+
+        c.put("/api/settings", json={"session_ttl_s": day})
+        # Still inside a day, so the same cookie is still good.
+        assert c.get("/api/me").status_code == 200
+
+        with mock.patch("tasksd.auth.time.time", return_value=time.time() + day + 60):
+            assert c.get("/api/me").status_code == 401
+        # …and it comes back once the setting is long again, because the token's
+        # own exp still has a month to run. Lengthening is the direction that
+        # cannot be applied retroactively; this is the one that can.
+        assert c.get("/api/me").status_code == 200
 
 
 def test_search_and_tags(client):

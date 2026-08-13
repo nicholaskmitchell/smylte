@@ -133,6 +133,38 @@ describe('<App> auth gate', () => {
   })
 })
 
+describe('<App> session length', () => {
+  const openSettings = async () => {
+    render(<App />)
+    await screen.findByRole('button', { name: 'Tasks' })
+    await userEvent.click(screen.getByRole('button', { name: 'Settings' }))
+    return screen.getByRole('button', { name: 'How long to stay signed in' })
+  }
+
+  it('opens on the shipped default when the account has not chosen', async () => {
+    expect(await openSettings()).toHaveTextContent('7 days')
+  })
+
+  it('shows the stored choice', async () => {
+    m.getSettings.mockResolvedValue({ session_ttl_s: 24 * 3600 })
+    await waitFor(async () => expect(await openSettings()).toHaveTextContent('1 day'))
+  })
+
+  it('cycles the choice and writes it through', async () => {
+    const btn = await openSettings()
+    await userEvent.click(btn)
+    expect(btn).toHaveTextContent('30 days')
+    expect(m.putSettings).toHaveBeenCalledWith({ session_ttl_s: 30 * 24 * 3600 })
+  })
+
+  it('ignores a stored value the server would refuse', async () => {
+    // The blob is hand-editable and this one decides how long a login lives;
+    // showing it back would make the menu lie about what is in force.
+    m.getSettings.mockResolvedValue({ session_ttl_s: 99 as never })
+    expect(await openSettings()).toHaveTextContent('7 days')
+  })
+})
+
 describe('<App> tab preferences', () => {
   const strip = () => [...document.querySelectorAll('.tabs .tab')].map((b) => b.textContent)
   const active = () =>
