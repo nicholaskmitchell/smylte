@@ -103,10 +103,22 @@ frontend/
     appearance.ts  token allowlist + validation, apply/reset, theme import/export
     dashboard.ts   Home grid math (pack/move/resize) — pure, unit-tested
     styles/     design tokens + app.css
+desktop/        Windows client: a WebView2 window that serves the CI-built SPA
+                from disk and proxies /api to the server (desktop/README.md)
 scratch/        disposable Radicale 3.7.4 in Docker on :5233 (NEVER production)
 deploy/         systemd unit, Caddy path-split snippet, cloudflared, setup.sh
 docs/           DEPLOY.md, phase0-findings.md, recurrence-findings.md
 ```
+
+## Windows client
+
+`desktop/` builds a small native window around the app. It is not a rewrite —
+it hosts WebView2, the Edge engine already on Windows 10 and 11, so rendering is
+exactly the browser's. What it changes is that the app shell, CSS, JS and fonts
+load from local disk instead of over the network, and that installing is one
+`.exe` that keeps itself current: CI publishes the built SPA to a rolling
+release, and the client picks it up on the next launch. API calls still go to
+the server, so nothing about CalDAV latency changes. See `desktop/README.md`.
 
 ## Develop
 

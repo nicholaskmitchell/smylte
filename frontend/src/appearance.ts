@@ -513,9 +513,10 @@ export function parseTheme(text: string, id: string): CustomTheme | null {
 }
 
 // ── fonts ───────────────────────────────────────────────────────────────────
-// The three shipped families are loaded by index.html. Anything else is fetched
-// on first use rather than up front, so choosing a font costs a request only for
-// the person who chose it — the default install still loads exactly three.
+// The three shipped families are self-hosted (styles/fonts.css). Anything else
+// is fetched from Google on first use rather than up front, so choosing a font
+// costs a request only for the person who chose it — and the default install
+// makes no third-party request at all.
 
 export interface FontChoice {
   label: string
