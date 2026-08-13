@@ -5,7 +5,7 @@ import userEvent from '@testing-library/user-event'
 import { TasksView } from './TasksView'
 import { DataProvider } from '../data'
 import { cacheLists, cacheTasks, setCacheUser } from '../cache'
-import { api, AuthError, type List, type Task, type TasksViewMode } from '../api'
+import { api, AuthError, type List, type Task, type TaskGroup, type TasksViewMode } from '../api'
 
 // Mock the whole API module: every method becomes a vi.fn() so the view never
 // touches the network.
@@ -60,6 +60,22 @@ function setup(view: TasksViewMode = 'list', showCompleted = false, collapsedTas
     onExpire, onCollapsedTasksChange, user: userEvent.setup(),
     bumpRev: (rev: number) => rerender(<Harness rev={rev} />),
   }
+}
+
+/** The default harness passes no groups; this one does, so the sidebar renders
+ *  its grouped layout and the picker order can be compared against it. */
+function setupGrouped(groups: TaskGroup[]) {
+  render(
+    <DataProvider rev={0} onExpire={vi.fn()} taskGroups={groups}>
+      <TasksView onExpire={vi.fn()} view="list" onView={vi.fn()}
+        sideCollapsed={false} onToggleSide={vi.fn()}
+        hiddenLists={[]} onHiddenListsChange={vi.fn()}
+        groups={groups} onGroupsChange={vi.fn()}
+        collapsedGroups={[]} onCollapsedGroupsChange={vi.fn()}
+        collapsedTasks={[]} onCollapsedTasksChange={vi.fn()}
+        showCompleted={false} />
+    </DataProvider>,
+  )
 }
 
 /** Quick-add's "New…" button opens the single-task form. */
@@ -624,6 +640,67 @@ describe('<TasksView> subtask progress', () => {
     // …and it stands on its own rather than being hidden under a parent that
     // is not really its parent.
     expect(screen.getByText('Book flight').closest('.task')).not.toHaveClass('sub')
+  })
+})
+
+// ── the list pickers follow the sidebar, not the fetch order ───────────────
+// `GET /api/lists` sorts by manual calendar-order then name, and the sidebar
+// renders that *through* the groups — each group's members, then the rest. So
+// the moment a group exists the two orders diverge, and the pickers were
+// following the one nobody can see.
+
+describe('<TasksView> list picker order', () => {
+  const l = (id: string, name: string): List => ({ ...list, id, href: `/${id}/`, name })
+  const four = [l('a', 'Alpha'), l('b', 'Bravo'), l('c', 'Charlie'), l('d', 'Delta')]
+  const groups: TaskGroup[] = [
+    { id: 'g1', name: 'Work', lists: ['c'] },
+    { id: 'g2', name: 'Home', lists: ['a'] },
+  ]
+
+  /** The sidebar's rows, top to bottom — the order the user actually sees. */
+  const sidebarOrder = () =>
+    [...document.querySelectorAll('.side-list .side-item .name')].map((n) => n.textContent)
+  const pickerOrder = () =>
+    [...screen.getByTitle('List for the new task').querySelectorAll('option')]
+      .map((o) => o.textContent)
+
+  it('offers the lists in the order the sidebar shows them', async () => {
+    m.lists.mockResolvedValue(four)
+    setupGrouped(groups)
+    await screen.findByPlaceholderText('Add a task…')
+    // Asserted against the rendered sidebar rather than a hardcoded sequence,
+    // so the two cannot drift apart again without this failing.
+    await waitFor(() => expect(pickerOrder()).toEqual(sidebarOrder()))
+    expect(pickerOrder()).toEqual(['Charlie', 'Alpha', 'Bravo', 'Delta'])
+  })
+
+  it('leaves the order alone when nothing is grouped', async () => {
+    m.lists.mockResolvedValue(four)
+    setupGrouped([])
+    await screen.findByPlaceholderText('Add a task…')
+    await waitFor(() => expect(pickerOrder()).toEqual(['Alpha', 'Bravo', 'Charlie', 'Delta']))
+  })
+
+  it('reorders on the wire in server order, not the grouped one', async () => {
+    // Dragging a row PROPPATCHes calendar-order onto every collection in
+    // Radicale. Task groups are an app-only construct, so sending the grouped
+    // flattening would rewrite the order Tasks.org and jtx Board read to match
+    // a grouping none of them can see.
+    m.lists.mockResolvedValue(four)
+    m.reorderLists.mockResolvedValue({})
+    setupGrouped(groups)
+    await screen.findByPlaceholderText('Add a task…')
+    await waitFor(() => expect(sidebarOrder()).toEqual(['Charlie', 'Alpha', 'Bravo', 'Delta']))
+
+    const rowFor = (name: string) =>
+      [...document.querySelectorAll('.side-list .side-item')]
+        .find((r) => r.querySelector('.name')?.textContent === name)!
+    fireEvent.dragStart(rowFor('Delta'))
+    fireEvent.drop(rowFor('Alpha'))
+
+    await waitFor(() => expect(m.reorderLists).toHaveBeenCalledTimes(1))
+    // Delta moved onto Alpha's slot within the *server* sequence a,b,c,d.
+    expect(m.reorderLists.mock.calls[0][0]).toEqual(['d', 'a', 'b', 'c'])
   })
 })
 

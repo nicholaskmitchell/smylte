@@ -59,7 +59,7 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
   // switching away and back neither drops them nor refetches from empty — and
   // Home reads the same copy rather than fanning out a second one.
   const {
-    lists, tasks, listsLoaded, loaded, setLists,
+    lists, serverOrderedLists, tasks, listsLoaded, loaded, setLists,
     create, createMany, addSub, toggle, remove, saveDetail,
   } = useTaskData()
   const [detail, setDetail] = useState<Task | null>(null)
@@ -294,7 +294,12 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
 
   return (
     <div className="work">
-      <Sidebar title="Lists" placeholder="List" items={lists}
+      {/* The raw order, not `lists`: dragging a row here PROPPATCHes
+          calendar-order onto every collection in Radicale, and the grouped
+          order is an app-only view that has no business rewriting what other
+          CalDAV clients read. The rail looks identical either way — its group
+          sections are filters, so they preserve relative order. */}
+      <Sidebar title="Lists" placeholder="List" items={serverOrderedLists}
         countOf={(l) => l.open_count} onItems={setLists} api={listApi}
         collapsed={sideCollapsed} onToggle={onToggleSide}
         hiddenIds={hiddenSet} onHiddenChange={onHiddenListsChange}
