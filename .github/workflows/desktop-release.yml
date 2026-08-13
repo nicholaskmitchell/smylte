@@ -1,0 +1,104 @@
+# Builds what the Windows client installs, so nothing is ever compiled on a
+# user's PC. The client reads the rolling `desktop-latest` release rather than
+# the repository, which is what makes the exe a thing you install once.
+#
+# The web job repeats ci.yml's frontend gates on purpose: this workflow can be
+# dispatched by hand, and a release that skipped the tests would be a release
+# nobody could trust.
+name: Desktop release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+      - name: Stamp the build
+        # Read by the client to tell one build from another, and by anyone
+        # wondering which commit a running desktop app is actually on.
+        run: |
+          printf '{"sha":"%s","built":"%s"}\n' \
+            "$GITHUB_SHA" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > dist/version.json
+
+      - name: Package
+        run: cd dist && zip -qr "$GITHUB_WORKSPACE/smylte-web.zip" .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web
+          path: smylte-web.zip
+          retention-days: 7
+
+  client:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Publish
+        run: >
+          dotnet publish desktop/Smylte.Desktop/Smylte.Desktop.csproj
+          -c Release
+          -o publish
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: client
+          path: publish/Smylte.exe
+          retention-days: 7
+
+  release:
+    needs: [web, client]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Publish the rolling release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # Upload --clobber onto the existing release rather than delete-and-recreate,
+        # so there is never a window where a client checking for updates finds no
+        # release at all.
+        run: |
+          NOTES="Rolling desktop build from ${GITHUB_SHA}.
+
+          \`Smylte.exe\` is the Windows client — download it once; it keeps its own
+          copy of the web build up to date from this release on each launch.
+          \`smylte-web.zip\` is that web build, and is what the client downloads."
+
+          FILES="artifacts/web/smylte-web.zip artifacts/client/Smylte.exe"
+
+          if gh release view desktop-latest >/dev/null 2>&1; then
+            gh release upload desktop-latest $FILES --clobber
+            gh release edit desktop-latest --notes "$NOTES"
+          else
+            gh release create desktop-latest $FILES \
+              --title "Smylte desktop (rolling)" \
+              --notes "$NOTES" \
+              --prerelease
+          fi
