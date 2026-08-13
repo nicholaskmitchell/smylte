@@ -395,6 +395,245 @@ describe('<TasksView> orphaned subtasks', () => {
   })
 })
 
+// ── a write issued against a row whose create is still in flight ────────────
+// The stand-in used to wear the bare client_id while the task the server was
+// actually writing carried `${client_id}@tasksd`. Every write aimed at the row
+// in that window therefore named a resource that did not exist. For a subtask
+// that meant a RELATED-TO pointing at nothing — persisted to CalDAV, so the
+// child came back as its own top-level task and no reload ever fixed it.
+
+describe('<TasksView> creates still in flight', () => {
+  /** A server that answers like the real one: uid derived from the slug sent. */
+  const echoServer = () =>
+    m.createTask.mockImplementation(async (_l: string, b: Record<string, unknown>) =>
+      task({
+        uid: `${b.client_id as string}@tasksd`,
+        list: 'l1',
+        summary: b.summary as string,
+        parent: (b.parent as string) ?? null,
+      }))
+
+  /** A parent whose response stays open until the returned `release` is called.
+   *
+   *  Holding it is the whole point: let the create settle first and the row is
+   *  already wearing its server uid by the time the subtask is typed, so the
+   *  window the bug lived in is never entered and the test passes against the
+   *  broken code too. */
+  const heldParent = () => {
+    const held = { cid: '', release: () => {} }
+    m.createTask.mockImplementationOnce((_l: string, b: Record<string, unknown>) =>
+      new Promise<Task>((res) => {
+        held.cid = b.client_id as string
+        held.release = () => res(task({ uid: `${held.cid}@tasksd`, list: 'l1', summary: 'trip' }))
+      }))
+    echoServer()
+    return held
+  }
+
+  /** Quick-add a top-level task and add a subtask to the row it paints. */
+  const addParentThenSub = async (user: ReturnType<typeof userEvent.setup>) => {
+    await user.type(await screen.findByPlaceholderText('Add a task…'), 'trip{Enter}')
+    await user.click(await screen.findByTitle('Add subtask'))
+    await user.type(await screen.findByPlaceholderText('Subtask'), 'book flight{Enter}')
+  }
+
+  it('sends the uid the server will derive, not the create id', async () => {
+    const parent = heldParent()
+    const { user } = setup()
+    await addParentThenSub(user)
+    parent.release()
+    await waitFor(() => expect(m.createTask).toHaveBeenCalledTimes(2))
+    // The assertion is about the relationship between the two requests, so the
+    // id is read back off the first rather than guessed.
+    expect(m.createTask.mock.calls[1][1].parent).toBe(`${parent.cid}@tasksd`)
+  })
+
+  it('keeps the subtask nested once both creates settle', async () => {
+    const parent = heldParent()
+    const { user } = setup()
+    await addParentThenSub(user)
+    parent.release()
+    await waitFor(() => expect(m.createTask).toHaveBeenCalledTimes(2))
+    // The reported symptom, exactly: the child became its own top-level task.
+    // Note this holds by two routes — the uid sent is right, and the legacy
+    // heal would rescue the display even if it weren't. The wire value itself
+    // is pinned by the test above, which is the one that matters to the other
+    // CalDAV clients reading the same collection.
+    await waitFor(() =>
+      expect(screen.getByText('book flight').closest('.task')).toHaveClass('sub'))
+    expect(screen.getAllByText('book flight')).toHaveLength(1)
+    expect(document.querySelectorAll('.task:not(.sub)')).toHaveLength(1)
+  })
+
+  it('orders the subtask behind its parent rather than racing it', async () => {
+    const parent = heldParent()
+    const { user } = setup()
+    await addParentThenSub(user)
+    // Both rows are painted, but only the parent's request has gone out — a
+    // subtask sent now would reach a server that has never heard of its parent.
+    expect(await screen.findByText('book flight')).toBeInTheDocument()
+    expect(m.createTask).toHaveBeenCalledTimes(1)
+    parent.release()
+    await waitFor(() => expect(m.createTask).toHaveBeenCalledTimes(2))
+  })
+
+  it('drops a pending subtask when its parent create fails, unsent', async () => {
+    let rejectParent: (e: Error) => void = () => {}
+    m.createTask.mockImplementationOnce(
+      () => new Promise<Task>((_res, rej) => { rejectParent = rej }))
+    echoServer()
+    const { user } = setup()
+    await addParentThenSub(user)
+    expect(await screen.findByText('book flight')).toBeInTheDocument()
+    rejectParent(new Error('boom'))
+    // The child would otherwise have been written against a parent uid that
+    // will never exist — orphaned on the server for good.
+    await waitFor(() => expect(screen.queryByText('book flight')).not.toBeInTheDocument())
+    expect(screen.queryByText('trip')).not.toBeInTheDocument()
+    expect(m.createTask).toHaveBeenCalledTimes(1)
+  })
+
+  it('completes a row whose create has not settled, by its real uid', async () => {
+    // Not just subtasks: toggle, delete and edit all send the rendered uid too.
+    let release: (t: Task) => void = () => {}
+    let cid = ''
+    m.createTask.mockImplementation((_l: string, b: Record<string, unknown>) =>
+      new Promise<Task>((res) => {
+        cid = b.client_id as string
+        release = () => res(task({ uid: `${cid}@tasksd`, summary: 'solo' }))
+      }))
+    m.complete.mockResolvedValue(task({ uid: 'ignored', completed: true }))
+    const { user } = setup()
+    await user.type(await screen.findByPlaceholderText('Add a task…'), 'solo{Enter}')
+    await user.click(await screen.findByTitle('Toggle complete'))
+    await waitFor(() => expect(m.complete).toHaveBeenCalledTimes(1))
+    expect(m.complete.mock.calls[0][1]).toBe(`${cid}@tasksd`)
+    release(task())
+  })
+
+  it('shows one row when a refetch lands between the paint and the settle', async () => {
+    // The SSE bump can bring the real task in while the create is still open.
+    // Both now share a uid, so a naive settle would leave two identical rows.
+    let release: (t: Task) => void = () => {}
+    let landed: Task | null = null
+    m.createTask.mockImplementation((_l: string, b: Record<string, unknown>) =>
+      new Promise<Task>((res) => {
+        landed = task({ uid: `${b.client_id as string}@tasksd`, summary: 'solo' })
+        release = () => res(landed!)
+      }))
+    const { user } = setup()
+    await user.type(await screen.findByPlaceholderText('Add a task…'), 'solo{Enter}')
+    await waitFor(() => expect(m.createTask).toHaveBeenCalledTimes(1))
+    m.tasks.mockResolvedValue([landed!])
+    release(landed!)
+    await waitFor(() => expect(screen.getAllByText('solo')).toHaveLength(1))
+  })
+})
+
+// ── subtask progress, counted from the tasks on hand ────────────────────────
+// The badge used to render the server's child_count, a snapshot of the last
+// refetch — so it stayed stale until an SSE bump landed a whole refetch later,
+// while the nesting beside it (computed locally) had already moved.
+
+describe('<TasksView> subtask progress', () => {
+  const parent = task({ uid: 'p1', summary: 'Trip planning' })
+
+  it('counts the children on hand, not the DTO field', async () => {
+    // The server field is deliberately wrong here: the local count must win.
+    m.tasks.mockResolvedValue([
+      task({ ...parent, child_count: 99, completed_child_count: 99 }),
+      task({ uid: 'c1', summary: 'Book flight', parent: 'p1' }),
+      task({ uid: 'c2', summary: 'Pack', parent: 'p1', completed: true, status: 'COMPLETED' }),
+    ])
+    setup()
+    expect(await screen.findByText('1/2')).toBeInTheDocument()
+  })
+
+  it('moves the moment a subtask is added, with no refetch', async () => {
+    m.tasks.mockResolvedValue([parent])
+    m.createTask.mockImplementation(async (_l: string, b: Record<string, unknown>) =>
+      task({ uid: `${b.client_id as string}@tasksd`, summary: 'Book flight', parent: 'p1' }))
+    const { user } = setup()
+    await screen.findByText('Trip planning')
+    const fetches = m.tasks.mock.calls.length
+    await user.click(screen.getByTitle('Add subtask'))
+    await user.type(await screen.findByPlaceholderText('Subtask'), 'Book flight{Enter}')
+    expect(await screen.findByText('0/1')).toBeInTheDocument()
+    expect(m.tasks).toHaveBeenCalledTimes(fetches)
+  })
+
+  it('moves when a subtask is ticked', async () => {
+    const child = task({ uid: 'c1', summary: 'Book flight', parent: 'p1' })
+    m.tasks.mockResolvedValue([parent, child])
+    m.complete.mockResolvedValue({ ...child, completed: true, status: 'COMPLETED' })
+    const { user } = setup()
+    expect(await screen.findByText('0/1')).toBeInTheDocument()
+    const row = screen.getByText('Book flight').closest('.task')!
+    await user.click(within(row as HTMLElement).getByTitle('Toggle complete'))
+    expect(await screen.findByText('1/1')).toBeInTheDocument()
+  })
+
+  it('drops the badge when the last subtask is deleted', async () => {
+    const child = task({ uid: 'c1', summary: 'Book flight', parent: 'p1' })
+    m.tasks.mockResolvedValue([parent, child])
+    m.deleteTask.mockResolvedValue(null)
+    const { user } = setup()
+    expect(await screen.findByText('0/1')).toBeInTheDocument()
+    const row = screen.getByText('Book flight').closest('.task')!
+    await user.click(within(row as HTMLElement).getByTitle('Delete'))
+    await waitFor(() => expect(screen.queryByText('0/1')).not.toBeInTheDocument())
+  })
+
+  it('counts a subtask sitting in a hidden list', async () => {
+    // The server counts every child in the collection regardless of what this
+    // browser is showing, so the badge has to as well — otherwise hiding a list
+    // would silently renumber a parent that is still visible.
+    m.lists.mockResolvedValue([list, { ...list, id: 'l2', href: '/l2/', name: 'Personal' }])
+    m.tasks.mockImplementation(async (id: string) =>
+      id === 'l1'
+        ? [parent]
+        : [task({ uid: 'c1', list: 'l2', summary: 'Book flight', parent: 'p1' })])
+    setup()
+    // The row itself is filtered out, but it is still one of the parent's kids.
+    expect(await screen.findByText('0/1')).toBeInTheDocument()
+  })
+})
+
+// ── subtasks written before the uid contract was honoured ───────────────────
+
+describe('<TasksView> legacy orphans', () => {
+  const cid = 'a'.repeat(32)
+
+  it('nests a subtask whose parent is the bare create id', async () => {
+    m.tasks.mockResolvedValue([
+      task({ uid: `${cid}@tasksd`, summary: 'Trip planning' }),
+      task({ uid: 'c1', summary: 'Book flight', parent: cid }),
+    ])
+    setup()
+    await screen.findByText('Trip planning')
+    expect(screen.getByText('Book flight').closest('.task')).toHaveClass('sub')
+    expect(await screen.findByText('0/1')).toBeInTheDocument()
+  })
+
+  it('leaves a parent that is not a create id alone', async () => {
+    // A foreign client's RELATED-TO must never be reinterpreted.
+    m.tasks.mockResolvedValue([
+      task({ uid: 'not-hex@tasksd', summary: 'Trip planning' }),
+      task({ uid: 'c1', summary: 'Orphan', parent: 'not-hex' }),
+    ])
+    setup()
+    await screen.findByText('Trip planning')
+    expect(screen.getByText('Orphan').closest('.task')).not.toHaveClass('sub')
+  })
+
+  it('leaves a bare-hex parent alone when no task matches it', async () => {
+    m.tasks.mockResolvedValue([task({ uid: 'c1', summary: 'Orphan', parent: cid })])
+    setup()
+    expect(await screen.findByText('Orphan')).toBeInTheDocument()
+    expect(screen.getByText('Orphan').closest('.task')).not.toHaveClass('sub')
+  })
+})
+
 // ── what the editor sends for a value it cannot represent exactly ───────────
 
 describe('<TasksView> lossy round-trips', () => {

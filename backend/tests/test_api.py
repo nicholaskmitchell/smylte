@@ -76,6 +76,50 @@ def test_task_crud_and_subtasks(client):
     assert sub["uid"] not in remaining
 
 
+def test_client_id_determines_uid(client):
+    """The uid a create lands on is `{client_id}@tasksd`, and nothing else.
+
+    The web client mints the same string up front (`uidFor` in api.ts) so a row
+    whose create is still in flight already wears the identity it will keep —
+    which is what lets a subtask added in that window write a RELATED-TO that
+    resolves. That prediction is only legitimate while this holds, so pin it
+    here rather than leaving it an implementation detail of the sync engine.
+    """
+    lid = _list(client)["id"]
+    cid = uuid.uuid4().hex
+    t = client.post(f"/api/lists/{lid}/tasks",
+                    json={"summary": "trip", "client_id": cid}).json()
+    assert t["uid"] == f"{cid}@tasksd"
+
+    # …and the same slug names an event's uid, which the calendar view predicts
+    # the same way.
+    ecid = uuid.uuid4().hex
+    cal = _cal(client)
+    e = client.post(f"/api/calendars/{cal['id']}/events",
+                    json={"summary": "lunch", "start": "2026-07-15", "all_day": True,
+                          "client_id": ecid}).json()
+    assert e["uid"] == f"{ecid}@tasksd"
+
+
+def test_create_rejects_a_parent_that_names_nothing(client):
+    """RELATED-TO is written verbatim, so an unresolvable parent is an orphan
+    persisted to the collection — not something a refetch repairs. Refuse it."""
+    lid = _list(client)["id"]
+    cid = uuid.uuid4().hex
+    # The exact shape of the old bug: the client_id, where the uid belongs.
+    r = client.post(f"/api/lists/{lid}/tasks", json={"summary": "sub", "parent": cid})
+    assert r.status_code == 422, r.text
+    assert not client.get(f"/api/lists/{lid}/tasks").json()
+
+    # The derived uid is accepted, and counts against its parent.
+    parent = client.post(f"/api/lists/{lid}/tasks",
+                         json={"summary": "trip", "client_id": cid}).json()
+    sub = client.post(f"/api/lists/{lid}/tasks",
+                      json={"summary": "sub", "parent": parent["uid"]})
+    assert sub.status_code == 201, sub.text
+    assert client.get(f"/api/lists/{lid}/tasks/{parent['uid']}").json()["child_count"] == 1
+
+
 def test_search_and_tags(client):
     lst = _list(client)
     token = uuid.uuid4().hex[:10]

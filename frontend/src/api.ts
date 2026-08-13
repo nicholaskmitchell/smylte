@@ -220,6 +220,22 @@ export interface Settings {
 // by it — a client_id passed in the create body wins over the generated one.
 export const clientId = () => crypto.randomUUID().replace(/-/g, '')
 
+/** The UID the server will give a resource created with this client_id.
+ *
+ * Deterministic by contract — `engine.create_task` builds `f"{slug}@tasksd"`
+ * from the slug we send — and knowing it up front is what lets an optimistic
+ * stand-in carry its *final* identity from the very first paint. It has to:
+ * a subtask added to a task whose create is still in flight sends the parent's
+ * rendered uid as its RELATED-TO, and that value is written to the VTODO
+ * verbatim. While the stand-in wore the bare client_id, that pointer named a
+ * UID which would never exist, so the subtask was orphaned in CalDAV — it came
+ * back from the server as its own top-level task, and no reload fixed it.
+ *
+ * `test_api.py::test_created_uid_is_derived_from_client_id` pins the format
+ * from the other side, so the two can't drift apart silently. */
+export const UID_SUFFIX = '@tasksd'
+export const uidFor = (cid: string) => `${cid}${UID_SUFFIX}`
+
 async function j<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(path, {
     method,

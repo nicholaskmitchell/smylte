@@ -781,6 +781,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def post_task(request: Request, list_id: str, body: CreateTask):
         href = _href(request, list_id)
         _check_client_id(body.client_id)
+        # A parent naming nothing is refused rather than written. RELATED-TO
+        # goes onto the VTODO verbatim, so an unresolvable value is not a
+        # display bug that a refetch fixes — it is a subtask orphaned in the
+        # collection for every client that reads it, us included. Answering 422
+        # is what makes a client sending the wrong uid fail loudly instead of
+        # quietly corrupting the data.
+        if body.parent is not None and not await _run(
+            _svc(request).has_task, href, body.parent
+        ):
+            raise HTTPException(422, f"unknown parent task {body.parent}")
         return await _run(
             _svc(request).create_task, href, body.summary,
             edit=_edit_from_create(body), parent_uid=body.parent,

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import {
-  api, AuthError, clientId,
+  api, AuthError, clientId, uidFor,
   type CreateTaskBody, type List, type Task, type TaskGroup, type TasksViewMode,
 } from '../api'
 import {
@@ -15,6 +15,14 @@ const VIEWS: ReadonlyArray<readonly [TasksViewMode, string]> = [
 
 /** Done or won't-do — both take a task out of the active list. */
 const isDone = (t: Task) => t.completed || t.cancelled
+
+/** The shape a bare client_id has, matching the backend's `_CLIENT_ID_RE`.
+ *  Only a `parent` looking exactly like this is a candidate for the legacy
+ *  reinterpretation below — a real uid always carries the `@tasksd` suffix. */
+const LEGACY_PARENT = /^[0-9a-f]{16,64}$/
+
+/** A parent's subtask tally, or null when it has none to show. */
+type Progress = { total: number; done: number } | null
 
 /**
  * A date+time pair as the wire should carry it.
@@ -137,9 +145,13 @@ export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggle
   const settle = (dto: Task | undefined, orig: Task) =>
     setTasks((ts) => ts.map((t) => (t.uid === orig.uid ? (dto ?? orig) : t)))
 
-  // A pending create renders immediately as a local stand-in keyed by the
-  // create's client_id (the idempotency slug the server derives its uid from),
-  // so success can swap in the server DTO — and failure remove it — by uid.
+  // A pending create renders immediately as a local stand-in carrying the uid
+  // the server *will* give it (`uidFor`, from the same client_id the request
+  // sends), so success can swap in the server DTO — and failure remove it — by
+  // uid. The stand-in used to wear the bare client_id instead, which made every
+  // write issued against the row before it settled name a resource that did not
+  // exist: completing it 404'd, and a subtask added to it wrote a RELATED-TO
+  // pointing at nothing, orphaning the child in CalDAV for good.
   // Every task carries its own list id (`list`), so writes below target the
   // task's own list rather than a single "selected" one — essential once the
   // combined view mixes tasks from several lists.
@@ -156,26 +168,64 @@ export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggle
     child_count: 0, completed_child_count: 0, derived_percent: null,
     pinned: false, href: '', etag: '',
   })
-  // Swap a settled server DTO in for its stand-in. `key` is the loadKey the
-  // create was issued under — the user may have switched views mid-flight.
-  const settleCreate = (cid: string, key: string, t: Task) => {
+  // Swap a settled server DTO in for its stand-in, in place. `key` is the
+  // loadKey the create was issued under — the user may have switched views
+  // mid-flight. Since the stand-in already carries the DTO's uid, a refetch
+  // that landed between the paint and the settle can have brought the real task
+  // in alongside it; collapse both onto one row rather than mapping each to the
+  // DTO, which would leave two identical rows fighting over one React key.
+  const settleCreate = (uid: string, key: string, t: Task) => {
     const here = key === keyRef.current
     setTasks((ts) => {
-      if (ts.some((x) => x.uid === cid)) return ts.map((x) => (x.uid === cid ? t : x))
-      // Stand-in already gone — a refetch brought the real task, or the view
-      // changed. Re-append only when it belongs here and isn't shown yet.
-      return here && !ts.some((x) => x.uid === t.uid) ? [...ts, t] : ts
+      let placed = false
+      const next: Task[] = []
+      for (const x of ts) {
+        if (x.uid !== uid && x.uid !== t.uid) { next.push(x); continue }
+        if (placed) continue
+        placed = true
+        next.push(t)
+      }
+      // Stand-in already gone and no twin to replace — the view changed under
+      // it. Append only when it still belongs here.
+      if (!placed && here) next.push(t)
+      return next
     })
   }
-  const create = async (listId: string, body: CreateTaskBody) => {
-    if (!listId) return
+
+  // Creates still in flight, keyed by the uid their stand-in already carries.
+  // A subtask waits on its parent's entry before its own request goes out:
+  // RELATED-TO is written verbatim with no existence check, so a child whose
+  // parent never lands would be orphaned in the CalDAV data rather than merely
+  // mispainted. The UI only offers "+ sub" on top-level rows, so the chain is
+  // one deep today; nothing here assumes that.
+  const pending = useRef(new Map<string, Promise<Task | undefined>>())
+
+  const create = async (listId: string, body: CreateTaskBody,
+    after?: Promise<Task | undefined>): Promise<Task | undefined> => {
+    if (!listId) return undefined
     const cid = clientId()
+    const uid = uidFor(cid)
     const key = loadKey                   // the view this create belongs to
     invalidateFetches()
-    setTasks((ts) => [...ts, draftTask(cid, listId, body)])
-    const t = await guard(() => api.createTask(listId, { ...body, client_id: cid }))
-    if (!t) { setTasks((ts) => ts.filter((x) => x.uid !== cid)); return }
-    settleCreate(cid, key, t)
+    setTasks((ts) => [...ts, draftTask(uid, listId, body)])
+    const settled = (async () => {
+      // Awaited after the paint, never before it — the point of the whole
+      // exercise is that the subtask appears the instant it is typed.
+      if (after && !(await after)) {
+        setTasks((ts) => ts.filter((x) => x.uid !== uid))
+        return undefined
+      }
+      invalidateFetches()          // a refetch may have started while we waited
+      const t = await guard(() => api.createTask(listId, { ...body, client_id: cid }))
+      if (!t) { setTasks((ts) => ts.filter((x) => x.uid !== uid)); return undefined }
+      settleCreate(uid, key, t)
+      return t
+    })()
+    pending.current.set(uid, settled)
+    void settled.finally(() => {
+      if (pending.current.get(uid) === settled) pending.current.delete(uid)
+    })
+    return settled
   }
   // Create many tasks in one go, for the "Add multiple" composer: one optimistic
   // paint for the whole batch, then one request per task, in order.
@@ -199,25 +249,26 @@ export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggle
     // response was lost on the way back — the failure the composer explicitly
     // invites you to retry — landed a second time as a distinct task.
     const cids = items.map((it) => it.cid)
+    const uids = cids.map(uidFor)
     invalidateFetches()
-    setTasks((ts) => [...ts, ...items.map((it, i) => draftTask(cids[i], it.listId, it.body))])
+    setTasks((ts) => [...ts, ...items.map((it, i) => draftTask(uids[i], it.listId, it.body))])
     const failed: number[] = []
     for (let i = 0; i < items.length; i++) {
       try {
         const t = await api.createTask(items[i].listId, { ...items[i].body, client_id: cids[i] })
-        settleCreate(cids[i], key, t)
+        settleCreate(uids[i], key, t)
       } catch (e) {
         if (e instanceof AuthError) {
           // Session died mid-batch. Drop every stand-in that can no longer land
           // and hand the rest back as failures, so nothing is left painted.
-          const rest = cids.slice(i)
+          const rest = uids.slice(i)
           setTasks((ts) => ts.filter((x) => !rest.includes(x.uid)))
           onExpire()
           return [...failed, ...items.map((_, n) => n).filter((n) => n >= i)]
         }
         console.error(e)
         failed.push(i)
-        setTasks((ts) => ts.filter((x) => x.uid !== cids[i]))
+        setTasks((ts) => ts.filter((x) => x.uid !== uids[i]))
       }
       onProgress(i + 1)
     }
@@ -227,7 +278,7 @@ export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggle
     create(listId, due ? { summary, due } : { summary })
   const addSub = (parent: string, summary: string) => {
     const p = tasks.find((x) => x.uid === parent)   // a subtask lives in its parent's list
-    if (p) create(p.list, { summary, parent })
+    if (p) void create(p.list, { summary, parent }, pending.current.get(parent))
   }
 
   const toggle = async (t: Task) => {
@@ -298,7 +349,52 @@ export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggle
   // Keep every fetched list in `tasks` and drop hidden ones here, so toggling a
   // list is an instant client-side filter (no refetch).
   const shownTasks = tasks.filter((t) => !hiddenSet.has(t.list))
-  const childrenOf = (uid: string) => shownTasks.filter((t) => t.parent === uid)
+
+  // Every task on the account, for resolving parents. Deliberately not
+  // `shownTasks`: hiding a list must not orphan a child onto the top level.
+  const allByUid = useMemo(() => new Map(tasks.map((t) => [t.uid, t] as const)), [tasks])
+  // Subtasks written before `uidFor` existed carry the create's client_id where
+  // the parent's uid belongs, so they point at a task that never existed and
+  // read back as top-level ones. Reinterpret those at render time — recognised
+  // only when the value has exactly the shape this app mints (the backend's
+  // _CLIENT_ID_RE), names no task, and `${value}@tasksd` names one. The stored
+  // RELATED-TO is repaired separately; this is what makes them nest at once,
+  // and what covers a row the repair hasn't reached yet.
+  const legacyParent = (t: Task): string | null => {
+    const p = t.parent
+    if (!p || allByUid.has(p)) return p
+    return LEGACY_PARENT.test(p) && allByUid.has(uidFor(p)) ? uidFor(p) : p
+  }
+  const parentOf = (t: Task) => legacyParent(t)
+
+  // Subtask progress is derived here rather than read off the DTO. The server's
+  // child_count/completed_child_count are a snapshot of the last refetch, so a
+  // subtask created or ticked just now left its parent's x/y stale until the
+  // SSE bump landed a whole refetch later. Built from the full `tasks` array so
+  // the number still matches the server's: this view fetches every list, and a
+  // child in a hidden list is one the server is counting too.
+  const kidsByParent = useMemo(() => {
+    const byUid = new Map(tasks.map((t) => [t.uid, t] as const))
+    const m = new Map<string, Task[]>()
+    for (const t of tasks) {
+      let p = t.parent
+      if (!p) continue
+      if (!byUid.has(p)) {
+        if (!LEGACY_PARENT.test(p) || !byUid.has(uidFor(p))) continue
+        p = uidFor(p)
+      }
+      const kids = m.get(p)
+      if (kids) kids.push(t)
+      else m.set(p, [t])
+    }
+    return m
+  }, [tasks])
+  const progressOf = (uid: string) => {
+    const kids = kidsByParent.get(uid)
+    return kids ? { total: kids.length, done: kids.filter(isDone).length } : null
+  }
+
+  const childrenOf = (uid: string) => shownTasks.filter((t) => parentOf(t) === uid)
   // A subtask reaches the DOM only underneath its own parent's row, so anything
   // whose parent isn't here has to stand on its own or it is not rendered at
   // all — invisible, and so uncompletable, uneditable and undeletable, while
@@ -310,7 +406,8 @@ export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggle
   // rendered, and the subtask goes with it.
   const byUid = new Map(shownTasks.map((t) => [t.uid, t] as const))
   const parentIsRendered = (t: Task) => {
-    const p = t.parent ? byUid.get(t.parent) : undefined
+    const parent = parentOf(t)
+    const p = parent ? byUid.get(parent) : undefined
     return !!p && (showCompleted || !isDone(p))
   }
   const tops = shownTasks.filter((t) => !parentIsRendered(t))
@@ -398,7 +495,7 @@ export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggle
             {completedTasks.length === 0 && <div className="empty">No completed tasks.</div>}
             {completedTasks.map((t) => (
               <TaskGroup key={t.uid} task={t} kids={childrenOf(t.uid)} dot={dotFor(t)}
-                onToggle={toggle} onRemove={remove} onOpen={setDetail} onAddSub={addSub} />
+                progress={progressOf(t.uid)} onToggle={toggle} onRemove={remove} onOpen={setDetail} onAddSub={addSub} />
             ))}
           </div>
         ) : visibleLists.length === 0 ? (
@@ -417,7 +514,7 @@ export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggle
             <div className="scroll">
               {active.map((t) => (
                 <TaskGroup key={t.uid} task={t} kids={childrenOf(t.uid)} dot={dotFor(t)}
-                  onToggle={toggle} onRemove={remove} onOpen={setDetail} onAddSub={addSub} />
+                  progress={progressOf(t.uid)} onToggle={toggle} onRemove={remove} onOpen={setDetail} onAddSub={addSub} />
               ))}
               {active.length === 0 && <div className="empty">Nothing to do here.</div>}
               {showCompleted && done.length > 0 && (
@@ -425,7 +522,7 @@ export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggle
                   <div className="section-label label">Completed · {done.length}</div>
                   {done.map((t) => (
                     <TaskGroup key={t.uid} task={t} kids={childrenOf(t.uid)} dot={dotFor(t)}
-                      onToggle={toggle} onRemove={remove} onOpen={setDetail} onAddSub={addSub} />
+                      progress={progressOf(t.uid)} onToggle={toggle} onRemove={remove} onOpen={setDetail} onAddSub={addSub} />
                   ))}
                 </>
               )}
@@ -493,15 +590,16 @@ export function TasksView({ rev, onExpire, view, onView, sideCollapsed, onToggle
   )
 }
 
-function TaskGroup({ task, kids, dot, onToggle, onRemove, onOpen, onAddSub }: {
+function TaskGroup({ task, kids, dot, progress, onToggle, onRemove, onOpen, onAddSub }: {
   task: Task; kids: Task[]; dot?: string | null
+  progress: Progress
   onToggle: (t: Task) => void; onRemove: (t: Task) => void
   onOpen: (t: Task) => void; onAddSub: (parent: string, summary: string) => void
 }) {
   const [adding, setAdding] = useState(false)
   return (
     <div>
-      <TaskRow task={task} dot={dot} onToggle={onToggle} onRemove={onRemove} onOpen={onOpen} onAddSub={() => setAdding(true)} />
+      <TaskRow task={task} dot={dot} progress={progress} onToggle={onToggle} onRemove={onRemove} onOpen={onOpen} onAddSub={() => setAdding(true)} />
       {kids.map((k) => (
         <TaskRow key={k.uid} task={k} sub dot={dot} onToggle={onToggle} onRemove={onRemove} onOpen={onOpen} />
       ))}
@@ -624,8 +722,11 @@ function DayCard({ task, showDate, dot, onToggle, onOpen, onDrag }: {
   )
 }
 
-function TaskRow({ task, sub, dot, onToggle, onRemove, onOpen, onAddSub }: {
+function TaskRow({ task, sub, dot, progress, onToggle, onRemove, onOpen, onAddSub }: {
   task: Task; sub?: boolean; dot?: string | null
+  // Derived from the tasks on hand, not read off the DTO — see `progressOf`.
+  // Absent for a subtask row, which never shows a count of its own.
+  progress?: Progress
   onToggle: (t: Task) => void; onRemove: (t: Task) => void
   onOpen: (t: Task) => void; onAddSub?: () => void
 }) {
@@ -641,15 +742,15 @@ function TaskRow({ task, sub, dot, onToggle, onRemove, onOpen, onAddSub }: {
           {dot !== undefined && <span className="list-dot" style={dot ? { background: dot } : undefined} />}
           {task.summary || '(untitled)'} {task.cancelled && <span className="chip">won't do</span>}
         </div>
-        {(task.due || task.child_count > 0 || task.tags.length > 0) && (
+        {(task.due || progress || task.tags.length > 0) && (
           <div className="task-meta">
             {task.due && (
               <span className={`due ${isOverdue(task.due, task.due_is_date) && !task.completed ? 'overdue' : ''}`}>
                 ◷ {fmtDue(task.due, task.due_is_date)}
               </span>
             )}
-            {task.child_count > 0 && (
-              <span className="child-progress">{task.completed_child_count}/{task.child_count}</span>
+            {progress && (
+              <span className="child-progress">{progress.done}/{progress.total}</span>
             )}
             {task.tags.map((tg) => <span key={tg} className="chip">#{tg}</span>)}
           </div>
