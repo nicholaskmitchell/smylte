@@ -695,8 +695,13 @@ describe('<TasksView> list picker order', () => {
     const rowFor = (name: string) =>
       [...document.querySelectorAll('.side-list .side-item')]
         .find((r) => r.querySelector('.name')?.textContent === name)!
-    fireEvent.dragStart(rowFor('Delta'))
-    fireEvent.drop(rowFor('Alpha'))
+    // jsdom builds a DragEvent with no dataTransfer, and the handler sets
+    // effectAllowed on it — so without a stub the drag throws asynchronously,
+    // which vitest reports as an unhandled error and a non-zero exit even
+    // though every assertion passed.
+    const dataTransfer = { setData: vi.fn(), getData: vi.fn(), effectAllowed: '' }
+    fireEvent.dragStart(rowFor('Delta'), { dataTransfer })
+    fireEvent.drop(rowFor('Alpha'), { dataTransfer })
 
     await waitFor(() => expect(m.reorderLists).toHaveBeenCalledTimes(1))
     // Delta moved onto Alpha's slot within the *server* sequence a,b,c,d.
