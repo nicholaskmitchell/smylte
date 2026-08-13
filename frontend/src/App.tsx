@@ -11,6 +11,7 @@ import {
   resolve, sanitizeAppearance, syncThemeColor, type Appearance, type Mode,
 } from './appearance'
 import { sanitizeLayout } from './dashboard'
+import { isSessionTtl, nextSessionTtl, sessionLabel } from './session'
 import {
   DEFAULT_TAB_ORDER, DEFAULT_TAB_START, TAB_LABELS, cacheTab, isTab, readCachedTab,
   resolveStartTab, sanitizeTabOrder, sanitizeTabStart, type Tab, type TabStart,
@@ -47,6 +48,9 @@ export function App() {
   const [collapsedGroups, setCollapsedGroups] = useState<string[]>([])
   const [collapsedTasks, setCollapsedTasks] = useState<string[]>([])
   const [showCompleted, setShowCompleted] = useState(false)
+  // How long a login lasts. Null means the deployment's own TASKS_SESSION_TTL,
+  // which is what this used to be the only way to set.
+  const [sessionTtl, setSessionTtl] = useState<number | null>(null)
   const [rev, setRev] = useState(0)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [archivedOpen, setArchivedOpen] = useState(false)
@@ -159,6 +163,7 @@ export function App() {
           setCollapsedTasks(s.collapsed_tasks.filter((x) => typeof x === 'string'))
         }
         if (typeof s.show_completed_tasks === 'boolean') setShowCompleted(s.show_completed_tasks)
+        if (isSessionTtl(s.session_ttl_s)) setSessionTtl(s.session_ttl_s)
         // Both blobs are re-validated here rather than trusted: they are the
         // two settings a user can hand-edit or import a file into, and an
         // unknown token or a garbage grid cell should degrade to the default
@@ -294,6 +299,15 @@ export function App() {
     saveSettingsSoon({ collapsed_tasks: next })
   }, [saveSettingsSoon])
 
+  // Session length. The server keeps the same allowlist and refuses anything
+  // else, so this cycles rather than offering a free field. Written straight
+  // through, not debounced — one click is one decision.
+  const cycleSessionTtl = useCallback(() => {
+    const next = nextSessionTtl(sessionTtl)
+    setSessionTtl(next)
+    saveSettings({ session_ttl_s: next })
+  }, [sessionTtl])
+
   // Whether completed tasks show inline in the main view. Hidden by default; the
   // sidebar's "View completed" button always works regardless of this choice.
   const toggleShowCompleted = useCallback(() => {
@@ -427,6 +441,13 @@ export function App() {
               </button>
             </div>
             <div className="menu-row">
+              <label>Stay signed in</label>
+              <button className="menu-toggle" onClick={cycleSessionTtl}
+                aria-label="How long to stay signed in">
+                {sessionLabel(sessionTtl)}
+              </button>
+            </div>
+            <div className="menu-row">
               <label>Completed tasks</label>
               <button className="menu-toggle" onClick={toggleShowCompleted}
                 aria-pressed={showCompleted}>
@@ -443,6 +464,10 @@ export function App() {
                 onClick={() => { setSettingsOpen(false); setArchivedOpen(true) }}>
                 {archivedCals.length > 0 ? `View (${archivedCals.length})` : 'View'}
               </button>
+            </div>
+            <div className="hintline">
+              A shorter sign-in applies at once, on this device and any other. A
+              longer one starts from your next sign-in.
             </div>
             <div className="hintline">
               Lists and calendars live on the Radicale CalDAV server — changes here

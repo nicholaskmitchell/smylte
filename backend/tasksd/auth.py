@@ -21,6 +21,7 @@ import hmac
 import ipaddress
 import secrets
 import time
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 
 import jwt
@@ -174,11 +175,19 @@ class RateLimiter:
 
 
 class Authenticator:
-    def __init__(self, *, user: str, password_hash: str, secret: str, ttl_s: int):
+    def __init__(self, *, user: str, password_hash: str, secret: str,
+                 ttl_s: int | Callable[[], int]):
         self._user = user
         self._password_hash = password_hash
         self._secret = secret
-        self._ttl = ttl_s
+        # A callable rather than a number, because the session length is a
+        # setting the user can change while signed in. Reading it at verify time
+        # is what lets a *shortened* session take effect at once, on this device
+        # and on any other: the JWT is stateless, so its own `exp` cannot be
+        # moved once issued, but a token older than the current setting can be
+        # refused. Lengthening still waits for the next login — nothing can
+        # stretch a token past the `exp` already baked into it.
+        self._ttl: Callable[[], int] = ttl_s if callable(ttl_s) else (lambda: ttl_s)
         self.limiter = RateLimiter()
         self._revoked: dict[str, float] = {}      # jti -> the token's own exp
         self._last_revoked_sweep = 0.0
@@ -196,13 +205,18 @@ class Authenticator:
         pass_ok = verify_password(password or "", self._password_hash)
         return user_ok and pass_ok
 
+    @property
+    def ttl_s(self) -> int:
+        """The session length in force right now."""
+        return self._ttl()
+
     def issue_session(self) -> str:
         now = datetime.now(timezone.utc)
         return jwt.encode(
             {
                 "sub": self._user,
                 "iat": now,
-                "exp": now + timedelta(seconds=self._ttl),
+                "exp": now + timedelta(seconds=self.ttl_s),
                 # Names this session so logout can withdraw exactly it, and not
                 # the ones on your other devices.
                 "jti": secrets.token_hex(16),
@@ -221,6 +235,13 @@ class Authenticator:
         except Exception:  # noqa: BLE001
             return None
         if self.is_revoked(claims.get("jti")):
+            return None
+        # Shortening the session length has to bite immediately, including on
+        # sessions opened elsewhere — which for a stateless token means judging
+        # it against the current setting rather than only the `exp` it was
+        # minted with. A token with no `iat` predates this and is left to `exp`.
+        iat = claims.get("iat")
+        if isinstance(iat, (int, float)) and time.time() - iat > self.ttl_s:
             return None
         return claims
 

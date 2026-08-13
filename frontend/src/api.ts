@@ -211,6 +211,7 @@ export interface Settings {
   task_groups?: TaskGroup[]        // named, collapsible groupings of task lists
   collapsed_groups?: string[]      // ids of task groups currently collapsed in the sidebar
   collapsed_tasks?: string[]       // uids of tasks whose subtask trees are folded away
+  session_ttl_s?: number | null    // how long a login lasts; null defers to the deployment
   show_completed_tasks?: boolean   // show completed/cancelled tasks inline in the main view (default hidden)
 }
 
