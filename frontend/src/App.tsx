@@ -372,7 +372,7 @@ export function App() {
   // everything under it. `enabled` is what keeps it from talking to a server
   // that has not yet said who we are.
   return (
-    <DataProvider rev={rev} onExpire={onExpire} enabled={auth === 'in'}>
+    <DataProvider rev={rev} onExpire={onExpire} taskGroups={taskGroups} enabled={auth === 'in'}>
       {auth === 'out'
         ? <Login onLogin={(u) => { setCacheUser(u); setUser(u); setAuth('in') }} />
         : (

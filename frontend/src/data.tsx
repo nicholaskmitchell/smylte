@@ -21,8 +21,9 @@ import {
 } from 'react'
 import {
   api, AuthError, clientId, uidFor,
-  type CalEvent, type CreateTaskBody, type List, type Task,
+  type CalEvent, type CreateTaskBody, type List, type Task, type TaskGroup,
 } from './api'
+import { orderLists } from './lists'
 import {
   cacheCalendars, cacheEvents, cacheLists, cacheTasks,
   readCachedCalendars, readCachedEvents, readCachedLists, readCachedTasks,
@@ -36,7 +37,19 @@ const LEGACY_PARENT = /^[0-9a-f]{16,64}$/
 const CACHE_DEBOUNCE_MS = 400
 
 export interface TaskData {
+  /** In the order the sidebar shows them — group by group, then ungrouped.
+   *  This is what every list picker should render: the dropdowns used to show
+   *  the raw fetch order, which stops matching the sidebar the moment a group
+   *  exists, so the picker followed an order nobody can see. */
   lists: List[]
+  /** As the server sorted them, for the one caller that must not use the other.
+   *  The sidebar's drag-reorder PROPPATCHes `calendar-order` onto every
+   *  collection in Radicale, and task groups are an app-only construct with
+   *  nowhere to live on the wire — handing it the grouped array would write
+   *  this app's grouping into shared CalDAV state, reordering the collections
+   *  for Tasks.org, jtx Board and Thunderbird to match something none of them
+   *  can see. A display preference does not get to rewrite that. */
+  serverOrderedLists: List[]
   tasks: Task[]
   /** The lists fetch has returned at least once this session. Cached rows are
    *  worth painting but are not evidence about the account, so "create a list
@@ -87,9 +100,11 @@ export function useCalendarData(): CalendarData {
 
 const windowKey = (from: string, to: string) => `${from}|${to}`
 
-export function DataProvider({ rev, onExpire, enabled = true, children }: {
+export function DataProvider({ rev, onExpire, taskGroups = [], enabled = true, children }: {
   rev: number
   onExpire: () => void
+  /** The sidebar's groupings, which decide the order `lists` comes back in. */
+  taskGroups?: TaskGroup[]
   /** Whether to talk to the server yet. The provider sits above the auth branch
    *  so resolving the session does not remount the whole shell underneath it —
    *  but it must not fetch while the session is unknown or gone. Cached rows
@@ -102,7 +117,8 @@ export function DataProvider({ rev, onExpire, enabled = true, children }: {
   const guard = useMemo(() => makeGuard(() => expire.current()), [])
 
   return (
-    <TaskProvider rev={rev} guard={guard} enabled={enabled} onExpire={() => expire.current()}>
+    <TaskProvider rev={rev} guard={guard} enabled={enabled} taskGroups={taskGroups}
+      onExpire={() => expire.current()}>
       <CalendarProvider rev={rev} guard={guard} enabled={enabled}>{children}</CalendarProvider>
     </TaskProvider>
   )
@@ -112,8 +128,9 @@ type Guard = ReturnType<typeof makeGuard>
 
 // ── tasks ───────────────────────────────────────────────────────────────────
 
-function TaskProvider({ rev, guard, enabled, onExpire, children }: {
-  rev: number; guard: Guard; enabled: boolean; onExpire: () => void; children: ReactNode
+function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
+  rev: number; guard: Guard; enabled: boolean; taskGroups: TaskGroup[]
+  onExpire: () => void; children: ReactNode
 }) {
   // Seeded from the disk mirror so the first frame has content. The server
   // overwrites both a moment later, like every other cached thing in the app.
@@ -402,8 +419,10 @@ function TaskProvider({ rev, guard, enabled, onExpire, children }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tasks, loaded])
 
+  const ordered = useMemo(() => orderLists(lists, taskGroups), [lists, taskGroups])
+
   const value: TaskData = {
-    lists, tasks, listsLoaded, loaded, setLists,
+    lists: ordered, serverOrderedLists: lists, tasks, listsLoaded, loaded, setLists,
     create, createMany, addSub, toggle, remove, saveDetail,
   }
   return <TaskCtx.Provider value={value}>{children}</TaskCtx.Provider>
