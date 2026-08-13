@@ -38,7 +38,8 @@ public static class Updater
             if (haveLocal) return new UpdateResult(false, "Offline — using the installed build.");
             throw new InvalidOperationException(
                 "Could not reach GitHub to download the app, and there is no local copy yet. "
-                + "Check the connection (and the token, if the repository is private).", ex);
+                + "Check the connection. If this keeps happening, a GitHub token in settings "
+                + "raises the API rate limit.", ex);
         }
 
         var id = asset.GetProperty("id").GetInt64();
