@@ -55,7 +55,7 @@ public sealed class SetupForm : Form
             Text = "The server address is where Smylte is deployed, e.g. "
                  + "https://radicale.nicholaskmitchell.com.\n"
                  + "The password is stored encrypted for your Windows account, never in the clear.\n"
-                 + "A GitHub token is only needed while the repository is private.",
+                 + "A GitHub token is optional — only useful if update checks hit a rate limit.",
             Location = new Point(24, 232),
             Size = new Size(532, 60),
             ForeColor = SystemColors.GrayText,

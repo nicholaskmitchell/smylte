@@ -22,8 +22,11 @@ public sealed class Settings
 
     public string DataFolder { get; set; } = "";
 
-    /// Only needed while the repository is private; release-asset downloads are
-    /// anonymous otherwise. A fine-grained PAT with Contents:read is enough.
+    /// Optional. The repository is public, so release assets download without
+    /// one; this exists because anonymous GitHub API access is capped at 60
+    /// requests an hour per IP. A launch spends one, which is ample on a normal
+    /// connection and not necessarily ample behind a shared or CGNAT address.
+    /// A fine-grained PAT with Contents:read is enough.
     public string GitHubToken { get; set; } = "";
 
     /// Deliberately stable across launches. localStorage is keyed by origin and
