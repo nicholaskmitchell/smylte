@@ -193,6 +193,15 @@ class TaskService:
                 children.setdefault(it["related_parent"], []).append(it)
         return children
 
+    def has_task(self, href: str, uid: str) -> bool:
+        """Is ``uid`` a VTODO in this collection? Asked before a create names it
+        as a parent — ``RELATED-TO`` is written verbatim with no existence check
+        of its own, so a wrong value is not a mispaint but an orphan persisted to
+        CalDAV that every client reading the collection then has to cope with."""
+        with self._lock:
+            row = store.get_item(self._conn, href, uid)
+        return row is not None and row["component"] == "VTODO"
+
     def get_task(self, href: str, uid: str) -> dict[str, Any] | None:
         with self._lock:
             row = store.get_item(self._conn, href, uid)
