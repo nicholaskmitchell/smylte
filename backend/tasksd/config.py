@@ -51,6 +51,20 @@ def normalize_dav_url(raw: str) -> str:
     return v if v.endswith("/") else v + "/"
 
 
+def normalize_public_url(raw: str) -> str:
+    """This deployment's external origin, without a trailing slash.
+
+    RFC 8707 defines the canonical form of a resource identifier, and RFC 9728's
+    `resource` field has to match what the client was pointed at — so the two
+    spellings of the same origin must not both be reachable. Trailing slash is
+    dropped for the same reason the MCP spec asks clients to omit it.
+    """
+    v = (raw or "").strip().rstrip("/")
+    if v and not v.startswith(("http://", "https://")):
+        v = "https://" + v
+    return v
+
+
 @dataclass(frozen=True)
 class Settings:
     radicale_url: str          # origin, e.g. http://127.0.0.1:5233 (no trailing slash)
@@ -78,6 +92,15 @@ class Settings:
     # /dav split, or an absolute URL if DAV lives on its own host). Only used
     # to answer RFC 6764 discovery — see the discovery routes in app.py.
     dav_public_url: str = "/dav/"
+    # Remote MCP server (Claude connectors). OFF by default: turning it on adds
+    # publicly reachable OAuth endpoints, and a deploy should never grow an auth
+    # surface on its own. See tasksd/mcp/.
+    mcp_enabled: bool = False
+    # This deployment's external origin, e.g. https://tasks.example.com. The
+    # OAuth metadata documents have to state absolute URLs, and the `resource`
+    # a token is bound to must match what the client was pointed at — so it is
+    # configured rather than read off the Host header, which a caller controls.
+    public_url: str = ""
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -103,4 +126,6 @@ class Settings:
             access_team_domain=os.environ.get("TASKS_ACCESS_TEAM_DOMAIN", ""),
             access_aud=os.environ.get("TASKS_ACCESS_AUD", ""),
             dav_public_url=normalize_dav_url(os.environ.get("TASKS_DAV_URL", "/dav/")),
+            mcp_enabled=_bool("TASKS_MCP_ENABLED", False),
+            public_url=normalize_public_url(os.environ.get("TASKS_PUBLIC_URL", "")),
         )
