@@ -641,3 +641,196 @@ def count_items(conn: sqlite3.Connection, collection_href: str | None = None) ->
     return conn.execute(
         "SELECT COUNT(*) FROM items WHERE collection_href=?", (collection_href,)
     ).fetchone()[0]
+
+
+# ── OAuth 2.1 authorization server (remote MCP connectors) ───────────────────
+#
+# Every function here takes and returns *hashes* of secrets, never the secrets
+# themselves — hashing is the caller's job (mcp/oauth.py), so a mistake there is
+# visible at the call site rather than buried in SQL. The only plaintext that
+# reaches this module is the client_id, which is a public identifier.
+
+
+def create_oauth_client(
+    conn: sqlite3.Connection,
+    *,
+    client_id: str,
+    client_secret_hash: str | None,
+    client_name: str | None,
+    redirect_uris: list[str],
+    scope: str,
+    now: float,
+) -> None:
+    conn.execute(
+        "INSERT INTO oauth_clients (client_id, client_secret_hash, client_name, "
+        "redirect_uris, scope, created_at, last_used_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (client_id, client_secret_hash, client_name,
+         json.dumps(list(redirect_uris)), scope, now, now),
+    )
+    conn.commit()
+
+
+def get_oauth_client(conn: sqlite3.Connection, client_id: str) -> dict | None:
+    row = conn.execute(
+        "SELECT * FROM oauth_clients WHERE client_id=?", (client_id,)
+    ).fetchone()
+    if row is None:
+        return None
+    d = dict(row)
+    try:
+        d["redirect_uris"] = json.loads(d["redirect_uris"])
+    except (TypeError, ValueError):
+        d["redirect_uris"] = []
+    if not isinstance(d["redirect_uris"], list):
+        d["redirect_uris"] = []
+    return d
+
+
+def touch_oauth_client(conn: sqlite3.Connection, client_id: str, now: float) -> None:
+    """Mark a client as still in use, so the sweep below spares it."""
+    conn.execute(
+        "UPDATE oauth_clients SET last_used_at=? WHERE client_id=?", (now, client_id)
+    )
+    conn.commit()
+
+
+def count_oauth_clients(conn: sqlite3.Connection) -> int:
+    return conn.execute("SELECT COUNT(*) FROM oauth_clients").fetchone()[0]
+
+
+def gc_oauth(conn: sqlite3.Connection, *, now: float, client_idle_s: float) -> int:
+    """Sweep expired codes and tokens, and clients that never got used.
+
+    Registration is open by design, so this is what keeps an unauthenticated
+    caller from growing the tables without bound. A client is spared as long as
+    it keeps completing flows; one that registered and then went quiet is junk.
+    Returns the number of client rows dropped.
+    """
+    conn.execute("DELETE FROM oauth_codes WHERE expires_at <= ?", (now,))
+    # A used refresh token is kept until it expires, not dropped on use: the
+    # replay check needs the row to still be there to notice the second attempt.
+    conn.execute("DELETE FROM oauth_tokens WHERE expires_at <= ?", (now,))
+    cur = conn.execute(
+        "DELETE FROM oauth_clients WHERE last_used_at <= ? AND client_id NOT IN "
+        "(SELECT DISTINCT client_id FROM oauth_tokens)",
+        (now - client_idle_s,),
+    )
+    conn.commit()
+    return cur.rowcount or 0
+
+
+def create_oauth_code(
+    conn: sqlite3.Connection,
+    *,
+    code_hash: str,
+    client_id: str,
+    redirect_uri: str,
+    scope: str,
+    resource: str,
+    code_challenge: str,
+    expires_at: float,
+    now: float,
+) -> None:
+    conn.execute(
+        "INSERT INTO oauth_codes (code_hash, client_id, redirect_uri, scope, resource, "
+        "code_challenge, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (code_hash, client_id, redirect_uri, scope, resource,
+         code_challenge, expires_at, now),
+    )
+    conn.commit()
+
+
+def take_oauth_code(conn: sqlite3.Connection, code_hash: str, *, now: float) -> dict | None:
+    """Consume an authorization code: read it and delete it in one transaction.
+
+    Single-use is enforced by the delete, not by a flag — two concurrent
+    exchanges race on the same row and SQLite serialises them, so exactly one
+    sees a rowcount of 1. Returns None for unknown, already-used or expired.
+    """
+    with conn:
+        row = conn.execute(
+            "SELECT * FROM oauth_codes WHERE code_hash=?", (code_hash,)
+        ).fetchone()
+        if row is None:
+            return None
+        cur = conn.execute("DELETE FROM oauth_codes WHERE code_hash=?", (code_hash,))
+        if not cur.rowcount:
+            return None                      # lost the race; the winner has it
+    return dict(row) if row["expires_at"] > now else None
+
+
+def create_oauth_token(
+    conn: sqlite3.Connection,
+    *,
+    token_hash: str,
+    kind: str,
+    client_id: str,
+    scope: str,
+    resource: str,
+    family_id: str,
+    expires_at: float,
+    now: float,
+) -> None:
+    conn.execute(
+        "INSERT INTO oauth_tokens (token_hash, kind, client_id, scope, resource, "
+        "family_id, used_at, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?)",
+        (token_hash, kind, client_id, scope, resource, family_id, expires_at, now),
+    )
+    conn.commit()
+
+
+def get_oauth_token(conn: sqlite3.Connection, token_hash: str) -> dict | None:
+    row = conn.execute(
+        "SELECT * FROM oauth_tokens WHERE token_hash=?", (token_hash,)
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def use_refresh_token(conn: sqlite3.Connection, token_hash: str, *, now: float) -> str:
+    """Claim a refresh token for rotation.
+
+    Returns "ok" when this call is the one that claimed it, "replayed" when it
+    had already been used (the caller must then kill the family — a second
+    presentation means a copy is loose), and "invalid" for unknown/expired.
+
+    The claim is a conditional UPDATE, so two concurrent redemptions cannot both
+    succeed: SQLite serialises them and the loser sees rowcount 0, which is the
+    same signal as a genuine replay. Treating that as a stolen token is the
+    conservative reading and costs an honest client one reconnect.
+    """
+    with conn:
+        row = conn.execute(
+            "SELECT * FROM oauth_tokens WHERE token_hash=? AND kind='refresh'",
+            (token_hash,),
+        ).fetchone()
+        if row is None or row["expires_at"] <= now:
+            return "invalid"
+        cur = conn.execute(
+            "UPDATE oauth_tokens SET used_at=? WHERE token_hash=? AND used_at IS NULL",
+            (now, token_hash),
+        )
+        return "ok" if cur.rowcount else "replayed"
+
+
+def revoke_oauth_family(conn: sqlite3.Connection, family_id: str) -> int:
+    """Drop every token in a rotation family. Used on replay, and on an explicit
+    disconnect — one row per issued token, so this ends the whole grant."""
+    cur = conn.execute("DELETE FROM oauth_tokens WHERE family_id=?", (family_id,))
+    conn.commit()
+    return cur.rowcount or 0
+
+
+def list_oauth_grants(conn: sqlite3.Connection, *, now: float) -> list[dict]:
+    """One row per live grant (family), for the connections screen: which client,
+    what it may do, when it was granted and when it was last refreshed."""
+    return [
+        dict(r)
+        for r in conn.execute(
+            "SELECT t.family_id, t.client_id, t.scope, t.resource, "
+            "       MIN(t.created_at) AS granted_at, MAX(t.created_at) AS refreshed_at, "
+            "       MAX(t.expires_at) AS expires_at, c.client_name "
+            "FROM oauth_tokens t LEFT JOIN oauth_clients c ON c.client_id = t.client_id "
+            "WHERE t.expires_at > ? GROUP BY t.family_id ORDER BY granted_at DESC",
+            (now,),
+        )
+    ]

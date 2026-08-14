@@ -191,3 +191,58 @@ CREATE TABLE IF NOT EXISTS revoked_sessions (
     expires_at REAL NOT NULL           -- the token's own exp, as a UNIX timestamp
 );
 CREATE INDEX IF NOT EXISTS idx_revoked_sessions_exp ON revoked_sessions(expires_at);
+
+-- ── OAuth 2.1 authorization server (remote MCP; sidecar-class) ───────────────
+-- State for the connector flow. Sidecar-class: none of it exists on the wire
+-- and a resync cannot rebuild it — dropping these tables signs every connected
+-- client out, which is the correct failure mode, not a lost cache.
+--
+-- Secrets are stored as SHA-256 hex, never in the clear. A read of this file
+-- (backup, disk image, a stray SELECT) must not yield a working credential; the
+-- app only ever needs to *recognise* a presented secret, never to reproduce it.
+-- Booking-link tokens are the deliberate exception — they are capability URLs
+-- the owner must be able to re-read and re-share.
+
+CREATE TABLE IF NOT EXISTS oauth_clients (
+    client_id            TEXT PRIMARY KEY,       -- secrets.token_urlsafe(24)
+    client_secret_hash   TEXT,                   -- NULL for a public client (Claude registers as one)
+    client_name          TEXT,
+    redirect_uris        TEXT NOT NULL,          -- JSON array; matched exactly (loopback: port ignored)
+    scope                TEXT,                   -- space-delimited, what this client may ask for
+    created_at           REAL NOT NULL,
+    -- Registration is open (the MCP spec wants DCR so a client can connect with
+    -- no setup), so rows are swept: one never used to complete a flow is junk,
+    -- and without this an unauthenticated caller could grow the table forever.
+    last_used_at         REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_oauth_clients_used ON oauth_clients(last_used_at);
+
+CREATE TABLE IF NOT EXISTS oauth_codes (
+    code_hash            TEXT PRIMARY KEY,
+    client_id            TEXT NOT NULL,
+    redirect_uri         TEXT NOT NULL,          -- pinned: the exchange must present the same one
+    scope                TEXT NOT NULL,
+    resource             TEXT NOT NULL,          -- RFC 8707 audience this code may mint a token for
+    code_challenge       TEXT NOT NULL,          -- PKCE S256 challenge; no plain, no omission
+    expires_at           REAL NOT NULL,          -- seconds, not minutes: a code is used immediately
+    created_at           REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_oauth_codes_exp ON oauth_codes(expires_at);
+
+CREATE TABLE IF NOT EXISTS oauth_tokens (
+    token_hash           TEXT PRIMARY KEY,
+    kind                 TEXT NOT NULL,          -- 'access' | 'refresh'
+    client_id            TEXT NOT NULL,
+    scope                TEXT NOT NULL,
+    resource             TEXT NOT NULL,          -- validated against the endpoint the token is used at
+    -- Rotation chain. A refresh token is single-use: redeeming it issues a
+    -- successor and marks this row used. A *second* redemption of an already-used
+    -- token is the signature of a stolen copy, so it kills the whole family
+    -- rather than just failing — OAuth 2.1 §4.3.1 for public clients.
+    family_id            TEXT NOT NULL,
+    used_at              REAL,
+    expires_at           REAL NOT NULL,
+    created_at           REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_oauth_tokens_exp ON oauth_tokens(expires_at);
+CREATE INDEX IF NOT EXISTS idx_oauth_tokens_family ON oauth_tokens(family_id);

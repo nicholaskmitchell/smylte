@@ -852,6 +852,18 @@ class TaskService:
         with self._lock:
             return store.live_revocations(self._conn, now=now)
 
+    # ── OAuth / MCP ──────────────────────────────────────────────────────────
+    def oauth(self, fn, *args, **kwargs):
+        """Run an OAuth store operation under the service lock.
+
+        The MCP layer needs the SQLite connection, and this is how it gets one
+        without a second handle on the database or its own idea of when it is
+        safe to write. Everything else in this class serialises the same way;
+        the token endpoint has no business being the exception.
+        """
+        with self._lock:
+            return fn(self._conn, *args, **kwargs)
+
     # ── app settings (account-synced) ─────────────────────────────────────────
     def get_settings(self) -> dict[str, Any]:
         with self._lock:

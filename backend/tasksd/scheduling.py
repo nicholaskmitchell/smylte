@@ -164,6 +164,17 @@ def generate_slots(
     one link-tz date (booking re-validation) while keeping the notice/horizon
     rules in force.
     """
+    # The candidate cursor advances by `duration`, so a non-positive one never
+    # advances and the loop below cannot terminate: the only early exit is the
+    # max_slots cap, and that is unreachable whenever the window sits before
+    # `open_from` — which it does for any default min_notice_hours. The caller
+    # runs this inside the service lock, so the hang would take the whole app
+    # with it and survive a restart, since the bad value is persisted. Every
+    # HTTP path bounds this field already; this refuses to be the loop that
+    # trusts them to have.
+    if duration_minutes <= 0:
+        raise ValueError("duration_minutes must be positive")
+
     local_now = now.astimezone(tz)
     open_from = local_now + timedelta(hours=min_notice_hours)
     last_day = local_now.date() + timedelta(days=horizon_days)

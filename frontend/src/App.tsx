@@ -27,6 +27,7 @@ import { SchedulingView } from './components/SchedulingView'
 import { HomeView } from './components/HomeView'
 import { AppearancePanel } from './components/AppearancePanel'
 import { ArchivedCalendarsModal } from './components/ArchivedCalendarsModal'
+import { ConnectionsModal } from './components/ConnectionsModal'
 import { TabsModal } from './components/TabsModal'
 
 type Auth = 'loading' | 'in' | 'out'
@@ -63,6 +64,7 @@ export function App() {
   const [rev, setRev] = useState(0)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [archivedOpen, setArchivedOpen] = useState(false)
+  const [connectionsOpen, setConnectionsOpen] = useState(false)
   const [tabsOpen, setTabsOpen] = useState(false)
   const [appearanceOpen, setAppearanceOpen] = useState(false)
   // Seeded from the pre-paint cache so the editor opens showing what is already
@@ -502,6 +504,13 @@ export function App() {
               <span className="menu-value">{user}</span>
             </div>
             <div className="menu-row">
+              <label>Connected apps</label>
+              <button className="menu-toggle" aria-label="Connected applications"
+                onClick={() => { setSettingsOpen(false); setConnectionsOpen(true) }}>
+                Manage…
+              </button>
+            </div>
+            <div className="menu-row">
               <label>Archived calendars</label>
               <button className="menu-toggle"
                 onClick={() => { setSettingsOpen(false); setArchivedOpen(true) }}>
@@ -555,6 +564,9 @@ export function App() {
         <AppearancePanel appearance={appearance} onChange={changeAppearance}
           mode={theme === 'dark' ? 'dark' : 'light'} onMode={changeTheme}
           onClose={() => setAppearanceOpen(false)} />
+      )}
+      {connectionsOpen && (
+        <ConnectionsModal onExpire={onExpire} onClose={() => setConnectionsOpen(false)} />
       )}
       {archivedOpen && (
         <ArchivedCalendarsModal archived={archivedCals} onChange={changeArchivedCals}
