@@ -7,6 +7,7 @@
 import type { Appearance } from './appearance'
 import type { DashboardModule } from './dashboard'
 import type { Tab, TabStart } from './tabs'
+import type { TimeFormat } from './time'
 export type { Appearance, DashboardModule }
 
 export class AuthError extends Error {}
@@ -51,6 +52,7 @@ export interface Task {
   due: string | null
   due_is_date: boolean
   start: string | null
+  start_is_date: boolean
   tags: string[]
   parent: string | null
   children: string[]
@@ -58,6 +60,10 @@ export interface Task {
   completed_child_count: number
   derived_percent: number | null
   pinned: boolean
+  // Manual position (see order.ts). Lives in the app-only sidecar, so it is
+  // null until something is dragged, and stays null for tasks another CalDAV
+  // client created — the sidecar never goes on the wire.
+  sort_order: number | null
   href: string
   etag: string
 }
@@ -213,6 +219,9 @@ export interface Settings {
   collapsed_tasks?: string[]       // uids of tasks whose subtask trees are folded away
   session_ttl_s?: number | null    // how long a login lasts; null defers to the deployment
   show_completed_tasks?: boolean   // show completed/cancelled tasks inline in the main view (default hidden)
+  time_format?: TimeFormat         // 12- or 24-hour clock across the app (see time.ts); default '12h'
+  calendar_task_lists?: string[]   // task-list ids DRAWN on the calendar — an allowlist, empty by default
+  calendar_show_done_tasks?: boolean  // keep completed tasks on the calendar (default hidden)
 }
 
 // Creates carry a client-generated id that becomes the CalDAV resource slug,
@@ -278,6 +287,13 @@ export const api = {
     j<List>('PATCH', `/api/lists/${id}`, body),
   deleteList: (id: string) => j<null>('DELETE', `/api/lists/${id}`),
   reorderLists: (ids: string[]) => j<unknown>('POST', '/api/lists/reorder', { ids }),
+  // Every task the client holds, in the order it wants them — not just the one
+  // that moved, and not just the visible lists. See order.ts and the endpoint's
+  // own docstring: the pane is always the merged view, so positions have to be
+  // comparable across lists, and a hidden list left out would come back with
+  // stale positions interleaved through the new ones.
+  reorderTasks: (items: Array<{ list: string; uid: string }>) =>
+    j<unknown>('POST', '/api/tasks/reorder', { items }),
   tasks: (listId: string, includeDone = true) =>
     j<Task[]>('GET', `/api/lists/${listId}/tasks?include_done=${includeDone}`),
   createTask: (listId: string, body: Record<string, unknown>) =>

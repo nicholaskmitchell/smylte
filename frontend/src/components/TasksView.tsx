@@ -4,14 +4,29 @@ import {
 import { api, uidFor, type CreateTaskBody, type List, type Task, type TaskGroup, type TasksViewMode } from '../api'
 import { useTaskData } from '../data'
 import {
-  addDays, dayKey, fmtDue, hasZone, instantFromLocal, isOverdue, makeGuard, toLocalInput, ymd,
+  addDays, dayKey, isOverdue, makeGuard, toLocalInput, ymd,
 } from '../util'
-import { AddMultipleModal, blankValues, bodyFrom, FIELDS, type RowValues } from './AddMultipleModal'
+import { fmtClock, fmtDue, inputLang } from '../time'
+import { sortTasks } from '../order'
+import { useTimeFormat } from '../timeformat'
+import { AddMultipleModal } from './AddMultipleModal'
+import { dateOut, TaskModal } from './TaskModal'
 import { Sidebar } from './Sidebar'
 
 const VIEWS: ReadonlyArray<readonly [TasksViewMode, string]> = [
   ['list', 'List'], ['day3', '3-Day'], ['week', 'Week'],
 ]
+
+/** Drag-to-reorder wiring, threaded to the list view's top-level rows.
+ *  `onOver(null, from)` clears the highlight only if `from` still owns it, so a
+ *  dragleave firing after the next row's dragenter doesn't blank it. */
+interface ReorderDrag {
+  uid: string | null
+  over: string | null
+  onStart: (uid: string | null) => void
+  onOver: (uid: string | null, from?: string) => void
+  onDrop: (target: string) => void
+}
 
 /** Done or won't-do — both take a task out of the active list. */
 const isDone = (t: Task) => t.completed || t.cancelled
@@ -23,23 +38,6 @@ const LEGACY_PARENT = /^[0-9a-f]{16,64}$/
 
 /** A parent's subtask tally, or null when it has none to show. */
 type Progress = { total: number; done: number } | null
-
-/**
- * A date+time pair as the wire should carry it.
- *
- * A bare date stays all-day. A timed value is sent as a naive local string —
- * which is what the app's own writes are — *unless* the property it replaces was
- * anchored to a zone by another CalDAV client, in which case the instant goes
- * instead so the server can put it back in that zone. Sending the naive string
- * there dropped the TZID and silently moved the deadline to the viewer's
- * wall clock: `DUE;TZID=Europe/Berlin:20260810T093000` came back as
- * `DUE:20260810T033000` for a reader in New York.
- */
-const dateOut = (date: string, time: string, original: string | null | undefined) => {
-  if (!date) return null
-  if (!time) return date
-  return hasZone(original) ? instantFromLocal(date, time) : `${date}T${time}`
-}
 
 export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
   hiddenLists, onHiddenListsChange, groups, onGroupsChange,
@@ -60,7 +58,7 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
   // Home reads the same copy rather than fanning out a second one.
   const {
     lists, serverOrderedLists, tasks, listsLoaded, loaded, setLists,
-    create, createMany, addSub, toggle, remove, saveDetail,
+    create, createMany, addSub, toggle, remove, saveDetail, reorder,
   } = useTaskData()
   const [detail, setDetail] = useState<Task | null>(null)
   // The two create surfaces, both null when closed. `adding` is the single-task
@@ -110,6 +108,25 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
   // A one-line convenience over the shared create; day columns pass a due.
   const addTask = (listId: string, summary: string, due?: string) =>
     create(listId, due ? { summary, due } : { summary })
+
+  // List-view drag-to-reorder. Only the list view: the day columns already own
+  // the drag gesture for rescheduling (`dragUid`/`dropOnDay` below), and one
+  // gesture cannot mean two things.
+  const [orderUid, setOrderUid] = useState<string | null>(null)
+  const [orderOver, setOrderOver] = useState<string | null>(null)
+  const reorderDrag: ReorderDrag = {
+    uid: orderUid,
+    over: orderOver,
+    onStart: (uid) => { setOrderUid(uid); if (!uid) setOrderOver(null) },
+    onOver: (uid, from) =>
+      setOrderOver((o) => (uid === null ? (o === from ? null : o) : uid)),
+    onDrop: (target) => {
+      const dragged = orderUid
+      setOrderUid(null)
+      setOrderOver(null)
+      if (dragged) void reorder(dragged, target)
+    },
+  }
   // Day-column drag: dropping a card on a column reschedules it to that day.
   // A timed due keeps its local time-of-day; an all-day due stays all-day.
   const [dragUid, setDragUid] = useState<string | null>(null)
@@ -236,6 +253,9 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
       if (mine) mine.push(t)
       else m.set(p, [t])
     }
+    // Subtasks get the same order as top-level rows — they are collected in
+    // array order above, which is exactly the thing that used to shuffle.
+    for (const [p, kids] of m) m.set(p, sortTasks(kids))
     return m
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tasks, hiddenSet, showCompleted, parentByUid])
@@ -252,8 +272,12 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
     const kept = collapsedTasks.filter((x) => x !== uid && kidRows.has(x))
     onCollapsedTasksChange(next ? [...kept, uid] : kept)
   }, [collapsedSet, collapsedTasks, kidRows, onCollapsedTasksChange])
-  const active = tops.filter((t) => !t.completed && !t.cancelled)
-  const done = tops.filter((t) => t.completed || t.cancelled)
+  // Sorted, not just filtered. These render straight into the list view, which
+  // used to show them in raw array order — so a new task appeared at the bottom
+  // and then jumped when the refetch replaced the array. `compareTasks` is a
+  // total order, so the array's own order stops mattering entirely.
+  const active = sortTasks(tops.filter((t) => !t.completed && !t.cancelled))
+  const done = sortTasks(tops.filter((t) => t.completed || t.cancelled))
   // Where new tasks land by default (first visible list); the list view's
   // quick-add offers a picker, day columns fall back to this.
   const defaultList = visibleLists[0]?.id ?? ''
@@ -271,24 +295,26 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
 
   const todayKey = ymd(new Date())
   const dueDay = (t: Task) => (t.due ? dayKey(t.due) : null)
-  const byDue = (a: Task, b: Task) => (a.due || '').localeCompare(b.due || '')
   // The dedicated "View completed" pane: every done/cancelled top-level task
   // (respecting hidden lists via `done`), most-recent due first, undated last.
-  const completedTasks = [...done].sort(byDue).reverse()
+  // The dated ones are reversed; the undated are appended rather than swept
+  // along, since reversing the whole run would float them to the top.
+  const completedTasks = [
+    ...sortTasks(done.filter((t) => t.due)).reverse(),
+    ...sortTasks(done.filter((t) => !t.due)),
+  ]
   const openOn = (key: string) =>
-    shownTasks.filter((t) => !t.completed && !t.cancelled && dueDay(t) === key).sort(byDue)
+    sortTasks(shownTasks.filter((t) => !t.completed && !t.cancelled && dueDay(t) === key))
   const doneOn = (key: string) =>
-    shownTasks.filter((t) => (t.completed || t.cancelled) && dueDay(t) === key).sort(byDue)
+    sortTasks(shownTasks.filter((t) => (t.completed || t.cancelled) && dueDay(t) === key))
   // Overdue tasks pool in the today column — but only ones due before the
   // visible window, so a task never shows both there and in its own column.
   const firstKey = ymd(days[0])
-  const overdue = shownTasks
-    .filter((t) => {
-      const d = dueDay(t)
-      return !t.completed && !t.cancelled && d !== null && d < todayKey && d < firstKey
-    })
-    .sort(byDue)
-  const undated = shownTasks.filter((t) => !t.completed && !t.cancelled && !t.due)
+  const overdue = sortTasks(shownTasks.filter((t) => {
+    const d = dueDay(t)
+    return !t.completed && !t.cancelled && d !== null && d < todayKey && d < firstKey
+  }))
+  const undated = sortTasks(shownTasks.filter((t) => !t.completed && !t.cancelled && !t.due))
 
   const fmtD = (d: Date) => d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 
@@ -368,7 +394,8 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
               {active.map((t) => (
                 <TaskGroup key={t.uid} task={t} childrenOf={childrenOf} dot={dotFor(t)}
                   progressOf={progressOf} collapsed={collapsedSet} onCollapse={setCollapsed}
-                  onToggle={toggle} onRemove={remove} onOpen={setDetail} onAddSub={addSub} />
+                  onToggle={toggle} onRemove={remove} onOpen={setDetail} onAddSub={addSub}
+                  drag={reorderDrag} />
               ))}
               {active.length === 0 && (
                 <div className="empty" aria-busy={!loaded || undefined}>
@@ -464,7 +491,7 @@ const MAX_INDENT = 6
  * gave out. A row already on its own path is dropped rather than repeated.
  */
 function TaskGroup({ task, childrenOf, dot, progressOf, depth = 0, seen,
-  collapsed, onCollapse, onToggle, onRemove, onOpen, onAddSub }: {
+  collapsed, onCollapse, onToggle, onRemove, onOpen, onAddSub, drag }: {
   task: Task
   childrenOf: (uid: string) => Task[]
   dot?: string | null
@@ -475,6 +502,10 @@ function TaskGroup({ task, childrenOf, dot, progressOf, depth = 0, seen,
   onCollapse: (uid: string, next: boolean) => void
   onToggle: (t: Task) => void; onRemove: (t: Task) => void
   onOpen: (t: Task) => void; onAddSub: (parent: string, summary: string) => void
+  /** Manual reorder, list view only (opt-in). Wraps the whole subtree, not just
+   *  the row, so a parent takes its subtasks with it. Subtasks are not
+   *  themselves reorderable — they render under their parent wherever it goes. */
+  drag?: ReorderDrag
 }) {
   const [adding, setAdding] = useState(false)
   const kids = childrenOf(task.uid).filter((k) => !seen?.has(k.uid))
@@ -482,7 +513,21 @@ function TaskGroup({ task, childrenOf, dot, progressOf, depth = 0, seen,
   const path = useMemo(() => new Set([...(seen ?? []), task.uid]), [seen, task.uid])
   const indent = Math.min(depth, MAX_INDENT)
   return (
-    <div>
+    <div
+      className={drag
+        ? `task-drag ${drag.over === task.uid && drag.uid !== task.uid ? 'drag-over' : ''}`
+        : undefined}
+      draggable={!!drag}
+      onDragStart={drag && ((e) => {
+        drag.onStart(task.uid)
+        e.dataTransfer.effectAllowed = 'move'
+        // Firefox refuses to start a drag with nothing on the transfer.
+        e.dataTransfer.setData('text/plain', task.uid)
+      })}
+      onDragOver={drag && ((e) => { e.preventDefault(); drag.onOver(task.uid) })}
+      onDragLeave={drag && (() => drag.onOver(null, task.uid))}
+      onDrop={drag && ((e) => { e.preventDefault(); drag.onDrop(task.uid) })}
+      onDragEnd={drag && (() => drag.onStart(null))}>
       <TaskRow task={task} dot={dot} depth={indent} progress={progressOf(task.uid)}
         collapsed={kids.length > 0 ? isCollapsed : undefined}
         onCollapse={(next) => onCollapse(task.uid, next)}
@@ -581,6 +626,7 @@ function DayCard({ task, showDate, dot, onToggle, onOpen, onDrag }: {
   const priClass = pri === 'high' ? 'pri-high' : pri === 'medium' ? 'pri-med' : pri === 'low' ? 'pri-low' : ''
   const done = task.completed || task.cancelled
   const timed = !!task.due && task.due.includes('T') && !task.due_is_date
+  const tf = useTimeFormat()
   return (
     <div className={`day-card ${done ? 'done' : ''}`} draggable
       onDragStart={(e) => {
@@ -601,12 +647,12 @@ function DayCard({ task, showDate, dot, onToggle, onOpen, onDrag }: {
           <div className="task-meta">
             {showDate && task.due && (
               <span className={`due ${!task.completed ? 'overdue' : ''}`}>
-                ◷ {fmtDue(task.due, task.due_is_date)}
+                ◷ {fmtDue(task.due, task.due_is_date, tf)}
               </span>
             )}
             {!showDate && timed && (
               <span className={`due ${isOverdue(task.due, task.due_is_date) && !task.completed ? 'overdue' : ''}`}>
-                {new Date(task.due!).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
+                {fmtClock(task.due!, tf)}
               </span>
             )}
             {task.tags.map((tg) => <span key={tg} className="chip">#{tg}</span>)}
@@ -634,6 +680,7 @@ function TaskRow({ task, depth = 0, dot, progress, collapsed, onCollapse,
   const pri = task.priority_label
   const priClass = pri === 'high' ? 'pri-high' : pri === 'medium' ? 'pri-med' : pri === 'low' ? 'pri-low' : ''
   const label = task.summary || '(untitled)'
+  const tf = useTimeFormat()
   return (
     <div className={`task ${depth > 0 ? 'sub' : ''} ${task.completed || task.cancelled ? 'done' : ''}`}
       style={indentStyle(depth)}>
@@ -658,7 +705,7 @@ function TaskRow({ task, depth = 0, dot, progress, collapsed, onCollapse,
           <div className="task-meta">
             {task.due && (
               <span className={`due ${isOverdue(task.due, task.due_is_date) && !task.completed ? 'overdue' : ''}`}>
-                ◷ {fmtDue(task.due, task.due_is_date)}
+                ◷ {fmtDue(task.due, task.due_is_date, tf)}
               </span>
             )}
             {progress && (
@@ -728,137 +775,6 @@ function InlineCreate({ placeholder, onSubmit, onCancel, grow }: {
           if (e.key === 'Enter' && v.trim()) onSubmit(v.trim())
           if (e.key === 'Escape') onCancel()
         }} />
-    </div>
-  )
-}
-
-/**
- * The single-task form, for both creating and editing — one property table and
- * one layout, so "add a task" and "edit a task" are the same form in two modes.
- * `task === null` means creating: the list picker appears (you're choosing where
- * it lands) and the footer offers the route to the bulk composer instead of
- * Delete.
- */
-function TaskModal({ task, lists, defaultList, initialTitle, onClose, onCreate, onSave, onDelete, onMultiple }: {
-  task: Task | null
-  lists: List[]
-  defaultList: string
-  initialTitle?: string
-  onClose: () => void
-  onCreate: (listId: string, body: CreateTaskBody) => void
-  onSave: (patch: Record<string, unknown>) => void
-  onDelete: () => void
-  onMultiple: (listId: string, summary: string) => void
-}) {
-  const creating = task === null
-  const [summary, setSummary] = useState(task?.summary || initialTitle || '')
-  const [notes, setNotes] = useState(task?.notes || '')
-  // Every other property lives in the same bag the bulk composer uses, and is
-  // rendered by the same FIELDS table — one form at two multiplicities. Date
-  // and time stay separate slots so an all-day due survives a save as a bare
-  // date instead of silently becoming a timed midnight due.
-  const hasTime = !!task?.due && !task.due_is_date && task.due.includes('T')
-  const startHasTime = !!task?.start && task.start.includes('T')
-  const initial = (): RowValues => ({
-    ...blankValues(task?.list || defaultList),
-    priority: task?.priority_label ?? 'none',
-    dueDate: task?.due ? dayKey(task.due) : '',
-    dueTime: hasTime ? toLocalInput(task!.due!).slice(11, 16) : '',
-    startDate: task?.start ? dayKey(task.start) : '',
-    startTime: startHasTime ? toLocalInput(task!.start!).slice(11, 16) : '',
-    tags: task?.tags ?? [],
-  })
-  const [start] = useState<RowValues>(initial)
-  const [vals, setVals] = useState<RowValues>(start)
-  // Every value here has round-tripped through a lossy form representation, so
-  // resending an unchanged field rewrites a property another CalDAV client
-  // authored. Compared against the opening values rather than tracked as
-  // "touched": a field edited and then put back is unchanged, and sending it
-  // would quantise a PRIORITY:3 the four-way picker can only render as "high".
-  const same = (a: string | string[], b: string | string[]) =>
-    Array.isArray(a) && Array.isArray(b)
-      ? a.length === b.length && a.every((x, i) => x === b[i])
-      : a === b
-  const changed = (...keys: (keyof RowValues)[]) => keys.some((k) => !same(vals[k], start[k]))
-  const patch = (p: Partial<RowValues>) => setVals((v) => ({ ...v, ...p }))
-
-  // The list picker only makes sense while creating: moving an existing task
-  // between lists means moving it between CalDAV collections, which PATCH
-  // doesn't do. Notes keeps its full-width textarea either way — the composer's
-  // one-line notes input is a density concession a single-task form needn't make.
-  const props = FIELDS.filter((f) => f.key !== 'notes' && (creating || f.key !== 'list'))
-  const listId = vals.listId || defaultList
-
-  // Creating omits empty fields (bodyFrom's rule — the backend treats a missing
-  // key as "leave unset"); editing sends explicit nulls, which is how a value
-  // gets cleared.
-  const submit = () => {
-    if (creating) {
-      if (!summary.trim()) return
-      onCreate(listId, bodyFrom(summary.trim(), { ...vals, notes }))
-      onClose()
-      return
-    }
-    // Omit anything unchanged: the backend treats an absent key as "leave
-    // unset", so a rename rewrites the summary and nothing else.
-    const body: Record<string, unknown> = {}
-    if (summary !== (task?.summary || '')) body.summary = summary
-    if (notes !== (task?.notes || '')) body.notes = notes
-    if (changed('priority')) body.priority = vals.priority
-    if (changed('dueDate', 'dueTime')) body.due = dateOut(vals.dueDate, vals.dueTime, task?.due)
-    if (changed('startDate', 'startTime')) {
-      body.start = dateOut(vals.startDate, vals.startTime, task?.start)
-    }
-    if (changed('tags')) body.tags = vals.tags
-    onSave(body)
-  }
-
-  return (
-    <div className="overlay" onClick={onClose}>
-      <div className="modal task-modal" role="dialog" aria-modal="true"
-        aria-label={creating ? 'Add task' : 'Task'}
-        onClick={(e) => e.stopPropagation()}>
-        <div className="modal-head">
-          <span className="modal-title">{creating ? 'Add task' : 'Task'}</span>
-          <button className="icon-btn" onClick={onClose} aria-label="Close">✕</button>
-        </div>
-        {/* Title and notes are the two controls FIELDS doesn't render, so they
-            carry their own htmlFor/id pair — only one form is ever open. */}
-        <div className="field">
-          <label className="label" htmlFor="task-title">Title</label>
-          <input id="task-title" className="input" value={summary} autoFocus={creating}
-            onChange={(e) => setSummary(e.target.value)}
-            onKeyDown={(e: KeyboardEvent) => { if (e.key === 'Enter') submit() }} />
-        </div>
-        <div className="task-props">
-          {props.map((f) => (
-            <div key={f.key} className={`task-prop prop-${f.key}`}>
-              <label className="label">{f.label}</label>
-              <span className="task-prop-controls">
-                {f.render(vals, patch, { lists, where: '', disabled: false })}
-              </span>
-            </div>
-          ))}
-        </div>
-        <div className="field">
-          <label className="label" htmlFor="task-notes">Notes</label>
-          <textarea id="task-notes" className="input" rows={3} value={notes}
-            onChange={(e) => setNotes(e.target.value)} />
-        </div>
-        <div className="modal-actions">
-          {creating ? (
-            <button className="btn ghost" onClick={() => onMultiple(listId, summary)}>
-              Add multiple
-            </button>
-          ) : (
-            <button className="btn ghost" onClick={onDelete}>Delete</button>
-          )}
-          <span className="spacer" />
-          <button className="btn" onClick={submit} disabled={creating && !summary.trim()}>
-            {creating ? 'Add' : 'Save'}
-          </button>
-        </div>
-      </div>
     </div>
   )
 }

@@ -419,6 +419,35 @@ def test_settings_show_completed_sync(client):
     assert client.get("/api/settings").json().get("show_completed_tasks") is False
 
 
+def test_settings_time_format_sync(client):
+    # Only the two clocks are accepted — the blob is hand-editable, and an
+    # unknown token would reach a formatter on every client that read it.
+    r = client.put("/api/settings", json={"time_format": "24h"})
+    assert r.status_code == 200 and r.json().get("time_format") == "24h"
+    assert client.get("/api/settings").json().get("time_format") == "24h"
+    assert client.put("/api/settings", json={"time_format": "12h"}).status_code == 200
+    assert client.get("/api/settings").json().get("time_format") == "12h"
+    assert client.put("/api/settings", json={"time_format": "H:mm"}).status_code == 422
+
+
+def test_settings_calendar_tasks_sync(client):
+    # An allowlist, not a hidden set: absent means no task lists are drawn on
+    # the calendar, so the empty default has to survive the round trip as
+    # "none" rather than being read as "unset, therefore all".
+    assert "calendar_task_lists" not in client.get("/api/settings").json()
+    r = client.put("/api/settings", json={"calendar_task_lists": ["a", "b"]})
+    assert r.status_code == 200 and r.json()["calendar_task_lists"] == ["a", "b"]
+    assert client.get("/api/settings").json()["calendar_task_lists"] == ["a", "b"]
+    # Empty is a real value that clears the set (the store merge only skips None).
+    assert client.put("/api/settings", json={"calendar_task_lists": []}).json()[
+        "calendar_task_lists"] == []
+
+    r = client.put("/api/settings", json={"calendar_show_done_tasks": True})
+    assert r.status_code == 200 and r.json()["calendar_show_done_tasks"] is True
+    client.put("/api/settings", json={"calendar_show_done_tasks": False})
+    assert client.get("/api/settings").json()["calendar_show_done_tasks"] is False
+
+
 def test_settings_task_grouping_sync(client):
     # hidden_lists, task_groups, and collapsed_groups must survive the HTTP
     # round-trip — the model has to accept and re-emit each key (a store test
@@ -801,3 +830,59 @@ def test_required_window_bounds_and_non_finite_sidecar_are_422(client):
         # And the list is still readable — rendering the 422 must not blow up
         # either, which it did while the handler echoed the offending value back.
         assert client.get(f"/api/lists/{lid}/tasks").status_code == 200
+
+
+def test_task_manual_reorder(client):
+    # Manual order spans lists: the tasks pane is always the merged view, so a
+    # position only means something if it is comparable between collections.
+    a, b = _list(client), _list(client)
+    mk = lambda lid, s: client.post(f"/api/lists/{lid}/tasks", json={"summary": s}).json()
+    one = mk(a["id"], "one")
+    two = mk(b["id"], "two")
+    three = mk(a["id"], "three")
+
+    # Until something is dragged every task is unplaced, and stays that way for
+    # anything another CalDAV client creates — the sidecar is not on the wire.
+    assert all(t["sort_order"] is None for t in client.get(f"/api/lists/{a['id']}/tasks").json())
+
+    order = [
+        {"list": b["id"], "uid": two["uid"]},
+        {"list": a["id"], "uid": three["uid"]},
+        {"list": a["id"], "uid": one["uid"]},
+    ]
+    assert client.post("/api/tasks/reorder", json={"items": order}).status_code == 200
+
+    got = {t["uid"]: t["sort_order"] for t in client.get(f"/api/lists/{a['id']}/tasks").json()}
+    got |= {t["uid"]: t["sort_order"] for t in client.get(f"/api/lists/{b['id']}/tasks").json()}
+    assert got[two["uid"]] == 1 and got[three["uid"]] == 2 and got[one["uid"]] == 3
+
+    # The list endpoint hands them back in that order too, so a direct API
+    # reader sees what the app shows.
+    assert [t["uid"] for t in client.get(f"/api/lists/{a['id']}/tasks").json()] \
+        == [three["uid"], one["uid"]]
+
+    # A reorder is one event, not one per task: nothing's iCalendar data
+    # changed, and N events would make every other tab refetch N times.
+    assert client.post("/api/tasks/reorder", json={"items": list(reversed(order))}).status_code == 200
+    got2 = {t["uid"]: t["sort_order"] for t in client.get(f"/api/lists/{a['id']}/tasks").json()}
+    assert got2[one["uid"]] == 1 and got2[three["uid"]] == 2
+
+
+def test_task_reorder_rejects_a_bad_body(client):
+    lst = _list(client)
+    t = client.post(f"/api/lists/{lst['id']}/tasks", json={"summary": "solo"}).json()
+
+    # An unknown list is a 404 for the whole request — a reorder never half-lands.
+    r = client.post("/api/tasks/reorder", json={
+        "items": [{"list": lst["id"], "uid": t["uid"]}, {"list": "nope", "uid": "x"}]})
+    assert r.status_code == 404
+    assert client.get(f"/api/lists/{lst['id']}/tasks").json()[0]["sort_order"] is None
+
+    # A uid twice would take two positions with the last winning, silently
+    # moving something the user never dragged.
+    dup = {"list": lst["id"], "uid": t["uid"]}
+    assert client.post("/api/tasks/reorder", json={"items": [dup, dup]}).status_code == 422
+
+    # An empty order is a no-op, not an error: it is what an account with no
+    # tasks at all would send.
+    assert client.post("/api/tasks/reorder", json={"items": []}).status_code == 200

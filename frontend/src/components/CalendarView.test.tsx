@@ -11,12 +11,12 @@
  */
 import { useState } from 'react'
 import { describe, expect, it, vi, afterEach, beforeEach } from 'vitest'
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { CalendarView } from './CalendarView'
 import { DataProvider } from '../data'
 import { setCacheUser } from '../cache'
-import { api, type CalEvent, type List } from '../api'
+import { api, type CalEvent, type List, type Task } from '../api'
 
 vi.mock('../api', async (importOriginal) => {
   const mod = await importOriginal<typeof import('../api')>()
@@ -40,6 +40,20 @@ const ev = (o: Partial<CalEvent> = {}): CalEvent => ({
   href: '/c1/u1.ics', etag: '"1"', ...o,
 })
 
+const taskList: List = {
+  id: 'tl1', href: '/tl1/', name: 'Errands', is_task_list: true, is_calendar: false,
+  open_count: 2, task_count: 2, event_count: 0, total: 2, color: '#1565C0',
+}
+
+const tsk = (o: Partial<Task> = {}): Task => ({
+  uid: 't1', list: 'tl1', summary: 'Renew passport', notes: null, status: 'NEEDS-ACTION',
+  completed: false, cancelled: false, priority: null, priority_label: 'none',
+  percent_complete: null, due: '2026-03-04', due_is_date: true,
+  start: null, start_is_date: true, tags: [], parent: null, children: [],
+  child_count: 0, completed_child_count: 0, derived_percent: null,
+  pinned: false, sort_order: null, href: '/tl1/t1.ics', etag: '"1"', ...o,
+})
+
 /** A recurring occurrence: what the expander hands the grid for one instance. */
 const occurrence = (o: Partial<CalEvent> = {}) => ev({
   id: 'u1::2026-03-09T09:00:00', recurrence_id: '2026-03-09T09:00:00',
@@ -52,24 +66,30 @@ const occurrence = (o: Partial<CalEvent> = {}) => ev({
 const setField = (label: string, value: string) =>
   fireEvent.change(screen.getByLabelText(label), { target: { value } })
 
-function Harness() {
+/** `calTaskLists` is controlled like the real App holds it, so a harness that
+ *  never fed a change back would test toggles that appear to do nothing. */
+function Harness({ taskLists = [] as string[], showDone = false }) {
   const now = new Date()
   const [cursor, setCursor] = useState(() => new Date(now.getFullYear(), now.getMonth(), 1))
+  const [shown, setShown] = useState(taskLists)
+  const [done, setDone] = useState(showDone)
   return (
     <DataProvider rev={0} onExpire={vi.fn()}>
       <CalendarView onExpire={vi.fn()} cursor={cursor} onCursorChange={setCursor}
         sideCollapsed={false} onToggleSide={vi.fn()}
         hiddenCalendars={[]} onHiddenCalendarsChange={vi.fn()}
-        archivedCalendars={[]} onArchivedCalendarsChange={vi.fn()} />
+        archivedCalendars={[]} onArchivedCalendarsChange={vi.fn()}
+        calTaskLists={shown} onCalTaskListsChange={setShown}
+        calShowDone={done} onCalShowDoneChange={() => setDone((v) => !v)} />
     </DataProvider>
   )
 }
 
-function setup(events?: CalEvent[]) {
+function setup(events?: CalEvent[], props?: { taskLists?: string[]; showDone?: boolean }) {
   if (events) m.events.mockResolvedValue(events)
   // The month lives in App now, so the harness has to hold it — a fixed cursor
   // would make the ‹ › buttons no-ops and quietly pass the navigation tests.
-  render(<Harness />)
+  render(<Harness {...props} />)
   return userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
 }
 
@@ -91,6 +111,8 @@ beforeEach(() => {
   vi.setSystemTime(new Date(2026, 2, 5))
   vi.clearAllMocks()
   m.calendars.mockResolvedValue([cal])
+  m.lists.mockResolvedValue([taskList])
+  m.tasks.mockResolvedValue([])
   m.events.mockResolvedValue([])
   m.patchEvent.mockResolvedValue(ev())
   m.createEvent.mockResolvedValue(ev())
@@ -258,5 +280,132 @@ describe('month navigation', () => {
 
     expect(screen.getByText('April event')).toBeInTheDocument()
     expect(screen.queryByText('March event')).not.toBeInTheDocument()
+  })
+})
+
+// ── tasks on the grid ───────────────────────────────────────────────────────
+// The calendar had no tasks on it before, so the setting that puts them there
+// is an allowlist: nothing appears until a list is opted in.
+
+describe('<CalendarView> tasks', () => {
+  const chips = () =>
+    [...document.querySelectorAll('.cal-task')].map((n) => n.textContent)
+
+  it('draws nothing until a task list is opted in', async () => {
+    m.tasks.mockResolvedValue([tsk()])
+    setup([])
+    await waitFor(() => expect(m.tasks).toHaveBeenCalled())
+    expect(chips()).toEqual([])
+  })
+
+  it('draws tasks of an opted-in list on their due day', async () => {
+    m.tasks.mockResolvedValue([tsk()])
+    setup([], { taskLists: ['tl1'] })
+    await waitFor(() => expect(chips()).toHaveLength(1))
+    expect(chips()[0]).toContain('Renew passport')
+    // The chip sits in the cell for the 4th, not wherever the grid starts.
+    const cell = document.querySelector('.cal-task')!.closest('.cal-cell')!
+    expect(cell.querySelector('.daynum')!.textContent).toBe('4')
+  })
+
+  it('leaves out a task from a list that is not opted in', async () => {
+    m.lists.mockResolvedValue([taskList, { ...taskList, id: 'tl2', href: '/tl2/', name: 'Work tasks' }])
+    // Per list: the provider fans out one request each, so a single mocked
+    // array would come back once per list and duplicate every task.
+    m.tasks.mockImplementation(async (id: string) =>
+      (id === 'tl1' ? [tsk()] : [tsk({ uid: 't2', list: 'tl2', summary: 'File taxes' })]))
+    setup([], { taskLists: ['tl1'] })
+    await waitFor(() => expect(chips()).toHaveLength(1))
+    expect(chips()[0]).toContain('Renew passport')
+  })
+
+  it('hides completed tasks by default and shows them on request', async () => {
+    m.tasks.mockResolvedValue([tsk(), tsk({ uid: 't2', summary: 'Post letter', completed: true })])
+    const user = setup([], { taskLists: ['tl1'] })
+    await waitFor(() => expect(chips()).toHaveLength(1))
+
+    await user.click(screen.getByRole('button', { name: /^Completed/ }))
+    await waitFor(() => expect(chips()).toHaveLength(2))
+    expect(document.querySelector('.cal-task.done')).toBeInTheDocument()
+  })
+
+  it('shows a timed due, and nothing for an all-day one', async () => {
+    m.tasks.mockResolvedValue([
+      tsk({ due: '2026-03-04T14:30', due_is_date: false }),
+      tsk({ uid: 't2', summary: 'Bin day', due: '2026-03-05', due_is_date: true }),
+    ])
+    setup([], { taskLists: ['tl1'] })
+    await waitFor(() => expect(chips()).toHaveLength(2))
+    expect(chips()[0]).toMatch(/2:30\s?PM/)
+    expect(chips()[1]).not.toMatch(/\d:\d\d/)
+  })
+
+  it('opens the task editor when a chip is clicked', async () => {
+    m.tasks.mockResolvedValue([tsk()])
+    m.patchTask.mockResolvedValue(tsk({ summary: 'Renew passport!' }))
+    const user = setup([], { taskLists: ['tl1'] })
+    await waitFor(() => expect(chips()).toHaveLength(1))
+
+    await user.click(document.querySelector('.cal-task') as HTMLElement)
+    const modal = await screen.findByRole('dialog', { name: 'Task' })
+    expect(within(modal).getByLabelText('Title')).toHaveValue('Renew passport')
+
+    // …and a save goes down the tasks tab's own write path.
+    fireEvent.change(within(modal).getByLabelText('Title'), { target: { value: 'Renew passport!' } })
+    await user.click(within(modal).getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(m.patchTask).toHaveBeenCalled())
+    expect(m.patchTask.mock.calls[0][2]).toEqual({ summary: 'Renew passport!' })
+  })
+
+  it('counts tasks and events together in "+N more"', async () => {
+    // The cap is over both kinds, so the remainder it reports is the real one.
+    const evs = Array.from({ length: 3 }, (_, i) =>
+      ev({ uid: `e${i}`, id: `e${i}`, summary: `Ev ${i}`,
+        start: '2026-03-04T09:00:00', end: '2026-03-04T09:30:00' }))
+    m.tasks.mockResolvedValue(Array.from({ length: 3 }, (_, i) =>
+      tsk({ uid: `t${i}`, summary: `Task ${i}` })))
+    setup(evs, { taskLists: ['tl1'] })
+    // 3 events + 3 tasks on the 4th, 4 shown, so 2 left over.
+    expect(await screen.findByRole('button', { name: '+2 more' })).toBeInTheDocument()
+  })
+
+  it('lists both kinds in the day popover', async () => {
+    const evs = Array.from({ length: 5 }, (_, i) =>
+      ev({ uid: `e${i}`, id: `e${i}`, summary: `Ev ${i}`,
+        start: '2026-03-04T09:00:00', end: '2026-03-04T09:30:00' }))
+    m.tasks.mockResolvedValue([tsk()])
+    const user = setup(evs, { taskLists: ['tl1'] })
+    await user.click(await screen.findByRole('button', { name: '+2 more' }))
+    const pop = await screen.findByRole('dialog')
+    expect(within(pop).getByText('Renew passport')).toBeInTheDocument()
+    expect(within(pop).getByText('Ev 0')).toBeInTheDocument()
+  })
+})
+
+describe('<CalendarView> tasks sidebar', () => {
+  it('toggles a list onto the calendar, reading the opposite way from a hidden set', async () => {
+    m.tasks.mockResolvedValue([tsk()])
+    const user = setup([])
+    const row = await screen.findByRole('checkbox', { name: /Errands/ })
+    // Off by default — the inverse of every other row in this sidebar.
+    expect(row).toHaveAttribute('aria-checked', 'false')
+
+    await user.click(row)
+    expect(row).toHaveAttribute('aria-checked', 'true')
+    await waitFor(() => expect(document.querySelectorAll('.cal-task')).toHaveLength(1))
+
+    await user.click(row)
+    expect(row).toHaveAttribute('aria-checked', 'false')
+    await waitFor(() => expect(document.querySelectorAll('.cal-task')).toHaveLength(0))
+  })
+
+  it('offers no way to rename, recolor or delete a task list from here', async () => {
+    // Those belong to the tasks tab. A reorder here would PROPPATCH
+    // calendar-order onto the task collections.
+    m.tasks.mockResolvedValue([tsk()])
+    setup([])
+    const row = await screen.findByRole('checkbox', { name: /Errands/ })
+    expect(row.querySelector('.side-edit')).toBeNull()
+    expect(row).not.toHaveAttribute('draggable', 'true')
   })
 })

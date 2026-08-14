@@ -183,6 +183,20 @@ class TaskService:
         dtos = [self._task_dto(it, cats, side, children) for it in items]
         if not include_done:
             dtos = [d for d in dtos if not (d["completed"] or d["cancelled"])]
+        # Manual position first, then the due-then-summary order the SQL already
+        # gave. Done here rather than in the query because the sidecar is
+        # already in hand, so it costs no join.
+        #
+        # The client sorts again on render and that is what decides what a user
+        # sees — its comparator is a total order, so no arrangement here can
+        # change the screen. This is for whoever reads the API directly.
+        dtos.sort(key=lambda d: (
+            d["sort_order"] is None,
+            d["sort_order"] or 0.0,
+            d["due"] is None,
+            d["due"] or "",
+            d["summary"] or "",
+        ))
         return dtos
 
     @staticmethod
@@ -372,6 +386,23 @@ class TaskService:
         with self._lock:
             self._engine.delete_task(href, uid)
         self._publish({"type": "task_deleted", "list": _slug(href), "uid": uid})
+
+    def reorder_tasks(self, placed: list[tuple[str, str]]) -> None:
+        """Persist a manual task order — (collection_href, uid) pairs, in order.
+
+        App-only by nature: ``sort_order`` lives in the sidecar, which is
+        deliberately not on the wire, so this order is Smylte's own and will not
+        appear in Tasks.org, jtx Board or Thunderbird. It survives a cache
+        rebuild because the sidecar is the one table sync never drops.
+
+        Published as its own event rather than a task_updated per row: nothing
+        about any task's iCalendar data changed, and N events would have every
+        other tab refetch N times for one drag.
+        """
+        with self._lock:
+            with self._conn:
+                store.set_sort_orders(self._conn, placed)
+        self._publish({"type": "task_reordered"})
 
     def set_sidecar(self, href: str, uid: str, **fields: object) -> dict[str, Any] | None:
         with self._lock:

@@ -13,6 +13,10 @@ import {
 import { sanitizeLayout } from './dashboard'
 import { isSessionTtl, nextSessionTtl, sessionLabel } from './session'
 import {
+  DEFAULT_TIME_FORMAT, isTimeFormat, nextTimeFormat, timeFormatLabel, type TimeFormat,
+} from './time'
+import { TimeFormatProvider } from './timeformat'
+import {
   DEFAULT_TAB_ORDER, DEFAULT_TAB_START, TAB_LABELS, cacheTab, isTab, readCachedTab,
   resolveStartTab, sanitizeTabOrder, sanitizeTabStart, type Tab, type TabStart,
 } from './tabs'
@@ -48,6 +52,11 @@ export function App() {
   const [collapsedGroups, setCollapsedGroups] = useState<string[]>([])
   const [collapsedTasks, setCollapsedTasks] = useState<string[]>([])
   const [showCompleted, setShowCompleted] = useState(false)
+  const [timeFormat, setTimeFormat] = useState<TimeFormat>(DEFAULT_TIME_FORMAT)
+  // An allowlist, not a hidden-set: no task list is drawn on the calendar until
+  // it is opted in (see the SettingsPatch comment for why this one is inverted).
+  const [calTaskLists, setCalTaskLists] = useState<string[]>([])
+  const [calShowDone, setCalShowDone] = useState(false)
   // How long a login lasts. Null means the deployment's own TASKS_SESSION_TTL,
   // which is what this used to be the only way to set.
   const [sessionTtl, setSessionTtl] = useState<number | null>(null)
@@ -163,6 +172,13 @@ export function App() {
           setCollapsedTasks(s.collapsed_tasks.filter((x) => typeof x === 'string'))
         }
         if (typeof s.show_completed_tasks === 'boolean') setShowCompleted(s.show_completed_tasks)
+        if (isTimeFormat(s.time_format)) setTimeFormat(s.time_format)
+        if (Array.isArray(s.calendar_task_lists)) {
+          setCalTaskLists(s.calendar_task_lists.filter((x) => typeof x === 'string'))
+        }
+        if (typeof s.calendar_show_done_tasks === 'boolean') {
+          setCalShowDone(s.calendar_show_done_tasks)
+        }
         if (isSessionTtl(s.session_ttl_s)) setSessionTtl(s.session_ttl_s)
         // Both blobs are re-validated here rather than trusted: they are the
         // two settings a user can hand-edit or import a file into, and an
@@ -316,6 +332,25 @@ export function App() {
     saveSettings({ show_completed_tasks: next })
   }, [showCompleted])
 
+  const changeCalTaskLists = useCallback((next: string[]) => {
+    setCalTaskLists(next)
+    saveSettings({ calendar_task_lists: next })
+  }, [])
+
+  const toggleCalShowDone = useCallback(() => {
+    const next = !calShowDone
+    setCalShowDone(next)
+    saveSettings({ calendar_show_done_tasks: next })
+  }, [calShowDone])
+
+  // 12- or 24-hour clock. Two values, so the row cycles like the theme rather
+  // than offering a picker.
+  const toggleTimeFormat = useCallback(() => {
+    const next = nextTimeFormat(timeFormat)
+    setTimeFormat(next)
+    saveSettings({ time_format: next })
+  }, [timeFormat])
+
   // Live updates: a server-side *data* change bumps `rev`, which the views
   // watch. One user action can publish several events in a burst (e.g. a move
   // is a delete + create) — debounce so they coalesce into a single refetch pass.
@@ -387,6 +422,7 @@ export function App() {
   // that has not yet said who we are.
   return (
     <DataProvider rev={rev} onExpire={onExpire} taskGroups={taskGroups} enabled={auth === 'in'}>
+      <TimeFormatProvider value={timeFormat}>
       {auth === 'out'
         ? <Login onLogin={(u) => { setCacheUser(u); setUser(u); setAuth('in') }} />
         : (
@@ -448,6 +484,13 @@ export function App() {
               </button>
             </div>
             <div className="menu-row">
+              <label>Clock</label>
+              <button className="menu-toggle" onClick={toggleTimeFormat}
+                aria-label="12- or 24-hour clock">
+                {timeFormatLabel(timeFormat)}
+              </button>
+            </div>
+            <div className="menu-row">
               <label>Completed tasks</label>
               <button className="menu-toggle" onClick={toggleShowCompleted}
                 aria-pressed={showCompleted}>
@@ -468,6 +511,11 @@ export function App() {
             <div className="hintline">
               A shorter sign-in applies at once, on this device and any other. A
               longer one starts from your next sign-in.
+            </div>
+            <div className="hintline">
+              The clock covers every time the app draws itself. Date and time
+              pickers are drawn by the browser — Chrome, Edge and the Windows
+              app follow this setting, Firefox follows your system's.
             </div>
             <div className="hintline">
               Lists and calendars live on the Radicale CalDAV server — changes here
@@ -493,7 +541,9 @@ export function App() {
         <CalendarView onExpire={onExpire} cursor={cursor} onCursorChange={setCursor}
           sideCollapsed={sideCollapsed} onToggleSide={toggleSide}
           hiddenCalendars={hiddenCals} onHiddenCalendarsChange={changeHiddenCals}
-          archivedCalendars={archivedCals} onArchivedCalendarsChange={changeArchivedCals} />
+          archivedCalendars={archivedCals} onArchivedCalendarsChange={changeArchivedCals}
+          calTaskLists={calTaskLists} onCalTaskListsChange={changeCalTaskLists}
+          calShowDone={calShowDone} onCalShowDoneChange={toggleCalShowDone} />
       )}
       {!booting && tab === 'scheduling' && <SchedulingView rev={rev} onExpire={onExpire} />}
       {!booting && tab === 'home' && (
@@ -522,6 +572,7 @@ export function App() {
       )}
     </div>
         )}
+      </TimeFormatProvider>
     </DataProvider>
   )
 }

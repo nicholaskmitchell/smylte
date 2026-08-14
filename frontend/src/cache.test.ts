@@ -10,9 +10,10 @@ import type { CalEvent, List, Task } from './api'
 const task = (o: Partial<Task> = {}): Task => ({
   uid: 'u1', list: 'l1', summary: 'Ship it', notes: null, status: 'NEEDS-ACTION',
   completed: false, cancelled: false, priority: null, priority_label: 'none',
-  percent_complete: null, due: null, due_is_date: true, start: null, tags: [],
+  percent_complete: null, due: null, due_is_date: true, start: null, start_is_date: true,
+  tags: [],
   parent: null, children: [], child_count: 0, completed_child_count: 0,
-  derived_percent: null, pinned: false, href: '/l1/u1.ics', etag: '"1"', ...o,
+  derived_percent: null, pinned: false, sort_order: null, href: '/l1/u1.ics', etag: '"1"', ...o,
 })
 
 const list = (o: Partial<List> = {}): List => ({
@@ -92,6 +93,22 @@ describe('cache reads defensively', () => {
     expect(t!.child_count).toBe(0)
     expect(t!.children).toEqual([])
     expect(t!.priority).toBeNull()     // NaN is not a usable number
+  })
+
+  it('carries the manual position through the disk cache', () => {
+    // sanitizeTask rebuilds field by field, so anything not listed there is
+    // silently dropped. sort_order going missing would make manual order work
+    // on a fresh load and vanish on a cached one — the hardest kind of bug to
+    // see, because a reload fixes it.
+    expect(sanitizeTask({ uid: 'u', list: 'l', sort_order: 3 })!.sort_order).toBe(3)
+    expect(sanitizeTask({ uid: 'u', list: 'l' })!.sort_order).toBeNull()
+    expect(sanitizeTask({ uid: 'u', list: 'l', sort_order: 'third' })!.sort_order).toBeNull()
+    expect(sanitizeTask({ uid: 'u', list: 'l', start_is_date: true })!.start_is_date).toBe(true)
+
+    cacheTasks([task({ sort_order: 7, start_is_date: false })])
+    const back = readCachedTasks()!
+    expect(back[0].sort_order).toBe(7)
+    expect(back[0].start_is_date).toBe(false)
   })
 
   it('refuses a row missing the fields everything keys on', () => {

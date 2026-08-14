@@ -3,7 +3,8 @@
 // grid. Both the Calendar tab and the Home mini calendar render a six-week
 // month, so they share one definition of "which days does this event cover".
 
-import type { CalEvent } from './api'
+import type { CalEvent, Task } from './api'
+import { sortTasks } from './order'
 import { addDays, dayKey, pad, parseDate, toLocalInput, ymd } from './util'
 
 /** A calendar-cell entry: `cont` marks days after the first of a multi-day span. */
@@ -92,6 +93,37 @@ export function bucketByDay(events: CalEvent[], days: Date[]): Map<string, DayEv
     }
   }
   for (const evs of m.values()) evs.sort((a, b) => (a.start || '').localeCompare(b.start || ''))
+  return m
+}
+
+/** The tasks falling on each day of `days`, keyed by `ymd`.
+ *
+ * Far simpler than `bucketByDay` because a task is a point in time, not a span:
+ * a VTODO has a DUE and optionally a DTSTART, but no end and no duration, so
+ * there is nothing to walk and no continuation days to mark. A task with no due
+ * date has no day to sit on and is left out entirely — the tasks pane is where
+ * those live.
+ *
+ * Within a day they take the app's one task order (see order.ts), so a day cell
+ * and the tasks pane agree about which comes first.
+ */
+export function bucketTasksByDay(tasks: Task[], days: Date[]): Map<string, Task[]> {
+  const m = new Map<string, Task[]>()
+  if (!days.length) return m
+  const first = ymd(days[0])
+  const last = ymd(days[days.length - 1])
+  for (const t of tasks) {
+    if (!t.due) continue
+    // An unparseable due would key the map on "NaN-NaN-NaN", which no cell
+    // renders — skip it rather than build a bucket nothing reads.
+    if (isNaN(parseDate(t.due).getTime())) continue
+    const day = dayKey(t.due)
+    if (day < first || day > last) continue
+    const bucket = m.get(day)
+    if (bucket) bucket.push(t)
+    else m.set(day, [t])
+  }
+  for (const [day, ts] of m) m.set(day, sortTasks(ts))
   return m
 }
 

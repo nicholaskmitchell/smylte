@@ -24,6 +24,7 @@ import {
   type CalEvent, type CreateTaskBody, type List, type Task, type TaskGroup,
 } from './api'
 import { orderLists } from './lists'
+import { sortTasks } from './order'
 import {
   cacheCalendars, cacheEvents, cacheLists, cacheTasks,
   readCachedCalendars, readCachedEvents, readCachedLists, readCachedTasks,
@@ -68,6 +69,11 @@ export interface TaskData {
   toggle: (t: Task) => Promise<void>
   remove: (t: Task) => Promise<void>
   saveDetail: (t: Task, patch: Record<string, unknown>) => Promise<void>
+  /** Move the task `uid` to where `target` currently sits. Same gesture as the
+   *  sidebar's list drag: dropping on a row below lands after it, above lands
+   *  before it. Positions are assigned across every task on the account, not
+   *  just the visible ones — see `reorder` below. */
+  reorder: (uid: string, target: string) => Promise<void>
 }
 
 export interface CalendarData {
@@ -224,9 +230,14 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
     priority: null, priority_label: body.priority || 'none',
     percent_complete: null, due: body.due ?? null,
     due_is_date: !!body.due && !body.due.includes('T'),
-    start: body.start ?? null, tags: body.tags ?? [], parent: body.parent ?? null, children: [],
+    start: body.start ?? null, start_is_date: !!body.start && !body.start.includes('T'),
+    tags: body.tags ?? [], parent: body.parent ?? null, children: [],
     child_count: 0, completed_child_count: 0, derived_percent: null,
-    pinned: false, href: '', etag: '',
+    // No manual position: a new task sorts by its due date like anything else
+    // the user hasn't placed by hand (see order.ts). The list is sorted at
+    // render, so this stand-in paints where the real task will be — it does not
+    // matter that `create` appends it to the end of the array.
+    pinned: false, sort_order: null, href: '', etag: '',
   })
 
   // Swap a settled server DTO in for its stand-in, in place. `key` is the
@@ -419,11 +430,46 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tasks, loaded])
 
+  // Move one task and renumber everything. The whole sequence goes to the
+  // server because manual position has to be comparable across lists — the
+  // pane is always the merged view — and because sending only the visible rows
+  // would leave a hidden list's positions stranded among the new ones.
+  //
+  // Every task on the account is already in `tasks` (the fetch fans out over
+  // every list unconditionally), so "the whole sequence" costs nothing to
+  // build: sort by the comparator that is already deciding what is on screen,
+  // splice the dragged row in, and hand that over.
+  const reorder = async (uid: string, target: string) => {
+    if (uid === target) return
+    const placed = sortTasks(tasks)
+    const from = placed.findIndex((t) => t.uid === uid)
+    // Read before the removal, like Sidebar's list drag: dropping on a row
+    // further down lands after it, further up lands before it, which is what
+    // the gesture looks like it is doing.
+    const to = placed.findIndex((t) => t.uid === target)
+    if (from < 0 || to < 0) return
+    const [moved] = placed.splice(from, 1)
+    placed.splice(to, 0, moved)
+
+    // Paint the new positions locally so the row stays where it was dropped:
+    // the comparator reads sort_order first, so writing 1..N here is the same
+    // arithmetic the server is about to do.
+    const next = placed.map((t, i) => ({ ...t, sort_order: i + 1 }))
+    invalidateFetches()
+    const rollback = tasks
+    setTasks(next)
+    const ok = await guard(() =>
+      api.reorderTasks(placed.map((t) => ({ list: t.list, uid: t.uid }))))
+    // The guard has already raised the toast; put the old order back rather
+    // than leaving the UI claiming a move that never landed.
+    if (ok === undefined) setTasks(rollback)
+  }
+
   const ordered = useMemo(() => orderLists(lists, taskGroups), [lists, taskGroups])
 
   const value: TaskData = {
     lists: ordered, serverOrderedLists: lists, tasks, listsLoaded, loaded, setLists,
-    create, createMany, addSub, toggle, remove, saveDetail,
+    create, createMany, addSub, toggle, remove, saveDetail, reorder,
   }
   return <TaskCtx.Provider value={value}>{children}</TaskCtx.Provider>
 }

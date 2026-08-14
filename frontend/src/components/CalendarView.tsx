@@ -1,19 +1,30 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
-import { api, clientId, uidFor, type CalEvent, type EventScope, type List } from '../api'
-import { useCalendarData } from '../data'
-import { dayKey, makeGuard, pad, toLocalInput, ymd } from '../util'
 import {
-  bucketByDay, dragBody, daysBetween, lastDayOf, monthGrid, shiftYmd, type DayEv,
+  api, clientId, uidFor, type CalEvent, type EventScope, type List, type Task,
+} from '../api'
+import { useCalendarData, useTaskData } from '../data'
+import { dayKey, makeGuard, pad, toLocalInput, ymd } from '../util'
+import { fmtClock, inputLang } from '../time'
+import { useTimeFormat } from '../timeformat'
+import {
+  bucketByDay, bucketTasksByDay, dragBody, daysBetween, lastDayOf, monthGrid, shiftYmd,
+  type DayEv,
 } from '../calendar'
 import { useIsMobile } from '../hooks'
-import { AgendaEvent, DayPopover } from './DayPopover'
+import { AgendaEvent, AgendaTask, DayPopover } from './DayPopover'
 import { Sidebar } from './Sidebar'
+import { TaskModal } from './TaskModal'
 
 const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June',
   'July', 'August', 'September', 'October', 'November', 'December']
 
 interface Draft { event?: CalEvent; date?: string }
+
+// How many chips a desktop day cell shows before collapsing the rest into
+// "+N more". Counted over events and tasks together, so the number is the
+// whole remainder rather than one kind's share of it.
+const CELL_MAX = 4
 
 /**
  * The local stand-in for an event whose create is still in flight, carrying the
@@ -41,10 +52,81 @@ function draftEvent(uid: string, calHref: string, body: Record<string, unknown>)
   }
 }
 
+/**
+ * The calendar sidebar's Tasks section: which task lists draw onto the grid.
+ *
+ * Its own rows rather than a second `Sidebar`: these are task collections
+ * borrowed for visibility, so none of the sidebar's collection management —
+ * rename, recolor, delete, drag-reorder — applies. A reorder here would
+ * PROPPATCH calendar-order onto the *task* collections, rewriting what
+ * Tasks.org and Thunderbird read to match a calendar-tab preference.
+ *
+ * The toggles read the opposite way round from every other row in this
+ * sidebar: `shown` is an allowlist, so a solid swatch means "drawn on the
+ * calendar" and the default is off.
+ */
+function CalendarTasksSection({ lists, shown, onShownChange, showDone, onShowDoneChange }: {
+  lists: List[]
+  shown: Set<string>
+  onShownChange: (next: string[]) => void
+  showDone: boolean
+  onShowDoneChange: () => void
+}) {
+  const [collapsed, setCollapsed] = useState(false)
+  if (!lists.length) return null
+  const anyShown = lists.some((l) => shown.has(l.id))
+  const toggle = (id: string) =>
+    onShownChange(shown.has(id) ? [...shown].filter((x) => x !== id) : [...shown, id])
+
+  return (
+    <div className="side-group cal-tasks">
+      <div className="group-head">
+        <button className="group-caret" aria-expanded={!collapsed}
+          aria-label={collapsed ? 'Show task lists' : 'Hide task lists'}
+          onClick={() => setCollapsed((c) => !c)}>
+          <span className={`caret ${collapsed ? '' : 'open'}`}>›</span>
+        </button>
+        <span className="group-name">Tasks</span>
+        <button className="group-eye" aria-pressed={anyShown}
+          title={anyShown ? 'Take task lists off the calendar' : 'Put every task list on the calendar'}
+          onClick={() => onShownChange(anyShown ? [] : lists.map((l) => l.id))}>
+          {anyShown ? '◉' : '◌'}
+        </button>
+      </div>
+      {!collapsed && (
+        <>
+          {lists.map((l) => {
+            const on = shown.has(l.id)
+            return (
+              <div key={l.id} className={`side-item ${on ? '' : 'cal-hidden'}`}
+                role="checkbox" aria-checked={on} tabIndex={0}
+                onKeyDown={(e) => {
+                  if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); toggle(l.id) }
+                }}
+                onClick={() => toggle(l.id)}>
+                <span className="swatch" style={on
+                  ? (l.color ? { background: l.color } : undefined)
+                  : { background: 'transparent', boxShadow: `inset 0 0 0 1.5px ${l.color || 'var(--fg-faint)'}` }} />
+                <span className="name">{l.name}</span>
+                <span className="count">{l.open_count}</span>
+              </div>
+            )
+          })}
+          <button className="cal-tasks-done" aria-pressed={showDone} onClick={onShowDoneChange}>
+            Completed · {showDone ? 'shown' : 'hidden'}
+          </button>
+        </>
+      )}
+    </div>
+  )
+}
+
 export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
   cursor, onCursorChange,
   hiddenCalendars, onHiddenCalendarsChange,
-  archivedCalendars, onArchivedCalendarsChange }: {
+  archivedCalendars, onArchivedCalendarsChange,
+  calTaskLists, onCalTaskListsChange,
+  calShowDone, onCalShowDoneChange }: {
   onExpire: () => void
   // The month lives above the tab strip too, so coming back to Calendar returns
   // to where you were rather than snapping to today.
@@ -52,10 +134,18 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
   sideCollapsed: boolean; onToggleSide: () => void
   hiddenCalendars: string[]; onHiddenCalendarsChange: (next: string[]) => void
   archivedCalendars: string[]; onArchivedCalendarsChange: (next: string[]) => void
+  // Task lists drawn on the grid. An allowlist — the calendar had no tasks on
+  // it before, so it gains none until one is opted in.
+  calTaskLists: string[]; onCalTaskListsChange: (next: string[]) => void
+  calShowDone: boolean; onCalShowDoneChange: () => void
 }) {
   const guard = makeGuard(onExpire)
   const isMobile = useIsMobile()
+  const tf = useTimeFormat()
   const { cals, loaded, setCals, eventsFor, requestWindow, setEvents, reload } = useCalendarData()
+  // Tasks need no fetch of their own: the provider above this already holds
+  // every task of every list, and HomeView reads both datasets the same way.
+  const { lists: taskLists, tasks, listsLoaded, saveDetail, remove: removeTask } = useTaskData()
   const setCursor = onCursorChange
   // Every calendar is visible by default; this holds the ids the user hid, so a
   // brand-new calendar shows up without any extra write.
@@ -126,6 +216,12 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
     const c = calByHref.get(e.calendar)?.color
     return c ? { '--ev-c': c } as CSSProperties : undefined
   }
+  // Tasks wear their list's color through the same custom property, so one set
+  // of chip rules covers both kinds.
+  const taskStyle = (t: Task): CSSProperties | undefined => {
+    const c = taskColor(t.list)
+    return c ? { '--ev-c': c } as CSSProperties : undefined
+  }
 
   // Hidden calendars drop out here — a pure filter, so toggling is instant.
   const visibleEvents = useMemo(
@@ -134,8 +230,34 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
   )
 
   const byDay = useMemo(() => bucketByDay(visibleEvents, days), [visibleEvents, days])
+
+  // ── tasks on the grid ─────────────────────────────────────────────────────
+  // An allowlist, so an empty set means no tasks at all rather than all of them.
+  const shownTaskLists = useMemo(() => new Set(calTaskLists), [calTaskLists])
+  const taskColor = (listId: string) => taskLists.find((l) => l.id === listId)?.color ?? null
+  const visibleTasks = useMemo(
+    () => tasks.filter((t) =>
+      shownTaskLists.has(t.list) && (calShowDone || !(t.completed || t.cancelled))),
+    [tasks, shownTaskLists, calShowDone],
+  )
+  const tasksByDay = useMemo(
+    () => bucketTasksByDay(visibleTasks, days), [visibleTasks, days])
+  const [taskDetail, setTaskDetail] = useState<Task | null>(null)
+
+  // Drop ids naming a list that no longer exists, so a deletion here or in
+  // another CalDAV client doesn't leave the blob accreting them. Gated on a
+  // real fetch: the pre-fetch empty state would otherwise clear the setting.
+  useEffect(() => {
+    if (!listsLoaded || !taskLists.length) return
+    const ids = new Set(taskLists.map((l) => l.id))
+    const kept = calTaskLists.filter((id) => ids.has(id))
+    if (kept.length !== calTaskLists.length) onCalTaskListsChange(kept)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [taskLists, listsLoaded])
+
   // The mobile agenda's day, read twice below (rows and the empty state).
   const focusEvents = byDay.get(focusDay) ?? []
+  const focusTasks = tasksByDay.get(focusDay) ?? []
 
   // Optimistically paint an edit onto the events we can represent locally: a
   // non-recurring event, or a single occurrence (scope "this"). Series-wide
@@ -271,7 +393,12 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
         countOf={(c) => c.event_count} onItems={setCals} api={calApi}
         collapsed={sideCollapsed} onToggle={onToggleSide}
         hiddenIds={hidden} onHiddenChange={onHiddenCalendarsChange}
-        archivedIds={archived} onArchive={archiveCal} />
+        archivedIds={archived} onArchive={archiveCal}
+        extra={
+          <CalendarTasksSection lists={taskLists} shown={shownTaskLists}
+            onShownChange={onCalTaskListsChange}
+            showDone={calShowDone} onShowDoneChange={onCalShowDoneChange} />
+        } />
 
       <div className="content">
         <div className="cal-head">
@@ -302,6 +429,14 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
                 const key = ymd(d)
                 const inMonth = d.getMonth() === cursor.getMonth()
                 const dayEvents = byDay.get(key) ?? []
+                const dayTasks = tasksByDay.get(key) ?? []
+                // One cap over both kinds, so the "+N more" count is the whole
+                // remainder rather than the events' share of it. Events lead:
+                // they hold a span, tasks are a single deadline on the day.
+                const shownEvents = dayEvents.slice(0, CELL_MAX)
+                const shownTasks = dayTasks.slice(0, Math.max(0, CELL_MAX - shownEvents.length))
+                const hiddenCount =
+                  dayEvents.length - shownEvents.length + dayTasks.length - shownTasks.length
                 return (
                   <div key={key}
                     className={`cal-cell ${inMonth ? '' : 'dim'} ${key === todayKey ? 'today' : ''} ${isMobile && key === focusDay ? 'focus' : ''} ${drag && overDay === key ? 'drag-over' : ''}`}
@@ -316,16 +451,19 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
                     }}>
                     <span className="daynum">{d.getDate()}</span>
                     {isMobile ? (
-                      dayEvents.length > 0 && (
+                      (dayEvents.length > 0 || dayTasks.length > 0) && (
                         <span className="ev-dots">
                           {dayEvents.slice(0, 6).map((e) => (
                             <i key={e.id} className={`ev-dot ${e.all_day ? 'allday' : ''}`} style={evStyle(e)} />
+                          ))}
+                          {dayTasks.slice(0, Math.max(0, 6 - dayEvents.length)).map((t) => (
+                            <i key={t.uid} className="ev-dot task" style={taskStyle(t)} />
                           ))}
                         </span>
                       )
                     ) : (
                       <>
-                        {dayEvents.slice(0, 4).map((e) => {
+                        {shownEvents.map((e) => {
                           const evLast = lastDayOf(e)
                           const resizable = key === (evLast > lastKey ? lastKey : evLast)
                           return (
@@ -342,7 +480,7 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
                               onDragEnd={() => { setDrag(null); setOverDay(null) }}
                               onClick={(ev) => { ev.stopPropagation(); setDraft({ event: e }) }}>
                               {!e.all_day && e.start && !e.cont && (
-                                <span className="t">{new Date(e.start).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</span>
+                                <span className="t">{fmtClock(e.start, tf)}</span>
                               )}
                               {e.is_recurring && <span className="recur" aria-hidden="true">↻ </span>}
                               {e.cont && <span className="t" aria-hidden="true">‥ </span>}
@@ -360,12 +498,25 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
                             </div>
                           )
                         })}
-                        {dayEvents.length > 4 && (
+                        {shownTasks.map((t) => {
+                          const timed = !!t.due && t.due.includes('T') && !t.due_is_date
+                          const done = t.completed || t.cancelled
+                          return (
+                            <div key={t.uid} className={`cal-task ${done ? 'done' : ''}`}
+                              style={taskStyle(t)} title={t.summary || ''}
+                              onClick={(ev) => { ev.stopPropagation(); setTaskDetail(t) }}>
+                              <span className="tick" aria-hidden="true">{done ? '☑' : '☐'}</span>
+                              {timed && <span className="t">{fmtClock(t.due!, tf)}</span>}
+                              {t.summary || '(untitled)'}
+                            </div>
+                          )
+                        })}
+                        {hiddenCount > 0 && (
                           <button className="cal-more" onClick={(ev) => {
                             ev.stopPropagation()
                             const r = ev.currentTarget.closest('.cal-cell')!.getBoundingClientRect()
                             setMore({ day: key, x: r.left, y: r.top })
-                          }}>+{dayEvents.length - 4} more</button>
+                          }}>+{hiddenCount} more</button>
                         )}
                       </>
                     )}
@@ -386,8 +537,12 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
                   <AgendaEvent key={e.id} ev={e} day={focusDay} style={evStyle(e)}
                     onOpen={() => setDraft({ event: e })} />
                 ))}
-                {focusEvents.length === 0 && (
-                  <div className="agenda-empty">No events this day.</div>
+                {focusTasks.map((t) => (
+                  <AgendaTask key={t.uid} task={t} style={taskStyle(t)}
+                    onOpen={() => setTaskDetail(t)} />
+                ))}
+                {focusEvents.length === 0 && focusTasks.length === 0 && (
+                  <div className="agenda-empty">Nothing this day.</div>
                 )}
               </div>
             )}
@@ -407,10 +562,24 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
           onDelete={(uid, opts) => del(draft.event ? calIdOf(draft.event) : defaultCal, uid, opts)} />
       )}
 
+      {/* The tasks tab's own editor, so a task edited from the calendar goes
+          down the same optimistic path and paints the same way. Editing only —
+          creating a task from a calendar cell would need a list picker and a
+          quick-add, which is what the tasks tab is. */}
+      {taskDetail && (
+        <TaskModal task={taskDetail} lists={taskLists} defaultList={taskDetail.list}
+          onClose={() => setTaskDetail(null)}
+          onCreate={() => {}} onMultiple={() => {}}
+          onSave={(patch) => { void saveDetail(taskDetail, patch); setTaskDetail(null) }}
+          onDelete={() => { void removeTask(taskDetail); setTaskDetail(null) }} />
+      )}
+
       {more && (
         <DayPopover day={more.day} x={more.x} y={more.y} events={byDay.get(more.day) ?? []}
-          styleOf={evStyle}
+          tasks={tasksByDay.get(more.day) ?? []}
+          styleOf={evStyle} taskStyleOf={taskStyle}
           onOpen={(e) => { setMore(null); setDraft({ event: e }) }}
+          onOpenTask={(t) => { setMore(null); setTaskDetail(t) }}
           onClose={() => setMore(null)} />
       )}
 
@@ -446,6 +615,7 @@ function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete }: {
   onDelete: (uid: string, opts?: { recurrence_id?: string | null; scope?: EventScope }) => void
 }) {
   const e = draft.event
+  const lang = inputLang(useTimeFormat())
   const recurring = !!e?.is_recurring
   // Where the event goes: a new event is created here, an existing one is
   // moved here (whole resource — a series always changes calendar as one).
@@ -587,12 +757,12 @@ function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete }: {
               <div className="field">
                 <label className="label" htmlFor="ev-start">Start</label>
                 <input className="input" id="ev-start" type={allDay ? 'date' : 'datetime-local'} value={startVal}
-                  onChange={(ev) => changeStart(ev.target.value)} />
+                  lang={lang} onChange={(ev) => changeStart(ev.target.value)} />
               </div>
               <div className="field">
                 <label className="label" htmlFor="ev-end">{allDay ? 'End (last day)' : 'End'}</label>
                 <input className="input" id="ev-end" type={allDay ? 'date' : 'datetime-local'} value={endVal}
-                  min={startVal} onChange={(ev) => setEnd(ev.target.value)} />
+                  lang={lang} min={startVal} onChange={(ev) => setEnd(ev.target.value)} />
               </div>
             </div>
             <div className="field">
