@@ -224,9 +224,14 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
     priority: null, priority_label: body.priority || 'none',
     percent_complete: null, due: body.due ?? null,
     due_is_date: !!body.due && !body.due.includes('T'),
-    start: body.start ?? null, tags: body.tags ?? [], parent: body.parent ?? null, children: [],
+    start: body.start ?? null, start_is_date: !!body.start && !body.start.includes('T'),
+    tags: body.tags ?? [], parent: body.parent ?? null, children: [],
     child_count: 0, completed_child_count: 0, derived_percent: null,
-    pinned: false, href: '', etag: '',
+    // No manual position: a new task sorts by its due date like anything else
+    // the user hasn't placed by hand (see order.ts). The list is sorted at
+    // render, so this stand-in paints where the real task will be — it does not
+    // matter that `create` appends it to the end of the array.
+    pinned: false, sort_order: null, href: '', etag: '',
   })
 
   // Swap a settled server DTO in for its stand-in, in place. `key` is the

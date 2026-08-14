@@ -52,6 +52,7 @@ export interface Task {
   due: string | null
   due_is_date: boolean
   start: string | null
+  start_is_date: boolean
   tags: string[]
   parent: string | null
   children: string[]
@@ -59,6 +60,10 @@ export interface Task {
   completed_child_count: number
   derived_percent: number | null
   pinned: boolean
+  // Manual position (see order.ts). Lives in the app-only sidecar, so it is
+  // null until something is dragged, and stays null for tasks another CalDAV
+  // client created — the sidecar never goes on the wire.
+  sort_order: number | null
   href: string
   etag: string
 }

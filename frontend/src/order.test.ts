@@ -1,0 +1,142 @@
+import { describe, expect, it } from 'vitest'
+import { compareTasks, sortTasks } from './order'
+import type { Task } from './api'
+
+const task = (o: Partial<Task> = {}): Task => ({
+  uid: 'u1', list: 'l1', summary: 'Ship it', notes: null, status: 'NEEDS-ACTION',
+  completed: false, cancelled: false, priority: null, priority_label: 'none',
+  percent_complete: null, due: null, due_is_date: true, start: null, start_is_date: true,
+  tags: [], parent: null, children: [], child_count: 0, completed_child_count: 0,
+  derived_percent: null, pinned: false, sort_order: null,
+  href: '/l1/u1.ics', etag: '"1"', ...o,
+})
+
+const uids = (ts: Task[]) => sortTasks(ts).map((t) => t.uid)
+
+describe('the key chain', () => {
+  it('puts a manual position ahead of everything else', () => {
+    // Dragging is the user saying it outright, so it outranks the due date.
+    const a = task({ uid: 'a', sort_order: 2, due: '2026-01-01' })
+    const b = task({ uid: 'b', sort_order: 1, due: '2026-12-31' })
+    expect(uids([a, b])).toEqual(['b', 'a'])
+  })
+
+  it('sorts an unplaced task after every placed one', () => {
+    // Not a transitional state: a task created in another CalDAV client never
+    // gets a sort_order, because the sidecar holding it is app-only.
+    const placed = task({ uid: 'placed', sort_order: 5, due: '2026-12-31' })
+    const loose = task({ uid: 'loose', due: '2026-01-01' })
+    expect(uids([loose, placed])).toEqual(['placed', 'loose'])
+  })
+
+  it('falls through to due date when nothing is placed', () => {
+    const a = task({ uid: 'a', due: '2026-07-11' })
+    const b = task({ uid: 'b', due: '2026-07-09' })
+    const c = task({ uid: 'c', due: '2026-07-10' })
+    expect(uids([a, b, c])).toEqual(['b', 'c', 'a'])
+  })
+
+  it('puts undated tasks last, not first', () => {
+    // TasksView used to put them first and HomeView last, so the same task sat
+    // at opposite ends of the two tabs.
+    const dated = task({ uid: 'dated', due: '2026-07-11' })
+    const undated = task({ uid: 'undated' })
+    expect(uids([undated, dated])).toEqual(['dated', 'undated'])
+  })
+
+  it('puts an all-day due ahead of a timed one on the same day', () => {
+    const allDay = task({ uid: 'allday', due: '2026-07-11', due_is_date: true })
+    const timed = task({ uid: 'timed', due: '2026-07-11T09:00', due_is_date: false })
+    expect(uids([timed, allDay])).toEqual(['allday', 'timed'])
+  })
+
+  it('orders a zone-anchored due by the instant it names, not its spelling', () => {
+    // A due another CalDAV client wrote carries an offset, and raw strings sort
+    // those wrong: "2026-07-11T23:00:00-07:00" is 06:00 UTC on the 12th — five
+    // hours *after* "2026-07-12T01:00:00Z" — yet it compares first as text.
+    const earlier = task({ uid: 'earlier', due: '2026-07-12T01:00:00Z', due_is_date: false })
+    const later = task({ uid: 'later', due: '2026-07-11T23:00:00-07:00', due_is_date: false })
+    expect(uids([later, earlier])).toEqual(['earlier', 'later'])
+    // And the text order really is the other way round, so this is a live trap
+    // rather than a hypothetical one.
+    expect(later.due! < earlier.due!).toBe(true)
+  })
+
+  it('breaks a due-date tie on priority, unset last', () => {
+    // iCal PRIORITY: 1 is the highest, 9 the lowest, 0/absent is unset.
+    const high = task({ uid: 'high', due: '2026-07-11', priority: 1 })
+    const low = task({ uid: 'low', due: '2026-07-11', priority: 9 })
+    const none = task({ uid: 'none', due: '2026-07-11', priority: null })
+    const zero = task({ uid: 'zero', due: '2026-07-11', priority: 0 })
+    // 0 means unset too, so it lands with `none` and the two settle on uid.
+    expect(uids([none, low, zero, high])).toEqual(['high', 'low', 'none', 'zero'])
+  })
+
+  it('breaks a priority tie on title, untitled last', () => {
+    const b = task({ uid: 'b', due: '2026-07-11', summary: 'Beta' })
+    const a = task({ uid: 'a', due: '2026-07-11', summary: 'Alpha' })
+    const blank = task({ uid: 'blank', due: '2026-07-11', summary: '' })
+    const none = task({ uid: 'none', due: '2026-07-11', summary: null })
+    expect(uids([none, b, blank, a])).toEqual(['a', 'b', 'blank', 'none'])
+  })
+})
+
+describe('totality — the property the list view depends on', () => {
+  // The reported bug was a task painting in one place and jumping to another
+  // once the server caught up. That is only possible while two distinct tasks
+  // can compare equal and keep whatever order the array gave them.
+
+  const sample = (): Task[] => [
+    task({ uid: 'a', due: '2026-07-11', summary: 'Same', priority: 5 }),
+    task({ uid: 'b', due: '2026-07-11', summary: 'Same', priority: 5 }),
+    task({ uid: 'c', due: '2026-07-11', summary: 'Same', priority: 5 }),
+    task({ uid: 'd', due: null, summary: null }),
+    task({ uid: 'e', sort_order: 3 }),
+    task({ uid: 'f', sort_order: 1 }),
+    task({ uid: 'g', due: '2026-01-01T08:30', due_is_date: false }),
+  ]
+
+  it('never calls two distinct tasks equal', () => {
+    const ts = sample()
+    for (const x of ts) {
+      for (const y of ts) {
+        if (x.uid === y.uid) expect(compareTasks(x, y)).toBe(0)
+        else expect(compareTasks(x, y)).not.toBe(0)
+      }
+    }
+  })
+
+  it('gives the same sequence whatever order the array arrived in', () => {
+    const want = uids(sample())
+    // Every rotation and the reverse — enough to catch an order that leans on
+    // Array#sort's stability rather than on the comparator.
+    const ts = sample()
+    for (let i = 0; i < ts.length; i++) {
+      expect(uids([...ts.slice(i), ...ts.slice(0, i)])).toEqual(want)
+    }
+    expect(uids([...ts].reverse())).toEqual(want)
+  })
+
+  it('is antisymmetric', () => {
+    const ts = sample()
+    for (const x of ts) {
+      for (const y of ts) {
+        // Summed rather than negated and compared: Math.sign(0) is +0 and
+        // -Math.sign(0) is -0, which toBe separates but nothing else does.
+        expect(Math.sign(compareTasks(x, y)) + Math.sign(compareTasks(y, x))).toBe(0)
+      }
+    }
+  })
+})
+
+describe('sortTasks', () => {
+  it('returns a new array and leaves the input alone', () => {
+    // Callers pass arrays straight out of state; sorting in place would mutate
+    // React's own copy.
+    const ts = [task({ uid: 'b', due: '2026-07-11' }), task({ uid: 'a', due: '2026-01-01' })]
+    const out = sortTasks(ts)
+    expect(out).not.toBe(ts)
+    expect(ts.map((t) => t.uid)).toEqual(['b', 'a'])
+    expect(out.map((t) => t.uid)).toEqual(['a', 'b'])
+  })
+})

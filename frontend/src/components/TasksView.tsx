@@ -7,6 +7,7 @@ import {
   addDays, dayKey, hasZone, instantFromLocal, isOverdue, makeGuard, toLocalInput, ymd,
 } from '../util'
 import { fmtClock, fmtDue, inputLang } from '../time'
+import { sortTasks } from '../order'
 import { useTimeFormat } from '../timeformat'
 import { AddMultipleModal, blankValues, bodyFrom, FIELDS, type RowValues } from './AddMultipleModal'
 import { Sidebar } from './Sidebar'
@@ -238,6 +239,9 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
       if (mine) mine.push(t)
       else m.set(p, [t])
     }
+    // Subtasks get the same order as top-level rows — they are collected in
+    // array order above, which is exactly the thing that used to shuffle.
+    for (const [p, kids] of m) m.set(p, sortTasks(kids))
     return m
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tasks, hiddenSet, showCompleted, parentByUid])
@@ -254,8 +258,12 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
     const kept = collapsedTasks.filter((x) => x !== uid && kidRows.has(x))
     onCollapsedTasksChange(next ? [...kept, uid] : kept)
   }, [collapsedSet, collapsedTasks, kidRows, onCollapsedTasksChange])
-  const active = tops.filter((t) => !t.completed && !t.cancelled)
-  const done = tops.filter((t) => t.completed || t.cancelled)
+  // Sorted, not just filtered. These render straight into the list view, which
+  // used to show them in raw array order — so a new task appeared at the bottom
+  // and then jumped when the refetch replaced the array. `compareTasks` is a
+  // total order, so the array's own order stops mattering entirely.
+  const active = sortTasks(tops.filter((t) => !t.completed && !t.cancelled))
+  const done = sortTasks(tops.filter((t) => t.completed || t.cancelled))
   // Where new tasks land by default (first visible list); the list view's
   // quick-add offers a picker, day columns fall back to this.
   const defaultList = visibleLists[0]?.id ?? ''
@@ -273,24 +281,26 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
 
   const todayKey = ymd(new Date())
   const dueDay = (t: Task) => (t.due ? dayKey(t.due) : null)
-  const byDue = (a: Task, b: Task) => (a.due || '').localeCompare(b.due || '')
   // The dedicated "View completed" pane: every done/cancelled top-level task
   // (respecting hidden lists via `done`), most-recent due first, undated last.
-  const completedTasks = [...done].sort(byDue).reverse()
+  // The dated ones are reversed; the undated are appended rather than swept
+  // along, since reversing the whole run would float them to the top.
+  const completedTasks = [
+    ...sortTasks(done.filter((t) => t.due)).reverse(),
+    ...sortTasks(done.filter((t) => !t.due)),
+  ]
   const openOn = (key: string) =>
-    shownTasks.filter((t) => !t.completed && !t.cancelled && dueDay(t) === key).sort(byDue)
+    sortTasks(shownTasks.filter((t) => !t.completed && !t.cancelled && dueDay(t) === key))
   const doneOn = (key: string) =>
-    shownTasks.filter((t) => (t.completed || t.cancelled) && dueDay(t) === key).sort(byDue)
+    sortTasks(shownTasks.filter((t) => (t.completed || t.cancelled) && dueDay(t) === key))
   // Overdue tasks pool in the today column — but only ones due before the
   // visible window, so a task never shows both there and in its own column.
   const firstKey = ymd(days[0])
-  const overdue = shownTasks
-    .filter((t) => {
-      const d = dueDay(t)
-      return !t.completed && !t.cancelled && d !== null && d < todayKey && d < firstKey
-    })
-    .sort(byDue)
-  const undated = shownTasks.filter((t) => !t.completed && !t.cancelled && !t.due)
+  const overdue = sortTasks(shownTasks.filter((t) => {
+    const d = dueDay(t)
+    return !t.completed && !t.cancelled && d !== null && d < todayKey && d < firstKey
+  }))
+  const undated = sortTasks(shownTasks.filter((t) => !t.completed && !t.cancelled && !t.due))
 
   const fmtD = (d: Date) => d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 
