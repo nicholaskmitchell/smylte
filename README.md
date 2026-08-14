@@ -22,6 +22,15 @@ just like the calendar's — each list is a row you click anywhere to show or hi
 it individually, no separate "all" toggle — plus collapsible **groups** to
 organize lists without widening the sidebar. Full-text search and tags.
 
+Rows sort by one rule everywhere (`order.ts`): manual position, then due date
+(undated last), priority, title, and finally uid — which is what makes it a
+*total* order, so the array's own order stops mattering and an optimistically
+added task paints where it belongs instead of jumping when the server catches
+up. In the list view you can **drag rows into a manual order**; it is global
+rather than per-list, because the pane is always the merged view. That order
+lives in the app-only sidecar, so it is Smylte's own and does not reach the
+other CalDAV clients.
+
 **Calendar.** Month grid across multiple calendars, each with a
 visibility toggle and non-destructive **archive** (hide without deleting;
 restore from Settings). Events support all-day and timed spans, drag to move
@@ -29,6 +38,13 @@ or resize, and a mobile day-agenda. **VEVENT recurrence is implemented** —
 author repeats and edit/delete a single occurrence, this-and-following, or the
 whole series (`docs/recurrence-findings.md`). **Task (VTODO) recurrence stays
 gated** pending real-device captures.
+
+A **Tasks** group in the same sidebar puts task lists on the grid: pick which
+ones appear, and whether completed tasks stay visible. Nothing shows until a
+list is opted in — unlike the calendar toggles, this one is an allowlist, since
+tasks are an overlay on a view that never had them. A task draws as its own
+chip (a checkbox and its list's color, not an event's tinted block), and
+clicking it opens the same editor the Tasks tab uses.
 
 **Scheduling.** Calendly-style booking links: weekly availability, buffers,
 minimum notice, and a horizon, with a public booking page at `/book/{token}`
@@ -74,9 +90,17 @@ match `tokens.css`.
 **Across the app.** Optimistic writes (paint immediately, reconcile with the
 server DTO, roll back on failure), live updates over Server-Sent Events, and
 account-synced UI preferences (theme, appearance, dashboard layout, task view,
-sidebar state, hidden/archived calendars, hidden lists, task groups). The
-public gate is the app's own username/password (scrypt-hashed, cookie session);
-Cloudflare Access is an optional second layer.
+sidebar state, hidden/archived calendars, hidden lists, task groups, clock,
+which task lists show on the calendar). The public gate is the app's own
+username/password (scrypt-hashed, cookie session); Cloudflare Access is an
+optional second layer.
+
+Settings → Clock switches every time the app draws between **12- and 24-hour**;
+`time.ts` is the only thing that formats a clock, so there is one place for the
+choice to land. Date and time *pickers* are drawn by the browser rather than by
+us, and read the element's `lang` to decide — which works in Chrome, Edge and
+the Windows client, and is ignored by Firefox, which follows the OS. The public
+booking page is deliberately left on the visitor's own locale.
 
 ## Architecture
 
@@ -97,11 +121,13 @@ backend/
 frontend/
   src/
     components/ TasksView, CalendarView, SchedulingView, HomeView, BookingPage,
-                Sidebar, Login, AppearancePanel, ArchivedCalendarsModal
+                Sidebar, Login, TaskModal, AppearancePanel, ArchivedCalendarsModal
     api.ts      typed, same-origin API client (+ SSE subscribe)
     App.tsx     shell: tabs, settings, theme, live-refresh
     appearance.ts  token allowlist + validation, apply/reset, theme import/export
     dashboard.ts   Home grid math (pack/move/resize) — pure, unit-tested
+    order.ts       the one task sort — total, so array order can't leak through
+    time.ts        every clock the app draws, 12- or 24-hour
     styles/     design tokens + app.css
 desktop/        Windows client: a WebView2 window that serves the CI-built SPA
                 from disk and proxies /api to the server (desktop/README.md)
