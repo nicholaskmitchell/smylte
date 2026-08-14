@@ -220,6 +220,8 @@ export interface Settings {
   session_ttl_s?: number | null    // how long a login lasts; null defers to the deployment
   show_completed_tasks?: boolean   // show completed/cancelled tasks inline in the main view (default hidden)
   time_format?: TimeFormat         // 12- or 24-hour clock across the app (see time.ts); default '12h'
+  calendar_task_lists?: string[]   // task-list ids DRAWN on the calendar — an allowlist, empty by default
+  calendar_show_done_tasks?: boolean  // keep completed tasks on the calendar (default hidden)
 }
 
 // Creates carry a client-generated id that becomes the CalDAV resource slug,

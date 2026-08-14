@@ -430,6 +430,24 @@ def test_settings_time_format_sync(client):
     assert client.put("/api/settings", json={"time_format": "H:mm"}).status_code == 422
 
 
+def test_settings_calendar_tasks_sync(client):
+    # An allowlist, not a hidden set: absent means no task lists are drawn on
+    # the calendar, so the empty default has to survive the round trip as
+    # "none" rather than being read as "unset, therefore all".
+    assert "calendar_task_lists" not in client.get("/api/settings").json()
+    r = client.put("/api/settings", json={"calendar_task_lists": ["a", "b"]})
+    assert r.status_code == 200 and r.json()["calendar_task_lists"] == ["a", "b"]
+    assert client.get("/api/settings").json()["calendar_task_lists"] == ["a", "b"]
+    # Empty is a real value that clears the set (the store merge only skips None).
+    assert client.put("/api/settings", json={"calendar_task_lists": []}).json()[
+        "calendar_task_lists"] == []
+
+    r = client.put("/api/settings", json={"calendar_show_done_tasks": True})
+    assert r.status_code == 200 and r.json()["calendar_show_done_tasks"] is True
+    client.put("/api/settings", json={"calendar_show_done_tasks": False})
+    assert client.get("/api/settings").json()["calendar_show_done_tasks"] is False
+
+
 def test_settings_task_grouping_sync(client):
     # hidden_lists, task_groups, and collapsed_groups must survive the HTTP
     # round-trip — the model has to accept and re-emit each key (a store test

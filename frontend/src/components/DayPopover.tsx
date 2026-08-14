@@ -4,7 +4,7 @@
 // is what makes it read-only, so the dashboard never grows an event editor.
 
 import { useEffect, type CSSProperties } from 'react'
-import type { CalEvent } from '../api'
+import type { CalEvent, Task } from '../api'
 import type { DayEv } from '../calendar'
 import { dayKey } from '../util'
 import { fmtClock, type TimeFormat } from '../time'
@@ -44,12 +44,41 @@ export function AgendaEvent({ ev, day, style, onOpen }: {
   )
 }
 
+/** A task on the calendar, as an agenda row. Same shape as AgendaEvent so the
+ *  two stack in one list, but a task is a deadline rather than a span: it shows
+ *  its due time, or nothing at all when the due is all-day. */
+export function AgendaTask({ task, style, onOpen }: {
+  task: Task
+  style?: CSSProperties
+  onOpen?: (t: Task) => void
+}) {
+  const tf = useTimeFormat()
+  const timed = !!task.due && task.due.includes('T') && !task.due_is_date
+  const done = task.completed || task.cancelled
+  const body = (
+    <>
+      <span className="t">{timed ? fmtClock(task.due!, tf) : ''}</span>
+      <span>
+        <span className="tick" aria-hidden="true">{done ? '☑ ' : '☐ '}</span>
+        {task.summary || '(untitled)'}
+      </span>
+    </>
+  )
+  const cls = `agenda-ev agenda-task ${done ? 'done' : ''}`
+  if (!onOpen) return <div className={`${cls} static`} style={style}>{body}</div>
+  return <button className={cls} style={style} onClick={() => onOpen(task)}>{body}</button>
+}
+
 // Anchored day popover — the full event list for one cell, since a cell itself
 // shows at most a few rows.
-export function DayPopover({ day, x, y, events, styleOf, onOpen, onClose }: {
+export function DayPopover({ day, x, y, events, tasks = [], styleOf, taskStyleOf, onOpen, onOpenTask, onClose }: {
   day: string; x: number; y: number; events: DayEv[]
+  /** Tasks due that day (Calendar tab only; the Home mini calendar passes none). */
+  tasks?: Task[]
   styleOf: (e: CalEvent) => CSSProperties | undefined
+  taskStyleOf?: (t: Task) => CSSProperties | undefined
   onOpen?: (e: CalEvent) => void
+  onOpenTask?: (t: Task) => void
   onClose: () => void
 }) {
   useEffect(() => {
@@ -72,6 +101,9 @@ export function DayPopover({ day, x, y, events, styleOf, onOpen, onClose }: {
         </div>
         {events.map((e) => (
           <AgendaEvent key={e.id} ev={e} day={day} style={styleOf(e)} onOpen={onOpen} />
+        ))}
+        {tasks.map((t) => (
+          <AgendaTask key={t.uid} task={t} style={taskStyleOf?.(t)} onOpen={onOpenTask} />
         ))}
       </div>
     </div>
