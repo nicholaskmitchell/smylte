@@ -660,3 +660,150 @@ def test_connections_need_the_session_cookie(mcp):
     assert mcp.get("/api/mcp/connections", headers={"Cookie": ""}).status_code == 401
     assert mcp.get("/api/mcp/connections",
                    headers={"Cookie": "", "Authorization": f"Bearer {token}"}).status_code == 401
+
+
+# ── defects found by the adversarial review, pinned so they cannot return ────
+
+def test_tool_arguments_are_checked_against_the_advertised_schema(mcp):
+    """A client is not obliged to honour the schema and a compromised one will
+    not, so the published contract has to be enforced rather than assumed.
+
+    The concrete cost of not doing so: duration_minutes=0 reached the slot
+    generator, whose cursor advances by that duration, and hung the process
+    inside the service lock — from a value already written to disk.
+    """
+    token = _connect(mcp)["access_token"]
+
+    def err(name, args):
+        return _rpc(mcp, token, "tools/call",
+                    {"name": name, "arguments": args}).json()["error"]["message"]
+
+    assert "at least 5" in err("smylte_update_booking_link",
+                               {"token": "t", "duration_minutes": 0})
+    assert "at most 480" in err("smylte_update_booking_link",
+                                {"token": "t", "duration_minutes": 99999})
+    assert "must be an integer" in err("smylte_update_booking_link",
+                                       {"token": "t", "duration_minutes": "long"})
+    # bool is an int subclass — JSON `true` must not satisfy an integer field.
+    assert "must be an integer" in err("smylte_list_tasks", {"limit": True})
+    assert "one of" in err("smylte_create_task",
+                           {"list_id": "x", "summary": "y", "priority": "urgent"})
+    assert "must be a string" in err("smylte_get_task", {"list_id": 7, "uid": "u"})
+    assert "expected format" in err("smylte_create_list",
+                                    {"name": "ok", "color": "not-a-colour"})
+    assert "at least 1 character" in err("smylte_create_list", {"name": ""})
+    assert "must be an array" in err("smylte_create_task",
+                                     {"list_id": "x", "summary": "y", "tags": "one"})
+    assert "must be a string" in err("smylte_create_task",
+                                     {"list_id": "x", "summary": "y", "tags": [1]})
+
+
+def test_every_tool_schema_stays_inside_what_the_validator_enforces(mcp):
+    """A schema keyword the validator does not implement would be advertised and
+    silently unenforced — which is the exact shape of the bug above."""
+    from tasksd.mcp.tools import build_tools
+    from tasksd.mcp.validate import unsupported_keywords
+
+    class _Stub:
+        def __getattr__(self, _):
+            return lambda *a, **k: None
+
+    for name, tool in build_tools(_Stub()).items():
+        assert not unsupported_keywords(tool.schema), name
+
+
+def test_slot_generation_refuses_a_duration_that_cannot_advance():
+    """Belt and braces for the same defect: whatever writes the value, the loop
+    itself must not be the thing that trusts it."""
+    from datetime import datetime, time, timezone
+    from zoneinfo import ZoneInfo
+
+    from tasksd import scheduling
+
+    for bad in (0, -30):
+        with pytest.raises(ValueError, match="positive"):
+            scheduling.generate_slots(
+                availability={0: [(time(9, 0), time(17, 0))]},
+                duration_minutes=bad, busy=[], buffer_minutes=0,
+                tz=ZoneInfo("UTC"), now=datetime(2026, 9, 1, tzinfo=timezone.utc),
+                min_notice_hours=24, horizon_days=7,
+            )
+
+
+def test_oversized_bodies_are_refused_before_they_are_buffered(mcp):
+    """Reading first and checking afterwards means the memory is already spent —
+    on endpoints an unauthenticated caller can reach."""
+    big = b"x" * 200_000
+    # Declared length, refused on the header alone.
+    assert mcp.post("/oauth/register", content=big,
+                    headers={"Content-Type": "application/json"}).status_code == 413
+    assert mcp.post("/oauth/token", content=big,
+                    headers={"Content-Type": "application/x-www-form-urlencoded"}
+                    ).status_code == 413
+    assert mcp.post("/oauth/authorize", content=big,
+                    headers={"Content-Type": "application/x-www-form-urlencoded"}
+                    ).status_code == 413
+
+    # Chunked, so there is no Content-Length to check: the running total is what
+    # actually enforces the cap.
+    def chunks():
+        for _ in range(20):
+            yield b"y" * 10_000
+
+    assert mcp.post("/oauth/register", content=chunks(),
+                    headers={"Content-Type": "application/json"}).status_code == 413
+
+    # A normal body still works.
+    assert mcp.post("/oauth/register",
+                    json={"redirect_uris": [CALLBACK]}).status_code == 201
+
+
+def test_free_time_reads_a_duration_only_event(mcp, monkeypatch):
+    """An event may carry DURATION instead of DTEND. Missing it made a two-hour
+    meeting look like a half-hour one and offered the rest as free."""
+    from tasksd.mcp.api import McpApi, parse_duration
+
+    assert parse_duration("PT2H") is not None
+
+    api = McpApi(mcp.app.state.service)
+    monkeypatch.setattr(api, "list_events", lambda *a, **k: [{
+        "start": "2026-09-07T10:00:00", "end": None, "duration": "PT2H",
+        "all_day": False, "status": "CONFIRMED",
+    }])
+    free = api.find_free_time("2026-09-07", "2026-09-08", minutes=30)
+    # 09:00-10:00 before it and 12:00-17:00 after — nothing inside the meeting.
+    assert [f["start"] for f in free] == ["2026-09-07T09:00", "2026-09-07T12:00"]
+    assert free[0]["end"] == "2026-09-07T10:00"
+
+
+def test_free_time_can_be_paged(mcp):
+    """It reported next_offset while its schema forbade sending one back."""
+    token = _connect(mcp)["access_token"]
+    out = _call(mcp, token, "smylte_find_free_time",
+                {"start": "2026-09-01", "end": "2026-11-01", "limit": 10, "offset": 5})
+    assert out["isError"] is False
+    body = out["structuredContent"]
+    assert body["offset"] == 5 and body["count"] <= 10
+    if body.get("has_more"):
+        assert body["next_offset"] == 15
+
+
+def test_a_wrong_password_keeps_the_read_only_choice(mcp):
+    """The screen exists for that choice, so a typo must not quietly re-arm
+    full access for the retry."""
+    reg = _register(mcp)
+    _, challenge = _pkce()
+    page = mcp.get("/oauth/authorize", params={
+        "response_type": "code", "client_id": reg["client_id"],
+        "redirect_uri": CALLBACK, "code_challenge": challenge,
+        "code_challenge_method": "S256", "resource": MCP_URL,
+        "scope": "mcp:read mcp:write offline_access"})
+    signed = re.search(r'name="request" value="([^"]+)"', page.text).group(1)
+
+    retry = mcp.post("/oauth/authorize", data={
+        "request": signed, "action": "approve", "grant": "read",
+        "username": "admin", "password": "wrong"})
+    assert retry.status_code == 401
+    read_radio = re.search(r'value="read"([^>]*)>', retry.text).group(1)
+    full_radio = re.search(r'value="full"([^>]*)>', retry.text).group(1)
+    assert "checked" in read_radio and "checked" not in full_radio

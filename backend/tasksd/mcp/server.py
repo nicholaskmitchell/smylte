@@ -22,12 +22,12 @@ where the token is checked once at connect and never again.
 """
 from __future__ import annotations
 
-import inspect
 import json
 import logging
 
 from .oauth import OAuthError, SCOPE_WRITE, scope_set
 from .tools import ToolError, build_tools
+from .validate import SchemaError, check_arguments
 
 log = logging.getLogger("tasksd.mcp")
 
@@ -159,19 +159,15 @@ class McpServer:
         if not isinstance(args, dict):
             raise ToolError("arguments must be an object")
 
-        # The schema is advertised, but a client is not obliged to honour it, so
-        # unknown keys are refused here rather than reaching a handler as a
-        # TypeError the model cannot read.
-        allowed = set(tool.schema.get("properties", {}))
-        unknown = set(args) - allowed
-        if unknown:
-            raise ToolError(
-                f"{name} has no argument(s) {', '.join(sorted(unknown))}. "
-                f"It accepts: {', '.join(sorted(allowed)) or 'no arguments'}."
-            )
-        missing = [k for k in tool.schema.get("required", []) if k not in args]
-        if missing:
-            raise ToolError(f"{name} is missing required argument(s): {', '.join(missing)}.")
+        # The schema is advertised, but a client is not obliged to honour it and a
+        # buggy or hostile one will not — so it is enforced here rather than
+        # trusted. Everything downstream was written behind FastAPI, where
+        # pydantic had already checked these bounds; without this the published
+        # contract is decoration. See validate.py for what that cost.
+        try:
+            check_arguments(args, tool.schema, tool=name)
+        except SchemaError as exc:
+            raise ToolError(str(exc)) from None
 
         try:
             value = tool.handler(**args)
