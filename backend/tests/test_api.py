@@ -419,6 +419,17 @@ def test_settings_show_completed_sync(client):
     assert client.get("/api/settings").json().get("show_completed_tasks") is False
 
 
+def test_settings_time_format_sync(client):
+    # Only the two clocks are accepted — the blob is hand-editable, and an
+    # unknown token would reach a formatter on every client that read it.
+    r = client.put("/api/settings", json={"time_format": "24h"})
+    assert r.status_code == 200 and r.json().get("time_format") == "24h"
+    assert client.get("/api/settings").json().get("time_format") == "24h"
+    assert client.put("/api/settings", json={"time_format": "12h"}).status_code == 200
+    assert client.get("/api/settings").json().get("time_format") == "12h"
+    assert client.put("/api/settings", json={"time_format": "H:mm"}).status_code == 422
+
+
 def test_settings_task_grouping_sync(client):
     # hidden_lists, task_groups, and collapsed_groups must survive the HTTP
     # round-trip — the model has to accept and re-emit each key (a store test

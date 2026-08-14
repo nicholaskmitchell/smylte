@@ -7,6 +7,7 @@
 import type { Appearance } from './appearance'
 import type { DashboardModule } from './dashboard'
 import type { Tab, TabStart } from './tabs'
+import type { TimeFormat } from './time'
 export type { Appearance, DashboardModule }
 
 export class AuthError extends Error {}
@@ -213,6 +214,7 @@ export interface Settings {
   collapsed_tasks?: string[]       // uids of tasks whose subtask trees are folded away
   session_ttl_s?: number | null    // how long a login lasts; null defers to the deployment
   show_completed_tasks?: boolean   // show completed/cancelled tasks inline in the main view (default hidden)
+  time_format?: TimeFormat         // 12- or 24-hour clock across the app (see time.ts); default '12h'
 }
 
 // Creates carry a client-generated id that becomes the CalDAV resource slug,
