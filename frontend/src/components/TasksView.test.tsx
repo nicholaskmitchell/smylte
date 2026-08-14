@@ -20,9 +20,10 @@ const m = vi.mocked(api)
 const task = (o: Partial<Task> = {}): Task => ({
   uid: 'u1', list: 'l1', summary: 'Ship it', notes: null, status: 'NEEDS-ACTION',
   completed: false, cancelled: false, priority: null, priority_label: 'none',
-  percent_complete: null, due: null, due_is_date: true, start: null, tags: [],
+  percent_complete: null, due: null, due_is_date: true, start: null, start_is_date: true,
+  tags: [],
   parent: null, children: [], child_count: 0, completed_child_count: 0,
-  derived_percent: null, pinned: false, href: '/l1/u1.ics', etag: '"1"', ...o,
+  derived_percent: null, pinned: false, sort_order: null, href: '/l1/u1.ics', etag: '"1"', ...o,
 })
 
 const list: List = {
@@ -1151,5 +1152,159 @@ describe('<TasksView> day-column drag', () => {
     const body = await dragTaskTo(
       task({ summary: 'Bin day', due: '2026-08-10', due_is_date: true }), 1)
     expect(body.due).not.toContain('T')
+  })
+})
+
+// ── the reported bug: a row that lands in one place and moves to another ────
+
+describe('<TasksView> order stability', () => {
+  const rowTitles = () =>
+    [...document.querySelectorAll('.task:not(.sub) .task-title')]
+      .map((n) => n.textContent?.trim())
+
+  const a = task({ uid: 'a', summary: 'Alpha', due: '2026-08-12', due_is_date: true })
+  const b = task({ uid: 'b', summary: 'Bravo', due: '2026-08-10', due_is_date: true })
+  const c = task({ uid: 'c', summary: 'Charlie', due: '2026-08-11', due_is_date: true })
+
+  it('renders by due date, not in the order the fetch happened to build', async () => {
+    // The list used to render `tasks` verbatim, which is per-list fetch blocks
+    // concatenated — an order nothing on screen explains.
+    m.tasks.mockResolvedValue([c, a, b])
+    setup('list')
+    await screen.findByText('Alpha')
+    expect(rowTitles()).toEqual(['Bravo', 'Charlie', 'Alpha'])
+  })
+
+  it('does not move a row when the server returns the same tasks reshuffled', async () => {
+    // This is the warp. A write publishes an SSE event, the event bumps `rev`,
+    // `rev` refetches, and the new array replaced the old one wholesale — so
+    // rows jumped a few hundred milliseconds after they were painted.
+    m.tasks.mockResolvedValue([c, a, b])
+    const { bumpRev } = setup('list')
+    await screen.findByText('Alpha')
+    const before = rowTitles()
+
+    m.tasks.mockResolvedValue([b, c, a])
+    bumpRev(1)
+    await waitFor(() => expect(m.tasks).toHaveBeenCalledTimes(2))
+    expect(rowTitles()).toEqual(before)
+  })
+
+  it('keeps an optimistic row where it first painted once the server answers', async () => {
+    // The stand-in is appended to the end of the array and `settleCreate`
+    // deliberately swaps the DTO in place, so nothing about the array says
+    // where this row belongs — only the comparator does.
+    m.tasks.mockResolvedValue([a, b])
+    const created = task({ uid: 'new', summary: 'Bisect', due: '2026-08-11', due_is_date: true })
+    m.createTask.mockResolvedValue(created)
+    const { user, bumpRev } = setup('list')
+    await screen.findByText('Alpha')
+
+    await openAdd(user)
+    await user.type(screen.getByLabelText('Title'), 'Bisect')
+    await user.type(screen.getByLabelText('Due date'), '2026-08-11')
+    await user.click(screen.getByRole('button', { name: 'Add' }))
+
+    // Between Bravo (the 10th) and Alpha (the 12th) from the very first paint.
+    await screen.findByText('Bisect')
+    expect(rowTitles()).toEqual(['Bravo', 'Bisect', 'Alpha'])
+
+    // And still there after the write's own refetch brings it back at the far
+    // end of the array, which is where a per-list fetch would put it.
+    m.tasks.mockResolvedValue([a, b, created])
+    bumpRev(1)
+    await waitFor(() => expect(m.tasks).toHaveBeenCalledTimes(2))
+    expect(rowTitles()).toEqual(['Bravo', 'Bisect', 'Alpha'])
+  })
+})
+
+// ── manual drag-reorder ─────────────────────────────────────────────────────
+
+describe('<TasksView> drag-to-reorder', () => {
+  const rowTitles = () =>
+    [...document.querySelectorAll('.task:not(.sub) .task-title')]
+      .map((n) => n.textContent?.trim())
+
+  const wrapFor = (title: string) =>
+    screen.getByText(title).closest('.task-drag') as HTMLElement
+
+  const dragOnto = (from: string, to: string) => {
+    // jsdom builds no DataTransfer; the wrapper's onDragStart calls setData.
+    const dataTransfer = { setData: vi.fn(), getData: vi.fn(), effectAllowed: '' }
+    fireEvent.dragStart(wrapFor(from), { dataTransfer })
+    fireEvent.drop(wrapFor(to), { dataTransfer })
+  }
+
+  const a = task({ uid: 'a', summary: 'Alpha', due: '2026-08-10', due_is_date: true })
+  const b = task({ uid: 'b', summary: 'Bravo', due: '2026-08-11', due_is_date: true })
+  const c = task({ uid: 'c', summary: 'Charlie', due: '2026-08-12', due_is_date: true })
+
+  it('sends every task on the account, in the new order', async () => {
+    // Not just the row that moved: manual position has to be comparable across
+    // lists, since the pane is always the merged view.
+    m.tasks.mockResolvedValue([a, b, c])
+    m.reorderTasks.mockResolvedValue({ ok: true })
+    setup('list')
+    await screen.findByText('Alpha')
+
+    dragOnto('Charlie', 'Alpha')
+    await waitFor(() => expect(m.reorderTasks).toHaveBeenCalled())
+    expect(m.reorderTasks.mock.calls[0][0]).toEqual([
+      { list: 'l1', uid: 'c' }, { list: 'l1', uid: 'a' }, { list: 'l1', uid: 'b' },
+    ])
+  })
+
+  it('paints the move at once and holds it through the refetch', async () => {
+    m.tasks.mockResolvedValue([a, b, c])
+    m.reorderTasks.mockResolvedValue({ ok: true })
+    const { bumpRev } = setup('list')
+    await screen.findByText('Alpha')
+    expect(rowTitles()).toEqual(['Alpha', 'Bravo', 'Charlie'])
+
+    dragOnto('Charlie', 'Alpha')
+    expect(rowTitles()).toEqual(['Charlie', 'Alpha', 'Bravo'])
+
+    // The server now knows, so the refetch carries the positions back.
+    m.tasks.mockResolvedValue([
+      { ...a, sort_order: 2 }, { ...b, sort_order: 3 }, { ...c, sort_order: 1 },
+    ])
+    bumpRev(1)
+    await waitFor(() => expect(m.tasks).toHaveBeenCalledTimes(2))
+    expect(rowTitles()).toEqual(['Charlie', 'Alpha', 'Bravo'])
+  })
+
+  it('puts the old order back when the write fails', async () => {
+    // The UI must not keep claiming a move the server refused.
+    m.tasks.mockResolvedValue([a, b, c])
+    m.reorderTasks.mockRejectedValue(new Error('nope'))
+    setup('list')
+    await screen.findByText('Alpha')
+
+    dragOnto('Charlie', 'Alpha')
+    await waitFor(() => expect(rowTitles()).toEqual(['Alpha', 'Bravo', 'Charlie']))
+  })
+
+  it('takes a task\'s subtasks with it', async () => {
+    const kid = task({ uid: 'a1', summary: 'Alpha sub', parent: 'a' })
+    m.tasks.mockResolvedValue([a, b, c, kid])
+    m.reorderTasks.mockResolvedValue({ ok: true })
+    setup('list')
+    await screen.findByText('Alpha sub')
+
+    dragOnto('Alpha', 'Charlie')
+    await waitFor(() => expect(m.reorderTasks).toHaveBeenCalled())
+    // The subtask keeps its place under its parent — it is not a top-level row
+    // and never leaves the subtree.
+    expect(rowTitles()).toEqual(['Bravo', 'Charlie', 'Alpha'])
+    expect(screen.getByText('Alpha sub').closest('.task')).toHaveClass('sub')
+  })
+
+  it('does not offer reorder in the day-column views', async () => {
+    // Those columns already use drag for rescheduling; one gesture cannot mean
+    // two things.
+    m.tasks.mockResolvedValue([a, b, c])
+    setup('day3')
+    await screen.findByText('Alpha')
+    expect(document.querySelectorAll('.task-drag')).toHaveLength(0)
   })
 })

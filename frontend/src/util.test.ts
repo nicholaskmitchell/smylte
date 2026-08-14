@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AuthError } from './api'
-import { addDays, dayKey, fmtDue, hasZone, instantFromLocal, isOverdue, makeGuard, pad, parseDate, setErrorNotifier, toLocalInput, ymd } from './util'
+import { addDays, dayKey, hasZone, instantFromLocal, isOverdue, makeGuard, pad, parseDate, setErrorNotifier, toLocalInput, ymd } from './util'
 
 describe('parseDate', () => {
   it('parses date-only strings as LOCAL midnight, not UTC', () => {
@@ -26,10 +26,8 @@ describe('day/formatting helpers', () => {
     expect(toLocalInput('2026-07-11T09:05:00')).toBe('2026-07-11T09:05')
   })
 
-  it('fmtDue is empty for null and echoes garbage instead of NaN', () => {
-    expect(fmtDue(null, false)).toBe('')
-    expect(fmtDue('not-a-date', false)).toBe('not-a-date')
-  })
+  // fmtDue moved to time.ts with the rest of the clock formatting — see
+  // time.test.ts for its null/garbage handling and both clock formats.
 
   it('ymd/pad/addDays roll over month boundaries', () => {
     expect(pad(3)).toBe('03')

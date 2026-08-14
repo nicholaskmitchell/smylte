@@ -364,6 +364,28 @@ def set_sidecar(conn: sqlite3.Connection, collection_href: str, uid: str, **fiel
         )
 
 
+def set_sort_orders(conn: sqlite3.Connection, placed: list[tuple[str, str]]) -> None:
+    """Write a manual order: `placed` is (collection_href, uid) in the new order,
+    and each gets its 1-based index as its ``sort_order``.
+
+    One statement per row inside the caller's transaction, so a reorder is all
+    or nothing — a partial write would leave two tasks sharing a position and
+    the order would depend on whatever broke the tie.
+
+    Rows are created on demand: a task that has never had a sidecar (which is
+    every task until something is dragged) gets one here rather than being
+    skipped, which is what makes the whole sequence explicit afterwards.
+    """
+    for i, (href, uid) in enumerate(placed, start=1):
+        conn.execute(
+            "INSERT INTO sidecar (collection_href, uid, sort_order) VALUES (?, ?, ?) "
+            "ON CONFLICT(collection_href, uid) DO UPDATE SET "
+            "sort_order=excluded.sort_order, "
+            "updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')",
+            (href, uid, float(i)),
+        )
+
+
 # ── scheduling (booking links + booking ledger; sidecar-class) ──────────────
 
 _LINK_FIELDS = {

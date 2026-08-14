@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState, type KeyboardEvent } from 'react'
 import { api, type Availability, type Booking, type BookingLink, type BookingLinkInput,
   type List } from '../api'
 import { makeGuard } from '../util'
+import { fmtWhen, inputLang } from '../time'
+import { useTimeFormat } from '../timeformat'
 
 // Owner side of client scheduling: manage booking links (availability, target
 // calendar, redacted-busy toggle) and see who booked. The public counterpart
@@ -16,12 +18,9 @@ const COMMON_TZS = [
   'Europe/Berlin', 'Asia/Tokyo', 'Asia/Shanghai', 'Asia/Kolkata', 'Australia/Sydney',
 ]
 
-const fmtWhen = (iso: string) =>
-  new Date(iso).toLocaleString(undefined,
-    { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
-
 export function SchedulingView({ rev, onExpire }: { rev: number; onExpire: () => void }) {
   const guard = makeGuard(onExpire)
+  const tf = useTimeFormat()
   const [links, setLinks] = useState<BookingLink[]>([])
   const [cals, setCals] = useState<List[]>([])
   const [bookings, setBookings] = useState<Booking[]>([])
@@ -138,7 +137,7 @@ export function SchedulingView({ rev, onExpire }: { rev: number; onExpire: () =>
           <div className="sched-bookings">
             {upcoming.map((b) => (
               <div key={b.id} className="sched-booking">
-                <span className="when mono">{fmtWhen(b.start)}</span>
+                <span className="when mono">{fmtWhen(b.start, tf)}</span>
                 <span className="who">
                   {b.name} <span className="email">{b.email}</span>
                 </span>
@@ -189,6 +188,7 @@ function LinkModal({ link, cals, onClose, onSave, onDelete }: {
   onSave: (body: BookingLinkInput, token?: string) => void
   onDelete: (l: BookingLink) => void
 }) {
+  const lang = inputLang(useTimeFormat())
   const [title, setTitle] = useState(link?.title ?? '')
   const [description, setDescription] = useState(link?.description ?? '')
   const [calendar, setCalendar] = useState(link?.calendar ?? cals[0]?.id ?? '')
@@ -284,10 +284,10 @@ function LinkModal({ link, cals, onClose, onSave, onDelete }: {
                   <div className="sched-ranges">
                     {days[i].ranges.map((r, k) => (
                       <span key={k} className="sched-range">
-                        <input className="input" type="time" value={r[0]}
+                        <input className="input" type="time" value={r[0]} lang={lang}
                           onChange={(e) => patchRange(i, k, 0, e.target.value)} />
                         –
-                        <input className="input" type="time" value={r[1]}
+                        <input className="input" type="time" value={r[1]} lang={lang}
                           onChange={(e) => patchRange(i, k, 1, e.target.value)} />
                         {days[i].ranges.length > 1 && (
                           <button className="icon-btn" title="Remove range"

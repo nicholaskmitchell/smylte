@@ -65,15 +65,9 @@ export function instantFromLocal(date: string, time: string): string {
   return isNaN(d.getTime()) ? `${date}T${time}` : d.toISOString()
 }
 
-export function fmtDue(iso: string | null, isDate: boolean): string {
-  if (!iso) return ''
-  const d = parseDate(iso)
-  if (isNaN(d.getTime())) return iso
-  return d.toLocaleDateString(undefined,
-    isDate
-      ? { month: 'short', day: 'numeric' }
-      : { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
-}
+// `fmtDue` and the rest of the clock formatting live in time.ts — they need the
+// 12/24-hour preference, and this module is imported by things that have no
+// business knowing about it.
 
 export function isOverdue(iso: string | null, isDate = false): boolean {
   if (!iso) return false

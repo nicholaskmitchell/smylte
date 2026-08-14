@@ -1,4 +1,6 @@
-import { useState, type CSSProperties, type DragEvent, type KeyboardEvent } from 'react'
+import {
+  useState, type CSSProperties, type DragEvent, type KeyboardEvent, type ReactNode,
+} from 'react'
 import { clientId, type List, type TaskGroup } from '../api'
 import { useIsMobile } from '../hooks'
 
@@ -33,7 +35,7 @@ export interface CollectionApi {
 export function Sidebar({ title, placeholder, items, sel = '', countOf, onSelect, onItems, api,
   collapsed, onToggle, allLabel, hiddenIds, onHiddenChange, onArchive, archivedIds,
   groups, onGroupsChange, collapsedGroups, onCollapsedGroupsChange,
-  completedActive, onToggleCompleted }: {
+  completedActive, onToggleCompleted, extra }: {
   title: string
   placeholder: string
   items: List[]
@@ -71,6 +73,13 @@ export function Sidebar({ title, placeholder, items, sel = '', countOf, onSelect
   // `completedActive` reflects whether that pane is currently showing.
   completedActive?: boolean
   onToggleCompleted?: () => void
+  // A second, foreign section under the collections — the Calendar tab's task
+  // lists. It is rendered rather than described because those rows are not this
+  // sidebar's `items`: they are a different kind of collection, borrowed for
+  // visibility only, and must not offer rename, recolor, delete or drag-reorder
+  // (a reorder here would PROPPATCH calendar-order onto the *task* collections).
+  // One slot, used by both the desktop panel and the mobile drawer.
+  extra?: ReactNode
 }) {
   const isMobile = useIsMobile()
   const canSelect = !!onSelect
@@ -412,7 +421,7 @@ export function Sidebar({ title, placeholder, items, sel = '', countOf, onSelect
                   recolor{onArchive ? ', archive' : ''} or delete.
                 </p>
               )}
-              <div className="side-list">{collectionsBody}</div>
+              <div className="side-list">{collectionsBody}{extra}</div>
               {addInputs}
               {completedFooter}
             </div>
@@ -486,7 +495,7 @@ export function Sidebar({ title, placeholder, items, sel = '', countOf, onSelect
           )}
         </span>
       </div>
-      <div className="side-list">{collectionsBody}</div>
+      <div className="side-list">{collectionsBody}{extra}</div>
       {completedFooter}
       {addInputs}
       {editModal}

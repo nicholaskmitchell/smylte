@@ -174,6 +174,20 @@
 }
 .group-rename { padding-top: 4px; padding-bottom: 4px; }
 
+/* The calendar sidebar's Tasks section — task lists borrowed for visibility.
+   It is a `.side-group` so it picks up the separator rule and header styling,
+   but it always follows the calendars, so the rule is stated directly (the
+   `.side-group + .side-group` selector needs a sibling group to match). */
+.cal-tasks { border-top: 1px solid var(--rule); margin-top: 10px; }
+.cal-tasks-done {
+  display: block; width: 100%; text-align: left; background: none; border: 0;
+  padding: 6px 16px 10px 34px; cursor: pointer;
+  font-family: var(--mono); font-size: calc(10px * var(--fs-scale));
+  text-transform: var(--label-case); letter-spacing: calc(0.1em * var(--tracking));
+  color: var(--fg-faint);
+}
+.cal-tasks-done:hover { color: var(--accent); }
+
 /* per-list color dot shown on tasks in the combined "All lists" view.
    vertical-align: middle centers on the text's x-height; the -1px lift raises it
    to the capital-letter optical center, so it lines up with the completion
@@ -220,6 +234,12 @@
   border-bottom: 1px solid var(--rule-faint);
 }
 .task:hover { background: var(--bg-elev); }
+/* Manual reorder (list view). The drop marker sits on the wrapper, which holds
+   the whole subtree — a parent drags its subtasks with it — and reads as a rule
+   above the row it would land on, matching the sidebar's list drag. */
+.task-drag { cursor: grab; }
+.task-drag:active { cursor: grabbing; }
+.task-drag.drag-over > .task { box-shadow: inset 0 2px 0 var(--accent); }
 /* Nesting is arbitrarily deep, so the indent is a step per level rather than
    one fixed inset. Capped in TasksView (MAX_INDENT) so a deep tree still leaves
    the titles somewhere to go. */
@@ -369,6 +389,22 @@
 .cal-ev .t { font-family: var(--mono); color: var(--fg-muted); margin-right: 4px; }
 .cal-ev .recur { color: var(--fg-muted); font-weight: 600; }
 
+/* A task on the grid. Deliberately not a .cal-ev: an event holds a span and can
+   be dragged and resized, while a task is one deadline on one day, so it gets
+   no tint block and no grab cursor — just its list's color as a left rule and a
+   checkbox, which is what says "this is a task" at a glance. */
+.cal-task {
+  font-size: calc(11px * var(--fs-scale)); color: var(--fg);
+  border-left: 2px solid var(--ev-c, var(--accent));
+  padding: 1px 5px; white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; cursor: pointer;
+}
+.cal-task:hover { background: color-mix(in oklch, var(--ev-c, var(--accent)) 10%, transparent); }
+.cal-task .tick { color: var(--ev-c, var(--accent)); margin-right: 3px; }
+.cal-task .t { font-family: var(--mono); color: var(--fg-muted); margin-right: 4px; }
+.cal-task.done { color: var(--fg-faint); text-decoration: line-through; }
+.ev-dot.task { border-radius: 0; }
+
 .cal-more {
   background: none; border: 0; padding: 0 5px; text-align: left; cursor: pointer;
   font-family: var(--mono); font-size: calc(10px * var(--fs-scale)); color: var(--fg-faint);
@@ -405,6 +441,9 @@
   padding: 12px 14px; font-size: calc(15px * var(--fs-scale)); color: var(--fg); cursor: pointer;
 }
 .agenda-ev:hover { background: var(--bg-elev); }
+/* A task agenda row: same frame as an event, marked by its checkbox. */
+.agenda-task .tick { color: var(--ev-c, var(--accent)); }
+.agenda-task.done { color: var(--fg-faint); text-decoration: line-through; }
 /* a read-only row (no editor behind it, as on the Home dashboard) */
 .agenda-ev.static { cursor: default; }
 .agenda-ev.static:hover { background: none; }

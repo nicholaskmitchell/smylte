@@ -1,13 +1,12 @@
 import { useEffect, useMemo, useState, type CSSProperties } from 'react'
 import { api, type CalEvent, type List } from '../api'
 import { dayKey, makeGuard, ymd } from '../util'
+import { fmtClock } from '../time'
+import { useTimeFormat } from '../timeformat'
 
 // Archive is app-level: the CalDAV collection stays on the wire, so an archived
 // calendar's events are still fetchable. This modal lists archived calendars and
 // lets you preview their events (read-only) or restore them.
-
-const fmtTime = (iso: string) =>
-  new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
 
 const fmtMonth = (d: Date) =>
   d.toLocaleDateString(undefined, { month: 'short', year: 'numeric' })
@@ -96,6 +95,7 @@ function ArchivedEvents({ cal, onExpire, onRestore }: {
   onRestore: () => void
 }) {
   const guard = makeGuard(onExpire)
+  const tf = useTimeFormat()
   const [events, setEvents] = useState<CalEvent[]>([])
   const [loaded, setLoaded] = useState(false)
 
@@ -143,7 +143,7 @@ function ArchivedEvents({ cal, onExpire, onRestore }: {
             {evs.map((e) => (
               <div key={e.id} className="agenda-ev"
                 style={cal.color ? { '--ev-c': cal.color } as CSSProperties : undefined}>
-                <span className="t">{e.all_day || e.start_is_date ? 'all day' : (e.start ? fmtTime(e.start) : '')}</span>
+                <span className="t">{e.all_day || e.start_is_date ? 'all day' : (e.start ? fmtClock(e.start, tf) : '')}</span>
                 <span>
                   {e.is_recurring && <span className="recur" aria-hidden="true">↻ </span>}
                   {e.summary || '(untitled)'}

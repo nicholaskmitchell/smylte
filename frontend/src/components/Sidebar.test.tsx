@@ -310,3 +310,56 @@ describe('<Sidebar> edit modal colors', () => {
     expect(api.update).toHaveBeenCalledWith('work', { name: 'Work', color: null })
   })
 })
+
+describe('<Sidebar> extra section', () => {
+  // The calendar tab's Tasks section rides in this slot. It is passed as a node
+  // rather than described, because those rows are a different kind of
+  // collection borrowed for visibility only — none of this sidebar's
+  // rename/recolor/delete/reorder applies to them.
+  const withExtra = () => (
+    <Sidebar title="Calendars" placeholder="Calendar"
+      items={[list('work', 'Work')]}
+      countOf={(l) => l.open_count} onItems={() => {}} api={noopApi}
+      hiddenIds={new Set()} onHiddenChange={() => {}}
+      extra={<div data-testid="extra">Tasks</div>} />
+  )
+
+  it('renders under the collections in the desktop panel', () => {
+    render(withExtra())
+    const slot = screen.getByTestId('extra')
+    expect(slot).toBeInTheDocument()
+    // Inside the same scroller as the collections, after them.
+    const body = slot.closest('.side-list')!
+    expect(body).toBeTruthy()
+    expect(body.querySelector('.side-item')!.compareDocumentPosition(slot))
+      .toBe(Node.DOCUMENT_POSITION_FOLLOWING)
+  })
+
+  it('renders in the mobile drawer too, not only on desktop', async () => {
+    // One slot for both layouts — a section only the desktop panel showed would
+    // be unreachable on a phone.
+    const realMatchMedia = window.matchMedia
+    window.matchMedia = ((q: string) => ({
+      matches: true, media: q, onchange: null,
+      addEventListener: () => {}, removeEventListener: () => {},
+      addListener: () => {}, removeListener: () => {}, dispatchEvent: () => false,
+    })) as unknown as typeof window.matchMedia
+    try {
+      await mobileDrawerShowsExtra()
+    } finally {
+      window.matchMedia = realMatchMedia
+    }
+  })
+
+  const mobileDrawerShowsExtra = async () => {
+    render(withExtra())
+    expect(screen.queryByTestId('extra')).not.toBeInTheDocument()   // drawer shut
+    await userEvent.click(screen.getByRole('button', { name: /Calendars/ }))
+    expect(screen.getByTestId('extra')).toBeInTheDocument()
+  }
+
+  it('is absent when nothing is passed', () => {
+    render(toggleSidebar({}))
+    expect(screen.queryByTestId('extra')).not.toBeInTheDocument()
+  })
+})

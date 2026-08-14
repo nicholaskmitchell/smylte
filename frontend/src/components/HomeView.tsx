@@ -2,7 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties }
 import { api, clientId, type Booking, type BookingLink, type CalEvent, type List, type Task } from '../api'
 import { useIsMobile } from '../hooks'
 import { useCalendarData, useTaskData, type TaskData } from '../data'
-import { makeGuard, addDays, dayKey, fmtDue, isOverdue, ymd } from '../util'
+import { makeGuard, addDays, dayKey, isOverdue, ymd } from '../util'
+import { fmtDue } from '../time'
+import { sortTasks } from '../order'
+import { useTimeFormat } from '../timeformat'
 import { bucketByDay, monthGrid, type DayEv } from '../calendar'
 import { DayPopover } from './DayPopover'
 import {
@@ -285,29 +288,37 @@ function ModuleBody({ kind, tasks, lists, days, byDay, links, bookings, colorOf,
   // and subtasks read as duplicates without their parent for context.
   const tops = tasks.filter((t) => !t.parent)
   const open = tops.filter((t) => !t.completed && !t.cancelled)
-  const byDue = (a: Task, b: Task) => (a.due || '￿').localeCompare(b.due || '￿')
+  // One order, shared with the Tasks pane (see order.ts). These used to sort by
+  // a local comparator that put undated tasks at the opposite end from the one
+  // TasksView used, so the same task sat in a different place on each tab.
 
   switch (kind) {
     case 'today':
-      return <TaskList items={open.filter((t) => t.due && dayKey(t.due) === today).sort(byDue)}
+      return <TaskList items={sortTasks(open.filter((t) => t.due && dayKey(t.due) === today))}
         colorOf={colorOf} empty="Nothing due today." loaded={loaded} />
     case 'overdue':
-      return <TaskList items={open.filter((t) => isOverdue(t.due, t.due_is_date)).sort(byDue)}
+      return <TaskList items={sortTasks(open.filter((t) => isOverdue(t.due, t.due_is_date)))}
         colorOf={colorOf} empty="Nothing overdue." overdue loaded={loaded} />
     case 'upcoming': {
       const end = ymd(addDays(new Date(), 7))
       return <TaskList
-        items={open
-          .filter((t) => t.due && dayKey(t.due) > today && dayKey(t.due) <= end)
-          .sort(byDue)}
+        items={sortTasks(open
+          .filter((t) => t.due && dayKey(t.due) > today && dayKey(t.due) <= end))}
         colorOf={colorOf} empty="Nothing in the next seven days." loaded={loaded} />
     }
-    case 'completed':
+    case 'completed': {
       // There is no completion timestamp on the wire, so "recent" is by due date
-      // descending — the same proxy the Tasks pane's completed view uses.
+      // descending — the same proxy the Tasks pane's completed view uses, and
+      // like it, undated tasks are appended rather than floated to the top by
+      // the reverse.
+      const done = tops.filter((t) => t.completed || t.cancelled)
       return <TaskList
-        items={tops.filter((t) => t.completed || t.cancelled).sort(byDue).reverse().slice(0, 40)}
+        items={[
+          ...sortTasks(done.filter((t) => t.due)).reverse(),
+          ...sortTasks(done.filter((t) => !t.due)),
+        ].slice(0, 40)}
         colorOf={colorOf} empty="Nothing completed yet." done loaded={loaded} />
+    }
     case 'mini_calendar':
       return <MiniCalendar days={days} byDay={byDay} eventColor={eventColor} />
     case 'booking_links':
@@ -329,6 +340,8 @@ function TaskList({ items, colorOf, empty, overdue, done, loaded }: {
   done?: boolean
   loaded?: boolean
 }) {
+  // Read before the early returns below — a hook can't sit behind a branch.
+  const tf = useTimeFormat()
   // Stay blank until the first fetch lands: "Nothing due today." flashing up and
   // then being replaced by a list of tasks reads as a bug. Keyed on `loaded`
   // rather than a `loading` flag that only ever cleared on the success path —
@@ -346,7 +359,7 @@ function TaskList({ items, colorOf, empty, overdue, done, loaded }: {
             <span className="dash-task-title">{t.summary || '(untitled)'}</span>
             {t.due && (
               <span className={`dash-task-due mono ${overdue ? 'overdue' : ''}`}>
-                {fmtDue(t.due, t.due_is_date)}
+                {fmtDue(t.due, t.due_is_date, tf)}
               </span>
             )}
           </li>
@@ -472,6 +485,7 @@ function LinkList({ links }: { links: BookingLink[] }) {
 }
 
 function BookingList({ bookings }: { bookings: Booking[] }) {
+  const tf = useTimeFormat()
   const upcoming = bookings
     .filter((b) => new Date(b.start).getTime() >= Date.now())
     .sort((a, b) => a.start.localeCompare(b.start))
@@ -482,7 +496,7 @@ function BookingList({ bookings }: { bookings: Booking[] }) {
       {upcoming.map((b) => (
         <li key={b.id} className="dash-task">
           <span className="dash-task-title">{b.name}</span>
-          <span className="dash-task-due mono">{fmtDue(b.start, false)}</span>
+          <span className="dash-task-due mono">{fmtDue(b.start, false, tf)}</span>
         </li>
       ))}
     </ul>
