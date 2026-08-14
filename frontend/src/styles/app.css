@@ -1042,3 +1042,20 @@
 .day-card, .cal-ev, .view-tab, .col-add, .sched-add-range, .booking-day,
 .slot-btn, .busy-chip, .booking-err, .booking-picked, .side.drawer,
 .dash-mod, .bulk-add-row, .bulk-fail, .chip { border-radius: var(--radius); }
+
+/* ── connected applications (MCP connector grants) ─────────────────────────── */
+.conn-list { max-height: 52vh; overflow-y: auto; margin-bottom: 4px; }
+.conn {
+  display: flex; align-items: center; gap: 12px; padding: 12px 0;
+  border-bottom: 1px solid var(--rule-faint);
+}
+.conn:last-child { border-bottom: 0; }
+.conn-main { flex: 1; min-width: 0; }
+.conn-name { font-weight: 600; }
+.conn-meta {
+  display: flex; align-items: center; gap: 8px; margin-top: 3px; flex-wrap: wrap;
+  font-size: calc(12px * var(--fs-scale)); color: var(--fg-faint);
+}
+.conn-actions { display: flex; gap: 6px; flex: none; }
+.btn.danger { border-color: var(--warn); color: var(--warn); background: none; }
+.btn.danger:hover { background: color-mix(in oklch, var(--warn) 12%, transparent); }
