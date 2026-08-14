@@ -812,3 +812,59 @@ def test_required_window_bounds_and_non_finite_sidecar_are_422(client):
         # And the list is still readable — rendering the 422 must not blow up
         # either, which it did while the handler echoed the offending value back.
         assert client.get(f"/api/lists/{lid}/tasks").status_code == 200
+
+
+def test_task_manual_reorder(client):
+    # Manual order spans lists: the tasks pane is always the merged view, so a
+    # position only means something if it is comparable between collections.
+    a, b = _list(client), _list(client)
+    mk = lambda lid, s: client.post(f"/api/lists/{lid}/tasks", json={"summary": s}).json()
+    one = mk(a["id"], "one")
+    two = mk(b["id"], "two")
+    three = mk(a["id"], "three")
+
+    # Until something is dragged every task is unplaced, and stays that way for
+    # anything another CalDAV client creates — the sidecar is not on the wire.
+    assert all(t["sort_order"] is None for t in client.get(f"/api/lists/{a['id']}/tasks").json())
+
+    order = [
+        {"list": b["id"], "uid": two["uid"]},
+        {"list": a["id"], "uid": three["uid"]},
+        {"list": a["id"], "uid": one["uid"]},
+    ]
+    assert client.post("/api/tasks/reorder", json={"items": order}).status_code == 200
+
+    got = {t["uid"]: t["sort_order"] for t in client.get(f"/api/lists/{a['id']}/tasks").json()}
+    got |= {t["uid"]: t["sort_order"] for t in client.get(f"/api/lists/{b['id']}/tasks").json()}
+    assert got[two["uid"]] == 1 and got[three["uid"]] == 2 and got[one["uid"]] == 3
+
+    # The list endpoint hands them back in that order too, so a direct API
+    # reader sees what the app shows.
+    assert [t["uid"] for t in client.get(f"/api/lists/{a['id']}/tasks").json()] \
+        == [three["uid"], one["uid"]]
+
+    # A reorder is one event, not one per task: nothing's iCalendar data
+    # changed, and N events would make every other tab refetch N times.
+    assert client.post("/api/tasks/reorder", json={"items": list(reversed(order))}).status_code == 200
+    got2 = {t["uid"]: t["sort_order"] for t in client.get(f"/api/lists/{a['id']}/tasks").json()}
+    assert got2[one["uid"]] == 1 and got2[three["uid"]] == 2
+
+
+def test_task_reorder_rejects_a_bad_body(client):
+    lst = _list(client)
+    t = client.post(f"/api/lists/{lst['id']}/tasks", json={"summary": "solo"}).json()
+
+    # An unknown list is a 404 for the whole request — a reorder never half-lands.
+    r = client.post("/api/tasks/reorder", json={
+        "items": [{"list": lst["id"], "uid": t["uid"]}, {"list": "nope", "uid": "x"}]})
+    assert r.status_code == 404
+    assert client.get(f"/api/lists/{lst['id']}/tasks").json()[0]["sort_order"] is None
+
+    # A uid twice would take two positions with the last winning, silently
+    # moving something the user never dragged.
+    dup = {"list": lst["id"], "uid": t["uid"]}
+    assert client.post("/api/tasks/reorder", json={"items": [dup, dup]}).status_code == 422
+
+    # An empty order is a no-op, not an error: it is what an account with no
+    # tasks at all would send.
+    assert client.post("/api/tasks/reorder", json={"items": []}).status_code == 200

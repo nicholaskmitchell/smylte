@@ -89,6 +89,34 @@ class ReorderLists(BaseModel):
     ids: list[str]                    # every shown collection, in the new order
 
 
+# A reorder carries every task on the account, so the bound is "more tasks than
+# anyone has" rather than a page size. It exists so a hand-rolled request can't
+# make the server walk an unbounded list inside the write lock.
+_MAX_REORDER_TASKS = 20_000
+
+
+class ReorderEntry(BaseModel):
+    list: str                         # the list id the task lives in
+    uid: str
+
+
+class ReorderTasks(BaseModel):
+    """Every task the client holds, in the order it wants them.
+
+    The whole sequence rather than the moved task alone, and across every list
+    rather than one at a time. The tasks pane has no single-list mode — it is
+    always the merged view — so a manual order has to be comparable between
+    lists, and the client already holds every task of every list. Sending only
+    the visible ones would leave a hidden list's rows carrying stale positions
+    that interleave arbitrarily the moment it is shown again.
+
+    That also makes positions plain 1..N integers: no fractional midpoints to
+    exhaust, no renormalization pass, and nothing left null once a drag lands.
+    """
+
+    items: list[ReorderEntry] = Field(max_length=_MAX_REORDER_TASKS)
+
+
 _COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?$")
 
 
@@ -890,6 +918,34 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         href = _href(request, list_id)
         await _run(_svc(request).delete_task, href, uid)
         return Response(status_code=204)
+
+    @api.post("/tasks/reorder")
+    async def reorder_tasks(request: Request, body: ReorderTasks):
+        # Resolved before the write rather than inside it: an unknown list id is
+        # a 404 for the whole request, so a reorder never half-lands.
+        svc = _svc(request)
+        placed: list[tuple[str, str]] = []
+        seen: set[tuple[str, str]] = set()
+        hrefs: dict[str, str] = {}
+        for item in body.items:
+            href = hrefs.get(item.list)
+            if href is None:
+                resolved = svc.resolve_list(item.list)
+                if resolved is None:
+                    raise HTTPException(
+                        status.HTTP_404_NOT_FOUND, f"unknown list {item.list}")
+                href = hrefs[item.list] = resolved
+            key = (href, item.uid)
+            # A uid repeated in the body would get two positions, the last one
+            # winning — silently reordering something the user never dragged.
+            if key in seen:
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    f"{item.uid} listed twice")
+            seen.add(key)
+            placed.append(key)
+        await _run(svc.reorder_tasks, placed)
+        return {"ok": True}
 
     @api.put("/lists/{list_id}/tasks/{uid}/sidecar")
     async def put_sidecar(request: Request, list_id: str, uid: str, body: Sidecar):

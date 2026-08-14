@@ -285,6 +285,13 @@ export const api = {
     j<List>('PATCH', `/api/lists/${id}`, body),
   deleteList: (id: string) => j<null>('DELETE', `/api/lists/${id}`),
   reorderLists: (ids: string[]) => j<unknown>('POST', '/api/lists/reorder', { ids }),
+  // Every task the client holds, in the order it wants them — not just the one
+  // that moved, and not just the visible lists. See order.ts and the endpoint's
+  // own docstring: the pane is always the merged view, so positions have to be
+  // comparable across lists, and a hidden list left out would come back with
+  // stale positions interleaved through the new ones.
+  reorderTasks: (items: Array<{ list: string; uid: string }>) =>
+    j<unknown>('POST', '/api/tasks/reorder', { items }),
   tasks: (listId: string, includeDone = true) =>
     j<Task[]>('GET', `/api/lists/${listId}/tasks?include_done=${includeDone}`),
   createTask: (listId: string, body: Record<string, unknown>) =>
