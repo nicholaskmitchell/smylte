@@ -10,9 +10,10 @@ import type { CalEvent, List, Task } from './api'
 const task = (o: Partial<Task> = {}): Task => ({
   uid: 'u1', list: 'l1', summary: 'Ship it', notes: null, status: 'NEEDS-ACTION',
   completed: false, cancelled: false, priority: null, priority_label: 'none',
-  percent_complete: null, due: null, due_is_date: true, start: null, tags: [],
+  percent_complete: null, due: null, due_is_date: true, start: null, start_is_date: true,
+  tags: [],
   parent: null, children: [], child_count: 0, completed_child_count: 0,
-  derived_percent: null, pinned: false, href: '/l1/u1.ics', etag: '"1"', ...o,
+  derived_percent: null, pinned: false, sort_order: null, href: '/l1/u1.ics', etag: '"1"', ...o,
 })
 
 const list = (o: Partial<List> = {}): List => ({

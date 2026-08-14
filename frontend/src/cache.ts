@@ -193,6 +193,7 @@ export function sanitizeTask(v: unknown): Task | null {
     due: orNull(o.due),
     due_is_date: bool(o.due_is_date),
     start: orNull(o.start),
+    start_is_date: bool(o.start_is_date),
     tags: strs(o.tags),
     parent: orNull(o.parent),
     children: strs(o.children),
@@ -200,6 +201,10 @@ export function sanitizeTask(v: unknown): Task | null {
     completed_child_count: num(o.completed_child_count),
     derived_percent: numOrNull(o.derived_percent),
     pinned: bool(o.pinned),
+    // Rebuilt field-by-field like the rest: anything not listed here is dropped
+    // on the way through the disk cache, so a missing line means manual order
+    // would work on a fresh load and silently vanish on a cached one.
+    sort_order: numOrNull(o.sort_order),
     href: orNull(o.href) ?? '',
     etag: orNull(o.etag) ?? '',
   }

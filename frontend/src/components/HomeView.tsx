@@ -4,6 +4,7 @@ import { useIsMobile } from '../hooks'
 import { useCalendarData, useTaskData, type TaskData } from '../data'
 import { makeGuard, addDays, dayKey, isOverdue, ymd } from '../util'
 import { fmtDue } from '../time'
+import { sortTasks } from '../order'
 import { useTimeFormat } from '../timeformat'
 import { bucketByDay, monthGrid, type DayEv } from '../calendar'
 import { DayPopover } from './DayPopover'
@@ -287,29 +288,37 @@ function ModuleBody({ kind, tasks, lists, days, byDay, links, bookings, colorOf,
   // and subtasks read as duplicates without their parent for context.
   const tops = tasks.filter((t) => !t.parent)
   const open = tops.filter((t) => !t.completed && !t.cancelled)
-  const byDue = (a: Task, b: Task) => (a.due || '￿').localeCompare(b.due || '￿')
+  // One order, shared with the Tasks pane (see order.ts). These used to sort by
+  // a local comparator that put undated tasks at the opposite end from the one
+  // TasksView used, so the same task sat in a different place on each tab.
 
   switch (kind) {
     case 'today':
-      return <TaskList items={open.filter((t) => t.due && dayKey(t.due) === today).sort(byDue)}
+      return <TaskList items={sortTasks(open.filter((t) => t.due && dayKey(t.due) === today))}
         colorOf={colorOf} empty="Nothing due today." loaded={loaded} />
     case 'overdue':
-      return <TaskList items={open.filter((t) => isOverdue(t.due, t.due_is_date)).sort(byDue)}
+      return <TaskList items={sortTasks(open.filter((t) => isOverdue(t.due, t.due_is_date)))}
         colorOf={colorOf} empty="Nothing overdue." overdue loaded={loaded} />
     case 'upcoming': {
       const end = ymd(addDays(new Date(), 7))
       return <TaskList
-        items={open
-          .filter((t) => t.due && dayKey(t.due) > today && dayKey(t.due) <= end)
-          .sort(byDue)}
+        items={sortTasks(open
+          .filter((t) => t.due && dayKey(t.due) > today && dayKey(t.due) <= end))}
         colorOf={colorOf} empty="Nothing in the next seven days." loaded={loaded} />
     }
-    case 'completed':
+    case 'completed': {
       // There is no completion timestamp on the wire, so "recent" is by due date
-      // descending — the same proxy the Tasks pane's completed view uses.
+      // descending — the same proxy the Tasks pane's completed view uses, and
+      // like it, undated tasks are appended rather than floated to the top by
+      // the reverse.
+      const done = tops.filter((t) => t.completed || t.cancelled)
       return <TaskList
-        items={tops.filter((t) => t.completed || t.cancelled).sort(byDue).reverse().slice(0, 40)}
+        items={[
+          ...sortTasks(done.filter((t) => t.due)).reverse(),
+          ...sortTasks(done.filter((t) => !t.due)),
+        ].slice(0, 40)}
         colorOf={colorOf} empty="Nothing completed yet." done loaded={loaded} />
+    }
     case 'mini_calendar':
       return <MiniCalendar days={days} byDay={byDay} eventColor={eventColor} />
     case 'booking_links':
