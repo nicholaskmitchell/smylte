@@ -499,14 +499,17 @@ def build_tools(api) -> dict[str, Tool]:
                           "description": "Earliest time of day to consider, 'HH:MM'."},
             "day_end": {"type": "string", "default": "17:00",
                         "description": "Latest time of day to consider, 'HH:MM'."},
-            "limit": _LIMIT,
+            "limit": _LIMIT, "offset": _OFFSET,
         }, ["start", "end"]),
     )
     def _find_free_time(start, end, minutes=30, calendar_id=None,
-                        day_start="09:00", day_end="17:00", limit=None):
+                        day_start="09:00", day_end="17:00", limit=None, offset=None):
         slots = api.find_free_time(start, end, minutes=minutes, calendar_id=calendar_id,
                                    day_start=day_start, day_end=day_end)
-        return page(slots, limit, 0, key="free")
+        # Paged like every other list tool. It used to hardcode offset 0 while
+        # still reporting next_offset, handing back a cursor its own schema
+        # forbade the caller from sending.
+        return page(slots, limit, offset, key="free")
 
     # ── scheduling ───────────────────────────────────────────────────────────
 

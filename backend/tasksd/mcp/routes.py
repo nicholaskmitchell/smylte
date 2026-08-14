@@ -12,6 +12,7 @@ from __future__ import annotations
 import base64
 import binascii
 import html
+import json
 import logging
 from urllib.parse import parse_qsl, unquote
 
@@ -66,6 +67,35 @@ def _basic_auth(request: Request) -> tuple[str, str] | None:
     return unquote(client_id), unquote(secret)
 
 
+# What each of these endpoints could ever legitimately receive. A DCR
+# registration and an OAuth form are both a few hundred bytes; the MCP cap is
+# generous enough for a large batch and small enough to be harmless.
+_MAX_FORM_BYTES = 64_000
+_MAX_JSON_BYTES = 64_000
+_MAX_RPC_BYTES = 1_000_000
+
+
+async def _read_capped(request: Request, cap: int) -> bytes:
+    """Read a body, refusing an oversized one *without* absorbing it first.
+
+    `await request.body()` buffers the whole stream and only then hands it over,
+    so checking the length afterwards means the memory has already been spent —
+    on endpoints an unauthenticated caller can reach. Content-Length is checked
+    first where it is offered, but a chunked request need not offer one, so the
+    running total is what actually enforces the cap: the read stops at the first
+    chunk that crosses it.
+    """
+    declared = request.headers.get("content-length")
+    if declared and declared.isdigit() and int(declared) > cap:
+        raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, "body too large")
+    buf = bytearray()
+    async for chunk in request.stream():
+        buf.extend(chunk)
+        if len(buf) > cap:
+            raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, "body too large")
+    return bytes(buf)
+
+
 async def _form(request: Request) -> dict[str, str]:
     """Parse an `application/x-www-form-urlencoded` body.
 
@@ -81,9 +111,7 @@ async def _form(request: Request) -> dict[str, str]:
             status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
             "expected application/x-www-form-urlencoded",
         )
-    raw = await request.body()
-    if len(raw) > 64_000:
-        raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, "body too large")
+    raw = await _read_capped(request, _MAX_FORM_BYTES)
     try:
         pairs = parse_qsl(raw.decode(), keep_blank_values=True, strict_parsing=False)
     except (UnicodeDecodeError, ValueError):
@@ -121,8 +149,6 @@ def register(app, *, settings, authenticator, client_ip, run):
         secret=settings.session_secret or "mcp-dev-secret",
         verify_password=verify_password,
     )
-    mcp = McpServer(McpApi(app.state.service)) if hasattr(app.state, "service") else None
-
     consent_limiter = RateLimiter(**_CONSENT_LIMITER)
     register_limiter = RateLimiter(**_REGISTER_LIMITER)
     token_limiter = RateLimiter(**_TOKEN_LIMITER)
@@ -169,7 +195,9 @@ def register(app, *, settings, authenticator, client_ip, run):
     async def oauth_register(request: Request):
         _throttle(request, register_limiter)
         try:
-            body = await request.json()
+            body = json.loads(await _read_capped(request, _MAX_JSON_BYTES))
+        except HTTPException:
+            raise
         except Exception:  # noqa: BLE001
             return _oauth_error(OAuthError("invalid_client_metadata", "body must be JSON"))
         if not isinstance(body, dict):
@@ -200,6 +228,10 @@ def register(app, *, settings, authenticator, client_ip, run):
 
     @app.post("/oauth/authorize", include_in_schema=False)
     async def authorize_submit(request: Request):
+        # Throttled before the body is read, not after: this is the one
+        # unauthenticated endpoint here whose read used to happen with no limit
+        # in front of it at all.
+        _throttle(request, consent_limiter)
         form = await _form(request)
         try:
             req = oauth.verify_request(form.get("request", ""))
@@ -224,11 +256,15 @@ def register(app, *, settings, authenticator, client_ip, run):
         if form.get("grant") == "read":
             granted &= {SCOPE_READ, SCOPE_OFFLINE}
 
-        _throttle(request, consent_limiter)
         ok = await run(oauth.check_password, form.get("username", ""), form.get("password", ""))
         if not ok:
             return HTMLResponse(
+                # Carrying the choice back: without it a mistyped password
+                # re-armed "Full access", so retyping the password silently
+                # granted write to someone who had deliberately picked
+                # read-only. The screen exists for that choice.
                 _consent_page(req, form.get("request", ""), issuer=issuer,
+                              grant=form.get("grant") or "full",
                               error="That username or password was not right."),
                 status_code=401,
                 headers={"Cache-Control": "no-store", "X-Frame-Options": "DENY"},
@@ -363,9 +399,7 @@ def register(app, *, settings, authenticator, client_ip, run):
         except OAuthError as exc:
             return _unauthorized(exc.description or exc.error)
 
-        raw = await request.body()
-        if len(raw) > 1_000_000:
-            raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, "body too large")
+        raw = await _read_capped(request, _MAX_RPC_BYTES)
         try:
             payload = parse_body(raw)
         except (ValueError, UnicodeDecodeError):
@@ -472,7 +506,8 @@ def _shell(title: str, body: str) -> str:
     )
 
 
-def _consent_page(req, signed: str, *, issuer: str, error: str = "") -> str:
+def _consent_page(req, signed: str, *, issuer: str, grant: str = "full",
+                  error: str = "") -> str:
     from urllib.parse import urlsplit
 
     scopes = scope_set(req.scope)
@@ -492,11 +527,13 @@ def _consent_page(req, signed: str, *, issuer: str, error: str = "") -> str:
 
     read_only_choice = ""
     if SCOPE_WRITE in scopes:
+        read = ' checked' if grant == "read" else ""
+        full = "" if grant == "read" else " checked"
         read_only_choice = (
-            '<label class="choice"><input type="radio" name="grant" value="full" checked>'
+            f'<label class="choice"><input type="radio" name="grant" value="full"{full}>'
             "<span><strong>Full access</strong>"
             "<em>Read and change everything above.</em></span></label>"
-            '<label class="choice"><input type="radio" name="grant" value="read">'
+            f'<label class="choice"><input type="radio" name="grant" value="read"{read}>'
             "<span><strong>Read-only</strong>"
             "<em>It can see your data but not change or delete anything.</em></span></label>"
         )

@@ -17,6 +17,7 @@ what to try instead.
 """
 from __future__ import annotations
 
+import re
 from datetime import date, datetime, time as time_of_day, timedelta
 
 from ..ical import EventEdit, TaskEdit, rrule_from_spec
@@ -62,6 +63,37 @@ def _as_dt(value: date | datetime | None) -> datetime | None:
     if isinstance(value, datetime):
         return value.astimezone().replace(tzinfo=None) if value.tzinfo else value
     return datetime.combine(value, time_of_day.min)
+
+
+_DURATION = re.compile(
+    r"^(?P<sign>[+-])?P(?:(?P<w>\d+)W)?(?:(?P<d>\d+)D)?"
+    r"(?:T(?:(?P<h>\d+)H)?(?:(?P<m>\d+)M)?(?:(?P<s>\d+)S)?)?$"
+)
+
+
+def parse_duration(value: str | None) -> timedelta | None:
+    """An RFC 5545 DURATION, e.g. 'PT1H30M' or 'P2D'.
+
+    An event may carry DURATION *instead of* DTEND — the two are mutually
+    exclusive — and the DTO passes it through untouched with `end` left null.
+    Without reading it, a two-hour meeting written that way looked like a
+    zero-length point, and the free/busy sweep's fallback reported the rest of
+    it as free time to offer someone.
+    """
+    if not value:
+        return None
+    m = _DURATION.match(str(value).strip())
+    if not m:
+        return None
+    parts = {k: int(v) for k, v in m.groupdict().items() if k != "sign" and v}
+    if not parts:
+        return None
+    delta = timedelta(weeks=parts.get("w", 0), days=parts.get("d", 0),
+                      hours=parts.get("h", 0), minutes=parts.get("m", 0),
+                      seconds=parts.get("s", 0))
+    # A negative DURATION is legal iCalendar but meaningless on a VEVENT; treat
+    # it as unknown rather than letting it run the busy block backwards.
+    return None if m.group("sign") == "-" else delta
 
 
 def _hhmm(value: str, *, field: str) -> time_of_day:
@@ -420,10 +452,19 @@ class McpApi:
             if b_start is None:
                 continue
             b_end = _as_dt(_parse_dt(event.get("end"), field="end"))
+            if b_end is None:
+                # DURATION is the other half of the pair — an event carries one
+                # or the other, never both — so it has to be read before any
+                # fallback, or the fallback silently shortens a real meeting.
+                length = parse_duration(event.get("duration"))
+                if length:
+                    b_end = b_start + length
             if event.get("all_day"):
                 # DTEND is exclusive for an all-day event; with none, it is one day.
                 b_end = b_end or (b_start + timedelta(days=1))
             elif b_end is None or b_end <= b_start:
+                # Genuinely unknown: assume a short meeting rather than none at
+                # all, since reporting occupied time as free is the worse error.
                 b_end = b_start + timedelta(minutes=30)
             busy.append((b_start, b_end))
         busy.sort()
