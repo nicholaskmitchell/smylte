@@ -305,6 +305,40 @@ describe('<App> live updates', () => {
   })
 })
 
+describe('<App> clock setting', () => {
+  it('opens on 12-hour and cycles to 24-hour, persisting the choice', async () => {
+    render(<App />)
+    await screen.findByRole('button', { name: 'Tasks' })
+    await userEvent.click(screen.getByRole('button', { name: 'Settings' }))
+    const clock = screen.getByRole('button', { name: '12- or 24-hour clock' })
+    expect(clock).toHaveTextContent('12-hour')
+    await userEvent.click(clock)
+    expect(clock).toHaveTextContent('24-hour')
+    await waitFor(() => expect(m.putSettings).toHaveBeenCalledWith({ time_format: '24h' }))
+    await userEvent.click(clock)
+    expect(clock).toHaveTextContent('12-hour')
+  })
+
+  it('restores a stored 24-hour choice', async () => {
+    m.getSettings.mockResolvedValue({ time_format: '24h' })
+    render(<App />)
+    await screen.findByRole('button', { name: 'Tasks' })
+    await userEvent.click(screen.getByRole('button', { name: 'Settings' }))
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: '12- or 24-hour clock' })).toHaveTextContent('24-hour'))
+  })
+
+  it('falls back to 12-hour when the stored value is junk', async () => {
+    // The blob is hand-editable, so an unknown token has to degrade to the
+    // default rather than reaching a formatter.
+    m.getSettings.mockResolvedValue({ time_format: 'H:mm' } as never)
+    render(<App />)
+    await screen.findByRole('button', { name: 'Tasks' })
+    await userEvent.click(screen.getByRole('button', { name: 'Settings' }))
+    expect(screen.getByRole('button', { name: '12- or 24-hour clock' })).toHaveTextContent('12-hour')
+  })
+})
+
 // ── a settings write that fails must not be swallowed ───────────────────────
 
 describe('<App> settings writes', () => {

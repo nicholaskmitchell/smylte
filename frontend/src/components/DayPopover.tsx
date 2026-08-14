@@ -7,18 +7,19 @@ import { useEffect, type CSSProperties } from 'react'
 import type { CalEvent } from '../api'
 import type { DayEv } from '../calendar'
 import { dayKey } from '../util'
-
-const time = (iso: string) =>
-  new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+import { fmtClock, type TimeFormat } from '../time'
+import { useTimeFormat } from '../timeformat'
 
 /** The time label for an event as it appears on `day`: a continuation day shows
  *  the end time if the span finishes that day, and otherwise reads as all day. */
-function label(ev: DayEv, day: string): string {
+function label(ev: DayEv, day: string, f: TimeFormat): string {
   if (ev.all_day) return 'all day'
   if (ev.cont) {
-    return ev.end && !ev.end_is_date && dayKey(ev.end) === day ? `– ${time(ev.end)}` : 'all day'
+    return ev.end && !ev.end_is_date && dayKey(ev.end) === day
+      ? `– ${fmtClock(ev.end, f)}`
+      : 'all day'
   }
-  return ev.start ? time(ev.start) : ''
+  return ev.start ? fmtClock(ev.start, f) : ''
 }
 
 export function AgendaEvent({ ev, day, style, onOpen }: {
@@ -27,9 +28,10 @@ export function AgendaEvent({ ev, day, style, onOpen }: {
   style?: CSSProperties
   onOpen?: (e: CalEvent) => void
 }) {
+  const tf = useTimeFormat()
   const body = (
     <>
-      <span className="t">{label(ev, day)}</span>
+      <span className="t">{label(ev, day, tf)}</span>
       <span>
         {ev.is_recurring && <span className="recur" aria-hidden="true">↻ </span>}
         {ev.summary || '(untitled)'}

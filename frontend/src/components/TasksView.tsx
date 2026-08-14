@@ -4,8 +4,10 @@ import {
 import { api, uidFor, type CreateTaskBody, type List, type Task, type TaskGroup, type TasksViewMode } from '../api'
 import { useTaskData } from '../data'
 import {
-  addDays, dayKey, fmtDue, hasZone, instantFromLocal, isOverdue, makeGuard, toLocalInput, ymd,
+  addDays, dayKey, hasZone, instantFromLocal, isOverdue, makeGuard, toLocalInput, ymd,
 } from '../util'
+import { fmtClock, fmtDue, inputLang } from '../time'
+import { useTimeFormat } from '../timeformat'
 import { AddMultipleModal, blankValues, bodyFrom, FIELDS, type RowValues } from './AddMultipleModal'
 import { Sidebar } from './Sidebar'
 
@@ -581,6 +583,7 @@ function DayCard({ task, showDate, dot, onToggle, onOpen, onDrag }: {
   const priClass = pri === 'high' ? 'pri-high' : pri === 'medium' ? 'pri-med' : pri === 'low' ? 'pri-low' : ''
   const done = task.completed || task.cancelled
   const timed = !!task.due && task.due.includes('T') && !task.due_is_date
+  const tf = useTimeFormat()
   return (
     <div className={`day-card ${done ? 'done' : ''}`} draggable
       onDragStart={(e) => {
@@ -601,12 +604,12 @@ function DayCard({ task, showDate, dot, onToggle, onOpen, onDrag }: {
           <div className="task-meta">
             {showDate && task.due && (
               <span className={`due ${!task.completed ? 'overdue' : ''}`}>
-                ◷ {fmtDue(task.due, task.due_is_date)}
+                ◷ {fmtDue(task.due, task.due_is_date, tf)}
               </span>
             )}
             {!showDate && timed && (
               <span className={`due ${isOverdue(task.due, task.due_is_date) && !task.completed ? 'overdue' : ''}`}>
-                {new Date(task.due!).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
+                {fmtClock(task.due!, tf)}
               </span>
             )}
             {task.tags.map((tg) => <span key={tg} className="chip">#{tg}</span>)}
@@ -634,6 +637,7 @@ function TaskRow({ task, depth = 0, dot, progress, collapsed, onCollapse,
   const pri = task.priority_label
   const priClass = pri === 'high' ? 'pri-high' : pri === 'medium' ? 'pri-med' : pri === 'low' ? 'pri-low' : ''
   const label = task.summary || '(untitled)'
+  const tf = useTimeFormat()
   return (
     <div className={`task ${depth > 0 ? 'sub' : ''} ${task.completed || task.cancelled ? 'done' : ''}`}
       style={indentStyle(depth)}>
@@ -658,7 +662,7 @@ function TaskRow({ task, depth = 0, dot, progress, collapsed, onCollapse,
           <div className="task-meta">
             {task.due && (
               <span className={`due ${isOverdue(task.due, task.due_is_date) && !task.completed ? 'overdue' : ''}`}>
-                ◷ {fmtDue(task.due, task.due_is_date)}
+                ◷ {fmtDue(task.due, task.due_is_date, tf)}
               </span>
             )}
             {progress && (
@@ -751,6 +755,7 @@ function TaskModal({ task, lists, defaultList, initialTitle, onClose, onCreate, 
   onMultiple: (listId: string, summary: string) => void
 }) {
   const creating = task === null
+  const lang = inputLang(useTimeFormat())
   const [summary, setSummary] = useState(task?.summary || initialTitle || '')
   const [notes, setNotes] = useState(task?.notes || '')
   // Every other property lives in the same bag the bulk composer uses, and is
@@ -835,7 +840,7 @@ function TaskModal({ task, lists, defaultList, initialTitle, onClose, onCreate, 
             <div key={f.key} className={`task-prop prop-${f.key}`}>
               <label className="label">{f.label}</label>
               <span className="task-prop-controls">
-                {f.render(vals, patch, { lists, where: '', disabled: false })}
+                {f.render(vals, patch, { lists, where: '', disabled: false, lang })}
               </span>
             </div>
           ))}

@@ -392,6 +392,11 @@ class SettingsPatch(BaseModel):
     # Absent means the default (hidden); False is a real value the merge keeps,
     # so an explicit "show" survives. The "View completed" button ignores this.
     show_completed_tasks: bool | None = None
+    # 12- or 24-hour clock for every time the app renders. Absent means "12h",
+    # which is what the app did before this was settable. Only the app's own
+    # displays follow it: the public booking page is rendered for visitors who
+    # are not this account, so it stays on their own locale.
+    time_format: Literal["12h", "24h"] | None = None
 
 
 _SCOPES = ("all", "this", "thisandfuture")

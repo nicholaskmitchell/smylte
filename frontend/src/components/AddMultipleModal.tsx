@@ -3,6 +3,8 @@ import {
   type ClipboardEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode,
 } from 'react'
 import { clientId, PRIORITIES, type CreateTaskBody, type List } from '../api'
+import { inputLang } from '../time'
+import { useTimeFormat } from '../timeformat'
 
 // Each create is a CalDAV PUT plus a re-read GET behind a single server-side
 // lock, so a batch this size is already a slow half-minute. It also bounds what
@@ -44,7 +46,11 @@ export const blankValues = (listId: string): RowValues => ({
 const blankRow = (listId: string): Row =>
   ({ ...blankValues(listId), key: clientId().slice(0, 8), cid: clientId(), summary: '' })
 
-export interface FieldCtx { lists: List[]; where: string; disabled: boolean }
+// `lang` reaches the native date/time pickers, which are drawn by the browser
+// and read it to pick a 12- or 24-hour clock. It rides in the context rather
+// than being read from the hook here because FIELDS is a plain table, not a
+// component — see time.ts's `inputLang` for what it can and cannot do.
+export interface FieldCtx { lists: List[]; where: string; disabled: boolean; lang: string }
 
 export interface FieldSpec {
   key: FieldKey
@@ -133,13 +139,13 @@ export const FIELDS: readonly FieldSpec[] = [
   },
   {
     key: 'due', label: 'Due', slots: ['dueDate', 'dueTime'],
-    render: (v, set, { where, disabled }) => (
+    render: (v, set, { where, disabled, lang }) => (
       <>
         <input className="input" type="date" aria-label={`Due date${where}`} value={v.dueDate}
           disabled={disabled} onChange={(e) => set({ dueDate: e.target.value })} />
         {/* A time with no date isn't expressible as a due, so keep the
             constraint visible rather than silently dropping the time. */}
-        <input className="input" type="time" aria-label={`Due time${where}`} value={v.dueTime}
+        <input className="input" type="time" aria-label={`Due time${where}`} value={v.dueTime} lang={lang}
           disabled={disabled || !v.dueDate} onChange={(e) => set({ dueTime: e.target.value })} />
       </>
     ),
@@ -149,12 +155,12 @@ export const FIELDS: readonly FieldSpec[] = [
     // clients routinely write one. With a date-only control the time had
     // nowhere to live and any save silently dropped it.
     key: 'start', label: 'Start', slots: ['startDate', 'startTime'],
-    render: (v, set, { where, disabled }) => (
+    render: (v, set, { where, disabled, lang }) => (
       <>
         <input className="input" type="date" aria-label={`Start date${where}`} value={v.startDate}
           disabled={disabled} onChange={(e) => set({ startDate: e.target.value })} />
         {/* A time with no date isn't expressible as a start, same as Due. */}
-        <input className="input" type="time" aria-label={`Start time${where}`} value={v.startTime}
+        <input className="input" type="time" aria-label={`Start time${where}`} value={v.startTime} lang={lang}
           disabled={disabled || !v.startDate} onChange={(e) => set({ startTime: e.target.value })} />
       </>
     ),
@@ -251,6 +257,7 @@ export function AddMultipleModal({ lists, defaultList, initialTitle, onSubmit, o
   ) => Promise<number[]>
   onClose: () => void
 }) {
+  const lang = inputLang(useTimeFormat())
   const [rows, setRows] = useState<Row[]>(() => [
     { ...blankRow(defaultList), summary: initialTitle?.trim() || '' },
     blankRow(defaultList), blankRow(defaultList),
@@ -414,7 +421,7 @@ export function AddMultipleModal({ lists, defaultList, initialTitle, onSubmit, o
                 {sharedOn[f.key] && (
                   <span className="task-prop-controls">
                     {f.render(shared, (p) => setShared((v) => ({ ...v, ...p })),
-                      { lists, where: FOR_ALL, disabled: busy })}
+                      { lists, where: FOR_ALL, disabled: busy, lang })}
                   </span>
                 )}
               </div>
@@ -453,7 +460,7 @@ export function AddMultipleModal({ lists, defaultList, initialTitle, onSubmit, o
                       each row stacks into a card (mobile). */}
                   <span className="bulk-cell-label label">{f.label}</span>
                   {f.render(row, (p) => patchRow(row.key, p),
-                    { lists, where: `, row ${i + 1}`, disabled: busy })}
+                    { lists, where: `, row ${i + 1}`, disabled: busy, lang })}
                 </span>
               ))}
               <button className="icon-btn bulk-x" disabled={busy}

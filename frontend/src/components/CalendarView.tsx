@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { api, clientId, uidFor, type CalEvent, type EventScope, type List } from '../api'
 import { useCalendarData } from '../data'
 import { dayKey, makeGuard, pad, toLocalInput, ymd } from '../util'
+import { fmtClock, inputLang } from '../time'
+import { useTimeFormat } from '../timeformat'
 import {
   bucketByDay, dragBody, daysBetween, lastDayOf, monthGrid, shiftYmd, type DayEv,
 } from '../calendar'
@@ -55,6 +57,7 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
 }) {
   const guard = makeGuard(onExpire)
   const isMobile = useIsMobile()
+  const tf = useTimeFormat()
   const { cals, loaded, setCals, eventsFor, requestWindow, setEvents, reload } = useCalendarData()
   const setCursor = onCursorChange
   // Every calendar is visible by default; this holds the ids the user hid, so a
@@ -342,7 +345,7 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
                               onDragEnd={() => { setDrag(null); setOverDay(null) }}
                               onClick={(ev) => { ev.stopPropagation(); setDraft({ event: e }) }}>
                               {!e.all_day && e.start && !e.cont && (
-                                <span className="t">{new Date(e.start).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</span>
+                                <span className="t">{fmtClock(e.start, tf)}</span>
                               )}
                               {e.is_recurring && <span className="recur" aria-hidden="true">↻ </span>}
                               {e.cont && <span className="t" aria-hidden="true">‥ </span>}
@@ -446,6 +449,7 @@ function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete }: {
   onDelete: (uid: string, opts?: { recurrence_id?: string | null; scope?: EventScope }) => void
 }) {
   const e = draft.event
+  const lang = inputLang(useTimeFormat())
   const recurring = !!e?.is_recurring
   // Where the event goes: a new event is created here, an existing one is
   // moved here (whole resource — a series always changes calendar as one).
@@ -587,12 +591,12 @@ function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete }: {
               <div className="field">
                 <label className="label" htmlFor="ev-start">Start</label>
                 <input className="input" id="ev-start" type={allDay ? 'date' : 'datetime-local'} value={startVal}
-                  onChange={(ev) => changeStart(ev.target.value)} />
+                  lang={lang} onChange={(ev) => changeStart(ev.target.value)} />
               </div>
               <div className="field">
                 <label className="label" htmlFor="ev-end">{allDay ? 'End (last day)' : 'End'}</label>
                 <input className="input" id="ev-end" type={allDay ? 'date' : 'datetime-local'} value={endVal}
-                  min={startVal} onChange={(ev) => setEnd(ev.target.value)} />
+                  lang={lang} min={startVal} onChange={(ev) => setEnd(ev.target.value)} />
               </div>
             </div>
             <div className="field">
