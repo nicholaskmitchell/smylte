@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
-  bucketByDay, dragBody, daysBetween, endIsExclusive, lastDayOf, monthGrid, shiftIso,
+  bucketByDay, bucketTasksByDay, dragBody, daysBetween, endIsExclusive, lastDayOf,
+  monthGrid, shiftIso,
 } from './calendar'
-import type { CalEvent } from './api'
+import type { CalEvent, Task } from './api'
 
 const ev = (start: string | null, end: string | null,
   o: Partial<CalEvent> = {}): CalEvent => ({
@@ -276,5 +277,55 @@ describe('dragBody: resize', () => {
 
   it('is still a no-op when a midnight-ending event is dropped on its own last day', () => {
     expect(dragBody(midnight, '2026-03-02', '2026-03-02', 'resize')).toBeNull()
+  })
+})
+
+describe('bucketTasksByDay', () => {
+  const t = (o: Partial<Task> = {}): Task => ({
+    uid: 't1', list: 'l1', summary: 'Task', notes: null, status: 'NEEDS-ACTION',
+    completed: false, cancelled: false, priority: null, priority_label: 'none',
+    percent_complete: null, due: '2026-03-04', due_is_date: true,
+    start: null, start_is_date: true, tags: [], parent: null, children: [],
+    child_count: 0, completed_child_count: 0, derived_percent: null,
+    pinned: false, sort_order: null, href: '/l1/t1.ics', etag: '"1"', ...o,
+  })
+  const days = Array.from({ length: 7 }, (_, i) => new Date(2026, 2, 1 + i))
+
+  it('keys a task on its due day', () => {
+    const m = bucketTasksByDay([t()], days)
+    expect(m.get('2026-03-04')!.map((x) => x.uid)).toEqual(['t1'])
+  })
+
+  it('leaves out a task with no due date', () => {
+    // It has no day to sit on; the tasks pane is where those live.
+    expect(bucketTasksByDay([t({ due: null })], days).size).toBe(0)
+  })
+
+  it('leaves out a task outside the window', () => {
+    expect(bucketTasksByDay([t({ due: '2026-05-01' })], days).size).toBe(0)
+    expect(bucketTasksByDay([t({ due: '2026-01-01' })], days).size).toBe(0)
+  })
+
+  it('lands a zone-anchored due on the viewer\'s local day', () => {
+    // 2026-03-05T02:00Z is still the 4th at 21:00 in the suite's New York zone.
+    const m = bucketTasksByDay([t({ due: '2026-03-05T02:00:00Z', due_is_date: false })], days)
+    expect(m.get('2026-03-04')).toHaveLength(1)
+  })
+
+  it('skips an unparseable due rather than keying on NaN', () => {
+    expect(bucketTasksByDay([t({ due: 'whenever' })], days).size).toBe(0)
+  })
+
+  it('orders a day\'s tasks the way the tasks pane does', () => {
+    const m = bucketTasksByDay([
+      t({ uid: 'late', due: '2026-03-04T16:00', due_is_date: false }),
+      t({ uid: 'allday', due: '2026-03-04', due_is_date: true }),
+      t({ uid: 'early', due: '2026-03-04T09:00', due_is_date: false }),
+    ], days)
+    expect(m.get('2026-03-04')!.map((x) => x.uid)).toEqual(['allday', 'early', 'late'])
+  })
+
+  it('returns nothing for an empty grid', () => {
+    expect(bucketTasksByDay([t()], []).size).toBe(0)
   })
 })

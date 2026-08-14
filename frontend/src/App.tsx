@@ -53,6 +53,10 @@ export function App() {
   const [collapsedTasks, setCollapsedTasks] = useState<string[]>([])
   const [showCompleted, setShowCompleted] = useState(false)
   const [timeFormat, setTimeFormat] = useState<TimeFormat>(DEFAULT_TIME_FORMAT)
+  // An allowlist, not a hidden-set: no task list is drawn on the calendar until
+  // it is opted in (see the SettingsPatch comment for why this one is inverted).
+  const [calTaskLists, setCalTaskLists] = useState<string[]>([])
+  const [calShowDone, setCalShowDone] = useState(false)
   // How long a login lasts. Null means the deployment's own TASKS_SESSION_TTL,
   // which is what this used to be the only way to set.
   const [sessionTtl, setSessionTtl] = useState<number | null>(null)
@@ -169,6 +173,12 @@ export function App() {
         }
         if (typeof s.show_completed_tasks === 'boolean') setShowCompleted(s.show_completed_tasks)
         if (isTimeFormat(s.time_format)) setTimeFormat(s.time_format)
+        if (Array.isArray(s.calendar_task_lists)) {
+          setCalTaskLists(s.calendar_task_lists.filter((x) => typeof x === 'string'))
+        }
+        if (typeof s.calendar_show_done_tasks === 'boolean') {
+          setCalShowDone(s.calendar_show_done_tasks)
+        }
         if (isSessionTtl(s.session_ttl_s)) setSessionTtl(s.session_ttl_s)
         // Both blobs are re-validated here rather than trusted: they are the
         // two settings a user can hand-edit or import a file into, and an
@@ -321,6 +331,17 @@ export function App() {
     setShowCompleted(next)
     saveSettings({ show_completed_tasks: next })
   }, [showCompleted])
+
+  const changeCalTaskLists = useCallback((next: string[]) => {
+    setCalTaskLists(next)
+    saveSettings({ calendar_task_lists: next })
+  }, [])
+
+  const toggleCalShowDone = useCallback(() => {
+    const next = !calShowDone
+    setCalShowDone(next)
+    saveSettings({ calendar_show_done_tasks: next })
+  }, [calShowDone])
 
   // 12- or 24-hour clock. Two values, so the row cycles like the theme rather
   // than offering a picker.
@@ -520,7 +541,9 @@ export function App() {
         <CalendarView onExpire={onExpire} cursor={cursor} onCursorChange={setCursor}
           sideCollapsed={sideCollapsed} onToggleSide={toggleSide}
           hiddenCalendars={hiddenCals} onHiddenCalendarsChange={changeHiddenCals}
-          archivedCalendars={archivedCals} onArchivedCalendarsChange={changeArchivedCals} />
+          archivedCalendars={archivedCals} onArchivedCalendarsChange={changeArchivedCals}
+          calTaskLists={calTaskLists} onCalTaskListsChange={changeCalTaskLists}
+          calShowDone={calShowDone} onCalShowDoneChange={toggleCalShowDone} />
       )}
       {!booting && tab === 'scheduling' && <SchedulingView rev={rev} onExpire={onExpire} />}
       {!booting && tab === 'home' && (

@@ -425,6 +425,16 @@ class SettingsPatch(BaseModel):
     # displays follow it: the public booking page is rendered for visitors who
     # are not this account, so it stays on their own locale.
     time_format: Literal["12h", "24h"] | None = None
+    # Ids of task lists whose tasks are drawn on the calendar grid. An ALLOWLIST,
+    # unlike hidden_calendars/hidden_lists above — those are denylists so a new
+    # collection shows by default, which is right for a collection the user just
+    # made. Tasks on the calendar are an overlay on a view that did not have
+    # them, so nothing appears until a list is opted in. Empty is the default
+    # and also a real value (clears the set).
+    calendar_task_lists: list[str] | None = None
+    # Whether completed/cancelled tasks stay on the calendar. Absent means the
+    # default (hidden), matching show_completed_tasks; False is a real value.
+    calendar_show_done_tasks: bool | None = None
 
 
 _SCOPES = ("all", "this", "thisandfuture")
