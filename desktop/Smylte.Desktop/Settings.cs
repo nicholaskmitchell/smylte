@@ -40,6 +40,12 @@ public sealed class Settings
     public long LastAssetId { get; set; }
     public string LastAssetStamp { get; set; } = "";
 
+    /// SHA-256 of this exe, and the write time it was computed for. Hashing 69 MB
+    /// on every launch to notice a new client would be silly; hashing it once per
+    /// binary is free. The stamp is what makes the cache safe to trust.
+    public string ClientDigest { get; set; } = "";
+    public string ClientDigestStamp { get; set; } = "";
+
     public int WindowWidth { get; set; } = 1280;
     public int WindowHeight { get; set; } = 860;
     public bool WindowMaximized { get; set; }
