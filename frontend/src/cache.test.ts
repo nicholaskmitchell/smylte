@@ -95,6 +95,22 @@ describe('cache reads defensively', () => {
     expect(t!.priority).toBeNull()     // NaN is not a usable number
   })
 
+  it('carries the manual position through the disk cache', () => {
+    // sanitizeTask rebuilds field by field, so anything not listed there is
+    // silently dropped. sort_order going missing would make manual order work
+    // on a fresh load and vanish on a cached one — the hardest kind of bug to
+    // see, because a reload fixes it.
+    expect(sanitizeTask({ uid: 'u', list: 'l', sort_order: 3 })!.sort_order).toBe(3)
+    expect(sanitizeTask({ uid: 'u', list: 'l' })!.sort_order).toBeNull()
+    expect(sanitizeTask({ uid: 'u', list: 'l', sort_order: 'third' })!.sort_order).toBeNull()
+    expect(sanitizeTask({ uid: 'u', list: 'l', start_is_date: true })!.start_is_date).toBe(true)
+
+    cacheTasks([task({ sort_order: 7, start_is_date: false })])
+    const back = readCachedTasks()!
+    expect(back[0].sort_order).toBe(7)
+    expect(back[0].start_is_date).toBe(false)
+  })
+
   it('refuses a row missing the fields everything keys on', () => {
     expect(sanitizeTask({ list: 'l1' })).toBeNull()          // no uid
     expect(sanitizeTask({ uid: 'u1' })).toBeNull()           // no list

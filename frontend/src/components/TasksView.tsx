@@ -16,6 +16,17 @@ const VIEWS: ReadonlyArray<readonly [TasksViewMode, string]> = [
   ['list', 'List'], ['day3', '3-Day'], ['week', 'Week'],
 ]
 
+/** Drag-to-reorder wiring, threaded to the list view's top-level rows.
+ *  `onOver(null, from)` clears the highlight only if `from` still owns it, so a
+ *  dragleave firing after the next row's dragenter doesn't blank it. */
+interface ReorderDrag {
+  uid: string | null
+  over: string | null
+  onStart: (uid: string | null) => void
+  onOver: (uid: string | null, from?: string) => void
+  onDrop: (target: string) => void
+}
+
 /** Done or won't-do — both take a task out of the active list. */
 const isDone = (t: Task) => t.completed || t.cancelled
 
@@ -63,7 +74,7 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
   // Home reads the same copy rather than fanning out a second one.
   const {
     lists, serverOrderedLists, tasks, listsLoaded, loaded, setLists,
-    create, createMany, addSub, toggle, remove, saveDetail,
+    create, createMany, addSub, toggle, remove, saveDetail, reorder,
   } = useTaskData()
   const [detail, setDetail] = useState<Task | null>(null)
   // The two create surfaces, both null when closed. `adding` is the single-task
@@ -113,6 +124,25 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
   // A one-line convenience over the shared create; day columns pass a due.
   const addTask = (listId: string, summary: string, due?: string) =>
     create(listId, due ? { summary, due } : { summary })
+
+  // List-view drag-to-reorder. Only the list view: the day columns already own
+  // the drag gesture for rescheduling (`dragUid`/`dropOnDay` below), and one
+  // gesture cannot mean two things.
+  const [orderUid, setOrderUid] = useState<string | null>(null)
+  const [orderOver, setOrderOver] = useState<string | null>(null)
+  const reorderDrag: ReorderDrag = {
+    uid: orderUid,
+    over: orderOver,
+    onStart: (uid) => { setOrderUid(uid); if (!uid) setOrderOver(null) },
+    onOver: (uid, from) =>
+      setOrderOver((o) => (uid === null ? (o === from ? null : o) : uid)),
+    onDrop: (target) => {
+      const dragged = orderUid
+      setOrderUid(null)
+      setOrderOver(null)
+      if (dragged) void reorder(dragged, target)
+    },
+  }
   // Day-column drag: dropping a card on a column reschedules it to that day.
   // A timed due keeps its local time-of-day; an all-day due stays all-day.
   const [dragUid, setDragUid] = useState<string | null>(null)
@@ -380,7 +410,8 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
               {active.map((t) => (
                 <TaskGroup key={t.uid} task={t} childrenOf={childrenOf} dot={dotFor(t)}
                   progressOf={progressOf} collapsed={collapsedSet} onCollapse={setCollapsed}
-                  onToggle={toggle} onRemove={remove} onOpen={setDetail} onAddSub={addSub} />
+                  onToggle={toggle} onRemove={remove} onOpen={setDetail} onAddSub={addSub}
+                  drag={reorderDrag} />
               ))}
               {active.length === 0 && (
                 <div className="empty" aria-busy={!loaded || undefined}>
@@ -476,7 +507,7 @@ const MAX_INDENT = 6
  * gave out. A row already on its own path is dropped rather than repeated.
  */
 function TaskGroup({ task, childrenOf, dot, progressOf, depth = 0, seen,
-  collapsed, onCollapse, onToggle, onRemove, onOpen, onAddSub }: {
+  collapsed, onCollapse, onToggle, onRemove, onOpen, onAddSub, drag }: {
   task: Task
   childrenOf: (uid: string) => Task[]
   dot?: string | null
@@ -487,6 +518,10 @@ function TaskGroup({ task, childrenOf, dot, progressOf, depth = 0, seen,
   onCollapse: (uid: string, next: boolean) => void
   onToggle: (t: Task) => void; onRemove: (t: Task) => void
   onOpen: (t: Task) => void; onAddSub: (parent: string, summary: string) => void
+  /** Manual reorder, list view only (opt-in). Wraps the whole subtree, not just
+   *  the row, so a parent takes its subtasks with it. Subtasks are not
+   *  themselves reorderable — they render under their parent wherever it goes. */
+  drag?: ReorderDrag
 }) {
   const [adding, setAdding] = useState(false)
   const kids = childrenOf(task.uid).filter((k) => !seen?.has(k.uid))
@@ -494,7 +529,21 @@ function TaskGroup({ task, childrenOf, dot, progressOf, depth = 0, seen,
   const path = useMemo(() => new Set([...(seen ?? []), task.uid]), [seen, task.uid])
   const indent = Math.min(depth, MAX_INDENT)
   return (
-    <div>
+    <div
+      className={drag
+        ? `task-drag ${drag.over === task.uid && drag.uid !== task.uid ? 'drag-over' : ''}`
+        : undefined}
+      draggable={!!drag}
+      onDragStart={drag && ((e) => {
+        drag.onStart(task.uid)
+        e.dataTransfer.effectAllowed = 'move'
+        // Firefox refuses to start a drag with nothing on the transfer.
+        e.dataTransfer.setData('text/plain', task.uid)
+      })}
+      onDragOver={drag && ((e) => { e.preventDefault(); drag.onOver(task.uid) })}
+      onDragLeave={drag && (() => drag.onOver(null, task.uid))}
+      onDrop={drag && ((e) => { e.preventDefault(); drag.onDrop(task.uid) })}
+      onDragEnd={drag && (() => drag.onStart(null))}>
       <TaskRow task={task} dot={dot} depth={indent} progress={progressOf(task.uid)}
         collapsed={kids.length > 0 ? isCollapsed : undefined}
         onCollapse={(next) => onCollapse(task.uid, next)}
