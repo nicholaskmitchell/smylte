@@ -135,6 +135,40 @@ third-party CalDAV VTODO support in iOS 13, so an Apple account surfaces the
 VEVENT calendars only. Tasks need the web app, Tasks.org/DAVx⁵, or jtx Board —
 they are the same collections either way.
 
+## F. Connect Claude (OPTIONAL)  **[PROD — edit env + restart]**
+
+Off by default. Turning it on publishes an OAuth-protected MCP endpoint that
+Claude can be added to as a custom connector.
+
+1. In `/etc/tasks/tasks.env`:
+   ```
+   TASKS_MCP_ENABLED=true
+   TASKS_PUBLIC_URL=https://radicale.nicholaskmitchell.com
+   ```
+   `TASKS_PUBLIC_URL` is required — the OAuth metadata has to state absolute
+   URLs, and the value a token is bound to must match what the client was
+   pointed at, so it is configured rather than read off the `Host` header. The
+   app refuses to start if it is missing, or if app auth is off, or if
+   `TASKS_SESSION_SECRET` is unset.
+2. `sudo systemctl restart tasks`.
+3. No Caddy change is needed. `/.well-known/oauth-*` and `/mcp` fall through the
+   existing catch-all to the app; only `/dav*`, the two CalDAV well-knowns and
+   `/internal*` are handled before it.
+4. In Claude → Settings → Connectors → **Add custom connector**, give it
+   `https://radicale.nicholaskmitchell.com/mcp`. Leave the OAuth Client ID and
+   Secret blank: the server supports dynamic client registration, so Claude
+   registers itself. A consent screen asks for your app username and password —
+   that is the gate; knowing the URL is not enough — and lets you grant
+   read-only instead of full access.
+5. Manage or revoke connections at any time in the app: **Settings → Connected
+   apps**. Disconnecting kills the access token and every refresh token from
+   that approval immediately.
+
+Anthropic's requests come from `160.79.104.0/21`; if you ever put a WAF or
+Cloudflare Access in front of the app, that range needs to reach both `/mcp`
+*and* the `/.well-known/oauth-*` documents, or discovery fails with the server
+looking reachable.
+
 ## Verify
 - `https://radicale.nicholaskmitchell.com` → login → tasks + calendar.
 - `PROPFIND https://radicale.nicholaskmitchell.com/dav/nicholaskmitchell/` returns 207.
@@ -153,6 +187,16 @@ they are the same collections either way.
 - `curl -I -X OPTIONS $S/dav/nicholaskmitchell/ -u ...` advertises
   `DAV: 1, 2, 3, calendar-access` (Apple refuses the account without it).
 - Change a task on the phone → appears in the web UI within ~1s (hook) or ~30s (poll).
+- With the connector on, discovery answers and the endpoint challenges:
+  ```bash
+  S=https://radicale.nicholaskmitchell.com
+  curl -s $S/.well-known/oauth-protected-resource | jq .resource   # "$S/mcp"
+  curl -s $S/.well-known/oauth-authorization-server | jq .issuer    # "$S"
+  curl -sI -X POST $S/mcp -H 'Content-Type: application/json' -d '{}' | grep -i www-authenticate
+  # -> WWW-Authenticate: Bearer realm="smylte", resource_metadata="$S/.well-known/..."
+  ```
+  A `resource` that does not exactly match the URL you gave Claude — including
+  the path — is the usual reason a reachable server still fails to connect.
 
 ## Backups (spec §9 — important)
 Back up **both**:

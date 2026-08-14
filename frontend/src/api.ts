@@ -201,6 +201,20 @@ export interface TaskGroup {
   lists: string[]
 }
 
+// One application connected through the MCP connector. Identified by its
+// rotation family rather than by any token value — the grant is the thing the
+// owner recognises, and no secret needs to leave the server to name it.
+export interface McpConnection {
+  family_id: string
+  client_id: string
+  client_name: string | null
+  scope: string
+  resource: string
+  granted_at: number      // UNIX seconds
+  refreshed_at: number
+  expires_at: number
+}
+
 // Account-synced UI preferences (stored server-side, not per-browser).
 export interface Settings {
   theme?: 'light' | 'dark'
@@ -356,6 +370,13 @@ export const api = {
   // settings (account-synced UI preferences)
   getSettings: () => j<Settings>('GET', '/api/settings'),
   putSettings: (patch: Settings) => j<Settings>('PUT', '/api/settings', patch),
+
+  // connected applications (MCP connector grants). Cookie-gated like the rest
+  // of /api — this is the owner managing their own grants, not a client.
+  mcpConnections: () => j<McpConnection[]>('GET', '/api/mcp/connections')
+    .then((r) => (r as unknown as { connections: McpConnection[] }).connections ?? []),
+  mcpDisconnect: (familyId: string) =>
+    j<null>('DELETE', `/api/mcp/connections/${encodeURIComponent(familyId)}`),
 
   // misc
   tags: () => j<string[]>('GET', '/api/tags'),

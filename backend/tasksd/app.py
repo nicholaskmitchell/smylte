@@ -1357,6 +1357,38 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "frontend not built")
         return FileResponse(index)
 
+    # -- remote MCP server + its OAuth authorization server (opt-in) --
+    # Registered here, before the static mount, because that mount matches every
+    # path and method — anything after it is unreachable. Off unless asked for:
+    # this adds publicly reachable OAuth endpoints, and a deploy should never
+    # grow an auth surface on its own.
+    if settings.mcp_enabled:
+        if not settings.public_url:
+            raise RuntimeError(
+                "TASKS_MCP_ENABLED is set but TASKS_PUBLIC_URL is not. The OAuth "
+                "metadata has to state this deployment's absolute URL (e.g. "
+                "https://tasks.example.com) and it cannot be read off the Host "
+                "header, which the caller controls — refusing to start."
+            )
+        if authenticator is None:
+            raise RuntimeError(
+                "TASKS_MCP_ENABLED is set but TASKS_AUTH_ENABLED is false. The "
+                "connector's consent screen is the app password — with no "
+                "password there is nothing to prove you are the owner, and "
+                "anyone reaching the server could mint a token. Refusing to start."
+            )
+        if not settings.session_secret:
+            raise RuntimeError(
+                "TASKS_MCP_ENABLED is set but TASKS_SESSION_SECRET is not. "
+                "Consent requests are signed with a key derived from it; an "
+                "ephemeral one would invalidate every in-flight connection on "
+                "restart. Refusing to start."
+            )
+        from .mcp.routes import register as _register_mcp
+        _register_mcp(app, settings=settings, authenticator=authenticator,
+                      client_ip=_client_ip, run=_run)
+        log.info("mcp: remote connector enabled at %s/mcp", settings.public_url)
+
     # -- static SPA (built frontend), mounted last so /api wins --
     if os.path.isdir(settings.static_dir):
         app.mount("/", StaticFiles(directory=settings.static_dir, html=True), name="spa")

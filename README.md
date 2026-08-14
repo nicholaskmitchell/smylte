@@ -87,6 +87,25 @@ the CSSOM, so a `url()` beacon or a property break-out must never survive
 storage. `appearance.test.ts` asserts the defaults *and* the presets still
 match `tokens.css`.
 
+**Connect it to Claude.** Settings → Connected apps, once
+`TASKS_MCP_ENABLED=true`, exposes a remote **MCP server** at `/mcp` that Claude
+(or any MCP client) can be pointed at as a custom connector — around two dozen
+tools over lists, tasks, subtasks, search, tags, calendars, events including the
+recurrence scopes, free/busy, and booking links.
+
+It is an OAuth 2.1 authorization server as well as the resource server, because
+there is one account here and no identity provider to delegate to. Knowing the
+URL gets you nothing: connecting means passing a consent screen that asks for
+the app password, and you choose there whether to grant read-only or full
+access. Tokens are opaque and stored only as hashes, bound to this server as
+their audience, and refresh tokens rotate — presenting a used one revokes the
+whole grant, on the assumption that a copy is loose. Disconnect any of them from
+Settings and it stops working at once.
+
+Off unless asked for. Turning it on adds publicly reachable OAuth endpoints, so
+a deploy never grows that surface on its own — and with it on, the app refuses
+to start without a public URL, app auth and a persistent session secret.
+
 **Across the app.** Optimistic writes (paint immediately, reconcile with the
 server DTO, roll back on failure), live updates over Server-Sent Events, and
 account-synced UI preferences (theme, appearance, dashboard layout, task view,
@@ -115,6 +134,9 @@ backend/
     db/         SQLite (WAL, FTS5) cache + app-only sidecar (schema.sql)
     sync/       sync engine (incremental / full resync / invalid-token
                 fallback / orphan GC) + write path with 412 merge
+    mcp/        remote MCP server: OAuth 2.1 AS + resource server (oauth.py),
+                Streamable-HTTP JSON-RPC transport (server.py), the tool table
+                (tools.py) and its adapter onto the service (api.py)
     scheduling.py, auth.py, access.py, config.py
   tests/        api + security + sync + concurrency + fidelity + scheduling (pytest)
   dev/          empirical probes (fidelity comparison, normalization, smokes)
