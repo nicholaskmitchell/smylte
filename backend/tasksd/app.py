@@ -45,6 +45,7 @@ from .config import Settings, normalize_dav_url
 from .dav.errors import AuthError as DavAuthError
 from .dav.errors import DavError
 from .dav.errors import NotFound as DavNotFound
+from .dav.xml import XML_SAFE_PATTERN_SCALAR
 from .ical import EventEdit, TaskEdit, rrule_from_spec
 from .scheduling import SlotTaken
 from .service import TaskService, priority_from_label
@@ -64,14 +65,19 @@ class Login(BaseModel):
 
 
 # A collection name goes onto the wire as XML text in a PROPPATCH/MKCALENDAR
-# body, and lxml refuses control characters at assignment time with a bare
-# ValueError — outside the DavError taxonomy, so it escaped every handler and
-# came back as a 500. JSON happily carries them, and these names are routinely
-# pasted from other CalDAV clients, so reject them here where the client still
-# gets an answer it can act on. Length is bounded like every other model.
+# body, and lxml refuses what XML cannot carry at assignment time with a bare
+# ValueError (or a UnicodeEncodeError) — outside the DavError taxonomy, so it
+# escaped every handler and came back as a 500. JSON happily carries them, and
+# these names are routinely pasted from other CalDAV clients, so reject them here
+# where the client still gets an answer it can act on. Length is bounded like
+# every other model.
+#
+# The character class is dav.xml's, not a copy: the same rule has to hold at this
+# edge, in the MCP tool schemas, and in the DAV backstop, and keeping three
+# hand-written copies in step is what previously let them drift.
 CollectionName = Annotated[
     str,
-    Field(min_length=1, max_length=200, pattern=r"^[^\x00-\x08\x0b\x0c\x0e-\x1f]*$"),
+    Field(min_length=1, max_length=200, pattern=XML_SAFE_PATTERN_SCALAR),
 ]
 
 

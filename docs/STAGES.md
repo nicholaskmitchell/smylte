@@ -1,8 +1,9 @@
 # Staged remediation of the audit backlog
 
-`docs/AUDIT.md` is the evidence: 40 open findings, each carrying a concrete
-trigger. This file is the plan for closing them, and the map from a finding to
-the test that pins it.
+`docs/AUDIT.md` is the evidence. This file is the plan for closing those
+findings, and the map from a finding to the test that pins it.
+
+**33 open, 7 closed.** Stage 1 is done; stages 2-5 remain.
 
 ## Stage 0 — the harness (done)
 
@@ -58,9 +59,26 @@ is silently wrong — and needs the most care per fix. Stage 4 is the largest bu
 each item is contained. Stage 5 unblocks itself: the "no tests" finding is what
 turns the structural pins above into real ones.
 
-## Stage 1 — Crash paths
+## Stage 1 — Crash paths ✅ DONE
 
-7 findings · pinned by `backend/tests/test_backlog_stage1.py`
+7 findings · closed · `backend/tests/test_backlog_stage1.py`
+
+All seven are fixed and ticked in `docs/AUDIT.md`; the xfail markers are gone and
+those tests are now ordinary regression tests that must stay green.
+
+Two things surfaced while fixing them, both wider than the findings as filed:
+
+* The `compare_digest` crash had **three** instances, not one. Beyond the filed
+  `oauth.py:606`, the same TypeError was reachable at the token endpoint via
+  `redirect_uri`, and via a stored `code_challenge` that was length-checked but
+  never charset-checked. All three now compare bytes, and the PKCE challenge is
+  charset-validated at authorize so junk is never stored.
+* Findings #30 and #36 were **one rule kept in three places** — `dav/xml.py`,
+  `app.py`, and missing from `mcp/tools.py`. They are now one exported constant.
+  It needs two spellings: pydantic compiles with Rust's regex crate, which cannot
+  name a surrogate (not a Unicode scalar value), so `XML_SAFE_PATTERN_SCALAR`
+  omits that range — pydantic rejects a lone surrogate at string conversion
+  anyway, which was verified rather than assumed.
 
 | # | Finding | Where | Sev |
 |---|---|---|---|

@@ -14,10 +14,14 @@ and task-edit dirty-tracking).
 Severity is the verifiers' rating. `minor` marks a fix that is a few
 obviously-correct lines needing no design decision — a reasonable place to start.
 
-**82 open**: 41 from the 2026-08-16 sweep below and 41 from 2026-08-07. The first
+**75 open**: 34 from the 2026-08-16 sweep below and 41 from 2026-08-07. The first
 sweep's findings are all fixed and ticked; the evidence stays here — a ticked box
 records what the bug was and why it mattered, and the issues that link into these
 sections still resolve.
+
+The 2026-08-16 sweep is being closed in stages (`docs/STAGES.md`), each pinned by
+tests that fail until the finding is fixed. **Stage 1 — crash paths — is done**:
+the seven ticked below.
 
 <!-- Newest sweep first: 2026-08-16, then 2026-08-07, then the 2026-07 sweep, fully ticked. -->
 
@@ -30,12 +34,13 @@ and its OAuth authorization server, the Windows desktop client, and the task-ord
 / tasks-on-calendar / 24-hour-clock work — all added after 2026-08-08.
 
 Every HIGH was re-verified by hand with a runnable probe before anything was
-changed. **5 fixed** in this pass (ticked below, each with a regression test that
-was confirmed to fail against the pre-fix code); the other 41 are open.
+changed. **5 fixed** in that first pass (ticked below, each with a regression test
+confirmed to fail against the pre-fix code), and **7 more closed by Stage 1**;
+the other 34 are open.
 
 ### MCP OAuth authorization server
 
-#### [ ] hmac.compare_digest on attacker-controlled redirect_uri raises TypeError on non-ASCII → uncaught 500
+#### [x] hmac.compare_digest on attacker-controlled redirect_uri raises TypeError on non-ASCII → uncaught 500
 
 `backend/tasksd/mcp/oauth.py:606` · **medium** · bug · `minor`
 
@@ -81,7 +86,7 @@ row['redirect_uri'].encode())` in `_grant_code`. Optionally also reject non-ASCI
 `_check_redirect_uri` so an unusable URI is refused at registration time rather than
 accepted and later fatal.
 
-#### [ ] Non-string `scope` in a dynamic client registration crashes with a 500 instead of a 400
+#### [x] Non-string `scope` in a dynamic client registration crashes with a 500 instead of a 400
 
 `backend/tasksd/mcp/oauth.py:207` · **low** · bug · `minor`
 
@@ -223,7 +228,7 @@ aborting the batch with an error once a cumulative cap is crossed. Measure
 `structuredContent` as well as `content` against `MAX_RESULT_CHARS`, or drop
 `structuredContent` once the text form is near the cap.
 
-#### [ ] Deeply nested JSON at POST /mcp raises RecursionError, which the parse guard does not catch — the request 500s instead of returning -32700
+#### [x] Deeply nested JSON at POST /mcp raises RecursionError, which the parse guard does not catch — the request 500s instead of returning -32700
 
 `backend/tasksd/mcp/routes.py:405` · **low** · bug · `minor`
 
@@ -544,7 +549,7 @@ is None, t["due"] or "", t["priority"] or 10, t["summary"] or ""))`. Either incl
 priority in the key or drop it from the tool description. Add a test with two lists
 whose interleaved due dates prove the first page is globally soonest-first.
 
-#### [ ] Collection-name schemas omit the control-character guard the HTTP model carries, so a stray \x0b answers "the calendar server may be unreachable"
+#### [x] Collection-name schemas omit the control-character guard the HTTP model carries, so a stray \x0b answers "the calendar server may be unreachable"
 
 `backend/tasksd/mcp/tools.py:174` · **low** · bug · `minor`
 
@@ -596,7 +601,7 @@ collection-name schemas (validate.py already enforces `pattern`), so the model g
 "name is not in the expected format" and can fix it. Add a test asserting a control
 character in `name` is rejected by the validator rather than by the DAV client.
 
-#### [ ] smylte_find_free_time raises an unhandled OverflowError on a range that ends on the last representable day
+#### [x] smylte_find_free_time raises an unhandled OverflowError on a range that ends on the last representable day
 
 `backend/tasksd/mcp/api.py:481` · **low** · bug · `minor`
 
@@ -1088,7 +1093,7 @@ succeeds.
 
 ### iCalendar edit path
 
-#### [ ] _at_or_after compares aware vs naive datetimes directly, so one floating EXDATE/RDATE/RECURRENCE-ID makes every "this and following" edit or delete a 500
+#### [x] _at_or_after compares aware vs naive datetimes directly, so one floating EXDATE/RDATE/RECURRENCE-ID makes every "this and following" edit or delete a 500
 
 `backend/tasksd/ical/edit.py:534` · **medium** · bug · `minor`
 
@@ -1379,7 +1384,7 @@ While there, construct the parser explicitly (`etree.XMLParser(resolve_entities=
 no_network=True, huge_tree=False)`) so the entity/size posture is pinned by the code
 rather than by whichever lxml `>=5.0` happens to be installed.
 
-#### [ ] The XML-safety backstop added for control characters misses lone surrogates and U+FFFE/U+FFFF, so a list name still turns into an unhandled 500
+#### [x] The XML-safety backstop added for control characters misses lone surrogates and U+FFFE/U+FFFF, so a list name still turns into an unhandled 500
 
 `backend/tasksd/dav/xml.py:127` · **low** · bug · `minor`
 
