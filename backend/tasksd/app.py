@@ -1407,8 +1407,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "restart. Refusing to start."
             )
         from .mcp.routes import register as _register_mcp
+        # `login_hashes` is shared, not duplicated: the consent POST runs the
+        # same memory-hard scrypt as /api/login, and what the bound protects is
+        # this process's memory rather than either endpoint's throughput.
         _register_mcp(app, settings=settings, authenticator=authenticator,
-                      client_ip=_client_ip, run=_run)
+                      client_ip=_client_ip, run=_run, login_hashes=login_hashes)
         log.info("mcp: remote connector enabled at %s/mcp", settings.public_url)
 
     # -- static SPA (built frontend), mounted last so /api wins --

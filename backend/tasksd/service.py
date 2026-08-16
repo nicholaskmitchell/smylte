@@ -138,14 +138,28 @@ class TaskService:
         # calendars belong to the Calendar tab (list_calendars).
         with self._lock:
             rows = store.get_collections(self._conn)
-            return [self._list_dto(r) for r in rows if "VTODO" in (r["components"] or "")]
+            # One counts query for the whole set, not one per collection.
+            counts = store.collection_counts(self._conn)
+            return [self._list_dto(r, counts) for r in rows
+                    if "VTODO" in (r["components"] or "")]
 
-    def _list_dto(self, row) -> dict[str, Any]:
+    def _list_dto(self, row, counts: dict[str, dict[str, int]] | None = None) -> dict[str, Any]:
+        """One list/calendar row for the client.
+
+        `counts` is the prefetched map from `store.collection_counts` — the two
+        callers that render every collection pass it so the whole sidebar costs
+        one query. Omitted, this counts the one collection itself, which is what
+        the single-row callers (after a create or an update) want.
+        """
         comps = [c for c in (row["components"] or "").split(",") if c]
-        items = store.get_items(self._conn, row["href"])
-        task_items = [i for i in items if i["component"] == "VTODO"]
-        open_count = sum(1 for i in task_items if i["status"] not in ("COMPLETED", "CANCELLED"))
-        event_count = sum(1 for i in items if i["component"] == "VEVENT")
+        if counts is not None:
+            # A GROUP BY yields no row for a collection with no items, so a
+            # missing key means zero — not "unknown", and not a reason to fall
+            # back to a query, which would put the per-collection round trip
+            # straight back for every empty list.
+            n = counts.get(row["href"]) or store.ZERO_COUNTS
+        else:
+            n = store.counts_for_collection(self._conn, row["href"])
         settings_row = self._conn.execute(
             "SELECT * FROM list_settings WHERE collection_href=?", (row["href"],)
         ).fetchone()
@@ -157,10 +171,10 @@ class TaskService:
             "color": (settings_row["color"] if settings_row else None) or row["color"],
             "is_task_list": "VTODO" in comps,
             "is_calendar": "VEVENT" in comps,
-            "open_count": open_count,
-            "task_count": len(task_items),
-            "event_count": event_count,
-            "total": len(items),
+            "open_count": n["open_count"],
+            "task_count": n["task_count"],
+            "event_count": n["event_count"],
+            "total": n["total"],
             "folder": settings_row["folder"] if settings_row else None,
             "sort_mode": settings_row["sort_mode"] if settings_row else None,
         }
@@ -414,7 +428,10 @@ class TaskService:
     def list_calendars(self) -> list[dict[str, Any]]:
         with self._lock:
             rows = store.get_collections(self._conn)
-            return [self._list_dto(r) for r in rows if "VEVENT" in (r["components"] or "")]
+            # One counts query for the whole set, not one per collection.
+            counts = store.collection_counts(self._conn)
+            return [self._list_dto(r, counts) for r in rows
+                    if "VEVENT" in (r["components"] or "")]
 
     def events_in_range(self, href: str, start_iso: str, end_iso: str) -> list[dict[str, Any]]:
         with self._lock:

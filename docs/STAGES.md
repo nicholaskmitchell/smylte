@@ -3,7 +3,7 @@
 `docs/AUDIT.md` is the evidence. This file is the plan for closing those
 findings, and the map from a finding to the test that pins it.
 
-**33 open, 7 closed.** Stage 1 is done; stages 2-5 remain.
+**28 open, 12 closed.** Stages 1 and 2 are done; stages 3-5 remain.
 
 ## Stage 0 — the harness (done)
 
@@ -90,9 +90,23 @@ Two things surfaced while fixing them, both wider than the findings as filed:
 | 31 | smylte_find_free_time raises an unhandled OverflowError on a range that ends on the last representable day | `backend/tasksd/mcp/api.py:481` | low |
 | 36 | The XML-safety backstop added for control characters misses lone surrogates and U+FFFE/U+FFFF, so a list name … | `backend/tasksd/dav/xml.py:127` | low |
 
-## Stage 2 — Abuse & resource exhaustion
+## Stage 2 — Abuse & resource exhaustion ✅ DONE
 
-5 findings · pinned by `backend/tests/test_backlog_stage2.py`
+5 findings · closed · `backend/tests/test_backlog_stage2.py`
+
+All five are fixed and ticked in `docs/AUDIT.md`. Two notes worth keeping:
+
+* **The consent-decline fix is a limiter SPLIT, not a refund.** Refunding the
+  password budget on a decline (`record_success`) would clear the counter
+  outright, letting an attacker alternate guess/deny and never lock out —
+  registration is open, so minting the signed blobs to do that is free. Instead
+  the endpoint now has two limiters: a generous one charged per POST (bounding
+  the unauthenticated body read), and the 8-per-15-min password budget charged
+  only when a password is actually verified. Verified both ways: eight declines
+  no longer lock the owner out, and eight wrong passwords still do.
+* **The scrypt semaphore is shared with `/api/login`, not duplicated**, because
+  the budget being protected is the process's memory. Measured peak is 4, and a
+  login still completes (~0.5 s) while twelve consent hashes are in flight.
 
 | # | Finding | Where | Sev |
 |---|---|---|---|

@@ -14,14 +14,14 @@ and task-edit dirty-tracking).
 Severity is the verifiers' rating. `minor` marks a fix that is a few
 obviously-correct lines needing no design decision — a reasonable place to start.
 
-**75 open**: 34 from the 2026-08-16 sweep below and 41 from 2026-08-07. The first
+**70 open**: 29 from the 2026-08-16 sweep below and 41 from 2026-08-07. The first
 sweep's findings are all fixed and ticked; the evidence stays here — a ticked box
 records what the bug was and why it mattered, and the issues that link into these
 sections still resolve.
 
 The 2026-08-16 sweep is being closed in stages (`docs/STAGES.md`), each pinned by
-tests that fail until the finding is fixed. **Stage 1 — crash paths — is done**:
-the seven ticked below.
+tests that fail until the finding is fixed. **Stages 1 and 2 are done** — the
+seven crash paths and the five abuse/exhaustion findings, ticked below.
 
 <!-- Newest sweep first: 2026-08-16, then 2026-08-07, then the 2026-07 sweep, fully ticked. -->
 
@@ -35,8 +35,8 @@ and its OAuth authorization server, the Windows desktop client, and the task-ord
 
 Every HIGH was re-verified by hand with a runnable probe before anything was
 changed. **5 fixed** in that first pass (ticked below, each with a regression test
-confirmed to fail against the pre-fix code), and **7 more closed by Stage 1**;
-the other 34 are open.
+confirmed to fail against the pre-fix code), **7 more closed by Stage 1** and
+**5 by Stage 2**; the other 29 are open.
 
 ### MCP OAuth authorization server
 
@@ -150,7 +150,7 @@ restore it in `verify_request` — it is already inside the HMAC so it stays tru
 and give the retry `HTMLResponse` the same `X-Frame-Options`/`Content-Security-Policy`
 headers as the GET path.
 
-#### [ ] Choosing "Read-only" on a write-only authorization request mints a token with an empty scope
+#### [x] Choosing "Read-only" on a write-only authorization request mints a token with an empty scope
 
 `backend/tasksd/mcp/routes.py:255` · **low** · bug · `minor`
 
@@ -186,7 +186,7 @@ e.g. `narrowed = granted & {SCOPE_READ, SCOPE_OFFLINE}` applied only `if narrowe
 
 ### MCP transport
 
-#### [ ] A JSON-RPC batch is unbounded: one 1 MB POST /mcp becomes thousands of serialized service calls and a multi-gigabyte response
+#### [x] A JSON-RPC batch is unbounded: one 1 MB POST /mcp becomes thousands of serialized service calls and a multi-gigabyte response
 
 `backend/tasksd/mcp/server.py:228` · **medium** · security
 
@@ -307,7 +307,7 @@ read it back with `payload.get("n", "")` in `verify_request` (the `.get` keeps b
 signed before the change working), or re-read the client row by `client_id` on the error
 path.
 
-#### [ ] Cancelling the consent screen burns the password-guess budget, so eight declines lock the owner out of connecting for 15 minutes
+#### [x] Cancelling the consent screen burns the password-guess budget, so eight declines lock the owner out of connecting for 15 minutes
 
 `backend/tasksd/mcp/routes.py:234` · **low** · bug · `minor`
 
@@ -770,7 +770,7 @@ Add a test that holds `TaskService._lock` from a background thread and asserts `
 
 ### Auth + session
 
-#### [ ] POST /oauth/authorize runs the same scrypt hash as /api/login without the `login_hashes` semaphore that exists to stop exactly that
+#### [x] POST /oauth/authorize runs the same scrypt hash as /api/login without the `login_hashes` semaphore that exists to stop exactly that
 
 `backend/tasksd/mcp/routes.py:259` · **low** · security · `minor`
 
@@ -992,7 +992,7 @@ last fully-generated day so the boundary is a whole day rather than mid-morning.
 test asserting that a Mon-Fri 09:00-17:00 / 30-minute / 180-day link offers at least one
 slot on the final day of its horizon.
 
-#### [ ] _list_dto materialises every item row — raw_ics included — from every collection just to compute four counts, under the global service lock
+#### [x] _list_dto materialises every item row — raw_ics included — from every collection just to compute four counts, under the global service lock
 
 `backend/tasksd/service.py:145` · **low** · bug
 

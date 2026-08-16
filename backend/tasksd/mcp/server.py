@@ -51,6 +51,15 @@ INTERNAL_ERROR = -32603
 # forgets to.
 MAX_RESULT_CHARS = 400_000
 
+# Messages in one batch. The transport caps the BODY at 1 MB, which bounds the
+# bytes but not the work: `tools/list` is ~40 bytes of JSON, so one compliant
+# request was ~25 000 messages — each a full CalDAV/SQLite call, dispatched
+# serially under the global service lock, with every reply accumulated in memory
+# before any of it was sent. The real question a batch cap answers is "how long
+# may one request hold the server", so it is a message count, not a byte count.
+# 50 matches DEFAULT_LIMIT and is far above what clients actually send (1-10).
+MAX_BATCH = 50
+
 
 def _result(rid, payload: dict) -> dict:
     return {"jsonrpc": "2.0", "id": rid, "result": payload}
@@ -233,6 +242,15 @@ def run_batch(server: McpServer, payload: object, *, scopes: set[str]) -> object
         if not payload:
             return {"jsonrpc": "2.0", "id": None,
                     "error": {"code": INVALID_REQUEST, "message": "empty batch"}}
+        if len(payload) > MAX_BATCH:
+            # Refused whole, not truncated: a caller that got results for the
+            # first N of its messages and silence for the rest cannot tell the
+            # difference between "dropped" and "succeeded with no reply", and
+            # would carry on as though the writes had landed.
+            return {"jsonrpc": "2.0", "id": None,
+                    "error": {"code": INVALID_REQUEST,
+                              "message": f"batch too large: {len(payload)} messages, "
+                                         f"limit is {MAX_BATCH}"}}
         out = [r for r in (server.handle(m, scopes=scopes) for m in payload) if r is not None]
         return out or None
     if isinstance(payload, dict):
