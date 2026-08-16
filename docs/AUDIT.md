@@ -14,16 +14,15 @@ and task-edit dirty-tracking).
 Severity is the verifiers' rating. `minor` marks a fix that is a few
 obviously-correct lines needing no design decision — a reasonable place to start.
 
-**50 open**: 9 from the 2026-08-16 sweep below and 41 from 2026-08-07. The first
-sweep's findings are all fixed and ticked; the evidence stays here — a ticked box
-records what the bug was and why it mattered, and the issues that link into these
-sections still resolve.
+**41 open**, all from the 2026-08-07 sweep. Nothing from 2026-08-16 is open. The
+evidence stays here — a ticked box records what the bug was and why it mattered,
+and the issues that link into these sections still resolve.
 
-The 2026-08-16 sweep is being closed in stages (`docs/STAGES.md`), each pinned by
-tests that fail until the finding is fixed. **Stages 1-4 are done** — the seven
-crash paths, the five abuse/exhaustion findings, the seven silent-corruption ones
-and the twelve user-visible ones, ticked below. Only Stage 5 (delivery
-infrastructure and test gaps) remains.
+The 2026-08-16 sweep was closed in stages (`docs/STAGES.md`), each pinned by
+tests that failed until the finding was fixed. **All five stages are done** — the
+seven crash paths, the five abuse/exhaustion findings, the seven silent-corruption
+ones, the twelve user-visible ones and the nine delivery/test-gap ones, all ticked
+below. Those pins are now ordinary regression tests that must stay green.
 
 <!-- Newest sweep first: 2026-08-16, then 2026-08-07, then the 2026-07 sweep, fully ticked. -->
 
@@ -38,7 +37,8 @@ and its OAuth authorization server, the Windows desktop client, and the task-ord
 Every HIGH was re-verified by hand with a runnable probe before anything was
 changed. **5 fixed** in that first pass (ticked below, each with a regression test
 confirmed to fail against the pre-fix code), **7 more closed by Stage 1**,
-**5 by Stage 2**, **7 by Stage 3** and **12 by Stage 4**; the other 9 are open.
+**5 by Stage 2**, **7 by Stage 3**, **12 by Stage 4** and the last **9 by
+Stage 5**. All 46 are closed.
 
 ### MCP OAuth authorization server
 
@@ -349,7 +349,7 @@ Concrete failure: the owner is setting up a connector, opens the consent page an
 `consent_limiter.record_success(limiter_key(client_ip(request)))` on the deny path,
 since `verify_request` has already proved the POST carries a blob this server issued.
 
-#### [ ] No test sends a JSON-RPC batch, so the entire batch-framing path in run_batch is uncovered
+#### [x] No test sends a JSON-RPC batch, so the entire batch-framing path in run_batch is uncovered
 
 `backend/tests/test_mcp.py:259` · **low** · test-gap · `minor`
 
@@ -646,7 +646,7 @@ The same class reaches _as_dt via `value.astimezone()` for an offset-aware bound
 bound the accepted window in `_range` to a sane calendar span (e.g. reject years past
 9000) so the caller gets a ToolError sentence instead of a mislabelled backend failure.
 
-#### [ ] No MCP-level test exercises any event write tool or any recurrence scope
+#### [x] No MCP-level test exercises any event write tool or any recurrence scope
 
 `backend/tests/test_mcp.py:208` · **low** · test-gap
 
@@ -1043,7 +1043,7 @@ one `SELECT * FROM list_settings` fetched once by `list_lists`/`list_calendars` 
 passed down the way `counts`/`names` already are in `_link_dto`. Add a coverage test
 that `list_lists()` on a collection of a few thousand items completes in a bounded time.
 
-#### [ ] Test gap: the DST slot battery never supplies busy intervals or a `now` inside the transition, and no test drives book_slot across one
+#### [x] Test gap: the DST slot battery never supplies busy intervals or a `now` inside the transition, and no test drives book_slot across one
 
 `backend/tests/test_scheduling.py:181` · **low** · test-gap
 
@@ -1337,7 +1337,7 @@ multistatus whose `<calendar-order>` is `"9"*23` and asserts the collection stil
 upserts with `order=None`, and — separately — wrap `bootstrap()`/`sync_all()`'s
 `discover()` so an unexpected exception from one property cannot abort startup.
 
-#### [ ] Test gap: parse_multistatus and the whole PROPFIND/REPORT response-parsing path — the only code turning untrusted wire XML into app state — has no unit coverage
+#### [x] Test gap: parse_multistatus and the whole PROPFIND/REPORT response-parsing path — the only code turning untrusted wire XML into app state — has no unit coverage
 
 `backend/tasksd/dav/xml.py:198` · **medium** · test-gap
 
@@ -2118,7 +2118,7 @@ are false while `rebeccapurple`/`transparent`/`currentColor` stay true.
 
 ### Desktop client + deploy
 
-#### [ ] Any failure during the update download kills startup even though a complete installed build is sitting on disk
+#### [x] Any failure during the update download kills startup even though a complete installed build is sitting on disk
 
 `desktop/Smylte.Desktop/Updater.cs:75` · **medium** · bug · `minor`
 
@@ -2175,7 +2175,7 @@ Leave the rethrow in place for `!haveLocal` (a first run genuinely has nothing t
 back to), and do not update `LastAssetId`/`LastAssetStamp` on that path so the next
 launch retries.
 
-#### [ ] An update interrupted between the two directory moves strands the only working build in web.old, and nothing ever restores it
+#### [x] An update interrupted between the two directory moves strands the only working build in web.old, and nothing ever restores it
 
 `desktop/Smylte.Desktop/Updater.cs:207` · **medium** · bug · `minor`
 
@@ -2221,7 +2221,7 @@ Failure scenario: an update is installing when the user hits the X (MainForm.OnF
 that instead. Then compute `haveLocal`. Same handful of lines makes the comment on
 205-206 true.
 
-#### [ ] setup.sh runs `python -m tasksd` without changing into the backend directory, so the documented install aborts before writing the env file
+#### [x] setup.sh runs `python -m tasksd` without changing into the backend directory, so the documented install aborts before writing the env file
 
 `deploy/setup.sh:31` · **medium** · bug · `minor`
 
@@ -2278,7 +2278,7 @@ Only a caller who happens to be sitting in ~/tasks/backend gets past line 31.
 assumes that layout. (Installing the package into the venv would fix it more thoroughly,
 but the one-line cd matches how tasks.service already works.)
 
-#### [ ] Test gap: the entire Windows client ships with zero tests — CI only compiles it, leaving the proxy's path-traversal guard and cookie rewriting unverified
+#### [x] Test gap: the entire Windows client ships with zero tests — CI only compiles it, leaving the proxy's path-traversal guard and cookie rewriting unverified
 
 `desktop/Smylte.Desktop/LocalServer.cs:257` · **medium** · test-gap
 
@@ -2339,7 +2339,7 @@ HttpOnly; Secure; SameSite=strict; Path=/`) and over `SameSite=None; Secure` and
 `Domain=` form; (c) an end-to-end `LocalServer` test against a stub upstream asserting
 SSE bytes arrive chunked and unbuffered — the failure the README calls out as silent.
 
-#### [ ] desktop-release.yml has no concurrency group, so an older build can clobber a newer one on the rolling release
+#### [x] desktop-release.yml has no concurrency group, so an older build can clobber a newer one on the rolling release
 
 `.github/workflows/desktop-release.yml:10` · **low** · bug · `minor`
 

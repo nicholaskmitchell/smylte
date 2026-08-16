@@ -807,3 +807,342 @@ def test_a_wrong_password_keeps_the_read_only_choice(mcp):
     read_radio = re.search(r'value="read"([^>]*)>', retry.text).group(1)
     full_radio = re.search(r'value="full"([^>]*)>', retry.text).group(1)
     assert "checked" in read_radio and "checked" not in full_radio
+
+
+# ── JSON-RPC batch framing ──────────────────────────────────────────────────
+#
+# AUDIT: `run_batch`'s list branch decides what a client gets back when it sends
+# several messages at once, and nothing exercised it. Batching left the
+# 2025-06-18 revision but earlier ones allow it and clients in the wild still
+# send it, so the branch is live and every reply framing decision in it — 202 vs
+# a body, which ids come back, what an over-long batch does — was untested.
+
+def _batch(client, token, messages):
+    return client.post("/mcp", json=messages, headers={
+        "Authorization": f"Bearer {token}",
+        "MCP-Protocol-Version": "2025-06-18",
+    })
+
+
+def test_a_batch_answers_each_request_and_keeps_its_ids(mcp):
+    token = _connect(mcp)["access_token"]
+    r = _batch(mcp, token, [
+        {"jsonrpc": "2.0", "id": "a", "method": "tools/list"},
+        {"jsonrpc": "2.0", "id": 7, "method": "tools/list"},
+    ])
+    assert r.status_code == 200
+    body = r.json()
+    assert isinstance(body, list) and len(body) == 2
+    # Order is not guaranteed by JSON-RPC; identity by id is what a client uses
+    # to match a reply to the message it sent.
+    assert {m["id"] for m in body} == {"a", 7}
+    assert all("result" in m for m in body)
+
+
+def test_a_batch_of_only_notifications_gets_202_and_no_body(mcp):
+    # A notification has no reply by definition, so a batch of them has no reply
+    # at all. Answering `[]` would be a JSON-RPC violation and a client waiting
+    # on ids it never sent could hang on it.
+    token = _connect(mcp)["access_token"]
+    r = _batch(mcp, token, [
+        {"jsonrpc": "2.0", "method": "notifications/initialized"},
+        {"jsonrpc": "2.0", "method": "notifications/cancelled"},
+    ])
+    assert r.status_code == 202 and not r.content
+
+
+def test_a_mixed_batch_replies_only_to_the_requests(mcp):
+    token = _connect(mcp)["access_token"]
+    r = _batch(mcp, token, [
+        {"jsonrpc": "2.0", "method": "notifications/initialized"},
+        {"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+        {"jsonrpc": "2.0", "method": "notifications/cancelled"},
+    ])
+    assert r.status_code == 200
+    body = r.json()
+    assert [m["id"] for m in body] == [1]
+
+
+def test_one_bad_message_does_not_sink_the_rest_of_the_batch(mcp):
+    # Per-message errors, not a per-batch one: a malformed third message must
+    # not discard the results of the first two.
+    token = _connect(mcp)["access_token"]
+    r = _batch(mcp, token, [
+        {"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+        {"jsonrpc": "1.0", "id": 2, "method": "tools/list"},
+        {"jsonrpc": "2.0", "id": 3, "method": "no/such/method"},
+    ])
+    body = {m.get("id"): m for m in r.json()}
+    assert "result" in body[1]
+    assert "error" in body[None]        # not a 2.0 message; no id to answer with
+    assert "error" in body[3]
+
+
+def test_an_empty_batch_is_an_invalid_request(mcp):
+    token = _connect(mcp)["access_token"]
+    body = _batch(mcp, token, []).json()
+    assert body["id"] is None and body["error"]["code"] == -32600
+    assert "empty batch" in body["error"]["message"]
+
+
+def test_an_oversized_batch_is_refused_whole(mcp):
+    """Refused whole, not truncated. A caller that got results for the first N
+    of its messages and silence for the rest cannot tell 'dropped' from
+    'succeeded with no reply', and would carry on as though the writes landed."""
+    from tasksd.mcp.server import MAX_BATCH
+
+    token = _connect(mcp)["access_token"]
+    r = _batch(mcp, token, [
+        {"jsonrpc": "2.0", "id": i, "method": "tools/list"} for i in range(MAX_BATCH + 1)])
+    body = r.json()
+    assert isinstance(body, dict)                     # not a list of partial results
+    assert body["error"]["code"] == -32600
+    assert str(MAX_BATCH) in body["error"]["message"]
+
+    # The control: exactly at the limit still works, so the cap is off-by-none.
+    at_limit = _batch(mcp, token, [
+        {"jsonrpc": "2.0", "id": i, "method": "tools/list"} for i in range(MAX_BATCH)])
+    assert len(at_limit.json()) == MAX_BATCH
+
+
+def test_a_bare_scalar_body_is_an_invalid_request(mcp):
+    token = _connect(mcp)["access_token"]
+    r = mcp.post("/mcp", json="hello", headers={"Authorization": f"Bearer {token}"})
+    assert r.json()["error"]["code"] == -32600
+
+
+def test_a_batch_is_bounded_by_the_same_scopes_as_a_single_call(mcp):
+    # The scope check lives in `handle`, which the batch branch calls per
+    # message — so a read-only grant must not be able to smuggle a write in by
+    # wrapping it in a list.
+    reg = _register(mcp)
+    verifier, challenge = _pkce()
+    code = _code_from(_authorize(mcp, reg, challenge, grant="read"))
+    token = _token(mcp, reg, code, verifier).json()["access_token"]
+
+    body = _batch(mcp, token, [
+        {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+         "params": {"name": "smylte_create_list", "arguments": {"name": "nope"}}}])
+    assert "write access" in body.json()[0]["error"]["message"]
+
+
+# ── the event write tools ───────────────────────────────────────────────────
+#
+# AUDIT: no MCP-level test drove smylte_create_event, smylte_update_event or
+# smylte_delete_event, nor the `scope` argument that decides whether an edit
+# touches one occurrence or rewrites a whole series. Getting that wrong is the
+# expensive kind of wrong — a model asked to move next Tuesday's stand-up would
+# silently move every stand-up there will ever be.
+
+@pytest.fixture
+def calendar(mcp):
+    """A connected client and a real CalDAV calendar, torn down afterwards."""
+    token = _connect(mcp)["access_token"]
+    made = _call(mcp, token, "smylte_create_calendar",
+                 {"name": f"MCP cal {uuid.uuid4().hex[:6]}"})["structuredContent"]
+    yield mcp, token, made["id"]
+    _call(mcp, token, "smylte_delete_calendar", {"calendar_id": made["id"]})
+
+
+def test_an_event_round_trips_through_the_write_tools(calendar):
+    client, token, cal = calendar
+
+    made = _call(client, token, "smylte_create_event", {
+        "calendar_id": cal, "summary": "Dentist",
+        "start": "2026-09-07T10:00", "end": "2026-09-07T11:00",
+        "location": "High Street", "tags": ["health"],
+    })["structuredContent"]
+    assert made["summary"] == "Dentist"
+
+    got = _call(client, token, "smylte_get_event",
+                {"calendar_id": cal, "uid": made["uid"]})["structuredContent"]
+    assert got["location"] == "High Street" and got["tags"] == ["health"]
+
+    _call(client, token, "smylte_update_event", {
+        "calendar_id": cal, "uid": made["uid"], "summary": "Dentist (moved)",
+        "start": "2026-09-07T14:00", "end": "2026-09-07T15:00"})
+    again = _call(client, token, "smylte_get_event",
+                  {"calendar_id": cal, "uid": made["uid"]})["structuredContent"]
+    assert again["summary"] == "Dentist (moved)"
+    assert again["start"].startswith("2026-09-07T14:00")
+
+    deleted = _call(client, token, "smylte_delete_event",
+                    {"calendar_id": cal, "uid": made["uid"]})["structuredContent"]
+    assert deleted["deleted"] == made["uid"]
+    gone = _call(client, token, "smylte_get_event", {"calendar_id": cal, "uid": made["uid"]})
+    assert gone["isError"] is True
+
+
+def test_scope_this_touches_one_occurrence_and_leaves_the_series(calendar):
+    """The argument that decides whether a model edits next Tuesday's stand-up or
+    every stand-up there will ever be."""
+    client, token, cal = calendar
+    made = _call(client, token, "smylte_create_event", {
+        "calendar_id": cal, "summary": "Stand-up",
+        "start": "2026-09-07T09:00", "end": "2026-09-07T09:15",
+        "repeat": "daily", "repeat_count": 5,
+    })["structuredContent"]
+
+    days = _call(client, token, "smylte_list_events",
+                 {"start": "2026-09-07", "end": "2026-09-14", "calendar_id": cal}
+                 )["structuredContent"]["events"]
+    assert len(days) == 5
+    second = days[1]
+
+    _call(client, token, "smylte_update_event", {
+        "calendar_id": cal, "uid": made["uid"], "summary": "Stand-up (skipped)",
+        "recurrence_id": second["recurrence_id"], "scope": "this"})
+
+    after = _call(client, token, "smylte_list_events",
+                  {"start": "2026-09-07", "end": "2026-09-14", "calendar_id": cal}
+                  )["structuredContent"]["events"]
+    assert [e["summary"] for e in after] == [
+        "Stand-up", "Stand-up (skipped)", "Stand-up", "Stand-up", "Stand-up"]
+
+
+def test_scope_thisandfuture_splits_the_series_at_that_point(calendar):
+    client, token, cal = calendar
+    made = _call(client, token, "smylte_create_event", {
+        "calendar_id": cal, "summary": "Stand-up",
+        "start": "2026-10-05T09:00", "end": "2026-10-05T09:15",
+        "repeat": "daily", "repeat_count": 5,
+    })["structuredContent"]
+
+    days = _call(client, token, "smylte_list_events",
+                 {"start": "2026-10-05", "end": "2026-10-12", "calendar_id": cal}
+                 )["structuredContent"]["events"]
+    third = days[2]
+
+    _call(client, token, "smylte_update_event", {
+        "calendar_id": cal, "uid": made["uid"], "summary": "Stand-up (new format)",
+        "recurrence_id": third["recurrence_id"], "scope": "thisandfuture"})
+
+    after = _call(client, token, "smylte_list_events",
+                  {"start": "2026-10-05", "end": "2026-10-12", "calendar_id": cal}
+                  )["structuredContent"]["events"]
+    # Everything before the split keeps the old summary; everything from it on
+    # takes the new one — that is what "and future" has to mean.
+    assert [e["summary"] for e in after] == [
+        "Stand-up", "Stand-up",
+        "Stand-up (new format)", "Stand-up (new format)", "Stand-up (new format)"]
+
+
+def test_scope_all_is_the_default_and_rewrites_the_whole_series(calendar):
+    # The control for the two above. `all` is the schema default, so an edit sent
+    # without a scope has to reach every occurrence — a model that omits the
+    # argument is asking for the ordinary thing.
+    client, token, cal = calendar
+    made = _call(client, token, "smylte_create_event", {
+        "calendar_id": cal, "summary": "Stand-up",
+        "start": "2026-11-02T09:00", "end": "2026-11-02T09:15",
+        "repeat": "daily", "repeat_count": 4,
+    })["structuredContent"]
+
+    _call(client, token, "smylte_update_event", {
+        "calendar_id": cal, "uid": made["uid"], "summary": "Team sync"})
+
+    after = _call(client, token, "smylte_list_events",
+                  {"start": "2026-11-02", "end": "2026-11-09", "calendar_id": cal}
+                  )["structuredContent"]["events"]
+    assert [e["summary"] for e in after] == ["Team sync"] * 4
+
+
+def test_deleting_one_occurrence_keeps_the_rest(calendar):
+    client, token, cal = calendar
+    made = _call(client, token, "smylte_create_event", {
+        "calendar_id": cal, "summary": "Gym",
+        "start": "2026-12-07T18:00", "end": "2026-12-07T19:00",
+        "repeat": "daily", "repeat_count": 3,
+    })["structuredContent"]
+
+    days = _call(client, token, "smylte_list_events",
+                 {"start": "2026-12-07", "end": "2026-12-14", "calendar_id": cal}
+                 )["structuredContent"]["events"]
+
+    out = _call(client, token, "smylte_delete_event", {
+        "calendar_id": cal, "uid": made["uid"],
+        "recurrence_id": days[1]["recurrence_id"], "scope": "this"})["structuredContent"]
+    assert out["scope"] == "this"
+
+    left = _call(client, token, "smylte_list_events",
+                 {"start": "2026-12-07", "end": "2026-12-14", "calendar_id": cal}
+                 )["structuredContent"]["events"]
+    assert [e["start"][:10] for e in left] == ["2026-12-07", "2026-12-09"]
+
+    # And the control: scope='all' takes the series with it.
+    _call(client, token, "smylte_delete_event",
+          {"calendar_id": cal, "uid": made["uid"], "scope": "all"})
+    assert _call(client, token, "smylte_list_events",
+                 {"start": "2026-12-07", "end": "2026-12-14", "calendar_id": cal}
+                 )["structuredContent"]["events"] == []
+
+
+def test_an_occurrence_scope_without_a_recurrence_id_is_refused(calendar):
+    # Not silently promoted to the whole series. This is the failure mode that
+    # costs data: a model that forgot the recurrence_id must be told, not
+    # quietly handed the destructive interpretation of its request.
+    client, token, cal = calendar
+    made = _call(client, token, "smylte_create_event", {
+        "calendar_id": cal, "summary": "Standup",
+        "start": "2027-01-04T09:00", "end": "2027-01-04T09:15",
+        "repeat": "daily", "repeat_count": 3,
+    })["structuredContent"]
+
+    for scope in ("this", "thisandfuture"):
+        out = _call(client, token, "smylte_update_event", {
+            "calendar_id": cal, "uid": made["uid"], "summary": "nope", "scope": scope})
+        assert out["isError"] is True, scope
+        assert "recurrence_id" in out["content"][0]["text"]
+
+    after = _call(client, token, "smylte_list_events",
+                  {"start": "2027-01-04", "end": "2027-01-11", "calendar_id": cal}
+                  )["structuredContent"]["events"]
+    assert [e["summary"] for e in after] == ["Standup"] * 3
+
+
+def test_moving_an_event_takes_its_whole_series(calendar):
+    client, token, cal = calendar
+    other = _call(client, token, "smylte_create_calendar",
+                  {"name": f"MCP dest {uuid.uuid4().hex[:6]}"})["structuredContent"]
+    try:
+        made = _call(client, token, "smylte_create_event", {
+            "calendar_id": cal, "summary": "Pilates",
+            "start": "2027-02-01T07:00", "end": "2027-02-01T08:00",
+            "repeat": "weekly", "repeat_count": 3,
+        })["structuredContent"]
+
+        _call(client, token, "smylte_move_event",
+              {"calendar_id": cal, "uid": made["uid"], "to_calendar_id": other["id"]})
+
+        assert _call(client, token, "smylte_list_events",
+                     {"start": "2027-02-01", "end": "2027-03-01", "calendar_id": cal}
+                     )["structuredContent"]["events"] == []
+        moved = _call(client, token, "smylte_list_events",
+                      {"start": "2027-02-01", "end": "2027-03-01", "calendar_id": other["id"]}
+                      )["structuredContent"]["events"]
+        assert len(moved) == 3
+    finally:
+        _call(client, token, "smylte_delete_calendar", {"calendar_id": other["id"]})
+
+
+def test_the_event_write_tools_need_write_scope(mcp):
+    # Every one of them is declared SCOPE_WRITE; a read-only connection must not
+    # reach any of them.
+    reg = _register(mcp)
+    verifier, challenge = _pkce()
+    code = _code_from(_authorize(mcp, reg, challenge, grant="read"))
+    token = _token(mcp, reg, code, verifier).json()["access_token"]
+
+    for name, args in [
+        ("smylte_create_event", {"calendar_id": "c", "summary": "x", "start": "2026-09-07T10:00"}),
+        ("smylte_update_event", {"calendar_id": "c", "uid": "u", "summary": "x"}),
+        ("smylte_delete_event", {"calendar_id": "c", "uid": "u"}),
+        ("smylte_move_event", {"calendar_id": "c", "uid": "u", "to_calendar_id": "d"}),
+    ]:
+        err = _rpc(mcp, token, "tools/call",
+                   {"name": name, "arguments": args}).json()["error"]
+        assert "write access" in err["message"], name
+
+    # The control: reading events is fine on the same token.
+    assert _call(mcp, token, "smylte_list_events",
+                 {"start": "2026-09-01", "end": "2026-09-08"})["isError"] is False

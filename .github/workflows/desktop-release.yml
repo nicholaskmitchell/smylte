@@ -12,6 +12,13 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# The release tag is ROLLING — every run overwrites the same assets — so two
+# pushes in quick succession race, and the slower (older) build can land last and
+# become what everyone downloads. ci.yml can race harmlessly; this one publishes.
+concurrency:
+  group: desktop-release
+  cancel-in-progress: false
+
 permissions:
   contents: write
 

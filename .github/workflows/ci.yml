@@ -66,7 +66,6 @@ jobs:
   desktop:
     # The Windows client is compiled by CI and never on a user's machine, so
     # without this gate a break would only surface when a release was cut.
-    # Build only — there is no Windows runtime here to exercise it on.
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -74,6 +73,13 @@ jobs:
         with:
           dotnet-version: '8.0.x'
       - run: dotnet build desktop/Smylte.Desktop/Smylte.Desktop.csproj -c Release
+      - name: Client unit tests
+        # Smylte.Desktop.Tests targets plain net8.0 and *links* the sources it
+        # covers, so it needs no Windows Desktop runtime pack and runs on any
+        # runner. It covers the two places in the client where a mistake is a
+        # security bug (the static-file traversal guard and the cookie rewriter)
+        # and the two ways a failed update used to cost someone a working build.
+        run: dotnet test desktop/Smylte.Desktop.Tests/Smylte.Desktop.Tests.csproj
 
   security:
     runs-on: ubuntu-latest
