@@ -18,6 +18,7 @@ what to try instead.
 from __future__ import annotations
 
 import re
+from contextlib import contextmanager
 from datetime import date, datetime, time as time_of_day, timedelta
 
 from ..ical import EventEdit, TaskEdit, rrule_from_spec
@@ -104,6 +105,60 @@ def _hhmm(value: str, *, field: str) -> time_of_day:
         raise ToolError(f"{field}={value!r} is not a time. Use 'HH:MM'.") from None
 
 
+def _display_order(t: dict):
+    """The order the app shows tasks in, which is what these tools advertise.
+
+    Mirrors `frontend/src/order.ts` — manual position, due date, priority, title,
+    then uid — key for key, including nulls-last on every one. The two cannot
+    share code across languages, so they are kept deliberately parallel: the tool
+    description promises "ordered the way the app shows them", and a model paging
+    with `limit` is entitled to that being true.
+
+    The final uid tie-break is the point, not a flourish. Rows arrive here as one
+    list's block after another's, so without a TOTAL order `limit=3` returned
+    "whichever list came first" — and the soonest deadline on the account could
+    be missing from a page that looked ordered. `order.ts`' header makes the same
+    argument at length.
+
+    Sort keys are `(is_null, value)` pairs so a missing value sorts last without
+    ever comparing None to a number.
+    """
+    due = t.get("due") or None
+    # A date-only due sorts as that day's start, which is how the app reads it.
+    due_key = f"{due}T00:00" if due and "T" not in due else due
+    priority = t.get("priority") or None       # iCal: 0/absent means unset
+    order = t.get("sort_order")
+    summary = t.get("summary") or None
+    return (
+        (order is None, order or 0),
+        (due_key is None, due_key or ""),
+        (priority is None, priority or 0),
+        (summary is None, (summary or "").casefold()),
+        t.get("uid") or "",
+    )
+
+
+@contextmanager
+def _not_found(message: str):
+    """Turn the engine's unknown-uid KeyError into an answer the model can act on.
+
+    `SyncEngine._edit` / `_move` raise `KeyError(f"unknown {kind} {uid} ...")`
+    when the uid is not in the cache, and nothing caught it — so the `is None`
+    guards below were dead code, and McpServer's catch-all reported "could not be
+    completed (KeyError). The calendar server may be unreachable". That sent the
+    model chasing an outage that was not happening, over a typo it could have
+    corrected itself.
+
+    Caught here, at the API boundary, rather than in McpServer: a KeyError from a
+    genuine dict bug must keep reporting as an internal failure, not as
+    "not found".
+    """
+    try:
+        yield
+    except KeyError:
+        raise ToolError(message) from None
+
+
 class McpApi:
     """Everything the tools can reach, and nothing else.
 
@@ -184,6 +239,7 @@ class McpApi:
                 if overdue_only and (due >= now or t["completed"] or t["cancelled"]):
                     continue
             out.append(t)
+        out.sort(key=_display_order)
         return out
 
     def get_task(self, list_id, uid):
@@ -254,25 +310,36 @@ class McpApi:
                 if not self._svc.has_task(href, parent):
                     raise ToolError(f"No task {parent!r} in this list to be the parent.")
             kw["related_parent"] = parent or None
-        task = self._svc.edit_task(href, uid, TaskEdit(**kw))
+        with _not_found(f"No task {uid!r} in list {list_id!r}."):
+            task = self._svc.edit_task(href, uid, TaskEdit(**kw))
         if task is None:
             raise ToolError(f"No task {uid!r} in list {list_id!r}.")
         return task
 
     def complete_task(self, list_id, uid, *, done=True):
-        task = self._svc.complete_task(self._href(list_id), uid, done=done)
+        with _not_found(f"No task {uid!r} in list {list_id!r}."):
+            task = self._svc.complete_task(self._href(list_id), uid, done=done)
         if task is None:
             raise ToolError(f"No task {uid!r} in list {list_id!r}.")
         return task
 
     def cancel_task(self, list_id, uid):
-        task = self._svc.cancel_task(self._href(list_id), uid)
+        with _not_found(f"No task {uid!r} in list {list_id!r}."):
+            task = self._svc.cancel_task(self._href(list_id), uid)
         if task is None:
             raise ToolError(f"No task {uid!r} in list {list_id!r}.")
         return task
 
     def delete_task(self, list_id, uid):
-        self._svc.delete_task(self._href(list_id), uid)
+        # Checked BEFORE the delete, because the engine returns silently when the
+        # uid is not in the cache and the tool then answers `{"deleted": uid}`
+        # regardless — telling the model a task is gone that never existed, or
+        # that is alive in a different list, so it reports success and stops.
+        href = self._href(list_id)
+        if not self._svc.has_task(href, uid):
+            raise ToolError(f"No task {uid!r} in list {list_id!r} to delete.")
+        with _not_found(f"No task {uid!r} in list {list_id!r} to delete."):
+            self._svc.delete_task(href, uid)
 
     # ── events ───────────────────────────────────────────────────────────────
 
@@ -400,9 +467,10 @@ class McpApi:
         if not kw:
             raise ToolError("Nothing to change — pass at least one field to update.")
         try:
-            event = self._svc.edit_event(
-                href, uid, EventEdit(**kw), recurrence_id=recurrence_id, scope=scope
-            )
+            with _not_found(f"No event {uid!r} on calendar {calendar_id!r}."):
+                event = self._svc.edit_event(
+                    href, uid, EventEdit(**kw), recurrence_id=recurrence_id, scope=scope
+                )
         except ValueError as exc:
             raise ToolError(str(exc)) from None
         if event is None:
@@ -412,7 +480,8 @@ class McpApi:
     def move_event(self, calendar_id, uid, to_calendar_id):
         src = self._href(calendar_id, kind="calendar")
         dst = self._href(to_calendar_id, kind="calendar")
-        event = self._svc.move_event(src, dst, uid)
+        with _not_found(f"No event {uid!r} on calendar {calendar_id!r}."):
+            event = self._svc.move_event(src, dst, uid)
         if event is None:
             raise ToolError(f"No event {uid!r} on calendar {calendar_id!r}.")
         return event
@@ -422,10 +491,14 @@ class McpApi:
             raise ToolError("scope must be 'all', 'this' or 'thisandfuture'.")
         if scope in ("this", "thisandfuture") and not recurrence_id:
             raise ToolError(f"scope={scope!r} needs recurrence_id.")
-        self._svc.delete_event(
-            self._href(calendar_id, kind="calendar"), uid,
-            recurrence_id=recurrence_id, scope=scope,
-        )
+        # Same reason as delete_task: a silent no-op reported as a deletion.
+        href = self._href(calendar_id, kind="calendar")
+        if self._svc.get_event(href, uid) is None:
+            raise ToolError(f"No event {uid!r} on calendar {calendar_id!r} to delete.")
+        with _not_found(f"No event {uid!r} on calendar {calendar_id!r} to delete."):
+            self._svc.delete_event(
+                href, uid, recurrence_id=recurrence_id, scope=scope,
+            )
 
     # ── free/busy ────────────────────────────────────────────────────────────
 
@@ -492,6 +565,12 @@ class McpApi:
             if window_end - cursor >= span:
                 free.append({"start": cursor.isoformat(timespec="minutes"),
                              "end": window_end.isoformat(timespec="minutes")})
+            # MAX_RANGE_DAYS bounds how LONG the range is, not where it ends, so
+            # a range finishing inside 9999-12-31 walked the cursor off date.max
+            # and raised OverflowError — outside every handler, from an argument
+            # the calling model chooses.
+            if day >= date.max:
+                break
             day += timedelta(days=1)
         return free
 

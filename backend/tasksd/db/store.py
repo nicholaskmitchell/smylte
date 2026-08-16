@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
 
 from ..dav.client import CollectionInfo, Item
@@ -20,6 +21,29 @@ _SCHEMA = (Path(__file__).parent / "schema.sql").read_text(encoding="utf-8")
 
 # C0 control bytes, stripped from search terms (see `search`).
 _CTRL = re.compile(r"[\x00-\x1f\x7f]")
+
+
+@contextmanager
+def tx(conn: sqlite3.Connection):
+    """An explicit all-or-nothing transaction.
+
+    Needed because `connect` sets `isolation_level=None` (autocommit): sqlite3's
+    own `with conn:` only manages a transaction it started ITSELF, so under
+    autocommit it commits nothing and rolls back nothing. A write that looked
+    atomic — and was documented as atomic — was in fact one commit per statement,
+    leaving half a change behind when a later statement raised.
+
+    Lives here rather than in the sync engine (where it started) because it is a
+    database concern that every writer needs, not a sync one.
+    """
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        yield
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
+    else:
+        conn.execute("COMMIT")
 
 
 def connect(db_path: str) -> sqlite3.Connection:
@@ -641,6 +665,55 @@ def count_items(conn: sqlite3.Connection, collection_href: str | None = None) ->
     return conn.execute(
         "SELECT COUNT(*) FROM items WHERE collection_href=?", (collection_href,)
     ).fetchone()[0]
+
+
+# The four numbers a list/calendar row shows. Counted in SQL rather than by
+# reading the rows: the caller only ever wanted these integers, but got there by
+# materialising every column of every item — `raw_ics` BLOBs included — for every
+# collection, inside the global service lock, on every sidebar render.
+_COUNT_COLUMNS = """
+    COUNT(*) AS total,
+    SUM(component = 'VTODO') AS task_count,
+    SUM(component = 'VEVENT') AS event_count,
+    SUM(component = 'VTODO'
+        AND (status IS NULL OR status NOT IN ('COMPLETED', 'CANCELLED'))) AS open_count
+"""
+
+
+_COUNT_KEYS = ("total", "task_count", "event_count", "open_count")
+ZERO_COUNTS: dict[str, int] = dict.fromkeys(_COUNT_KEYS, 0)
+
+
+def _counts_row(row) -> dict[str, int]:
+    # SUM over no rows is NULL, and an empty collection must read as 0, not None.
+    return {k: int(row[k] or 0) for k in _COUNT_KEYS}
+
+
+def collection_counts(conn: sqlite3.Connection) -> dict[str, dict[str, int]]:
+    """Per-collection item counts for every collection, in one pass.
+
+    One query for the whole sidebar rather than one per collection, because the
+    caller renders them all together and holds the lock while it does."""
+    return {
+        r["collection_href"]: _counts_row(r)
+        for r in conn.execute(
+            # _COUNT_COLUMNS is a module constant — not attacker input. Shared
+            # with counts_for_collection so the bulk and single-collection paths
+            # cannot drift into disagreeing about what "open" means.
+            f"SELECT collection_href, {_COUNT_COLUMNS} "  # nosec B608
+            "FROM items GROUP BY collection_href"
+        )
+    }
+
+
+def counts_for_collection(conn: sqlite3.Connection, collection_href: str) -> dict[str, int]:
+    """The same four numbers for one collection, for the single-row callers."""
+    row = conn.execute(
+        # _COUNT_COLUMNS is a module constant — not attacker input.
+        f"SELECT {_COUNT_COLUMNS} FROM items WHERE collection_href=?",  # nosec B608
+        (collection_href,),
+    ).fetchone()
+    return _counts_row(row)
 
 
 # ── OAuth 2.1 authorization server (remote MCP connectors) ───────────────────

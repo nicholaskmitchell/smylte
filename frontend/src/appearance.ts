@@ -283,10 +283,47 @@ const COLOR_FNS = new Set([
   'color-mix', 'color', 'var', 'calc',
 ])
 
+/** The CSS named colours, plus the two keywords. The bare-word rule used to be
+ *  /^[a-z]{3,20}$/i, which accepted `bluu` and `notacolour` as readily as `red`:
+ *  the value was stored, applied to the CSSOM, and silently dropped by the
+ *  browser, blanking that token with nothing in the editor to say why. Matching
+ *  the real set is the only way to keep `rebeccapurple` working while refusing a
+ *  typo. */
+const NAMED_COLORS = new Set([
+  'transparent', 'currentcolor',
+  'aliceblue', 'antiquewhite', 'aqua', 'aquamarine', 'azure', 'beige', 'bisque',
+  'black', 'blanchedalmond', 'blue', 'blueviolet', 'brown', 'burlywood',
+  'cadetblue', 'chartreuse', 'chocolate', 'coral', 'cornflowerblue', 'cornsilk',
+  'crimson', 'cyan', 'darkblue', 'darkcyan', 'darkgoldenrod', 'darkgray',
+  'darkgreen', 'darkgrey', 'darkkhaki', 'darkmagenta', 'darkolivegreen',
+  'darkorange', 'darkorchid', 'darkred', 'darksalmon', 'darkseagreen',
+  'darkslateblue', 'darkslategray', 'darkslategrey', 'darkturquoise',
+  'darkviolet', 'deeppink', 'deepskyblue', 'dimgray', 'dimgrey', 'dodgerblue',
+  'firebrick', 'floralwhite', 'forestgreen', 'fuchsia', 'gainsboro',
+  'ghostwhite', 'gold', 'goldenrod', 'gray', 'green', 'greenyellow', 'grey',
+  'honeydew', 'hotpink', 'indianred', 'indigo', 'ivory', 'khaki', 'lavender',
+  'lavenderblush', 'lawngreen', 'lemonchiffon', 'lightblue', 'lightcoral',
+  'lightcyan', 'lightgoldenrodyellow', 'lightgray', 'lightgreen', 'lightgrey',
+  'lightpink', 'lightsalmon', 'lightseagreen', 'lightskyblue', 'lightslategray',
+  'lightslategrey', 'lightsteelblue', 'lightyellow', 'lime', 'limegreen',
+  'linen', 'magenta', 'maroon', 'mediumaquamarine', 'mediumblue',
+  'mediumorchid', 'mediumpurple', 'mediumseagreen', 'mediumslateblue',
+  'mediumspringgreen', 'mediumturquoise', 'mediumvioletred', 'midnightblue',
+  'mintcream', 'mistyrose', 'moccasin', 'navajowhite', 'navy', 'oldlace',
+  'olive', 'olivedrab', 'orange', 'orangered', 'orchid', 'palegoldenrod',
+  'palegreen', 'paleturquoise', 'palevioletred', 'papayawhip', 'peachpuff',
+  'peru', 'pink', 'plum', 'powderblue', 'purple', 'rebeccapurple', 'red',
+  'rosybrown', 'royalblue', 'saddlebrown', 'salmon', 'sandybrown', 'seagreen',
+  'seashell', 'sienna', 'silver', 'skyblue', 'slateblue', 'slategray',
+  'slategrey', 'snow', 'springgreen', 'steelblue', 'tan', 'teal', 'thistle',
+  'tomato', 'turquoise', 'violet', 'wheat', 'white', 'whitesmoke', 'yellow',
+  'yellowgreen',
+])
+
 function isColor(v: string): boolean {
   if (/^#[0-9a-f]{3,8}$/i.test(v)) return true
-  // A bare keyword: `transparent`, `currentColor`, a named CSS color.
-  if (/^[a-z]{3,20}$/i.test(v)) return true
+  // A bare keyword: `transparent`, `currentColor`, or a named CSS colour.
+  if (/^[a-z]+$/i.test(v)) return NAMED_COLORS.has(v.toLowerCase())
   const fns = [...v.matchAll(/([a-z-]+)\s*\(/gi)].map((m) => m[1].toLowerCase())
   if (!fns.length) return false
   if (!fns.every((f) => COLOR_FNS.has(f))) return false

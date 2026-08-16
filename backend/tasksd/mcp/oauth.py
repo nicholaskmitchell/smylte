@@ -45,6 +45,7 @@ import base64
 import hashlib
 import hmac
 import json
+import re
 import secrets
 import time
 from dataclasses import dataclass
@@ -63,6 +64,10 @@ CLIENT_IDLE_S = 24 * 3600
 # Bounds a hostile registrant; well above any real client's needs.
 MAX_CLIENTS = 500
 MAX_REDIRECT_URIS = 10
+
+# RFC 7636 §4.1: the PKCE verifier, and so the challenge derived from it, is
+# base64url — unreserved characters only.
+_PKCE_RE = re.compile(r"[A-Za-z0-9._~-]+")
 
 SCOPE_READ = "mcp:read"
 SCOPE_WRITE = "mcp:write"
@@ -204,7 +209,14 @@ class OAuthServer:
             raise OAuthError("invalid_request", "too many registered clients",
                              status=429)
 
-        requested = scope_set(body.get("scope")) or scope_set(DEFAULT_SCOPE)
+        # Type-checked before use: registration is open and its body is wholly
+        # attacker-chosen, and `scope_set` calls `.split()` — so a JSON list or
+        # number was an AttributeError escaping as a 500 rather than the 400 the
+        # sibling fields below already produce.
+        raw_scope = body.get("scope")
+        if raw_scope is not None and not isinstance(raw_scope, str):
+            raise OAuthError("invalid_client_metadata", "scope must be a string")
+        requested = scope_set(raw_scope) or scope_set(DEFAULT_SCOPE)
         unknown = requested - set(SUPPORTED_SCOPES)
         if unknown:
             raise OAuthError("invalid_client_metadata",
@@ -286,7 +298,12 @@ class OAuthServer:
         if method != "S256":
             raise OAuthError("invalid_request",
                              "code_challenge_method must be S256", redirectable=True)
-        if not (43 <= len(challenge) <= 128):
+        # Length AND charset. RFC 7636 §4.2 makes the challenge base64url, and
+        # without the charset half a non-ASCII one was stored happily here and
+        # then raised TypeError out of `compare_digest` at the exchange — a 500
+        # on the token endpoint, arriving one request after the request that
+        # actually caused it.
+        if not (43 <= len(challenge) <= 128) or not _PKCE_RE.fullmatch(challenge):
             raise OAuthError("invalid_request", "malformed code_challenge",
                              redirectable=True)
 
@@ -422,14 +439,17 @@ class OAuthServer:
         # though both authenticated successfully as themselves.
         if not hmac.compare_digest(row["client_id"], client["client_id"]):
             raise OAuthError("invalid_grant", "the code was issued to another client")
-        if not hmac.compare_digest(form.get("redirect_uri") or "", row["redirect_uri"]):
+        # Bytes, not str: both sides are caller-supplied here, and compare_digest
+        # raises TypeError on non-ASCII — a 500 on the token endpoint.
+        if not hmac.compare_digest(
+                (form.get("redirect_uri") or "").encode(), row["redirect_uri"].encode()):
             raise OAuthError("invalid_grant", "redirect_uri does not match the request")
 
         verifier = form.get("code_verifier") or ""
         if not (43 <= len(verifier) <= 128):
             raise OAuthError("invalid_grant", "malformed code_verifier")
         digest = _b64url(hashlib.sha256(verifier.encode("ascii", "ignore")).digest())
-        if not hmac.compare_digest(digest, row["code_challenge"]):
+        if not hmac.compare_digest(digest.encode(), row["code_challenge"].encode()):
             raise OAuthError("invalid_grant", "code_verifier does not match the challenge")
 
         # A `resource` on the exchange is optional, but if sent it must agree
@@ -603,7 +623,12 @@ def _redirect_allowed(presented: str, registered: list[str]) -> bool:
     loopback, where the alternative is that native clients simply cannot work.
     """
     for candidate in registered:
-        if hmac.compare_digest(presented, candidate):
+        # Compare bytes: compare_digest raises TypeError on a non-ASCII str, and
+        # `presented` is whatever an anonymous caller put in the query string —
+        # so one accented character was an uncaught 500 instead of the plain
+        # "redirect_uri is not registered" this returns. Same fix as auth.py:204
+        # and app.py:1316.
+        if hmac.compare_digest(presented.encode(), candidate.encode()):
             return True
     p = urlsplit(presented)
     host = (p.hostname or "").lower()

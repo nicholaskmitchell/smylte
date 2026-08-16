@@ -115,7 +115,46 @@ def build_mkcalendar(
 # Characters lxml refuses at assignment time. It raises a bare ValueError, which
 # is outside the DavError taxonomy the app's handlers know about, so a name
 # carrying one escaped every handler and surfaced as a 500 with a traceback.
-_XML_FORBIDDEN = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+# Everything XML 1.0 cannot carry (§2.2 Char): the C0 controls except tab, LF and
+# CR; the surrogate range, which additionally fails UTF-8 encoding outright with
+# a UnicodeEncodeError rather than anything lxml would raise; and the two
+# noncharacters at the end of the BMP, which lxml refuses with a bare ValueError.
+# None of those three exception types is in the DAV taxonomy, so an unguarded one
+# surfaced as a 500 from a list rename.
+#
+# Exported because this rule has to hold in three places at once — the HTTP edge
+# (app.CollectionName), the MCP tool schemas, and this backstop. It was
+# previously duplicated by hand, so widening it in one place silently drifted the
+# others: the SPA would accept a name the DAV layer then rejected, turning what
+# should be a 422 into a failed write.
+#
+# Two spellings, because two regex engines have to enforce it and only one of
+# them can express the surrogate range:
+#
+#   XML_SAFE_PATTERN         full set. For Python's `re` — the MCP tool schemas
+#                            (validated by mcp/validate.py) and the backstop below.
+#   XML_SAFE_PATTERN_SCALAR  same, minus the surrogates. For pydantic, which
+#                            compiles with Rust's regex crate; a surrogate is not
+#                            a Unicode scalar value, so Rust cannot name one and
+#                            the pattern fails to build at import time.
+#
+# Dropping them there costs nothing: pydantic rejects a lone surrogate at string
+# conversion (`string_unicode`) before any pattern runs, for the same underlying
+# reason. Verified, not assumed — see test_backlog_stage1.
+_C0 = r"\x00-\x08\x0b\x0c\x0e-\x1f"       # C0 controls except tab, LF, CR
+_SURROGATES = r"\ud800-\udfff"            # also unencodable as UTF-8
+# The two characters below are LITERAL U+FFFE and U+FFFF, and invisible in most
+# editors. They cannot be written as `￾￿` escapes: that spelling is
+# Python's, and `XML_SAFE_PATTERN_SCALAR` is compiled by Rust's regex crate,
+# which spells the same thing `\u{FFFE}`. A literal is the one form both engines
+# read identically.
+_NONCHARS = "￾￿"                # lxml refuses these with a bare ValueError
+
+XML_FORBIDDEN_CLASS = _C0 + _SURROGATES + _NONCHARS
+XML_SAFE_PATTERN = rf"^[^{XML_FORBIDDEN_CLASS}]*$"
+XML_SAFE_PATTERN_SCALAR = rf"^[^{_C0}{_NONCHARS}]*$"
+
+_XML_FORBIDDEN = re.compile(f"[{XML_FORBIDDEN_CLASS}]")
 
 
 def _text(el, value: str) -> None:

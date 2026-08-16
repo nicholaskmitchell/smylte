@@ -10,4 +10,15 @@ testpaths = ["tests"]
 addopts = "-q"
 markers = [
     "radicale: integration tests that require the scratch Radicale on :5233",
+    # The audit backlog, staged. Every open finding in docs/AUDIT.md has a test
+    # here that asserts the CORRECT behaviour and is marked xfail(strict=True):
+    # CI stays green while the bug is open, and the moment it is fixed the test
+    # XPASSes and FAILS the build until it is reclassified. Run one stage with
+    # `pytest -m stage1`; see docs/STAGES.md.
+    "backlog: pins a known-open finding from docs/AUDIT.md",
+    "stage1: crash paths — untrusted input reaching an unhandled exception",
+    "stage2: abuse and resource exhaustion",
+    "stage3: silent data corruption and wrong results",
+    "stage4: user-visible correctness and rendering",
+    "stage5: delivery infrastructure and test gaps",
 ]

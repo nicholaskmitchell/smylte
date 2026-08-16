@@ -340,6 +340,40 @@ def _datelist_values(event: Event, key: str) -> list:
     return [entry.dt for lst in lists for entry in lst.dts]
 
 
+def _rule_for_probe(rule: dict, start: datetime, original_dtstart) -> str:
+    """`rule` serialized so dateutil will accept it alongside `start`.
+
+    dateutil refuses a rule whose UNTIL disagrees with dtstart about awareness —
+    "RRULE UNTIL values must be specified in UTC when DTSTART is timezone-aware"
+    — and `_comparable` strips BOTH ends of the probe to wall clock whenever an
+    override's RECURRENCE-ID and the master's DTSTART disagree, which is exactly
+    what a floating override left by an older write or a foreign client causes.
+    That left `UNTIL=...Z` as the only aware value in the call, so one such
+    override made "Repeat until <date>" permanently unsaveable on that series —
+    a 422 carrying dateutil's internal message.
+
+    Converted through the master's own zone before stripping, rather than merely
+    having its tzinfo dropped, so the bound still lands on the wall clock the
+    rule was written against.
+    """
+    until = rule.get("UNTIL")
+    if not until:
+        return vRecur(rule).to_ical().decode()
+
+    zone = getattr(original_dtstart, "tzinfo", None)
+    out, changed = [], False
+    for v in (until if isinstance(until, list) else [until]):
+        if isinstance(v, datetime):
+            if start.tzinfo is None and v.tzinfo is not None:
+                v = (v.astimezone(zone) if zone else v).replace(tzinfo=None)
+                changed = True
+            elif start.tzinfo is not None and v.tzinfo is None:
+                v = v.replace(tzinfo=timezone.utc)
+                changed = True
+        out.append(v)
+    return vRecur({**rule, "UNTIL": out} if changed else rule).to_ical().decode()
+
+
 def _comparable(dtstart, moment) -> tuple[datetime, datetime]:
     """(dtstart, moment) as datetimes dateutil can compare — all-day values
     become midnight, and a mixed-awareness pair drops to wall clock rather than
@@ -390,7 +424,7 @@ def _reconcile_overrides(cal: Calendar, master: Event) -> None:
         # to agree on tz-awareness and an override's RECURRENCE-ID need not agree
         # with the master's (an older write may have lost or fabricated a zone).
         start, at = _comparable(dtstart.dt, anchor)
-        rr = rrulestr(vRecur(rule).to_ical().decode(), dtstart=start)
+        rr = rrulestr(_rule_for_probe(rule, start, dtstart.dt), dtstart=start)
         return bool(rr.between(at, at, inc=True))
 
     cal.subcomponents = [
@@ -531,6 +565,14 @@ def _at_or_after(a, anchor) -> bool:
     """True if instant/date `a` is on or after `anchor` (used to split a series)."""
     a, anchor = _period_start(a), _period_start(anchor)
     if isinstance(a, datetime) and isinstance(anchor, datetime):
+        if (a.tzinfo is None) != (anchor.tzinfo is None):
+            # Same guard, and the same reasoning, as `_same_instant` above:
+            # `_as_utc` leaves a naive value naive, so one floating EXDATE /
+            # RDATE / RECURRENCE-ID — which is exactly what a foreign client
+            # leaves behind — made every "this and following" edit or delete a
+            # TypeError. Fall back to wall clock so the occurrence stays
+            # addressable rather than taking the whole edit down.
+            return a.replace(tzinfo=None) >= anchor.replace(tzinfo=None)
         return _as_utc(a) >= _as_utc(anchor)
     da = a.date() if isinstance(a, datetime) else a
     db = anchor.date() if isinstance(anchor, datetime) else anchor
@@ -837,6 +879,69 @@ def _rrule_dict(master: Event) -> dict | None:
     return {k: list(v) for k, v in rule.items()}
 
 
+# What the tail's master must own itself, so a fold cannot overwrite the split's
+# own decisions (its new identity, its rebased start, its remaining rule).
+_MASTER_OWNS = frozenset({
+    "UID", "RECURRENCE-ID", "RRULE", "RDATE", "EXDATE",
+    "DTSTART", "DTEND", "DURATION", "DTSTAMP", "SEQUENCE",
+})
+
+
+def _governing_thisandfuture(cal: Calendar, anchor):
+    """The ``RANGE=THISANDFUTURE`` override that governs `anchor`, if any.
+
+    Such an override carries the values for its own slot *and every later one*
+    (RFC 5545 §3.2.13), so when a split lands after one, that override — not the
+    master — is what the tail actually looks like, even though its RECURRENCE-ID
+    sits back in the head. The latest one strictly before the anchor wins; one at
+    or after it belongs to the tail and is re-homed as an ordinary override.
+    """
+    best = None
+    for c in cal.walk("VEVENT"):
+        rid = c.get("RECURRENCE-ID")
+        if rid is None or str(rid.params.get("RANGE", "")).upper() != "THISANDFUTURE":
+            continue
+        if _at_or_after(rid.dt, anchor):
+            continue
+        if best is None or _at_or_after(rid.dt, best.get("RECURRENCE-ID").dt):
+            best = c
+    return best
+
+
+def _tf_shift(override) -> timedelta:
+    """How far a THISANDFUTURE override moves the occurrences it governs.
+
+    The same quantity `recur._thisandfuture_shifts` computes on the read path
+    (its own DTSTART minus its RECURRENCE-ID), with the same guard: a pair that
+    disagrees about dateness has no meaningful offset, so it contributes none.
+    """
+    rid, dtstart = override.get("RECURRENCE-ID"), override.get("DTSTART")
+    if rid is None or dtstart is None:
+        return timedelta(0)
+    if isinstance(rid.dt, datetime) != isinstance(dtstart.dt, datetime):
+        return timedelta(0)
+    return dtstart.dt - rid.dt
+
+
+def _fold_override(master: Event, override) -> None:
+    """Copy a governing override's values onto the tail's master.
+
+    Folded rather than carried across as a component: the tail is a new resource
+    with a new UID, so an override whose RECURRENCE-ID names a slot back in the
+    head would replace nothing and render as a duplicate.
+
+    Subcomponents (VALARM) are replaced wholesale rather than merged, because an
+    override IS the complete event for the occurrences it covers — its reminder
+    set is authoritative, including when it is empty.
+    """
+    for key in list(override.keys()):
+        if key.upper() in _MASTER_OWNS:
+            continue
+        _replace(master, key)
+        master[key] = override[key]
+    master.subcomponents = [copy.deepcopy(c) for c in override.subcomponents]
+
+
 def _drop_overrides(cal: Calendar, anchor, *, keep_before: bool) -> None:
     """Keep only the overrides on one side of the split anchor."""
     kept = []
@@ -913,12 +1018,32 @@ def split_series(
     new_uid = f"{uuid4().hex}@tasksd"
     dur = _event_duration(tmaster)
     orig_start = tmaster.get("DTSTART").dt if tmaster.get("DTSTART") is not None else anchor
+
+    # A THISANDFUTURE override before the split governs the whole tail, so fold
+    # it into the tail's master before `_drop_overrides` discards it below.
+    # Without this the tail snapped back to the master's values — losing the
+    # summary, location, alarms, attendees and X- properties the user had set for
+    # every one of these occurrences — and because the tail is written with a
+    # fresh UID, that loss was permanent.
+    governing = _governing_thisandfuture(tail, anchor)
+    shift = timedelta(0)
+    if governing is not None:
+        shift = _tf_shift(governing)
+        gov_dur = _event_duration(governing)
+        if gov_dur is not None:
+            dur = gov_dur                 # the override may also change length
+        _fold_override(tmaster, governing)
+
+    # The shift is what keeps the tail at the time the user actually sees: an
+    # override that moved this-and-future to 10:00 means the tail's occurrences
+    # are at 10:00, not back at the rule's original hour.
+    start = anchor + shift if shift else anchor
     _replace(tmaster, "DTSTART")
-    tmaster.add("DTSTART", anchor)
+    tmaster.add("DTSTART", start)
     _replace(tmaster, "DURATION")
     _replace(tmaster, "DTEND")
     if dur is not None:
-        tmaster.add("DTEND", anchor + dur)
+        tmaster.add("DTEND", start + dur)
     tail_rule = _rrule_dict(tmaster)
     if tail_rule is not None:
         if "COUNT" in tail_rule:

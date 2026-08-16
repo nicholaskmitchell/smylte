@@ -23,6 +23,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from ..dav.xml import XML_SAFE_PATTERN
 from .oauth import SCOPE_READ, SCOPE_WRITE
 
 # Enough to be useful, small enough that a wide query cannot bury a context
@@ -76,6 +77,14 @@ def _obj(props: dict, required: list[str] | None = None) -> dict:
     }
 
 
+# A collection name goes onto the wire as XML text in a PROPPATCH/MKCALENDAR
+# body. The HTTP model (app.CollectionName) has always bounded it; these schemas
+# did not, so a name carrying a control character reached lxml and came back to
+# the model as "the calendar server may be unreachable" — pointing it at an
+# outage that was not happening, over a byte it could simply have dropped.
+_COLLECTION_NAME = {
+    "type": "string", "minLength": 1, "maxLength": 200, "pattern": XML_SAFE_PATTERN,
+}
 _LIST_ID = {
     "type": "string",
     "description": "Task-list id, as returned by smylte_list_lists (short slug or full href).",
@@ -171,7 +180,7 @@ def build_tools(api) -> dict[str, Tool]:
         "Create a task list. This is a real CalDAV collection, so it appears in "
         "every other client on this account too.",
         _obj({
-            "name": {"type": "string", "minLength": 1, "maxLength": 200},
+            "name": _COLLECTION_NAME,
             "color": {"type": "string", "pattern": "^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$",
                       "description": "Hex colour, #RRGGBB or #RRGGBBAA."},
         }, ["name"]),
@@ -185,7 +194,7 @@ def build_tools(api) -> dict[str, Tool]:
         "Rename a task list or change its colour. Written to the server, so "
         "other CalDAV clients see it.",
         _obj({"list_id": _LIST_ID,
-              "name": {"type": "string", "minLength": 1, "maxLength": 200},
+              "name": _COLLECTION_NAME,
               "color": {"type": "string", "pattern": "^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$"}},
              ["list_id"]),
         scope=SCOPE_WRITE, read_only=False, idempotent=True,
@@ -349,7 +358,7 @@ def build_tools(api) -> dict[str, Tool]:
         "smylte_create_calendar", "Create a calendar",
         "Create a calendar as a real CalDAV collection, visible to every other "
         "client on this account.",
-        _obj({"name": {"type": "string", "minLength": 1, "maxLength": 200},
+        _obj({"name": _COLLECTION_NAME,
               "color": {"type": "string", "pattern": "^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$"}},
              ["name"]),
         scope=SCOPE_WRITE, read_only=False,
@@ -362,7 +371,7 @@ def build_tools(api) -> dict[str, Tool]:
         "Rename a calendar or change its colour. Written to the server, so "
         "other CalDAV clients see it. Does not touch the events on it.",
         _obj({"calendar_id": _CAL_ID,
-              "name": {"type": "string", "minLength": 1, "maxLength": 200},
+              "name": _COLLECTION_NAME,
               "color": {"type": "string", "pattern": "^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$"}},
              ["calendar_id"]),
         scope=SCOPE_WRITE, read_only=False, idempotent=True,

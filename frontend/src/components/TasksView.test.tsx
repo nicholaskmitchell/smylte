@@ -1308,3 +1308,70 @@ describe('<TasksView> drag-to-reorder', () => {
     expect(document.querySelectorAll('.task-drag')).toHaveLength(0)
   })
 })
+
+// ── Stage 4 backlog closures (docs/AUDIT.md) ───────────────────────────────
+
+describe('stage 4 — list drag and the prune gate', () => {
+  // AUDIT closed: TasksView.tsx:518 — the indicator pointed the wrong way.
+  it('marks the drop side so the indicator matches where the row lands', async () => {
+    m.lists.mockResolvedValue([list])
+    m.tasks.mockResolvedValue([
+      task({ uid: 'a', summary: 'Alpha', sort_order: 1 }),
+      task({ uid: 'b', summary: 'Bravo', sort_order: 2 }),
+      task({ uid: 'c', summary: 'Charlie', sort_order: 3 }),
+    ])
+    render(
+      <DataProvider rev={0} onExpire={vi.fn()}>
+        <TasksView onExpire={vi.fn()} view="list" onView={vi.fn()}
+          sideCollapsed={false} onToggleSide={vi.fn()}
+          hiddenLists={[]} onHiddenListsChange={vi.fn()}
+          groups={[]} onGroupsChange={vi.fn()}
+          collapsedGroups={[]} onCollapsedGroupsChange={vi.fn()}
+          collapsedTasks={[]} onCollapsedTasksChange={vi.fn()}
+          showCompleted={false} />
+      </DataProvider>,
+    )
+    const row = async (name: string) =>
+      (await screen.findByText(name)).closest('.task-drag') as HTMLElement
+
+    const dataTransfer = { setData: vi.fn(), getData: vi.fn(), effectAllowed: '' }
+    // Downward: Alpha onto Charlie lands AFTER Charlie, so the line goes below.
+    fireEvent.dragStart(await row('Alpha'), { dataTransfer })
+    fireEvent.dragOver(await row('Charlie'), { dataTransfer })
+    await waitFor(async () =>
+      expect((await row('Charlie')).className).toContain('drag-below'))
+
+    // Upward: Charlie onto Alpha lands BEFORE Alpha, so the line stays on top.
+    fireEvent.dragStart(await row('Charlie'), { dataTransfer })
+    fireEvent.dragOver(await row('Alpha'), { dataTransfer })
+    await waitFor(async () => {
+      const cls = (await row('Alpha')).className
+      expect(cls).toContain('drag-over')
+      expect(cls).not.toContain('drag-below')
+    })
+  })
+
+  // AUDIT closed: TasksView.tsx:91 — a failed lists fetch pruned settings.
+  it('does not prune list-scoped settings when the lists fetch failed', async () => {
+    // The cache holds a list the (failed) fetch cannot confirm. Pruning against
+    // it would drop the hidden-list entry and write that loss to the server.
+    setCacheUser('u')
+    cacheLists([list, { ...list, id: 'l2', name: 'Later' }])
+    m.lists.mockRejectedValue(new Error('boom'))
+    m.tasks.mockResolvedValue([])
+    const onHiddenListsChange = vi.fn()
+    render(
+      <DataProvider rev={0} onExpire={vi.fn()}>
+        <TasksView onExpire={vi.fn()} view="list" onView={vi.fn()}
+          sideCollapsed={false} onToggleSide={vi.fn()}
+          hiddenLists={['l2']} onHiddenListsChange={onHiddenListsChange}
+          groups={[]} onGroupsChange={vi.fn()}
+          collapsedGroups={[]} onCollapsedGroupsChange={vi.fn()}
+          collapsedTasks={[]} onCollapsedTasksChange={vi.fn()}
+          showCompleted={false} />
+      </DataProvider>,
+    )
+    await waitFor(() => expect(m.lists).toHaveBeenCalled())
+    expect(onHiddenListsChange).not.toHaveBeenCalled()
+  })
+})

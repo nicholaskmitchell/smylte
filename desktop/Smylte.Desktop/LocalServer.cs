@@ -245,7 +245,11 @@ public sealed class LocalServer : IDisposable
 
     /// null when the path is not a real file, which the caller turns into the
     /// SPA fallback — /book/&lt;token&gt; and the tab routes are client-side.
-    private string? Resolve(string urlPath)
+    /// `internal` rather than private so the test project — which links this
+    /// file rather than referencing the WinForms assembly — can reach it. This
+    /// guard is one of the two places in the client where a mistake is a
+    /// security bug rather than a cosmetic one.
+    internal string? Resolve(string urlPath)
     {
         var relative = Uri.UnescapeDataString(urlPath).TrimStart('/');
         if (relative.Length == 0) relative = "index.html";

@@ -467,7 +467,15 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
                           const evLast = lastDayOf(e)
                           const resizable = key === (evLast > lastKey ? lastKey : evLast)
                           return (
-                            <div key={e.id} className={`cal-ev ${e.all_day ? 'allday' : ''} ${e.cont ? 'cont' : ''}`}
+                            // Keyed by collection too: `id` is unique per
+                            // rendered instance of a SERIES (uid, or
+                            // uid::recurrence_id), and a UID is only unique
+                            // within one collection — so the same event copied
+                            // to, or subscribed from, a second calendar gave two
+                            // chips one key. React then drops one and can bind
+                            // the wrong click target to the other.
+                            <div key={`${e.calendar}::${e.id}`}
+                              className={`cal-ev ${e.all_day ? 'allday' : ''} ${e.cont ? 'cont' : ''}`}
                               style={evStyle(e)}
                               title={e.is_recurring ? `${e.summary || ''} (repeating)` : (e.summary || '')}
                               draggable
