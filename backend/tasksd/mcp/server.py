@@ -211,7 +211,15 @@ class McpServer:
 def parse_body(raw: bytes) -> object:
     if len(raw) == 0:
         raise ValueError("empty body")
-    return json.loads(raw)
+    try:
+        return json.loads(raw)
+    except RecursionError as exc:
+        # `json.loads` recurses per nesting level, and RecursionError is a
+        # RuntimeError — not a ValueError — so deeply nested JSON escaped the
+        # transport's parse guard and 500ed instead of answering -32700.
+        # Normalised here rather than at the call site so there stays exactly
+        # one parse-failure taxonomy for callers to catch.
+        raise ValueError("JSON nested too deeply") from exc
 
 
 def run_batch(server: McpServer, payload: object, *, scopes: set[str]) -> object | None:

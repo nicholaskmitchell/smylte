@@ -531,6 +531,14 @@ def _at_or_after(a, anchor) -> bool:
     """True if instant/date `a` is on or after `anchor` (used to split a series)."""
     a, anchor = _period_start(a), _period_start(anchor)
     if isinstance(a, datetime) and isinstance(anchor, datetime):
+        if (a.tzinfo is None) != (anchor.tzinfo is None):
+            # Same guard, and the same reasoning, as `_same_instant` above:
+            # `_as_utc` leaves a naive value naive, so one floating EXDATE /
+            # RDATE / RECURRENCE-ID — which is exactly what a foreign client
+            # leaves behind — made every "this and following" edit or delete a
+            # TypeError. Fall back to wall clock so the occurrence stays
+            # addressable rather than taking the whole edit down.
+            return a.replace(tzinfo=None) >= anchor.replace(tzinfo=None)
         return _as_utc(a) >= _as_utc(anchor)
     da = a.date() if isinstance(a, datetime) else a
     db = anchor.date() if isinstance(anchor, datetime) else anchor

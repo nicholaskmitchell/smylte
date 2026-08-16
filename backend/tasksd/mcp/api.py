@@ -492,6 +492,12 @@ class McpApi:
             if window_end - cursor >= span:
                 free.append({"start": cursor.isoformat(timespec="minutes"),
                              "end": window_end.isoformat(timespec="minutes")})
+            # MAX_RANGE_DAYS bounds how LONG the range is, not where it ends, so
+            # a range finishing inside 9999-12-31 walked the cursor off date.max
+            # and raised OverflowError — outside every handler, from an argument
+            # the calling model chooses.
+            if day >= date.max:
+                break
             day += timedelta(days=1)
         return free
 
