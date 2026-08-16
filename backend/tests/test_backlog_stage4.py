@@ -3,7 +3,9 @@
 Most of this stage is the SPA, pinned in frontend/src/backlog.stage4.test.tsx.
 This is the one server-rendered page in it: the OAuth consent screen.
 
-See test_backlog_stage1.py for how the xfail(strict=True) harness works.
+**Stage 4 is CLOSED** — this began as an xfail(strict=True) pin and is now an
+ordinary regression test that must stay green. The SPA half lives in
+frontend/src/backlog.stage4.test.tsx.
 """
 from __future__ import annotations
 
@@ -20,7 +22,6 @@ from tests.conftest import api_settings
 
 pytestmark = [pytest.mark.backlog, pytest.mark.stage4]
 
-XFAIL = dict(strict=True)
 ISSUER = "https://tasks.example.test"
 CALLBACK = "https://claude.ai/api/mcp/auth_callback"
 
@@ -47,17 +48,20 @@ def mcp(tmp_path):
 
 # ── AUDIT: the consent screen forgets which app it is for ─────────────────
 
-@pytest.mark.xfail(reason="AUDIT open: routes.py:266 client name lost on retry", **XFAIL)
 def test_the_consent_screen_still_names_the_app_after_a_bad_password(mcp):
     """`verify_request` rebuilds the AuthRequest from the signed blob, which
     carries client_id but not client_name — so it hardcodes `client_name=""` and
     `parse_authorize`'s "an application" fallback takes over.
 
-    The first render says "Claude wants access"; mistype the password and the
-    retry says "an application wants access". That is precisely the screen where
+    The first render said "Claude wants access"; mistype the password and the
+    retry said "an application wants access". That is precisely the screen where
     the user is being asked to type their password and decide whether to trust a
-    caller — and it stops naming the caller at the moment they look hardest.
-    Two independent finders reported this (filed once).
+    caller — and it stopped naming the caller at the moment they look hardest.
+    Two independent finders reported this (filed twice in AUDIT.md, one problem).
+
+    Fixed by re-resolving the name from the client_id the signed blob already
+    carries, rather than widening the blob — which would have put an
+    attacker-supplied name inside a signature.
     """
     r = mcp.post("/oauth/register", json={
         "client_name": "Claude", "redirect_uris": [CALLBACK],

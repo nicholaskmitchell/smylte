@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import dataclasses
 import html
 import json
 import logging
@@ -22,6 +23,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from ..auth import RateLimiter, limiter_key
 from .api import McpApi
 from .oauth import OAuthError, OAuthServer, SCOPE_OFFLINE, SCOPE_READ, SCOPE_WRITE, scope_set, scope_str
+from ..db.store import get_oauth_client as _get_oauth_client
 from ..db.store import list_oauth_grants as _list_grants, revoke_oauth_family as _revoke_family
 from .server import McpServer, parse_body, run_batch
 
@@ -311,7 +313,17 @@ def register(app, *, settings, authenticator, client_ip, run, login_hashes):
                 # re-armed "Full access", so retyping the password silently
                 # granted write to someone who had deliberately picked
                 # read-only. The screen exists for that choice.
-                _consent_page(req, form.get("request", ""), issuer=issuer,
+                #
+                # ...and carrying the NAME back too. `verify_request` rebuilds
+                # the request from the signed blob, which holds client_id but
+                # not client_name, so it hardcodes "" and parse_authorize's
+                # "an application" fallback took over. The first render said
+                # "Claude wants access"; one mistyped password and the retry
+                # said "an application" — at the exact moment the user is being
+                # asked to type a password and decide whether to trust the
+                # caller. Re-resolved from the id rather than widening the blob,
+                # which would put an attacker-supplied name inside a signature.
+                _consent_page(await _named(request, req), form.get("request", ""), issuer=issuer,
                               grant=form.get("grant") or "full",
                               error="That username or password was not right."),
                 status_code=401,
@@ -326,6 +338,15 @@ def register(app, *, settings, authenticator, client_ip, run, login_hashes):
             oauth.redirect_with(req.redirect_uri, _with_state({"code": code}, req.state)),
             status_code=303, headers={"Cache-Control": "no-store"},
         )
+
+    async def _named(request: Request, req):
+        """`req` with the client's registered name filled back in."""
+        if req.client_name:
+            return req
+        row = await run(request.app.state.service.oauth,
+                        _get_oauth_client, req.client_id)
+        name = (row or {}).get("client_name") if row is not None else None
+        return dataclasses.replace(req, client_name=name or "") if name else req
 
     def _authorize_failure(exc: OAuthError, params: dict):
         """A failed authorization request.

@@ -7,7 +7,7 @@
 // looks like on the wire, and TasksView imports it back for the day-column
 // drag, which reschedules through the same rule.
 
-import { useState, type KeyboardEvent } from 'react'
+import { useRef, useState, type KeyboardEvent } from 'react'
 import type { CreateTaskBody, List, Task } from '../api'
 import { dayKey, hasZone, instantFromLocal, toLocalInput } from '../util'
 import { inputLang } from '../time'
@@ -114,8 +114,19 @@ export function TaskModal({ task, lists, defaultList, initialTitle, onClose, onC
     onSave(body)
   }
 
+  // Whether the press that started this click landed on the scrim itself.
+  const scrimPress = useRef(false)
+
   return (
-    <div className="overlay" onClick={onClose}>
+    // Closes on a press AND release that both land on the scrim. A bare onClick
+    // fires whenever the release lands here, so a text drag-select that began
+    // inside the modal and finished outside it discarded the whole form.
+    <div className="overlay"
+      onMouseDown={(e) => { scrimPress.current = e.target === e.currentTarget }}
+      onClick={(e) => {
+        if (e.target === e.currentTarget && scrimPress.current) onClose()
+        scrimPress.current = false
+      }}>
       <div className="modal task-modal" role="dialog" aria-modal="true"
         aria-label={creating ? 'Add task' : 'Task'}
         onClick={(e) => e.stopPropagation()}>
