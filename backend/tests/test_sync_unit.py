@@ -337,3 +337,74 @@ def test_a_uid_that_came_back_is_spared_by_the_gc():
     assert store.get_sidecar(conn, COL, "u-1")["orphaned_at"] is None
     assert store.gc_orphans(conn) == 0
     assert _sidecar_uids(conn) == ["u-1"]
+
+
+# ── discovery tolerates an unusable collection property ─────────────────────
+# `calendar-order` is an Apple dead property any sharing CalDAV client can
+# PROPPATCH, and it is read straight off the wire. Python ints are unbounded but
+# SQLite's INTEGER is not, so a large one raised OverflowError at bind time —
+# not a ValueError, so nothing caught it. discover() upserts every collection in
+# ONE transaction, so a single poisoned collection rolled back the enumeration
+# of all of them, on every retry (the value lives on the server) and at every
+# restart, taking bootstrap() and therefore startup with it.
+
+class _DiscoveryDav:
+    def __init__(self, cols: list[CollectionInfo]):
+        self.cols = cols
+
+    def list_collections(self) -> list[CollectionInfo]:
+        return self.cols
+
+
+HUGE_ORDER = 10 ** 25          # past 2**63-1; any value out of range does it
+
+
+def test_an_unparseable_calendar_order_is_dropped_at_the_parser():
+    """The wire value is clamped where it enters, so it never reaches the bind."""
+    import types
+
+    from tasksd.dav.client import DavClient
+
+    wire = b"""<?xml version="1.0"?>
+<D:multistatus xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav"
+               xmlns:A="http://apple.com/ns/ical/">
+  <D:response><D:href>/u/shared/</D:href><D:propstat><D:prop>
+    <D:displayname>Shared</D:displayname>
+    <D:resourcetype><D:collection/><C:calendar/></D:resourcetype>
+    <C:supported-calendar-component-set><C:comp name="VTODO"/></C:supported-calendar-component-set>
+    <A:calendar-order>99999999999999999999999</A:calendar-order>
+  </D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>
+</D:multistatus>"""
+
+    c = DavClient.__new__(DavClient)
+    type(c).principal_path = property(lambda self: "/u/")
+    c._request = lambda *a, **kw: types.SimpleNamespace(
+        content=wire, status_code=207, headers={})
+
+    (info,) = c.list_collections()
+    assert info.order is None, f"out-of-range order survived the parser: {info.order}"
+
+
+def test_one_uncacheable_collection_does_not_abort_discovery():
+    """Defence in depth for any other unusable property: the healthy collection
+    must still be cached, discovery must not raise, and the poisoned one must
+    NOT be marked deleted — the server says it exists, and marking it deleted
+    would discard sidecar state that is not derivable from anywhere."""
+    conn = store.connect(":memory:")
+    store.init_db(conn)
+
+    engine = SyncEngine(_DiscoveryDav([
+        CollectionInfo(href="/u/work/", displayname="Work", components={"VTODO"}, order=0),
+        CollectionInfo(href="/u/poison/", displayname="Bad", components={"VTODO"},
+                       order=HUGE_ORDER),
+    ]), conn)
+
+    kept = engine.discover()                      # must not raise
+    assert [c.href for c in kept] == ["/u/work/"]
+
+    rows = {r["href"]: r for r in store.get_collections(conn)}
+    assert "/u/work/" in rows, "a healthy collection was rolled back with the bad one"
+    assert not any(r["deleted"] for r in rows.values())
+
+    # Deterministic: the property lives on the server, so it recurs every pass.
+    assert [c.href for c in engine.discover()] == ["/u/work/"]

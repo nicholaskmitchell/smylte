@@ -234,6 +234,71 @@ def test_dst_day_lengths_differ_by_the_transition():
     assert fall - spring == 4
 
 
+# ── DST: the FILTERS must compare instants, not wall clock ──────────────────
+# Stepping in UTC fixed the slot lengths, but `slot.start >= open_from` and
+# `_overlaps_any` still compared local values. Every datetime here shares one
+# ZoneInfo object, and CPython short-circuits `==`/`<` to a NAIVE field
+# comparison when `self.tzinfo is other.tzinfo` — so on the fall-back day the
+# two passes of the repeated hour are indistinguishable to a local comparison.
+# The battery above cannot see it: it hardcodes busy=[] and a `now` a day out.
+
+FALL_BACK = date(2026, 11, 1)          # 01:00-02:00 local happens twice
+_FIRST_PASS = datetime(2026, 11, 1, 6, 0, tzinfo=UTC)    # 01:00 CDT
+_SECOND_PASS = datetime(2026, 11, 1, 7, 0, tzinfo=UTC)   # 01:00 CST — same clock
+
+
+def _fall_back_slots(*, now, busy=()):
+    av = scheduling.parse_availability({str(FALL_BACK.weekday()): ["00:00-05:00"]})
+    return scheduling.generate_slots(
+        availability=av, duration_minutes=30, busy=list(busy), buffer_minutes=0,
+        tz=TZ, now=now, min_notice_hours=0, horizon_days=1, only_day=FALL_BACK,
+    )
+
+
+def test_fall_back_never_advertises_a_slot_already_in_the_past():
+    # `now` is 01:15 CST — the SECOND pass. Compared as wall clock, every slot
+    # from 01:30 CDT (45 minutes gone) onwards still looked like the future, and
+    # book_slot accepted them: an anonymous visitor putting an event on the
+    # owner's calendar in the past, confirmed as "1:30 AM" ending "1:00 AM".
+    now = datetime(2026, 11, 1, 7, 15, tzinfo=UTC)
+    for s in _fall_back_slots(now=now):
+        assert s.start.astimezone(UTC) >= now, (
+            f"offered {s.start.isoformat()} = {s.start.astimezone(UTC).isoformat()}, "
+            f"which is in the past at {now.isoformat()}"
+        )
+
+
+def test_fall_back_busy_in_one_pass_leaves_the_other_bookable():
+    # A real event covering only 06:00Z-06:30Z shares its wall clock with
+    # 07:00Z-07:30Z, so a local comparison blocked both — silently deleting an
+    # hour of genuine availability the repeated-hour fix exists to expose.
+    busy = [Interval(_FIRST_PASS.astimezone(TZ),
+                     (_FIRST_PASS + timedelta(minutes=30)).astimezone(TZ))]
+    starts = {s.start.astimezone(UTC)
+              for s in _fall_back_slots(now=datetime(2026, 10, 31, 12, 0, tzinfo=UTC),
+                                        busy=busy)}
+    assert _FIRST_PASS not in starts, "the genuinely busy pass must stay blocked"
+    assert _SECOND_PASS in starts, "the free pass of the repeated hour was blocked too"
+
+
+def test_min_notice_is_absolute_time_across_the_transition():
+    # A notice window that spans the transition. `aware + timedelta` adds to the
+    # naive fields and re-derives the offset, so "one hour from 01:30 CDT" came
+    # out as 02:30 CST (08:30Z) — two absolute hours — hiding the slot at 07:30Z
+    # that is exactly one hour away. An hour of real availability, lost.
+    now = datetime(2026, 11, 1, 6, 30, tzinfo=UTC)    # 01:30 CDT, the first pass
+    av = scheduling.parse_availability({str(FALL_BACK.weekday()): ["00:00-05:00"]})
+    slots = scheduling.generate_slots(
+        availability=av, duration_minutes=30, busy=[], buffer_minutes=0, tz=TZ,
+        now=now, min_notice_hours=1, horizon_days=1, only_day=FALL_BACK,
+    )
+    earliest = min(s.start.astimezone(UTC) for s in slots)
+    assert earliest == now + timedelta(hours=1), (
+        f"earliest offered {earliest.isoformat()}, expected exactly one absolute "
+        f"hour after {now.isoformat()}"
+    )
+
+
 def test_empty_availability_no_slots():
     assert _slots(availability={}) == []
 
