@@ -85,8 +85,15 @@ class EditList(BaseModel):
     color: str | None = None          # explicit null clears the color
 
 
+# A reorder carries every collection, so the bound is "more lists than anyone
+# has". Unbounded, one request made the server resolve AND PROPPATCH once per
+# element inside the write lock — the same reason ReorderTasks.items is bounded.
+_MAX_REORDER_LISTS = 1_000
+
+
 class ReorderLists(BaseModel):
-    ids: list[str]                    # every shown collection, in the new order
+    # every shown collection, in the new order
+    ids: list[str] = Field(max_length=_MAX_REORDER_LISTS)
 
 
 # A reorder carries every task on the account, so the bound is "more tasks than
@@ -809,14 +816,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def _svc(request: Request) -> TaskService:
         return request.app.state.service
 
-    def _href(request: Request, list_id: str) -> str:
-        href = _svc(request).resolve_list(list_id)
+    async def _run(fn, *a, **kw):
+        return await asyncio.to_thread(fn, *a, **kw)
+
+    async def _href(request: Request, list_id: str) -> str:
+        # Threaded like every other service call. `resolve_list` takes the global
+        # service lock, which is held across CalDAV I/O (a sync sweep, a write,
+        # a PROPPATCH) for as long as the 30 s DAV timeout allows. Called
+        # synchronously it blocked the EVENT LOOP rather than a worker thread,
+        # so one slow Radicale froze the whole process — /healthz, /api/login,
+        # the SSE keepalives and the static SPA included.
+        href = await _run(_svc(request).resolve_list, list_id)
         if href is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown list {list_id}")
         return href
-
-    async def _run(fn, *a, **kw):
-        return await asyncio.to_thread(fn, *a, **kw)
 
     async def _check_parent(request: Request, href: str, parent: str | None,
                             *, uid: str | None = None) -> None:
@@ -849,7 +862,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @api.patch("/lists/{list_id}")
     @api.patch("/calendars/{list_id}")
     async def patch_list(request: Request, list_id: str, body: EditList):
-        href = _href(request, list_id)
+        href = await _href(request, list_id)
         fs = body.model_fields_set
         _check_color(body.color)
         return await _run(
@@ -862,7 +875,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @api.delete("/lists/{list_id}", status_code=204)
     @api.delete("/calendars/{list_id}", status_code=204)
     async def delete_list(request: Request, list_id: str):
-        href = _href(request, list_id)
+        href = await _href(request, list_id)
         await _run(_svc(request).delete_collection, href)
         # A bare Response, never JSONResponse: a 204 carries no body (RFC 9110
         # 6.4.1), and `content=None` renders b"null". uvicorn then aborts with
@@ -875,19 +888,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @api.post("/lists/reorder")
     @api.post("/calendars/reorder")
     async def reorder_lists(request: Request, body: ReorderLists):
-        hrefs = [_href(request, i) for i in body.ids]
+        hrefs = [await _href(request, i) for i in body.ids]
         await _run(_svc(request).reorder_collections, hrefs)
         return {"ok": True}
 
     # -- tasks --
     @api.get("/lists/{list_id}/tasks")
     async def get_tasks(request: Request, list_id: str, include_done: bool = Query(True)):
-        href = _href(request, list_id)
+        href = await _href(request, list_id)
         return await _run(_svc(request).list_tasks, href, include_done=include_done)
 
     @api.post("/lists/{list_id}/tasks", status_code=201)
     async def post_task(request: Request, list_id: str, body: CreateTask):
-        href = _href(request, list_id)
+        href = await _href(request, list_id)
         _check_client_id(body.client_id)
         await _check_parent(request, href, body.parent)
         return await _run(
@@ -898,7 +911,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @api.get("/lists/{list_id}/tasks/{uid}")
     async def get_one_task(request: Request, list_id: str, uid: str):
-        href = _href(request, list_id)
+        href = await _href(request, list_id)
         dto = await _run(_svc(request).get_task, href, uid)
         if dto is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown task {uid}")
@@ -906,7 +919,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @api.patch("/lists/{list_id}/tasks/{uid}")
     async def patch_task(request: Request, list_id: str, uid: str, body: EditTask):
-        href = _href(request, list_id)
+        href = await _href(request, list_id)
         await _check_parent(request, href, body.parent, uid=uid)
         dto = await _run(_svc(request).edit_task, href, uid, _edit_from_patch(body))
         if dto is None:
@@ -915,17 +928,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @api.post("/lists/{list_id}/tasks/{uid}/complete")
     async def complete_task(request: Request, list_id: str, uid: str, done: bool = Query(True)):
-        href = _href(request, list_id)
+        href = await _href(request, list_id)
         return await _run(_svc(request).complete_task, href, uid, done=done)
 
     @api.post("/lists/{list_id}/tasks/{uid}/cancel")
     async def cancel_task(request: Request, list_id: str, uid: str):
-        href = _href(request, list_id)
+        href = await _href(request, list_id)
         return await _run(_svc(request).cancel_task, href, uid)
 
     @api.delete("/lists/{list_id}/tasks/{uid}", status_code=204)
     async def delete_task(request: Request, list_id: str, uid: str):
-        href = _href(request, list_id)
+        href = await _href(request, list_id)
         await _run(_svc(request).delete_task, href, uid)
         return Response(status_code=204)
 
@@ -940,7 +953,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         for item in body.items:
             href = hrefs.get(item.list)
             if href is None:
-                resolved = svc.resolve_list(item.list)
+                # Threaded, for the reason given on `_href`: this takes the
+                # global service lock, and up to _MAX_REORDER_TASKS distinct
+                # list ids can reach it in one request.
+                resolved = await _run(svc.resolve_list, item.list)
                 if resolved is None:
                     raise HTTPException(
                         status.HTTP_404_NOT_FOUND, f"unknown list {item.list}")
@@ -959,7 +975,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @api.put("/lists/{list_id}/tasks/{uid}/sidecar")
     async def put_sidecar(request: Request, list_id: str, uid: str, body: Sidecar):
-        href = _href(request, list_id)
+        href = await _href(request, list_id)
         fields = {k: v for k, v in body.model_dump().items() if v is not None}
         return await _run(_svc(request).set_sidecar, href, uid, **fields)
 
@@ -976,7 +992,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @api.get("/calendars/{cal_id}/events")
     async def get_events(request: Request, cal_id: str,
                          start: str = Query(...), end: str = Query(...)):
-        href = _href(request, cal_id)
+        href = await _href(request, cal_id)
         # 422 on a bad window bound. _parse_datelike reads "" as "unset", which
         # is right for an optional field but not for a required bound — the empty
         # string went straight through to the service and 500ed there.
@@ -987,7 +1003,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @api.post("/calendars/{cal_id}/events", status_code=201)
     async def post_event(request: Request, cal_id: str, body: CreateEvent):
-        href = _href(request, cal_id)
+        href = await _href(request, cal_id)
         _check_client_id(body.client_id)
         return await _run(
             _svc(request).create_event, href, body.summary,
@@ -999,7 +1015,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @api.get("/calendars/{cal_id}/events/{uid}")
     async def get_one_event(request: Request, cal_id: str, uid: str):
-        href = _href(request, cal_id)
+        href = await _href(request, cal_id)
         dto = await _run(_svc(request).get_event, href, uid)
         if dto is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown event {uid}")
@@ -1007,7 +1023,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @api.patch("/calendars/{cal_id}/events/{uid}")
     async def patch_event(request: Request, cal_id: str, uid: str, body: EditEvent):
-        href = _href(request, cal_id)
+        href = await _href(request, cal_id)
         _check_scope(body.scope or "all")
         _check_recurrence_id(body.recurrence_id, body.scope or "all")
         try:
@@ -1024,8 +1040,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @api.post("/calendars/{cal_id}/events/{uid}/move")
     async def move_event(request: Request, cal_id: str, uid: str, body: MoveEvent):
-        src = _href(request, cal_id)
-        dst = _href(request, body.calendar)
+        src = await _href(request, cal_id)
+        dst = await _href(request, body.calendar)
         dto = await _run(_svc(request).move_event, src, dst, uid)
         if dto is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown event {uid}")
@@ -1037,7 +1053,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         recurrence_id: str | None = Query(default=None),
         scope: str = Query(default="all"),   # all|this|thisandfuture
     ):
-        href = _href(request, cal_id)
+        href = await _href(request, cal_id)
         _check_scope(scope)
         _check_recurrence_id(recurrence_id, scope)
         await _run(
@@ -1058,7 +1074,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @api.post("/scheduling/links", status_code=201)
     async def post_booking_link(request: Request, body: CreateBookingLink):
         fields = {k: getattr(body, k) for k in _LINK_SIMPLE_FIELDS}
-        fields["calendar_href"] = _href(request, body.calendar)
+        fields["calendar_href"] = await _href(request, body.calendar)
         try:
             return await _run(_svc(request).create_booking_link, fields)
         except ValueError as e:
@@ -1069,7 +1085,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         fs = body.model_fields_set          # only fields the client actually sent
         fields = {k: getattr(body, k) for k in _LINK_SIMPLE_FIELDS if k in fs}
         if "calendar" in fs:
-            fields["calendar_href"] = _href(request, body.calendar)
+            fields["calendar_href"] = await _href(request, body.calendar)
         try:
             dto = await _run(_svc(request).update_booking_link, token, fields)
         except ValueError as e:

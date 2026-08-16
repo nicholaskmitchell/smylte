@@ -112,12 +112,26 @@ def busy_intervals(events: Iterable[dict], tz: ZoneInfo) -> list[Interval]:
     return merge(out)
 
 
+def _u(dt: datetime) -> datetime:
+    """The instant, as UTC.
+
+    Every comparison in this module must go through here. Two datetimes that
+    share one ZoneInfo object are compared by CPython on their NAIVE fields
+    (`datetime_richcompare` short-circuits when `self.tzinfo is other.tzinfo`),
+    so on a fall-back day the two passes of the repeated hour — different
+    instants, identical wall clock — compare EQUAL. Since `tz` is built once per
+    link and threaded through slot generation, busy parsing and booking, that is
+    exactly the situation here.
+    """
+    return dt.astimezone(timezone.utc)
+
+
 def merge(intervals: list[Interval]) -> list[Interval]:
     """Sorted, coalesced (overlapping/adjacent become one)."""
     out: list[Interval] = []
-    for iv in sorted(intervals):
-        if out and iv.start <= out[-1].end:
-            if iv.end > out[-1].end:
+    for iv in sorted(intervals, key=lambda x: (_u(x.start), _u(x.end))):
+        if out and _u(iv.start) <= _u(out[-1].end):
+            if _u(iv.end) > _u(out[-1].end):
                 out[-1] = Interval(out[-1].start, iv.end)
         else:
             out.append(iv)
@@ -129,15 +143,23 @@ def pad(intervals: list[Interval], buffer_minutes: int) -> list[Interval]:
     if not buffer_minutes:
         return merge(intervals)
     b = timedelta(minutes=buffer_minutes)
-    return merge([Interval(iv.start - b, iv.end + b) for iv in intervals])
+    # Widen the INSTANT, then derive the local value back. Subtracting from an
+    # aware datetime adds to its naive fields and re-derives the offset, so a
+    # buffer straddling a transition would otherwise be an hour out.
+    return merge([
+        Interval((_u(iv.start) - b).astimezone(iv.start.tzinfo),
+                 (_u(iv.end) + b).astimezone(iv.end.tzinfo))
+        for iv in intervals
+    ])
 
 
 def clip(intervals: list[Interval], window: Interval) -> list[Interval]:
     """Merged intervals cut down to the visible window."""
     out = []
     for iv in merge(intervals):
-        s, e = max(iv.start, window.start), min(iv.end, window.end)
-        if s < e:
+        s = iv.start if _u(iv.start) > _u(window.start) else window.start
+        e = iv.end if _u(iv.end) < _u(window.end) else window.end
+        if _u(s) < _u(e):
             out.append(Interval(s, e))
     return out
 
@@ -176,7 +198,12 @@ def generate_slots(
         raise ValueError("duration_minutes must be positive")
 
     local_now = now.astimezone(tz)
-    open_from = local_now + timedelta(hours=min_notice_hours)
+    # Apply the notice as absolute time. `aware + timedelta` adds to the naive
+    # fields AND resets fold to 0, so deriving this from the local value threw
+    # away which pass of a repeated fall-back hour `now` was in — re-opening the
+    # window an hour early no matter how the later comparison was written.
+    open_from_utc = _u(now) + timedelta(hours=min_notice_hours)
+    open_from = open_from_utc.astimezone(tz)
     last_day = local_now.date() + timedelta(days=horizon_days)
     blocked = pad(busy, buffer_minutes)
     duration = timedelta(minutes=duration_minutes)
@@ -206,7 +233,11 @@ def generate_slots(
             end_utc = win.end.astimezone(timezone.utc)
             while s_utc + duration <= end_utc:
                 slot = Interval(s_utc.astimezone(tz), (s_utc + duration).astimezone(tz))
-                if slot.start >= open_from and not _overlaps_any(slot, blocked):
+                # Filter on the INSTANT (`s_utc`), never on `slot.start`. Both
+                # passes of a repeated fall-back hour carry the same wall clock,
+                # so comparing local values admitted slots already in the past
+                # and hid genuinely free ones.
+                if s_utc >= open_from_utc and not _overlaps_any(slot, blocked):
                     slots.append(slot)
                     if len(slots) >= max_slots:
                         return slots
@@ -217,10 +248,14 @@ def generate_slots(
 
 def _overlaps_any(slot: Interval, blocked: list[Interval]) -> bool:
     # `blocked` is merged/sorted; a linear scan with early exit is plenty for
-    # the bounded horizon this runs over.
+    # the bounded horizon this runs over. Compared as instants: on a fall-back
+    # day a busy block in the first pass of the repeated hour shares its wall
+    # clock with the second, so local comparison blocked both.
+    s_start, s_end = _u(slot.start), _u(slot.end)
     for b in blocked:
-        if b.start >= slot.end:
+        b_start, b_end = _u(b.start), _u(b.end)
+        if b_start >= s_end:
             return False
-        if slot.start < b.end and slot.end > b.start:
+        if s_start < b_end and s_end > b_start:
             return True
     return False

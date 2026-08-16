@@ -787,7 +787,12 @@ class TaskService:
                 horizon_days=link["horizon_days"],
                 only_day=req.date(),
             )
-            if not any(s.start == req for s in slots):
+            # Match on the INSTANT. `s.start` and `req` share one ZoneInfo, so
+            # `==` compares naive fields: on a fall-back day either pass of the
+            # repeated hour matched the other, letting a visitor book an instant
+            # that was never offered.
+            req_utc = req.astimezone(timezone.utc)
+            if not any(s.start.astimezone(timezone.utc) == req_utc for s in slots):
                 raise scheduling.SlotTaken("that time is not available")
 
             # In UTC for the same reason generate_slots steps in UTC: adding a
