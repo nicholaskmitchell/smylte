@@ -19,13 +19,13 @@ from __future__ import annotations
 import logging
 import re
 import uuid
-from contextlib import contextmanager
 from dataclasses import dataclass
 
 from .. import ical
 from ..dav.client import CollectionInfo, DavClient
 from ..dav.errors import DavError, InvalidSyncToken, NotFound, PreconditionFailed
 from ..db import store
+from ..db.store import tx as _tx
 
 log = logging.getLogger("tasksd.sync")
 
@@ -56,18 +56,6 @@ class SyncStats:
     skipped: int = 0                  # malformed resources left uncached this pass
     full_resync: bool = False
     last_error: str | None = None     # recorded in sync_state.last_error
-
-
-@contextmanager
-def _tx(conn):
-    conn.execute("BEGIN IMMEDIATE")
-    try:
-        yield
-    except BaseException:
-        conn.execute("ROLLBACK")
-        raise
-    else:
-        conn.execute("COMMIT")
 
 
 def _is_synced_collection(ci: CollectionInfo) -> bool:

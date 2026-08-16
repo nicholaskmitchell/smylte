@@ -13,6 +13,7 @@ a day can add a timed event spanning it.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
@@ -22,6 +23,24 @@ from zoneinfo import ZoneInfo
 from icalendar.prop import vDuration
 
 _RANGE_RE = re.compile(r"^(\d{2}):(\d{2})-(\d{2}):(\d{2})$")
+
+log = logging.getLogger("tasksd.scheduling")
+
+# A runaway backstop, not a page size. It exists because the candidate cursor
+# advances by `duration`, so a non-positive one never terminates (see
+# generate_slots); it was never meant to shape what a visitor sees.
+#
+# At 1000 it did exactly that: a 15-minute link with a wide weekly window ran out
+# roughly a month into a 60-day horizon, and every day past that rendered as
+# fully booked — indistinguishable, to someone looking at the page, from the
+# owner genuinely having no time left.
+#
+# The bound is now set from what the schema actually permits: horizon_days caps
+# at 180 and duration_minutes at 5, so 24h of availability every day is
+# 288 * 180 = 51 840 slots. Rounding up leaves headroom no real link approaches,
+# while still refusing to loop forever. If it ever engages, that is a truncation
+# worth seeing in the log rather than inferring from a suspiciously empty page.
+MAX_SLOTS = 60_000
 
 
 class SlotTaken(Exception):
@@ -175,7 +194,7 @@ def generate_slots(
     min_notice_hours: int,
     horizon_days: int,
     only_day: date | None = None,
-    max_slots: int = 1000,
+    max_slots: int = MAX_SLOTS,
 ) -> list[Interval]:
     """Bookable slots between ``now + min_notice`` and ``now + horizon_days``.
 
@@ -240,6 +259,15 @@ def generate_slots(
                 if s_utc >= open_from_utc and not _overlaps_any(slot, blocked):
                     slots.append(slot)
                     if len(slots) >= max_slots:
+                        # Reaching the backstop means the answer is INCOMPLETE:
+                        # every day after this one will read as fully booked. Say
+                        # so, rather than leaving it to be inferred from a page
+                        # that looks like a busy owner.
+                        log.warning(
+                            "slot generation hit the %d cap on %s — availability "
+                            "past this point is truncated, not booked",
+                            max_slots, day,
+                        )
                         return slots
                 s_utc += duration
         day += timedelta(days=1)

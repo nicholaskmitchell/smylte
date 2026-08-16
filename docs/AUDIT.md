@@ -14,14 +14,15 @@ and task-edit dirty-tracking).
 Severity is the verifiers' rating. `minor` marks a fix that is a few
 obviously-correct lines needing no design decision — a reasonable place to start.
 
-**70 open**: 29 from the 2026-08-16 sweep below and 41 from 2026-08-07. The first
+**63 open**: 22 from the 2026-08-16 sweep below and 41 from 2026-08-07. The first
 sweep's findings are all fixed and ticked; the evidence stays here — a ticked box
 records what the bug was and why it mattered, and the issues that link into these
 sections still resolve.
 
 The 2026-08-16 sweep is being closed in stages (`docs/STAGES.md`), each pinned by
-tests that fail until the finding is fixed. **Stages 1 and 2 are done** — the
-seven crash paths and the five abuse/exhaustion findings, ticked below.
+tests that fail until the finding is fixed. **Stages 1, 2 and 3 are done** — the
+seven crash paths, the five abuse/exhaustion findings and the seven
+silent-corruption ones, ticked below.
 
 <!-- Newest sweep first: 2026-08-16, then 2026-08-07, then the 2026-07 sweep, fully ticked. -->
 
@@ -35,8 +36,8 @@ and its OAuth authorization server, the Windows desktop client, and the task-ord
 
 Every HIGH was re-verified by hand with a runnable probe before anything was
 changed. **5 fixed** in that first pass (ticked below, each with a regression test
-confirmed to fail against the pre-fix code), **7 more closed by Stage 1** and
-**5 by Stage 2**; the other 29 are open.
+confirmed to fail against the pre-fix code), **7 more closed by Stage 1**,
+**5 by Stage 2** and **7 by Stage 3**; the other 22 are open.
 
 ### MCP OAuth authorization server
 
@@ -385,7 +386,7 @@ and a malformed-JSON body -> 400 with code -32700.
 
 ### MCP tools
 
-#### [ ] Every write tool reports "the calendar server may be unreachable" for an unknown uid — the ToolError guards in api.py are unreachable dead code
+#### [x] Every write tool reports "the calendar server may be unreachable" for an unknown uid — the ToolError guards in api.py are unreachable dead code
 
 `backend/tasksd/mcp/api.py:257` · **medium** · bug · `minor`
 
@@ -442,7 +443,7 @@ cache conflict says "someone else changed this; re-read it and try again" rather
 smylte_update_task/smylte_update_event against a bogus uid returns the "No task/event
 ..." sentence.
 
-#### [ ] smylte_delete_task and smylte_delete_event confirm `{"deleted": uid}` for a uid that does not exist or lives in a different list
+#### [x] smylte_delete_task and smylte_delete_event confirm `{"deleted": uid}` for a uid that does not exist or lives in a different list
 
 `backend/tasksd/mcp/tools.py:325` · **medium** · bug · `minor`
 
@@ -500,7 +501,7 @@ list {list_id!r}.")`, and for events `if self._svc.get_event(href, uid) is None:
 ToolError(...)`. Add a regression test that deleting an unknown uid comes back with
 isError true.
 
-#### [ ] smylte_list_tasks across all lists is concatenated per-list and never sorted, so `limit` returns an arbitrary subset while the description promises due-date order
+#### [x] smylte_list_tasks across all lists is concatenated per-list and never sorted, so `limit` returns an arbitrary subset while the description promises due-date order
 
 `backend/tasksd/mcp/api.py:168` · **medium** · bug · `minor`
 
@@ -947,7 +948,7 @@ write.) Add a test that on 2026-11-01 with `availability={"6": ["00:00-01:30"]}`
 for `2026-11-01T01:00:00-06:00` raises `SlotTaken`, while `2026-11-01T01:00:00-05:00`
 succeeds.
 
-#### [ ] generate_slots' default max_slots=1000 silently truncates the public page — the tail of a long horizon renders as fully booked
+#### [x] generate_slots' default max_slots=1000 silently truncates the public page — the tail of a long horizon renders as fully booked
 
 `backend/tasksd/service.py:715` · **medium** · bug
 
@@ -1158,7 +1159,7 @@ split_series tests for all three shapes (floating EXDATE on an aware master, awa
 EXDATE on a floating master, floating RECURRENCE-ID override on an aware master)
 asserting a clean split rather than a raise.
 
-#### [ ] _reconcile_overrides builds a dateutil probe with a naive DTSTART but a UTC UNTIL, so changing "Repeat until" on a series with one mismatched override is permanently rejected
+#### [x] _reconcile_overrides builds a dateutil probe with a naive DTSTART but a UTC UNTIL, so changing "Repeat until" on a series with one mismatched override is permanently rejected
 
 `backend/tasksd/ical/edit.py:393` · **medium** · bug · `minor`
 
@@ -1209,7 +1210,7 @@ probe is throwaway; the rule actually written to the master is untouched.) Add a
 aware master + floating-RECURRENCE-ID override + `rrule_from_spec('weekly', until=...)`
 reconciles instead of raising.
 
-#### [ ] split_series drops a RANGE=THISANDFUTURE override that starts before the split point, so every occurrence in the tail silently reverts to the master
+#### [x] split_series drops a RANGE=THISANDFUTURE override that starts before the split point, so every occurrence in the tail silently reverts to the master
 
 `backend/tasksd/ical/edit.py:932` · **medium** · bug
 
@@ -1524,7 +1525,7 @@ and skipped rather than aborting the transaction for all of them. Add a unit tes
 driving `discover()` with a stub whose `list_collections` returns one good and one
 `order=10**25` collection, asserting the good one is cached and no exception escapes.
 
-#### [ ] reorder_tasks' `with self._conn:` opens no transaction (isolation_level=None), so set_sort_orders' documented all-or-nothing guarantee does not exist and 20 000 rows are written as 20 000 separate commits under the global lock
+#### [x] reorder_tasks' `with self._conn:` opens no transaction (isolation_level=None), so set_sort_orders' documented all-or-nothing guarantee does not exist and 20 000 rows are written as 20 000 separate commits under the global lock
 
 `backend/tasksd/service.py:403` · **medium** · bug · `minor`
 

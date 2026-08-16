@@ -3,7 +3,7 @@
 `docs/AUDIT.md` is the evidence. This file is the plan for closing those
 findings, and the map from a finding to the test that pins it.
 
-**28 open, 12 closed.** Stages 1 and 2 are done; stages 3-5 remain.
+**21 open, 19 closed.** Stages 1-3 are done; stages 4 and 5 remain.
 
 ## Stage 0 — the harness (done)
 
@@ -116,9 +116,26 @@ All five are fixed and ticked in `docs/AUDIT.md`. Two notes worth keeping:
 | 33 | POST /oauth/authorize runs the same scrypt hash as /api/login without the `login_hashes` semaphore that exists… | `backend/tasksd/mcp/routes.py:259` | low |
 | 34 | _list_dto materialises every item row — raw_ics included — from every collection just to compute four counts, … | `backend/tasksd/service.py:145` | low |
 
-## Stage 3 — Silent data corruption
+## Stage 3 — Silent data corruption ✅ DONE
 
-7 findings · pinned by `backend/tests/test_backlog_stage3.py`
+7 findings · closed · `backend/tests/test_backlog_stage3.py`
+
+All seven are fixed and ticked in `docs/AUDIT.md`. Three things worth keeping:
+
+* **A THISANDFUTURE override before a split is FOLDED into the tail's master**,
+  properties and time offset both, rather than carried across as a component. The
+  tail is a new resource with a new UID, so an override whose RECURRENCE-ID names
+  a slot back in the head would replace nothing and render as a duplicate. The
+  offset is what keeps the tail at the time the user actually sees; without it
+  the values survive but every occurrence jumps back to the master's hour.
+* **`store.tx` replaced `with self._conn:`**, which managed nothing under
+  `isolation_level=None` — sqlite3's context manager only commits a transaction
+  it opened itself. The helper moved out of `sync/engine.py` because every writer
+  needs it, not just sync.
+* **The slot cap is a runaway backstop, not a page size.** It is now derived from
+  what the schema permits (180 days x 288 slots) and logs a warning if it ever
+  engages, so a truncation is visible rather than inferred from a page that looks
+  like a busy owner.
 
 | # | Finding | Where | Sev |
 |---|---|---|---|

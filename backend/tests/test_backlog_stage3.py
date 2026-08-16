@@ -4,8 +4,12 @@ The dangerous class: nothing raises, nothing is logged, and the answer is wrong
 — a deletion confirmed that never happened, a series that quietly reverts, a
 page of results that is an arbitrary subset of the truth.
 
-See test_backlog_stage1.py for how the xfail(strict=True) harness works and
-docs/STAGES.md for the staging.
+**Stage 3 is CLOSED.** These began as xfail(strict=True) pins, each failing
+against the code as it stood; the seven findings are fixed and ticked in
+docs/AUDIT.md, so the markers are gone and these are ordinary regression tests
+that must stay green. The docstrings keep the past tense and the original
+evidence — for this stage especially, since a silent wrong answer leaves no
+stack trace and the test is the only record of what it looked like.
 """
 from __future__ import annotations
 
@@ -24,7 +28,6 @@ from tests.helpers import foreign_event_raw
 
 pytestmark = [pytest.mark.backlog, pytest.mark.stage3]
 
-XFAIL = dict(strict=True)
 
 
 class _Svc:
@@ -46,6 +49,12 @@ class _Svc:
     def list_tasks(self, href, *, include_done=True):
         return list(self._tasks.get(href, []))
 
+    def has_task(self, href, uid):
+        return any(t["uid"] == uid for t in self._tasks.get(href, []))
+
+    def get_event(self, href, uid):
+        return None
+
     def edit_task(self, href, uid, edit):
         # engine._edit: `row is None -> raise KeyError(f"unknown task ...")`
         raise KeyError(f"unknown task {uid} in {href}")
@@ -56,14 +65,14 @@ class _Svc:
 
 # ── AUDIT: the ToolError guards in api.py are unreachable dead code ────────
 
-@pytest.mark.xfail(reason="AUDIT open: api.py:257 unreachable ToolError guards", **XFAIL)
 def test_editing_an_unknown_task_names_the_uid():
     """`api.edit_task` ends with `if task is None: raise ToolError(f"No task
     {uid!r}...")`, but `service.edit_task` never returns None for a missing uid
-    — `engine._edit` raises KeyError first. So the guard is dead code, and
-    McpServer's catch-all turns it into "could not be completed (KeyError). The
+    — `engine._edit` raises KeyError first. So the guard WAS dead code, and
+    McpServer's catch-all turned it into "could not be completed (KeyError). The
     calendar server may be unreachable" — pointing the model at an outage that
-    is not happening, for a typo it could have corrected."""
+    was not happening, for a typo it could have corrected. `_not_found` now maps
+    that KeyError at the API boundary."""
     api = McpApi(_Svc())
     with pytest.raises(ToolError) as exc:
         api.update_task("inbox", "no-such-uid", {"summary": "x"})
@@ -72,13 +81,13 @@ def test_editing_an_unknown_task_names_the_uid():
 
 # ── AUDIT: delete confirms a uid that does not exist ──────────────────────
 
-@pytest.mark.xfail(reason="AUDIT open: tools.py:325 delete confirms a phantom", **XFAIL)
 def test_deleting_an_unknown_task_is_refused_not_confirmed():
     """`api.delete_task` calls straight through and `engine.delete_task` returns
-    silently when the uid is not in the cache; the tool then answers
-    `{"deleted": uid}` regardless. The model is told a task is gone that never
-    existed — or that still exists in a different list — so it reports success
-    to the user and stops retrying."""
+    silently when the uid is not in the cache; the tool then answered
+    `{"deleted": uid}` regardless. The model was told a task was gone that never
+    existed — or that still existed in a different list — so it reported success
+    to the user and stopped retrying. Existence is checked before the delete
+    now."""
     api = McpApi(_Svc())
     with pytest.raises(ToolError):
         api.delete_task("inbox", "no-such-uid")
@@ -86,13 +95,13 @@ def test_deleting_an_unknown_task_is_refused_not_confirmed():
 
 # ── AUDIT: list_tasks across all lists is unsorted before `limit` ──────────
 
-@pytest.mark.xfail(reason="AUDIT open: api.py:168 unsorted before limit", **XFAIL)
 def test_tasks_across_all_lists_are_ordered_before_the_limit_applies():
     """`list_tasks` extends one list's rows after another's and never sorts, but
-    the tool then pages that concatenation. The description promises due-date
+    the tool then pages that concatenation. The description promises the app's
     order, so `limit=3` should be the three most urgent tasks on the account; it
-    is actually "whatever list came first", and the soonest deadline can be
-    missing entirely."""
+    was actually "whatever list came first", and the soonest deadline could be
+    missing entirely. Sorted now by the same total order frontend/src/order.ts
+    defines, uid tie-break included."""
     def _t(uid, due):
         return {"uid": uid, "due": due, "completed": False, "cancelled": False,
                 "tags": [], "summary": uid}
@@ -115,13 +124,13 @@ def test_tasks_across_all_lists_are_ordered_before_the_limit_applies():
 
 # ── AUDIT: generate_slots' default max_slots truncates the public page ────
 
-@pytest.mark.xfail(reason="AUDIT open: service.py:715 max_slots truncation", **XFAIL)
 def test_a_long_horizon_is_not_silently_truncated():
     """`public_link_info` calls `generate_slots` without `max_slots`, taking the
     1000 default. A 15-minute link with a wide weekly window and a 60-day
-    horizon generates far more than that, so the cap lands mid-horizon and every
-    day past it renders as fully booked — indistinguishable, to a visitor, from
-    the owner genuinely having no time."""
+    horizon generates far more than that, so the cap landed mid-horizon and every
+    day past it rendered as fully booked — indistinguishable, to a visitor, from
+    the owner genuinely having no time. The cap is now set from what the schema
+    permits, and logs a warning if it ever engages."""
     tz = ZoneInfo("UTC")
     av = scheduling.parse_availability({str(d): ["09:00-17:00"] for d in range(7)})
     now = datetime(2026, 1, 5, 8, 0, tzinfo=tz)
@@ -142,7 +151,6 @@ def test_a_long_horizon_is_not_silently_truncated():
 
 # ── AUDIT: changing "Repeat until" with a mismatched override ──────────────
 
-@pytest.mark.xfail(reason="AUDIT open: edit.py:393 naive dtstart vs UTC UNTIL", **XFAIL)
 def test_setting_repeat_until_survives_a_floating_override():
     """`_reconcile_overrides` builds its dateutil probe from a tz-STRIPPED
     dtstart while the rule it passes still carries `UNTIL=...Z`, and dateutil
@@ -165,7 +173,6 @@ def test_setting_repeat_until_survives_a_floating_override():
 
 # ── AUDIT: split_series drops a THISANDFUTURE override ────────────────────
 
-@pytest.mark.xfail(reason="AUDIT open: edit.py:932 THISANDFUTURE dropped", **XFAIL)
 def test_this_and_following_keeps_a_this_and_future_overrides_values():
     """`_drop_overrides(tail, anchor, keep_before=False)` discards every override
     whose RECURRENCE-ID precedes the anchor. That is right for a single-slot
@@ -194,7 +201,6 @@ def test_this_and_following_keeps_a_this_and_future_overrides_values():
 
 # ── AUDIT: reorder_tasks' `with self._conn:` opens no transaction ──────────
 
-@pytest.mark.xfail(reason="AUDIT open: service.py:403 no real transaction", **XFAIL)
 def test_a_failed_reorder_leaves_no_partial_order():
     """`store.connect` sets `isolation_level=None`, so `with self._conn:` commits
     nothing and rolls back nothing — sqlite3's context manager only manages a

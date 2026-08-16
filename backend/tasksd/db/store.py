@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
 
 from ..dav.client import CollectionInfo, Item
@@ -20,6 +21,29 @@ _SCHEMA = (Path(__file__).parent / "schema.sql").read_text(encoding="utf-8")
 
 # C0 control bytes, stripped from search terms (see `search`).
 _CTRL = re.compile(r"[\x00-\x1f\x7f]")
+
+
+@contextmanager
+def tx(conn: sqlite3.Connection):
+    """An explicit all-or-nothing transaction.
+
+    Needed because `connect` sets `isolation_level=None` (autocommit): sqlite3's
+    own `with conn:` only manages a transaction it started ITSELF, so under
+    autocommit it commits nothing and rolls back nothing. A write that looked
+    atomic — and was documented as atomic — was in fact one commit per statement,
+    leaving half a change behind when a later statement raised.
+
+    Lives here rather than in the sync engine (where it started) because it is a
+    database concern that every writer needs, not a sync one.
+    """
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        yield
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
+    else:
+        conn.execute("COMMIT")
 
 
 def connect(db_path: str) -> sqlite3.Connection:
