@@ -3,7 +3,7 @@
 `docs/AUDIT.md` is the evidence. This file is the plan for closing those
 findings, and the map from a finding to the test that pins it.
 
-**21 open, 19 closed.** Stages 1-3 are done; stages 4 and 5 remain.
+**9 open, 31 closed.** Stages 1-4 are done; only Stage 5 remains.
 
 ## Stage 0 — the harness (done)
 
@@ -45,8 +45,10 @@ the one anticipated will XPASS and need reclassifying. That is the harness
 working, not a false alarm. They are used where the harness a behavioural test
 would need does not exist yet:
 
-* the SPA's drag-and-drop and data-provider findings (no such harness — building
-  one is itself a Stage 4 item);
+* ~~the SPA's drag-and-drop and data-provider findings (no such harness — building
+  one is itself a Stage 4 item)~~ — **this was wrong.** The harness existed all
+  along in `TasksView.test.tsx`; Stage 4 converted every one of those pins to a
+  behavioural test.
 * the three C# findings (no dotnet runtime in the unit environment — closing
   "the Windows client ships with zero tests" is what upgrades them).
 
@@ -147,9 +149,30 @@ All seven are fixed and ticked in `docs/AUDIT.md`. Three things worth keeping:
 | 9 | split_series drops a RANGE=THISANDFUTURE override that starts before the split point, so every occurrence in t… | `backend/tasksd/ical/edit.py:932` | medium |
 | 11 | reorder_tasks' `with self._conn:` opens no transaction (isolation_level=None), so set_sort_orders' documented … | `backend/tasksd/service.py:403` | medium |
 
-## Stage 4 — User-visible correctness & rendering
+## Stage 4 — User-visible correctness & rendering ✅ DONE
 
-12 findings · pinned by `frontend/src/backlog.stage4.test.tsx + backend/tests/test_backlog_stage4.py`
+12 findings · closed · `frontend/src/backlog.stage4.test.tsx` +
+`backend/tests/test_backlog_stage4.py`, with behavioural coverage also added to
+`TasksView.test.tsx`, `CalendarView.test.tsx` and `order.test.ts`.
+
+Three things worth keeping:
+
+* **Every pin here is behavioural now.** Ten were structural only because of a
+  wrong assumption — recorded below — that the drag/data-provider harness did not
+  exist. It does. That mistake was not free: six of those pins failed to
+  recognise their own fix, because the fix used a different helper name, CSS
+  class or approach than the pin had guessed.
+* **New tasks interleave by due date instead of sinking.** A drag renumbers the
+  whole account (the server model intends that), so afterwards a null position
+  means "created since the last drag". `sortTasks` now assigns an *effective
+  position* in a pre-pass rather than comparing pairwise — a pairwise version
+  would be non-transitive (P1 < P2 < U < P1) and `Array.sort` on an inconsistent
+  comparator is implementation-defined. Placed rows keep their exact order; a new
+  task lands before the first placed row it precedes, which preserves the manual
+  order rather than re-sorting everything by due.
+* **`listsOk` is separate from `listsLoaded`.** The latter means "the attempt
+  finished", which the spinner and the task fetch both want; only the former
+  means the server answered, and only it may gate anything destructive.
 
 | # | Finding | Where | Sev |
 |---|---|---|---|

@@ -23,6 +23,11 @@ const VIEWS: ReadonlyArray<readonly [TasksViewMode, string]> = [
 interface ReorderDrag {
   uid: string | null
   over: string | null
+  /** Which side of `over` the row will land on. The insert is deliberate —
+   *  `reorder` reads the target index BEFORE removing the dragged row, so a
+   *  downward drop lands AFTER the target — but the indicator drew on top
+   *  regardless, so every downward drag pointed one row from where it went. */
+  below: boolean
   onStart: (uid: string | null) => void
   onOver: (uid: string | null, from?: string) => void
   onDrop: (target: string) => void
@@ -57,7 +62,7 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
   // switching away and back neither drops them nor refetches from empty — and
   // Home reads the same copy rather than fanning out a second one.
   const {
-    lists, serverOrderedLists, tasks, listsLoaded, loaded, setLists,
+    lists, serverOrderedLists, tasks, listsLoaded, listsOk, loaded, setLists,
     create, createMany, addSub, toggle, remove, saveDetail, reorder,
   } = useTaskData()
   const [detail, setDetail] = useState<Task | null>(null)
@@ -88,7 +93,11 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
   // must not wipe prefs before the lists arrive, and neither must the cached
   // seed, which is a snapshot that may predate a list created elsewhere.
   useEffect(() => {
-    if (!listsLoaded || !lists.length) return
+    // `listsOk`, not `listsLoaded`: the latter is true even when the fetch
+    // FAILED, so this pruned against whatever the stale disk cache held and then
+    // wrote the pruned blob back — a transient 500 at startup silently and
+    // permanently discarded the user's groups.
+    if (!listsOk || !lists.length) return
     const ids = new Set(lists.map((l) => l.id))
     const keptHidden = hiddenLists.filter((id) => ids.has(id))
     if (keptHidden.length !== hiddenLists.length) onHiddenListsChange(keptHidden)
@@ -103,7 +112,7 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
     const keptCollapsed = collapsedGroups.filter((id) => gids.has(id))
     if (keptCollapsed.length !== collapsedGroups.length) onCollapsedGroupsChange(keptCollapsed)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lists, listsLoaded])
+  }, [lists, listsOk])
 
   // A one-line convenience over the shared create; day columns pass a due.
   const addTask = (listId: string, summary: string, due?: string) =>
@@ -114,9 +123,17 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
   // gesture cannot mean two things.
   const [orderUid, setOrderUid] = useState<string | null>(null)
   const [orderOver, setOrderOver] = useState<string | null>(null)
+  // Indices in `sortTasks(tasks)` — the exact sequence `reorder` splices, so the
+  // indicator and the insert cannot disagree. (`active` is a filtered subset and
+  // is not defined until further down.)
+  const orderedAll = useMemo(() => sortTasks(tasks), [tasks])
+  const orderIndex = (uid: string | null) =>
+    uid === null ? -1 : orderedAll.findIndex((t) => t.uid === uid)
   const reorderDrag: ReorderDrag = {
     uid: orderUid,
     over: orderOver,
+    below: orderUid !== null && orderOver !== null
+      && orderIndex(orderUid) >= 0 && orderIndex(orderUid) < orderIndex(orderOver),
     onStart: (uid) => { setOrderUid(uid); if (!uid) setOrderOver(null) },
     onOver: (uid, from) =>
       setOrderOver((o) => (uid === null ? (o === from ? null : o) : uid)),
@@ -515,10 +532,19 @@ function TaskGroup({ task, childrenOf, dot, progressOf, depth = 0, seen,
   return (
     <div
       className={drag
-        ? `task-drag ${drag.over === task.uid && drag.uid !== task.uid ? 'drag-over' : ''}`
+        ? `task-drag ${drag.over === task.uid && drag.uid !== task.uid
+            ? (drag.below ? 'drag-over drag-below' : 'drag-over') : ''}`
         : undefined}
       draggable={!!drag}
       onDragStart={drag && ((e) => {
+        // `draggable` is on the row wrapper, so a press inside the nested inline
+        // "add subtask" field started a drag of the PARENT task — selecting text
+        // there silently reordered the list. A gesture that begins on something
+        // interactive belongs to that control.
+        if ((e.target as HTMLElement)?.closest?.('input, textarea, button, [contenteditable]')) {
+          e.preventDefault()
+          return
+        }
         drag.onStart(task.uid)
         e.dataTransfer.effectAllowed = 'move'
         // Firefox refuses to start a drag with nothing on the transfer.

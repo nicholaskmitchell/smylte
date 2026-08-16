@@ -21,12 +21,53 @@ describe('the key chain', () => {
     expect(uids([a, b])).toEqual(['b', 'a'])
   })
 
-  it('sorts an unplaced task after every placed one', () => {
-    // Not a transitional state: a task created in another CalDAV client never
-    // gets a sort_order, because the sidecar holding it is app-only.
+  it('places an unplaced task among the placed ones, by when it is due', () => {
+    // CHANGED, deliberately. This used to assert the opposite — that an unplaced
+    // task sorts after every placed one. That was defensible while most tasks
+    // were unplaced, but a drag renumbers the WHOLE account (the server's
+    // ReorderTasks model: "nothing left null once a drag lands"), so afterwards a
+    // null position means "created since the last drag" and sinking those to the
+    // bottom of every view buried every new task.
     const placed = task({ uid: 'placed', sort_order: 5, due: '2026-12-31' })
     const loose = task({ uid: 'loose', due: '2026-01-01' })
+    expect(uids([loose, placed])).toEqual(['loose', 'placed'])
+  })
+
+  it('still sends an unplaced task to the end when it is later than everything', () => {
+    // The other half: placing by due date is not "always first". An unplaced task
+    // later than every placed one lands where it always did.
+    const placed = task({ uid: 'placed', sort_order: 5, due: '2026-01-01' })
+    const loose = task({ uid: 'loose', due: '2026-12-31' })
     expect(uids([loose, placed])).toEqual(['placed', 'loose'])
+  })
+
+  it('keeps the manual order of placed tasks intact', () => {
+    // The guarantee dragging depends on: an unplaced task threading between them
+    // must never reshuffle the ones the user put in order by hand.
+    const a = task({ uid: 'a', sort_order: 1, due: '2026-12-01' })
+    const b = task({ uid: 'b', sort_order: 2, due: '2026-02-01' })
+    const c = task({ uid: 'c', sort_order: 3, due: '2026-06-01' })
+    const loose = task({ uid: 'loose', due: '2026-03-01' })
+    const out = uids([c, loose, a, b])
+    expect(out.filter((u) => u !== 'loose')).toEqual(['a', 'b', 'c'])
+  })
+
+  it('is a total order — any shuffle of the same set sorts identically', () => {
+    // The property the module exists for, now that sortTasks assigns an
+    // effective position rather than comparing pairwise. A non-transitive
+    // comparator would make Array.sort implementation-defined, and this is what
+    // would catch it.
+    const set = [
+      task({ uid: 'p1', sort_order: 1, due: '2026-12-01' }),
+      task({ uid: 'p2', sort_order: 2, due: '2026-01-15' }),
+      task({ uid: 'u1', due: '2026-06-01' }),
+      task({ uid: 'u2', due: null }),
+      task({ uid: 'u3', due: '2026-01-01' }),
+    ]
+    const expected = uids(set)
+    for (const shuffle of [[4, 0, 3, 1, 2], [2, 3, 4, 1, 0], [1, 4, 0, 2, 3]]) {
+      expect(uids(shuffle.map((i) => set[i]))).toEqual(expected)
+    }
   })
 
   it('falls through to due date when nothing is placed', () => {

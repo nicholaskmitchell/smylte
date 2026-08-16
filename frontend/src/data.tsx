@@ -56,6 +56,9 @@ export interface TaskData {
    *  worth painting but are not evidence about the account, so "create a list
    *  to get started" — and pruning settings that name a list — wait on this. */
   listsLoaded: boolean
+  /** The lists came from the server, not from the disk cache. Gate destructive
+   *  pruning on this, never on `listsLoaded`. */
+  listsOk: boolean
   /** …and the tasks behind them have landed too. Kept separate because the
    *  lists arrive a hop earlier, and "nothing to do here" said in that gap is
    *  just as wrong as saying the account has no lists. */
@@ -143,6 +146,13 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
   const [lists, setLists] = useState<List[]>(() => readCachedLists() ?? [])
   const [tasks, setTasks] = useState<Task[]>(() => readCachedTasks() ?? [])
   const [listsLoaded, setListsLoaded] = useState(false)
+  // Distinct from `listsLoaded`, which only means "the attempt finished" — the
+  // spinner and the task fetch both want that. This means the server actually
+  // answered with a list, and it is what gates anything DESTRUCTIVE: pruning
+  // list-scoped settings against a failed fetch prunes them against the stale
+  // disk cache, and writes the result back, so one transient 500 at startup
+  // permanently loses the user's grouping.
+  const [listsOk, setListsOk] = useState(false)
   const [loaded, setLoaded] = useState(false)
 
   useEffect(() => {
@@ -151,7 +161,10 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
       const ls = await api.lists()
       // A malformed body must not become the state every render maps over —
       // `guard` only shields us from a rejection, not from a 200 with junk in it.
-      if (Array.isArray(ls)) setLists(ls)
+      if (Array.isArray(ls)) {
+        setLists(ls)
+        setListsOk(true)
+      }
     }).finally(() => setListsLoaded(true))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rev, enabled])
@@ -456,19 +469,26 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
     // arithmetic the server is about to do.
     const next = placed.map((t, i) => ({ ...t, sort_order: i + 1 }))
     invalidateFetches()
-    const rollback = tasks
+    // Only the positions are remembered, not the whole array. Snapshotting
+    // `tasks` and restoring it wholesale also reverted anything that landed
+    // while the reorder was in flight — an SSE update, a completed task, an edit
+    // from another tab — silently undoing a write the user had just made.
+    const before = new Map(tasks.map((t) => [t.uid, t.sort_order ?? null]))
     setTasks(next)
     const ok = await guard(() =>
       api.reorderTasks(placed.map((t) => ({ list: t.list, uid: t.uid }))))
-    // The guard has already raised the toast; put the old order back rather
+    // The guard has already raised the toast; put the old positions back rather
     // than leaving the UI claiming a move that never landed.
-    if (ok === undefined) setTasks(rollback)
+    if (ok === undefined) {
+      setTasks((cur) => cur.map((t) => (
+        before.has(t.uid) ? { ...t, sort_order: before.get(t.uid)! } : t)))
+    }
   }
 
   const ordered = useMemo(() => orderLists(lists, taskGroups), [lists, taskGroups])
 
   const value: TaskData = {
-    lists: ordered, serverOrderedLists: lists, tasks, listsLoaded, loaded, setLists,
+    lists: ordered, serverOrderedLists: lists, tasks, listsLoaded, listsOk, loaded, setLists,
     create, createMany, addSub, toggle, remove, saveDetail, reorder,
   }
   return <TaskCtx.Provider value={value}>{children}</TaskCtx.Provider>
@@ -520,17 +540,24 @@ function CalendarProvider({ rev, guard, enabled, children }: {
   // win. When the older batch settled second the grid held the previous month's
   // events — and since `bucketByDay` clips to the visible six weeks, almost none
   // of them matched a rendered day, so the month came up *empty*.
-  const gen = useRef(0)
+  // Per WINDOW, not one counter for all of them. A single generation meant any
+  // newer fetch superseded any older one, so paging January -> February dropped
+  // January's response when it landed second — while `asked` had already
+  // recorded January as fetched, so coming back to it never re-requested and the
+  // grid stayed empty until something unrelated bumped `rev`. A fetch should
+  // only ever be superseded by a newer fetch for the SAME window.
+  const gen = useRef(new Map<string, number>())
   const inflight = useRef(new Set<string>())
 
   const fetchWindow = useCallback((from: string, to: string, forCals: List[]) => {
     const key = windowKey(from, to)
-    const mine = ++gen.current
+    const mine = (gen.current.get(key) ?? 0) + 1
+    gen.current.set(key, mine)
     inflight.current.add(key)
     void guard(async () => {
       const per = await Promise.all(forCals.map((c) => api.events(c.id, from, to)))
       const rows = per.filter(Array.isArray).flat()
-      if (gen.current !== mine) return
+      if (gen.current.get(key) !== mine) return
       setWindows((w) => new Map(w).set(key, rows))
     }).finally(() => inflight.current.delete(key))
   }, [guard])

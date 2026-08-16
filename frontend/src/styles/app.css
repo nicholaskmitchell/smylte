@@ -239,7 +239,11 @@
    above the row it would land on, matching the sidebar's list drag. */
 .task-drag { cursor: grab; }
 .task-drag:active { cursor: grabbing; }
+/* The line goes on the side the row will actually land. A downward drag inserts
+   AFTER the target (reorder reads the target index before removing the dragged
+   row), so drawing on top pointed one row away from where the drop went. */
 .task-drag.drag-over > .task { box-shadow: inset 0 2px 0 var(--accent); }
+.task-drag.drag-over.drag-below > .task { box-shadow: inset 0 -2px 0 var(--accent); }
 /* Nesting is arbitrarily deep, so the indent is a step per level rather than
    one fixed inset. Capped in TasksView (MAX_INDENT) so a deep tree still leaves
    the titles somewhere to go. */

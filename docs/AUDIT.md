@@ -14,15 +14,16 @@ and task-edit dirty-tracking).
 Severity is the verifiers' rating. `minor` marks a fix that is a few
 obviously-correct lines needing no design decision — a reasonable place to start.
 
-**63 open**: 22 from the 2026-08-16 sweep below and 41 from 2026-08-07. The first
+**50 open**: 9 from the 2026-08-16 sweep below and 41 from 2026-08-07. The first
 sweep's findings are all fixed and ticked; the evidence stays here — a ticked box
 records what the bug was and why it mattered, and the issues that link into these
 sections still resolve.
 
 The 2026-08-16 sweep is being closed in stages (`docs/STAGES.md`), each pinned by
-tests that fail until the finding is fixed. **Stages 1, 2 and 3 are done** — the
-seven crash paths, the five abuse/exhaustion findings and the seven
-silent-corruption ones, ticked below.
+tests that fail until the finding is fixed. **Stages 1-4 are done** — the seven
+crash paths, the five abuse/exhaustion findings, the seven silent-corruption ones
+and the twelve user-visible ones, ticked below. Only Stage 5 (delivery
+infrastructure and test gaps) remains.
 
 <!-- Newest sweep first: 2026-08-16, then 2026-08-07, then the 2026-07 sweep, fully ticked. -->
 
@@ -37,7 +38,7 @@ and its OAuth authorization server, the Windows desktop client, and the task-ord
 Every HIGH was re-verified by hand with a runnable probe before anything was
 changed. **5 fixed** in that first pass (ticked below, each with a regression test
 confirmed to fail against the pre-fix code), **7 more closed by Stage 1**,
-**5 by Stage 2** and **7 by Stage 3**; the other 22 are open.
+**5 by Stage 2**, **7 by Stage 3** and **12 by Stage 4**; the other 9 are open.
 
 ### MCP OAuth authorization server
 
@@ -117,7 +118,7 @@ None and not isinstance(raw_scope, str): raise OAuthError("invalid_client_metada
 "scope must be a string")`, then `requested = scope_set(raw_scope) or
 scope_set(DEFAULT_SCOPE)`.
 
-#### [ ] After a mistyped password the consent screen forgets which application it is for
+#### [x] After a mistyped password the consent screen forgets which application it is for
 
 `backend/tasksd/mcp/routes.py:266` · **low** · rendering · `minor`
 
@@ -267,7 +268,7 @@ Concrete failure: a client with a valid bearer token POSTs a 200 KB body of `[[[
 **Suggested fix.** Add `RecursionError` to the except tuple (or use `except Exception` as `/oauth/register`
 does) so the malformed body maps to the -32700 parse error the protocol defines.
 
-#### [ ] After a mistyped password the consent screen stops naming the application it is about to authorize
+#### [x] After a mistyped password the consent screen stops naming the application it is about to authorize
 
 `backend/tasksd/mcp/routes.py:266` · **low** · rendering · `minor`
 
@@ -1611,7 +1612,7 @@ a failure partway through `set_sort_orders` and asserts no `sort_order` changed.
 
 ### Frontend core
 
-#### [ ] The events staleness guard is global, not per window: a superseded month is dropped but still recorded as fetched, so navigating back to it renders an empty (or stale) grid forever
+#### [x] The events staleness guard is global, not per window: a superseded month is dropped but still recorded as fetched, so navigating back to it renders an empty (or stale) grid forever
 
 `frontend/src/data.tsx:533` · **medium** · bug · `minor`
 
@@ -1673,7 +1674,7 @@ collateral. (Belt-and-braces: `asked.current.delete(key)` when a response is dro
 Add the test above — forward, back, and assert a third `api.events` call plus the March
 event on screen.
 
-#### [ ] A failed drag-reorder rolls back a whole-array snapshot, discarding any write that landed while it was in flight
+#### [x] A failed drag-reorder rolls back a whole-array snapshot, discarding any write that landed while it was in flight
 
 `frontend/src/data.tsx:465` · **low** · bug · `minor`
 
@@ -1722,7 +1723,7 @@ and asserts the tick survives.
 
 ### Tasks / Calendar / Home views
 
-#### [ ] Drop indicator draws above the target row, but a downward drag inserts below it
+#### [x] Drop indicator draws above the target row, but a downward drag inserts below it
 
 `frontend/src/components/TasksView.tsx:518` · **medium** · rendering
 
@@ -1761,7 +1762,7 @@ actually land on. The sidebar's list drag (`.side-item.drag-over`, app.css:89) s
 the same top-edge-only indicator with the same after-the-target semantics and wants the
 same treatment.
 
-#### [ ] One drag assigns a manual position to every task on the account, so every task created afterwards sorts to the very bottom of every view
+#### [x] One drag assigns a manual position to every task on the account, so every task created afterwards sorts to the very bottom of every view
 
 `frontend/src/data.tsx:457` · **medium** · bug
 
@@ -1806,7 +1807,7 @@ agree. Alternatively make the comparator treat null as "unplaced, fall back to d
 by interleaving on due date rather than sorting all nulls after all placed rows. Either
 way add a test that a task created after a reorder lands in due order, not at the end.
 
-#### [ ] A failed GET /api/lists still marks the lists "loaded", so list-scoped settings are pruned against the stale disk cache and the loss is written to the server
+#### [x] A failed GET /api/lists still marks the lists "loaded", so list-scoped settings are pruned against the stale disk cache and the loss is written to the server
 
 `frontend/src/components/TasksView.tsx:91` · **medium** · bug · `minor`
 
@@ -1851,7 +1852,7 @@ same for the calendars' `loaded` at data.tsx:497, which gates CalendarView's ide
 hidden/archived prune). Add a regression test that a rejected `api.lists()` leaves
 hidden_lists, task_groups and calendar_task_lists untouched.
 
-#### [ ] A drag started inside the inline "add subtask" field reorders the parent task
+#### [x] A drag started inside the inline "add subtask" field reorders the parent task
 
 `frontend/src/components/TasksView.tsx:521` · **medium** · bug · `minor`
 
@@ -1892,7 +1893,7 @@ itself — e.g. `if ((e.target as HTMLElement).closest('input, textarea, select'
 e.preventDefault(); return }`. Add a test asserting a dragstart from the subtask input
 does not call api.reorderTasks.
 
-#### [ ] Calendar chips key on the bare UID, so the same UID in two collections yields duplicate React keys
+#### [x] Calendar chips key on the bare UID, so the same UID in two collections yields duplicate React keys
 
 `frontend/src/components/CalendarView.tsx:470` · **low** · rendering · `minor`
 
@@ -1930,7 +1931,7 @@ the follow-on fix for the same identity confusion.)
 
 ### Modals, scheduling + appearance
 
-#### [ ] TaskModal's scrim is an onClick handler, so a text drag-select released outside the modal closes it and discards the whole form
+#### [x] TaskModal's scrim is an onClick handler, so a text drag-select released outside the modal closes it and discards the whole form
 
 `frontend/src/components/TaskModal.tsx:118` · **medium** · rendering · `minor`
 
@@ -1982,7 +1983,7 @@ unsaved form state — SchedulingView.tsx:235 and CalendarView.tsx:728. Add a te
 mousedown on the modal body followed by a click whose target is the overlay does not
 call onClose.
 
-#### [ ] The booking-link editor has no in-flight guard, so a double-click (or a second Enter) on "Create link" publishes two live booking links
+#### [x] The booking-link editor has no in-flight guard, so a double-click (or a second Enter) on "Create link" publishes two live booking links
 
 `frontend/src/components/SchedulingView.tsx:348` · **medium** · bug · `minor`
 
@@ -2032,7 +2033,7 @@ useState(false)` to LinkModal, make `save()` bail on `saving`, set it around the
 and use `disabled={!valid || saving}` with a "Saving…" label. Add a test that two rapid
 clicks on "Create link" issue exactly one `createSchedulingLink` call.
 
-#### [ ] The booking-link editor breaks the modal contract every other modal keeps: no Escape, no dialog role, and an onClick scrim over the app's longest form
+#### [x] The booking-link editor breaks the modal contract every other modal keeps: no Escape, no dialog role, and an onClick scrim over the app's longest form
 
 `frontend/src/components/SchedulingView.tsx:235` · **low** · rendering · `minor`
 
@@ -2073,7 +2074,7 @@ label="Close"`, and switch the scrim to the target-checked `onMouseDown` form us
 AddMultipleModal.tsx:399. Add `role`/`aria-modal`/`aria-label` to
 ArchivedCalendarsModal.tsx:164 as well.
 
-#### [ ] The appearance validator accepts any 3–20 letter word as a color, so a misspelled or invented color name is stored and applied as an override that silently blanks the property
+#### [x] The appearance validator accepts any 3–20 letter word as a color, so a misspelled or invented color name is stored and applied as an override that silently blanks the property
 
 `frontend/src/appearance.ts:289` · **low** · bug
 

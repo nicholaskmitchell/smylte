@@ -215,8 +215,14 @@ function LinkModal({ link, cals, onClose, onSave, onDelete }: {
   const valid = title.trim() && calendar && tz.trim()
     && Object.keys(daysToAvail(days)).length > 0
 
+  // `valid` bounds validity, not flight. Without this a double-click — or a
+  // second Enter in any field, which also calls save() — published TWO live
+  // booking links with two public URLs, one of which nobody knows exists.
+  const [saving, setSaving] = useState(false)
+
   const save = () => {
-    if (!valid) return
+    if (!valid || saving) return
+    setSaving(true)
     onSave({
       title: title.trim(),
       description: description.trim() || null,
@@ -231,9 +237,19 @@ function LinkModal({ link, cals, onClose, onSave, onDelete }: {
     }, link?.token)
   }
 
+  // The modal contract every other dialog here keeps (see TabsModal): Escape
+  // closes it, and a screen reader is told it is a dialog rather than a div.
+  useEffect(() => {
+    const onKey = (e: globalThis.KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
   return (
     <div className="overlay" onClick={onClose}>
-      <div className="modal sched-modal" onClick={(e) => e.stopPropagation()}>
+      <div className="modal sched-modal" role="dialog" aria-modal="true"
+        aria-label={link ? 'Edit booking link' : 'New booking link'}
+        onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
           <span className="modal-title">{link ? 'Edit booking link' : 'New booking link'}</span>
           <button className="icon-btn" onClick={onClose}>✕</button>
@@ -345,7 +361,7 @@ function LinkModal({ link, cals, onClose, onSave, onDelete }: {
             </button>
           )}
           <span className="spacer" />
-          <button className="btn" disabled={!valid} onClick={save}>
+          <button className="btn" disabled={!valid || saving} onClick={save}>
             {link ? 'Save' : 'Create link'}
           </button>
         </div>
