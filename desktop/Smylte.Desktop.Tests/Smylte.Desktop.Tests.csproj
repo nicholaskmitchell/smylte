@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- Plain net8.0, NOT net8.0-windows. The app targets net8.0-windows with
+         UseWindowsForms, and a ProjectReference to it would drag in the Windows
+         Desktop runtime pack — which has no Linux build, so the tests could be
+         compiled but never run off a Windows runner. Linking the sources under a
+         portable TFM instead means this suite runs anywhere, including locally.
+
+         The trade, stated deliberately: if either linked file ever takes a
+         Windows-only dependency, this project stops compiling. That is the right
+         failure — these two files are the client's portable logic (an HTTP path
+         resolver, a cookie rewriter, a directory swap), and none of it should
+         need WinForms. -->
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Smylte.Desktop.Tests</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <!-- Settings' two DPAPI calls are Windows-only, and under a portable TFM the
+         platform analyser says so. Nothing here calls them — the password never
+         enters a test — and the app itself compiles under net8.0-windows where
+         the check passes, so the warning is about this project's TFM rather than
+         about the code. -->
+    <NoWarn>$(NoWarn);CA1416</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Settings comes along because Updater takes one; its DPAPI calls are only
+         reached by SetPassword/GetPassword, which nothing here touches. -->
+    <Compile Include="../Smylte.Desktop/LocalServer.cs" />
+    <Compile Include="../Smylte.Desktop/Updater.cs" />
+    <Compile Include="../Smylte.Desktop/Settings.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+
+</Project>

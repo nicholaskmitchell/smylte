@@ -155,6 +155,14 @@ class DavClient:
                 order = int(order_text) if order_text else None
             except ValueError:
                 order = None
+            # Python ints are unbounded but SQLite's INTEGER is not, and this
+            # value is a dead property any sharing client can PROPPATCH. Left
+            # unbounded it reaches the `ord` bind in upsert_collection and
+            # raises OverflowError — which is not ValueError, so nothing catches
+            # it — aborting discover() for every collection at once. It is only
+            # a sort hint, so anything out of range is no hint at all.
+            if order is not None and not (-(2**63) <= order < 2**63):
+                order = None
             out.append(CollectionInfo(
                 href=r.href, displayname=name, components=comps, color=color, order=order
             ))

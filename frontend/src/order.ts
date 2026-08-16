@@ -52,23 +52,11 @@ function priorityOf(t: Task): number | null {
 }
 
 /**
- * The order any list of tasks is shown in.
- *
- * In turn: manual position, then due date, then priority, then title, then uid.
- * Each key is only consulted when the one before it ties.
- *
- * `sort_order` is the manual position drag-reorder writes. It is null for every
- * task until something is dragged, and stays null forever for tasks created in
- * another CalDAV client (the sidecar that holds it is app-only and never goes
- * on the wire), so null sorting last is not a transitional state to be tidied
- * away — it is the permanent, ordinary case for anything the user has not
- * placed by hand. Those tasks fall through to due date, which is where they
- * were before manual ordering existed.
+ * Everything except the manual position: due date, then priority, then title,
+ * then uid. This is the order that applies when nothing has been placed by hand,
+ * and it is also how an unplaced task is measured against a placed one.
  */
-export function compareTasks(a: Task, b: Task): number {
-  const manual = nullsLast(a.sort_order ?? null, b.sort_order ?? null, (x, y) => x - y)
-  if (manual) return manual
-
+function compareIntrinsic(a: Task, b: Task): number {
   const due = nullsLast(dueAt(a), dueAt(b), (x, y) => x - y)
   if (due) return due
 
@@ -85,7 +73,67 @@ export function compareTasks(a: Task, b: Task): number {
   return a.uid < b.uid ? -1 : a.uid > b.uid ? 1 : 0
 }
 
-/** `tasks` in display order, as a new array. */
+/**
+ * The order any list of tasks is shown in.
+ *
+ * In turn: manual position, then due date, then priority, then title, then uid.
+ * Each key is only consulted when the one before it ties.
+ *
+ * `sort_order` is the manual position drag-reorder writes, and it is null until
+ * something is dragged — or forever, for tasks created in another CalDAV client,
+ * since the sidecar that holds it is app-only and never goes on the wire.
+ *
+ * This comparator still sorts a null position LAST, which is right when it is
+ * asked about two tasks in isolation. It is NOT how a list is ordered — see
+ * `sortTasks`, which is what every view calls. The difference matters because a
+ * drag renumbers the whole account (the server's ReorderTasks model says so
+ * explicitly: "nothing left null once a drag lands"), so after the first drag a
+ * null position stops meaning "ordinary, unplaced" and starts meaning "created
+ * since the last drag" — and sinking those to the bottom of every view is not
+ * what anyone wants.
+ */
+export function compareTasks(a: Task, b: Task): number {
+  const manual = nullsLast(a.sort_order ?? null, b.sort_order ?? null, (x, y) => x - y)
+  if (manual) return manual
+  return compareIntrinsic(a, b)
+}
+
+/**
+ * `tasks` in display order, as a new array.
+ *
+ * Not simply `sort(compareTasks)`, because an unplaced task has to be *placed
+ * among* the manually ordered ones rather than after all of them. That cannot be
+ * done pairwise: comparing placed-to-placed by position while comparing
+ * placed-to-unplaced by due date is not transitive — given P1(pos 1, due Dec),
+ * P2(pos 2, due Jan) and U(due Jun) you get P1 < P2 < U < P1 — and
+ * `Array.prototype.sort` on an inconsistent comparator is implementation-defined,
+ * which is exactly the class of bug this module exists to prevent.
+ *
+ * So every task is first given ONE effective position: a placed task keeps its
+ * own (normalised to its index, so gaps and duplicates cannot matter), and an
+ * unplaced task takes a spot just before the first placed task that ought to
+ * come after it. Ordering by that single number, tie-broken by the intrinsic
+ * keys, is a genuine total order again.
+ */
 export function sortTasks(tasks: Task[]): Task[] {
-  return [...tasks].sort(compareTasks)
+  const placed = tasks
+    .filter((t) => t.sort_order != null)
+    .sort((a, b) => (a.sort_order! - b.sort_order!) || compareIntrinsic(a, b))
+
+  // Nothing has been dragged (the common case, and every case before the first
+  // drag): the intrinsic order is the whole answer.
+  if (!placed.length) return [...tasks].sort(compareIntrinsic)
+
+  const at = new Map<string, number>()
+  placed.forEach((t, i) => at.set(t.uid, i))
+  for (const t of tasks) {
+    if (t.sort_order != null) continue
+    const next = placed.findIndex((p) => compareIntrinsic(t, p) < 0)
+    // Half a step before its first later neighbour — or the end, when it is
+    // later than everything, which is where it used to land unconditionally.
+    at.set(t.uid, next < 0 ? placed.length : next - 0.5)
+  }
+
+  return [...tasks].sort(
+    (a, b) => (at.get(a.uid)! - at.get(b.uid)!) || compareIntrinsic(a, b))
 }

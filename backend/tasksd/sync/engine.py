@@ -19,13 +19,13 @@ from __future__ import annotations
 import logging
 import re
 import uuid
-from contextlib import contextmanager
 from dataclasses import dataclass
 
 from .. import ical
 from ..dav.client import CollectionInfo, DavClient
 from ..dav.errors import DavError, InvalidSyncToken, NotFound, PreconditionFailed
 from ..db import store
+from ..db.store import tx as _tx
 
 log = logging.getLogger("tasksd.sync")
 
@@ -58,18 +58,6 @@ class SyncStats:
     last_error: str | None = None     # recorded in sync_state.last_error
 
 
-@contextmanager
-def _tx(conn):
-    conn.execute("BEGIN IMMEDIATE")
-    try:
-        yield
-    except BaseException:
-        conn.execute("ROLLBACK")
-        raise
-    else:
-        conn.execute("COMMIT")
-
-
 def _is_synced_collection(ci: CollectionInfo) -> bool:
     # Track anything that can hold tasks or events. An unspecified component set
     # is permissive (Radicale's default template includes both).
@@ -85,14 +73,30 @@ class SyncEngine:
     # ── discovery ────────────────────────────────────────────────────────────
     def discover(self) -> list[CollectionInfo]:
         cols = [c for c in self.dav.list_collections() if _is_synced_collection(c)]
+        # `live` is built from every collection the server listed, including any
+        # we then fail to cache: the server says it exists, so it must not be
+        # marked deleted (which would discard its sidecar state) just because one
+        # of its properties is unusable.
         live = {c.href for c in cols}
+        kept: list[CollectionInfo] = []
         with _tx(self.conn):
             for c in cols:
-                store.upsert_collection(self.conn, c)
+                # Per-collection tolerance. These all share one transaction, so
+                # without this an unusable property on ONE collection rolls back
+                # the enumeration of ALL of them — and since the property lives
+                # on the server, it does so on every retry and every restart,
+                # taking bootstrap() (and therefore startup) with it.
+                try:
+                    store.upsert_collection(self.conn, c)
+                except Exception:  # noqa: BLE001 — one bad collection, not all
+                    log.warning("skipping collection %s: could not be cached", c.href,
+                                exc_info=True)
+                    continue
+                kept.append(c)
             for row in store.get_collections(self.conn):
                 if row["href"] not in live:
                     store.mark_collection_deleted(self.conn, row["href"])
-        return cols
+        return kept
 
     # ── read path ────────────────────────────────────────────────────────────
     def sync(self, collection_href: str) -> SyncStats:

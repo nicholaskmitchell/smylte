@@ -409,3 +409,24 @@ describe('<CalendarView> tasks sidebar', () => {
     expect(row).not.toHaveAttribute('draggable', 'true')
   })
 })
+
+// ── Stage 4 backlog closure (docs/AUDIT.md) ────────────────────────────────
+
+describe('stage 4 — chip identity', () => {
+  // AUDIT closed: CalendarView.tsx:470 — chips keyed on the bare id.
+  it('renders both copies when one UID lives in two calendars', async () => {
+    // `id` is unique per rendered instance of a SERIES, and a UID is only unique
+    // within one collection — so an event copied to (or subscribed from) a
+    // second calendar gave two chips one React key. React drops one, and can
+    // bind the wrong click target to the survivor.
+    const warn = vi.spyOn(console, 'error').mockImplementation(() => {})
+    setup([
+      ev({ uid: 'shared', id: 'shared', calendar: '/c1/', summary: 'Standup' }),
+      ev({ uid: 'shared', id: 'shared', calendar: '/c2/', summary: 'Standup' }),
+    ])
+    await waitFor(() =>
+      expect(screen.getAllByTitle(/^Standup/).length).toBeGreaterThanOrEqual(2))
+    expect(warn.mock.calls.flat().join(' ')).not.toMatch(/same key/i)
+    warn.mockRestore()
+  })
+})
