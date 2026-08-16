@@ -414,7 +414,13 @@ class TaskService:
         other tab refetch N times for one drag.
         """
         with self._lock:
-            with self._conn:
+            # A REAL transaction. `with self._conn:` looked like one and was not:
+            # the connection is in autocommit (isolation_level=None), where
+            # sqlite3's context manager only manages a transaction it opened
+            # itself. So this method's documented all-or-nothing guarantee did
+            # not exist — a failure part-way left some rows renumbered and some
+            # not, and 20 000 rows were 20 000 separate commits under the lock.
+            with store.tx(self._conn):
                 store.set_sort_orders(self._conn, placed)
         self._publish({"type": "task_reordered"})
 
