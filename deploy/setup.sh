@@ -28,7 +28,12 @@ else
   # NB: a failing command substitution inside an assignment does NOT trip
   # `set -e` — check explicitly, or a mismatched/aborted prompt would write
   # an empty TASKS_AUTH_PASSWORD_HASH and the service would refuse to start.
-  if ! HASH=$(sudo -u "$USER_NAME" "$PY" -m tasksd hash-password) || [ -z "$HASH" ]; then
+  # `cd` into $BACKEND first: `python -m tasksd` resolves the package off the
+  # interpreter's path, which contains only the working directory, so run from
+  # anywhere else this aborts on "No module named tasksd" — after prompting for
+  # every password and before writing the env file.
+  if ! HASH=$(cd "$BACKEND" && sudo -u "$USER_NAME" "$PY" -m tasksd hash-password) \
+     || [ -z "$HASH" ]; then
     echo "password hashing failed — env file not written; re-run setup" >&2
     exit 1
   fi

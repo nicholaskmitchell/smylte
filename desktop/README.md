@@ -93,6 +93,23 @@ it carries the runtime — that is what lets the exe run on a machine with no .N
 installed. A framework-dependent build is 1.4 MB but needs the .NET Desktop
 Runtime installed separately, which Windows does not ship.
 
+## Tests
+
+```
+dotnet test desktop/Smylte.Desktop.Tests/Smylte.Desktop.Tests.csproj
+```
+
+Runs on any OS, not just Windows: the project targets plain `net8.0` and
+*links* the sources it covers rather than referencing the app, which would drag
+in a Windows Desktop runtime pack that has no Linux build. CI runs it alongside
+the build.
+
+It covers the two places where a mistake here is a security bug — the static
+file resolver's path-traversal guard and the cookie rewriting — and the two ways
+a failed update used to cost someone a working client. If either covered file
+ever takes a Windows-only dependency this project stops compiling, which is the
+intended failure: they are meant to be portable logic.
+
 ## How it fits together
 
 ```

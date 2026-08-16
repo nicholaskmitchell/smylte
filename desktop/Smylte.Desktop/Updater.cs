@@ -35,7 +35,7 @@ public static class Updater
     public static async Task<UpdateResult> EnsureWebAssetsAsync(
         Settings settings, IProgress<string> log, CancellationToken ct)
     {
-        var haveLocal = File.Exists(Path.Combine(settings.WebRoot, "index.html"));
+        var haveLocal = HaveLocalBuild(settings);
 
         JsonElement release;
         try
@@ -72,13 +72,72 @@ public static class Updater
             return new UpdateResult(false, "Up to date.", clientOutdated);
 
         log.Report("Downloading the latest build…");
-        await DownloadAndSwapAsync(settings, id, log, ct).ConfigureAwait(false);
+        if (await SwapOrKeepLocalAsync(
+                () => DownloadAndSwapAsync(settings, id, log, ct),
+                haveLocal, clientOutdated, log).ConfigureAwait(false) is { } kept)
+            return kept;
 
         settings.LastAssetId = id;
         settings.LastAssetStamp = stamp;
         settings.Save();
 
         return new UpdateResult(true, "Updated to the latest build.", clientOutdated);
+    }
+
+    /// Run the download and swap, degrading to the installed build if it throws.
+    /// Returns null when the swap succeeded and the caller should carry on.
+    ///
+    /// The release LOOKUP already degrades this way when it fails; the download
+    /// did not, so a dropped connection, a truncated zip or a failed directory
+    /// move threw straight out of startup with a complete working build sitting
+    /// on disk. An update is an improvement, not a precondition for opening the
+    /// app. Only when `haveLocal` — a first run has nothing to fall back to and
+    /// must still surface the error.
+    ///
+    /// Taking a delegate rather than inlining the try/catch is what lets the
+    /// guard be tested without a GitHub round-trip: the property that matters is
+    /// "a throw here is fatal on a first run and survivable once a build exists".
+    internal static async Task<UpdateResult?> SwapOrKeepLocalAsync(
+        Func<Task> swap, bool haveLocal, bool clientOutdated, IProgress<string> log)
+    {
+        try
+        {
+            await swap().ConfigureAwait(false);
+            return null;
+        }
+        catch (Exception ex) when (haveLocal)
+        {
+            log.Report("Update failed — using the installed build.");
+            return new UpdateResult(
+                false, $"Update failed ({ex.Message}) — using the installed build.", clientOutdated);
+        }
+    }
+
+    /// Recover anything a previous run stranded, then say whether a usable build
+    /// is on disk. The order is the point — every "can the app still open?"
+    /// decision below reads this answer, so the recovery has to have happened
+    /// before it is computed, not after.
+    internal static bool HaveLocalBuild(Settings settings)
+    {
+        RecoverStrandedBuild(settings);
+        return File.Exists(Path.Combine(settings.WebRoot, "index.html"));
+    }
+
+    /// Put back a build stranded by an interrupted swap.
+    ///
+    /// `DownloadAndSwapAsync` moves `web` aside to `web.old` and then moves
+    /// `web.new` into place. The catch there covers a throw from the second
+    /// move — but a process killed BETWEEN them (the window closed, a reboot,
+    /// the installer terminated) leaves the only working copy in `web.old` with
+    /// no `web` at all, and nothing ever looked there again: the next run simply
+    /// saw `haveLocal == false` and treated it as a first install.
+    internal static void RecoverStrandedBuild(Settings settings)
+    {
+        var root = settings.WebRoot;
+        var previous = root + ".old";
+        if (Directory.Exists(root) || !Directory.Exists(previous)) return;
+        try { Directory.Move(previous, root); }
+        catch (Exception) { /* best effort; the download below still runs */ }
     }
 
     /// Is the published exe a different binary from the one running?

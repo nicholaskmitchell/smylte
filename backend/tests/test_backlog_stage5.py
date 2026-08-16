@@ -1,18 +1,23 @@
 """Stage 5 of the audit backlog: delivery infrastructure and test gaps.
 
-Two kinds of finding live here.
+**Stage 5 is CLOSED**, and with it the whole backlog — every finding from the
+2026-08-16 sweep is fixed. These began as `xfail(strict=True)` pins and are now
+ordinary tests that must stay green.
 
-**Delivery.** The Windows client, the install script and the release workflow.
-There is no dotnet runtime in the unit environment, so the C# findings are pinned
-structurally — the source is read and the property asserted. That is weaker than
-executing it, but it is deterministic, it runs everywhere, and it fails the
-moment the shape regresses. Closing finding "the Windows client ships with zero
-tests" is what would let these become real tests.
+Two of the findings here were about the Windows client, and were originally
+pinned by reading `Updater.cs` and asserting its shape, on the belief that no
+dotnet toolchain was available. That was wrong: the SDK installs fine, and
+`LocalServer.cs` and `Updater.cs` have no WinForms dependency between them (the
+one apparent match was `Cache-Control` catching a `Control\\b` grep). Those two
+structural pins are gone rather than kept alongside their replacements —
+`desktop/Smylte.Desktop.Tests/` executes the behaviour instead, which a pin that
+matches source text cannot. What remains here of the client is the meta-test
+that the project exists and CI runs it, because that is a *backend*-visible
+guard against the C# suite being quietly dropped.
 
 **Test gaps.** A test-gap finding is closed by a test EXISTING, so the pin is
-necessarily a meta-test: it asserts the suite covers the named path, and it goes
-green when somebody writes that coverage. Kept honest by naming the specific
-symbol or behaviour the gap is about, not just a file.
+necessarily a meta-test: it asserts the suite covers the named path. Kept honest
+by naming the specific symbol or behaviour the gap is about, not just a file.
 
 See test_backlog_stage1.py for how the xfail(strict=True) harness works.
 """
@@ -26,7 +31,6 @@ import pytest
 
 pytestmark = [pytest.mark.backlog, pytest.mark.stage5]
 
-XFAIL = dict(strict=True)
 REPO = pathlib.Path(__file__).resolve().parents[2]
 TESTS = pathlib.Path(__file__).resolve().parent
 
@@ -47,50 +51,15 @@ def _suite_text() -> str:
 
 # ── delivery: the Windows client ──────────────────────────────────────────
 
-@pytest.mark.xfail(reason="AUDIT open: Updater.cs:75 update failure kills startup", **XFAIL)
-def test_an_update_failure_falls_back_to_the_installed_build():
-    """`EnsureWebAssetsAsync` guards the RELEASE LOOKUP with `haveLocal` and
-    degrades to "Offline — using the installed build". The DOWNLOAD that follows
-    has no such guard, so a connection dropped mid-transfer, a truncated zip or
-    a failed directory swap throws straight out of startup — with a complete,
-    working build sitting on disk. The client refuses to open over a fault that
-    it is already designed to survive."""
-    src = _read("desktop/Smylte.Desktop/Updater.cs")
-
-    swap = re.search(r"await DownloadAndSwapAsync\(.*?\);", src, re.S)
-    assert swap, "DownloadAndSwapAsync call not found — has Updater.cs been restructured?"
-
-    window = src[max(0, swap.start() - 400):swap.end() + 200]
-    assert re.search(r"\btry\b", window) and "haveLocal" in window, (
-        "the download/swap is not wrapped in a fallback that keeps a working "
-        "installed build openable when an update fails"
-    )
-
-
-@pytest.mark.xfail(reason="AUDIT open: Updater.cs:207 interrupted swap strands the build", **XFAIL)
-def test_a_stranded_previous_build_is_recovered_on_the_next_run():
-    """The swap is: move `web` -> `web.old`, then `web.new` -> `web`. The catch
-    handles a throw from the second move, but a process killed BETWEEN them (the
-    user closing the window, a reboot, the installer being terminated) leaves the
-    only working copy in `web.old` and no `web` at all. Nothing ever looks in
-    `web.old` again, and the next run sees `haveLocal == false`."""
-    src = _read("desktop/Smylte.Desktop/Updater.cs")
-
-    have_local = re.search(r"var haveLocal\s*=.*?;", src, re.S)
-    assert have_local, "haveLocal probe not found"
-
-    # Recovery has to happen before the first thing that consumes haveLocal.
-    assert re.search(r'\.old.*?(Directory\.Move|Restore|Recover)', src[:have_local.end()], re.S), (
-        "nothing restores a build stranded in web.old by an interrupted swap"
-    )
-
-
-@pytest.mark.xfail(reason="AUDIT open: LocalServer.cs:257 the client has no tests", **XFAIL)
-def test_the_windows_client_has_tests():
-    """CI compiles the client and never runs it, so the local proxy's
+def test_the_windows_client_has_tests_and_ci_runs_them():
+    """CI compiled the client and never ran it, so the local proxy's
     path-traversal guard and its cookie rewriting — the two places where a
-    mistake is a security bug rather than a cosmetic one — are unverified. This
-    is the finding that unblocks the two structural pins above."""
+    mistake is a security bug rather than a cosmetic one — were unverified.
+
+    The tests themselves are C# and live in desktop/Smylte.Desktop.Tests; this
+    asserts they exist and are wired into CI, which is the part a backend-only
+    change could silently undo. A test project that nothing runs is a comment.
+    """
     csproj = list((REPO / "desktop").rglob("*.csproj"))
     test_projects = [p for p in csproj
                      if "test" in p.stem.lower()
@@ -100,14 +69,30 @@ def test_the_windows_client_has_tests():
         f"the client is compiled by CI but never exercised"
     )
 
+    ci = _read(".github/workflows/ci.yml")
+    assert re.search(r"dotnet test\s+\S*desktop/", ci), (
+        "the client test project exists but no CI step runs `dotnet test` on it"
+    )
+
+    # It has to be buildable off Windows or the ubuntu-side story is a promise:
+    # a ProjectReference to the net8.0-windows app would drag in a runtime pack
+    # that has no Linux build. Linked sources under a portable TFM is the shape
+    # that lets this suite run anywhere.
+    project = test_projects[0].read_text(encoding="utf-8")
+    assert "<TargetFramework>net8.0</TargetFramework>" in project, (
+        "the client test project targets a Windows-only TFM; it can be compiled "
+        "but not run outside a Windows runner"
+    )
+    assert "<Compile Include=" in project
+    assert "<ProjectReference" not in project
+
 
 # ── delivery: install script and release workflow ─────────────────────────
 
-@pytest.mark.xfail(reason="AUDIT open: setup.sh:31 runs python -m tasksd from the wrong cwd", **XFAIL)
 def test_setup_runs_the_module_from_the_backend_directory():
     """`python -m tasksd hash-password` resolves `tasksd` off the interpreter's
-    path, which only contains the CWD. setup.sh calls it without changing into
-    $BACKEND, so the documented install aborts on "No module named tasksd" —
+    path, which only contains the CWD. setup.sh called it without changing into
+    $BACKEND, so the documented install aborted on "No module named tasksd" —
     after prompting for every password, and before writing the env file."""
     src = _read("deploy/setup.sh")
 
@@ -121,7 +106,6 @@ def test_setup_runs_the_module_from_the_backend_directory():
     )
 
 
-@pytest.mark.xfail(reason="AUDIT open: desktop-release.yml:10 no concurrency group", **XFAIL)
 def test_the_desktop_release_workflow_serialises_its_runs():
     """The release is a ROLLING tag: every run overwrites the same assets. With
     no concurrency group, two pushes in quick succession race, and the slower —
@@ -134,43 +118,44 @@ def test_the_desktop_release_workflow_serialises_its_runs():
         "desktop-release.yml has no top-level concurrency group, so an older "
         "build can clobber a newer one on the rolling release"
     )
+    # cancel-in-progress would be wrong here: killing a half-published release
+    # leaves the rolling tag holding whatever assets had uploaded so far.
+    assert re.search(r"^\s*cancel-in-progress:\s*false", src, re.M)
 
 
 # ── test gaps ─────────────────────────────────────────────────────────────
 
-@pytest.mark.xfail(reason="AUDIT open: xml.py:198 parse_multistatus untested", **XFAIL)
 def test_the_multistatus_parser_has_unit_coverage():
     """`parse_multistatus` is the single place untrusted wire XML becomes app
     state — every href, etag, displayname, colour and component set the rest of
-    the backend trusts comes through it. It has no unit test at all, so its
+    the backend trusts comes through it. It had no unit test at all, so its
     behaviour on a partial 207, a missing propstat, a non-200 status or a
-    namespace-shifted document is unpinned."""
+    namespace-shifted document was unpinned. See tests/test_dav_xml.py."""
     assert "parse_multistatus" in _suite_text(), (
         "no test exercises parse_multistatus — the whole PROPFIND/REPORT "
         "response-parsing path is uncovered"
     )
 
 
-@pytest.mark.xfail(reason="AUDIT open: test_mcp.py:259 batch framing untested", **XFAIL)
 def test_the_json_rpc_batch_path_has_coverage():
     """`run_batch`'s list branch — empty-batch rejection, mixed
     request/notification batches, the all-notifications case that must answer
-    202 with no body — is entirely uncovered, on the endpoint a hostile client
-    talks to."""
+    202 with no body — was entirely uncovered, on the endpoint a hostile client
+    talks to. Covered in test_mcp.py, which is radicale-marked: those tests run
+    in CI against the scratch server and skip without one."""
     assert "run_batch" in _suite_text(), (
         "no test sends a JSON-RPC batch; the batch-framing path is uncovered"
     )
 
 
-@pytest.mark.xfail(reason="AUDIT open: test_mcp.py:208 no event write tool coverage", **XFAIL)
 @pytest.mark.parametrize("tool", [
     "smylte_create_event", "smylte_update_event", "smylte_delete_event",
 ])
 def test_every_event_write_tool_is_exercised(tool):
-    """The task tools are covered; the event tools are not — including the
+    """The task tools were covered; the event tools were not — including the
     `scope` argument that decides whether an edit touches one occurrence or
     rewrites a whole series. That is the most destructive argument the connector
-    exposes, and no MCP-level test drives it."""
+    exposes, and no MCP-level test drove it."""
     assert tool in _suite_text(), f"no MCP test exercises {tool}"
 
 

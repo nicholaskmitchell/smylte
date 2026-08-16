@@ -3,7 +3,9 @@
 `docs/AUDIT.md` is the evidence. This file is the plan for closing those
 findings, and the map from a finding to the test that pins it.
 
-**9 open, 31 closed.** Stages 1-4 are done; only Stage 5 remains.
+**0 open, 40 closed.** Every stage is done. The backlog from the 2026-08-16
+sweep is closed; the 41 findings still open in `docs/AUDIT.md` are from the
+2026-08-07 sweep and are untouched by this work.
 
 ## Stage 0 — the harness (done)
 
@@ -42,15 +44,25 @@ stages 1–3 and 5 are these.
 — an `onClick` scrim, a `key` built from a non-unique id, a missing `concurrency`
 key. They pin the *cause*, not the *symptom*, so a fix shaped differently from
 the one anticipated will XPASS and need reclassifying. That is the harness
-working, not a false alarm. They are used where the harness a behavioural test
-would need does not exist yet:
+working, not a false alarm. They were used where the harness a behavioural test
+would need did not exist yet — and **both claims of that kind turned out to be
+false**, which is worth keeping on the record:
 
 * ~~the SPA's drag-and-drop and data-provider findings (no such harness — building
-  one is itself a Stage 4 item)~~ — **this was wrong.** The harness existed all
-  along in `TasksView.test.tsx`; Stage 4 converted every one of those pins to a
+  one is itself a Stage 4 item)~~ — **wrong.** The harness existed all along in
+  `TasksView.test.tsx`; Stage 4 converted every one of those pins to a
   behavioural test.
-* the three C# findings (no dotnet runtime in the unit environment — closing
-  "the Windows client ships with zero tests" is what upgrades them).
+* ~~the three C# findings (no dotnet runtime in the unit environment)~~ —
+  **also wrong.** There is no preinstalled SDK, but it installs, and
+  `LocalServer.cs` and `Updater.cs` have no WinForms dependency between them (the
+  single apparent match was `Cache-Control` catching a `Control\b` grep). Stage 5
+  built `desktop/Smylte.Desktop.Tests` — plain `net8.0`, *linking* those sources
+  rather than referencing the WinForms project — and it runs on any runner. The
+  structural pins were deleted rather than kept alongside it.
+
+The pattern in both: "no harness exists" was asserted from a quick look and then
+inherited by every later stage without being re-checked. A constraint that
+weakens the tests deserves the same scrutiny as a finding.
 
 ### Ordering
 
@@ -58,8 +70,8 @@ The stages run cheapest-and-nastiest first. Stage 1 is almost all `minor` fixes
 that stop an adversary turning odd input into a 500. Stage 2 bounds work that is
 already unbounded. Stage 3 is the dangerous class — nothing raises and the answer
 is silently wrong — and needs the most care per fix. Stage 4 is the largest but
-each item is contained. Stage 5 unblocks itself: the "no tests" finding is what
-turns the structural pins above into real ones.
+each item is contained. Stage 5 unblocked itself: closing the "no tests" finding
+is what turned the C# pins above into real ones.
 
 ## Stage 1 — Crash paths ✅ DONE
 
@@ -189,9 +201,39 @@ Three things worth keeping:
 | 39 | The booking-link editor breaks the modal contract every other modal keeps: no Escape, no dialog role, and an o… | `frontend/src/components/SchedulingView.tsx:235` | low |
 | 40 | The appearance validator accepts any 3–20 letter word as a color, so a misspelled or invented color name is st… | `frontend/src/appearance.ts:289` | low |
 
-## Stage 5 — Delivery infrastructure & test gaps
+## Stage 5 — Delivery infrastructure & test gaps ✅ DONE
 
-9 findings · pinned by `backend/tests/test_backlog_stage5.py`
+9 findings · closed · `backend/tests/test_backlog_stage5.py`,
+`backend/tests/test_dav_xml.py`, additions to `backend/tests/test_mcp.py`, and a
+new C# suite in `desktop/Smylte.Desktop.Tests/`.
+
+Four things worth keeping:
+
+* **The Windows client has real tests now, and they run everywhere.**
+  `Smylte.Desktop.Tests` targets plain `net8.0` and *links* `LocalServer.cs`,
+  `Updater.cs` and `Settings.cs` instead of referencing the app: a
+  `ProjectReference` to a `net8.0-windows` WinForms project drags in a Desktop
+  runtime pack that has no Linux build, so the suite could have been compiled but
+  never run off a Windows runner. The trade is deliberate and recorded in the
+  project file — if either covered file takes a Windows-only dependency this
+  project stops compiling, which is the right failure for two files whose whole
+  claim is that they are portable logic. `ci.yml`'s desktop job now runs it.
+* **Both updater fixes are behind seams, not inline try/catch.**
+  `SwapOrKeepLocalAsync` takes the swap as a delegate and `HaveLocalBuild` folds
+  the recovery into the probe that consumes it. That is what lets the guards be
+  tested without a GitHub round-trip, and the ordering property — recovery must
+  happen *before* anything reads `haveLocal` — becomes a test rather than a
+  comment. Both were mutation-checked: breaking either guard fails a test.
+* **The MCP event scopes are covered against a real server.** `scope` decides
+  whether an edit touches one occurrence or rewrites a series, and it was the
+  most destructive argument the connector exposes with no test at all. The new
+  tests live in `test_mcp.py`, which is `radicale`-marked: they run in CI against
+  the scratch Radicale, and skip when there is no server to talk to.
+* **`parse_multistatus` is pinned including what it does with hostile input.**
+  A 404 propstat is a deletion and an unparseable status line is *not* — getting
+  that backwards silently deletes cached items. External entities are pinned as
+  not fetched, because the day that changes an XXE reads local files through the
+  sync loop.
 
 | # | Finding | Where | Sev |
 |---|---|---|---|
@@ -204,3 +246,16 @@ Three things worth keeping:
 | 32 | No MCP-level test exercises any event write tool or any recurrence scope | `backend/tests/test_mcp.py:208` | low |
 | 35 | Test gap: the DST slot battery never supplies busy intervals or a `now` inside the transition, and no test dri… | `backend/tests/test_scheduling.py:181` | low |
 | 41 | desktop-release.yml has no concurrency group, so an older build can clobber a newer one on the rolling release | `.github/workflows/desktop-release.yml:10` | low |
+
+## After the backlog
+
+The harness stays. Every pin above is now an ordinary test that must stay green,
+so a regression on any of these 40 findings fails CI the same way the original
+defect would have. `python -m pytest -m backlog -rxX` still prints the itemised
+state, and it should report no xfails and no XPASSes: a new `xfail(strict=True)`
+appearing there means somebody has filed and pinned a new finding, which is
+exactly what it is for.
+
+What is deliberately **not** closed: the 41 findings in `docs/AUDIT.md` from the
+2026-08-07 sweep. They predate this work and none of them were re-verified here,
+so they are neither fixed nor confirmed still-live.
