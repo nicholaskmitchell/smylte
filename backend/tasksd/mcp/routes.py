@@ -31,6 +31,11 @@ log = logging.getLogger("tasksd.mcp")
 # like /api/login — same shape, separate budget, so a connector flow being
 # fumbled cannot lock the owner out of the web app (or the reverse).
 _CONSENT_LIMITER = dict(max_fails=8, window_s=900, lockout_s=900)
+# ...and a separate, generous budget for POSTing the form at all. A decline
+# spends only this one, so declining a connection a few times cannot lock the
+# owner out of ever connecting. Shaped like _TOKEN_LIMITER: enough to stop the
+# endpoint being hammered, nowhere near tight enough to matter to a person.
+_CONSENT_POST_LIMITER = dict(max_fails=120, window_s=300, lockout_s=300)
 # Registration and token exchange are cheap but unauthenticated; these bound
 # what an anonymous caller can make the server do.
 _REGISTER_LIMITER = dict(max_fails=20, window_s=3600, lockout_s=3600)
@@ -126,7 +131,7 @@ def _bearer(request: Request) -> str | None:
     return None
 
 
-def register(app, *, settings, authenticator, client_ip, run):
+def register(app, *, settings, authenticator, client_ip, run, login_hashes):
     """Mount the MCP endpoint and its authorization server onto `app`.
 
     Called from create_app before the static mount — that mount is a full-match
@@ -150,6 +155,7 @@ def register(app, *, settings, authenticator, client_ip, run):
         verify_password=verify_password,
     )
     consent_limiter = RateLimiter(**_CONSENT_LIMITER)
+    consent_post_limiter = RateLimiter(**_CONSENT_POST_LIMITER)
     register_limiter = RateLimiter(**_REGISTER_LIMITER)
     token_limiter = RateLimiter(**_TOKEN_LIMITER)
 
@@ -228,10 +234,23 @@ def register(app, *, settings, authenticator, client_ip, run):
 
     @app.post("/oauth/authorize", include_in_schema=False)
     async def authorize_submit(request: Request):
-        # Throttled before the body is read, not after: this is the one
-        # unauthenticated endpoint here whose read used to happen with no limit
-        # in front of it at all.
-        _throttle(request, consent_limiter)
+        # Two limiters, because this endpoint guards two different things and
+        # one counter could not do both. `consent_post_limiter` is the generous
+        # one: it bounds how hard the endpoint can be hammered, and it is charged
+        # here — before the body is read — because that read is unauthenticated
+        # and used to happen with no limit in front of it at all.
+        #
+        # The password budget (`consent_limiter`, 8 per 15 min) is charged much
+        # further down, only when a password is actually about to be verified.
+        # Charging it here made a DECLINE cost a password guess, so eight "no
+        # thanks" clicks locked the owner out of connecting for the window.
+        #
+        # Note what is deliberately NOT done: refunding the password budget on a
+        # decline. `record_success` clears the counter outright, so an attacker
+        # alternating guess/deny would never lock out — and registration is open,
+        # so minting the signed blobs to do that is free. Splitting the counters
+        # is what fixes the lockout without opening that door.
+        _throttle(request, consent_post_limiter)
         form = await _form(request)
         try:
             req = oauth.verify_request(form.get("request", ""))
@@ -255,8 +274,37 @@ def register(app, *, settings, authenticator, client_ip, run):
         granted = scope_set(req.scope)
         if form.get("grant") == "read":
             granted &= {SCOPE_READ, SCOPE_OFFLINE}
+            # ...but a narrowing that grants nothing is not a narrowing. On a
+            # write-only request the intersection is empty, and approving it
+            # minted a code for a token that could do nothing at all — surfacing
+            # later as an unexplained "not permitted" on every call, a long way
+            # from the screen that caused it. The consent page no longer offers
+            # the choice in that case; this refuses the POST, which is reachable
+            # regardless of what the page rendered.
+            if not (granted - {SCOPE_OFFLINE}):
+                # Rendered, not redirected: this is a form POST a person is
+                # looking at, and the sibling failure above (an expired form)
+                # answers the same way. Bouncing them back to the client with
+                # `error=invalid_scope` would hand a human a machine's error.
+                return HTMLResponse(_notice_page(
+                    "Read-only would grant nothing",
+                    "This application asked for write access only, so limiting "
+                    "it to read-only would leave it unable to do anything. "
+                    "Start again and approve it in full, or decline it.",
+                ), status_code=400)
 
-        ok = await run(oauth.check_password, form.get("username", ""), form.get("password", ""))
+        # The password budget is spent HERE — one unit per password actually
+        # verified — and reserved before the await, which is the property
+        # RateLimiter.attempt exists to provide.
+        _throttle(request, consent_limiter)
+        async with login_hashes:
+            # scrypt is memory-hard (~16 MiB a call). /api/login bounds its
+            # concurrency for exactly that reason and this runs the same hash on
+            # the same unauthenticated surface, so it shares the same semaphore:
+            # the budget being protected is the process's memory, not one
+            # endpoint's throughput.
+            ok = await run(oauth.check_password,
+                           form.get("username", ""), form.get("password", ""))
         if not ok:
             return HTMLResponse(
                 # Carrying the choice back: without it a mistyped password
@@ -526,7 +574,12 @@ def _consent_page(req, signed: str, *, issuer: str, grant: str = "full",
         can.append("Stay connected without asking you again, until you disconnect it")
 
     read_only_choice = ""
-    if SCOPE_WRITE in scopes:
+    # Offered only when there is something left after narrowing. A write-only
+    # request has nothing: `granted &= {READ, OFFLINE}` empties it, so picking
+    # read-only produced a token that could do nothing at all. Never render a
+    # choice whose outcome is "no access" — the POST refuses it either way, but
+    # a button that cannot work should not be there to press.
+    if SCOPE_WRITE in scopes and SCOPE_READ in scopes:
         read = ' checked' if grant == "read" else ""
         full = "" if grant == "read" else " checked"
         read_only_choice = (
