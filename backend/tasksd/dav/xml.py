@@ -154,6 +154,32 @@ XML_FORBIDDEN_CLASS = _C0 + _SURROGATES + _NONCHARS
 XML_SAFE_PATTERN = rf"^[^{XML_FORBIDDEN_CLASS}]*$"
 XML_SAFE_PATTERN_SCALAR = rf"^[^{_C0}{_NONCHARS}]*$"
 
+# The shape a collection color may take, on the way IN as well as out.
+#
+# `calendar-color` is an Apple dead property, so anything with write access to a
+# shared collection can PROPPATCH it to arbitrary text and Radicale stores that
+# verbatim (trust model: hostile data from Radicale is adversary #2). The write
+# path always validated it; the read path took it as raw text, stored it, and
+# handed it to the SPA, which writes it straight into the CSSOM as an inline
+# declaration. `background: url(https://evil.example/x.png)` on a rendered 3-5px
+# dot fetches the URL — a beacon that fires whenever the owner opens the
+# Calendar tab or the Home mini-calendar.
+#
+# It lives here, beside the property name it belongs to, because the same shape
+# has to hold on both paths and this file is already where a validator shared
+# across layers goes (see XML_SAFE_PATTERN_SCALAR above, whose comment records
+# what three hand-written copies cost last time).
+COLOR_PATTERN = r"^#[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?$"
+_COLOR_RE = re.compile(COLOR_PATTERN)
+
+
+def clean_color(value: str | None) -> str | None:
+    """A collection color if it is one, else None. Never raises."""
+    if not isinstance(value, str):
+        return None
+    v = value.strip()
+    return v if _COLOR_RE.match(v) else None
+
 _XML_FORBIDDEN = re.compile(f"[{XML_FORBIDDEN_CLASS}]")
 
 

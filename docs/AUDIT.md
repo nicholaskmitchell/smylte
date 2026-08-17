@@ -32,9 +32,23 @@ gone". Re-scope them before working them.
 Ticked findings keep their original references, which point into the tree as it
 was when they were filed. They are history, not navigation.
 
-**41 open**, all from the 2026-08-07 sweep. Nothing from 2026-08-16 is open. The
+**0 open.** The 2026-08-07 backlog is closed, and so is the one finding the
+remediation filed against itself (the missing CSP — issue #57, below). The
 evidence stays here — a ticked box records what the bug was and why it mattered,
 and the issues that link into these sections still resolve.
+
+The 2026-08-07 backlog was closed cluster by cluster, in severity order, against
+the seven issues that group it (#42–#48). Each cluster landed as one commit:
+source fix, a regression test confirmed to fail against the pre-fix code, and
+the tick here. All seven are done — **#45 (auth, session lifetime and request
+limits)**, six findings including the sweep's remaining HIGH; **#42 (the
+unauthenticated booking write path)**, six plus the `expand_occurrences`
+truncation from #44, which is the same defect one layer down; **#46 (frontend
+time correctness)**, six including the sweep's other HIGH; **#43 (iCalendar
+series editing)**, five; **#44 (recurrence expansion, cache integrity and
+startup)**, its remaining five; **#47 (tasks view and bulk add)**, five plus the
+one open finding that belonged to no issue; **#48 (untrusted color into the
+CSSOM, plus rendering polish)**, six.
 
 The 2026-08-16 sweep was closed in stages (`docs/STAGES.md`), each pinned by
 tests that failed until the finding was fixed. **All five stages are done** — the
@@ -42,7 +56,55 @@ seven crash paths, the five abuse/exhaustion findings, the seven silent-corrupti
 ones, the twelve user-visible ones and the nine delivery/test-gap ones, all ticked
 below. Those pins are now ordinary regression tests that must stay green.
 
-<!-- Newest sweep first: 2026-08-16, then 2026-08-07, then the 2026-07 sweep, fully ticked. -->
+<!-- Newest first: the 2026-08-17 remediation finding, then the 2026-08-16
+     sweep, then 2026-08-07, then the 2026-07 sweep, fully ticked. -->
+
+## Filed during remediation — 2026-08-17
+
+Found while closing the 2026-08-07 backlog, not by a sweep. One finding, not
+verified by anyone else. Tracked as issue #57 — it came out of #48 but was its
+own change, for the reason the entry gives. Now closed.
+
+#### [x] No Content-Security-Policy anywhere, so nothing bounds what a value reaching the CSSOM can fetch
+
+`deploy/Caddyfile.snippet` · **medium** · security
+
+**Fixed, but NOT where this anchor points.** The policy is set by the app
+(`backend/tasksd/csp.py`), not by Caddy. Two `Content-Security-Policy` headers
+on one response are enforced as their intersection, so it has to be exactly one
+place — and the app is the place that can hash the SPA's inline script, that
+covers a direct connection to uvicorn, and that the test suite can exercise. The
+Caddy snippet carries a comment saying not to add a second one. Two other
+deviations from the suggested fix below: `img-src` does not allow `data:`
+(nothing in the app builds one), and the policy allows `fonts.googleapis.com` /
+`fonts.gstatic.com`, because 13 of the 24 Appearance font choices load from them
+at runtime and a defence should not silently remove a working feature.
+Self-hosting those families would let both entries go.
+
+Cluster #48 closed the `calendar-color` beacon by validating the value at
+ingest and again on the client. That is the right fix for that path, and it is
+the only defence there was: there is no CSP on any response this app serves, so
+ANY value that reaches a style declaration, an `img` src or a script tag can
+make the browser talk to a third party, and the next such path will be
+undefended in exactly the same way. The appearance allowlist and `cssColor` are
+both allowlists over specific fields; a CSP is the bound over everything else.
+
+Deliberately not fixed in that pass. The SPA carries an inline pre-paint script
+in `index.html` (it has to: it applies the stored theme before first paint, and
+importing a module would be too late), so a `script-src` needs a hash or a
+nonce, and getting it wrong breaks the app at load rather than degrading. That
+wants its own change with a real browser in front of it, not a line added to a
+cluster about colors.
+
+**Suggested fix.** Add `header` directives to the `handle { reverse_proxy 127.0.0.1:8080 }` block in
+`deploy/Caddyfile.snippet`: `default-src 'self'`, `img-src 'self' data:`,
+`style-src 'self' 'unsafe-inline'` (inline styles are load-bearing throughout
+the SPA), `script-src 'self' 'sha256-…'` for the pre-paint script,
+`connect-src 'self'`, `frame-ancestors 'none'`, `base-uri 'none'`. Pin the
+script hash from a test that reads `index.html`, the way
+`appearance.test.ts` already pins that script's contents, so an edit to it
+cannot silently break the policy. Verify in a real browser, including the
+public booking page, which is served to people who are not this account.
 
 ## Sweep — 2026-08-16
 
@@ -2413,13 +2475,93 @@ the workflow, so it ran a single whole-repo finder instead of twelve — those a
 filed under *Cross-cutting*.
 
 Every HIGH here was additionally re-verified by hand with a runnable probe before
-anything was changed. **8 fixed** in this pass (ticked below, each with a
-regression test); the rest are open.
+anything was changed. **8 fixed** in that pass (ticked below, each with a
+regression test).
+
+The remaining 41 are being closed by cluster (issues #42–#48). **Cluster #45 —
+auth, session lifetime and request limits — closed 6**: the unauthenticated
+body-buffering HIGH (now bounded ahead of the router by `tasksd/limits.py` and
+at the edge by `deploy/Caddyfile.snippet`), the SSE stream that outlived its own
+revocation, sessions surviving a credential change, the frontend logout that
+reported success on a failed request, the sidecar PUT that wrote an
+unreclaimable row for an unknown uid, and the SSE test gap.
+
+**Cluster #42 — the unauthenticated booking write path — closed 6**, plus
+`expand_occurrences` from #44 (the same truncation, one layer down). The three
+per-link-ceiling findings were one defect in the charge accounting and got one
+fix: `RateLimiter.release`, a reservation taken before the await, and
+`book_slot` returning `(confirmation, created)` so a replay is distinguishable
+from a write. Also: the occurrence cap is now derived from the window and
+raises instead of truncating, `_link_busy` treats a series it could not expand
+as blocking rather than as free, floating times are read in a new
+`home_timezone` setting rather than in each link's own zone, and the booking
+page mints its idempotency key once per chosen slot.
+
+**Cluster #46 — frontend time correctness — closed 6.** The HIGH was a
+wire-contract decision rather than a patch: `shiftIso` committed in its own
+docstring to returning floating local time, and it backs every drag and resize
+path. It now preserves the instant when the source value carries one, so
+`DTSTART;TZID=Europe/Berlin` survives a drag instead of being rewritten as a
+naive local string; floating values stay floating. Also: a DURATION-only event
+keeps its span across an edit (and the write omits `end` entirely when the span
+cannot be derived), `bucketByDay` orders a cell by the instant each start names
+rather than by the wire string, `j()` renders a pydantic 422 as readable text
+instead of "[object Object]", and the two `hooks.ts` findings closed by deleting
+dead code and covering what was left.
+
+**Cluster #43 — iCalendar series editing — closed 5.** All five were the repo's
+own invariant #2 failing in a different way: never lose what another client
+authored. An UNTIL is now shifted in the series' own zone rather than in UTC, so
+dragging a bounded zone-aware series across a DST edge no longer drops its last
+occurrence; deleting one occurrence no longer destroys a `RANGE=THISANDFUTURE`
+override and with it every later occurrence's values; `split_series` rejects an
+all-day/timed switch with the same ValueError `shift_series` raises (a clean 422
+rather than an unhandled TypeError); `_event_duration` goes through
+`_comparable`, so a mixed-type or mixed-awareness DTSTART/DTEND no longer makes
+an event permanently uneditable; and a split at the first occurrence returns no
+head at all, so the engine DELETEs the resource instead of leaving a husk that
+expands to nothing and can never be removed.
+
+**Cluster #44 — recurrence expansion, cache integrity and startup — closed 5**
+(its sixth, `expand_occurrences`, went with #42). `gc_orphans` takes a
+collection scope, so one clean collection can no longer sweep the orphans
+another collection's poison resource was protecting; `items` records the FTS
+rowid so an upsert deletes by rowid instead of scanning the whole FTS table,
+which is what made a full resync O(n^2) under the global lock; `bootstrap` has
+the same per-collection tolerance `sync_all` always had, so a bad collection or
+an unreachable Radicale no longer takes startup down with it;
+`_thisandfuture_shifts` — and `edit._tf_shift`, its write-path twin with the
+identical gap — guard tz-awareness as well as dateness; and `discover` reports
+whether the live collection set moved, so a list deleted on another device
+finally reaches the open tab.
+
+**Cluster #47 — tasks view and bulk add — closed 6**, including the
+day-column-drag test gap that was in no cluster issue. Two of the six needed
+re-scoping first (see their entries): main's 2026-08-14 merge had already taken
+the duplicate row and the `childrenOf` rescan, leaving a flattened tree and a
+per-row `colorOf` scan respectively. The rest as filed: a multi-line paste
+regenerates the row's idempotency id, `toggleShared` compares slot values by
+value (a shared `sameValue` in util.ts, replacing the copy in TaskModal), and a
+failed list delete restores the group membership as well as the list.
+
+**Cluster #48 — untrusted color into the CSSOM — closed 6.** The beacon is
+closed at both layers: `dav/xml.py` gains a `clean_color` the read path applies
+at ingest and the write path now shares, so the app no longer refuses to write
+what it happily reads back, and `cssColor` in util.ts guards every inline-style
+site on the client — applied at the ACCESSOR in each component rather than at
+each style site, so a new consumer inherits it. That includes the `boxShadow`
+shorthand in Sidebar, where a wire value escapes the property boundary most
+freely. The rest: the public page names the zone when a fall-back hour repeats
+(and carries that label through to the confirmation card), moving an event into
+a hidden calendar reveals it, the scheduling fetch got the staleness guard that
+was the last one missing, and `.appear-text` is back at the mobile 16px floor.
+
+**All 41 findings from the 2026-08-07 sweep are now closed.**
 
 
 ### HTTP API surface
 
-#### [ ] Unauthenticated request bodies are buffered whole before any length bound or rate limiter runs — a single anonymous POST /api/login can exhaust memory
+#### [x] Unauthenticated request bodies are buffered whole before any length bound or rate limiter runs — a single anonymous POST /api/login can exhaust memory
 
 `backend/tasksd/app.py:1177` (`login`) · **high** · security
 
@@ -2603,7 +2745,7 @@ Against the real app (authenticated):
 bound — an estimate in minutes never needs more). Extend the existing sidecar test with
 the oversized-int case alongside the non-finite-float one.
 
-#### [ ] PUT .../tasks/{uid}/sidecar answers 200 null for an unknown uid and writes a sidecar row gc_orphans can never reclaim
+#### [x] PUT .../tasks/{uid}/sidecar answers 200 null for an unknown uid and writes a sidecar row gc_orphans can never reclaim
 
 `backend/tasksd/app.py:983` (`put_sidecar`) · **low** · bug · `minor`
 
@@ -2649,7 +2791,7 @@ Better, check existence before writing (`store.get_item(conn, href, uid)`) insid
 `TaskService.set_sidecar` so no row is created at all, and add a test asserting an
 unknown uid 404s and leaves `count(sidecar)` unchanged.
 
-#### [ ] Test gap: the SSE endpoint /api/events has no backend test at all, including its per-connection cleanup
+#### [x] Test gap: the SSE endpoint /api/events has no backend test at all, including its per-connection cleanup
 
 `backend/tasksd/app.py:1144` (`events`) · **low** · test-gap
 
@@ -2693,7 +2835,7 @@ disconnect path.
 
 ### Auth + session
 
-#### [ ] Logout does not close an already-open SSE stream — a revoked session keeps receiving live change events forever
+#### [x] Logout does not close an already-open SSE stream — a revoked session keeps receiving live change events forever
 
 `backend/tasksd/app.py:1152` (`events`) · **medium** · security · `minor`
 
@@ -2757,9 +2899,19 @@ every 15 s, so a revoked stream dies within one keepalive interval and the same 
 also retires a stream whose JWT `exp` passed. Add a test: login, open the stream,
 logout, publish, assert nothing arrives.
 
-#### [ ] Changing the app password (or username) does not invalidate existing sessions, and there is no sign-out-everywhere
+#### [x] Changing the app password (or username) does not invalidate existing sessions, and there is no sign-out-everywhere
 
 `backend/tasksd/auth.py:228` (`session_claims`) · **medium** · security
+
+**Fixed, with two deviations from the suggestion below.** The `cv` claim is
+keyed with the signing secret (HMAC) rather than a bare `sha256(hash)[:16]`: on
+the `TASKS_AUTH_PASSWORD` dev path the credential material is a plaintext
+password, and a truncated unkeyed digest of it is offline-guessable by whoever
+holds the token. And it fingerprints the *configured* credential rather than the
+derived hash, because scrypt salts randomly — hashing the plaintext at startup
+yields a different hash on every boot, so binding to it would have signed
+everyone out on each ordinary restart. `docs/DEPLOY.md` now documents both
+levers under "If the password leaks".
 
 The session JWT carries only `sub`/`iat`/`exp`/`jti` and is signed with
 `TASKS_SESSION_SECRET`, which is independent of the password hash. `session_claims`
@@ -2821,7 +2973,7 @@ hash fails against an Authenticator built with a new one.
 
 ### Service layer
 
-#### [ ] Idempotent booking replays spend the per-link budget without landing a booking, restoring the link-lockout DoS the ceiling was rewritten to close
+#### [x] Idempotent booking replays spend the per-link budget without landing a booking, restoring the link-lockout DoS the ceiling was rewritten to close
 
 `backend/tasksd/service.py:792` (`book_slot`) · **medium** · security
 
@@ -2865,7 +3017,7 @@ only when the result is a fresh booking. Add a test that books once, replays 40 
 and asserts a different address can still book (mirroring
 `test_refused_bookings_do_not_spend_the_links_budget`).
 
-#### [ ] bootstrap() has no per-collection error handling, so one unreachable or vanished collection aborts application startup entirely
+#### [x] bootstrap() has no per-collection error handling, so one unreachable or vanished collection aborts application startup entirely
 
 `backend/tasksd/service.py:103` (`bootstrap`) · **medium** · bug
 
@@ -2916,7 +3068,7 @@ answers when `list_collections`/`sync_collection` raise.
 
 ### iCalendar edit path
 
-#### [ ] shift_series moves a UTC UNTIL by the wall-clock delta, so dragging a zone-aware bounded series across a DST edge silently deletes its last occurrence(s)
+#### [x] shift_series moves a UTC UNTIL by the wall-clock delta, so dragging a zone-aware bounded series across a DST edge silently deletes its last occurrence(s)
 
 `backend/tasksd/ical/edit.py:777` (`_shift_rrule`) · **medium** · bug
 
@@ -2968,7 +3120,7 @@ applies to DTSTART. Leave floating and DATE-valued UNTILs on the current path. A
 regression test asserting that a 7-day drag of a UNTIL-bounded America/Chicago series
 across the 2026-11-01 fall-back keeps the same number of occurrences.
 
-#### [ ] Deleting one occurrence destroys a RANGE=THISANDFUTURE override, silently reverting every later occurrence to the master
+#### [x] Deleting one occurrence destroys a RANGE=THISANDFUTURE override, silently reverting every later occurrence to the master
 
 `backend/tasksd/ical/edit.py:639` (`exclude_occurrence`) · **medium** · bug · `minor`
 
@@ -3022,7 +3174,7 @@ str(c.get("RECURRENCE-ID").params.get("RANGE", "")).upper() != "THISANDFUTURE"` 
 drop predicate. Add a test that deletes the override's own slot and asserts the later
 occurrences keep their overridden start and summary.
 
-#### [ ] split_series lacks the all-day <-> timed guard shift_series has, so toggling "all day" and saving "This and following" is an unhandled TypeError (500)
+#### [x] split_series lacks the all-day <-> timed guard shift_series has, so toggling "all day" and saving "This and following" is an unhandled TypeError (500)
 
 `backend/tasksd/ical/edit.py:983` (`split_series`) · **medium** · bug · `minor`
 
@@ -3078,7 +3230,7 @@ isinstance(edit.dtstart, datetime)`, raise the same ValueError ("cannot switch a
 between all-day and timed…") so the route answers 422. Cover both directions with a
 test.
 
-#### [ ] _event_duration subtracts DTEND-DTSTART with no tolerance for mixed value types or awareness, so one malformed foreign event becomes permanently uneditable (500)
+#### [x] _event_duration subtracts DTEND-DTSTART with no tolerance for mixed value types or awareness, so one malformed foreign event becomes permanently uneditable (500)
 
 `backend/tasksd/ical/edit.py:582` (`_event_duration`) · **low** · bug
 
@@ -3125,7 +3277,7 @@ mismatch degrades to a wall-clock span instead of raising. Add a fidelity/regres
 case with a mixed-type DTSTART/DTEND master driven through split_series and
 apply_occurrence_override.
 
-#### [ ] "This and following" on the FIRST occurrence writes a head whose UNTIL precedes its own DTSTART, leaving an undeletable empty resource behind forever
+#### [x] "This and following" on the FIRST occurrence writes a head whose UNTIL precedes its own DTSTART, leaving an undeletable empty resource behind forever
 
 `backend/tasksd/ical/edit.py:1007` (`split_series`) · **low** · bug
 
@@ -3231,9 +3383,16 @@ applied to FREQ; or fast-forward the rule's DTSTART to the last slot before
 Add a test asserting `FREQ=HOURLY` with a DTSTART decades before the window either
 raises promptly or completes in well under a second.
 
-#### [ ] expand_occurrences silently truncates at max_occurrences=750, so a rule the guard explicitly permits loses ~12 days off the end of the calendar grid and makes the public booking page advertise slots that 409
+#### [x] expand_occurrences silently truncates at max_occurrences=750, so a rule the guard explicitly permits loses ~12 days off the end of the calendar grid and makes the public booking page advertise slots that 409
 
 `backend/tasksd/ical/recur.py:279` (`expand_occurrences`) · **medium** · bug
+
+**Closed in the cluster-#42 pass**, alongside its twin ("A dense recurring
+series stops blocking bookings past 750 occurrences") — the same truncation
+seen from the booking side. The cap is now derived from the window
+(`_MAX_PER_DAY × days + slack`, floored at the old 750) so every rule the
+density guard permits expands in full, and overrunning it raises rather than
+returning a short list.
 
 `expand_occurrences` stops emitting after 750 occurrences with no signal to the caller —
 no exception, no flag, nothing `events_in_range` can distinguish from 'the series really
@@ -3286,7 +3445,7 @@ master-row branch and the user sees one event rather than a hole. Add a test tha
 expands a permitted 24/day rule over the 43-day grid window and asserts either the full
 count or the raise.
 
-#### [ ] _thisandfuture_shifts crashes with TypeError on a RANGE=THISANDFUTURE override whose RECURRENCE-ID and DTSTART differ in tz-awareness, wiping every occurrence of the series from the calendar
+#### [x] _thisandfuture_shifts crashes with TypeError on a RANGE=THISANDFUTURE override whose RECURRENCE-ID and DTSTART differ in tz-awareness, wiping every occurrence of the series from the calendar
 
 `backend/tasksd/ical/recur.py:109` (`_thisandfuture_shifts`) · **low** · bug · `minor`
 
@@ -3415,7 +3574,7 @@ delete and `orphan_sidecar` for the evicted UID). Independently, make
 otherwise surface a ConflictError. Add a unit test with the stub DAV that rewrites a
 href with a different UID and asserts `store.count_items(...) == 1` after the next sync.
 
-#### [ ] gc_orphans is global while the guard that gates it is per-collection, so one clean collection permanently deletes the sidecar state another collection's poison resource was protecting
+#### [x] gc_orphans is global while the guard that gates it is per-collection, so one clean collection permanently deletes the sidecar state another collection's poison resource was protecting
 
 `backend/tasksd/sync/engine.py:160` (`full_resync`) · **medium** · bug · `minor`
 
@@ -3471,7 +3630,7 @@ all. Extend test_resync_does_not_gc_sidecars_off_an_incomplete_pass to seed a se
 collection and assert that resyncing it does not sweep the first collection's protected
 orphan.
 
-#### [ ] Every upsert_item does a full scan of items_fts, making a full resync O(n²) — thousands of items freeze the whole API for tens of seconds under the global service lock
+#### [x] Every upsert_item does a full scan of items_fts, making a full resync O(n²) — thousands of items freeze the whole API for tens of seconds under the global service lock
 
 `backend/tasksd/db/store.py:272` (`_fts_replace`) · **medium** · bug
 
@@ -3524,7 +3683,7 @@ conn.lastrowid`) and delete with `DELETE FROM items_fts WHERE rowid=?`, which is
 Either way, add a coverage test that a full resync of a few thousand items completes in
 a bounded time.
 
-#### [ ] A list or calendar created or deleted by another CalDAV client is never pushed to the SPA — the sidebar keeps a list the server has already purged
+#### [x] A list or calendar created or deleted by another CalDAV client is never pushed to the SPA — the sidebar keeps a list the server has already purged
 
 `backend/tasksd/service.py:131` (`sync_all`) · **low** · rendering · `minor`
 
@@ -3577,7 +3736,7 @@ from `list_collections()` between two `sync_all()` calls emits an event.
 
 ### Scheduling + public booking
 
-#### [ ] Idempotent replay of a booking POST spends the per-link ceiling, so anyone holding the published URL can lock the link out permanently
+#### [x] Idempotent replay of a booking POST spends the per-link ceiling, so anyone holding the published URL can lock the link out permanently
 
 `backend/tasksd/app.py:1309` (`public_booking_book`) · **medium** · security
 
@@ -3624,7 +3783,7 @@ bool)` or set a `replayed` key on the confirmation) and only call
 `public_post_link_limiter.record_failure` when a VEVENT was actually written. Add a test
 that books once, replays 40 times, and asserts a different client can still book.
 
-#### [ ] The per-link booking ceiling is a check-then-act: concurrent POSTs all pass the gate before any of them charges, so the 30/hour cap never engages
+#### [x] The per-link booking ceiling is a check-then-act: concurrent POSTs all pass the gate before any of them charges, so the 30/hour cap never engages
 
 `backend/tasksd/app.py:1258` (`_gate`) · **medium** · security
 
@@ -3667,7 +3826,7 @@ front, `release` on SlotTaken/422/404/replay. That keeps the DoS fix (refused re
 cost nothing) while restoring the reserve-before-await property. Add a concurrent-burst
 test (e.g. 60 parallel POSTs from distinct X-Real-IPs) asserting at most 30 land.
 
-#### [ ] The public booking POST mints a fresh client_id on every attempt, so a lost response turns one booking into two and tells the visitor their own slot "was just taken"
+#### [x] The public booking POST mints a fresh client_id on every attempt, so a lost response turns one booking into two and tells the visitor their own slot "was just taken"
 
 `frontend/src/components/BookingPage.tsx:87` (`submit`) · **medium** · bug
 
@@ -3713,7 +3872,7 @@ of the same slot replays the same id and hits the server's replay path. Re-mint 
 when the visitor changes slot. Add a test that fails the first `publicBook` with a
 network Error, retries, and asserts the same `client_id` is sent.
 
-#### [ ] A dense recurring series stops blocking bookings past 750 occurrences, so the public page advertises the owner's busy hours as free
+#### [x] A dense recurring series stops blocking bookings past 750 occurrences, so the public page advertises the owner's busy hours as free
 
 `backend/tasksd/service.py:691` (`_link_busy`) · **medium** · bug
 
@@ -3760,7 +3919,7 @@ fully blocking (or chunk the horizon into sub-windows small enough that `_MAX_PE
 days < max_occurrences`). Add a test: an hourly series over a 180-day horizon must block
 a slot on day 120.
 
-#### [ ] Floating (naive) event times are read in the link's timezone, so a link whose timezone differs from where events were authored silently double-books the owner
+#### [x] Floating (naive) event times are read in the link's timezone, so a link whose timezone differs from where events were authored silently double-books the owner
 
 `backend/tasksd/scheduling.py:101` (`parse_event_time`) · **medium** · bug
 
@@ -3795,7 +3954,7 @@ that, refuse to save a link whose timezone differs from the owner's, or surface 
 warning. Add a test with link tz != authoring tz asserting the busy block lands at the
 authored instant.
 
-#### [ ] On the DST fall-back day the public page renders two identical slot buttons an hour apart, so the visitor can book the wrong hour with no way to tell
+#### [x] On the DST fall-back day the public page renders two identical slot buttons an hour apart, so the visitor can book the wrong hour with no way to tell
 
 `frontend/src/components/BookingPage.tsx:214` (`fmtTime`) · **low** · rendering
 
@@ -3840,7 +3999,7 @@ card. Add a test with the two fall-back slots asserting distinct button labels.
 
 ### Frontend core
 
-#### [ ] Dragging a zone-anchored event in the calendar rewrites DTSTART/DTEND as floating local wall time, destroying the TZID another CalDAV client wrote
+#### [x] Dragging a zone-anchored event in the calendar rewrites DTSTART/DTEND as floating local wall time, destroying the TZID another CalDAV client wrote
 
 `frontend/src/calendar.ts:26` (`shiftIso`) · **high** · bug
 
@@ -3899,9 +4058,16 @@ original had a zone). `_set_datelike` will then re-express it in the property's 
 tzinfo and `DTSTART;TZID=Europe/Berlin` survives. Add table-driven cases to
 calendar.test.ts for a `+02:00` start under TZ=America/New_York in both move and resize.
 
-#### [ ] useAllTasks never clears `loading` when a fetch fails, so the Home dashboard's task modules render permanently blank with no retry
+#### [x] useAllTasks never clears `loading` when a fetch fails, so the Home dashboard's task modules render permanently blank with no retry
 
 `frontend/src/hooks.ts:46` (`useAllTasks`) · **medium** · bug · `minor`
+
+**Closed by deleting the code.** `useAllTasks` had no callers left — HomeView
+moved to `useTaskData()` from `data.tsx` in main's 2026-08-14 merge, and a
+repo-wide grep found only the definition. The live equivalent was checked for
+the same defect and does not have it: `data.tsx` clears its flag in a
+`.finally`, so a failed fetch still ends the loading state. Fixing and testing a
+hook nothing calls would have been coverage of dead code.
 
 `setLoading(false)` is the last statement inside the guarded async body. `makeGuard`
 swallows the rejection (toast + console) and returns undefined, so on any failure the
@@ -3946,7 +4112,7 @@ There is no hooks.test.ts, so nothing catches it.
 promise always settles), and drop the `setLoading(false)` from inside the body. Consider
 `Promise.allSettled` so one failing list does not blank the whole dashboard.
 
-#### [ ] A failed logout still shows the login form, leaving a live session and a valid cookie behind (and raises an unhandled rejection)
+#### [x] A failed logout still shows the login form, leaving a live session and a valid cookie behind (and raises an unhandled rejection)
 
 `frontend/src/App.tsx:411` (`onLogout`) · **medium** · security
 
@@ -3981,7 +4147,7 @@ showToast("Couldn't sign out — you are still signed in on this device. Try aga
 Add a test that rejects `api.logout` and asserts the shell stays mounted with a visible
 error.
 
-#### [ ] A 422 from the API renders as the literal string "[object Object]", because FastAPI's validation detail is a list
+#### [x] A 422 from the API renders as the literal string "[object Object]", because FastAPI's validation detail is a list
 
 `frontend/src/api.ts:275` (`j`) · **low** · rendering · `minor`
 
@@ -4019,7 +4185,7 @@ Concrete trigger on an unauthenticated endpoint: Login.tsx puts no `maxLength` o
 ${e.msg}`).join('; ') || msg : msg`. Add an api.test.ts case stubbing a 422 with an
 array detail and asserting a readable message.
 
-#### [ ] bucketByDay sorts each day's events by raw ISO string, so a zone-anchored event lands in the wrong slot — and can be pushed out of the cell entirely
+#### [x] bucketByDay sorts each day's events by raw ISO string, so a zone-anchored event lands in the wrong slot — and can be pushed out of the cell entirely
 
 `frontend/src/calendar.ts:95` (`bucketByDay`) · **low** · rendering · `minor`
 
@@ -4060,9 +4226,16 @@ b.start.includes('T')) || (a.start ? parseDate(a.start).getTime() : 0) - (b.star
 parseDate(b.start).getTime() : 0))`. Add a test with a `+01:00` start and a floating
 start under TZ=America/New_York.
 
-#### [ ] Test gap: hooks.ts has no test file, so useAllTasks' documented staleness guard and its loading contract are entirely unverified
+#### [x] Test gap: hooks.ts has no test file, so useAllTasks' documented staleness guard and its loading contract are entirely unverified
 
 `frontend/src/hooks.ts:29` (`useAllTasks`) · **low** · test-gap · `minor`
+
+**Closed, narrowed to what survives.** `frontend/src/hooks.test.ts` now exists.
+Three of the four cases the fix below asks for were about `useAllTasks`, which
+was deleted as dead code (see the finding above), so the suite covers
+`useIsMobile` instead — first read, following a `matchMedia` change, and
+removing its listener on unmount. It decides which layout the whole app renders
+and three components subscribe to it.
 
 Every other non-trivial module in frontend/src has a sibling suite (api, util, calendar,
 dashboard, tabs, appearance, App, and every component). hooks.ts has none. `useAllTasks`
@@ -4099,9 +4272,18 @@ is what commits; (3) an AuthError from either call invokes `onExpire` exactly on
 
 ### Tasks view
 
-#### [ ] "View completed" renders a completed subtask twice — once as a top-level row and again nested under its parent
+#### [x] "View completed" renders a completed subtask twice — once as a top-level row and again nested under its parent
 
 `frontend/src/components/TasksView.tsx:257` (`tops`) · **medium** · rendering · `minor`
+
+**Re-scoped, then fixed.** The duplicate is gone — `kidRows` (main's 2026-08-14
+merge) only nests a task whose parent IS rendered, so the completed child was no
+longer emitted twice. What survived is the other half of the same cause: it was
+promoted to a top-level row *instead* of being nested, so the pane sat the child
+beside the parent it belongs under and showed a flat list where a tree was
+intended. The pane now has its own top-level set and its own children lookup,
+neither of which consults `showCompleted` — which is the flag that never applied
+to it in the first place.
 
 `tops` treats a task as top-level when its parent is not rendered, and
 `parentIsRendered` uses the global `showCompleted` flag: `return !!p && (showCompleted
@@ -4144,7 +4326,7 @@ completedTops = shownTasks.filter((t) => isDone(t) && !(t.parent && byUid.get(t.
 && isDone(byUid.get(t.parent)!)))` and sort that. Add a test asserting
 `getAllByText('Book flight')` has length 1 in the pane.
 
-#### [ ] A multi-line paste retitles a bulk row but keeps its client_id, so retrying after a lost response silently discards the new title
+#### [x] A multi-line paste retitles a bulk row but keeps its client_id, so retrying after a lost response silently discards the new title
 
 `frontend/src/components/AddMultipleModal.tsx:341` (`onPasteTitle`) · **medium** · bug · `minor`
 
@@ -4182,7 +4364,7 @@ Reproduced (vitest): submit row 1 "alpha" -> onSubmit reports index 0 failed -> 
 "mints a new client_id when the row is retitled before the retry" test with a paste-
 driven retitle.
 
-#### [ ] Turning Tags into a shared property silently drops the tag already typed into a row (array compared by reference)
+#### [x] Turning Tags into a shared property silently drops the tag already typed into a row (array compared by reference)
 
 `frontend/src/components/AddMultipleModal.tsx:382` (`toggleShared`) · **medium** · bug · `minor`
 
@@ -4216,9 +4398,16 @@ Second consequence of the same reference compare: `donor` matches rows[0] uncond
 i) => x === b[i]) : a === b`, then use `eq` in both the `donor` find and the `every`
 guard. Add the Tags case to the adoption test.
 
-#### [ ] Test gap: day-column drag-to-reschedule has no coverage at all, though it writes a DUE to a real CalDAV resource
+#### [x] Test gap: day-column drag-to-reschedule has no coverage at all, though it writes a DUE to a real CalDAV resource
 
 `frontend/src/components/TasksView.tsx:150` (`dropOnDay`) · **medium** · test-gap
+
+**Partly overtaken, then completed.** A `day-column drag` suite landed with
+main's 2026-08-14 merge covering the two write shapes (zone-anchored due, all-day
+due). What it did not cover was what `dropOnDay` DECIDES before writing, so this
+pass added the rest: the time of day surviving a column move, a drop on the
+task's own column writing nothing, and a drop that resolves no task writing
+nothing.
 
 `dropOnDay` is the only drag-driven write in the Tasks view — a drop mutates DUE on the
 user's real task list — and neither it nor the surrounding `DayColumn`/`DayCard` surface
@@ -4258,7 +4447,7 @@ issues no PATCH; (d) a rejected PATCH restores the original due in the DOM; (e) 
 due before the window pools under the "Overdue" label in the today column and is counted
 once.
 
-#### [ ] A failed list delete restores the list but permanently loses its group membership
+#### [x] A failed list delete restores the list but permanently loses its group membership
 
 `frontend/src/components/Sidebar.tsx:126` (`remove`) · **low** · bug · `minor`
 
@@ -4301,11 +4490,14 @@ cleanup until after the DELETE resolves: `const prevGroups = groups; ... if ((aw
 api.remove(id)) === undefined) { onItems(prev); if (groupsOn)
 onGroupsChange!(prevGroups!) }`.
 
-#### [ ] The merged all-lists pane does an O(n²) scan per render (childrenOf) plus an O(n·m) lookup per row
+#### [x] The merged all-lists pane does an O(n²) scan per render (childrenOf) plus an O(n·m) lookup per row
 
 `frontend/src/components/TasksView.tsx:88` (`colorOf`) · **low** · bug · `minor`
 
-**Partly overtaken.** The `childrenOf` half is gone — it is a memoised `kidRows` Map lookup as of main's 2026-08-14 merge, not a per-row rescan. `colorOf` is unchanged and still scans `lists` for every rendered row, so the O(n·m) half stands. Re-scope before working this.
+**Partly overtaken; the surviving half is fixed.** The `childrenOf` half was
+already gone — a memoised `kidRows` Map lookup as of main's 2026-08-14 merge,
+not a per-row rescan. `colorOf` still scanned `lists` for every rendered row;
+it is now a `Map` built once under `useMemo`.
 
 `childrenOf` re-scans the whole task array for every rendered top-level row, and
 `colorOf` re-scans the lists array for every row. Because the view fetches every list
@@ -4341,7 +4533,7 @@ kidsBy.get(uid) ?? EMPTY`, and a `Map` for list colors. Memoize
 
 ### Calendar + Home
 
-#### [ ] Collection colors from the wire are unvalidated and go straight into the CSSOM — url() in calendar-color is a live remote-fetch beacon
+#### [x] Collection colors from the wire are unvalidated and go straight into the CSSOM — url() in calendar-color is a live remote-fetch beacon
 
 `frontend/src/components/HomeView.tsx:358` (`TaskList`) · **medium** · security
 
@@ -4391,11 +4583,18 @@ normalize in `_list_dto` too, dropping any `row["color"]` that does not match
 `_COLOR_RE`, so a hostile value never crosses the wire. Cover it with a test that a wire
 color of `url(https://x/)` renders no inline background.
 
-#### [ ] HomeView's calendar fetch has no staleness guard, so an older batch settling last leaves the mini calendar showing a stale month
+#### [x] HomeView's calendar fetch has no staleness guard, so an older batch settling last leaves the mini calendar showing a stale month
 
 `frontend/src/components/HomeView.tsx:139` (`requestWindow`) · **low** · bug · `minor`
 
-**Code no longer exists.** HomeView stopped fetching calendars itself in main's 2026-08-14 merge; it reads through `useCalendarData()` and defers to `requestWindow`, whose staleness guard Stage 4 made per-window in `data.tsx`. Anchored at the call site. Verify before working — this may already be closed.
+**Re-scoped, then fixed.** Verified: the calendar half really was closed.
+HomeView stopped fetching calendars itself in main's 2026-08-14 merge — it
+reads through `useCalendarData()` and defers to `requestWindow`, whose
+staleness guard Stage 4 made per-window in `data.tsx`. What was still
+unguarded was the SCHEDULING effect in the same component: `api.schedulingLinks()`
+then `api.schedulingBookings()`, sequentially, re-running on `rev`, with no
+generation counter and no cleanup — the same defect one module along, and the
+last fetch in the app without the guard. That one now carries a token ref.
 
 The calendar effect fans out `api.calendars()` plus one `api.events()` per visible
 calendar and commits with `setCals`/`setEvents`, with no generation counter,
@@ -4440,7 +4639,7 @@ a HomeView test in the shape of CalendarView.test.tsx's "ignores an older fetch 
 settles after a newer one": hold the first `api.events` promise, bump `rev`, let the
 second resolve, then release the first and assert the dots came from the newer batch.
 
-#### [ ] Moving an event into a hidden calendar makes it vanish from the grid with no feedback; only the create path un-hides
+#### [x] Moving an event into a hidden calendar makes it vanish from the grid with no feedback; only the create path un-hides
 
 `frontend/src/components/CalendarView.tsx:322` (`save`) · **low** · rendering · `minor`
 
@@ -4489,7 +4688,7 @@ hidden calendar in the modal drops that id from `onHiddenCalendarsChange`.
 
 ### Appearance + theming
 
-#### [ ] calendar-color read off the wire is never validated and lands in the CSSOM, so a foreign CalDAV client can plant a url() beacon
+#### [x] calendar-color read off the wire is never validated and lands in the CSSOM, so a foreign CalDAV client can plant a url() beacon
 
 `backend/tasksd/dav/client.py:152` (`discover`) · **medium** · security
 
@@ -4549,7 +4748,7 @@ reaches an inline style or `--ev-c`, and stop interpolating a wire value into th
 `boxShadow` shorthand. Add a sync test asserting a `calendar-color` of `url(//evil)`
 surfaces as `color: null` in the list DTO.
 
-#### [ ] The Appearance editor's color text field overrides the mobile 16px input floor, reintroducing iOS Safari's zoom-on-focus
+#### [x] The Appearance editor's color text field overrides the mobile 16px input floor, reintroducing iOS Safari's zoom-on-focus
 
 `frontend/src/styles/app.css:929` (`.appear-text`) · **low** · rendering · `minor`
 
@@ -4592,7 +4791,7 @@ var(--fs-scale))); }` (or append `.appear-text` to the existing `.bulk-row .inpu
 
 ### Cross-cutting
 
-#### [ ] Saving a DURATION-only event collapses it to zero length (silently destroys its span, and it stops blocking bookings)
+#### [x] Saving a DURATION-only event collapses it to zero length (silently destroys its span, and it stops blocking bookings)
 
 `frontend/src/components/CalendarView.tsx:638` (`EventModal`) · **medium** · bug
 

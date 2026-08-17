@@ -28,6 +28,12 @@ Legend: **[SAFE]** on-Pi, reversible · **[DASH]** you, in the Cloudflare dashbo
 ```bash
 cd ~/tasks/frontend && npm install && npm run build   # -> dist/
 ```
+⚠️ **Restart the service after a rebuild**: `sudo systemctl restart tasks`. The
+Content-Security-Policy (below) carries a hash of the SPA's inline pre-paint
+script, read from `dist/index.html` at startup — so a rebuild that changes that
+script while the old process is still running leaves a stale hash, and the
+browser blocks the script: a blank page. Everything else about a rebuild is
+picked up without a restart, so this is the one new rule.
 
 ## A. Install the app  **[SAFE]**
 ```bash
@@ -197,6 +203,60 @@ looking reachable.
   ```
   A `resource` that does not exactly match the URL you gave Claude — including
   the path — is the usual reason a reachable server still fails to connect.
+
+## Content-Security-Policy
+
+The app sets one on every response (`backend/tasksd/csp.py`). It is what bounds
+where a page can fetch from at all — the field-level guards on collection colors
+and appearance tokens only cover the fields they name, and this covers the rest.
+Nothing to configure in Caddy; the snippet has a comment saying why it must not
+set a second one.
+
+What it allows, and why:
+
+| Directive | Why it is not tighter |
+|---|---|
+| `script-src 'self' 'sha256-…'` | The hash is the SPA's inline pre-paint script (it applies your theme before first paint, so it cannot be a module). Derived from the served `dist/index.html` at startup — see the warning in §0. |
+| `style-src … 'unsafe-inline' fonts.googleapis.com` | Every calendar and list color is an inline style, and the MCP consent screen is a `<style>` block, so `'unsafe-inline'` is unavoidable. The Google host is there because 13 of the Appearance font choices load a stylesheet from it. |
+| `font-src 'self' fonts.gstatic.com` | Where that Google stylesheet then fetches its woff2. The shipped defaults (Fraunces/Inter/JetBrains Mono) are local and need neither host. |
+
+Everything else is `'self'` or `'none'`. Note the privacy consequence of the two
+Google entries: picking one of those font families means every page load — the
+public booking page included, for visitors who are not you — tells Google the
+reader's IP. Self-hosting those families would let both entries go.
+
+**If it breaks something**, in `/etc/tasks/tasks.env`:
+
+```
+TASKS_CSP=report-only    # log violations in the browser console, block nothing
+TASKS_CSP=off            # no header at all
+```
+then `sudo systemctl restart tasks`. Unset (or anything unrecognised) enforces —
+a typo must not silently disable a security control. The policy in force is
+logged at startup: `journalctl -u tasks | grep csp:`.
+
+## If the password leaks — signing out everywhere
+
+Sessions are JWTs, so they are valid until they expire (`TASKS_SESSION_TTL`, 7
+days by default) whether or not the browser still holds the cookie. Logging out
+withdraws one session *by name*; it cannot reach a session minted on someone
+else's machine, whose id you have never seen.
+
+Two levers, in the order to reach for them:
+
+1. **Change the password.** Regenerate with `python -m tasksd hash-password`,
+   set `TASKS_AUTH_PASSWORD_HASH` in `/etc/tasks/tasks.env`, `sudo systemctl
+   restart tasks`. Every existing session is refused from that moment: a token
+   carries a fingerprint of the credentials it was minted under, so changing
+   the password (or `TASKS_AUTH_USER`) invalidates all of them. This is the
+   normal response, and it keeps the session secret stable.
+2. **Rotate `TASKS_SESSION_SECRET`** if you have reason to think the secret
+   itself leaked — it is the signing key, and anyone holding it can mint a
+   valid session without the password. Set a fresh one (`python -c 'import
+   secrets;print(secrets.token_hex(32))'`) and restart. Every session dies,
+   including yours.
+
+An ordinary restart signs nobody out; only a change to one of these does.
 
 ## Backups (spec §9 — important)
 Back up **both**:

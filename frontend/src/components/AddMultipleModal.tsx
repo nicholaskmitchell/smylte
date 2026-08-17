@@ -3,6 +3,7 @@ import {
   type ClipboardEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode,
 } from 'react'
 import { clientId, PRIORITIES, type CreateTaskBody, type List } from '../api'
+import { sameValue } from '../util'
 import { inputLang } from '../time'
 import { useTimeFormat } from '../timeformat'
 
@@ -353,8 +354,18 @@ export function AddMultipleModal({ lists, defaultList, initialTitle, onSubmit, o
       const next = rs.slice()
       lines.forEach((summary, i) => {
         const at = index + i
-        if (at < next.length) next[at] = { ...next[at], summary }
-        else next.push({ ...blankRow(defaultList), summary })
+        if (at < next.length) {
+          // Same rule `patchRow` documents, on the path that bypasses it: a
+          // retitled row is a different task and needs its own idempotency id.
+          // A row that failed (and kept its cid) and is then corrected by a
+          // multi-line paste would otherwise replay the OLD slug with a NEW
+          // title, and the server answers a replayed slug by confirming the
+          // resource already written under it — silently discarding the fix.
+          const retitled = summary !== next[at].summary
+          next[at] = { ...next[at], summary, ...(retitled ? { cid: clientId() } : {}) }
+        } else {
+          next.push({ ...blankRow(defaultList), summary })
+        }
       })
       return next.slice(0, MAX_ROWS)
     })
@@ -383,9 +394,14 @@ export function AddMultipleModal({ lists, defaultList, initialTitle, onSubmit, o
     const on = !sharedOn[f.key]
     setSharedOn((s) => ({ ...s, [f.key]: on }))
     if (!on) return
+    // By VALUE, not by reference. The `tags` slot holds a string[], so `!==`
+    // against the blank was ALWAYS true and `===` always false: the adoption
+    // branch could never run for Tags, which is exactly the loss this function
+    // exists to prevent — turning Tags shared silently dropped the tag already
+    // typed into a row.
     const blank = blankValues(defaultList)
-    const donor = rows.find((r) => f.slots.some((s) => r[s] !== blank[s]))
-    if (donor && f.slots.every((s) => shared[s] === blank[s])) {
+    const donor = rows.find((r) => f.slots.some((s) => !sameValue(r[s], blank[s])))
+    if (donor && f.slots.every((s) => sameValue(shared[s], blank[s]))) {
       setShared((v) => ({ ...v, ...Object.fromEntries(f.slots.map((s) => [s, donor[s]])) }))
     }
   }

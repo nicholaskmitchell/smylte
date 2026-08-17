@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties }
 import { api, clientId, type Booking, type BookingLink, type CalEvent, type List, type Task } from '../api'
 import { useIsMobile } from '../hooks'
 import { useCalendarData, useTaskData, type TaskData } from '../data'
-import { makeGuard, addDays, dayKey, isOverdue, ymd } from '../util'
+import { cssColor, makeGuard, addDays, dayKey, isOverdue, ymd } from '../util'
 import { fmtDue } from '../time'
 import { sortTasks } from '../order'
 import { useTimeFormat } from '../timeformat'
@@ -140,24 +140,38 @@ export function HomeView({ rev, onExpire, layout, onLayoutChange,
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [needsCal, from, to, wanted.map((c) => c.id).join(',')])
 
+  // Two sequential requests with no staleness guard: the effect re-runs on
+  // `rev`, so two SSE-driven refreshes put two batches in flight and whichever
+  // settled last won — painting whatever the older one happened to see. Every
+  // other fetch in this app carries this guard (`useTaskData`'s token ref,
+  // `fetchWindow`'s per-window generation); this one was the last without it.
+  const schedToken = useRef(0)
   useEffect(() => {
     if (!needsSched) { setLinks([]); setBookings([]); return }
+    const mine = ++schedToken.current
     const guard = makeGuard(onExpire)
     guard(async () => {
-      setLinks(await api.schedulingLinks())
-      setBookings(await api.schedulingBookings())
+      const ls = await api.schedulingLinks()
+      if (mine !== schedToken.current) return
+      setLinks(ls)
+      const bs = await api.schedulingBookings()
+      if (mine !== schedToken.current) return
+      setBookings(bs)
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rev, needsSched])
 
+  // Through cssColor at the accessor, so every downstream style site is
+  // covered: these values are whatever another CalDAV client wrote into the
+  // collection's calendar-color, and they land in inline styles — see util.ts.
   const colorOf = useCallback(
-    (listId: string) => lists.find((l) => l.id === listId)?.color ?? null, [lists])
+    (listId: string) => cssColor(lists.find((l) => l.id === listId)?.color), [lists])
 
   // An event carries its collection href, not a calendar id — that is what maps
   // it back to the calendar whose color it should wear.
   const calByHref = useMemo(() => new Map(cals.map((c) => [c.href, c] as const)), [cals])
   const eventColor = useCallback(
-    (e: CalEvent) => calByHref.get(e.calendar)?.color ?? null, [calByHref])
+    (e: CalEvent) => cssColor(calByHref.get(e.calendar)?.color), [calByHref])
   const visibleEvents = useMemo(
     () => events.filter((e) => !hidden.has(calByHref.get(e.calendar)?.id || '')),
     [events, hidden, calByHref])

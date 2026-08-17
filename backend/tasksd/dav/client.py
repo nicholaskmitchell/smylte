@@ -149,7 +149,11 @@ class DavClient:
                     c.get("name", "").upper() for c in comp_set.findall(X.COMP) if c.get("name")
                 }
             name = r.text(X.DISPLAYNAME) or r.href.rstrip("/").rsplit("/", 1)[-1]
-            color = (r.text(X.CALENDAR_COLOR) or "").strip() or None
+            # Validated where it enters, exactly like `order` three lines
+            # below: a dead property any sharing client can PROPPATCH, read
+            # straight off the wire, and handed to the SPA to put in the CSSOM.
+            # Anything that is not a plain hex color is no color at all.
+            color = X.clean_color(r.text(X.CALENDAR_COLOR))
             order_text = (r.text(X.CALENDAR_ORDER) or "").strip()
             try:
                 order = int(order_text) if order_text else None

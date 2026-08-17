@@ -5,12 +5,13 @@ anywhere. HTTP-level coverage lives in test_scheduling.py (radicale-marked).
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import pytest
 from helpers import foreign_event_raw
 
+from tasksd import scheduling
 from tasksd.config import Settings
 from tasksd.dav.client import CollectionInfo, Item
 from tasksd.db import store
@@ -81,6 +82,57 @@ def test_public_busy_is_scoped_to_the_links_calendar(svc):
     assert "2026-07-13T10:00:00-05:00" not in starts
 
 
+def test_a_dense_series_still_blocks_past_the_old_occurrence_cap(svc):
+    """`_link_busy` builds the public page's conflict set through
+    `events_in_range`, which fans recurring masters out. Expansion used to stop
+    silently after 750 occurrences — no exception, nothing the caller could tell
+    apart from "the series ends here" — while the density guard deliberately
+    PERMITS up to 24 instances a day. An hourly series overruns 750 in about a
+    month, so every occurrence past that was invisible to the busy check and the
+    slots sitting on top of the owner's real meetings were advertised, and
+    bookable, as free."""
+    raw = foreign_event_raw(
+        "hourly", "Standing call",
+        dtstart="20260713T140000Z", dtend="20260713T150000Z",
+        rrule="FREQ=HOURLY;INTERVAL=1;COUNT=5000",
+    )
+    store.upsert_item(
+        svc._conn, CAL_A, Item(f"{CAL_A}hourly.ics", '"1"', raw), extract_from_raw(raw)
+    )
+
+    # The window public_link_info actually uses: the link's whole horizon, up
+    # to 182 days. Day 120 of it is far past the 750th occurrence, which an
+    # hourly series reaches in about 31.
+    day0 = datetime(2026, 7, 13, tzinfo=TZ)
+    window = scheduling.Interval(day0, day0 + timedelta(days=180))
+    busy = svc._link_busy(TZ, window)
+
+    covered = datetime(2026, 11, 10, 14, 30, tzinfo=timezone.utc)
+    assert any(iv.start <= covered < iv.end for iv in busy), (
+        "an hourly series stopped blocking past the expansion cap"
+    )
+
+
+def test_a_series_too_dense_to_expand_blocks_its_whole_window(svc):
+    """The other half. When expansion is refused outright, the calendar grid
+    degrades to the master row — one visible row the owner can act on. The busy
+    set has no such reader, so the same degradation there would quietly hand an
+    anonymous visitor the owner's whole day. It reports the window as busy."""
+    raw = foreign_event_raw(
+        "toodense", "Every minute",
+        dtstart="20260713T140000Z", dtend="20260713T140100Z",
+        rrule="FREQ=MINUTELY;INTERVAL=1;COUNT=100000",
+    )
+    store.upsert_item(
+        svc._conn, CAL_A, Item(f"{CAL_A}toodense.ics", '"1"', raw), extract_from_raw(raw)
+    )
+
+    day = datetime(2026, 7, 13, tzinfo=TZ)
+    busy = svc._link_busy(TZ, scheduling.Interval(day, day + timedelta(days=1)))
+    noon = datetime(2026, 7, 13, 12, 0, tzinfo=TZ)
+    assert any(iv.start <= noon < iv.end for iv in busy)
+
+
 def _stub_create_event(svc):
     captured: dict = {}
 
@@ -99,6 +151,8 @@ def test_book_slot_writes_zone_aware_utc(svc):
         token, start_iso="2026-07-13T09:00:00-05:00", name="N", email="n@x.co", now=NOW
     )
     assert res is not None
+    _, created = res
+    assert created is True
     # The VEVENT is written as an absolute UTC instant, not floating local —
     # floating would be re-read relative to whichever link zone parses it next,
     # so links in different zones wouldn't block each other's bookings.
@@ -111,15 +165,19 @@ def test_booking_replay_is_scoped_to_its_link(svc):
     t1, t2 = _make_link(svc), _make_link(svc, title="Other link")
     _stub_create_event(svc)
     cid = "a" * 32
-    first = svc.book_slot(
+    first, first_created = svc.book_slot(
         t1, start_iso="2026-07-13T09:00:00-05:00", name="N", email="n@x.co",
         client_id=cid, now=NOW,
     )
-    # Same link + same client_id = replay: the original confirmation returns.
-    again = svc.book_slot(
+    assert first_created is True
+    # Same link + same client_id = replay: the original confirmation returns,
+    # flagged as NOT created — nothing was written, so the caller must not
+    # charge the link's booking budget for it.
+    again, again_created = svc.book_slot(
         t1, start_iso="2026-07-13T09:00:00-05:00", name="N", email="n@x.co",
         client_id=cid, now=NOW,
     )
+    assert again_created is False
     assert again["id"] == first["id"] and again["start"] == first["start"]
     # A different link must not treat it as a replay (nor leak the other
     # booking's confirmation): clean 422-shaped rejection.
@@ -128,3 +186,44 @@ def test_booking_replay_is_scoped_to_its_link(svc):
             t2, start_iso="2026-07-13T15:00:00-05:00", name="M", email="m@x.co",
             client_id=cid, now=NOW,
         )
+
+
+# ── startup must not depend on the CalDAV server being healthy ──────────────
+
+def test_bootstrap_survives_a_collection_that_cannot_be_synced(svc):
+    """`bootstrap` ran discover() and every per-collection sync() with no try at
+    all, inside the FastAPI lifespan. Any exception propagated out of the
+    lifespan and uvicorn reported a startup failure and exited — so one bad or
+    vanished collection, or a transient Radicale hiccup, took down the whole
+    listener: /healthz, /api/login, the SPA and every read path, all of which
+    are pure SQLite against the already-populated cache and would have worked.
+    `sync_all` guards exactly these two failure modes deliberately."""
+    boom = []
+
+    def explode(href):
+        boom.append(href)
+        raise RuntimeError("radicale said no")
+
+    svc._engine.sync = explode
+    svc.bootstrap()                                   # must not raise
+
+    assert len(boom) == 2, "every collection is still attempted"
+    # …and the failure is recorded where /api/sync can surface it.
+    errors = [
+        r["last_error"] for r in svc._conn.execute("SELECT last_error FROM sync_state")
+    ]
+    assert all(e and "radicale said no" in e for e in errors), errors
+
+    # The cache is still readable, which is the whole point of coming up.
+    assert svc.list_calendars() != []
+
+
+def test_bootstrap_survives_discovery_failing_outright(svc):
+    """A Radicale that is simply down at boot."""
+    def explode():
+        raise RuntimeError("connection refused")
+
+    svc._engine.discover = explode
+    svc._engine.sync = lambda href: None
+    svc.bootstrap()                                   # must not raise
+    assert svc.list_calendars() != []

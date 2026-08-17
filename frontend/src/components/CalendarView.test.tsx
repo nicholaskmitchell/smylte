@@ -35,7 +35,7 @@ const ev = (o: Partial<CalEvent> = {}): CalEvent => ({
   uid: 'u1', id: 'u1', recurrence_id: null, is_recurring: false, calendar: '/c1/',
   summary: 'Standup', description: null, location: null,
   start: '2026-03-02T09:00:00', start_is_date: false,
-  end: '2026-03-02T09:30:00', end_is_date: false,
+  end: '2026-03-02T09:30:00', end_is_date: false, duration: null,
   all_day: false, status: null, tags: [], has_rrule: false,
   href: '/c1/u1.ics', etag: '"1"', ...o,
 })
@@ -68,7 +68,9 @@ const setField = (label: string, value: string) =>
 
 /** `calTaskLists` is controlled like the real App holds it, so a harness that
  *  never fed a change back would test toggles that appear to do nothing. */
-function Harness({ taskLists = [] as string[], showDone = false }) {
+function Harness({ taskLists = [] as string[], showDone = false,
+  hiddenCalendars = [] as string[],
+  onHiddenCalendarsChange = (() => {}) as (next: string[]) => void }) {
   const now = new Date()
   const [cursor, setCursor] = useState(() => new Date(now.getFullYear(), now.getMonth(), 1))
   const [shown, setShown] = useState(taskLists)
@@ -77,7 +79,7 @@ function Harness({ taskLists = [] as string[], showDone = false }) {
     <DataProvider rev={0} onExpire={vi.fn()}>
       <CalendarView onExpire={vi.fn()} cursor={cursor} onCursorChange={setCursor}
         sideCollapsed={false} onToggleSide={vi.fn()}
-        hiddenCalendars={[]} onHiddenCalendarsChange={vi.fn()}
+        hiddenCalendars={hiddenCalendars} onHiddenCalendarsChange={onHiddenCalendarsChange}
         archivedCalendars={[]} onArchivedCalendarsChange={vi.fn()}
         calTaskLists={shown} onCalTaskListsChange={setShown}
         calShowDone={done} onCalShowDoneChange={() => setDone((v) => !v)} />
@@ -85,7 +87,10 @@ function Harness({ taskLists = [] as string[], showDone = false }) {
   )
 }
 
-function setup(events?: CalEvent[], props?: { taskLists?: string[]; showDone?: boolean }) {
+function setup(events?: CalEvent[], props?: {
+  taskLists?: string[]; showDone?: boolean
+  hiddenCalendars?: string[]; onHiddenCalendarsChange?: (next: string[]) => void
+}) {
   if (events) m.events.mockResolvedValue(events)
   // The month lives in App now, so the harness has to hold it — a fixed cursor
   // would make the ‹ › buttons no-ops and quietly pass the navigation tests.
@@ -246,6 +251,45 @@ describe('all-day end conversion', () => {
     setField('Start', '2026-04-01T14:00')
 
     expect(screen.getByLabelText('End')).toHaveValue('2026-04-01T15:30')
+  })
+})
+
+// ── a DURATION-only event has a length, even with no DTEND ──────────────────
+// DAVx5 and the phone clients write DURATION instead of DTEND. Those arrive
+// with `end: null`, and the modal defaulted the end picker to 10:00 — so any
+// save, including a pure rename, rewrote the event's end. `_apply_event_fields`
+// deletes DURATION whenever a dtend is supplied, so the original span was gone
+// for good, and a zero-length event stops blocking booking slots as well.
+
+describe('DURATION-only events', () => {
+  it('seeds the end picker from the duration', async () => {
+    const user = setup([ev({ start: '2026-03-02T09:00:00', end: null, duration: 'PT1H30M' })])
+    await openEvent(user)
+    expect(screen.getByLabelText('End')).toHaveValue('2026-03-02T10:30')
+  })
+
+  it('preserves the span across an edit that never touched the times', async () => {
+    const user = setup([ev({ start: '2026-03-02T09:00:00', end: null, duration: 'PT1H30M' })])
+    await openEvent(user)
+    setField('Title', 'Renamed')
+    await user.click(screen.getByText('Save'))
+    await waitFor(() => expect(m.patchEvent).toHaveBeenCalled())
+    expect(body('patchEvent')).toMatchObject({
+      summary: 'Renamed', start: '2026-03-02T09:00', end: '2026-03-02T10:30',
+    })
+  })
+
+  it('sends no end at all when the span cannot be derived', async () => {
+    // Neither DTEND nor a usable DURATION: sending a fabricated end would
+    // destroy whatever the resource actually holds, so the write omits it.
+    const user = setup([ev({ start: '2026-03-02T09:00:00', end: null, duration: null })])
+    await openEvent(user)
+    setField('Title', 'Renamed')
+    await user.click(screen.getByText('Save'))
+    await waitFor(() => expect(m.patchEvent).toHaveBeenCalled())
+    const sent = body('patchEvent') as Record<string, unknown>
+    expect(sent.summary).toBe('Renamed')
+    expect('end' in sent).toBe(false)
   })
 })
 
@@ -428,5 +472,49 @@ describe('stage 4 — chip identity', () => {
       expect(screen.getAllByTitle(/^Standup/).length).toBeGreaterThanOrEqual(2))
     expect(warn.mock.calls.flat().join(' ')).not.toMatch(/same key/i)
     warn.mockRestore()
+  })
+})
+
+// ── an event moved into a hidden calendar must not just vanish ──────────────
+// The modal's Calendar picker is populated from `visibleCals`, which includes
+// calendars the user has HIDDEN — hidden is a pure render filter, not an
+// exclusion from the list. The create branch reveals the target for exactly
+// this reason ("Don't let a fresh event vanish into a hidden calendar"); the
+// move branch did not, so picking a hidden calendar for an existing event
+// dropped it out of the month grid, the mobile agenda and the day popovers with
+// no feedback at all.
+
+describe('moving into a hidden calendar', () => {
+  const other: List = {
+    id: 'c2', href: '/c2/', name: 'Personal', is_task_list: false, is_calendar: true,
+    open_count: 0, task_count: 0, event_count: 0, total: 0, color: '#1565C0',
+  }
+
+  it('reveals the destination after a successful move', async () => {
+    const onHiddenCalendarsChange = vi.fn()
+    m.calendars.mockResolvedValue([cal, other])
+    m.moveEvent.mockResolvedValue(ev({ calendar: '/c2/' }))
+    const user = setup([ev()], { hiddenCalendars: ['c2'], onHiddenCalendarsChange })
+
+    await openEvent(user)
+    await user.selectOptions(screen.getByLabelText('Calendar'), 'c2')
+    await user.click(screen.getByText('Save'))
+
+    await waitFor(() => expect(m.moveEvent).toHaveBeenCalled())
+    expect(onHiddenCalendarsChange).toHaveBeenCalledWith([])
+  })
+
+  it('leaves the hidden set alone when the destination is already visible', async () => {
+    const onHiddenCalendarsChange = vi.fn()
+    m.calendars.mockResolvedValue([cal, other])
+    m.moveEvent.mockResolvedValue(ev({ calendar: '/c2/' }))
+    const user = setup([ev()], { hiddenCalendars: [], onHiddenCalendarsChange })
+
+    await openEvent(user)
+    await user.selectOptions(screen.getByLabelText('Calendar'), 'c2')
+    await user.click(screen.getByText('Save'))
+
+    await waitFor(() => expect(m.moveEvent).toHaveBeenCalled())
+    expect(onHiddenCalendarsChange).not.toHaveBeenCalled()
   })
 })

@@ -16,6 +16,7 @@ import re
 import secrets
 from datetime import date, datetime
 from typing import Annotated, Literal
+from zoneinfo import ZoneInfo
 
 from fastapi import (
     APIRouter,
@@ -45,8 +46,10 @@ from .config import Settings, normalize_dav_url
 from .dav.errors import AuthError as DavAuthError
 from .dav.errors import DavError
 from .dav.errors import NotFound as DavNotFound
-from .dav.xml import XML_SAFE_PATTERN_SCALAR
+from .dav.xml import XML_SAFE_PATTERN_SCALAR, clean_color
 from .ical import EventEdit, TaskEdit, rrule_from_spec
+from .csp import CSPMiddleware, policy_for_index
+from .limits import BodySizeLimitMiddleware
 from .scheduling import SlotTaken
 from .service import TaskService, priority_from_label
 from .sync.engine import ConflictError
@@ -130,11 +133,11 @@ class ReorderTasks(BaseModel):
     items: list[ReorderEntry] = Field(max_length=_MAX_REORDER_TASKS)
 
 
-_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?$")
-
-
 def _check_color(color: str | None) -> None:
-    if color is not None and not _COLOR_RE.match(color):
+    # One pattern for both directions — see dav/xml.py. The read path used to
+    # have no check at all, so the app refused to WRITE what it happily read
+    # back and handed to the SPA's inline styles.
+    if color is not None and clean_color(color) is None:
         raise HTTPException(422, "color must be #RRGGBB or #RRGGBBAA")
 
 
@@ -448,6 +451,26 @@ class SettingsPatch(BaseModel):
     # Whether completed/cancelled tasks stay on the calendar. Absent means the
     # default (hidden), matching show_completed_tasks; False is a real value.
     calendar_show_done_tasks: bool | None = None
+    # The IANA zone this account authors times in. The app writes non-all-day
+    # events as FLOATING local wall time (`DTSTART:20260810T090000`), which
+    # names no instant on its own — something has to say which clock it was.
+    # The booking busy-set used to assume the *link's* zone, a per-link
+    # free-text field, so a link published in another zone read every one of the
+    # owner's own events at the wrong instant and offered their busy hours as
+    # free. Absent means "assume the link's zone", the old behaviour. An empty
+    # string clears it (the store merge only skips None).
+    home_timezone: str | None = None
+
+    @field_validator("home_timezone")
+    @classmethod
+    def _known_zone(cls, v: str | None) -> str | None:
+        if v is None or v == "":
+            return v
+        try:
+            ZoneInfo(v)
+        except Exception:  # noqa: BLE001
+            raise ValueError(f"unknown timezone {v!r}") from None
+        return v
 
 
 _SCOPES = ("all", "this", "thisandfuture")
@@ -699,6 +722,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             password_hash=password_hash,
             secret=session_secret,
             ttl_s=lambda: session_ttl["value"],
+            # The configured credential, not the derived hash: the plaintext dev
+            # path re-hashes with a fresh salt every startup, and sessions must
+            # survive an ordinary restart while dying on a real change.
+            credential_id=settings.auth_password_hash or settings.auth_password,
         )
     elif not settings.access_required:
         # Deliberate dev/test posture, but loud: nothing gates /api at all.
@@ -741,6 +768,36 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             svc.close()
 
     app = FastAPI(title="tasksd", version="0.1.0-phase1", lifespan=lifespan)
+
+    # Ahead of the router, because that is the only place it works: FastAPI
+    # buffers a pydantic body before the endpoint (and therefore before the
+    # login limiter and the booking throttles) ever runs. See tasksd/limits.py.
+    app.add_middleware(BodySizeLimitMiddleware, max_bytes=settings.max_body_bytes)
+
+    # Content-Security-Policy. The script hash is derived from the index.html
+    # this deployment actually serves rather than written down, so the two
+    # cannot drift into a blank page — see tasksd/csp.py. Read once, here: a
+    # frontend rebuild therefore needs a restart, which docs/DEPLOY.md says.
+    if settings.csp_mode != "off":
+        index_path = os.path.join(settings.static_dir, "index.html")
+        index_html: str | None = None
+        try:
+            with open(index_path, encoding="utf-8") as fh:
+                index_html = fh.read()
+        except OSError:
+            # No frontend to protect (dev, tests, API-only). The policy still
+            # ships for the API and the MCP pages; it just has no script hash.
+            log.info("csp: no %s; serving the policy without a script hash", index_path)
+        policy = policy_for_index(index_html)
+        app.add_middleware(
+            CSPMiddleware, policy=policy,
+            report_only=settings.csp_mode == "report-only",
+        )
+        log.info(
+            "csp: %s — %s",
+            "report-only" if settings.csp_mode == "report-only" else "enforcing",
+            policy,
+        )
 
     @app.exception_handler(RequestValidationError)
     async def _invalid_request(request: Request, exc: RequestValidationError):
@@ -982,6 +1039,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @api.put("/lists/{list_id}/tasks/{uid}/sidecar")
     async def put_sidecar(request: Request, list_id: str, uid: str, body: Sidecar):
         href = await _href(request, list_id)
+        # Check before writing, like every sibling route. store.set_sidecar does
+        # INSERT OR IGNORE with no referential check, so an unknown uid used to
+        # answer 200 with a body of `null` AND leave a row behind with
+        # orphaned_at IS NULL — which orphan_sidecar never sets (it only fires
+        # when a *known* item is deleted) and gc_orphans therefore never
+        # reclaims. The sidecar table is the one part of SQLite a resync cannot
+        # rebuild, so those rows were permanent.
+        if not await _run(_svc(request).has_task, href, uid):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown task {uid}")
         fields = {k: v for k, v in body.model_dump().items() if v is not None}
         return await _run(_svc(request).set_sidecar, href, uid, **fields)
 
@@ -1141,22 +1207,37 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     # -- live updates (SSE) --
     @api.get("/events")
-    async def events(request: Request):
+    async def events(
+        request: Request,
+        session: str | None = Cookie(default=None, alias="tasks_session"),
+    ):
         svc = _svc(request)
         queue = svc.subscribe()
+
+        def still_authorised() -> bool:
+            # require_auth ran once, at connect. This stream then outlives every
+            # later check: POST /api/logout is the only thing that makes a stolen
+            # cookie stop working, and it never reached a connection already open,
+            # so a revoked session kept receiving every create/update/delete for
+            # as long as it held the socket. The keepalive already wakes this loop
+            # every 15s, so re-checking here retires a revoked — or simply expired
+            # — stream within one interval and costs one HMAC verify.
+            return authenticator is None or authenticator.session_claims(session) is not None
 
         async def gen():
             try:
                 yield "retry: 3000\n\n"
                 yield f"data: {json.dumps({'type': 'hello'})}\n\n"
                 while True:
-                    if await request.is_disconnected():
+                    if await request.is_disconnected() or not still_authorised():
                         break
                     try:
                         ev = await asyncio.wait_for(queue.get(), timeout=15)
                     except asyncio.TimeoutError:
                         yield ": keepalive\n\n"
                         continue
+                    if not still_authorised():
+                        break
                     yield f"data: {json.dumps(ev)}\n\n"
             finally:
                 svc.unsubscribe(queue)
@@ -1282,12 +1363,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/api/public/booking/{token}/book", status_code=201)
     async def public_booking_book(request: Request, token: str, body: PublicBook):
         _public_throttle(request, public_post_limiter)
-        _gate(f"link:{token}", public_post_link_limiter)
         _check_client_id(body.client_id)
         if not _EMAIL_RE.match(body.email.strip()):
             raise HTTPException(422, "invalid email address")
         if not body.name.strip():
             raise HTTPException(422, "name is required")
+        # Reserve the link's credit BEFORE the await, and give it back if
+        # nothing landed. A read-only gate here was a check-then-act: book_slot
+        # is awaited, so every request that arrived while earlier ones were
+        # inside it saw a counter that had not moved, and an arbitrary number
+        # passed the ceiling together simply by being sent in parallel. This is
+        # the same reserve-first shape the login route uses; `release` is what
+        # keeps the other half of the contract, that a request which wrote
+        # nothing costs nothing.
+        link_key = f"link:{token}"
+        if not public_post_link_limiter.attempt(link_key):
+            raise HTTPException(
+                status.HTTP_429_TOO_MANY_REQUESTS,
+                "too many requests, try later",
+                headers={"Retry-After": str(public_post_link_limiter.retry_after(link_key))},
+            )
         try:
             result = await _run(
                 _svc(request).book_slot, token,
@@ -1300,13 +1395,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             # parses fine and only blows up in the tz conversion inside
             # book_slot. OverflowError is not a ValueError, so it escaped as a
             # 500 — on the one route an unauthenticated caller can reach.
+            public_post_link_limiter.release(link_key)
             raise HTTPException(422, "start is out of range") from None
         except ValueError as e:
+            public_post_link_limiter.release(link_key)
             raise HTTPException(422, str(e)) from None
+        except BaseException:
+            # SlotTaken (409) included: a refused booking wrote nothing, and the
+            # ceiling counts events written.
+            public_post_link_limiter.release(link_key)
+            raise
         if result is None:
+            public_post_link_limiter.release(link_key)
             raise HTTPException(status.HTTP_404_NOT_FOUND, "unknown booking link")
-        # Charged here: the booking landed on the owner's calendar.
-        public_post_link_limiter.record_failure(f"link:{token}")
+        result, created = result
+        if not created:
+            # A replay: the confirmation came from the booking already on the
+            # calendar, so no VEVENT was written and the budget is not spent.
+            # Charging it made the replay path a denial-of-service against the
+            # published link — the exact one this ceiling was rewritten to close.
+            public_post_link_limiter.release(link_key)
         return result
 
     # -- internal change hook (localhost only, shared secret; NOT behind Access) --

@@ -385,6 +385,35 @@ describe('<TasksView> retrying a bulk create', () => {
     await waitFor(() => expect(m.createTask).toHaveBeenCalledTimes(1))
     expect(m.createTask.mock.calls[0][1].client_id).not.toBe(firstTry)
   })
+
+  it('mints a new client_id when a multi-line paste retitles the row', async () => {
+    // `onPasteTitle` writes `summary` straight into the row and bypassed
+    // `patchRow`, so a row that failed (keeping its cid) and was then corrected
+    // by a paste replayed the OLD idempotency slug with a NEW title — and the
+    // server confirms the resource already written under that slug, discarding
+    // the correction.
+    m.createTask.mockRejectedValueOnce(new Error('boom'))
+    const { user } = setup()
+    await openBulk(user, ['alpha'])
+    await user.click(bulkAdd(1))
+    await screen.findByRole('alert')
+
+    const firstTry = m.createTask.mock.calls[0][1].client_id
+    m.createTask.mockClear()
+    m.createTask.mockImplementation(async () => task({ uid: 'u2', summary: 'corrected' }))
+
+    // A two-line paste: row 1 is overwritten, row 2 is appended.
+    const row1 = screen.getByLabelText('Title, row 1')
+    await user.click(row1)
+    await user.paste('corrected\nextra')
+    await waitFor(() => expect(row1).toHaveValue('corrected'))
+    await user.click(bulkAdd(2))
+
+    await waitFor(() => expect(m.createTask).toHaveBeenCalledTimes(2))
+    const ids = m.createTask.mock.calls.map((c) => c[1].client_id)
+    expect(ids[0]).not.toBe(firstTry)
+    expect(new Set(ids).size).toBe(2)      // and the two rows do not collide
+  })
 })
 
 // ── a subtask must reach the DOM even when its parent row does not ──────────
@@ -1153,6 +1182,45 @@ describe('<TasksView> day-column drag', () => {
       task({ summary: 'Bin day', due: '2026-08-10', due_is_date: true }), 1)
     expect(body.due).not.toContain('T')
   })
+
+  it('keeps the time of day when a timed due moves column', async () => {
+    // The drop names a DAY. Everything else about the deadline — including the
+    // hour the user set — has to survive it.
+    const body = await dragTaskTo(
+      task({ summary: 'Call back', due: '2026-08-10T14:00', due_is_date: false }), 2)
+    expect(body.due).toBe('2026-08-12T14:00')
+  })
+
+  it('writes nothing when a task is dropped on the column it is already in', async () => {
+    // The only decision `dropOnDay` makes before writing. Without it every
+    // pick-up-and-put-down is a CalDAV PUT plus a re-read against the user's
+    // real list, and a SEQUENCE bump every other client sees.
+    const t = task({ summary: 'Stay put', due: '2026-08-10', due_is_date: true })
+    m.tasks.mockResolvedValue([t])
+    m.patchTask.mockResolvedValue(t)
+    setup('day3')
+    const card = await screen.findByText('Stay put')
+    const dataTransfer = { setData: vi.fn(), getData: vi.fn(), effectAllowed: '' }
+    fireEvent.dragStart(card.closest('.day-card') || card, { dataTransfer })
+    fireEvent.drop(document.querySelectorAll('.day-col')[0])      // today, its own column
+
+    await Promise.resolve()
+    expect(m.patchTask).not.toHaveBeenCalled()
+  })
+
+  it('does nothing when the dragged task is gone by the time it lands', async () => {
+    // A drop that resolves no task — the row was completed or deleted in
+    // another client mid-drag — must not write anything.
+    const t = task({ summary: 'Vanishing', due: '2026-08-10', due_is_date: true })
+    m.tasks.mockResolvedValue([t])
+    m.patchTask.mockResolvedValue(t)
+    setup('day3')
+    await screen.findByText('Vanishing')
+    fireEvent.drop(document.querySelectorAll('.day-col')[1])      // no dragStart at all
+
+    await Promise.resolve()
+    expect(m.patchTask).not.toHaveBeenCalled()
+  })
 })
 
 // ── the reported bug: a row that lands in one place and moves to another ────
@@ -1373,5 +1441,49 @@ describe('stage 4 — list drag and the prune gate', () => {
     )
     await waitFor(() => expect(m.lists).toHaveBeenCalled())
     expect(onHiddenListsChange).not.toHaveBeenCalled()
+  })
+})
+
+// ── the "View completed" pane ───────────────────────────────────────────────
+// It renders `done`, which is derived from `tops`, and `tops` calls a task
+// top-level when its parent is not RENDERED. `rendersUnder` consults the global
+// `showCompleted` flag — but this pane shows done tasks regardless of it. So
+// with the default showCompleted={false} a completed child of a completed
+// parent was promoted into `tops` while its parent was also there, and the same
+// task appeared twice in the pane.
+
+describe('<TasksView> completed pane', () => {
+  const openPane = async () => {
+    const { user } = setup()
+    // Nothing shows in the main pane — both tasks are done and showCompleted is
+    // false — so wait for the button rather than for a row.
+    await user.click(await screen.findByRole('button', { name: /view completed/i }))
+    await screen.findByText('Trip')
+    return user
+  }
+
+  beforeEach(() => {
+    m.lists.mockResolvedValue([list])
+    m.tasks.mockResolvedValue([
+      task({ uid: 'trip', summary: 'Trip', completed: true, status: 'COMPLETED' }),
+      task({ uid: 'flight', summary: 'Book flight', parent: 'trip',
+             completed: true, status: 'COMPLETED', href: '/l1/flight.ics' }),
+    ])
+  })
+
+  it('renders a completed subtask once, not as a row and a child', async () => {
+    await openPane()
+    expect(screen.getAllByText('Book flight')).toHaveLength(1)
+    expect(screen.getAllByText('Trip')).toHaveLength(1)
+  })
+
+  it('keeps the completed subtask nested under its completed parent', async () => {
+    // Nesting is what stops the duplicate: promote the child to top level and
+    // it is a sibling of its own parent. Asserted through the fold control,
+    // which only exists for a row that actually has children rendered under it.
+    const user = await openPane()
+    await user.click(screen.getByRole('button', { name: 'Hide subtasks of Trip' }))
+    expect(screen.queryByText('Book flight')).not.toBeInTheDocument()
+    expect(screen.getByText('Trip')).toBeInTheDocument()
   })
 })
