@@ -211,6 +211,18 @@
 }
 .color-dot.on { outline: 2px solid var(--accent); outline-offset: 1px; }
 .color-dot.none { background: none; color: var(--fg-faint); font-size: calc(11px * var(--fs-scale)); line-height: 1; }
+/* the ninth square: the way past the eight presets. The label is the swatch —
+   a spectrum until it is the chosen colour, so the one square that is not a
+   specific colour is the one offering all of them — and the native colour input
+   lies invisible on top of it at full size, which is what actually opens the
+   picker. Styling the input directly does not work: it always paints its own
+   value over any background, and its value has to stay the current colour so the
+   picker opens where you already are. */
+.color-dot.custom { background: conic-gradient(red, magenta, blue, aqua, lime, yellow, red); overflow: hidden; }
+.color-dot.custom > input { display: block; width: 100%; height: 100%; opacity: 0; padding: 0; border: none; cursor: pointer; }
+/* the input carries focus but cannot show it, so the label wears the ring —
+   same treatment .on gets, so tabbing to it looks like landing on any other dot */
+.color-dot.custom:has(> input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 /* main content */
 .content { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
