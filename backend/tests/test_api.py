@@ -430,6 +430,21 @@ def test_settings_time_format_sync(client):
     assert client.put("/api/settings", json={"time_format": "H:mm"}).status_code == 422
 
 
+def test_settings_home_timezone_sync(client):
+    # The zone the account authors floating times in. Validated on the way in
+    # because it is fed to ZoneInfo on the public booking path, and the blob is
+    # hand-editable.
+    assert "home_timezone" not in client.get("/api/settings").json()
+    r = client.put("/api/settings", json={"home_timezone": "America/New_York"})
+    assert r.status_code == 200 and r.json()["home_timezone"] == "America/New_York"
+    assert client.get("/api/settings").json()["home_timezone"] == "America/New_York"
+    # Empty string clears it back to "use the link's own zone".
+    assert client.put("/api/settings", json={"home_timezone": ""}).status_code == 200
+    assert client.get("/api/settings").json()["home_timezone"] == ""
+    assert client.put("/api/settings", json={"home_timezone": "Mars/Olympus"}).status_code == 422
+    assert client.put("/api/settings", json={"home_timezone": "../../etc"}).status_code == 422
+
+
 def test_settings_calendar_tasks_sync(client):
     # An allowlist, not a hidden set: absent means no task lists are drawn on
     # the calendar, so the empty default has to survive the round trip as

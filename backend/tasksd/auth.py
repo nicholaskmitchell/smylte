@@ -153,7 +153,11 @@ class RateLimiter:
         recent.append(now)
         if len(recent) >= self.max_fails:
             self._locked[key] = now + self.lockout
-            self._fails.pop(key, None)      # tracked by _locked now; drop the list
+            # The window is kept rather than dropped, so release() can hand a
+            # reservation back and know what the count was before it. At most
+            # max_fails floats per locked key, and _sweep still evicts the key
+            # once the lockout ends and the failures age out.
+            self._fails[key] = recent
         else:
             self._fails[key] = recent
         return True
@@ -165,9 +169,40 @@ class RateLimiter:
         recent.append(now)
         if len(recent) >= self.max_fails:
             self._locked[key] = now + self.lockout
-            self._fails.pop(key, None)      # tracked by _locked now; drop the list
+            # The window is kept rather than dropped, so release() can hand a
+            # reservation back and know what the count was before it. At most
+            # max_fails floats per locked key, and _sweep still evicts the key
+            # once the lockout ends and the failures age out.
+            self._fails[key] = recent
         else:
             self._fails[key] = recent
+
+    def release(self, key: str) -> None:
+        """Hand back ONE reservation taken by ``attempt``.
+
+        For a counter whose budget is spent on an *outcome* rather than on a
+        request, the reservation still has to be taken before the awaited work —
+        otherwise every request that arrives while the first is in flight sees a
+        counter that has not moved yet, and they all pass the gate together.
+        This is what makes that shape usable: reserve up front, release when the
+        outcome did not happen.
+
+        ``record_success`` is not a substitute. It clears the key entirely, so
+        using it to undo one reservation would hand back the whole budget — on
+        the per-link booking ceiling, one refused request would reset the hour.
+        """
+        now = time.monotonic()
+        recent = [t for t in self._fails.get(key, []) if now - t < self.window]
+        if recent:
+            recent.pop()
+        if recent:
+            self._fails[key] = recent
+        else:
+            self._fails.pop(key, None)
+        # Only the reservation that tripped it can lift a lockout, and only by
+        # putting the count back under the limit.
+        if len(recent) < self.max_fails:
+            self._locked.pop(key, None)
 
     def record_success(self, key: str) -> None:
         self._fails.pop(key, None)

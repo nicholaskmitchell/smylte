@@ -32,15 +32,17 @@ gone". Re-scope them before working them.
 Ticked findings keep their original references, which point into the tree as it
 was when they were filed. They are history, not navigation.
 
-**35 open**, all from the 2026-08-07 sweep. Nothing from 2026-08-16 is open. The
+**28 open**, all from the 2026-08-07 sweep. Nothing from 2026-08-16 is open. The
 evidence stays here — a ticked box records what the bug was and why it mattered,
 and the issues that link into these sections still resolve.
 
 The 2026-08-07 backlog is being closed cluster by cluster, in severity order,
 against the seven issues that group it (#42–#48). Each cluster lands as one
 commit: source fix, a regression test confirmed to fail against the pre-fix
-code, and the tick here. **Cluster #45 (auth, session lifetime and request
-limits) is done** — six findings including the sweep's remaining HIGH.
+code, and the tick here. Done so far: **#45 (auth, session lifetime and request
+limits)**, six findings including the sweep's remaining HIGH; **#42 (the
+unauthenticated booking write path)**, six plus the `expand_occurrences`
+truncation from #44, which is the same defect one layer down.
 
 The 2026-08-16 sweep was closed in stages (`docs/STAGES.md`), each pinned by
 tests that failed until the finding was fixed. **All five stages are done** — the
@@ -2428,7 +2430,18 @@ body-buffering HIGH (now bounded ahead of the router by `tasksd/limits.py` and
 at the edge by `deploy/Caddyfile.snippet`), the SSE stream that outlived its own
 revocation, sessions surviving a credential change, the frontend logout that
 reported success on a failed request, the sidecar PUT that wrote an
-unreclaimable row for an unknown uid, and the SSE test gap. **35 open.**
+unreclaimable row for an unknown uid, and the SSE test gap.
+
+**Cluster #42 — the unauthenticated booking write path — closed 6**, plus
+`expand_occurrences` from #44 (the same truncation, one layer down). The three
+per-link-ceiling findings were one defect in the charge accounting and got one
+fix: `RateLimiter.release`, a reservation taken before the await, and
+`book_slot` returning `(confirmation, created)` so a replay is distinguishable
+from a write. Also: the occurrence cap is now derived from the window and
+raises instead of truncating, `_link_busy` treats a series it could not expand
+as blocking rather than as free, floating times are read in a new
+`home_timezone` setting rather than in each link's own zone, and the booking
+page mints its idempotency key once per chosen slot. **28 open.**
 
 
 ### HTTP API surface
@@ -2845,7 +2858,7 @@ hash fails against an Authenticator built with a new one.
 
 ### Service layer
 
-#### [ ] Idempotent booking replays spend the per-link budget without landing a booking, restoring the link-lockout DoS the ceiling was rewritten to close
+#### [x] Idempotent booking replays spend the per-link budget without landing a booking, restoring the link-lockout DoS the ceiling was rewritten to close
 
 `backend/tasksd/service.py:792` (`book_slot`) · **medium** · security
 
@@ -3255,9 +3268,16 @@ applied to FREQ; or fast-forward the rule's DTSTART to the last slot before
 Add a test asserting `FREQ=HOURLY` with a DTSTART decades before the window either
 raises promptly or completes in well under a second.
 
-#### [ ] expand_occurrences silently truncates at max_occurrences=750, so a rule the guard explicitly permits loses ~12 days off the end of the calendar grid and makes the public booking page advertise slots that 409
+#### [x] expand_occurrences silently truncates at max_occurrences=750, so a rule the guard explicitly permits loses ~12 days off the end of the calendar grid and makes the public booking page advertise slots that 409
 
 `backend/tasksd/ical/recur.py:279` (`expand_occurrences`) · **medium** · bug
+
+**Closed in the cluster-#42 pass**, alongside its twin ("A dense recurring
+series stops blocking bookings past 750 occurrences") — the same truncation
+seen from the booking side. The cap is now derived from the window
+(`_MAX_PER_DAY × days + slack`, floored at the old 750) so every rule the
+density guard permits expands in full, and overrunning it raises rather than
+returning a short list.
 
 `expand_occurrences` stops emitting after 750 occurrences with no signal to the caller —
 no exception, no flag, nothing `events_in_range` can distinguish from 'the series really
@@ -3601,7 +3621,7 @@ from `list_collections()` between two `sync_all()` calls emits an event.
 
 ### Scheduling + public booking
 
-#### [ ] Idempotent replay of a booking POST spends the per-link ceiling, so anyone holding the published URL can lock the link out permanently
+#### [x] Idempotent replay of a booking POST spends the per-link ceiling, so anyone holding the published URL can lock the link out permanently
 
 `backend/tasksd/app.py:1309` (`public_booking_book`) · **medium** · security
 
@@ -3648,7 +3668,7 @@ bool)` or set a `replayed` key on the confirmation) and only call
 `public_post_link_limiter.record_failure` when a VEVENT was actually written. Add a test
 that books once, replays 40 times, and asserts a different client can still book.
 
-#### [ ] The per-link booking ceiling is a check-then-act: concurrent POSTs all pass the gate before any of them charges, so the 30/hour cap never engages
+#### [x] The per-link booking ceiling is a check-then-act: concurrent POSTs all pass the gate before any of them charges, so the 30/hour cap never engages
 
 `backend/tasksd/app.py:1258` (`_gate`) · **medium** · security
 
@@ -3691,7 +3711,7 @@ front, `release` on SlotTaken/422/404/replay. That keeps the DoS fix (refused re
 cost nothing) while restoring the reserve-before-await property. Add a concurrent-burst
 test (e.g. 60 parallel POSTs from distinct X-Real-IPs) asserting at most 30 land.
 
-#### [ ] The public booking POST mints a fresh client_id on every attempt, so a lost response turns one booking into two and tells the visitor their own slot "was just taken"
+#### [x] The public booking POST mints a fresh client_id on every attempt, so a lost response turns one booking into two and tells the visitor their own slot "was just taken"
 
 `frontend/src/components/BookingPage.tsx:87` (`submit`) · **medium** · bug
 
@@ -3737,7 +3757,7 @@ of the same slot replays the same id and hits the server's replay path. Re-mint 
 when the visitor changes slot. Add a test that fails the first `publicBook` with a
 network Error, retries, and asserts the same `client_id` is sent.
 
-#### [ ] A dense recurring series stops blocking bookings past 750 occurrences, so the public page advertises the owner's busy hours as free
+#### [x] A dense recurring series stops blocking bookings past 750 occurrences, so the public page advertises the owner's busy hours as free
 
 `backend/tasksd/service.py:691` (`_link_busy`) · **medium** · bug
 
@@ -3784,7 +3804,7 @@ fully blocking (or chunk the horizon into sub-windows small enough that `_MAX_PE
 days < max_occurrences`). Add a test: an hourly series over a 180-day horizon must block
 a slot on day 120.
 
-#### [ ] Floating (naive) event times are read in the link's timezone, so a link whose timezone differs from where events were authored silently double-books the owner
+#### [x] Floating (naive) event times are read in the link's timezone, so a link whose timezone differs from where events were authored silently double-books the owner
 
 `backend/tasksd/scheduling.py:101` (`parse_event_time`) · **medium** · bug
 

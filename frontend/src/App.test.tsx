@@ -160,6 +160,40 @@ describe('<App> auth gate', () => {
   })
 })
 
+describe('<App> home timezone', () => {
+  // The app writes non-all-day events as floating local wall time, which names
+  // no instant on its own. A scheduling link used to assume its OWN zone for
+  // those, so a link published in another zone read every one of the owner's
+  // events at the wrong instant and offered their busy hours as bookable.
+  const openSettings = async () => {
+    render(<App />)
+    await screen.findByRole('button', { name: 'Tasks' })
+    await userEvent.click(screen.getByRole('button', { name: 'Settings' }))
+    return screen.getByRole('button', { name: 'Timezone your events are written in' })
+  }
+
+  it('starts unset, falling back to each link’s own zone', async () => {
+    expect(await openSettings()).toHaveTextContent('Not set')
+  })
+
+  it('shows the stored zone', async () => {
+    m.getSettings.mockResolvedValue({ home_timezone: 'Europe/Berlin' })
+    await waitFor(async () => expect(await openSettings()).toHaveTextContent('Europe/Berlin'))
+  })
+
+  it('adopts this device’s zone, and clears back off', async () => {
+    const here = Intl.DateTimeFormat().resolvedOptions().timeZone
+    const btn = await openSettings()
+    await userEvent.click(btn)
+    expect(btn).toHaveTextContent(here)
+    expect(m.putSettings).toHaveBeenCalledWith({ home_timezone: here })
+
+    await userEvent.click(btn)
+    expect(btn).toHaveTextContent('Not set')
+    expect(m.putSettings).toHaveBeenLastCalledWith({ home_timezone: '' })
+  })
+})
+
 describe('<App> session length', () => {
   const openSettings = async () => {
     render(<App />)

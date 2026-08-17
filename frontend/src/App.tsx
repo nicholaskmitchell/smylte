@@ -54,6 +54,7 @@ export function App() {
   const [collapsedTasks, setCollapsedTasks] = useState<string[]>([])
   const [showCompleted, setShowCompleted] = useState(false)
   const [timeFormat, setTimeFormat] = useState<TimeFormat>(DEFAULT_TIME_FORMAT)
+  const [homeTz, setHomeTz] = useState('')     // '' = fall back to each link's zone
   // An allowlist, not a hidden-set: no task list is drawn on the calendar until
   // it is opted in (see the SettingsPatch comment for why this one is inverted).
   const [calTaskLists, setCalTaskLists] = useState<string[]>([])
@@ -175,6 +176,7 @@ export function App() {
         }
         if (typeof s.show_completed_tasks === 'boolean') setShowCompleted(s.show_completed_tasks)
         if (isTimeFormat(s.time_format)) setTimeFormat(s.time_format)
+        if (typeof s.home_timezone === 'string') setHomeTz(s.home_timezone)
         if (Array.isArray(s.calendar_task_lists)) {
           setCalTaskLists(s.calendar_task_lists.filter((x) => typeof x === 'string'))
         }
@@ -345,6 +347,22 @@ export function App() {
     saveSettings({ calendar_show_done_tasks: next })
   }, [calShowDone])
 
+  // The zone this account authors times in. It exists for the scheduling links:
+  // the app writes non-all-day events as floating local wall time, which names
+  // no instant on its own, so the busy-set behind a public booking page has to
+  // be told which clock they were written on. Unset, it falls back to the
+  // link's own zone — which is a per-link field that may be anywhere, and when
+  // the two differed the owner's real appointments were offered as free time.
+  //
+  // A cycle rather than a picker: the answer is almost always "wherever I am",
+  // and a 400-entry zone list for a setting most accounts never need is a worse
+  // trade than one button that adopts this device's zone.
+  const toggleHomeTz = useCallback(() => {
+    const next = homeTz ? '' : Intl.DateTimeFormat().resolvedOptions().timeZone
+    setHomeTz(next)
+    saveSettings({ home_timezone: next })
+  }, [homeTz])
+
   // 12- or 24-hour clock. Two values, so the row cycles like the theme rather
   // than offering a picker.
   const toggleTimeFormat = useCallback(() => {
@@ -514,6 +532,14 @@ export function App() {
               <button className="menu-toggle" onClick={toggleShowCompleted}
                 aria-pressed={showCompleted}>
                 {showCompleted ? 'Shown' : 'Hidden'}
+              </button>
+            </div>
+            <div className="menu-row">
+              <label>Home timezone</label>
+              <button className="menu-toggle" onClick={toggleHomeTz}
+                aria-label="Timezone your events are written in"
+                title="Which clock your events are written on. Scheduling links use it to know when you are really busy.">
+                {homeTz || 'Not set'}
               </button>
             </div>
             <div className="menu-row">

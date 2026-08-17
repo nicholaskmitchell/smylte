@@ -191,7 +191,7 @@ def test_book_slot_is_driven_across_a_dst_transition(tmp_path):
         # The SECOND pass of the repeated hour, named by its true offset.
         res = svc.book_slot(token, start_iso="2026-11-01T01:00:00-06:00",
                             name="N", email="n@x.co", now=now)
-        assert res is not None
+        assert res is not None and res[1] is True
         assert captured["dtstart"] == datetime(2026, 11, 1, 7, 0, tzinfo=timezone.utc)
         assert captured["dtend"] == datetime(2026, 11, 1, 7, 30, tzinfo=timezone.utc)
 

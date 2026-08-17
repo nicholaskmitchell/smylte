@@ -16,6 +16,7 @@ import re
 import secrets
 from datetime import date, datetime
 from typing import Annotated, Literal
+from zoneinfo import ZoneInfo
 
 from fastapi import (
     APIRouter,
@@ -449,6 +450,26 @@ class SettingsPatch(BaseModel):
     # Whether completed/cancelled tasks stay on the calendar. Absent means the
     # default (hidden), matching show_completed_tasks; False is a real value.
     calendar_show_done_tasks: bool | None = None
+    # The IANA zone this account authors times in. The app writes non-all-day
+    # events as FLOATING local wall time (`DTSTART:20260810T090000`), which
+    # names no instant on its own — something has to say which clock it was.
+    # The booking busy-set used to assume the *link's* zone, a per-link
+    # free-text field, so a link published in another zone read every one of the
+    # owner's own events at the wrong instant and offered their busy hours as
+    # free. Absent means "assume the link's zone", the old behaviour. An empty
+    # string clears it (the store merge only skips None).
+    home_timezone: str | None = None
+
+    @field_validator("home_timezone")
+    @classmethod
+    def _known_zone(cls, v: str | None) -> str | None:
+        if v is None or v == "":
+            return v
+        try:
+            ZoneInfo(v)
+        except Exception:  # noqa: BLE001
+            raise ValueError(f"unknown timezone {v!r}") from None
+        return v
 
 
 _SCOPES = ("all", "this", "thisandfuture")
@@ -1316,12 +1337,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/api/public/booking/{token}/book", status_code=201)
     async def public_booking_book(request: Request, token: str, body: PublicBook):
         _public_throttle(request, public_post_limiter)
-        _gate(f"link:{token}", public_post_link_limiter)
         _check_client_id(body.client_id)
         if not _EMAIL_RE.match(body.email.strip()):
             raise HTTPException(422, "invalid email address")
         if not body.name.strip():
             raise HTTPException(422, "name is required")
+        # Reserve the link's credit BEFORE the await, and give it back if
+        # nothing landed. A read-only gate here was a check-then-act: book_slot
+        # is awaited, so every request that arrived while earlier ones were
+        # inside it saw a counter that had not moved, and an arbitrary number
+        # passed the ceiling together simply by being sent in parallel. This is
+        # the same reserve-first shape the login route uses; `release` is what
+        # keeps the other half of the contract, that a request which wrote
+        # nothing costs nothing.
+        link_key = f"link:{token}"
+        if not public_post_link_limiter.attempt(link_key):
+            raise HTTPException(
+                status.HTTP_429_TOO_MANY_REQUESTS,
+                "too many requests, try later",
+                headers={"Retry-After": str(public_post_link_limiter.retry_after(link_key))},
+            )
         try:
             result = await _run(
                 _svc(request).book_slot, token,
@@ -1334,13 +1369,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             # parses fine and only blows up in the tz conversion inside
             # book_slot. OverflowError is not a ValueError, so it escaped as a
             # 500 — on the one route an unauthenticated caller can reach.
+            public_post_link_limiter.release(link_key)
             raise HTTPException(422, "start is out of range") from None
         except ValueError as e:
+            public_post_link_limiter.release(link_key)
             raise HTTPException(422, str(e)) from None
+        except BaseException:
+            # SlotTaken (409) included: a refused booking wrote nothing, and the
+            # ceiling counts events written.
+            public_post_link_limiter.release(link_key)
+            raise
         if result is None:
+            public_post_link_limiter.release(link_key)
             raise HTTPException(status.HTTP_404_NOT_FOUND, "unknown booking link")
-        # Charged here: the booking landed on the owner's calendar.
-        public_post_link_limiter.record_failure(f"link:{token}")
+        result, created = result
+        if not created:
+            # A replay: the confirmation came from the booking already on the
+            # calendar, so no VEVENT was written and the budget is not spent.
+            # Charging it made the replay path a denial-of-service against the
+            # published link — the exact one this ceiling was rewritten to close.
+            public_post_link_limiter.release(link_key)
         return result
 
     # -- internal change hook (localhost only, shared secret; NOT behind Access) --

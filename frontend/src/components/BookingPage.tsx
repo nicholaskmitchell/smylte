@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { api, AuthError, HttpError, type PublicBookingInfo, type PublicSlot } from '../api'
+import { api, AuthError, clientId, HttpError, type PublicBookingInfo, type PublicSlot } from '../api'
 import { ymd } from '../util'
 
 // The public client-facing page at /book/<token>. Standalone by design: no
@@ -26,6 +26,17 @@ export function BookingPage({ token }: { token: string }) {
   const [info, setInfo] = useState<PublicBookingInfo | null>(null)
   const [day, setDay] = useState('')
   const [slot, setSlot] = useState<PublicSlot | null>(null)
+  // The idempotency key for the slot currently chosen, minted ONCE when it is
+  // chosen rather than per request. api.publicBook used to mint one inline on
+  // every call, so a retry after a lost response replayed the same intent under
+  // a different key — and the server's replay path (get_booking_by_event on
+  // `{client_id}@tasksd`) was unreachable from the real client. `fetch` rejects
+  // both when the write never landed and when the response was lost after the
+  // CalDAV PUT committed, and the page keeps the slot selected and re-enables
+  // the button, so retrying is the obvious move: one booking became two, and
+  // the visitor was told their own slot "was just taken". Re-minted only when
+  // they pick a different slot, which is a different intent.
+  const [cid, setCid] = useState(() => clientId())
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [notes, setNotes] = useState('')
@@ -85,6 +96,7 @@ export function BookingPage({ token }: { token: string }) {
     setError(null)
     try {
       const r = await api.publicBook(token, {
+        client_id: cid,
         start: slot.start, name: name.trim(), email: email.trim(),
         notes: notes.trim() || undefined,
       })
@@ -210,7 +222,7 @@ export function BookingPage({ token }: { token: string }) {
             <div className="booking-slots">
               {(slotsByDay.get(selDay) ?? []).map((s) => (
                 <button key={s.start} className="slot-btn"
-                  onClick={() => { setSlot(s); setPhase('confirm') }}>
+                  onClick={() => { setSlot(s); setCid(clientId()); setPhase('confirm') }}>
                   {fmtTime(s.start)}
                 </button>
               ))}

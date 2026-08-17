@@ -80,9 +80,66 @@ describe('<BookingPage>', () => {
     await userEvent.click(screen.getByRole('button', { name: /confirm booking/i }))
 
     expect(bookMock).toHaveBeenCalledWith('tok', {
+      client_id: expect.any(String),
       start: INFO.slots[0].start, name: 'Ada', email: 'ada@example.com', notes: undefined,
     })
     expect(await screen.findByText(/you're booked, ada/i)).toBeInTheDocument()
+  })
+
+  it('replays the same client_id when a failed booking is retried', async () => {
+    // `fetch` rejects both when the write never landed and when the response
+    // was lost after the CalDAV PUT committed. The page keeps the slot selected
+    // and re-enables the button, so retrying is the obvious move — and a fresh
+    // idempotency key per call made that retry a SECOND event on the owner's
+    // calendar, then told the visitor their own slot "was just taken".
+    infoMock.mockResolvedValue(INFO)
+    bookMock.mockRejectedValueOnce(new TypeError('Failed to fetch'))
+    bookMock.mockResolvedValue({
+      id: 'b1', start: INFO.slots[0].start, end: INFO.slots[0].end,
+      title: 'Intro call', duration_minutes: 30, timezone: 'UTC',
+    })
+    render(<BookingPage token="tok" />)
+    await screen.findByText('Intro call')
+
+    await userEvent.click(document.querySelectorAll('.slot-btn')[0] as HTMLElement)
+    await userEvent.type(screen.getAllByRole('textbox')[0], 'Ada')
+    const email = document.querySelector('input[type="email"]') as HTMLInputElement
+    await userEvent.type(email, 'ada@example.com')
+    const confirm = screen.getByRole('button', { name: /confirm booking/i })
+    await userEvent.click(confirm)
+    await screen.findByText(/failed to fetch/i)
+    await userEvent.click(confirm)
+
+    expect(bookMock).toHaveBeenCalledTimes(2)
+    const [first, second] = bookMock.mock.calls
+    expect(second[1].client_id).toBe(first[1].client_id)
+    expect(first[1].client_id).toBeTruthy()
+    expect(await screen.findByText(/you're booked, ada/i)).toBeInTheDocument()
+  })
+
+  it('mints a new client_id when the visitor picks a different slot', async () => {
+    // A different slot is a different intent, not a retry of the same one.
+    infoMock.mockResolvedValue(INFO)
+    bookMock.mockRejectedValue(new TypeError('Failed to fetch'))
+    render(<BookingPage token="tok" />)
+    await screen.findByText('Intro call')
+
+    const fill = async () => {
+      await userEvent.type(screen.getAllByRole('textbox')[0], 'Ada')
+      const email = document.querySelector('input[type="email"]') as HTMLInputElement
+      await userEvent.type(email, 'ada@example.com')
+      await userEvent.click(screen.getByRole('button', { name: /confirm booking/i }))
+      await screen.findByText(/failed to fetch/i)
+    }
+
+    await userEvent.click(document.querySelectorAll('.slot-btn')[0] as HTMLElement)
+    await fill()
+    await userEvent.click(screen.getByRole('button', { name: /change/i }))
+    await userEvent.click(document.querySelectorAll('.slot-btn')[1] as HTMLElement)
+    await userEvent.click(screen.getByRole('button', { name: /confirm booking/i }))
+
+    const [first, second] = bookMock.mock.calls
+    expect(second[1].client_id).not.toBe(first[1].client_id)
   })
 
   it('keeps the confirm button disabled until name and a plausible email exist', async () => {
