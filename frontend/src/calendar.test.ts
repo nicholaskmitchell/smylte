@@ -9,7 +9,7 @@ const ev = (start: string | null, end: string | null,
   o: Partial<CalEvent> = {}): CalEvent => ({
   uid: 'e', id: 'e', recurrence_id: null, is_recurring: false, calendar: 'c',
   summary: 'E', description: null, location: null,
-  start, start_is_date: false, end, end_is_date: false,
+  start, start_is_date: false, end, end_is_date: false, duration: null,
   all_day: false, status: null, tags: [], has_rrule: false, href: '/c/e.ics', etag: '"1"',
   ...o,
 })
@@ -23,6 +23,27 @@ const grid = Array.from({ length: 42 }, (_, i) => {
 const keys = (m: Map<string, unknown>) => [...m.keys()].sort()
 
 describe('bucketByDay', () => {
+  // Ordering within a cell was a string compare on the wire value. Events
+  // another CalDAV client wrote carry an offset; the ones this app wrote are
+  // floating. Under TZ=America/New_York, `2026-08-03T19:00:00+01:00` is 14:00
+  // local — earlier than a floating `2026-08-03T16:00:00` — but sorts after it
+  // as a string. The cell renders only the first four and hides the rest behind
+  // "+N more", so this could push an earlier event out of view entirely.
+  it('orders a day by the instant each start names, not the wire string', () => {
+    const zoned = ev('2026-08-03T19:00:00+01:00', '2026-08-03T20:00:00+01:00', { uid: 'zoned' })
+    const floating = ev('2026-08-03T16:00:00', '2026-08-03T17:00:00', { uid: 'floating' })
+    const day = bucketByDay([floating, zoned], grid).get('2026-08-03')!
+    expect(day.map((e) => e.uid)).toEqual(['zoned', 'floating'])
+  })
+
+  it('keeps all-day entries at the top of the cell', () => {
+    const allDay = ev('2026-08-03', '2026-08-04',
+      { uid: 'allday', all_day: true, start_is_date: true, end_is_date: true })
+    const early = ev('2026-08-03T01:00:00', '2026-08-03T02:00:00', { uid: 'early' })
+    const day = bucketByDay([early, allDay], grid).get('2026-08-03')!
+    expect(day.map((e) => e.uid)).toEqual(['allday', 'early'])
+  })
+
   it('lists an event on every day its span covers', () => {
     const m = bucketByDay([ev('2026-08-03T09:00:00', '2026-08-05T10:00:00')], grid)
     expect(keys(m)).toEqual(['2026-08-03', '2026-08-04', '2026-08-05'])
@@ -166,6 +187,33 @@ describe('shiftIso', () => {
   it('keeps the wall-clock time across a fall-back', () => {
     expect(shiftIso('2026-10-31T09:00:00', 2)).toBe('2026-11-02T09:00')
   })
+
+  // The whole point of the distinction: a value that names an INSTANT has to
+  // come back as one. Flattening it to the viewer's wall clock threw away the
+  // TZID another CalDAV client wrote (the backend only re-expresses a value
+  // into the property's own zone when the incoming one is zone-aware; a naive
+  // string is written verbatim) and, for a viewer in a different zone, moved
+  // the event by the offset difference. Tests run under TZ=America/New_York.
+  it.each([
+    ['a +02:00 start', '2026-08-03T09:30:00+02:00', 2, '2026-08-05T07:30:00.000Z'],
+    ['a UTC start', '2026-08-03T09:30:00Z', 2, '2026-08-05T09:30:00.000Z'],
+    ['a backwards shift', '2026-08-03T09:30:00+02:00', -2, '2026-08-01T07:30:00.000Z'],
+  ])('preserves the instant for %s', (_label, input, n, expected) => {
+    expect(shiftIso(input, n)).toBe(expected)
+  })
+
+  it('holds a zoned event at the hour the viewer sees, across a fall-back', () => {
+    // A drag moves the chip the user is looking at, so the clock preserved is
+    // theirs: 09:00+01:00 renders as 04:00 in New York, and two cells later it
+    // is still 04:00 there. Crossing the US transition (and not Berlin's) that
+    // means the event's own local time shifts by the hour the viewer's zone
+    // moved — unavoidable without knowing the event's zone rather than just its
+    // offset at one instant, and the same rule already applied to floating
+    // values. What must NOT happen is the value ceasing to name an instant.
+    const out = shiftIso('2026-10-31T09:00:00+01:00', 2)
+    expect(new Date(out).getHours()).toBe(4)        // viewer-local 04:00, preserved
+    expect(out).toMatch(/Z$/)                       // still an instant, not floating
+  })
 })
 
 describe('endIsExclusive', () => {
@@ -182,6 +230,17 @@ describe('endIsExclusive', () => {
 
 describe('dragBody: move', () => {
   const timed = ev('2026-08-03T09:00:00', '2026-08-03T10:00:00')
+
+  it('keeps a zone-anchored event anchored', () => {
+    // Before the fix this sent `2026-08-06T03:00` — naive, so the backend wrote
+    // it verbatim and `DTSTART;TZID=Europe/Berlin` became a floating value.
+    const zoned = ev('2026-08-03T09:00:00+02:00', '2026-08-03T10:00:00+02:00')
+    const body = dragBody(zoned, '2026-08-03', '2026-08-06', 'move')
+    expect(body).toEqual({
+      start: '2026-08-06T07:00:00.000Z',
+      end: '2026-08-06T08:00:00.000Z',
+    })
+  })
 
   it('shifts start and end by the whole-day delta', () => {
     expect(dragBody(timed, '2026-08-03', '2026-08-06', 'move'))
@@ -277,6 +336,24 @@ describe('dragBody: resize', () => {
 
   it('is still a no-op when a midnight-ending event is dropped on its own last day', () => {
     expect(dragBody(midnight, '2026-03-02', '2026-03-02', 'resize')).toBeNull()
+  })
+
+  // The resize branch had the same defect as the move branch, on a path that
+  // does not even intend to touch the start: `toLocalInput(ev.start)` rewrote a
+  // zone-anchored DTSTART as floating local wall time, so a pure resize
+  // destroyed the TZID another client wrote.
+  it('leaves a zone-anchored start exactly as it was', () => {
+    const zoned = ev('2026-08-03T09:00:00+02:00', '2026-08-03T17:00:00+02:00')
+    const body = dragBody(zoned, '2026-08-03', '2026-08-05', 'resize')
+    expect(body!.start).toBe('2026-08-03T09:00:00+02:00')
+  })
+
+  it('sends the new end as an instant when the old one named one', () => {
+    const zoned = ev('2026-08-03T09:00:00+02:00', '2026-08-03T17:00:00+02:00')
+    const body = dragBody(zoned, '2026-08-03', '2026-08-05', 'resize')
+    // 17:00+02:00 is 11:00 in New York; two days on, still 11:00 there.
+    expect(new Date(body!.end as string).getHours()).toBe(11)
+    expect(body!.end).toMatch(/Z$/)
   })
 })
 

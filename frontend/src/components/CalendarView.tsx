@@ -7,8 +7,8 @@ import { dayKey, makeGuard, pad, toLocalInput, ymd } from '../util'
 import { fmtClock, inputLang } from '../time'
 import { useTimeFormat } from '../timeformat'
 import {
-  bucketByDay, bucketTasksByDay, dragBody, daysBetween, lastDayOf, monthGrid, shiftYmd,
-  type DayEv,
+  bucketByDay, bucketTasksByDay, dragBody, daysBetween, endFromDuration, lastDayOf,
+  monthGrid, shiftYmd, type DayEv,
 } from '../calendar'
 import { useIsMobile } from '../hooks'
 import { AgendaEvent, AgendaTask, DayPopover } from './DayPopover'
@@ -45,7 +45,7 @@ function draftEvent(uid: string, calHref: string, body: Record<string, unknown>)
     description: typeof body.description === 'string' ? body.description : null,
     location: typeof body.location === 'string' ? body.location : null,
     start, start_is_date: !!start && !start.includes('T'),
-    end, end_is_date: !!end && !end.includes('T'),
+    end, end_is_date: !!end && !end.includes('T'), duration: null,
     all_day: allDay, status: null,
     tags: Array.isArray(body.tags) ? (body.tags as string[]) : [],
     has_rrule: false, href: '', etag: '',
@@ -634,14 +634,27 @@ function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete }: {
   const [start, setStart] = useState(
     e?.start ? (e.start.includes('T') ? toLocalInput(e.start) : e.start) : `${baseDate}T09:00`,
   )
+  // A VEVENT can carry its length as DURATION instead of DTEND — the shape
+  // DAVx5 and the phone clients write — and those arrive with `end: null`.
+  // Defaulting the picker to 10:00 for them meant any save, including a pure
+  // rename, rewrote the event's end: `commit()` sends start AND end for a
+  // non-recurring event, and `_apply_event_fields` deletes DURATION whenever a
+  // dtend is supplied, so the original span was gone for good. A zero-length
+  // event also stops blocking booking slots (busy_intervals only counts an
+  // interval when end > start). `calendar.ts` already got this right on the
+  // drag path — the modal was the outlier.
+  const derivedEnd = e && !e.end && e.start ? endFromDuration(e.start, e.duration) : null
   const [end, setEnd] = useState(() => {
-    if (!e?.end) return `${baseDate}T10:00`
+    if (!e?.end) return derivedEnd ?? `${baseDate}T10:00`
     if (e.end.includes('T')) return toLocalInput(e.end)
     // All-day DTEND is exclusive — show the inclusive last day in the picker.
     const inclusive = shiftYmd(e.end.slice(0, 10), -1)
     const startDay = e.start ? e.start.slice(0, 10) : inclusive
     return inclusive < startDay ? startDay : inclusive
   })
+  // Nothing to reconstruct the span from: rather than send a fabricated end and
+  // destroy whatever the resource actually holds, leave `end` out of the write.
+  const endUnknown = !!e && !e.end && !derivedEnd
   const [location, setLocation] = useState(e?.location || '')
   const [description, setDescription] = useState(e?.description || '')
   const [tags, setTags] = useState((e?.tags || []).join(', '))
@@ -707,20 +720,22 @@ function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete }: {
       return
     }
     const details = { summary, location, description, tags: tagList() }
+    // An event whose span we could not reconstruct sends no end at all, so the
+    // stored DTEND/DURATION is left exactly as its author wrote it.
+    const times = endUnknown
+      ? { start: startOut }
+      : { start: startOut, end: endOut }
     if (recurring && scope === 'all') {
       // A changed time plus recurrence_id tells the server to shift the whole
       // series by the same offset (EXDATEs and overrides move along). Untouched
       // times are omitted — resending an occurrence's slot as the master start
       // would slide the series arbitrarily.
-      const times = timeChanged
-        ? { start: startOut, end: endOut, recurrence_id: e.recurrence_id }
-        : {}
-      onSave({ ...details, ...times, ...repeatFields(), scope: 'all' }, calPick, e.uid)
+      const shift = timeChanged ? { ...times, recurrence_id: e.recurrence_id } : {}
+      onSave({ ...details, ...shift, ...repeatFields(), scope: 'all' }, calPick, e.uid)
     } else if (recurring) {
-      onSave({ ...details, start: startOut, end: endOut,
-               recurrence_id: e.recurrence_id, scope }, calPick, e.uid)
+      onSave({ ...details, ...times, recurrence_id: e.recurrence_id, scope }, calPick, e.uid)
     } else {
-      onSave({ ...details, start: startOut, end: endOut, ...repeatFields() }, calPick, e.uid)
+      onSave({ ...details, ...times, ...repeatFields() }, calPick, e.uid)
     }
   }
 

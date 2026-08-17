@@ -100,6 +100,11 @@ export interface CalEvent {
   start_is_date: boolean
   end: string | null
   end_is_date: boolean
+  // An iCalendar DURATION (e.g. "PT1H30M") when the VEVENT carries one INSTEAD
+  // of a DTEND — the shape DAVx5 and the phone clients write. `end` is null for
+  // those, so anything reconstructing a span has to look here before assuming
+  // the event has no length.
+  duration: string | null
   all_day: boolean
   status: string | null
   tags: string[]
@@ -267,6 +272,32 @@ export const clientId = () => crypto.randomUUID().replace(/-/g, '')
 export const UID_SUFFIX = '@tasksd'
 export const uidFor = (cid: string) => `${cid}${UID_SUFFIX}`
 
+/** A FastAPI `detail` as something a person can read.
+ *
+ * It is a string for the errors this app raises itself, but a LIST for every
+ * pydantic validation failure — the app's own RequestValidationError handler
+ * answers `{"detail": [{type, loc, msg}, ...]}`. That went into `new Error(...)`
+ * unchecked, so the constructor stringified the array and the user was shown
+ * the literal "[object Object]": the login card renders `(ex as Error).message`
+ * verbatim, and the settings toast interpolates it. `loc` starts with the body
+ * location ("body"), which means nothing to a reader, so it is dropped. */
+function detailText(detail: unknown): string {
+  if (typeof detail === 'string') return detail
+  if (Array.isArray(detail)) {
+    return detail
+      .map((e) => {
+        if (typeof e === 'string') return e
+        const item = e as { loc?: unknown[]; msg?: unknown }
+        const where = Array.isArray(item?.loc) ? item.loc.slice(1).join('.') : ''
+        const what = typeof item?.msg === 'string' ? item.msg : ''
+        return where && what ? `${where}: ${what}` : what || where
+      })
+      .filter(Boolean)
+      .join('; ')
+  }
+  return ''
+}
+
 async function j<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(path, {
     method,
@@ -278,7 +309,7 @@ async function j<T>(method: string, path: string, body?: unknown): Promise<T> {
     let msg = res.statusText
     try {
       const data = await res.json()
-      msg = data.detail || msg
+      msg = detailText(data?.detail) || msg
     } catch {
       /* ignore */
     }
