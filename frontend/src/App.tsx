@@ -408,8 +408,25 @@ export function App() {
   // Logging out clears the mirror; an expired session deliberately does not,
   // since it is usually the same person about to sign back in and keeping it
   // makes that instant.
+  // Tear the UI down only if the sign-out actually landed. POST /api/logout is
+  // the only thing that revokes the session token and the only thing that can
+  // clear the HttpOnly cookie — JS cannot. Putting setAuth('out') in a `finally`
+  // showed the login card either way, so a failed request left a live session
+  // and a valid cookie behind while the user believed they were signed out, and
+  // the rejection escaped an async onClick as an unhandled promise rejection.
+  // A 401 is the one failure that means it worked: the session is already gone.
   const onLogout = async () => {
-    try { await api.logout() } finally { clearCache(); setCacheUser(''); setAuth('out') }
+    try {
+      await api.logout()
+    } catch (e) {
+      if (!(e instanceof AuthError)) {
+        showToast("Couldn't sign out — you are still signed in on this device.")
+        return
+      }
+    }
+    clearCache()
+    setCacheUser('')
+    setAuth('out')
   }
 
   // While /api/me is in flight the shell paints anyway — the tab strip is real

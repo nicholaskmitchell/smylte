@@ -282,6 +282,51 @@ def test_a_withdrawn_session_stays_withdrawn_across_a_restart(make_app, tmp_path
 
 
 @pytest.mark.radicale
+def test_changing_the_password_invalidates_existing_sessions(make_app, tmp_path):
+    """The documented remedy for a compromised password is: regenerate the hash,
+    update TASKS_AUTH_PASSWORD_HASH, restart. That left every session the
+    attacker had already minted valid for the rest of its TTL — and unreachable
+    by revocation, which can only withdraw a jti the owner can name. Changing
+    the password has to be a sign-out-everywhere."""
+    db = str(tmp_path / "credver.db")
+    with TestClient(make_app(db_path=db)) as c:
+        assert c.post("/api/login", json=LOGIN).status_code == 200
+        minted = c.cookies["tasks_session"]
+        assert c.get("/api/me").status_code == 200
+
+    # Same signing secret, same DB — only the password moved.
+    with TestClient(make_app(db_path=db, auth_password="a-different-password")) as rotated:
+        rotated.cookies.set("tasks_session", minted)
+        assert rotated.get("/api/me").status_code == 401
+
+
+@pytest.mark.radicale
+def test_changing_the_username_invalidates_existing_sessions(make_app, tmp_path):
+    """`sub` was carried in the claims and never compared to anything."""
+    db = str(tmp_path / "subver.db")
+    with TestClient(make_app(db_path=db)) as c:
+        assert c.post("/api/login", json=LOGIN).status_code == 200
+        minted = c.cookies["tasks_session"]
+
+    with TestClient(make_app(db_path=db, auth_user="someone-else")) as renamed:
+        renamed.cookies.set("tasks_session", minted)
+        assert renamed.get("/api/me").status_code == 401
+
+
+@pytest.mark.radicale
+def test_an_unchanged_credential_keeps_its_sessions(make_app, tmp_path):
+    """The other half: an ordinary restart must not sign everyone out."""
+    db = str(tmp_path / "samecred.db")
+    with TestClient(make_app(db_path=db)) as c:
+        assert c.post("/api/login", json=LOGIN).status_code == 200
+        minted = c.cookies["tasks_session"]
+
+    with TestClient(make_app(db_path=db)) as restarted:
+        restarted.cookies.set("tasks_session", minted)
+        assert restarted.get("/api/me").status_code == 200
+
+
+@pytest.mark.radicale
 def test_login_error_does_not_reveal_which_field_failed(make_app):
     with TestClient(make_app()) as c:
         bad_user = c.post("/api/login", json={"username": "nobody", "password": "testpass123"})

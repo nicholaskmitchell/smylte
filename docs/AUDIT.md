@@ -32,9 +32,15 @@ gone". Re-scope them before working them.
 Ticked findings keep their original references, which point into the tree as it
 was when they were filed. They are history, not navigation.
 
-**41 open**, all from the 2026-08-07 sweep. Nothing from 2026-08-16 is open. The
+**35 open**, all from the 2026-08-07 sweep. Nothing from 2026-08-16 is open. The
 evidence stays here — a ticked box records what the bug was and why it mattered,
 and the issues that link into these sections still resolve.
+
+The 2026-08-07 backlog is being closed cluster by cluster, in severity order,
+against the seven issues that group it (#42–#48). Each cluster lands as one
+commit: source fix, a regression test confirmed to fail against the pre-fix
+code, and the tick here. **Cluster #45 (auth, session lifetime and request
+limits) is done** — six findings including the sweep's remaining HIGH.
 
 The 2026-08-16 sweep was closed in stages (`docs/STAGES.md`), each pinned by
 tests that failed until the finding was fixed. **All five stages are done** — the
@@ -2413,13 +2419,21 @@ the workflow, so it ran a single whole-repo finder instead of twelve — those a
 filed under *Cross-cutting*.
 
 Every HIGH here was additionally re-verified by hand with a runnable probe before
-anything was changed. **8 fixed** in this pass (ticked below, each with a
-regression test); the rest are open.
+anything was changed. **8 fixed** in that pass (ticked below, each with a
+regression test).
+
+The remaining 41 are being closed by cluster (issues #42–#48). **Cluster #45 —
+auth, session lifetime and request limits — closed 6**: the unauthenticated
+body-buffering HIGH (now bounded ahead of the router by `tasksd/limits.py` and
+at the edge by `deploy/Caddyfile.snippet`), the SSE stream that outlived its own
+revocation, sessions surviving a credential change, the frontend logout that
+reported success on a failed request, the sidecar PUT that wrote an
+unreclaimable row for an unknown uid, and the SSE test gap. **35 open.**
 
 
 ### HTTP API surface
 
-#### [ ] Unauthenticated request bodies are buffered whole before any length bound or rate limiter runs — a single anonymous POST /api/login can exhaust memory
+#### [x] Unauthenticated request bodies are buffered whole before any length bound or rate limiter runs — a single anonymous POST /api/login can exhaust memory
 
 `backend/tasksd/app.py:1177` (`login`) · **high** · security
 
@@ -2603,7 +2617,7 @@ Against the real app (authenticated):
 bound — an estimate in minutes never needs more). Extend the existing sidecar test with
 the oversized-int case alongside the non-finite-float one.
 
-#### [ ] PUT .../tasks/{uid}/sidecar answers 200 null for an unknown uid and writes a sidecar row gc_orphans can never reclaim
+#### [x] PUT .../tasks/{uid}/sidecar answers 200 null for an unknown uid and writes a sidecar row gc_orphans can never reclaim
 
 `backend/tasksd/app.py:983` (`put_sidecar`) · **low** · bug · `minor`
 
@@ -2649,7 +2663,7 @@ Better, check existence before writing (`store.get_item(conn, href, uid)`) insid
 `TaskService.set_sidecar` so no row is created at all, and add a test asserting an
 unknown uid 404s and leaves `count(sidecar)` unchanged.
 
-#### [ ] Test gap: the SSE endpoint /api/events has no backend test at all, including its per-connection cleanup
+#### [x] Test gap: the SSE endpoint /api/events has no backend test at all, including its per-connection cleanup
 
 `backend/tasksd/app.py:1144` (`events`) · **low** · test-gap
 
@@ -2693,7 +2707,7 @@ disconnect path.
 
 ### Auth + session
 
-#### [ ] Logout does not close an already-open SSE stream — a revoked session keeps receiving live change events forever
+#### [x] Logout does not close an already-open SSE stream — a revoked session keeps receiving live change events forever
 
 `backend/tasksd/app.py:1152` (`events`) · **medium** · security · `minor`
 
@@ -2757,9 +2771,19 @@ every 15 s, so a revoked stream dies within one keepalive interval and the same 
 also retires a stream whose JWT `exp` passed. Add a test: login, open the stream,
 logout, publish, assert nothing arrives.
 
-#### [ ] Changing the app password (or username) does not invalidate existing sessions, and there is no sign-out-everywhere
+#### [x] Changing the app password (or username) does not invalidate existing sessions, and there is no sign-out-everywhere
 
 `backend/tasksd/auth.py:228` (`session_claims`) · **medium** · security
+
+**Fixed, with two deviations from the suggestion below.** The `cv` claim is
+keyed with the signing secret (HMAC) rather than a bare `sha256(hash)[:16]`: on
+the `TASKS_AUTH_PASSWORD` dev path the credential material is a plaintext
+password, and a truncated unkeyed digest of it is offline-guessable by whoever
+holds the token. And it fingerprints the *configured* credential rather than the
+derived hash, because scrypt salts randomly — hashing the plaintext at startup
+yields a different hash on every boot, so binding to it would have signed
+everyone out on each ordinary restart. `docs/DEPLOY.md` now documents both
+levers under "If the password leaks".
 
 The session JWT carries only `sub`/`iat`/`exp`/`jti` and is signed with
 `TASKS_SESSION_SECRET`, which is independent of the password hash. `session_claims`
@@ -3946,7 +3970,7 @@ There is no hooks.test.ts, so nothing catches it.
 promise always settles), and drop the `setLoading(false)` from inside the body. Consider
 `Promise.allSettled` so one failing list does not blank the whole dashboard.
 
-#### [ ] A failed logout still shows the login form, leaving a live session and a valid cookie behind (and raises an unhandled rejection)
+#### [x] A failed logout still shows the login form, leaving a live session and a valid cookie behind (and raises an unhandled rejection)
 
 `frontend/src/App.tsx:411` (`onLogout`) · **medium** · security
 

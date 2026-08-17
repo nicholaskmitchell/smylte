@@ -9,6 +9,8 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
+from .limits import DEFAULT_MAX_BODY_BYTES
+
 
 _TRUE = frozenset({"1", "true", "yes", "y", "on"})
 _FALSE = frozenset({"0", "false", "no", "n", "off"})
@@ -101,6 +103,9 @@ class Settings:
     # a token is bound to must match what the client was pointed at — so it is
     # configured rather than read off the Host header, which a caller controls.
     public_url: str = ""
+    # Largest request body accepted, enforced ahead of the router — see
+    # tasksd/limits.py for why it cannot live in the routes themselves.
+    max_body_bytes: int = DEFAULT_MAX_BODY_BYTES
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -128,4 +133,7 @@ class Settings:
             dav_public_url=normalize_dav_url(os.environ.get("TASKS_DAV_URL", "/dav/")),
             mcp_enabled=_bool("TASKS_MCP_ENABLED", False),
             public_url=normalize_public_url(os.environ.get("TASKS_PUBLIC_URL", "")),
+            max_body_bytes=int(
+                os.environ.get("TASKS_MAX_BODY_BYTES", str(DEFAULT_MAX_BODY_BYTES))
+            ),
         )
