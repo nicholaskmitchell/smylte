@@ -113,3 +113,24 @@ export function sameValue(a: string | string[], b: string | string[]): boolean {
   }
   return a === b
 }
+
+/** A collection color, or null if it is not one.
+ *
+ * `List.color` comes off the wire: it is served from whatever another CalDAV
+ * client wrote into the collection's `ical:calendar-color`, an Apple dead
+ * property that anything sharing the collection can PROPPATCH to arbitrary
+ * text. It is then written straight into element styles — as a `background`,
+ * and as the `--ev-c` custom property that app.css resolves into
+ * `background: var(--ev-c, var(--accent))`. So `url(https://evil.example/x.png)`
+ * on a rendered 3-5px dot makes the browser fetch it: a beacon that fires
+ * whenever the owner opens the Calendar tab or the Home mini-calendar. There is
+ * no Content-Security-Policy anywhere in this app to stop it.
+ *
+ * The same shape the backend now enforces at ingest (dav/xml.py `clean_color`)
+ * and has always enforced on write, so a legitimate color is unaffected. This
+ * is the belt to that braces: it holds for rows cached before the backend fix,
+ * and for any future path that forgets.
+ */
+const HEX_COLOR = /^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$/
+export const cssColor = (c: string | null | undefined): string | null =>
+  (c && HEX_COLOR.test(c.trim()) ? c.trim() : null)

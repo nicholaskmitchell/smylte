@@ -310,6 +310,37 @@ describe('the "All" swatch ring', () => {
 // so opening the modal to rename a list PROPPATCHed the shortened color back and
 // dropped the alpha for every other client.
 
+describe('<Sidebar> a hostile wire color', () => {
+  // `color` is served verbatim from another client's `ical:calendar-color`. The
+  // swatch writes it into a `background`, and the hidden variant interpolates
+  // it into a `boxShadow` SHORTHAND — which lets it escape the property
+  // boundary more freely still. A `url(...)` there is a fetch on every render.
+  const hostile = 'url(https://evil.example/beacon.png)'
+
+  const withWireColor = (hiddenIds: Set<string>) => (
+    <Sidebar title="Lists" placeholder="List"
+      items={[{ ...list('work', 'Work'), color: hostile }]}
+      countOf={(l) => l.open_count} onItems={() => {}} api={noopApi}
+      hiddenIds={hiddenIds} onHiddenChange={() => {}}
+      collapsedGroups={[]} onCollapsedGroupsChange={() => {}} />
+  )
+
+  it('renders no inline background for it', () => {
+    const { container } = render(withWireColor(new Set()))
+    const swatch = container.querySelector('.side-item .swatch') as HTMLElement
+    expect(swatch).not.toBeNull()
+    expect(swatch.getAttribute('style') ?? '').not.toContain('url(')
+    expect(swatch.style.background).toBe('')
+  })
+
+  it('does not smuggle it through the hidden-state boxShadow either', () => {
+    const { container } = render(withWireColor(new Set(['work'])))
+    const swatch = container.querySelector('.side-item .swatch') as HTMLElement
+    expect(swatch.getAttribute('style') ?? '').not.toContain('evil.example')
+    expect(swatch.style.boxShadow).toContain('var(--fg-faint)')
+  })
+})
+
 describe('<Sidebar> edit modal colors', () => {
   const editApi = () => ({
     create: vi.fn(async () => undefined),

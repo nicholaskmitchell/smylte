@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { HomeView } from './HomeView'
 import { DataProvider } from '../data'
@@ -376,5 +376,57 @@ describe('mini calendar spans', () => {
     await waitFor(() => expect(dayButton(busyDay)).toBeEnabled())
     expect(isBusy(busyDay)).toBe(true)
     expect(isBusy(quietDay)).toBe(false)
+  })
+})
+
+
+// ── the scheduling fetch must not be won by a stale batch ───────────────────
+// The effect re-runs on `rev`, so two SSE-driven refreshes put two two-request
+// batches in flight and whichever settled last won — painting whatever the
+// older one happened to see. Every other fetch in the app carries this guard
+// (`useTaskData`'s token ref, `fetchWindow`'s per-window generation); this was
+// the last one without it.
+
+describe('scheduling modules', () => {
+  const layout: DashboardModule[] = [
+    { id: 'l', kind: 'booking_links', x: 0, y: 0, w: 6, h: 6 },
+  ]
+
+  const link = (token: string, title: string) => ({
+    token, title, description: null, calendar: 'c1', calendar_name: 'Work',
+    calendar_missing: false, duration_minutes: 30, timezone: 'UTC',
+    availability: {}, show_busy: true, buffer_minutes: 0, min_notice_hours: 0,
+    horizon_days: 14, enabled: true, booking_count: 0,
+    created_at: '2026-08-01T00:00:00Z', updated_at: '2026-08-01T00:00:00Z',
+  })
+
+  it('ignores an older batch that settles after a newer one', async () => {
+    let releaseFirst: (v: unknown[]) => void = () => {}
+    const first = new Promise<unknown[]>((res) => { releaseFirst = res })
+    m.schedulingLinks
+      .mockReturnValueOnce(first as never)
+      .mockResolvedValue([link('new', 'Newer link')] as never)
+
+    const onLayoutChange = vi.fn()
+    const { rerender } = render(
+      <DataProvider rev={0} onExpire={vi.fn()}>
+        <HomeView rev={0} onExpire={vi.fn()} layout={layout} onLayoutChange={onLayoutChange} />
+      </DataProvider>,
+    )
+    // A second refresh — the shape an SSE bump takes.
+    rerender(
+      <DataProvider rev={1} onExpire={vi.fn()}>
+        <HomeView rev={1} onExpire={vi.fn()} layout={layout} onLayoutChange={onLayoutChange} />
+      </DataProvider>,
+    )
+    await waitFor(() => expect(m.schedulingLinks).toHaveBeenCalledTimes(2))
+    expect(await screen.findByText('Newer link')).toBeInTheDocument()
+
+    // Now the first batch — the one the user has already moved past — lands.
+    releaseFirst([link('old', 'Stale link')])
+    await act(async () => { await first })
+
+    expect(screen.getByText('Newer link')).toBeInTheDocument()
+    expect(screen.queryByText('Stale link')).not.toBeInTheDocument()
   })
 })

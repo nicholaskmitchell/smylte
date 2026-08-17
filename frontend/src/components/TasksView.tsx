@@ -4,7 +4,7 @@ import {
 import { api, uidFor, type CreateTaskBody, type List, type Task, type TaskGroup, type TasksViewMode } from '../api'
 import { useTaskData } from '../data'
 import {
-  addDays, dayKey, isOverdue, makeGuard, toLocalInput, ymd,
+  addDays, cssColor, dayKey, isOverdue, makeGuard, toLocalInput, ymd,
 } from '../util'
 import { fmtClock, fmtDue, inputLang } from '../time'
 import { sortTasks } from '../order'
@@ -89,8 +89,10 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
   // include_done=true, so `tasks` holds every completed task the account has
   // ever had — a linear `lists.find` per rendered row made the cost grow with
   // total history rather than with what is on screen.
+  // Sanitised as it is indexed: `color` is whatever another CalDAV client wrote
+  // into the collection's calendar-color, and it goes into an inline style.
   const colorByList = useMemo(
-    () => new Map(lists.map((l) => [l.id, l.color ?? null] as const)), [lists])
+    () => new Map(lists.map((l) => [l.id, cssColor(l.color)] as const)), [lists])
   const colorOf = useCallback((listId: string) => colorByList.get(listId) ?? null, [colorByList])
 
   // Prune settings that reference lists (or groups) that no longer exist, so a

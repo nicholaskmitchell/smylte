@@ -256,6 +256,13 @@ state, and it should report no xfails and no XPASSes: a new `xfail(strict=True)`
 appearing there means somebody has filed and pinned a new finding, which is
 exactly what it is for.
 
-What is deliberately **not** closed: the 41 findings in `docs/AUDIT.md` from the
-2026-08-07 sweep. They predate this work and none of them were re-verified here,
-so they are neither fixed nor confirmed still-live.
+What was deliberately **not** closed by this work: the 41 findings in
+`docs/AUDIT.md` from the 2026-08-07 sweep. They predated it and none of them
+were re-verified here, so they were neither fixed nor confirmed still-live.
+
+They have since been closed on their own, cluster by cluster against issues
+#42–#48 — one commit each, every fix carrying a regression test confirmed to
+fail against the pre-fix code. Four of the 41 had been partly overtaken by
+main's 2026-08-14 merge and were re-scoped before being worked rather than
+ticked on sight; each carries a note in `docs/AUDIT.md` saying what actually
+survived. Those tests are ordinary regression tests now, like the pins above.

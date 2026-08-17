@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type CSSProperties } from 'react'
 import { api, type CalEvent, type List } from '../api'
-import { dayKey, makeGuard, ymd } from '../util'
+import { cssColor, dayKey, makeGuard, ymd } from '../util'
 import { fmtClock } from '../time'
 import { useTimeFormat } from '../timeformat'
 
@@ -72,7 +72,7 @@ export function ArchivedCalendarsModal({ archived, onChange, onExpire, onClose }
                 <div className="arch-empty">No archived calendars.</div>
               ) : archivedCals.map((c) => (
                 <div key={c.id} className="arch-row">
-                  <span className="swatch" style={c.color ? { background: c.color } : undefined} />
+                  <span className="swatch" style={cssColor(c.color) ? { background: cssColor(c.color)! } : undefined} />
                   <span className="name">{c.name}</span>
                   <span className="count">{c.event_count}</span>
                   <button className="btn ghost" onClick={() => setViewing(c)}>View events</button>
@@ -142,7 +142,7 @@ function ArchivedEvents({ cal, onExpire, onRestore }: {
             <div className="arch-day-head">{fmtDay(day)}</div>
             {evs.map((e) => (
               <div key={e.id} className="agenda-ev"
-                style={cal.color ? { '--ev-c': cal.color } as CSSProperties : undefined}>
+                style={cssColor(cal.color) ? { '--ev-c': cssColor(cal.color) } as CSSProperties : undefined}>
                 <span className="t">{e.all_day || e.start_is_date ? 'all day' : (e.start ? fmtClock(e.start, tf) : '')}</span>
                 <span>
                   {e.is_recurring && <span className="recur" aria-hidden="true">↻ </span>}

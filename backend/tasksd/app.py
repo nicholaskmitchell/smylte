@@ -46,7 +46,7 @@ from .config import Settings, normalize_dav_url
 from .dav.errors import AuthError as DavAuthError
 from .dav.errors import DavError
 from .dav.errors import NotFound as DavNotFound
-from .dav.xml import XML_SAFE_PATTERN_SCALAR
+from .dav.xml import XML_SAFE_PATTERN_SCALAR, clean_color
 from .ical import EventEdit, TaskEdit, rrule_from_spec
 from .limits import BodySizeLimitMiddleware
 from .scheduling import SlotTaken
@@ -132,11 +132,11 @@ class ReorderTasks(BaseModel):
     items: list[ReorderEntry] = Field(max_length=_MAX_REORDER_TASKS)
 
 
-_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?$")
-
-
 def _check_color(color: str | None) -> None:
-    if color is not None and not _COLOR_RE.match(color):
+    # One pattern for both directions — see dav/xml.py. The read path used to
+    # have no check at all, so the app refused to WRITE what it happily read
+    # back and handed to the SPA's inline styles.
+    if color is not None and clean_color(color) is None:
         raise HTTPException(422, "color must be #RRGGBB or #RRGGBBAA")
 
 

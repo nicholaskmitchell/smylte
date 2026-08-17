@@ -473,3 +473,86 @@ def test_discover_reports_whether_the_collection_set_moved():
 
     engine.discover()
     assert engine.last_discovery_changed is False
+
+
+# ── a hostile calendar-color must not reach the SPA ─────────────────────────
+# `calendar-color` is an Apple dead property: anything with write access to a
+# shared collection can PROPPATCH it to arbitrary text, and Radicale stores that
+# verbatim. The write path always validated it; the read path took it as raw
+# text, cached it, and served it in the list DTO — which the SPA writes straight
+# into the CSSOM as an inline declaration. `background: url(https://evil/x.png)`
+# on a rendered 3-5px dot fetches the URL, a beacon that fires whenever the
+# owner opens the Calendar tab. There is no CSP anywhere to stop it.
+
+@pytest.mark.parametrize("hostile", [
+    "url(https://evil.example/x.png)",
+    "url(//evil.example/x)",
+    "red; background: url(//evil.example/x)",
+    "expression(alert(1))",
+    "var(--bg)",
+    "#12345",              # not a valid hex color either
+    "#GGGGGG",
+    "rgb(1,2,3)",          # legal CSS, but not the shape the write path allows
+    "",
+    "   ",
+])
+def test_a_hostile_calendar_color_surfaces_as_no_color(hostile):
+    from tasksd.dav import xml as X
+
+    assert X.clean_color(hostile) is None
+
+
+@pytest.mark.parametrize("ok, expected", [
+    ("#D9480F", "#D9480F"),
+    ("#d9480f", "#d9480f"),
+    ("#D9480F80", "#D9480F80"),      # RRGGBBAA
+    ("  #D9480F  ", "#D9480F"),      # the wire value is stripped, as before
+])
+def test_a_real_color_still_comes_through(ok, expected):
+    from tasksd.dav import xml as X
+
+    assert X.clean_color(ok) == expected
+
+
+def test_the_read_path_drops_a_hostile_color_before_it_is_cached():
+    """End to end through the multistatus parser, the way `order` is pinned."""
+    import types
+
+    from tasksd.dav.client import DavClient
+
+    wire = b"""<?xml version="1.0"?>
+<D:multistatus xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav"
+               xmlns:A="http://apple.com/ns/ical/">
+  <D:response><D:href>/u/shared/</D:href><D:propstat><D:prop>
+    <D:displayname>Shared</D:displayname>
+    <D:resourcetype><D:collection/><C:calendar/></D:resourcetype>
+    <C:supported-calendar-component-set><C:comp name="VEVENT"/></C:supported-calendar-component-set>
+    <A:calendar-color>url(https://evil.example/beacon.png)</A:calendar-color>
+  </D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>
+  <D:response><D:href>/u/mine/</D:href><D:propstat><D:prop>
+    <D:displayname>Mine</D:displayname>
+    <D:resourcetype><D:collection/><C:calendar/></D:resourcetype>
+    <C:supported-calendar-component-set><C:comp name="VEVENT"/></C:supported-calendar-component-set>
+    <A:calendar-color>#D9480F</A:calendar-color>
+  </D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>
+</D:multistatus>"""
+
+    c = DavClient.__new__(DavClient)
+    type(c).principal_path = property(lambda self: "/u/")
+    c._request = lambda *a, **kw: types.SimpleNamespace(
+        content=wire, status_code=207, headers={})
+
+    by_href = {info.href: info for info in c.list_collections()}
+    assert by_href["/u/shared/"].color is None, "a url() color survived the parser"
+    assert by_href["/u/mine/"].color == "#D9480F"
+
+
+def test_the_write_path_refuses_what_the_read_path_now_drops():
+    """One shape, both directions — the point of sharing the pattern."""
+    from tasksd.app import _check_color
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException):
+        _check_color("url(https://evil.example/x.png)")
+    _check_color("#D9480F")          # must not raise
+    _check_color(None)

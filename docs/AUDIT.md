@@ -32,21 +32,23 @@ gone". Re-scope them before working them.
 Ticked findings keep their original references, which point into the tree as it
 was when they were filed. They are history, not navigation.
 
-**6 open**, all from the 2026-08-07 sweep. Nothing from 2026-08-16 is open. The
+**0 open** from the 2026-08-07 sweep — the backlog it filed is closed. One
+finding is open from the remediation itself (the missing CSP, below). The
 evidence stays here — a ticked box records what the bug was and why it mattered,
 and the issues that link into these sections still resolve.
 
-The 2026-08-07 backlog is being closed cluster by cluster, in severity order,
-against the seven issues that group it (#42–#48). Each cluster lands as one
-commit: source fix, a regression test confirmed to fail against the pre-fix
-code, and the tick here. Done so far: **#45 (auth, session lifetime and request
+The 2026-08-07 backlog was closed cluster by cluster, in severity order, against
+the seven issues that group it (#42–#48). Each cluster landed as one commit:
+source fix, a regression test confirmed to fail against the pre-fix code, and
+the tick here. All seven are done — **#45 (auth, session lifetime and request
 limits)**, six findings including the sweep's remaining HIGH; **#42 (the
 unauthenticated booking write path)**, six plus the `expand_occurrences`
 truncation from #44, which is the same defect one layer down; **#46 (frontend
 time correctness)**, six including the sweep's other HIGH; **#43 (iCalendar
 series editing)**, five; **#44 (recurrence expansion, cache integrity and
 startup)**, its remaining five; **#47 (tasks view and bulk add)**, five plus the
-one open finding that belonged to no issue.
+one open finding that belonged to no issue; **#48 (untrusted color into the
+CSSOM, plus rendering polish)**, six.
 
 The 2026-08-16 sweep was closed in stages (`docs/STAGES.md`), each pinned by
 tests that failed until the finding was fixed. **All five stages are done** — the
@@ -54,7 +56,42 @@ seven crash paths, the five abuse/exhaustion findings, the seven silent-corrupti
 ones, the twelve user-visible ones and the nine delivery/test-gap ones, all ticked
 below. Those pins are now ordinary regression tests that must stay green.
 
-<!-- Newest sweep first: 2026-08-16, then 2026-08-07, then the 2026-07 sweep, fully ticked. -->
+<!-- Newest first: the 2026-08-17 remediation finding, then the 2026-08-16
+     sweep, then 2026-08-07, then the 2026-07 sweep, fully ticked. -->
+
+## Filed during remediation — 2026-08-17
+
+Found while closing the 2026-08-07 backlog, not by a sweep. One finding, not
+verified by anyone else.
+
+#### [ ] No Content-Security-Policy anywhere, so nothing bounds what a value reaching the CSSOM can fetch
+
+`deploy/Caddyfile.snippet` · **medium** · security
+
+Cluster #48 closed the `calendar-color` beacon by validating the value at
+ingest and again on the client. That is the right fix for that path, and it is
+the only defence there was: there is no CSP on any response this app serves, so
+ANY value that reaches a style declaration, an `img` src or a script tag can
+make the browser talk to a third party, and the next such path will be
+undefended in exactly the same way. The appearance allowlist and `cssColor` are
+both allowlists over specific fields; a CSP is the bound over everything else.
+
+Deliberately not fixed in that pass. The SPA carries an inline pre-paint script
+in `index.html` (it has to: it applies the stored theme before first paint, and
+importing a module would be too late), so a `script-src` needs a hash or a
+nonce, and getting it wrong breaks the app at load rather than degrading. That
+wants its own change with a real browser in front of it, not a line added to a
+cluster about colors.
+
+**Suggested fix.** Add `header` directives to the `handle { reverse_proxy 127.0.0.1:8080 }` block in
+`deploy/Caddyfile.snippet`: `default-src 'self'`, `img-src 'self' data:`,
+`style-src 'self' 'unsafe-inline'` (inline styles are load-bearing throughout
+the SPA), `script-src 'self' 'sha256-…'` for the pre-paint script,
+`connect-src 'self'`, `frame-ancestors 'none'`, `base-uri 'none'`. Pin the
+script hash from a test that reads `index.html`, the way
+`appearance.test.ts` already pins that script's contents, so an edit to it
+cannot silently break the policy. Verify in a real browser, including the
+public booking page, which is served to people who are not this account.
 
 ## Sweep — 2026-08-16
 
@@ -2492,8 +2529,21 @@ the duplicate row and the `childrenOf` rescan, leaving a flattened tree and a
 per-row `colorOf` scan respectively. The rest as filed: a multi-line paste
 regenerates the row's idempotency id, `toggleShared` compares slot values by
 value (a shared `sameValue` in util.ts, replacing the copy in TaskModal), and a
-failed list delete restores the group membership as well as the list. **6
-open.**
+failed list delete restores the group membership as well as the list.
+
+**Cluster #48 — untrusted color into the CSSOM — closed 6.** The beacon is
+closed at both layers: `dav/xml.py` gains a `clean_color` the read path applies
+at ingest and the write path now shares, so the app no longer refuses to write
+what it happily reads back, and `cssColor` in util.ts guards every inline-style
+site on the client — applied at the ACCESSOR in each component rather than at
+each style site, so a new consumer inherits it. That includes the `boxShadow`
+shorthand in Sidebar, where a wire value escapes the property boundary most
+freely. The rest: the public page names the zone when a fall-back hour repeats
+(and carries that label through to the confirmation card), moving an event into
+a hidden calendar reveals it, the scheduling fetch got the staleness guard that
+was the last one missing, and `.appear-text` is back at the mobile 16px floor.
+
+**All 41 findings from the 2026-08-07 sweep are now closed.**
 
 
 ### HTTP API surface
@@ -3891,7 +3941,7 @@ that, refuse to save a link whose timezone differs from the owner's, or surface 
 warning. Add a test with link tz != authoring tz asserting the busy block lands at the
 authored instant.
 
-#### [ ] On the DST fall-back day the public page renders two identical slot buttons an hour apart, so the visitor can book the wrong hour with no way to tell
+#### [x] On the DST fall-back day the public page renders two identical slot buttons an hour apart, so the visitor can book the wrong hour with no way to tell
 
 `frontend/src/components/BookingPage.tsx:214` (`fmtTime`) · **low** · rendering
 
@@ -4470,7 +4520,7 @@ kidsBy.get(uid) ?? EMPTY`, and a `Map` for list colors. Memoize
 
 ### Calendar + Home
 
-#### [ ] Collection colors from the wire are unvalidated and go straight into the CSSOM — url() in calendar-color is a live remote-fetch beacon
+#### [x] Collection colors from the wire are unvalidated and go straight into the CSSOM — url() in calendar-color is a live remote-fetch beacon
 
 `frontend/src/components/HomeView.tsx:358` (`TaskList`) · **medium** · security
 
@@ -4520,11 +4570,18 @@ normalize in `_list_dto` too, dropping any `row["color"]` that does not match
 `_COLOR_RE`, so a hostile value never crosses the wire. Cover it with a test that a wire
 color of `url(https://x/)` renders no inline background.
 
-#### [ ] HomeView's calendar fetch has no staleness guard, so an older batch settling last leaves the mini calendar showing a stale month
+#### [x] HomeView's calendar fetch has no staleness guard, so an older batch settling last leaves the mini calendar showing a stale month
 
 `frontend/src/components/HomeView.tsx:139` (`requestWindow`) · **low** · bug · `minor`
 
-**Code no longer exists.** HomeView stopped fetching calendars itself in main's 2026-08-14 merge; it reads through `useCalendarData()` and defers to `requestWindow`, whose staleness guard Stage 4 made per-window in `data.tsx`. Anchored at the call site. Verify before working — this may already be closed.
+**Re-scoped, then fixed.** Verified: the calendar half really was closed.
+HomeView stopped fetching calendars itself in main's 2026-08-14 merge — it
+reads through `useCalendarData()` and defers to `requestWindow`, whose
+staleness guard Stage 4 made per-window in `data.tsx`. What was still
+unguarded was the SCHEDULING effect in the same component: `api.schedulingLinks()`
+then `api.schedulingBookings()`, sequentially, re-running on `rev`, with no
+generation counter and no cleanup — the same defect one module along, and the
+last fetch in the app without the guard. That one now carries a token ref.
 
 The calendar effect fans out `api.calendars()` plus one `api.events()` per visible
 calendar and commits with `setCals`/`setEvents`, with no generation counter,
@@ -4569,7 +4626,7 @@ a HomeView test in the shape of CalendarView.test.tsx's "ignores an older fetch 
 settles after a newer one": hold the first `api.events` promise, bump `rev`, let the
 second resolve, then release the first and assert the dots came from the newer batch.
 
-#### [ ] Moving an event into a hidden calendar makes it vanish from the grid with no feedback; only the create path un-hides
+#### [x] Moving an event into a hidden calendar makes it vanish from the grid with no feedback; only the create path un-hides
 
 `frontend/src/components/CalendarView.tsx:322` (`save`) · **low** · rendering · `minor`
 
@@ -4618,7 +4675,7 @@ hidden calendar in the modal drops that id from `onHiddenCalendarsChange`.
 
 ### Appearance + theming
 
-#### [ ] calendar-color read off the wire is never validated and lands in the CSSOM, so a foreign CalDAV client can plant a url() beacon
+#### [x] calendar-color read off the wire is never validated and lands in the CSSOM, so a foreign CalDAV client can plant a url() beacon
 
 `backend/tasksd/dav/client.py:152` (`discover`) · **medium** · security
 
@@ -4678,7 +4735,7 @@ reaches an inline style or `--ev-c`, and stop interpolating a wire value into th
 `boxShadow` shorthand. Add a sync test asserting a `calendar-color` of `url(//evil)`
 surfaces as `color: null` in the list DTO.
 
-#### [ ] The Appearance editor's color text field overrides the mobile 16px input floor, reintroducing iOS Safari's zoom-on-focus
+#### [x] The Appearance editor's color text field overrides the mobile 16px input floor, reintroducing iOS Safari's zoom-on-focus
 
 `frontend/src/styles/app.css:929` (`.appear-text`) · **low** · rendering · `minor`
 

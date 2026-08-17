@@ -142,6 +142,59 @@ describe('<BookingPage>', () => {
     expect(second[1].client_id).not.toBe(first[1].client_id)
   })
 
+  it('names the zone when the fall-back hour repeats', async () => {
+    // generate_slots deliberately offers BOTH passes of the repeated hour on
+    // the fall-back day. The suite runs in America/New_York, where 2026-11-01
+    // 01:00 happens twice: 05:00Z (EDT) and 06:00Z (EST). Both printed
+    // "1:00 AM", on the buttons and everywhere downstream, so the visitor had
+    // no way to tell which hour they were booking.
+    infoMock.mockResolvedValue({
+      ...INFO,
+      slots: [
+        { start: '2026-11-01T05:00:00+00:00', end: '2026-11-01T05:30:00+00:00' },
+        { start: '2026-11-01T06:00:00+00:00', end: '2026-11-01T06:30:00+00:00' },
+        { start: '2026-11-01T15:00:00+00:00', end: '2026-11-01T15:30:00+00:00' },
+      ],
+    })
+    render(<BookingPage token="tok" />)
+    await screen.findByText('Intro call')
+
+    const labels = [...document.querySelectorAll('.slot-btn')].map((b) => b.textContent)
+    expect(new Set(labels).size).toBe(labels.length)
+    expect(labels[0]).toMatch(/EDT/)
+    expect(labels[1]).toMatch(/EST/)
+    // The unambiguous slot is left alone — no zone suffix on every button.
+    expect(labels[2]).not.toMatch(/E[DS]T/)
+  })
+
+  it('carries the disambiguated label through to the confirmation card', async () => {
+    infoMock.mockResolvedValue({
+      ...INFO,
+      slots: [
+        { start: '2026-11-01T05:00:00+00:00', end: '2026-11-01T05:30:00+00:00' },
+        { start: '2026-11-01T06:00:00+00:00', end: '2026-11-01T06:30:00+00:00' },
+      ],
+    })
+    bookMock.mockResolvedValue({
+      id: 'b1', start: '2026-11-01T05:00:00+00:00', end: '2026-11-01T05:30:00+00:00',
+      title: 'Intro call', duration_minutes: 30, timezone: 'UTC',
+    })
+    render(<BookingPage token="tok" />)
+    await screen.findByText('Intro call')
+
+    await userEvent.click(document.querySelectorAll('.slot-btn')[0] as HTMLElement)
+    // The confirm bar says it too, not just the button that opened it.
+    expect(document.querySelector('.booking-picked')!.textContent).toMatch(/EDT/)
+
+    await userEvent.type(screen.getAllByRole('textbox')[0], 'Ada')
+    const email = document.querySelector('input[type="email"]') as HTMLInputElement
+    await userEvent.type(email, 'ada@example.com')
+    await userEvent.click(screen.getByRole('button', { name: /confirm booking/i }))
+
+    expect(await screen.findByText(/you're booked, ada/i)).toBeInTheDocument()
+    expect(document.querySelector('.booking-lead')!.textContent).toMatch(/EDT/)
+  })
+
   it('keeps the confirm button disabled until name and a plausible email exist', async () => {
     infoMock.mockResolvedValue(INFO)
     render(<BookingPage token="tok" />)

@@ -2,6 +2,7 @@ import {
   useState, type CSSProperties, type DragEvent, type KeyboardEvent, type ReactNode,
 } from 'react'
 import { clientId, type List, type TaskGroup } from '../api'
+import { cssColor } from '../util'
 import { useIsMobile } from '../hooks'
 
 // Preset collection colors — muted, editorial, distinct from the accent.
@@ -204,10 +205,14 @@ export function Sidebar({ title, placeholder, items, sel = '', countOf, onSelect
   // Swatch fill: a visible item shows its solid color; a hidden one (visibility
   // mode) shows a hollow ring so the color still reads at a glance.
   const swatchStyle = (l: List): CSSProperties | undefined => {
+    // Through cssColor, and the hidden branch especially: interpolating a wire
+    // value into a `boxShadow` SHORTHAND lets it escape the property boundary
+    // far more freely than a plain `background:` does.
+    const c = cssColor(l.color)
     if (canToggle && hidden.has(l.id)) {
-      return { background: 'transparent', boxShadow: `inset 0 0 0 1.5px ${l.color || 'var(--fg-faint)'}` }
+      return { background: 'transparent', boxShadow: `inset 0 0 0 1.5px ${c ?? 'var(--fg-faint)'}` }
     }
-    return l.color ? { background: l.color } : undefined
+    return c ? { background: c } : undefined
   }
 
   // One collection row — reused by both the grouped and ungrouped sections. In
