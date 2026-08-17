@@ -62,7 +62,8 @@ below. Those pins are now ordinary regression tests that must stay green.
 ## Filed during remediation — 2026-08-17
 
 Found while closing the 2026-08-07 backlog, not by a sweep. One finding, not
-verified by anyone else.
+verified by anyone else. Tracked as issue #57 — it came out of #48 but is its
+own change, for the reason the entry gives.
 
 #### [ ] No Content-Security-Policy anywhere, so nothing bounds what a value reaching the CSSOM can fetch
 
