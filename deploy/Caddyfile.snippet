@@ -66,6 +66,15 @@
 
 	# Everything else -> the Tasks + Calendar web app.
 	handle {
+		# NO Content-Security-Policy here, deliberately. The app sets one itself
+		# (tasksd/csp.py), and it has to: the policy carries a sha256 of the
+		# SPA's inline pre-paint script, derived at startup from the index.html
+		# actually being served, which nothing at this layer can know. Adding a
+		# second policy here would not harden anything — browsers enforce the
+		# INTERSECTION of every policy on a response, so the two would combine
+		# into one that neither file describes, and the symptom is a blank page.
+		# To relax or disable it, set TASKS_CSP in /etc/tasks/tasks.env.
+
 		# Refuse an oversized body at the edge, before the app allocates for it.
 		# /api/login and the public booking POST are anonymous, and FastAPI
 		# buffers a request body before any of their rate limiters run, so an

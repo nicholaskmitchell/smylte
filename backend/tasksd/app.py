@@ -48,6 +48,7 @@ from .dav.errors import DavError
 from .dav.errors import NotFound as DavNotFound
 from .dav.xml import XML_SAFE_PATTERN_SCALAR, clean_color
 from .ical import EventEdit, TaskEdit, rrule_from_spec
+from .csp import CSPMiddleware, policy_for_index
 from .limits import BodySizeLimitMiddleware
 from .scheduling import SlotTaken
 from .service import TaskService, priority_from_label
@@ -772,6 +773,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # buffers a pydantic body before the endpoint (and therefore before the
     # login limiter and the booking throttles) ever runs. See tasksd/limits.py.
     app.add_middleware(BodySizeLimitMiddleware, max_bytes=settings.max_body_bytes)
+
+    # Content-Security-Policy. The script hash is derived from the index.html
+    # this deployment actually serves rather than written down, so the two
+    # cannot drift into a blank page — see tasksd/csp.py. Read once, here: a
+    # frontend rebuild therefore needs a restart, which docs/DEPLOY.md says.
+    if settings.csp_mode != "off":
+        index_path = os.path.join(settings.static_dir, "index.html")
+        index_html: str | None = None
+        try:
+            with open(index_path, encoding="utf-8") as fh:
+                index_html = fh.read()
+        except OSError:
+            # No frontend to protect (dev, tests, API-only). The policy still
+            # ships for the API and the MCP pages; it just has no script hash.
+            log.info("csp: no %s; serving the policy without a script hash", index_path)
+        policy = policy_for_index(index_html)
+        app.add_middleware(
+            CSPMiddleware, policy=policy,
+            report_only=settings.csp_mode == "report-only",
+        )
+        log.info(
+            "csp: %s — %s",
+            "report-only" if settings.csp_mode == "report-only" else "enforcing",
+            policy,
+        )
 
     @app.exception_handler(RequestValidationError)
     async def _invalid_request(request: Request, exc: RequestValidationError):
