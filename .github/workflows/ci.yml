@@ -81,6 +81,25 @@ jobs:
         # and the two ways a failed update used to cost someone a working build.
         run: dotnet test desktop/Smylte.Desktop.Tests/Smylte.Desktop.Tests.csproj
 
+  workflows:
+    # desktop-release.yml's publish step is the only code here that hands
+    # something to the outside world, and it is shell that never runs on a PR —
+    # it fires on a push to main, straight at the real release. Its bad day is
+    # also not a red build: a transient between the asset upload and the notes
+    # edit leaves `desktop-latest` green and half-updated. So the step is tested
+    # against a stub `gh`, reading the `run:` block out of the YAML so the thing
+    # under test cannot drift from the thing that ships.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Publish-step tests (stubbed gh)
+        run: |
+          pip install --quiet pyyaml
+          .github/workflows/tests/publish-release.test.sh
+
   security:
     runs-on: ubuntu-latest
     steps:
