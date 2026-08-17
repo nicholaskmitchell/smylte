@@ -91,7 +91,61 @@ jobs:
         # Upload --clobber onto the existing release rather than delete-and-recreate,
         # so there is never a window where a client checking for updates finds no
         # release at all.
+        #
+        # Every api.github.com call here is retried, because this step publishes
+        # and it takes more than one call to do it. On 2026-08-17 a 503 hit the
+        # notes edit AFTER the assets had uploaded, leaving the rolling release
+        # carrying new binaries under notes naming the previous commit — green
+        # builds, wrong story, and it took a manual re-run to converge. Retrying
+        # is safe because every call below is idempotent: --clobber replaces an
+        # asset and --notes replaces the body, so a repeat is a no-op.
         run: |
+          # 5 attempts, doubling from 5s: ~75s of cover, which is the shape of a
+          # GitHub API blip. A longer outage should fail the job, not sit on a
+          # runner — the step is re-runnable and converges when it is.
+          retry() {
+            local attempt=1 max=5 delay=5
+            # Name the call by its first three words, not "$*": the notes are an
+            # argument, and echoing them turns every annotation into a paragraph.
+            local what="$1 ${2:-} ${3:-}"
+            # Annotations go to STDERR. Actions reads them from either stream,
+            # and `retry` is used inside `$( )` — on stdout they would be
+            # captured as the command's output, which silently corrupts the
+            # answer rather than failing. Verified: with these on stdout, a
+            # retried existence check returns the warning text instead of
+            # "present" and the script falls through to `gh release create`.
+            until "$@"; do
+              if [ "$attempt" -ge "$max" ]; then
+                echo "::error::\`$what\` failed $max times; giving up" >&2
+                return 1
+              fi
+              echo "::warning::\`$what\` failed (attempt $attempt/$max); retrying in ${delay}s" >&2
+              sleep "$delay"
+              attempt=$((attempt + 1))
+              delay=$((delay * 2))
+            done
+          }
+
+          # Whether the release exists is a question the API can also simply fail
+          # to answer, and the two must not be confused. `gh release view` exits
+          # non-zero for both, so a transient error used to read as "absent" and
+          # send the script into `gh release create`, which then died with
+          # "already exists" — a misleading error for a retryable blip. Only a
+          # real 404 is an answer; anything else propagates and gets retried.
+          release_state() {
+            local err
+            if err=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/desktop-latest" 2>&1 >/dev/null); then
+              echo present
+              return 0
+            fi
+            if printf '%s' "$err" | grep -q 'HTTP 404'; then
+              echo absent
+              return 0
+            fi
+            printf '%s\n' "$err" >&2
+            return 1
+          }
+
           NOTES="Rolling desktop build from ${GITHUB_SHA}.
 
           \`Smylte.exe\` is the Windows client — download it once; it keeps its own
@@ -100,12 +154,31 @@ jobs:
 
           FILES="artifacts/web/smylte-web.zip artifacts/client/Smylte.exe"
 
-          if gh release view desktop-latest >/dev/null 2>&1; then
-            gh release upload desktop-latest $FILES --clobber
-            gh release edit desktop-latest --notes "$NOTES"
+          RELEASE_STATE=$(retry release_state)
+
+          if [ "$RELEASE_STATE" = present ]; then
+            # Assets first, notes second, and the order matters. If this step dies
+            # in between, new binaries under stale notes is the harmless half —
+            # the client keys on the asset id and updated_at (Updater.cs), never
+            # the body, so it still gets the right build. The reverse would leave
+            # notes promising a commit whose binaries were never uploaded, which
+            # reads as shipped and is not.
+            retry gh release upload desktop-latest $FILES --clobber
+            retry gh release edit desktop-latest --notes "$NOTES"
           else
-            gh release create desktop-latest $FILES \
+            retry gh release create desktop-latest $FILES \
               --title "Smylte desktop (rolling)" \
               --notes "$NOTES" \
               --prerelease
+          fi
+
+          # The post-condition, because the failure this step guards against is
+          # one that leaves the job looking successful. If the notes do not name
+          # the commit whose binaries were just uploaded, the release is in the
+          # half-updated state, and that must be a red job rather than something
+          # noticed later by reading the releases page.
+          BODY=$(retry gh release view desktop-latest --json body --jq .body)
+          if ! printf '%s' "$BODY" | grep -q "$GITHUB_SHA"; then
+            echo "::error::desktop-latest notes do not name ${GITHUB_SHA}; the release is half-updated"
+            exit 1
           fi
