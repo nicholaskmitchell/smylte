@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -560,6 +562,30 @@ describe('<Sidebar> color on a new collection', () => {
     expect(screen.queryByPlaceholderText('Calendar')).not.toBeInTheDocument()
   })
 
+  // The mobile drawer renders its own copy of the add form inside the bottom
+  // sheet, reached by a different button. Same component, different container —
+  // and on a phone the drawer is the *only* way to add a collection at all.
+  it('creates with a color from the mobile drawer too', async () => {
+    const stub = (matches: boolean) => {
+      window.matchMedia = ((query: string) => ({
+        matches, media: query, onchange: null,
+        addEventListener: () => {}, removeEventListener: () => {},
+        addListener: () => {}, removeListener: () => {}, dispatchEvent: () => false,
+      })) as unknown as typeof window.matchMedia
+    }
+    stub(true)
+    try {
+      const api = addApi()
+      render(withApi(api))
+      await userEvent.click(screen.getByRole('button', { name: 'New calendar' }))
+      await userEvent.click(screen.getByTitle('#6A1B9A'))
+      await userEvent.type(nameField(), 'Travel{Enter}')
+      expect(api.create).toHaveBeenCalledWith('Travel', '#6A1B9A')
+    } finally {
+      stub(false)
+    }
+  })
+
   it('keeps a half-typed name when focus leaves', async () => {
     render(
       <>
@@ -573,6 +599,65 @@ describe('<Sidebar> color on a new collection', () => {
     await userEvent.type(screen.getByPlaceholderText('Calendar'), 'Trav')
     await userEvent.click(screen.getByRole('button', { name: 'elsewhere' }))
     expect(screen.getByPlaceholderText('Calendar')).toHaveValue('Trav')
+  })
+})
+
+// This suite runs with `css: false` (vite.config.ts), so nothing above ever
+// sees a painted pixel — the component contract is asserted there, and the
+// rules that turn it into a square are asserted here, read off disk the way
+// appearance.test.ts pins tokens.css. Not a substitute for looking at it: this
+// catches the rules being dropped or renamed, not them being ugly.
+describe('the custom square’s stylesheet', () => {
+  // From process.cwd() (the frontend dir) rather than import.meta.url, which
+  // is not a file: URL under this environment — the same way util.test.ts
+  // reaches the backend's COLOR_PATTERN. Comments are stripped first: the
+  // rules below are *explained* in prose that names the very selectors and
+  // properties being asserted, so matching raw text would read the commentary
+  // rather than the CSS.
+  const appCss = readFileSync(resolve(process.cwd(), 'src/styles/app.css'), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+
+  /** The body of one CSS rule, or null if the selector is not in the file. */
+  const rule = (selector: string): string | null => {
+    const at = appCss.indexOf(selector + ' {')
+    return at < 0 ? null : appCss.slice(at + selector.length + 2, appCss.indexOf('}', at))
+  }
+
+  it('paints a spectrum, so an unpicked square is not a ninth color', () => {
+    // Without this the label is transparent and the square reads as empty —
+    // and the inline fill only ever covers the *picked* state.
+    expect(rule('.color-dot.custom')).toContain('conic-gradient')
+  })
+
+  it('clips the fill to the dot', () => {
+    // The input inside is a rectangle; without overflow the gradient and the
+    // picked color spill past the radius on the rounded preset.
+    expect(rule('.color-dot.custom')).toContain('overflow: hidden')
+  })
+
+  it('stretches the input over the whole square and hides it', () => {
+    const input = rule('.color-dot.custom > input')
+    expect(input).not.toBeNull()
+    // opacity, not display/visibility: the input must stay hit-testable and in
+    // the tab order, since it is the only thing that opens the picker.
+    expect(input).toContain('opacity: 0')
+    expect(input).toMatch(/width:\s*100%/)
+    expect(input).toMatch(/height:\s*100%/)
+  })
+
+  it('draws a focus ring without :has()', () => {
+    // The input carries focus but cannot show it. :has() is used nowhere else
+    // in these sheets, and a browser that cannot parse it drops the whole rule
+    // — which would leave the keyboard user no focus indicator at all.
+    expect(rule('.color-dot.custom:focus-within')).toContain('outline')
+    expect(appCss).not.toContain(':has(')
+  })
+
+  it('stacks the add form, and only the add form', () => {
+    // .side-add is shared with add-group, rename-group and quick-add, which are
+    // all one control on one line and must stay that way.
+    expect(rule('.side-add.with-color')).toContain('flex-direction: column')
+    expect(rule('.side-add')).not.toContain('flex-direction')
   })
 })
 
