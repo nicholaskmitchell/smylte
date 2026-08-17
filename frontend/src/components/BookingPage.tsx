@@ -15,6 +15,18 @@ type Phase = 'loading' | 'notfound' | 'unavailable' | 'pick' | 'confirm' | 'done
 const fmtTime = (iso: string) =>
   new Date(iso).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
 
+/** The same time, named unambiguously — "1:00 AM CDT" rather than "1:00 AM".
+ *
+ * On the fall-back day the hour repeats, and `generate_slots` deliberately
+ * offers BOTH passes of it (see test_fall_back_offers_the_repeated_hour). For a
+ * visitor in a zone with the same transition — most of them, since a link is
+ * usually shared within a country — the two slots printed the same label, on
+ * the buttons, on the confirm bar and on the confirmation card. Nothing
+ * anywhere told them which hour they were booking. */
+const fmtTimeZoned = (iso: string) =>
+  new Date(iso).toLocaleTimeString(undefined,
+    { hour: 'numeric', minute: '2-digit', timeZoneName: 'short' })
+
 const fmtDay = (key: string) =>
   new Date(`${key}T00:00`).toLocaleDateString(undefined,
     { weekday: 'long', month: 'long', day: 'numeric' })
@@ -42,7 +54,12 @@ export function BookingPage({ token }: { token: string }) {
   const [notes, setNotes] = useState('')
   const [busyNow, setBusyNow] = useState(false)      // submit in flight
   const [error, setError] = useState<string | null>(null)
-  const [booked, setBooked] = useState<{ start: string; end: string } | null>(null)
+  // `zoned` records the decision made at confirm time: whether this slot's
+  // label repeated on its day. The card is written after the slot list has been
+  // refreshed away, so it cannot re-derive that — and it has to say the same
+  // thing the button the visitor clicked said.
+  const [booked, setBooked] =
+    useState<{ start: string; end: string; zoned: boolean } | null>(null)
 
   const load = async (opts: { keepPhase?: boolean } = {}): Promise<PublicBookingInfo | null> => {
     try {
@@ -86,6 +103,27 @@ export function BookingPage({ token }: { token: string }) {
     return m
   }, [info])
 
+  // Which slot starts share a printed label with another slot the same day.
+  // Only those get the zone suffix: adding it everywhere would put "CDT" on
+  // every button on the page to solve a problem that exists twice a year.
+  const ambiguous = useMemo(() => {
+    const out = new Set<string>()
+    for (const slots of slotsByDay.values()) {
+      const seen = new Map<string, string>()
+      for (const s of slots) {
+        const label = fmtTime(s.start)
+        const first = seen.get(label)
+        if (first === undefined) seen.set(label, s.start)
+        else { out.add(first); out.add(s.start) }
+      }
+    }
+    return out
+  }, [slotsByDay])
+  // Used everywhere a slot time is shown — the buttons, the confirm bar and the
+  // confirmation card — so the visitor sees the same unambiguous label at every
+  // step of the one booking.
+  const fmtSlot = (iso: string) => (ambiguous.has(iso) ? fmtTimeZoned(iso) : fmtTime(iso))
+
   const days = useMemo(() => [...slotsByDay.keys()].sort(), [slotsByDay])
   const selDay = days.includes(day) ? day : days[0] || ''
   const visitorTz = Intl.DateTimeFormat().resolvedOptions().timeZone
@@ -100,7 +138,7 @@ export function BookingPage({ token }: { token: string }) {
         start: slot.start, name: name.trim(), email: email.trim(),
         notes: notes.trim() || undefined,
       })
-      setBooked({ start: r.start, end: r.end })
+      setBooked({ start: r.start, end: r.end, zoned: ambiguous.has(slot.start) })
       setPhase('done')
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
@@ -163,7 +201,9 @@ export function BookingPage({ token }: { token: string }) {
             {new Date(booked.start).toLocaleDateString(undefined,
               { weekday: 'long', month: 'long', day: 'numeric' })}
             {' · '}
-            {fmtTime(booked.start)}–{fmtTime(booked.end)}
+            {booked.zoned
+              ? `${fmtTimeZoned(booked.start)}–${fmtTimeZoned(booked.end)}`
+              : `${fmtTime(booked.start)}–${fmtTime(booked.end)}`}
           </p>
           <p className="hintline">
             You're booked, {name.trim()}. Times shown in {visitorTz}.
@@ -223,7 +263,7 @@ export function BookingPage({ token }: { token: string }) {
               {(slotsByDay.get(selDay) ?? []).map((s) => (
                 <button key={s.start} className="slot-btn"
                   onClick={() => { setSlot(s); setCid(clientId()); setPhase('confirm') }}>
-                  {fmtTime(s.start)}
+                  {fmtSlot(s.start)}
                 </button>
               ))}
             </div>
@@ -234,7 +274,7 @@ export function BookingPage({ token }: { token: string }) {
           <>
             <div className="booking-picked">
               <span>
-                {fmtDay(localDay(slot.start))} · {fmtTime(slot.start)}–{fmtTime(slot.end)}
+                {fmtDay(localDay(slot.start))} · {fmtSlot(slot.start)}–{fmtSlot(slot.end)}
               </span>
               <button className="btn ghost" onClick={() => { setSlot(null); setPhase('pick') }}>
                 Change

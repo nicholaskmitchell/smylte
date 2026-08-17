@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AuthError } from './api'
-import { addDays, dayKey, hasZone, instantFromLocal, isOverdue, makeGuard, pad, parseDate, setErrorNotifier, toLocalInput, ymd } from './util'
+import { addDays, cssColor, dayKey, hasZone, instantFromLocal, isOverdue, makeGuard, pad, parseDate, setErrorNotifier, toLocalInput, ymd } from './util'
 
 describe('parseDate', () => {
   it('parses date-only strings as LOCAL midnight, not UTC', () => {
@@ -113,5 +113,59 @@ describe('instantFromLocal', () => {
 
   it('hands an unparseable pair straight back rather than inventing a date', () => {
     expect(instantFromLocal('nonsense', '04:30')).toBe('nonsenseT04:30')
+  })
+})
+
+// ── a wire color must never reach the CSSOM unchecked ───────────────────────
+// `List.color` is served from whatever another CalDAV client wrote into the
+// collection's `ical:calendar-color` — an Apple dead property anything sharing
+// the collection can PROPPATCH — and the SPA writes it into element styles, as
+// a `background` and as the `--ev-c` custom property that app.css resolves into
+// `background: var(--ev-c, var(--accent))`. So `url(...)` on a rendered 3-5px
+// dot makes the browser fetch it, a beacon that fires whenever the owner opens
+// the Calendar tab. There is no CSP in this app to stop it.
+
+describe('cssColor', () => {
+  it.each([
+    ['a url() beacon', 'url(https://evil.example/x.png)'],
+    ['a protocol-relative url()', 'url(//evil.example/x)'],
+    ['a value escaping the declaration', 'red; background: url(//evil.example/x)'],
+    ['an image()', 'image(//evil.example/x)'],
+    ['a legacy expression()', 'expression(alert(1))'],
+    ['a var() reference', 'var(--bg)'],
+    ['a named color', 'red'],
+    ['an rgb() call', 'rgb(1,2,3)'],
+    ['a short hex', '#123'],
+    ['a malformed hex', '#GGGGGG'],
+    ['an empty string', ''],
+    ['null', null],
+    ['undefined', undefined],
+  ])('refuses %s', (_label, value) => {
+    expect(cssColor(value)).toBeNull()
+  })
+
+  it.each([
+    ['#D9480F', '#D9480F'],
+    ['#d9480f', '#d9480f'],
+    ['#D9480F80', '#D9480F80'],     // RRGGBBAA, which the app writes
+    ['  #D9480F  ', '#D9480F'],     // trimmed, like the backend does
+  ])('passes %s through', (input, expected) => {
+    expect(cssColor(input)).toBe(expected)
+  })
+
+  it('agrees with the shape the backend enforces on both paths', async () => {
+    // dav/xml.py's COLOR_PATTERN. Pinned by reading it off disk, the way
+    // appearance.test.ts pins the pre-paint script — a divergence here means
+    // one layer accepts what the other refuses.
+    const { readFileSync } = await import('node:fs')
+    const { resolve } = await import('node:path')
+    const src = readFileSync(
+      resolve(process.cwd(), '../backend/tasksd/dav/xml.py'), 'utf8')
+    const m = /COLOR_PATTERN = r"([^"]+)"/.exec(src)
+    expect(m).not.toBeNull()
+    // Python's (?:…) is a non-capturing group; JS spells it the same way.
+    const backend = new RegExp(m![1])
+    for (const v of ['#D9480F', '#d9480f80']) expect(backend.test(v)).toBe(true)
+    for (const v of ['url(//x)', 'red', '#123']) expect(backend.test(v)).toBe(false)
   })
 })

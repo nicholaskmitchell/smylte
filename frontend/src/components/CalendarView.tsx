@@ -3,7 +3,7 @@ import {
   api, clientId, uidFor, type CalEvent, type EventScope, type List, type Task,
 } from '../api'
 import { useCalendarData, useTaskData } from '../data'
-import { dayKey, makeGuard, pad, toLocalInput, ymd } from '../util'
+import { cssColor, dayKey, makeGuard, pad, toLocalInput, ymd } from '../util'
 import { fmtClock, inputLang } from '../time'
 import { useTimeFormat } from '../timeformat'
 import {
@@ -105,8 +105,9 @@ function CalendarTasksSection({ lists, shown, onShownChange, showDone, onShowDon
                 }}
                 onClick={() => toggle(l.id)}>
                 <span className="swatch" style={on
-                  ? (l.color ? { background: l.color } : undefined)
-                  : { background: 'transparent', boxShadow: `inset 0 0 0 1.5px ${l.color || 'var(--fg-faint)'}` }} />
+                  ? (cssColor(l.color) ? { background: cssColor(l.color)! } : undefined)
+                  : { background: 'transparent',
+                      boxShadow: `inset 0 0 0 1.5px ${cssColor(l.color) ?? 'var(--fg-faint)'}` }} />
                 <span className="name">{l.name}</span>
                 <span className="count">{l.open_count}</span>
               </div>
@@ -213,13 +214,16 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
   const calIdOf = (e: CalEvent) => calByHref.get(e.calendar)?.id || ''
   // Per-event tint, so the combined view keeps each calendar's color.
   const evStyle = (e: CalEvent): CSSProperties | undefined => {
-    const c = calByHref.get(e.calendar)?.color
+    // Through cssColor: `color` is whatever another CalDAV client wrote into
+    // the collection's calendar-color, and `--ev-c` resolves into a plain
+    // `background` in app.css — see util.ts.
+    const c = cssColor(calByHref.get(e.calendar)?.color)
     return c ? { '--ev-c': c } as CSSProperties : undefined
   }
   // Tasks wear their list's color through the same custom property, so one set
   // of chip rules covers both kinds.
   const taskStyle = (t: Task): CSSProperties | undefined => {
-    const c = taskColor(t.list)
+    const c = cssColor(taskColor(t.list))
     return c ? { '--ev-c': c } as CSSProperties : undefined
   }
 
@@ -319,7 +323,16 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
     const painted = applyLocal(uid, body)
     const ok = await guard(() => api.patchEvent(cal, uid, body))
     const moved = !!(ok && moveTo && moveTo !== cal)
-    if (moved) await guard(() => api.moveEvent(cal, uid, moveTo!))
+    if (moved) {
+      await guard(() => api.moveEvent(cal, uid, moveTo!))
+      // Reveal the destination, the same two lines the create branch runs and
+      // for the same reason. The modal's Calendar picker is populated from
+      // `visibleCals`, which includes calendars the user has HIDDEN (hidden is
+      // a pure render filter), so moving an event into one made it vanish from
+      // the month grid, the mobile agenda and the day popovers with no feedback
+      // at all — the event is fine, it is just nowhere the user can see.
+      if (hidden.has(moveTo!)) onHiddenCalendarsChange(hiddenCalendars.filter((x) => x !== moveTo))
+    }
     if (!ok || !painted || moved) reloadHere()
   }
   const del = async (cal: string, uid: string, opts?: { recurrence_id?: string | null; scope?: EventScope }) => {

@@ -68,7 +68,9 @@ const setField = (label: string, value: string) =>
 
 /** `calTaskLists` is controlled like the real App holds it, so a harness that
  *  never fed a change back would test toggles that appear to do nothing. */
-function Harness({ taskLists = [] as string[], showDone = false }) {
+function Harness({ taskLists = [] as string[], showDone = false,
+  hiddenCalendars = [] as string[],
+  onHiddenCalendarsChange = (() => {}) as (next: string[]) => void }) {
   const now = new Date()
   const [cursor, setCursor] = useState(() => new Date(now.getFullYear(), now.getMonth(), 1))
   const [shown, setShown] = useState(taskLists)
@@ -77,7 +79,7 @@ function Harness({ taskLists = [] as string[], showDone = false }) {
     <DataProvider rev={0} onExpire={vi.fn()}>
       <CalendarView onExpire={vi.fn()} cursor={cursor} onCursorChange={setCursor}
         sideCollapsed={false} onToggleSide={vi.fn()}
-        hiddenCalendars={[]} onHiddenCalendarsChange={vi.fn()}
+        hiddenCalendars={hiddenCalendars} onHiddenCalendarsChange={onHiddenCalendarsChange}
         archivedCalendars={[]} onArchivedCalendarsChange={vi.fn()}
         calTaskLists={shown} onCalTaskListsChange={setShown}
         calShowDone={done} onCalShowDoneChange={() => setDone((v) => !v)} />
@@ -85,7 +87,10 @@ function Harness({ taskLists = [] as string[], showDone = false }) {
   )
 }
 
-function setup(events?: CalEvent[], props?: { taskLists?: string[]; showDone?: boolean }) {
+function setup(events?: CalEvent[], props?: {
+  taskLists?: string[]; showDone?: boolean
+  hiddenCalendars?: string[]; onHiddenCalendarsChange?: (next: string[]) => void
+}) {
   if (events) m.events.mockResolvedValue(events)
   // The month lives in App now, so the harness has to hold it — a fixed cursor
   // would make the ‹ › buttons no-ops and quietly pass the navigation tests.
@@ -467,5 +472,49 @@ describe('stage 4 — chip identity', () => {
       expect(screen.getAllByTitle(/^Standup/).length).toBeGreaterThanOrEqual(2))
     expect(warn.mock.calls.flat().join(' ')).not.toMatch(/same key/i)
     warn.mockRestore()
+  })
+})
+
+// ── an event moved into a hidden calendar must not just vanish ──────────────
+// The modal's Calendar picker is populated from `visibleCals`, which includes
+// calendars the user has HIDDEN — hidden is a pure render filter, not an
+// exclusion from the list. The create branch reveals the target for exactly
+// this reason ("Don't let a fresh event vanish into a hidden calendar"); the
+// move branch did not, so picking a hidden calendar for an existing event
+// dropped it out of the month grid, the mobile agenda and the day popovers with
+// no feedback at all.
+
+describe('moving into a hidden calendar', () => {
+  const other: List = {
+    id: 'c2', href: '/c2/', name: 'Personal', is_task_list: false, is_calendar: true,
+    open_count: 0, task_count: 0, event_count: 0, total: 0, color: '#1565C0',
+  }
+
+  it('reveals the destination after a successful move', async () => {
+    const onHiddenCalendarsChange = vi.fn()
+    m.calendars.mockResolvedValue([cal, other])
+    m.moveEvent.mockResolvedValue(ev({ calendar: '/c2/' }))
+    const user = setup([ev()], { hiddenCalendars: ['c2'], onHiddenCalendarsChange })
+
+    await openEvent(user)
+    await user.selectOptions(screen.getByLabelText('Calendar'), 'c2')
+    await user.click(screen.getByText('Save'))
+
+    await waitFor(() => expect(m.moveEvent).toHaveBeenCalled())
+    expect(onHiddenCalendarsChange).toHaveBeenCalledWith([])
+  })
+
+  it('leaves the hidden set alone when the destination is already visible', async () => {
+    const onHiddenCalendarsChange = vi.fn()
+    m.calendars.mockResolvedValue([cal, other])
+    m.moveEvent.mockResolvedValue(ev({ calendar: '/c2/' }))
+    const user = setup([ev()], { hiddenCalendars: [], onHiddenCalendarsChange })
+
+    await openEvent(user)
+    await user.selectOptions(screen.getByLabelText('Calendar'), 'c2')
+    await user.click(screen.getByText('Save'))
+
+    await waitFor(() => expect(m.moveEvent).toHaveBeenCalled())
+    expect(onHiddenCalendarsChange).not.toHaveBeenCalled()
   })
 })

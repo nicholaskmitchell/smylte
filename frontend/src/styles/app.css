@@ -1016,6 +1016,12 @@
      offset from what the user sees and the modal reads as broken. Rows stack
      into cards at this width, so the taller control costs nothing. */
   .bulk-row .input, .sched-range .input { font-size: max(16px, calc(16px * var(--fs-scale))); }
+  /* `.appear-text` beats the floor a different way: same (0,1,0) specificity as
+     the mobile `.input` rule, but declared LATER in this file, so it wins on
+     source order in every viewport. The Appearance editor's raw color field
+     therefore rendered at 12px on a phone — 9.6px at the minimum --fs-scale of
+     0.8 — which is exactly the condition the floor exists to prevent. */
+  .appear-text { font-size: max(16px, calc(12px * var(--fs-scale))); }
   /* the modal is already a scrolling bottom sheet — a nested scroller inside
      one is miserable on touch, so let the rows flow into it instead */
   .bulk-rows { max-height: none; overflow: visible; gap: 10px; }

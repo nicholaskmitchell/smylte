@@ -496,3 +496,62 @@ describe('TOKENS metadata', () => {
     }
   })
 })
+
+// ── the mobile 16px input floor ─────────────────────────────────────────────
+// app.css sets `.input { font-size: max(16px, …) }` inside the mobile block
+// with a comment calling the floor load-bearing: below 16px, iOS Safari zooms
+// the page on focus, and once it zooms it does not zoom back — every later tap
+// lands offset from what the user sees. Any rule that outranks it has to put it
+// back, and the file already does that twice for higher-specificity selectors.
+// `.appear-text` outranked it a third way: the same (0,1,0) specificity, but
+// declared later in the file, so it won on source order in every viewport.
+
+describe('the mobile input floor', () => {
+  const appCss = read('./styles/app.css')
+
+  /** The text of the `@media (max-width: 720px)` blocks, brace-matched. */
+  const mobileBlocks = (() => {
+    const out: string[] = []
+    const re = /@media \(max-width: 720px\)\s*\{/g
+    for (let m = re.exec(appCss); m; m = re.exec(appCss)) {
+      let depth = 1
+      let i = m.index + m[0].length
+      const from = i
+      while (i < appCss.length && depth > 0) {
+        if (appCss[i] === '{') depth++
+        else if (appCss[i] === '}') depth--
+        i++
+      }
+      out.push(appCss.slice(from, i - 1))
+    }
+    return out
+  })()
+
+  it('finds the mobile blocks at all', () => {
+    expect(mobileBlocks.length).toBeGreaterThan(0)
+  })
+
+  const declaredMobile = (selector: string) =>
+    mobileBlocks.some((b) =>
+      new RegExp(`(^|[,{}\\s])${selector.replace('.', '\\.')}\\s*\\{[^}]*font-size:\\s*max\\(16px`, 'm')
+        .test(b)
+      || new RegExp(`${selector.replace('.', '\\.')}[^{}]*\\{[^}]*font-size:\\s*max\\(16px`)
+        .test(b))
+
+  it.each([
+    ['.input', 'the floor itself'],
+    ['.bulk-row .input', 'a (0,2,0) selector that outranks it'],
+    ['.sched-range .input', 'a (0,2,0) selector that outranks it'],
+    ['.appear-text', 'a (0,1,0) selector that outranks it on source order'],
+  ])('keeps %s at the floor on mobile (%s)', (selector) => {
+    expect(declaredMobile(selector)).toBe(true)
+  })
+
+  it('leaves the desktop size alone, so only the mobile floor changed', () => {
+    // The designed 12px still stands outside the media query — the fix raises
+    // the floor on phones, it does not resize the control everywhere.
+    const desktopRule = '.appear-text { font-size: calc(12px * var(--fs-scale)); }'
+    expect(appCss).toContain(desktopRule)
+    expect(mobileBlocks.some((b) => b.includes(desktopRule))).toBe(false)
+  })
+})
