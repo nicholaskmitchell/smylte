@@ -368,6 +368,38 @@ def test_recurring_this_and_following(client):
     assert len({e["uid"] for e in after if e["summary"].startswith("Class")}) == 2
 
 
+def test_deleting_this_and_following_from_the_first_occurrence_removes_the_resource(client):
+    """The head is bounded with `UNTIL = anchor - 1s`; at the FIRST occurrence
+    that precedes its own DTSTART, so the head generates nothing. It was PUT
+    anyway, leaving a VEVENT on Radicale and a cache row that expand to zero
+    occurrences forever — `events_in_range` never emits it, so nothing could
+    render or delete it again. The server answered 204 and the SPA cleared the
+    rows while the resource was still there. This is the natural way to remove a
+    whole series from an occurrence chip, so it is not an exotic path."""
+    cid = _cal(client)["id"]
+    ev = client.post(f"/api/calendars/{cid}/events", json={
+        "summary": "Gone", "start": "2026-07-06T18:00:00", "end": "2026-07-06T19:00:00",
+        "repeat": "weekly",
+    }).json()
+    uid = ev["uid"]
+    occ = sorted((e for e in _events(client, cid) if e["summary"] == "Gone"),
+                 key=lambda e: e["start"])
+    assert len(occ) >= 2
+
+    r = client.request("DELETE", f"/api/calendars/{cid}/events/{uid}", params={
+        "recurrence_id": occ[0]["recurrence_id"], "scope": "thisandfuture",
+    })
+    assert r.status_code == 204
+
+    # Gone from the projection…
+    assert [e for e in _events(client, cid) if e["summary"] == "Gone"] == []
+    # …and gone from the wire, not left as an unreachable husk. A resync would
+    # bring a surviving resource straight back.
+    assert client.post("/api/sync").status_code == 200
+    assert [e for e in _events(client, cid) if e["summary"] == "Gone"] == []
+    assert client.get(f"/api/calendars/{cid}/events/{uid}").status_code == 404
+
+
 def test_settings_sync(client):
     r = client.put("/api/settings", json={"theme": "dark"})
     assert r.status_code == 200 and r.json().get("theme") == "dark"

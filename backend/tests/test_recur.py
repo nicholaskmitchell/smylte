@@ -344,6 +344,75 @@ def test_split_delete_truncates_head():
     assert starts == ["2026-01-06T09:00:00+00:00", "2026-01-13T09:00:00+00:00"]
 
 
+def test_splitting_at_the_first_occurrence_leaves_no_head_to_write():
+    """The head is always bounded with `UNTIL = anchor - 1s`. At the series'
+    FIRST occurrence that is earlier than the head's own DTSTART, so its
+    recurrence set is empty — and PUTting it left a VEVENT on the server, and a
+    cache row, expanding to zero occurrences forever: `events_in_range` never
+    emits it, so nothing could render or delete it again. "Delete this and
+    following" from the first occurrence answered 204 and cleared the rows while
+    deleting nothing at all. None tells the caller to delete the resource."""
+    head, tail = split_series(_series(), "2026-01-06T09:00:00+00:00", EventEdit())
+    assert head is None
+    # The tail is still the whole series — nothing is lost by deleting the head.
+    assert len(recur.expand_occurrences(tail, *_WIN)) == 5
+
+
+def test_an_rdate_before_the_anchor_still_leaves_a_head():
+    """A surviving RDATE generates an occurrence even when the rule cannot, so
+    the head is not empty and must still be written."""
+    raw = foreign_event_raw("rd@x", "Std", rrule="FREQ=WEEKLY;COUNT=3",
+                            rdate="20260102T090000Z")
+    head, _tail = split_series(raw, "2026-01-06T09:00:00+00:00", EventEdit())
+    assert head is not None
+    assert _starts(recur.expand_occurrences(head, *_WIN)) == ["2026-01-02T09:00:00+00:00"]
+
+
+def test_split_rejects_a_dateness_switch_like_shift_does():
+    """`shift_series` rejects this with a clean ValueError the route turns into
+    a 422. `split_series` had no equivalent check, so `_wall_delta` subtracted a
+    date from a datetime and raised TypeError — which the route does not map, so
+    it escaped as a 500. The SPA reaches it in one click: the modal renders the
+    "all day" checkbox for a recurring event, and a non-'all' scope sends a bare
+    date string with no all_day flag."""
+    with pytest.raises(ValueError):
+        split_series(_series(), "2026-01-20T09:00:00+00:00",
+                     EventEdit(dtstart=date(2026, 1, 22)))
+
+    # And the other direction: a timed edit against an all-day series.
+    all_day = foreign_event_raw("ad@x", "Std", dtstart="20260106", dtend="20260107",
+                                all_day=True, rrule="FREQ=WEEKLY;COUNT=5")
+    with pytest.raises(ValueError):
+        split_series(all_day, "2026-01-20", EventEdit(dtstart=datetime(2026, 1, 22, 9, 0)))
+
+
+def test_a_mixed_dtstart_dtend_master_is_still_editable():
+    """`_event_duration` was the one datetime helper left doing a raw
+    subtraction. A DTSTART/DTEND that disagree on value type or tz-awareness —
+    both writable through Radicale by anything sharing the collection — raised
+    TypeError, and since it sits on BOTH per-occurrence write paths and the
+    routes only map ValueError, the event 500ed and could never be edited
+    again."""
+    # DATE-valued DTSTART beside a DATE-TIME DTEND.
+    raw = (b"BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//t//t//EN\r\n"
+           b"BEGIN:VEVENT\r\nUID:mixed@x\r\nDTSTART;VALUE=DATE:20260106\r\n"
+           b"DTEND:20260106T100000Z\r\nRRULE:FREQ=WEEKLY;COUNT=4\r\n"
+           b"SUMMARY:Std\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n")
+    head, tail = split_series(raw, "2026-01-20", EventEdit(summary="New"))
+    assert head is not None and b"UID:mixed@x" in head
+    assert b"SUMMARY:New" in tail
+
+    # And the aware/naive pair, through the other write path.
+    raw2 = (b"BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//t//t//EN\r\n"
+            b"BEGIN:VEVENT\r\nUID:mixed2@x\r\nDTSTART;TZID=America/Chicago:20260106T090000\r\n"
+            b"DTEND:20260106T100000\r\nRRULE:FREQ=WEEKLY;COUNT=4\r\n"
+            b"SUMMARY:Std\r\nEND:VEVENT\r\n"
+            + ("\r\n".join(_CHICAGO_VTZ) + "\r\n").encode() + b"END:VCALENDAR\r\n")
+    out = apply_occurrence_override(raw2, "2026-01-20T09:00:00-06:00",
+                                    EventEdit(summary="Just this"))
+    assert b"SUMMARY:Just this" in out
+
+
 # ── whole-series reschedule (shift_series) ────────────────────────────────────
 
 def test_shift_series_moves_rule_exdate_and_override_together():
@@ -444,6 +513,36 @@ def test_shift_series_rejects_dateness_switch():
     with pytest.raises(ValueError):
         shift_series(_series(), "2026-01-06T09:00:00+00:00",
                      EventEdit(dtstart=date(2026, 1, 8)))
+
+
+def test_dragging_a_bounded_zoned_series_across_a_fall_back_keeps_every_occurrence():
+    """UNTIL was shifted by the WALL-CLOCK delta while sitting in UTC.
+
+    DTSTART is zone-aware, so `dt + delta` preserves its wall clock and its UTC
+    instant moves by `delta ± the DST change`; UNTIL is a UTC instant and moved
+    by exactly `delta`. Carrying the series across a transition made the two
+    disagree by an hour, UNTIL landed before the final generated slot, and that
+    occurrence was silently dropped — a bounded series quietly lost its last
+    event on a drag that was only supposed to move it."""
+    # Weekly 09:00 Chicago from Oct 14, bounded at its own last slot: Oct 28
+    # 09:00 CDT is 14:00Z. Three occurrences, all before the fall-back.
+    raw = foreign_event_raw(
+        "shuntil", dtstart="TZID=America/Chicago:20261014T090000", dtend=None,
+        rrule="FREQ=WEEKLY;UNTIL=20261028T140000Z", vtimezone=_CHICAGO_VTZ,
+    )
+    win = (date(2026, 10, 1), date(2026, 12, 15))
+    assert len(recur.expand_occurrences(raw, *win)) == 3
+
+    # Drag it a week later. The final slot is now Nov 4, on the far side of the
+    # 2026-11-01 fall-back: 09:00 there is CST, 15:00Z, while a UTC UNTIL moved
+    # by the bare 7-day delta lands at 14:00Z — an hour short of the occurrence
+    # it is supposed to include.
+    shifted = shift_series(raw, "2026-10-14T09:00:00-05:00",
+                           EventEdit(dtstart=datetime(2026, 10, 21, 9, 0)))
+    occs = recur.expand_occurrences(shifted, *win)
+    assert len(occs) == 3, [o.start for o in occs]
+    assert occs[0].start.startswith("2026-10-21T09:00:00-05:00")
+    assert occs[2].start.startswith("2026-11-04T09:00:00-06:00")   # the one that vanished
 
 
 def test_shift_series_tolerates_timed_override_on_all_day_series():
@@ -940,6 +1039,27 @@ def test_deleting_a_thisandfuture_instance_removes_that_one():
         "2026-01-06T09:00:00+00:00", "2026-01-13T10:00:00+00:00",
         "2026-01-20T10:00:00+00:00",
     ]
+
+
+def test_deleting_a_thisandfuture_overrides_own_slot_keeps_the_later_ones():
+    """A RANGE=THISANDFUTURE override carries the values for its own slot AND
+    every later one (RFC 5545 §3.2.13). `exclude_occurrence` dropped any
+    component whose RECURRENCE-ID matched the anchor, which for this shape threw
+    away the times, summary and everything else a foreign client had authored
+    for all subsequent occurrences — they silently snapped back to the master.
+    The EXDATE alone removes the instance the user asked about."""
+    series = _thisandfuture_series()
+    # Delete the override's OWN slot, the second occurrence.
+    raw = exclude_occurrence(series, "2026-01-13T09:00:00+00:00")
+    occs = recur.expand_occurrences(raw, *_TF_WIN)
+
+    assert _starts(occs) == [
+        "2026-01-06T09:00:00+00:00",     # before the override: untouched
+        "2026-01-20T10:00:00+00:00",     # still moved to 10:00 by the override…
+        "2026-01-27T10:00:00+00:00",
+    ]
+    # …and still carrying the summary it authored, not the master's.
+    assert [o.summary for o in occs[1:]] == ["TF", "TF"]
 
 
 def test_editing_a_thisandfuture_instance_edits_that_one():

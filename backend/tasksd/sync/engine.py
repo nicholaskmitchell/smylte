@@ -393,15 +393,28 @@ class SyncEngine:
         if not delete_tail:
             tail_href = f"{collection_href}{uuid.uuid4().hex}.ics"
             self.dav.put(tail_href, tail, if_none_match="*")
+
+        def write_head(ics: bytes | None, etag: str | None) -> None:
+            # A head of None means the split left nothing before the anchor —
+            # the anchor was the series' first occurrence. PUTting that husk
+            # left a resource expanding to zero occurrences on the server
+            # forever: nothing renders it, so nothing can delete it either, and
+            # "delete this and following" from the first occurrence answered 204
+            # while deleting nothing at all.
+            if ics is None:
+                self.dav.delete(href, if_match=etag)
+            else:
+                self.dav.put(href, ics, if_match=etag)
+
         try:
-            self.dav.put(href, head, if_match=row["etag"])
+            write_head(head, row["etag"])
         except PreconditionFailed:
             fresh = self.dav.get(href)
             head, tail = build(fresh.data)
             if tail_href is not None:
                 self.dav.put(tail_href, tail)   # replace our own just-written tail
             try:
-                self.dav.put(href, head, if_match=fresh.etag)
+                write_head(head, fresh.etag)
             except PreconditionFailed as e:
                 if tail_href is not None:
                     # Don't strand a tail next to an untruncated head.
@@ -410,7 +423,14 @@ class SyncEngine:
                     except DavError:
                         pass
                 raise ConflictError(f"edit conflict on {uid}: retry the change") from e
-        self._refresh_from_wire(collection_href, href)
+        if head is None:
+            # The resource is gone from the wire, so there is nothing to read
+            # back — purge the projection the way delete_task does.
+            with _tx(self.conn):
+                store.delete_item_by_href(self.conn, collection_href, href)
+                store.orphan_sidecar(self.conn, collection_href, uid)
+        else:
+            self._refresh_from_wire(collection_href, href)
         if tail_href is not None:
             self._refresh_from_wire(collection_href, tail_href)
         return uid
