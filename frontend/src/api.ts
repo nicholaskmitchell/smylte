@@ -333,7 +333,7 @@ export const api = {
 
   // tasks
   lists: () => j<List[]>('GET', '/api/lists'),
-  createList: (name: string, color?: string) => j<List>('POST', '/api/lists', { name, color }),
+  createList: (name: string, color?: string | null) => j<List>('POST', '/api/lists', { name, color }),
   updateList: (id: string, body: { name?: string; color?: string | null }) =>
     j<List>('PATCH', `/api/lists/${id}`, body),
   deleteList: (id: string) => j<null>('DELETE', `/api/lists/${id}`),
@@ -360,7 +360,7 @@ export const api = {
 
   // calendars / events
   calendars: () => j<List[]>('GET', '/api/calendars'),
-  createCalendar: (name: string, color?: string) =>
+  createCalendar: (name: string, color?: string | null) =>
     j<List>('POST', '/api/calendars', { name, color }),
   updateCalendar: (id: string, body: { name?: string; color?: string | null }) =>
     j<List>('PATCH', `/api/calendars/${id}`, body),

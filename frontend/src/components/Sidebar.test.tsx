@@ -447,6 +447,133 @@ describe('<Sidebar> edit modal colors', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Save' }))
     expect(api.update).toHaveBeenCalledWith('work', { name: 'Work' })
   })
+
+  it('hands the square back to a preset once one is clicked', async () => {
+    render(withColor('#FF9500FF', editApi()))
+    await openEdit()
+    await userEvent.click(screen.getByTitle('#1565C0'))
+    expect(customDot()).not.toHaveClass('on')
+    expect(document.querySelectorAll('.color-dot.on')).toHaveLength(1)
+  })
+
+  it('leaves the square inactive, on a neutral seed, when there is no color', async () => {
+    render(withColor(null, editApi()))
+    await openEdit()
+    expect(customDot()).not.toHaveClass('on')
+    expect(custom().value).toBe('#808080')
+  })
+
+  // The same wire value the hostile-color suite guards on the sidebar swatch
+  // reaches this square's background too — it is the one dot whose fill is not
+  // a constant from SWATCHES.
+  it('never paints a hostile wire color into the custom square', async () => {
+    render(withColor('url(https://evil.example/beacon.png)', editApi()))
+    await openEdit()
+    expect(customDot().getAttribute('style') ?? '').not.toContain('evil.example')
+    expect(customDot().style.background).toBe('')
+    expect(custom().value).toBe('#808080')
+    // Nothing in the row claims it: junk is not a color any square represents.
+    expect(document.querySelectorAll('.color-dot.on')).toHaveLength(0)
+  })
+
+  it('does not rewrite a color the user picked away from and back to', async () => {
+    const api = editApi()
+    render(withColor('#FF9500', api))
+    await openEdit()
+    // The picker only ever reports lower-case, so landing back on the colour the
+    // list already had returns `#ff9500` against a stored `#FF9500`. A bare !==
+    // would PROPPATCH that case flip out to every other client as a recolour.
+    // (Two events on purpose: React fires no change for a value already in the
+    // input, and the seed is the lowered current colour — so a single
+    // same-value change would assert nothing.)
+    pickCustom('#123456')
+    pickCustom('#ff9500')
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+    expect(api.update).toHaveBeenCalledWith('work', { name: 'Work' })
+  })
+})
+
+describe('<Sidebar> color on a new collection', () => {
+  const addApi = () => ({
+    create: vi.fn(async (name: string) => list('new', name)),
+    update: vi.fn(async () => undefined),
+    remove: vi.fn(async () => undefined),
+    reorder: vi.fn(async () => undefined),
+  })
+
+  const withApi = (api: ReturnType<typeof addApi>) => (
+    <Sidebar title="Calendars" placeholder="Calendar" items={[]}
+      countOf={(l) => l.open_count} onItems={() => {}} api={api}
+      hiddenIds={new Set()} onHiddenChange={() => {}} />
+  )
+
+  const openAdd = async () => userEvent.click(screen.getByTitle('New calendar'))
+  const nameField = () => screen.getByPlaceholderText('Calendar')
+
+  it('creates with the color picked before the name was committed', async () => {
+    const api = addApi()
+    render(withApi(api))
+    await openAdd()
+    await userEvent.click(screen.getByTitle('#1565C0'))
+    await userEvent.type(nameField(), 'Travel{Enter}')
+    expect(api.create).toHaveBeenCalledWith('Travel', '#1565C0')
+  })
+
+  it('creates with a color from past the presets', async () => {
+    const api = addApi()
+    render(withApi(api))
+    await openAdd()
+    fireEvent.change(screen.getByLabelText('Custom color'), { target: { value: '#123456' } })
+    await userEvent.type(nameField(), 'Travel{Enter}')
+    expect(api.create).toHaveBeenCalledWith('Travel', '#123456')
+  })
+
+  it('creates with no color when none is picked', async () => {
+    const api = addApi()
+    render(withApi(api))
+    await openAdd()
+    await userEvent.type(nameField(), 'Travel{Enter}')
+    expect(api.create).toHaveBeenCalledWith('Travel', null)
+  })
+
+  // The row is part of the form, so choosing from it must not dismiss the form
+  // the way clicking away from an empty name field still does.
+  it('stays open while picking a color with the name still empty', async () => {
+    render(withApi(addApi()))
+    await openAdd()
+    await userEvent.click(screen.getByTitle('#1565C0'))
+    expect(nameField()).toBeInTheDocument()
+    expect(screen.getByTitle('#1565C0')).toHaveClass('on')
+  })
+
+  it('still closes an empty form when focus leaves it entirely', async () => {
+    render(
+      <>
+        <button>elsewhere</button>
+        <Sidebar title="Calendars" placeholder="Calendar" items={[]}
+          countOf={(l) => l.open_count} onItems={() => {}} api={addApi()}
+          hiddenIds={new Set()} onHiddenChange={() => {}} />
+      </>,
+    )
+    await openAdd()
+    await userEvent.click(screen.getByRole('button', { name: 'elsewhere' }))
+    expect(screen.queryByPlaceholderText('Calendar')).not.toBeInTheDocument()
+  })
+
+  it('keeps a half-typed name when focus leaves', async () => {
+    render(
+      <>
+        <button>elsewhere</button>
+        <Sidebar title="Calendars" placeholder="Calendar" items={[]}
+          countOf={(l) => l.open_count} onItems={() => {}} api={addApi()}
+          hiddenIds={new Set()} onHiddenChange={() => {}} />
+      </>,
+    )
+    await openAdd()
+    await userEvent.type(screen.getByPlaceholderText('Calendar'), 'Trav')
+    await userEvent.click(screen.getByRole('button', { name: 'elsewhere' }))
+    expect(screen.getByPlaceholderText('Calendar')).toHaveValue('Trav')
+  })
 })
 
 describe('<Sidebar> extra section', () => {
