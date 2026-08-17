@@ -92,6 +92,11 @@
 .side-item.cal-hidden .count { opacity: .45; }
 .side-item[role="checkbox"]:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .side-add { display: flex; gap: 6px; padding: 8px 12px; border-top: 1px solid var(--rule); }
+/* The new-collection form is the one .side-add that is more than a single
+   control — a colour row sits under its name field — so it stacks. The others
+   (add group, rename group, quick-add) stay one line. At 240px the row wraps
+   onto two, which is what flex-wrap is there for. */
+.side-add.with-color { flex-direction: column; align-items: stretch; gap: 8px; }
 .side-head-actions { display: flex; align-items: center; gap: 4px; }
 /* footer button beneath the lists/groups — opens the "just completed" pane */
 .side-completed {
@@ -211,6 +216,21 @@
 }
 .color-dot.on { outline: 2px solid var(--accent); outline-offset: 1px; }
 .color-dot.none { background: none; color: var(--fg-faint); font-size: calc(11px * var(--fs-scale)); line-height: 1; }
+/* the ninth square: the way past the eight presets. The label is the swatch —
+   a spectrum until it is the chosen colour, so the one square that is not a
+   specific colour is the one offering all of them — and the native colour input
+   lies invisible on top of it at full size, which is what actually opens the
+   picker. Styling the input directly does not work: it always paints its own
+   value over any background, and its value has to stay the current colour so the
+   picker opens where you already are. */
+.color-dot.custom { background: conic-gradient(red, magenta, blue, aqua, lime, yellow, red); overflow: hidden; }
+.color-dot.custom > input { display: block; width: 100%; height: 100%; opacity: 0; padding: 0; border: none; cursor: pointer; }
+/* The input carries focus but cannot show it, so the square wears the ring —
+   the same one .on draws, so tabbing to it looks like landing on any other dot.
+   :focus-within rather than :has(> input:focus-visible): nothing else in these
+   sheets uses :has(), and a browser that cannot parse it drops the whole rule,
+   which would cost the keyboard user their only focus indicator. */
+.color-dot.custom:focus-within { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 /* main content */
 .content { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }

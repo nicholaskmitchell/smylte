@@ -1,5 +1,7 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ALL_SWATCH_STYLE, Sidebar, SWATCHES } from './Sidebar'
 import type { List, TaskGroup } from '../api'
@@ -399,6 +401,263 @@ describe('<Sidebar> edit modal colors', () => {
     await userEvent.click(screen.getByTitle('No color'))
     await userEvent.click(screen.getByRole('button', { name: 'Save' }))
     expect(api.update).toHaveBeenCalledWith('work', { name: 'Work', color: null })
+  })
+
+  // A native colour input cannot be driven by a click — there is no picker to
+  // open in jsdom — so set the value the way the UA would and fire the change.
+  const custom = () => screen.getByLabelText('Custom color') as HTMLInputElement
+  // The input is invisible on top of the label; the label is the square that
+  // shows the colour and wears .on, so selection asserts against the wrapper.
+  const customDot = () => custom().closest('.color-dot') as HTMLElement
+  const pickCustom = (hex: string) => fireEvent.change(custom(), { target: { value: hex } })
+
+  it('sends a color picked past the presets, without the old alpha byte', async () => {
+    const api = editApi()
+    render(withColor('#FF9500FF', api))
+    await openEdit()
+    pickCustom('#123456')
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+    expect(api.update).toHaveBeenCalledWith('work', { name: 'Work', color: '#123456' })
+  })
+
+  it('marks the custom square active for a color no preset covers', async () => {
+    render(withColor('#FF9500FF', editApi()))
+    await openEdit()
+    expect(customDot()).toHaveClass('on')
+    // ...and it is the only thing selected — no preset claims it too.
+    expect(document.querySelectorAll('.color-dot.on')).toHaveLength(1)
+    // It paints the colour itself, rather than leaving the spectrum showing.
+    expect(customDot()).toHaveStyle({ background: '#ff9500' })
+  })
+
+  it('leaves the custom square inactive when a preset is the color', async () => {
+    render(withColor('#D9480FFF', editApi()))
+    await openEdit()
+    expect(customDot()).not.toHaveClass('on')
+  })
+
+  it('seeds the custom square from the current color, alpha trimmed', async () => {
+    render(withColor('#FF9500FF', editApi()))
+    await openEdit()
+    expect(custom().value).toBe('#ff9500')
+  })
+
+  it('does not resend a color the user only saw in the custom square', async () => {
+    const api = editApi()
+    render(withColor('#FF9500FF', api))
+    await openEdit()
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+    expect(api.update).toHaveBeenCalledWith('work', { name: 'Work' })
+  })
+
+  it('hands the square back to a preset once one is clicked', async () => {
+    render(withColor('#FF9500FF', editApi()))
+    await openEdit()
+    await userEvent.click(screen.getByTitle('#1565C0'))
+    expect(customDot()).not.toHaveClass('on')
+    expect(document.querySelectorAll('.color-dot.on')).toHaveLength(1)
+  })
+
+  it('leaves the square inactive, on a neutral seed, when there is no color', async () => {
+    render(withColor(null, editApi()))
+    await openEdit()
+    expect(customDot()).not.toHaveClass('on')
+    expect(custom().value).toBe('#808080')
+  })
+
+  // The same wire value the hostile-color suite guards on the sidebar swatch
+  // reaches this square's background too — it is the one dot whose fill is not
+  // a constant from SWATCHES.
+  it('never paints a hostile wire color into the custom square', async () => {
+    render(withColor('url(https://evil.example/beacon.png)', editApi()))
+    await openEdit()
+    expect(customDot().getAttribute('style') ?? '').not.toContain('evil.example')
+    expect(customDot().style.background).toBe('')
+    expect(custom().value).toBe('#808080')
+    // Nothing in the row claims it: junk is not a color any square represents.
+    expect(document.querySelectorAll('.color-dot.on')).toHaveLength(0)
+  })
+
+  it('does not rewrite a color the user picked away from and back to', async () => {
+    const api = editApi()
+    render(withColor('#FF9500', api))
+    await openEdit()
+    // The picker only ever reports lower-case, so landing back on the colour the
+    // list already had returns `#ff9500` against a stored `#FF9500`. A bare !==
+    // would PROPPATCH that case flip out to every other client as a recolour.
+    // (Two events on purpose: React fires no change for a value already in the
+    // input, and the seed is the lowered current colour — so a single
+    // same-value change would assert nothing.)
+    pickCustom('#123456')
+    pickCustom('#ff9500')
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+    expect(api.update).toHaveBeenCalledWith('work', { name: 'Work' })
+  })
+})
+
+describe('<Sidebar> color on a new collection', () => {
+  const addApi = () => ({
+    create: vi.fn(async (name: string) => list('new', name)),
+    update: vi.fn(async () => undefined),
+    remove: vi.fn(async () => undefined),
+    reorder: vi.fn(async () => undefined),
+  })
+
+  const withApi = (api: ReturnType<typeof addApi>) => (
+    <Sidebar title="Calendars" placeholder="Calendar" items={[]}
+      countOf={(l) => l.open_count} onItems={() => {}} api={api}
+      hiddenIds={new Set()} onHiddenChange={() => {}} />
+  )
+
+  const openAdd = async () => userEvent.click(screen.getByTitle('New calendar'))
+  const nameField = () => screen.getByPlaceholderText('Calendar')
+
+  it('creates with the color picked before the name was committed', async () => {
+    const api = addApi()
+    render(withApi(api))
+    await openAdd()
+    await userEvent.click(screen.getByTitle('#1565C0'))
+    await userEvent.type(nameField(), 'Travel{Enter}')
+    expect(api.create).toHaveBeenCalledWith('Travel', '#1565C0')
+  })
+
+  it('creates with a color from past the presets', async () => {
+    const api = addApi()
+    render(withApi(api))
+    await openAdd()
+    fireEvent.change(screen.getByLabelText('Custom color'), { target: { value: '#123456' } })
+    await userEvent.type(nameField(), 'Travel{Enter}')
+    expect(api.create).toHaveBeenCalledWith('Travel', '#123456')
+  })
+
+  it('creates with no color when none is picked', async () => {
+    const api = addApi()
+    render(withApi(api))
+    await openAdd()
+    await userEvent.type(nameField(), 'Travel{Enter}')
+    expect(api.create).toHaveBeenCalledWith('Travel', null)
+  })
+
+  // The row is part of the form, so choosing from it must not dismiss the form
+  // the way clicking away from an empty name field still does.
+  it('stays open while picking a color with the name still empty', async () => {
+    render(withApi(addApi()))
+    await openAdd()
+    await userEvent.click(screen.getByTitle('#1565C0'))
+    expect(nameField()).toBeInTheDocument()
+    expect(screen.getByTitle('#1565C0')).toHaveClass('on')
+  })
+
+  it('still closes an empty form when focus leaves it entirely', async () => {
+    render(
+      <>
+        <button>elsewhere</button>
+        <Sidebar title="Calendars" placeholder="Calendar" items={[]}
+          countOf={(l) => l.open_count} onItems={() => {}} api={addApi()}
+          hiddenIds={new Set()} onHiddenChange={() => {}} />
+      </>,
+    )
+    await openAdd()
+    await userEvent.click(screen.getByRole('button', { name: 'elsewhere' }))
+    expect(screen.queryByPlaceholderText('Calendar')).not.toBeInTheDocument()
+  })
+
+  // The mobile drawer renders its own copy of the add form inside the bottom
+  // sheet, reached by a different button. Same component, different container —
+  // and on a phone the drawer is the *only* way to add a collection at all.
+  it('creates with a color from the mobile drawer too', async () => {
+    const stub = (matches: boolean) => {
+      window.matchMedia = ((query: string) => ({
+        matches, media: query, onchange: null,
+        addEventListener: () => {}, removeEventListener: () => {},
+        addListener: () => {}, removeListener: () => {}, dispatchEvent: () => false,
+      })) as unknown as typeof window.matchMedia
+    }
+    stub(true)
+    try {
+      const api = addApi()
+      render(withApi(api))
+      await userEvent.click(screen.getByRole('button', { name: 'New calendar' }))
+      await userEvent.click(screen.getByTitle('#6A1B9A'))
+      await userEvent.type(nameField(), 'Travel{Enter}')
+      expect(api.create).toHaveBeenCalledWith('Travel', '#6A1B9A')
+    } finally {
+      stub(false)
+    }
+  })
+
+  it('keeps a half-typed name when focus leaves', async () => {
+    render(
+      <>
+        <button>elsewhere</button>
+        <Sidebar title="Calendars" placeholder="Calendar" items={[]}
+          countOf={(l) => l.open_count} onItems={() => {}} api={addApi()}
+          hiddenIds={new Set()} onHiddenChange={() => {}} />
+      </>,
+    )
+    await openAdd()
+    await userEvent.type(screen.getByPlaceholderText('Calendar'), 'Trav')
+    await userEvent.click(screen.getByRole('button', { name: 'elsewhere' }))
+    expect(screen.getByPlaceholderText('Calendar')).toHaveValue('Trav')
+  })
+})
+
+// This suite runs with `css: false` (vite.config.ts), so nothing above ever
+// sees a painted pixel — the component contract is asserted there, and the
+// rules that turn it into a square are asserted here, read off disk the way
+// appearance.test.ts pins tokens.css. Not a substitute for looking at it: this
+// catches the rules being dropped or renamed, not them being ugly.
+describe('the custom square’s stylesheet', () => {
+  // From process.cwd() (the frontend dir) rather than import.meta.url, which
+  // is not a file: URL under this environment — the same way util.test.ts
+  // reaches the backend's COLOR_PATTERN. Comments are stripped first: the
+  // rules below are *explained* in prose that names the very selectors and
+  // properties being asserted, so matching raw text would read the commentary
+  // rather than the CSS.
+  const appCss = readFileSync(resolve(process.cwd(), 'src/styles/app.css'), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+
+  /** The body of one CSS rule, or null if the selector is not in the file. */
+  const rule = (selector: string): string | null => {
+    const at = appCss.indexOf(selector + ' {')
+    return at < 0 ? null : appCss.slice(at + selector.length + 2, appCss.indexOf('}', at))
+  }
+
+  it('paints a spectrum, so an unpicked square is not a ninth color', () => {
+    // Without this the label is transparent and the square reads as empty —
+    // and the inline fill only ever covers the *picked* state.
+    expect(rule('.color-dot.custom')).toContain('conic-gradient')
+  })
+
+  it('clips the fill to the dot', () => {
+    // The input inside is a rectangle; without overflow the gradient and the
+    // picked color spill past the radius on the rounded preset.
+    expect(rule('.color-dot.custom')).toContain('overflow: hidden')
+  })
+
+  it('stretches the input over the whole square and hides it', () => {
+    const input = rule('.color-dot.custom > input')
+    expect(input).not.toBeNull()
+    // opacity, not display/visibility: the input must stay hit-testable and in
+    // the tab order, since it is the only thing that opens the picker.
+    expect(input).toContain('opacity: 0')
+    expect(input).toMatch(/width:\s*100%/)
+    expect(input).toMatch(/height:\s*100%/)
+  })
+
+  it('draws a focus ring without :has()', () => {
+    // The input carries focus but cannot show it. :has() is used nowhere else
+    // in these sheets, and a browser that cannot parse it drops the whole rule
+    // — which would leave the keyboard user no focus indicator at all.
+    expect(rule('.color-dot.custom:focus-within')).toContain('outline')
+    expect(appCss).not.toContain(':has(')
+  })
+
+  it('stacks the add form, and only the add form', () => {
+    // .side-add is shared with add-group, rename-group and quick-add, which are
+    // all one control on one line and must stay that way.
+    expect(rule('.side-add.with-color')).toContain('flex-direction: column')
+    expect(rule('.side-add')).not.toContain('flex-direction')
   })
 })
 
