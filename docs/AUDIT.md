@@ -32,7 +32,7 @@ gone". Re-scope them before working them.
 Ticked findings keep their original references, which point into the tree as it
 was when they were filed. They are history, not navigation.
 
-**28 open**, all from the 2026-08-07 sweep. Nothing from 2026-08-16 is open. The
+**22 open**, all from the 2026-08-07 sweep. Nothing from 2026-08-16 is open. The
 evidence stays here — a ticked box records what the bug was and why it mattered,
 and the issues that link into these sections still resolve.
 
@@ -42,7 +42,8 @@ commit: source fix, a regression test confirmed to fail against the pre-fix
 code, and the tick here. Done so far: **#45 (auth, session lifetime and request
 limits)**, six findings including the sweep's remaining HIGH; **#42 (the
 unauthenticated booking write path)**, six plus the `expand_occurrences`
-truncation from #44, which is the same defect one layer down.
+truncation from #44, which is the same defect one layer down; **#46 (frontend
+time correctness)**, six including the sweep's other HIGH.
 
 The 2026-08-16 sweep was closed in stages (`docs/STAGES.md`), each pinned by
 tests that failed until the finding was fixed. **All five stages are done** — the
@@ -2441,7 +2442,19 @@ from a write. Also: the occurrence cap is now derived from the window and
 raises instead of truncating, `_link_busy` treats a series it could not expand
 as blocking rather than as free, floating times are read in a new
 `home_timezone` setting rather than in each link's own zone, and the booking
-page mints its idempotency key once per chosen slot. **28 open.**
+page mints its idempotency key once per chosen slot.
+
+**Cluster #46 — frontend time correctness — closed 6.** The HIGH was a
+wire-contract decision rather than a patch: `shiftIso` committed in its own
+docstring to returning floating local time, and it backs every drag and resize
+path. It now preserves the instant when the source value carries one, so
+`DTSTART;TZID=Europe/Berlin` survives a drag instead of being rewritten as a
+naive local string; floating values stay floating. Also: a DURATION-only event
+keeps its span across an edit (and the write omits `end` entirely when the span
+cannot be derived), `bucketByDay` orders a cell by the instant each start names
+rather than by the wire string, `j()` renders a pydantic 422 as readable text
+instead of "[object Object]", and the two `hooks.ts` findings closed by deleting
+dead code and covering what was left. **22 open.**
 
 
 ### HTTP API surface
@@ -3884,7 +3897,7 @@ card. Add a test with the two fall-back slots asserting distinct button labels.
 
 ### Frontend core
 
-#### [ ] Dragging a zone-anchored event in the calendar rewrites DTSTART/DTEND as floating local wall time, destroying the TZID another CalDAV client wrote
+#### [x] Dragging a zone-anchored event in the calendar rewrites DTSTART/DTEND as floating local wall time, destroying the TZID another CalDAV client wrote
 
 `frontend/src/calendar.ts:26` (`shiftIso`) · **high** · bug
 
@@ -3943,9 +3956,16 @@ original had a zone). `_set_datelike` will then re-express it in the property's 
 tzinfo and `DTSTART;TZID=Europe/Berlin` survives. Add table-driven cases to
 calendar.test.ts for a `+02:00` start under TZ=America/New_York in both move and resize.
 
-#### [ ] useAllTasks never clears `loading` when a fetch fails, so the Home dashboard's task modules render permanently blank with no retry
+#### [x] useAllTasks never clears `loading` when a fetch fails, so the Home dashboard's task modules render permanently blank with no retry
 
 `frontend/src/hooks.ts:46` (`useAllTasks`) · **medium** · bug · `minor`
+
+**Closed by deleting the code.** `useAllTasks` had no callers left — HomeView
+moved to `useTaskData()` from `data.tsx` in main's 2026-08-14 merge, and a
+repo-wide grep found only the definition. The live equivalent was checked for
+the same defect and does not have it: `data.tsx` clears its flag in a
+`.finally`, so a failed fetch still ends the loading state. Fixing and testing a
+hook nothing calls would have been coverage of dead code.
 
 `setLoading(false)` is the last statement inside the guarded async body. `makeGuard`
 swallows the rejection (toast + console) and returns undefined, so on any failure the
@@ -4025,7 +4045,7 @@ showToast("Couldn't sign out — you are still signed in on this device. Try aga
 Add a test that rejects `api.logout` and asserts the shell stays mounted with a visible
 error.
 
-#### [ ] A 422 from the API renders as the literal string "[object Object]", because FastAPI's validation detail is a list
+#### [x] A 422 from the API renders as the literal string "[object Object]", because FastAPI's validation detail is a list
 
 `frontend/src/api.ts:275` (`j`) · **low** · rendering · `minor`
 
@@ -4063,7 +4083,7 @@ Concrete trigger on an unauthenticated endpoint: Login.tsx puts no `maxLength` o
 ${e.msg}`).join('; ') || msg : msg`. Add an api.test.ts case stubbing a 422 with an
 array detail and asserting a readable message.
 
-#### [ ] bucketByDay sorts each day's events by raw ISO string, so a zone-anchored event lands in the wrong slot — and can be pushed out of the cell entirely
+#### [x] bucketByDay sorts each day's events by raw ISO string, so a zone-anchored event lands in the wrong slot — and can be pushed out of the cell entirely
 
 `frontend/src/calendar.ts:95` (`bucketByDay`) · **low** · rendering · `minor`
 
@@ -4104,9 +4124,16 @@ b.start.includes('T')) || (a.start ? parseDate(a.start).getTime() : 0) - (b.star
 parseDate(b.start).getTime() : 0))`. Add a test with a `+01:00` start and a floating
 start under TZ=America/New_York.
 
-#### [ ] Test gap: hooks.ts has no test file, so useAllTasks' documented staleness guard and its loading contract are entirely unverified
+#### [x] Test gap: hooks.ts has no test file, so useAllTasks' documented staleness guard and its loading contract are entirely unverified
 
 `frontend/src/hooks.ts:29` (`useAllTasks`) · **low** · test-gap · `minor`
+
+**Closed, narrowed to what survives.** `frontend/src/hooks.test.ts` now exists.
+Three of the four cases the fix below asks for were about `useAllTasks`, which
+was deleted as dead code (see the finding above), so the suite covers
+`useIsMobile` instead — first read, following a `matchMedia` change, and
+removing its listener on unmount. It decides which layout the whole app renders
+and three components subscribe to it.
 
 Every other non-trivial module in frontend/src has a sibling suite (api, util, calendar,
 dashboard, tabs, appearance, App, and every component). hooks.ts has none. `useAllTasks`
@@ -4636,7 +4663,7 @@ var(--fs-scale))); }` (or append `.appear-text` to the existing `.bulk-row .inpu
 
 ### Cross-cutting
 
-#### [ ] Saving a DURATION-only event collapses it to zero length (silently destroys its span, and it stops blocking bookings)
+#### [x] Saving a DURATION-only event collapses it to zero length (silently destroys its span, and it stops blocking bookings)
 
 `frontend/src/components/CalendarView.tsx:638` (`EventModal`) · **medium** · bug
 
