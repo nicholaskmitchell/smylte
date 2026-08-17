@@ -593,6 +593,11 @@ function EditModal({ item, placeholder, groups, groupId, onSetGroup, onClose, on
   const [color, setColor] = useState<string | null>(item.color)
   const [confirming, setConfirming] = useState(false)
   const isSwatch = (c: string) => color?.slice(0, 7).toLowerCase() === c.toLowerCase()
+  // Eight presets run out once you keep more than eight collections, and a color
+  // another CalDAV client wrote is rarely one of ours — so anything set that is
+  // not a preset belongs to the custom square, which is what makes exactly one
+  // of the row read as selected.
+  const isCustom = color !== null && !SWATCHES.some(isSwatch)
 
   const save = () => {
     // Send the color only when the user actually picked one, so a rename never
@@ -624,6 +629,25 @@ function EditModal({ item, placeholder, groups, groupId, onSetGroup, onClose, on
               <button key={c} className={`color-dot ${isSwatch(c) ? 'on' : ''}`}
                 style={{ background: c }} title={c} onClick={() => setColor(c)} />
             ))}
+            {/* The escape hatch past the presets. Native rather than a drawn
+                picker: it is the browser's, so it brings a hex field and an
+                eyedropper for free, and it is what AppearancePanel already uses.
+                The input is wrapped rather than styled directly because it always
+                paints its own value, and its value has to stay the current color
+                so the picker opens where you already are — painting that would
+                just duplicate whichever preset is lit two squares over. So the
+                label carries the fill and the input goes invisible on top of it.
+                It takes exactly `#rrggbb`: anything longer or upper-case is
+                sanitized by the DOM, which then fights the value React writes
+                back, so trim and lower it here while `color` keeps it whole.
+                Picking drops any alpha byte on purpose — an explicit choice
+                replaces the old value rather than inheriting its transparency. */}
+            <label className={`color-dot custom ${isCustom ? 'on' : ''}`} title="Custom color"
+              style={isCustom ? { background: color.slice(0, 7) } : undefined}>
+              <input type="color" aria-label="Custom color"
+                value={(cssColor(color)?.slice(0, 7) ?? '#808080').toLowerCase()}
+                onChange={(e) => setColor(e.target.value)} />
+            </label>
           </div>
         </div>
         {groups && onSetGroup && (

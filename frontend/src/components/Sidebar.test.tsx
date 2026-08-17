@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ALL_SWATCH_STYLE, Sidebar, SWATCHES } from './Sidebar'
 import type { List, TaskGroup } from '../api'
@@ -399,6 +399,53 @@ describe('<Sidebar> edit modal colors', () => {
     await userEvent.click(screen.getByTitle('No color'))
     await userEvent.click(screen.getByRole('button', { name: 'Save' }))
     expect(api.update).toHaveBeenCalledWith('work', { name: 'Work', color: null })
+  })
+
+  // A native colour input cannot be driven by a click — there is no picker to
+  // open in jsdom — so set the value the way the UA would and fire the change.
+  const custom = () => screen.getByLabelText('Custom color') as HTMLInputElement
+  // The input is invisible on top of the label; the label is the square that
+  // shows the colour and wears .on, so selection asserts against the wrapper.
+  const customDot = () => custom().closest('.color-dot') as HTMLElement
+  const pickCustom = (hex: string) => fireEvent.change(custom(), { target: { value: hex } })
+
+  it('sends a color picked past the presets, without the old alpha byte', async () => {
+    const api = editApi()
+    render(withColor('#FF9500FF', api))
+    await openEdit()
+    pickCustom('#123456')
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+    expect(api.update).toHaveBeenCalledWith('work', { name: 'Work', color: '#123456' })
+  })
+
+  it('marks the custom square active for a color no preset covers', async () => {
+    render(withColor('#FF9500FF', editApi()))
+    await openEdit()
+    expect(customDot()).toHaveClass('on')
+    // ...and it is the only thing selected — no preset claims it too.
+    expect(document.querySelectorAll('.color-dot.on')).toHaveLength(1)
+    // It paints the colour itself, rather than leaving the spectrum showing.
+    expect(customDot()).toHaveStyle({ background: '#ff9500' })
+  })
+
+  it('leaves the custom square inactive when a preset is the color', async () => {
+    render(withColor('#D9480FFF', editApi()))
+    await openEdit()
+    expect(customDot()).not.toHaveClass('on')
+  })
+
+  it('seeds the custom square from the current color, alpha trimmed', async () => {
+    render(withColor('#FF9500FF', editApi()))
+    await openEdit()
+    expect(custom().value).toBe('#ff9500')
+  })
+
+  it('does not resend a color the user only saw in the custom square', async () => {
+    const api = editApi()
+    render(withColor('#FF9500FF', api))
+    await openEdit()
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+    expect(api.update).toHaveBeenCalledWith('work', { name: 'Work' })
   })
 })
 
