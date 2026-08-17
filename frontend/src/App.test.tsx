@@ -131,6 +131,33 @@ describe('<App> auth gate', () => {
     expect(m.logout).toHaveBeenCalledOnce()
     expect(await screen.findByRole('button', { name: /sign in/i })).toBeInTheDocument()
   })
+
+  it('stays signed in, and says so, when the sign-out request fails', async () => {
+    // POST /api/logout is the only thing that revokes the token and the only
+    // thing that can clear the HttpOnly cookie. Showing the login card on a
+    // failure told the user they were signed out while the session was still
+    // live — on a cookie that is the whole perimeter.
+    m.logout.mockRejectedValue(new HttpError(502, 'bad gateway'))
+    render(<App />)
+    await screen.findByRole('button', { name: 'Tasks' })
+    await userEvent.click(screen.getByRole('button', { name: 'Settings' }))
+    await userEvent.click(screen.getByRole('button', { name: /log out/i }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/still signed in/i)
+    expect(screen.queryByRole('button', { name: /sign in/i })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Tasks' })).toBeInTheDocument()
+  })
+
+  it('treats a 401 from logout as already signed out', async () => {
+    // The session is gone either way; there is nothing to keep the user in for.
+    m.logout.mockRejectedValue(new AuthError('not authenticated'))
+    render(<App />)
+    await screen.findByRole('button', { name: 'Tasks' })
+    await userEvent.click(screen.getByRole('button', { name: 'Settings' }))
+    await userEvent.click(screen.getByRole('button', { name: /log out/i }))
+
+    expect(await screen.findByRole('button', { name: /sign in/i })).toBeInTheDocument()
+  })
 })
 
 describe('<App> session length', () => {

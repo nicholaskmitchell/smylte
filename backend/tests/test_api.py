@@ -832,6 +832,26 @@ def test_required_window_bounds_and_non_finite_sidecar_are_422(client):
         assert client.get(f"/api/lists/{lid}/tasks").status_code == 200
 
 
+def test_a_sidecar_put_for_an_unknown_task_is_a_404_and_writes_nothing(client):
+    """The only write route that did not check the item exists. It answered 200
+    with a body of `null` (every sibling 404s the same uid) and left a sidecar
+    row with orphaned_at IS NULL — which nothing ever sets, because
+    orphan_sidecar only fires when a *known* item is deleted, so gc_orphans
+    could never reclaim it. Sidecar rows are the one thing a resync cannot
+    rebuild, which made them permanent."""
+    lid = _list(client)["id"]
+    svc = client.app.state.service
+
+    def sidecar_rows() -> int:
+        with svc._lock:
+            return svc._conn.execute("SELECT count(*) FROM sidecar").fetchone()[0]
+
+    before = sidecar_rows()
+    r = client.put(f"/api/lists/{lid}/tasks/no-such-uid/sidecar", json={"sort_order": 1.0})
+    assert r.status_code == 404
+    assert sidecar_rows() == before
+
+
 def test_task_manual_reorder(client):
     # Manual order spans lists: the tasks pane is always the merged view, so a
     # position only means something if it is comparable between collections.

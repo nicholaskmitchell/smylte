@@ -198,6 +198,29 @@ looking reachable.
   A `resource` that does not exactly match the URL you gave Claude — including
   the path — is the usual reason a reachable server still fails to connect.
 
+## If the password leaks — signing out everywhere
+
+Sessions are JWTs, so they are valid until they expire (`TASKS_SESSION_TTL`, 7
+days by default) whether or not the browser still holds the cookie. Logging out
+withdraws one session *by name*; it cannot reach a session minted on someone
+else's machine, whose id you have never seen.
+
+Two levers, in the order to reach for them:
+
+1. **Change the password.** Regenerate with `python -m tasksd hash-password`,
+   set `TASKS_AUTH_PASSWORD_HASH` in `/etc/tasks/tasks.env`, `sudo systemctl
+   restart tasks`. Every existing session is refused from that moment: a token
+   carries a fingerprint of the credentials it was minted under, so changing
+   the password (or `TASKS_AUTH_USER`) invalidates all of them. This is the
+   normal response, and it keeps the session secret stable.
+2. **Rotate `TASKS_SESSION_SECRET`** if you have reason to think the secret
+   itself leaked — it is the signing key, and anyone holding it can mint a
+   valid session without the password. Set a fresh one (`python -c 'import
+   secrets;print(secrets.token_hex(32))'`) and restart. Every session dies,
+   including yours.
+
+An ordinary restart signs nobody out; only a change to one of these does.
+
 ## Backups (spec §9 — important)
 Back up **both**:
 - `~/radicale/collections` — the source of truth (all `.ics`).

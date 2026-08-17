@@ -47,6 +47,7 @@ from .dav.errors import DavError
 from .dav.errors import NotFound as DavNotFound
 from .dav.xml import XML_SAFE_PATTERN_SCALAR
 from .ical import EventEdit, TaskEdit, rrule_from_spec
+from .limits import BodySizeLimitMiddleware
 from .scheduling import SlotTaken
 from .service import TaskService, priority_from_label
 from .sync.engine import ConflictError
@@ -699,6 +700,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             password_hash=password_hash,
             secret=session_secret,
             ttl_s=lambda: session_ttl["value"],
+            # The configured credential, not the derived hash: the plaintext dev
+            # path re-hashes with a fresh salt every startup, and sessions must
+            # survive an ordinary restart while dying on a real change.
+            credential_id=settings.auth_password_hash or settings.auth_password,
         )
     elif not settings.access_required:
         # Deliberate dev/test posture, but loud: nothing gates /api at all.
@@ -741,6 +746,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             svc.close()
 
     app = FastAPI(title="tasksd", version="0.1.0-phase1", lifespan=lifespan)
+
+    # Ahead of the router, because that is the only place it works: FastAPI
+    # buffers a pydantic body before the endpoint (and therefore before the
+    # login limiter and the booking throttles) ever runs. See tasksd/limits.py.
+    app.add_middleware(BodySizeLimitMiddleware, max_bytes=settings.max_body_bytes)
 
     @app.exception_handler(RequestValidationError)
     async def _invalid_request(request: Request, exc: RequestValidationError):
@@ -982,6 +992,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @api.put("/lists/{list_id}/tasks/{uid}/sidecar")
     async def put_sidecar(request: Request, list_id: str, uid: str, body: Sidecar):
         href = await _href(request, list_id)
+        # Check before writing, like every sibling route. store.set_sidecar does
+        # INSERT OR IGNORE with no referential check, so an unknown uid used to
+        # answer 200 with a body of `null` AND leave a row behind with
+        # orphaned_at IS NULL — which orphan_sidecar never sets (it only fires
+        # when a *known* item is deleted) and gc_orphans therefore never
+        # reclaims. The sidecar table is the one part of SQLite a resync cannot
+        # rebuild, so those rows were permanent.
+        if not await _run(_svc(request).has_task, href, uid):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown task {uid}")
         fields = {k: v for k, v in body.model_dump().items() if v is not None}
         return await _run(_svc(request).set_sidecar, href, uid, **fields)
 
@@ -1141,22 +1160,37 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     # -- live updates (SSE) --
     @api.get("/events")
-    async def events(request: Request):
+    async def events(
+        request: Request,
+        session: str | None = Cookie(default=None, alias="tasks_session"),
+    ):
         svc = _svc(request)
         queue = svc.subscribe()
+
+        def still_authorised() -> bool:
+            # require_auth ran once, at connect. This stream then outlives every
+            # later check: POST /api/logout is the only thing that makes a stolen
+            # cookie stop working, and it never reached a connection already open,
+            # so a revoked session kept receiving every create/update/delete for
+            # as long as it held the socket. The keepalive already wakes this loop
+            # every 15s, so re-checking here retires a revoked — or simply expired
+            # — stream within one interval and costs one HMAC verify.
+            return authenticator is None or authenticator.session_claims(session) is not None
 
         async def gen():
             try:
                 yield "retry: 3000\n\n"
                 yield f"data: {json.dumps({'type': 'hello'})}\n\n"
                 while True:
-                    if await request.is_disconnected():
+                    if await request.is_disconnected() or not still_authorised():
                         break
                     try:
                         ev = await asyncio.wait_for(queue.get(), timeout=15)
                     except asyncio.TimeoutError:
                         yield ": keepalive\n\n"
                         continue
+                    if not still_authorised():
+                        break
                     yield f"data: {json.dumps(ev)}\n\n"
             finally:
                 svc.unsubscribe(queue)

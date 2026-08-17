@@ -176,9 +176,16 @@ class RateLimiter:
 
 class Authenticator:
     def __init__(self, *, user: str, password_hash: str, secret: str,
-                 ttl_s: int | Callable[[], int]):
+                 ttl_s: int | Callable[[], int], credential_id: str | None = None):
         self._user = user
         self._password_hash = password_hash
+        # What "the credentials changed" is judged against — see
+        # _credential_version. Not the hash itself: scrypt salts randomly, so
+        # the dev plaintext path (TASKS_AUTH_PASSWORD, hashed at startup)
+        # produces a different hash every restart and would sign everyone out
+        # on each one. The caller passes the *configured* material instead,
+        # which is stable across restarts and moves only when it is changed.
+        self._credential_id = password_hash if credential_id is None else credential_id
         self._secret = secret
         # A callable rather than a number, because the session length is a
         # setting the user can change while signed in. Reading it at verify time
@@ -210,6 +217,29 @@ class Authenticator:
         """The session length in force right now."""
         return self._ttl()
 
+    @property
+    def _credential_version(self) -> str:
+        """A short fingerprint of the credentials a token was minted under.
+
+        The signing secret is independent of the password, so before this the
+        documented remedy for a compromise — regenerate the hash, update
+        TASKS_AUTH_PASSWORD_HASH, restart — left every session the attacker had
+        already minted valid for the rest of its TTL (7 days by default), and
+        revocation could not reach them: logout withdraws a `jti` by name, and
+        the owner never sees the jti of a session created on someone else's
+        machine. Binding the token to the credentials makes changing the
+        password a sign-out-everywhere, which is what an operator changing it
+        under duress already believes it to be.
+
+        Keyed with the signing secret rather than a bare digest: the credential
+        material is a plaintext password on the dev path, and a truncated
+        unkeyed hash of it would be offline-guessable by whoever holds the
+        token. Anyone who knows the secret can already mint tokens, so keying it
+        gives nothing away.
+        """
+        material = f"{self._user}\0{self._credential_id}".encode()
+        return hmac.new(self._secret.encode(), material, hashlib.sha256).hexdigest()[:16]
+
     def issue_session(self) -> str:
         now = datetime.now(timezone.utc)
         return jwt.encode(
@@ -220,6 +250,8 @@ class Authenticator:
                 # Names this session so logout can withdraw exactly it, and not
                 # the ones on your other devices.
                 "jti": secrets.token_hex(16),
+                # Which credentials this was minted under; see _credential_version.
+                "cv": self._credential_version,
             },
             self._secret,
             algorithm="HS256",
@@ -235,6 +267,17 @@ class Authenticator:
         except Exception:  # noqa: BLE001
             return None
         if self.is_revoked(claims.get("jti")):
+            return None
+        # Whose session this is, and under which credentials. `sub` was carried
+        # but never checked, so a token signed with the same secret stayed valid
+        # across a username change; `cv` does the same job for the password. A
+        # token minted before this claim existed has no `cv` and is refused —
+        # the conservative direction, and it costs one re-login at upgrade.
+        if not hmac.compare_digest(str(claims.get("sub", "")).encode(), self._user.encode()):
+            return None
+        if not hmac.compare_digest(
+            str(claims.get("cv", "")).encode(), self._credential_version.encode()
+        ):
             return None
         # Shortening the session length has to bite immediately, including on
         # sessions opened elsewhere — which for a stateless token means judging
