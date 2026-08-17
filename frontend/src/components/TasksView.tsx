@@ -171,7 +171,7 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
   }
 
   const listApi = {
-    create: (name: string) => guard(() => api.createList(name)),
+    create: (name: string, color?: string | null) => guard(() => api.createList(name, color)),
     update: (id: string, body: { name?: string; color?: string | null }) =>
       guard(() => api.updateList(id, body)),
     remove: (id: string) => guard(() => api.deleteList(id)),

@@ -378,7 +378,7 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
   // Desktop "+N more": a popover anchored to the day cell listing every event.
   const [more, setMore] = useState<{ day: string; x: number; y: number } | null>(null)
   const calApi = {
-    create: (name: string) => guard(() => api.createCalendar(name)),
+    create: (name: string, color?: string | null) => guard(() => api.createCalendar(name, color)),
     update: (id: string, body: { name?: string; color?: string | null }) =>
       guard(() => api.updateCalendar(id, body)),
     remove: (id: string) => guard(() => api.deleteCalendar(id)),
