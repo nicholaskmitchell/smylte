@@ -98,18 +98,39 @@ def parse_availability(raw: str | dict | None) -> dict[int, list[tuple[time, tim
     return out
 
 
-def parse_event_time(iso: str, tz: ZoneInfo) -> datetime:
-    """An event ISO string as an aware datetime in the link zone: naive strings
-    (floating local, this app's own writes) are stamped with the link zone;
-    aware ones (foreign CalDAV clients) are converted into it."""
+def parse_event_time(iso: str, tz: ZoneInfo, naive_tz: ZoneInfo | None = None) -> datetime:
+    """An event ISO string as an aware datetime in the link zone.
+
+    Aware strings (foreign CalDAV clients) name an instant and are converted
+    into ``tz``. Naive ones are floating local wall time — and they are this
+    app's OWN writes: `build_new_event` emits `DTSTART:20260810T090000` with no
+    zone, and the cache stores it naive.
+
+    Which zone that wall clock belongs to is the whole question. It used to be
+    read as the *link's* zone, which is a free-text field the owner sets per
+    link and may be anywhere. When the two differed, every floating event landed
+    at the wrong absolute instant in the busy set — off by exactly the offset
+    difference — so the owner's real appointment was advertised as free and an
+    unauthenticated visitor could book straight over it, while the genuinely
+    free hour was blocked. ``naive_tz`` is the zone the owner authors in (their
+    home timezone setting); the link zone is left doing what it is for, the
+    availability-window math and display.
+    """
     dt = datetime.fromisoformat(iso)
-    return dt.replace(tzinfo=tz) if dt.tzinfo is None else dt.astimezone(tz)
+    if dt.tzinfo is not None:
+        return dt.astimezone(tz)
+    return dt.replace(tzinfo=naive_tz or tz).astimezone(tz)
 
 
-def busy_intervals(events: Iterable[dict], tz: ZoneInfo) -> list[Interval]:
+def busy_intervals(
+    events: Iterable[dict], tz: ZoneInfo, *, naive_tz: ZoneInfo | None = None
+) -> list[Interval]:
     """Blocking intervals from event DTOs (``TaskService.events_in_range`` shape,
     recurrences already expanded). Cancelled and all-day events don't block (see
-    module docstring); a malformed event is skipped rather than failing the page."""
+    module docstring); a malformed event is skipped rather than failing the page.
+
+    ``naive_tz``: the zone floating times are authored in — see
+    ``parse_event_time``. Defaults to ``tz``, the historical behaviour."""
     out: list[Interval] = []
     for ev in events:
         try:
@@ -117,9 +138,9 @@ def busy_intervals(events: Iterable[dict], tz: ZoneInfo) -> list[Interval]:
                 continue
             if str(ev.get("status") or "").upper() == "CANCELLED":
                 continue
-            start = parse_event_time(ev["start"], tz)
+            start = parse_event_time(ev["start"], tz, naive_tz)
             if ev.get("end"):
-                end = parse_event_time(ev["end"], tz)
+                end = parse_event_time(ev["end"], tz, naive_tz)
             elif ev.get("duration"):
                 end = start + vDuration.from_ical(ev["duration"])
             else:

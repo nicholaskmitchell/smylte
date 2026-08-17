@@ -439,7 +439,18 @@ class TaskService:
             return [self._list_dto(r, counts) for r in rows
                     if "VEVENT" in (r["components"] or "")]
 
-    def events_in_range(self, href: str, start_iso: str, end_iso: str) -> list[dict[str, Any]]:
+    def events_in_range(
+        self, href: str, start_iso: str, end_iso: str, *, blocking: bool = False
+    ) -> list[dict[str, Any]]:
+        """Events in the window, recurring resources fanned out per occurrence.
+
+        `blocking=True` is for the busy set behind the public booking page,
+        where a series that could not be expanded means something different than
+        it does on the calendar grid. The grid degrades to the master row, which
+        is one visible row the owner can see and act on. The busy set has no
+        such reader: dropping a series' occurrences there advertises the owner's
+        real meetings as free time to an anonymous visitor, so an unexpandable
+        series is reported as covering the whole window instead."""
         with self._lock:
             rows = store.get_events_in_range(self._conn, href, start_iso, end_iso)
             cats = store.get_all_categories(self._conn, href)
@@ -457,8 +468,22 @@ class TaskService:
                     out.append(self._occurrence_dto(r, occ, cats))
             except Exception:  # noqa: BLE001
                 log.warning("recurrence expansion failed for %s; showing master", r["uid"])
-                out.append(self._event_dto(r, cats))
+                if blocking:
+                    out.append(self._opaque_span_dto(r, start_iso, end_iso, cats))
+                else:
+                    out.append(self._event_dto(r, cats))
         return out
+
+    def _opaque_span_dto(
+        self, row, start_iso: str, end_iso: str, cats
+    ) -> dict[str, Any]:
+        """A recurring resource we could not expand, as one interval covering the
+        whole query window — "assume busy" rather than "assume free"."""
+        dto = dict(self._event_dto(row, cats))
+        dto["start"], dto["end"] = start_iso, end_iso
+        dto["start_is_date"] = dto["end_is_date"] = False
+        dto["duration"] = None
+        return dto
 
     def get_event(self, href: str, uid: str) -> dict[str, Any] | None:
         with self._lock:
@@ -706,8 +731,24 @@ class TaskService:
                     continue
                 if only_href is not None and row["href"] != only_href:
                     continue
-                events.extend(self.events_in_range(row["href"], start_iso, end_iso))
-        return scheduling.busy_intervals(events, tz)
+                events.extend(
+                    self.events_in_range(row["href"], start_iso, end_iso, blocking=True)
+                )
+        return scheduling.busy_intervals(events, tz, naive_tz=self._home_tz())
+
+    def _home_tz(self) -> ZoneInfo | None:
+        """The zone the owner authors floating times in, if they have set one.
+
+        None means "no better information than the link's zone", which is what
+        the busy math falls back to."""
+        with self._lock:
+            name = store.get_settings(self._conn).get("home_timezone")
+        if not isinstance(name, str) or not name:
+            return None
+        try:
+            return ZoneInfo(name)
+        except Exception:  # noqa: BLE001 — a stored blob can hold anything
+            return None
 
     def _link_is_live(self, link) -> bool:
         """Bookable at all? Disabled links and links whose target calendar has
@@ -771,11 +812,17 @@ class TaskService:
         self, token: str, *, start_iso: str, name: str, email: str,
         notes: str | None = None, client_id: str | None = None,
         now: datetime | None = None,
-    ) -> dict[str, Any] | None:
+    ) -> tuple[dict[str, Any], bool] | None:
         """Book a slot: re-validate under the lock, write the VEVENT, record the
         booking. Returns None for unknown/disabled links; raises ValueError for
         a malformed start (→ 422) and scheduling.SlotTaken when the requested
-        time isn't an open slot (→ 409)."""
+        time isn't an open slot (→ 409).
+
+        Returns `(confirmation, created)`. `created` is False for a replay — the
+        same client_id coming back, answered from the booking already written.
+        The caller needs to tell them apart: the per-link ceiling is a budget of
+        BOOKINGS, and charging a replay for one that landed nothing put the
+        published-link denial-of-service straight back."""
         with self._lock:
             link = store.get_booking_link(self._conn, token)
             if link is None or not self._link_is_live(link):
@@ -789,7 +836,7 @@ class TaskService:
                 prior = store.get_booking_by_event(self._conn, f"{client_id}@tasksd")
                 if prior is not None:
                     if prior["link_token"] == token:
-                        return self._confirmation(link, prior)
+                        return self._confirmation(link, prior), False
                     raise ValueError("client_id already used")
             tz = ZoneInfo(link["timezone"])
             req = datetime.fromisoformat(start_iso)
@@ -855,7 +902,7 @@ class TaskService:
             "title": link["title"],
             "duration_minutes": link["duration_minutes"],
             "timezone": link["timezone"],
-        }
+        }, True
 
     @staticmethod
     def _confirmation(link, booking) -> dict[str, Any]:

@@ -23,6 +23,8 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
+from datetime import time as dtime
+from math import ceil
 
 import recurring_ical_events
 from icalendar import Calendar
@@ -238,19 +240,59 @@ def _occurrence(comp, override_anchors: set[str], tf_shifts: dict[str, timedelta
     )
 
 
+def _occurrence_cap(
+    window_start: date | datetime, window_end: date | datetime, floor: int = 750
+) -> int:
+    """How many occurrences a window can legitimately hold.
+
+    A flat constant was wrong in both directions. `_pathological_rule` refuses
+    anything over `_MAX_PER_DAY` (24) instances a day and *permits* everything
+    under it, so a rule the guard explicitly allows could still overrun a fixed
+    750 — an hourly series passes the density check and produces 1032 over the
+    calendar's 43-day grid. The window is what decides how many there can be, so
+    the bound is derived from it.
+
+    The floor keeps short windows from getting a cap tighter than the old one.
+    """
+    start = _as_datetime(window_start)
+    end = _as_datetime(window_end)
+    days = max(1, ceil((end - start).total_seconds() / 86400))
+    # +1 day of slack: the query is inclusive at the edges and an override or an
+    # RDATE can add an instance the rule itself did not generate.
+    return max(floor, int(_MAX_PER_DAY * (days + 1)))
+
+
+def _as_datetime(v: date | datetime) -> datetime:
+    if isinstance(v, datetime):
+        return v.replace(tzinfo=None)
+    return datetime.combine(v, dtime.min)
+
+
 def expand_occurrences(
     raw_ics: bytes | str,
     window_start: date | datetime,
     window_end: date | datetime,
     *,
-    max_occurrences: int = 750,
+    max_occurrences: int | None = None,
 ) -> list[Occurrence]:
     """Occurrences of the resource's VEVENT series within ``[window_start,
     window_end)``, most-relevant first. Returns ``[]`` when the series produces
     nothing in the window (e.g. a rule whose UNTIL is already past).
 
     Raises ``ValueError`` for a rule too dense or too malformed to expand within
-    a bounded cost — the caller degrades to the master row."""
+    a bounded cost, and for one that overruns the window's occurrence cap — the
+    caller degrades to the master row.
+
+    Overrunning used to return a silently short list instead, with no signal the
+    caller could tell apart from "the series really ends here". Two things went
+    wrong with that. The calendar grid rendered the tail of its month empty with
+    nothing to say anything was hidden; worse, `_link_busy` builds the public
+    booking page's conflict set from this, so a busy series past the cap stopped
+    blocking and the page advertised — and let an anonymous visitor book — hours
+    the owner was already in a meeting. Raising puts both on the existing
+    degrade-to-master-row path, which is visible."""
+    cap = (max_occurrences if max_occurrences is not None
+           else _occurrence_cap(window_start, window_end))
     cal = Calendar.from_ical(raw_ics)
     why = _pathological_rule(cal, window_end)
     if why is not None:
@@ -276,6 +318,8 @@ def expand_occurrences(
             occ = replace(occ, recurrence_id=occ.start or occ.recurrence_id)
         seen.add(occ.recurrence_id)
         out.append(occ)
-        if len(out) >= max_occurrences:
-            break
+        if len(out) > cap:
+            raise ValueError(
+                f"refusing to expand recurrence: more than {cap} occurrences in the window"
+            )
     return out
