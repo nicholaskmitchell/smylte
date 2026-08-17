@@ -101,10 +101,32 @@ class TaskService:
 
     # ── sync ─────────────────────────────────────────────────────────────────
     def bootstrap(self) -> None:
+        """First pass at startup. Tolerant by construction.
+
+        Every failure here used to propagate out of the FastAPI lifespan, so
+        uvicorn reported a startup failure and exited: one unreachable or
+        vanished collection, or a transient Radicale hiccup, took down the whole
+        listener — including /healthz, /api/login, the SPA and every read path,
+        all of which are pure SQLite against the already-populated cache and
+        would have worked fine. `sync_all` guards exactly these two failure
+        modes deliberately ("one bad collection must not stall the rest of the
+        sweep"); this had neither. `_sync_loop` retries after us, so nothing is
+        lost by carrying on. Startup should only ever hard-fail on
+        configuration, never on the state of the CalDAV server."""
         with self._lock:
-            self._engine.discover()
+            try:
+                self._engine.discover()
+            except Exception as e:  # noqa: BLE001
+                log.warning("discovery failed at startup: %s; serving the cache", e)
             for row in store.get_collections(self._conn):
-                self._engine.sync(row["href"])
+                href = row["href"]
+                try:
+                    self._engine.sync(href)
+                except DavNotFound:
+                    continue                     # gone from under us; discover next pass
+                except Exception as e:  # noqa: BLE001
+                    log.warning("initial sync failed for %s: %s", href, e)
+                    store.set_sync_error(self._conn, href, str(e))
 
     def sync_all(self) -> list[SyncStats]:
         # Lock per collection, not for the whole sweep: interactive requests
@@ -112,6 +134,7 @@ class TaskService:
         # of stalling for the full background pass every poll interval.
         with self._lock:
             self._engine.discover()
+            collections_changed = self._engine.last_discovery_changed
             hrefs = [r["href"] for r in store.get_collections(self._conn)]
         stats: list[SyncStats] = []
         for href in hrefs:
@@ -128,7 +151,12 @@ class TaskService:
                     # and future tooling can see it and move on.
                     log.warning("sync failed for %s: %s", href, e)
                     store.set_sync_error(self._conn, href, str(e))
-        if any(s.upserted or s.removed for s in stats):
+        # A collection appearing or vanishing is a change the SPA has to hear
+        # about, and it never shows up in the item counters: discover() handles
+        # it separately, and its result used to be thrown away. So a list the
+        # owner deleted on their phone was purged from the projection while the
+        # open tab kept rendering it — and clicking it 404'd.
+        if collections_changed or any(s.upserted or s.removed for s in stats):
             self._publish({"type": "sync"})
         return stats
 

@@ -151,6 +151,37 @@ def test_resync_does_not_gc_sidecars_off_an_incomplete_pass():
     assert conn.execute("SELECT 1 FROM sidecar WHERE uid='gone-1'").fetchone() is None
 
 
+def test_one_clean_collection_does_not_gc_another_collections_protected_orphans():
+    """The guard above is per-collection; the sweep it gated was global.
+
+    So a collection whose enumeration is permanently incomplete — a resource
+    `extract_from_raw` cannot handle — correctly never GC'd its own orphans, and
+    then lost them anyway the first time an unrelated calendar full-resynced.
+    The state destroyed is the one thing in the DB no resync can rebuild."""
+    other = "/u/other/"
+    conn = _db()
+    store.upsert_collection(
+        conn, CollectionInfo(href=other, displayname="Other", components={"VTODO"})
+    )
+
+    # A sidecar row in COL, orphaned and long overdue for collection…
+    SyncEngine(_FakeDav([Item(f"{COL}A.ics", '"e1"', _vtodo("gone-1", "Old"))]), conn).sync(COL)
+    store.set_sidecar(conn, COL, "gone-1", kanban_column="doing")
+    SyncEngine(_FakeDav([Item(f"{COL}B.ics", '"e2"', _POISON)]), conn).full_resync(COL)
+    conn.execute(
+        "UPDATE sidecar SET orphaned_at=strftime('%Y-%m-%dT%H:%M:%fZ','now','-8 days') "
+        "WHERE uid='gone-1'")
+    conn.commit()
+
+    # …but COL cannot be enumerated cleanly, so it is protected. Now resync a
+    # different, perfectly healthy collection.
+    SyncEngine(_FakeDav([Item(f"{other}C.ics", '"e3"', _vtodo("live-1", "Fine"))]), conn) \
+        .full_resync(other)
+
+    assert conn.execute("SELECT 1 FROM sidecar WHERE uid='gone-1'").fetchone() is not None, \
+        "another collection's clean pass swept a protected orphan"
+
+
 def test_a_collection_that_comes_back_rebuilds_its_items():
     """Deleting a collection purges its cached rows, so the token it was synced
     to must go with them: `upsert_collection` clears `deleted` when the
@@ -408,3 +439,37 @@ def test_one_uncacheable_collection_does_not_abort_discovery():
 
     # Deterministic: the property lives on the server, so it recurs every pass.
     assert [c.href for c in engine.discover()] == ["/u/work/"]
+
+
+# ── a collection appearing or leaving has to reach the SPA ──────────────────
+
+def test_discover_reports_whether_the_collection_set_moved():
+    """`sync_all` publishes on this. Collection-set changes are found by
+    discover(), never by the per-collection item counters, and discover()'s
+    result was thrown away — so a list the owner deleted on their phone was
+    correctly purged from the projection while the open tab kept rendering it
+    in the sidebar, until some unrelated write happened to bump `rev`. Clicking
+    it 404'd. A new *empty* collection was equally invisible."""
+    conn = _db()
+    a = CollectionInfo(href="/u/a/", displayname="A", components={"VTODO"})
+    b = CollectionInfo(href="/u/b/", displayname="B", components={"VTODO"})
+
+    engine = SyncEngine(_DiscoveryDav([a]), conn)
+    engine.discover()
+    assert engine.last_discovery_changed is True          # /u/a/ arrived
+
+    engine.discover()
+    assert engine.last_discovery_changed is False         # nothing moved
+
+    # A brand-new, still-empty collection counts.
+    engine.dav = _DiscoveryDav([a, b])
+    engine.discover()
+    assert engine.last_discovery_changed is True
+
+    # And one that vanished.
+    engine.dav = _DiscoveryDav([a])
+    engine.discover()
+    assert engine.last_discovery_changed is True
+
+    engine.discover()
+    assert engine.last_discovery_changed is False

@@ -186,3 +186,44 @@ def test_booking_replay_is_scoped_to_its_link(svc):
             t2, start_iso="2026-07-13T15:00:00-05:00", name="M", email="m@x.co",
             client_id=cid, now=NOW,
         )
+
+
+# ── startup must not depend on the CalDAV server being healthy ──────────────
+
+def test_bootstrap_survives_a_collection_that_cannot_be_synced(svc):
+    """`bootstrap` ran discover() and every per-collection sync() with no try at
+    all, inside the FastAPI lifespan. Any exception propagated out of the
+    lifespan and uvicorn reported a startup failure and exited — so one bad or
+    vanished collection, or a transient Radicale hiccup, took down the whole
+    listener: /healthz, /api/login, the SPA and every read path, all of which
+    are pure SQLite against the already-populated cache and would have worked.
+    `sync_all` guards exactly these two failure modes deliberately."""
+    boom = []
+
+    def explode(href):
+        boom.append(href)
+        raise RuntimeError("radicale said no")
+
+    svc._engine.sync = explode
+    svc.bootstrap()                                   # must not raise
+
+    assert len(boom) == 2, "every collection is still attempted"
+    # …and the failure is recorded where /api/sync can surface it.
+    errors = [
+        r["last_error"] for r in svc._conn.execute("SELECT last_error FROM sync_state")
+    ]
+    assert all(e and "radicale said no" in e for e in errors), errors
+
+    # The cache is still readable, which is the whole point of coming up.
+    assert svc.list_calendars() != []
+
+
+def test_bootstrap_survives_discovery_failing_outright(svc):
+    """A Radicale that is simply down at boot."""
+    def explode():
+        raise RuntimeError("connection refused")
+
+    svc._engine.discover = explode
+    svc._engine.sync = lambda href: None
+    svc.bootstrap()                                   # must not raise
+    assert svc.list_calendars() != []

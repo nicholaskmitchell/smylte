@@ -974,7 +974,13 @@ def _tf_shift(override) -> timedelta:
     rid, dtstart = override.get("RECURRENCE-ID"), override.get("DTSTART")
     if rid is None or dtstart is None:
         return timedelta(0)
+    # Dateness AND awareness. A floating value beside a zoned one is two
+    # datetimes, so the dateness check alone passes and the subtraction raises
+    # TypeError — see recur._same_shape, the read-path twin of this guard, which
+    # had the identical gap.
     if isinstance(rid.dt, datetime) != isinstance(dtstart.dt, datetime):
+        return timedelta(0)
+    if isinstance(rid.dt, datetime) and (rid.dt.tzinfo is None) != (dtstart.dt.tzinfo is None):
         return timedelta(0)
     return dtstart.dt - rid.dt
 

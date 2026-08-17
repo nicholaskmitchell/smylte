@@ -69,9 +69,23 @@ class SyncEngine:
         self.dav = dav
         self.conn = conn
         self.batch = multiget_batch
+        # Whether the last discover() saw the live collection set move. Read by
+        # TaskService.sync_all to decide whether the SPA needs telling.
+        self.last_discovery_changed = False
 
     # ── discovery ────────────────────────────────────────────────────────────
     def discover(self) -> list[CollectionInfo]:
+        """Reconcile the cached collection set with the server's.
+
+        Sets `self.last_discovery_changed` to whether the live set actually
+        moved — a collection appeared or vanished. `sync_all` publishes on it:
+        collection-set changes are found here, not in the per-collection item
+        counters, so when the owner deleted a list on their phone the projection
+        was correctly purged but no `rev` bump ever reached the browser. The open
+        tab kept rendering a dead list in the sidebar until some unrelated write
+        happened, and clicking it 404'd. A new empty collection was equally
+        invisible."""
+        before = {row["href"] for row in store.get_collections(self.conn)}
         cols = [c for c in self.dav.list_collections() if _is_synced_collection(c)]
         # `live` is built from every collection the server listed, including any
         # we then fail to cache: the server says it exists, so it must not be
@@ -96,6 +110,8 @@ class SyncEngine:
             for row in store.get_collections(self.conn):
                 if row["href"] not in live:
                     store.mark_collection_deleted(self.conn, row["href"])
+        after = {row["href"] for row in store.get_collections(self.conn)}
+        self.last_discovery_changed = after != before
         return kept
 
     # ── read path ────────────────────────────────────────────────────────────
@@ -156,9 +172,13 @@ class SyncEngine:
                                  error=stats.last_error)
             # gc_orphans is the only permanent deletion of non-derivable state in
             # the app — pins, kanban column, manual order, which no resync can
-            # rebuild. Never run it off an incomplete enumeration.
+            # rebuild. Never run it off an incomplete enumeration, and only over
+            # the collection this pass actually enumerated: `stats.skipped` is
+            # scoped to that collection, so an unscoped sweep let ANY other
+            # collection resyncing cleanly delete the orphans this guard exists
+            # to protect.
             if not stats.skipped:
-                store.gc_orphans(self.conn)
+                store.gc_orphans(self.conn, collection_href)
         return stats
 
     def _drop_uncacheable(self, collection_href: str, href: str, stats: SyncStats) -> None:

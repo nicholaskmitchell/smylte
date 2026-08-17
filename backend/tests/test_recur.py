@@ -1041,6 +1041,49 @@ def test_deleting_a_thisandfuture_instance_removes_that_one():
     ]
 
 
+def test_a_thisandfuture_override_mixing_floating_and_zoned_still_expands():
+    """`_thisandfuture_shifts` guarded one mismatch between the override's
+    RECURRENCE-ID and its DTSTART — dateness — and not the other. A floating
+    value beside a zoned one is two datetimes, so the dateness check passes and
+    `dtstart.dt - rid.dt` raises TypeError. That runs before any expansion, so
+    it escapes `expand_occurrences` (documented as raising ValueError) and
+    `events_in_range` falls into its `except Exception` branch: the whole series
+    collapses to one master row and every occurrence vanishes from the
+    calendar."""
+    series = foreign_event_raw(
+        "mixtf@x", "Std", rrule="FREQ=WEEKLY;COUNT=4",
+        overrides=((
+            "RECURRENCE-ID;RANGE=THISANDFUTURE:20260113T090000Z",   # zoned (UTC)
+            "DTSTART:20260113T100000",                              # floating
+            "DTEND:20260113T103000",
+            "SUMMARY:TF",
+        ),),
+    )
+    occs = recur.expand_occurrences(series, *_TF_WIN)
+
+    # It expands rather than blowing up, and every instance keeps a distinct
+    # anchor — the dedup fallback, which is the intended degradation.
+    assert len(occs) >= 4, _starts(occs)
+    assert len({o.recurrence_id for o in occs}) == len(occs), "duplicate anchors"
+
+
+def test_the_edit_path_tolerates_the_same_mixed_override():
+    """`edit._tf_shift` is the write-path twin of the guard above, and had the
+    identical gap — so the same resource 500ed on a split instead of expanding
+    wrong."""
+    series = foreign_event_raw(
+        "mixtf2@x", "Std", rrule="FREQ=WEEKLY;COUNT=4",
+        overrides=((
+            "RECURRENCE-ID;RANGE=THISANDFUTURE:20260113T090000Z",
+            "DTSTART:20260113T100000",
+            "DTEND:20260113T103000",
+            "SUMMARY:TF",
+        ),),
+    )
+    head, tail = split_series(series, "2026-01-20T09:00:00+00:00", EventEdit(summary="New"))
+    assert head is not None and b"SUMMARY:New" in tail
+
+
 def test_deleting_a_thisandfuture_overrides_own_slot_keeps_the_later_ones():
     """A RANGE=THISANDFUTURE override carries the values for its own slot AND
     every later one (RFC 5545 §3.2.13). `exclude_occurrence` dropped any

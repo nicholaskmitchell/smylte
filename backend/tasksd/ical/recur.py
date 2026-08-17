@@ -106,10 +106,31 @@ def _thisandfuture_shifts(cal: Calendar) -> dict[str, timedelta]:
         if str(rid.params.get("RANGE", "")).upper() != "THISANDFUTURE":
             continue
         iso = _iso(rid)[0]
-        if iso is None or isinstance(rid.dt, datetime) != isinstance(dtstart.dt, datetime):
-            continue                      # mismatched dateness: no meaningful offset
+        if iso is None or not _same_shape(rid.dt, dtstart.dt):
+            continue                      # mismatched pair: no meaningful offset
         out[iso] = dtstart.dt - rid.dt
     return out
+
+
+def _same_shape(a, b) -> bool:
+    """Can `a - b` be taken at all?
+
+    Two guards, not one. Mismatched DATENESS (a DATE beside a DATE-TIME) was
+    already handled; mismatched AWARENESS was not, and both values are
+    `datetime` in that case so the dateness check passes and the subtraction
+    raises `TypeError: can't subtract offset-naive and offset-aware datetimes`.
+    That runs before any expansion, so it escapes `expand_occurrences` — which
+    documents itself as raising ValueError — and `events_in_range` falls into
+    its `except Exception` branch: the whole series collapses to a single master
+    row and every occurrence disappears from the calendar. Mixed floating/zoned
+    values in one component are exactly the hostile-shaped ICS the trust model
+    calls out. Skipping just means the dedup fallback gives each covered
+    instance its own start as an anchor, which is the intended degradation."""
+    if isinstance(a, datetime) != isinstance(b, datetime):
+        return False
+    if isinstance(a, datetime) and (a.tzinfo is None) != (b.tzinfo is None):
+        return False
+    return True
 
 
 def _per_day(rule) -> float:
