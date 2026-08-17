@@ -27,7 +27,7 @@ export const ALL_SWATCH_STYLE: CSSProperties = {
 export const ALL_ID = '*'
 
 export interface CollectionApi {
-  create: (name: string) => Promise<List | undefined>
+  create: (name: string, color?: string | null) => Promise<List | undefined>
   update: (id: string, body: { name?: string; color?: string | null }) => Promise<List | undefined>
   remove: (id: string) => Promise<unknown>
   reorder: (ids: string[]) => Promise<unknown>
@@ -104,8 +104,8 @@ export function Sidebar({ title, placeholder, items, sel = '', countOf, onSelect
   // desktop rail can do (rename, recolor, delete, group) is reachable on touch.
   const [drawerOpen, setDrawerOpen] = useState(false)
 
-  const create = async (name: string) => {
-    const l = await api.create(name)
+  const create = async (name: string, color: string | null) => {
+    const l = await api.create(name, color)
     setAdding(false)
     // A new item is simply not hidden, so it shows by default. In select mode we
     // also focus it; in pure-visibility mode there is no selection to move.
@@ -338,17 +338,7 @@ export function Sidebar({ title, placeholder, items, sel = '', countOf, onSelect
             }} />
         </div>
       )}
-      {adding && (
-        <div className="side-add">
-          <input className="input" autoFocus placeholder={placeholder}
-            onBlur={(e) => { if (!e.target.value.trim()) setAdding(false) }}
-            onKeyDown={(e: KeyboardEvent<HTMLInputElement>) => {
-              const v = (e.target as HTMLInputElement).value
-              if (e.key === 'Enter' && v.trim()) create(v.trim())
-              if (e.key === 'Escape') setAdding(false)
-            }} />
-        </div>
-      )}
+      {adding && <AddForm placeholder={placeholder} onCancel={() => setAdding(false)} onCreate={create} />}
     </>
   )
 
@@ -573,6 +563,89 @@ function GroupHeader({ group, count, collapsed, canToggle, anyVisible,
   )
 }
 
+/** The clear, the eight presets, and the way past them.
+ *
+ * One definition for both the places a collection's color is chosen — the add
+ * form and the edit modal — so the two cannot drift, which is the same reason
+ * ALL_SWATCH_STYLE is built from SWATCHES rather than written out again.
+ */
+function ColorRow({ color, onPick }: { color: string | null; onPick: (c: string | null) => void }) {
+  // Compare on the RGB prefix: the wire value may carry an alpha byte (Apple
+  // Calendar and DAVx5 both write one) and it has to keep matching its preset.
+  const isSwatch = (c: string) => color?.slice(0, 7).toLowerCase() === c.toLowerCase()
+  // Eight presets run out once you keep more than eight collections, and a color
+  // another CalDAV client wrote is rarely one of ours — so anything set that no
+  // preset covers belongs to the custom square, which is what makes exactly one
+  // square in the row read as selected. Through cssColor like every other place
+  // this value reaches a style: it is whatever another client PROPPATCHed, and
+  // this paints a live `background` (see the hostile-wire-color suite). Junk
+  // lights nothing, which is honest — no square represents it.
+  const customColor = SWATCHES.some(isSwatch) ? null : cssColor(color)
+
+  return (
+    <div className="color-row">
+      <button className={`color-dot none ${color === null ? 'on' : ''}`} title="No color"
+        onClick={() => onPick(null)}>✕</button>
+      {SWATCHES.map((c) => (
+        <button key={c} className={`color-dot ${isSwatch(c) ? 'on' : ''}`}
+          style={{ background: c }} title={c} onClick={() => onPick(c)} />
+      ))}
+      {/* The escape hatch past the presets. Native rather than a drawn picker:
+          it is the browser's own dialog, so it brings a hex field and an
+          eyedropper for free, needs no dependency, and is the control
+          AppearancePanel already uses. The input is wrapped and made invisible
+          rather than styled directly, because a color input can only ever paint
+          its own value and has no value meaning "not custom" — so the label
+          draws the fill (a spectrum until a color is chosen) and the input,
+          stretched over it at full size, is what every click and Tab lands on.
+          It takes exactly `#rrggbb`: anything longer or upper-case is sanitized
+          by the DOM, which then fights the value React writes back, so trim and
+          lower it here. Picking drops any alpha byte on purpose — the dialog
+          cannot show alpha, so re-attaching the old one would keep a
+          translucency the user never saw. */}
+      <label className={`color-dot custom ${customColor ? 'on' : ''}`} title="Custom color"
+        style={customColor ? { background: customColor } : undefined}>
+        <input type="color" aria-label="Custom color"
+          value={(cssColor(color)?.slice(0, 7) ?? '#808080').toLowerCase()}
+          onChange={(e) => onPick(e.target.value)} />
+      </label>
+    </div>
+  )
+}
+
+/** A new collection: its name, and its color up front.
+ *
+ * The color is here so a new list or calendar arrives already distinguishable,
+ * rather than landing uncolored and needing a second trip through the edit
+ * modal — which matters most at exactly the point you are adding the ninth one.
+ */
+function AddForm({ placeholder, onCancel, onCreate }: {
+  placeholder: string
+  onCancel: () => void
+  onCreate: (name: string, color: string | null) => void
+}) {
+  const [name, setName] = useState('')
+  const [color, setColor] = useState<string | null>(null)
+
+  return (
+    // An empty form still closes when you click away, as it always has — but
+    // the row below the field is part of it now, so "away" has to mean out of
+    // the form entirely. Without the containment check, picking a color would
+    // blur the name field and dismiss the form mid-choice.
+    <div className="side-add with-color" onBlur={(e) => {
+      if (!name.trim() && !e.currentTarget.contains(e.relatedTarget as Node | null)) onCancel()
+    }}>
+      <input className="input" autoFocus placeholder={placeholder} value={name}
+        onChange={(e) => setName(e.target.value)}
+        onKeyDown={(e: KeyboardEvent<HTMLInputElement>) => {
+          if (e.key === 'Enter' && name.trim()) onCreate(name.trim(), color)
+          if (e.key === 'Escape') onCancel()
+        }} />
+      <ColorRow color={color} onPick={setColor} />
+    </div>
+  )
+}
+
 function EditModal({ item, placeholder, groups, groupId, onSetGroup, onClose, onSave, onDelete, onArchive }: {
   item: List
   placeholder: string
@@ -592,18 +665,20 @@ function EditModal({ item, placeholder, groups, groupId, onSetGroup, onClose, on
   // client. Compare on the RGB prefix instead, and keep the original intact.
   const [color, setColor] = useState<string | null>(item.color)
   const [confirming, setConfirming] = useState(false)
-  const isSwatch = (c: string) => color?.slice(0, 7).toLowerCase() === c.toLowerCase()
-  // Eight presets run out once you keep more than eight collections, and a color
-  // another CalDAV client wrote is rarely one of ours — so anything set that is
-  // not a preset belongs to the custom square, which is what makes exactly one
-  // of the row read as selected.
-  const isCustom = color !== null && !SWATCHES.some(isSwatch)
 
   const save = () => {
     // Send the color only when the user actually picked one, so a rename never
-    // rewrites a color it merely displayed.
+    // rewrites a color it merely displayed — case-insensitively, now that a
+    // control reporting lower-case can set it. The picker is seeded with a
+    // lowered hex (it accepts nothing else), so confirming or cancelling on the
+    // colour a list already had comes back as `#d9480f` against a stored
+    // `#D9480F`, and a bare !== would PROPPATCH that case flip out to every
+    // other client as though it were a real recolour.
     const body: { name?: string; color?: string | null } = { name: name.trim() || item.name }
-    if (color !== item.color) body.color = color
+    const same = color === item.color
+      || (color !== null && item.color !== null
+        && color.toLowerCase() === item.color.toLowerCase())
+    if (!same) body.color = color
     onSave(item.id, body)
   }
 
@@ -622,33 +697,7 @@ function EditModal({ item, placeholder, groups, groupId, onSetGroup, onClose, on
         </div>
         <div className="field">
           <label className="label">Color</label>
-          <div className="color-row">
-            <button className={`color-dot none ${color === null ? 'on' : ''}`} title="No color"
-              onClick={() => setColor(null)}>✕</button>
-            {SWATCHES.map((c) => (
-              <button key={c} className={`color-dot ${isSwatch(c) ? 'on' : ''}`}
-                style={{ background: c }} title={c} onClick={() => setColor(c)} />
-            ))}
-            {/* The escape hatch past the presets. Native rather than a drawn
-                picker: it is the browser's, so it brings a hex field and an
-                eyedropper for free, and it is what AppearancePanel already uses.
-                The input is wrapped rather than styled directly because it always
-                paints its own value, and its value has to stay the current color
-                so the picker opens where you already are — painting that would
-                just duplicate whichever preset is lit two squares over. So the
-                label carries the fill and the input goes invisible on top of it.
-                It takes exactly `#rrggbb`: anything longer or upper-case is
-                sanitized by the DOM, which then fights the value React writes
-                back, so trim and lower it here while `color` keeps it whole.
-                Picking drops any alpha byte on purpose — an explicit choice
-                replaces the old value rather than inheriting its transparency. */}
-            <label className={`color-dot custom ${isCustom ? 'on' : ''}`} title="Custom color"
-              style={isCustom ? { background: color.slice(0, 7) } : undefined}>
-              <input type="color" aria-label="Custom color"
-                value={(cssColor(color)?.slice(0, 7) ?? '#808080').toLowerCase()}
-                onChange={(e) => setColor(e.target.value)} />
-            </label>
-          </div>
+          <ColorRow color={color} onPick={setColor} />
         </div>
         {groups && onSetGroup && (
           <div className="field">
