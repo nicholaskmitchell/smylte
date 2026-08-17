@@ -32,7 +32,7 @@ gone". Re-scope them before working them.
 Ticked findings keep their original references, which point into the tree as it
 was when they were filed. They are history, not navigation.
 
-**22 open**, all from the 2026-08-07 sweep. Nothing from 2026-08-16 is open. The
+**17 open**, all from the 2026-08-07 sweep. Nothing from 2026-08-16 is open. The
 evidence stays here — a ticked box records what the bug was and why it mattered,
 and the issues that link into these sections still resolve.
 
@@ -43,7 +43,8 @@ code, and the tick here. Done so far: **#45 (auth, session lifetime and request
 limits)**, six findings including the sweep's remaining HIGH; **#42 (the
 unauthenticated booking write path)**, six plus the `expand_occurrences`
 truncation from #44, which is the same defect one layer down; **#46 (frontend
-time correctness)**, six including the sweep's other HIGH.
+time correctness)**, six including the sweep's other HIGH; **#43 (iCalendar
+series editing)**, five.
 
 The 2026-08-16 sweep was closed in stages (`docs/STAGES.md`), each pinned by
 tests that failed until the finding was fixed. **All five stages are done** — the
@@ -2454,7 +2455,20 @@ keeps its span across an edit (and the write omits `end` entirely when the span
 cannot be derived), `bucketByDay` orders a cell by the instant each start names
 rather than by the wire string, `j()` renders a pydantic 422 as readable text
 instead of "[object Object]", and the two `hooks.ts` findings closed by deleting
-dead code and covering what was left. **22 open.**
+dead code and covering what was left.
+
+**Cluster #43 — iCalendar series editing — closed 5.** All five were the repo's
+own invariant #2 failing in a different way: never lose what another client
+authored. An UNTIL is now shifted in the series' own zone rather than in UTC, so
+dragging a bounded zone-aware series across a DST edge no longer drops its last
+occurrence; deleting one occurrence no longer destroys a `RANGE=THISANDFUTURE`
+override and with it every later occurrence's values; `split_series` rejects an
+all-day/timed switch with the same ValueError `shift_series` raises (a clean 422
+rather than an unhandled TypeError); `_event_duration` goes through
+`_comparable`, so a mixed-type or mixed-awareness DTSTART/DTEND no longer makes
+an event permanently uneditable; and a split at the first occurrence returns no
+head at all, so the engine DELETEs the resource instead of leaving a husk that
+expands to nothing and can never be removed. **17 open.**
 
 
 ### HTTP API surface
@@ -2966,7 +2980,7 @@ answers when `list_collections`/`sync_collection` raise.
 
 ### iCalendar edit path
 
-#### [ ] shift_series moves a UTC UNTIL by the wall-clock delta, so dragging a zone-aware bounded series across a DST edge silently deletes its last occurrence(s)
+#### [x] shift_series moves a UTC UNTIL by the wall-clock delta, so dragging a zone-aware bounded series across a DST edge silently deletes its last occurrence(s)
 
 `backend/tasksd/ical/edit.py:777` (`_shift_rrule`) · **medium** · bug
 
@@ -3018,7 +3032,7 @@ applies to DTSTART. Leave floating and DATE-valued UNTILs on the current path. A
 regression test asserting that a 7-day drag of a UNTIL-bounded America/Chicago series
 across the 2026-11-01 fall-back keeps the same number of occurrences.
 
-#### [ ] Deleting one occurrence destroys a RANGE=THISANDFUTURE override, silently reverting every later occurrence to the master
+#### [x] Deleting one occurrence destroys a RANGE=THISANDFUTURE override, silently reverting every later occurrence to the master
 
 `backend/tasksd/ical/edit.py:639` (`exclude_occurrence`) · **medium** · bug · `minor`
 
@@ -3072,7 +3086,7 @@ str(c.get("RECURRENCE-ID").params.get("RANGE", "")).upper() != "THISANDFUTURE"` 
 drop predicate. Add a test that deletes the override's own slot and asserts the later
 occurrences keep their overridden start and summary.
 
-#### [ ] split_series lacks the all-day <-> timed guard shift_series has, so toggling "all day" and saving "This and following" is an unhandled TypeError (500)
+#### [x] split_series lacks the all-day <-> timed guard shift_series has, so toggling "all day" and saving "This and following" is an unhandled TypeError (500)
 
 `backend/tasksd/ical/edit.py:983` (`split_series`) · **medium** · bug · `minor`
 
@@ -3128,7 +3142,7 @@ isinstance(edit.dtstart, datetime)`, raise the same ValueError ("cannot switch a
 between all-day and timed…") so the route answers 422. Cover both directions with a
 test.
 
-#### [ ] _event_duration subtracts DTEND-DTSTART with no tolerance for mixed value types or awareness, so one malformed foreign event becomes permanently uneditable (500)
+#### [x] _event_duration subtracts DTEND-DTSTART with no tolerance for mixed value types or awareness, so one malformed foreign event becomes permanently uneditable (500)
 
 `backend/tasksd/ical/edit.py:582` (`_event_duration`) · **low** · bug
 
@@ -3175,7 +3189,7 @@ mismatch degrades to a wall-clock span instead of raising. Add a fidelity/regres
 case with a mixed-type DTSTART/DTEND master driven through split_series and
 apply_occurrence_override.
 
-#### [ ] "This and following" on the FIRST occurrence writes a head whose UNTIL precedes its own DTSTART, leaving an undeletable empty resource behind forever
+#### [x] "This and following" on the FIRST occurrence writes a head whose UNTIL precedes its own DTSTART, leaving an undeletable empty resource behind forever
 
 `backend/tasksd/ical/edit.py:1007` (`split_series`) · **low** · bug
 

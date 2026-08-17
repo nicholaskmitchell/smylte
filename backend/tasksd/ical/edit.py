@@ -580,9 +580,21 @@ def _at_or_after(a, anchor) -> bool:
 
 
 def _event_duration(master: Event):
+    """The event's span, tolerating the shapes a foreign client can write.
+
+    Every other datetime helper in this file deliberately survives a mismatched
+    pair — `_wall_delta` handles mixed tz-awareness, `_comparable` drops to wall
+    clock rather than raising, `_shift_value` handles PERIOD tuples. This was
+    the one left doing a raw subtraction, and it sits on BOTH per-occurrence
+    write paths. A DTSTART/DTEND that disagree on value type (DATE vs
+    DATE-TIME) or on awareness (`DTSTART;TZID=…` beside a floating DTEND) —
+    both writable through Radicale by anything sharing the collection — raised
+    TypeError, which the routes do not map (they translate ValueError to 422),
+    so it escaped as a 500 and the event could never be edited again."""
     ds, de, dur = master.get("DTSTART"), master.get("DTEND"), master.get("DURATION")
     if ds is not None and de is not None:
-        return de.dt - ds.dt
+        start, end = _comparable(ds.dt, de.dt)
+        return end - start
     if dur is not None:
         return dur.dt
     return None
@@ -640,7 +652,18 @@ def exclude_occurrence(
     raw: bytes | str, recurrence_id: str, *, now: datetime | None = None
 ) -> bytes:
     """Delete one instance ("this event"): add EXDATE to the master for the slot
-    and drop any override that had moved/edited it."""
+    and drop any override that had moved/edited it.
+
+    A `RANGE=THISANDFUTURE` override is the exception, and it is why the drop
+    predicate below is not just "same RECURRENCE-ID". RFC 5545 §3.2.13 makes
+    such a component carry the edits for its own slot AND every later one —
+    Apple Calendar's and Thunderbird's "this and all future events", a shape
+    this repo explicitly supports (see `recur._thisandfuture_shifts`). Removing
+    it to delete a single occurrence threw away the times, summary, location
+    and everything else a foreign client had authored for all subsequent
+    occurrences, which silently snapped back to the master's values. The EXDATE
+    alone already removes the instance the user asked about, and leaves the
+    later ones covered."""
     now = now or datetime.now(timezone.utc)
     cal = Calendar.from_ical(raw)
     master = _find_master_event(cal)
@@ -654,6 +677,7 @@ def exclude_occurrence(
             getattr(c, "name", "") == "VEVENT"
             and c.get("RECURRENCE-ID") is not None
             and _same_instant(c.get("RECURRENCE-ID").dt, anchor)
+            and not _is_thisandfuture(c.get("RECURRENCE-ID"))
         )
     ]
     _stamp(master, now)
@@ -764,6 +788,31 @@ def _shift_datelist(event: Event, key: str, delta: timedelta) -> None:
     _rebuild_datelist(event, key, lambda v: _shift_value(v, delta))
 
 
+def _shift_until(until, delta: timedelta, master: Event):
+    """Move an UNTIL by `delta` measured in the series' OWN zone.
+
+    `delta` is a wall-clock offset — the same one DTSTART is shifted by, and
+    DTSTART is usually zone-aware (TZID), so its UTC instant moves by
+    `delta ± the DST change`. UNTIL, though, is required to be UTC for a
+    zone-aware rule (`_coerce_until` normalises it there), and adding the same
+    wall-clock delta to a UTC instant moves it by exactly `delta`. When the
+    shift carries the series across a DST transition the two disagree by an
+    hour and UNTIL lands BEFORE the final generated occurrence, which is then
+    silently dropped — the user drags a bounded series a week and quietly loses
+    its last event. Nothing downstream repairs it: `_set_rrule`/`_coerce_until`
+    pass an already-UTC UNTIL through unchanged.
+
+    So re-express UNTIL in the series' zone, add the wall-clock delta there, and
+    convert back — the same discipline `_shift_value` applies to DTSTART.
+    Floating and DATE-valued UNTILs are already wall clock and keep the old
+    path."""
+    dtstart = master.get("DTSTART")
+    zone = getattr(getattr(dtstart, "dt", None), "tzinfo", None)
+    if zone is None or not isinstance(until, datetime) or until.tzinfo is None:
+        return until + delta
+    return (until.astimezone(zone) + delta).astimezone(timezone.utc)
+
+
 def _shift_rrule(master: Event, delta: timedelta, day_delta: int) -> None:
     """UNTIL moves with the series (preserving the occurrence count), and a
     WEEKLY BYDAY list rotates with the day offset so "every Mon" dragged one
@@ -774,7 +823,7 @@ def _shift_rrule(master: Event, delta: timedelta, day_delta: int) -> None:
         return
     changed = False
     if "UNTIL" in rule:
-        rule["UNTIL"] = [u + delta for u in rule["UNTIL"]]
+        rule["UNTIL"] = [_shift_until(u, delta, master) for u in rule["UNTIL"]]
         changed = True
     freq = [str(f).upper() for f in rule.get("FREQ", [])]
     if day_delta % 7 and "WEEKLY" in freq and "BYDAY" in rule:
@@ -887,6 +936,13 @@ _MASTER_OWNS = frozenset({
 })
 
 
+def _is_thisandfuture(rid) -> bool:
+    """Does this RECURRENCE-ID govern every later occurrence too (RFC 5545
+    §3.2.13)? One place, because getting it wrong in either direction loses
+    another client's edits."""
+    return rid is not None and str(rid.params.get("RANGE", "")).upper() == "THISANDFUTURE"
+
+
 def _governing_thisandfuture(cal: Calendar, anchor):
     """The ``RANGE=THISANDFUTURE`` override that governs `anchor`, if any.
 
@@ -899,7 +955,7 @@ def _governing_thisandfuture(cal: Calendar, anchor):
     best = None
     for c in cal.walk("VEVENT"):
         rid = c.get("RECURRENCE-ID")
-        if rid is None or str(rid.params.get("RANGE", "")).upper() != "THISANDFUTURE":
+        if not _is_thisandfuture(rid):
             continue
         if _at_or_after(rid.dt, anchor):
             continue
@@ -982,11 +1038,16 @@ def _count_consumed(rule: dict, dtstart: date | datetime, anchor) -> int:
 
 def split_series(
     raw: bytes | str, recurrence_id: str, edit: EventEdit, *, now: datetime | None = None
-) -> tuple[bytes, bytes]:
+) -> tuple[bytes | None, bytes]:
     """Split a series at `recurrence_id` ("this and following"). Returns
     (head_ics, tail_ics): the head is the original resource with its rule bounded
     to end just before the anchor; the tail is a brand-new resource (new UID)
     starting at the anchor with the remaining recurrence and the edits applied.
+
+    The head is **None** when the split leaves it generating nothing — the
+    anchor is the series' first occurrence — because a bounded-to-empty VEVENT
+    is not something to write. The caller deletes the resource instead; see
+    `_head_is_empty`.
     A COUNT-bounded rule keeps its overall length: the tail's COUNT is the
     original minus the occurrences the head consumed. RDATE/EXDATE entries are
     partitioned by the anchor alongside the overrides.
@@ -1001,6 +1062,19 @@ def split_series(
     if hmaster is None:
         raise NotEditable("resource has no VEVENT to edit")
     anchor = _anchor_from_iso(recurrence_id, hmaster)
+    # The same guard shift_series has, for the same reason. Without it
+    # `_wall_delta(edit.dtstart, base)` below subtracts a `date` from a
+    # `datetime` and raises TypeError, which `patch_event` does not map (it
+    # catches ValueError), so it escaped as a 500. The SPA reaches this in one
+    # click: the modal renders the "all day" checkbox for a recurring event too,
+    # and a non-'all' scope sends a bare date string with no all_day flag.
+    if edit.dtstart is not UNSET and edit.dtstart is not None and (
+        isinstance(anchor, datetime) != isinstance(edit.dtstart, datetime)
+    ):
+        raise ValueError(
+            "cannot switch a series between all-day and timed with 'this and following'; "
+            "edit single occurrences instead"
+        )
     rule = _rrule_dict(hmaster)
     if rule is not None:
         rule.pop("COUNT", None)
@@ -1124,4 +1198,37 @@ def split_series(
     _apply_event_fields(tmaster, replace(edit, dtstart=UNSET, dtend=UNSET), now)
     if repeat_changed:
         _reconcile_overrides(tail, tmaster)
-    return head.to_ical(), tail.to_ical()
+    return (None if _head_is_empty(head, anchor) else head.to_ical()), tail.to_ical()
+
+
+def _head_is_empty(head: Calendar, anchor) -> bool:
+    """Would the bounded head generate nothing at all?
+
+    The head is always bounded with `UNTIL = anchor - 1s` (or -1 day for
+    all-day). When the anchor IS the series' first occurrence that UNTIL is
+    earlier than the head's own DTSTART, so its recurrence set is empty — and
+    PUTting it left a VEVENT on Radicale, and a cache row, that expands to zero
+    occurrences forever: `events_in_range` never emits it, so the app can never
+    render or delete it again. For "delete this and following" from the first
+    occurrence — the natural way to remove a whole series from an occurrence
+    chip — the server answered 204 and the SPA cleared the rows while nothing
+    had actually been deleted.
+
+    A surviving RDATE before the anchor still generates an occurrence, so the
+    head is only empty when there is none.
+    """
+    master = _find_master_event(head)
+    if master is None:
+        return True
+    dtstart = master.get("DTSTART")
+    if dtstart is None:
+        return False
+    if not _at_or_after(dtstart.dt, anchor):
+        return False        # the rule still generates occurrences before the split
+    rdates = master.get("RDATE")
+    for prop in (rdates if isinstance(rdates, list) else [rdates] if rdates else []):
+        for value in getattr(prop, "dts", []):
+            start = _period_start(value.dt)
+            if not _at_or_after(start, anchor):
+                return False
+    return True
