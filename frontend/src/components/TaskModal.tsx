@@ -9,7 +9,7 @@
 
 import { useRef, useState, type KeyboardEvent } from 'react'
 import type { CreateTaskBody, List, Task } from '../api'
-import { dayKey, hasZone, instantFromLocal, toLocalInput } from '../util'
+import { dayKey, hasZone, instantFromLocal, sameValue, toLocalInput } from '../util'
 import { inputLang } from '../time'
 import { useTimeFormat } from '../timeformat'
 import { blankValues, bodyFrom, FIELDS, type RowValues } from './AddMultipleModal'
@@ -76,11 +76,8 @@ export function TaskModal({ task, lists, defaultList, initialTitle, onClose, onC
   // authored. Compared against the opening values rather than tracked as
   // "touched": a field edited and then put back is unchanged, and sending it
   // would quantise a PRIORITY:3 the four-way picker can only render as "high".
-  const same = (a: string | string[], b: string | string[]) =>
-    Array.isArray(a) && Array.isArray(b)
-      ? a.length === b.length && a.every((x, i) => x === b[i])
-      : a === b
-  const changed = (...keys: (keyof RowValues)[]) => keys.some((k) => !same(vals[k], start[k]))
+  const changed = (...keys: (keyof RowValues)[]) =>
+    keys.some((k) => !sameValue(vals[k], start[k]))
   const patch = (p: Partial<RowValues>) => setVals((v) => ({ ...v, ...p }))
 
   // The list picker only makes sense while creating: moving an existing task

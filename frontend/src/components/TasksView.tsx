@@ -85,7 +85,13 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
   // toggling one off is an instant client-side filter (no refetch).
   const hiddenSet = useMemo(() => new Set(hiddenLists), [hiddenLists])
   const visibleLists = useMemo(() => lists.filter((l) => !hiddenSet.has(l.id)), [lists, hiddenSet])
-  const colorOf = (listId: string) => lists.find((l) => l.id === listId)?.color ?? null
+  // Indexed once, not re-scanned per row. This view fetches every list with
+  // include_done=true, so `tasks` holds every completed task the account has
+  // ever had — a linear `lists.find` per rendered row made the cost grow with
+  // total history rather than with what is on screen.
+  const colorByList = useMemo(
+    () => new Map(lists.map((l) => [l.id, l.color ?? null] as const)), [lists])
+  const colorOf = useCallback((listId: string) => colorByList.get(listId) ?? null, [colorByList])
 
   // Prune settings that reference lists (or groups) that no longer exist, so a
   // deletion here or in another CalDAV client doesn't leave the blob accreting
@@ -316,9 +322,31 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
   // (respecting hidden lists via `done`), most-recent due first, undated last.
   // The dated ones are reversed; the undated are appended rather than swept
   // along, since reversing the whole run would float them to the top.
+  //
+  // It needs its own top-level set rather than reusing `done`. `tops` calls a
+  // task top-level when its parent is not RENDERED, and `rendersUnder` consults
+  // the global `showCompleted` flag — but this pane shows done tasks regardless
+  // of that flag. So with the default showCompleted={false} a completed child
+  // of a completed parent was promoted to a row of its own, sitting beside the
+  // parent it belongs under, and the tree the pane is meant to show was flat.
+  const completedTops = shownTasks.filter((t) => {
+    if (!isDone(t)) return false
+    const p = parentOf(t)
+    const parent = p ? byUid.get(p) : undefined
+    return !(parent && isDone(parent))
+  })
+  const completedKids = useCallback((uid: string) => {
+    const kids = shownTasks.filter((t) => {
+      if (!isDone(t)) return false
+      const p = parentOf(t)
+      return p === uid
+    })
+    return sortTasks(kids)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tasks, hiddenSet, parentByUid])
   const completedTasks = [
-    ...sortTasks(done.filter((t) => t.due)).reverse(),
-    ...sortTasks(done.filter((t) => !t.due)),
+    ...sortTasks(completedTops.filter((t) => t.due)).reverse(),
+    ...sortTasks(completedTops.filter((t) => !t.due)),
   ]
   const openOn = (key: string) =>
     sortTasks(shownTasks.filter((t) => !t.completed && !t.cancelled && dueDay(t) === key))
@@ -383,7 +411,7 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
           <div className="scroll">
             {completedTasks.length === 0 && <div className="empty">No completed tasks.</div>}
             {completedTasks.map((t) => (
-              <TaskGroup key={t.uid} task={t} childrenOf={childrenOf} dot={dotFor(t)}
+              <TaskGroup key={t.uid} task={t} childrenOf={completedKids} dot={dotFor(t)}
                 progressOf={progressOf} collapsed={collapsedSet} onCollapse={setCollapsed}
                 onToggle={toggle} onRemove={remove} onOpen={setDetail} onAddSub={addSub} />
             ))}

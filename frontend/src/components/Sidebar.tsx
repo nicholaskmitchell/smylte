@@ -126,14 +126,23 @@ export function Sidebar({ title, placeholder, items, sel = '', countOf, onSelect
   const remove = async (id: string) => {
     setEditing(null)
     const prev = items
+    const prevGroups = groups
     const left = items.filter((l) => l.id !== id)
     onItems(left)
     if (canSelect && sel === id) onSelect?.(left[0]?.id || '')
     // Drop the deleted list out of any group so the stored blob stays tidy.
-    if (groupsOn && groups!.some((g) => g.lists.includes(id))) {
+    const regrouped = groupsOn && groups!.some((g) => g.lists.includes(id))
+    if (regrouped) {
       onGroupsChange!(groups!.map((g) => ({ ...g, lists: g.lists.filter((x) => x !== id) })))
     }
-    if ((await api.remove(id)) === undefined) onItems(prev)
+    if ((await api.remove(id)) === undefined) {
+      // Roll back BOTH. `onGroupsChange` is written straight through to the
+      // server by App, so only restoring `items` brought the list back
+      // ungrouped — with the loss already persisted, and nothing left to
+      // undo it from.
+      onItems(prev)
+      if (regrouped) onGroupsChange!(prevGroups!)
+    }
   }
 
   const drop = (targetId: string) => {

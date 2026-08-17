@@ -227,6 +227,66 @@ describe('<Sidebar> group dividers', () => {
   })
 })
 
+// ── a failed delete has to put back everything it took ──────────────────────
+
+describe('<Sidebar> a delete that fails', () => {
+  const withGroups = (over: {
+    api?: { create: unknown; update: unknown; remove: unknown; reorder: unknown }
+    onItems?: (next: List[]) => void
+    onGroupsChange?: (next: TaskGroup[]) => void
+    groups?: TaskGroup[]
+  }) => (
+    <Sidebar title="Lists" placeholder="List"
+      items={[list('work', 'Work'), list('home', 'Home')]}
+      countOf={(l) => l.open_count} onItems={over.onItems ?? (() => {})}
+      api={(over.api ?? noopApi) as typeof noopApi}
+      hiddenIds={new Set()} onHiddenChange={() => {}}
+      groups={over.groups ?? [{ id: 'g1', name: 'Focus', lists: ['work', 'home'] }]}
+      onGroupsChange={over.onGroupsChange ?? (() => {})}
+      collapsedGroups={[]} onCollapsedGroupsChange={() => {}} />
+  )
+
+  const deleteHome = async () => {
+    await userEvent.click(screen.getByRole('button', { name: 'Edit Home' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    await userEvent.click(screen.getByRole('button', { name: /Really delete/ }))
+  }
+
+  it('restores the group membership, not just the list', async () => {
+    // `remove` strips the list out of every group and calls onGroupsChange —
+    // which App writes straight through to the server — BEFORE awaiting the
+    // DELETE. Only `items` was rolled back, so a failed delete brought the list
+    // back UNGROUPED, with the loss already persisted server-side and nothing
+    // left to undo it from.
+    const groups: TaskGroup[] = [{ id: 'g1', name: 'Focus', lists: ['work', 'home'] }]
+    const api = { ...noopApi, remove: vi.fn(async () => undefined) }
+    const onItems = vi.fn()
+    const onGroupsChange = vi.fn()
+    render(withGroups({ api, onItems, onGroupsChange, groups }))
+
+    await deleteHome()
+
+    expect(api.remove).toHaveBeenCalledWith('home')
+    // Optimistic strip, then the rollback — both halves.
+    expect(onGroupsChange.mock.calls.map((c) => c[0])).toEqual([
+      [{ id: 'g1', name: 'Focus', lists: ['work'] }],
+      groups,
+    ])
+    expect(onItems).toHaveBeenLastCalledWith([list('work', 'Work'), list('home', 'Home')])
+  })
+
+  it('leaves the groups alone when the delete succeeds', async () => {
+    const api = { ...noopApi, remove: vi.fn(async () => null) }
+    const onGroupsChange = vi.fn()
+    render(withGroups({ api, onGroupsChange }))
+
+    await deleteHome()
+
+    expect(onGroupsChange).toHaveBeenCalledTimes(1)
+    expect(onGroupsChange.mock.calls[0][0]).toEqual([{ id: 'g1', name: 'Focus', lists: ['work'] }])
+  })
+})
+
 describe('the "All" swatch ring', () => {
   it('reproduces the gradient it replaced in app.css exactly', () => {
     // The ring used to be a second, hand-written copy of the palette in CSS.

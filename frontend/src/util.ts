@@ -94,3 +94,22 @@ export function addDays(d: Date, n: number): Date {
   x.setDate(x.getDate() + n)
   return x
 }
+
+/** Value equality for a row/slot value, which may be a string or a string[].
+ *
+ * Shared because `===` on the array-valued slots is a REFERENCE comparison, and
+ * two of the places that ask "did this change?" were silently always answering
+ * yes (or always no) for tags because of it. One definition, so a third caller
+ * cannot drift from the other two.
+ *
+ * A string on one side and an array on the other is not equal — the callers
+ * only ever compare a slot against another value for the same slot, so that
+ * pairing means something has already gone wrong.
+ */
+export function sameValue(a: string | string[], b: string | string[]): boolean {
+  if (Array.isArray(a) || Array.isArray(b)) {
+    return Array.isArray(a) && Array.isArray(b)
+      && a.length === b.length && a.every((x, i) => x === b[i])
+  }
+  return a === b
+}

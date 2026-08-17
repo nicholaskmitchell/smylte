@@ -32,7 +32,7 @@ gone". Re-scope them before working them.
 Ticked findings keep their original references, which point into the tree as it
 was when they were filed. They are history, not navigation.
 
-**12 open**, all from the 2026-08-07 sweep. Nothing from 2026-08-16 is open. The
+**6 open**, all from the 2026-08-07 sweep. Nothing from 2026-08-16 is open. The
 evidence stays here — a ticked box records what the bug was and why it mattered,
 and the issues that link into these sections still resolve.
 
@@ -45,7 +45,8 @@ unauthenticated booking write path)**, six plus the `expand_occurrences`
 truncation from #44, which is the same defect one layer down; **#46 (frontend
 time correctness)**, six including the sweep's other HIGH; **#43 (iCalendar
 series editing)**, five; **#44 (recurrence expansion, cache integrity and
-startup)**, its remaining five.
+startup)**, its remaining five; **#47 (tasks view and bulk add)**, five plus the
+one open finding that belonged to no issue.
 
 The 2026-08-16 sweep was closed in stages (`docs/STAGES.md`), each pinned by
 tests that failed until the finding was fixed. **All five stages are done** — the
@@ -2482,7 +2483,17 @@ an unreachable Radicale no longer takes startup down with it;
 `_thisandfuture_shifts` — and `edit._tf_shift`, its write-path twin with the
 identical gap — guard tz-awareness as well as dateness; and `discover` reports
 whether the live collection set moved, so a list deleted on another device
-finally reaches the open tab. **12 open.**
+finally reaches the open tab.
+
+**Cluster #47 — tasks view and bulk add — closed 6**, including the
+day-column-drag test gap that was in no cluster issue. Two of the six needed
+re-scoping first (see their entries): main's 2026-08-14 merge had already taken
+the duplicate row and the `childrenOf` rescan, leaving a flattened tree and a
+per-row `colorOf` scan respectively. The rest as filed: a multi-line paste
+regenerates the row's idempotency id, `toggleShared` compares slot values by
+value (a shared `sameValue` in util.ts, replacing the copy in TaskModal), and a
+failed list delete restores the group membership as well as the list. **6
+open.**
 
 
 ### HTTP API surface
@@ -4198,9 +4209,18 @@ is what commits; (3) an AuthError from either call invokes `onExpire` exactly on
 
 ### Tasks view
 
-#### [ ] "View completed" renders a completed subtask twice — once as a top-level row and again nested under its parent
+#### [x] "View completed" renders a completed subtask twice — once as a top-level row and again nested under its parent
 
 `frontend/src/components/TasksView.tsx:257` (`tops`) · **medium** · rendering · `minor`
+
+**Re-scoped, then fixed.** The duplicate is gone — `kidRows` (main's 2026-08-14
+merge) only nests a task whose parent IS rendered, so the completed child was no
+longer emitted twice. What survived is the other half of the same cause: it was
+promoted to a top-level row *instead* of being nested, so the pane sat the child
+beside the parent it belongs under and showed a flat list where a tree was
+intended. The pane now has its own top-level set and its own children lookup,
+neither of which consults `showCompleted` — which is the flag that never applied
+to it in the first place.
 
 `tops` treats a task as top-level when its parent is not rendered, and
 `parentIsRendered` uses the global `showCompleted` flag: `return !!p && (showCompleted
@@ -4243,7 +4263,7 @@ completedTops = shownTasks.filter((t) => isDone(t) && !(t.parent && byUid.get(t.
 && isDone(byUid.get(t.parent)!)))` and sort that. Add a test asserting
 `getAllByText('Book flight')` has length 1 in the pane.
 
-#### [ ] A multi-line paste retitles a bulk row but keeps its client_id, so retrying after a lost response silently discards the new title
+#### [x] A multi-line paste retitles a bulk row but keeps its client_id, so retrying after a lost response silently discards the new title
 
 `frontend/src/components/AddMultipleModal.tsx:341` (`onPasteTitle`) · **medium** · bug · `minor`
 
@@ -4281,7 +4301,7 @@ Reproduced (vitest): submit row 1 "alpha" -> onSubmit reports index 0 failed -> 
 "mints a new client_id when the row is retitled before the retry" test with a paste-
 driven retitle.
 
-#### [ ] Turning Tags into a shared property silently drops the tag already typed into a row (array compared by reference)
+#### [x] Turning Tags into a shared property silently drops the tag already typed into a row (array compared by reference)
 
 `frontend/src/components/AddMultipleModal.tsx:382` (`toggleShared`) · **medium** · bug · `minor`
 
@@ -4315,9 +4335,16 @@ Second consequence of the same reference compare: `donor` matches rows[0] uncond
 i) => x === b[i]) : a === b`, then use `eq` in both the `donor` find and the `every`
 guard. Add the Tags case to the adoption test.
 
-#### [ ] Test gap: day-column drag-to-reschedule has no coverage at all, though it writes a DUE to a real CalDAV resource
+#### [x] Test gap: day-column drag-to-reschedule has no coverage at all, though it writes a DUE to a real CalDAV resource
 
 `frontend/src/components/TasksView.tsx:150` (`dropOnDay`) · **medium** · test-gap
+
+**Partly overtaken, then completed.** A `day-column drag` suite landed with
+main's 2026-08-14 merge covering the two write shapes (zone-anchored due, all-day
+due). What it did not cover was what `dropOnDay` DECIDES before writing, so this
+pass added the rest: the time of day surviving a column move, a drop on the
+task's own column writing nothing, and a drop that resolves no task writing
+nothing.
 
 `dropOnDay` is the only drag-driven write in the Tasks view — a drop mutates DUE on the
 user's real task list — and neither it nor the surrounding `DayColumn`/`DayCard` surface
@@ -4357,7 +4384,7 @@ issues no PATCH; (d) a rejected PATCH restores the original due in the DOM; (e) 
 due before the window pools under the "Overdue" label in the today column and is counted
 once.
 
-#### [ ] A failed list delete restores the list but permanently loses its group membership
+#### [x] A failed list delete restores the list but permanently loses its group membership
 
 `frontend/src/components/Sidebar.tsx:126` (`remove`) · **low** · bug · `minor`
 
@@ -4400,11 +4427,14 @@ cleanup until after the DELETE resolves: `const prevGroups = groups; ... if ((aw
 api.remove(id)) === undefined) { onItems(prev); if (groupsOn)
 onGroupsChange!(prevGroups!) }`.
 
-#### [ ] The merged all-lists pane does an O(n²) scan per render (childrenOf) plus an O(n·m) lookup per row
+#### [x] The merged all-lists pane does an O(n²) scan per render (childrenOf) plus an O(n·m) lookup per row
 
 `frontend/src/components/TasksView.tsx:88` (`colorOf`) · **low** · bug · `minor`
 
-**Partly overtaken.** The `childrenOf` half is gone — it is a memoised `kidRows` Map lookup as of main's 2026-08-14 merge, not a per-row rescan. `colorOf` is unchanged and still scans `lists` for every rendered row, so the O(n·m) half stands. Re-scope before working this.
+**Partly overtaken; the surviving half is fixed.** The `childrenOf` half was
+already gone — a memoised `kidRows` Map lookup as of main's 2026-08-14 merge,
+not a per-row rescan. `colorOf` still scanned `lists` for every rendered row;
+it is now a `Map` built once under `useMemo`.
 
 `childrenOf` re-scans the whole task array for every rendered top-level row, and
 `colorOf` re-scans the lists array for every row. Because the view fetches every list
