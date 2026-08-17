@@ -66,6 +66,25 @@
 
 	# Everything else -> the Tasks + Calendar web app.
 	handle {
+		# NO Content-Security-Policy here, deliberately. The app sets one itself
+		# (tasksd/csp.py), and it has to: the policy carries a sha256 of the
+		# SPA's inline pre-paint script, derived at startup from the index.html
+		# actually being served, which nothing at this layer can know. Adding a
+		# second policy here would not harden anything — browsers enforce the
+		# INTERSECTION of every policy on a response, so the two would combine
+		# into one that neither file describes, and the symptom is a blank page.
+		# To relax or disable it, set TASKS_CSP in /etc/tasks/tasks.env.
+
+		# Refuse an oversized body at the edge, before the app allocates for it.
+		# /api/login and the public booking POST are anonymous, and FastAPI
+		# buffers a request body before any of their rate limiters run, so an
+		# unbounded body is an unauthenticated memory amplifier. The app carries
+		# the same cap in-process (tasksd/limits.py); this one keeps the bytes
+		# off the box entirely. Nothing the app accepts is near 1 MB.
+		request_body {
+			max_size 1MB
+		}
+
 		reverse_proxy 127.0.0.1:8080 {
 			# The app rate-limits per client IP and trusts X-Real-IP only from a
 			# loopback peer (that's us). Set it from Cloudflare's edge-verified

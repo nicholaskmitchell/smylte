@@ -65,6 +65,12 @@ def init_db(conn: sqlite3.Connection) -> None:
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(collections)")}
     if "ord" not in cols:
         conn.execute("ALTER TABLE collections ADD COLUMN ord INTEGER")
+    item_cols = {r["name"] for r in conn.execute("PRAGMA table_info(items)")}
+    if "fts_rowid" not in item_cols:
+        # Rows written before this column keep NULL and fall back to the old
+        # scoped delete, so no rebuild is needed; they pick up a rowid the next
+        # time they are upserted.
+        conn.execute("ALTER TABLE items ADD COLUMN fts_rowid INTEGER")
 
 
 # ── collections ──────────────────────────────────────────────────────────────
@@ -198,8 +204,9 @@ def _evict_uid(conn: sqlite3.Connection, collection_href: str, uid: str) -> None
     href starts carrying a different UID: the old UID is gone from that resource,
     so its cache state must go with it, but the sidecar is only *marked* (never
     deleted here) — gc_orphans owns that, and only off a complete enumeration."""
+    # FTS first: the rowid it deletes by lives on the items row.
+    _fts_delete(conn, collection_href, uid)
     conn.execute("DELETE FROM items WHERE collection_href=? AND uid=?", (collection_href, uid))
-    conn.execute("DELETE FROM items_fts WHERE collection_href=? AND uid=?", (collection_href, uid))
     conn.execute("DELETE FROM categories WHERE collection_href=? AND uid=?", (collection_href, uid))
     orphan_sidecar(conn, collection_href, uid)
 
@@ -226,6 +233,10 @@ def upsert_item(
         (collection_href, item.href, fields.uid),
     ).fetchall():
         _evict_uid(conn, collection_href, stale["uid"])
+    # Read the FTS bookkeeping BEFORE the upsert: afterwards the row always
+    # exists, so "was this item already cached?" is no longer answerable — and
+    # that answer is what lets a first sync skip the delete entirely.
+    prior = _fts_rowid(conn, collection_href, fields.uid)
     conn.execute(
         """INSERT INTO items (collection_href, uid, href, etag, raw_ics, component, summary,
              description, status, priority, percent_complete, completed, due,
@@ -261,7 +272,7 @@ def upsert_item(
         "INSERT OR IGNORE INTO categories (collection_href, uid, category) VALUES (?,?,?)",
         [(collection_href, fields.uid, c) for c in fields.categories],
     )
-    _fts_replace(conn, collection_href, fields)
+    _fts_replace(conn, collection_href, fields, prior)
     # The UID is present on the wire again; if it was an orphan, un-orphan it.
     conn.execute(
         "UPDATE sidecar SET orphaned_at=NULL WHERE collection_href=? AND uid=? AND orphaned_at IS NOT NULL",
@@ -269,14 +280,71 @@ def upsert_item(
     )
 
 
-def _fts_replace(conn: sqlite3.Connection, collection_href: str, f: TaskFields) -> None:
+def _fts_rowid(conn: sqlite3.Connection, collection_href: str, uid: str):
+    """`(existed, fts_rowid)` for a cached item: whether the items row is there
+    at all, and the FTS rowid it recorded (None for a row written before that
+    column existed)."""
+    row = conn.execute(
+        "SELECT fts_rowid FROM items WHERE collection_href=? AND uid=?",
+        (collection_href, uid),
+    ).fetchone()
+    return (row is not None, row["fts_rowid"] if row is not None else None)
+
+
+def _fts_delete(conn: sqlite3.Connection, collection_href: str, uid: str) -> None:
+    """Remove a UID's FTS entry, by rowid where we know it.
+
+    `uid` and `collection_href` are UNINDEXED columns of an fts5 table, which
+    means fts5 keeps no index over them and SQLite plans a predicate on them as
+    `SCAN items_fts VIRTUAL TABLE` — a full scan of the ENTIRE FTS table, across
+    every collection, per row touched. `upsert_item` does one of these per item,
+    so a full resync cost (items upserted) × (items in the whole DB), inside one
+    BEGIN IMMEDIATE, under the service lock every API route shares. Measured at
+    2.23 ms per delete against an 8000-row table: a few thousand items froze the
+    whole API — no task list, no calendar, no booking page, no login — for tens
+    of seconds, on an operation that happens routinely.
+
+    `items.fts_rowid` is written alongside each insert so the delete is a rowid
+    lookup. A row cached before that column existed has NULL and falls back to
+    the scan, which is correct if slow, and picks up a rowid on its next upsert.
+    """
+    existed, rowid = _fts_rowid(conn, collection_href, uid)
+    _fts_delete_known(conn, collection_href, uid, existed, rowid)
+
+
+def _fts_delete_known(
+    conn: sqlite3.Connection, collection_href: str, uid: str, existed: bool, rowid
+) -> None:
+    if not existed:
+        # No items row means no FTS entry: the two are only ever written and
+        # dropped together, inside one transaction, by this module. Skipping the
+        # lookup matters most on a FIRST sync, where every upsert is an insert
+        # and the fallback below would scan the whole table for nothing.
+        return
+    if rowid is not None:
+        conn.execute("DELETE FROM items_fts WHERE rowid=?", (rowid,))
+        return
     conn.execute(
-        "DELETE FROM items_fts WHERE collection_href=? AND uid=?", (collection_href, f.uid)
+        "DELETE FROM items_fts WHERE collection_href=? AND uid=?", (collection_href, uid)
     )
-    conn.execute(
+
+
+def _fts_replace(
+    conn: sqlite3.Connection, collection_href: str, f: TaskFields, prior=None
+) -> None:
+    """Replace a UID's FTS entry. `prior` is the `(existed, rowid)` pair read
+    BEFORE the items row was upserted — the caller has to take it then, because
+    afterwards every row looks like it existed."""
+    existed, rowid = prior if prior is not None else _fts_rowid(conn, collection_href, f.uid)
+    _fts_delete_known(conn, collection_href, f.uid, existed, rowid)
+    cur = conn.execute(
         "INSERT INTO items_fts (uid, collection_href, summary, description, categories) "
         "VALUES (?,?,?,?,?)",
         (f.uid, collection_href, f.summary or "", f.description or "", " ".join(f.categories)),
+    )
+    conn.execute(
+        "UPDATE items SET fts_rowid=? WHERE collection_href=? AND uid=?",
+        (cur.lastrowid, collection_href, f.uid),
     )
 
 
@@ -290,8 +358,8 @@ def delete_item_by_href(conn: sqlite3.Connection, collection_href: str, href: st
     if row is None:
         return None
     uid = row["uid"]
+    _fts_delete(conn, collection_href, uid)          # before the items row goes
     conn.execute("DELETE FROM items WHERE collection_href=? AND uid=?", (collection_href, uid))
-    conn.execute("DELETE FROM items_fts WHERE collection_href=? AND uid=?", (collection_href, uid))
     return uid
 
 
@@ -354,14 +422,27 @@ def live_revocations(conn: sqlite3.Connection, *, now: float) -> dict[str, float
     }
 
 
-def gc_orphans(conn: sqlite3.Connection, *, keep_days: int = 7) -> int:
-    """Drop sidecar rows orphaned longer than keep_days. Returns the count."""
-    cur = conn.execute(
-        "DELETE FROM sidecar WHERE orphaned_at IS NOT NULL "
-        "AND orphaned_at < strftime('%Y-%m-%dT%H:%M:%fZ','now', ?)",
-        (f"-{int(keep_days)} days",),
-    )
-    return cur.rowcount
+def gc_orphans(
+    conn: sqlite3.Connection, collection_href: str | None = None, *, keep_days: int = 7
+) -> int:
+    """Drop sidecar rows orphaned longer than keep_days. Returns the count.
+
+    `collection_href` scopes the sweep, and the caller that matters passes it.
+    This is the only irreversible deletion in the cache layer — sidecar rows
+    hold kanban column, manual sort order, pins and estimated minutes, the one
+    part of the DB no resync can rebuild — and `full_resync` gates it behind
+    "the enumeration was complete". That guard is per-collection, so an
+    unscoped sweep here was defeated by any OTHER collection resyncing cleanly:
+    a collection whose enumeration is permanently incomplete never GCs its own
+    orphans, exactly as designed, and then lost them anyway the first time an
+    unrelated calendar full-resynced."""
+    sql = ("DELETE FROM sidecar WHERE orphaned_at IS NOT NULL "
+           "AND orphaned_at < strftime('%Y-%m-%dT%H:%M:%fZ','now', ?)")
+    params: tuple = (f"-{int(keep_days)} days",)
+    if collection_href is not None:
+        sql += " AND collection_href=?"
+        params += (collection_href,)
+    return conn.execute(sql, params).rowcount
 
 
 def get_sidecar(conn: sqlite3.Connection, collection_href: str, uid: str) -> sqlite3.Row | None:

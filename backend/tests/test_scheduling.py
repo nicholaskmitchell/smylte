@@ -4,7 +4,7 @@ anywhere, plus HTTP integration tests against scratch Radicale (skipped when
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -81,6 +81,48 @@ def test_busy_intervals_naive_and_aware():
     busy = scheduling.busy_intervals([naive, aware], TZ)
     # The two overlap once normalized into link tz → merged into one block.
     assert busy == [_iv(10, 0, 11, 30)]
+
+
+def test_a_floating_event_is_read_in_the_owners_zone_not_the_links():
+    """The app writes its own events as floating local wall time, which names no
+    instant on its own. Reading them in the LINK's zone — a free-text field set
+    per link — put every one of the owner's events at the wrong absolute time
+    whenever the two differed, by exactly the offset: their real appointment was
+    advertised as free and an anonymous visitor could book over it, while the
+    genuinely free hour was blocked."""
+    from zoneinfo import ZoneInfo
+
+    home = ZoneInfo("America/New_York")          # where the events were authored
+    link_tz = ZoneInfo("Europe/London")          # where the link was published
+    # 09:00 EDT is 13:00Z, which is 14:00 in London — not 09:00.
+    ev = _ev(start="2026-08-10T09:00:00", end="2026-08-10T10:00:00")
+
+    busy = scheduling.busy_intervals([ev], link_tz, naive_tz=home)
+    assert len(busy) == 1
+    assert busy[0].start.astimezone(timezone.utc) == datetime(
+        2026, 8, 10, 13, 0, tzinfo=timezone.utc
+    )
+    assert busy[0].end.astimezone(timezone.utc) == datetime(
+        2026, 8, 10, 14, 0, tzinfo=timezone.utc
+    )
+
+    # Without a home zone the old reading stands: the link's zone.
+    fallback = scheduling.busy_intervals([ev], link_tz)
+    assert fallback[0].start.astimezone(timezone.utc) == datetime(
+        2026, 8, 10, 8, 0, tzinfo=timezone.utc
+    )
+
+
+def test_an_aware_event_ignores_the_owners_zone():
+    """A zone-anchored value already names an instant; nothing may re-read it."""
+    from zoneinfo import ZoneInfo
+
+    ev = _ev(start="2026-08-10T15:30:00+00:00", end="2026-08-10T16:30:00+00:00")
+    for home in (None, ZoneInfo("Asia/Tokyo")):
+        busy = scheduling.busy_intervals([ev], TZ, naive_tz=home)
+        assert busy[0].start.astimezone(timezone.utc) == datetime(
+            2026, 8, 10, 15, 30, tzinfo=timezone.utc
+        ), home
 
 
 def test_busy_intervals_skips_nonblocking():
@@ -743,6 +785,74 @@ def test_refused_bookings_do_not_spend_the_links_budget(client, many_ips, label,
     # …and a real visitor can still book.
     r = many_ips(url, json=_book_body(info["slots"][0]))
     assert r.status_code == 201, (label, r.text)
+
+
+@pytest.mark.radicale
+def test_a_replay_does_not_spend_the_links_budget(client, many_ips):
+    """The ceiling counts BOOKINGS. A replay — same client_id coming back after
+    a lost response — is answered from the booking already on the calendar and
+    writes nothing, but it used to be charged like a fresh one. That put the
+    published-link denial-of-service straight back: one real booking plus a
+    replay loop, and the link is dead for everyone else."""
+    cal = _cal(client)
+    link = _mklink(client, cal["id"], duration_minutes=5, horizon_days=30)
+    info = client.get(f"/api/public/booking/{link['token']}", headers=_NO_COOKIE).json()
+    url = f"/api/public/booking/{link['token']}/book"
+    assert len(info["slots"]) >= 2, "not enough free slots"
+
+    body = _book_body(info["slots"][0])
+    first = many_ips(url, json=body)
+    assert first.status_code == 201, first.text
+
+    # Well past the 30/hour ceiling, none of which writes anything.
+    for i in range(40):
+        r = many_ips(url, json=body)
+        assert r.status_code == 201, (i, r.status_code, r.text)
+        assert r.json()["id"] == first.json()["id"], "a replay must not book again"
+
+    # …and a different visitor can still book.
+    r = many_ips(url, json=_book_body(info["slots"][1]))
+    assert r.status_code == 201, r.text
+
+
+@pytest.mark.radicale
+def test_concurrent_bookings_cannot_outrun_the_per_link_ceiling(client):
+    """The ceiling has to bound how many bookings are WRITTEN, not how many are
+    counted afterwards. The gate was a pure read that reserved nothing, and the
+    charge came after an await — so every request that arrived while earlier
+    ones were still inside book_slot saw a counter that had not moved, and an
+    arbitrary number passed together. Sending them in parallel was the entire
+    bypass."""
+    import asyncio
+    from collections import Counter
+
+    import httpx
+
+    cal = _cal(client)
+    link = _mklink(client, cal["id"], duration_minutes=5, horizon_days=30)
+    info = client.get(f"/api/public/booking/{link['token']}", headers=_NO_COOKIE).json()
+    url = f"/api/public/booking/{link['token']}/book"
+    slots = info["slots"][:60]
+    assert len(slots) == 60, "not enough free slots to test the ceiling"
+
+    async def hammer():
+        # Onto the already-running app: entering a TestClient/lifespan here
+        # would shut the session-scoped app down for every later test.
+        transport = httpx.ASGITransport(app=client.app, client=("127.0.0.1", 1))
+        async with httpx.AsyncClient(transport=transport, base_url="http://t") as c:
+            async def book(i, slot):
+                # A fresh source per request: the per-CLIENT limiter would
+                # otherwise mask the per-LINK one, which is the cap under test.
+                r = await c.post(url, json=_book_body(slot), headers={
+                    **_NO_COOKIE, "X-Real-IP": f"198.51.100.{i % 250}"})
+                return r.status_code
+            return Counter(await asyncio.gather(
+                *[book(i, s) for i, s in enumerate(slots)]))
+
+    codes = asyncio.run(hammer())
+    assert codes[201] <= 30, codes
+    assert 429 in codes, codes
+    assert sum(codes.values()) == 60, codes
 
 
 @pytest.mark.radicale

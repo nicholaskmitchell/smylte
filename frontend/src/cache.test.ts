@@ -24,7 +24,7 @@ const list = (o: Partial<List> = {}): List => ({
 const event = (o: Partial<CalEvent> = {}): CalEvent => ({
   uid: 'e1', id: 'e1', recurrence_id: null, is_recurring: false, calendar: '/c1/',
   summary: 'Lunch', description: null, location: null, start: '2026-07-15',
-  start_is_date: true, end: '2026-07-16', end_is_date: true, all_day: true,
+  start_is_date: true, end: '2026-07-16', end_is_date: true, duration: null, all_day: true,
   status: null, tags: [], has_rrule: false, href: '/c1/e1.ics', etag: '"1"', ...o,
 })
 

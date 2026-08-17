@@ -131,6 +131,67 @@ describe('<App> auth gate', () => {
     expect(m.logout).toHaveBeenCalledOnce()
     expect(await screen.findByRole('button', { name: /sign in/i })).toBeInTheDocument()
   })
+
+  it('stays signed in, and says so, when the sign-out request fails', async () => {
+    // POST /api/logout is the only thing that revokes the token and the only
+    // thing that can clear the HttpOnly cookie. Showing the login card on a
+    // failure told the user they were signed out while the session was still
+    // live — on a cookie that is the whole perimeter.
+    m.logout.mockRejectedValue(new HttpError(502, 'bad gateway'))
+    render(<App />)
+    await screen.findByRole('button', { name: 'Tasks' })
+    await userEvent.click(screen.getByRole('button', { name: 'Settings' }))
+    await userEvent.click(screen.getByRole('button', { name: /log out/i }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/still signed in/i)
+    expect(screen.queryByRole('button', { name: /sign in/i })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Tasks' })).toBeInTheDocument()
+  })
+
+  it('treats a 401 from logout as already signed out', async () => {
+    // The session is gone either way; there is nothing to keep the user in for.
+    m.logout.mockRejectedValue(new AuthError('not authenticated'))
+    render(<App />)
+    await screen.findByRole('button', { name: 'Tasks' })
+    await userEvent.click(screen.getByRole('button', { name: 'Settings' }))
+    await userEvent.click(screen.getByRole('button', { name: /log out/i }))
+
+    expect(await screen.findByRole('button', { name: /sign in/i })).toBeInTheDocument()
+  })
+})
+
+describe('<App> home timezone', () => {
+  // The app writes non-all-day events as floating local wall time, which names
+  // no instant on its own. A scheduling link used to assume its OWN zone for
+  // those, so a link published in another zone read every one of the owner's
+  // events at the wrong instant and offered their busy hours as bookable.
+  const openSettings = async () => {
+    render(<App />)
+    await screen.findByRole('button', { name: 'Tasks' })
+    await userEvent.click(screen.getByRole('button', { name: 'Settings' }))
+    return screen.getByRole('button', { name: 'Timezone your events are written in' })
+  }
+
+  it('starts unset, falling back to each link’s own zone', async () => {
+    expect(await openSettings()).toHaveTextContent('Not set')
+  })
+
+  it('shows the stored zone', async () => {
+    m.getSettings.mockResolvedValue({ home_timezone: 'Europe/Berlin' })
+    await waitFor(async () => expect(await openSettings()).toHaveTextContent('Europe/Berlin'))
+  })
+
+  it('adopts this device’s zone, and clears back off', async () => {
+    const here = Intl.DateTimeFormat().resolvedOptions().timeZone
+    const btn = await openSettings()
+    await userEvent.click(btn)
+    expect(btn).toHaveTextContent(here)
+    expect(m.putSettings).toHaveBeenCalledWith({ home_timezone: here })
+
+    await userEvent.click(btn)
+    expect(btn).toHaveTextContent('Not set')
+    expect(m.putSettings).toHaveBeenLastCalledWith({ home_timezone: '' })
+  })
 })
 
 describe('<App> session length', () => {

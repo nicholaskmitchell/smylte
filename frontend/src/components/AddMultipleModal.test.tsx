@@ -160,6 +160,24 @@ describe('AddMultipleModal', () => {
     expect(itemsOf(onSubmit).map((i) => i.body.due)).toEqual(['2026-08-10', '2026-08-10'])
   })
 
+  it('adopts a tag already typed per-row when Tags becomes shared', async () => {
+    // The adoption guard compared slot values with === / !==, which for the
+    // `tags` slot (a string[]) is a REFERENCE comparison: `shared.tags ===
+    // blank.tags` is always false, so the branch never ran for Tags — the exact
+    // loss the function exists to prevent.
+    const { onSubmit, user } = setup()
+    await user.click(screen.getByRole('checkbox', { name: 'Tags' }))
+    await user.type(screen.getByLabelText('Tags, row 1'), 'errand{Enter}')
+    await user.click(screen.getByRole('checkbox', { name: 'Tags' }))
+
+    expect(screen.getByRole('button', { name: 'Remove errand' })).toBeInTheDocument()
+
+    await user.type(title(1), 'a')
+    await user.type(title(2), 'b')
+    await user.click(add())
+    expect(itemsOf(onSubmit).map((i) => i.body.tags)).toEqual([['errand'], ['errand']])
+  })
+
   it('restores per-row values when a property goes back to per-row', async () => {
     const { user } = setup()
     await user.click(screen.getByRole('checkbox', { name: 'Tags' }))

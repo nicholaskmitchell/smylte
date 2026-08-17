@@ -191,3 +191,78 @@ def test_a_duration_only_event_is_visible_in_windows_after_its_start_day(db):
     found = store.get_events_in_range(db, COL_A, "2026-07-12T00:00:00", "2026-07-13T00:00:00")
     assert sorted(r["uid"] for r in found) == ["dtend", "dur"], \
         "the DURATION-only block must be a booking-conflict candidate like its DTEND twin"
+
+
+def test_upserting_an_item_does_not_get_slower_as_the_fts_table_grows(db):
+    """`_fts_replace` deleted the row's FTS entry by (collection_href, uid).
+
+    Both are UNINDEXED columns of an fts5 table, so fts5 keeps no index over
+    them and SQLite plans that as `SCAN items_fts VIRTUAL TABLE` — a full scan
+    of the entire FTS table, every collection, once per item upserted. A full
+    resync upserts every item in a collection, so the cost was (items upserted)
+    x (items in the whole DB), inside one BEGIN IMMEDIATE, under the lock every
+    API route shares: the whole API froze for the duration, and full resyncs are
+    routine.
+
+    Asserted as a SCALING property rather than a wall-clock threshold. The
+    defect is that per-item cost grows with the size of the whole database, so
+    the test measures the same work against a small FTS table and a large one
+    and compares. That is what makes it machine-independent — an absolute
+    timeout on shared CI is either flaky or so loose it proves nothing.
+    """
+    import time
+
+    store.upsert_collection(
+        db, CollectionInfo(href=COL_A, displayname="C", components={"VTODO"}))
+    store.upsert_collection(
+        db, CollectionInfo(href=COL_B, displayname="D", components={"VTODO"}))
+
+    def _raw(uid: str, summary: str = "Thing") -> bytes:
+        return (f"BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VTODO\r\nUID:{uid}\r\n"
+                f"SUMMARY:{summary}\r\nEND:VTODO\r\nEND:VCALENDAR\r\n").encode()
+
+    def _upsert(col: str, uid: str, summary: str = "Thing") -> None:
+        raw = _raw(uid, summary)
+        store.upsert_item(db, col, Item(f"{col}{uid}.ics", '"1"', raw), extract_from_raw(raw))
+
+    def _time_batch(col: str, prefix: str, n: int) -> float:
+        t = time.perf_counter()
+        for i in range(n):
+            _upsert(col, f"{prefix}{i}")
+        return time.perf_counter() - t
+
+    BATCH = 150
+    small = _time_batch(COL_A, "s", BATCH)          # against a near-empty FTS table
+
+    # Now fill an UNRELATED collection: under the old code this alone made every
+    # later upsert slower, because the scan was never scoped to a collection.
+    for i in range(4000):
+        _upsert(COL_B, f"bulk{i}")
+
+    large = _time_batch(COL_A, "l", BATCH)          # same work, 4000+ rows present
+
+    # Ratio, not a threshold. Pre-fix this grew with the bulk collection —
+    # measured ~6x at 4000 rows and ~10x at 8000, without bound. The fix makes
+    # it flat (~1x), and 3x leaves generous room for a noisy shared runner.
+    assert large < max(small, 0.01) * 3, f"small={small:.3f}s large={large:.3f}s"
+
+
+def test_a_row_cached_before_the_fts_rowid_column_still_replaces_cleanly(db):
+    """The migration adds the column without a rebuild, so rows written by an
+    older build carry NULL and fall back to the scan. That path has to stay
+    correct — it just costs more — and pick up a rowid on the next write."""
+    store.upsert_collection(
+        db, CollectionInfo(href=COL_A, displayname="C", components={"VTODO"}))
+    raw = (b"BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VTODO\r\nUID:t2\r\n"
+           b"SUMMARY:Legacy\r\nEND:VTODO\r\nEND:VCALENDAR\r\n")
+    store.upsert_item(db, COL_A, Item(f"{COL_A}t2.ics", '"1"', raw), extract_from_raw(raw))
+    db.execute("UPDATE items SET fts_rowid=NULL WHERE uid='t2'")
+
+    raw2 = raw.replace(b"SUMMARY:Legacy", b"SUMMARY:Modern")
+    store.upsert_item(db, COL_A, Item(f"{COL_A}t2.ics", '"2"', raw2), extract_from_raw(raw2))
+
+    assert db.execute("SELECT count(*) FROM items_fts").fetchone()[0] == 1
+    assert [r["uid"] for r in store.search(db, "Modern")] == ["t2"]
+    assert store.search(db, "Legacy") == []
+    assert db.execute(
+        "SELECT fts_rowid FROM items WHERE uid='t2'").fetchone()["fts_rowid"] is not None

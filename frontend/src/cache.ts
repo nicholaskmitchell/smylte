@@ -229,6 +229,7 @@ export function sanitizeEvent(v: unknown): CalEvent | null {
     start_is_date: bool(o.start_is_date),
     end: orNull(o.end),
     end_is_date: bool(o.end_is_date),
+    duration: orNull(o.duration),
     all_day: bool(o.all_day),
     status: orNull(o.status),
     tags: strs(o.tags),

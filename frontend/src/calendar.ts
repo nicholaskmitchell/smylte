@@ -5,7 +5,7 @@
 
 import type { CalEvent, Task } from './api'
 import { sortTasks } from './order'
-import { addDays, dayKey, pad, parseDate, toLocalInput, ymd } from './util'
+import { addDays, dayKey, hasZone, instantFromLocal, pad, parseDate, toLocalInput, ymd } from './util'
 
 /** A calendar-cell entry: `cont` marks days after the first of a multi-day span. */
 export type DayEv = CalEvent & { cont?: boolean }
@@ -21,12 +21,53 @@ export const shiftYmd = (day: string, n: number) => ymd(addDays(new Date(`${day}
 export const daysBetween = (a: string, b: string) =>
   Math.round((new Date(`${b}T00:00`).getTime() - new Date(`${a}T00:00`).getTime()) / 86400000)
 
-/** Shift an ISO date or datetime by n days. Datetimes come back as floating
- * local wall time — the same form the edit modal writes. */
+/** Shift an ISO date or datetime by n days, preserving the wall clock.
+ *
+ * A value that names an INSTANT comes back as an instant; a floating one comes
+ * back floating. That distinction is the whole point. This used to flatten
+ * everything to `${ymd}T${HH}:${MM}` in the viewer's own wall clock, with no
+ * offset — so dragging an event another CalDAV client had written with
+ * `DTSTART;TZID=Europe/Berlin` sent back a naive string, `_set_datelike` wrote
+ * it verbatim, and the TZID was gone. For a viewer in a different zone the
+ * event also silently moved by the offset difference. That is invariant #2:
+ * never lose properties you did not author.
+ *
+ * The backend re-expresses an incoming instant in the property's own tzinfo, so
+ * emitting one here is what keeps the zone. TasksView already does this for DUE
+ * through `dateOut`; this is the same rule on the event side. */
 export const shiftIso = (v: string, n: number) => {
   if (!v.includes('T')) return shiftYmd(v, n)
   const d = addDays(parseDate(v), n)
-  return `${ymd(d)}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+  return hasZone(v) ? d.toISOString() : `${ymd(d)}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+/** Milliseconds in an iCalendar DURATION (RFC 5545 §3.3.6), or null.
+ *
+ * Weeks are exclusive of the other parts in the grammar, and a leading `-` is
+ * legal. Anything that does not parse cleanly returns null rather than a guess:
+ * the caller's fallback is to leave the stored span alone, which is always
+ * safer than writing a made-up one. */
+export function durationMs(d: string | null | undefined): number | null {
+  if (!d) return null
+  const m = /^([+-])?P(?:(\d+)W|(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?)$/.exec(d.trim())
+  if (!m) return null
+  const [, sign, w, dd, hh, mm, ss] = m
+  if (!w && !dd && !hh && !mm && !ss) return null      // bare "P" / "PT"
+  const ms = (Number(w || 0) * 7 + Number(dd || 0)) * 86400000
+    + Number(hh || 0) * 3600000 + Number(mm || 0) * 60000 + Number(ss || 0) * 1000
+  return sign === '-' ? -ms : ms
+}
+
+/** The datetime-local value `start + duration` names, or null if it cannot be
+ * derived. Used to seed the edit modal for a VEVENT that carries DURATION
+ * instead of DTEND. */
+export function endFromDuration(start: string, duration: string | null | undefined): string | null {
+  const ms = durationMs(duration)
+  if (ms === null) return null
+  const d = parseDate(start)
+  if (isNaN(d.getTime())) return null
+  const out = new Date(d.getTime() + ms)
+  return `${ymd(out)}T${pad(out.getHours())}:${pad(out.getMinutes())}`
 }
 
 /** Is this event's DTEND exclusive — i.e. does it name an instant the event does
@@ -92,8 +133,29 @@ export function bucketByDay(events: CalEvent[], days: Date[]): Map<string, DayEv
       else m.set(day, [entry])
     }
   }
-  for (const evs of m.values()) evs.sort((a, b) => (a.start || '').localeCompare(b.start || ''))
+  // Sort on the instant each start NAMES, not on the wire string. Events from
+  // another CalDAV client come back with an offset (`2026-08-03T19:00:00+01:00`)
+  // while the ones this app wrote are floating (`2026-08-03T16:00:00`), and the
+  // lexicographic order of those two has nothing to do with their local order
+  // whenever the offset differs from the viewer's. That is not only a reorder
+  // of chips: the cell renders `dayEvents.slice(0, 4)` in array order and hides
+  // the rest behind "+N more", so a mis-sort can push an earlier event out of
+  // the cell while a later one stays, and HomeView's dot colors walk the same
+  // array. All-day entries sort first — they are the day, not a time in it.
+  for (const evs of m.values()) evs.sort(startOrder)
   return m
+}
+
+const startOrder = (a: DayEv, b: DayEv) => {
+  const aDay = !!(a.all_day || a.start_is_date)
+  const bDay = !!(b.all_day || b.start_is_date)
+  if (aDay !== bDay) return aDay ? -1 : 1
+  const at = a.start ? parseDate(a.start).getTime() : 0
+  const bt = b.start ? parseDate(b.start).getTime() : 0
+  if (isNaN(at) || isNaN(bt) || at === bt) {
+    return (a.start || '').localeCompare(b.start || '')   // stable, and never NaN
+  }
+  return at - bt
 }
 
 /** The tasks falling on each day of `days`, keyed by `ymd`.
@@ -172,5 +234,17 @@ export function dragBody(
   }
   const oldEnd = ev.end && (ev.all_day ? ev.end.slice(0, 10) : toLocalInput(ev.end))
   if (end === oldEnd) return null
-  return { start, end }
+  if (ev.all_day) return { start, end }
+  // Everything above works in the viewer's wall clock, which is what the
+  // no-op guards compare. Convert back out only here, and only for a value
+  // that named an instant to begin with: a resize must not turn
+  // `DTSTART;TZID=Europe/Berlin` into a floating local time, which is the same
+  // loss the move branch had. The start is pinned by definition, so it goes
+  // back verbatim rather than being re-derived.
+  return {
+    start: hasZone(ev.start) ? ev.start : start,
+    end: hasZone(ev.end || ev.start)
+      ? instantFromLocal(end.slice(0, 10), end.slice(11, 16))
+      : end,
+  }
 }

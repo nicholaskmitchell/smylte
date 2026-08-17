@@ -64,6 +64,12 @@ CREATE TABLE IF NOT EXISTS items (
     created          TEXT,
     last_modified    TEXT,
     synced_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    -- The rowid of this item's row in items_fts. fts5 declares uid and
+    -- collection_href UNINDEXED and builds no index over them, so deleting an
+    -- entry by those columns is a full SCAN of the whole FTS table (every
+    -- collection) — once per upsert, which makes a full resync O(n^2) under the
+    -- single global service lock. Deleting by rowid is O(1).
+    fts_rowid        INTEGER,
     PRIMARY KEY (collection_href, uid)       -- keyed on UID, never href
 );
 CREATE INDEX IF NOT EXISTS idx_items_href   ON items(collection_href, href);

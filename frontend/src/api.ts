@@ -100,6 +100,11 @@ export interface CalEvent {
   start_is_date: boolean
   end: string | null
   end_is_date: boolean
+  // An iCalendar DURATION (e.g. "PT1H30M") when the VEVENT carries one INSTEAD
+  // of a DTEND — the shape DAVx5 and the phone clients write. `end` is null for
+  // those, so anything reconstructing a span has to look here before assuming
+  // the event has no length.
+  duration: string | null
   all_day: boolean
   status: string | null
   tags: string[]
@@ -236,6 +241,12 @@ export interface Settings {
   time_format?: TimeFormat         // 12- or 24-hour clock across the app (see time.ts); default '12h'
   calendar_task_lists?: string[]   // task-list ids DRAWN on the calendar — an allowlist, empty by default
   calendar_show_done_tasks?: boolean  // keep completed tasks on the calendar (default hidden)
+  // The IANA zone this account authors times in. The app writes non-all-day
+  // events as floating local wall time, which names no instant on its own, so
+  // the booking busy-set has to be told which clock they were written on —
+  // without this it assumed the *link's* zone and read every one of the owner's
+  // own events at the wrong instant. '' clears it.
+  home_timezone?: string
 }
 
 // Creates carry a client-generated id that becomes the CalDAV resource slug,
@@ -261,6 +272,32 @@ export const clientId = () => crypto.randomUUID().replace(/-/g, '')
 export const UID_SUFFIX = '@tasksd'
 export const uidFor = (cid: string) => `${cid}${UID_SUFFIX}`
 
+/** A FastAPI `detail` as something a person can read.
+ *
+ * It is a string for the errors this app raises itself, but a LIST for every
+ * pydantic validation failure — the app's own RequestValidationError handler
+ * answers `{"detail": [{type, loc, msg}, ...]}`. That went into `new Error(...)`
+ * unchecked, so the constructor stringified the array and the user was shown
+ * the literal "[object Object]": the login card renders `(ex as Error).message`
+ * verbatim, and the settings toast interpolates it. `loc` starts with the body
+ * location ("body"), which means nothing to a reader, so it is dropped. */
+function detailText(detail: unknown): string {
+  if (typeof detail === 'string') return detail
+  if (Array.isArray(detail)) {
+    return detail
+      .map((e) => {
+        if (typeof e === 'string') return e
+        const item = e as { loc?: unknown[]; msg?: unknown }
+        const where = Array.isArray(item?.loc) ? item.loc.slice(1).join('.') : ''
+        const what = typeof item?.msg === 'string' ? item.msg : ''
+        return where && what ? `${where}: ${what}` : what || where
+      })
+      .filter(Boolean)
+      .join('; ')
+  }
+  return ''
+}
+
 async function j<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(path, {
     method,
@@ -272,7 +309,7 @@ async function j<T>(method: string, path: string, body?: unknown): Promise<T> {
     let msg = res.statusText
     try {
       const data = await res.json()
-      msg = data.detail || msg
+      msg = detailText(data?.detail) || msg
     } catch {
       /* ignore */
     }
@@ -363,7 +400,14 @@ export const api = {
   // client scheduling (public booking page — no session needed)
   publicBookingInfo: (token: string) =>
     j<PublicBookingInfo>('GET', `/api/public/booking/${encodeURIComponent(token)}`),
-  publicBook: (token: string, body: { start: string; name: string; email: string; notes?: string }) =>
+  // `client_id` is the idempotency key the server replays on. The caller owns
+  // it and must keep it stable across a retry of the SAME booking — a fresh one
+  // per call turns a lost response into a second event on the owner's calendar.
+  // The default is a last resort for a caller with nothing to retry.
+  publicBook: (
+    token: string,
+    body: { start: string; name: string; email: string; notes?: string; client_id?: string },
+  ) =>
     j<PublicBookingResult>('POST',
       `/api/public/booking/${encodeURIComponent(token)}/book`, { client_id: clientId(), ...body }),
 

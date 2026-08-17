@@ -23,6 +23,8 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
+from datetime import time as dtime
+from math import ceil
 
 import recurring_ical_events
 from icalendar import Calendar
@@ -104,10 +106,31 @@ def _thisandfuture_shifts(cal: Calendar) -> dict[str, timedelta]:
         if str(rid.params.get("RANGE", "")).upper() != "THISANDFUTURE":
             continue
         iso = _iso(rid)[0]
-        if iso is None or isinstance(rid.dt, datetime) != isinstance(dtstart.dt, datetime):
-            continue                      # mismatched dateness: no meaningful offset
+        if iso is None or not _same_shape(rid.dt, dtstart.dt):
+            continue                      # mismatched pair: no meaningful offset
         out[iso] = dtstart.dt - rid.dt
     return out
+
+
+def _same_shape(a, b) -> bool:
+    """Can `a - b` be taken at all?
+
+    Two guards, not one. Mismatched DATENESS (a DATE beside a DATE-TIME) was
+    already handled; mismatched AWARENESS was not, and both values are
+    `datetime` in that case so the dateness check passes and the subtraction
+    raises `TypeError: can't subtract offset-naive and offset-aware datetimes`.
+    That runs before any expansion, so it escapes `expand_occurrences` — which
+    documents itself as raising ValueError — and `events_in_range` falls into
+    its `except Exception` branch: the whole series collapses to a single master
+    row and every occurrence disappears from the calendar. Mixed floating/zoned
+    values in one component are exactly the hostile-shaped ICS the trust model
+    calls out. Skipping just means the dedup fallback gives each covered
+    instance its own start as an anchor, which is the intended degradation."""
+    if isinstance(a, datetime) != isinstance(b, datetime):
+        return False
+    if isinstance(a, datetime) and (a.tzinfo is None) != (b.tzinfo is None):
+        return False
+    return True
 
 
 def _per_day(rule) -> float:
@@ -238,19 +261,59 @@ def _occurrence(comp, override_anchors: set[str], tf_shifts: dict[str, timedelta
     )
 
 
+def _occurrence_cap(
+    window_start: date | datetime, window_end: date | datetime, floor: int = 750
+) -> int:
+    """How many occurrences a window can legitimately hold.
+
+    A flat constant was wrong in both directions. `_pathological_rule` refuses
+    anything over `_MAX_PER_DAY` (24) instances a day and *permits* everything
+    under it, so a rule the guard explicitly allows could still overrun a fixed
+    750 — an hourly series passes the density check and produces 1032 over the
+    calendar's 43-day grid. The window is what decides how many there can be, so
+    the bound is derived from it.
+
+    The floor keeps short windows from getting a cap tighter than the old one.
+    """
+    start = _as_datetime(window_start)
+    end = _as_datetime(window_end)
+    days = max(1, ceil((end - start).total_seconds() / 86400))
+    # +1 day of slack: the query is inclusive at the edges and an override or an
+    # RDATE can add an instance the rule itself did not generate.
+    return max(floor, int(_MAX_PER_DAY * (days + 1)))
+
+
+def _as_datetime(v: date | datetime) -> datetime:
+    if isinstance(v, datetime):
+        return v.replace(tzinfo=None)
+    return datetime.combine(v, dtime.min)
+
+
 def expand_occurrences(
     raw_ics: bytes | str,
     window_start: date | datetime,
     window_end: date | datetime,
     *,
-    max_occurrences: int = 750,
+    max_occurrences: int | None = None,
 ) -> list[Occurrence]:
     """Occurrences of the resource's VEVENT series within ``[window_start,
     window_end)``, most-relevant first. Returns ``[]`` when the series produces
     nothing in the window (e.g. a rule whose UNTIL is already past).
 
     Raises ``ValueError`` for a rule too dense or too malformed to expand within
-    a bounded cost — the caller degrades to the master row."""
+    a bounded cost, and for one that overruns the window's occurrence cap — the
+    caller degrades to the master row.
+
+    Overrunning used to return a silently short list instead, with no signal the
+    caller could tell apart from "the series really ends here". Two things went
+    wrong with that. The calendar grid rendered the tail of its month empty with
+    nothing to say anything was hidden; worse, `_link_busy` builds the public
+    booking page's conflict set from this, so a busy series past the cap stopped
+    blocking and the page advertised — and let an anonymous visitor book — hours
+    the owner was already in a meeting. Raising puts both on the existing
+    degrade-to-master-row path, which is visible."""
+    cap = (max_occurrences if max_occurrences is not None
+           else _occurrence_cap(window_start, window_end))
     cal = Calendar.from_ical(raw_ics)
     why = _pathological_rule(cal, window_end)
     if why is not None:
@@ -276,6 +339,8 @@ def expand_occurrences(
             occ = replace(occ, recurrence_id=occ.start or occ.recurrence_id)
         seen.add(occ.recurrence_id)
         out.append(occ)
-        if len(out) >= max_occurrences:
-            break
+        if len(out) > cap:
+            raise ValueError(
+                f"refusing to expand recurrence: more than {cap} occurrences in the window"
+            )
     return out

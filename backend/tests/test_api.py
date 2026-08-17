@@ -368,6 +368,38 @@ def test_recurring_this_and_following(client):
     assert len({e["uid"] for e in after if e["summary"].startswith("Class")}) == 2
 
 
+def test_deleting_this_and_following_from_the_first_occurrence_removes_the_resource(client):
+    """The head is bounded with `UNTIL = anchor - 1s`; at the FIRST occurrence
+    that precedes its own DTSTART, so the head generates nothing. It was PUT
+    anyway, leaving a VEVENT on Radicale and a cache row that expand to zero
+    occurrences forever — `events_in_range` never emits it, so nothing could
+    render or delete it again. The server answered 204 and the SPA cleared the
+    rows while the resource was still there. This is the natural way to remove a
+    whole series from an occurrence chip, so it is not an exotic path."""
+    cid = _cal(client)["id"]
+    ev = client.post(f"/api/calendars/{cid}/events", json={
+        "summary": "Gone", "start": "2026-07-06T18:00:00", "end": "2026-07-06T19:00:00",
+        "repeat": "weekly",
+    }).json()
+    uid = ev["uid"]
+    occ = sorted((e for e in _events(client, cid) if e["summary"] == "Gone"),
+                 key=lambda e: e["start"])
+    assert len(occ) >= 2
+
+    r = client.request("DELETE", f"/api/calendars/{cid}/events/{uid}", params={
+        "recurrence_id": occ[0]["recurrence_id"], "scope": "thisandfuture",
+    })
+    assert r.status_code == 204
+
+    # Gone from the projection…
+    assert [e for e in _events(client, cid) if e["summary"] == "Gone"] == []
+    # …and gone from the wire, not left as an unreachable husk. A resync would
+    # bring a surviving resource straight back.
+    assert client.post("/api/sync").status_code == 200
+    assert [e for e in _events(client, cid) if e["summary"] == "Gone"] == []
+    assert client.get(f"/api/calendars/{cid}/events/{uid}").status_code == 404
+
+
 def test_settings_sync(client):
     r = client.put("/api/settings", json={"theme": "dark"})
     assert r.status_code == 200 and r.json().get("theme") == "dark"
@@ -428,6 +460,21 @@ def test_settings_time_format_sync(client):
     assert client.put("/api/settings", json={"time_format": "12h"}).status_code == 200
     assert client.get("/api/settings").json().get("time_format") == "12h"
     assert client.put("/api/settings", json={"time_format": "H:mm"}).status_code == 422
+
+
+def test_settings_home_timezone_sync(client):
+    # The zone the account authors floating times in. Validated on the way in
+    # because it is fed to ZoneInfo on the public booking path, and the blob is
+    # hand-editable.
+    assert "home_timezone" not in client.get("/api/settings").json()
+    r = client.put("/api/settings", json={"home_timezone": "America/New_York"})
+    assert r.status_code == 200 and r.json()["home_timezone"] == "America/New_York"
+    assert client.get("/api/settings").json()["home_timezone"] == "America/New_York"
+    # Empty string clears it back to "use the link's own zone".
+    assert client.put("/api/settings", json={"home_timezone": ""}).status_code == 200
+    assert client.get("/api/settings").json()["home_timezone"] == ""
+    assert client.put("/api/settings", json={"home_timezone": "Mars/Olympus"}).status_code == 422
+    assert client.put("/api/settings", json={"home_timezone": "../../etc"}).status_code == 422
 
 
 def test_settings_calendar_tasks_sync(client):
@@ -830,6 +877,26 @@ def test_required_window_bounds_and_non_finite_sidecar_are_422(client):
         # And the list is still readable — rendering the 422 must not blow up
         # either, which it did while the handler echoed the offending value back.
         assert client.get(f"/api/lists/{lid}/tasks").status_code == 200
+
+
+def test_a_sidecar_put_for_an_unknown_task_is_a_404_and_writes_nothing(client):
+    """The only write route that did not check the item exists. It answered 200
+    with a body of `null` (every sibling 404s the same uid) and left a sidecar
+    row with orphaned_at IS NULL — which nothing ever sets, because
+    orphan_sidecar only fires when a *known* item is deleted, so gc_orphans
+    could never reclaim it. Sidecar rows are the one thing a resync cannot
+    rebuild, which made them permanent."""
+    lid = _list(client)["id"]
+    svc = client.app.state.service
+
+    def sidecar_rows() -> int:
+        with svc._lock:
+            return svc._conn.execute("SELECT count(*) FROM sidecar").fetchone()[0]
+
+    before = sidecar_rows()
+    r = client.put(f"/api/lists/{lid}/tasks/no-such-uid/sidecar", json={"sort_order": 1.0})
+    assert r.status_code == 404
+    assert sidecar_rows() == before
 
 
 def test_task_manual_reorder(client):

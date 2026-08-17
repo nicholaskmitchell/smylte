@@ -44,6 +44,33 @@ describe('the fetch wrapper', () => {
     await expect(api.lists()).rejects.toThrow('Bad Gateway')
   })
 
+  // Every pydantic failure answers with a LIST, not a string — the app's own
+  // RequestValidationError handler builds `{"detail": [{type, loc, msg}, ...]}`.
+  // Handed to `new Error(...)` unchecked, the array stringified and the user was
+  // shown the literal "[object Object]": the login card renders the message
+  // verbatim and the settings toast interpolates it.
+  it('renders a 422 validation list as readable text', async () => {
+    stubFetch(422, {
+      detail: [
+        { type: 'string_too_long', loc: ['body', 'password'], msg: 'String should have at most 1024 characters' },
+        { type: 'missing', loc: ['body', 'username'], msg: 'Field required' },
+      ],
+    })
+    await expect(api.lists()).rejects.toThrow(
+      'password: String should have at most 1024 characters; username: Field required',
+    )
+  })
+
+  it('falls back to statusText when the detail is an empty list', async () => {
+    stubFetch(422, { detail: [] }, 'Unprocessable Entity')
+    await expect(api.lists()).rejects.toThrow('Unprocessable Entity')
+  })
+
+  it('survives a detail that is neither a string nor a list', async () => {
+    stubFetch(400, { detail: { nested: 'shape' } }, 'Bad Request')
+    await expect(api.lists()).rejects.toThrow('Bad Request')
+  })
+
   it('returns null for 204 (deletes)', async () => {
     stubFetch(204)
     await expect(api.deleteTask('l1', 'u1')).resolves.toBeNull()

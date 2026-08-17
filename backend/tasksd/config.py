@@ -9,6 +9,8 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
+from .limits import DEFAULT_MAX_BODY_BYTES
+
 
 _TRUE = frozenset({"1", "true", "yes", "y", "on"})
 _FALSE = frozenset({"0", "false", "no", "n", "off"})
@@ -101,6 +103,18 @@ class Settings:
     # a token is bound to must match what the client was pointed at — so it is
     # configured rather than read off the Host header, which a caller controls.
     public_url: str = ""
+    # Largest request body accepted, enforced ahead of the router — see
+    # tasksd/limits.py for why it cannot live in the routes themselves.
+    max_body_bytes: int = DEFAULT_MAX_BODY_BYTES
+    # Content-Security-Policy posture: "on" (enforce), "report-only" (log
+    # violations in the browser console, block nothing) or "off". An escape
+    # hatch rather than a knob: a policy that turns out to block something real
+    # takes the app down to a blank page, and the fix should be a line in
+    # /etc/tasks/tasks.env plus a restart, not a code change and a redeploy.
+    # Anything unrecognised is treated as "on" — this is a security control, so
+    # a typo must not quietly disable it (same posture as _bool above, which
+    # refuses to fail open).
+    csp_mode: str = "on"
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -128,4 +142,8 @@ class Settings:
             dav_public_url=normalize_dav_url(os.environ.get("TASKS_DAV_URL", "/dav/")),
             mcp_enabled=_bool("TASKS_MCP_ENABLED", False),
             public_url=normalize_public_url(os.environ.get("TASKS_PUBLIC_URL", "")),
+            max_body_bytes=int(
+                os.environ.get("TASKS_MAX_BODY_BYTES", str(DEFAULT_MAX_BODY_BYTES))
+            ),
+            csp_mode=os.environ.get("TASKS_CSP", "on").strip().lower() or "on",
         )

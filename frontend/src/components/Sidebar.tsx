@@ -2,6 +2,7 @@ import {
   useState, type CSSProperties, type DragEvent, type KeyboardEvent, type ReactNode,
 } from 'react'
 import { clientId, type List, type TaskGroup } from '../api'
+import { cssColor } from '../util'
 import { useIsMobile } from '../hooks'
 
 // Preset collection colors — muted, editorial, distinct from the accent.
@@ -126,14 +127,23 @@ export function Sidebar({ title, placeholder, items, sel = '', countOf, onSelect
   const remove = async (id: string) => {
     setEditing(null)
     const prev = items
+    const prevGroups = groups
     const left = items.filter((l) => l.id !== id)
     onItems(left)
     if (canSelect && sel === id) onSelect?.(left[0]?.id || '')
     // Drop the deleted list out of any group so the stored blob stays tidy.
-    if (groupsOn && groups!.some((g) => g.lists.includes(id))) {
+    const regrouped = groupsOn && groups!.some((g) => g.lists.includes(id))
+    if (regrouped) {
       onGroupsChange!(groups!.map((g) => ({ ...g, lists: g.lists.filter((x) => x !== id) })))
     }
-    if ((await api.remove(id)) === undefined) onItems(prev)
+    if ((await api.remove(id)) === undefined) {
+      // Roll back BOTH. `onGroupsChange` is written straight through to the
+      // server by App, so only restoring `items` brought the list back
+      // ungrouped — with the loss already persisted, and nothing left to
+      // undo it from.
+      onItems(prev)
+      if (regrouped) onGroupsChange!(prevGroups!)
+    }
   }
 
   const drop = (targetId: string) => {
@@ -195,10 +205,14 @@ export function Sidebar({ title, placeholder, items, sel = '', countOf, onSelect
   // Swatch fill: a visible item shows its solid color; a hidden one (visibility
   // mode) shows a hollow ring so the color still reads at a glance.
   const swatchStyle = (l: List): CSSProperties | undefined => {
+    // Through cssColor, and the hidden branch especially: interpolating a wire
+    // value into a `boxShadow` SHORTHAND lets it escape the property boundary
+    // far more freely than a plain `background:` does.
+    const c = cssColor(l.color)
     if (canToggle && hidden.has(l.id)) {
-      return { background: 'transparent', boxShadow: `inset 0 0 0 1.5px ${l.color || 'var(--fg-faint)'}` }
+      return { background: 'transparent', boxShadow: `inset 0 0 0 1.5px ${c ?? 'var(--fg-faint)'}` }
     }
-    return l.color ? { background: l.color } : undefined
+    return c ? { background: c } : undefined
   }
 
   // One collection row — reused by both the grouped and ungrouped sections. In
