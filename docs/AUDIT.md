@@ -32,7 +32,7 @@ gone". Re-scope them before working them.
 Ticked findings keep their original references, which point into the tree as it
 was when they were filed. They are history, not navigation.
 
-**17 open**, all from the 2026-08-07 sweep. Nothing from 2026-08-16 is open. The
+**12 open**, all from the 2026-08-07 sweep. Nothing from 2026-08-16 is open. The
 evidence stays here — a ticked box records what the bug was and why it mattered,
 and the issues that link into these sections still resolve.
 
@@ -44,7 +44,8 @@ limits)**, six findings including the sweep's remaining HIGH; **#42 (the
 unauthenticated booking write path)**, six plus the `expand_occurrences`
 truncation from #44, which is the same defect one layer down; **#46 (frontend
 time correctness)**, six including the sweep's other HIGH; **#43 (iCalendar
-series editing)**, five.
+series editing)**, five; **#44 (recurrence expansion, cache integrity and
+startup)**, its remaining five.
 
 The 2026-08-16 sweep was closed in stages (`docs/STAGES.md`), each pinned by
 tests that failed until the finding was fixed. **All five stages are done** — the
@@ -2468,7 +2469,20 @@ rather than an unhandled TypeError); `_event_duration` goes through
 `_comparable`, so a mixed-type or mixed-awareness DTSTART/DTEND no longer makes
 an event permanently uneditable; and a split at the first occurrence returns no
 head at all, so the engine DELETEs the resource instead of leaving a husk that
-expands to nothing and can never be removed. **17 open.**
+expands to nothing and can never be removed.
+
+**Cluster #44 — recurrence expansion, cache integrity and startup — closed 5**
+(its sixth, `expand_occurrences`, went with #42). `gc_orphans` takes a
+collection scope, so one clean collection can no longer sweep the orphans
+another collection's poison resource was protecting; `items` records the FTS
+rowid so an upsert deletes by rowid instead of scanning the whole FTS table,
+which is what made a full resync O(n^2) under the global lock; `bootstrap` has
+the same per-collection tolerance `sync_all` always had, so a bad collection or
+an unreachable Radicale no longer takes startup down with it;
+`_thisandfuture_shifts` — and `edit._tf_shift`, its write-path twin with the
+identical gap — guard tz-awareness as well as dateness; and `discover` reports
+whether the live collection set moved, so a list deleted on another device
+finally reaches the open tab. **12 open.**
 
 
 ### HTTP API surface
@@ -2929,7 +2943,7 @@ only when the result is a fresh booking. Add a test that books once, replays 40 
 and asserts a different address can still book (mirroring
 `test_refused_bookings_do_not_spend_the_links_budget`).
 
-#### [ ] bootstrap() has no per-collection error handling, so one unreachable or vanished collection aborts application startup entirely
+#### [x] bootstrap() has no per-collection error handling, so one unreachable or vanished collection aborts application startup entirely
 
 `backend/tasksd/service.py:103` (`bootstrap`) · **medium** · bug
 
@@ -3357,7 +3371,7 @@ master-row branch and the user sees one event rather than a hole. Add a test tha
 expands a permitted 24/day rule over the 43-day grid window and asserts either the full
 count or the raise.
 
-#### [ ] _thisandfuture_shifts crashes with TypeError on a RANGE=THISANDFUTURE override whose RECURRENCE-ID and DTSTART differ in tz-awareness, wiping every occurrence of the series from the calendar
+#### [x] _thisandfuture_shifts crashes with TypeError on a RANGE=THISANDFUTURE override whose RECURRENCE-ID and DTSTART differ in tz-awareness, wiping every occurrence of the series from the calendar
 
 `backend/tasksd/ical/recur.py:109` (`_thisandfuture_shifts`) · **low** · bug · `minor`
 
@@ -3486,7 +3500,7 @@ delete and `orphan_sidecar` for the evicted UID). Independently, make
 otherwise surface a ConflictError. Add a unit test with the stub DAV that rewrites a
 href with a different UID and asserts `store.count_items(...) == 1` after the next sync.
 
-#### [ ] gc_orphans is global while the guard that gates it is per-collection, so one clean collection permanently deletes the sidecar state another collection's poison resource was protecting
+#### [x] gc_orphans is global while the guard that gates it is per-collection, so one clean collection permanently deletes the sidecar state another collection's poison resource was protecting
 
 `backend/tasksd/sync/engine.py:160` (`full_resync`) · **medium** · bug · `minor`
 
@@ -3542,7 +3556,7 @@ all. Extend test_resync_does_not_gc_sidecars_off_an_incomplete_pass to seed a se
 collection and assert that resyncing it does not sweep the first collection's protected
 orphan.
 
-#### [ ] Every upsert_item does a full scan of items_fts, making a full resync O(n²) — thousands of items freeze the whole API for tens of seconds under the global service lock
+#### [x] Every upsert_item does a full scan of items_fts, making a full resync O(n²) — thousands of items freeze the whole API for tens of seconds under the global service lock
 
 `backend/tasksd/db/store.py:272` (`_fts_replace`) · **medium** · bug
 
@@ -3595,7 +3609,7 @@ conn.lastrowid`) and delete with `DELETE FROM items_fts WHERE rowid=?`, which is
 Either way, add a coverage test that a full resync of a few thousand items completes in
 a bounded time.
 
-#### [ ] A list or calendar created or deleted by another CalDAV client is never pushed to the SPA — the sidebar keeps a list the server has already purged
+#### [x] A list or calendar created or deleted by another CalDAV client is never pushed to the SPA — the sidebar keeps a list the server has already purged
 
 `backend/tasksd/service.py:131` (`sync_all`) · **low** · rendering · `minor`
 
