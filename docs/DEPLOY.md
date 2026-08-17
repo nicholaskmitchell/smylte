@@ -28,6 +28,12 @@ Legend: **[SAFE]** on-Pi, reversible · **[DASH]** you, in the Cloudflare dashbo
 ```bash
 cd ~/tasks/frontend && npm install && npm run build   # -> dist/
 ```
+⚠️ **Restart the service after a rebuild**: `sudo systemctl restart tasks`. The
+Content-Security-Policy (below) carries a hash of the SPA's inline pre-paint
+script, read from `dist/index.html` at startup — so a rebuild that changes that
+script while the old process is still running leaves a stale hash, and the
+browser blocks the script: a blank page. Everything else about a rebuild is
+picked up without a restart, so this is the one new rule.
 
 ## A. Install the app  **[SAFE]**
 ```bash
@@ -197,6 +203,37 @@ looking reachable.
   ```
   A `resource` that does not exactly match the URL you gave Claude — including
   the path — is the usual reason a reachable server still fails to connect.
+
+## Content-Security-Policy
+
+The app sets one on every response (`backend/tasksd/csp.py`). It is what bounds
+where a page can fetch from at all — the field-level guards on collection colors
+and appearance tokens only cover the fields they name, and this covers the rest.
+Nothing to configure in Caddy; the snippet has a comment saying why it must not
+set a second one.
+
+What it allows, and why:
+
+| Directive | Why it is not tighter |
+|---|---|
+| `script-src 'self' 'sha256-…'` | The hash is the SPA's inline pre-paint script (it applies your theme before first paint, so it cannot be a module). Derived from the served `dist/index.html` at startup — see the warning in §0. |
+| `style-src … 'unsafe-inline' fonts.googleapis.com` | Every calendar and list color is an inline style, and the MCP consent screen is a `<style>` block, so `'unsafe-inline'` is unavoidable. The Google host is there because 13 of the Appearance font choices load a stylesheet from it. |
+| `font-src 'self' fonts.gstatic.com` | Where that Google stylesheet then fetches its woff2. The shipped defaults (Fraunces/Inter/JetBrains Mono) are local and need neither host. |
+
+Everything else is `'self'` or `'none'`. Note the privacy consequence of the two
+Google entries: picking one of those font families means every page load — the
+public booking page included, for visitors who are not you — tells Google the
+reader's IP. Self-hosting those families would let both entries go.
+
+**If it breaks something**, in `/etc/tasks/tasks.env`:
+
+```
+TASKS_CSP=report-only    # log violations in the browser console, block nothing
+TASKS_CSP=off            # no header at all
+```
+then `sudo systemctl restart tasks`. Unset (or anything unrecognised) enforces —
+a typo must not silently disable a security control. The policy in force is
+logged at startup: `journalctl -u tasks | grep csp:`.
 
 ## If the password leaks — signing out everywhere
 

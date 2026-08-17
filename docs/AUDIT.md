@@ -32,8 +32,8 @@ gone". Re-scope them before working them.
 Ticked findings keep their original references, which point into the tree as it
 was when they were filed. They are history, not navigation.
 
-**0 open** from the 2026-08-07 sweep — the backlog it filed is closed. One
-finding is open from the remediation itself (the missing CSP, below). The
+**0 open.** The 2026-08-07 backlog is closed, and so is the one finding the
+remediation filed against itself (the missing CSP — issue #57, below). The
 evidence stays here — a ticked box records what the bug was and why it mattered,
 and the issues that link into these sections still resolve.
 
@@ -62,12 +62,24 @@ below. Those pins are now ordinary regression tests that must stay green.
 ## Filed during remediation — 2026-08-17
 
 Found while closing the 2026-08-07 backlog, not by a sweep. One finding, not
-verified by anyone else. Tracked as issue #57 — it came out of #48 but is its
-own change, for the reason the entry gives.
+verified by anyone else. Tracked as issue #57 — it came out of #48 but was its
+own change, for the reason the entry gives. Now closed.
 
-#### [ ] No Content-Security-Policy anywhere, so nothing bounds what a value reaching the CSSOM can fetch
+#### [x] No Content-Security-Policy anywhere, so nothing bounds what a value reaching the CSSOM can fetch
 
 `deploy/Caddyfile.snippet` · **medium** · security
+
+**Fixed, but NOT where this anchor points.** The policy is set by the app
+(`backend/tasksd/csp.py`), not by Caddy. Two `Content-Security-Policy` headers
+on one response are enforced as their intersection, so it has to be exactly one
+place — and the app is the place that can hash the SPA's inline script, that
+covers a direct connection to uvicorn, and that the test suite can exercise. The
+Caddy snippet carries a comment saying not to add a second one. Two other
+deviations from the suggested fix below: `img-src` does not allow `data:`
+(nothing in the app builds one), and the policy allows `fonts.googleapis.com` /
+`fonts.gstatic.com`, because 13 of the 24 Appearance font choices load from them
+at runtime and a defence should not silently remove a working feature.
+Self-hosting those families would let both entries go.
 
 Cluster #48 closed the `calendar-color` beacon by validating the value at
 ingest and again on the client. That is the right fix for that path, and it is
