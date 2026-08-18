@@ -1,19 +1,18 @@
 import { describe, expect, it, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { TabsModal } from './TabsModal'
+import { TabsSection } from './TabsSection'
 import { DEFAULT_TAB_ORDER, type Tab, type TabStart } from '../tabs'
 
 function show(order: Tab[] = DEFAULT_TAB_ORDER, start: TabStart = 'home') {
   const onOrderChange = vi.fn()
   const onStartChange = vi.fn()
-  const onClose = vi.fn()
-  render(<TabsModal order={order} start={start} onOrderChange={onOrderChange}
-    onStartChange={onStartChange} onClose={onClose} />)
-  return { onOrderChange, onStartChange, onClose }
+  render(<TabsSection order={order} start={start} onOrderChange={onOrderChange}
+    onStartChange={onStartChange} />)
+  return { onOrderChange, onStartChange }
 }
 
-describe('<TabsModal>', () => {
+describe('<TabsSection>', () => {
   it('lists the tabs in their current order', () => {
     show(['calendar', 'home', 'tasks', 'scheduling'])
     const names = [...document.querySelectorAll('.tab-order-row .name')].map((n) => n.textContent)
@@ -53,13 +52,8 @@ describe('<TabsModal>', () => {
     expect(screen.getByLabelText('Opens on')).toHaveValue('last')
   })
 
-  it('closes on Escape, the ✕ and the backdrop', async () => {
-    const { onClose } = show()
-    await userEvent.keyboard('{Escape}')
-    await userEvent.click(screen.getByRole('button', { name: 'Close' }))
-    await userEvent.click(document.querySelector('.overlay')!)
-    expect(onClose).toHaveBeenCalledTimes(3)
-  })
+  // Dismissal is no longer this component's business: it is a section body
+  // inside the settings panel, and the panel owns Escape and the way out.
 
   it('keeps focus on the arrow that was pressed, so a tab can be moved twice', async () => {
     // The rows swap places on a move; without the refocus a keyboard reorder
@@ -71,13 +65,13 @@ describe('<TabsModal>', () => {
   })
 })
 
-/** A modal that actually applies its own reorder, for the focus assertion. */
+/** A section that actually applies its own reorder, for the focus assertion. */
 function renderControlled() {
   let order: Tab[] = [...DEFAULT_TAB_ORDER]
-  const view = render(<TabsModal order={order} start="home"
-    onOrderChange={(next) => { order = next }} onStartChange={vi.fn()} onClose={vi.fn()} />)
+  const view = render(<TabsSection order={order} start="home"
+    onOrderChange={(next) => { order = next }} onStartChange={vi.fn()} />)
   return {
-    rerender: () => view.rerender(<TabsModal order={order} start="home"
-      onOrderChange={(next) => { order = next }} onStartChange={vi.fn()} onClose={vi.fn()} />),
+    rerender: () => view.rerender(<TabsSection order={order} start="home"
+      onOrderChange={(next) => { order = next }} onStartChange={vi.fn()} />),
   }
 }

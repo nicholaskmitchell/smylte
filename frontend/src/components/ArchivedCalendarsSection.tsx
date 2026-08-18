@@ -5,8 +5,13 @@ import { fmtClock } from '../time'
 import { useTimeFormat } from '../timeformat'
 
 // Archive is app-level: the CalDAV collection stays on the wire, so an archived
-// calendar's events are still fetchable. This modal lists archived calendars and
-// lets you preview their events (read-only) or restore them.
+// calendar's events are still fetchable. This section lists archived calendars
+// and lets you preview their events (read-only) or restore them.
+//
+// It sits inside the settings panel's Calendar section and keeps a drill-down of
+// its own — the list, then one calendar's agenda. That inner step owns its own
+// back control and its own Escape, and reports upward through `onViewing` so the
+// panel's back control steps out of the agenda before it leaves the section.
 
 const fmtMonth = (d: Date) =>
   d.toLocaleDateString(undefined, { month: 'short', year: 'numeric' })
@@ -15,22 +20,18 @@ const fmtDay = (day: string) =>
   new Date(`${day}T00:00`).toLocaleDateString(undefined,
     { weekday: 'short', month: 'short', day: 'numeric' })
 
-export function ArchivedCalendarsModal({ archived, onChange, onExpire, onClose }: {
+export function ArchivedCalendarsSection({ archived, onChange, onExpire, viewing, onViewing }: {
   archived: string[]
   onChange: (next: string[]) => void
   onExpire: () => void
-  onClose: () => void
+  /** The calendar whose agenda is open, held by the panel so its back control
+      and Escape can step out of the agenda before leaving the section. */
+  viewing: List | null
+  onViewing: (cal: List | null) => void
 }) {
   const guard = makeGuard(onExpire)
   const [cals, setCals] = useState<List[]>([])
   const [loaded, setLoaded] = useState(false)
-  const [viewing, setViewing] = useState<List | null>(null)
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') (viewing ? setViewing(null) : onClose()) }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [viewing, onClose])
 
   // Fetch the full calendar list (incl. archived — the backend never filters)
   // once, then match against the archived id set.
@@ -46,42 +47,26 @@ export function ArchivedCalendarsModal({ archived, onChange, onExpire, onClose }
 
   const restore = (id: string) => {
     onChange(archived.filter((x) => x !== id))
-    if (viewing?.id === id) setViewing(null)
+    if (viewing?.id === id) onViewing(null)
   }
 
-  return (
-    <div className="overlay" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-head">
-          <span className="modal-title">
-            {viewing ? viewing.name : 'Archived calendars'}
-          </span>
-          <button className="icon-btn" onClick={viewing ? () => setViewing(null) : onClose}>
-            {viewing ? '‹ Back' : '✕'}
-          </button>
+  return viewing ? (
+    <ArchivedEvents cal={viewing} onExpire={onExpire} onRestore={() => restore(viewing.id)} />
+  ) : (
+    <div className="arch-list">
+      {!loaded ? (
+        <div className="arch-empty">Loading…</div>
+      ) : archivedCals.length === 0 ? (
+        <div className="arch-empty">No archived calendars.</div>
+      ) : archivedCals.map((c) => (
+        <div key={c.id} className="arch-row">
+          <span className="swatch" style={cssColor(c.color) ? { background: cssColor(c.color)! } : undefined} />
+          <span className="name">{c.name}</span>
+          <span className="count">{c.event_count}</span>
+          <button className="btn ghost" onClick={() => onViewing(c)}>View events</button>
+          <button className="btn" onClick={() => restore(c.id)}>Restore</button>
         </div>
-
-        {viewing
-          ? <ArchivedEvents cal={viewing} onExpire={onExpire}
-              onRestore={() => restore(viewing.id)} />
-          : (
-            <div className="arch-list">
-              {!loaded ? (
-                <div className="arch-empty">Loading…</div>
-              ) : archivedCals.length === 0 ? (
-                <div className="arch-empty">No archived calendars.</div>
-              ) : archivedCals.map((c) => (
-                <div key={c.id} className="arch-row">
-                  <span className="swatch" style={cssColor(c.color) ? { background: cssColor(c.color)! } : undefined} />
-                  <span className="name">{c.name}</span>
-                  <span className="count">{c.event_count}</span>
-                  <button className="btn ghost" onClick={() => setViewing(c)}>View events</button>
-                  <button className="btn" onClick={() => restore(c.id)}>Restore</button>
-                </div>
-              ))}
-            </div>
-          )}
-      </div>
+      ))}
     </div>
   )
 }
