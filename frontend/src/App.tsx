@@ -29,9 +29,7 @@ import { CalendarView } from './components/CalendarView'
 import { SchedulingView } from './components/SchedulingView'
 import { HomeView } from './components/HomeView'
 import { AppearancePanel } from './components/AppearancePanel'
-import { ArchivedCalendarsModal } from './components/ArchivedCalendarsModal'
-import { ConnectionsModal } from './components/ConnectionsModal'
-import { TabsModal } from './components/TabsModal'
+import { SettingsMenu } from './components/SettingsMenu'
 
 type Auth = 'loading' | 'in' | 'out'
 
@@ -70,9 +68,9 @@ export function App() {
   const [sessionTtl, setSessionTtl] = useState<number | null>(null)
   const [rev, setRev] = useState(0)
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [archivedOpen, setArchivedOpen] = useState(false)
-  const [connectionsOpen, setConnectionsOpen] = useState(false)
-  const [tabsOpen, setTabsOpen] = useState(false)
+  // Appearance is the one editor still opened over the app: it is a full token
+  // workbench, not a row of settings. Tabs, connected apps and archived
+  // calendars are sections inside the settings panel now.
   const [appearanceOpen, setAppearanceOpen] = useState(false)
   // Seeded from the pre-paint cache so the editor opens showing what is already
   // on screen; the server overwrites it a moment later like every other setting.
@@ -407,7 +405,10 @@ export function App() {
     return () => { clearTimeout(timer); unsubscribe() }
   }, [auth])
 
-  // Dismiss the settings menu on an outside click or Escape (like Søren's).
+  // Dismiss the settings menu on an outside click (like Søren's). Escape is
+  // SettingsMenu's own: it has a drill-down to unwind — the archived-calendar
+  // agenda, then the section, then the menu — and closing outright from here
+  // would skip those steps.
   useEffect(() => {
     if (!settingsOpen) return
     const onClick = (e: MouseEvent) => {
@@ -415,15 +416,8 @@ export function App() {
       if (settingsRef.current?.contains(t) || gearRef.current?.contains(t)) return
       setSettingsOpen(false)
     }
-    const onKey = (e: globalThis.KeyboardEvent) => {
-      if (e.key === 'Escape') setSettingsOpen(false)
-    }
     document.addEventListener('mousedown', onClick)
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('mousedown', onClick)
-      document.removeEventListener('keydown', onKey)
-    }
+    return () => document.removeEventListener('mousedown', onClick)
   }, [settingsOpen])
 
   const changeTheme = useCallback((next: 'light' | 'dark') => {
@@ -505,105 +499,19 @@ export function App() {
         )}
 
         {settingsOpen && (
-          <div ref={settingsRef} className="menu settings-menu" role="dialog" aria-label="Settings">
-            <div className="menu-head">Settings</div>
-            <div className="menu-row">
-              <label>Theme</label>
-              <button className="menu-toggle" onClick={toggleTheme}>
-                {theme === 'dark' ? 'Dark' : 'Light'}
-              </button>
-            </div>
-            <div className="menu-row">
-              <label>Appearance</label>
-              <button className="menu-toggle" aria-label="Customize appearance"
-                onClick={() => { setSettingsOpen(false); setAppearanceOpen(true) }}>
-                Customize…
-              </button>
-            </div>
-            <div className="menu-row">
-              <label>Tabs</label>
-              <button className="menu-toggle" aria-label="Customize tabs"
-                onClick={() => { setSettingsOpen(false); setTabsOpen(true) }}>
-                Customize…
-              </button>
-            </div>
-            <div className="menu-row">
-              <label>Stay signed in</label>
-              <button className="menu-toggle" onClick={cycleSessionTtl}
-                aria-label="How long to stay signed in">
-                {sessionLabel(sessionTtl)}
-              </button>
-            </div>
-            <div className="menu-row">
-              <label>Clock</label>
-              <button className="menu-toggle" onClick={toggleTimeFormat}
-                aria-label="12- or 24-hour clock">
-                {timeFormatLabel(timeFormat)}
-              </button>
-            </div>
-            <div className="menu-row">
-              <label>Calendar window</label>
-              <button className="menu-toggle" onClick={toggleCalFit}
-                aria-label="Fixed or dynamic calendar grid"
-                title="Fixed keeps every week the same height; a day with more than fits collapses into “+N more” instead of stretching its week.">
-                {calendarFitLabel(calFit)}
-              </button>
-            </div>
-            <div className="menu-row">
-              <label>Completed tasks</label>
-              <button className="menu-toggle" onClick={toggleShowCompleted}
-                aria-pressed={showCompleted}>
-                {showCompleted ? 'Shown' : 'Hidden'}
-              </button>
-            </div>
-            <div className="menu-row">
-              <label>Home timezone</label>
-              <button className="menu-toggle" onClick={toggleHomeTz}
-                aria-label="Timezone your events are written in"
-                title="Which clock your events are written on. Scheduling links use it to know when you are really busy.">
-                {homeTz || 'Not set'}
-              </button>
-            </div>
-            <div className="menu-row">
-              <label>Signed in as</label>
-              <span className="menu-value">{user}</span>
-            </div>
-            <div className="menu-row">
-              <label>Connected apps</label>
-              <button className="menu-toggle" aria-label="Connected applications"
-                onClick={() => { setSettingsOpen(false); setConnectionsOpen(true) }}>
-                Manage…
-              </button>
-            </div>
-            <div className="menu-row">
-              <label>Archived calendars</label>
-              <button className="menu-toggle"
-                onClick={() => { setSettingsOpen(false); setArchivedOpen(true) }}>
-                {archivedCals.length > 0 ? `View (${archivedCals.length})` : 'View'}
-              </button>
-            </div>
-            <div className="hintline">
-              A shorter sign-in applies at once, on this device and any other. A
-              longer one starts from your next sign-in.
-            </div>
-            <div className="hintline">
-              The clock covers every time the app draws itself. Date and time
-              pickers are drawn by the browser — Chrome, Edge and the Windows
-              app follow this setting, Firefox follows your system's.
-            </div>
-            <div className="hintline">
-              A fixed calendar window fits the whole month in the pane: every week
-              is the same height, and a day with more than fits collapses into
-              “+N more”. Dynamic lets a busy week grow and the grid scroll.
-            </div>
-            <div className="hintline">
-              Lists and calendars live on the Radicale CalDAV server — changes here
-              show up in every connected client.
-            </div>
-            <div className="menu-actions">
-              <button className="btn ghost" onClick={onLogout}>Log out</button>
-            </div>
-          </div>
+          <SettingsMenu panelRef={settingsRef}
+            theme={theme} onToggleTheme={toggleTheme}
+            onCustomizeAppearance={() => { setSettingsOpen(false); setAppearanceOpen(true) }}
+            tabOrder={tabOrder} startTab={startTab}
+            onTabOrderChange={changeTabOrder} onStartTabChange={changeStartTab}
+            timeFormat={timeFormat} onToggleTimeFormat={toggleTimeFormat}
+            homeTz={homeTz} onToggleHomeTz={toggleHomeTz}
+            calFit={calFit} onToggleCalFit={toggleCalFit}
+            archivedCals={archivedCals} onArchivedCalsChange={changeArchivedCals}
+            showCompleted={showCompleted} onToggleShowCompleted={toggleShowCompleted}
+            user={user} sessionTtl={sessionTtl} onCycleSessionTtl={cycleSessionTtl}
+            onLogout={onLogout} onExpire={onExpire}
+            onClose={() => setSettingsOpen(false)} />
         )}
       </div>
       {booting && <div className="work"><div className="content" aria-busy="true" /></div>}
@@ -635,17 +543,6 @@ export function App() {
         <AppearancePanel appearance={appearance} onChange={changeAppearance}
           mode={theme === 'dark' ? 'dark' : 'light'} onMode={changeTheme}
           onClose={() => setAppearanceOpen(false)} />
-      )}
-      {connectionsOpen && (
-        <ConnectionsModal onExpire={onExpire} onClose={() => setConnectionsOpen(false)} />
-      )}
-      {archivedOpen && (
-        <ArchivedCalendarsModal archived={archivedCals} onChange={changeArchivedCals}
-          onExpire={onExpire} onClose={() => setArchivedOpen(false)} />
-      )}
-      {tabsOpen && (
-        <TabsModal order={tabOrder} start={startTab} onOrderChange={changeTabOrder}
-          onStartChange={changeStartTab} onClose={() => setTabsOpen(false)} />
       )}
       {toast && (
         <div className="toast" role="alert">

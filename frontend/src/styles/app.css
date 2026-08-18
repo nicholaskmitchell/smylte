@@ -34,7 +34,48 @@
   box-shadow: var(--shadow);
   padding: 14px; display: flex; flex-direction: column; gap: 8px;
 }
-.settings-menu { width: 320px; max-height: 82vh; overflow-y: auto; }
+/* A left nav beside a panel, not one flat list of rows — see SettingsMenu.tsx.
+   The nav column extends downward for free, so the number of sections stops
+   being the thing that decides whether settings fits.
+   `dvh`, not `vh`: on iOS `vh` is the URL-bar-hidden height, so a cap measured
+   in it overflows the screen you can actually see whenever the bar is showing. */
+.settings-menu {
+  width: 600px; max-width: calc(100vw - 36px); max-height: 82dvh;
+  overflow: hidden; gap: 12px;
+}
+.set-head { display: flex; align-items: center; gap: 8px; }
+.set-title { flex: 1; min-width: 0; }
+/* Only the sheet has a title bar with controls in it; on a desktop the heading
+   is just a heading, and the nav says where you are. */
+.set-back, .set-back-slot, .set-close { display: none; }
+.set-body { display: flex; gap: 14px; align-items: stretch; flex: 1 1 auto; min-height: 0; }
+.set-nav {
+  display: flex; flex-direction: column; flex: none; width: 124px; gap: 1px;
+  border-right: 1px solid var(--rule); padding-right: 8px;
+}
+.set-nav-item {
+  font-family: var(--mono); font-size: calc(11px * var(--fs-scale));
+  text-transform: var(--label-case); letter-spacing: calc(0.07em * var(--tracking));
+  background: none; border: 0; border-left: 2px solid transparent; color: var(--fg-muted);
+  padding: 8px 10px; cursor: pointer; transition: color 0.15s, border-color 0.15s;
+  flex: none; white-space: nowrap; text-align: left;
+}
+.set-nav-item:hover { color: var(--accent); }
+.set-nav-item.active { color: var(--fg); border-left-color: var(--accent); }
+/* The panel column is the one scroller on this surface. A capped list nested
+   inside it would only clip itself mid-row. */
+.set-panels { flex: 1 1 auto; min-width: 0; overflow-y: auto; padding-right: 2px; }
+.set-panel { display: flex; flex-direction: column; gap: 9px; }
+/* A subhead introducing the next block, not the first line of the panel. */
+.set-panel .menu-head:not(:first-child) { margin-top: 14px; }
+/* Without this a flex field cannot shrink below its own content — and the
+   mobile anti-zoom rule below bumps `.input` to 16px, making it *wider* on a
+   phone than on a desktop. That is what pushed rows off the side. */
+.settings-menu input, .settings-menu select { min-width: 0; }
+/* `.input` is `width: 100%`, which in a `.menu-row` swallows the row and wraps
+   the label onto two lines. Cap it so the label keeps its own line. */
+.set-panel .menu-row .input { width: auto; max-width: min(220px, 60%); }
+.settings-menu .arch-row, .settings-menu .conn { flex-wrap: wrap; row-gap: 6px; }
 .menu-head {
   font-family: var(--mono); font-size: calc(10px * var(--fs-scale)); text-transform: var(--label-case);
   letter-spacing: calc(0.1em * var(--tracking)); color: var(--fg-faint);
@@ -583,6 +624,47 @@
   .topbar { gap: 14px; padding: 10px 14px; }
   .brand { font-size: calc(19px * var(--fs-scale)); }
   .menu { right: 14px; }
+
+  /* Settings is a bottom sheet here, not a popover. The popover form could not
+     be made to fit: it hangs off `.topbar` at `top: calc(100% + 6px)` under an
+     `82vh` cap, and `.shell` is `overflow: hidden`, so anything past the fold
+     was simply unreachable. A sheet anchored to the viewport has one answer for
+     its height — and it is the idiom every other dialog here already uses. */
+  .set-overlay { align-items: flex-end; padding: 0; }
+  .settings-menu.set-sheet {
+    width: 100%; max-width: none; max-height: 88dvh;
+    display: flex; flex-direction: column;
+    background: var(--bg-elev); border: 0; border-top: 1px solid var(--rule);
+    box-shadow: 0 -12px 40px rgba(0, 0, 0, 0.28);
+    padding: 14px 14px calc(14px + env(safe-area-inset-bottom));
+    animation: sheet-up 0.18s ease-out;
+  }
+  .set-sheet .set-head {
+    font-size: calc(12px * var(--fs-scale)); letter-spacing: calc(0.08em * var(--tracking));
+    padding-bottom: 8px; border-bottom: 1px solid var(--rule);
+  }
+  .set-sheet .set-back, .set-sheet .set-close { display: inline-flex; }
+  .set-sheet .set-back-slot { display: block; width: 27px; flex: none; }
+  /* Nav and panel take turns rather than sharing the width: an index of
+     sections, then the one you tapped. A 124px column beside a phone-width
+     panel would leave neither enough room. */
+  .set-sheet .set-body { display: block; flex: 1 1 auto; min-height: 0; overflow: hidden; }
+  .set-sheet .set-nav {
+    width: auto; border-right: 0; padding-right: 0; gap: 0;
+    height: 100%; overflow-y: auto;
+  }
+  /* Full-width rows with a chevron — a list you tap, not a tab you pick. */
+  .set-sheet .set-nav-item {
+    font-family: var(--sans); font-size: calc(15px * var(--fs-scale));
+    text-transform: none; letter-spacing: 0; color: var(--fg);
+    border-left: 0; border-bottom: 1px solid color-mix(in oklab, var(--rule) 55%, transparent);
+    padding: 14px 4px; display: flex; align-items: center; justify-content: space-between;
+  }
+  .set-sheet .set-nav-item::after { content: "›"; color: var(--fg-faint); font-size: calc(15px * var(--fs-scale)); }
+  .set-sheet .set-nav-item.active { border-left: 0; }
+  .set-sheet .set-panels { height: 100%; overflow-y: auto; padding-right: 0; }
+  .set-sheet[data-view="index"] .set-panels { display: none; }
+  .set-sheet[data-view="panel"] .set-nav { display: none; }
 
   /* panes stack; on phones the sidebar is a compact trigger bar plus a
      bottom-sheet management drawer (Sidebar.tsx) — not a cramped chip strip.
