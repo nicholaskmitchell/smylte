@@ -1,14 +1,16 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import {
+  useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties,
+} from 'react'
 import {
   api, clientId, uidFor, type CalEvent, type EventScope, type List, type Task,
 } from '../api'
 import { useCalendarData, useTaskData } from '../data'
-import { cssColor, dayKey, makeGuard, pad, toLocalInput, ymd } from '../util'
+import { cssColor, dayKey, makeGuard, pad, textDir, toLocalInput, ymd } from '../util'
 import { fmtClock, inputLang } from '../time'
 import { useTimeFormat } from '../timeformat'
 import {
-  bucketByDay, bucketTasksByDay, dragBody, daysBetween, endFromDuration, lastDayOf,
-  monthGrid, shiftYmd, type DayEv,
+  bucketByDay, bucketTasksByDay, cellCapacity, chipsShown, dragBody, daysBetween,
+  endFromDuration, lastDayOf, monthGrid, shiftYmd, type CalendarFit, type DayEv,
 } from '../calendar'
 import { useIsMobile } from '../hooks'
 import { AgendaEvent, AgendaTask, DayPopover } from './DayPopover'
@@ -24,7 +26,37 @@ interface Draft { event?: CalEvent; date?: string }
 // How many chips a desktop day cell shows before collapsing the rest into
 // "+N more". Counted over events and tasks together, so the number is the
 // whole remainder rather than one kind's share of it.
+//
+// The cap for a dynamic grid, where the cell grows to fit whatever it is given.
+// A fixed grid measures its own instead (see `measureCells`) and falls back to
+// this until it can.
 const CELL_MAX = 4
+
+/**
+ * How many chips a cell of the currently rendered grid can hold, or null while
+ * nothing is measurable.
+ *
+ * Read off the DOM rather than derived from the stylesheet: a fixed cell's
+ * height comes from the pane it is stretched into, and a chip's from
+ * `--fs-scale` and whichever font the account chose — neither is knowable here.
+ * `.cal-ev, .cal-task` is looked up across the whole grid, not inside one cell,
+ * because most cells hold no chip to measure; every chip is the same height, so
+ * any of them answers for all.
+ */
+function measureCells(root: HTMLElement | null): number | null {
+  const cell = root?.querySelector('.cal-cell') as HTMLElement | null
+  const head = cell?.querySelector('.daynum') as HTMLElement | null
+  const chip = root?.querySelector('.cal-ev, .cal-task') as HTMLElement | null
+  if (!cell || !head || !chip) return null
+  const cs = getComputedStyle(cell)
+  return cellCapacity({
+    // clientHeight is the padding box, so the cell's own padding comes off it.
+    inner: cell.clientHeight - (parseFloat(cs.paddingTop) || 0) - (parseFloat(cs.paddingBottom) || 0),
+    head: head.getBoundingClientRect().height,
+    chip: chip.getBoundingClientRect().height,
+    gap: parseFloat(cs.rowGap) || 0,
+  })
+}
 
 /**
  * The local stand-in for an event whose create is still in flight, carrying the
@@ -127,7 +159,7 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
   hiddenCalendars, onHiddenCalendarsChange,
   archivedCalendars, onArchivedCalendarsChange,
   calTaskLists, onCalTaskListsChange,
-  calShowDone, onCalShowDoneChange }: {
+  calShowDone, onCalShowDoneChange, fit }: {
   onExpire: () => void
   // The month lives above the tab strip too, so coming back to Calendar returns
   // to where you were rather than snapping to today.
@@ -139,6 +171,10 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
   // it before, so it gains none until one is opted in.
   calTaskLists: string[]; onCalTaskListsChange: (next: string[]) => void
   calShowDone: boolean; onCalShowDoneChange: () => void
+  // Whether the month fits the pane or grows to its busiest day. Read-only: the
+  // choice is made in the settings menu, like the clock and the completed-task
+  // toggle, so there is nothing to hand back from here.
+  fit: CalendarFit
 }) {
   const guard = makeGuard(onExpire)
   const isMobile = useIsMobile()
@@ -377,6 +413,44 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
 
   // Desktop "+N more": a popover anchored to the day cell listing every event.
   const [more, setMore] = useState<{ day: string; x: number; y: number } | null>(null)
+
+  // ── the fixed window ──────────────────────────────────────────────────────
+  // Mobile is left out on purpose rather than overlooked: its cells carry dots
+  // instead of chips, and the day agenda renders *below* the grid inside the
+  // same scroller, so pinning the grid to the pane would squeeze the agenda off
+  // the screen. There is nothing on a mobile cell for a busy day to stretch.
+  const fitted = fit === 'fixed' && !isMobile
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const [capacity, setCapacity] = useState(CELL_MAX)
+
+  // Re-measured after every render — the cap has to answer to a month change, a
+  // font change and a text-size change alike, and none of those resizes the
+  // pane. It settles in one extra pass and cannot oscillate: a fixed row's
+  // height comes from the grid, not from what the cell holds, so the cap is a
+  // function of the layout and not of its own last answer.
+  useLayoutEffect(() => {
+    if (!fitted) {
+      setCapacity((prev) => (prev === CELL_MAX ? prev : CELL_MAX))
+      return
+    }
+    const next = measureCells(scrollRef.current)
+    // null is "nothing to measure yet" — keep the last usable answer rather
+    // than blanking every cell (which is also what jsdom always reports).
+    if (next !== null) setCapacity((prev) => (prev === next ? prev : next))
+  })
+
+  // A window resize changes the pane without re-rendering anything, so the
+  // effect above would never hear about it.
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!fitted || !el || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(() => {
+      const next = measureCells(el)
+      if (next !== null) setCapacity((prev) => (prev === next ? prev : next))
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [fitted])
   const calApi = {
     create: (name: string, color?: string | null) => guard(() => api.createCalendar(name, color)),
     update: (id: string, body: { name?: string; color?: string | null }) =>
@@ -435,7 +509,7 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
                 : 'All calendars are archived — restore one from Settings.'}
           </div>
         ) : (
-          <div className="cal-scroll">
+          <div ref={scrollRef} className={`cal-scroll${fitted ? ' fixed' : ''}`}>
             <div className="cal-grid">
               {DOW.map((d) => <div key={d} className="cal-dow">{d}</div>)}
               {days.map((d) => {
@@ -446,10 +520,11 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
                 // One cap over both kinds, so the "+N more" count is the whole
                 // remainder rather than the events' share of it. Events lead:
                 // they hold a span, tasks are a single deadline on the day.
-                const shownEvents = dayEvents.slice(0, CELL_MAX)
-                const shownTasks = dayTasks.slice(0, Math.max(0, CELL_MAX - shownEvents.length))
-                const hiddenCount =
-                  dayEvents.length - shownEvents.length + dayTasks.length - shownTasks.length
+                const total = dayEvents.length + dayTasks.length
+                const room = chipsShown(total, fitted ? capacity : CELL_MAX, fitted)
+                const shownEvents = dayEvents.slice(0, room)
+                const shownTasks = dayTasks.slice(0, Math.max(0, room - shownEvents.length))
+                const hiddenCount = total - shownEvents.length - shownTasks.length
                 return (
                   <div key={key}
                     className={`cal-cell ${inMonth ? '' : 'dim'} ${key === todayKey ? 'today' : ''} ${isMobile && key === focusDay ? 'focus' : ''} ${drag && overDay === key ? 'drag-over' : ''}`}
@@ -490,6 +565,7 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
                             <div key={`${e.calendar}::${e.id}`}
                               className={`cal-ev ${e.all_day ? 'allday' : ''} ${e.cont ? 'cont' : ''}`}
                               style={evStyle(e)}
+                              dir={textDir(e.summary)}
                               title={e.is_recurring ? `${e.summary || ''} (repeating)` : (e.summary || '')}
                               draggable
                               onDragStart={(ev) => {
@@ -505,7 +581,19 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
                               )}
                               {e.is_recurring && <span className="recur" aria-hidden="true">↻ </span>}
                               {e.cont && <span className="t" aria-hidden="true">‥ </span>}
-                              {e.summary || '(untitled)'}
+                              {/* A title too long for its cell is cut by CSS
+                                  (`text-overflow: ellipsis`), never here — the
+                                  browser clips the shaped line and paints an
+                                  ellipsis over it. Cutting the STRING instead
+                                  would break Arabic letter joining: the last
+                                  surviving letter falls back to its isolated
+                                  form, which is often wider than the medial one
+                                  it replaced, so a "shortened" title can render
+                                  longer than the one it shortened. `title=`
+                                  above keeps the whole thing a hover away, and
+                                  <bdi> stops an RTL title reordering the clock
+                                  prefix and the ↻ around it. */}
+                              <bdi>{e.summary || '(untitled)'}</bdi>
                               {resizable && (
                                 <span className="ev-resize" title="Drag to change the last day"
                                   draggable
@@ -524,11 +612,13 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
                           const done = t.completed || t.cancelled
                           return (
                             <div key={t.uid} className={`cal-task ${done ? 'done' : ''}`}
-                              style={taskStyle(t)} title={t.summary || ''}
+                              style={taskStyle(t)} dir={textDir(t.summary)} title={t.summary || ''}
                               onClick={(ev) => { ev.stopPropagation(); setTaskDetail(t) }}>
                               <span className="tick" aria-hidden="true">{done ? '☑' : '☐'}</span>
                               {timed && <span className="t">{fmtClock(t.due!, tf)}</span>}
-                              {t.summary || '(untitled)'}
+                              {/* Cut by CSS, never by the string — see the event
+                                  chip above for why that distinction matters. */}
+                              <bdi>{t.summary || '(untitled)'}</bdi>
                             </div>
                           )
                         })}

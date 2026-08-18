@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AuthError } from './api'
-import { addDays, cssColor, dayKey, hasZone, instantFromLocal, isOverdue, makeGuard, pad, parseDate, setErrorNotifier, toLocalInput, ymd } from './util'
+import { addDays, cssColor, dayKey, hasZone, instantFromLocal, isOverdue, makeGuard, pad, parseDate, setErrorNotifier, textDir, toLocalInput, ymd } from './util'
 
 describe('parseDate', () => {
   it('parses date-only strings as LOCAL midnight, not UTC', () => {
@@ -167,5 +167,35 @@ describe('cssColor', () => {
     const backend = new RegExp(m![1])
     for (const v of ['#D9480F', '#d9480f80']) expect(backend.test(v)).toBe(true)
     for (const v of ['url(//x)', 'red', '#123']) expect(backend.test(v)).toBe(false)
+  })
+})
+
+describe('textDir', () => {
+  // Which end of a title an ellipsis eats follows the direction of the box, not
+  // the text — so a chip holding an Arabic title has to be marked rtl or it
+  // gets clipped at the beginning, the half you need to recognise it by.
+  it('marks a title that begins in a right-to-left script', () => {
+    expect(textDir('اجتماع الفريق الأسبوعي')).toBe('rtl')
+    expect(textDir('פגישת צוות')).toBe('rtl')
+  })
+
+  it('leaves a left-to-right title alone', () => {
+    expect(textDir('Weekly standup')).toBeUndefined()
+    expect(textDir('会議')).toBeUndefined()
+  })
+
+  it('reads the FIRST strong character, skipping what has no direction', () => {
+    // Leading digits and punctuation belong to whatever follows them.
+    expect(textDir('١٢٣ اجتماع')).toBe('rtl')
+    expect(textDir('— اجتماع')).toBe('rtl')
+    expect(textDir('123 Standup')).toBeUndefined()
+    // …and a Latin lead keeps the chip ltr however much Arabic follows it.
+    expect(textDir('Re: اجتماع الفريق')).toBeUndefined()
+  })
+
+  it('has no opinion about a title that is not there', () => {
+    expect(textDir('')).toBeUndefined()
+    expect(textDir(null)).toBeUndefined()
+    expect(textDir(undefined)).toBeUndefined()
   })
 })

@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
-  bucketByDay, bucketTasksByDay, dragBody, daysBetween, endIsExclusive, lastDayOf,
-  monthGrid, shiftIso,
+  DEFAULT_CALENDAR_FIT, bucketByDay, bucketTasksByDay, calendarFitLabel, cellCapacity,
+  chipsShown, dragBody, daysBetween, endIsExclusive, isCalendarFit, lastDayOf, monthGrid,
+  nextCalendarFit, shiftIso,
 } from './calendar'
 import type { CalEvent, Task } from './api'
 
@@ -404,5 +405,76 @@ describe('bucketTasksByDay', () => {
 
   it('returns nothing for an empty grid', () => {
     expect(bucketTasksByDay([t()], []).size).toBe(0)
+  })
+})
+
+// ── the grid's shape ────────────────────────────────────────────────────────
+// A fixed cell's height comes from the pane and a chip's from the account's
+// text scale, so the cap has to be measured. These are that arithmetic, given
+// the measurements the view reads off the DOM.
+
+describe('calendar fit', () => {
+  it('round-trips between the two shapes', () => {
+    expect(DEFAULT_CALENDAR_FIT).toBe('dynamic')
+    expect(nextCalendarFit('dynamic')).toBe('fixed')
+    expect(nextCalendarFit(nextCalendarFit('dynamic'))).toBe('dynamic')
+    expect(calendarFitLabel('fixed')).toBe('Fixed')
+    expect(calendarFitLabel('dynamic')).toBe('Dynamic')
+  })
+
+  it('refuses a stored value it did not write', () => {
+    // Settings are a JSON blob a user can hand-edit; anything else falls back
+    // to the shipped shape rather than reaching the grid.
+    for (const v of ['Fixed', '', 'auto', 0, null, undefined, {}]) {
+      expect(isCalendarFit(v)).toBe(false)
+    }
+    expect(isCalendarFit('fixed')).toBe(true)
+    expect(isCalendarFit('dynamic')).toBe(true)
+  })
+})
+
+describe('cellCapacity', () => {
+  // A cell is a flex column: the date number, then a gap before every chip.
+  it.each([
+    // [inner, head, chip, gap, fits]
+    [96, 15, 15, 3, 4],     // the shipped 104px cell, near enough
+    [55, 15, 15, 3, 2],     // squeezed to the 64px row floor
+    [200, 15, 15, 3, 10],   // a tall pane in a five-week month
+    [96, 15, 21, 3, 3],     // the same cell at a larger text scale
+    [17, 15, 15, 3, 0],     // no room for even one — "+N more" alone
+  ])('fits %i/%i/%i/%i into %i chips', (inner, head, chip, gap, fits) => {
+    expect(cellCapacity({ inner, head, chip, gap })).toBe(fits)
+  })
+
+  it.each([
+    ['an unlaid-out pane', { inner: 0, head: 0, chip: 0, gap: 0 }],
+    ['a cell with no chip to measure', { inner: 96, head: 15, chip: 0, gap: 3 }],
+    ['a NaN reading', { inner: NaN, head: 15, chip: 15, gap: 3 }],
+    ['a negative reading', { inner: -8, head: 15, chip: 15, gap: 3 }],
+  ])('answers null for %s', (_what, m) => {
+    // Null is "don't know yet", and the view keeps its last usable cap: a zero
+    // here would blank every cell behind "+N more" on the first paint.
+    expect(cellCapacity(m)).toBeNull()
+  })
+})
+
+describe('chipsShown', () => {
+  it('shows everything that fits, whichever shape the grid has', () => {
+    expect(chipsShown(3, 4, false)).toBe(3)
+    expect(chipsShown(3, 4, true)).toBe(3)
+    expect(chipsShown(4, 4, true)).toBe(4)
+  })
+
+  it('spends a slot on "+N more" only where the cell cannot grow', () => {
+    // A dynamic cell grows to make room for the button, which is what the grid
+    // has always done; a fixed one has to take the room out of its own height.
+    expect(chipsShown(9, 4, false)).toBe(4)
+    expect(chipsShown(9, 4, true)).toBe(3)
+  })
+
+  it('never slices backwards', () => {
+    expect(chipsShown(9, 0, true)).toBe(0)
+    expect(chipsShown(9, 1, true)).toBe(0)
+    expect(chipsShown(0, 4, true)).toBe(0)
   })
 })
