@@ -31,13 +31,13 @@ rather than per-list, because the pane is always the merged view. That order
 lives in the app-only sidecar, so it is Smylte's own and does not reach the
 other CalDAV clients.
 
-**Calendar.** Month grid across multiple calendars, each with a
-visibility toggle and non-destructive **archive** (hide without deleting;
-restore from Settings). Events support all-day and timed spans, drag to move
-or resize, and a mobile day-agenda. **VEVENT recurrence is implemented** —
-author repeats and edit/delete a single occurrence, this-and-following, or the
-whole series (`docs/recurrence-findings.md`). **Task (VTODO) recurrence stays
-gated** pending real-device captures.
+**Calendar.** Month grid across multiple calendars, each with a visibility
+toggle and non-destructive **archive** (hide without deleting; restore from
+Settings → Calendar). Events support all-day and timed spans, drag to move or
+resize, and a mobile day-agenda. **VEVENT recurrence is implemented** — author
+repeats and edit/delete a single occurrence, this-and-following, or the whole
+series (`docs/recurrence-findings.md`). **Task (VTODO) recurrence stays gated**
+pending real-device captures.
 
 A **Tasks** group in the same sidebar puts task lists on the grid: pick which
 ones appear, and whether completed tasks stay visible. Nothing shows until a
@@ -57,8 +57,9 @@ is account-synced. Arranging is desktop-only for now; phones render the same
 modules stacked in the saved order. The mini calendar dots each day in its
 calendars' colors, and a day opens a read-only list of its events.
 
-**Tabs.** Settings → Tabs reorders the top strip and picks which tab the app
-opens on — a fixed one, or wherever you left off. Both follow the account.
+**Tabs.** Settings → General → Tabs reorders the top strip and picks which tab
+the app opens on — a fixed one, or wherever you left off. Both follow the
+account.
 
 **Appearance.** Settings → Appearance opens a live editor over the design
 system: every color token (with a picker and a raw OKLCH/hex field), corner
@@ -87,7 +88,7 @@ the CSSOM, so a `url()` beacon or a property break-out must never survive
 storage. `appearance.test.ts` asserts the defaults *and* the presets still
 match `tokens.css`.
 
-**Connect it to Claude.** Settings → Connected apps, once
+**Connect it to Claude.** Settings → Account → Connected apps, once
 `TASKS_MCP_ENABLED=true`, exposes a remote **MCP server** at `/mcp` that Claude
 (or any MCP client) can be pointed at as a custom connector — around two dozen
 tools over lists, tasks, subtasks, search, tags, calendars, events including the
@@ -114,12 +115,13 @@ which task lists show on the calendar). The public gate is the app's own
 username/password (scrypt-hashed, cookie session); Cloudflare Access is an
 optional second layer.
 
-Settings → Clock switches every time the app draws between **12- and 24-hour**;
-`time.ts` is the only thing that formats a clock, so there is one place for the
-choice to land. Date and time *pickers* are drawn by the browser rather than by
-us, and read the element's `lang` to decide — which works in Chrome, Edge and
-the Windows client, and is ignored by Firefox, which follows the OS. The public
-booking page is deliberately left on the visitor's own locale.
+Settings → General → Clock switches every time the app draws between **12- and
+24-hour**; `time.ts` is the only thing that formats a clock, so there is one
+place for the choice to land. Date and time *pickers* are drawn by the browser
+rather than by us, and read the element's `lang` to decide — which works in
+Chrome, Edge and the Windows client, and is ignored by Firefox, which follows
+the OS. The public booking page is deliberately left on the visitor's own
+locale.
 
 ## Architecture
 
