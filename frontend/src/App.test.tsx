@@ -400,6 +400,38 @@ describe('<App> clock setting', () => {
   })
 })
 
+describe('<App> calendar window setting', () => {
+  const open = async () => {
+    render(<App />)
+    await screen.findByRole('button', { name: 'Tasks' })
+    await userEvent.click(screen.getByRole('button', { name: 'Settings' }))
+    return screen.getByRole('button', { name: 'Fixed or dynamic calendar grid' })
+  }
+
+  it('opens on the shape the grid has always had, and cycles', async () => {
+    const row = await open()
+    expect(row).toHaveTextContent('Dynamic')
+    await userEvent.click(row)
+    expect(row).toHaveTextContent('Fixed')
+    await waitFor(() => expect(m.putSettings).toHaveBeenCalledWith({ calendar_fit: 'fixed' }))
+    await userEvent.click(row)
+    expect(row).toHaveTextContent('Dynamic')
+    expect(m.putSettings).toHaveBeenLastCalledWith({ calendar_fit: 'dynamic' })
+  })
+
+  it('restores a stored choice', async () => {
+    m.getSettings.mockResolvedValue({ calendar_fit: 'fixed' })
+    await waitFor(async () => expect(await open()).toHaveTextContent('Fixed'))
+  })
+
+  it('falls back to dynamic when the stored value is junk', async () => {
+    // Hand-editable blob: an unknown token degrades to the shipped shape rather
+    // than reaching the grid as a class nothing styles.
+    m.getSettings.mockResolvedValue({ calendar_fit: 'squeeze' } as never)
+    expect(await open()).toHaveTextContent('Dynamic')
+  })
+})
+
 // ── a settings write that fails must not be swallowed ───────────────────────
 
 describe('<App> settings writes', () => {
