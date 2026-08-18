@@ -5,6 +5,7 @@
 // allowlist and the grid math — and re-exported here so the wire contract still
 // reads in one place. The backend mirrors them in SettingsPatch.
 import type { Appearance } from './appearance'
+import type { CalendarFit } from './calendar'
 import type { DashboardModule } from './dashboard'
 import type { Tab, TabStart } from './tabs'
 import type { TimeFormat } from './time'
@@ -241,6 +242,10 @@ export interface Settings {
   time_format?: TimeFormat         // 12- or 24-hour clock across the app (see time.ts); default '12h'
   calendar_task_lists?: string[]   // task-list ids DRAWN on the calendar — an allowlist, empty by default
   calendar_show_done_tasks?: boolean  // keep completed tasks on the calendar (default hidden)
+  // Whether the month grid fits the pane ('fixed': six equal week rows, a busy
+  // day collapsing into "+N more") or grows to its busiest day and scrolls
+  // ('dynamic', the default and what the grid did before this was settable).
+  calendar_fit?: CalendarFit
   // The IANA zone this account authors times in. The app writes non-all-day
   // events as floating local wall time, which names no instant on its own, so
   // the booking busy-set has to be told which clock they were written on —
