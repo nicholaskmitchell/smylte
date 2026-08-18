@@ -248,3 +248,83 @@ export function dragBody(
       : end,
   }
 }
+
+// ── the grid's shape ────────────────────────────────────────────────────────
+// A month cell used to size itself to whatever it held: `.cal-cell` carries a
+// min-height and the grid's rows are `auto`, so one day with four chips and a
+// "+N more" button made its whole week taller than the quiet weeks around it,
+// and the six rows together outgrew the pane. That is `dynamic`, and it stays
+// the default. `fixed` splits the pane evenly between the six weeks instead, so
+// the month always draws the same shape and a busy day collapses into "+N more"
+// rather than stretching its row.
+
+export type CalendarFit = 'dynamic' | 'fixed'
+
+/** The shape the grid has always had, and what an account gets until it says
+ *  otherwise. */
+export const DEFAULT_CALENDAR_FIT: CalendarFit = 'dynamic'
+
+// Settings are a JSON blob a user can hand-edit, so the stored value is
+// re-validated on the way in rather than trusted (same as isTimeFormat).
+export function isCalendarFit(v: unknown): v is CalendarFit {
+  return v === 'dynamic' || v === 'fixed'
+}
+
+/** Two values, so the settings row cycles like the clock rather than offering a
+ *  picker. */
+export function nextCalendarFit(f: CalendarFit): CalendarFit {
+  return f === 'fixed' ? 'dynamic' : 'fixed'
+}
+
+export function calendarFitLabel(f: CalendarFit): string {
+  return f === 'fixed' ? 'Fixed' : 'Dynamic'
+}
+
+/** One day cell's vertical layout, in px, as read off the rendered grid.
+ *
+ * `inner` is the content box: the cell's height with its own padding taken off.
+ * `head` is the date number above the chips, `chip` one chip, `gap` the flex
+ * gap that sits between every adjacent pair. */
+export interface CellMetrics {
+  inner: number
+  head: number
+  chip: number
+  gap: number
+}
+
+/**
+ * How many chips fit in a cell of these measurements, or null when they say
+ * nothing usable.
+ *
+ * A fixed cell's height comes from the pane, and a chip's from `--fs-scale` and
+ * the chosen font — neither is a constant this module could hold, so the cap is
+ * measured rather than assumed. That is what keeps "+N more" honest: a guessed
+ * cap either hides events a taller cell had room for, or promises chips that
+ * get clipped.
+ *
+ * Null is the "don't know yet" answer, and the caller keeps whatever cap it had:
+ * it comes back for an unmeasured layout (jsdom, a display:none pane, the paint
+ * before the first chip exists) rather than a zero that would blank every cell.
+ */
+export function cellCapacity(m: CellMetrics): number | null {
+  const { inner, head, chip, gap } = m
+  if (![inner, head, chip, gap].every((n) => Number.isFinite(n) && n >= 0)) return null
+  if (inner <= 0 || chip <= 0) return null
+  // n chips under the date number occupy head + n * (gap + chip): the flex gap
+  // falls between the head and the first chip too.
+  return Math.max(0, Math.floor((inner - head) / (chip + gap)))
+}
+
+/**
+ * How many of a day's `total` chips the cell renders. The remainder is what
+ * "+N more" counts.
+ *
+ * `reserveMore` is the only place the two modes actually differ. A fixed cell
+ * cannot grow, so the "+N more" button has to come out of the same height and
+ * costs a chip slot; a dynamic cell grows to make room for it, which is what
+ * the grid has always done.
+ */
+export function chipsShown(total: number, cap: number, reserveMore: boolean): number {
+  if (total <= cap) return Math.max(0, total)
+  return Math.max(0, reserveMore ? cap - 1 : cap)
+}

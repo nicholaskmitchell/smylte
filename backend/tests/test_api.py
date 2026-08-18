@@ -495,6 +495,19 @@ def test_settings_calendar_tasks_sync(client):
     assert client.get("/api/settings").json()["calendar_show_done_tasks"] is False
 
 
+def test_settings_calendar_fit_sync(client):
+    # Absent means the shape the grid has always had: rows that grow to their
+    # busiest day. Only the two the client knows how to draw are accepted — an
+    # unknown one would reach the grid as a class nothing styles.
+    assert "calendar_fit" not in client.get("/api/settings").json()
+    r = client.put("/api/settings", json={"calendar_fit": "fixed"})
+    assert r.status_code == 200 and r.json()["calendar_fit"] == "fixed"
+    assert client.get("/api/settings").json()["calendar_fit"] == "fixed"
+    assert client.put("/api/settings", json={"calendar_fit": "dynamic"}).json()[
+        "calendar_fit"] == "dynamic"
+    assert client.put("/api/settings", json={"calendar_fit": "squeeze"}).status_code == 422
+
+
 def test_settings_task_grouping_sync(client):
     # hidden_lists, task_groups, and collapsed_groups must survive the HTTP
     # round-trip — the model has to accept and re-emit each key (a store test

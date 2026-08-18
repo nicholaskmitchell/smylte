@@ -10,6 +10,9 @@ import {
   applyTokens, cacheAppearance, ensureFonts, presetSlug, readCachedAppearance,
   resolve, sanitizeAppearance, syncThemeColor, type Appearance, type Mode,
 } from './appearance'
+import {
+  DEFAULT_CALENDAR_FIT, calendarFitLabel, isCalendarFit, nextCalendarFit, type CalendarFit,
+} from './calendar'
 import { sanitizeLayout } from './dashboard'
 import { isSessionTtl, nextSessionTtl, sessionLabel } from './session'
 import {
@@ -59,6 +62,9 @@ export function App() {
   // it is opted in (see the SettingsPatch comment for why this one is inverted).
   const [calTaskLists, setCalTaskLists] = useState<string[]>([])
   const [calShowDone, setCalShowDone] = useState(false)
+  // Whether the month grid fits the pane or grows to its busiest day. Dynamic is
+  // what the grid has always done, so an account that never chose keeps it.
+  const [calFit, setCalFit] = useState<CalendarFit>(DEFAULT_CALENDAR_FIT)
   // How long a login lasts. Null means the deployment's own TASKS_SESSION_TTL,
   // which is what this used to be the only way to set.
   const [sessionTtl, setSessionTtl] = useState<number | null>(null)
@@ -183,6 +189,7 @@ export function App() {
         if (typeof s.calendar_show_done_tasks === 'boolean') {
           setCalShowDone(s.calendar_show_done_tasks)
         }
+        if (isCalendarFit(s.calendar_fit)) setCalFit(s.calendar_fit)
         if (isSessionTtl(s.session_ttl_s)) setSessionTtl(s.session_ttl_s)
         // Both blobs are re-validated here rather than trusted: they are the
         // two settings a user can hand-edit or import a file into, and an
@@ -346,6 +353,13 @@ export function App() {
     setCalShowDone(next)
     saveSettings({ calendar_show_done_tasks: next })
   }, [calShowDone])
+
+  // Fixed or dynamic month grid. Two values, so the row cycles like the clock.
+  const toggleCalFit = useCallback(() => {
+    const next = nextCalendarFit(calFit)
+    setCalFit(next)
+    saveSettings({ calendar_fit: next })
+  }, [calFit])
 
   // The zone this account authors times in. It exists for the scheduling links:
   // the app writes non-all-day events as floating local wall time, which names
@@ -528,6 +542,14 @@ export function App() {
               </button>
             </div>
             <div className="menu-row">
+              <label>Calendar window</label>
+              <button className="menu-toggle" onClick={toggleCalFit}
+                aria-label="Fixed or dynamic calendar grid"
+                title="Fixed keeps every week the same height; a day with more than fits collapses into “+N more” instead of stretching its week.">
+                {calendarFitLabel(calFit)}
+              </button>
+            </div>
+            <div className="menu-row">
               <label>Completed tasks</label>
               <button className="menu-toggle" onClick={toggleShowCompleted}
                 aria-pressed={showCompleted}>
@@ -570,6 +592,11 @@ export function App() {
               app follow this setting, Firefox follows your system's.
             </div>
             <div className="hintline">
+              A fixed calendar window fits the whole month in the pane: every week
+              is the same height, and a day with more than fits collapses into
+              “+N more”. Dynamic lets a busy week grow and the grid scroll.
+            </div>
+            <div className="hintline">
               Lists and calendars live on the Radicale CalDAV server — changes here
               show up in every connected client.
             </div>
@@ -595,7 +622,8 @@ export function App() {
           hiddenCalendars={hiddenCals} onHiddenCalendarsChange={changeHiddenCals}
           archivedCalendars={archivedCals} onArchivedCalendarsChange={changeArchivedCals}
           calTaskLists={calTaskLists} onCalTaskListsChange={changeCalTaskLists}
-          calShowDone={calShowDone} onCalShowDoneChange={toggleCalShowDone} />
+          calShowDone={calShowDone} onCalShowDoneChange={toggleCalShowDone}
+          fit={calFit} />
       )}
       {!booting && tab === 'scheduling' && <SchedulingView rev={rev} onExpire={onExpire} />}
       {!booting && tab === 'home' && (

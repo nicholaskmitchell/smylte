@@ -385,6 +385,32 @@
   min-height: 104px; border-right: 1px solid var(--rule); border-bottom: 1px solid var(--rule);
   padding: 4px 6px; cursor: pointer; display: flex; flex-direction: column; gap: 3px;
 }
+/* The fixed window (Settings → Calendar window). The six week rows split the
+   pane between them, so a busy day collapses into "+N more" instead of
+   stretching its whole week and pushing the last one off the bottom — the month
+   draws the same shape whatever is in it. Cells clip rather than grow, and the
+   chip cap is measured against this height (see CalendarView's `measureCells`),
+   so what the browser ever has to clip is one chip's text, not half a row.
+
+   The 64px floor is what stops "fixed" from meaning "unreadable": in a pane too
+   short for six of them the grid outgrows .cal-scroll and scrolls again, which
+   is the dynamic behaviour and the right answer at that size. Flex rather than
+   `height: 100%` so the grid gets a definite height without depending on a
+   percentage resolving against a flex item. */
+.cal-scroll.fixed { display: flex; flex-direction: column; }
+.cal-scroll.fixed .cal-grid {
+  flex: 1;
+  grid-template-rows: auto repeat(6, minmax(64px, 1fr));
+  /* Both axes, not just the rows. A `1fr` track floors at its content's
+     min-width, and a chip is `white-space: nowrap`, so one long title used to
+     widen its weekday for the whole month — Thursday twice the width of Sunday
+     because of a single event on the 20th. The explicit 0 floor is what makes
+     the ellipsis on that chip the thing that gives way instead of the column.
+     (`overflow: hidden` on the cell below already zeroes that floor as a side
+     effect; this says it rather than relying on it.) */
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+}
+.cal-scroll.fixed .cal-cell { min-height: 0; overflow: hidden; }
 .cal-cell:hover { background: var(--bg-elev); }
 .cal-cell.dim { background: var(--paper); }
 .cal-cell.today .daynum { color: var(--bg); background: var(--accent); }
@@ -393,10 +419,16 @@
 /* Events tint from the calendar's own color (--ev-c, set on .cal-scroll);
    uncolored calendars fall back to the accent / ok tints. */
 .cal-cell.drag-over { box-shadow: inset 0 0 0 1px var(--accent); }
+/* The colour rule sits on the INLINE start, not the left: a chip whose title
+   reads right-to-left is marked dir="rtl" (see CalendarView's `textDir`) so the
+   ellipsis eats the end of the title rather than its beginning, and the rule
+   follows the text to the right edge with it. Identical to `border-left` for
+   every left-to-right chip. The resize grip below stays physical on purpose —
+   it belongs to the grid's day axis, which runs left to right regardless. */
 .cal-ev {
   font-size: calc(11px * var(--fs-scale)); color: var(--fg);
   background: color-mix(in oklch, var(--ev-c, var(--accent)) 16%, transparent);
-  border-left: 2px solid var(--ev-c, var(--accent));
+  border-inline-start: 2px solid var(--ev-c, var(--accent));
   padding: 1px 5px; white-space: nowrap; overflow: hidden;
   text-overflow: ellipsis; cursor: grab;
   position: relative;
@@ -406,11 +438,11 @@
 .cal-ev:hover .ev-resize { border-right: 3px solid var(--ev-c, var(--accent)); }
 .cal-ev.allday {
   background: color-mix(in oklch, var(--ev-c, var(--ok)) 26%, transparent);
-  border-left-color: var(--ev-c, var(--ok));
+  border-inline-start-color: var(--ev-c, var(--ok));
 }
 /* continuation day of a multi-day span — same tint, softened lead edge */
-.cal-ev.cont { border-left-style: dotted; }
-.cal-ev .t { font-family: var(--mono); color: var(--fg-muted); margin-right: 4px; }
+.cal-ev.cont { border-inline-start-style: dotted; }
+.cal-ev .t { font-family: var(--mono); color: var(--fg-muted); margin-inline-end: 4px; }
 .cal-ev .recur { color: var(--fg-muted); font-weight: 600; }
 
 /* A task on the grid. Deliberately not a .cal-ev: an event holds a span and can
@@ -419,13 +451,13 @@
    checkbox, which is what says "this is a task" at a glance. */
 .cal-task {
   font-size: calc(11px * var(--fs-scale)); color: var(--fg);
-  border-left: 2px solid var(--ev-c, var(--accent));
+  border-inline-start: 2px solid var(--ev-c, var(--accent));
   padding: 1px 5px; white-space: nowrap; overflow: hidden;
   text-overflow: ellipsis; cursor: pointer;
 }
 .cal-task:hover { background: color-mix(in oklch, var(--ev-c, var(--accent)) 10%, transparent); }
-.cal-task .tick { color: var(--ev-c, var(--accent)); margin-right: 3px; }
-.cal-task .t { font-family: var(--mono); color: var(--fg-muted); margin-right: 4px; }
+.cal-task .tick { color: var(--ev-c, var(--accent)); margin-inline-end: 3px; }
+.cal-task .t { font-family: var(--mono); color: var(--fg-muted); margin-inline-end: 4px; }
 .cal-task.done { color: var(--fg-faint); text-decoration: line-through; }
 .ev-dot.task { border-radius: 0; }
 

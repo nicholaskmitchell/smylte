@@ -134,3 +134,22 @@ export function sameValue(a: string | string[], b: string | string[]): boolean {
 const HEX_COLOR = /^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$/
 export const cssColor = (c: string | null | undefined): string | null =>
   (c && HEX_COLOR.test(c.trim()) ? c.trim() : null)
+
+/**
+ * `'rtl'` when `s` reads right to left, else undefined — meant for the `dir`
+ * attribute on an element holding one user-supplied title.
+ *
+ * Which end of a title an ellipsis eats depends on the direction of the box it
+ * overflows, not on the text: an Arabic summary inside a left-to-right chip
+ * gets clipped at its *beginning*, which is the half you need to recognise it.
+ * Marking the chip rtl puts the ellipsis on the left and the clock prefix on
+ * the reading edge, so what is lost is the tail — the same bargain a Latin
+ * title gets.
+ *
+ * The first strong character decides, which is what `dir="auto"` would do if it
+ * could be aimed at the summary alone; on the chip itself it would read the
+ * "AM" of the clock prefix instead and answer ltr for everything.
+ */
+const RTL_FIRST = /^\P{L}*[\p{Script=Arabic}\p{Script=Hebrew}\p{Script=Syriac}\p{Script=Thaana}\p{Script=Nko}]/u
+export const textDir = (s: string | null | undefined): 'rtl' | undefined =>
+  (s && RTL_FIRST.test(s) ? 'rtl' : undefined)

@@ -17,6 +17,7 @@ import { CalendarView } from './CalendarView'
 import { DataProvider } from '../data'
 import { setCacheUser } from '../cache'
 import { api, type CalEvent, type List, type Task } from '../api'
+import type { CalendarFit } from '../calendar'
 
 vi.mock('../api', async (importOriginal) => {
   const mod = await importOriginal<typeof import('../api')>()
@@ -69,7 +70,7 @@ const setField = (label: string, value: string) =>
 /** `calTaskLists` is controlled like the real App holds it, so a harness that
  *  never fed a change back would test toggles that appear to do nothing. */
 function Harness({ taskLists = [] as string[], showDone = false,
-  hiddenCalendars = [] as string[],
+  hiddenCalendars = [] as string[], fit = 'dynamic' as CalendarFit,
   onHiddenCalendarsChange = (() => {}) as (next: string[]) => void }) {
   const now = new Date()
   const [cursor, setCursor] = useState(() => new Date(now.getFullYear(), now.getMonth(), 1))
@@ -82,13 +83,14 @@ function Harness({ taskLists = [] as string[], showDone = false,
         hiddenCalendars={hiddenCalendars} onHiddenCalendarsChange={onHiddenCalendarsChange}
         archivedCalendars={[]} onArchivedCalendarsChange={vi.fn()}
         calTaskLists={shown} onCalTaskListsChange={setShown}
-        calShowDone={done} onCalShowDoneChange={() => setDone((v) => !v)} />
+        calShowDone={done} onCalShowDoneChange={() => setDone((v) => !v)}
+        fit={fit} />
     </DataProvider>
   )
 }
 
 function setup(events?: CalEvent[], props?: {
-  taskLists?: string[]; showDone?: boolean
+  taskLists?: string[]; showDone?: boolean; fit?: CalendarFit
   hiddenCalendars?: string[]; onHiddenCalendarsChange?: (next: string[]) => void
 }) {
   if (events) m.events.mockResolvedValue(events)
@@ -423,6 +425,76 @@ describe('<CalendarView> tasks', () => {
     const pop = await screen.findByRole('dialog')
     expect(within(pop).getByText('Renew passport')).toBeInTheDocument()
     expect(within(pop).getByText('Ev 0')).toBeInTheDocument()
+  })
+})
+
+// ── the fixed window ────────────────────────────────────────────────────────
+// The shape of the grid is CSS's job; what the component owns is the class that
+// turns it on and the chip cap that has to hold when nothing is measurable.
+// jsdom lays nothing out — every height it reports is 0 — so it exercises
+// exactly the path a real browser takes on its first paint.
+
+describe('<CalendarView> calendar window', () => {
+  const busy = () => Array.from({ length: 6 }, (_, i) =>
+    ev({ uid: `e${i}`, id: `e${i}`, summary: `Ev ${i}`,
+      start: '2026-03-04T09:00:00', end: '2026-03-04T09:30:00' }))
+
+  it('leaves the grid free to grow by default', async () => {
+    setup(busy())
+    await screen.findByRole('button', { name: '+2 more' })
+    expect(document.querySelector('.cal-scroll')).not.toHaveClass('fixed')
+  })
+
+  it('pins the grid to the pane when the account asked for it', async () => {
+    setup(busy(), { fit: 'fixed' })
+    await screen.findByRole('button', { name: /more$/ })
+    expect(document.querySelector('.cal-scroll')).toHaveClass('fixed')
+  })
+
+  it('falls back to the shipped cap while the cell cannot be measured', async () => {
+    // An unlaid-out grid answers null, not zero, so the cap holds at 4 rather
+    // than hiding all six events behind "+6 more" on the first paint. Three
+    // chips, not four: a fixed cell cannot grow, so the button comes out of the
+    // same four slots.
+    setup(busy(), { fit: 'fixed' })
+    expect(await screen.findByRole('button', { name: '+3 more' })).toBeInTheDocument()
+    expect(document.querySelectorAll('.cal-ev')).toHaveLength(3)
+  })
+})
+
+describe('<CalendarView> chip text', () => {
+  // The whole title always reaches the DOM; the ellipsis is painted by CSS over
+  // what will not fit. Cutting the string instead would break Arabic letter
+  // joining — the last surviving letter falls back to a wider isolated form, so
+  // the "shortened" title can render longer than the one it shortened.
+  const arabic = 'اجتماع الفريق الأسبوعي لمراجعة المشروع'
+
+  it('keeps a long title whole and lays it out right to left', async () => {
+    setup([ev({ summary: arabic })])
+    const chip = await waitFor(() => {
+      const el = document.querySelector('.cal-ev')
+      expect(el).not.toBeNull()
+      return el as HTMLElement
+    })
+    expect(chip).toHaveAttribute('dir', 'rtl')
+    expect(chip.textContent).toContain(arabic)          // nothing truncated it
+    expect(chip.textContent).not.toContain('…')
+    expect(chip).toHaveAttribute('title', arabic)       // and hover has it in full
+  })
+
+  it('leaves a left-to-right title undirected', async () => {
+    setup([ev({ summary: 'Weekly standup' })])
+    await waitFor(() => expect(document.querySelector('.cal-ev')).not.toBeNull())
+    expect(document.querySelector('.cal-ev')).not.toHaveAttribute('dir')
+  })
+
+  it('isolates a task title the same way', async () => {
+    m.tasks.mockResolvedValue([tsk({ summary: arabic })])
+    setup([], { taskLists: ['tl1'] })
+    await waitFor(() => expect(document.querySelector('.cal-task')).not.toBeNull())
+    const chip = document.querySelector('.cal-task') as HTMLElement
+    expect(chip).toHaveAttribute('dir', 'rtl')
+    expect(chip.querySelector('bdi')!.textContent).toBe(arabic)
   })
 })
 

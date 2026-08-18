@@ -451,6 +451,12 @@ class SettingsPatch(BaseModel):
     # Whether completed/cancelled tasks stay on the calendar. Absent means the
     # default (hidden), matching show_completed_tasks; False is a real value.
     calendar_show_done_tasks: bool | None = None
+    # How the month grid sizes itself. "fixed" splits the pane evenly between the
+    # six week rows, so a busy day collapses into "+N more" rather than
+    # stretching its whole week; "dynamic" grows each row to its busiest day and
+    # scrolls. Absent means dynamic, which is what the grid did before this was
+    # settable.
+    calendar_fit: Literal["dynamic", "fixed"] | None = None
     # The IANA zone this account authors times in. The app writes non-all-day
     # events as FLOATING local wall time (`DTSTART:20260810T090000`), which
     # names no instant on its own — something has to say which clock it was.
