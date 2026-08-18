@@ -14,6 +14,16 @@ vi.mock('./api', async (importOriginal) => {
 
 const m = vi.mocked(api)
 
+/** Open settings and, when a section is named, drill into it.
+ *
+ * The nav items are `role="tab"`, not buttons — which is also what keeps the
+ * *Tasks* section from colliding with the *Tasks* tab in the strip above, since
+ * every `getByRole('button', { name: 'Tasks' })` here means the strip. */
+const openSettings = async (section?: string) => {
+  await userEvent.click(screen.getByRole('button', { name: 'Settings' }))
+  if (section) await userEvent.click(screen.getByRole('tab', { name: section }))
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   document.documentElement.dataset.theme = 'light'
@@ -29,6 +39,9 @@ beforeEach(() => {
   m.events.mockResolvedValue([])
   m.schedulingLinks.mockResolvedValue([])
   m.schedulingBookings.mockResolvedValue([])
+  // The Account section mounts the connected-apps list, so opening settings
+  // now fetches this too.
+  m.mcpConnections.mockResolvedValue([])
 })
 
 describe('<App> auth gate', () => {
@@ -126,7 +139,7 @@ describe('<App> auth gate', () => {
   it('logs out back to the login form', async () => {
     render(<App />)
     await screen.findByRole('button', { name: 'Tasks' })
-    await userEvent.click(screen.getByRole('button', { name: 'Settings' }))
+    await openSettings('Account')
     await userEvent.click(screen.getByRole('button', { name: /log out/i }))
     expect(m.logout).toHaveBeenCalledOnce()
     expect(await screen.findByRole('button', { name: /sign in/i })).toBeInTheDocument()
@@ -140,7 +153,7 @@ describe('<App> auth gate', () => {
     m.logout.mockRejectedValue(new HttpError(502, 'bad gateway'))
     render(<App />)
     await screen.findByRole('button', { name: 'Tasks' })
-    await userEvent.click(screen.getByRole('button', { name: 'Settings' }))
+    await openSettings('Account')
     await userEvent.click(screen.getByRole('button', { name: /log out/i }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/still signed in/i)
@@ -153,7 +166,7 @@ describe('<App> auth gate', () => {
     m.logout.mockRejectedValue(new AuthError('not authenticated'))
     render(<App />)
     await screen.findByRole('button', { name: 'Tasks' })
-    await userEvent.click(screen.getByRole('button', { name: 'Settings' }))
+    await openSettings('Account')
     await userEvent.click(screen.getByRole('button', { name: /log out/i }))
 
     expect(await screen.findByRole('button', { name: /sign in/i })).toBeInTheDocument()
@@ -165,25 +178,25 @@ describe('<App> home timezone', () => {
   // no instant on its own. A scheduling link used to assume its OWN zone for
   // those, so a link published in another zone read every one of the owner's
   // events at the wrong instant and offered their busy hours as bookable.
-  const openSettings = async () => {
+  const open = async () => {
     render(<App />)
     await screen.findByRole('button', { name: 'Tasks' })
-    await userEvent.click(screen.getByRole('button', { name: 'Settings' }))
+    await openSettings('General')
     return screen.getByRole('button', { name: 'Timezone your events are written in' })
   }
 
   it('starts unset, falling back to each link’s own zone', async () => {
-    expect(await openSettings()).toHaveTextContent('Not set')
+    expect(await open()).toHaveTextContent('Not set')
   })
 
   it('shows the stored zone', async () => {
     m.getSettings.mockResolvedValue({ home_timezone: 'Europe/Berlin' })
-    await waitFor(async () => expect(await openSettings()).toHaveTextContent('Europe/Berlin'))
+    await waitFor(async () => expect(await open()).toHaveTextContent('Europe/Berlin'))
   })
 
   it('adopts this device’s zone, and clears back off', async () => {
     const here = Intl.DateTimeFormat().resolvedOptions().timeZone
-    const btn = await openSettings()
+    const btn = await open()
     await userEvent.click(btn)
     expect(btn).toHaveTextContent(here)
     expect(m.putSettings).toHaveBeenCalledWith({ home_timezone: here })
@@ -195,24 +208,24 @@ describe('<App> home timezone', () => {
 })
 
 describe('<App> session length', () => {
-  const openSettings = async () => {
+  const open = async () => {
     render(<App />)
     await screen.findByRole('button', { name: 'Tasks' })
-    await userEvent.click(screen.getByRole('button', { name: 'Settings' }))
+    await openSettings('Account')
     return screen.getByRole('button', { name: 'How long to stay signed in' })
   }
 
   it('opens on the shipped default when the account has not chosen', async () => {
-    expect(await openSettings()).toHaveTextContent('7 days')
+    expect(await open()).toHaveTextContent('7 days')
   })
 
   it('shows the stored choice', async () => {
     m.getSettings.mockResolvedValue({ session_ttl_s: 24 * 3600 })
-    await waitFor(async () => expect(await openSettings()).toHaveTextContent('1 day'))
+    await waitFor(async () => expect(await open()).toHaveTextContent('1 day'))
   })
 
   it('cycles the choice and writes it through', async () => {
-    const btn = await openSettings()
+    const btn = await open()
     await userEvent.click(btn)
     expect(btn).toHaveTextContent('30 days')
     expect(m.putSettings).toHaveBeenCalledWith({ session_ttl_s: 30 * 24 * 3600 })
@@ -222,7 +235,7 @@ describe('<App> session length', () => {
     // The blob is hand-editable and this one decides how long a login lives;
     // showing it back would make the menu lie about what is in force.
     m.getSettings.mockResolvedValue({ session_ttl_s: 99 as never })
-    expect(await openSettings()).toHaveTextContent('7 days')
+    expect(await open()).toHaveTextContent('7 days')
   })
 })
 
@@ -287,8 +300,7 @@ describe('<App> tab preferences', () => {
   it('saves a reorder from the tabs editor', async () => {
     render(<App />)
     await screen.findByRole('button', { name: 'Tasks' })
-    await userEvent.click(screen.getByRole('button', { name: 'Settings' }))
-    await userEvent.click(screen.getByRole('button', { name: 'Customize tabs' }))
+    await openSettings('General')
     await userEvent.click(screen.getByRole('button', { name: 'Move Calendar left' }))
     expect(m.putSettings).toHaveBeenCalledWith({
       tab_order: ['home', 'calendar', 'tasks', 'scheduling'],
@@ -299,8 +311,7 @@ describe('<App> tab preferences', () => {
   it('saves the tab to open on', async () => {
     render(<App />)
     await screen.findByRole('button', { name: 'Tasks' })
-    await userEvent.click(screen.getByRole('button', { name: 'Settings' }))
-    await userEvent.click(screen.getByRole('button', { name: 'Customize tabs' }))
+    await openSettings('General')
     await userEvent.selectOptions(screen.getByLabelText('Opens on'), 'scheduling')
     expect(m.putSettings).toHaveBeenCalledWith({ start_tab: 'scheduling' })
   })
@@ -370,7 +381,7 @@ describe('<App> clock setting', () => {
   it('opens on 12-hour and cycles to 24-hour, persisting the choice', async () => {
     render(<App />)
     await screen.findByRole('button', { name: 'Tasks' })
-    await userEvent.click(screen.getByRole('button', { name: 'Settings' }))
+    await openSettings('General')
     const clock = screen.getByRole('button', { name: '12- or 24-hour clock' })
     expect(clock).toHaveTextContent('12-hour')
     await userEvent.click(clock)
@@ -384,7 +395,7 @@ describe('<App> clock setting', () => {
     m.getSettings.mockResolvedValue({ time_format: '24h' })
     render(<App />)
     await screen.findByRole('button', { name: 'Tasks' })
-    await userEvent.click(screen.getByRole('button', { name: 'Settings' }))
+    await openSettings('General')
     await waitFor(() =>
       expect(screen.getByRole('button', { name: '12- or 24-hour clock' })).toHaveTextContent('24-hour'))
   })
@@ -395,7 +406,7 @@ describe('<App> clock setting', () => {
     m.getSettings.mockResolvedValue({ time_format: 'H:mm' } as never)
     render(<App />)
     await screen.findByRole('button', { name: 'Tasks' })
-    await userEvent.click(screen.getByRole('button', { name: 'Settings' }))
+    await openSettings('General')
     expect(screen.getByRole('button', { name: '12- or 24-hour clock' })).toHaveTextContent('12-hour')
   })
 })
@@ -404,7 +415,7 @@ describe('<App> calendar window setting', () => {
   const open = async () => {
     render(<App />)
     await screen.findByRole('button', { name: 'Tasks' })
-    await userEvent.click(screen.getByRole('button', { name: 'Settings' }))
+    await openSettings('Calendar')
     return screen.getByRole('button', { name: 'Fixed or dynamic calendar grid' })
   }
 
@@ -442,8 +453,7 @@ describe('<App> settings writes', () => {
     m.putSettings.mockRejectedValue(new AuthError('unauthenticated'))
     render(<App />)
     await screen.findByRole('button', { name: 'Tasks' })
-    await userEvent.click(screen.getByRole('button', { name: 'Settings' }))
-    await userEvent.click(screen.getByRole('button', { name: 'Customize tabs' }))
+    await openSettings('General')
     await userEvent.click(screen.getByRole('button', { name: 'Move Calendar left' }))
     expect(await screen.findByRole('button', { name: /sign in/i })).toBeInTheDocument()
   })
@@ -452,8 +462,7 @@ describe('<App> settings writes', () => {
     m.putSettings.mockRejectedValue(new HttpError(422, 'dashboard.0.h: less than or equal to 40'))
     render(<App />)
     await screen.findByRole('button', { name: 'Tasks' })
-    await userEvent.click(screen.getByRole('button', { name: 'Settings' }))
-    await userEvent.click(screen.getByRole('button', { name: 'Customize tabs' }))
+    await openSettings('General')
     await userEvent.click(screen.getByRole('button', { name: 'Move Calendar left' }))
     expect(await screen.findByText(/couldn't save your preferences/i)).toBeInTheDocument()
   })
@@ -463,8 +472,7 @@ describe('<App> settings writes', () => {
     m.putSettings.mockRejectedValue(new TypeError('Failed to fetch'))
     render(<App />)
     await screen.findByRole('button', { name: 'Tasks' })
-    await userEvent.click(screen.getByRole('button', { name: 'Settings' }))
-    await userEvent.click(screen.getByRole('button', { name: 'Customize tabs' }))
+    await openSettings('General')
     await userEvent.click(screen.getByRole('button', { name: 'Move Calendar left' }))
     await waitFor(() => expect(m.putSettings).toHaveBeenCalled())
     expect(screen.queryByText(/couldn't save/i)).not.toBeInTheDocument()
