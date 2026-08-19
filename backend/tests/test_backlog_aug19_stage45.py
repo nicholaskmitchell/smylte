@@ -1,0 +1,902 @@
+"""The 2026-08-19 sweep: user-visible backend correctness (stage 4) and
+delivery infrastructure / test gaps (stage 5).
+
+Every earlier backlog file in this directory is a record of something already
+fixed. **This one is not.** The findings pinned here are OPEN, so these are
+pins in the original sense of docs/STAGES.md: each drives the real code, asserts
+the behaviour that code SHOULD have, and fails against what it does today. The
+`xfail(strict=True)` markers are what keep CI green while they are open — and
+what turns the build red the moment one is fixed without being ticked off.
+
+The test-gap findings are the exception, and they split two ways, exactly as
+test_backlog_stage5.py describes: a gap is closed by a test EXISTING, so the
+test is written and run, and then it is kept as whatever it turned out to be.
+Three of them (the confidential-client credential check, the shape of a 204,
+the won't-do write path) cover behaviour that is already correct — no gap hid a
+bug there, only coverage was missing, so they carry no marker and must stay
+green like any other test. The fourth (busy_intervals across a DST transition)
+found two live defects the gap had been hiding, and is pinned like the rest.
+
+Run just this file with `pytest tests/test_backlog_aug19_stage45.py -rxX`, or
+the whole executable backlog with `pytest -m backlog -rxX`.
+"""
+from __future__ import annotations
+
+import asyncio
+import base64
+import dataclasses
+import hashlib
+import os
+import pathlib
+import re
+import shutil
+import subprocess
+import tempfile
+import threading
+import time
+import uuid
+from datetime import timedelta, timezone
+from urllib.parse import parse_qs, urlsplit
+from zoneinfo import ZoneInfo
+
+import pytest
+from fastapi.testclient import TestClient
+
+from tasksd import scheduling
+from tasksd.app import create_app
+from tasksd.db import store
+from tests.conftest import api_settings
+
+pytestmark = [pytest.mark.backlog, pytest.mark.stage4, pytest.mark.stage5]
+
+REPO = pathlib.Path(__file__).resolve().parents[2]
+
+ISSUER = "https://tasks.example.test"
+MCP_URL = f"{ISSUER}/mcp"
+CALLBACK = "https://claude.ai/api/mcp/auth_callback"
+PASSWORD = "testpass123"          # api_settings' auth_password
+TZ = ZoneInfo("America/Chicago")
+
+
+def _read(rel: str) -> str:
+    return (REPO / rel).read_text(encoding="utf-8")
+
+
+# ── a consent-screen app with no CalDAV server behind it ────────────────────
+
+class _StubService:
+    """Enough TaskService for the OAuth endpoints: they only ever touch the
+    SQLite side, through `oauth()`."""
+
+    def __init__(self) -> None:
+        self._conn = store.connect(":memory:")
+        store.init_db(self._conn)
+        self._lock = threading.RLock()
+
+    def oauth(self, fn, *a, **kw):
+        with self._lock:
+            return fn(self._conn, *a, **kw)
+
+
+@pytest.fixture
+def oauth_app(tmp_path):
+    settings = dataclasses.replace(
+        api_settings(str(tmp_path / "aug19.db")), mcp_enabled=True, public_url=ISSUER)
+    app = create_app(settings)
+    app.state.service = _StubService()
+    return TestClient(app)
+
+
+def _pkce() -> tuple[str, str]:
+    verifier = base64.urlsafe_b64encode(uuid.uuid4().bytes * 2).decode().rstrip("=")
+    challenge = base64.urlsafe_b64encode(
+        hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
+    return verifier, challenge
+
+
+def _register(client, **over) -> dict:
+    body = {"client_name": "Claude", "redirect_uris": [CALLBACK],
+            "token_endpoint_auth_method": "none", **over}
+    r = client.post("/oauth/register", json=body)
+    assert r.status_code == 201, r.text
+    return r.json()
+
+
+def _consent_page(client, reg, challenge, *, scope="mcp:read"):
+    params = {"response_type": "code", "client_id": reg["client_id"],
+              "redirect_uri": CALLBACK, "code_challenge": challenge,
+              "code_challenge_method": "S256", "state": "xyz",
+              "scope": scope, "resource": MCP_URL}
+    page = client.get("/oauth/authorize", params=params)
+    assert page.status_code == 200, page.text
+    return page.text
+
+
+def _approve(client, reg, challenge, *, scope="mcp:read") -> str:
+    """The consent screen, approved the way test_mcp.py's `_authorize` does.
+    Returns the authorization code."""
+    page = _consent_page(client, reg, challenge, scope=scope)
+    signed = re.search(r'name="request" value="([^"]+)"', page).group(1)
+    r = client.post("/oauth/authorize", data={
+        "request": signed, "action": "approve", "grant": "full",
+        "username": "admin", "password": PASSWORD}, follow_redirects=False)
+    assert r.status_code == 303, r.text
+    return parse_qs(urlsplit(r.headers["location"]).query)["code"][0]
+
+
+# ── AUDIT: "Cancel" is the consent form's default button ────────────────────
+
+_FORM = re.compile(r"<form\b.*?</form>", re.I | re.S)
+_CONTROL = re.compile(r"<(button|input)\b([^>]*)>", re.I)
+_ATTR = re.compile(r'([\w-]+)\s*=\s*"([^"]*)"')
+
+
+def _implicit_submission(page: str) -> dict[str, str]:
+    """What the browser POSTs when the user presses Enter in a text field.
+
+    HTML's implicit submission activates the form's *default button* — the
+    first submit button in tree order — and sends its name/value along with the
+    fields. `<button>` defaults to type=submit; an `<input>` does not.
+    """
+    form = _FORM.search(page)
+    assert form, "the consent page has no <form> to submit"
+    body = form.group(0)
+
+    data: dict[str, str] = {"username": "admin", "password": PASSWORD}
+    default: dict[str, str] | None = None
+    for m in _CONTROL.finditer(body):
+        tag, raw = m.group(1).lower(), m.group(2)
+        attrs = dict(_ATTR.findall(raw))
+        kind = (attrs.get("type") or ("submit" if tag == "button" else "text")).lower()
+        if kind in ("submit", "image"):
+            if default is None:
+                default = attrs
+        elif tag == "input" and attrs.get("name"):
+            if kind == "hidden":
+                data[attrs["name"]] = attrs.get("value", "")
+            elif kind == "radio" and re.search(r"\bchecked\b", raw, re.I):
+                data[attrs["name"]] = attrs.get("value", "")
+    if default and default.get("name"):
+        data[default["name"]] = default.get("value", "")
+    return data
+
+
+@pytest.mark.xfail(strict=True, reason="Cancel is the consent form's default "
+                                       "button, so Enter declines the connection")
+def test_pressing_enter_on_the_consent_form_connects_rather_than_declining(oauth_app):
+    """The consent screen is this app's most important password form, and its
+    username field is `autofocus`. Type the username, Tab, type the password,
+    press Enter — the ordinary way anybody fills in two fields — and the browser
+    activates the form's default button, which is the FIRST submit button in
+    tree order. `_consent_page` emits Cancel first, so Enter POSTs
+    `action=deny`; `authorize_submit` short-circuits before the password is even
+    looked at and 303s back to the connector with
+    `error=access_denied&error_description=the+request+was+declined`.
+
+    The user has just typed their password into a form that told the client they
+    refused it, and the browser has already navigated to the client's callback,
+    so there is nothing to correct in place — the whole flow restarts from the
+    client. Nor can script rescue it: the page ships
+    `default-src 'none'; style-src 'unsafe-inline'`.
+
+    This drives the real page and then submits it the way the browser would,
+    rather than asserting where any particular button sits: put Connect first,
+    make Cancel a link or a `type="button"`, reverse the row with CSS — any of
+    those passes. What must not happen is that Enter declines.
+    """
+    reg = _register(oauth_app)
+    _, challenge = _pkce()
+    page = _consent_page(oauth_app, reg, challenge)
+
+    r = oauth_app.post("/oauth/authorize", data=_implicit_submission(page),
+                       follow_redirects=False)
+    query = parse_qs(urlsplit(r.headers.get("location", "")).query)
+
+    assert query.get("error") != ["access_denied"], (
+        "pressing Enter after typing the password declined the connection: "
+        f"{r.status_code} -> {r.headers.get('location')}"
+    )
+    assert query.get("code"), (
+        "the form's default submission did not authorize the client: "
+        f"{r.status_code} -> {r.headers.get('location') or r.text[:200]}"
+    )
+
+
+# ── AUDIT: /book/<token>/ 404s ──────────────────────────────────────────────
+
+@pytest.mark.xfail(strict=True, reason="the SPA mount swallows /book/<token>/ "
+                                       "before redirect_slashes can act")
+def test_a_booking_link_serves_the_spa_with_or_without_a_trailing_slash(tmp_path):
+    """`@app.get("/book/{token}")` is registered in the bare spelling only, and
+    `StaticFiles` mounted at "/" returns a FULL match for every path — so
+    Starlette hands `/book/<token>/` to the mount inside its route loop and
+    FastAPI's `redirect_slashes` fallback, which only runs when the loop found
+    nothing, never executes. The mount looks for a file called `book/<token>`,
+    does not find one, and raises a bare JSON 404.
+
+    app.py already documents this hazard 25 lines earlier — the RFC 6764 routes
+    register their trailing-slash spellings explicitly "because the SPA mount at
+    '/' swallows unmatched paths". The booking route did not get the same
+    treatment, while the SPA router deliberately accepts the slash
+    (frontend/src/main.tsx matches `/^\\/book\\/([A-Za-z0-9_-]+)\\/?$/`).
+
+    So an anonymous visitor who requests the owner's published link with the
+    trailing slash a path that looks like a folder invites — typed by hand, or
+    rewritten by a mail client — gets `{"detail":"Not Found"}`, which reads
+    exactly like the "this link is no longer available" case. They do not book
+    and the owner never hears about it.
+
+    Redirects are followed, so answering the slash with a 308 to the bare
+    spelling passes this just as well as registering the second route.
+    """
+    static = tmp_path / "dist"
+    static.mkdir()
+    (static / "index.html").write_text(
+        '<!doctype html><html><head><title>Smylte</title></head>'
+        '<body><div id="root"></div></body></html>', encoding="utf-8")
+    settings = dataclasses.replace(
+        api_settings(str(tmp_path / "book.db")), static_dir=str(static))
+    client = TestClient(create_app(settings))
+
+    for path in ("/book/Ab3-_x9Q", "/book/Ab3-_x9Q/"):
+        r = client.get(path)
+        assert r.status_code == 200, (
+            f"GET {path} -> {r.status_code} {r.headers.get('content-type')} "
+            f"{r.text[:120]!r}"
+        )
+        assert "text/html" in r.headers.get("content-type", ""), (
+            f"GET {path} did not serve the SPA shell: "
+            f"{r.headers.get('content-type')}"
+        )
+        assert 'id="root"' in r.text
+
+
+# ── AUDIT: shutdown closes the DB and DAV client under a running sweep ──────
+
+@pytest.mark.radicale
+@pytest.mark.xfail(strict=True, reason="lifespan teardown closes the connection "
+                                       "while sync_all is still sweeping")
+def test_shutdown_does_not_close_the_connection_under_a_running_sweep(
+        dav, tmp_path, monkeypatch):
+    """The lifespan's `finally` assumes cancelling the sync task stops the sync:
+
+        loop_task.cancel(); await loop_task; svc.close()
+
+    but `_sync_loop` sits in `await asyncio.to_thread(svc.sync_all)`, and
+    cancelling that marks the *asyncio* future cancelled while the worker thread
+    carries on — `concurrent.futures.Future.cancel()` cannot stop a work item
+    that is already running. `await loop_task` therefore returns immediately and
+    `svc.close()` runs against a live sweep. `sync_all` releases the global lock
+    between collections on purpose, so `close()` takes it in one of those gaps
+    and shuts both the DAV client and the SQLite connection; the sweep's next
+    slice then calls `store.has_collection(self._conn, href)`, which sits
+    OUTSIDE the per-collection `try/except`, and raises
+    `sqlite3.ProgrammingError: Cannot operate on a closed database`.
+
+    Nothing is awaiting that future any more, so asyncio logs an "exception was
+    never retrieved" traceback on every restart that lands mid-sweep, the rest
+    of the collections are never swept, and the httpx client is closed under
+    whatever request was about to go out. With a 30 s interval and a sweep that
+    is seconds per collection, `systemctl restart tasks` lands there routinely.
+
+    Driven through the real lifespan rather than through TaskService, because
+    both repairs the finding names have to satisfy it: a `_closed` flag the
+    sweep checks, or a teardown that waits for the sweep before closing. The
+    per-collection sync is stubbed to a fixed 0.4 s so a slice is reliably in
+    flight at shutdown; everything else — sync_all's locking, `close()`, the
+    lifespan — is the real thing. The assertion is only that no exception
+    escaped the sweep.
+    """
+    from tasksd.service import TaskService
+    from tasksd.sync import SyncEngine, SyncStats
+
+    hrefs = [dav.create_task_collection(f"aug19-{uuid.uuid4().hex[:8]}",
+                                        components=("VTODO",)).href
+             for _ in range(3)]
+
+    armed, started = threading.Event(), threading.Event()
+
+    def slow_sync(self, collection_href):
+        if armed.is_set():
+            started.set()
+            time.sleep(0.4)            # the sweep holds the lock for this slice
+        return SyncStats(collection_href=collection_href)
+
+    monkeypatch.setattr(SyncEngine, "sync", slow_sync)
+
+    errors: list[BaseException] = []
+    in_flight: list[int] = []
+    real_sync_all = TaskService.sync_all
+
+    def recording_sync_all(self):
+        in_flight.append(1)
+        try:
+            return real_sync_all(self)
+        except BaseException as exc:   # noqa: BLE001 — the point of the test
+            errors.append(exc)
+            raise
+        finally:
+            in_flight.pop()
+
+    monkeypatch.setattr(TaskService, "sync_all", recording_sync_all)
+
+    settings = dataclasses.replace(
+        api_settings(str(tmp_path / "shutdown.db")), sync_interval_s=0)
+    try:
+        with TestClient(create_app(settings)):
+            armed.set()
+            assert started.wait(20), "the background sweep never started"
+            time.sleep(0.1)            # ...and is inside a slice right now
+        deadline = time.monotonic() + 20
+        while in_flight and time.monotonic() < deadline:
+            time.sleep(0.05)
+    finally:
+        for href in hrefs:
+            try:
+                dav.delete_collection(href)
+            except Exception:          # noqa: BLE001
+                pass
+
+    assert not in_flight, "a sweep was still running 20s after shutdown"
+    assert not errors, (
+        "shutdown tore the service down under the running sweep: "
+        f"{type(errors[0]).__name__}: {errors[0]}"
+    )
+
+
+# ── AUDIT: desktop-release.yml grants contents: write to every job ──────────
+
+def _contents_permission(perms) -> str | None:
+    """GitHub's effective `contents` permission from a `permissions:` value."""
+    if perms is None:
+        return None
+    if isinstance(perms, str):
+        return {"write-all": "write", "read-all": "read"}.get(perms)
+    return perms.get("contents")
+
+
+@pytest.mark.xfail(strict=True, reason="workflow-scope `contents: write` hands "
+                                       "the release token to npm ci and NuGet restore")
+def test_the_desktop_release_build_jobs_hold_no_write_token():
+    """`permissions: contents: write` is declared at workflow scope, so it
+    applies to every job rather than to `release`, the only one that publishes.
+    `actions/checkout@v4` defaults `persist-credentials: true` and writes
+    `http.extraheader: AUTHORIZATION: basic <x-access-token:$GITHUB_TOKEN>` into
+    `$GITHUB_WORKSPACE/.git/config`; the very next step in `web` is `npm ci`,
+    which runs install lifecycle scripts for the whole dependency tree (216
+    entries in frontend/package-lock.json, and no `.npmrc` sets ignore-scripts).
+    `client` does the same through `dotnet publish` -> NuGet restore, with
+    `Microsoft.Web.WebView2` floating on `1.0.*`.
+
+    So one compromised transitive dev-dependency reads that config, decodes the
+    header, and holds a token that can push to `main` — which the Pi autopulls
+    on a one-minute cron — and replace `smylte-web.zip` on `desktop-latest`,
+    which every installed desktop client downloads and executes on next launch
+    with no signature or digest check (Updater.cs).
+
+    **Structural of necessity, and the only pin here that is.** There is no
+    harness that can execute a GitHub Actions workflow from this suite, so what
+    it asserts is GitHub's own effective-permission rule — a job's own
+    `permissions:` replaces the workflow's — applied to whichever jobs run
+    third-party dependency code, found by what their steps actually run rather
+    than by name. Moving the grant onto `release`, or adding
+    `permissions: contents: read` to the build jobs, both pass.
+    """
+    # PyYAML rides in with uvicorn[standard]; skip rather than fake a pin if
+    # it ever stops doing so — an ImportError is not this finding's failure.
+    yaml = pytest.importorskip("yaml")
+    wf = yaml.safe_load(_read(".github/workflows/desktop-release.yml"))
+    top = wf.get("permissions")
+
+    checked = []
+    for name, job in (wf.get("jobs") or {}).items():
+        runs = " ".join(str(s.get("run") or "") for s in (job.get("steps") or []))
+        if not re.search(r"\bnpm (ci|install)\b|\bdotnet (publish|build|restore|test)\b", runs):
+            continue
+        checked.append(name)
+        effective = _contents_permission(
+            job["permissions"] if "permissions" in job else top)
+        assert effective != "write", (
+            f"job {name!r} runs third-party install/build code with "
+            f"contents: write in scope — checkout leaves the token in "
+            f".git/config, so an npm postinstall can publish releases"
+        )
+    assert checked, "no job in desktop-release.yml installs dependencies any more?"
+
+
+# ── AUDIT: setup.sh writes the Radicale password unescaped ──────────────────
+
+def _parse_systemd_env(text: str) -> dict[str, str]:
+    """systemd's `EnvironmentFile=` parser, as a state machine.
+
+    Mirrors `parse_env_file_internal` in systemd's src/basic/env-file.c, which
+    is what actually reads /etc/tasks/tasks.env — NOT the shell. Three
+    characters carry meaning there that a `KEY=value` heredoc does not account
+    for: right after `=` a quote opens a quoted section, and a backslash escapes
+    the next character and disappears. An unterminated quote is not an error: at
+    EOF whatever accumulated is pushed, silently.
+    """
+    out: dict[str, str] = {}
+    key = val = ""
+    state = "ws"
+    for c in text:
+        if state == "ws":
+            if c in "\n\r \t":
+                continue
+            if c == "#":
+                state = "comment"
+            else:
+                key, state = c, "var"
+        elif state == "comment":
+            if c in "\n\r":
+                state = "ws"
+        elif state == "var":
+            if c in "\n\r":
+                key, state = "", "ws"
+            elif c == "=":
+                val, state = "", "pre"
+            else:
+                key += c
+        elif state == "pre":                       # the char right after '='
+            if c in "\n\r":
+                out[key], state = "", "ws"
+            elif c == "'":
+                state = "sq"
+            elif c == '"':
+                state = "dq"
+            elif c == "\\":
+                state = "vesc"
+            elif c in " \t":
+                continue
+            else:
+                val, state = c, "value"
+        elif state == "value":
+            if c in "\n\r":
+                out[key], state = val.rstrip(" \t"), "ws"
+            elif c == "\\":
+                state = "vesc"
+            else:
+                val += c
+        elif state == "vesc":
+            state = "value"
+            if c not in "\n\r":                    # a newline is a continuation
+                val += c
+        elif state == "sq":
+            state = "value" if c == "'" else ("sqesc" if c == "\\" else "sq")
+            if state == "sq" and c not in ("'", "\\"):
+                val += c
+        elif state == "sqesc":
+            val, state = val + c, "sq"
+        elif state == "dq":
+            state = "value" if c == '"' else ("dqesc" if c == "\\" else "dq")
+            if state == "dq" and c not in ('"', "\\"):
+                val += c
+        elif state == "dqesc":
+            val, state = val + c, "dq"
+    if state in ("pre", "value", "vesc"):
+        out[key] = val.rstrip(" \t")
+    elif state in ("sq", "sqesc", "dq", "dqesc"):
+        out[key] = val                             # unterminated quote, no error
+    return out
+
+
+def _run_setup_sh(password: str, root: pathlib.Path) -> pathlib.Path:
+    """Run deploy/setup.sh for real, answering its prompts, with every path it
+    touches redirected into `root` and every system command stubbed.
+
+    The script itself is unmodified apart from those redirections — the env file
+    below is the one it writes, produced by whatever quoting it does, so a fix
+    that adds a helper anywhere in the script is picked up automatically.
+    """
+    bin_dir, etc = root / "bin", root / "etc"
+    bin_dir.mkdir(parents=True)
+    (etc / "systemd").mkdir(parents=True)
+    (root / "usrbin").mkdir()
+
+    fake_py = root / "hash-password"
+    fake_py.write_text("#!/bin/sh\necho 'scrypt$16384$8$1$fake$fake'\n")
+    fake_py.chmod(0o755)
+
+    stubs = {
+        # `install -d` has to really make the directory; nothing else may run.
+        "install": '#!/bin/sh\nfor a in "$@"; do last=$a; done\n'
+                   'case " $* " in *" -d "*) mkdir -p "$last";; esac\nexit 0\n',
+        "systemctl": "#!/bin/sh\nexit 0\n",
+        "chown": "#!/bin/sh\nexit 0\n",
+        "chmod": "#!/bin/sh\nexit 0\n",
+        "id": "#!/bin/sh\necho 0\n",
+        "sudo": '#!/bin/sh\nwhile [ "$1" = "-u" ]; do shift 2; done\nexec "$@"\n',
+    }
+    for name, body in stubs.items():
+        p = bin_dir / name
+        p.write_text(body)
+        p.chmod(0o755)
+
+    script = _read("deploy/setup.sh")
+    script = re.sub(r"^PY=.*$", f"PY={fake_py}", script, flags=re.M)
+    script = script.replace("/etc/tasks", str(etc / "tasks"))
+    script = script.replace("/etc/systemd/system", str(etc / "systemd"))
+    script = script.replace("/usr/local/bin", str(root / "usrbin"))
+    script = script.replace("/home/$USER_NAME/tasks", str(REPO))
+    sh = root / "setup.sh"
+    sh.write_text(script)
+
+    env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}")
+    # stdin: the Radicale password, then Enter to take the default app username.
+    proc = subprocess.run(["bash", str(sh)], input=f"{password}\n\n", text=True,
+                          capture_output=True, timeout=120, env=env)
+    envfile = etc / "tasks" / "tasks.env"
+    assert proc.returncode == 0 and envfile.is_file(), (
+        f"the sandboxed setup.sh did not write an env file (rc={proc.returncode}): "
+        f"{proc.stdout[-400:]} {proc.stderr[-400:]}"
+    )
+    return envfile
+
+
+@pytest.mark.xfail(strict=True, reason="setup.sh interpolates the Radicale "
+                                       "password into the env file unescaped")
+def test_setup_sh_writes_a_password_systemd_reads_back_unchanged():
+    """setup.sh interpolates `$RADPW`, read from an interactive prompt, straight
+    into a `KEY=value` line of /etc/tasks/tasks.env. The bash side is safe — an
+    expansion result is not rescanned — but systemd's `EnvironmentFile=` parser
+    is not the shell, and it is the one that reads this file.
+
+    Password `pi\\home2024` is stored as `pihome2024`: the service starts, the
+    app logs in, and every CalDAV call 401s. The UI shows an empty account and
+    "calendar server unavailable", and re-running setup.sh repairs nothing
+    because it sees an existing env file and leaves it alone.
+
+    A password that BEGINS with a quote is worse. `"tunnel-otter-9` puts the
+    parser into DOUBLE_QUOTE_VALUE at the first character of the value and it
+    swallows the remaining lines of the file into that one value — no error, no
+    warning — so TASKS_AUTH_PASSWORD_HASH, TASKS_SESSION_SECRET and
+    TASKS_HOOK_SECRET are never set at all and the app refuses to start.
+
+    The script already reasons about this file being corrupted by a bad prompt
+    (it guards `$HASH` for exactly that), so the gap is in which values got the
+    care, not in whether anyone thought about it.
+
+    This runs the real script and parses the real file it writes, so it does not
+    care HOW the values are quoted — only that systemd hands back what was
+    typed.
+    """
+    hostile = {
+        "backslash": r"pi\home2024",
+        "leading double quote": '"tunnel-otter-9',
+        "leading single quote": "'otter-tunnel-9",
+    }
+    for label, password in hostile.items():
+        root = pathlib.Path(tempfile.mkdtemp(prefix="aug19-setup-"))
+        try:
+            envfile = _run_setup_sh(password, root)
+            parsed = _parse_systemd_env(envfile.read_text(encoding="utf-8"))
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
+        assert parsed.get("RADICALE_PASSWORD") == password, (
+            f"{label}: systemd reads RADICALE_PASSWORD as "
+            f"{parsed.get('RADICALE_PASSWORD')!r}, not the password that was "
+            f"typed ({password!r}) — every CalDAV call would 401"
+        )
+        for key in ("TASKS_AUTH_PASSWORD_HASH", "TASKS_SESSION_SECRET",
+                    "TASKS_HOOK_SECRET"):
+            assert parsed.get(key), (
+                f"{label}: {key} is missing from the parsed env file — the "
+                f"password swallowed the rest of it"
+            )
+
+
+# ── AUDIT (test gap): the confidential-client path has no coverage ──────────
+
+def test_a_confidential_client_authenticates_with_its_secret_and_only_that(oauth_app):
+    """Closing a test gap, and it turned out to be a gap in coverage only: the
+    behaviour below is already correct, so this is an ordinary test with no
+    xfail marker — the same shape test_backlog_stage5.py uses for a gap that hid
+    nothing.
+
+    `authorization_server_metadata` advertises `client_secret_post` and
+    `client_secret_basic` at the token and revocation endpoints, so a client
+    reading the metadata may pick either — but every existing test registers
+    `token_endpoint_auth_method: "none"` and sends nothing but a client_id.
+    `_basic_auth`'s base64/`split(":", 1)`/`unquote` decoding, the
+    `client_secret_hash` branch of `_authenticate_client` and `register`'s
+    secret minting were exercised by nothing at all. That is the credential
+    check on an internet-facing token endpoint: an inverted branch, a
+    `secret or ''`, or `_basic_auth` returning None where it should refuse would
+    all have been silent.
+
+    Pinned as five outcomes, which is what a regression would have to break:
+    the right secret works over Basic and over the form, a wrong secret and a
+    missing secret are both 401 invalid_client, and a public client is still
+    allowed to send the empty `client_secret=` that real clients send while a
+    non-empty one is refused.
+    """
+    def _basic(client_id: str, secret: str) -> dict[str, str]:
+        raw = base64.b64encode(f"{client_id}:{secret}".encode()).decode()
+        return {"Authorization": f"Basic {raw}"}
+
+    def _exchange(reg, *, headers=None, **form_over):
+        verifier, challenge = _pkce()
+        code = _approve(oauth_app, reg, challenge)
+        form = {"grant_type": "authorization_code", "code": code,
+                "redirect_uri": CALLBACK, "client_id": reg["client_id"],
+                "code_verifier": verifier, "resource": MCP_URL}
+        form.update(form_over)
+        form = {k: v for k, v in form.items() if v is not None}
+        return oauth_app.post("/oauth/token", data=form, headers=headers or {})
+
+    # -- client_secret_basic --
+    conf = _register(oauth_app, token_endpoint_auth_method="client_secret_basic")
+    secret = conf.get("client_secret")
+    assert secret, "a confidential registration must return a secret exactly once"
+    assert conf["token_endpoint_auth_method"] == "client_secret_basic"
+
+    ok = _exchange(conf, headers=_basic(conf["client_id"], secret), client_id=None)
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["access_token"]
+
+    bad = _exchange(conf, headers=_basic(conf["client_id"], "nope"), client_id=None)
+    assert bad.status_code == 401, bad.text
+    assert bad.json()["error"] == "invalid_client"
+
+    # A confidential client that presents no credential at all is not the same
+    # as a public one, and must not be treated as one.
+    naked = _exchange(conf)
+    assert naked.status_code == 401, naked.text
+    assert naked.json()["error"] == "invalid_client"
+
+    # -- client_secret_post --
+    post_client = _register(oauth_app, token_endpoint_auth_method="client_secret_post")
+    posted = _exchange(post_client, client_secret=post_client["client_secret"])
+    assert posted.status_code == 200, posted.text
+    assert posted.json()["access_token"]
+
+    wrong = _exchange(post_client, client_secret="nope")
+    assert wrong.status_code == 401 and wrong.json()["error"] == "invalid_client"
+
+    # -- public clients --
+    public = _register(oauth_app)
+    assert "client_secret" not in public
+    blank = _exchange(public, client_secret="")
+    assert blank.status_code == 200, (
+        "a public client sending an empty client_secret — which real clients do "
+        f"— must still be able to exchange its code: {blank.text}"
+    )
+    impostor = _exchange(public, client_secret="invented")
+    assert impostor.status_code == 401, impostor.text
+    assert impostor.json()["error"] == "invalid_client"
+
+
+# ── AUDIT (test gap): busy_intervals is never driven across a DST change ────
+
+def _ev(**kw) -> dict:
+    base = {"start": None, "end": None, "duration": None, "status": None,
+            "start_is_date": False, "all_day": False}
+    base.update(kw)
+    return base
+
+
+def _abs(dt):
+    return dt.astimezone(timezone.utc)
+
+
+@pytest.mark.xfail(strict=True, reason="busy_intervals drops a fall-back event "
+                                       "and shortens a DURATION across a transition")
+def test_busy_intervals_hold_their_absolute_length_across_a_dst_change():
+    """The DST battery in test_scheduling.py covers slot GENERATION four ways,
+    but every DST fixture in that file is an `Interval` built by hand, so
+    `busy_intervals` — the function that turns untrusted foreign iCalendar into
+    the conflict set behind the only unauthenticated write path in the app — is
+    only ever driven on 2026-07-13, an ordinary July Monday. The one busy
+    fixture on a transition day sits entirely inside the first pass of the
+    repeated hour and never crosses 07:00Z.
+
+    Writing the missing cases found two live defects, which is why this one
+    keeps its marker:
+
+    * **The `end > start` guard** (scheduling.py:148) compares two datetimes
+      that share one ZoneInfo object, and CPython compares those on their naive
+      fields — the property `_u` exists in this very module to prevent. A real
+      06:30Z-07:00Z event on 2026-11-01 is 01:30 CDT to 01:00 CST, so the guard
+      reads it as ending before it starts and drops it. The owner's appointment
+      vanishes from the busy set and an anonymous visitor can book over it.
+    * **The DURATION branch** (scheduling.py:145) adds the timedelta to the
+      aware start, which adds to the naive fields and re-derives the offset, so
+      a PT2H commitment starting 07:30Z on 2026-03-08 comes back an hour short.
+
+    Asserted as absolute (UTC) length, not as wall-clock endpoints, so any fix
+    that keeps the real duration passes.
+    """
+    fall_back = scheduling.busy_intervals(
+        [_ev(start="2026-11-01T06:30:00+00:00", end="2026-11-01T07:00:00+00:00")], TZ)
+    assert len(fall_back) == 1, (
+        "a real 30-minute event spanning the fall-back transition disappeared "
+        f"from the busy set: {fall_back!r}"
+    )
+    assert _abs(fall_back[0].end) - _abs(fall_back[0].start) == timedelta(minutes=30)
+
+    spring_forward = scheduling.busy_intervals(
+        [_ev(start="2026-03-08T07:30:00+00:00", duration="PT2H")], TZ)
+    assert len(spring_forward) == 1, spring_forward
+    assert _abs(spring_forward[0].end) - _abs(spring_forward[0].start) == timedelta(hours=2), (
+        "a DURATION event spanning the spring-forward transition came back "
+        f"{_abs(spring_forward[0].end) - _abs(spring_forward[0].start)} long, "
+        "not the PT2H the calendar says"
+    )
+
+
+# ── AUDIT (test gap): nothing observes a 204 beyond its status code ─────────
+
+def _drive_asgi(app, method: str, path: str, cookies) -> list[dict]:
+    """One request straight into the ASGI app, capturing what it sends.
+
+    TestClient bypasses the protocol layer — which is precisely why app.py's own
+    comment says "the suite is green either way" — so the messages the app emits
+    are collected here rather than inferred from an httpx Response.
+    """
+    cookie = "; ".join(f"{k}={v}" for k, v in cookies.items()).encode()
+    scope = {
+        "type": "http", "asgi": {"version": "3.0", "spec_version": "2.3"},
+        "http_version": "1.1", "method": method, "scheme": "http",
+        "path": path, "raw_path": path.encode(), "query_string": b"",
+        "root_path": "", "client": ("127.0.0.1", 4321), "server": ("testserver", 80),
+        "headers": [(b"host", b"testserver"), (b"cookie", cookie)],
+    }
+    sent: list[dict] = []
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message):
+        sent.append(message)
+
+    asyncio.run(app(scope, receive, send))
+    return sent
+
+
+@pytest.mark.radicale
+def test_a_204_delete_carries_no_body_and_no_content_type(client):
+    """Closing a test gap, and the behaviour is already right — so this carries
+    no marker and must stay green.
+
+    docs/AUDIT.md closed "every DELETE route sends a body on a 204", and the fix
+    is `return Response(status_code=204)`. The comment above it says outright
+    that "TestClient bypasses the protocol layer, which is why the suite is
+    green either way", and that is exactly true: all eleven 204 assertions in
+    the suite check `status_code == 204` and nothing else, so the fix has been
+    guarded by a comment. Revert that line to `return None` and every test still
+    passes while the response grows a `content-type: application/json` on a
+    bodiless status — and, on the FastAPI/Starlette version the finding was
+    filed against, a `null` body, which is what tore down the keep-alive socket
+    on every delete. requirements.txt pins only `fastapi>=0.115`, so which
+    serialization a 204 gets is decided by whatever pip resolves that day.
+
+    Asserted twice over: through TestClient, and by driving the ASGI app
+    directly so the `http.response.start` message itself is examined — the blind
+    spot the source comment names.
+    """
+    lid = client.post("/api/lists", json={"name": f"L-{uuid.uuid4().hex[:8]}"}).json()["id"]
+    doomed = client.post(f"/api/lists/{lid}/tasks", json={"summary": "delete me"}).json()
+
+    r = client.delete(f"/api/lists/{lid}/tasks/{doomed['uid']}")
+    assert r.status_code == 204
+    assert r.content == b"", f"a 204 carried a body: {r.content!r}"
+    assert "content-type" not in r.headers, (
+        f"a 204 declared a content type: {r.headers.get('content-type')!r}")
+    assert "content-length" not in r.headers
+
+    # ...and at the protocol layer, where the damage actually happened.
+    second = client.post(f"/api/lists/{lid}/tasks", json={"summary": "delete me too"}).json()
+    sent = _drive_asgi(client.app, "DELETE",
+                       f"/api/lists/{lid}/tasks/{second['uid']}", client.cookies)
+    start = next(m for m in sent if m["type"] == "http.response.start")
+    body = b"".join(m.get("body", b"") for m in sent if m["type"] == "http.response.body")
+    headers = {k.decode().lower(): v.decode() for k, v in start["headers"]}
+    assert start["status"] == 204, (start, body)
+    assert body == b"", f"the ASGI app sent a body with its 204: {body!r}"
+    assert "content-type" not in headers, headers
+    assert "content-length" not in headers, headers
+
+    client.delete(f"/api/lists/{lid}")
+
+
+# ── AUDIT (test gap): the won't-do write path is exercised by nothing ───────
+
+@pytest.mark.radicale
+def test_cancelling_a_task_is_wont_do_and_not_done(client):
+    """Closing a test gap; the behaviour is already correct, so no marker.
+
+    `POST /api/lists/{id}/tasks/{uid}/cancel` and `TaskService.cancel_task`
+    write `STATUS:CANCELLED`, and nothing called either. The only thing that
+    looked like coverage was the comment `# complete + won't-do` in
+    test_api.py, above a block that exercises `/complete` and
+    `/complete?done=false` and nothing else — the comment was the entire reason
+    the path read as covered.
+
+    `cancelled` is a first-class field of the Task DTO that
+    `list_tasks(include_done=False)` filters on and that the SPA's
+    "View completed" pane keys off, yet no test ever produced a task carrying
+    it. Change `cancel_task` to write COMPLETED, or drop `d["cancelled"]` from
+    that filter, and the whole suite stays green while "won't do" becomes
+    indistinguishable from "done" to every other CalDAV client — or a cancelled
+    task never leaves the open list.
+    """
+    lid = client.post("/api/lists", json={"name": f"L-{uuid.uuid4().hex[:8]}"}).json()["id"]
+    t = client.post(f"/api/lists/{lid}/tasks", json={"summary": "skip it"}).json()
+
+    r = client.post(f"/api/lists/{lid}/tasks/{t['uid']}/cancel")
+    assert r.status_code == 200, r.text
+    cancelled = r.json()
+    assert cancelled["cancelled"] is True and cancelled["completed"] is False
+    assert cancelled["status"] == "CANCELLED"
+
+    open_uids = {x["uid"] for x in client.get(
+        f"/api/lists/{lid}/tasks", params={"include_done": False}).json()}
+    assert t["uid"] not in open_uids, "a won't-do task is still in the open list"
+    all_uids = {x["uid"] for x in client.get(f"/api/lists/{lid}/tasks").json()}
+    assert t["uid"] in all_uids, "a won't-do task must be kept for the record"
+
+    assert client.post(f"/api/lists/{lid}/tasks/no-such-uid/cancel").status_code == 404
+
+    client.delete(f"/api/lists/{lid}")
+
+
+@pytest.mark.radicale
+def test_the_cancel_tool_needs_write_access_and_marks_the_task_wont_do(_scratch_up, tmp_path):
+    """The connector half of the same gap: `smylte_cancel_task` is called by no
+    test either, including — like every write tool — the question of whether a
+    read-only grant can reach it. Also already correct, so no marker.
+    """
+    settings = dataclasses.replace(
+        api_settings(str(tmp_path / "cancel-mcp.db")), mcp_enabled=True, public_url=ISSUER)
+    with TestClient(create_app(settings)) as mcp:
+        def _token_for(scope: str) -> str:
+            reg = _register(mcp)
+            verifier, challenge = _pkce()
+            code = _approve(mcp, reg, challenge, scope=scope)
+            r = mcp.post("/oauth/token", data={
+                "grant_type": "authorization_code", "code": code,
+                "redirect_uri": CALLBACK, "client_id": reg["client_id"],
+                "code_verifier": verifier, "resource": MCP_URL})
+            assert r.status_code == 200, r.text
+            return r.json()["access_token"]
+
+        def _rpc(token: str, name: str, args: dict) -> dict:
+            r = mcp.post("/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                                       "params": {"name": name, "arguments": args}},
+                         headers={"Authorization": f"Bearer {token}",
+                                  "MCP-Protocol-Version": "2025-06-18"})
+            assert r.status_code == 200, r.text
+            return r.json()
+
+        def _ok(token: str, name: str, args: dict) -> dict:
+            out = _rpc(token, name, args)
+            assert "error" not in out, out
+            assert out["result"]["isError"] is False, out["result"]
+            return out["result"]["structuredContent"]
+
+        write = _token_for("mcp:read mcp:write")
+        read_only = _token_for("mcp:read")
+
+        list_id = _ok(write, "smylte_create_list", {"name": f"L-{uuid.uuid4().hex[:8]}"})["id"]
+        try:
+            uid = _ok(write, "smylte_create_task",
+                      {"list_id": list_id, "summary": "skip it"})["uid"]
+
+            # A refusal may be a JSON-RPC error (the call could not be made) or
+            # a result carrying isError (it was made and did not work) — either
+            # is a refusal; what matters is that the task is untouched.
+            refused = _rpc(read_only, "smylte_cancel_task",
+                           {"list_id": list_id, "uid": uid})
+            declined = ("error" in refused
+                        or refused["result"].get("isError") is True)
+            assert declined, f"a read-only connection cancelled a task: {refused}"
+            still_open = _ok(read_only, "smylte_get_task",
+                             {"list_id": list_id, "uid": uid})
+            assert still_open["cancelled"] is False
+
+            done = _ok(write, "smylte_cancel_task", {"list_id": list_id, "uid": uid})
+            assert done["cancelled"] is True and done["completed"] is False
+            assert done["status"] == "CANCELLED"
+        finally:
+            _ok(write, "smylte_delete_list", {"list_id": list_id})
