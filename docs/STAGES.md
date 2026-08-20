@@ -12,17 +12,17 @@ of how the harness behaved in practice — its "Two strengths of pin" and
 
 `docs/AUDIT.md` is the evidence. This is the plan for closing it.
 
-**28 open, 54 closed.** Stages 1, 2 and 3 are done; stage 4 is in progress and
-stage 5 has not started. Of the 28 still open:
+**27 open, 55 closed.** Stages 1, 2 and 3 are done; stage 4 is in progress and
+stage 5 has not started. Of the 27 still open:
 
 | where it came from | open |
 |---|---|
-| the sweep itself (stages 4 and 5) | 18 |
+| the sweep itself (stages 4 and 5) | 17 |
 | filed by the adversarial review of Stage 3 | 7 |
 | filed by that review's own follow-up | 1 |
 | filed during remediation (see `docs/AUDIT.md`) | 2 |
 
-17 of the 18 sweep findings are pinned — 13 as `xfail(strict=True)` / `it.fails`
+16 of the 17 sweep findings are pinned — 12 as `xfail(strict=True)` / `it.fails`
 and 4 as ordinary passing tests (see "Test gaps that were only gaps" below); the
 unpinned one is finding 62. None of the review's 8 is pinned yet. The review's
 other 3, the ones Stage 3 itself caused, are closed — along with 3 more the
@@ -388,12 +388,12 @@ before the real fix landed.
 
 ## Stage 4 — User-visible correctness & rendering ⬜ IN PROGRESS
 
-21 findings · 8 medium, 13 low · **10 closed, 11 open**
+21 findings · 8 medium, 13 low · **11 closed, 10 open**
 
 Closed so far: **38**, **45** (the two backend ones — the paths a stranger
 reaches), **41**, **42**, **54** (the provider's fetch identity — when the app
 decides to ask the server again), **40**, **49**, **50** (calendar date math) and
-**51**, **56** (one uid, two collections).
+**51**, **56** (one uid, two collections) and **57** (the Completed pane's ring).
 Every pin was widened before its fix and then run against a plausible half-fix.
 
 **Three half-fixes so far, and not one was caught by its own pin.** In each case
@@ -441,7 +441,7 @@ The user can see it is wrong. Contained, mostly small, and the stage where a fix
 | 54 ✅ | loadKey encodes list ORDER, so a sidebar drag-reorder refetches every task in the account and discards the f… | `frontend/src/data.tsx:180` | low | `does not refetch every task in the account when only the order changed` |
 | 55 | packDown can stack modules past MAX_ROWS, producing a y the server's `le=200` rejects — the whole settings P… | `frontend/src/dashboard.ts:93` | low | `never emits a module below the row the server accepts` |
 | 56 ✅ | Tasks pane rows key on the bare UID, so a task copied into a second list produces duplicate React keys and d… | `frontend/src/components/TasksView.tsx:442` | low | `deletes only the copy whose row was clicked` |
-| 57 | The Completed pane hides a completed RELATED-TO ring entirely, though the list view has explicit code to ren… | `frontend/src/components/TasksView.tsx:334` | low | `shows a completed ring another client authored` |
+| 57 ✅ | The Completed pane hides a completed RELATED-TO ring entirely, though the list view has explicit code to ren… | `frontend/src/components/TasksView.tsx:334` | low | `shows a completed ring another client authored` |
 | 58 | TaskModal — the app's most-used dialog — has no Escape handler, breaking the modal contract every other dial… | `frontend/src/components/TaskModal.tsx:121` | low | `closes on Escape, like every other dialog in the app` |
 
 ## Stage 5 — Delivery infrastructure & test gaps ⬜ OPEN
