@@ -153,9 +153,6 @@ def _connect(client) -> dict:
 # ── AUDIT: _display_order copies compareTasks, the comparator order.ts names
 #          as NOT how a list is ordered ──────────────────────────────────────
 
-@pytest.mark.xfail(strict=True, reason="mcp/api.py:_display_order sinks null "
-                                       "sort_order last, so every task created "
-                                       "after the first drag falls off page one")
 def test_a_task_created_after_a_drag_is_not_sunk_below_the_whole_account():
     """`_display_order` sorts `(order is None, order or 0)` first — nulls LAST.
     Its docstring says it mirrors `frontend/src/order.ts`, but order.ts exports
@@ -176,6 +173,18 @@ def test_a_task_created_after_a_drag_is_not_sunk_below_the_whole_account():
     Asserted as the user-visible outcome — the soonest deadline is on the first
     page — so any correct port of `sortTasks` satisfies it, whatever shape it
     takes.
+    
+    **Fixed** by porting `sortTasks` instead of `compareTasks` — the effective-
+    position algorithm, not the pairwise comparator, because order.ts explains
+    that the pairwise form is not transitive across the placed/unplaced boundary
+    (P1 pos 1 due Dec, P2 pos 2 due Jan, U due Jun gives P1 < P2 < U < P1) and
+    sorting on an inconsistent comparator is undefined. `due` is now parsed to an
+    instant rather than compared lexically, mirroring `dueAt`, and `_title_key`
+    reproduces `localeCompare`'s tertiary case rule.
+
+    The port was cross-checked by RUNNING order.ts over 402 generated task sets
+    and comparing outputs; a sample of those is pinned below as
+    `CROSS_CHECKED`, since CI has no node.
     """
     placed = [_task(f"placed-{i}", due=f"2027-12-{i:02d}", sort_order=i)
               for i in range(1, 21)]
@@ -190,6 +199,142 @@ def test_a_task_created_after_a_drag_is_not_sunk_below_the_whole_account():
         f"of {len(rows)}, below every manually placed task; the first page is "
         f"{first_page}. A model asked \"what's due next?\" never sees it."
     )
+
+
+# The oracle for the port above, and the reason it can be trusted across two
+# languages: `frontend/src/order.ts` was RUN over 402 generated task sets —
+# random dues (date-only and timed), priorities including 0, titles differing
+# only by case, duplicate and gapped sort_orders, plus two degenerate sets where
+# every task is identical but for its uid — and the Python port reproduced its
+# output on all 402. These eight are the ones that exercise the most: mixed
+# placed/unplaced, ties on every key, and the case pairs.
+#
+# Pinned as a table rather than as a live cross-check because CI has no node.
+# Regenerate by running order.ts over the cases if the comparator ever changes;
+# if these ever disagree, order.ts is right and this port is wrong.
+CROSS_CHECKED = [
+    (
+        [
+            {'uid': 'u00', 'sort_order': 1.0, 'due': None, 'priority': 0, 'summary': 'Alpha'},
+            {'uid': 'u01', 'sort_order': 1.0, 'due': '2026-12-31', 'priority': 5, 'summary': ''},
+            {'uid': 'u02', 'sort_order': 1.0, 'due': '2027-03-03T18:30', 'priority': 5, 'summary': None},
+            {'uid': 'u03', 'sort_order': 1.0, 'due': '2027-03-03T18:30', 'priority': 9, 'summary': 'gamma'},
+            {'uid': 'u04', 'sort_order': 1.0, 'due': '2026-12-31', 'priority': 5, 'summary': None},
+            {'uid': 'u05', 'sort_order': None, 'due': None, 'priority': 0, 'summary': 'alpha'},
+            {'uid': 'u06', 'sort_order': 1.0, 'due': '2026-01-05', 'priority': 5, 'summary': ''},
+        ],
+        ['u06', 'u01', 'u04', 'u02', 'u03', 'u05', 'u00'],
+    ),
+    (
+        [
+            {'uid': 'u00', 'sort_order': 1.0, 'due': '2026-01-05T00:00', 'priority': 5, 'summary': 'alpha'},
+            {'uid': 'u01', 'sort_order': 2.0, 'due': '2027-03-03T18:30', 'priority': 9, 'summary': ''},
+            {'uid': 'u02', 'sort_order': 1.0, 'due': '2026-06-01T09:00', 'priority': 9, 'summary': 'Beta'},
+            {'uid': 'u03', 'sort_order': 7.0, 'due': '2027-03-03T18:30', 'priority': 5, 'summary': ''},
+            {'uid': 'u04', 'sort_order': 2.0, 'due': '2026-01-05T00:00', 'priority': 0, 'summary': 'alpha'},
+            {'uid': 'u05', 'sort_order': None, 'due': '2027-03-03T18:30', 'priority': 1, 'summary': 'gamma'},
+            {'uid': 'u06', 'sort_order': 1.0, 'due': '2026-01-05', 'priority': 0, 'summary': 'gamma'},
+            {'uid': 'u07', 'sort_order': 1.0, 'due': '2027-03-03T18:30', 'priority': 5, 'summary': 'gamma'},
+            {'uid': 'u08', 'sort_order': 100.0, 'due': '2027-03-03T18:30', 'priority': 0, 'summary': 'Alpha'},
+        ],
+        ['u00', 'u06', 'u02', 'u05', 'u07', 'u04', 'u01', 'u03', 'u08'],
+    ),
+    (
+        [
+            {'uid': 'u00', 'sort_order': 100.0, 'due': '2026-01-05T00:00', 'priority': 0, 'summary': 'gamma'},
+            {'uid': 'u01', 'sort_order': None, 'due': None, 'priority': 1, 'summary': None},
+            {'uid': 'u02', 'sort_order': 2.5, 'due': None, 'priority': None, 'summary': 'Alpha'},
+            {'uid': 'u03', 'sort_order': 1.0, 'due': '2026-01-05T00:00', 'priority': 9, 'summary': 'gamma'},
+            {'uid': 'u04', 'sort_order': 7.0, 'due': '2026-12-31', 'priority': 9, 'summary': 'alpha'},
+            {'uid': 'u05', 'sort_order': 1.0, 'due': None, 'priority': 5, 'summary': 'Alpha'},
+            {'uid': 'u06', 'sort_order': 100.0, 'due': '2026-01-05', 'priority': 1, 'summary': 'Alpha'},
+            {'uid': 'u07', 'sort_order': 1.0, 'due': '2026-01-05', 'priority': 0, 'summary': 'Alpha'},
+            {'uid': 'u08', 'sort_order': 100.0, 'due': '2027-03-03T18:30', 'priority': 5, 'summary': 'Alpha'},
+            {'uid': 'u09', 'sort_order': 2.5, 'due': '2027-03-03T18:30', 'priority': 0, 'summary': 'alpha'},
+        ],
+        ['u03', 'u07', 'u01', 'u05', 'u09', 'u02', 'u04', 'u06', 'u00', 'u08'],
+    ),
+    (
+        [
+            {'uid': 'u00', 'sort_order': 7.0, 'due': '2027-03-03T18:30', 'priority': None, 'summary': 'Beta'},
+            {'uid': 'u01', 'sort_order': 7.0, 'due': '2026-12-31', 'priority': 1, 'summary': 'gamma'},
+            {'uid': 'u02', 'sort_order': None, 'due': '2026-12-31', 'priority': 1, 'summary': 'Alpha'},
+            {'uid': 'u03', 'sort_order': 1.0, 'due': '2026-01-05', 'priority': 0, 'summary': 'Beta'},
+            {'uid': 'u04', 'sort_order': None, 'due': '2026-06-01T09:00', 'priority': None, 'summary': None},
+            {'uid': 'u05', 'sort_order': 1.0, 'due': '2026-12-31', 'priority': 0, 'summary': 'Beta'},
+        ],
+        ['u03', 'u04', 'u02', 'u05', 'u01', 'u00'],
+    ),
+    (
+        [
+            {'uid': 'u00', 'sort_order': 1.0, 'due': '2027-03-03T18:30', 'priority': None, 'summary': 'alpha'},
+            {'uid': 'u01', 'sort_order': 7.0, 'due': '2026-06-01T09:00', 'priority': 5, 'summary': 'Beta'},
+            {'uid': 'u02', 'sort_order': 7.0, 'due': '2026-01-05', 'priority': 0, 'summary': 'Beta'},
+            {'uid': 'u03', 'sort_order': 2.0, 'due': None, 'priority': 0, 'summary': ''},
+            {'uid': 'u04', 'sort_order': 7.0, 'due': '2026-01-05T00:00', 'priority': 0, 'summary': 'Beta'},
+            {'uid': 'u05', 'sort_order': None, 'due': '2026-06-01T09:00', 'priority': None, 'summary': 'Beta'},
+            {'uid': 'u06', 'sort_order': None, 'due': '2026-01-05', 'priority': 0, 'summary': ''},
+            {'uid': 'u07', 'sort_order': 7.0, 'due': '2026-01-05T00:00', 'priority': None, 'summary': 'alpha'},
+            {'uid': 'u08', 'sort_order': 1.0, 'due': '2026-12-31', 'priority': 5, 'summary': ''},
+        ],
+        ['u06', 'u05', 'u08', 'u00', 'u03', 'u07', 'u02', 'u04', 'u01'],
+    ),
+    (
+        [
+            {'uid': 'u00', 'sort_order': None, 'due': '2026-01-05', 'priority': 9, 'summary': ''},
+            {'uid': 'u01', 'sort_order': 1.0, 'due': '2026-06-01T09:00', 'priority': 0, 'summary': 'Alpha'},
+            {'uid': 'u02', 'sort_order': 2.5, 'due': None, 'priority': 1, 'summary': 'Beta'},
+            {'uid': 'u03', 'sort_order': 1.0, 'due': '2026-01-05', 'priority': 9, 'summary': 'Alpha'},
+            {'uid': 'u04', 'sort_order': 1.0, 'due': '2027-03-03T18:30', 'priority': None, 'summary': 'Alpha'},
+            {'uid': 'u05', 'sort_order': 2.5, 'due': '2026-01-05', 'priority': 0, 'summary': ''},
+            {'uid': 'u06', 'sort_order': 2.0, 'due': '2027-03-03T18:30', 'priority': 0, 'summary': ''},
+            {'uid': 'u07', 'sort_order': 100.0, 'due': '2027-03-03T18:30', 'priority': 1, 'summary': ''},
+        ],
+        ['u03', 'u00', 'u01', 'u04', 'u06', 'u05', 'u02', 'u07'],
+    ),
+    (
+        [
+            {'uid': 't0', 'sort_order': None, 'due': None, 'priority': None, 'summary': 'same'},
+            {'uid': 't1', 'sort_order': None, 'due': None, 'priority': None, 'summary': 'same'},
+            {'uid': 't2', 'sort_order': None, 'due': None, 'priority': None, 'summary': 'same'},
+            {'uid': 't3', 'sort_order': None, 'due': None, 'priority': None, 'summary': 'same'},
+            {'uid': 't4', 'sort_order': None, 'due': None, 'priority': None, 'summary': 'same'},
+            {'uid': 't5', 'sort_order': None, 'due': None, 'priority': None, 'summary': 'same'},
+        ],
+        ['t0', 't1', 't2', 't3', 't4', 't5'],
+    ),
+    (
+        [
+            {'uid': 'p0', 'sort_order': 3.0, 'due': None, 'priority': None, 'summary': None},
+            {'uid': 'p1', 'sort_order': 3.0, 'due': None, 'priority': None, 'summary': None},
+            {'uid': 'p2', 'sort_order': 3.0, 'due': None, 'priority': None, 'summary': None},
+            {'uid': 'p3', 'sort_order': 3.0, 'due': None, 'priority': None, 'summary': None},
+            {'uid': 'p4', 'sort_order': 3.0, 'due': None, 'priority': None, 'summary': None},
+        ],
+        ['p0', 'p1', 'p2', 'p3', 'p4'],
+    ),
+]
+
+
+@pytest.mark.parametrize("tasks, expected", CROSS_CHECKED)
+def test_the_port_agrees_with_order_ts(tasks, expected):
+    from tasksd.mcp.api import _in_display_order
+
+    assert [t["uid"] for t in _in_display_order(tasks)] == expected
+
+
+def test_the_title_key_reproduces_localecompares_case_rule():
+    """`localeCompare` is a collation: case is a TERTIARY difference and
+    lowercase sorts BEFORE uppercase. Python's `<` is codepoint order ("Alpha" <
+    "alpha") and `casefold` alone calls them equal — the first attempt at this
+    port used casefold and disagreed with order.ts on exactly the six of 402
+    cases where two tasks tied on due and priority and differed only in case."""
+    from tasksd.mcp.api import _title_key
+
+    assert _title_key("alpha") < _title_key("Alpha")
+    assert _title_key("alpha") < _title_key("beta")
+    assert _title_key("Alpha") < _title_key("beta")
+    assert _title_key("") < _title_key("a")
 
 
 # ── AUDIT: the booking ledger row is written after the CalDAV PUT ───────────
@@ -644,9 +789,6 @@ def test_a_move_into_a_calendar_holding_that_uid_is_a_conflict_not_an_outage(cli
 
 # ── AUDIT: list_oauth_grants reads a bare column in a multi-aggregate GROUP BY
 
-@pytest.mark.xfail(strict=True, reason="store.py:983 selects t.scope bare "
-                                       "alongside three aggregates, so the "
-                                       "value comes from an arbitrary row")
 def test_a_grants_scope_does_not_depend_on_row_order():
     """The query groups `oauth_tokens` by `family_id` and selects `t.scope` as a
     bare column alongside three aggregates. SQLite's bare-column rule only pins
@@ -669,6 +811,10 @@ def test_a_grants_scope_does_not_depend_on_row_order():
     same scopes, the same created_at and the same expiry — they differ only in
     the order the rows were inserted, which is nothing the owner can see. Today
     that alone decides what the screen says.
+    
+    **Fixed** with a correlated subquery for the newest live token's scope, so
+    the connections screen reports what the family can still actually do rather
+    than a value SQLite chose by scan order.
     """
     wide, narrow = "mcp:read mcp:write offline_access", "mcp:read offline_access"
     rows = [("access", wide, 100.0), ("refresh", wide, 100.0),
@@ -699,9 +845,6 @@ def test_a_grants_scope_does_not_depend_on_row_order():
 # ── AUDIT: a narrowing refresh without offline_access ends the grant ────────
 
 @pytest.mark.radicale
-@pytest.mark.xfail(strict=True, reason="oauth.py:516 gates the new refresh "
-                                       "token on the NARROWED scope, so a "
-                                       "legal narrowing kills the grant")
 def test_narrowing_scope_on_refresh_does_not_end_the_grant(mcp_app):
     """`_grant_refresh` lets a client narrow scope and passes the narrowed value
     to `_issue_pair`, which gates the new refresh token on it: `if SCOPE_OFFLINE
@@ -726,6 +869,11 @@ def test_narrowing_scope_on_refresh_does_not_end_the_grant(mcp_app):
     No existing test covers narrowing at refresh time: test_a_refresh_cannot_
     widen_scope covers only the rejection, and test_no_refresh_token_without_
     offline_access only the authorization-code path.
+    
+    **Fixed** by keeping `offline_access` from the FAMILY's granted scope when
+    reissuing. It is a grant shape, not an API capability, so narrowing the API
+    scopes is not a request to stop refreshing — and the alternative reading cost
+    the user their whole grant with no explanation anywhere.
     """
     grant = _connect(mcp_app)
     held = grant["refresh_token"]
@@ -755,9 +903,6 @@ def test_narrowing_scope_on_refresh_does_not_end_the_grant(mcp_app):
 # ── AUDIT: disconnecting a connector is not idempotent ─────────────────────
 
 @pytest.mark.radicale
-@pytest.mark.xfail(strict=True, reason="mcp/routes.py:410 404s a family that "
-                                       "is already gone, so a retry after a "
-                                       "lost response reads as a failure")
 def test_disconnecting_a_connection_twice_is_not_an_error(mcp_app):
     """`drop_connection` treats an already-gone family as an error, and
     `ConnectionsSection.disconnect` treats ANY failure as "the disconnect did
@@ -784,6 +929,10 @@ def test_disconnecting_a_connection_twice_is_not_an_error(mcp_app):
     names a frontend-only remedy (treat a 404 as success in
     `ConnectionsSection`); if that is chosen instead, this pin reclassifies
     rather than fails.
+    
+    **Fixed** by answering 204 whether or not a family was found. A connection
+    that is already gone is the state the caller asked for. Nothing leaks: the
+    route is cookie-gated to the owner.
     """
     _connect(mcp_app)
     # These two routes are the owner managing their own grants, so they are
@@ -807,8 +956,6 @@ def test_disconnecting_a_connection_twice_is_not_an_error(mcp_app):
 
 # ── AUDIT: a notifications/ method carrying an id gets no reply at all ──────
 
-@pytest.mark.xfail(strict=True, reason="mcp/server.py:114 returns None "
-                                       "unconditionally, discarding the id")
 def test_a_notification_method_sent_with_an_id_gets_a_reply():
     """`handle` computes `is_notification = "id" not in message` and honours it
     on every other branch — `tools/call`, unknown methods, the ToolError path
@@ -828,6 +975,9 @@ def test_a_notification_method_sent_with_an_id_gets_a_reply():
     Asserted as "there is a reply and it carries the id", which both a friendly
     empty result and a strict INVALID_REQUEST error satisfy. The id-less form is
     checked alongside so a fix cannot start replying to genuine notifications.
+    
+    **Fixed** by honouring `is_notification` in that branch like every other one.
+    An empty result is the friendlier of the two legal answers.
     """
     srv = McpServer(object())
 

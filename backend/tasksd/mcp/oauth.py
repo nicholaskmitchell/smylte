@@ -531,6 +531,17 @@ class OAuthServer:
             if asked - granted:
                 raise OAuthError("invalid_scope", "a refresh cannot widen scope")
             granted = asked
+        # `offline_access` is a grant SHAPE, not an API capability, so a client
+        # narrowing to `mcp:read mcp:write` — an ordinary thing to do, since the
+        # token response echoes scope back — is not asking to give up refreshing.
+        # `_issue_pair` gates the new refresh token on the scope it is handed, so
+        # without this the response carried no refresh_token; RFC 6749 §6 then
+        # tells the client to keep using the one it has, `use_refresh_token`
+        # reports "replayed", and `revoke_oauth_family` destroys the grant. The
+        # reuse detector fired on a client doing exactly what the spec says, and
+        # the user re-typed their password with no explanation anywhere.
+        if SCOPE_OFFLINE in scope_set(row["scope"]):
+            granted = granted | {SCOPE_OFFLINE}
         return self._issue_pair(conn, client_id=client["client_id"],
                                 scope=scope_str(granted), resource=row["resource"],
                                 family_id=row["family_id"])

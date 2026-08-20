@@ -650,7 +650,12 @@ def test_connections_are_listed_and_can_be_disconnected(mcp):
     assert mcp.delete(f"/api/mcp/connections/{family}").status_code == 204
     assert _rpc(mcp, grant["access_token"], "ping").status_code == 401
     assert mcp.get("/api/mcp/connections").json()["connections"] == []
-    assert mcp.delete(f"/api/mcp/connections/{family}").status_code == 404
+    # 204 again, not 404: disconnecting is idempotent (2026-08-19 finding 35).
+    # This line used to assert the 404, which is how the behaviour survived —
+    # `ConnectionsSection.disconnect` restores the optimistic removal on ANY
+    # failure, so a retry after a lost response put the revoked grant back in
+    # the owner's list of live connections and left it there.
+    assert mcp.delete(f"/api/mcp/connections/{family}").status_code == 204
 
 
 def test_connections_need_the_session_cookie(mcp):

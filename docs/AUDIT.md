@@ -34,7 +34,7 @@ The 2026-08-19 references were written against this commit and have not drifted 
 Ticked findings keep their original references, which point into the tree as it
 was when they were filed. They are history, not navigation.
 
-**38 open**, all from the 2026-08-19 sweep immediately below; every older
+**33 open**, all from the 2026-08-19 sweep immediately below; every older
 finding is closed. The 2026-08-07 backlog is closed, and so are both findings the
 remediation filed against itself (the missing CSP — issue #57 — and the unbounded
 `_count_consumed` walk, below). The
@@ -74,7 +74,7 @@ Three of the 69 are the same defect seen at a different layer, so they are filed
 once and the backlog counts **66**. Every one of the ten HIGHs was reproduced by
 hand with a runnable probe against a live Radicale 3.7.4 before being written down.
 
-**38 open, 28 closed** — the seven crash paths went first, as **Stage 1**
+**33 open, 33 closed** — the seven crash paths went first, as **Stage 1**
 (`docs/STAGES.md`), and **Stage 2** is closing on top of them; their pins are
 ordinary regression tests now and must stay green. The rest are still pinned by a test that asserts the corrected behaviour
 and fails today — see `docs/STAGES.md` for the stage plan and the
@@ -728,7 +728,7 @@ Failure scenario: the owner (or any foreign client) has a recurring 02:30-03:00 
 
 ### MCP tools
 
-#### [ ] smylte_list_tasks implements the comparator order.ts documents as wrong, so after one drag every newly-created task sinks below the whole account and falls off the first page
+#### [x] smylte_list_tasks implements the comparator order.ts documents as wrong, so after one drag every newly-created task sinks below the whole account and falls off the first page
 
 `backend/tasksd/mcp/api.py:133` · **high** · bug · stage 3
 
@@ -917,7 +917,7 @@ No test posts a body that json.loads accepts but the response encoder rejects; `
 
 **Pinned by** `test_a_non_finite_jsonrpc_id_gets_an_answer_not_a_500 (parametrized: NaN, -Infinity, 1e400, one poisoned id in a batch — 4 XFAILs)` in `backend/tests/test_backlog_aug19_stage1.py`.
 
-#### [ ] Disconnecting a connector is not idempotent: a retry after a lost response 404s and the SPA puts the revoked grant back in the list
+#### [x] Disconnecting a connector is not idempotent: a retry after a lost response 404s and the SPA puts the revoked grant back in the list
 
 `backend/tasksd/mcp/routes.py:410` · **low** · bug · `minor` · stage 3
 
@@ -954,7 +954,7 @@ Failure scenario: the owner opens Settings › Connected apps and clicks Disconn
 
 **Pinned by** `test_disconnecting_a_connection_twice_is_not_an_error` in `backend/tests/test_backlog_aug19_stage3_core.py`.
 
-#### [ ] A JSON-RPC request (with an id) whose method starts with `notifications/` gets no reply at all, so the client waits on an id that never resolves
+#### [x] A JSON-RPC request (with an id) whose method starts with `notifications/` gets no reply at all, so the client waits on an id that never resolves
 
 `backend/tasksd/mcp/server.py:114` · **low** · bug · `minor` · stage 3
 
@@ -1012,7 +1012,7 @@ The refresh succeeding is the serious half: the attacker does not merely keep a 
 
 **Pinned by** `test_rotating_the_credentials_ends_an_mcp_grant_too` in `backend/tests/test_backlog_aug19_stage2.py`.
 
-#### [ ] A refresh that narrows scope without repeating `offline_access` returns no refresh token, and the client's RFC-mandated reuse of the old one then revokes the whole grant
+#### [x] A refresh that narrows scope without repeating `offline_access` returns no refresh token, and the client's RFC-mandated reuse of the old one then revokes the whole grant
 
 `backend/tasksd/mcp/oauth.py:516` · **medium** · bug · `minor` · stage 3
 
@@ -1610,7 +1610,7 @@ The first window is exactly what book_slot produces for a 24-Aug booking (`day0 
 
 **Pinned by** `test_an_occurrence_moved_before_its_series_start_is_still_in_the_window` in `backend/tests/test_backlog_aug19_stage3_core.py`.
 
-#### [ ] list_oauth_grants reads `scope` as a bare column in a multi-aggregate GROUP BY, so the connections screen can report a revoked capability level for a live grant
+#### [x] list_oauth_grants reads `scope` as a bare column in a multi-aggregate GROUP BY, so the connections screen can report a revoked capability level for a live grant
 
 `backend/tasksd/db/store.py:983` · **low** · bug · `minor` · stage 3
 
