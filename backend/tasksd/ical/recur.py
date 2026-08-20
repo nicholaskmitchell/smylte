@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, replace
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from datetime import time as dtime
 from math import ceil
 
@@ -30,7 +30,7 @@ import recurring_ical_events
 from icalendar import Calendar
 
 from .rrule_budget import SearchBudgetExceeded, search_budget
-from .read import _iso, _text
+from .read import _iso, _text, advance
 
 log = logging.getLogger("tasksd.recur")
 
@@ -87,7 +87,9 @@ def _end_fields(comp) -> tuple[str | None, bool]:
         return _iso(dtend)
     dtstart, dur = comp.get("DTSTART"), comp.get("DURATION")
     if dtstart is not None and dur is not None:
-        return _iso(dtstart.dt + dur.dt)
+        # Not `dtstart.dt + dur.dt`: see `advance`. That is the same wall-clock
+        # addition `_repair_span` below exists to undo, one layer earlier.
+        return _iso(advance(dtstart.dt, dur.to_ical(), dur.dt))
     return None, False
 
 
@@ -246,9 +248,53 @@ def _pathological_rule(cal: Calendar, window_end: date | datetime | None = None)
     return None
 
 
+def _repair_span(start_iso: str | None, end_iso: str | None) -> str | None:
+    """The instance end, with a DST arithmetic artifact taken back out.
+
+    `recurring_ical_events` derives each instance's end by wall-clock arithmetic
+    on that instance's DTSTART. For an instance whose span crosses a transition,
+    the two ends resolve with different offsets, so the emitted pair states one
+    duration in wall clock and a different one in real time:
+
+        2026-03-08T02:30:00-06:00 -> 2026-03-08T03:00:00-05:00     -30 minutes
+        2026-11-01T01:30:00-05:00 -> 2026-11-01T02:00:00-06:00     +90 minutes
+
+    The first runs backwards, which is wrong under any reading — and
+    `busy_intervals` discards any interval that is not strictly positive, so the
+    owner's recurring 02:30 commitment stopped blocking bookings on that one day
+    and the public page handed the time to an anonymous visitor. The second
+    blocks three times its authored length, withholding an hour of real
+    availability. The SPA renders the first as "3:30 AM - 3:00 AM".
+
+    The repair keeps the duration the component STATES (its wall-clock span) and
+    re-applies it as absolute time from the start instant. On any day without a
+    transition inside the span the two are equal and nothing changes, so the
+    blast radius is exactly the broken instances. Note the fall-back case then
+    reads "1:30 AM - 1:00 AM" locally, which is correct and is the same shape
+    this app's own 01:30 bookings already have (06:30Z -> 07:00Z).
+    """
+    if start_iso is None or end_iso is None:
+        return end_iso
+    try:
+        start, end = datetime.fromisoformat(start_iso), datetime.fromisoformat(end_iso)
+    except ValueError:
+        return end_iso
+    if start.tzinfo is None or end.tzinfo is None:
+        return end_iso                     # floating: no offset to disagree about
+    wall = end.replace(tzinfo=None) - start.replace(tzinfo=None)
+    exact = end.astimezone(timezone.utc) - start.astimezone(timezone.utc)
+    if exact == wall:
+        return end_iso                     # no transition inside the span
+    # The stated span is a wall-clock quantity, so re-apply it as one — but from
+    # the start INSTANT, which is what the library failed to do.
+    return (start.astimezone(timezone.utc) + wall).astimezone(start.tzinfo).isoformat()
+
+
 def _occurrence(comp, override_anchors: set[str], tf_shifts: dict[str, timedelta]) -> Occurrence:
     start, start_is_date = _iso(comp.get("DTSTART"))
     end, end_is_date = _end_fields(comp)
+    if not start_is_date and not end_is_date:
+        end = _repair_span(start, end)
     rid = comp.get("RECURRENCE-ID")
     rid_iso = _iso(rid)[0] if rid is not None else None
     anchor = rid_iso or start or ""

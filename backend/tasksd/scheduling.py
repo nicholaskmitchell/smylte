@@ -22,6 +22,8 @@ from zoneinfo import ZoneInfo
 
 from icalendar.prop import vDuration
 
+from .ical.read import advance
+
 # `fullmatch` below, not `match`: Python's `$` also matches before a trailing
 # newline, so "09:00-17:00\n" satisfied a pattern written to be exact.
 _RANGE_RE = re.compile(r"(\d{2}):(\d{2})-(\d{2}):(\d{2})")
@@ -144,10 +146,35 @@ def busy_intervals(
             if ev.get("end"):
                 end = parse_event_time(ev["end"], tz, naive_tz)
             elif ev.get("duration"):
-                end = start + vDuration.from_ical(ev["duration"])
+                # `start + timedelta` adds to the NAIVE fields and re-derives the
+                # offset, which is wall-clock arithmetic — the exact thing `pad`
+                # and `generate_slots` both carry comments explaining they avoid.
+                # Across spring-forward a two-hour commitment blocked one hour and
+                # the tail was offered to an anonymous visitor; across fall-back a
+                # thirty-minute one blocked ninety, withholding real availability.
+                #
+                # `advance` applies the two halves of the DURATION the way RFC 5545
+                # §3.3.6 defines them rather than picking one: the weeks/days part
+                # is nominal (P1D is "same time tomorrow", 23 real hours across the
+                # spring-forward) and the time part is exact. Adding everything to
+                # the instant would have fixed PT2H and broken P1D, which is the
+                # same class of trade as the bug.
+                end = advance(
+                    start, ev["duration"], vDuration.from_ical(ev["duration"]))
             else:
                 continue                       # zero-length: blocks nothing
-            if end > start:
+            # Through `_u`, like every other comparison in this module — see its
+            # docstring. Both operands share one ZoneInfo object, so CPython
+            # compares their NAIVE fields: an event starting in the first pass of
+            # the repeated hour and ending in the second has end-wall-clock <=
+            # start-wall-clock, and this guard silently dropped it. It never
+            # reached `merge`, so the busy set had no trace of it and the slot
+            # sitting on top of it was offered — and `book_slot` re-validates
+            # against the same busy set, so an anonymous POST wrote a second
+            # event at the identical instant. This app's own bookings are in
+            # scope: 30 minutes from 01:30 CDT is 06:30Z->07:00Z = 01:30 -> 01:00
+            # local.
+            if _u(end) > _u(start):
                 out.append(Interval(start, end))
         except Exception:  # noqa: BLE001 — one bad event must not sink the page
             continue

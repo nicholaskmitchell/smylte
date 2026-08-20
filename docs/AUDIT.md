@@ -34,7 +34,7 @@ The 2026-08-19 references were written against this commit and have not drifted 
 Ticked findings keep their original references, which point into the tree as it
 was when they were filed. They are history, not navigation.
 
-**53 open**, all from the 2026-08-19 sweep immediately below; every older
+**49 open**, all from the 2026-08-19 sweep immediately below; every older
 finding is closed. The 2026-08-07 backlog is closed, and so are both findings the
 remediation filed against itself (the missing CSP — issue #57 — and the unbounded
 `_count_consumed` walk, below). The
@@ -74,7 +74,7 @@ Three of the 69 are the same defect seen at a different layer, so they are filed
 once and the backlog counts **66**. Every one of the ten HIGHs was reproduced by
 hand with a runnable probe against a live Radicale 3.7.4 before being written down.
 
-**53 open, 13 closed** — the seven crash paths went first, as **Stage 1**
+**49 open, 17 closed** — the seven crash paths went first, as **Stage 1**
 (`docs/STAGES.md`), and **Stage 2** is closing on top of them; their pins are
 ordinary regression tests now and must stay green. The rest are still pinned by a test that asserts the corrected behaviour
 and fails today — see `docs/STAGES.md` for the stage plan and the
@@ -688,7 +688,7 @@ Failure scenario: any client sharing the Radicale collection (DAVx5/Tasks.org/Th
 
 **Pinned by** `test_a_rule_that_can_never_match_is_expanded_promptly` in `backend/tests/test_backlog_aug19_stage2.py`.
 
-#### [ ] Recurrence expansion emits occurrences whose end precedes their start on the DST spring-forward (and 3x-long ones on the fall-back), so the instance blocks nothing in the busy set
+#### [x] Recurrence expansion emits occurrences whose end precedes their start on the DST spring-forward (and 3x-long ones on the fall-back), so the instance blocks nothing in the busy set
 
 `backend/tasksd/ical/recur.py:234` · **medium** · bug · stage 3
 
@@ -1124,7 +1124,7 @@ None of these five outcomes is asserted anywhere in tests/test_mcp.py.
 
 ### Scheduling & public booking
 
-#### [ ] busy_intervals drops any event crossing the DST fall-back transition, so an anonymous POST double-books the owner at the identical instant
+#### [x] busy_intervals drops any event crossing the DST fall-back transition, so an anonymous POST double-books the owner at the identical instant
 
 `backend/tasksd/scheduling.py:148` · **high** · bug · stage 3
 
@@ -1219,7 +1219,7 @@ both naming genuinely open slots):
 
 **Pinned by** `test_a_client_id_with_a_trailing_newline_is_refused` in `backend/tests/test_backlog_aug19_stage2.py`.
 
-#### [ ] busy_intervals derives a DURATION-only event's end by wall-clock addition, so across a DST transition it blocks the wrong hour
+#### [x] busy_intervals derives a DURATION-only event's end by wall-clock addition, so across a DST transition it blocks the wrong hour
 
 `backend/tasksd/scheduling.py:145` · **medium** · bug · `minor` · stage 3
 
@@ -1301,7 +1301,7 @@ between the PUT and the ledger insert; test_service_unit.py stubs create_event e
 
 **Pinned by** `test_a_booking_retried_after_a_failed_write_is_not_a_conflict_with_itself` in `backend/tests/test_backlog_aug19_stage3_core.py`.
 
-#### [ ] Test gap: no test drives busy_intervals across a DST transition at all, which is why two real slot-math defects survived three sweeps
+#### [x] Test gap: no test drives busy_intervals across a DST transition at all, which is why two real slot-math defects survived three sweeps
 
 `backend/tests/test_scheduling.py:77` · **low** · test-gap · `minor` · stage 5
 

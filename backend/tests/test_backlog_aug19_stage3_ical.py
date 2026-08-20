@@ -110,9 +110,6 @@ def calendar(client):
 
 # ── AUDIT: busy_intervals drops any event crossing the DST fall-back ────────
 
-@pytest.mark.xfail(strict=True, reason=(
-    "busy_intervals' `if end > start` guard compares wall clock, so an event "
-    "crossing the fall-back transition is discarded and its slot is offered"))
 def test_a_meeting_across_the_fall_back_transition_still_blocks_its_slot():
     """The owner has a 30-minute commitment at 06:30Z-07:00Z on 2026-11-01. In
     America/Chicago that is 01:30 CDT -> 01:00 CST: it starts in the first pass
@@ -138,6 +135,12 @@ def test_a_meeting_across_the_fall_back_transition_still_blocks_its_slot():
     unauthenticated write path into the owner's calendar, and `generate_slots`
     deliberately offers both passes of the repeated hour, so those slots are
     real and reachable by a stranger.
+
+    **Fixed** by routing the guard through `_u`, which is all it ever needed —
+    the module's own docstring had already written the rule down. The wider
+    lesson is in docs/STAGES.md: a comment asserting a safety property is
+    evidence of intent, not of behaviour, and this is the fifth finding of that
+    shape in one sweep.
     """
     meeting = {"start": "2026-11-01T06:30:00+00:00", "end": "2026-11-01T07:00:00+00:00"}
 
@@ -169,9 +172,6 @@ def test_a_meeting_across_the_fall_back_transition_still_blocks_its_slot():
 
 # ── AUDIT: a DURATION-only event's end is derived by wall-clock addition ────
 
-@pytest.mark.xfail(strict=True, reason=(
-    "busy_intervals derives a DURATION-only event's end with `start + duration` "
-    "on a local datetime, so a DST transition moves the blocked hour"))
 def test_a_duration_only_event_blocks_its_authored_length_across_a_transition():
     """`end = start + vDuration.from_ical(ev["duration"])` (scheduling.py:145)
     adds a timedelta to a zone-aware LOCAL datetime, which adds to the naive
@@ -195,12 +195,34 @@ def test_a_duration_only_event_blocks_its_authored_length_across_a_transition():
     PT2H and PT30M are exact-time durations, so both directions are wrong under
     any reading: what is asked for here is that a busy interval last as long as
     the event that produced it.
+
+    **Fixed** by `ical.read.advance`, which applies the two halves of a DURATION
+    the way RFC 5545 §3.3.6 defines them instead of picking one — weeks and days
+    nominal, hours/minutes/seconds exact. The obvious repair (add the whole
+    timedelta to the instant) fixes PT2H and breaks P1D, so the nominal cases
+    below are as load-bearing as the exact ones: `vDuration.from_ical` collapses
+    P1D and PT24H to the same `timedelta`, and only the raw string can tell them
+    apart.
     """
     cases = (
         ("spring-forward", {"start": "2026-03-08T07:30:00+00:00", "duration": "PT2H"},
          timedelta(hours=2)),
         ("fall-back", {"start": "2026-11-01T06:30:00+00:00", "duration": "PT30M"},
          timedelta(minutes=30)),
+        # An ordinary July day, so a fix cannot pass by changing every span.
+        ("no transition", {"start": "2026-07-13T14:00:00+00:00", "duration": "PT1H"},
+         timedelta(hours=1)),
+        # PT24H is EXACT: twenty-four hours of real time, transition or not.
+        ("exact day, spring", {"start": "2026-03-08T07:30:00+00:00", "duration": "PT24H"},
+         timedelta(hours=24)),
+        # …and P1D is NOMINAL — "the same time tomorrow", which across the
+        # spring-forward is 23 real hours. This is the half a fix that simply
+        # added the whole duration to the instant would get wrong, trading one
+        # wrong answer for another. RFC 5545 §3.3.6.
+        ("nominal day, spring", {"start": "2026-03-08T07:30:00+00:00", "duration": "P1D"},
+         timedelta(hours=23)),
+        ("nominal day, fall", {"start": "2026-11-01T05:30:00+00:00", "duration": "P1D"},
+         timedelta(hours=25)),
     )
     wrong = []
     for label, ev, authored in cases:
@@ -497,9 +519,6 @@ def test_this_and_following_on_a_non_repeating_event_does_not_duplicate_it(
 
 # ── AUDIT: expansion emits occurrences whose end precedes their start ───────
 
-@pytest.mark.xfail(strict=True, reason=(
-    "recurrence expansion derives each instance's end by wall-clock addition, "
-    "so a spring-forward instance runs backwards and blocks nothing"))
 def test_every_expanded_occurrence_across_spring_forward_blocks_real_time():
     """`recurring_ical_events` derives each instance's end by wall-clock
     arithmetic on that instance's DTSTART, and `_end_fields` does the same for
@@ -541,6 +560,22 @@ def test_every_expanded_occurrence_across_spring_forward_blocks_real_time():
     occurrences = expand_occurrences(raw, date(2026, 3, 1), date(2026, 3, 20))
     assert len(occurrences) == 8, occurrences        # sanity: the series expanded
 
+    # Every instance must occupy the thirty minutes it was authored with — not
+    # merely be forward-going. A guard that only clamped a backwards end to its
+    # start would satisfy the two assertions below while still emitting a
+    # zero-length instance here, and zero-length blocks nothing either.
+    spans = {
+        f"{o.start} -> {o.end}": (
+            datetime.fromisoformat(o.end).astimezone(UTC)
+            - datetime.fromisoformat(o.start).astimezone(UTC)
+        )
+        for o in occurrences
+    }
+    assert set(spans.values()) == {timedelta(minutes=30)}, (
+        "instances do not all occupy their authored 30 minutes of real time: "
+        + str({k: str(v) for k, v in spans.items() if v != timedelta(minutes=30)})
+    )
+
     backwards = [
         f"{o.start} -> {o.end}"
         for o in occurrences
@@ -562,6 +597,47 @@ def test_every_expanded_occurrence_across_spring_forward_blocks_real_time():
         "these occurrences of the owner's recurring commitment block nothing at "
         "all, so the public booking page offers them as free:\n  "
         + "\n  ".join(unblocked)
+    )
+
+
+@pytest.mark.parametrize("tail", [
+    ("DURATION:PT30M",),
+    # The library derives the end the same wrong way whether the master authored
+    # DURATION or DTEND, so both spellings have to be driven — a fix applied only
+    # to `_end_fields` would leave this one broken.
+    ("DTEND;TZID=America/Chicago:20261025T020000",),
+])
+def test_the_fall_back_mirror_does_not_stretch_an_instance_to_three_times_its_length(tail):
+    """The other direction of the same defect, and the one the pin above cannot
+    see: on 2026-11-01 a 30-minute 01:30 instance is emitted as
+    01:30-05:00 -> 02:00-06:00, which is 90 minutes of real time. It is forward-
+    going, so `busy_intervals` accepts it and nothing looks wrong — it simply
+    withholds an hour of the owner's genuine availability from the public page,
+    every year, on one day.
+
+    Note what a correct answer looks like locally: 01:30 CDT + 30 real minutes is
+    01:00 CST, so the instance reads "1:30 AM - 1:00 AM". That is the repeated
+    hour, and it is the same shape this app's own 01:30 bookings already have
+    (06:30Z -> 07:00Z), which is why `busy_intervals` must compare instants.
+    """
+    raw = foreign_event_raw(
+        "fall@x", "Nightly", dtstart="TZID=America/Chicago:20261025T013000",
+        dtend=None, rrule="FREQ=DAILY;COUNT=10",
+        vtimezone=CHICAGO_VTIMEZONE, extra=tail,
+    )
+    occurrences = expand_occurrences(raw, date(2026, 10, 25), date(2026, 11, 10))
+    wrong = {
+        f"{o.start} -> {o.end}": str(
+            datetime.fromisoformat(o.end).astimezone(UTC)
+            - datetime.fromisoformat(o.start).astimezone(UTC)
+        )
+        for o in occurrences
+        if (datetime.fromisoformat(o.end).astimezone(UTC)
+            - datetime.fromisoformat(o.start).astimezone(UTC)) != timedelta(minutes=30)
+    }
+    assert not wrong, (
+        "an instance spanning the fall-back transition blocks more time than it "
+        f"occupies, withholding real availability: {wrong}"
     )
 
 

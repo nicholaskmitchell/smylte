@@ -9,7 +9,8 @@ The full-fidelity source of truth stays in `raw_ics` (invariant #1/#2).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date, datetime
+import re
+from datetime import date, datetime, timedelta, timezone
 
 from icalendar import Calendar
 
@@ -84,6 +85,65 @@ def _iso(value) -> tuple[str | None, bool]:
     if isinstance(dt, date):
         return dt.isoformat(), True
     return str(dt), False
+
+
+# RFC 5545 §3.3.6 splits a DURATION into two kinds of quantity, and the
+# distinction is load-bearing on exactly two days a year: "the duration of a week
+# or a day depends on its position in the calendar", while an hour, minute or
+# second is exact. So P1D across the spring-forward is 23 hours of real time and
+# PT24H is 24, and a single timedelta cannot tell you which you were given —
+# `vDuration.from_ical` collapses both to `timedelta(days=1)`.
+_DURATION_PARTS = re.compile(
+    r"(?P<sign>[+-])?P(?:(?P<w>\d+)W)?(?:(?P<d>\d+)D)?"
+    r"(?:T(?:(?P<h>\d+)H)?(?:(?P<m>\d+)M)?(?:(?P<s>\d+)S)?)?",
+    re.IGNORECASE,
+)
+
+
+def split_duration(raw) -> tuple[timedelta, timedelta] | None:
+    """An RFC 5545 DURATION as its (nominal, exact) halves, or None if unparseable.
+
+    Nominal is the weeks/days part, exact the time part. A negative duration
+    negates both.
+    """
+    if raw is None:
+        return None
+    text = raw.decode() if isinstance(raw, bytes) else str(raw)
+    m = _DURATION_PARTS.fullmatch(text.strip())
+    if m is None:
+        return None
+    g = {k: int(v) for k, v in m.groupdict().items() if k != "sign" and v}
+    if not g:
+        return None
+    sign = -1 if m.group("sign") == "-" else 1
+    nominal = timedelta(weeks=g.get("w", 0), days=g.get("d", 0))
+    exact = timedelta(hours=g.get("h", 0), minutes=g.get("m", 0), seconds=g.get("s", 0))
+    return sign * nominal, sign * exact
+
+
+def advance(value, raw, total: timedelta):
+    """`value` moved forward by a DURATION, each half applied as §3.3.6 defines.
+
+    The nominal half is added to the WALL CLOCK — "a day later" means the same
+    time tomorrow whatever the clocks did overnight. The exact half is added to
+    the INSTANT, because `aware + timedelta` adds to the naive fields and
+    re-derives the offset: 02:30 CST + PT30M is 03:00, and on 2026-03-08 that
+    03:00 is CDT, half an hour BEFORE the start.
+
+    `total` is the already-parsed timedelta, used when `raw` cannot be split (or
+    when `value` is a date, where everything is nominal anyway) so a caller never
+    ends up worse off than the plain addition it replaced.
+    """
+    if not isinstance(value, datetime) or value.tzinfo is None:
+        return value + total
+    parts = split_duration(raw)
+    if parts is None:
+        return value + total
+    nominal, exact = parts
+    out = value + nominal                       # wall clock, then…
+    if exact:
+        out = (out.astimezone(timezone.utc) + exact).astimezone(value.tzinfo)
+    return out
 
 
 def _text(comp, key: str) -> str | None:

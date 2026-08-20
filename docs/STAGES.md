@@ -12,10 +12,11 @@ of how the harness behaved in practice — its "Two strengths of pin" and
 
 `docs/AUDIT.md` is the evidence. This is the plan for closing it.
 
-**53 open, 13 closed.** Stages 1 and 2 are done; stages 3-5 remain. Of the 53
-still open, 52 are pinned by a test that asserts the corrected behaviour and
-fails today — 48 as `xfail(strict=True)` / `it.fails`, and 4 as ordinary passing
-tests (see "Test gaps that were only gaps" below). One is deliberately **not** pinned; see
+**49 open, 17 closed.** Stages 1 and 2 are done and Stage 3 is in progress;
+stages 4-5 remain. Of the 49 still open, 48 are pinned by a test that asserts
+the corrected behaviour and fails today — 44 as `xfail(strict=True)` /
+`it.fails`, and 4 as ordinary passing tests (see "Test gaps that were only gaps"
+below). One is deliberately **not** pinned; see
 "The one that is not pinned" below. The harness
 described under *Stage 0* further down still applies unchanged; these pins live in
 their own files so the closed 2026-08-16 stages stay closed:
@@ -206,11 +207,31 @@ The last row was filed during remediation, not by the sweep; it is under
 `## Filed during remediation — 2026-08-20` in `docs/AUDIT.md` and is not counted
 in that sweep's 66.
 
-## Stage 3 — Silent data corruption ⬜ OPEN
+## Stage 3 — Silent data corruption 🟨 IN PROGRESS
 
-24 findings · 6 high, 12 medium, 6 low · open
+24 findings · 6 high, 12 medium, 6 low · **3 closed, 21 open**
 
 Nothing raises and the answer is silently wrong. The dangerous class, and the largest — it needs the most care per fix because the failure leaves no trace and several of these corrupt data another CalDAV client authored.
+
+Three are done — 18, 26 and 29, which are one defect at three sites: a duration
+or a comparison evaluated on WALL CLOCK where it needed the instant. Two things
+came out of it.
+
+**Finding 64 went with them, and it was never really a Stage 5 finding.** It was
+filed as a test gap — "nothing drives `busy_intervals` across a DST transition at
+all" — and writing the missing case is what found 18 and 29 in the first place.
+Its pin asserts exactly those two behaviours, so fixing them closed it, with no
+change of its own. The stage boundaries are a sorting aid, not a partition.
+
+**The obvious repair would have traded one wrong answer for another.** Adding the
+whole DURATION to the instant fixes `PT2H` and breaks `P1D`: RFC 5545 §3.3.6
+makes weeks and days NOMINAL ("the same time tomorrow", 23 real hours across the
+spring-forward) and hours/minutes/seconds EXACT, and `vDuration.from_ical`
+collapses `P1D` and `PT24H` to one `timedelta` — only the raw string tells them
+apart. `ical.read.advance` applies each half as the RFC defines it, and pin 29
+now drives the nominal cases too, so that shortcut fails the build. Both this and
+the "clamp a backwards end to its start" shortcut were run and watched to fail
+before the real fix landed.
 
 | # | Finding | Where | Sev | Pin |
 |---|---|---|---|---|
@@ -218,7 +239,7 @@ Nothing raises and the answer is silently wrong. The dangerous class, and the la
 | 15 | "This event" on the first slot of a RANGE=THISANDFUTURE override rewrites every later occurrence | `backend/tasksd/ical/edit.py:642` | high | `test_editing_the_slot_a_this_and_future_override_anchors_leaves_later_ones_alone` |
 | 16 | Dragging a foreign MONTHLY/YEARLY series deletes the dragged occurrence and moves nothing else | `backend/tasksd/ical/edit.py:829` | high | `test_dragging_a_monthly_series_moves_it_instead_of_desynchronizing_the_rule` |
 | 17 | smylte_list_tasks implements the comparator order.ts documents as wrong, so after one drag every newly-creat… | `backend/tasksd/mcp/api.py:133` | high | `test_a_task_created_after_a_drag_is_not_sunk_below_the_whole_account` |
-| 18 | busy_intervals drops any event crossing the DST fall-back transition, so an anonymous POST double-books the … | `backend/tasksd/scheduling.py:148` | high | `test_a_meeting_across_the_fall_back_transition_still_blocks_its_slot` |
+| 18 ✅ | busy_intervals drops any event crossing the DST fall-back transition, so an anonymous POST double-books the … | `backend/tasksd/scheduling.py:148` | high | `test_a_meeting_across_the_fall_back_transition_still_blocks_its_slot` |
 | 19 | split_event's 412 recovery always fails with a 409 and strands a duplicate recurring series on the server | `backend/tasksd/sync/engine.py:435` | high | `test_a_contended_this_and_following_split_leaves_no_duplicate_series` |
 | 20 | get_events_in_range gates on the master's DTSTART, so a RECURRENCE-ID override moved earlier than the series… | `backend/tasksd/db/store.py:661` | medium | `test_an_occurrence_moved_before_its_series_start_is_still_in_the_window` |
 | 21 | Logout does not clear the in-memory data mirror, so the calendar keeps painting the previous session's event… | `frontend/src/data.tsx:505` | medium | `does not paint the previous session’s events to the next one` |
@@ -226,10 +247,10 @@ Nothing raises and the answer is silently wrong. The dangerous class, and the la
 | 23 | Folding one subtask tree silently deletes the folded state of every tree that is not currently rendered — an… | `frontend/src/components/TasksView.tsx:297` | medium | `keeps a hidden list’s folded trees when another tree is folded` |
 | 24 | A zone-offset datetime accepted by _parse_datelike is written as TZID="UTC±HH:MM" and read back as floating … | `backend/tasksd/app.py:531` | medium | `test_an_event_created_with_a_zone_offset_keeps_the_instant_it_names` |
 | 25 | split_series never checks that the anchor is an occurrence, so "this and following" duplicates a non-recurri… | `backend/tasksd/ical/edit.py:1084` | medium | `test_this_and_following_on_a_non_repeating_event_does_not_duplicate_it` |
-| 26 | Recurrence expansion emits occurrences whose end precedes their start on the DST spring-forward (and 3x-long… | `backend/tasksd/ical/recur.py:234` | medium | `test_every_expanded_occurrence_across_spring_forward_blocks_real_time` |
+| 26 ✅ | Recurrence expansion emits occurrences whose end precedes their start on the DST spring-forward (and 3x-long… | `backend/tasksd/ical/recur.py:234` | medium | `test_every_expanded_occurrence_across_spring_forward_blocks_real_time` |
 | 27 | Every task tool accepts a calendar id and every calendar tool accepts a task-list id, so smylte_delete_list … | `backend/tasksd/mcp/api.py:176` | medium | `test_a_calendar_id_is_refused_by_the_task_tools` |
 | 28 | A refresh that narrows scope without repeating `offline_access` returns no refresh token, and the client's R… | `backend/tasksd/mcp/oauth.py:516` | medium | `test_narrowing_scope_on_refresh_does_not_end_the_grant` |
-| 29 | busy_intervals derives a DURATION-only event's end by wall-clock addition, so across a DST transition it blo… | `backend/tasksd/scheduling.py:145` | medium | `test_a_duration_only_event_blocks_its_authored_length_across_a_transition` |
+| 29 ✅ | busy_intervals derives a DURATION-only event's end by wall-clock addition, so across a DST transition it blo… | `backend/tasksd/scheduling.py:145` | medium | `test_a_duration_only_event_blocks_its_authored_length_across_a_transition` |
 | 30 | The booking ledger row is written after the CalDAV PUT, so a failure in between makes the visitor's own retr… | `backend/tasksd/service.py:919` | medium | `test_a_booking_retried_after_a_failed_write_is_not_a_conflict_with_itself` |
 | 31 | resolve_list ignores the collection's component set, so a task can be written into a VEVENT-only calendar (a… | `backend/tasksd/service.py:210` | medium | `test_a_task_cannot_be_written_into_an_event_only_calendar` |
 | 32 | list_oauth_grants reads `scope` as a bare column in a multi-aggregate GROUP BY, so the connections screen ca… | `backend/tasksd/db/store.py:983` | low | `test_a_grants_scope_does_not_depend_on_row_order` |
@@ -271,7 +292,9 @@ The user can see it is wrong. Contained, mostly small, and the stage where a fix
 
 ## Stage 5 — Delivery infrastructure & test gaps ⬜ OPEN
 
-8 findings · 3 medium, 5 low · open
+8 findings · 3 medium, 5 low · **1 closed, 7 open**
+
+One is already closed: **64** (no test drives `busy_intervals` across a DST transition) was shut by the Stage 3 fixes for the two defects that writing its missing case uncovered — see Stage 3 above.
 
 The pipeline that ships the code and the tests that watch it. Closing these is what stops the next sweep finding the same class again.
 
@@ -282,7 +305,7 @@ The pipeline that ships the code and the tests that watch it. Closing these is w
 | 61 | setup.ts's matchMedia stub hardcodes the desktop breakpoint, so CalendarView's and HomeView's entire mobile … | `frontend/src/test/setup.ts:5` | medium | `renders the mobile calendar and the mobile dashboard` |
 | 62 | Shutdown tears down the SQLite connection and DAV client under a still-running sync sweep | `backend/tasksd/app.py:774` | low | _not pinned — see below_ |
 | 63 | Test gap: the confidential-client path — client_secret_basic/post, the Basic header parser and the secret co… | `backend/tasksd/mcp/oauth.py:417` | low | `test_a_confidential_client_authenticates_with_its_secret_and_only_that` |
-| 64 | Test gap: no test drives busy_intervals across a DST transition at all, which is why two real slot-math defe… | `backend/tests/test_scheduling.py:77` | low | `test_busy_intervals_hold_their_absolute_length_across_a_dst_change` |
+| 64 ✅ | Test gap: no test drives busy_intervals across a DST transition at all, which is why two real slot-math defe… | `backend/tests/test_scheduling.py:77` | low | `test_busy_intervals_hold_their_absolute_length_across_a_dst_change` |
 | 65 | No test observes anything about a 204 beyond its status code, and the source comment states the suite is gre… | `backend/tests/test_api.py:76` | low | `test_a_204_delete_carries_no_body_and_no_content_type` |
 | 66 | The won't-do write route and its MCP twin have no behavioural test at all — only a comment in test_api.py cl… | `backend/tests/test_api.py:69` | low | `test_cancelling_a_task_is_wont_do_and_not_done + test_the_cancel_tool_needs_write_access_and_marks_the_task_wont_do` |
 
