@@ -34,7 +34,8 @@ The 2026-08-19 references were written against this commit and have not drifted 
 Ticked findings keep their original references, which point into the tree as it
 was when they were filed. They are history, not navigation.
 
-**28 open**, all from the 2026-08-19 sweep immediately below; every older
+**28 open** from the 2026-08-19 sweep, plus **10** filed by the Stage 3
+adversarial review (below), immediately below; every older
 finding is closed. The 2026-08-07 backlog is closed, and so are both findings the
 remediation filed against itself (the missing CSP — issue #57 — and the unbounded
 `_count_consumed` walk, below). The
@@ -74,7 +75,7 @@ Three of the 69 are the same defect seen at a different layer, so they are filed
 once and the backlog counts **66**. Every one of the ten HIGHs was reproduced by
 hand with a runnable probe against a live Radicale 3.7.4 before being written down.
 
-**28 open, 38 closed** — the seven crash paths went first, as **Stage 1**
+**38 open, 38 closed** — the seven crash paths went first, as **Stage 1**
 (`docs/STAGES.md`), and **Stage 2** is closing on top of them; their pins are
 ordinary regression tests now and must stay green. The rest are still pinned by a test that asserts the corrected behaviour
 and fails today — see `docs/STAGES.md` for the stage plan and the
@@ -2605,6 +2606,211 @@ fastapi/routing.py:466-472 is the interceptor:
 **Suggested fix.** Make the signal something FastAPI re-raises instead of swallowing: raise `HTTPException(413, "request body exceeds N bytes")` from `counting_receive` (FastAPI's `except HTTPException: raise` passes it straight through to the registered handler), or set a flag on `scope` and have the middleware emit the 413 based on the flag rather than on catching its own exception. Keep the `_BodyTooLarge` catch as the backstop for non-FastAPI consumers. Add a test that posts a chunked over-cap body to `/api/login` through `create_app` and asserts 413 plus the `connection: close` header.
 
 **Pinned by** `test_a_chunked_oversized_body_is_a_413_through_the_real_app` in `backend/tests/test_backlog_aug19_stage1.py`.
+
+## Filed during the Stage 3 adversarial review — 2026-08-20
+
+Three reviewers were run over the Stage 3 diff (`5c0abb1..648e6a3`) with
+deliberately adversarial briefs: correctness of the fixes, quality of the pins
+(revert each fix, check the pin actually catches it), and the trust model. They
+reproduced 14 findings with runnable probes.
+
+**Four were regressions introduced BY Stage 3** and are fixed in `d325ef9`,
+recorded there rather than here: `_repair_span` corrupting authored DTEND spans,
+`get_events_in_range` admitting every recurring row, `split_event` destroying the
+tail on a lost response, and `_recover_orphaned_booking` disclosing across links.
+Two pins (27, 34) were widened in the same commit after being shown to pass
+against a half-fix.
+
+The ten below are **open**. They are filed rather than fixed because each is its
+own change with its own risk, and the lesson of that same review is that a fix
+written in a hurry to close a review comment is how three of the four regressions
+above got in. Nothing here is pinned yet.
+
+One theme is worth stating up front, because it is about the harness rather than
+the code: **every backend pin in Stage 3 was widened with controls, and not one
+frontend pin was.** Five of the ten below are frontend, and four of those are
+"the pin drives one of the N cases its own evidence names". The next stage should
+treat a frontend pin as needing the same parametrisation a backend one gets.
+
+#### [ ] _detach_thisandfuture destroys a neighbouring override and re-creates the duplicate RECURRENCE-ID it was written to avoid
+
+`backend/tasksd/ical/edit.py:774` · **high** · bug
+
+`_next_generated` returns the next RRULE slot without checking whether an
+override already claims it. Daily series, a `RANGE=THISANDFUTURE` override
+anchored Jan 7, a plain single-slot override on Jan 8, user clicks "this event"
+on Jan 7: the range override is re-homed onto Jan 8, which already has one. The
+resource ends with two components claiming `20260108T090000` — the exact state
+the fix's own commit message says the first attempt was rejected for — and the
+user's explicit Jan-8 edit is silently deleted. It goes to Radicale, so the loss
+is permanent. A THISANDFUTURE override with a per-instance override just after it
+is the ordinary Apple Calendar / Thunderbird shape.
+
+**Suggested fix.** `_next_generated` must skip slots an override already claims,
+and re-home onto the first free generated slot after the anchor; if there is
+none, drop the range override as the last-occurrence branch already does. Pin the
+neighbouring-override case and assert RECURRENCE-ID values stay unique.
+
+#### [ ] _next_generated silently drops a range override when the rule is unprobeable
+
+`backend/tasksd/ical/edit.py:774` · **medium** · bug
+
+`_next_generated` returns None for a FREQ outside the `_FREQ` whitelist or over
+`_MAX_PROBE_INSTANCES`, and `_detach_thisandfuture` then deletes the range
+override. With `FREQ=HOURLY;INTERVAL=24` the override's summary, its moved time
+and its LOCATION are all gone on the next PUT. The docstring calls this "the safe
+direction"; it is silent permanent data loss, where the pre-fix code preserved
+the values. `_next_generated` also ignores RDATE and EXDATE, so it can re-home an
+override onto an excluded slot.
+
+**Suggested fix.** When the next slot cannot be established, leave the range
+override where it is and refuse the single-instance edit with a ValueError the
+route maps to 422 — refusing an edit is recoverable, deleting authored values is
+not.
+
+#### [ ] The nominal/exact DURATION split is defeated one layer up: the cached column is icalendar's re-serialization
+
+`backend/tasksd/ical/read.py:244` · **medium** · bug
+
+`f.duration = comp.get("DURATION").to_ical().decode()` — so `PT24H` is cached as
+`P1D` and `PT36H` as `P1DT12H`. `advance`'s whole premise is that only the raw
+string distinguishes nominal from exact, and it never sees the raw string. Any
+exact duration whose time part is at least 24 h is misclassified: a `PT24H` block
+across the spring-forward blocks 23 real hours, releasing one to the booking
+page. `recur.py:92` has the same defect and is additionally dead code —
+`recurring_ical_events` converts DURATION to DTEND on every instance it emits, so
+`_end_fields`' DURATION branch never runs during expansion.
+
+**Suggested fix.** Cache the wire value verbatim in a new column (or keep the raw
+DURATION text alongside the parsed one) and pass that to `advance`. Then delete
+or re-justify the `_end_fields` branch.
+
+#### [ ] MERGED_SETTINGS omits the two security-relevant settings and the one its own evidence excused
+
+`frontend/src/App.tsx:248` · **medium** · security
+
+The gate's rationale — scalars are safe because "the value they carry is the one
+just chosen" — is false for cycling controls, which are read-modify-write over
+exactly the state that failed to load. `session_ttl_s` cycles: with the read
+failed the panel reads "7 days" whatever the account holds, and one click PUTs
+30 days — a 30x lengthening of the field `app.py` calls out as security-relevant.
+`home_timezone` cycles the same way and decides where floating events land in the
+public booking busy set. And `appearance` is excused in the pin's own evidence as
+having a localStorage mirror, but `cacheAppearance` REMOVES the mirror whenever
+no theme is active, so an account with saved themes and none active writes
+`{appearance: {active: id}}` with no `themes` key over a top-level replace,
+destroying the collection.
+
+**Suggested fix.** Add all three. The predicate is "is the value computed from
+state the read was supposed to populate", not "is it a scalar". Better still,
+disable the controls while `settingsFailed.current` — the labels are lying too.
+
+#### [ ] reconcileReplay fires on the ordinary create path and its stated invariant is backwards
+
+`frontend/src/data.tsx:351` · **medium** · bug
+
+It runs after every `api.createTask`, and two comparisons are type-mismatched
+against the real DTO: `CreateTaskBody.priority` is a label string while
+`Task.priority` is the iCal integer, and `body.due` is `YYYY-MM-DDTHH:MM` while
+the server returns `_iso()` output. So every bulk row with a timed due or a
+priority provokes a spurious PATCH — a 20-row add is 40 writes, each a CalDAV PUT
+with a SEQUENCE bump other clients see. Worse, the reconcile sits inside
+`createMany`'s try, so a transient failure on that redundant PATCH marks a create
+that fully landed as a failed row. The comment claims "a server-side
+normalisation of something we left alone cannot provoke a write"; normalisation
+of the fields we DID set is exactly what provokes it.
+
+**Suggested fix.** Normalise both sides before comparing (parse `due` to an
+instant, map the priority label to its integer), or compare against the body the
+server echoes rather than the DTO. The pin cannot catch this — its `createTask`
+double echoes `body.due` verbatim and never returns a numeric priority — so widen
+the double first.
+
+#### [ ] _intrinsic_order matches order.ts only when the server timezone equals the browser's
+
+`backend/tasksd/mcp/api.py:120` · **medium** · bug
+
+`_as_dt` does `value.astimezone().replace(tzinfo=None)` — the SERVER's local zone
+— while `dueAt` compares an absolute instant against browser-local midnight. With
+the browser in America/Chicago and the server in UTC (the ordinary Docker
+deployment) the two disagree on a task due 23:00 local versus an all-day task the
+next day. The docstring promises `due` "parsed to an instant … mirroring
+`dueAt`", and this ordering decides which rows `limit` keeps. The 402-case
+cross-check cannot see it: both implementations run in one process, so they share
+a zone — the same blind spot the uid-only keying had before duplicates were added
+to the corpus.
+
+**Suggested fix.** Compare instants, not server-local naive datetimes; a date-only
+due needs a zone to become an instant, and the honest one is the owner's
+`home_timezone`. Then add a case to the corpus generator with the two zones
+differing.
+
+#### [ ] _desynchronizing falsely refuses Google Calendar's "every weekday"
+
+`backend/tasksd/ical/edit.py:1006` · **medium** · bug
+
+Under `FREQ=DAILY`, BYDAY is a filter rather than a day selector, so a +1-day drag
+inside the weekday set desynchronizes nothing — but the guard blocks any day
+change for any BYDAY on a non-WEEKLY rule.
+`FREQ=DAILY;BYDAY=MO,TU,WE,TH,FR` is what Google Calendar writes for "Every
+weekday", so dragging that series now answers 422 where it previously worked
+correctly. The finding-16 fix traded a silent corruption for a refusal, and this
+is the refusal landing on a legitimate series.
+
+**Suggested fix.** Test the property rather than the shape: does the NEW DTSTART
+still satisfy the rule? `_require_occurrence` next door already has the
+machinery. Refuse only when it does not.
+
+#### [ ] The refresh-token scope check runs after the single-use consumption, burning the grant on a bad scope
+
+`backend/tasksd/mcp/oauth.py:531` · **medium** · bug
+
+`use_refresh_token` is called before the `asked - granted` widening check, so a
+client that sends one over-wide scope has its refresh token consumed, and its
+next ordinary refresh reads as a replay: `revoke_oauth_family` destroys the whole
+grant and the owner is shown "this refresh token was already used". This file
+argues the exact principle nine lines earlier for `_check_cv` — "checking after
+would burn the one use on a request we were going to refuse anyway" — and the
+same fix was not applied one branch over. It also desensitises the one alarm that
+should mean a stolen token.
+
+**Suggested fix.** Move the scope check above `use_refresh_token`, beside
+`_check_cv`.
+
+#### [ ] list_oauth_grants now understates a grant's live capability, deterministically
+
+`backend/tasksd/db/store.py:1085` · **low** · bug
+
+Reporting the newest live token's scope replaced "an arbitrary row" with "the
+narrowest, newest one", which is systematically wrong in the unsafe direction:
+after a narrowing refresh the previous WIDE access token stays live for the rest
+of its hour. A scoped MCP token can trigger this deliberately — refresh with
+`scope=mcp:read` right after the code exchange — and the owner's Connected-apps
+screen reads "read-only" while the connector keeps writing. Revocation still
+works, so this is deception rather than escalation. The same line also binds `?1`
+with a sequence, which is a DeprecationWarning today and an
+`sqlite3.ProgrammingError` on Python 3.14.
+
+**Suggested fix.** The screen answers "what can this connection still do", which
+is the UNION of live tokens' scopes. Fix the parameter binding at the same time.
+
+#### [ ] A fall-back instance blocks three times the time it occupies
+
+`backend/tasksd/ical/recur.py:251` · **low** · bug
+
+The mirror of finding 26, left open deliberately when `_repair_span` was narrowed
+in `d325ef9`: a 30-minute instance on the fall-back day is emitted as
+`01:30-05:00 -> 02:00-06:00`, 90 real minutes. Repairing it means repairing every
+span whose exact duration disagrees with its wall-clock one, and that corrupts
+authored DTEND spans — which is the regression the narrowing exists to undo. It
+over-blocks rather than under-blocks, so it withholds availability rather than
+allowing a double-booking.
+
+**Suggested fix.** Needs the master's own duration in scope so a library-derived
+end can be told from an authored one — `expand_occurrences` has the master and
+`_occurrence` does not. Pinned by
+`test_a_fall_back_instance_over_blocks_rather_than_under_blocks`, which asserts
+the current behaviour exactly so that changing it is a decision.
 
 ## Filed during remediation — 2026-08-20
 

@@ -12,10 +12,12 @@ of how the harness behaved in practice — its "Two strengths of pin" and
 
 `docs/AUDIT.md` is the evidence. This is the plan for closing it.
 
-**28 open, 38 closed.** Stages 1, 2 and 3 are done; stages 4-5 remain. Of the 28
-still open, 27 are pinned by a test that asserts the corrected behaviour and
-fails today — 23 as `xfail(strict=True)` / `it.fails`, and 4 as ordinary passing
-tests (see "Test gaps that were only gaps" below). One is deliberately **not** pinned; see
+**38 open, 38 closed.** Stages 1, 2 and 3 are done; stages 4-5 remain. Of the 38
+still open, 28 are from the sweep — 27 of those pinned, 23 as
+`xfail(strict=True)` / `it.fails` and 4 as ordinary passing tests (see "Test gaps
+that were only gaps" below) — and **10 were filed by the adversarial review of
+Stage 3** and are not pinned yet. See `## Filed during the Stage 3 adversarial
+review` in `docs/AUDIT.md`. One is deliberately **not** pinned; see
 "The one that is not pinned" below. The harness
 described under *Stage 0* further down still applies unchanged; these pins live in
 their own files so the closed 2026-08-16 stages stay closed:
@@ -224,6 +226,34 @@ Nothing raises and the answer is silently wrong. The dangerous class, and the la
 All 24 are fixed and ticked in `docs/AUDIT.md`; the xfail / `it.fails` markers are
 gone and those tests are ordinary regression tests that must stay green. Finding
 64 (Stage 5) went with them.
+
+**Then three adversarial reviewers were run over the finished diff** — one on the
+correctness of each fix, one on whether each pin actually catches its bug (revert
+the fix, run the pin, then try a plausible half-fix), one on the trust model.
+They reproduced 14 findings with runnable probes. Four were regressions
+introduced BY this stage, fixed in `d325ef9`; ten are filed open. That is a 17%
+regression rate on 24 fixes, and it is the most useful number this stage
+produced.
+
+Three things to carry forward:
+
+* **A widened pin can encode a WRONG contract, and then it drives a wrong fix.**
+  Pin 26 was widened to assert every instance holds its authored duration. That
+  is not true of a DTEND-authored recurrence — RFC 5545 §3.8.5.3 carries the
+  exact duration, and the master's own occurrence is the bytes the author wrote —
+  and the pin drove a `_repair_span` that rewrote authored spans, turning a
+  9-hour overnight shift into 8 and releasing the last hour to the public booking
+  page. Widening is not free. A pin asserts a contract, and the contract has to
+  be right before the range is wide.
+* **Every backend pin in this stage got controls; not one frontend pin did.**
+  All five frontend markers were dropped with the bodies byte-identical to their
+  pre-fix versions, and four of the ten open findings are "the pin drives one of
+  the N cases its own evidence names". A frontend pin needs the same
+  parametrisation a backend one gets.
+* **Closing a finding can open a bigger one.** Admitting every recurring row
+  genuinely fixed finding 20, and made an unauthenticated request cost 9.13 s
+  under the global lock. The check for "does this fix cost something the finding
+  did not" is not the same check as "does this fix work".
 
 Three are done — 18, 26 and 29, which are one defect at three sites: a duration
 or a comparison evaluated on WALL CLOCK where it needed the instant. Two things
