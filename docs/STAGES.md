@@ -12,18 +12,18 @@ of how the harness behaved in practice — its "Two strengths of pin" and
 
 `docs/AUDIT.md` is the evidence. This is the plan for closing it.
 
-**22 open, 60 closed.** Stages 1, 2 and 3 are done; stage 4 is in progress and
-stage 5 has not started. Of the 22 still open:
+**17 open, 65 closed.** Stages 1, 2 and 3 are done; stage 4 is done and
+stage 5 has not started. Of the 17 still open:
 
 | where it came from | open |
 |---|---|
-| the sweep itself (stages 4 and 5) | 12 |
+| the sweep itself (stage 5) | 7 |
 | filed by the adversarial review of Stage 3 | 7 |
 | filed by that review's own follow-up | 1 |
-| filed during remediation (see `docs/AUDIT.md`) | 2 |
+| filed during remediation (see `docs/AUDIT.md`) | 5 |
 
-11 of the 12 sweep findings are pinned — 7 as `xfail(strict=True)` / `it.fails`
-and 4 as ordinary passing tests (see "Test gaps that were only gaps" below); the
+6 of the 7 remaining sweep findings are pinned — 2 as `xfail(strict=True)` /
+`it.fails` and 4 as ordinary passing tests (see "Test gaps that were only gaps" below); the
 unpinned one is finding 62. None of the review's 8 is pinned yet. The review's
 other 3, the ones Stage 3 itself caused, are closed — along with 3 more the
 follow-up found in those very fixes. See `## Filed during the Stage 3 adversarial review` in
@@ -386,15 +386,16 @@ before the real fix landed.
 | 36 ✅ | A JSON-RPC request (with an id) whose method starts with `notifications/` gets no reply at all, so the clien… | `backend/tasksd/mcp/server.py:114` | low | `test_a_notification_method_sent_with_an_id_gets_a_reply` |
 | 37 ✅ | move_event maps Radicale's 409 no-uid-conflict to "calendar server unavailable" (502) instead of the conflic… | `backend/tasksd/sync/engine.py:349` | low | `test_a_move_into_a_calendar_holding_that_uid_is_a_conflict_not_an_outage` |
 
-## Stage 4 — User-visible correctness & rendering ⬜ IN PROGRESS
+## Stage 4 — User-visible correctness & rendering ✅ DONE
 
-21 findings · 8 medium, 13 low · **16 closed, 5 open**
+21 findings · 8 medium, 13 low · ✅ **ALL 21 CLOSED**
 
-Closed so far: **38**, **45** (the two backend ones — the paths a stranger
-reaches), **41**, **42**, **54** (the provider's fetch identity — when the app
-decides to ask the server again), **40**, **49**, **50** (calendar date math) and
-**51**, **56** (one uid, two collections), **57** (the Completed pane's ring) and
-**39**, **46**, **48** (appearance) and **43**, **44** (the booking-link editor).
+Closed in eight commits: **38**, **45** (the two backend paths a stranger
+reaches), **41**, **42**, **54** (the provider's fetch identity), **40**, **49**,
+**50** (calendar date math), **51**, **56** (one uid, two collections), **57**
+(the Completed pane's ring), **39**, **46**, **48** (appearance), **43**, **44**
+(the booking-link editor), and **47**, **52**, **53**, **55**, **58** (dialogs,
+forms, bounds).
 Every pin was widened before its fix and then run against a plausible half-fix.
 
 **Three half-fixes so far, and not one was caught by its own pin.** In each case
@@ -412,8 +413,16 @@ the thing that failed was a control:
 | 48 | reset `renaming` inside `selectTheme` only | the Duplicate widening |
 | 43 | clear `saving` in a `finally`, `save()` returning true | its own pins |
 | 44 | validate the overlap, keep `daysToAvail`'s silent filter | `never drops a range the user typed backwards` — the assertion the `if (sent)` hatch had made unreachable |
+| 47 | repair `ArchivedCalendarsSection`, not its sibling | the `ArchivedEvents` widening |
+| 52 | probe the session, ignore the answer | its own pin |
+| 53 | `htmlFor` with no matching id | its own pin |
+| 55 | clamp in `sanitizeLayout` only | the editing-operations widening |
+| 58 | bind the handler to the modal element | the document/window widening |
 
-Two lessons, and neither is the one the review predicted.
+Thirteen half-fix checks over the stage. **Every one was caught**, but only six
+by the pin the finding shipped with: four needed a case added during widening,
+and three needed a control. Two lessons, and neither is the one the review
+predicted.
 
 **A pin does not catch an over-correction.** Widening makes a pin detect the BUG
 more reliably; it cannot make it detect a fix that goes too far, because a pin
@@ -453,18 +462,18 @@ The user can see it is wrong. Contained, mostly small, and the stage where a fix
 | 44 ✅ | The availability editor lets the owner build overlapping weekly windows the server rejects with a 422, and s… | `frontend/src/components/SchedulingView.tsx:178` | medium | `never submits a week the server will refuse, and never drops a range` |
 | 45 ✅ | On the consent screen "Cancel" is the form's default button, so pressing Enter after typing the password dec… | `backend/tasksd/mcp/routes.py:638` | medium | `test_pressing_enter_on_the_consent_form_connects_rather_than_declining` |
 | 46 ✅ | isColor accepts hex literals CSS rejects (5 and 7 digits) and non-color functions like calc(), so a mistyped… | `frontend/src/appearance.ts:324` | low | `refuses hex lengths CSS does not have, and functions that are not colours` |
-| 47 | The archived-calendars settings section renders "Loading…" forever when its fetch fails — the sibling sectio… | `frontend/src/components/ArchivedCalendarsSection.tsx:39` | low | `stops saying "Loading…" once the fetch has failed` |
+| 47 ✅ | The archived-calendars settings section renders "Loading…" forever when its fetch fails — the sibling sectio… | `frontend/src/components/ArchivedCalendarsSection.tsx:39` | low | `stops saying "Loading…" once the fetch has failed` |
 | 48 ✅ | The theme rename row is never closed when the active theme changes, so switching themes with it open and pre… | `frontend/src/components/AppearancePanel.tsx:45` | low | `never renames the theme the user switched to with the old name` |
 | 49 ✅ | endFromDuration returns the string "NaN-NaN-NaNTNaN:NaN" instead of null when the duration overflows Date, s… | `frontend/src/calendar.ts:70` | low | `sends no fabricated end for a DURATION that overflows the calendar` |
 | 50 ✅ | Ticking "all day" on a timed event that ends at midnight adds a day the grid never showed | `frontend/src/components/CalendarView.tsx:777` | low | `keeps a midnight-ending event on its one day when it is made all-day` |
 | 51 ✅ | The duplicate-React-key fix landed on one of the five sites named; task chips, mobile dots, the mobile agend… | `frontend/src/components/CalendarView.tsx:614` | low | `gives every task chip and every popover row a key unique per collection` |
-| 52 | An SSE reconnect that 401s retries forever, so a session that lapses while the tab is idle is never detected | `frontend/src/api.ts:475` | low | `discovers a session that lapsed while the tab was idle` |
-| 53 | The login form's two labels are not associated with their inputs, so both fields are unlabelled — the one fo… | `frontend/src/components/Login.tsx:34` | low | `gives both fields an accessible name` |
+| 52 ✅ | An SSE reconnect that 401s retries forever, so a session that lapses while the tab is idle is never detected | `frontend/src/api.ts:475` | low | `discovers a session that lapsed while the tab was idle` |
+| 53 ✅ | The login form's two labels are not associated with their inputs, so both fields are unlabelled — the one fo… | `frontend/src/components/Login.tsx:34` | low | `gives both fields an accessible name` |
 | 54 ✅ | loadKey encodes list ORDER, so a sidebar drag-reorder refetches every task in the account and discards the f… | `frontend/src/data.tsx:180` | low | `does not refetch every task in the account when only the order changed` |
-| 55 | packDown can stack modules past MAX_ROWS, producing a y the server's `le=200` rejects — the whole settings P… | `frontend/src/dashboard.ts:93` | low | `never emits a module below the row the server accepts` |
+| 55 ✅ | packDown can stack modules past MAX_ROWS, producing a y the server's `le=200` rejects — the whole settings P… | `frontend/src/dashboard.ts:93` | low | `never emits a module below the row the server accepts` |
 | 56 ✅ | Tasks pane rows key on the bare UID, so a task copied into a second list produces duplicate React keys and d… | `frontend/src/components/TasksView.tsx:442` | low | `deletes only the copy whose row was clicked` |
 | 57 ✅ | The Completed pane hides a completed RELATED-TO ring entirely, though the list view has explicit code to ren… | `frontend/src/components/TasksView.tsx:334` | low | `shows a completed ring another client authored` |
-| 58 | TaskModal — the app's most-used dialog — has no Escape handler, breaking the modal contract every other dial… | `frontend/src/components/TaskModal.tsx:121` | low | `closes on Escape, like every other dialog in the app` |
+| 58 ✅ | TaskModal — the app's most-used dialog — has no Escape handler, breaking the modal contract every other dial… | `frontend/src/components/TaskModal.tsx:121` | low | `closes on Escape, like every other dialog in the app` |
 
 ## Stage 5 — Delivery infrastructure & test gaps ⬜ OPEN
 

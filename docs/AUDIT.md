@@ -316,7 +316,7 @@ pin still fails on that second half.
 
 **Pinned by** `2026-08-19 — the calendar grid > re-requests a month whose first fetch failed` in `frontend/src/backlog.aug19.stage4a.test.tsx`.
 
-#### [ ] An SSE reconnect that 401s retries forever, so a session that lapses while the tab is idle is never detected
+#### [x] An SSE reconnect that 401s retries forever, so a session that lapses while the tab is idle is never detected
 
 `frontend/src/api.ts:475` · **low** · bug · stage 4
 
@@ -344,9 +344,29 @@ Trigger: TASKS_SESSION_TTL default is 7 days; a tab left open over a long weeken
 
 **Suggested fix.** Give `subscribe` an expiry signal: after N consecutive hard failures (or on every failure past the first), probe `api.me()` and, on `AuthError`, call an `onExpire` callback App can wire to `setAuth('out')` and stop the loop. At minimum surface a "live updates disconnected" indicator so a frozen tab is visible.
 
+**Fixed** as suggested: `subscribe` takes an optional `onExpire`, counts
+consecutive hard failures, and after three probes `api.me()` — stopping the loop
+and reporting up only on an `AuthError`. Three and not one because one hard
+failure is an ordinary blip, and probing on it would also fire an unmocked
+`fetch` inside `api.test.ts`, which drives exactly one. `App.tsx` passes the
+`onExpire` it already holds, moved above the SSE effect.
+
+**The pin was NARROWED, not just widened, and that is the substantive decision
+here.** It previously blessed either repair — probe, or "give up and surface a
+live-updates-disconnected state" — and asserted `probed || gaveUp`. The second
+outcome is not reachable: `subscribe` takes one callback and has no channel to
+surface UI state, so "gave up" means a silently frozen tab, which is the finding.
+The docstring was rewritten to say so rather than left to be quietly outgrown.
+
+The control matters more than the pin: with the probe answering **200** the loop
+must keep reconnecting and must sign nobody out. A server that is down is not a
+session that is gone, and logging a live session out on one 502 from the tunnel
+would be worse than the bug being fixed — and no pin would notice, since the pin
+only asks that `onExpire` fires.
+
 **Pinned by** `aug19 stage 4b — an SSE reconnect that 401s > discovers a session that lapsed while the tab was idle` in `frontend/src/backlog.aug19.stage4b.test.tsx`.
 
-#### [ ] The login form's two labels are not associated with their inputs, so both fields are unlabelled — the one form in the app that gets this wrong
+#### [x] The login form's two labels are not associated with their inputs, so both fields are unlabelled — the one form in the app that gets this wrong
 
 `frontend/src/components/Login.tsx:34` · **low** · rendering · `minor` · stage 4
 
@@ -377,6 +397,12 @@ Login.test.tsx:19-23
 </details>
 
 **Suggested fix.** Add the pairs the rest of the app already uses: `<label className="label" htmlFor="login-user">Username</label>` / `<input id="login-user" …>` and `<label className="label" htmlFor="login-pass">Password</label>` / `<input id="login-pass" type="password" …>`, then switch Login.test.tsx's `fields()` to `getByLabelText` so the association is what the test depends on.
+
+**Fixed** with the `htmlFor`/`id` pairs the rest of the app already uses.
+Half-fix checked: `htmlFor` with no matching id, which `getByLabelText` still
+refuses. Not asserted: that clicking the label focuses the input — jsdom's
+label-to-control forwarding is not a reliable oracle for focus, and pinning it
+would be pinning the test environment rather than the app.
 
 **Pinned by** `aug19 stage 4b — the login form > gives both fields an accessible name` in `frontend/src/backlog.aug19.stage4b.test.tsx`.
 
@@ -1856,7 +1882,7 @@ is the failure mode this class of fix has.
 
 **Pinned by** `2026-08-19 — appearance > refuses hex lengths CSS does not have, and functions that are not colours` in `frontend/src/backlog.aug19.stage4a.test.tsx`.
 
-#### [ ] The archived-calendars settings section renders "Loading…" forever when its fetch fails — the sibling section right next to it guards this and it does not
+#### [x] The archived-calendars settings section renders "Loading…" forever when its fetch fails — the sibling section right next to it guards this and it does not
 
 `frontend/src/components/ArchivedCalendarsSection.tsx:39` · **low** · bug · `minor` · stage 4
 
@@ -1897,7 +1923,19 @@ Failure scenario: the user opens Settings -> Calendar while the connection is mo
 
 **Suggested fix.** Mirror ConnectionsSection: `guard(async () => setCals(await api.calendars())).finally(() => setLoaded(true))` in `ArchivedCalendarsSection`, and the same in `ArchivedEvents`. Better still, distinguish the states — keep a `failed` flag so the body can read "Couldn't load archived calendars" with a retry button rather than an empty list. Add a SettingsMenu/ArchivedCalendarsSection test with `calendars` rejecting that asserts "Loading…" is gone once the promise settles.
 
-**Pinned by** `aug19 stage 4b — archived calendars > stops saying "Loading…" once the fetch has failed` in `frontend/src/backlog.aug19.stage4b.test.tsx`.
+**Fixed** in BOTH sections — `ArchivedCalendarsSection` and the identical
+`ArchivedEvents` ten lines below — with the `.finally(() => setLoaded(true))`
+`ConnectionsSection` already uses, plus the `failed` flag this entry asks for so a
+failure is distinguishable from an empty archive: "No archived calendars." over a
+failed fetch is a confident lie about the account. Also added the `Array.isArray`
+guard `data.tsx` uses, since a 200 carrying junk is not a list.
+
+Widened to drive the sibling, and that is what earned it: the half-fix (repair the
+first section only) leaves the original pin passing and is caught by the
+`ArchivedEvents` case alone. A control asserts a successful fetch still lists the
+rows, so a repair that settles `loaded` eagerly cannot pass.
+
+**Pinned by** `aug19 stage 4b — archived calendars > stops saying "Loading…" once the fetch has failed` and `… > stops saying "Loading…" once the EVENT fetch has failed` in `frontend/src/backlog.aug19.stage4b.test.tsx`.
 
 #### [x] The theme rename row is never closed when the active theme changes, so switching themes with it open and pressing Save renames the theme you switched TO with the old theme's name
 
@@ -2296,7 +2334,7 @@ fails — the exact assertion the hatch used to hide.
 
 **Pinned by** `2026-08-19 — the booking-link editor > never submits a week the server will refuse` and `… > never drops a range the user typed backwards` in `frontend/src/backlog.aug19.stage4a.test.tsx`.
 
-#### [ ] packDown can stack modules past MAX_ROWS, producing a y the server's `le=200` rejects — the whole settings PUT 422s and the arrangement is never saved
+#### [x] packDown can stack modules past MAX_ROWS, producing a y the server's `le=200` rejects — the whole settings PUT 422s and the arrangement is never saved
 
 `frontend/src/dashboard.ts:93` · **low** · bug · `minor` · stage 4
 
@@ -2321,7 +2359,24 @@ Failure scenario: the user adds all eight modules and stretches them to full wid
 
 **Suggested fix.** Clamp in `packDown` after the stacking loops — e.g. `placed.push({ ...m, y: Math.min(MAX_ROWS, y) })` and the same bound on the pinned push — or re-run `clampToGrid` over `packDown`'s output inside `sanitizeLayout`. Either is a couple of lines; add a dashboard.test.ts case asserting `sanitizeLayout(...).every(m => m.y <= 200)` for a maximal layout.
 
-**Pinned by** `aug19 stage 4b — the dashboard grid > never emits a module below the row the server accepts` in `frontend/src/backlog.aug19.stage4b.test.tsx`.
+**Fixed** in `packDown` itself, at both push sites — and the pinned branch's
+`while` became an `if` first, which is not a style change: one push always clears
+the overlap by construction, and with the clamp added a `while` can never
+terminate, because a clamped `y` can still overlap. That repair hangs the test
+run rather than failing it, which reads like infrastructure trouble.
+
+Widened past `sanitizeLayout`, which is not what the app PUTs: `HomeView` holds
+the result of `moveModule`/`resizeModule`/`addModule`/`removeModule` as its live
+layout and sends that, so an intermediate is what 422s the settings write. The
+half-fix — clamp in `sanitizeLayout` only — leaves the original pin passing and is
+caught by the editing-operations case. A control keeps a pinned module on the row
+the drag put it on, so a repair that drops the pinned branch cannot pass.
+
+Consequence worth stating: two modules can now share a row at the very bottom of
+a 200-row grid. That is reachable only from an absurd layout and is strictly
+better than losing the whole settings write.
+
+**Pinned by** `aug19 stage 4b — the dashboard grid > never emits a module below the row the server accepts` and `… > never emits a module below that row from any editing operation` in `frontend/src/backlog.aug19.stage4b.test.tsx`.
 
 ### Tasks view
 
@@ -2507,7 +2562,7 @@ gives up and flattens the pane cannot pass either.
 
 **Pinned by** `aug19 stage 4b — the Completed pane and a RELATED-TO ring > shows a completed ring another client authored` and `… > shows a completed ring of three the same way` in `frontend/src/backlog.aug19.stage4b.test.tsx`.
 
-#### [ ] TaskModal — the app's most-used dialog — has no Escape handler, breaking the modal contract every other dialog in the app keeps
+#### [x] TaskModal — the app's most-used dialog — has no Escape handler, breaking the modal contract every other dialog in the app keeps
 
 `frontend/src/components/TaskModal.tsx:121` · **low** · rendering · `minor` · stage 4
 
@@ -2524,6 +2579,22 @@ Failure: the user clicks a task row, the dialog opens, they press Escape to back
 </details>
 
 **Suggested fix.** Add the same effect the other modals use: `useEffect(() => { const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }; window.addEventListener('keydown', onKey); return () => window.removeEventListener('keydown', onKey) }, [onClose])`, and add a regression test beside the two scrim tests in backlog.stage4.test.tsx.
+
+**Fixed** with a new `useEscape` hook in `hooks.ts`, bound to `window` — the
+widest of the three spellings already in the tree, and one that subsumes the
+`document` variant since a document keydown bubbles to the window.
+
+**Only `TaskModal` adopts it.** The other five dialogs inline the same effect and
+are left alone: one guards on `busy`, one works around React's `KeyboardEvent`
+type shadowing, one binds `document`. Converting five working dialogs to close one
+finding is how the Stage 3 regressions got in. The consolidation is filed below.
+
+Widened to dispatch at `document` and at `window`, not only at the dialog. The
+original fired the key at the dialog, where a handler on ANY ancestor passes —
+including one on the modal element itself, which only fires while focus is inside
+the dialog. With no focus trap, focus outside it is exactly the state a keyboard
+user needs the escape hatch from. That handler is the half-fix, and the widened
+cases catch it.
 
 **Pinned by** `aug19 stage 4b — TaskModal > closes on Escape, like every other dialog in the app` in `frontend/src/backlog.aug19.stage4b.test.tsx`.
 
@@ -3175,6 +3246,65 @@ end can be told from an authored one — `expand_occurrences` has the master and
 the current behaviour exactly so that changing it is a decision.
 
 ## Filed during remediation — 2026-08-20
+
+#### [ ] Five dialogs inline the same Escape effect with three different bindings, and nothing makes the modal contract checkable
+
+`frontend/src/hooks.ts:16` · **low** · test-gap
+
+`useEscape` was added with finding 58 and adopted in `TaskModal` only. The other
+five dialogs still hand-roll it: `DayPopover.tsx:84` and `SchedulingView.tsx:240`
+on `window`, `AppearancePanel.tsx:48` on `document`, `AddMultipleModal.tsx:278` on
+`window` guarded by `busy`, and `SettingsMenu.tsx:105` unwinding a drill-down
+rather than closing. Three bindings for one contract, and the difference is not
+cosmetic: a `document` listener does not see a keydown dispatched at `window`.
+
+Nothing enforces that a new dialog joins the set, which is how `TaskModal` — the
+app's most-used dialog — came to have no handler at all for as long as it did.
+
+**Suggested fix.** Move the four true modals onto `useEscape` (it takes a
+callback, so the `busy` guard is `useEscape(busy ? noop : onClose)`); leave
+`SettingsMenu`, whose Escape means "go back one step". Then add a test that
+enumerates the dialog components and asserts each closes on an Escape dispatched
+at `window` — the coverage that would have caught 58 before it was filed.
+
+#### [ ] One failing calendar blanks the whole month, and the retry does not help
+
+`frontend/src/data.tsx:608` · **low** · bug
+
+`fetchWindow` fans out with `Promise.all`, so a single calendar answering 502
+rejects the whole window and `windows` gets no rows at all — every other
+calendar's events are discarded with it. Finding 41 fixed the part that made this
+permanent (the window is no longer recorded as fetched on failure, so paging back
+re-requests it), but the re-request has the same shape: while one collection is
+unhealthy the user sees an empty month rather than the events that did load.
+
+**Suggested fix.** This is a design question, not a defect with one answer, and it
+should be decided before it is coded. `Promise.allSettled` plus painting what
+arrived shows the user most of their month but silently under-reports — dangerous
+next to the booking page's busy set, which must never under-report. The
+alternative is to keep the all-or-nothing fetch and add an explicit "couldn't load
+Work" state with a retry. Whichever is chosen, `eventsFor`'s fallback to the disk
+mirror needs to be part of the reasoning.
+
+#### [ ] find_free_time derives an event's end by wall-clock addition — the DST-unsafe twin of a call Stage 3 already fixed
+
+`backend/tasksd/mcp/api.py:635` · **medium** · bug
+
+`b_start + length` on a zone-aware datetime adds wall-clock time, so across a DST
+transition the busy interval covers the wrong hour. This is the identical defect
+Stage 3 closed at `scheduling.py:163`, where the repair was `advance()` — which
+applies an RFC 5545 duration's nominal and exact halves separately (`ical/read.py:128`).
+The MCP path was not touched because the finding named only the scheduling one.
+
+Spotted while exploring for Stage 4, not by a test: nothing drives
+`smylte_find_free_time` across a transition. `find_free_time` is what an MCP
+client calls to pick a meeting slot, so the wrong hour here becomes a real
+double-booking on the owner's calendar.
+
+**Suggested fix.** Use `advance(b_start, raw, length)` as `scheduling.busy_intervals`
+does, and add a pin driving `find_free_time` across both the spring-forward and
+the fall-back — the DST test gap (finding 64) was closed for `busy_intervals`
+only, and closing it there is what uncovered two live defects.
 
 #### [ ] TasksView resolves subtasks, progress and fold state by bare uid, so one uid in two lists shows one row's children under both
 
