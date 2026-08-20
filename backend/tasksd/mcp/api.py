@@ -20,6 +20,7 @@ from __future__ import annotations
 import re
 from contextlib import contextmanager
 from datetime import date, datetime, time as time_of_day, timedelta
+from zoneinfo import ZoneInfo
 
 from ..ical import EventEdit, TaskEdit, rrule_from_spec
 from ..ical.read import normalize_offset
@@ -117,13 +118,44 @@ def _hhmm(value: str, *, field: str) -> time_of_day:
         raise ToolError(f"{field}={value!r} is not a time. Use 'HH:MM'.") from None
 
 
-def _intrinsic_order(t: dict):
+def _due_instant(t: dict, zone) -> float | None:
+    """A task's deadline as an absolute instant, the way `dueAt` computes it.
+
+    `order.ts` resolves a date-only due against BROWSER-local midnight and a
+    naive timed due against the browser's zone. `_as_dt` resolved both against
+    the SERVER's — `value.astimezone().replace(tzinfo=None)` — and the two only
+    agree when the two zones do. With the browser in America/Chicago and the
+    server in UTC, which is the ordinary Docker deployment, a task due 23:00
+    local and an all-day task the next day swap places; this ordering is what
+    decides which rows `limit` keeps, so the soonest deadline can fall off a page
+    that looks ordered.
+
+    `zone` is the owner's `home_timezone` — the honest stand-in for "the zone
+    they read their calendar in", and the same value `busy_intervals` already
+    uses for floating times. None keeps the previous behaviour (the server's
+    local zone), which is what a caller with no service handle gets.
+    """
+    raw = t.get("due")
+    if not raw:
+        return None
+    value = _parse_dt(raw, field="due")
+    if value is None:
+        return None
+    if not isinstance(value, datetime):
+        value = datetime.combine(value, time_of_day.min)
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=zone) if zone is not None else value.astimezone()
+    return value.timestamp()
+
+
+def _intrinsic_order(t: dict, zone=None):
     """Everything except the manual position: due, priority, title, then uid.
 
-    The port of `compareIntrinsic` in `frontend/src/order.ts`. `due` is parsed to
-    an instant rather than compared as a string, mirroring `dueAt` — lexical
-    comparison happens to agree for ISO values of equal shape and stops agreeing
-    the moment a date-only and a timed value meet, or an offset appears.
+    The port of `compareIntrinsic` in `frontend/src/order.ts`. `due` is compared
+    as an INSTANT rather than as a string — lexical comparison happens to agree
+    for ISO values of equal shape and stops agreeing the moment a date-only and a
+    timed value meet, or an offset appears — and the instant is resolved in the
+    reader's zone rather than the server's. See `_due_instant`.
 
     Sort keys are `(is_null, value)` pairs so a missing value sorts last without
     ever comparing None to a number. The final uid tie-break is the point, not a
@@ -131,11 +163,11 @@ def _intrinsic_order(t: dict):
     order `limit=3` returned "whichever list came first" and the soonest deadline
     on the account could be missing from a page that looked ordered.
     """
-    due = _as_dt(_parse_dt(t.get("due"), field="due")) if t.get("due") else None
+    due = _due_instant(t, zone)
     priority = t.get("priority") or None       # iCal: 0/absent means unset
     summary = t.get("summary") or None
     return (
-        (due is None, due or datetime.min),
+        (due is None, due if due is not None else 0.0),
         (priority is None, priority or 0),
         (summary is None, _title_key(summary or "")),
         t.get("uid") or "",
@@ -174,7 +206,7 @@ def _task_key(t: dict) -> tuple:
     return (t.get("list") or "", t.get("uid") or "")
 
 
-def _in_display_order(tasks: list[dict]) -> list[dict]:
+def _in_display_order(tasks: list[dict], zone=None) -> list[dict]:
     """`tasks` in the order the app shows them, as a new list.
 
     The port of `sortTasks`, which is what every view calls — NOT of
@@ -201,22 +233,22 @@ def _in_display_order(tasks: list[dict]) -> list[dict]:
     """
     placed = sorted(
         (t for t in tasks if t.get("sort_order") is not None),
-        key=lambda t: (t["sort_order"], _intrinsic_order(t)),
+        key=lambda t: (t["sort_order"], _intrinsic_order(t, zone)),
     )
     # Nothing has been dragged — the common case, and every case before the first
     # drag: the intrinsic order is the whole answer.
     if not placed:
-        return sorted(tasks, key=_intrinsic_order)
+        return sorted(tasks, key=lambda t: _intrinsic_order(t, zone))
 
     at: dict[tuple, float] = {_task_key(t): float(i) for i, t in enumerate(placed)}
-    keys = [_intrinsic_order(t) for t in placed]
+    keys = [_intrinsic_order(t, zone) for t in placed]
     for t in tasks:
         if t.get("sort_order") is not None:
             continue
-        mine = _intrinsic_order(t)
+        mine = _intrinsic_order(t, zone)
         nxt = next((i for i, k in enumerate(keys) if mine < k), -1)
         at[_task_key(t)] = float(len(placed)) if nxt < 0 else nxt - 0.5
-    return sorted(tasks, key=lambda t: (at[_task_key(t)], _intrinsic_order(t)))
+    return sorted(tasks, key=lambda t: (at[_task_key(t)], _intrinsic_order(t, zone)))
 
 
 @contextmanager
@@ -251,6 +283,34 @@ class McpApi:
 
     def __init__(self, service):
         self._svc = service
+
+    def _home_zone(self):
+        """The zone the owner reads their calendar in, or None.
+
+        `order.ts` resolves a due date against the BROWSER's midnight; the
+        server's own zone is not that, and in the ordinary Docker deployment it
+        is UTC while the owner is somewhere else. `home_timezone` is the closest
+        thing this process has to the reader's zone and is already what
+        `busy_intervals` uses for floating times.
+
+        Fail-soft in the same shape as `TaskService._home_tz`: a stored blob can
+        hold anything, and an unusable zone must degrade to the old behaviour
+        rather than break every task listing. Read through whatever the service
+        exposes, so a stub without settings still works.
+        """
+        getter = getattr(self._svc, "get_settings", None)
+        if getter is None:
+            return None
+        try:
+            name = getter().get("home_timezone")
+        except Exception:  # noqa: BLE001 — an ordering must not fail on settings
+            return None
+        if not isinstance(name, str) or not name:
+            return None
+        try:
+            return ZoneInfo(name)
+        except Exception:  # noqa: BLE001 — a stored blob can hold anything
+            return None
 
     # ── resolution ───────────────────────────────────────────────────────────
 
@@ -333,7 +393,7 @@ class McpApi:
                 if overdue_only and (due >= now or t["completed"] or t["cancelled"]):
                     continue
             out.append(t)
-        return _in_display_order(out)
+        return _in_display_order(out, self._home_zone())
 
     def get_task(self, list_id, uid):
         task = self._svc.get_task(self._href(list_id), uid)

@@ -34,6 +34,7 @@ import re
 import uuid
 from datetime import datetime
 from urllib.parse import parse_qs, urlsplit
+import time
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -1039,3 +1040,167 @@ def test_a_notification_method_sent_with_an_id_gets_a_reply():
     # A real notification — no id — must still get no reply.
     assert srv.handle({"jsonrpc": "2.0", "method": "notifications/initialized"},
                       scopes={"mcp:read"}) is None
+
+
+# ── Filed by the Stage 3 adversarial review — OPEN when written ─────────────
+
+
+@pytest.mark.radicale
+def test_a_refresh_with_an_over_wide_scope_does_not_burn_the_token(mcp_app):
+    """`use_refresh_token` is called before the `asked - granted` widening check,
+    and a refresh token is single-use.
+
+    So a client that sends one over-wide scope — a misconfigured connector, or
+    one that simply repeats the scope string it was first issued — has its token
+    consumed on a request that is refused anyway. Its next ORDINARY refresh then
+    presents a token already marked used, which is the replay signature:
+    `revoke_oauth_family` destroys the whole grant and the owner is told "this
+    refresh token was already used". That is an alarm about a theft that did not
+    happen, for what is really a client bug — and it desensitises the one alarm
+    that should mean a stolen token.
+
+    `oauth.py` argues this exact principle nine lines earlier for `_check_cv`
+    ("checking after would burn the one use on a request we were going to refuse
+    anyway"). It was simply not applied one branch over.
+
+    Same shape as `test_a_refused_refresh_does_not_burn_the_token_or_kill_the_family`
+    in the stage-2 file, which pins the `_check_cv` half.
+    """
+    granted = _connect(mcp_app)
+    body = {"grant_type": "refresh_token", "refresh_token": granted["refresh_token"],
+            "client_id": granted["reg"]["client_id"]}
+
+    refused = mcp_app.post("/oauth/token", data={**body, "scope": "mcp:read mcp:admin"})
+    assert refused.status_code != 200, refused.text
+    assert "already used" not in refused.text, (
+        f"a refused refresh was reported as a REPLAY: {refused.text[:200]}"
+    )
+
+    # The client's next ordinary refresh, with the same token it was never told
+    # had been spent.
+    again = mcp_app.post("/oauth/token", data=body)
+    assert again.status_code == 200, (
+        f"the refused attempt consumed the refresh token or revoked its family: "
+        f"{again.status_code} {again.text[:200]}"
+    )
+    assert again.json().get("access_token")
+
+
+def test_a_grant_reports_what_any_live_token_can_still_do():
+    """The Connected-apps screen answers "what can this connection still do", and
+    the honest answer is the UNION of the live tokens' scopes.
+
+    Reporting the NEWEST live token's scope is deterministic — which is what the
+    earlier fix was after — but systematically wrong in the UNSAFE direction. A
+    refresh may narrow scope (RFC 6749 §6) and reissues into the same family,
+    while the PREVIOUS wide-scoped access token stays live for the rest of its
+    hour. So straight after a narrowing refresh the screen reads "read-only"
+    while the connector goes on writing, and a scoped MCP token can trigger that
+    deliberately by refreshing with `scope=mcp:read` right after the code
+    exchange.
+
+    Revocation still works, so this is deception rather than escalation — but the
+    screen exists to be acted on, and it is the only view the owner has.
+    """
+    conn = store.connect(":memory:")
+    store.init_db(conn)
+    wide = "mcp:read mcp:write offline_access"
+    narrow = "mcp:read offline_access"
+    # The wide access token still has an hour to run when the narrowing refresh
+    # reissues; both are live at `now`.
+    store.create_oauth_token(conn, token_hash="a-wide", kind="access", client_id="c1",
+                             family_id="fam", scope=wide, resource=f"{ISSUER}/mcp",
+                             expires_at=10_000.0, now=100.0)
+    store.create_oauth_token(conn, token_hash="r-narrow", kind="refresh", client_id="c1",
+                             family_id="fam", scope=narrow, resource=f"{ISSUER}/mcp",
+                             expires_at=10_000.0, now=200.0)
+
+    grants = store.list_oauth_grants(conn, now=0.0)
+    assert len(grants) == 1, grants
+    reported = set(grants[0]["scope"].split())
+    assert "mcp:write" in reported, (
+        f"the screen reported {grants[0]['scope']!r} while a live token still "
+        f"carried mcp:write"
+    )
+
+
+def test_a_grant_does_not_report_what_an_expired_token_could_do():
+    """The control, and the one this repair actually needs.
+
+    "Union of live tokens" is one step from "union of every token ever issued",
+    which over-reports in the same direction the old behaviour under-reported:
+    the screen would say a connector can write for the rest of the grant's life
+    because it could an hour ago. The pin above cannot tell those apart — it has
+    no expired rows — so the boundary is asserted here.
+    """
+    conn = store.connect(":memory:")
+    store.init_db(conn)
+    store.create_oauth_token(conn, token_hash="a-old", kind="access", client_id="c1",
+                             family_id="fam", scope="mcp:read mcp:write",
+                             resource=f"{ISSUER}/mcp", expires_at=50.0, now=10.0)
+    store.create_oauth_token(conn, token_hash="r-now", kind="refresh", client_id="c1",
+                             family_id="fam", scope="mcp:read offline_access",
+                             resource=f"{ISSUER}/mcp", expires_at=10_000.0, now=200.0)
+
+    grants = store.list_oauth_grants(conn, now=100.0)      # the wide one has lapsed
+    assert len(grants) == 1, grants
+    reported = set(grants[0]["scope"].split())
+    assert "mcp:write" not in reported, (
+        f"the screen reported {grants[0]['scope']!r}, crediting a token that "
+        f"expired at 50.0"
+    )
+    assert reported == {"mcp:read", "offline_access"}
+
+
+def test_task_order_matches_the_browser_when_the_server_is_in_another_zone(monkeypatch):
+    """`_in_display_order` promises to be the port of `sortTasks`, and the 402-case
+    cross-check next door cannot see this: both implementations run in one
+    process, so they share a zone. It is the same blind spot the uid-only keying
+    had before duplicates were added to the corpus.
+
+    `_as_dt` did `value.astimezone().replace(tzinfo=None)` — the SERVER's local
+    wall clock — while `dueAt` resolves a date-only due against BROWSER-local
+    midnight. With the server in UTC and the reader in America/Chicago (the
+    ordinary Docker deployment), a task due 23:00 Chicago on the 5th and an
+    all-day task on the 6th swap places: in UTC the timed one is already the 6th
+    at 05:00, so it sorts AFTER the all-day one; in Chicago it is still the 5th
+    and sorts before.
+
+    This ordering is the one thing that decides which rows `limit` keeps, so the
+    swap can push the soonest deadline off a page that looks ordered.
+
+    Driven through the zone the owner actually reads in, which is what the fix
+    threads down from `home_timezone`.
+    """
+    # The server's zone is pinned, not assumed: the defect is a DISAGREEMENT
+    # between two zones, so a run that happened to be in America/Chicago would
+    # pass against the bug.
+    monkeypatch.setenv("TZ", "UTC")
+    time.tzset()
+
+    chicago = ZoneInfo("America/Chicago")
+    tasks = [
+        _task("a", summary="Late call", due="2026-01-05T23:00:00-06:00"),
+        _task("b", summary="All-day thing", due="2026-01-06"),
+    ]
+    from tasksd.mcp.api import _in_display_order
+    got = [t["uid"] for t in _in_display_order(tasks, chicago)]
+    assert got == ["a", "b"], (
+        f"a task due 23:00 on the 5th in the reader's zone sorted after an "
+        f"all-day task on the 6th: {got}"
+    )
+
+
+def test_task_order_without_a_zone_is_unchanged():
+    """The control for the signature change. Every caller that has no service
+    handle — the 402-case corpus check above, and any direct use — passes no
+    zone, and must keep getting exactly the ordering it got before: resolved
+    against the server's own local clock. A fix that made the zone mandatory, or
+    that defaulted it to UTC, would move that corpus silently."""
+    tasks = [
+        _task("a", summary="One", due="2026-01-05"),
+        _task("b", summary="Two", due="2026-01-06"),
+        _task("c", summary="Three"),
+    ]
+    from tasksd.mcp.api import _in_display_order
+    assert [t["uid"] for t in _in_display_order(tasks)] == ["a", "b", "c"]
