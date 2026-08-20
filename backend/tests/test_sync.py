@@ -142,3 +142,72 @@ def test_create_slug_occupied_by_foreign_resource_conflicts(engine, dav, collect
             if_none_match="*")
     with pytest.raises(ConflictError):
         engine.create_task(collection.href, "Mine", slug=slug)
+
+
+# ── AUDIT (2026-08-19 stage 1): one U+FFFE must not wedge the collection ──────
+
+# A literal, for the reason dav/xml.py gives: every layer below reads this
+# spelling identically, and an escape does not survive the Rust regex engine.
+_FFFE = "￾"
+
+
+def test_one_unrepresentable_resource_does_not_stop_the_others_syncing(
+        engine, dav, collection, db):
+    """The half of the fix that the stage-1 pin does NOT cover.
+
+    Radicale copies item bytes verbatim into <C:calendar-data>, so one VTODO
+    whose SUMMARY carries U+FFFE makes the WHOLE multiget response unparseable —
+    the other 49 hrefs in the batch are fine and tell us nothing. Turning that
+    into a `DavError` (which the pin asserts) keeps the taxonomy honest but does
+    not save the collection: `sync_all` swallows a DavError into
+    `sync_state.last_error`, a column with writers and no readers, and the token
+    never advances — so the collection re-fetches the same doomed batch forever
+    and silently stops receiving any change from any client.
+
+    `_multiget` therefore refetches a failed batch one href at a time over GET,
+    which returns raw bytes and parses no XML. The poisoned resource then costs
+    one resource: it reaches `_upsert_body`, whose malformed-resource path logs
+    and counts it, and everything else caches normally.
+
+    Without this test the fallback is uncovered and the next refactor deletes it
+    while the pin stays green.
+    """
+    _put(dav, collection.href, "clean-a@x", "bread")
+    dav.put(f"{collection.href}poison@x.ics",
+            foreign_raw("poison@x", f"groceries {_FFFE}"), if_none_match="*")
+    _put(dav, collection.href, "clean-b@x", "milk")
+    engine.discover()
+
+    stats = engine.full_resync(collection.href)
+
+    summaries = {r["summary"] for r in store.get_items(db, collection.href)}
+    assert {"bread", "milk"} <= summaries, (
+        f"a single unrepresentable resource took the batch down with it: {summaries}"
+    )
+    # The token advanced, so the next pass is ordinary rather than a re-run of
+    # the same failure — that is what "not wedged" means here.
+    assert store.get_sync_token(db, collection.href) is not None
+    again = engine.sync(collection.href)
+    assert again.last_error is None or "unparseable" not in (again.last_error or "")
+
+
+def test_a_transport_failure_is_not_retried_href_by_href(engine, collection, monkeypatch):
+    """The narrowness of the fallback, which is the part that could go wrong.
+
+    Keying it on any `DavError` would turn one network blip into fifty GETs —
+    and, worse, let the sweep conclude the collection enumerated cleanly. Only a
+    `MalformedResponse` (the server answered, and the bytes are not XML) earns
+    the per-href retry; anything else still propagates.
+    """
+    from tasksd.dav.errors import DavError
+
+    calls = []
+
+    def boom(_href, hrefs):
+        calls.append(list(hrefs))
+        raise DavError("connection reset")
+
+    monkeypatch.setattr(engine.dav, "multiget", boom)
+    with pytest.raises(DavError):
+        engine._multiget(collection.href, ["/a.ics", "/b.ics"])
+    assert len(calls) == 1, "a transport failure was retried per-href"

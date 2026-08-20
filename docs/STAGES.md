@@ -12,10 +12,11 @@ of how the harness behaved in practice — its "Two strengths of pin" and
 
 `docs/AUDIT.md` is the evidence. This is the plan for closing it.
 
-**66 open, 0 closed.** 65 of the 66 are pinned by a test that asserts the corrected
-behaviour and fails today — 61 as `xfail(strict=True)` / `it.fails`, and 4 as
-ordinary passing tests (see "Test gaps that were only gaps" below). One is
-deliberately **not** pinned; see "The one that is not pinned" below. The harness
+**59 open, 7 closed.** Stage 1 is done; stages 2-5 remain. Of the 59 still open,
+58 are pinned by a test that asserts the corrected behaviour and fails today —
+54 as `xfail(strict=True)` / `it.fails`, and 4 as ordinary passing tests (see
+"Test gaps that were only gaps" below). One is deliberately **not** pinned; see
+"The one that is not pinned" below. The harness
 described under *Stage 0* further down still applies unchanged; these pins live in
 their own files so the closed 2026-08-16 stages stay closed:
 
@@ -65,11 +66,51 @@ raced with it. Whoever fixes the finding should add that seam and pin it then.
 The reasoning is repeated in full at the finding's place in
 `backend/tests/test_backlog_aug19_stage45.py`.
 
-## Stage 1 — Crash paths ⬜ OPEN
+## Stage 1 — Crash paths ✅ DONE
 
-7 findings · 2 high, 4 medium, 1 low · open
+7 findings · closed · `backend/tests/test_backlog_aug19_stage1.py`, with the read-side contract updated in `backend/tests/test_dav_xml.py` and the multiget fallback covered in `backend/tests/test_sync.py`
 
 Untrusted input reaching an unhandled exception — a 500 where a 4xx was owed. Cheapest to fix, nastiest to leave: each one is an adversary turning odd input into a stack trace, and two of them commit a write before they crash.
+
+All seven are fixed and ticked in `docs/AUDIT.md`; the xfail markers are gone and
+those tests are now ordinary regression tests that must stay green.
+
+Four things surfaced while fixing them, all wider than the findings as filed:
+
+* **Findings 1 and 3 were one defect, and fixing either alone would have been
+  worse than neither.** 3 let the app WRITE a U+FFFE; 1 was what happened when
+  it read one back. Fix only 1 and the app still poisons its own collections;
+  fix only 3 and it is still defenceless against the four other CalDAV clients
+  sharing those collections. The sharpest way in was also not the one filed:
+  `PublicBook.name` and `.notes` reach the booked event's SUMMARY and
+  DESCRIPTION, so a stranger holding a booking link could wedge a collection.
+  The same hole existed on the MCP schemas, which the finding did not mention.
+* **The taxonomy wrap alone does not fix finding 1.** Turning the
+  `XMLSyntaxError` into a `DavError` satisfies the pin, but `sync_all` swallows
+  a `DavError` into `sync_state.last_error` — a column with writers and no
+  readers anywhere in the repo — and the token never advances, so the collection
+  stays wedged and silent. What actually closes it is `_multiget` refetching a
+  failed batch one href at a time over GET, which parses no XML: the poisoned
+  resource then costs one resource and reaches `_upsert_body`'s existing
+  malformed-resource path. A pin that a partial fix satisfies is worth knowing
+  about.
+* **Two of the seven were fixed wrongly the first time, and their pins passed
+  anyway.** `PublicBook.email` was left unguarded on the assumption that
+  `_EMAIL_RE` bounded it — it forbids only `@` and whitespace, so the anonymous
+  poisoning path the finding is about stayed open while the pin went green. And
+  finding 5's first fix saturated the *input* before the arithmetic, which
+  survives only a delta smaller than the guard: the pin drove a one-day drag, so
+  a fix that broke at thirty days passed. Both pins have been widened (a
+  year-long drag; all three booking fields), but the lesson is about the harness
+  rather than the bugs — a pin is only as good as the range of inputs it drives,
+  and "the pin passes" is not "the finding is closed". Neither was caught by the
+  suite; both were caught by re-reading the landed diff against the finding.
+* **A bounded UNTIL saturates rather than refuses.** Answering 422 for a
+  far-future UNTIL would have been the tidier-looking repair and the wrong one:
+  the foreign `UNTIL=99991231T235959Z` series that provoked the finding would
+  have stayed exactly as uneditable, just with a nicer status code. Saturating
+  at the rule-writing choke point keeps the series editable, and the route's new
+  `except OverflowError` is only the backstop.
 
 | # | Finding | Where | Sev | Pin |
 |---|---|---|---|---|

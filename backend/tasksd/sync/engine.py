@@ -23,7 +23,8 @@ from dataclasses import dataclass
 
 from .. import ical
 from ..dav.client import CollectionInfo, DavClient
-from ..dav.errors import DavError, InvalidSyncToken, NotFound, PreconditionFailed
+from ..dav.errors import (DavError, InvalidSyncToken, MalformedResponse, NotFound,
+                          PreconditionFailed)
 from ..db import store
 from ..db.store import tx as _tx
 
@@ -243,7 +244,36 @@ class SyncEngine:
     def _multiget(self, collection_href: str, hrefs: list[str]) -> list:
         out: list = []
         for i in range(0, len(hrefs), self.batch):
-            out.extend(self.dav.multiget(collection_href, hrefs[i : i + self.batch]))
+            batch = hrefs[i : i + self.batch]
+            try:
+                out.extend(self.dav.multiget(collection_href, batch))
+            except MalformedResponse as e:
+                # Narrow on purpose: a transport failure must NOT become fifty
+                # retries. One resource Radicale cannot represent in XML — a U+FFFE in a
+                # SUMMARY another client wrote — poisons the WHOLE multistatus,
+                # so the batch tells us nothing about the other 49. Refetch them
+                # one at a time over GET, which returns raw bytes and parses no
+                # XML at all: the poisoned href fails alone and reaches
+                # `_upsert_body`, whose malformed-resource path counts it skipped
+                # (suppressing gc_orphans) and lets the token advance. Without
+                # this the collection re-fetches the same doomed batch forever
+                # and silently stops receiving any change from any client.
+                log.warning("multiget failed for %s (%d hrefs), refetching "
+                            "singly: %s", collection_href, len(batch), e)
+                out.extend(self._get_each(batch))
+        return out
+
+    def _get_each(self, hrefs: list[str]) -> list:
+        """Per-href GET fallback. A missing href is skipped the way multiget
+        skips it; anything else unreadable is left for `_upsert_body` to log."""
+        out: list = []
+        for href in hrefs:
+            try:
+                out.append(self.dav.get(href))
+            except NotFound:
+                continue
+            except DavError as e:
+                log.warning("skipping unreadable resource %s: %s", href, e)
         return out
 
     # ── write path ───────────────────────────────────────────────────────────

@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 
 from .oauth import OAuthError, SCOPE_WRITE, scope_set
 from .tools import ToolError, build_tools
@@ -61,6 +62,19 @@ MAX_RESULT_CHARS = 400_000
 MAX_BATCH = 50
 
 
+def _usable_id(rid) -> bool:
+    """Whether an id can be echoed back. JSON-RPC 2.0 §4 allows a String, a
+    Number or Null; `bool` is excluded because it is not a Number, and a float
+    has to be finite or the response cannot be serialized at all."""
+    if rid is None or isinstance(rid, str):
+        return True
+    if isinstance(rid, bool):
+        return False
+    if isinstance(rid, int):
+        return True
+    return isinstance(rid, float) and math.isfinite(rid)
+
+
 def _result(rid, payload: dict) -> dict:
     return {"jsonrpc": "2.0", "id": rid, "result": payload}
 
@@ -91,6 +105,19 @@ class McpServer:
             return _error(None, INVALID_REQUEST, "expected a JSON-RPC 2.0 message")
         method = message.get("method")
         rid = message.get("id")
+        if not _usable_id(rid):
+            # The id is a REPLY ADDRESS, and it is echoed into every envelope
+            # this returns. A non-finite float survives json.loads and dies in
+            # json.dumps — Starlette renders with allow_nan=False — so echoing
+            # one raised while rendering, outside every exception handler, and
+            # the request became a 500. For tools/call that lands AFTER the tool
+            # has run, so a real write committed while its caller was told the
+            # call failed; in a batch, one poisoned id discarded all 50 replies.
+            # Answer against a null id, the shape run_batch already uses when it
+            # cannot address the caller. (app.py's _invalid_request documents
+            # this same trap on the 422 path.)
+            return _error(None, INVALID_REQUEST,
+                          "id must be a string, a finite number, or null")
         if not isinstance(method, str):
             return _error(rid, INVALID_REQUEST, "missing method")
         # No id means a notification. The only ones that matter here are
@@ -217,11 +244,21 @@ class McpServer:
         return {"content": [{"type": "text", "text": message}], "isError": True}
 
 
+def _reject_constant(name: str):
+    raise ValueError(f"{name} is not valid JSON")
+
+
 def parse_body(raw: bytes) -> object:
     if len(raw) == 0:
         raise ValueError("empty body")
     try:
-        return json.loads(raw)
+        # `parse_constant` catches the bare NaN/Infinity/-Infinity literals here,
+        # where the protocol already has an answer for unreadable JSON (-32700),
+        # rather than letting them reach a response that cannot be rendered.
+        # It does NOT catch 1e400 — that is an ordinary number literal parsed by
+        # `parse_float`, which overflows to inf — so the id-shape check in
+        # `handle` is the load-bearing guard and this is defence in depth.
+        return json.loads(raw, parse_constant=_reject_constant)
     except RecursionError as exc:
         # `json.loads` recurses per nesting level, and RecursionError is a
         # RuntimeError — not a ValueError — so deeply nested JSON escaped the

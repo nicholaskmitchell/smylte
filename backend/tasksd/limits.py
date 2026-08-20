@@ -20,6 +20,7 @@ the test suite can actually exercise.
 """
 from __future__ import annotations
 
+from starlette.exceptions import HTTPException
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 # 1 MiB. The largest thing any route legitimately accepts is the settings blob
@@ -27,8 +28,31 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 DEFAULT_MAX_BODY_BYTES = 1024 * 1024
 
 
-class _BodyTooLarge(Exception):
-    """Raised out of the wrapped receive() once the cap is passed."""
+class _BodyTooLarge(HTTPException):
+    """Raised out of the wrapped receive() once the cap is passed.
+
+    An HTTPException, not a bare one, because of where it surfaces. FastAPI wraps
+    the body read in `except Exception: raise HTTPException(400, "There was an
+    error parsing the body")`, so a plain exception was converted to a 400 before
+    this middleware's own `except` could ever see it — the 413 was dead code on
+    every router path, and `started` was already True by then. Immediately above
+    that arm FastAPI has `except HTTPException: raise`, commented "If a
+    middleware raises an HTTPException, it should be raised again": the escape
+    hatch for exactly this. Being an HTTPException takes it, and ExceptionMiddleware
+    (which sits INSIDE this one) renders the 413.
+
+    The `except _BodyTooLarge` below still matters: mounted over a bare ASGI app
+    there is no ExceptionMiddleware to render anything, and that is the shape
+    tests/test_body_limit.py exercises.
+    """
+
+    def __init__(self, max_bytes: int) -> None:
+        # The body was refused unread, so the connection cannot be reused —
+        # the same header `_too_large` sends. Carried here so the router path
+        # says it too, rather than only the Content-Length and bare-ASGI paths.
+        super().__init__(status_code=413,
+                         detail=f"request body exceeds {max_bytes} bytes",
+                         headers={"connection": "close"})
 
 
 class BodySizeLimitMiddleware:
@@ -59,7 +83,7 @@ class BodySizeLimitMiddleware:
                 if seen > self.max_bytes:
                     # Cut the stream here: returning the chunk would hand the
                     # oversized bytes to whatever is buffering them.
-                    raise _BodyTooLarge
+                    raise _BodyTooLarge(self.max_bytes)
             return message
 
         async def watching_send(message: Message) -> None:

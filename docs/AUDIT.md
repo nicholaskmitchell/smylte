@@ -34,7 +34,7 @@ The 2026-08-19 references were written against this commit and have not drifted 
 Ticked findings keep their original references, which point into the tree as it
 was when they were filed. They are history, not navigation.
 
-**66 open**, all from the 2026-08-19 sweep immediately below; every older
+**59 open**, all from the 2026-08-19 sweep immediately below; every older
 finding is closed. The 2026-08-07 backlog is closed, and so is the one finding the
 remediation filed against itself (the missing CSP — issue #57, below). The
 evidence stays here — a ticked box records what the bug was and why it mattered,
@@ -73,8 +73,10 @@ Three of the 69 are the same defect seen at a different layer, so they are filed
 once and the backlog counts **66**. Every one of the ten HIGHs was reproduced by
 hand with a runnable probe against a live Radicale 3.7.4 before being written down.
 
-**66 open**, none fixed. All 66 are pinned by a test that asserts the corrected
-behaviour and fails today — see `docs/STAGES.md` for the stage plan and the
+**59 open, 7 closed** — the seven crash paths went first, as **Stage 1**
+(`docs/STAGES.md`); their pins are ordinary regression tests now and must stay
+green. The rest are still pinned by a test that asserts the corrected behaviour
+and fails today — see `docs/STAGES.md` for the stage plan and the
 finding-to-pin map. Run `pytest -m backlog -rxX` and `npx vitest run backlog` for
 the itemised state.
 
@@ -87,7 +89,7 @@ see it" and nothing reads it. A comment is evidence of intent, not of behaviour.
 
 ### CalDAV client & XML
 
-#### [ ] One U+FFFE/U+FFFF anywhere in a calendar item permanently and silently kills that collection's sync (XMLSyntaxError escapes the DAV taxonomy from parse_multistatus)
+#### [x] One U+FFFE/U+FFFF anywhere in a calendar item permanently and silently kills that collection's sync (XMLSyntaxError escapes the DAV taxonomy from parse_multistatus)
 
 `backend/tasksd/dav/xml.py:264` · **high** · bug · stage 1
 
@@ -138,7 +140,7 @@ A full codepoint sweep (0x00-0x1F, 0x7F, 0x85, 0x9F, 0xFDD0, 0xFFFE, 0xFFFF, 0x1
 
 **Pinned by** `test_a_body_xml_cannot_carry_stays_inside_the_dav_taxonomy` in `backend/tests/test_backlog_aug19_stage1.py`.
 
-#### [ ] summary/notes/location/description reach Radicale with no character guard, so the app can write a value its own read path cannot parse — the XML-safe rule is applied only to collection names
+#### [x] summary/notes/location/description reach Radicale with no character guard, so the app can write a value its own read path cannot parse — the XML-safe rule is applied only to collection names
 
 `backend/tasksd/app.py:145` · **medium** · bug · stage 1
 
@@ -501,7 +503,7 @@ Reachable in one gesture from the SPA: CalendarView.tsx:836 sends the changed ti
 
 **Pinned by** `test_dragging_a_monthly_series_moves_it_instead_of_desynchronizing_the_rule` in `backend/tests/test_backlog_aug19_stage3_ical.py`.
 
-#### [ ] A far-future UNTIL (repeat-until 9999-12-31, or a foreign UNTIL=99991231T235959Z) raises OverflowError — an unmapped 500 that makes the series permanently uneditable
+#### [x] A far-future UNTIL (repeat-until 9999-12-31, or a foreign UNTIL=99991231T235959Z) raises OverflowError — an unmapped 500 that makes the series permanently uneditable
 
 `backend/tasksd/ical/edit.py:813` · **medium** · bug · `minor` · stage 1
 
@@ -768,7 +770,7 @@ comparator runs after the filter, so the placed tasks still lead.
 
 **Pinned by** `test_a_task_created_after_a_drag_is_not_sunk_below_the_whole_account` in `backend/tests/test_backlog_aug19_stage3_core.py`.
 
-#### [ ] smylte_delete_event skips the recurrence_id ISO check the HTTP DELETE route performs, so a space instead of a T is reported as "the calendar server may be unreachable"
+#### [x] smylte_delete_event skips the recurrence_id ISO check the HTTP DELETE route performs, so a space instead of a T is reported as "the calendar server may be unreachable"
 
 `backend/tasksd/mcp/api.py:492` · **medium** · bug · `minor` · stage 1
 
@@ -872,7 +874,7 @@ whereas a merely misspelled id would have produced the corrective ToolError.
 
 ### MCP transport
 
-#### [ ] A JSON-RPC `id` of NaN/Infinity is echoed straight into JSONResponse, which refuses to serialize it — unhandled 500 after the tool has already written
+#### [x] A JSON-RPC `id` of NaN/Infinity is echoed straight into JSONResponse, which refuses to serialize it — unhandled 500 after the tool has already written
 
 `backend/tasksd/mcp/routes.py:489` · **high** · bug · stage 1
 
@@ -2290,7 +2292,7 @@ No test anywhere sends an offset-bearing datetime to any create or patch route.
 
 ### HTTP API — routes
 
-#### [ ] PATCH /api/scheduling/links/{token} with an explicit null 500s and leaves a half-applied update behind
+#### [x] PATCH /api/scheduling/links/{token} with an explicit null 500s and leaves a half-applied update behind
 
 `backend/tasksd/app.py:1161` · **medium** · bug · stage 1
 
@@ -2555,7 +2557,7 @@ and one MCP-level case driving `smylte_cancel_task` (including that it is refuse
 
 ### Auth, session & limits
 
-#### [ ] The body-limit middleware's 413 is dead code on every FastAPI route — FastAPI swallows _BodyTooLarge and answers 400, and no test covers the chunked path through the real app
+#### [x] The body-limit middleware's 413 is dead code on every FastAPI route — FastAPI swallows _BodyTooLarge and answers 400, and no test covers the chunked path through the real app
 
 `backend/tasksd/limits.py:73` · **low** · bug · `minor` · stage 1
 

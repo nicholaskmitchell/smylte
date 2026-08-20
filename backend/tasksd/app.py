@@ -83,6 +83,14 @@ CollectionName = Annotated[
     Field(min_length=1, max_length=200, pattern=XML_SAFE_PATTERN_SCALAR),
 ]
 
+# The same rule for item text. A collection name was guarded and a task summary
+# was not, so the app could write a SUMMARY its OWN read path cannot parse:
+# Radicale copies item bytes verbatim into <C:calendar-data>, and one U+FFFE
+# there makes the multistatus unparseable. The sharpest way in is anonymous —
+# PublicBook.name and .notes become the booked event's SUMMARY and DESCRIPTION.
+# No length bound here: the callers set their own, which differ per field.
+XmlSafeText = Annotated[str, Field(pattern=XML_SAFE_PATTERN_SCALAR)]
+
 
 class CreateList(BaseModel):
     name: CollectionName
@@ -142,12 +150,12 @@ def _check_color(color: str | None) -> None:
 
 
 class CreateTask(BaseModel):
-    summary: str
-    notes: str | None = None
+    summary: XmlSafeText
+    notes: XmlSafeText | None = None
     priority: str | None = None       # none|low|medium|high
     due: str | None = None            # ISO date or datetime
     start: str | None = None
-    tags: list[str] | None = None
+    tags: list[XmlSafeText] | None = None
     parent: str | None = None         # parent task UID (subtask/checklist item)
     client_id: str | None = None      # idempotency: a replayed create reuses the slug
 
@@ -181,12 +189,12 @@ def _check_session_ttl(ttl: int | None) -> None:
 
 
 class EditTask(BaseModel):
-    summary: str | None = None
-    notes: str | None = None
+    summary: XmlSafeText | None = None
+    notes: XmlSafeText | None = None
     priority: str | None = None
     due: str | None = None
     start: str | None = None
-    tags: list[str] | None = None
+    tags: list[XmlSafeText] | None = None
     status: str | None = None         # NEEDS-ACTION|IN-PROCESS|COMPLETED|CANCELLED
     parent: str | None = None         # parent task UID; explicit null unparents
 
@@ -219,23 +227,23 @@ class Repeat(BaseModel):
 
 
 class CreateEvent(Repeat):
-    summary: str
+    summary: XmlSafeText
     start: str                        # ISO date (all-day) or datetime
     end: str | None = None
     all_day: bool = False
-    location: str | None = None
-    description: str | None = None
-    tags: list[str] | None = None
+    location: XmlSafeText | None = None
+    description: XmlSafeText | None = None
+    tags: list[XmlSafeText] | None = None
     client_id: str | None = None      # idempotency: a replayed create reuses the slug
 
 
 class EditEvent(Repeat):
-    summary: str | None = None
-    description: str | None = None
-    location: str | None = None
+    summary: XmlSafeText | None = None
+    description: XmlSafeText | None = None
+    location: XmlSafeText | None = None
     start: str | None = None
     end: str | None = None
-    tags: list[str] | None = None
+    tags: list[XmlSafeText] | None = None
     status: str | None = None         # CONFIRMED|TENTATIVE|CANCELLED
     # Per-occurrence editing (Tier 3): which slice of a recurring series to touch.
     recurrence_id: str | None = None  # the occurrence anchor (original-slot ISO)
@@ -247,8 +255,8 @@ class MoveEvent(BaseModel):
 
 
 class CreateBookingLink(BaseModel):
-    title: str = Field(min_length=1, max_length=200)
-    description: str | None = Field(default=None, max_length=2000)
+    title: XmlSafeText = Field(min_length=1, max_length=200)
+    description: XmlSafeText | None = Field(default=None, max_length=2000)
     calendar: str                                     # calendar id or href
     duration_minutes: int = Field(default=30, ge=5, le=480)
     timezone: str = Field(min_length=1, max_length=64)   # IANA name
@@ -261,8 +269,8 @@ class CreateBookingLink(BaseModel):
 
 
 class EditBookingLink(BaseModel):
-    title: str | None = Field(default=None, min_length=1, max_length=200)
-    description: str | None = Field(default=None, max_length=2000)
+    title: XmlSafeText | None = Field(default=None, min_length=1, max_length=200)
+    description: XmlSafeText | None = Field(default=None, max_length=2000)
     calendar: str | None = None
     duration_minutes: int | None = Field(default=None, ge=5, le=480)
     timezone: str | None = Field(default=None, min_length=1, max_length=64)
@@ -276,9 +284,13 @@ class EditBookingLink(BaseModel):
 
 class PublicBook(BaseModel):
     start: str                                        # ISO datetime WITH offset
-    name: str = Field(min_length=1, max_length=200)
-    email: str = Field(min_length=3, max_length=320)
-    notes: str | None = Field(default=None, max_length=2000)
+    name: XmlSafeText = Field(min_length=1, max_length=200)
+    # Guarded like name and notes: _EMAIL_RE below rejects neither U+FFFE nor a
+    # control byte (it only forbids @ and whitespace), and service.book writes
+    # the address verbatim into the event DESCRIPTION — so this is the same
+    # anonymous poisoning path, one field over.
+    email: XmlSafeText = Field(min_length=3, max_length=320)
+    notes: XmlSafeText | None = Field(default=None, max_length=2000)
     client_id: str | None = None                      # idempotency, like event creates
 
 
@@ -1112,6 +1124,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except ValueError as e:
             # e.g. a series shift that would switch all-day <-> timed
             raise HTTPException(422, str(e)) from None
+        except OverflowError:
+            # A boundary date parses fine and only blows up in the arithmetic
+            # deep in the edit path. OverflowError is not a ValueError, so it
+            # escaped as a 500 — the same trap the public booking route already
+            # guards. The rule writer saturates now, so this is the backstop for
+            # any other date arithmetic that reaches the edge.
+            raise HTTPException(422, "date is out of range") from None
         if dto is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown event {uid}")
         return dto
@@ -1145,6 +1164,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                            "availability", "show_busy", "buffer_minutes",
                            "min_notice_hours", "horizon_days", "enabled")
 
+    # Every EditBookingLink field is Optional so it can be OMITTED, which makes an
+    # explicit `null` indistinguishable from "leave alone" by type — only
+    # `model_fields_set` tells them apart. These columns are NOT NULL, so a sent
+    # null reached SQLite as an IntegrityError, which no handler maps: a 500, with
+    # the fields updated before it already committed. (`description` is nullable;
+    # `timezone`/`availability` already answer 422 from _normalize_link_fields;
+    # `show_busy`/`enabled` coerce to 0.)
+    _LINK_NOT_NULL = ("title", "duration_minutes", "buffer_minutes",
+                      "min_notice_hours", "horizon_days")
+
     @api.get("/scheduling/links")
     async def get_booking_links(request: Request):
         return await _run(_svc(request).list_booking_links)
@@ -1162,6 +1191,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def patch_booking_link(request: Request, token: str, body: EditBookingLink):
         fs = body.model_fields_set          # only fields the client actually sent
         fields = {k: getattr(body, k) for k in _LINK_SIMPLE_FIELDS if k in fs}
+        nulled = [k for k in _LINK_NOT_NULL if k in fields and fields[k] is None]
+        if nulled:
+            raise HTTPException(
+                422, f"these fields cannot be null: {', '.join(sorted(nulled))}")
         if "calendar" in fs:
             fields["calendar_href"] = await _href(request, body.calendar)
         try:
