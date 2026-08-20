@@ -248,20 +248,26 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
   // the pane. Walking up until the chain repeats finds the loop; its lowest uid
   // is elected the root, deterministically, so exactly one row anchors it and
   // the rest hang beneath (TaskGroup's `seen` stops the ring closing again).
-  const parentIsRendered = (t: Task) => {
+  //
+  // Parameterised by the "renders under" predicate rather than closing over
+  // `rendersUnder`, because the Completed pane needs the identical election
+  // over a DIFFERENT parent rule — see `completedTops` below. The two disagree
+  // about which parents count, and they must not disagree about rings.
+  const anchorsRing = (t: Task, under: (x: Task) => Task | undefined) => {
     const seen = new Set<string>([t.uid])
-    for (let cur = rendersUnder(t); cur; cur = rendersUnder(cur)) {
+    for (let cur = under(t); cur; cur = under(cur)) {
       if (!seen.has(cur.uid)) { seen.add(cur.uid); continue }
       // `seen` now holds the whole ring plus the tail that led into it; only
       // the ring matters, and re-walking from `cur` collects exactly that.
       const ring: string[] = []
-      for (let x: Task | undefined = cur; x && !ring.includes(x.uid); x = rendersUnder(x)) {
+      for (let x: Task | undefined = cur; x && !ring.includes(x.uid); x = under(x)) {
         ring.push(x.uid)
       }
       return t.uid !== ring.reduce((a, b) => (a < b ? a : b))
     }
-    return !!rendersUnder(t)
+    return !!under(t)
   }
+  const parentIsRendered = (t: Task) => anchorsRing(t, rendersUnder)
   const tops = shownTasks.filter((t) => !parentIsRendered(t))
 
   // Nesting goes as deep as the data does: a subtask can have subtasks of its
@@ -341,12 +347,20 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
   // of that flag. So with the default showCompleted={false} a completed child
   // of a completed parent was promoted to a row of its own, sitting beside the
   // parent it belongs under, and the tree the pane is meant to show was flat.
-  const completedTops = shownTasks.filter((t) => {
-    if (!isDone(t)) return false
+  //
+  // A plain "my parent is not also done" test is a `tops` with the ring
+  // handling stripped out, and it loses a done RELATED-TO ring completely:
+  // every task in the ring has a done parent, so none of them is a top and the
+  // pane renders none of them — not even a stub. Nothing on either side of the
+  // wire prevents such a ring, and other clients write them. Reuse the same
+  // election `tops` uses, over this pane's own parent rule.
+  const completedUnder = (t: Task) => {
     const p = parentOf(t)
     const parent = p ? byUid.get(p) : undefined
-    return !(parent && isDone(parent))
-  })
+    return parent && isDone(parent) ? parent : undefined
+  }
+  const completedTops = shownTasks.filter(
+    (t) => isDone(t) && !anchorsRing(t, completedUnder))
   const completedKids = useCallback((uid: string) => {
     const kids = shownTasks.filter((t) => {
       if (!isDone(t)) return false

@@ -2349,7 +2349,7 @@ rows show one row's subtasks, progress and fold state. See below.
 
 **Pinned by** `aug19 stage 4b — the tasks pane and one uid in two lists > deletes only the copy whose row was clicked` and `… > completes only the copy whose box was ticked` in `frontend/src/backlog.aug19.stage4b.test.tsx`.
 
-#### [ ] The Completed pane hides a completed RELATED-TO ring entirely, though the list view has explicit code to render one
+#### [x] The Completed pane hides a completed RELATED-TO ring entirely, though the list view has explicit code to render one
 
 `frontend/src/components/TasksView.tsx:334` · **low** · bug · `minor` · stage 4
 
@@ -2374,7 +2374,25 @@ Reproduced against the real component (vitest): tasks = [{uid:'a', summary:'Alph
 
 **Suggested fix.** Reuse the ring election the list view already has — e.g. treat a done task as a completed-pane top when its done parent chain loops back to it and it is not the ring's minimum uid — or simply exclude the child only when walking up from the parent does not return to `t`. (`completedKids` at line 340-348 has no cycle guard either; TaskGroup's `seen` set stops the recursion, but a guard there would keep the two consistent.)
 
-**Pinned by** `aug19 stage 4b — the Completed pane and a RELATED-TO ring > shows a completed ring another client authored` in `frontend/src/backlog.aug19.stage4b.test.tsx`.
+**Fixed** by reusing the list view's ring election rather than restating it: the
+walk is now `anchorsRing(t, under)`, parameterised by the "renders under"
+predicate, and the Completed pane passes its own — done parents only, ignoring
+the global `showCompleted` the list view consults. The two rules genuinely
+disagree about which parents count (the comment at `TasksView.tsx:337` records
+why) and they must not also disagree about rings, which is exactly what happened.
+
+`completedKids` needed no change: `TaskGroup`'s `seen` path already stops the
+recursion closing the loop.
+
+Widened first with a THREE-node ring, and that earned its keep immediately. The
+obvious repair — a one-hop widening, "a done task is a top when its parent is not
+done, or when its parent's parent is itself" — satisfies the original two-node
+pin and still loses a→b→c→a completely. Rings arrive from other clients and
+nothing on either side of the wire bounds their length. A control asserts that an
+ordinary completed child still nests under its completed parent, so a repair that
+gives up and flattens the pane cannot pass either.
+
+**Pinned by** `aug19 stage 4b — the Completed pane and a RELATED-TO ring > shows a completed ring another client authored` and `… > shows a completed ring of three the same way` in `frontend/src/backlog.aug19.stage4b.test.tsx`.
 
 #### [ ] TaskModal — the app's most-used dialog — has no Escape handler, breaking the modal contract every other dialog in the app keeps
 

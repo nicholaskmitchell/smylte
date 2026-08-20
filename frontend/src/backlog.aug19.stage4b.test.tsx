@@ -363,7 +363,7 @@ describe('aug19 stage 4b — the tasks pane and one uid in two lists', () => {
 
 describe('aug19 stage 4b — the Completed pane and a RELATED-TO ring', () => {
   // AUDIT open: TasksView.tsx:334
-  it.fails('shows a completed ring another client authored', async () => {
+  it('shows a completed ring another client authored', async () => {
     // `tops` elects a ring's lowest uid as its root so the loop renders;
     // `completedTops`, written later for this pane, uses a plain one-hop "my
     // parent is not also done" test. In a cycle every member fails it, so the
@@ -396,6 +396,53 @@ describe('aug19 stage 4b — the Completed pane and a RELATED-TO ring', () => {
     // the top level — neither task may disappear.
     expect(screen.getAllByText('Alpha').length).toBeGreaterThan(0)
     expect(screen.getAllByText('Bravo').length).toBeGreaterThan(0)
+  })
+
+  // WIDENING: a THREE-node ring. The two-node case above is satisfied by a
+  // one-hop widening ("a done task is a top when its parent is not done, or
+  // when its parent is itself parented"), which is the obvious repair and still
+  // loses a→b→c→a entirely. Rings arrive from other clients and nothing on
+  // either side of the wire prevents them, so the length is not bounded.
+  it('shows a completed ring of three the same way', async () => {
+    m.tasks.mockResolvedValue([
+      task({ uid: 'a', summary: 'Alpha', parent: 'b', completed: true, status: 'COMPLETED' }),
+      task({ uid: 'b', summary: 'Bravo', parent: 'c', completed: true, status: 'COMPLETED' }),
+      task({ uid: 'c', summary: 'Cass', parent: 'a', completed: true, status: 'COMPLETED' }),
+    ])
+    const user = tasksSetup()
+    await user.click(await screen.findByText(/View completed/))
+
+    for (const name of ['Alpha', 'Bravo', 'Cass']) {
+      expect(screen.getAllByText(name).length, name).toBeGreaterThan(0)
+    }
+    // …and each exactly once: a repair that puts the whole ring at the top
+    // level AND nests it would render duplicates.
+    for (const name of ['Alpha', 'Bravo', 'Cass']) {
+      expect(screen.getAllByText(name), name).toHaveLength(1)
+    }
+  })
+
+  // Control (passes today, must keep passing). This pane needs its own
+  // top-level set precisely because `tops` consults the global `showCompleted`;
+  // the comment at TasksView.tsx:337 records why. A repair that gives up and
+  // puts every done task at the top level satisfies both pins above and undoes
+  // that — the child would sit beside the parent it belongs under.
+  it('still nests an ordinary completed child under its completed parent', async () => {
+    m.tasks.mockResolvedValue([
+      task({ uid: 'p', summary: 'Move house', completed: true, status: 'COMPLETED' }),
+      task({ uid: 'k', summary: 'Book the van', parent: 'p', completed: true, status: 'COMPLETED' }),
+    ])
+    const user = tasksSetup()
+    await user.click(await screen.findByText(/View completed/))
+
+    await screen.findByText('Move house')
+    expect(screen.getAllByText('Book the van')).toHaveLength(1)
+    // The child renders as a SUBTASK, not as a top-level row beside the parent
+    // it belongs under. `.sub` is what TaskRow puts on any row with depth > 0.
+    const child = screen.getByText('Book the van').closest('.task') as HTMLElement
+    const parentRow = screen.getByText('Move house').closest('.task') as HTMLElement
+    expect(child.className, 'the completed child is indented under its parent').toMatch(/\bsub\b/)
+    expect(parentRow.className).not.toMatch(/\bsub\b/)
   })
 })
 
