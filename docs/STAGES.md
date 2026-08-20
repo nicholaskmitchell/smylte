@@ -12,12 +12,14 @@ of how the harness behaved in practice — its "Two strengths of pin" and
 
 `docs/AUDIT.md` is the evidence. This is the plan for closing it.
 
-**38 open, 38 closed.** Stages 1, 2 and 3 are done; stages 4-5 remain. Of the 38
+**36 open, 44 closed.** Stages 1, 2 and 3 are done; stages 4-5 remain. Of the 36
 still open, 28 are from the sweep — 27 of those pinned, 23 as
 `xfail(strict=True)` / `it.fails` and 4 as ordinary passing tests (see "Test gaps
-that were only gaps" below) — and **10 were filed by the adversarial review of
-Stage 3** and are not pinned yet. See `## Filed during the Stage 3 adversarial
-review` in `docs/AUDIT.md`. One is deliberately **not** pinned; see
+that were only gaps" below) — and **7 were filed by the adversarial review of
+Stage 3**, plus **1** from that review's own follow-up. The review's other 3, the
+ones Stage 3 itself caused, are closed — along with 3 more the follow-up found in
+those very fixes. See `## Filed during the Stage 3 adversarial review` in
+`docs/AUDIT.md`. One is deliberately **not** pinned; see
 "The one that is not pinned" below. The harness
 described under *Stage 0* further down still applies unchanged; these pins live in
 their own files so the closed 2026-08-16 stages stay closed:
@@ -234,6 +236,39 @@ They reproduced 14 findings with runnable probes. Four were regressions
 introduced BY this stage, fixed in `d325ef9`; ten are filed open. That is a 17%
 regression rate on 24 fixes, and it is the most useful number this stage
 produced.
+
+**The three findings Stage 3 itself caused are now closed**, pinned before they
+were fixed. Two things came out of doing it that way:
+
+* **The pin caught a mistake reading would not have.** `recurring_ical_events`
+  stamps a RECURRENCE-ID on EVERY instance it emits, including the ones a plain
+  series generates — so keying the authored-length lookup on the emitted value
+  matched nothing and the fix silently did not work. `override_anchors`, already
+  in scope, is what tells an authored override from a generated instance.
+* **Running each pin against a half-fix earned its keep immediately.** Pin A
+  passed against a fix that skipped slots other overrides claim but not EXDATE'd
+  ones — half of what "the next occurrence" means. It was widened before the
+  marker came off. Two of the three half-fixes were caught first time; the one
+  that was not is the one that mattered.
+* **A design review of the three fixes found four more, one of them a blocker
+  the whole suite was green over.** The exact-duration repair read the master's
+  length for any instance no *authored override* claimed — and an
+  `RDATE;VALUE=PERIOD` block is neither, so a four-hour commitment came back as
+  thirty minutes on an ordinary January day, releasing three and a half hours to
+  the booking page. Same failure the narrowing exists to prevent, different door.
+  What fixed it was narrowing the trigger to the DST artifact's own SIGNATURE —
+  the emitted pair states the authored length in wall clock and delivers
+  something else in real time — which fails closed for every family nobody
+  enumerated, instead of enumerating families.
+
+  The review also caught the RFC citation being backwards. §3.8.5.3 says a
+  DTEND-authored recurrence carries the same EXACT duration to every instance,
+  which argues for repairing the case the code deliberately leaves alone —
+  applying it literally is what caused the original regression. The real argument
+  is §3.3.6 and it is about information: a DURATION carries the nominal/exact
+  distinction in its bytes and a DTEND does not, so wall-clock preservation is
+  the only non-destructive reading of a DTEND. A plausible citation is not a
+  correct one.
 
 Three things to carry forward:
 

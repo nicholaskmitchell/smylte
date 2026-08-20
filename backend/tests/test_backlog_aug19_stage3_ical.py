@@ -728,33 +728,32 @@ def test_every_expanded_occurrence_across_spring_forward_blocks_real_time():
     )
 
 
-@pytest.mark.parametrize("tail", [
-    ("DURATION:PT30M",),
-    ("DTEND;TZID=America/Chicago:20261025T020000",),
+@pytest.mark.parametrize("tail, spans", [
+    # DURATION is EXACT when its parts are time-based (RFC 5545 §3.3.6), so every
+    # instance owes thirty real minutes — including the one across the
+    # transition. `_exact_durations` + `_repair_span` deliver that.
+    (("DURATION:PT30M",), {timedelta(minutes=30)}),
+    # DTEND names a WALL-CLOCK end, so the instance on the fall-back day really
+    # does run from 01:30 CDT to 02:00 CST — ninety real minutes — and that is
+    # the authored answer rather than a defect. Repairing it is what turned an
+    # overnight 22:00->06:00 shift from the 9 hours it occupies into 8, releasing
+    # the last hour to the public booking page.
+    (("DTEND;TZID=America/Chicago:20261025T020000",),
+     {timedelta(minutes=30), timedelta(minutes=90)}),
 ])
-def test_a_fall_back_instance_over_blocks_rather_than_under_blocks(tail):
-    """The boundary of the repair, pinned deliberately rather than left to drift.
+def test_the_fall_back_span_follows_how_the_series_authored_its_length(tail, spans):
+    """The line between "repair" and "leave alone", pinned as a decision.
 
-    The mirror of the spring-forward defect is a 30-minute instance on the
-    fall-back day emitted as 01:30-05:00 -> 02:00-06:00, which is 90 real
-    minutes. It is NOT repaired, and that is a decision rather than an oversight.
+    Both spellings look identical to `recurring_ical_events`, which converts
+    DURATION to a wall-clock DTEND before this app sees anything
+    (`adapters/component.py` pops DURATION unconditionally). So the app has to
+    read the length off the ORIGINAL calendar to know which rule applies, and
+    off the component that GOVERNS each instance — a RANGE=THISANDFUTURE
+    override supplies the length for every slot it covers.
 
-    Repairing it means repairing every span whose exact duration disagrees with
-    its wall-clock duration — and for a DTEND-authored recurrence that is wrong:
-    RFC 5545 §3.8.5.3 carries the same EXACT duration to every instance, and for
-    the master's own occurrence the bytes the library emits are the bytes the
-    author wrote. The first version of `_repair_span` did exactly that and turned
-    an overnight 22:00->06:00 shift across the fall-back night from the 9 real
-    hours it occupies into 8 — releasing the last hour to the public booking
-    page, which is the failure this whole commit exists to close.
-
-    So the line is drawn at "wrong under any reading": an end at or before its
-    start. What remains is an instance that blocks MORE time than it occupies,
-    which withholds availability rather than double-booking. That is the safe
-    direction on this path, and it is filed as its own finding under
-    "Filed during remediation" in docs/AUDIT.md rather than papered over.
-
-    What must hold: never backwards, never zero, and never SHORTER than authored.
+    What must hold for both: never backwards, never zero, and never SHORTER than
+    the series occupies, because short is the direction that hands a real
+    commitment to an anonymous booker.
     """
     raw = foreign_event_raw(
         "fall@x", "Nightly", dtstart="TZID=America/Chicago:20261025T013000",
@@ -762,22 +761,19 @@ def test_a_fall_back_instance_over_blocks_rather_than_under_blocks(tail):
         vtimezone=CHICAGO_VTIMEZONE, extra=tail,
     )
     occurrences = expand_occurrences(raw, date(2026, 10, 25), date(2026, 11, 10))
-    spans = {
+    got = {
         f"{o.start} -> {o.end}": (
             datetime.fromisoformat(o.end).astimezone(UTC)
             - datetime.fromisoformat(o.start).astimezone(UTC)
         )
         for o in occurrences
     }
-    too_short = {k: str(v) for k, v in spans.items() if v < timedelta(minutes=30)}
+    too_short = {k: str(v) for k, v in got.items() if v < timedelta(minutes=30)}
     assert not too_short, (
         f"an instance blocks LESS time than it occupies, so the booking page "
         f"offers part of a real commitment: {too_short}")
-    # …and the known residual, stated so a future change to it is a deliberate one.
-    assert set(spans.values()) == {timedelta(minutes=30), timedelta(minutes=90)}, (
-        f"the fall-back instance no longer over-blocks by exactly an hour — if "
-        f"that is intentional, this test and the finding it names both move: "
-        f"{ {k: str(v) for k, v in spans.items()} }")
+    assert set(got.values()) == spans, (
+        f"the spans this series produces changed: { {k: str(v) for k, v in got.items()} }")
 
 
 def test_an_authored_overnight_span_across_the_fall_back_is_left_alone(): 
@@ -926,3 +922,321 @@ def test_a_real_named_zone_is_not_flattened_to_utc():
     assert normalize_offset(z).tzinfo is z.tzinfo
     naive = datetime(2026, 8, 10, 9, 0)
     assert normalize_offset(naive) is naive          # floating stays floating
+
+
+# ══ Filed by the Stage 3 adversarial review — 2026-08-20 ═══════════════════
+#
+# Three findings that Stage 3 CREATED. Each is pinned here before it is fixed,
+# the way the harness intends, because the review's own conclusion was that a
+# test written after a fix asserts what the fix does rather than what the finding
+# needs — which is how three of the four regressions it found got in.
+
+
+def _rid_values(raw: bytes) -> list[str]:
+    """Every RECURRENCE-ID value in the resource, in file order."""
+    return [ln.split(":", 1)[1] for ln in raw.decode().splitlines()
+            if ln.startswith("RECURRENCE-ID")]
+
+
+def test_detaching_a_range_override_does_not_land_on_a_slot_already_claimed():
+    """`_detach_thisandfuture` re-homes the `RANGE=THISANDFUTURE` override onto
+    "the next occurrence", and `_next_generated` computes that from the RRULE
+    alone — it never asks whether some other component already addresses that
+    slot.
+
+    A range override anchored Jan 7 with a plain single-slot override on Jan 8 is
+    the ordinary Apple Calendar / Thunderbird shape: "change this and everything
+    after", then "…except that one Thursday". Editing "this event" on Jan 7 moves
+    the range override onto Jan 8, and now TWO components claim
+    `20260108T090000`.
+
+    That is the exact state this fix's own docstring says the FIRST attempt was
+    rejected for — "the reader has no way to rank them" — so the fix reproduced
+    the failure it was written to avoid, one slot over. The user's explicit Jan-8
+    edit is the one that loses, and it goes to Radicale, so the loss is permanent
+    and visible to every other client on the account.
+
+    Asserted as the two things that must both hold: no duplicate RECURRENCE-ID,
+    and the Jan-8 edit still on the calendar. Skipping to the next FREE slot,
+    refusing the edit, or any other repair satisfies it.
+    
+    **Fixed** by `_claimed_anchors` plus a bounded skip: `_next_generated` now
+    walks with `rr.xafter(count=len(blocked) + len(exdates) + 1)` and returns the
+    first slot that neither another override nor an EXDATE has spoken for. The
+    count is what makes it terminate — at most that many slots can be
+    unavailable, so a free one appears within them if it exists at all, where a
+    loop of `.after()` calls has no such bound.
+    """
+    raw = foreign_event_raw(
+        "claim@x", "standup", dtstart="20260106T090000Z", dtend="20260106T093000Z",
+        rrule="FREQ=DAILY;COUNT=6",
+        overrides=(
+            ("RECURRENCE-ID;RANGE=THISANDFUTURE:20260107T090000Z",
+             "DTSTART:20260107T100000Z", "DTEND:20260107T103000Z",
+             "SUMMARY:standup moved to 10"),
+            ("RECURRENCE-ID:20260108T090000Z",
+             "DTSTART:20260108T110000Z", "DTEND:20260108T113000Z",
+             "SUMMARY:jan 8 special"),
+        ),
+    )
+    edited = apply_occurrence_override(
+        raw, "2026-01-07T09:00:00+00:00", EventEdit(summary="renamed just this one"))
+
+    rids = _rid_values(edited)
+    assert len(rids) == len(set(rids)), (
+        f"two components claim one RECURRENCE-ID, which no reader can rank: {rids}")
+
+    summaries = {o.summary for o in expand_occurrences(
+        edited, date(2026, 1, 1), date(2026, 2, 1))}
+    assert "jan 8 special" in summaries, (
+        f"the user's explicit Jan-8 edit was destroyed by re-homing the range "
+        f"override on top of it; the series now reads {sorted(summaries)}")
+
+
+def test_detaching_a_range_override_does_not_land_on_an_excluded_slot():
+    """The other half of "the next occurrence", and the half a fix that only
+    checks other OVERRIDES sails past — verified: deleting the EXDATE check while
+    keeping the claimed-anchor one passes every other test in this file.
+
+    An EXDATE'd slot is not an occurrence. Re-homing a `RANGE=THISANDFUTURE`
+    override onto one hands every other CalDAV client a RECURRENCE-ID that
+    addresses a deleted instance: nothing renders it, so nothing can act on it,
+    and the values it carries for the occurrences after it are attached to a slot
+    the series does not generate.
+
+    Jan 8 is excluded here, so detaching Jan 7 has to skip it and land on Jan 9 —
+    carrying the +1h shift with it, which is what keeps the later occurrences at
+    the time the user actually sees.
+    """
+    raw = foreign_event_raw(
+        "exdate@x", "standup", dtstart="20260106T090000Z", dtend="20260106T093000Z",
+        rrule="FREQ=DAILY;COUNT=6", exdate="20260108T090000Z",
+        overrides=(
+            ("RECURRENCE-ID;RANGE=THISANDFUTURE:20260107T090000Z",
+             "DTSTART:20260107T100000Z", "DTEND:20260107T103000Z",
+             "SUMMARY:standup moved to 10"),
+        ),
+    )
+    edited = apply_occurrence_override(
+        raw, "2026-01-07T09:00:00+00:00", EventEdit(summary="renamed just this one"))
+
+    rids = _rid_values(edited)
+    assert "20260108T090000Z" not in rids, (
+        f"the range override was re-homed onto an EXDATE'd slot, so it now "
+        f"addresses an occurrence that does not exist: {rids}")
+
+    by_start = {o.start: o.summary for o in expand_occurrences(
+        edited, date(2026, 1, 1), date(2026, 2, 1))}
+    assert "2026-01-08T09:00:00+00:00" not in by_start, (
+        f"the excluded occurrence came back: {sorted(by_start)}")
+    assert by_start.get("2026-01-07T10:00:00+00:00") == "renamed just this one"
+    # …and the range override still governs what follows, at the hour it moved
+    # them to rather than back at the master's.
+    assert by_start.get("2026-01-09T10:00:00+00:00") == "standup moved to 10", (
+        f"the occurrences the range override governs lost its values or its "
+        f"time: {by_start}")
+
+
+def test_a_range_override_survives_an_edit_it_cannot_be_re_homed_around():
+    """`_next_generated` returns None for a FREQ outside the `_FREQ` whitelist,
+    for a probe over `_MAX_PROBE_INSTANCES`, and for a search budget that fires —
+    and `_detach_thisandfuture` treats that identically to "the range override
+    anchored the last occurrence", which is the one case where deleting it is
+    right.
+
+    So on a foreign rule this app cannot probe — `FREQ=HOURLY;INTERVAL=24` is a
+    perfectly ordinary way to write "daily", and the whitelist exists because
+    probing a foreign rule is unbounded, not because the rule is invalid — one
+    "this event" click silently deletes the summary, the moved time and the
+    LOCATION a foreign client authored for every later occurrence. The docstring
+    calls that "the safe direction". It is permanent data loss on the next PUT,
+    where the code it replaced preserved those values.
+
+    Either outcome is correct: keep the range override (and put the edit
+    somewhere that does not collide), or refuse the edit with a ValueError, which
+    both call paths already map — `patch_event` to 422, `update_event` to a
+    ToolError. What is not correct is answering success and deleting the values.
+    
+    **Fixed** with a `_UNKNOWN` sentinel separating "the rule was evaluated and
+    there is nothing later" — where dropping the override is right, and
+    `test_detaching_the_last_occurrence_of_a_range_override_does_not_strand_it`
+    covers it — from "the rule could not be evaluated", which now raises.
+    """
+    raw = foreign_event_raw(
+        "unprobe@x", "standup", dtstart="20260106T090000Z", dtend="20260106T093000Z",
+        rrule="FREQ=HOURLY;INTERVAL=24;COUNT=6",
+        overrides=(
+            ("RECURRENCE-ID;RANGE=THISANDFUTURE:20260107T090000Z",
+             "DTSTART:20260107T100000Z", "DTEND:20260107T103000Z",
+             "SUMMARY:standup moved to 10", "LOCATION:Room B"),
+        ),
+    )
+    try:
+        edited = apply_occurrence_override(
+            raw, "2026-01-07T09:00:00+00:00", EventEdit(summary="just this one"))
+    except ValueError:
+        return                                  # a clean refusal is a fix
+
+    body = edited.decode()
+    assert "SUMMARY:standup moved to 10" in body and "LOCATION:Room B" in body, (
+        "the range override was deleted, so the summary, the moved time and the "
+        "location a foreign client authored for every later occurrence are gone "
+        "from the bytes about to be PUT:\n" + body)
+
+
+def test_a_duration_authored_instance_holds_its_exact_length_across_the_fall_back():
+    """The half of finding 26 that the narrowed `_repair_span` does not reach.
+
+    A DURATION is EXACT when its parts are hours/minutes/seconds (RFC 5545
+    §3.3.6 — "the duration of a week or a day depends on its position in the
+    calendar" while an hour does not), so every instance of a `DURATION:PT30M`
+    series occupies thirty minutes of real time. On the fall-back day the library
+    emits `01:30-05:00 -> 02:00-06:00`, which is ninety.
+
+    `_repair_span` currently repairs only a non-positive span, deliberately: the
+    version that repaired every span whose exact duration disagreed with its
+    wall-clock duration also rewrote AUTHORED DTEND spans, turning an overnight
+    22:00->06:00 shift across that night from the 9 real hours it occupies into 8
+    and releasing the last hour to the public booking page.
+
+    The distinction the repair needs is how the governing component authored its
+    LENGTH — DURATION is exact, DTEND is a wall-clock end. This drives the
+    DURATION spelling only; the DTEND control next door must keep passing, and so
+    must `test_an_authored_overnight_span_across_the_fall_back_is_left_alone`.
+    
+    **Fixed** by `_exact_durations`, which reads the authored length off the
+    ORIGINAL calendar (the library pops DURATION before this app sees a
+    component) and keys it by the GOVERNING component — a RANGE=THISANDFUTURE
+    override supplies the length for every slot it covers, so an instance it
+    governs must not read the master's.
+
+    One thing the pin caught that reading would not have:
+    `recurring_ical_events` stamps a RECURRENCE-ID on EVERY instance it emits,
+    including the ones a plain series generates, so keying the lookup on the
+    emitted value matched nothing. `override_anchors` — the rids an AUTHORED
+    override carries — is what distinguishes them, and it was already in scope.
+    """
+    raw = foreign_event_raw(
+        "exact@x", "Nightly", dtstart="TZID=America/Chicago:20261025T013000",
+        dtend=None, rrule="FREQ=DAILY;COUNT=10",
+        vtimezone=CHICAGO_VTIMEZONE, extra=("DURATION:PT30M",),
+    )
+    spans = {
+        f"{o.start} -> {o.end}": (
+            datetime.fromisoformat(o.end).astimezone(UTC)
+            - datetime.fromisoformat(o.start).astimezone(UTC)
+        )
+        for o in expand_occurrences(raw, date(2026, 10, 25), date(2026, 11, 10))
+    }
+    wrong = {k: str(v) for k, v in spans.items() if v != timedelta(minutes=30)}
+    assert not wrong, (
+        f"a PT30M instance does not occupy thirty minutes of real time, so it "
+        f"withholds availability the owner actually has: {wrong}")
+
+
+# ── the design review of these three fixes found four more, all pinned here ──
+#
+# Written after the fixes rather than before, and said so plainly: they came out
+# of a design review of the fixes themselves, so there was never a moment when
+# the finding existed and the fix did not. Each was reproduced before it was
+# fixed.
+
+def test_an_rdate_period_keeps_its_own_length_not_the_masters():
+    """The blocker the design review found in the exact-duration repair.
+
+    `RDATE;VALUE=PERIOD` states its own length, and `recurring_ical_events` takes
+    it from the period rather than from the master. The first version of the
+    repair read the master's DURATION for any instance no AUTHORED override
+    claimed — and a period slot is not an override — so a four-hour block came
+    back as thirty minutes, on an ordinary January day with no transition
+    anywhere near it. Three and a half hours of a real commitment released to the
+    public booking page: the same failure `_repair_span` was narrowed to prevent,
+    through a different door.
+
+    The repair now fires only on the DST artifact's own signature — the emitted
+    pair states the authored length in WALL CLOCK and delivers something else in
+    real time. Anything whose wall-clock span is a different length came from
+    somewhere else and is left alone, which fails closed for every family nobody
+    thought to enumerate.
+    """
+    raw = foreign_event_raw(
+        "period@x", "Block", dtstart="20260106T090000Z", dtend=None,
+        rrule="FREQ=WEEKLY;COUNT=2",
+        extra=("DURATION:PT30M", "RDATE;VALUE=PERIOD:20260120T090000Z/PT4H"),
+    )
+    spans = {
+        o.start: (datetime.fromisoformat(o.end).astimezone(UTC)
+                  - datetime.fromisoformat(o.start).astimezone(UTC))
+        for o in expand_occurrences(raw, date(2026, 1, 1), date(2026, 2, 1))
+    }
+    assert spans.get("2026-01-20T09:00:00+00:00") == timedelta(hours=4), (
+        f"the RDATE period's own four-hour length was overwritten with the "
+        f"master's PT30M: { {k: str(v) for k, v in spans.items()} }")
+    assert spans.get("2026-01-06T09:00:00+00:00") == timedelta(minutes=30)
+
+
+def test_a_date_valued_exdate_still_blocks_a_re_homed_override():
+    """A DATE-valued EXDATE on a TIMED series removes the whole day — that is
+    what `recurring_ical_events` does, keeping a separate date-keyed exclusion
+    set. `_same_instant` answers False outright for a date/datetime pair, so
+    comparing instants alone let the re-homed override land on the excluded slot
+    and the deleted occurrence came back.
+
+    The `VALUE=DATE` spelling is what a client writes when the user deletes a
+    whole day, so this is not an exotic input.
+    """
+    raw = foreign_event_raw(
+        "exdate2@x", "standup", dtstart="20260105T090000Z", dtend="20260105T093000Z",
+        rrule="FREQ=DAILY;COUNT=6",
+        # Through `extra`, not the `exdate=` kwarg: the helper renders that one
+        # as `EXDATE:<value>` and only special-cases a TZID parameter, so a
+        # VALUE=DATE would come out as `EXDATE:VALUE=DATE:...` — malformed.
+        extra=("EXDATE;VALUE=DATE:20260107",),
+        overrides=(
+            ("RECURRENCE-ID;RANGE=THISANDFUTURE:20260106T090000Z",
+             "DTSTART:20260106T100000Z", "DTEND:20260106T103000Z",
+             "SUMMARY:moved to 10"),
+        ),
+    )
+    edited = apply_occurrence_override(
+        raw, "2026-01-06T09:00:00+00:00", EventEdit(summary="just this one"))
+
+    rids = _rid_values(edited)
+    assert not any(r.startswith("20260107") for r in rids), (
+        f"the override was re-homed onto a day the series excludes: {rids}")
+    starts = {o.start for o in expand_occurrences(
+        edited, date(2026, 1, 1), date(2026, 2, 1))}
+    assert not any(s.startswith("2026-01-07") for s in starts), (
+        f"the excluded day came back: {sorted(starts)}")
+
+
+def test_an_rdate_only_series_can_still_have_one_occurrence_edited():
+    """An RDATE-only resource is a real series — the library puts RDATEs into the
+    same rruleset and a range override governs them — and the first version of
+    the `_UNKNOWN` sentinel answered `_UNKNOWN` for any resource with no RRULE.
+    That turned "delete the override" into "refuse forever": no occurrence of
+    such a series could be edited at all.
+
+    A fix for a data-loss bug must not close a door the loss did not.
+    """
+    raw = foreign_event_raw(
+        "rdonly@x", "standup", dtstart="20260106T090000Z", dtend="20260106T093000Z",
+        rdate="20260113T090000Z,20260120T090000Z",
+        overrides=(
+            ("RECURRENCE-ID;RANGE=THISANDFUTURE:20260113T090000Z",
+             "DTSTART:20260113T100000Z", "DTEND:20260113T103000Z",
+             "SUMMARY:moved to 10", "LOCATION:Room B"),
+        ),
+    )
+    edited = apply_occurrence_override(
+        raw, "2026-01-13T09:00:00+00:00", EventEdit(summary="just this one"))
+
+    body = edited.decode()
+    assert "SUMMARY:moved to 10" in body and "LOCATION:Room B" in body, (
+        "the range override was deleted, so what it authored for the later RDATE "
+        "occurrences is gone:\n" + body)
+    by_start = {o.start: o.summary for o in expand_occurrences(
+        edited, date(2026, 1, 1), date(2026, 2, 1))}
+    assert by_start.get("2026-01-13T10:00:00+00:00") == "just this one"
+    assert by_start.get("2026-01-20T10:00:00+00:00") == "moved to 10", (
+        f"the later RDATE occurrence lost the range override's values: {by_start}")

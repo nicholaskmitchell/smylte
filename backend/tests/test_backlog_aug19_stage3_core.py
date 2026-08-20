@@ -757,10 +757,14 @@ def test_a_reorder_naming_an_unknown_uid_writes_no_sidecar_row(client):
             f"task in this list: a row for a uid that is not in this collection, "
             f"with orphaned_at IS NULL, which gc_orphans can never reclaim."
         )
-        # …and the one legitimate row is the one that was asked for.
+        # …and the one legitimate row is the one that was asked for. Scoped to
+        # THIS list: the service is session-scoped, so an unscoped query picks up
+        # every other test's sidecar rows and fails only in a full-suite run.
         with svc._lock:
             placed = svc._conn.execute(
-                "SELECT collection_href, uid FROM sidecar WHERE sort_order IS NOT NULL"
+                "SELECT uid FROM sidecar WHERE collection_href=? "
+                "AND sort_order IS NOT NULL",
+                (svc.resolve_list(lst["id"], component="VTODO"),)
             ).fetchall()
         assert [r["uid"] for r in placed] == [real["uid"]], (
             f"the wrong task was given a position: {[dict(r) for r in placed]}")
