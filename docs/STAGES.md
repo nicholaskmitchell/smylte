@@ -3,9 +3,183 @@
 `docs/AUDIT.md` is the evidence. This file is the plan for closing those
 findings, and the map from a finding to the test that pins it.
 
-**0 open, 40 closed.** Every stage is done. The backlog from the 2026-08-16
-sweep is closed; the 41 findings still open in `docs/AUDIT.md` are from the
-2026-08-07 sweep and are untouched by this work.
+Two sweeps have been staged this way. The **2026-08-19** backlog is open and is
+the live plan; the **2026-08-16** one below it is closed and kept as the record
+of how the harness behaved in practice — its "Two strengths of pin" and
+"Ordering" notes are the reason the new pins are shaped the way they are.
+
+# Sweep — 2026-08-19 · the open backlog
+
+`docs/AUDIT.md` is the evidence. This is the plan for closing it.
+
+**66 open, 0 closed.** 65 of the 66 are pinned by a test that asserts the corrected
+behaviour and fails today — 61 as `xfail(strict=True)` / `it.fails`, and 4 as
+ordinary passing tests (see "Test gaps that were only gaps" below). One is
+deliberately **not** pinned; see "The one that is not pinned" below. The harness
+described under *Stage 0* further down still applies unchanged; these pins live in
+their own files so the closed 2026-08-16 stages stay closed:
+
+| stage | pins |
+|---|---|
+| 1 | `backend/tests/test_backlog_aug19_stage1.py` |
+| 2 | `backend/tests/test_backlog_aug19_stage2.py` |
+| 3 | `backend/tests/test_backlog_aug19_stage3_ical.py`, `..._stage3_core.py`, `frontend/src/backlog.aug19.stage3.test.tsx` |
+| 4 | `backend/tests/test_backlog_aug19_stage45.py`, `frontend/src/backlog.aug19.stage4a.test.tsx`, `...stage4b.test.tsx` |
+| 5 | `backend/tests/test_backlog_aug19_stage45.py`, `frontend/src/backlog.aug19.stage4b.test.tsx` |
+
+### The sorting criteria
+
+Same five buckets as the 2026-08-16 plan, and the same ordering rule —
+**cheapest-and-nastiest first**. A finding lands in a stage by what its failure
+*does*, not by which file it is in:
+
+1. does untrusted input reach an unhandled exception? → **Stage 1**
+2. can an adversary make the work or the storage unbounded, or bypass a control? → **Stage 2**
+3. does it return a wrong answer without raising? → **Stage 3**
+4. can the user see it is wrong? → **Stage 4**
+5. is it in the pipeline, or in the tests themselves? → **Stage 5**
+
+Where a finding qualifies for two, the lower stage wins: a crash that also
+corrupts is a crash first. Within a stage, rows are ordered by severity.
+
+### Test gaps that were only gaps
+
+Four findings were `test-gap`s whose subject turned out to be *correct* — the
+coverage was missing, the behaviour was not broken. Those are committed as
+ORDINARY PASSING TESTS, not pins. Marking a passing test `xfail(strict=True)`
+would XPASS and break the build, which is the opposite of what the harness is for.
+This mirrors `test_backlog_stage5.py`, which already handles the same case.
+
+### The one that is not pinned
+
+Finding 62 (shutdown tearing the service down under a running sweep) has **no
+pin**. It reproduces on demand in isolation — swap the service's `RLock` for one
+that yields on release and `close()` reliably wins the gap between two slices —
+but not once the rest of its file has run: three consecutive whole-file runs gave
+xfail / XPASS / xfail. Under `strict=True` an XPASS is a red build, so pinning it
+would hand CI a coin flip, which is worse than leaving it open and visible.
+
+What a real pin needs is a seam this code does not have: a hook between two
+slices of `sync_all`, so teardown can be *ordered* against the sweep rather than
+raced with it. Whoever fixes the finding should add that seam and pin it then.
+The reasoning is repeated in full at the finding's place in
+`backend/tests/test_backlog_aug19_stage45.py`.
+
+## Stage 1 — Crash paths ⬜ OPEN
+
+7 findings · 2 high, 4 medium, 1 low · open
+
+Untrusted input reaching an unhandled exception — a 500 where a 4xx was owed. Cheapest to fix, nastiest to leave: each one is an adversary turning odd input into a stack trace, and two of them commit a write before they crash.
+
+| # | Finding | Where | Sev | Pin |
+|---|---|---|---|---|
+| 1 | One U+FFFE/U+FFFF anywhere in a calendar item permanently and silently kills that collection's sync (XMLSynt… | `backend/tasksd/dav/xml.py:264` | high | `test_a_body_xml_cannot_carry_stays_inside_the_dav_taxonomy` |
+| 2 | A JSON-RPC `id` of NaN/Infinity is echoed straight into JSONResponse, which refuses to serialize it — unhand… | `backend/tasksd/mcp/routes.py:489` | high | `test_a_non_finite_jsonrpc_id_gets_an_answer_not_a_500` |
+| 3 | summary/notes/location/description reach Radicale with no character guard, so the app can write a value its … | `backend/tasksd/app.py:145` | medium | `test_a_task_summary_cannot_carry_what_the_read_path_cannot_parse` |
+| 4 | PATCH /api/scheduling/links/{token} with an explicit null 500s and leaves a half-applied update behind | `backend/tasksd/app.py:1161` | medium | `test_a_null_booking_link_field_is_refused_not_a_half_applied_500` |
+| 5 | A far-future UNTIL (repeat-until 9999-12-31, or a foreign UNTIL=99991231T235959Z) raises OverflowError — an … | `backend/tasksd/ical/edit.py:813` | medium | `test_a_boundary_until_answers_the_client_instead_of_overflowing` |
+| 6 | smylte_delete_event skips the recurrence_id ISO check the HTTP DELETE route performs, so a space instead of … | `backend/tasksd/mcp/api.py:492` | medium | `test_a_malformed_recurrence_id_names_the_argument_not_the_server` |
+| 7 | The body-limit middleware's 413 is dead code on every FastAPI route — FastAPI swallows _BodyTooLarge and ans… | `backend/tasksd/limits.py:73` | low | `test_a_chunked_oversized_body_is_a_413_through_the_real_app` |
+
+## Stage 2 — Abuse & resource exhaustion ⬜ OPEN
+
+6 findings · 2 high, 3 medium, 1 low · open
+
+Work an adversary can make unbounded, plus the one missing security control. Everything here is reachable without credentials or survives the credential change that was supposed to stop it.
+
+| # | Finding | Where | Sev | Pin |
+|---|---|---|---|---|
+| 8 | A never-matching RRULE makes expansion iterate to year 9999 — both pathology guards score it "safe" because … | `backend/tasksd/ical/recur.py:178` | high | `test_a_rule_that_can_never_match_is_expanded_promptly` |
+| 9 | Rotating the app password (and even TASKS_SESSION_SECRET) does not revoke any MCP OAuth grant — the document… | `backend/tasksd/mcp/oauth.py:551` | high | `test_rotating_the_credentials_ends_an_mcp_grant_too` |
+| 10 | service.search rebuilds the whole collection's children map once per result row, so one uncapped FTS query b… | `backend/tasksd/service.py:331` | medium | `test_searching_a_large_list_is_not_quadratic_in_the_lists_size` |
+| 11 | _reconcile_overrides probes each override with an unbounded dateutil walk — one repeat change burns minutes … | `backend/tasksd/ical/edit.py:427` | medium | `test_changing_the_repeat_is_prompt_with_a_far_future_override` |
+| 12 | _check_client_id's regex accepts a trailing newline, so an anonymous booking POST answers 409 with the owner… | `backend/tasksd/app.py:157` | medium | `test_a_client_id_with_a_trailing_newline_is_refused` |
+| 13 | MAX_CLIENTS refuses new registrations instead of evicting stale ones, so anonymous registrants can lock the … | `backend/tasksd/mcp/oauth.py:208` | low | `test_a_table_full_of_junk_clients_does_not_lock_the_owner_out` |
+
+## Stage 3 — Silent data corruption ⬜ OPEN
+
+24 findings · 6 high, 12 medium, 6 low · open
+
+Nothing raises and the answer is silently wrong. The dangerous class, and the largest — it needs the most care per fix because the failure leaves no trace and several of these corrupt data another CalDAV client authored.
+
+| # | Finding | Where | Sev | Pin |
+|---|---|---|---|---|
+| 14 | A failed GET /api/settings is swallowed silently, and the next preference gesture overwrites the account's s… | `frontend/src/App.tsx:203` | high | `does not write a defaults-derived preference back over the account` |
+| 15 | "This event" on the first slot of a RANGE=THISANDFUTURE override rewrites every later occurrence | `backend/tasksd/ical/edit.py:642` | high | `test_editing_the_slot_a_this_and_future_override_anchors_leaves_later_ones_alone` |
+| 16 | Dragging a foreign MONTHLY/YEARLY series deletes the dragged occurrence and moves nothing else | `backend/tasksd/ical/edit.py:829` | high | `test_dragging_a_monthly_series_moves_it_instead_of_desynchronizing_the_rule` |
+| 17 | smylte_list_tasks implements the comparator order.ts documents as wrong, so after one drag every newly-creat… | `backend/tasksd/mcp/api.py:133` | high | `test_a_task_created_after_a_drag_is_not_sunk_below_the_whole_account` |
+| 18 | busy_intervals drops any event crossing the DST fall-back transition, so an anonymous POST double-books the … | `backend/tasksd/scheduling.py:148` | high | `test_a_meeting_across_the_fall_back_transition_still_blocks_its_slot` |
+| 19 | split_event's 412 recovery always fails with a 409 and strands a duplicate recurring series on the server | `backend/tasksd/sync/engine.py:435` | high | `test_a_contended_this_and_following_split_leaves_no_duplicate_series` |
+| 20 | get_events_in_range gates on the master's DTSTART, so a RECURRENCE-ID override moved earlier than the series… | `backend/tasksd/db/store.py:661` | medium | `test_an_occurrence_moved_before_its_series_start_is_still_in_the_window` |
+| 21 | Logout does not clear the in-memory data mirror, so the calendar keeps painting the previous session's event… | `frontend/src/data.tsx:505` | medium | `does not paint the previous session’s events to the next one` |
+| 22 | sortTasks keys its effective-position map by bare uid, so one task copied into a second list silently rewrit… | `frontend/src/order.ts:128` | medium | `keeps a dragged row where it was dropped when a copy shares its uid` |
+| 23 | Folding one subtask tree silently deletes the folded state of every tree that is not currently rendered — an… | `frontend/src/components/TasksView.tsx:297` | medium | `keeps a hidden list’s folded trees when another tree is folded` |
+| 24 | A zone-offset datetime accepted by _parse_datelike is written as TZID="UTC±HH:MM" and read back as floating … | `backend/tasksd/app.py:531` | medium | `test_an_event_created_with_a_zone_offset_keeps_the_instant_it_names` |
+| 25 | split_series never checks that the anchor is an occurrence, so "this and following" duplicates a non-recurri… | `backend/tasksd/ical/edit.py:1084` | medium | `test_this_and_following_on_a_non_repeating_event_does_not_duplicate_it` |
+| 26 | Recurrence expansion emits occurrences whose end precedes their start on the DST spring-forward (and 3x-long… | `backend/tasksd/ical/recur.py:234` | medium | `test_every_expanded_occurrence_across_spring_forward_blocks_real_time` |
+| 27 | Every task tool accepts a calendar id and every calendar tool accepts a task-list id, so smylte_delete_list … | `backend/tasksd/mcp/api.py:176` | medium | `test_a_calendar_id_is_refused_by_the_task_tools` |
+| 28 | A refresh that narrows scope without repeating `offline_access` returns no refresh token, and the client's R… | `backend/tasksd/mcp/oauth.py:516` | medium | `test_narrowing_scope_on_refresh_does_not_end_the_grant` |
+| 29 | busy_intervals derives a DURATION-only event's end by wall-clock addition, so across a DST transition it blo… | `backend/tasksd/scheduling.py:145` | medium | `test_a_duration_only_event_blocks_its_authored_length_across_a_transition` |
+| 30 | The booking ledger row is written after the CalDAV PUT, so a failure in between makes the visitor's own retr… | `backend/tasksd/service.py:919` | medium | `test_a_booking_retried_after_a_failed_write_is_not_a_conflict_with_itself` |
+| 31 | resolve_list ignores the collection's component set, so a task can be written into a VEVENT-only calendar (a… | `backend/tasksd/service.py:210` | medium | `test_a_task_cannot_be_written_into_an_event_only_calendar` |
+| 32 | list_oauth_grants reads `scope` as a bare column in a multi-aggregate GROUP BY, so the connections screen ca… | `backend/tasksd/db/store.py:983` | low | `test_a_grants_scope_does_not_depend_on_row_order` |
+| 33 | A bulk row corrected in any field except its title replays the old client_id, so the correction is silently … | `frontend/src/components/AddMultipleModal.tsx:298` | low | `does not close reporting success on a correction the server drops` |
+| 34 | POST /api/tasks/reorder writes permanent, unreclaimable sidecar rows for uids that do not exist | `backend/tasksd/app.py:1042` | low | `test_a_reorder_naming_an_unknown_uid_writes_no_sidecar_row` |
+| 35 | Disconnecting a connector is not idempotent: a retry after a lost response 404s and the SPA puts the revoked… | `backend/tasksd/mcp/routes.py:410` | low | `test_disconnecting_a_connection_twice_is_not_an_error` |
+| 36 | A JSON-RPC request (with an id) whose method starts with `notifications/` gets no reply at all, so the clien… | `backend/tasksd/mcp/server.py:114` | low | `test_a_notification_method_sent_with_an_id_gets_a_reply` |
+| 37 | move_event maps Radicale's 409 no-uid-conflict to "calendar server unavailable" (502) instead of the conflic… | `backend/tasksd/sync/engine.py:349` | low | `test_a_move_into_a_calendar_holding_that_uid_is_a_conflict_not_an_outage` |
+
+## Stage 4 — User-visible correctness & rendering ⬜ OPEN
+
+21 findings · 8 medium, 13 low · open
+
+The user can see it is wrong. Contained, mostly small, and the stage where a fix is easiest to verify by looking at it.
+
+| # | Finding | Where | Sev | Pin |
+|---|---|---|---|---|
+| 38 | `/book/<token>/` (trailing slash) 404s — the SPA mount swallows it before redirect_slashes can act, though m… | `backend/tasksd/app.py:1489` | medium | `test_a_booking_link_serves_the_spa_with_or_without_a_trailing_slash` |
+| 39 | Shape, density and type tokens are stored per light/dark map, so corner radius, text size, gutter, row heigh… | `frontend/src/components/AppearancePanel.tsx:69` | medium | `keeps a shape token when the theme flips to dark` |
+| 40 | The resize grip on an event that runs past the six-week window truncates the span when released on its own c… | `frontend/src/components/CalendarView.tsx:556` | medium | `does not truncate a window-clipped span dropped where its grip is drawn` |
+| 41 | A failed events fetch permanently records the month as "asked", so the calendar grid stays blank or stale wi… | `frontend/src/data.tsx:576` | medium | `re-requests a month whose first fetch failed` |
+| 42 | The Home mini calendar never refetches on an SSE change, so its dots go stale while every other module on th… | `frontend/src/components/HomeView.tsx:141` | medium | `repaints when the account changes under an open dashboard` |
+| 43 | A rejected booking-link save leaves the editor permanently disabled — the in-flight guard is set but never c… | `frontend/src/components/SchedulingView.tsx:225` | medium | `comes back to life when the save is rejected` |
+| 44 | The availability editor lets the owner build overlapping weekly windows the server rejects with a 422, and s… | `frontend/src/components/SchedulingView.tsx:178` | medium | `never submits a week the server will refuse, and never drops a range` |
+| 45 | On the consent screen "Cancel" is the form's default button, so pressing Enter after typing the password dec… | `backend/tasksd/mcp/routes.py:638` | medium | `test_pressing_enter_on_the_consent_form_connects_rather_than_declining` |
+| 46 | isColor accepts hex literals CSS rejects (5 and 7 digits) and non-color functions like calc(), so a mistyped… | `frontend/src/appearance.ts:324` | low | `refuses hex lengths CSS does not have, and functions that are not colours` |
+| 47 | The archived-calendars settings section renders "Loading…" forever when its fetch fails — the sibling sectio… | `frontend/src/components/ArchivedCalendarsSection.tsx:39` | low | `stops saying "Loading…" once the fetch has failed` |
+| 48 | The theme rename row is never closed when the active theme changes, so switching themes with it open and pre… | `frontend/src/components/AppearancePanel.tsx:45` | low | `never renames the theme the user switched to with the old name` |
+| 49 | endFromDuration returns the string "NaN-NaN-NaNTNaN:NaN" instead of null when the duration overflows Date, s… | `frontend/src/calendar.ts:70` | low | `sends no fabricated end for a DURATION that overflows the calendar` |
+| 50 | Ticking "all day" on a timed event that ends at midnight adds a day the grid never showed | `frontend/src/components/CalendarView.tsx:777` | low | `keeps a midnight-ending event on its one day when it is made all-day` |
+| 51 | The duplicate-React-key fix landed on one of the five sites named; task chips, mobile dots, the mobile agend… | `frontend/src/components/CalendarView.tsx:614` | low | `gives every task chip and every popover row a key unique per collection` |
+| 52 | An SSE reconnect that 401s retries forever, so a session that lapses while the tab is idle is never detected | `frontend/src/api.ts:475` | low | `discovers a session that lapsed while the tab was idle` |
+| 53 | The login form's two labels are not associated with their inputs, so both fields are unlabelled — the one fo… | `frontend/src/components/Login.tsx:34` | low | `gives both fields an accessible name` |
+| 54 | loadKey encodes list ORDER, so a sidebar drag-reorder refetches every task in the account and discards the f… | `frontend/src/data.tsx:180` | low | `does not refetch every task in the account when only the order changed` |
+| 55 | packDown can stack modules past MAX_ROWS, producing a y the server's `le=200` rejects — the whole settings P… | `frontend/src/dashboard.ts:93` | low | `never emits a module below the row the server accepts` |
+| 56 | Tasks pane rows key on the bare UID, so a task copied into a second list produces duplicate React keys and d… | `frontend/src/components/TasksView.tsx:442` | low | `deletes only the copy whose row was clicked` |
+| 57 | The Completed pane hides a completed RELATED-TO ring entirely, though the list view has explicit code to ren… | `frontend/src/components/TasksView.tsx:334` | low | `shows a completed ring another client authored` |
+| 58 | TaskModal — the app's most-used dialog — has no Escape handler, breaking the modal contract every other dial… | `frontend/src/components/TaskModal.tsx:121` | low | `closes on Escape, like every other dialog in the app` |
+
+## Stage 5 — Delivery infrastructure & test gaps ⬜ OPEN
+
+8 findings · 3 medium, 5 low · open
+
+The pipeline that ships the code and the tests that watch it. Closing these is what stops the next sweep finding the same class again.
+
+| # | Finding | Where | Sev | Pin |
+|---|---|---|---|---|
+| 59 | desktop-release.yml grants `contents: write` at workflow scope, so `npm ci` and NuGet restore in the build j… | `.github/workflows/desktop-release.yml:22` | medium | `test_the_desktop_release_build_jobs_hold_no_write_token` |
+| 60 | setup.sh writes the typed Radicale password into a systemd EnvironmentFile without escaping, and systemd's p… | `deploy/setup.sh:44` | medium | `test_setup_sh_writes_a_password_systemd_reads_back_unchanged` |
+| 61 | setup.ts's matchMedia stub hardcodes the desktop breakpoint, so CalendarView's and HomeView's entire mobile … | `frontend/src/test/setup.ts:5` | medium | `renders the mobile calendar and the mobile dashboard` |
+| 62 | Shutdown tears down the SQLite connection and DAV client under a still-running sync sweep | `backend/tasksd/app.py:774` | low | _not pinned — see below_ |
+| 63 | Test gap: the confidential-client path — client_secret_basic/post, the Basic header parser and the secret co… | `backend/tasksd/mcp/oauth.py:417` | low | `test_a_confidential_client_authenticates_with_its_secret_and_only_that` |
+| 64 | Test gap: no test drives busy_intervals across a DST transition at all, which is why two real slot-math defe… | `backend/tests/test_scheduling.py:77` | low | `test_busy_intervals_hold_their_absolute_length_across_a_dst_change` |
+| 65 | No test observes anything about a 204 beyond its status code, and the source comment states the suite is gre… | `backend/tests/test_api.py:76` | low | `test_a_204_delete_carries_no_body_and_no_content_type` |
+| 66 | The won't-do write route and its MCP twin have no behavioural test at all — only a comment in test_api.py cl… | `backend/tests/test_api.py:69` | low | `test_cancelling_a_task_is_wont_do_and_not_done + test_the_cancel_tool_needs_write_access_and_marks_the_task_wont_do` |
+
+# Sweep — 2026-08-16 · closed
+
+**0 open, 40 closed.** Every stage below is done; these are ordinary
+regression tests now and must stay green.
 
 ## Stage 0 — the harness (done)
 
