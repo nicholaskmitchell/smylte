@@ -2183,7 +2183,7 @@ surface, being where a user watches for what their other clients wrote.
 
 **Pinned by** `2026-08-19 — the Home mini calendar > repaints when the account changes under an open dashboard` and `… > the calendar tab repaints when the account changes under it` in `frontend/src/backlog.aug19.stage4a.test.tsx`.
 
-#### [ ] A rejected booking-link save leaves the editor permanently disabled — the in-flight guard is set but never cleared, and the whole form is unrecoverable
+#### [x] A rejected booking-link save leaves the editor permanently disabled — the in-flight guard is set but never cleared, and the whole form is unrecoverable
 
 `frontend/src/components/SchedulingView.tsx:225` · **medium** · bug · stage 4
 
@@ -2217,9 +2217,23 @@ Realistic triggers, all common: (a) a typo in the free-text Timezone field — `
 
 **Suggested fix.** Make the contract observable: type `onSave` as `(body, token?) => Promise<boolean>` (or `Promise<void>` that rejects), have `SchedulingView.save` return whether it succeeded, and in `LinkModal.save` do `setSaving(true); try { const ok = await onSave(...) } finally { if (!ok) setSaving(false) }`. Add a test that rejects the create and asserts the button is re-enabled and a retry reaches the API.
 
-**Pinned by** `2026-08-19 — the booking-link editor > comes back to life when the save is rejected` in `frontend/src/backlog.aug19.stage4a.test.tsx`.
+**Fixed** as suggested — `onSave` is now `(body, token?) => Promise<boolean>`
+and `SchedulingView.save` returns whether the write landed — with one deliberate
+departure from the suggested shape: `saving` is cleared on FAILURE only, not in a
+`finally`. A `finally` sets state on a modal the success path has already
+unmounted, and, worse, it invites `save` to return `true` unconditionally, which
+puts the button back while leaving the editor exactly as broken. That is the
+half-fix that was run, and both pins catch it.
 
-#### [ ] The availability editor lets the owner build overlapping weekly windows the server rejects with a 422, and silently deletes any window whose end precedes its start
+Widened with the EDIT path (`patchSchedulingLink`, which the finding names and
+the original pin never reached) and a control asserting the form survives the
+rejection — the modal is deliberately left open to retry, so a repair that
+re-enables the button by remounting it would satisfy both pins and throw the
+form away, the same loss one step later.
+
+**Pinned by** `2026-08-19 — the booking-link editor > comes back to life when the save is rejected` and `… > comes back to life when an edit is rejected` in `frontend/src/backlog.aug19.stage4a.test.tsx`.
+
+#### [x] The availability editor lets the owner build overlapping weekly windows the server rejects with a 422, and silently deletes any window whose end precedes its start
 
 `frontend/src/components/SchedulingView.tsx:178` · **medium** · bug · stage 4
 
@@ -2258,7 +2272,29 @@ Inverted scenario: set Friday to 17:00–09:00 and save. 201 Created, `availabil
 
 **Suggested fix.** Move the overlap check client-side next to the `s < e` filter (sort each day's ranges and reject `next.start < prev.end`), and surface both failures inline on the offending day rather than dropping them: mark the range invalid, fold it into `valid`, and say why. The two rules belong in one place — they are already one function on the server.
 
-**Pinned by** `2026-08-19 — the booking-link editor > never submits a week the server will refuse, and never drops a range` in `frontend/src/backlog.aug19.stage4a.test.tsx`.
+**Fixed** with a new exported `availErrors(days)` mirroring `parse_availability`
+exactly — both fields filled, `s < e` STRICTLY (equal endpoints are illegal there
+too), and no overlap once the day's ranges are SORTED, so submission order does
+not matter and exactly adjacent ranges are LEGAL. That last rule has a control:
+a `<=` on the client would refuse a lunch break the server accepts, which is this
+same defect pointing the other way.
+
+`daysToAvail` now drops only the wholly-untouched "+ range" placeholder. The
+`s < e` filter that lived there was the silent discard, and moving the rule into
+`availErrors` is what makes the difference between refusing an inverted range and
+deleting it.
+
+**The pin had an escape hatch, and removing it is most of the value here.** Its
+assertions were wrapped in `if (sent) { … }`, so a fix that merely refuses to
+submit executed ZERO assertions and passed — it could not tell "refused and
+explained" from "refused silently and threw the range away". Split into three
+tests whose assertions run in BOTH branches: if nothing was submitted, the values
+the user typed must still be on screen and the day must say why. Run against a
+half-fix that validates the overlap but keeps `daysToAvail`'s filter, the overlap
+pin still passes and `never drops a range the user typed backwards` is what
+fails — the exact assertion the hatch used to hide.
+
+**Pinned by** `2026-08-19 — the booking-link editor > never submits a week the server will refuse` and `… > never drops a range the user typed backwards` in `frontend/src/backlog.aug19.stage4a.test.tsx`.
 
 #### [ ] packDown can stack modules past MAX_ROWS, producing a y the server's `le=200` rejects — the whole settings PUT 422s and the arrangement is never saved
 
