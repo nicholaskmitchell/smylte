@@ -1,12 +1,12 @@
 """Audit backlog, 2026-08-19 sweep — stage 2: abuse and resource exhaustion.
 
-Six findings from the sweep of 2026-08-19, all of them **OPEN**. Unlike the
-stage1–5 files beside this one — whose findings are closed and whose tests are
-now ordinary regression tests — every test here is an `xfail(strict=True)` pin:
-it asserts the behaviour the code SHOULD have and fails against the code as it
-stands. CI stays green while the finding is open and goes red the moment it is
-fixed, which is the signal to drop the marker and tick the finding off. The
-harness is described in docs/STAGES.md.
+Six findings from the sweep of 2026-08-19, plus a seventh found while fixing
+them. **Three are closed** (8, 11, and the seventh) and their tests are ordinary
+regression tests that must stay green; the other four are still
+`xfail(strict=True)` pins, each asserting the behaviour the code SHOULD have and
+failing against the code as it stands. CI stays green while a finding is open and
+goes red the moment it is fixed, which is the signal to drop the marker and tick
+the finding off. The harness is described in docs/STAGES.md.
 
 Four of the six share one shape — work whose *cost* is chosen by whoever writes
 the input, on a path that holds the service lock or that an anonymous caller can
@@ -22,17 +22,23 @@ reach the OAuth grants at all, so the documented incident response leaves a
 own message says it refuses, which turns the single unauthenticated write path
 into an href disclosure.
 
-Three of these are pinned by a wall-clock budget, which deserves a word. Timing
+Four of these are pinned by a wall-clock budget, which deserves a word. Timing
 is the user-visible symptom — the whole finding is "this takes seconds" — and
 the alternative, counting iterations or asserting that a particular guard was
 called, is exactly the over-specific structural pin docs/STAGES.md records as
-having failed to recognise its own fix. One budget (1 s) serves all three. It
+having failed to recognise its own fix. One budget (1 s) serves all four. It
 sits several times below what today's code costs — measured on this machine:
-4.2 s, 12.8 s, 2.9 s — and one to three orders of magnitude above what the same
-work costs once it is bounded: 2 ms for the override probe when the anchor is
-near DTSTART, 0.09 s for the same search with the children map built once per
+4.2 s, 12.8 s, 3.6 s, 2.9 s — and one to three orders of magnitude above what the
+same work costs once it is bounded: 2 ms for the override probe when the anchor
+is near DTSTART, 0.09 s for the same search with the children map built once per
 collection. Nothing a slow runner or a fast one does moves an answer across
 that gap.
+
+Each of the three closed tests keeps a **control** beside it that must still
+produce the right answer, because a pin that only forbids slowness is satisfied
+by a version that refuses everything. For finding 8 those controls live in
+`test_recur.py` (a satisfiable-rule sweep, and a test that the guard still bites
+at all); for the other two they are in this file.
 """
 from __future__ import annotations
 
@@ -47,7 +53,7 @@ import pytest
 from tasksd.dav.client import CollectionInfo, Item
 from tasksd.db import store
 from tasksd.ical import EventEdit, extract_from_raw, rrule_from_spec
-from tasksd.ical.edit import apply_event_changes
+from tasksd.ical.edit import apply_event_changes, split_series
 from tasksd.ical.recur import expand_occurrences
 from tasksd.mcp import oauth as O
 from tests.helpers import foreign_event_raw, foreign_raw
@@ -72,9 +78,22 @@ def _elapsed(fn, *a, **kw):
 
 # ── AUDIT: a never-matching RRULE iterates to year 9999 ────────────────────
 
-@pytest.mark.xfail(strict=True, reason="both pathology guards measure yield, not "
-                                       "search: a zero-yield RRULE walks to MAXYEAR")
-def test_a_rule_that_can_never_match_is_expanded_promptly():
+@pytest.mark.parametrize("rrule", [
+    # The originally-filed shape: February has no 30th.
+    "FREQ=DAILY;BYMONTH=2;BYMONTHDAY=30",
+    # The density guard's exact boundary: _per_day returns 24 and the test is
+    # `> _MAX_PER_DAY` (24), so this is the densest rule the guard permits AND
+    # it never matches. A fix that leans on density cannot catch it — and
+    # closing the boundary instead would break plain FREQ=HOURLY, which
+    # test_recur.py::test_ordinary_density_still_expands requires to expand.
+    "FREQ=HOURLY;BYMONTH=2;BYMONTHDAY=30",
+    # Three shapes that defeat a BYMONTH x BYMONTHDAY satisfiability table, so
+    # the pin cannot be satisfied by enumerating month/day pairs:
+    "FREQ=DAILY;BYSETPOS=5;BYDAY=MO",              # 2nd of a 1-element set
+    "FREQ=DAILY;BYWEEKNO=54",                      # no ISO year has week 54
+    "FREQ=DAILY;BYWEEKNO=53;BYMONTH=1;BYDAY=MO",   # week 53's Monday is in December
+])
+def test_a_rule_that_can_never_match_is_expanded_promptly(rrule):
     """`_pathological_rule` has two bounds and both count instances *emitted*:
     `_per_day` (density) and `_instances_before` (density x days to the window).
     Neither bounds the work dateutil does *looking* for an instance, so a rule
@@ -104,10 +123,22 @@ def test_a_rule_that_can_never_match_is_expanded_promptly():
     the search (a step or time budget, or a shape check that spots a BY* set
     that can never be satisfied), not on the yield. The pin asserts neither: any
     of them satisfies it.
+
+    **Fixed** by `tasksd/ical/rrule_budget.py`: a thread-local step budget
+    wrapped around dateutil's `_iterinfo.rebuild`, armed by `expand_occurrences`
+    around `query.between(...)` and converted at that boundary into the
+    `ValueError` vocabulary the function already raises. A cost bound, not a
+    satisfiability oracle — which is what makes it sound against the five shapes
+    below, none of which any month/day table would catch. 3.4-5.5s -> 0.18-0.29s.
+    Its own module docstring carries the measurements; the control half of the
+    contract lives in `test_recur.py::test_a_satisfiable_rule_is_never_refused_
+    by_the_search_budget`, and `::test_the_search_budget_actually_fires` asserts
+    the monkeypatch still bites, because a dateutil rename would otherwise make
+    all of this a silent no-op that no other test would notice.
     """
     raw = foreign_event_raw(
         "never@x", "Never", dtstart="20260101T090000Z", dtend="20260101T093000Z",
-        rrule="FREQ=DAILY;BYMONTH=2;BYMONTHDAY=30",
+        rrule=rrule,
     )
     elapsed, occurrences = _elapsed(
         expand_occurrences, raw, date(2026, 8, 1), date(2026, 8, 2))
@@ -126,8 +157,6 @@ def test_a_rule_that_can_never_match_is_expanded_promptly():
 
 # ── AUDIT: _reconcile_overrides probes with an unbounded dateutil walk ──────
 
-@pytest.mark.xfail(strict=True, reason="the override's RECURRENCE-ID is the probe "
-                                       "target and is unbounded: ~2.9M iterations each")
 def test_changing_the_repeat_is_prompt_with_a_far_future_override():
     """`_reconcile_overrides` documents its own cost guard — it whitelists FREQ
     to our own vocabulary because probing a foreign rule "means letting dateutil
@@ -145,6 +174,14 @@ def test_changing_the_repeat_is_prompt_with_a_far_future_override():
     Measured against today's code: 12.70 s for TWO overrides. `recur`'s guard
     exists to refuse exactly this class on the read path; the write path has no
     equivalent.
+
+    **Fixed** in two tiers, and the first is not optional. Tier 1 prices each
+    probe with the read path's own `recur._instances_before` and, over
+    `_MAX_PROBE_INSTANCES`, keeps the override without probing. Tier 2 is the
+    shared step budget as a backstop, caught per component rather than for the
+    whole comprehension. Budget alone is order-dependent — the first hostile
+    probe would eat it and every later override would then be kept unprobed —
+    which is what the third override below exists to catch. 10.17s -> 0.002s.
     """
     raw = foreign_event_raw(
         "s1@x", "Std", dtstart="20260106T090000Z", dtend="20260106T093000Z",
@@ -154,6 +191,18 @@ def test_changing_the_repeat_is_prompt_with_a_far_future_override():
              "DTEND:99991001T103000Z", "SUMMARY:far one"),
             ("RECURRENCE-ID:99991002T090000Z", "DTSTART:99991002T100000Z",
              "DTEND:99991002T103000Z", "SUMMARY:far two"),
+            # A genuinely orphaned override, at a near anchor the new daily rule
+            # does not generate (11:30, while the rule produces 09:00), placed
+            # AFTER the two hostile ones ON PURPOSE.
+            #
+            # This is what makes the pin discriminate. A fix that only wraps the
+            # whole reconcile in one shared budget passes the timing assertion
+            # while the first far-future probe eats the entire budget — and then
+            # every LATER override is kept unprobed, including this one, which
+            # should be dropped. Pricing each probe before running it is what
+            # makes the outcome independent of component order.
+            ("RECURRENCE-ID:20260113T113000Z", "DTSTART:20260113T113000Z",
+             "DTEND:20260113T120000Z", "SUMMARY:near orphan"),
         ),
     )
     elapsed, out = _elapsed(
@@ -163,12 +212,75 @@ def test_changing_the_repeat_is_prompt_with_a_far_future_override():
     # by a version that gave up and wrote nothing.
     assert out is not None and b"FREQ=DAILY" in out, (
         "the repeat change did not land on the master")
+    assert b"SUMMARY:near orphan" not in out, (
+        "an override the new rule does not generate survived — reconciliation "
+        "was skipped for it, which is what happens when one shared budget is "
+        "spent by an earlier hostile probe instead of each probe being priced")
+    assert b"SUMMARY:far one" in out and b"SUMMARY:far two" in out, (
+        "a far-future override was DROPPED — keeping an unprobeable override is "
+        "the safe direction; dropping one destroys an edit the user made")
     assert elapsed < BUDGET_S, (
         f"changing the repeat on an event carrying two far-future overrides "
         f"took {elapsed:.2f}s (budget {BUDGET_S}s) — ~6.4s per override, under "
         f"the global service lock. 100 override components is ~11 minutes."
     )
 
+
+# ── AUDIT: _count_consumed walks unbounded too (filed during remediation) ──
+
+def test_splitting_a_series_on_a_never_matching_rule_is_prompt():
+    """Found while fixing finding 8, in the same file, on a path the finding did
+    not mention — and filed as its own finding rather than smuggled in with it.
+
+    `_count_consumed` enumerates the head's share of a COUNT-bounded series, and
+    its comment claimed the walk was "finite: the rule carries COUNT". It is not,
+    for exactly the reason finding 8 records: dateutil consults COUNT only when
+    it PRODUCES an instance, so a rule that never matches never reaches the test
+    and `for occ in rr` runs to year 9999. Unlike finding 8 this needs
+    credentials — it is the "this and following" split — but the resource can be
+    foreign, the split is an ordinary owner action, and it runs under the same
+    global service lock.
+
+    Measured: 3.59 s with the budget neutralised in-process, 0.21 s with it.
+
+    **Fixed** by arming the same `search_budget` around the walk and treating
+    exhaustion as "the head consumed whatever was found so far" — the caller
+    already clamps the count to at least 1, so there is no zero to mishandle.
+    """
+    raw = foreign_event_raw(
+        "split@x", "Never", dtstart="20260106T090000Z", dtend="20260106T093000Z",
+        rrule="FREQ=DAILY;COUNT=5;BYMONTH=2;BYMONTHDAY=30",
+    )
+    elapsed, out = _elapsed(
+        split_series, raw, "2026-01-20T09:00:00+00:00", EventEdit(summary="New"))
+
+    assert out is not None, "the split refused outright rather than being bounded"
+    head, tail = out
+    assert head is not None and b"SUMMARY:New" in tail, (
+        "the split did not produce both halves")
+    assert elapsed < BUDGET_S, (
+        f"splitting a series whose rule never matches took {elapsed:.2f}s "
+        f"(budget {BUDGET_S}s) — under the global service lock"
+    )
+
+
+def test_an_ordinary_count_split_still_divides_the_count():
+    """The control for the pin above. Bounding the walk must not change the
+    arithmetic it feeds: a five-occurrence weekly series split at its third
+    occurrence still owes the head two and the tail three. A budget that fired
+    early here would silently shorten a real series instead of stalling — the
+    quieter and worse failure."""
+    raw = foreign_event_raw(
+        "ok@x", "Weekly", dtstart="20260106T090000Z", dtend="20260106T093000Z",
+        rrule="FREQ=WEEKLY;COUNT=5",
+    )
+    head, tail = split_series(
+        raw, "2026-01-20T09:00:00+00:00", EventEdit(summary="New"))
+
+    win = (date(2026, 1, 1), date(2026, 3, 1))
+    assert [o.start for o in expand_occurrences(head, *win)] == [
+        "2026-01-06T09:00:00+00:00", "2026-01-13T09:00:00+00:00"]
+    assert len(expand_occurrences(tail, *win)) == 3
 
 # ── AUDIT: service.search rebuilds the children map once per result row ────
 

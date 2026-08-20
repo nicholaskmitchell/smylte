@@ -8,7 +8,7 @@ master whose own DTSTART is in the past.
 from __future__ import annotations
 
 import time
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -1264,3 +1264,63 @@ def test_shifting_a_series_without_a_repeat_change_keeps_its_overrides():
                   rrule=rrule_from_spec("weekly")),
     )
     assert "special" in [o.summary for o in recur.expand_occurrences(shifted, *_RC_WIN)]
+
+
+# ── the search budget (2026-08-19 stage 2, finding 8) ────────────────────────
+
+@pytest.mark.parametrize("rrule, dtstart", [
+    # Every one of these is SATISFIABLE and must keep expanding. A guard that
+    # only forbids slowness is satisfied by a version that refuses everything,
+    # so these are the half of the contract that stops the cure being worse.
+    ("FREQ=WEEKLY;BYDAY=MO", "19700101T090000Z"),
+    ("FREQ=MONTHLY;BYMONTHDAY=31", "19700101T090000Z"),      # skips short months
+    ("FREQ=MONTHLY;BYMONTHDAY=-1", "19700101T090000Z"),      # last day of month
+    ("FREQ=YEARLY;BYMONTH=2;BYMONTHDAY=29", "19700101T090000Z"),  # leap day: valid
+    ("FREQ=DAILY;BYMONTH=2;BYMONTHDAY=29;BYDAY=MO", "19700101T090000Z"),
+    ("FREQ=HOURLY", "20240101T090000Z"),                     # the density boundary
+])
+def test_a_satisfiable_rule_is_never_refused_by_the_search_budget(rrule, dtstart):
+    """The budget prices a rule's SEARCH, and a sparse-but-real rule from an old
+    DTSTART is the shape most likely to be caught by mistake.
+
+    Measured over a 42-day grid, the most expensive legitimate rule here costs
+    890 dateutil periods from a 1970 DTSTART against a 5000 budget — 5.6x
+    headroom — and window width barely moves it (682 -> 733 going from 42 days
+    to five years), because the cost is the DTSTART -> window skip, not the
+    window. The never-matching rules that cost real time walk 95,760.
+    """
+    # DTEND has to travel with DTSTART. Leaving the helper's 2026 default against
+    # a 1970 DTSTART makes every occurrence a 56-year-long event, so all of them
+    # overlap the window and the unrelated `_occurrence_cap` fires first — which
+    # would let this test pass while proving nothing about the budget.
+    begin = datetime.strptime(dtstart, "%Y%m%dT%H%M%SZ")
+    raw = foreign_event_raw(
+        "ok", rrule=rrule, dtstart=dtstart,
+        dtend=(begin + timedelta(minutes=30)).strftime("%Y%m%dT%H%M%SZ"),
+    )
+    # No exception is the assertion: a refusal raises ValueError.
+    recur.expand_occurrences(raw, date(2026, 8, 1), date(2026, 9, 12))
+
+
+def test_the_search_budget_actually_fires():
+    """The guard wraps a PRIVATE attribute of dateutil (`_iterinfo.rebuild`), so
+    a future release that renames it would turn the bound into a silent no-op
+    and nothing else in the suite would notice — every test would still pass,
+    just slowly, and the unauthenticated DoS would be back.
+
+    So assert the mechanism, not just the outcome: a deliberately tiny budget
+    must stop an ordinary rule that would otherwise complete easily.
+    """
+    from dateutil.rrule import rrulestr
+
+    from tasksd.ical.rrule_budget import SearchBudgetExceeded, search_budget
+
+    with pytest.raises(SearchBudgetExceeded):
+        with search_budget(2):
+            rrulestr("FREQ=DAILY", dtstart=datetime(1970, 1, 1, 9, 0)).between(
+                datetime(2026, 8, 1), datetime(2026, 9, 12))
+
+    # ...and outside a budget block the wrapper is inert, so importing this
+    # module cannot affect any other dateutil user in the process.
+    assert rrulestr("FREQ=DAILY", dtstart=datetime(2026, 1, 1, 9, 0)).between(
+        datetime(2026, 8, 1), datetime(2026, 9, 12))

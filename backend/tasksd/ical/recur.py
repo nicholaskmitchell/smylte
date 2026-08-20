@@ -29,6 +29,7 @@ from math import ceil
 import recurring_ical_events
 from icalendar import Calendar
 
+from .rrule_budget import SearchBudgetExceeded, search_budget
 from .read import _iso, _text
 
 log = logging.getLogger("tasksd.recur")
@@ -44,6 +45,22 @@ _MAX_PER_DAY = 24
 # ~3.6k, 24/day for five years is ~44k) while refusing the ancient-DTSTART dense
 # rules whose skip phase dominates everything. See _instances_before.
 _MAX_TOTAL_INSTANCES = 200_000
+
+# Periods dateutil may walk, per expansion, before we stop it. The guards above
+# bound a rule's YIELD; this bounds its SEARCH, which is the part an
+# unsatisfiable rule makes unbounded — UNTIL and COUNT are tested only when an
+# instance is actually produced, so neither bounds a rule that produces none.
+# See tasksd/ical/rrule_budget.py for why this is a cost bound rather than a
+# satisfiability check.
+#
+# Measured over a 42-day grid: the most expensive LEGITIMATE rule found costs 890
+# periods (FREQ=DAILY;BYMONTH=2;BYMONTHDAY=29;BYDAY=MO from a 1970 DTSTART — the
+# skip phase dominates, and window width barely moves it), while every
+# never-matching rule that costs real time walks 95,760. 5000 sits between with
+# 5.6x headroom under the worst legitimate rule and 19x under the expensive
+# hostile ones. The budget is per expand_occurrences call, so it also caps a
+# resource carrying many VEVENTs rather than each rule separately.
+_MAX_SEARCH_STEPS = 5000
 
 # How many instances each FREQ yields per day before BY* parts are applied.
 _FREQ_PER_DAY = {"SECONDLY": 86400, "MINUTELY": 1440, "HOURLY": 24}
@@ -321,7 +338,19 @@ def expand_occurrences(
     override_anchors = _override_anchors(cal)
     tf_shifts = _thisandfuture_shifts(cal)
     query = recurring_ical_events.of(cal, components=["VEVENT"])
-    comps = query.between(window_start, window_end)
+    try:
+        with search_budget(_MAX_SEARCH_STEPS):
+            comps = query.between(window_start, window_end)
+    except SearchBudgetExceeded as e:
+        # Into the vocabulary this function already raises, so every caller
+        # degrades the way it already does for a too-dense rule: the calendar
+        # shows the master row, and `_link_busy` treats the series as an opaque
+        # busy span. Blocking the window rather than freeing it is the safe
+        # direction on the booking path.
+        raise ValueError(
+            f"refusing to expand recurrence: the rule searched past "
+            f"{_MAX_SEARCH_STEPS} periods without producing an occurrence"
+        ) from e
 
     out: list[Occurrence] = []
     seen: set[str] = set()

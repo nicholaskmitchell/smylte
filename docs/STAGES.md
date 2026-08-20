@@ -12,10 +12,10 @@ of how the harness behaved in practice — its "Two strengths of pin" and
 
 `docs/AUDIT.md` is the evidence. This is the plan for closing it.
 
-**59 open, 7 closed.** Stage 1 is done; stages 2-5 remain. Of the 59 still open,
-58 are pinned by a test that asserts the corrected behaviour and fails today —
-54 as `xfail(strict=True)` / `it.fails`, and 4 as ordinary passing tests (see
-"Test gaps that were only gaps" below). One is deliberately **not** pinned; see
+**57 open, 9 closed.** Stage 1 is done and Stage 2 is closing; stages 3-5
+remain. Of the 57 still open, 56 are pinned by a test that asserts the corrected
+behaviour and fails today — 52 as `xfail(strict=True)` / `it.fails`, and 4 as
+ordinary passing tests (see "Test gaps that were only gaps" below). One is deliberately **not** pinned; see
 "The one that is not pinned" below. The harness
 described under *Stage 0* further down still applies unchanged; these pins live in
 their own files so the closed 2026-08-16 stages stay closed:
@@ -122,20 +122,51 @@ Four things surfaced while fixing them, all wider than the findings as filed:
 | 6 | smylte_delete_event skips the recurrence_id ISO check the HTTP DELETE route performs, so a space instead of … | `backend/tasksd/mcp/api.py:492` | medium | `test_a_malformed_recurrence_id_names_the_argument_not_the_server` |
 | 7 | The body-limit middleware's 413 is dead code on every FastAPI route — FastAPI swallows _BodyTooLarge and ans… | `backend/tasksd/limits.py:73` | low | `test_a_chunked_oversized_body_is_a_413_through_the_real_app` |
 
-## Stage 2 — Abuse & resource exhaustion ⬜ OPEN
+## Stage 2 — Abuse & resource exhaustion 🟨 IN PROGRESS
 
-6 findings · 2 high, 3 medium, 1 low · open
+6 findings + 1 filed during remediation · 2 high, 4 medium, 1 low · **3 closed, 4 open**
 
 Work an adversary can make unbounded, plus the one missing security control. Everything here is reachable without credentials or survives the credential change that was supposed to stop it.
 
+Three are done — 8, 11, and the one that fixing 8 uncovered. All three are the
+same defect (`tasksd/ical/rrule_budget.py` is the shared fix) and two things
+about it are worth carrying forward:
+
+* **The fix `docs/AUDIT.md` prescribed for 8 does not work, and was measured not
+  to before anything was written.** It proposed re-emitting each RRULE with
+  `UNTIL = window_end`. dateutil tests UNTIL and COUNT *inside* the yield blocks
+  of `rrule._iter`, so a rule that never yields never reaches either:
+  `FREQ=DAILY;BYMONTH=2;BYMONTHDAY=30` costs 3.50 s bare, 3.44 s with UNTIL and
+  3.45 s with COUNT, all returning nothing. A suggested fix in the audit is a
+  lead, not an instruction.
+* **A satisfiability check is the obvious repair and it is wrong in both
+  directions.** `BYSETPOS=5;BYDAY=MO`, `BYWEEKNO=54` and
+  `BYWEEKNO=53;BYMONTH=1;BYDAY=MO` all defeat any BYMONTH × BYMONTHDAY table and
+  still cost seconds; meanwhile `BYMONTH=4,5;BYMONTHDAY=31` **is** satisfiable
+  (May 31), so a table would refuse a legitimate rule. Bounding the *cost*
+  sidesteps the question: anything that finishes inside the budget is cheap by
+  construction, whether or not it ever matches.
+
+And one thing about the harness, following Stage 1's "a pin is only as good as
+the inputs it drives": pin 11 was **widened before the fix landed**, with a third
+override at a near anchor placed after the two far-future ones. With the
+instance-count tier neutralised in-process, a budget-only fix keeps that override
+— the bug — and the widened pin catches it. That is Stage 1's lesson applied
+rather than re-learned.
+
 | # | Finding | Where | Sev | Pin |
 |---|---|---|---|---|
-| 8 | A never-matching RRULE makes expansion iterate to year 9999 — both pathology guards score it "safe" because … | `backend/tasksd/ical/recur.py:178` | high | `test_a_rule_that_can_never_match_is_expanded_promptly` |
+| 8 ✅ | A never-matching RRULE makes expansion iterate to year 9999 — both pathology guards score it "safe" because … | `backend/tasksd/ical/recur.py:178` | high | `test_a_rule_that_can_never_match_is_expanded_promptly` |
 | 9 | Rotating the app password (and even TASKS_SESSION_SECRET) does not revoke any MCP OAuth grant — the document… | `backend/tasksd/mcp/oauth.py:551` | high | `test_rotating_the_credentials_ends_an_mcp_grant_too` |
 | 10 | service.search rebuilds the whole collection's children map once per result row, so one uncapped FTS query b… | `backend/tasksd/service.py:331` | medium | `test_searching_a_large_list_is_not_quadratic_in_the_lists_size` |
-| 11 | _reconcile_overrides probes each override with an unbounded dateutil walk — one repeat change burns minutes … | `backend/tasksd/ical/edit.py:427` | medium | `test_changing_the_repeat_is_prompt_with_a_far_future_override` |
+| 11 ✅ | _reconcile_overrides probes each override with an unbounded dateutil walk — one repeat change burns minutes … | `backend/tasksd/ical/edit.py:427` | medium | `test_changing_the_repeat_is_prompt_with_a_far_future_override` |
 | 12 | _check_client_id's regex accepts a trailing newline, so an anonymous booking POST answers 409 with the owner… | `backend/tasksd/app.py:157` | medium | `test_a_client_id_with_a_trailing_newline_is_refused` |
 | 13 | MAX_CLIENTS refuses new registrations instead of evicting stale ones, so anonymous registrants can lock the … | `backend/tasksd/mcp/oauth.py:208` | low | `test_a_table_full_of_junk_clients_does_not_lock_the_owner_out` |
+| — ✅ | _count_consumed's walk is unbounded for the same reason UNTIL is, so "this and following" on a never-matchi… | `backend/tasksd/ical/edit.py:1117` | medium | `test_splitting_a_series_on_a_never_matching_rule_is_prompt` |
+
+The last row was filed during remediation, not by the sweep; it is under
+`## Filed during remediation — 2026-08-20` in `docs/AUDIT.md` and is not counted
+in that sweep's 66.
 
 ## Stage 3 — Silent data corruption ⬜ OPEN
 
