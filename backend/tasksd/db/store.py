@@ -65,6 +65,14 @@ def init_db(conn: sqlite3.Connection) -> None:
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(collections)")}
     if "ord" not in cols:
         conn.execute("ALTER TABLE collections ADD COLUMN ord INTEGER")
+    tok_cols = {r["name"] for r in conn.execute("PRAGMA table_info(oauth_tokens)")}
+    if "cv" not in tok_cols:
+        # Grants issued before this column read '' and are refused on first use,
+        # so an upgrade costs every MCP client one re-authorization. That is the
+        # conservative direction and the same cost the session `cv` already
+        # documents: a token whose provenance cannot be established is not one
+        # to trust for the next 30 days.
+        conn.execute("ALTER TABLE oauth_tokens ADD COLUMN cv TEXT NOT NULL DEFAULT ''")
     item_cols = {r["name"] for r in conn.execute("PRAGMA table_info(items)")}
     if "fts_rowid" not in item_cols:
         # Rows written before this column keep NULL and fall back to the old
@@ -879,6 +887,48 @@ def gc_oauth(conn: sqlite3.Connection, *, now: float, client_idle_s: float) -> i
     return cur.rowcount or 0
 
 
+def evict_oauth_clients(conn: sqlite3.Connection, *, limit: int) -> int:
+    """Drop up to `limit` least-recently-used clients that hold NOTHING.
+
+    The companion to `gc_oauth`, for when the table is at its cap and the sweep
+    freed nothing: `gc_oauth` spares a client until it has been idle, and idle
+    time is exactly what a registration flood does not give you. Registration is
+    unauthenticated, so without this the cap protected the table by locking the
+    OWNER out of it — a denial of service performed by the defence.
+
+    Two exclusions, and both matter:
+
+    * a client holding a TOKEN is a working grant. Evicting it signs a real
+      client out, which is the thing the cap was supposed to prevent.
+    * a client holding a live CODE is mid-consent — the owner is on the screen
+      right now. Eviction has no idleness requirement (that is the point), so
+      without this a registration burst timed against a consent would break it.
+
+    `last_used_at` is seeded from `created_at` (see `create_oauth_client`), so a
+    never-used client orders by when it registered and a flood evicts itself
+    oldest-first.
+
+    What this does NOT protect is the gap between a legitimate client's
+    registration and its authorize call, where it holds neither a token nor a
+    code and is evictable like any junk row. That window is a few seconds of a
+    flow the user is actively driving, and the client re-registers on a failure;
+    closing it would need a grace period, which is the idleness requirement this
+    function exists to do without.
+    """
+    cur = conn.execute(
+        "DELETE FROM oauth_clients WHERE client_id IN ("
+        "  SELECT client_id FROM oauth_clients"
+        "   WHERE client_id NOT IN (SELECT DISTINCT client_id FROM oauth_tokens)"
+        "     AND client_id NOT IN (SELECT DISTINCT client_id FROM oauth_codes)"
+        "   ORDER BY last_used_at ASC, created_at ASC"
+        "   LIMIT ?"
+        ")",
+        (limit,),
+    )
+    conn.commit()
+    return cur.rowcount or 0
+
+
 def create_oauth_code(
     conn: sqlite3.Connection,
     *,
@@ -930,11 +980,17 @@ def create_oauth_token(
     family_id: str,
     expires_at: float,
     now: float,
+    cv: str = "",
 ) -> None:
+    # `cv` defaults to '' so a direct caller predating it still compiles — and
+    # gets a token refused on first use rather than one silently exempt from the
+    # check. Failing closed is the only safe default for a field whose whole job
+    # is revocation.
     conn.execute(
         "INSERT INTO oauth_tokens (token_hash, kind, client_id, scope, resource, "
-        "family_id, used_at, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?)",
-        (token_hash, kind, client_id, scope, resource, family_id, expires_at, now),
+        "family_id, used_at, expires_at, created_at, cv) "
+        "VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)",
+        (token_hash, kind, client_id, scope, resource, family_id, expires_at, now, cv),
     )
     conn.commit()
 

@@ -215,7 +215,7 @@ class Authenticator:
         self._user = user
         self._password_hash = password_hash
         # What "the credentials changed" is judged against — see
-        # _credential_version. Not the hash itself: scrypt salts randomly, so
+        # credential_version. Not the hash itself: scrypt salts randomly, so
         # the dev plaintext path (TASKS_AUTH_PASSWORD, hashed at startup)
         # produces a different hash every restart and would sign everyone out
         # on each one. The caller passes the *configured* material instead,
@@ -253,7 +253,7 @@ class Authenticator:
         return self._ttl()
 
     @property
-    def _credential_version(self) -> str:
+    def credential_version(self) -> str:
         """A short fingerprint of the credentials a token was minted under.
 
         The signing secret is independent of the password, so before this the
@@ -271,6 +271,14 @@ class Authenticator:
         unkeyed hash of it would be offline-guessable by whoever holds the
         token. Anyone who knows the secret can already mint tokens, so keying it
         gives nothing away.
+
+        Public because the MCP authorization server stamps the same value onto
+        every OAuth token it issues and checks it on every request. That was the
+        other half of "signing out everywhere": rotating the password ended every
+        SESSION and left every MCP grant working, so docs/DEPLOY.md's documented
+        incident response left a 30-day read/write backdoor open. One value
+        covers both levers — it is keyed with the signing secret, so it moves
+        when EITHER the password or TASKS_SESSION_SECRET does.
         """
         material = f"{self._user}\0{self._credential_id}".encode()
         return hmac.new(self._secret.encode(), material, hashlib.sha256).hexdigest()[:16]
@@ -285,8 +293,8 @@ class Authenticator:
                 # Names this session so logout can withdraw exactly it, and not
                 # the ones on your other devices.
                 "jti": secrets.token_hex(16),
-                # Which credentials this was minted under; see _credential_version.
-                "cv": self._credential_version,
+                # Which credentials this was minted under; see credential_version.
+                "cv": self.credential_version,
             },
             self._secret,
             algorithm="HS256",
@@ -311,7 +319,7 @@ class Authenticator:
         if not hmac.compare_digest(str(claims.get("sub", "")).encode(), self._user.encode()):
             return None
         if not hmac.compare_digest(
-            str(claims.get("cv", "")).encode(), self._credential_version.encode()
+            str(claims.get("cv", "")).encode(), self.credential_version.encode()
         ):
             return None
         # Shortening the session length has to bite immediately, including on

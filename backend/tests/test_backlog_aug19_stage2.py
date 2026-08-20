@@ -1,44 +1,45 @@
 """Audit backlog, 2026-08-19 sweep — stage 2: abuse and resource exhaustion.
 
-Six findings from the sweep of 2026-08-19, plus a seventh found while fixing
-them. **Three are closed** (8, 11, and the seventh) and their tests are ordinary
-regression tests that must stay green; the other four are still
-`xfail(strict=True)` pins, each asserting the behaviour the code SHOULD have and
-failing against the code as it stands. CI stays green while a finding is open and
-goes red the moment it is fixed, which is the signal to drop the marker and tick
-the finding off. The harness is described in docs/STAGES.md.
+**Stage 2 is CLOSED.** Seven findings — six from the sweep of 2026-08-19 and one
+found while fixing them — all fixed and ticked in `docs/AUDIT.md`. Every test
+here was an `xfail(strict=True)` pin asserting the behaviour the code SHOULD
+have; the markers are gone and these are ordinary regression tests now. They must
+stay green. The harness is described in `docs/STAGES.md`.
 
-Four of the six share one shape — work whose *cost* is chosen by whoever writes
-the input, on a path that holds the service lock or that an anonymous caller can
-reach. Every guard that exists there measures the wrong quantity:
-`_pathological_rule` bounds how many instances a rule *emits* rather than how
-long the library searches for them; `_reconcile_overrides` bounds the *rule* it
+Four of the seven shared one shape — work whose *cost* is chosen by whoever
+writes the input, on a path that holds the service lock or that an anonymous
+caller can reach. Every guard that existed there measured the wrong quantity:
+`_pathological_rule` bounded how many instances a rule *emits* rather than how
+long the library searches for them; `_reconcile_overrides` bounded the *rule* it
 probes with and not the attacker-supplied *anchor* it probes at; `service.search`
-bounds nothing at all; and `MAX_CLIENTS` bounds the table by locking the owner
-out of it. The fifth is the missing control all of them assume exists: rotating
-the app password — what docs/DEPLOY.md calls "signing out everywhere" — does not
-reach the OAuth grants at all, so the documented incident response leaves a
-30-day read/write backdoor open. The sixth is a validator that admits a byte its
-own message says it refuses, which turns the single unauthenticated write path
-into an href disclosure.
+bounded nothing at all; and `MAX_CLIENTS` bounded the table by locking the owner
+out of it. The fifth was the missing control all of them assume exists: rotating
+the app password — what `docs/DEPLOY.md` calls "signing out everywhere" — did not
+reach the OAuth grants at all, so the documented incident response left a 30-day
+read/write backdoor open. The sixth was a validator that admitted a byte its own
+message said it refused, which turned the single unauthenticated write path into
+an href disclosure. The seventh is the same defect as the first, in the same
+file, on a path the finding did not name.
 
 Four of these are pinned by a wall-clock budget, which deserves a word. Timing
 is the user-visible symptom — the whole finding is "this takes seconds" — and
 the alternative, counting iterations or asserting that a particular guard was
-called, is exactly the over-specific structural pin docs/STAGES.md records as
-having failed to recognise its own fix. One budget (1 s) serves all four. It
-sits several times below what today's code costs — measured on this machine:
+called, is exactly the over-specific structural pin `docs/STAGES.md` records as
+having failed to recognise its own fix. One budget (1 s) serves all four. It sits
+several times below what the pre-fix code cost — measured on this machine:
 4.2 s, 12.8 s, 3.6 s, 2.9 s — and one to three orders of magnitude above what the
-same work costs once it is bounded: 2 ms for the override probe when the anchor
-is near DTSTART, 0.09 s for the same search with the children map built once per
-collection. Nothing a slow runner or a fast one does moves an answer across
-that gap.
+same work costs once bounded: 2 ms for the override probe, 0.09 s for the same
+search with the children map built once per collection. Nothing a slow runner or
+a fast one does moves an answer across that gap.
 
-Each of the three closed tests keeps a **control** beside it that must still
-produce the right answer, because a pin that only forbids slowness is satisfied
-by a version that refuses everything. For finding 8 those controls live in
-`test_recur.py` (a satisfiable-rule sweep, and a test that the guard still bites
-at all); for the other two they are in this file.
+**Every timing pin here keeps a control beside it**, because a pin that only
+forbids slowness is satisfied by a version that refuses everything, and a pin
+that only forbids a full client table is satisfied by one that evicts working
+grants. For finding 8 those controls live in `test_recur.py` (a satisfiable-rule
+sweep, and a test that the guard still bites at all); the rest are in this file.
+Four of them were run against a deliberately half-correct version of their own
+fix and watched to fail — see `docs/STAGES.md` for which, and why that is the
+habit Stage 1 paid to learn.
 """
 from __future__ import annotations
 
@@ -373,8 +374,6 @@ def test_searching_a_large_list_is_not_quadratic_in_the_lists_size():
 # ── AUDIT: MAX_CLIENTS refuses new registrations instead of evicting ───────
 
 @pytest.mark.radicale
-@pytest.mark.xfail(strict=True, reason="a full oauth_clients table 429s the owner's "
-                                       "own registration for a full CLIENT_IDLE_S")
 def test_a_table_full_of_junk_clients_does_not_lock_the_owner_out(_scratch_up, tmp_path):
     """`register` sweeps with `gc_oauth` and then refuses outright at
     MAX_CLIENTS = 500. The cap is global but what it protects is not:
@@ -398,6 +397,13 @@ def test_a_table_full_of_junk_clients_does_not_lock_the_owner_out(_scratch_up, t
     only that *some* 429 appears within 40 requests, and instrumenting it shows
     the 429 arriving at request 21 from the rate limiter, with 20 client rows in
     the table. `count_oauth_clients(conn) >= MAX_CLIENTS` never executes.
+
+    **Fixed** by evicting rather than refusing: at the cap, `register` drops the
+    least-recently-used clients that hold neither a token nor a live code, and
+    429s only if that frees nothing. Excluding live CODES is not decoration —
+    eviction has no idleness requirement, which is the whole point, so without it
+    a registration burst timed against a consent screen would break the flow the
+    owner was in the middle of. The two tests below hold both exclusions.
     """
     from fastapi.testclient import TestClient
 
@@ -435,11 +441,147 @@ def test_a_table_full_of_junk_clients_does_not_lock_the_owner_out(_scratch_up, t
     assert r.json().get("client_id")
 
 
+# All 500 seeded rows above hold no tokens, so that pin cannot tell "evict the
+# oldest token-less client" from "evict anything at all". These two can.
+
+@pytest.mark.radicale
+def test_a_client_holding_a_token_is_not_evicted_to_admit_a_new_one(_scratch_up, tmp_path):
+    """Eviction must not sign a working client out — that is the outcome the cap
+    existed to prevent, arriving by a different route."""
+    from fastapi.testclient import TestClient
+
+    from tasksd.app import create_app
+    from tests.conftest import api_settings
+    from tests.test_mcp import CALLBACK, ISSUER, _connect, _rpc
+
+    db = tmp_path / "keep.db"
+    settings = dataclasses.replace(
+        api_settings(str(db)), mcp_enabled=True, public_url=ISSUER)
+    with TestClient(create_app(settings)) as c:
+        # A real grant first, so this client holds tokens.
+        grant = _connect(c)
+        real = grant["reg"]["client_id"]
+
+        conn = store.connect(str(db))
+        try:
+            now = time.time()
+            # Seeded NEWER than the real client on purpose. Only one row needs to
+            # go to admit a registration, so if the junk were older an LRU that
+            # ignored tokens would take a junk row and pass this test by luck.
+            # This way the real, token-holding client is the least-recently-used
+            # row in the table, and nothing but the token exclusion saves it.
+            for i in range(O.MAX_CLIENTS):
+                store.create_oauth_client(
+                    conn, client_id=f"junk-{i}", client_secret_hash=None,
+                    client_name="drive-by", redirect_uris=["https://x.test/cb"],
+                    scope="mcp:read", now=now + 10_000)
+        finally:
+            conn.close()
+
+        r = c.post("/oauth/register", json={
+            "client_name": "Second", "redirect_uris": [CALLBACK],
+            "token_endpoint_auth_method": "none",
+        })
+        assert r.status_code == 201, r.text
+
+        conn = store.connect(str(db))
+        try:
+            assert store.get_oauth_client(conn, real) is not None, (
+                "a client holding live tokens was evicted to make room for a "
+                "registration — the cap's own failure mode, by another route")
+        finally:
+            conn.close()
+
+        # And it still works, which is the part a row check alone would miss.
+        assert _rpc(c, grant["access_token"], "ping").status_code == 200
+
+
+@pytest.mark.radicale
+def test_a_table_of_clients_that_all_hold_tokens_still_refuses(_scratch_up, tmp_path):
+    """The control on the other side: when there is genuinely nothing safe to
+    reclaim, 429 is the CORRECT answer and must survive. A fix that always finds
+    room is a fix that evicts working grants."""
+    from fastapi.testclient import TestClient
+
+    from tasksd.app import create_app
+    from tests.conftest import api_settings
+    from tests.test_mcp import CALLBACK, ISSUER
+
+    db = tmp_path / "full.db"
+    settings = dataclasses.replace(
+        api_settings(str(db)), mcp_enabled=True, public_url=ISSUER)
+    with TestClient(create_app(settings)) as c:
+        conn = store.connect(str(db))
+        try:
+            now = time.time()
+            for i in range(O.MAX_CLIENTS):
+                store.create_oauth_client(
+                    conn, client_id=f"real-{i}", client_secret_hash=None,
+                    client_name="a real client", redirect_uris=["https://x.test/cb"],
+                    scope="mcp:read", now=now)
+                store.create_oauth_token(
+                    conn, token_hash=f"hash-{i}", kind="access", client_id=f"real-{i}",
+                    scope="mcp:read", resource="https://x.test/mcp",
+                    family_id=f"fam-{i}", expires_at=now + 3600, now=now)
+        finally:
+            conn.close()
+
+        r = c.post("/oauth/register", json={
+            "client_name": "Claude", "redirect_uris": [CALLBACK],
+            "token_endpoint_auth_method": "none",
+        })
+    assert r.status_code == 429, (
+        f"every registered client holds a live token, so there is nothing safe "
+        f"to evict and the cap must hold — got {r.status_code} {r.text[:200]}")
+
+
+@pytest.mark.radicale
+def test_a_client_mid_consent_is_not_evicted(_scratch_up, tmp_path):
+    """A client holding a live authorization CODE is one the owner is consenting
+    to right now. Eviction has no idleness requirement — that is the point — so
+    without excluding codes, a registration burst timed against a consent screen
+    would break the flow between the authorize and the exchange."""
+    from fastapi.testclient import TestClient
+
+    from tasksd.app import create_app
+    from tests.conftest import api_settings
+    from tests.test_mcp import (CALLBACK, ISSUER, _authorize, _code_from, _pkce,
+                                _register, _token)
+
+    db = tmp_path / "consent.db"
+    settings = dataclasses.replace(
+        api_settings(str(db)), mcp_enabled=True, public_url=ISSUER)
+    with TestClient(create_app(settings)) as c:
+        reg = _register(c)
+        verifier, challenge = _pkce()
+        code = _code_from(_authorize(c, reg, challenge))   # code issued, not yet spent
+
+        conn = store.connect(str(db))
+        try:
+            now = time.time()
+            for i in range(O.MAX_CLIENTS):
+                store.create_oauth_client(
+                    conn, client_id=f"junk-{i}", client_secret_hash=None,
+                    client_name="drive-by", redirect_uris=["https://x.test/cb"],
+                    scope="mcp:read", now=now)
+        finally:
+            conn.close()
+
+        assert c.post("/oauth/register", json={
+            "client_name": "Interloper", "redirect_uris": [CALLBACK],
+            "token_endpoint_auth_method": "none",
+        }).status_code == 201
+
+        # The consent the owner started must still complete.
+        r = _token(c, reg, code, verifier)
+    assert r.status_code == 200, (
+        f"a registration burst evicted a client that was mid-consent, so the "
+        f"owner's authorization failed: {r.status_code} {r.text[:200]}")
+
+
 # ── AUDIT: rotating the app password does not revoke MCP grants ────────────
 
 @pytest.mark.radicale
-@pytest.mark.xfail(strict=True, reason="oauth_tokens carries no credential "
-                                       "fingerprint, so no rotation reaches a grant")
 def test_rotating_the_credentials_ends_an_mcp_grant_too(_scratch_up, tmp_path):
     """docs/DEPLOY.md §"If the password leaks — signing out everywhere" names
     two levers and calls each total: change the password ("Every existing
@@ -465,6 +607,22 @@ def test_rotating_the_credentials_ends_an_mcp_grant_too(_scratch_up, tmp_path):
     Any binding satisfies the pin: a `cv` column on `oauth_tokens`, a startup
     sweep when the fingerprint changes, anything that stops a pre-rotation
     bearer and its refresh token from working afterwards.
+
+    **Fixed** with a `cv` column, stamped in `_issue_pair` and checked per
+    request in `verify_bearer` — not a startup sweep, so a rotation applied
+    without a restart still bites. `Authenticator.credential_version` is HMAC'd
+    with the signing secret, so ONE value moves when either documented lever
+    does. Two details carry the risk:
+
+    * the check in `_grant_refresh` runs BEFORE `use_refresh_token`. A refresh
+      token is single-use, so checking after would burn the use on a request we
+      were going to refuse, and the client's next legitimate attempt would read
+      as a replay — killing the family and reporting a theft that never
+      happened.
+    * `credential_id` stays the CONFIGURED credential rather than the derived
+      hash. scrypt salts randomly, so on the dev plaintext path the hash differs
+      every startup, and binding to it would sign every client out on each
+      restart. `test_an_ordinary_restart_does_not_end_a_grant` holds that line.
     """
     from fastapi.testclient import TestClient
 
@@ -508,6 +666,86 @@ def test_rotating_the_credentials_ends_an_mcp_grant_too(_scratch_up, tmp_path):
         f"both remedies: {refresh.status_code} {refresh.text[:200]} — the "
         f"attacker re-arms another {O.REFRESH_TTL_S // 86400} days on each use"
     )
+
+
+# The pin above says a rotation ENDS a grant. These two say what must NOT change,
+# and they carry the risk: `cv` is checked on every MCP request, so getting it
+# wrong signs every client out on every restart — a self-inflicted outage that
+# looks exactly like the security control working.
+
+@pytest.mark.radicale
+def test_an_ordinary_restart_does_not_end_a_grant(_scratch_up, tmp_path):
+    """`credential_version` fingerprints the CONFIGURED credential, not the
+    derived hash. scrypt salts randomly, so on the dev plaintext path
+    (TASKS_AUTH_PASSWORD, hashed at startup) the hash is different every boot —
+    binding to it would revoke every MCP grant on every restart. Same settings,
+    fresh app, grant still works."""
+    from fastapi.testclient import TestClient
+
+    from tasksd.app import create_app
+    from tests.conftest import api_settings
+    from tests.test_mcp import ISSUER, MCP_URL, _connect, _rpc
+
+    settings = dataclasses.replace(
+        api_settings(str(tmp_path / "restart.db")), mcp_enabled=True, public_url=ISSUER)
+    with TestClient(create_app(settings)) as c:
+        grant = _connect(c)
+        assert _rpc(c, grant["access_token"], "ping").status_code == 200
+
+    with TestClient(create_app(settings)) as c2:      # same settings, new process
+        assert _rpc(c2, grant["access_token"], "ping").status_code == 200, (
+            "an ordinary restart revoked a live MCP grant — the credential "
+            "fingerprint is being taken over something that is not stable "
+            "across restarts")
+        r = c2.post("/oauth/token", data={
+            "grant_type": "refresh_token", "refresh_token": grant["refresh_token"],
+            "client_id": grant["reg"]["client_id"], "resource": MCP_URL,
+        })
+        assert r.status_code == 200, f"the refresh token stopped working: {r.text[:200]}"
+
+
+@pytest.mark.radicale
+def test_a_refused_refresh_does_not_burn_the_token_or_kill_the_family(
+        _scratch_up, tmp_path):
+    """Order-of-operations, and it is the sharp edge of this fix.
+
+    A refresh token is single-use. If the credential check ran AFTER
+    `use_refresh_token`, a refused refresh would still mark the row used — and
+    the client's next attempt would look like a replay, killing the whole family
+    and answering "this refresh token was already used". The operator would read
+    a stolen-token alarm for what was really "the password changed".
+
+    So: refuse under the rotated credentials, then rotate BACK and check the
+    token is still exactly where it was."""
+    from fastapi.testclient import TestClient
+
+    from tasksd.app import create_app
+    from tests.conftest import api_settings
+    from tests.test_mcp import ISSUER, MCP_URL, _connect
+
+    settings = dataclasses.replace(
+        api_settings(str(tmp_path / "burn.db")), mcp_enabled=True, public_url=ISSUER)
+    with TestClient(create_app(settings)) as c:
+        grant = _connect(c)
+
+    body = {"grant_type": "refresh_token", "refresh_token": grant["refresh_token"],
+            "client_id": grant["reg"]["client_id"], "resource": MCP_URL}
+
+    rotated = dataclasses.replace(settings, auth_password="a-brand-new-password")
+    with TestClient(create_app(rotated)) as c2:
+        refused = c2.post("/oauth/token", data=body)
+    assert refused.status_code != 200
+    assert "already used" not in refused.text, (
+        f"a refused refresh was reported as a REPLAY: {refused.text[:200]} — the "
+        f"credential check ran after use_refresh_token and burned the single use")
+
+    # Back to the original credentials — the grant was never really revoked, only
+    # refused, so the token must still be unspent and the family intact.
+    with TestClient(create_app(settings)) as c3:
+        again = c3.post("/oauth/token", data=body)
+    assert again.status_code == 200, (
+        f"the refused attempt consumed the refresh token or revoked its family: "
+        f"{again.status_code} {again.text[:200]}")
 
 
 # ── AUDIT: _CLIENT_ID_RE accepts a trailing newline ────────────────────────
