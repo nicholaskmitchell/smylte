@@ -489,16 +489,26 @@ class McpApi:
     def delete_event(self, calendar_id, uid, *, recurrence_id=None, scope="all"):
         if scope not in ("all", "this", "thisandfuture"):
             raise ToolError("scope must be 'all', 'this' or 'thisandfuture'.")
-        if scope in ("this", "thisandfuture") and not recurrence_id:
+        # `.strip()`, like the HTTP route: "   " is not an anchor, and `not
+        # recurrence_id` alone let it through to be parsed deep in the edit path.
+        if scope in ("this", "thisandfuture") and not (recurrence_id or "").strip():
             raise ToolError(f"scope={scope!r} needs recurrence_id.")
         # Same reason as delete_task: a silent no-op reported as a deletion.
         href = self._href(calendar_id, kind="calendar")
         if self._svc.get_event(href, uid) is None:
             raise ToolError(f"No event {uid!r} on calendar {calendar_id!r} to delete.")
         with _not_found(f"No event {uid!r} on calendar {calendar_id!r} to delete."):
-            self._svc.delete_event(
-                href, uid, recurrence_id=recurrence_id, scope=scope,
-            )
+            try:
+                self._svc.delete_event(
+                    href, uid, recurrence_id=recurrence_id, scope=scope,
+                )
+            except ValueError as exc:
+                # The arm update_event already had. Without it, an unreadable
+                # recurrence_id reached `date.fromisoformat` in the edit path and
+                # McpServer's catch-all reported it as "the calendar server may
+                # be unreachable" — sending the model after an outage that was
+                # not happening, over an argument it chose and could fix.
+                raise ToolError(str(exc)) from None
 
     # ── free/busy ────────────────────────────────────────────────────────────
 

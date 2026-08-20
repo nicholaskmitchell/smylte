@@ -6,21 +6,26 @@ adversary, a foreign CalDAV client, or merely an odd browser control chooses
 reaches an exception type outside the taxonomy the handlers were built around,
 so it escapes as a 500 the caller can neither read nor act on.
 
-**These findings are OPEN.** Unlike test_backlog_stage1.py … stage5.py, every
-test here is an `xfail(strict=True)` pin: it asserts the CORRECTED behaviour and
-fails against the code as it stands. CI stays green while the bug is open and
-goes red the moment it is fixed — see docs/STAGES.md for the harness and why
-that second half matters.
+**Stage 1 is CLOSED.** These began as `xfail(strict=True)` pins, each failing
+against the code as it stood. The seven findings are fixed and ticked in
+docs/AUDIT.md, so the markers are gone and these are now ordinary regression
+tests: they must stay green.
 
-Every pin is behavioural: each drives the real endpoint, the real DAV client or
+The docstrings deliberately keep the past tense and the original evidence — a
+closed finding's value is the record of what the bug was and why it mattered,
+and that is what stops it being reintroduced. Run just this stage with
+`pytest -m stage1`.
+
+Every one is behavioural: each drives the real endpoint, the real DAV client or
 the real MCP server and asserts the answer a caller receives, not the shape of
 the source. Each asserts the *class* of the corrected answer ("not a 500", "not
 an outage sentence") rather than a particular repair, because a pin that only
-accepts the fix its author imagined is not a regression test.
+accepts the fix its author imagined is not a regression test. That earned its
+keep here: three of the seven were fixed in a different place from the one the
+finding suggested, and every pin still recognised its own repair.
 
 Written after reproducing each one by hand against the scratch Radicale on
-:5233, so the evidence in the docstrings is observed, not inferred. Run just
-this file with `pytest tests/test_backlog_aug19_stage1.py -rxX`.
+:5233, so the evidence in the docstrings is observed, not inferred.
 """
 from __future__ import annotations
 
@@ -188,10 +193,6 @@ def _vevent(uid: str, *, dtstart: str, dtend: str, rrule: str) -> str:
 # ── carry it, so the request 500s after the tool has already written ──────────
 
 @pytest.mark.radicale
-@pytest.mark.xfail(strict=True, reason=(
-    "a NaN/Infinity JSON-RPC id is echoed verbatim into JSONResponse, whose "
-    "json.dumps(allow_nan=False) raises ValueError -> unhandled 500"
-))
 @pytest.mark.parametrize("label, body", [
     ("NaN", '{"jsonrpc":"2.0","id":NaN,"method":"ping"}'),
     ("-Infinity", '{"jsonrpc":"2.0","id":-Infinity,"method":"ping"}'),
@@ -203,10 +204,17 @@ def _vevent(uid: str, *, dtstart: str, dtend: str, rrule: str) -> str:
 ])
 def test_a_non_finite_jsonrpc_id_gets_an_answer_not_a_500(mcp_post, label, body):
     """`json.loads` accepts the bare literals `NaN`, `Infinity` and `-Infinity`
-    (and overflows `1e400` to `inf`), `McpServer.handle` echoes the id back
+    (and overflows `1e400` to `inf`), `McpServer.handle` echoed the id back
     verbatim, and Starlette renders with `json.dumps(..., allow_nan=False)` —
-    which raises. Nothing catches ValueError there, so the request dies as a
+    which raises. Nothing caught ValueError there, so the request died as a
     500 with a traceback.
+
+    Fixed in `handle`, which now refuses an id that is not a string, a finite
+    number or null and answers against a null id — the shape `run_batch` already
+    used when it cannot address the caller. `parse_body` also gained a
+    `parse_constant` so the bare literals become the protocol's -32700 earlier;
+    that is defence in depth, not the fix, since `1e400` is an ordinary number
+    literal that `parse_float` overflows and `parse_constant` never sees.
 
     This is the exact trap app.py already documents one layer over, in
     `_invalid_request`: "A non-finite float round-trips through json.loads but
@@ -252,14 +260,13 @@ def test_a_non_finite_jsonrpc_id_gets_an_answer_not_a_500(mcp_post, label, body)
 # ── AUDIT: an explicit null on PATCH /api/scheduling/links/{token} ────────────
 
 @pytest.mark.radicale
-@pytest.mark.xfail(strict=True, reason=(
-    "an explicit JSON null on a NOT NULL booking-link column reaches SQLite as "
-    "an IntegrityError, which no handler maps -> 500, half-applied"
-))
 def test_a_null_booking_link_field_is_refused_not_a_half_applied_500(app_client):
-    """`EditBookingLink` types every field as `X | None` and the route selects
-    by `model_fields_set`, so an explicitly-sent `null` is a *set* field whose
-    value is None and is forwarded verbatim. `_normalize_link_fields` rescues
+    """FIXED. `EditBookingLink` types every field as `X | None` so it can be
+    OMITTED, and the route selects by `model_fields_set` — so an explicitly-sent
+    `null` WAS a *set* field whose value is None, forwarded verbatim. The route
+    now refuses a null for the five NOT NULL columns, and `update_booking_link`
+    runs inside `store.tx`, so a value the schema rejects can no longer leave
+    the earlier fields committed. Originally: `_normalize_link_fields` rescues
     only `timezone`, `availability`, `show_busy` and `enabled`; `title`,
     `duration_minutes`, `buffer_minutes`, `min_notice_hours` and `horizon_days`
     pass through untouched and are all NOT NULL in db/schema.sql. SQLite raises
@@ -331,18 +338,21 @@ def test_a_null_booking_link_field_is_refused_not_a_half_applied_500(app_client)
 # ── AUDIT: one U+FFFE in a calendar item kills the collection's sync ──────────
 
 @pytest.mark.radicale
-@pytest.mark.xfail(strict=True, reason=(
-    "parse_multistatus calls etree.fromstring unguarded, so a body Radicale "
-    "cannot represent in XML raises lxml's XMLSyntaxError, outside DavError"
-))
 def test_a_body_xml_cannot_carry_stays_inside_the_dav_taxonomy(dav, collection):
     """Radicale copies a resource's iCalendar bytes verbatim into
     `<C:calendar-data>` with stdlib ElementTree, which does not validate
     characters. So a VTODO whose SUMMARY carries U+FFFE (or U+FFFF) produces a
     perfectly well-formed-looking 207 that lxml refuses — XML 1.0 §2.2 Char
-    forbids exactly those two. `parse_multistatus` has no guard, so
-    `lxml.etree.XMLSyntaxError` — not a `DavError` — comes out of `multiget`,
+    forbids exactly those two. `parse_multistatus` HAD no guard, so
+    `lxml.etree.XMLSyntaxError` — not a `DavError` — came out of `multiget`,
     the only path that fetches bodies.
+
+    Fixed in two halves, because the taxonomy wrap alone does not save the
+    collection: `parse_multistatus` now parses with an explicit XMLParser and
+    raises `DavError`, and `SyncEngine._multiget` refetches a failed batch one
+    href at a time over GET, which parses no XML — so the poisoned resource
+    costs one resource instead of the whole batch, reaches `_upsert_body`'s
+    malformed-resource path, and the sync token advances again.
 
     That escapes the transport's own taxonomy, and lands past every place built
     to contain a bad resource: `SyncEngine._multiget` fails for the whole 50-item
@@ -395,13 +405,16 @@ def test_a_body_xml_cannot_carry_stays_inside_the_dav_taxonomy(dav, collection):
 # ── AUDIT: a boundary UNTIL overflows datetime instead of answering 4xx ───────
 
 @pytest.mark.radicale
-@pytest.mark.xfail(strict=True, reason=(
-    "_shift_until/_coerce_until do unguarded datetime arithmetic, so a UNTIL "
-    "at the end of representable time raises OverflowError -> unmapped 500"
-))
-@pytest.mark.parametrize("case", ["foreign UNTIL=9999 dragged", "repeat_until=9999-12-31"])
+@pytest.mark.parametrize("case", ["foreign UNTIL=9999 dragged",
+                                  "foreign UNTIL=9999 dragged a year",
+                                  "repeat_until=9999-12-31"])
 def test_a_boundary_until_answers_the_client_instead_of_overflowing(app_client, case):
-    """Two UNTIL writers add a timedelta or convert a zone with no range check.
+    """FIXED. Two UNTIL writers added a timedelta or converted a zone with no
+    range check; both now saturate to a representable bound first, and
+    patch_event catches OverflowError beside the ValueError it already caught.
+    Saturating rather than refusing is deliberate — refusing would leave a
+    foreign 9999 series exactly as uneditable, only with a tidier status.
+    Originally:
 
     `_shift_until` does `(until.astimezone(zone) + delta).astimezone(utc)`, so
     dragging a series whose rule carries `UNTIL=99991231T235959Z` — a real
@@ -440,15 +453,22 @@ def test_a_boundary_until_answers_the_client_instead_of_overflowing(app_client, 
     cal_href = f"/{USER}/{cal['id']}/"
     uid = uuid.uuid4().hex
     try:
-        if case == "foreign UNTIL=9999 dragged":
+        if case.startswith("foreign UNTIL=9999 dragged"):
             _foreign_put(cal_href, uid, _vevent(
                 f"{uid}@tasksd",
                 dtstart="DTSTART:20260106T090000Z", dtend="DTEND:20260106T093000Z",
                 rrule="FREQ=YEARLY;UNTIL=99991231T235959Z",
             ))
             assert app_client.post("/api/sync").status_code == 200
-            body = {"start": "2026-01-07T09:00:00+00:00",
-                    "end": "2026-01-07T09:30:00+00:00",
+            # A YEAR, not a day, for the second case. Saturating the INPUT
+            # before the arithmetic survives only a delta smaller than the
+            # guard, so a one-day drag passed against a half-fix while a real
+            # reschedule still raised. The result is what has to be bounded.
+            far = case.endswith("a year")
+            body = {"start": "2027-01-07T09:00:00+00:00" if far
+                             else "2026-01-07T09:00:00+00:00",
+                    "end": "2027-01-07T09:30:00+00:00" if far
+                           else "2026-01-07T09:30:00+00:00",
                     "scope": "all", "recurrence_id": "2026-01-06T09:00:00+00:00"}
         else:
             _foreign_put(cal_href, uid, _vevent(
@@ -471,15 +491,12 @@ def test_a_boundary_until_answers_the_client_instead_of_overflowing(app_client, 
 # ── AUDIT: the XML-safe rule guards collection names but not item text ────────
 
 @pytest.mark.radicale
-@pytest.mark.xfail(strict=True, reason=(
-    "CreateTask.summary is a bare str, so the app writes a task body its own "
-    "read path cannot parse — the XML-safe rule guards only collection names"
-))
 def test_a_task_summary_cannot_carry_what_the_read_path_cannot_parse(app_client):
     """dav/xml.py states the XML-safe rule "has to hold in three places at once
     — the HTTP edge (app.CollectionName), the MCP tool schemas, and this
     backstop", because "widening it in one place silently drifted the others".
-    It is enforced on exactly one field. `CollectionName` carries
+    It WAS enforced on exactly one field; the same alias now guards every field
+    that reaches iCal, on both the HTTP and MCP surfaces. `CollectionName` carries
     `XML_SAFE_PATTERN_SCALAR` and the MCP collection-name schema carries
     `XML_SAFE_PATTERN`; `CreateTask.summary`/`notes`, `EditTask.*`,
     `CreateEvent.summary`/`location`/`description`, `tags` and the matching MCP
@@ -534,16 +551,88 @@ def test_a_task_summary_cannot_carry_what_the_read_path_cannot_parse(app_client)
         app_client.delete(f"/api/lists/{lst['id']}")
 
 
+@pytest.mark.radicale
+def test_the_xml_safe_rule_refuses_only_what_xml_cannot_carry(app_client):
+    """The control for the guard above, and the reason it is a character class
+    rather than an ASCII whitelist.
+
+    The rule excludes C0 controls (bar tab/LF/CR), surrogates and U+FFFE/U+FFFF —
+    nothing else. A summary is the field people put emoji, accents and CJK in,
+    and notes are multi-line by definition, so a guard that took any of those
+    would be a worse bug than the one it fixed.
+    """
+    r = app_client.post("/api/lists", json={"name": f"L-{uuid.uuid4().hex[:8]}"})
+    assert r.status_code == 201, r.text
+    lst = r.json()
+    try:
+        for label, text in [
+            ("emoji", "Ship it 🚀"),
+            ("ZWJ sequence", "👩‍💻 pair with 👨‍👩‍👧"),
+            ("accents", "Café déjà vu — naïve"),
+            ("CJK", "日本語のタスク"),
+            ("RTL", "مهمة عربية"),
+            ("newline", "line one\nline two"),
+            ("tab", "a\tb"),
+        ]:
+            got = app_client.post(f"/api/lists/{lst['id']}/tasks",
+                                  json={"summary": text})
+            assert got.status_code == 201, f"{label} was refused: {got.text}"
+            assert got.json()["summary"] == text, f"{label} did not round-trip"
+    finally:
+        app_client.delete(f"/api/lists/{lst['id']}")
+
+
+@pytest.mark.radicale
+def test_an_anonymous_booking_cannot_poison_the_target_calendar(app_client):
+    """The sharpest instance of the same finding, and the one first missed.
+
+    `PublicBook` is the only unauthenticated write path into the owner's
+    calendar, and all three of its text fields reach the VEVENT: `name` and the
+    link title become the SUMMARY, and `service.book` writes `f"Name: {name}"`
+    and `f"Email: {email}"` into the DESCRIPTION. `email` was left a bare `str`
+    when the guard first landed, on the assumption that `_EMAIL_RE` bounded it —
+    it does not: the pattern only forbids `@` and whitespace, so
+    `"ada\ufffe@example.com"` matches it happily.
+
+    A stranger holding a booking link could therefore still write a character
+    the app's own read path cannot parse, wedging that calendar's sync for every
+    client. All three fields are asserted together because the guard is only
+    worth anything if it has no gap.
+    """
+    cal = _new_calendar(app_client)
+    r = app_client.post("/api/scheduling/links", json={
+        "title": "Coffee", "calendar": cal["id"], "timezone": "UTC",
+        "availability": {str(d): ["09:00-17:00"] for d in range(5)},
+    })
+    assert r.status_code == 201, r.text
+    token = r.json()["token"]
+    try:
+        for field, body in [
+            ("email", {"name": "Ada", "email": f"ada{FFFE}@example.com"}),
+            ("name", {"name": f"Ada{FFFE}", "email": "ada@example.com"}),
+            ("notes", {"name": "Ada", "email": "ada@example.com",
+                       "notes": f"see you {FFFE}"}),
+        ]:
+            got = app_client.post(f"/api/public/booking/{token}/book",
+                                  json={"start": "2099-01-05T10:00:00+00:00", **body})
+            assert got.status_code < 500, f"{field}: {got.text}"
+            assert got.status_code != 201, (
+                f"an anonymous booking wrote U+FFFE through {field!r} — that "
+                f"calendar's sync is now unreadable to every client"
+            )
+    finally:
+        app_client.delete(f"/api/calendars/{cal['id']}")
+
+
 # ── AUDIT: smylte_delete_event skips the recurrence_id check HTTP performs ────
 
 @pytest.mark.radicale
-@pytest.mark.xfail(strict=True, reason=(
-    "McpApi.delete_event never validates recurrence_id and has no ValueError "
-    "arm, so a malformed anchor is reported as a calendar-server outage"
-))
 @pytest.mark.parametrize("bad", ["2026-09-08 09:00", "   ", "not-a-date"])
 def test_a_malformed_recurrence_id_names_the_argument_not_the_server(mcp_stack, bad):
-    """`McpApi.delete_event` checks only that `recurrence_id` is non-empty. The
+    """FIXED. `McpApi.delete_event` checked only that `recurrence_id` was
+    non-empty; it now strips before that check and carries the `except
+    ValueError -> ToolError` arm its sibling `update_event` already had.
+    Originally: The
     HTTP route for the identical operation calls `_check_recurrence_id`, whose
     docstring spells out the missing half: "A non-ISO anchor is the other half:
     it reaches `date.fromisoformat` deep in the edit path, where the ValueError
@@ -597,18 +686,20 @@ def test_a_malformed_recurrence_id_names_the_argument_not_the_server(mcp_stack, 
 # ── AUDIT: the body-limit middleware's 413 is dead code on every route ────────
 
 @pytest.mark.radicale
-@pytest.mark.xfail(strict=True, reason=(
-    "FastAPI's body-read wrapper catches _BodyTooLarge and answers 400, so the "
-    "middleware's 413 never reaches a router path"
-))
 def test_a_chunked_oversized_body_is_a_413_through_the_real_app(_scratch_up, tmp_path):
     """`BodySizeLimitMiddleware` raises a private `_BodyTooLarge` out of
     `counting_receive` and catches it around the inner app to emit the 413. That
-    `except` never fires for a FastAPI route: `get_request_handler` wraps the
+    `except` never fired for a FastAPI route: `get_request_handler` wraps the
     body read in `except Exception as e: raise HTTPException(400, "There was an
-    error parsing the body")`, and `_BodyTooLarge` is an ordinary Exception. So
+    error parsing the body")`, and `_BodyTooLarge` WAS an ordinary Exception. So
     the `started` flag, the `_too_large` fallback and its `Connection: close`
-    are all unreachable on the router path.
+    were all unreachable on the router path.
+
+    Fixed by making `_BodyTooLarge` an `HTTPException(413)`, which takes the
+    `except HTTPException: raise` arm FastAPI keeps immediately above the
+    generic one, commented "If a middleware raises an HTTPException, it should
+    be raised again". The bare-ASGI path test_body_limit.py exercises still
+    reaches the middleware's own handler.
 
     The memory bound itself still holds — the stream really is cut at the first
     over-cap chunk — so this is a contract defect rather than a hole. But the

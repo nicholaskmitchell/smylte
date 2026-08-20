@@ -532,13 +532,19 @@ def update_booking_link(
         raise ValueError(f"unknown booking link fields: {bad}")
     if get_booking_link(conn, token) is None:
         return None
-    for k, v in fields.items():
-        conn.execute(
-            # {k} is vetted against _LINK_FIELDS above — not attacker input.
-            f"UPDATE booking_links SET {k}=?, "  # nosec B608
-            "updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE token=?",
-            (v, token),
-        )
+    # One statement per field on an autocommit connection is one COMMIT per
+    # field, so a value the schema rejects part-way through left the earlier
+    # fields permanently applied — the caller saw a 500 and a half-changed link.
+    # Same repair, and the same reason, as reorder_tasks: `with conn:` is not a
+    # transaction under isolation_level=None.
+    with tx(conn):
+        for k, v in fields.items():
+            conn.execute(
+                # {k} is vetted against _LINK_FIELDS above — not attacker input.
+                f"UPDATE booking_links SET {k}=?, "  # nosec B608
+                "updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE token=?",
+                (v, token),
+            )
     return get_booking_link(conn, token)
 
 

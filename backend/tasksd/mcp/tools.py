@@ -113,7 +113,7 @@ _DUE = {
     ),
 }
 _TAGS = {
-    "type": "array", "items": {"type": "string"},
+    "type": "array", "items": {"type": "string", "pattern": XML_SAFE_PATTERN},
     "description": "Tags (iCalendar CATEGORIES). Replaces the whole set.",
 }
 _SCOPE = {
@@ -266,8 +266,9 @@ def build_tools(api) -> dict[str, Tool]:
         "`parent` to make it a subtask of an existing task in the same list.",
         _obj({
             "list_id": _LIST_ID,
-            "summary": {"type": "string", "minLength": 1, "description": "The task title."},
-            "notes": {"type": "string"},
+            "summary": {"type": "string", "minLength": 1, "pattern": XML_SAFE_PATTERN,
+                        "description": "The task title."},
+            "notes": {"type": "string", "pattern": XML_SAFE_PATTERN},
             "due": _DUE,
             "start": {"type": "string", "description": "Start date/time, same format as due."},
             "priority": _PRIORITY,
@@ -288,7 +289,8 @@ def build_tools(api) -> dict[str, Tool]:
         "string to clear a date, or an empty array to clear tags.",
         _obj({
             "list_id": _LIST_ID, "uid": {"type": "string"},
-            "summary": {"type": "string"}, "notes": {"type": "string"},
+            "summary": {"type": "string", "pattern": XML_SAFE_PATTERN},
+            "notes": {"type": "string", "pattern": XML_SAFE_PATTERN},
             "due": _DUE, "start": {"type": "string"},
             "priority": _PRIORITY, "tags": _TAGS,
             "status": {"type": "string",
@@ -423,15 +425,15 @@ def build_tools(api) -> dict[str, Tool]:
         "to make it recur.",
         _obj({
             "calendar_id": _CAL_ID,
-            "summary": {"type": "string", "minLength": 1},
+            "summary": {"type": "string", "minLength": 1, "pattern": XML_SAFE_PATTERN},
             "start": {"type": "string",
                       "description": "'YYYY-MM-DD' when all_day, else 'YYYY-MM-DDTHH:MM'."},
             "end": {"type": "string",
                     "description": "Same format as start. For an all-day event this is "
                                    "exclusive — the day after the last one."},
             "all_day": {"type": "boolean", "default": False},
-            "location": {"type": "string"},
-            "description": {"type": "string"},
+            "location": {"type": "string", "pattern": XML_SAFE_PATTERN},
+            "description": {"type": "string", "pattern": XML_SAFE_PATTERN},
             "tags": _TAGS,
             "repeat": _REPEAT,
             "repeat_interval": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 1,
@@ -452,8 +454,9 @@ def build_tools(api) -> dict[str, Tool]:
         "change reaches — read the scope description before editing one.",
         _obj({
             "calendar_id": _CAL_ID, "uid": {"type": "string"},
-            "summary": {"type": "string"}, "description": {"type": "string"},
-            "location": {"type": "string"},
+            "summary": {"type": "string", "pattern": XML_SAFE_PATTERN},
+            "description": {"type": "string", "pattern": XML_SAFE_PATTERN},
+            "location": {"type": "string", "pattern": XML_SAFE_PATTERN},
             "start": {"type": "string"}, "end": {"type": "string"},
             "tags": _TAGS,
             "status": {"type": "string", "enum": ["CONFIRMED", "TENTATIVE", "CANCELLED"]},
@@ -549,8 +552,10 @@ def build_tools(api) -> dict[str, Tool]:
         _obj({
             "token": {"type": "string", "description": "Link token from smylte_list_booking_links."},
             "enabled": {"type": "boolean"},
-            "title": {"type": "string", "minLength": 1, "maxLength": 200},
-            "description": {"type": "string", "maxLength": 2000},
+            "title": {"type": "string", "minLength": 1, "maxLength": 200,
+                      "pattern": XML_SAFE_PATTERN},
+            "description": {"type": "string", "maxLength": 2000,
+                            "pattern": XML_SAFE_PATTERN},
             "duration_minutes": {"type": "integer", "minimum": 5, "maximum": 480},
             "buffer_minutes": {"type": "integer", "minimum": 0, "maximum": 240},
             "min_notice_hours": {"type": "integer", "minimum": 0, "maximum": 720},

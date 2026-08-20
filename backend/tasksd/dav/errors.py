@@ -36,3 +36,15 @@ class PreconditionFailed(DavError):
 
 class InvalidSyncToken(DavError):
     """sync-collection token no longer valid. EXPECTED; fall back to full resync."""
+
+
+class MalformedResponse(DavError):
+    """The server answered, and the body is not XML we can read.
+
+    Distinct from the transport failures above because the remedy is different:
+    a 4xx/5xx or a dropped connection says "ask again later", while this says
+    "this particular BATCH is unreadable" — Radicale copies item bytes verbatim
+    into <C:calendar-data>, so one resource carrying a character XML forbids
+    (U+FFFE/U+FFFF) makes the whole multistatus unparseable while every other
+    resource in it is fine. `SyncEngine._multiget` keys its per-href fallback on
+    this specifically, so a network blip does not become fifty retries."""

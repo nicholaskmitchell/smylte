@@ -280,6 +280,47 @@ def _find_master_event(cal: Calendar):
     return events[0] if events else None
 
 
+# Arithmetic near datetime's edges raises OverflowError, which is not a
+# ValueError, so nothing on the edit path caught it: a foreign
+# UNTIL=99991231T235959Z made every drag of that series a 500, and "repeat until
+# 9999-12-31" from the UI did the same. Saturate rather than refuse — a rule
+# running to the end of representable time is unbounded in every practical
+# sense, and refusing would leave the foreign series exactly as uneditable, just
+# with a tidier status code. The margin leaves room for a zone conversion (±14h)
+# and a subsequent drag to move it again without walking off the end.
+_UNTIL_GUARD = timedelta(days=2)
+
+
+def _saturate(dt: datetime) -> datetime:
+    """`dt`, pulled inside the range datetime arithmetic can survive."""
+    lo, hi = datetime.min + _UNTIL_GUARD, datetime.max - _UNTIL_GUARD
+    naive = dt.replace(tzinfo=None)
+    if naive > hi:
+        return hi.replace(tzinfo=dt.tzinfo)
+    if naive < lo:
+        return lo.replace(tzinfo=dt.tzinfo)
+    return dt
+
+
+def _bound(*, high: bool, tzinfo) -> datetime:
+    """The saturation value itself, in the shape the caller returns."""
+    edge = datetime.max - _UNTIL_GUARD if high else datetime.min + _UNTIL_GUARD
+    return edge.replace(tzinfo=tzinfo)
+
+
+def _safely(compute, *, high: bool, tzinfo):
+    """`compute()`, saturating instead of overflowing.
+
+    The RESULT has to be clamped, not just the input: pre-clamping only survives
+    a delta smaller than the guard, so a bounded series dragged a day worked and
+    the same series dragged a month still raised. That distinction is why the
+    stage-1 pin (which drags one day) passed against a half-fix."""
+    try:
+        return _saturate(compute())
+    except (OverflowError, ValueError):
+        return _bound(high=high, tzinfo=tzinfo)
+
+
 def _coerce_until(until, dtstart) -> date | datetime:
     """UNTIL, expressed in the value type RFC 5545 §3.3.10 requires of it.
 
@@ -297,7 +338,10 @@ def _coerce_until(until, dtstart) -> date | datetime:
         until = datetime.combine(until, time(23, 59, 59), tzinfo=dtstart.tzinfo)
     elif until.tzinfo is None and dtstart.tzinfo is not None:
         until = until.replace(tzinfo=dtstart.tzinfo)
-    return _as_utc(until) if dtstart.tzinfo is not None else until.replace(tzinfo=None)
+    until = _saturate(until)
+    if dtstart.tzinfo is not None:
+        return _safely(lambda: _as_utc(until), high=True, tzinfo=timezone.utc)
+    return until.replace(tzinfo=None)
 
 
 def _normalized_rule(rule: dict | None, event: Event) -> dict | None:
@@ -808,9 +852,18 @@ def _shift_until(until, delta: timedelta, master: Event):
     path."""
     dtstart = master.get("DTSTART")
     zone = getattr(getattr(dtstart, "dt", None), "tzinfo", None)
-    if zone is None or not isinstance(until, datetime) or until.tzinfo is None:
-        return until + delta
-    return (until.astimezone(zone) + delta).astimezone(timezone.utc)
+    high = delta >= timedelta(0)
+    if not isinstance(until, datetime):
+        # A DATE-valued UNTIL: date.max is the edge here, not datetime.max.
+        try:
+            return until + delta
+        except (OverflowError, ValueError):
+            return date.max - _UNTIL_GUARD if high else date.min + _UNTIL_GUARD
+    if zone is None or until.tzinfo is None:
+        return _safely(lambda: _saturate(until) + delta,
+                       high=high, tzinfo=until.tzinfo)
+    return _safely(lambda: (_saturate(until).astimezone(zone) + delta).astimezone(timezone.utc),
+                   high=high, tzinfo=timezone.utc)
 
 
 def _shift_rrule(master: Event, delta: timedelta, day_delta: int) -> None:

@@ -11,9 +11,9 @@ Nothing here needs Radicale. These are bytes in, dataclasses out.
 from __future__ import annotations
 
 import pytest
-from lxml import etree
 
 from tasksd.dav import xml as X
+from tasksd.dav.errors import DavError
 
 
 def ms(body: str) -> bytes:
@@ -181,13 +181,30 @@ def test_a_propstat_without_a_status_is_not_treated_as_success():
     assert r.text(X.GETETAG) is None
 
 
-def test_malformed_xml_raises_an_lxml_syntax_error():
-    # Documented, not endorsed: the callers all sit behind `_request`, which has
-    # already required a 207, so this only fires on a server that answered 207
-    # with rubbish. It surfaces as XMLSyntaxError rather than DavError — worth
-    # pinning so a future change to the taxonomy notices this path exists.
-    with pytest.raises(etree.XMLSyntaxError):
+def test_malformed_xml_stays_inside_the_dav_taxonomy():
+    # This pinned XMLSyntaxError, on the rationale that "the callers all sit
+    # behind `_request`, which has already required a 207, so this only fires on
+    # a server that answered 207 with rubbish". That rationale was false, and
+    # the test was doing exactly the job its own comment claimed — noticing when
+    # the taxonomy changed. Radicale answers a VALID 207 whose payload carries a
+    # character XML cannot represent (one U+FFFE another CalDAV client wrote), so
+    # a foreign exception type came out of `multiget` and wedged the collection's
+    # sync for good. `parse_multistatus` now refuses in-taxonomy.
+    with pytest.raises(DavError):
         X.parse_multistatus(b"<d:multistatus xmlns:d='DAV:'><d:response>")
+
+
+def test_a_character_xml_cannot_carry_is_refused_in_taxonomy():
+    # The shape that actually happens on the wire: well-formed markup whose TEXT
+    # holds U+FFFE. lxml refuses the document; the caller must see a DavError.
+    body = (
+        "<d:multistatus xmlns:d='DAV:'><d:response><d:href>/x.ics</d:href>"
+        "<d:propstat><d:prop><d:getetag>￾</d:getetag></d:prop>"
+        "<d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>"
+        "</d:multistatus>"
+    ).encode()
+    with pytest.raises(DavError):
+        X.parse_multistatus(body)
 
 
 def test_an_external_entity_is_not_fetched():
@@ -204,6 +221,6 @@ def test_an_external_entity_is_not_fetched():
     ).encode()
     try:
         parsed = X.parse_multistatus(body)
-    except etree.XMLSyntaxError:
+    except DavError:
         return                                  # refused outright; also fine
     assert "root:" not in parsed.responses[0].href
