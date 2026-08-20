@@ -12,17 +12,17 @@ of how the harness behaved in practice — its "Two strengths of pin" and
 
 `docs/AUDIT.md` is the evidence. This is the plan for closing it.
 
-**29 open, 52 closed.** Stages 1, 2 and 3 are done; stage 4 is in progress and
-stage 5 has not started. Of the 29 still open:
+**28 open, 54 closed.** Stages 1, 2 and 3 are done; stage 4 is in progress and
+stage 5 has not started. Of the 28 still open:
 
 | where it came from | open |
 |---|---|
-| the sweep itself (stages 4 and 5) | 20 |
+| the sweep itself (stages 4 and 5) | 18 |
 | filed by the adversarial review of Stage 3 | 7 |
 | filed by that review's own follow-up | 1 |
-| filed during remediation (see `docs/AUDIT.md`) | 1 |
+| filed during remediation (see `docs/AUDIT.md`) | 2 |
 
-19 of the 20 sweep findings are pinned — 15 as `xfail(strict=True)` / `it.fails`
+17 of the 18 sweep findings are pinned — 13 as `xfail(strict=True)` / `it.fails`
 and 4 as ordinary passing tests (see "Test gaps that were only gaps" below); the
 unpinned one is finding 62. None of the review's 8 is pinned yet. The review's
 other 3, the ones Stage 3 itself caused, are closed — along with 3 more the
@@ -388,11 +388,12 @@ before the real fix landed.
 
 ## Stage 4 — User-visible correctness & rendering ⬜ IN PROGRESS
 
-21 findings · 8 medium, 13 low · **8 closed, 13 open**
+21 findings · 8 medium, 13 low · **10 closed, 11 open**
 
 Closed so far: **38**, **45** (the two backend ones — the paths a stranger
 reaches), **41**, **42**, **54** (the provider's fetch identity — when the app
-decides to ask the server again) and **40**, **49**, **50** (calendar date math).
+decides to ask the server again), **40**, **49**, **50** (calendar date math) and
+**51**, **56** (one uid, two collections).
 Every pin was widened before its fix and then run against a plausible half-fix.
 
 **Three half-fixes so far, and not one was caught by its own pin.** In each case
@@ -434,12 +435,12 @@ The user can see it is wrong. Contained, mostly small, and the stage where a fix
 | 48 | The theme rename row is never closed when the active theme changes, so switching themes with it open and pre… | `frontend/src/components/AppearancePanel.tsx:45` | low | `never renames the theme the user switched to with the old name` |
 | 49 ✅ | endFromDuration returns the string "NaN-NaN-NaNTNaN:NaN" instead of null when the duration overflows Date, s… | `frontend/src/calendar.ts:70` | low | `sends no fabricated end for a DURATION that overflows the calendar` |
 | 50 ✅ | Ticking "all day" on a timed event that ends at midnight adds a day the grid never showed | `frontend/src/components/CalendarView.tsx:777` | low | `keeps a midnight-ending event on its one day when it is made all-day` |
-| 51 | The duplicate-React-key fix landed on one of the five sites named; task chips, mobile dots, the mobile agend… | `frontend/src/components/CalendarView.tsx:614` | low | `gives every task chip and every popover row a key unique per collection` |
+| 51 ✅ | The duplicate-React-key fix landed on one of the five sites named; task chips, mobile dots, the mobile agend… | `frontend/src/components/CalendarView.tsx:614` | low | `gives every task chip and every popover row a key unique per collection` |
 | 52 | An SSE reconnect that 401s retries forever, so a session that lapses while the tab is idle is never detected | `frontend/src/api.ts:475` | low | `discovers a session that lapsed while the tab was idle` |
 | 53 | The login form's two labels are not associated with their inputs, so both fields are unlabelled — the one fo… | `frontend/src/components/Login.tsx:34` | low | `gives both fields an accessible name` |
 | 54 ✅ | loadKey encodes list ORDER, so a sidebar drag-reorder refetches every task in the account and discards the f… | `frontend/src/data.tsx:180` | low | `does not refetch every task in the account when only the order changed` |
 | 55 | packDown can stack modules past MAX_ROWS, producing a y the server's `le=200` rejects — the whole settings P… | `frontend/src/dashboard.ts:93` | low | `never emits a module below the row the server accepts` |
-| 56 | Tasks pane rows key on the bare UID, so a task copied into a second list produces duplicate React keys and d… | `frontend/src/components/TasksView.tsx:442` | low | `deletes only the copy whose row was clicked` |
+| 56 ✅ | Tasks pane rows key on the bare UID, so a task copied into a second list produces duplicate React keys and d… | `frontend/src/components/TasksView.tsx:442` | low | `deletes only the copy whose row was clicked` |
 | 57 | The Completed pane hides a completed RELATED-TO ring entirely, though the list view has explicit code to ren… | `frontend/src/components/TasksView.tsx:334` | low | `shows a completed ring another client authored` |
 | 58 | TaskModal — the app's most-used dialog — has no Escape handler, breaking the modal contract every other dial… | `frontend/src/components/TaskModal.tsx:121` | low | `closes on Escape, like every other dialog in the app` |
 

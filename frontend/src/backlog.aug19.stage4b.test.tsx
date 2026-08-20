@@ -150,7 +150,7 @@ const keyWarnings = () =>
 
 describe('aug19 stage 4b — chip, dot, agenda and popover identity', () => {
   // AUDIT open: CalendarView.tsx:614 (and :545, :548, :648, :652; DayPopover.tsx:103, :106)
-  it.fails('gives every task chip and every popover row a key unique per collection', async () => {
+  it('gives every task chip and every popover row a key unique per collection', async () => {
     // The stage-4 fix keyed the desktop EVENT chip `${calendar}::${id}` and
     // tested exactly that element. A CalDAV UID is unique per COLLECTION, not
     // per account, and the trust model treats Tasks.org / DAVx5 / Thunderbird
@@ -199,6 +199,75 @@ describe('aug19 stage 4b — chip, dot, agenda and popover identity', () => {
     expect(within(screen.getByRole('dialog')).getAllByText(/Renew passport/)).toHaveLength(2)
     expect(keyWarnings(), 'the day popover').toBe(0)
   })
+
+  // WIDENING: the mobile leg above duplicates a TASK uid, so the event dot and
+  // the agenda's event row — two of the six sites the finding names — were
+  // never driven by anything. Same defect, different map.
+  it('gives every event dot and mobile agenda row a key unique per collection', async () => {
+    const due = todayYmd()
+    m.calendars.mockResolvedValue([cal, { ...cal, id: 'c2', href: '/c2/', name: 'Personal' }])
+    m.events.mockImplementation(async (calId: string) =>
+      [ev({ uid: 'shared', id: 'shared', calendar: `/${calId}/`,
+        summary: 'Standup', start: `${due}T09:00:00`, end: `${due}T09:30:00` })])
+
+    stubMatchMedia(true)
+    try {
+      render(<CalendarHarness />)
+      await waitFor(() => expect(document.querySelectorAll('.ev-dot')).toHaveLength(2))
+      expect(document.querySelectorAll('.day-agenda .agenda-ev')).toHaveLength(2)
+      expect(keyWarnings(), 'mobile event dots and agenda rows').toBe(0)
+    } finally { stubMatchMedia(false) }
+  })
+
+  // WIDENING: the other half of this finding's suggested fix, which no
+  // assertion reached — `applyLocal` and `del` match on `e.uid` alone, so an
+  // edit or a delete aimed at one collection's copy hits both. The React key is
+  // only the visible symptom; this is the data loss under it.
+  it('removes only the calendar copy that was deleted', async () => {
+    const due = todayYmd()
+    m.calendars.mockResolvedValue([cal, { ...cal, id: 'c2', href: '/c2/', name: 'Personal' }])
+    m.events.mockImplementation(async (calId: string) =>
+      [ev({ uid: 'shared', id: 'shared', calendar: `/${calId}/`,
+        summary: 'Standup', start: `${due}T09:00:00`, end: `${due}T09:30:00` })])
+    m.deleteEvent.mockResolvedValue(null as never)
+
+    const user = userEvent.setup()
+    render(<CalendarHarness />)
+    await waitFor(() => expect(document.querySelectorAll('.cal-ev')).toHaveLength(2))
+
+    await user.click(document.querySelectorAll('.cal-ev')[0] as HTMLElement)
+    const dialog = await screen.findByRole('dialog')
+    await user.click(within(dialog).getByText('Delete'))
+
+    await waitFor(() => expect(m.deleteEvent).toHaveBeenCalledTimes(1))
+    // The wire call is already correct; it is local state that loses both.
+    expect(document.querySelectorAll('.cal-ev')).toHaveLength(1)
+  })
+
+  // Control (passes today, must keep passing): scoping the local mutation must
+  // not stop it happening. `calHref` answers '' until the calendar list has
+  // loaded, so a predicate that requires a matching href with no fallback turns
+  // every optimistic delete into a no-op — and `applyLocal` reports success, so
+  // nothing reloads to cover for it.
+  it('still removes the only copy of an event that lives in one calendar', async () => {
+    const due = todayYmd()
+    m.events.mockResolvedValue([ev({
+      uid: 'solo', id: 'solo', calendar: '/c1/', summary: 'Standup',
+      start: `${due}T09:00:00`, end: `${due}T09:30:00`,
+    })])
+    m.deleteEvent.mockResolvedValue(null as never)
+
+    const user = userEvent.setup()
+    render(<CalendarHarness />)
+    await waitFor(() => expect(document.querySelectorAll('.cal-ev')).toHaveLength(1))
+
+    await user.click(document.querySelectorAll('.cal-ev')[0] as HTMLElement)
+    const dialog = await screen.findByRole('dialog')
+    await user.click(within(dialog).getByText('Delete'))
+
+    await waitFor(() => expect(m.deleteEvent).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(document.querySelectorAll('.cal-ev')).toHaveLength(0))
+  })
 })
 
 /** The tasks pane over a real provider — the Sidebar comes with it. */
@@ -219,7 +288,7 @@ function tasksSetup() {
 
 describe('aug19 stage 4b — the tasks pane and one uid in two lists', () => {
   // AUDIT open: TasksView.tsx:442
-  it.fails('deletes only the copy whose row was clicked', async () => {
+  it('deletes only the copy whose row was clicked', async () => {
     // Rows key on the bare uid and the provider's optimistic mutations match on
     // it too, so the two copies are one row as far as the pane is concerned:
     // React warns about the duplicate key, and `del` on the Work copy — correct
@@ -242,6 +311,51 @@ describe('aug19 stage 4b — the tasks pane and one uid in two lists', () => {
     expect(m.deleteTask.mock.calls[0][0]).toBe('l1')          // only the Work copy
     // …and the other list's task is still on screen.
     expect(screen.queryAllByText('Ship it')).toHaveLength(1)
+  })
+
+  // WIDENING: delete is one of four provider mutations that match on the bare
+  // uid. Completing is the one a user does every day, and it is worse to get
+  // wrong because nothing about it looks destructive — the other list's task
+  // silently reads as done, and the next refetch un-does it.
+  it('completes only the copy whose box was ticked', async () => {
+    m.lists.mockResolvedValue([work, home])
+    m.tasks.mockImplementation(async (listId: string) =>
+      [task({ uid: 'shared', list: listId, summary: 'Ship it' })])
+    m.complete.mockImplementation(async (listId: string) =>
+      task({ uid: 'shared', list: listId, summary: 'Ship it', completed: true,
+        status: 'COMPLETED' }))
+    const user = tasksSetup()
+
+    await waitFor(() => expect(screen.getAllByText('Ship it')).toHaveLength(2))
+    const rows = () => Array.from(document.querySelectorAll('.task')) as HTMLElement[]
+    await user.click(within(rows()[0]).getByTitle('Toggle complete'))
+
+    await waitFor(() => expect(m.complete).toHaveBeenCalledTimes(1))
+    expect(m.complete.mock.calls[0][0]).toBe('l1')
+    // Exactly one row reads as done. `showCompleted` is false, so the ticked
+    // one leaves the pane and the other stays — either way, not both.
+    await waitFor(() => expect(screen.queryAllByText('Ship it')).toHaveLength(1))
+    expect(rows()[0].className).not.toMatch(/\bdone\b/)
+  })
+
+  // Control (passes today, must keep passing). Scoping a mutation must not stop
+  // it happening: a predicate that demands a matching list with no fallback
+  // would make every optimistic update a no-op for the ordinary single-copy
+  // task, which is every task most accounts have.
+  it('still completes and deletes an ordinary task that lives in one list', async () => {
+    m.lists.mockResolvedValue([work])
+    m.tasks.mockResolvedValue([task({ uid: 'solo', list: 'l1', summary: 'Buy milk' })])
+    m.complete.mockResolvedValue(
+      task({ uid: 'solo', list: 'l1', summary: 'Buy milk', completed: true, status: 'COMPLETED' }))
+    m.deleteTask.mockResolvedValue(null)
+    const user = tasksSetup()
+
+    await screen.findByText('Buy milk')
+    const row = () => document.querySelector('.task') as HTMLElement
+    await user.click(within(row()).getByTitle('Toggle complete'))
+    await waitFor(() => expect(m.complete).toHaveBeenCalledTimes(1))
+    // showCompleted is false, so completing it takes it out of the pane.
+    await waitFor(() => expect(screen.queryByText('Buy milk')).toBeNull())
   })
 })
 
