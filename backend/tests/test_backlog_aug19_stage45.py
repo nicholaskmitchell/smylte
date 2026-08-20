@@ -614,8 +614,6 @@ def _abs(dt):
     return dt.astimezone(timezone.utc)
 
 
-@pytest.mark.xfail(strict=True, reason="busy_intervals drops a fall-back event "
-                                       "and shortens a DURATION across a transition")
 def test_busy_intervals_hold_their_absolute_length_across_a_dst_change():
     """The DST battery in test_scheduling.py covers slot GENERATION four ways,
     but every DST fixture in that file is an `Interval` built by hand, so
@@ -640,6 +638,13 @@ def test_busy_intervals_hold_their_absolute_length_across_a_dst_change():
 
     Asserted as absolute (UTC) length, not as wall-clock endpoints, so any fix
     that keeps the real duration passes.
+
+    **Closed by the Stage 3 fixes for those two defects** (findings 18 and 29),
+    not by a change of its own — which is the point of a test-gap finding: the
+    gap is shut when the case exists AND passes. Worth noting that the stage
+    boundaries were not watertight here. This was filed as a Stage 5 test gap
+    and the two defects it uncovered were filed as Stage 3 bugs; they are one
+    piece of work, and it was the missing test that found them.
     """
     fall_back = scheduling.busy_intervals(
         [_ev(start="2026-11-01T06:30:00+00:00", end="2026-11-01T07:00:00+00:00")], TZ)
