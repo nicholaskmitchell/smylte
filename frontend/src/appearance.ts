@@ -277,11 +277,16 @@ export const MAX_NAME_LEN = 120
 
 const FORBIDDEN = /url\(|image\(|expression\(|javascript:|@import|[;{}<>\\]|\/\*/i
 
-/** Functions a color value may legally use. */
+/** Functions a color value may legally use — anywhere inside the value. */
 const COLOR_FNS = new Set([
   'rgb', 'rgba', 'hsl', 'hsla', 'hwb', 'lab', 'lch', 'oklab', 'oklch',
   'color-mix', 'color', 'var', 'calc',
 ])
+
+/** …and the subset that may be the value's OUTERMOST function. `calc()` is a
+ *  number, not a colour: it is legal inside `rgb(calc(1 + 1) 0 0)` and never as
+ *  the whole of a colour token. */
+const OUTER_COLOR_FNS = new Set([...COLOR_FNS].filter((f) => f !== 'calc'))
 
 /** The CSS named colours, plus the two keywords. The bare-word rule used to be
  *  /^[a-z]{3,20}$/i, which accepted `bluu` and `notacolour` as readily as `red`:
@@ -320,21 +325,65 @@ const NAMED_COLORS = new Set([
   'yellowgreen',
 ])
 
+/** The index of the `)` closing the `(` at `open`, or -1 if it is unbalanced. */
+function closingParen(v: string, open: number): number {
+  let depth = 0
+  for (let i = open; i < v.length; i++) {
+    if (v[i] === '(') depth++
+    else if (v[i] === ')' && --depth === 0) return i
+  }
+  return -1
+}
+
+/**
+ * Is `v` something CSS will accept as a colour?
+ *
+ * Deliberately a GRAMMAR check and not a parse oracle. The obvious repair is
+ * `CSS.supports('color', v)`, and it cannot be used here: `CSS.supports` does
+ * not exist in the jsdom the suite runs under (nor does the canvas that
+ * `toSwatchHex` uses), so an oracle-based validator would be code no test ever
+ * executes — the fallback would be the only branch under test while the browser
+ * ran the other one. For a value that reaches `document.documentElement.style`,
+ * localStorage and the account, a rule that can be read and tested beats one
+ * that cannot.
+ *
+ * Three shapes are legal, and each was previously too loose:
+ *  - a hex literal of 3, 4, 6 or 8 digits. `{3,8}` also admitted 5 and 7, which
+ *    CSS has no such thing as, so `#0a0a0` (a six-digit value with one character
+ *    dropped) was stored, applied, and dropped by the browser at computed-value
+ *    time — blanking the token with the editor still reporting it valid.
+ *  - a bare keyword in NAMED_COLORS.
+ *  - ONE function call spanning the whole value. The old test asked only that
+ *    every `name(` occurrence was in COLOR_FNS with balanced parens overall,
+ *    which passes `rgb(1,2,3), 0 0 0 200vmax red` — a shadow, not a colour.
+ */
 function isColor(v: string): boolean {
-  if (/^#[0-9a-f]{3,8}$/i.test(v)) return true
+  if (/^#([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(v)) return true
   // A bare keyword: `transparent`, `currentColor`, or a named CSS colour.
   if (/^[a-z]+$/i.test(v)) return NAMED_COLORS.has(v.toLowerCase())
-  const fns = [...v.matchAll(/([a-z-]+)\s*\(/gi)].map((m) => m[1].toLowerCase())
-  if (!fns.length) return false
-  if (!fns.every((f) => COLOR_FNS.has(f))) return false
-  // Balanced parens — an unbalanced value would leak into whatever follows it
-  // when the pre-paint script writes it out.
-  let depth = 0
-  for (const ch of v) {
-    if (ch === '(') depth++
-    else if (ch === ')' && --depth < 0) return false
+
+  const head = /^([a-z-]+)\(/i.exec(v)
+  if (!head || !OUTER_COLOR_FNS.has(head[1].toLowerCase())) return false
+  // The single call has to BE the value; this subsumes the old balance check.
+  if (closingParen(v, head[0].length - 1) !== v.length - 1) return false
+
+  const inner = v.slice(head[0].length, -1)
+  const nested = [...inner.matchAll(/([a-z-]+)\s*\(/gi)].map((m) => m[1].toLowerCase())
+  if (!nested.every((f) => COLOR_FNS.has(f))) return false
+
+  if (head[1].toLowerCase() === 'var') {
+    // A colour token may alias another COLOUR token and nothing else. This is
+    // the distinction the finding's evidence turns on: `var(--accent)` is a
+    // legitimate way to say "the same as the accent", while `var(--serif)`
+    // resolves to a font stack and blanks the property exactly as a typo would.
+    // Decidable here, and by nothing downstream — `CSS.supports` would accept
+    // both, since a var() is only invalid at computed-value time.
+    const ref = /^\s*(--[\w-]+)\s*(?:,([\s\S]+))?$/.exec(inner)
+    if (!ref || TOKENS[ref[1]]?.kind !== 'color') return false
+    // A fallback is substituted verbatim, so it has to be a colour too.
+    if (ref[2] !== undefined && !isColor(ref[2].trim())) return false
   }
-  return depth === 0
+  return true
 }
 
 /** A font-family list: quoted or bare family names, commas, generic keywords. */
@@ -427,11 +476,46 @@ export function sanitizeAppearance(raw: unknown): Appearance {
  * is carried by `<html data-preset>` (see presetSlug), so the inline layer must
  * be cleared for it rather than written to.
  */
+/**
+ * What `theme` says in `mode`, with the mode-independent tokens counted for both.
+ *
+ * Nine of the 23 customizable tokens are not mode-specific in the shipped
+ * design: they live only in SHARED_DEFAULTS and are declared only in the
+ * `:root` block of tokens.css, since the `:root[data-theme="dark"]` block
+ * restates colours and nothing else. `CustomTheme` has only `light` and `dark`
+ * maps, so a corner radius or a typeface chosen in light mode used to vanish the
+ * moment the app flipped — with the theme still selected and named, and no way
+ * in the panel to author these once for both.
+ *
+ * The write side now puts a shared token into BOTH maps. This is the read side,
+ * and it exists for the themes already saved: a shared token present in only one
+ * map is this bug's fingerprint — "only in light" was never something the editor
+ * could express on purpose — so it counts for both. That repairs those themes on
+ * the next load with no migration and no schema change.
+ *
+ * Only SHARED_DEFAULTS' names fall through. A colour must never cross, or a dark
+ * theme would be repainted in its light values.
+ */
+export function themeTokens(theme: CustomTheme, mode: Mode): ThemeTokens {
+  const own = sanitizeTokens(mode === 'dark' ? theme.dark : theme.light)
+  const other = sanitizeTokens(mode === 'dark' ? theme.light : theme.dark)
+  const shared: ThemeTokens = {}
+  for (const name of Object.keys(SHARED_DEFAULTS)) {
+    if (other[name] !== undefined) shared[name] = other[name]
+  }
+  return { ...shared, ...own }
+}
+
 export function resolve(appearance: Appearance | null | undefined, mode: Mode): ThemeTokens {
   if (!appearance?.active) return {}
   const theme = appearance.themes?.find((t) => t.id === appearance.active)
   if (!theme) return {}
-  return sanitizeTokens(mode === 'dark' ? theme.dark : theme.light)
+  return themeTokens(theme, mode)
+}
+
+/** Is `token` one of the nine the shipped design does not vary by mode? */
+export function isSharedToken(token: string): boolean {
+  return token in SHARED_DEFAULTS
 }
 
 /**

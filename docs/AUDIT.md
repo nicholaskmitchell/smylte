@@ -1715,7 +1715,7 @@ So the owner's connections screen says the connector is read-only while a live a
 
 ### Appearance & settings
 
-#### [ ] Shape, density and type tokens are stored per light/dark map, so corner radius, text size, gutter, row height, label case, tracking and all three fonts silently revert on every theme flip
+#### [x] Shape, density and type tokens are stored per light/dark map, so corner radius, text size, gutter, row height, label case, tracking and all three fonts silently revert on every theme flip
 
 `frontend/src/components/AppearancePanel.tsx:69` · **medium** · rendering · stage 4
 
@@ -1755,9 +1755,38 @@ Failure scenario: Settings -> Appearance (app in light mode, shipped design acti
 
 **Suggested fix.** Give the shared tokens one home. Cheapest correct change: in `edit()`, split the patch — tokens whose shipped value comes from `SHARED_DEFAULTS` (i.e. `!(token in DEFAULTS.light)`) get merged into BOTH `light` and `dark`, colors keep going into `active[mode]` only; do the same in the per-token `onClear` and in `resetMode`. Alternatively add a third `shared: ThemeTokens` map to `CustomTheme` (mirrored in backend/tasksd/app.py's `CustomTheme`) and have `resolve()` return `{...theme.shared, ...theme[mode]}`. Either way add an appearance.test.ts case asserting that a theme created by setting `--radius` in light resolves to the same `--radius` in dark, and an AppearancePanel test that editing Corners emits a patch landing in both maps.
 
-**Pinned by** `2026-08-19 — appearance > keeps a shape token when the theme flips to dark` in `frontend/src/backlog.aug19.stage4a.test.tsx`.
+**Fixed** by taking the cheaper of the two options this entry offers — split the
+patch, no schema change — with the drawback it attributes to that option removed.
+Already-saved themes are repaired on the READ path by `themeTokens`, exported from
+appearance.ts and used by `resolve` and by the panel's `current`/`overridden` so
+the page and the panel cannot disagree: a shared token present in only one map is
+this bug's fingerprint ("only in light" was never something the editor could
+express on purpose), so it counts for both. No migration, no schema change, and
+the theme is repaired the next time it loads.
 
-#### [ ] isColor accepts hex literals CSS rejects (5 and 7 digits) and non-color functions like calc(), so a mistyped color is stored, synced and applied while the editor reports it valid
+The `shared` bucket was rejected for three reasons, the third decisive: it needs a
+matching field on `app.py`'s pydantic `CustomTheme` or every settings PUT silently
+drops the user's shape tokens; `parseTheme`/`serializeTheme` are version-stamped,
+so a third map is an export-format change; and **the presets are dense** — all 23
+tokens in both maps, pinned byte-for-byte against tokens.css — so `seedFork` gives
+a forked preset `--radius` in both, and `{...shared, ...mode}` would let the
+per-mode copy shadow every later shared edit. The fix would silently do nothing
+for exactly the users most likely to hit it.
+
+`resetMode` and the per-token clear are symmetric with the write, which is a
+contract decision worth stating: "Reset light" now drops shared tokens from BOTH
+maps. Leaving them would make the button visibly inert — the override counter
+counts shared tokens in both modes, so it would still read above zero straight
+after a reset.
+
+Widened from one slider to all three control kinds, the fork-from-default path,
+`onClear` and `resetMode`. The half-fix (split in `edit()` only) is caught — but
+NOT by the original pin, nor by the two that drive the other control kinds: only
+the `onClear` and `resetMode` cases fail against it.
+
+**Pinned by** `2026-08-19 — appearance > keeps a shape token when the theme flips to dark` and the four cases beside it in `frontend/src/backlog.aug19.stage4a.test.tsx`.
+
+#### [x] isColor accepts hex literals CSS rejects (5 and 7 digits) and non-color functions like calc(), so a mistyped color is stored, synced and applied while the editor reports it valid
 
 `frontend/src/appearance.ts:324` · **low** · bug · `minor` · stage 4
 
@@ -1790,6 +1819,40 @@ Failure scenario B (visible while typing, because `ColorControl` commits on ever
 </details>
 
 **Suggested fix.** Make the hex branch match the four legal lengths: `/^#([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i`. For the function branch, use the parse oracle the module already has instead of a name list — `toSwatchHex` sets `ctx.fillStyle`, which ignores anything the browser cannot parse, so `isColor` can end with a `CSS.supports('color', v)` check (falling back to the existing shape rules when `CSS.supports` is unavailable, so jsdom stays deterministic). Add appearance.test.ts cases asserting `isValidToken('--bg','#12345')`, `isValidToken('--bg','#1234567')` and `isValidToken('--accent','calc(1px)')` are false while `#fff`, `#fff0`, `#ffffff`, `#ffffff80` and `oklch(...)` stay true.
+
+**Fixed**, but NOT with the `CSS.supports` oracle this entry suggests. Measured
+under the suite's own environment: `CSS.supports` is `undefined` in the installed
+jsdom, as is the canvas `toSwatchHex` relies on. An oracle-based validator would
+be code no test ever executes — every pin would exercise the fallback while the
+browser ran the other branch. For a value that reaches
+`document.documentElement.style`, localStorage and the account, a rule that can
+be read and tested beats one that cannot.
+
+So: a deterministic grammar check. The four legal hex lengths; ONE function call
+spanning the whole value (which is what rejects `rgb(1,2,3), 0 0 0 200vmax red`
+and subsumes the old paren-balance test); `calc` removed from the set a value may
+be headed by, since it is a number and is legal only INSIDE a colour function.
+
+**A `var()` may name only a COLOUR token.** That is the distinction this entry's
+own evidence turns on — `var(--serif)` resolves to a font stack and blanks the
+property exactly as a typo would — and it is decidable here, from `TOKENS[name].kind`,
+and by nothing downstream: `CSS.supports` accepts any `var()`, since a var is only
+invalid at computed-value time. A fallback (`var(--accent, #fff)`) is substituted
+verbatim, so it is required to be a colour too.
+
+**Supersession, recorded rather than quietly applied.** `backlog.stage4.test.tsx`'s
+control `still accepts every form a real value takes` listed `var(--x)` as valid.
+`--x` is not a token at all, so it is the same defect as `var(--serif)` and it is
+now refused; that control was updated to `var(--accent)` — the legitimate form —
+with an assertion that `var(--x)` is false and a comment naming this finding.
+Changing a green test to match new code is normally the anti-pattern; here the
+older control encoded an assumption this finding overturns, and the alternative
+was to leave the validator admitting a value that blanks the token.
+
+The control beside the pin now round-trips every shipped value — both `DEFAULTS`
+maps, `SHARED_DEFAULTS` and every preset — through `sanitizeTokens` unchanged.
+That is what stops a tightened validator blanking the design for everybody, which
+is the failure mode this class of fix has.
 
 **Pinned by** `2026-08-19 — appearance > refuses hex lengths CSS does not have, and functions that are not colours` in `frontend/src/backlog.aug19.stage4a.test.tsx`.
 
@@ -1836,7 +1899,7 @@ Failure scenario: the user opens Settings -> Calendar while the connection is mo
 
 **Pinned by** `aug19 stage 4b — archived calendars > stops saying "Loading…" once the fetch has failed` in `frontend/src/backlog.aug19.stage4b.test.tsx`.
 
-#### [ ] The theme rename row is never closed when the active theme changes, so switching themes with it open and pressing Save renames the theme you switched TO with the old theme's name
+#### [x] The theme rename row is never closed when the active theme changes, so switching themes with it open and pressing Save renames the theme you switched TO with the old theme's name
 
 `frontend/src/components/AppearancePanel.tsx:45` · **low** · bug · `minor` · stage 4
 
@@ -1876,7 +1939,21 @@ Failure scenario: the user has themes "Alpha" and "Beta". They click Rename on A
 
 **Suggested fix.** Close the row whenever the target changes: `useEffect(() => { setRenaming(false) }, [appearance.active])` (or key the rename row on `active.id`). Also have `saveAs` and `importTheme` call `setRenaming(false)` since both retarget `active`. Add an AppearancePanel test that opens Rename, selects a different theme, and asserts the rename field is gone.
 
-**Pinned by** `aug19 stage 4b — the theme rename bar > never renames the theme the user switched to with the old name` in `frontend/src/backlog.aug19.stage4b.test.tsx`.
+**Fixed** with the one-line effect this entry suggests, keyed on
+`appearance.active`, which covers all three retargeting paths — the picker,
+Duplicate and Import — because all three write it. Closing rather than
+re-priming: re-priming would silently change what the row is about while the user
+is looking at it, which is a second version of the same defect.
+
+The pin had an escape hatch and it mattered. Its Save click was `if (save) await
+user.click(save)`, so a fix that closes the row passed with the rename never
+attempted — the assertion that matters was unreachable in exactly the branch the
+fix creates. Restated as the outcome (the row is gone, or it is about the theme
+the user is now looking at), and the Duplicate path added. Run against a half-fix
+that resets `renaming` inside `selectTheme` only, the picker pin passes and the
+Duplicate pin is what fails.
+
+**Pinned by** `aug19 stage 4b — the theme rename bar > never renames the theme the user switched to with the old name` and `… > never renames the copy Duplicate just made with the original name` in `frontend/src/backlog.aug19.stage4b.test.tsx`.
 
 ### Calendar view
 

@@ -12,17 +12,17 @@ of how the harness behaved in practice — its "Two strengths of pin" and
 
 `docs/AUDIT.md` is the evidence. This is the plan for closing it.
 
-**27 open, 55 closed.** Stages 1, 2 and 3 are done; stage 4 is in progress and
-stage 5 has not started. Of the 27 still open:
+**24 open, 58 closed.** Stages 1, 2 and 3 are done; stage 4 is in progress and
+stage 5 has not started. Of the 24 still open:
 
 | where it came from | open |
 |---|---|
-| the sweep itself (stages 4 and 5) | 17 |
+| the sweep itself (stages 4 and 5) | 14 |
 | filed by the adversarial review of Stage 3 | 7 |
 | filed by that review's own follow-up | 1 |
 | filed during remediation (see `docs/AUDIT.md`) | 2 |
 
-16 of the 17 sweep findings are pinned — 12 as `xfail(strict=True)` / `it.fails`
+13 of the 14 sweep findings are pinned — 9 as `xfail(strict=True)` / `it.fails`
 and 4 as ordinary passing tests (see "Test gaps that were only gaps" below); the
 unpinned one is finding 62. None of the review's 8 is pinned yet. The review's
 other 3, the ones Stage 3 itself caused, are closed — along with 3 more the
@@ -388,12 +388,13 @@ before the real fix landed.
 
 ## Stage 4 — User-visible correctness & rendering ⬜ IN PROGRESS
 
-21 findings · 8 medium, 13 low · **11 closed, 10 open**
+21 findings · 8 medium, 13 low · **14 closed, 7 open**
 
 Closed so far: **38**, **45** (the two backend ones — the paths a stranger
 reaches), **41**, **42**, **54** (the provider's fetch identity — when the app
 decides to ask the server again), **40**, **49**, **50** (calendar date math) and
-**51**, **56** (one uid, two collections) and **57** (the Completed pane's ring).
+**51**, **56** (one uid, two collections), **57** (the Completed pane's ring) and
+**39**, **46**, **48** (appearance).
 Every pin was widened before its fix and then run against a plausible half-fix.
 
 **Three half-fixes so far, and not one was caught by its own pin.** In each case
@@ -404,12 +405,31 @@ the thing that failed was a control:
 | 54 | sort the effect dependency, leave the commit guard | `keeps a task fetch that was in flight when the order changed` — green today, load-bearing only after the fix |
 | 40 | refuse every drop on a clipped event | `still resizes a window-clipped span dropped on an earlier cell` |
 | 50 | subtract a day whenever "all day" is ticked | two long-standing tests in `CalendarView.test.tsx` |
+| 51/56 | fix the keys, leave the mutations on the bare uid | its own pins |
+| 57 | the one-hop ring test | the three-node widening |
+| 39 | split the patch in `edit()` only | the `onClear` and `resetMode` widenings — not the original pin, and not the two that drive the other control kinds |
+| 46 | tighten the hex regex only | its own pin |
+| 48 | reset `renaming` inside `selectTheme` only | the Duplicate widening |
 
-That is the lesson of this stage so far, and it is not the one the review
-predicted. Widening a pin makes it detect the BUG more reliably; it does not make
-it detect an OVER-correction, because a pin only ever asserts that one thing is
-now right. What catches an over-correction is a test asserting that something
-else is still right — and those never appear in a count of pins.
+Two lessons, and neither is the one the review predicted.
+
+**A pin does not catch an over-correction.** Widening makes a pin detect the BUG
+more reliably; it cannot make it detect a fix that goes too far, because a pin
+only ever asserts that one thing is now right. What catches that is a test
+asserting something ELSE is still right — and those never appear in a count of
+pins. Three of the eight rows above are controls.
+
+**Widening pays where the finding names several sites.** #57, #39 and #48 were
+each caught only by a case added during widening, and in #39's and #48's the
+ORIGINAL pin passed against the half-fix. That is the review's criticism landing
+exactly as it described it.
+
+One contract was superseded rather than added to: `backlog.stage4.test.tsx` had
+pinned `var(--x)` as a valid colour, and #46 makes a `var()` naming a non-colour
+token invalid. Changing a green test to match new code is normally the
+anti-pattern; here the older control encoded an assumption the newer finding
+overturns, and the alternative was a validator that admits a value which blanks
+the token. Recorded in `docs/AUDIT.md` under #46, not applied quietly.
 
 Widening #38 also surfaced a new finding: `HEAD /book/<token>` 404s on **both**
 spellings, because FastAPI's `APIRoute` does not derive HEAD from GET the way
@@ -423,16 +443,16 @@ The user can see it is wrong. Contained, mostly small, and the stage where a fix
 | # | Finding | Where | Sev | Pin |
 |---|---|---|---|---|
 | 38 ✅ | `/book/<token>/` (trailing slash) 404s — the SPA mount swallows it before redirect_slashes can act, though m… | `backend/tasksd/app.py:1489` | medium | `test_a_booking_link_serves_the_spa_with_or_without_a_trailing_slash` |
-| 39 | Shape, density and type tokens are stored per light/dark map, so corner radius, text size, gutter, row heigh… | `frontend/src/components/AppearancePanel.tsx:69` | medium | `keeps a shape token when the theme flips to dark` |
+| 39 ✅ | Shape, density and type tokens are stored per light/dark map, so corner radius, text size, gutter, row heigh… | `frontend/src/components/AppearancePanel.tsx:69` | medium | `keeps a shape token when the theme flips to dark` |
 | 40 ✅ | The resize grip on an event that runs past the six-week window truncates the span when released on its own c… | `frontend/src/components/CalendarView.tsx:556` | medium | `does not truncate a window-clipped span dropped where its grip is drawn` |
 | 41 ✅ | A failed events fetch permanently records the month as "asked", so the calendar grid stays blank or stale wi… | `frontend/src/data.tsx:576` | medium | `re-requests a month whose first fetch failed` |
 | 42 ✅ | The Home mini calendar never refetches on an SSE change, so its dots go stale while every other module on th… | `frontend/src/components/HomeView.tsx:141` | medium | `repaints when the account changes under an open dashboard` |
 | 43 | A rejected booking-link save leaves the editor permanently disabled — the in-flight guard is set but never c… | `frontend/src/components/SchedulingView.tsx:225` | medium | `comes back to life when the save is rejected` |
 | 44 | The availability editor lets the owner build overlapping weekly windows the server rejects with a 422, and s… | `frontend/src/components/SchedulingView.tsx:178` | medium | `never submits a week the server will refuse, and never drops a range` |
 | 45 ✅ | On the consent screen "Cancel" is the form's default button, so pressing Enter after typing the password dec… | `backend/tasksd/mcp/routes.py:638` | medium | `test_pressing_enter_on_the_consent_form_connects_rather_than_declining` |
-| 46 | isColor accepts hex literals CSS rejects (5 and 7 digits) and non-color functions like calc(), so a mistyped… | `frontend/src/appearance.ts:324` | low | `refuses hex lengths CSS does not have, and functions that are not colours` |
+| 46 ✅ | isColor accepts hex literals CSS rejects (5 and 7 digits) and non-color functions like calc(), so a mistyped… | `frontend/src/appearance.ts:324` | low | `refuses hex lengths CSS does not have, and functions that are not colours` |
 | 47 | The archived-calendars settings section renders "Loading…" forever when its fetch fails — the sibling sectio… | `frontend/src/components/ArchivedCalendarsSection.tsx:39` | low | `stops saying "Loading…" once the fetch has failed` |
-| 48 | The theme rename row is never closed when the active theme changes, so switching themes with it open and pre… | `frontend/src/components/AppearancePanel.tsx:45` | low | `never renames the theme the user switched to with the old name` |
+| 48 ✅ | The theme rename row is never closed when the active theme changes, so switching themes with it open and pre… | `frontend/src/components/AppearancePanel.tsx:45` | low | `never renames the theme the user switched to with the old name` |
 | 49 ✅ | endFromDuration returns the string "NaN-NaN-NaNTNaN:NaN" instead of null when the duration overflows Date, s… | `frontend/src/calendar.ts:70` | low | `sends no fabricated end for a DURATION that overflows the calendar` |
 | 50 ✅ | Ticking "all day" on a timed event that ends at midnight adds a day the grid never showed | `frontend/src/components/CalendarView.tsx:777` | low | `keeps a midnight-ending event on its one day when it is made all-day` |
 | 51 ✅ | The duplicate-React-key fix landed on one of the five sites named; task chips, mobile dots, the mobile agend… | `frontend/src/components/CalendarView.tsx:614` | low | `gives every task chip and every popover row a key unique per collection` |

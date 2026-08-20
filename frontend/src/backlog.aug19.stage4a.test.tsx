@@ -35,7 +35,10 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
-import { isValidToken, resolve, sanitizeTokens, type Appearance, type CustomTheme } from './appearance'
+import {
+  DEFAULTS, FONT_CHOICES, PRESETS, SHARED_DEFAULTS, isValidToken, resolve, sanitizeTokens,
+  type Appearance, type CustomTheme,
+} from './appearance'
 import { durationMs, endFromDuration } from './calendar'
 import { DataProvider } from './data'
 import { setCacheUser } from './cache'
@@ -677,7 +680,7 @@ describe('2026-08-19 — appearance', () => {
   // ── AUDIT (open): appearance.ts:324 — isColor accepts hex literals CSS
   //    rejects and non-colour functions, so a mistyped colour is stored,
   //    synced and applied while the editor reports it valid ─────────────────
-  it.fails('refuses hex lengths CSS does not have, and functions that are not colours', () => {
+  it('refuses hex lengths CSS does not have, and functions that are not colours', () => {
     // EVIDENCE. The audit already closed this exact failure mode for bare words
     // ("any 3–20 letter word … stored and applied as an override that silently
     // blanks the property"), and the fix replaced that shape test with
@@ -698,11 +701,20 @@ describe('2026-08-19 — appearance', () => {
     // Paste `#0a0a0` into Surfaces → Background (a six-digit hex with one
     // character dropped) and the page paints on the browser's default canvas
     // while the panel counts it as a live override that survives a reload.
-    for (const bad of ['#12345', '#1234567']) {
-      expect(isValidToken('--bg', bad)).toBe(false)
+    // WIDENED. Two hex digits and one are as illegal as five, and the function
+    // branch admits more than `calc`: anything whose NAME is in COLOR_FNS, in
+    // any position, with balanced parens. A `var()` naming a token that is not
+    // a colour is the case the finding's own evidence leads with, and it is
+    // decidable here — TOKENS records each token's kind — while `var(--accent)`
+    // in the control below is legitimate and must stay valid. That distinction
+    // is the whole finding: a colour may alias another COLOUR.
+    for (const bad of ['#1', '#12', '#12345', '#1234567', '#123456789']) {
+      expect(isValidToken('--bg', bad), bad).toBe(false)
     }
-    for (const bad of ['calc(1px)', 'rgb(1,2,3), 0 0 0 200vmax red']) {
-      expect(isValidToken('--accent', bad)).toBe(false)
+    for (const bad of ['calc(1px)', 'rgb(1,2,3), 0 0 0 200vmax red', 'attr(data-x)',
+                       'translate(1px)', 'oklch(0.6 0.19 42) drop-shadow(0 0 red)',
+                       'var(--serif)', 'var(--nope)']) {
+      expect(isValidToken('--accent', bad), bad).toBe(false)
     }
     // Nothing downstream catches it either — sanitizeTokens re-runs the same check.
     expect(sanitizeTokens({ '--bg': '#12345' })).toEqual({})
@@ -717,14 +729,27 @@ describe('2026-08-19 — appearance', () => {
     }
     for (const ok of ['oklch(0.60 0.19 42)', 'rgb(20, 19, 26)', 'rgba(20, 19, 26, 0.6)',
                       'hsl(210 50% 40%)', 'color-mix(in oklch, red, blue)', 'var(--accent)',
+                      'var(--accent, #fff)', 'color(display-p3 1 0 0)',
                       'transparent', 'rebeccapurple']) {
-      expect(isValidToken('--accent', ok)).toBe(true)
+      expect(isValidToken('--accent', ok), ok).toBe(true)
     }
+
+    // The control that matters most: every value the app SHIPS has to survive
+    // its own validator. A tightened `isColor` that drops one of these blanks
+    // that token for everybody, and the failure is invisible in review because
+    // the panel goes on reporting the value as valid-but-absent.
+    for (const m of ['light', 'dark'] as const) {
+      expect(sanitizeTokens(DEFAULTS[m]), `DEFAULTS.${m}`).toEqual(DEFAULTS[m])
+      for (const preset of PRESETS) {
+        expect(sanitizeTokens(preset[m]), `${preset.name}.${m}`).toEqual(preset[m])
+      }
+    }
+    expect(sanitizeTokens(SHARED_DEFAULTS)).toEqual(SHARED_DEFAULTS)
   })
 
   // ── AUDIT (open): AppearancePanel.tsx:69 — shape, density and type tokens are
   //    stored per light/dark map, so nine of them revert on every theme flip ─
-  it.fails('keeps a shape token when the theme flips to dark', async () => {
+  it('keeps a shape token when the theme flips to dark', async () => {
     // EVIDENCE. Nine of the 23 customizable tokens are not mode-specific in the
     // shipped design: --serif, --sans, --mono, --radius, --fs-scale, --gutter,
     // --row-y, --label-case and --tracking live only in SHARED_DEFAULTS and are
@@ -759,5 +784,66 @@ describe('2026-08-19 — appearance', () => {
     const withAccent = last()
     expect(resolve(withAccent, 'light')['--accent']).toBe('#00ff00')
     expect(resolve(withAccent, 'dark')['--accent']).toBeUndefined()
+  })
+
+  // WIDENING: the slider above is one of THREE control kinds, and `--radius` is
+  // one of the nine shared tokens. A repair wired into the length control alone
+  // passes the pin and leaves the typeface and the label casing reverting.
+  it('keeps every shared token, whichever control set it', async () => {
+    const { last } = openAppearance({ active: 't1', themes: [theme()] }, 'light')
+
+    // The select's values are whole font STACKS, not labels.
+    const sans = FONT_CHOICES.sans[1].stack        // "System sans"
+    fireEvent.change(screen.getByLabelText(/^Interface/), { target: { value: sans } })
+    expect(resolve(last(), 'dark')['--sans'], '--sans (font control)').toBe(sans)
+
+    fireEvent.change(screen.getByLabelText(/^Labels/), { target: { value: 'none' } })
+    expect(resolve(last(), 'dark')['--label-case'], '--label-case (keyword)').toBe('none')
+
+    fireEvent.change(screen.getByLabelText(/^Gutter/), { target: { value: '40' } })
+    expect(resolve(last(), 'dark')['--gutter'], '--gutter (length)').toBe('40px')
+  })
+
+  // WIDENING: the fork path. With no theme active, `edit()` seeds a new one
+  // from the shipped design and merges the patch into `fork[mode]` — a
+  // different branch from the one above, and the one a first-time user hits.
+  it('keeps a shared token set on a theme the edit itself created', async () => {
+    const { last } = openAppearance({}, 'light')
+
+    fireEvent.change(screen.getByLabelText('Corners'), { target: { value: '8' } })
+    expect(resolve(last(), 'light')['--radius']).toBe('8px')
+    expect(resolve(last(), 'dark')['--radius']).toBe('8px')
+  })
+
+  // WIDENING: clearing has to be symmetric with setting, or the reset arrow
+  // stops working the moment the fix lands — the token would be cleared from
+  // the current mode and go on resolving from the other one.
+  it('clears a shared token out of both modes', async () => {
+    const withRadius: Appearance = {
+      active: 't1', themes: [theme({ light: { '--radius': '8px' }, dark: { '--radius': '8px' } })],
+    }
+    const { last } = openAppearance(withRadius, 'light')
+
+    // The per-token reset arrow, labelled per token ("Reset Corners").
+    fireEvent.click(screen.getByLabelText('Reset Corners'))
+
+    expect(resolve(last(), 'light')['--radius']).toBeUndefined()
+    expect(resolve(last(), 'dark')['--radius']).toBeUndefined()
+  })
+
+  // WIDENING: "Reset light" says it drops every override for this mode. Once a
+  // shared token counts for both, leaving it in the other map means the button
+  // visibly does nothing — the override counter, which counts shared tokens in
+  // both modes, would still read above zero straight after a reset.
+  it('drops shared tokens from both modes on a per-mode reset', async () => {
+    const withRadius: Appearance = {
+      active: 't1', themes: [theme({ light: { '--radius': '8px' }, dark: { '--radius': '8px' } })],
+    }
+    const { last } = openAppearance(withRadius, 'light')
+
+    fireEvent.click(screen.getByText(/Reset light/i))
+
+    expect(resolve(last(), 'light')['--radius']).toBeUndefined()
+    expect(resolve(last(), 'dark')['--radius']).toBeUndefined()
   })
 })
