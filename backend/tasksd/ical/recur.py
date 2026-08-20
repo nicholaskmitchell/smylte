@@ -249,29 +249,40 @@ def _pathological_rule(cal: Calendar, window_end: date | datetime | None = None)
 
 
 def _repair_span(start_iso: str | None, end_iso: str | None) -> str | None:
-    """The instance end, with a DST arithmetic artifact taken back out.
+    """The instance end, when the library emitted one that precedes its start.
 
     `recurring_ical_events` derives each instance's end by wall-clock arithmetic
-    on that instance's DTSTART. For an instance whose span crosses a transition,
-    the two ends resolve with different offsets, so the emitted pair states one
-    duration in wall clock and a different one in real time:
+    on that instance's DTSTART. When the instance's local start falls inside the
+    hour the clock SKIPS, the two ends resolve with different offsets and the
+    emitted occurrence runs BACKWARDS:
 
         2026-03-08T02:30:00-06:00 -> 2026-03-08T03:00:00-05:00     -30 minutes
-        2026-11-01T01:30:00-05:00 -> 2026-11-01T02:00:00-06:00     +90 minutes
 
-    The first runs backwards, which is wrong under any reading — and
     `busy_intervals` discards any interval that is not strictly positive, so the
     owner's recurring 02:30 commitment stopped blocking bookings on that one day
-    and the public page handed the time to an anonymous visitor. The second
-    blocks three times its authored length, withholding an hour of real
-    availability. The SPA renders the first as "3:30 AM - 3:00 AM".
+    and the public page handed the time to an anonymous visitor. The SPA rendered
+    it "3:30 AM - 3:00 AM".
 
-    The repair keeps the duration the component STATES (its wall-clock span) and
-    re-applies it as absolute time from the start instant. On any day without a
-    transition inside the span the two are equal and nothing changes, so the
-    blast radius is exactly the broken instances. Note the fall-back case then
-    reads "1:30 AM - 1:00 AM" locally, which is correct and is the same shape
-    this app's own 01:30 bookings already have (06:30Z -> 07:00Z).
+    ONLY that case. The first version of this repaired every span whose exact
+    duration disagreed with its wall-clock duration, on the reasoning that the
+    stated span is a wall-clock quantity — and that is wrong in a way that costs
+    exactly what it was meant to save. RFC 5545 §3.8.5.3 says a DTEND-authored
+    recurrence carries the same EXACT duration to every instance, and for the
+    master's own occurrence the DTSTART/DTEND the library emits are the bytes the
+    author wrote, correct by construction. Repairing those turned an overnight
+    22:00->06:00 shift across the fall-back night from the 9 real hours it
+    occupies into 8, and released the last hour to the booking page.
+
+    So the remaining disagreement — an instance spanning a transition being an
+    hour LONGER than the master's — is left alone. It blocks more time than it
+    occupies, which withholds availability rather than double-booking, and that
+    is the direction to err in on this path. It is filed as its own finding
+    rather than papered over here.
+
+    The end is rebuilt in the START's zone, which is a fixed offset recovered
+    from an ISO string. That is exact as an instant, which is what every consumer
+    of this value compares on; the wall-clock rendering of the repaired end can
+    name the pre-transition offset.
     """
     if start_iso is None or end_iso is None:
         return end_iso
@@ -281,12 +292,11 @@ def _repair_span(start_iso: str | None, end_iso: str | None) -> str | None:
         return end_iso
     if start.tzinfo is None or end.tzinfo is None:
         return end_iso                     # floating: no offset to disagree about
+    if end.astimezone(timezone.utc) > start.astimezone(timezone.utc):
+        return end_iso                     # forward-going: not ours to touch
     wall = end.replace(tzinfo=None) - start.replace(tzinfo=None)
-    exact = end.astimezone(timezone.utc) - start.astimezone(timezone.utc)
-    if exact == wall:
-        return end_iso                     # no transition inside the span
-    # The stated span is a wall-clock quantity, so re-apply it as one — but from
-    # the start INSTANT, which is what the library failed to do.
+    if wall <= timedelta(0):
+        return end_iso                     # authored as zero/negative; not a DST artifact
     return (start.astimezone(timezone.utc) + wall).astimezone(start.tzinfo).isoformat()
 
 

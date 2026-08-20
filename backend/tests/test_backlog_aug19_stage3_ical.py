@@ -688,10 +688,10 @@ def test_every_expanded_occurrence_across_spring_forward_blocks_real_time():
     occurrences = expand_occurrences(raw, date(2026, 3, 1), date(2026, 3, 20))
     assert len(occurrences) == 8, occurrences        # sanity: the series expanded
 
-    # Every instance must occupy the thirty minutes it was authored with — not
-    # merely be forward-going. A guard that only clamped a backwards end to its
-    # start would satisfy the two assertions below while still emitting a
-    # zero-length instance here, and zero-length blocks nothing either.
+    # Forward-going is not enough: a guard that merely CLAMPED a backwards end to
+    # its start would satisfy the two assertions below while emitting a
+    # zero-length instance, and zero-length blocks nothing either. On the
+    # spring-forward side the repaired instance occupies its authored 30 minutes.
     spans = {
         f"{o.start} -> {o.end}": (
             datetime.fromisoformat(o.end).astimezone(UTC)
@@ -730,23 +730,31 @@ def test_every_expanded_occurrence_across_spring_forward_blocks_real_time():
 
 @pytest.mark.parametrize("tail", [
     ("DURATION:PT30M",),
-    # The library derives the end the same wrong way whether the master authored
-    # DURATION or DTEND, so both spellings have to be driven — a fix applied only
-    # to `_end_fields` would leave this one broken.
     ("DTEND;TZID=America/Chicago:20261025T020000",),
 ])
-def test_the_fall_back_mirror_does_not_stretch_an_instance_to_three_times_its_length(tail):
-    """The other direction of the same defect, and the one the pin above cannot
-    see: on 2026-11-01 a 30-minute 01:30 instance is emitted as
-    01:30-05:00 -> 02:00-06:00, which is 90 minutes of real time. It is forward-
-    going, so `busy_intervals` accepts it and nothing looks wrong — it simply
-    withholds an hour of the owner's genuine availability from the public page,
-    every year, on one day.
+def test_a_fall_back_instance_over_blocks_rather_than_under_blocks(tail):
+    """The boundary of the repair, pinned deliberately rather than left to drift.
 
-    Note what a correct answer looks like locally: 01:30 CDT + 30 real minutes is
-    01:00 CST, so the instance reads "1:30 AM - 1:00 AM". That is the repeated
-    hour, and it is the same shape this app's own 01:30 bookings already have
-    (06:30Z -> 07:00Z), which is why `busy_intervals` must compare instants.
+    The mirror of the spring-forward defect is a 30-minute instance on the
+    fall-back day emitted as 01:30-05:00 -> 02:00-06:00, which is 90 real
+    minutes. It is NOT repaired, and that is a decision rather than an oversight.
+
+    Repairing it means repairing every span whose exact duration disagrees with
+    its wall-clock duration — and for a DTEND-authored recurrence that is wrong:
+    RFC 5545 §3.8.5.3 carries the same EXACT duration to every instance, and for
+    the master's own occurrence the bytes the library emits are the bytes the
+    author wrote. The first version of `_repair_span` did exactly that and turned
+    an overnight 22:00->06:00 shift across the fall-back night from the 9 real
+    hours it occupies into 8 — releasing the last hour to the public booking
+    page, which is the failure this whole commit exists to close.
+
+    So the line is drawn at "wrong under any reading": an end at or before its
+    start. What remains is an instance that blocks MORE time than it occupies,
+    which withholds availability rather than double-booking. That is the safe
+    direction on this path, and it is filed as its own finding under
+    "Filed during remediation" in docs/AUDIT.md rather than papered over.
+
+    What must hold: never backwards, never zero, and never SHORTER than authored.
     """
     raw = foreign_event_raw(
         "fall@x", "Nightly", dtstart="TZID=America/Chicago:20261025T013000",
@@ -754,19 +762,43 @@ def test_the_fall_back_mirror_does_not_stretch_an_instance_to_three_times_its_le
         vtimezone=CHICAGO_VTIMEZONE, extra=tail,
     )
     occurrences = expand_occurrences(raw, date(2026, 10, 25), date(2026, 11, 10))
-    wrong = {
-        f"{o.start} -> {o.end}": str(
+    spans = {
+        f"{o.start} -> {o.end}": (
             datetime.fromisoformat(o.end).astimezone(UTC)
             - datetime.fromisoformat(o.start).astimezone(UTC)
         )
         for o in occurrences
-        if (datetime.fromisoformat(o.end).astimezone(UTC)
-            - datetime.fromisoformat(o.start).astimezone(UTC)) != timedelta(minutes=30)
     }
-    assert not wrong, (
-        "an instance spanning the fall-back transition blocks more time than it "
-        f"occupies, withholding real availability: {wrong}"
+    too_short = {k: str(v) for k, v in spans.items() if v < timedelta(minutes=30)}
+    assert not too_short, (
+        f"an instance blocks LESS time than it occupies, so the booking page "
+        f"offers part of a real commitment: {too_short}")
+    # …and the known residual, stated so a future change to it is a deliberate one.
+    assert set(spans.values()) == {timedelta(minutes=30), timedelta(minutes=90)}, (
+        f"the fall-back instance no longer over-blocks by exactly an hour — if "
+        f"that is intentional, this test and the finding it names both move: "
+        f"{ {k: str(v) for k, v in spans.items()} }")
+
+
+def test_an_authored_overnight_span_across_the_fall_back_is_left_alone(): 
+    """The regression the narrowing exists for, driven end to end into the busy
+    set. A 22:00->06:00 shift authored ON the transition night occupies 9 real
+    hours; the over-eager repair reported 8 and freed the last one."""
+    raw = foreign_event_raw(
+        "night@x", "Night shift", dtstart="TZID=America/Chicago:20261031T220000",
+        dtend="TZID=America/Chicago:20261101T060000", rrule="FREQ=WEEKLY;COUNT=3",
+        vtimezone=CHICAGO_VTIMEZONE,
     )
+    first = expand_occurrences(raw, date(2026, 10, 25), date(2026, 11, 20))[0]
+    span = (datetime.fromisoformat(first.end).astimezone(UTC)
+            - datetime.fromisoformat(first.start).astimezone(UTC))
+    assert span == timedelta(hours=9), (
+        f"the authored overnight span came back {span}, not the 9 real hours it "
+        f"occupies: {first.start} -> {first.end}")
+    busy = scheduling.busy_intervals([{"start": first.start, "end": first.end}], CHICAGO)
+    assert busy[0].end.astimezone(UTC) == datetime(2026, 11, 1, 12, 0, tzinfo=UTC), (
+        f"the shift stops blocking at {busy[0].end.astimezone(UTC)} but runs to "
+        f"2026-11-01T12:00Z — an hour of a real commitment is on offer")
 
 
 # ── AUDIT: an offset-bearing datetime is written as TZID="UTC±HH:MM" ────────

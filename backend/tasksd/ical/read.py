@@ -42,6 +42,10 @@ class ItemFields:
     sequence: int | None = None
     has_rrule: bool = False
     location: str | None = None
+    # The earliest instant this RESOURCE can produce, across every component —
+    # the master's DTSTART, any RDATE, and any RECURRENCE-ID override's DTSTART.
+    # See `min_instant` below for why the master's DTSTART is not it.
+    min_instant: str | None = None
 
 
 # Back-compat alias: Phase 0 named this TaskFields.
@@ -242,7 +246,45 @@ def extract(cal: Calendar) -> ItemFields | None:
             # str() on a parsed vDDDTypes yields its repr, not the RFC 5545 form;
             # busy/interval math re-parses this column, so store canonical text.
             f.duration = comp.get("DURATION").to_ical().decode()
+    f.min_instant = _min_instant(cal, f.dtstart)
     return f
+
+
+def _min_instant(cal: Calendar, dtstart: str | None) -> str | None:
+    """The earliest instant any component of this resource can produce.
+
+    `items.dtstart` is the MASTER's DTSTART, and a recurrence set can start
+    before it: `recurring_ical_events` applies RECURRENCE-ID overrides, and an
+    override carries its own DTSTART. This app creates that shape itself —
+    `apply_occurrence_override` deliberately leaves the master rule alone, so
+    dragging the first occurrence of a series earlier is enough — and
+    Thunderbird's and Apple's "move this occurrence" do the same.
+
+    `get_events_in_range` needs a lower bound it can filter on. Gating on the
+    master's DTSTART dropped the moved occurrence; dropping the gate entirely
+    made every recurring row on the account a candidate for every window, which
+    is a cost an anonymous caller can choose. This is the honest value.
+
+    Compared as an ISO string, like every other date column here, so it orders
+    correctly on the leading date and needs no parsing at query time. Mixed
+    offsets can misorder by less than a day, which is why the query keeps a
+    day of slack around it.
+    """
+    best = dtstart
+    for comp in cal.walk():
+        if getattr(comp, "name", "") not in ("VEVENT", "VTODO"):
+            continue
+        candidates = [comp.get("DTSTART")]
+        rdate = comp.get("RDATE")
+        for entry in (rdate if isinstance(rdate, list) else [rdate] if rdate else []):
+            candidates.extend(getattr(entry, "dts", []) or [])
+        for c in candidates:
+            if c is None:
+                continue
+            value = _iso(c)[0]
+            if isinstance(value, str) and (best is None or value < best):
+                best = value
+    return best
 
 
 def extract_from_raw(raw: bytes | str) -> ItemFields | None:

@@ -74,6 +74,11 @@ def init_db(conn: sqlite3.Connection) -> None:
         # to trust for the next 30 days.
         conn.execute("ALTER TABLE oauth_tokens ADD COLUMN cv TEXT NOT NULL DEFAULT ''")
     item_cols = {r["name"] for r in conn.execute("PRAGMA table_info(items)")}
+    if "min_instant" not in item_cols:
+        # NULL until the row is next upserted, and the candidate query admits a
+        # NULL rather than filtering on it — the conservative direction, since a
+        # missing lower bound must not hide an occurrence. A resync fills it in.
+        conn.execute("ALTER TABLE items ADD COLUMN min_instant TEXT")
     if "fts_rowid" not in item_cols:
         # Rows written before this column keep NULL and fall back to the old
         # scoped delete, so no rebuild is needed; they pick up a rowid the next
@@ -249,8 +254,9 @@ def upsert_item(
         """INSERT INTO items (collection_href, uid, href, etag, raw_ics, component, summary,
              description, status, priority, percent_complete, completed, due,
              due_is_date, dtstart, dtstart_is_date, dtend, dtend_is_date, duration,
-             related_parent, sequence, has_rrule, location, created, last_modified, synced_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,
+             related_parent, sequence, has_rrule, min_instant, location, created,
+             last_modified, synced_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,
                    strftime('%Y-%m-%dT%H:%M:%fZ','now'))
            ON CONFLICT(collection_href, uid) DO UPDATE SET
              href=excluded.href, etag=excluded.etag, raw_ics=excluded.raw_ics,
@@ -261,7 +267,8 @@ def upsert_item(
              dtstart_is_date=excluded.dtstart_is_date, dtend=excluded.dtend,
              dtend_is_date=excluded.dtend_is_date, duration=excluded.duration,
              related_parent=excluded.related_parent, sequence=excluded.sequence,
-             has_rrule=excluded.has_rrule, location=excluded.location, created=excluded.created,
+             has_rrule=excluded.has_rrule, min_instant=excluded.min_instant,
+             location=excluded.location, created=excluded.created,
              last_modified=excluded.last_modified, synced_at=excluded.synced_at""",
         (
             collection_href, fields.uid, item.href, item.etag, item.data, fields.component,
@@ -270,7 +277,7 @@ def upsert_item(
             int(fields.due_is_date), fields.dtstart, int(fields.dtstart_is_date),
             fields.dtend, int(fields.dtend_is_date), fields.duration,
             fields.related_parent, fields.sequence, int(fields.has_rrule),
-            fields.location, fields.created, fields.last_modified,
+            fields.min_instant, fields.location, fields.created, fields.last_modified,
         ),
     )
     conn.execute(
@@ -698,16 +705,27 @@ def get_events_in_range(
     +/-1 day around the requested day, so the moved meeting contributed no busy
     interval and an anonymous visitor could book straight over it.
 
-    So recurring rows are admitted unconditionally and `recur.expand_occurrences`
-    does the precise filtering it already does. The extra rows cost one expansion
-    each, bounded by the stage-2 search budget."""
+    So a recurring row is gated on `min_instant` — the earliest instant the whole
+    RESOURCE can produce, across its overrides and RDATEs — rather than on the
+    master's DTSTART. Admitting them unconditionally instead was the first
+    attempt and it is not affordable: the stage-2 search budget bounds ONE
+    expansion, `_link_busy` runs one per recurring row while holding the global
+    lock, and both public booking routes reach it unauthenticated. Measured, 50
+    far-future never-matching series (ordinary foreign-client output) went from 0
+    candidate rows to 50, and a two-day booking window from ~0 s to 9.13 s.
+
+    A NULL `min_instant` — a row cached before the column existed — is admitted,
+    so an incomplete upgrade cannot hide an occurrence."""
     return list(
         conn.execute(
             "SELECT * FROM items WHERE collection_href=? AND component='VEVENT' "
-            "AND (has_rrule=1 OR (dtstart <= ? AND (duration IS NOT NULL "
-            "OR COALESCE(dtend, dtstart) >= ?))) "
+            "AND CASE WHEN has_rrule=1 "
+            "         THEN COALESCE(min_instant, dtstart) IS NULL "
+            "              OR COALESCE(min_instant, dtstart) <= ? "
+            "         ELSE dtstart <= ? AND (duration IS NOT NULL "
+            "              OR COALESCE(dtend, dtstart) >= ?) END "
             "ORDER BY dtstart",
-            (collection_href, end_iso, start_iso),
+            (collection_href, end_iso, end_iso, start_iso),
         )
     )
 
