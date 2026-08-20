@@ -201,22 +201,23 @@ describe('aug19 stage 4b — chip, dot, agenda and popover identity', () => {
   })
 })
 
-describe('aug19 stage 4b — the tasks pane and one uid in two lists', () => {
-  function tasksSetup() {
-    render(
-      <DataProvider rev={0} onExpire={vi.fn()}>
-        <TasksView onExpire={vi.fn()} view="list" onView={vi.fn()}
-          sideCollapsed={false} onToggleSide={vi.fn()}
-          hiddenLists={[]} onHiddenListsChange={vi.fn()}
-          groups={[]} onGroupsChange={vi.fn()}
-          collapsedGroups={[]} onCollapsedGroupsChange={vi.fn()}
-          collapsedTasks={[]} onCollapsedTasksChange={vi.fn()}
-          showCompleted={false} />
-      </DataProvider>,
-    )
-    return userEvent.setup()
-  }
+/** The tasks pane over a real provider — the Sidebar comes with it. */
+function tasksSetup() {
+  render(
+    <DataProvider rev={0} onExpire={vi.fn()}>
+      <TasksView onExpire={vi.fn()} view="list" onView={vi.fn()}
+        sideCollapsed={false} onToggleSide={vi.fn()}
+        hiddenLists={[]} onHiddenListsChange={vi.fn()}
+        groups={[]} onGroupsChange={vi.fn()}
+        collapsedGroups={[]} onCollapsedGroupsChange={vi.fn()}
+        collapsedTasks={[]} onCollapsedTasksChange={vi.fn()}
+        showCompleted={false} />
+    </DataProvider>,
+  )
+  return userEvent.setup()
+}
 
+describe('aug19 stage 4b — the tasks pane and one uid in two lists', () => {
   // AUDIT open: TasksView.tsx:442
   it.fails('deletes only the copy whose row was clicked', async () => {
     // Rows key on the bare uid and the provider's optimistic mutations match on
@@ -510,7 +511,7 @@ function Probe({ onReady }: { onReady: (d: ReturnType<typeof useTaskData>) => vo
 
 describe('aug19 stage 4b — reordering the sidebar', () => {
   // AUDIT open: data.tsx:180
-  it.fails('does not refetch every task in the account when only the order changed', async () => {
+  it('does not refetch every task in the account when only the order changed', async () => {
     // `loadKey` is `*|${lists.map(l => l.id).join(',')}` — order-sensitive — and
     // it is both a dependency of the task fan-out effect and the commit guard
     // for every response in flight. A sidebar drag-reorder hands back the SAME
@@ -519,6 +520,82 @@ describe('aug19 stage 4b — reordering the sidebar', () => {
     // any response already in flight fails `key === keyRef.current` and is
     // thrown away. Rename and recolor don't change ids and correctly don't
     // refetch, which is what shows the identity is meant to be the SET.
+    // WIDENED. The original drove `setLists` from a Probe, which proves the
+    // provider's own dep but not that the sidebar reaches it; the drag is fired
+    // on the real rows here instead. The two halves the key controls are then
+    // driven separately: the fan-out (this test) and the commit guard (below).
+    m.lists.mockResolvedValue([work, home])
+    m.tasks.mockResolvedValue([])
+    const user = tasksSetup()
+
+    await waitFor(() => expect(m.tasks).toHaveBeenCalledTimes(2))
+
+    // Sidebar's own drop handler: dragStart on one row, drop on another. It
+    // computes the new order, calls `onItems` (the provider's setLists) and
+    // PATCHes the order to the server.
+    const rows = () => Array.from(document.querySelectorAll('.side-item')) as HTMLElement[]
+    const rowFor = (name: string) =>
+      rows().find((r) => r.textContent?.includes(name)) as HTMLElement
+    const from = rowFor('Home'), onto = rowFor('Work')
+    expect(from && onto).toBeTruthy()
+
+    fireEvent.dragStart(from, { dataTransfer: { effectAllowed: '' } })
+    fireEvent.dragOver(onto)
+    fireEvent.drop(onto)
+    await act(async () => { await Promise.resolve() })
+
+    expect(m.tasks).toHaveBeenCalledTimes(2)
+    // …and the reorder did reach the server, so this is not passing because the
+    // drag never happened.
+    expect(m.reorderLists).toHaveBeenCalledTimes(1)
+    void user
+  })
+
+  // CONTROL for data.tsx:194 — the same key, its OTHER consumer. Green today,
+  // and it must stay green; it is the reason this commit changes the CONSTANT
+  // rather than the effect's dependency list.
+  it('keeps a task fetch that was in flight when the order changed', async () => {
+    // `loadKey` is not only the effect's dependency, it is the commit guard:
+    // `if (token === fetchToken.current && key === keyRef.current) setTasks(ts)`.
+    // A reorder changes the key under a response already on the wire, so that
+    // response IS discarded today — but the effect also re-runs, so the tasks
+    // arrive via the second fan-out and nothing is visibly lost. That is why
+    // this is a control and not a pin: it passes now.
+    //
+    // It becomes load-bearing the moment the refetch is the thing being
+    // removed. Sort the ids in the effect's dependency list only, leave
+    // `keyRef` on the unsorted key, and this path drops the response with
+    // nothing left to re-issue it — strictly worse than the bug being fixed.
+    let release!: (rows: Task[]) => void
+    m.lists.mockResolvedValue([work, home])
+    m.tasks.mockImplementation((listId: string) =>
+      listId === 'l1'
+        ? new Promise<Task[]>((res) => { release = (rows) => res(rows) })
+        : Promise.resolve([]))
+
+    let d!: ReturnType<typeof useTaskData>
+    render(
+      <DataProvider rev={0} onExpire={vi.fn()}>
+        <Probe onReady={(x) => { d = x }} />
+      </DataProvider>,
+    )
+    await waitFor(() => expect(m.tasks).toHaveBeenCalledTimes(2))
+
+    // The drag lands while Work's tasks are still on the wire.
+    await act(async () => { d.setLists([home, work]) })
+    await act(async () => {
+      release([task({ uid: 'inflight', list: 'l1', summary: 'Still arriving' })])
+      await Promise.resolve()
+    })
+    await act(async () => { await Promise.resolve() })
+
+    expect(d.tasks.map((t) => t.uid)).toContain('inflight')
+  })
+
+  // Control (passes today, must keep passing): the key is the SET, so changing
+  // the set still refetches. Without this, "never re-run the effect" satisfies
+  // the pin above and a newly-created list would never load its tasks.
+  it('still refetches when a list is added or removed', async () => {
     m.lists.mockResolvedValue([work, home])
     m.tasks.mockResolvedValue([])
 
@@ -530,11 +607,12 @@ describe('aug19 stage 4b — reordering the sidebar', () => {
     )
     await waitFor(() => expect(m.tasks).toHaveBeenCalledTimes(2))
 
-    // What Sidebar's drop handler does: same ids, new order.
-    await act(async () => { d.setLists([home, work]) })
-    await act(async () => { await Promise.resolve() })
+    const third: List = { ...home, id: 'l3', href: '/l3/', name: 'Reading' }
+    await act(async () => { d.setLists([work, home, third]) })
+    await waitFor(() => expect(m.tasks).toHaveBeenCalledTimes(5))   // 2 + a fan-out of 3
 
-    expect(m.tasks).toHaveBeenCalledTimes(2)
+    await act(async () => { d.setLists([work, third]) })
+    await waitFor(() => expect(m.tasks).toHaveBeenCalledTimes(7))   // + a fan-out of 2
   })
 })
 

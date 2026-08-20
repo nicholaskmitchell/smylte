@@ -107,12 +107,12 @@ afterEach(() => { vi.useRealTimers() })
 
 /** The Calendar tab with its month held above it, exactly as App holds it — a
  *  fixed cursor would make ‹ › no-ops and quietly pass the navigation pin. */
-function CalHarness() {
+function CalHarness({ rev = 0 }: { rev?: number }) {
   const now = new Date()
   const [cursor, setCursor] = useState(() => new Date(now.getFullYear(), now.getMonth(), 1))
   const [shown, setShown] = useState<string[]>([])
   return (
-    <DataProvider rev={0} onExpire={vi.fn()}>
+    <DataProvider rev={rev} onExpire={vi.fn()}>
       <CalendarView onExpire={vi.fn()} cursor={cursor} onCursorChange={setCursor}
         sideCollapsed={false} onToggleSide={vi.fn()}
         hiddenCalendars={[]} onHiddenCalendarsChange={vi.fn()}
@@ -149,7 +149,7 @@ const patchBody = () => m.patchEvent.mock.calls[0][2] as Record<string, unknown>
 describe('2026-08-19 — the calendar grid', () => {
   // ── AUDIT (open): data.tsx:576 — a failed events fetch records the month as
   //    "asked", so the grid stays blank with no retry path ─────────────────
-  it.fails('re-requests a month whose first fetch failed', async () => {
+  it('re-requests a month whose first fetch failed', async () => {
     // EVIDENCE. `requestWindow` writes the window into `asked` BEFORE issuing
     // the fetch and short-circuits every later request while `rev` and the
     // calendar set are unchanged. `fetchWindow` deletes from `gen` and
@@ -164,19 +164,41 @@ describe('2026-08-19 — the calendar grid', () => {
     // The assertion is the month on screen, not the call count: any correct
     // repair — dropping the `asked` record on failure, retrying, recording only
     // successes — has to end with the user seeing their events.
+    //
+    // WIDENED. The single-failure case below passed against a repair that
+    // recovers exactly once, so a second failure is driven too: a flaky tunnel
+    // does not fail once and then behave. And the dedupe is asserted to SURVIVE
+    // — a month that succeeded is not re-requested when the user pages back to
+    // it — so "delete the record unconditionally" cannot satisfy this either.
+    // Both directions matter: this provider sits under every tab, and a
+    // request storm here is finding 22 all over again.
     const march = ev({ id: 'march', summary: 'March event',
       start: '2026-03-10T09:00:00', end: '2026-03-10T09:30:00' })
-    m.events.mockRejectedValueOnce(new Error('502 bad gateway')).mockResolvedValue([march])
+    m.events
+      .mockRejectedValueOnce(new Error('502 bad gateway'))
+      .mockResolvedValueOnce([])                       // April, first visit
+      .mockRejectedValueOnce(new Error('502 bad gateway'))   // March, second try
+      .mockResolvedValue([march])
 
     const user = openCalendar()
     await screen.findByText(/^Today$/)
     await waitFor(() => expect(m.events).toHaveBeenCalledTimes(1))
 
-    await user.click(screen.getByRole('button', { name: '›' }))     // April
+    const next = () => screen.getByRole('button', { name: '›' })
+    const prev = () => screen.getByRole('button', { name: '‹' })
+
+    await user.click(next())                                    // April
     await waitFor(() => expect(m.events).toHaveBeenCalledTimes(2))
-    await user.click(screen.getByRole('button', { name: '‹' }))     // back to March
+    await user.click(prev())                                    // back to March — fails again
+    await waitFor(() => expect(m.events).toHaveBeenCalledTimes(3))
+    await user.click(next())                                    // April again: already have it
+    await user.click(prev())                                    // March, third try — succeeds
 
     expect(await screen.findByText('March event')).toBeInTheDocument()
+
+    // April succeeded on its first visit, so neither return trip may re-request
+    // it. Four calls total: March, April, March, March.
+    expect(m.events).toHaveBeenCalledTimes(4)
   })
 
   // ── AUDIT (open): CalendarView.tsx:556 — the resize grip on a span that runs
@@ -295,7 +317,7 @@ describe('2026-08-19 — the Home mini calendar', () => {
 
   // ── AUDIT (open): HomeView.tsx:141 — the mini calendar never refetches on an
   //    SSE change, so its dots go stale while the rest of the page updates ──
-  it.fails('repaints when the account changes under an open dashboard', async () => {
+  it('repaints when the account changes under an open dashboard', async () => {
     // EVIDENCE. HomeView's event fetch effect depends on `needsCal`, `from`,
     // `to` and the joined calendar-id string — all invariant under `rev`, the
     // SSE change signal. Every other data source on the same page consumes it:
@@ -333,6 +355,46 @@ describe('2026-08-19 — the Home mini calendar', () => {
     // The day cell's accessible name is the whole user-visible payload here:
     // "…, 1 event" is what a screen reader reads and what the dots draw from.
     expect(await screen.findByLabelText(/1 event$/)).toBeInTheDocument()
+
+    // …and exactly once. `requestWindow` stamps its dedupe key with `rev`, so a
+    // repair that re-runs the effect must still dedupe within a rev — otherwise
+    // every unrelated re-render of an open dashboard is a fresh fan-out across
+    // every visible calendar, which is the request storm finding 22 closed.
+    const after = m.events.mock.calls.length
+    rerender(
+      <DataProvider rev={1} onExpire={vi.fn()}>
+        <HomeView rev={1} onExpire={vi.fn()} layout={layout} onLayoutChange={vi.fn()} />
+      </DataProvider>,
+    )
+    await act(async () => { await Promise.resolve() })
+    expect(m.events).toHaveBeenCalledTimes(after)
+  })
+
+  // ── AUDIT (open): CalendarView.tsx:242 — the SAME defect, in the tab that IS
+  //    the calendar. Named in finding 42's suggested fix, pinned by nothing ──
+  it('the calendar tab repaints when the account changes under it', async () => {
+    // EVIDENCE. `CalendarView`'s event effect carries the identical dep array —
+    // `[from, to, visibleCals.map(c => c.id).join(',')]` — every part of which
+    // is invariant under an SSE change. It is masked, not absent: CalendarView
+    // calls `reloadHere()` after its OWN writes, so the stale window is only
+    // visible when the change came from somewhere else. That is precisely the
+    // case the mini-calendar finding is about, so it is the same finding, not a
+    // second one — and it is the bigger surface, because the calendar tab is
+    // where a user watches for what their other clients wrote.
+    //
+    // Left open here on purpose, as an outcome: whether the repair is a `rev`
+    // prop, a `requestWindow` dep, or a subscription, the chip has to appear.
+    const { rerender } = render(<CalHarness rev={0} />)
+    await screen.findByText(/^Today$/)
+    await waitFor(() => expect(m.events).toHaveBeenCalledTimes(1))
+
+    m.events.mockResolvedValue([ev({
+      id: 'elsewhere', summary: 'Booked from my phone',
+      start: '2026-03-10T09:00:00', end: '2026-03-10T09:30:00',
+    })])
+    rerender(<CalHarness rev={1} />)
+
+    expect(await screen.findAllByTitle(/^Booked from my phone/)).not.toHaveLength(0)
   })
 })
 
