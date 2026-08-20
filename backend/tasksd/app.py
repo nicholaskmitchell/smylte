@@ -1545,6 +1545,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "frontend not built")
         return FileResponse(index)
 
+    # Both spellings, for the same reason the well-known routes above register
+    # theirs: the SPA mount at "/" returns a FULL match for every path, so
+    # Starlette hands `/book/<token>/` to the mount inside its route loop and
+    # `redirect_slashes` — which only runs when the loop found nothing — never
+    # executes. The mount looks for a file called `book/<token>`, does not find
+    # one, and raises a bare JSON 404 that reads exactly like a dead link. The
+    # SPA's own router accepts the slash (frontend/src/main.tsx), and a path
+    # that looks like a folder invites one, typed by hand or added by a mail
+    # client.
+    app.add_api_route(
+        "/book/{token}/", booking_spa, methods=["GET"], include_in_schema=False
+    )
+
     # -- remote MCP server + its OAuth authorization server (opt-in) --
     # Registered here, before the static mount, because that mount matches every
     # path and method — anything after it is unreachable. Off unless asked for:

@@ -559,7 +559,18 @@ input:focus { outline: 2px solid #d9480f; outline-offset: -1px; }
 .choice > span { flex: 1; }
 .choice em { display: block; margin-top: 2px; font-style: normal;
   color: #6b6157; font-size: 13px; }
-.actions { display: flex; gap: 10px; margin-top: 20px; }
+/* row-reverse, and the button order in the form below is reversed to
+   match: Connect is FIRST in tree order so that HTML's implicit
+   submission — pressing Enter after typing the password, the ordinary way
+   anybody fills in two fields — activates it. With Cancel first the browser
+   POSTed action=deny, the request was refused before the password was even
+   looked at, and the user had just typed their password into a form that
+   told the client they refused it. Nothing could correct it in place: the
+   browser has already navigated to the client's callback, and this page
+   ships `default-src 'none'` so no script can intervene. The visual order
+   (Cancel left, Connect right) is preserved here; the cost is that Tab
+   reaches Connect before Cancel. */
+.actions { display: flex; flex-direction: row-reverse; gap: 10px; margin-top: 20px; }
 button { flex: 1; padding: 10px 14px; border: 1px solid #1a1714; background: #1a1714;
   color: #faf8f5; font: 500 14px/1 inherit; cursor: pointer; }
 button.ghost { background: none; color: #1a1714; border-color: #d6cec2; }
@@ -652,8 +663,9 @@ def _consent_page(req, signed: str, *, issuer: str, grant: str = "full",
             '<label><span>Password</span>'
             '<input type="password" name="password" autocomplete="current-password" required></label>'
             '<div class="actions">'
-            '<button type="submit" name="action" value="deny" class="ghost">Cancel</button>'
+            # First in tree order = the form's default button. See .actions above.
             '<button type="submit" name="action" value="approve">Connect</button>'
+            '<button type="submit" name="action" value="deny" class="ghost">Cancel</button>'
             "</div></form>"
             '<p class="foot">Signing in here grants this application a token for '
             "your tasks and calendar. You can disconnect it at any time from "
