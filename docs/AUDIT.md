@@ -73,9 +73,9 @@ Three of the 69 are the same defect seen at a different layer, so they are filed
 once and the backlog counts **66**. Every one of the ten HIGHs was reproduced by
 hand with a runnable probe against a live Radicale 3.7.4 before being written down.
 
-**59 open, 7 closed** — the seven crash paths went first, as **Stage 1**
-(`docs/STAGES.md`); their pins are ordinary regression tests now and must stay
-green. The rest are still pinned by a test that asserts the corrected behaviour
+**57 open, 9 closed** — the seven crash paths went first, as **Stage 1**
+(`docs/STAGES.md`), and **Stage 2** is closing on top of them; their pins are
+ordinary regression tests now and must stay green. The rest are still pinned by a test that asserts the corrected behaviour
 and fails today — see `docs/STAGES.md` for the stage plan and the
 finding-to-pin map. Run `pytest -m backlog -rxX` and `npx vitest run backlog` for
 the itemised state.
@@ -555,7 +555,7 @@ The mirror underflow exists too: a rule with `UNTIL=00010101T000000Z` dragged ba
 
 **Pinned by** `test_a_boundary_until_answers_the_client_instead_of_overflowing (parametrized: 'foreign UNTIL=9999 dragged', 'repeat_until=9999-12-31' — 2 XFAILs)` in `backend/tests/test_backlog_aug19_stage1.py`.
 
-#### [ ] _reconcile_overrides probes each override with an unbounded dateutil walk — one repeat change burns minutes of CPU under the global lock
+#### [x] _reconcile_overrides probes each override with an unbounded dateutil walk — one repeat change burns minutes of CPU under the global lock
 
 `backend/tasksd/ical/edit.py:427` · **medium** · security · stage 2
 
@@ -644,7 +644,7 @@ Reachable with no validation at all through MCP: `smylte_update_event(calendar_i
 
 ### iCalendar read & recurrence
 
-#### [ ] A never-matching RRULE makes expansion iterate to year 9999 — both pathology guards score it "safe" because they measure yield, not iterations (unauthenticated DoS under the service lock)
+#### [x] A never-matching RRULE makes expansion iterate to year 9999 — both pathology guards score it "safe" because they measure yield, not iterations (unauthenticated DoS under the service lock)
 
 `backend/tasksd/ical/recur.py:178` · **high** · security · stage 2
 
@@ -2604,6 +2604,61 @@ fastapi/routing.py:466-472 is the interceptor:
 **Suggested fix.** Make the signal something FastAPI re-raises instead of swallowing: raise `HTTPException(413, "request body exceeds N bytes")` from `counting_receive` (FastAPI's `except HTTPException: raise` passes it straight through to the registered handler), or set a flag on `scope` and have the middleware emit the 413 based on the flag rather than on catching its own exception. Keep the `_BodyTooLarge` catch as the backstop for non-FastAPI consumers. Add a test that posts a chunked over-cap body to `/api/login` through `create_app` and asserts 413 plus the `connection: close` header.
 
 **Pinned by** `test_a_chunked_oversized_body_is_a_413_through_the_real_app` in `backend/tests/test_backlog_aug19_stage1.py`.
+
+## Filed during remediation — 2026-08-20
+
+Found while closing the 2026-08-19 backlog, not by a sweep. One finding, not
+verified by anyone else. It is the same defect as finding 8, in the same file,
+on a path that finding did not name — filed on its own rather than folded into
+it, because "we fixed a bit more while we were in there" is how a defect class
+stops being countable. Fixed in the same change. Now closed.
+
+#### [x] _count_consumed's walk is unbounded for the same reason UNTIL is, so "this and following" on a never-matching COUNT rule stalls the service
+
+`backend/tasksd/ical/edit.py:1117` · **medium** · security · stage 2
+
+`_count_consumed` enumerates a COUNT-bounded series to work out the head's share
+before a split, and the comment above its loop asserted the walk was safe:
+*"finite: the rule carries COUNT"*. It is not. dateutil evaluates COUNT only
+when it produces an instance — the same mechanism that makes finding 8's `UNTIL`
+clamp useless — so `for occ in rr` over a rule whose BY\* parts can never be
+satisfied runs to `datetime.MAXYEAR` with `consumed` still 0.
+
+This one needs credentials, which is why it is medium and not high: it is the
+"this and following" split, `PUT /api/calendars/{cal}/events/{uid}` with
+`scope="following"` (or `smylte_update_event(..., scope='following')`). But the
+*resource* need not be ours — any of the other CalDAV clients sharing the
+collection can write the rule — the split is an ordinary owner action on it, and
+it runs inside `service`'s global lock like the rest of this stage.
+
+<details><summary>Evidence</summary>
+
+```
+Master DTSTART:20260106T090000Z, RRULE:FREQ=DAILY;COUNT=5;BYMONTH=2;BYMONTHDAY=30,
+split at 2026-01-20T09:00:00+00:00 (icalendar 7.2.2, dateutil 2.9.0.post0):
+
+  split_series(raw, "2026-01-20T09:00:00+00:00", EventEdit(summary="New"))
+  -> 3.59 s          # budget neutralised in-process, i.e. the pre-fix cost
+  ->    0.21 s       # with the step budget armed
+
+The comment that made it look bounded, edit.py:1124 before the fix:
+
+    # Finite: the rule carries COUNT.
+    for occ in rr:
+        if occ >= end: break
+        consumed += 1
+```
+
+</details>
+
+**Fixed** by arming the same `search_budget(_MAX_SEARCH_STEPS)` from
+`tasksd/ical/rrule_budget.py` around the walk, and treating exhaustion as "the
+head consumed whatever the walk found before the budget ran out" — the caller
+already clamps the result to at least 1, so there is no zero to mishandle.
+
+**Pinned by** `test_splitting_a_series_on_a_never_matching_rule_is_prompt`, with
+`test_an_ordinary_count_split_still_divides_the_count` as its control, in
+`backend/tests/test_backlog_aug19_stage2.py`.
 
 ## Filed during remediation — 2026-08-17
 

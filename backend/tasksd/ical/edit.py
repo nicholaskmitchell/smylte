@@ -24,6 +24,16 @@ from uuid import uuid4
 from dateutil.rrule import rrulestr
 from icalendar import Calendar, Event, Todo, vRecur
 
+from .recur import _MAX_SEARCH_STEPS, _instances_before
+from .rrule_budget import SearchBudgetExceeded, search_budget
+
+# How far an override's RECURRENCE-ID may sit from DTSTART, in instances, before
+# reconciling it is priced as too expensive to be worth probing. ~55 years of a
+# daily rule. A legitimate probe costs one dateutil step; only a far-future
+# anchor is expensive, and _instances_before over-estimates for coarse FREQs,
+# which errs toward skipping more probes — the safe direction here.
+_MAX_PROBE_INSTANCES = 20_000
+
 # Sentinel: a field left UNSET is not touched; None means "clear this property".
 UNSET: Any = object()
 
@@ -468,17 +478,41 @@ def _reconcile_overrides(cal: Calendar, master: Event) -> None:
         # to agree on tz-awareness and an override's RECURRENCE-ID need not agree
         # with the master's (an older write may have lost or fabricated a zone).
         start, at = _comparable(dtstart.dt, anchor)
+        # The FREQ whitelist above bounds the RULE; it does not bound the PROBE
+        # TARGET, and that is the attacker-controlled half. `at` is the
+        # override's RECURRENCE-ID, written by whatever client made it, so a
+        # far-future anchor makes dateutil walk from DTSTART to it before it can
+        # answer: measured 10.17s for two overrides, 51.40s for ten, all under
+        # the global service lock, on an ordinary "change the repeat" edit.
+        #
+        # Reuse the read path's own arithmetic to price the walk before doing
+        # it. Over the limit, keep the override without probing — the safe
+        # direction this function's docstring already argues for, and the same
+        # answer it gives a foreign rule. A legitimate probe costs one step, so
+        # nothing real is near this.
+        if _instances_before(rule, dtstart, at) > _MAX_PROBE_INSTANCES:
+            return True
         rr = rrulestr(_rule_for_probe(rule, start, dtstart.dt), dtstart=start)
         return bool(rr.between(at, at, inc=True))
 
-    cal.subcomponents = [
-        c for c in cal.subcomponents
-        if not (
-            getattr(c, "name", "") == "VEVENT"
-            and c.get("RECURRENCE-ID") is not None
-            and not _generated(c.get("RECURRENCE-ID").dt)
-        )
-    ]
+    def _keep(c) -> bool:
+        if getattr(c, "name", "") != "VEVENT" or c.get("RECURRENCE-ID") is None:
+            return True
+        try:
+            return _generated(c.get("RECURRENCE-ID").dt)
+        except SearchBudgetExceeded:
+            # The shared budget is the backstop behind the arithmetic above: a
+            # shape it prices as cheap but that still walks. Keep the override,
+            # same safe direction. Deciding this per component rather than for
+            # the whole comprehension means one expensive probe cannot make
+            # every LATER override un-reconcilable, which would silently keep
+            # genuinely orphaned ones.
+            return True
+
+    # One budget for the whole reconcile, so a resource carrying many overrides
+    # is bounded in aggregate and not merely per probe.
+    with search_budget(_MAX_SEARCH_STEPS):
+        cal.subcomponents = [c for c in cal.subcomponents if _keep(c)]
 
 
 def _stamp(event: Event, now: datetime) -> None:
@@ -1088,10 +1122,22 @@ def _count_consumed(rule: dict, dtstart: date | datetime, anchor) -> int:
     start, end = _comparable(dtstart, anchor)
     rr = rrulestr(vRecur(rule).to_ical().decode(), dtstart=start)
     consumed = 0
-    for occ in rr:                      # finite: the rule carries COUNT
-        if occ >= end:
-            break
-        consumed += 1
+    try:
+        # NOT finite just because the rule carries COUNT — that was the comment
+        # here, and it is wrong for the same reason UNTIL is: dateutil tests
+        # COUNT only when it produces an instance, so a rule that never matches
+        # walks to year 9999 regardless. Measured 3.53s on the authenticated
+        # "this and following" split path with FREQ=DAILY;COUNT=5;BYMONTH=2;
+        # BYMONTHDAY=30. Filed as its own finding rather than fixed silently.
+        with search_budget(_MAX_SEARCH_STEPS):
+            for occ in rr:
+                if occ >= end:
+                    break
+                consumed += 1
+    except SearchBudgetExceeded:
+        # The head consumed whatever the walk found before the budget ran out.
+        # The caller already clamps this to at least 1, so a zero here is safe.
+        pass
     return consumed
 
 
