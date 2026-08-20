@@ -12,9 +12,9 @@ of how the harness behaved in practice — its "Two strengths of pin" and
 
 `docs/AUDIT.md` is the evidence. This is the plan for closing it.
 
-**57 open, 9 closed.** Stage 1 is done and Stage 2 is closing; stages 3-5
-remain. Of the 57 still open, 56 are pinned by a test that asserts the corrected
-behaviour and fails today — 52 as `xfail(strict=True)` / `it.fails`, and 4 as
+**55 open, 11 closed.** Stage 1 is done and Stage 2 is closing; stages 3-5
+remain. Of the 55 still open, 54 are pinned by a test that asserts the corrected
+behaviour and fails today — 50 as `xfail(strict=True)` / `it.fails`, and 4 as
 ordinary passing tests (see "Test gaps that were only gaps" below). One is deliberately **not** pinned; see
 "The one that is not pinned" below. The harness
 described under *Stage 0* further down still applies unchanged; these pins live in
@@ -124,7 +124,7 @@ Four things surfaced while fixing them, all wider than the findings as filed:
 
 ## Stage 2 — Abuse & resource exhaustion 🟨 IN PROGRESS
 
-6 findings + 1 filed during remediation · 2 high, 4 medium, 1 low · **3 closed, 4 open**
+6 findings + 1 filed during remediation · 2 high, 4 medium, 1 low · **5 closed, 2 open**
 
 Work an adversary can make unbounded, plus the one missing security control. Everything here is reachable without credentials or survives the credential change that was supposed to stop it.
 
@@ -147,6 +147,18 @@ about it are worth carrying forward:
   sidesteps the question: anything that finishes inside the budget is cheap by
   construction, whether or not it ever matches.
 
+Finding 12 was filed as one validator and was five. Every `^…$` pattern in the
+backend used with `.match()` had the same gap — Python's `$` also matches just
+before a trailing newline — and three of them (`_EMAIL_RE`, `parse_duration`,
+`clean_color`) were saved only by a caller happening to `.strip()` first, which
+is an accident rather than a property of the validator. All five now use
+`fullmatch`; `XML_SAFE_PATTERN` was checked and is genuinely fine, because a
+NEGATED class cannot leave `$` sitting before a newline, and there is now a test
+saying so rather than a comment. The second half of that finding — the CalDAV
+href in a 409 body handed to an anonymous booker — is fixed at the raise site in
+`_put_new`, so it is closed for every caller and not only for the route the
+finding reached it through.
+
 And one thing about the harness, following Stage 1's "a pin is only as good as
 the inputs it drives": pin 11 was **widened before the fix landed**, with a third
 override at a near anchor placed after the two far-future ones. With the
@@ -158,9 +170,9 @@ rather than re-learned.
 |---|---|---|---|---|
 | 8 ✅ | A never-matching RRULE makes expansion iterate to year 9999 — both pathology guards score it "safe" because … | `backend/tasksd/ical/recur.py:178` | high | `test_a_rule_that_can_never_match_is_expanded_promptly` |
 | 9 | Rotating the app password (and even TASKS_SESSION_SECRET) does not revoke any MCP OAuth grant — the document… | `backend/tasksd/mcp/oauth.py:551` | high | `test_rotating_the_credentials_ends_an_mcp_grant_too` |
-| 10 | service.search rebuilds the whole collection's children map once per result row, so one uncapped FTS query b… | `backend/tasksd/service.py:331` | medium | `test_searching_a_large_list_is_not_quadratic_in_the_lists_size` |
+| 10 ✅ | service.search rebuilds the whole collection's children map once per result row, so one uncapped FTS query b… | `backend/tasksd/service.py:331` | medium | `test_searching_a_large_list_is_not_quadratic_in_the_lists_size` |
 | 11 ✅ | _reconcile_overrides probes each override with an unbounded dateutil walk — one repeat change burns minutes … | `backend/tasksd/ical/edit.py:427` | medium | `test_changing_the_repeat_is_prompt_with_a_far_future_override` |
-| 12 | _check_client_id's regex accepts a trailing newline, so an anonymous booking POST answers 409 with the owner… | `backend/tasksd/app.py:157` | medium | `test_a_client_id_with_a_trailing_newline_is_refused` |
+| 12 ✅ | _check_client_id's regex accepts a trailing newline, so an anonymous booking POST answers 409 with the owner… | `backend/tasksd/app.py:157` | medium | `test_a_client_id_with_a_trailing_newline_is_refused` |
 | 13 | MAX_CLIENTS refuses new registrations instead of evicting stale ones, so anonymous registrants can lock the … | `backend/tasksd/mcp/oauth.py:208` | low | `test_a_table_full_of_junk_clients_does_not_lock_the_owner_out` |
 | — ✅ | _count_consumed's walk is unbounded for the same reason UNTIL is, so "this and following" on a never-matchi… | `backend/tasksd/ical/edit.py:1117` | medium | `test_splitting_a_series_on_a_never_matching_rule_is_prompt` |
 

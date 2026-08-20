@@ -169,8 +169,13 @@ XML_SAFE_PATTERN_SCALAR = rf"^[^{_C0}{_NONCHARS}]*$"
 # has to hold on both paths and this file is already where a validator shared
 # across layers goes (see XML_SAFE_PATTERN_SCALAR above, whose comment records
 # what three hand-written copies cost last time).
+#
+# The anchors stay in COLOR_PATTERN: it is handed to pydantic and to the MCP tool
+# schemas as a JSON Schema `pattern`, where an unanchored expression is an
+# unanchored SEARCH. `_COLOR_RE` is used with `fullmatch` below, so the `$`
+# /trailing-newline gap does not apply to the Python side either way.
 COLOR_PATTERN = r"^#[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?$"
-_COLOR_RE = re.compile(COLOR_PATTERN)
+_COLOR_RE = re.compile(r"#[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?")
 
 
 def clean_color(value: str | None) -> str | None:
@@ -178,7 +183,7 @@ def clean_color(value: str | None) -> str | None:
     if not isinstance(value, str):
         return None
     v = value.strip()
-    return v if _COLOR_RE.match(v) else None
+    return v if _COLOR_RE.fullmatch(v) else None
 
 _XML_FORBIDDEN = re.compile(f"[{XML_FORBIDDEN_CLASS}]")
 
