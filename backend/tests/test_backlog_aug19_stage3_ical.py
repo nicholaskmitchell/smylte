@@ -1240,3 +1240,112 @@ def test_an_rdate_only_series_can_still_have_one_occurrence_edited():
     assert by_start.get("2026-01-13T10:00:00+00:00") == "just this one"
     assert by_start.get("2026-01-20T10:00:00+00:00") == "moved to 10", (
         f"the later RDATE occurrence lost the range override's values: {by_start}")
+
+
+# ── Filed by the Stage 3 adversarial review — OPEN when written ─────────────
+#
+# These carry `xfail(strict=True)` like every other pin in this file. The rest
+# of it is closed regression tests; a marker here is what tells the two apart.
+
+
+def test_an_exact_day_long_duration_survives_the_cache_and_the_expansion():
+    """`split_duration`'s whole premise is that only the DURATION's own bytes say
+    whether it was nominal or exact, and neither consumer ever sees those bytes.
+
+    `read.extract` stores `comp.get("DURATION").to_ical().decode()`, and
+    `to_ical()` re-serializes a normalized `timedelta`: icalendar parses `PT24H`
+    to `timedelta(days=1)`, which comes back out as `P1D`. `recur._exact_durations`
+    reads the same `to_ical()` and classifies the event as nominal. So an exact
+    duration of a day or more is misread at BOTH layers — `advance` is handed a
+    string that has already lost the distinction it exists to preserve.
+
+    Measured: `PT24H` across the 2026-03-08 spring-forward blocks 23 real hours
+    instead of 24, releasing an hour to the public booking page, which is the
+    same failure the DST work in this stage was about.
+
+    Two halves, deliberately, because a repair at one layer leaves the other
+    wrong and looks done: the CACHED value (what `busy_intervals` re-parses) and
+    the EXPANDED instance (what `_exact_durations` feeds `_repair_span`).
+    """
+    from tasksd.ical.read import extract_from_raw
+
+    # -- the cached column --
+    for authored in ("PT24H", "PT36H", "P1DT12H", "P1D", "PT1H30M"):
+        raw = foreign_event_raw(
+            "dur@x", "Block", dtstart="20260308T073000Z", dtend=None,
+            extra=(f"DURATION:{authored}",))
+        got = extract_from_raw(raw).duration
+        assert got == authored, (
+            f"authored DURATION:{authored} was cached as {got!r} — "
+            f"the nominal/exact distinction is gone before anything reads it"
+        )
+
+    # -- and the expansion, which reads its own copy --
+    #
+    # In a ZONE THAT OBSERVES DST, and that is the whole point: in UTC a 24-hour
+    # wall-clock span IS 24 real hours, so a version of this case anchored to
+    # UTC passes against the bug and against a repair that fixes only the cached
+    # column. It has to straddle the 2026-03-08 spring-forward, where the
+    # library's wall-clock arithmetic yields 23 real hours and `_exact_durations`
+    # is the only thing that can say the authored PT24H meant otherwise.
+    raw = foreign_event_raw(
+        "dur2@x", "Block", dtstart="TZID=America/Chicago:20260307T230000",
+        dtend=None, extra=("DURATION:PT24H", "RRULE:FREQ=DAILY;COUNT=3"),
+        vtimezone=CHICAGO_VTIMEZONE)
+    spans = {
+        o.start: (datetime.fromisoformat(o.end) - datetime.fromisoformat(o.start))
+        for o in expand_occurrences(raw, date(2026, 3, 1), date(2026, 3, 20))
+    }
+    assert spans, "the series produced no occurrences"
+    for start, span in spans.items():
+        assert span == timedelta(hours=24), (
+            f"the instance at {start} spans {span}, not the authored 24 hours"
+        )
+
+
+def test_dragging_an_every_weekday_series_inside_its_own_day_set_is_allowed():
+    """`FREQ=DAILY;BYDAY=MO,TU,WE,TH,FR` is what Google Calendar writes for
+    "Every weekday", so this is not an exotic rule — it is one of the most common
+    series any account holds.
+
+    Under FREQ=DAILY, BYDAY is a FILTER over the generated days, not a selector
+    that pins the rule to one weekday. Moving DTSTART from a Monday to a Tuesday
+    desynchronizes nothing: every weekday is still in the set, and the rule still
+    generates the same days. But `_desynchronizing` tests the SHAPE ("is there a
+    BYDAY on a non-WEEKLY rule?") rather than the property, so it refuses with
+    422 — a series that used to drag correctly now cannot be moved at all.
+
+    The finding-16 fix traded a silent corruption for a refusal; this is that
+    refusal landing on a legitimate series.
+    """
+    raw = foreign_event_raw(
+        "wd@x", "Standup", dtstart="20260105T090000Z", dtend="20260105T093000Z",
+        rrule="FREQ=DAILY;BYDAY=MO,TU,WE,TH,FR;COUNT=10")
+    moved = datetime(2026, 1, 6, 9, 0, tzinfo=timezone.utc)      # Mon -> Tue
+    out = shift_series(
+        raw, "2026-01-05T09:00:00+00:00",
+        EventEdit(dtstart=moved, dtend=moved + timedelta(minutes=30)))
+    days = [datetime.fromisoformat(o.start).date()
+            for o in expand_occurrences(out, date(2026, 1, 1), date(2026, 3, 1))]
+    assert days, "the moved series produced no occurrences"
+    assert all(d.weekday() < 5 for d in days), f"a weekend day appeared: {days}"
+    assert days[0] == date(2026, 1, 6), f"the series did not move: {days[:3]}"
+
+
+def test_a_weekday_series_dragged_onto_a_weekend_is_still_refused():
+    """The control for the pin above, and the reason the repair has to test the
+    PROPERTY rather than just whitelisting `FREQ=DAILY;BYDAY=…`.
+
+    Saturday is not in `MO,TU,WE,TH,FR`, so a +5-day drag puts DTSTART on a day
+    the rule cannot generate — the series really would desynchronize from its own
+    start. Refusing is correct here, and a fix that simply stopped looking at
+    BYDAY under FREQ=DAILY would let it through.
+    """
+    raw = foreign_event_raw(
+        "wd2@x", "Standup", dtstart="20260105T090000Z", dtend="20260105T093000Z",
+        rrule="FREQ=DAILY;BYDAY=MO,TU,WE,TH,FR;COUNT=10")
+    moved = datetime(2026, 1, 10, 9, 0, tzinfo=timezone.utc)     # Mon -> Sat
+    with pytest.raises(ValueError):
+        shift_series(
+            raw, "2026-01-05T09:00:00+00:00",
+            EventEdit(dtstart=moved, dtend=moved + timedelta(minutes=30)))

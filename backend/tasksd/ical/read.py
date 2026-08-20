@@ -104,6 +104,65 @@ _DURATION_PARTS = re.compile(
 )
 
 
+_DURATION_LINE = re.compile(r"^DURATION[;:]", re.I)
+_RECURRENCE_LINE = re.compile(r"^RECURRENCE-ID[;:]", re.I)
+
+
+def unfold(raw: bytes | str) -> list[str]:
+    """The ICS content lines, with RFC 5545 §3.1 folding undone.
+
+    A line beginning with a space or tab continues the one before it, and the
+    single leading whitespace character is what was inserted by the folder.
+    """
+    text = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else raw
+    out: list[str] = []
+    for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        if line[:1] in (" ", "\t") and out:
+            out[-1] += line[1:]
+        else:
+            out.append(line)
+    return out
+
+
+def wire_durations(raw: bytes | str) -> dict[str | None, str]:
+    """Each VEVENT's DURATION exactly as it arrived, keyed by RECURRENCE-ID value.
+
+    WHY THIS EXISTS AT ALL. icalendar parses a DURATION into a `timedelta`, and
+    `timedelta` normalizes: `PT24H` becomes `timedelta(days=1)`, which
+    `to_ical()` re-serializes as `P1D`. Those two are NOT interchangeable —
+    §3.3.6 makes the time part exact and the day part nominal, which is the whole
+    distinction `split_duration` and `advance` exist to preserve — so reading the
+    duration back off the parsed component destroys the only evidence of which
+    was authored, one layer above the code that cares.
+
+    The effect was measurable: a `PT24H` block across the spring-forward blocked
+    23 real hours instead of 24, releasing an hour to the public booking page,
+    and `_exact_durations` classified the same event as nominal and left the
+    expansion alone.
+
+    Keyed on the RECURRENCE-ID's raw value rather than a parsed instant: this
+    runs before any parsing and only has to line up with itself.
+    """
+    out: dict[str | None, str] = {}
+    depth_in_vevent = False
+    duration: str | None = None
+    rid: str | None = None
+    for line in unfold(raw):
+        upper = line.upper()
+        if upper.startswith("BEGIN:VEVENT"):
+            depth_in_vevent, duration, rid = True, None, None
+        elif upper.startswith("END:VEVENT"):
+            if depth_in_vevent and duration is not None:
+                out[rid] = duration
+            depth_in_vevent = False
+        elif depth_in_vevent:
+            if _DURATION_LINE.match(line):
+                duration = line.split(":", 1)[1].strip() if ":" in line else None
+            elif _RECURRENCE_LINE.match(line):
+                rid = line.split(":", 1)[1].strip() if ":" in line else None
+    return out
+
+
 def split_duration(raw) -> tuple[timedelta, timedelta] | None:
     """An RFC 5545 DURATION as its (nominal, exact) halves, or None if unparseable.
 
@@ -211,7 +270,11 @@ def _related_parent(comp) -> str | None:
     return None
 
 
-def extract(cal: Calendar) -> ItemFields | None:
+def extract(cal: Calendar, *, wire: dict[str | None, str] | None = None) -> ItemFields | None:
+    """`wire` is `wire_durations(raw)` when the caller still has the bytes — the
+    only place the authored DURATION text survives. Optional so a caller holding
+    only a parsed Calendar still works, at the cost of the nominal/exact
+    distinction for durations of a day or more."""
     comp, name = find_component(cal)
     if comp is None:
         return None
@@ -243,9 +306,16 @@ def extract(cal: Calendar) -> ItemFields | None:
         if "DTEND" in comp:
             f.dtend, f.dtend_is_date = _iso(comp.get("DTEND"))
         if "DURATION" in comp:
-            # str() on a parsed vDDDTypes yields its repr, not the RFC 5545 form;
-            # busy/interval math re-parses this column, so store canonical text.
-            f.duration = comp.get("DURATION").to_ical().decode()
+            # The WIRE text when we have it, and `to_ical()` only as a fallback.
+            # `str()` on a parsed vDDDTypes yields its repr, so this column has
+            # always needed a deliberate serialization — but `to_ical()` round
+            # trips through a normalized `timedelta`, which turns `PT24H` into
+            # `P1D` and silently changes what the value MEANS (see
+            # `wire_durations`). busy/interval math re-parses this column, so the
+            # loss landed on the booking page's busy set.
+            rid = comp.get("RECURRENCE-ID")
+            key = str(rid.to_ical().decode()) if rid is not None else None
+            f.duration = (wire or {}).get(key) or comp.get("DURATION").to_ical().decode()
     f.min_instant = _min_instant(cal, f.dtstart)
     return f
 
@@ -288,4 +358,4 @@ def _min_instant(cal: Calendar, dtstart: str | None) -> str | None:
 
 
 def extract_from_raw(raw: bytes | str) -> ItemFields | None:
-    return extract(parse_calendar(raw))
+    return extract(parse_calendar(raw), wire=wire_durations(raw))

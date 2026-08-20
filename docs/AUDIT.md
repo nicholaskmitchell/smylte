@@ -3101,7 +3101,7 @@ override where it is and refuse the single-instance edit with a ValueError the
 route maps to 422 — refusing an edit is recoverable, deleting authored values is
 not.
 
-#### [ ] The nominal/exact DURATION split is defeated one layer up: the cached column is icalendar's re-serialization
+#### [x] The nominal/exact DURATION split is defeated one layer up: the cached column is icalendar's re-serialization
 
 `backend/tasksd/ical/read.py:244` · **medium** · bug
 
@@ -3117,6 +3117,29 @@ page. `recur.py:92` has the same defect and is additionally dead code —
 **Suggested fix.** Cache the wire value verbatim in a new column (or keep the raw
 DURATION text alongside the parsed one) and pass that to `advance`. Then delete
 or re-justify the `_end_fields` branch.
+
+**Fixed** with a new `wire_durations(raw)` in `read.py` — an unfolding scan of the
+ICS text that returns each VEVENT's DURATION exactly as it arrived, keyed by its
+raw RECURRENCE-ID. No new column was needed: the existing `duration` column now
+holds the wire value rather than `to_ical()`'s re-serialization, and every
+consumer already re-parses it.
+
+**A THIRD site had the same defect and this entry does not name it.**
+`_exact_durations` (`recur.py:172`) also read `dur.to_ical()`, so the EXPANSION
+path misclassified an exact day-or-longer duration too — and that is the path
+that feeds `_repair_span`. Both are fixed; the pin drives both, because a repair
+at one layer leaves the other wrong and looks done.
+
+The pin's first version could not tell them apart: it anchored the expansion case
+in UTC, where a 24-hour wall-clock span IS 24 real hours, so it passed against
+the bug. Re-anchored across the 2026-03-08 spring-forward in America/Chicago,
+which is the only place the distinction is observable — and it then caught the
+half-fix (repair the column, leave `_exact_durations`) that the UTC version had
+waved through.
+
+`_end_fields`' DURATION branch is left in place and its comment already states
+why it is unreachable from `expand_occurrences`; it now also says that
+`_exact_durations` is the source of truth for an expanded instance.
 
 #### [ ] MERGED_SETTINGS omits the two security-relevant settings and the one its own evidence excused
 
@@ -3178,7 +3201,7 @@ due needs a zone to become an instant, and the honest one is the owner's
 `home_timezone`. Then add a case to the corpus generator with the two zones
 differing.
 
-#### [ ] _desynchronizing falsely refuses Google Calendar's "every weekday"
+#### [x] _desynchronizing falsely refuses Google Calendar's "every weekday"
 
 `backend/tasksd/ical/edit.py:1006` · **medium** · bug
 
@@ -3193,6 +3216,21 @@ is the refusal landing on a legitimate series.
 **Suggested fix.** Test the property rather than the shape: does the NEW DTSTART
 still satisfy the rule? `_require_occurrence` next door already has the
 machinery. Refuse only when it does not.
+
+**Fixed** exactly that way, and more cheaply than expected: `_shift_rrule` runs
+AFTER the caller has already shifted DTSTART, so the moved weekday is simply
+`master.get("DTSTART").dt.weekday()` — no probe, no search budget. Under a FREQ
+shorter than WEEKLY, BYDAY is a filter over the days the rule already generates,
+so a shift landing inside the set desynchronizes nothing; `_desynchronizing`
+refuses only when the new weekday is not in it, and still fails closed when the
+weekday cannot be determined.
+
+Reading DTSTART at the wrong moment was the first attempt and the control caught
+it: taking the weekday BEFORE the shift and adding `day_delta` gave
+Saturday + 5 = Thursday, which is in the set, so a Monday→Saturday drag was
+allowed through. The control (`test_a_weekday_series_dragged_onto_a_weekend_is_still_refused`)
+is also what catches the lazy half-fix — whitelisting `FREQ=DAILY;BYDAY=…`
+outright — which the pin itself passes.
 
 #### [ ] The refresh-token scope check runs after the single-use consumption, burning the grant on a bad scope
 
