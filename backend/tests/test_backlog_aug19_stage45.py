@@ -1,12 +1,20 @@
 """The 2026-08-19 sweep: user-visible backend correctness (stage 4) and
 delivery infrastructure / test gaps (stage 5).
 
-Every earlier backlog file in this directory is a record of something already
-fixed. **This one is not.** The findings pinned here are OPEN, so these are
-pins in the original sense of docs/STAGES.md: each drives the real code, asserts
-the behaviour that code SHOULD have, and fails against what it does today. The
-`xfail(strict=True)` markers are what keep CI green while they are open — and
-what turns the build red the moment one is fixed without being ticked off.
+This file is now MIXED, and which is which is readable off the markers. A test
+still carrying `xfail(strict=True)` pins an OPEN finding: it drives the real
+code, asserts the behaviour that code SHOULD have, and fails against what it
+does today — the marker is what keeps CI green while the finding is open, and
+what turns the build red the moment it is fixed without being ticked off. A test
+with no marker is a closed finding's regression test and must stay green.
+
+**Both stage-4 findings here are closed** (the consent form's default button,
+and `/book/<token>/`). Each was widened before it was fixed and then run against
+a plausible half-fix to confirm the widened pin still caught one — for the
+consent form that half-fix was "autofocus Connect but leave Cancel first in tree
+order", which does not change the default button and which the pin refuses. What
+remains open is stage 5: the release workflow's token scope, and setup.sh's
+password escaping.
 
 The test-gap findings are the exception, and they split two ways, exactly as
 test_backlog_stage5.py describes: a gap is closed by a test EXISTING, so the
@@ -161,8 +169,24 @@ def _implicit_submission(page: str) -> dict[str, str]:
     return data
 
 
-@pytest.mark.xfail(strict=True, reason="Cancel is the consent form's default "
-                                       "button, so Enter declines the connection")
+def _submit(client, page: str, **over):
+    """Press Enter in the consent form, optionally overriding a field."""
+    data = _implicit_submission(page)
+    data.update(over)
+    return client.post("/oauth/authorize", data=data, follow_redirects=False)
+
+
+def _redirect_query(r) -> dict[str, list[str]]:
+    return parse_qs(urlsplit(r.headers.get("location", "")).query)
+
+
+def _exchange_code(client, reg, verifier: str, code: str):
+    return client.post("/oauth/token", data={
+        "grant_type": "authorization_code", "code": code,
+        "redirect_uri": CALLBACK, "client_id": reg["client_id"],
+        "code_verifier": verifier, "resource": MCP_URL})
+
+
 def test_pressing_enter_on_the_consent_form_connects_rather_than_declining(oauth_app):
     """The consent screen is this app's most important password form, and its
     username field is `autofocus`. Type the username, Tab, type the password,
@@ -185,12 +209,12 @@ def test_pressing_enter_on_the_consent_form_connects_rather_than_declining(oauth
     those passes. What must not happen is that Enter declines.
     """
     reg = _register(oauth_app)
-    _, challenge = _pkce()
-    page = _consent_page(oauth_app, reg, challenge)
 
-    r = oauth_app.post("/oauth/authorize", data=_implicit_submission(page),
-                       follow_redirects=False)
-    query = parse_qs(urlsplit(r.headers.get("location", "")).query)
+    # -- the read-only request: no grant radios on the page at all --
+    verifier, challenge = _pkce()
+    page = _consent_page(oauth_app, reg, challenge)
+    r = _submit(oauth_app, page)
+    query = _redirect_query(r)
 
     assert query.get("error") != ["access_denied"], (
         "pressing Enter after typing the password declined the connection: "
@@ -201,11 +225,69 @@ def test_pressing_enter_on_the_consent_form_connects_rather_than_declining(oauth
         f"{r.status_code} -> {r.headers.get('location') or r.text[:200]}"
     )
 
+    # -- the read+write request, where the page also carries the grant radios --
+    # A different page: `read_only_choice` inserts two <input type="radio">
+    # controls ahead of the username field, and the default button is still
+    # whichever submit button comes first. Enter must approve here too, and it
+    # must grant what the CHECKED radio says rather than something narrower or
+    # wider.
+    verifier, challenge = _pkce()
+    page = _consent_page(oauth_app, reg, challenge, scope="mcp:read mcp:write")
+    assert 'name="grant"' in page, (
+        "the read+write consent page did not render the grant choice, so this "
+        "case is not exercising the branch it was written for"
+    )
+    r = _submit(oauth_app, page)
+    query = _redirect_query(r)
+    assert query.get("code"), (
+        "the default submission did not authorize a read+write request: "
+        f"{r.status_code} -> {r.headers.get('location') or r.text[:200]}"
+    )
+    tok = _exchange_code(oauth_app, reg, verifier, query["code"][0])
+    assert tok.status_code == 200, tok.text
+    assert "mcp:write" in tok.json()["scope"].split(), (
+        "'Full access' was checked and Enter granted something narrower: "
+        f"{tok.json()['scope']!r}"
+    )
+
+    # -- and the read-only choice survives the default submission --
+    # Reached the way a person reaches it: pick Read-only, mistype the password,
+    # and the re-rendered page carries the choice back with `read` checked.
+    # Pressing Enter on THAT page must approve, and must approve read-only.
+    verifier, challenge = _pkce()
+    page = _consent_page(oauth_app, reg, challenge, scope="mcp:read mcp:write")
+    retry = _submit(oauth_app, page, grant="read", password="not-the-password")
+    assert retry.status_code == 401, retry.text
+    assert 'value="read" checked' in retry.text, (
+        "the retry page did not carry the read-only choice back, so this case "
+        "cannot tell whether Enter honoured it"
+    )
+    r = _submit(oauth_app, retry.text)
+    query = _redirect_query(r)
+    assert query.get("code"), (
+        "the default submission on the retry page did not authorize: "
+        f"{r.status_code} -> {r.headers.get('location') or r.text[:200]}"
+    )
+    tok = _exchange_code(oauth_app, reg, verifier, query["code"][0])
+    assert tok.status_code == 200, tok.text
+    assert "mcp:write" not in tok.json()["scope"].split(), (
+        "'Read-only' was checked and Enter granted write anyway: "
+        f"{tok.json()['scope']!r}"
+    )
+
+    # -- control: an explicit decline must still decline --
+    # This is what stops the repair being "treat every POST as an approval".
+    _, challenge = _pkce()
+    page = _consent_page(oauth_app, reg, challenge)
+    declined = _submit(oauth_app, page, action="deny")
+    assert _redirect_query(declined).get("error") == ["access_denied"], (
+        "pressing Cancel no longer declines: "
+        f"{declined.status_code} -> {declined.headers.get('location')}"
+    )
+
 
 # ── AUDIT: /book/<token>/ 404s ──────────────────────────────────────────────
 
-@pytest.mark.xfail(strict=True, reason="the SPA mount swallows /book/<token>/ "
-                                       "before redirect_slashes can act")
 def test_a_booking_link_serves_the_spa_with_or_without_a_trailing_slash(tmp_path):
     """`@app.get("/book/{token}")` is registered in the bare spelling only, and
     `StaticFiles` mounted at "/" returns a FULL match for every path — so
@@ -249,6 +331,27 @@ def test_a_booking_link_serves_the_spa_with_or_without_a_trailing_slash(tmp_path
             f"{r.headers.get('content-type')}"
         )
         assert 'id="root"' in r.text
+
+        # NOT asserted here: that HEAD answers too. It does not — FastAPI's
+        # APIRoute, unlike Starlette's Route, does not derive HEAD from GET, so
+        # `HEAD /book/<token>` 404s today on BOTH spellings while GET serves the
+        # shell. That is a real inconsistency and a separate finding; pinning it
+        # here would make this pin drive a fix wider than the finding it names.
+
+    # -- controls: the repair is the second spelling, not a catch-all --
+    # A route that swallowed everything under /book/ would serve the shell for
+    # a path no booking link can produce, and the SPA's own matcher
+    # (frontend/src/main.tsx) refuses it, so the visitor would get a blank page
+    # instead of a 404.
+    deeper = client.get("/book/Ab3-_x9Q/extra")
+    assert deeper.status_code == 404, (
+        f"GET /book/<token>/extra -> {deeper.status_code}; the fix widened the "
+        f"route rather than registering the trailing-slash spelling"
+    )
+    missing = client.get("/nope")
+    assert missing.status_code == 404, (
+        f"GET /nope -> {missing.status_code}; an unrelated path stopped 404ing"
+    )
 
 
 # ── AUDIT: shutdown closes the DB and DAV client under a running sweep ──────

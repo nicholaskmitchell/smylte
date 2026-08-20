@@ -12,13 +12,21 @@ of how the harness behaved in practice — its "Two strengths of pin" and
 
 `docs/AUDIT.md` is the evidence. This is the plan for closing it.
 
-**36 open, 44 closed.** Stages 1, 2 and 3 are done; stages 4-5 remain. Of the 36
-still open, 28 are from the sweep — 27 of those pinned, 23 as
-`xfail(strict=True)` / `it.fails` and 4 as ordinary passing tests (see "Test gaps
-that were only gaps" below) — and **7 were filed by the adversarial review of
-Stage 3**, plus **1** from that review's own follow-up. The review's other 3, the
-ones Stage 3 itself caused, are closed — along with 3 more the follow-up found in
-those very fixes. See `## Filed during the Stage 3 adversarial review` in
+**35 open, 46 closed.** Stages 1, 2 and 3 are done; stage 4 is in progress and
+stage 5 has not started. Of the 35 still open:
+
+| where it came from | open |
+|---|---|
+| the sweep itself (stages 4 and 5) | 26 |
+| filed by the adversarial review of Stage 3 | 7 |
+| filed by that review's own follow-up | 1 |
+| filed during remediation (see `docs/AUDIT.md`) | 1 |
+
+25 of the 26 sweep findings are pinned — 21 as `xfail(strict=True)` / `it.fails`
+and 4 as ordinary passing tests (see "Test gaps that were only gaps" below); the
+unpinned one is finding 62. None of the review's 8 is pinned yet. The review's
+other 3, the ones Stage 3 itself caused, are closed — along with 3 more the
+follow-up found in those very fixes. See `## Filed during the Stage 3 adversarial review` in
 `docs/AUDIT.md`. One is deliberately **not** pinned; see
 "The one that is not pinned" below. The harness
 described under *Stage 0* further down still applies unchanged; these pins live in
@@ -378,22 +386,33 @@ before the real fix landed.
 | 36 ✅ | A JSON-RPC request (with an id) whose method starts with `notifications/` gets no reply at all, so the clien… | `backend/tasksd/mcp/server.py:114` | low | `test_a_notification_method_sent_with_an_id_gets_a_reply` |
 | 37 ✅ | move_event maps Radicale's 409 no-uid-conflict to "calendar server unavailable" (502) instead of the conflic… | `backend/tasksd/sync/engine.py:349` | low | `test_a_move_into_a_calendar_holding_that_uid_is_a_conflict_not_an_outage` |
 
-## Stage 4 — User-visible correctness & rendering ⬜ OPEN
+## Stage 4 — User-visible correctness & rendering ⬜ IN PROGRESS
 
-21 findings · 8 medium, 13 low · open
+21 findings · 8 medium, 13 low · **2 closed, 19 open**
+
+Closed so far: **38** and **45**, the two backend ones — the paths a stranger
+reaches. Both pins were widened before either fix, and both were then run
+against a plausible half-fix to confirm the widened pin still caught one.
+
+Widening #38 also surfaced a new finding: `HEAD /book/<token>` 404s on **both**
+spellings, because FastAPI's `APIRoute` does not derive HEAD from GET the way
+Starlette's `Route` does. That assertion was removed from the pin rather than
+kept — it is a real defect but not the one #38 names, and leaving it in would
+have made the pin drive a wider fix than its own evidence supports. It is filed
+under `## Filed during remediation` in `docs/AUDIT.md`.
 
 The user can see it is wrong. Contained, mostly small, and the stage where a fix is easiest to verify by looking at it.
 
 | # | Finding | Where | Sev | Pin |
 |---|---|---|---|---|
-| 38 | `/book/<token>/` (trailing slash) 404s — the SPA mount swallows it before redirect_slashes can act, though m… | `backend/tasksd/app.py:1489` | medium | `test_a_booking_link_serves_the_spa_with_or_without_a_trailing_slash` |
+| 38 ✅ | `/book/<token>/` (trailing slash) 404s — the SPA mount swallows it before redirect_slashes can act, though m… | `backend/tasksd/app.py:1489` | medium | `test_a_booking_link_serves_the_spa_with_or_without_a_trailing_slash` |
 | 39 | Shape, density and type tokens are stored per light/dark map, so corner radius, text size, gutter, row heigh… | `frontend/src/components/AppearancePanel.tsx:69` | medium | `keeps a shape token when the theme flips to dark` |
 | 40 | The resize grip on an event that runs past the six-week window truncates the span when released on its own c… | `frontend/src/components/CalendarView.tsx:556` | medium | `does not truncate a window-clipped span dropped where its grip is drawn` |
 | 41 | A failed events fetch permanently records the month as "asked", so the calendar grid stays blank or stale wi… | `frontend/src/data.tsx:576` | medium | `re-requests a month whose first fetch failed` |
 | 42 | The Home mini calendar never refetches on an SSE change, so its dots go stale while every other module on th… | `frontend/src/components/HomeView.tsx:141` | medium | `repaints when the account changes under an open dashboard` |
 | 43 | A rejected booking-link save leaves the editor permanently disabled — the in-flight guard is set but never c… | `frontend/src/components/SchedulingView.tsx:225` | medium | `comes back to life when the save is rejected` |
 | 44 | The availability editor lets the owner build overlapping weekly windows the server rejects with a 422, and s… | `frontend/src/components/SchedulingView.tsx:178` | medium | `never submits a week the server will refuse, and never drops a range` |
-| 45 | On the consent screen "Cancel" is the form's default button, so pressing Enter after typing the password dec… | `backend/tasksd/mcp/routes.py:638` | medium | `test_pressing_enter_on_the_consent_form_connects_rather_than_declining` |
+| 45 ✅ | On the consent screen "Cancel" is the form's default button, so pressing Enter after typing the password dec… | `backend/tasksd/mcp/routes.py:638` | medium | `test_pressing_enter_on_the_consent_form_connects_rather_than_declining` |
 | 46 | isColor accepts hex literals CSS rejects (5 and 7 digits) and non-color functions like calc(), so a mistyped… | `frontend/src/appearance.ts:324` | low | `refuses hex lengths CSS does not have, and functions that are not colours` |
 | 47 | The archived-calendars settings section renders "Loading…" forever when its fetch fails — the sibling sectio… | `frontend/src/components/ArchivedCalendarsSection.tsx:39` | low | `stops saying "Loading…" once the fetch has failed` |
 | 48 | The theme rename row is never closed when the active theme changes, so switching themes with it open and pre… | `frontend/src/components/AppearancePanel.tsx:45` | low | `never renames the theme the user switched to with the old name` |

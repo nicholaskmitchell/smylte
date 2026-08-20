@@ -1043,7 +1043,7 @@ No test covers narrowing at refresh time: test_a_refresh_cannot_widen_scope (tes
 
 **Pinned by** `test_narrowing_scope_on_refresh_does_not_end_the_grant` in `backend/tests/test_backlog_aug19_stage3_core.py`.
 
-#### [ ] On the consent screen "Cancel" is the form's default button, so pressing Enter after typing the password declines the connection
+#### [x] On the consent screen "Cancel" is the form's default button, so pressing Enter after typing the password declines the connection
 
 `backend/tasksd/mcp/routes.py:638` · **medium** · rendering · `minor` · stage 4
 
@@ -1069,6 +1069,23 @@ Sequence: user opens the consent page (username field is `autofocus`), types the
 </details>
 
 **Suggested fix.** Make Cancel non-default: either give it `formnovalidate` and put Connect first in tree order (reversing the visual order with `flex-direction: row-reverse` on `.actions` if the Cancel-left layout is wanted), or render Cancel as a plain link/`type="button"` and treat a POST with no `action=approve` as a decline only when it carries an explicit deny marker. Pin it with a test asserting the first `<button type="submit">` in the page is `value="approve"`.
+
+**Fixed** by taking the first of the suggested options: Connect is now first in
+tree order, and `.actions` gained `flex-direction: row-reverse` in the same hunk
+so the rendered row is unchanged (Cancel left, Connect right). The other two
+options were rejected on this page specifically — `type="button"` is inert under
+`default-src 'none'`, and rendering Cancel as a link would put the signed request
+into a URL, growing a surface on the one page that must not grow one. The cost,
+stated because it is real: DOM order and visual order now differ, so Tab reaches
+Connect before Cancel.
+
+The pin was widened before the fix and asserts the OUTCOME rather than where a
+button sits: the read-only request approves, the read+write request approves and
+grants what the CHECKED radio names, the read-only choice carried back by a
+mistyped-password retry is still honoured by the default submission, and an
+explicit Cancel still declines. Run against a half-fix that adds `autofocus` to
+Connect while leaving Cancel first, the pin still fails — focus is not the
+default button.
 
 **Pinned by** `test_pressing_enter_on_the_consent_form_connects_rather_than_declining` in `backend/tests/test_backlog_aug19_stage45.py`.
 
@@ -1498,7 +1515,7 @@ Failure scenario 3 (unvalidated empty): pressing Enter at the `Radicale password
 
 ### CSP & static serving
 
-#### [ ] `/book/<token>/` (trailing slash) 404s — the SPA mount swallows it before redirect_slashes can act, though main.tsx explicitly accepts the slash
+#### [x] `/book/<token>/` (trailing slash) 404s — the SPA mount swallows it before redirect_slashes can act, though main.tsx explicitly accepts the slash
 
 `backend/tasksd/app.py:1489` · **medium** · bug · `minor` · stage 4
 
@@ -1536,6 +1553,22 @@ Failure scenario: the owner publishes their booking link and, as people routinel
 </details>
 
 **Suggested fix.** Register the trailing-slash spelling the same way the well-known routes do, e.g. add `@app.get("/book/{token}/")` bound to the same handler (or `app.add_api_route("/book/{token}/", booking_spa, methods=["GET"], include_in_schema=False)`), and add a test asserting both spellings return the SPA index with the CSP header.
+
+**Fixed** by registering the trailing-slash spelling with `add_api_route`, the
+way the RFC 6764 discovery routes twenty lines earlier already do for the
+identical reason. Not a 308: the mount swallows the path before
+`redirect_slashes` runs, so a redirect would have to be hand-written for no gain.
+
+The widened pin adds two controls that bound the repair: `/book/<token>/extra`
+must still 404 (so the fix is a second spelling, not a catch-all that would serve
+a blank shell for a path the SPA's own matcher refuses), and an unrelated missing
+path must still 404. Run against a half-fix that registers the slash spelling
+*after* the static mount, the pin still fails.
+
+Not fixed, and filed separately below: `HEAD /book/<token>` 404s on both
+spellings, because FastAPI's `APIRoute` — unlike Starlette's `Route` — does not
+derive HEAD from GET. The pin says so explicitly rather than quietly asserting
+it, which would have driven a fix wider than this finding.
 
 **Pinned by** `test_a_booking_link_serves_the_spa_with_or_without_a_trailing_slash` in `backend/tests/test_backlog_aug19_stage45.py`.
 
@@ -2891,6 +2924,30 @@ end can be told from an authored one — `expand_occurrences` has the master and
 the current behaviour exactly so that changing it is a decision.
 
 ## Filed during remediation — 2026-08-20
+
+#### [ ] HEAD on a booking link 404s while GET serves the SPA, so a link checker reports the owner's published link dead
+
+`backend/tasksd/app.py:1541` · **low** · bug
+
+Found while widening the pin for the trailing-slash finding above, by asserting
+HEAD and watching it fail on the spelling that already worked. `@app.get` builds
+a FastAPI `APIRoute`, which registers `methods={"GET"}` only — Starlette's plain
+`Route` adds HEAD when GET is present, and `APIRoute` does not. So
+`GET /book/<token>` serves the SPA shell and `HEAD /book/<token>` falls through
+to the static mount, which looks for a file called `book/<token>`, does not find
+one, and answers `{"detail":"Not Found"}`.
+
+HEAD is what link checkers, mail-security scanners and chat-app unfurlers send
+first, and several treat a 404 as a dead link — which is how a published booking
+link gets flagged or stripped before any human clicks it. The owner never hears
+about it, the same failure mode as the trailing-slash finding.
+
+**Suggested fix.** `methods=["GET", "HEAD"]` on both spellings of the booking
+route (the `add_api_route` call already registers one of them, so this is one
+list). Check the other explicitly-registered SPA routes for the same shape while
+there. Pin it by asserting HEAD alongside GET in
+`test_a_booking_link_serves_the_spa_with_or_without_a_trailing_slash`, whose
+docstring currently records the gap.
 
 Found while closing the 2026-08-19 backlog, not by a sweep. One finding, not
 verified by anyone else. It is the same defect as finding 8, in the same file,
