@@ -69,10 +69,18 @@ describe('stage 4 — appearance', () => {
   })
 
   it('still accepts every form a real value takes', () => {
+    // `var(--x)` used to be in this list and is now REFUSED, deliberately: the
+    // 2026-08-19 sweep's isColor finding names `var(--serif)` as a defect of the
+    // same class, and `--x` is not a token at all. A var() naming anything but a
+    // COLOUR token resolves to garbage and the declaration is dropped at
+    // computed-value time — the very failure this describe block exists for.
+    // `var(--accent)` is the legitimate form and stays valid. Recorded as a
+    // supersession in docs/AUDIT.md rather than quietly edited.
     for (const ok of ['transparent', 'currentColor', 'red', 'rebeccapurple',
-                      '#abc', '#aabbccdd', 'oklch(0.7 0.1 250)', 'var(--x)']) {
+                      '#abc', '#aabbccdd', 'oklch(0.7 0.1 250)', 'var(--accent)']) {
       expect(isValidValue('color', ok)).toBe(true)
     }
+    expect(isValidValue('color', 'var(--x)')).toBe(false)
   })
 })
 

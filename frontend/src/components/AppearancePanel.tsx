@@ -2,8 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { clientId } from '../api'
 import {
   DEFAULTS, FONT_CHOICES, GROUPS, MAX_NAME_LEN, MAX_THEMES, PRESETS, SHARED_DEFAULTS,
-  TOKENS, defaultValue, ensureFont, findPreset, isValidToken, parseTheme,
-  serializeTheme, toSwatchHex,
+  TOKENS, defaultValue, ensureFont, findPreset, isSharedToken, isValidToken,
+  parseTheme, serializeTheme, themeTokens, toSwatchHex,
   type Appearance, type CustomTheme, type Mode, type ThemeTokens, type TokenSpec,
 } from '../appearance'
 
@@ -51,6 +51,21 @@ export function AppearancePanel({ appearance, onChange, mode, onMode, onClose }:
     return () => document.removeEventListener('keydown', onKey)
   }, [onClose])
 
+  // Close the rename row whenever the theme it was opened for stops being the
+  // active one. `renaming`/`name` are captured when Rename is pressed and were
+  // cleared only by the row's own Save and Cancel, while the row's guard is
+  // `renaming && active` — "some theme is active", not "still the one this was
+  // about". The picker sits directly above it, so switching themes left the row
+  // open, pre-filled with the previous theme's name and bound to a different
+  // object: Save then renamed the NEW theme to the OLD one's name, and since ids
+  // are never shown, the name is the only thing that tells two themes apart.
+  //
+  // One effect covers all three paths that retarget `active` — the picker,
+  // Duplicate and Import — because all three write it. Closing rather than
+  // re-priming: re-priming would silently change what the row is about while the
+  // user is looking at it, which is a second version of the same defect.
+  useEffect(() => { setRenaming(false) }, [appearance.active])
+
   /**
    * A new theme carrying everything `source` has, or an empty one when there is
    * no source — which is how a copy of Smylte stays lossless.
@@ -63,10 +78,35 @@ export function AppearancePanel({ appearance, onChange, mode, onMode, onClose }:
     dark: { ...(source?.dark ?? {}) },
   })
 
+  /**
+   * A patch, split by whether each token varies with the mode.
+   *
+   * The nine in SHARED_DEFAULTS are declared once in tokens.css's `:root` block
+   * and have no dark counterpart, so writing a corner radius or a typeface into
+   * `active[mode]` alone meant it disappeared the moment the app flipped — with
+   * the theme still selected and named, and no way in the panel to author these
+   * once for both. They go into BOTH maps; colours keep going into the current
+   * mode only, or a dark theme would be repainted in its light values.
+   */
+  const splitPatch = (t: CustomTheme, patch: ThemeTokens): CustomTheme => {
+    const own: ThemeTokens = {}
+    const shared: ThemeTokens = {}
+    for (const [token, value] of Object.entries(patch)) {
+      if (isSharedToken(token)) shared[token] = value
+      else own[token] = value
+    }
+    const other: Mode = mode === 'dark' ? 'light' : 'dark'
+    return {
+      ...t,
+      [mode]: { ...t[mode], ...shared, ...own },
+      [other]: { ...t[other], ...shared },
+    }
+  }
+
   /** Write `tokens` into the active theme for the current mode, forking first. */
   const edit = (patch: ThemeTokens) => {
     if (active && !isPreset) {
-      const next = { ...active, [mode]: { ...active[mode], ...patch } }
+      const next = splitPatch(active, patch)
       onChange({ active: active.id, themes: themes.map((t) => (t.id === active.id ? next : t)) })
       return
     }
@@ -75,9 +115,8 @@ export function AppearancePanel({ appearance, onChange, mode, onMode, onClose }:
     // `return`: the panel stayed fully interactive, the sliders moved and the
     // color field accepted typing, and nothing was ever applied or saved.
     if (themes.length >= MAX_THEMES) { window.alert(AT_CAP); return }
-    const fork = seedFork(preset)
     // Merged, not replaced: the seed has to survive the very edit that made it.
-    fork[mode] = { ...fork[mode], ...patch }
+    const fork = splitPatch(seedFork(preset), patch)
     onChange({ active: fork.id, themes: [...themes, fork] })
   }
 
@@ -105,12 +144,22 @@ export function AppearancePanel({ appearance, onChange, mode, onMode, onClose }:
     onChange({ active: null, themes: themes.filter((t) => t.id !== active.id) })
   }
 
-  /** Drop every override for this mode — back to the shipped values. */
+  /** Drop every override for this mode — back to the shipped values.
+   *
+   *  The shared tokens go from the other map too. They count for both modes now
+   *  (see `themeTokens`) and the override counter counts them in both, so
+   *  leaving them behind would make this button visibly do nothing: the count
+   *  would still read above zero straight after a reset, and the corner radius
+   *  would go on resolving from the map the user did not reset. */
   const resetMode = () => {
     if (!active || isPreset) return
+    const other: Mode = mode === 'dark' ? 'light' : 'dark'
+    const keptOther = Object.fromEntries(
+      Object.entries(active[other]).filter(([token]) => !isSharedToken(token)))
     onChange({
       active: active.id,
-      themes: themes.map((t) => (t.id === active.id ? { ...t, [mode]: {} } : t)),
+      themes: themes.map((t) =>
+        (t.id === active.id ? { ...t, [mode]: {}, [other]: keptOther } : t)),
     })
   }
 
@@ -134,7 +183,11 @@ export function AppearancePanel({ appearance, onChange, mode, onMode, onClose }:
 
   // What each control shows: the override if there is one, else the shipped value.
   const current = useMemo(() => {
-    const overrides = active?.[mode] ?? {}
+    // `themeTokens`, not `active[mode]`: that is what the page applies, and a
+    // theme saved before the split carries a shared token in one map only.
+    // Reading it raw here would show the shipped value in the control while the
+    // page painted the override — the panel and the screen disagreeing.
+    const overrides = active ? themeTokens(active, mode) : {}
     const out: ThemeTokens = {}
     for (const token of Object.keys(TOKENS)) {
       out[token] = overrides[token] ?? defaultValue(token, mode)
@@ -144,7 +197,7 @@ export function AppearancePanel({ appearance, onChange, mode, onMode, onClose }:
 
   // A preset's own values are not overrides — nothing of the user's is in play,
   // so every per-token reset is inert and the counter has nothing to count.
-  const overridden = isPreset ? {} : (active?.[mode] ?? {})
+  const overridden = isPreset ? {} : (active ? themeTokens(active, mode) : {})
 
   return (
     <div className="overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}>
@@ -230,11 +283,19 @@ export function AppearancePanel({ appearance, onChange, mode, onMode, onClose }:
                     onChange={(v) => edit({ [token]: v })}
                     onClear={() => {
                       if (!active || isPreset) return
-                      const next = { ...overridden }
+                      // Symmetric with `edit`: a shared token was written to
+                      // both maps, so clearing it from one alone would leave the
+                      // reset arrow visibly inert — the value would go on
+                      // resolving from the other mode.
+                      const other: Mode = mode === 'dark' ? 'light' : 'dark'
+                      const next = { ...active[mode] }
                       delete next[token]
+                      const nextOther = { ...active[other] }
+                      if (isSharedToken(token)) delete nextOther[token]
                       onChange({
                         active: active.id,
-                        themes: themes.map((t) => (t.id === active.id ? { ...t, [mode]: next } : t)),
+                        themes: themes.map((t) => (t.id === active.id
+                          ? { ...t, [mode]: next, [other]: nextOther } : t)),
                       })
                     }} />
                 ))}

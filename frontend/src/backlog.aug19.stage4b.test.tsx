@@ -527,7 +527,7 @@ describe('aug19 stage 4b — the theme rename bar', () => {
   }
 
   // AUDIT open: AppearancePanel.tsx:45
-  it.fails('never renames the theme the user switched to with the old name', async () => {
+  it('never renames the theme the user switched to with the old name', async () => {
     // `renaming`/`name` are captured when Rename is pressed and cleared only by
     // the row's own Save and Cancel. Nothing resets them when `appearance.active`
     // changes underneath, and the row's guard is `renaming && active` — "some
@@ -552,13 +552,51 @@ describe('aug19 stage 4b — the theme rename bar', () => {
 
     // Change of mind: look at Beta instead.
     await user.selectOptions(screen.getByRole('combobox', { name: 'Theme' }), 'b')
-    // If the row survived the switch, dismissing it must not rename anything.
+
+    // WIDENED. This used to click Save only `if (save)`, so a fix that closes
+    // the row passed with the rename never attempted — the assertion that
+    // matters was unreachable in exactly the branch the fix creates. Stated as
+    // the outcome instead: the row is either gone, or it is about the theme the
+    // user is now looking at. Both repairs the docstring blesses satisfy it,
+    // and doing nothing does not.
+    const field = screen.queryByLabelText('Theme name')
+    if (field) expect(field).toHaveValue('Beta')
+
+    // …and whatever it does, dismissing it must not put Alpha's name anywhere
+    // it does not belong.
     const save = screen.queryByRole('button', { name: 'Save' })
     if (save) await user.click(save)
-
     const names = screen.getAllByRole('option').map((o) => o.textContent)
     expect(names.filter((n) => n === 'Alpha')).toHaveLength(1)
     expect(names).toContain('Beta')
+  })
+
+  // WIDENING: the picker is one of three paths that retarget `active`, and the
+  // finding names all three. Duplicate is the one a user reaches while already
+  // in the middle of renaming, since both buttons sit in the same row.
+  it('never renames the copy Duplicate just made with the original name', async () => {
+    const user = userEvent.setup()
+    render(<AppearanceHarness initial={{
+      active: 'a', themes: [{ id: 'a', name: 'Alpha', base: 'light', light: {}, dark: {} }],
+    }} />)
+
+    await user.click(screen.getByRole('button', { name: 'Rename' }))
+    expect(screen.getByLabelText('Theme name')).toHaveValue('Alpha')
+
+    await user.click(screen.getByRole('button', { name: 'Duplicate' }))
+
+    const field = screen.queryByLabelText('Theme name')
+    if (field) expect(field).not.toHaveValue('Alpha')
+    const save = screen.queryByRole('button', { name: 'Save' })
+    if (save) await user.click(save)
+
+    // Two themes, two distinct names — the id is never shown, so the name is
+    // the only thing that tells them apart. Scoped to the theme picker: the
+    // font selects contribute options too, and some of their labels repeat
+    // across the serif/sans/mono tiers by design.
+    const picker = screen.getByRole('combobox', { name: 'Theme' })
+    const names = within(picker).getAllByRole('option').map((o) => o.textContent)
+    expect(new Set(names).size).toBe(names.length)
   })
 })
 
