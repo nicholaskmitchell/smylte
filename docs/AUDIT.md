@@ -3182,7 +3182,7 @@ server echoes rather than the DTO. The pin cannot catch this — its `createTask
 double echoes `body.due` verbatim and never returns a numeric priority — so widen
 the double first.
 
-#### [ ] _intrinsic_order matches order.ts only when the server timezone equals the browser's
+#### [x] _intrinsic_order matches order.ts only when the server timezone equals the browser's
 
 `backend/tasksd/mcp/api.py:120` · **medium** · bug
 
@@ -3200,6 +3200,21 @@ to the corpus.
 due needs a zone to become an instant, and the honest one is the owner's
 `home_timezone`. Then add a case to the corpus generator with the two zones
 differing.
+
+**Fixed** with a new `_due_instant(t, zone)` and an optional `zone` threaded
+through `_intrinsic_order` / `_in_display_order`, supplied by a fail-soft
+`McpApi._home_zone()` modelled on `TaskService._home_tz`.
+
+`zone` is OPTIONAL and defaults to the previous behaviour, deliberately: the
+402-case corpus check calls `_in_display_order` directly and has no service
+handle, so a mandatory parameter would have meant editing the corpus test in the
+same commit that changes the ordering — exactly the churn that hides a
+regression. A control pins the no-zone path so it cannot drift.
+
+The pin fixes `TZ=UTC` with `monkeypatch`/`tzset` rather than assuming it: the
+defect is a DISAGREEMENT between two zones, so a run that happened to be in
+America/Chicago would pass against the bug. Half-fix checked: ignore the `zone`
+argument and keep `.astimezone()`.
 
 #### [x] _desynchronizing falsely refuses Google Calendar's "every weekday"
 
@@ -3232,7 +3247,7 @@ allowed through. The control (`test_a_weekday_series_dragged_onto_a_weekend_is_s
 is also what catches the lazy half-fix — whitelisting `FREQ=DAILY;BYDAY=…`
 outright — which the pin itself passes.
 
-#### [ ] The refresh-token scope check runs after the single-use consumption, burning the grant on a bad scope
+#### [x] The refresh-token scope check runs after the single-use consumption, burning the grant on a bad scope
 
 `backend/tasksd/mcp/oauth.py:531` · **medium** · bug
 
@@ -3248,7 +3263,14 @@ should mean a stolen token.
 **Suggested fix.** Move the scope check above `use_refresh_token`, beside
 `_check_cv`.
 
-#### [ ] list_oauth_grants now understates a grant's live capability, deterministically
+**Fixed** exactly there, with a comment pointing at the argument nine lines above
+that had already been made and simply not applied one branch over. Half-fix
+checked: leaving the check where it was catches on the pin's second half, which
+re-presents the same token and demands 200 rather than only asserting the
+refusal — the existing `test_a_refresh_cannot_widen_scope` asserts the refusal
+alone, which is why this was invisible.
+
+#### [x] list_oauth_grants now understates a grant's live capability, deterministically
 
 `backend/tasksd/db/store.py:1085` · **low** · bug
 
@@ -3264,6 +3286,19 @@ with a sequence, which is a DeprecationWarning today and an
 
 **Suggested fix.** The screen answers "what can this connection still do", which
 is the UNION of live tokens' scopes. Fix the parameter binding at the same time.
+
+**Fixed** both. The union is taken in Python — scopes are space-separated strings
+and SQLite has no set type, so a SQL version would need a recursive CTE to split
+them — preserving first-seen order so the chips do not reshuffle on every poll.
+The binding is now `?` twice with a two-element tuple; the whole-suite warning
+count dropped from 7 to 2 with it.
+
+**The pin does not catch the over-correction, and a control does.** "Union of
+live tokens" is one step from "union of every token ever issued", which
+over-reports in the same direction the old behaviour under-reported — the screen
+would say a connector can still write because it could an hour ago. The pin has
+no expired rows and passes against that; `test_a_grant_does_not_report_what_an_expired_token_could_do`
+is what fails.
 
 #### [x] A fall-back instance blocks three times the time it occupies
 

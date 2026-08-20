@@ -1090,29 +1090,53 @@ def list_oauth_grants(conn: sqlite3.Connection, *, now: float) -> list[dict]:
     """One row per live grant (family), for the connections screen: which client,
     what it may do, when it was granted and when it was last refreshed.
 
-    `scope` comes from the family's NEWEST live token, via a correlated subquery,
-    rather than being read as a bare column out of the GROUP BY. SQLite pins a
-    bare column to a particular row only when the query holds exactly one
-    min()/max() aggregate; this one has three, so the value came from an
-    arbitrary row of the group. Scope is not constant within a family —
-    `_grant_refresh` implements RFC 6749 §6 narrowing and reissues into the SAME
-    family_id, while the previous wide-scoped access token stays live for the
-    rest of its hour and the previous refresh row is deliberately kept until it
-    expires. So the owner's only view of what a connector may do, and the screen
-    they act on to revoke one, could show a capability level that no live token
-    carried, in either direction, decided by scan order.
+    `scope` is the UNION of the family's live tokens' scopes, because the question
+    the screen answers is "what can this connection still do" and the answer is
+    what ANY live token permits.
+
+    Scope is not constant within a family: `_grant_refresh` implements RFC 6749
+    §6 narrowing and reissues into the SAME family_id, while the previous
+    wide-scoped ACCESS token stays live for the rest of its hour. Reading a bare
+    column out of the GROUP BY took it from an arbitrary row (SQLite pins one
+    only when the query holds exactly one min()/max() aggregate, and this has
+    three); reading the newest live token's scope was deterministic but
+    systematically wrong in the UNSAFE direction — after a narrowing refresh the
+    screen read "read-only" while the connector kept writing with a token that
+    had another hour to run. A scoped MCP token can trigger that deliberately by
+    refreshing with `scope=mcp:read` straight after the code exchange. Revocation
+    always worked, so this was deception rather than escalation, but the screen
+    exists to be acted on.
+
+    The union is taken in Python rather than SQL: scopes are space-separated
+    strings and SQLite has no set type, so a SQL version would mean a recursive
+    CTE to split them. First-seen order (oldest token first) is preserved so the
+    chips read stably rather than reshuffling on every poll.
     """
-    return [
+    # `?` twice with a two-element tuple, not `?1` twice with a one-element one.
+    # `?1` is a NUMBERED placeholder, and CPython's sqlite3 classifies it as
+    # NAMED — its name is the literal "?1" — so binding a sequence to it is a
+    # DeprecationWarning on 3.12 and an sqlite3.ProgrammingError from 3.14.
+    rows = [
         dict(r)
         for r in conn.execute(
             "SELECT t.family_id, t.client_id, t.resource, "
-            "       (SELECT x.scope FROM oauth_tokens x WHERE x.family_id = t.family_id "
-            "          AND x.expires_at > ?1 ORDER BY x.created_at DESC, x.rowid DESC "
-            "          LIMIT 1) AS scope, "
             "       MIN(t.created_at) AS granted_at, MAX(t.created_at) AS refreshed_at, "
             "       MAX(t.expires_at) AS expires_at, c.client_name "
             "FROM oauth_tokens t LEFT JOIN oauth_clients c ON c.client_id = t.client_id "
-            "WHERE t.expires_at > ?1 GROUP BY t.family_id ORDER BY granted_at DESC",
+            "WHERE t.expires_at > ? GROUP BY t.family_id ORDER BY granted_at DESC",
             (now,),
         )
     ]
+    live: dict[str, list[str]] = {}
+    for family_id, scope in conn.execute(
+        "SELECT family_id, scope FROM oauth_tokens WHERE expires_at > ? "
+        "ORDER BY created_at ASC, rowid ASC",
+        (now,),
+    ):
+        seen = live.setdefault(family_id, [])
+        for word in (scope or "").split():
+            if word not in seen:
+                seen.append(word)
+    for row in rows:
+        row["scope"] = " ".join(live.get(row["family_id"], []))
+    return rows

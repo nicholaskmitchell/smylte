@@ -514,6 +514,23 @@ class OAuthServer:
                 "reauthorize the client",
             ) from e
 
+        # A refresh may narrow scope but never widen it (RFC 6749 §6).
+        #
+        # Also BEFORE `use_refresh_token`, for the reason argued nine lines
+        # above for `_check_cv` — and the argument was not applied here when it
+        # should have been. A client sending one over-wide scope had its
+        # single-use token burned on a request that was refused anyway, so its
+        # next ORDINARY refresh read as a replay: `revoke_oauth_family` destroyed
+        # the whole grant and the owner was shown "this refresh token was already
+        # used", an alarm about a theft that did not happen. That also
+        # desensitises the one alarm that should mean a stolen token.
+        granted = scope_set(row["scope"])
+        if form.get("scope"):
+            asked = scope_set(form.get("scope"))
+            if asked - granted:
+                raise OAuthError("invalid_scope", "a refresh cannot widen scope")
+            granted = asked
+
         state = store.use_refresh_token(conn, token_hash, now=self._now())
         if state == "invalid":
             raise OAuthError("invalid_grant", "the refresh token has expired")
@@ -523,14 +540,6 @@ class OAuthServer:
             store.revoke_oauth_family(conn, row["family_id"])
             raise OAuthError("invalid_grant",
                              "this refresh token was already used; the grant has been revoked")
-
-        # A refresh may narrow scope but never widen it (RFC 6749 §6).
-        granted = scope_set(row["scope"])
-        if form.get("scope"):
-            asked = scope_set(form.get("scope"))
-            if asked - granted:
-                raise OAuthError("invalid_scope", "a refresh cannot widen scope")
-            granted = asked
         # `offline_access` is a grant SHAPE, not an API capability, so a client
         # narrowing to `mcp:read mcp:write` — an ordinary thing to do, since the
         # token response echoes scope back — is not asking to give up refreshing.
