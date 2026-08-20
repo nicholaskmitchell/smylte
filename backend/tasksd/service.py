@@ -207,11 +207,35 @@ class TaskService:
             "sort_mode": settings_row["sort_mode"] if settings_row else None,
         }
 
-    def resolve_list(self, list_id: str) -> str | None:
-        """Accept either a full href or the short slug; return the href."""
+    def resolve_list(self, list_id: str, *, component: str | None = None) -> str | None:
+        """Accept either a full href or the short slug; return the href.
+
+        `component` is what the caller is about to WRITE or READ there — "VTODO"
+        for the task routes, "VEVENT" for the event ones — and a collection that
+        does not hold it does not resolve.
+
+        The read side of this service has always been segregated by component:
+        `list_lists` filters on VTODO, `list_calendars` on VEVENT, `get_task` and
+        `get_event` on the item's own component, and `_link_busy` skips any
+        collection without VEVENT — `test_api.py::test_tabs_are_separated` says
+        that is deliberate. The write side had no such check: this resolver
+        matched on href-or-slug alone, and it sits behind every `/api/lists/...`
+        route, every `/api/calendars/...` route and both MCP resolvers. So a
+        VTODO could be written into an event-only calendar, where it landed on
+        Radicale, occupied a UID, and was then invisible to every reader in this
+        app — `smylte_delete_list` would happily delete a calendar, too.
+
+        `_normalize_link_fields` already did this for one caller ("calendar must
+        be an existing event calendar"), so the need was recognised and applied
+        once. Callers that deliberately span both kinds — collection rename,
+        delete and reorder, which the SPA uses from both tabs — pass nothing and
+        keep the old behaviour.
+        """
         with self._lock:
             for row in store.get_collections(self._conn):
                 if list_id in (row["href"], _slug(row["href"])):
+                    if component and component not in (row["components"] or ""):
+                        return None
                     return row["href"]
         return None
 
@@ -874,6 +898,8 @@ class TaskService:
             # booking's times (nor collide with its event resource).
             if client_id:
                 prior = store.get_booking_by_event(self._conn, f"{client_id}@tasksd")
+                if prior is None:
+                    prior = self._recover_orphaned_booking(link, token, client_id)
                 if prior is not None:
                     if prior["link_token"] == token:
                         return self._confirmation(link, prior), False
@@ -943,6 +969,63 @@ class TaskService:
             "duration_minutes": link["duration_minutes"],
             "timezone": link["timezone"],
         }, True
+
+    def _recover_orphaned_booking(self, link, token: str, client_id: str):
+        """A ledger row rebuilt from an event this booking already wrote.
+
+        The whole replay mechanism keys on the ledger, and the ledger row is
+        inserted AFTER `create_event` has PUT the VEVENT to Radicale. Anything
+        between the two — `_refresh_from_wire`'s second round trip raising
+        DavError, a process restart — leaves the event on the owner's calendar
+        with no ledger row. The visitor's retry, with the same client_id their
+        page deliberately keeps stable for the chosen slot, is then not
+        recognised as a replay; once the background sync pulls the orphan into
+        the cache, `_link_busy` sees it, the slot disappears, and `book_slot`
+        tells them "that time is not available" about their OWN booking. They
+        pick another slot and the owner gets two events for one person, one of
+        which is invisible in Settings -> Bookings and uncounted against the
+        link's ceiling.
+
+        So the hook does not depend on the ledger being there: the EVENT is the
+        record, since `create_event` derives its UID from the client_id, and the
+        ledger is rebuilt from it. Restricted to the link's own calendar, so a
+        client_id reused against a different link still raises rather than
+        disclosing the other booking's times.
+
+        Returns the new ledger row, or None if there is no such event.
+        """
+        row = store.get_item(self._conn, link["calendar_href"], f"{client_id}@tasksd")
+        if row is None or row["component"] != "VEVENT":
+            return None
+        # In the LINK's zone, the way the ordinary path writes it. The cached
+        # row holds whatever the wire said (this app writes bookings in UTC), and
+        # a confirmation that named the same instant in a different offset would
+        # read to the visitor as a different time than the one they picked.
+        tz = ZoneInfo(link["timezone"])
+
+        def _local(value):
+            if not value:
+                return ""
+            try:
+                dt = datetime.fromisoformat(value)
+            except ValueError:
+                return value
+            return (dt.astimezone(tz) if dt.tzinfo else dt).isoformat()
+
+        booking_id = uuid.uuid4().hex
+        store.insert_booking(
+            self._conn, id=booking_id, link_token=token,
+            calendar_href=link["calendar_href"], event_uid=row["uid"],
+            client_name="", client_email="", notes=None,
+            start_at=_local(row["dtstart"]),
+            end_at=_local(row["dtend"] or row["dtstart"]),
+        )
+        log.warning(
+            "booking ledger row was missing for event %s on link %s; rebuilt from "
+            "the calendar (a write failed between the PUT and the ledger insert)",
+            row["uid"], token,
+        )
+        return store.get_booking_by_event(self._conn, row["uid"])
 
     @staticmethod
     def _confirmation(link, booking) -> dict[str, Any]:

@@ -39,7 +39,10 @@ class _Svc:
         self._tasks = tasks or {}
         self._lists = lists or ["/u/inbox/"]
 
-    def resolve_list(self, list_id):
+    def resolve_list(self, list_id, *, component=None):
+        # `component` accepted and ignored: these fakes hold task lists only, and
+        # the real resolver takes it (2026-08-19 finding 31 — a task could be
+        # written into an event-only calendar).
         href = f"/u/{list_id}/"
         return href if href in self._lists else None
 

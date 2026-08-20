@@ -155,7 +155,7 @@ def mcp_stack(_scratch_up, tmp_path_factory):
         yield McpServer(api), cal["id"], event["uid"], {SCOPE_READ, SCOPE_WRITE}
     finally:
         try:
-            api.delete_collection(cal["id"])
+            api.delete_collection(cal["id"], kind="calendar")
         finally:
             svc.close()
 

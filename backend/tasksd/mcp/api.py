@@ -185,8 +185,18 @@ class McpApi:
 
     # ── resolution ───────────────────────────────────────────────────────────
 
+    _COMPONENT = {"list": "VTODO", "calendar": "VEVENT"}
+
     def _href(self, list_id: str, *, kind: str = "list") -> str:
-        href = self._svc.resolve_list(list_id)
+        """The collection href for an id — of the right KIND.
+
+        `kind` used to affect only the wording of the error, so every task tool
+        accepted a calendar id and every calendar tool accepted a task-list id:
+        `smylte_delete_list` deleted calendars, and `smylte_create_task` wrote a
+        VTODO into an event-only calendar where no reader in this app would ever
+        return it again.
+        """
+        href = self._svc.resolve_list(list_id, component=self._COMPONENT.get(kind))
         if href is None:
             raise ToolError(
                 f"There is no {kind} with id {list_id!r}. Call "
@@ -209,15 +219,18 @@ class McpApi:
     def create_calendar(self, *, name, color=None):
         return self._svc.create_calendar(name, color=color)
 
-    def update_collection(self, list_id, *, name=None, color=None):
+    # `kind` threaded rather than defaulted: these two back BOTH
+    # smylte_update_list/smylte_delete_list AND their calendar twins, so without
+    # it `smylte_delete_list(<a calendar id>)` deleted the calendar.
+    def update_collection(self, list_id, *, name=None, color=None, kind="list"):
         if name is None and color is None:
             raise ToolError("Nothing to change — pass a name or a color.")
         return self._svc.update_collection(
-            self._href(list_id), name=name, color=color, clear_color=False
+            self._href(list_id, kind=kind), name=name, color=color, clear_color=False
         )
 
-    def delete_collection(self, list_id):
-        self._svc.delete_collection(self._href(list_id))
+    def delete_collection(self, list_id, *, kind="list"):
+        self._svc.delete_collection(self._href(list_id, kind=kind))
 
     # ── tasks ────────────────────────────────────────────────────────────────
 

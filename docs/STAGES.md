@@ -12,9 +12,9 @@ of how the harness behaved in practice — its "Two strengths of pin" and
 
 `docs/AUDIT.md` is the evidence. This is the plan for closing it.
 
-**45 open, 21 closed.** Stages 1 and 2 are done and Stage 3 is in progress;
-stages 4-5 remain. Of the 45 still open, 44 are pinned by a test that asserts
-the corrected behaviour and fails today — 40 as `xfail(strict=True)` /
+**38 open, 28 closed.** Stages 1 and 2 are done and Stage 3 is in progress;
+stages 4-5 remain. Of the 38 still open, 37 are pinned by a test that asserts
+the corrected behaviour and fails today — 33 as `xfail(strict=True)` /
 `it.fails`, and 4 as ordinary passing tests (see "Test gaps that were only gaps"
 below). One is deliberately **not** pinned; see
 "The one that is not pinned" below. The harness
@@ -209,7 +209,7 @@ in that sweep's 66.
 
 ## Stage 3 — Silent data corruption 🟨 IN PROGRESS
 
-24 findings · 6 high, 12 medium, 6 low · **7 closed, 17 open**
+24 findings · 6 high, 12 medium, 6 low · **14 closed, 10 open**
 
 Nothing raises and the answer is silently wrong. The dangerous class, and the largest — it needs the most care per fix because the failure leaves no trace and several of these corrupt data another CalDAV client authored.
 
@@ -222,6 +222,12 @@ filed as a test gap — "nothing drives `busy_intervals` across a DST transition
 all" — and writing the missing case is what found 18 and 29 in the first place.
 Its pin asserts exactly those two behaviours, so fixing them closed it, with no
 change of its own. The stage boundaries are a sorting aid, not a partition.
+
+**Findings 27 and 31 were one defect at two layers**, and they closed together
+because both `_href` resolvers go through `service.resolve_list`. That is worth
+noticing for the sorting rather than the fix: the sweep filed the HTTP symptom
+and the MCP symptom as separate findings, in stages that would have been worked
+weeks apart, and whoever took the second one would have found it already fixed.
 
 **Two of the four edit-path fixes were wrong on the first attempt, and the
 widened pins are what said so.** Finding 15's audit entry prescribes adding a
@@ -252,25 +258,25 @@ before the real fix landed.
 | 16 ✅ | Dragging a foreign MONTHLY/YEARLY series deletes the dragged occurrence and moves nothing else | `backend/tasksd/ical/edit.py:829` | high | `test_dragging_a_monthly_series_moves_it_instead_of_desynchronizing_the_rule` |
 | 17 | smylte_list_tasks implements the comparator order.ts documents as wrong, so after one drag every newly-creat… | `backend/tasksd/mcp/api.py:133` | high | `test_a_task_created_after_a_drag_is_not_sunk_below_the_whole_account` |
 | 18 ✅ | busy_intervals drops any event crossing the DST fall-back transition, so an anonymous POST double-books the … | `backend/tasksd/scheduling.py:148` | high | `test_a_meeting_across_the_fall_back_transition_still_blocks_its_slot` |
-| 19 | split_event's 412 recovery always fails with a 409 and strands a duplicate recurring series on the server | `backend/tasksd/sync/engine.py:435` | high | `test_a_contended_this_and_following_split_leaves_no_duplicate_series` |
-| 20 | get_events_in_range gates on the master's DTSTART, so a RECURRENCE-ID override moved earlier than the series… | `backend/tasksd/db/store.py:661` | medium | `test_an_occurrence_moved_before_its_series_start_is_still_in_the_window` |
+| 19 ✅ | split_event's 412 recovery always fails with a 409 and strands a duplicate recurring series on the server | `backend/tasksd/sync/engine.py:435` | high | `test_a_contended_this_and_following_split_leaves_no_duplicate_series` |
+| 20 ✅ | get_events_in_range gates on the master's DTSTART, so a RECURRENCE-ID override moved earlier than the series… | `backend/tasksd/db/store.py:661` | medium | `test_an_occurrence_moved_before_its_series_start_is_still_in_the_window` |
 | 21 | Logout does not clear the in-memory data mirror, so the calendar keeps painting the previous session's event… | `frontend/src/data.tsx:505` | medium | `does not paint the previous session’s events to the next one` |
 | 22 | sortTasks keys its effective-position map by bare uid, so one task copied into a second list silently rewrit… | `frontend/src/order.ts:128` | medium | `keeps a dragged row where it was dropped when a copy shares its uid` |
 | 23 | Folding one subtask tree silently deletes the folded state of every tree that is not currently rendered — an… | `frontend/src/components/TasksView.tsx:297` | medium | `keeps a hidden list’s folded trees when another tree is folded` |
 | 24 ✅ | A zone-offset datetime accepted by _parse_datelike is written as TZID="UTC±HH:MM" and read back as floating … | `backend/tasksd/app.py:531` | medium | `test_an_event_created_with_a_zone_offset_keeps_the_instant_it_names` |
 | 25 ✅ | split_series never checks that the anchor is an occurrence, so "this and following" duplicates a non-recurri… | `backend/tasksd/ical/edit.py:1084` | medium | `test_this_and_following_on_a_non_repeating_event_does_not_duplicate_it` |
 | 26 ✅ | Recurrence expansion emits occurrences whose end precedes their start on the DST spring-forward (and 3x-long… | `backend/tasksd/ical/recur.py:234` | medium | `test_every_expanded_occurrence_across_spring_forward_blocks_real_time` |
-| 27 | Every task tool accepts a calendar id and every calendar tool accepts a task-list id, so smylte_delete_list … | `backend/tasksd/mcp/api.py:176` | medium | `test_a_calendar_id_is_refused_by_the_task_tools` |
+| 27 ✅ | Every task tool accepts a calendar id and every calendar tool accepts a task-list id, so smylte_delete_list … | `backend/tasksd/mcp/api.py:176` | medium | `test_a_calendar_id_is_refused_by_the_task_tools` |
 | 28 | A refresh that narrows scope without repeating `offline_access` returns no refresh token, and the client's R… | `backend/tasksd/mcp/oauth.py:516` | medium | `test_narrowing_scope_on_refresh_does_not_end_the_grant` |
 | 29 ✅ | busy_intervals derives a DURATION-only event's end by wall-clock addition, so across a DST transition it blo… | `backend/tasksd/scheduling.py:145` | medium | `test_a_duration_only_event_blocks_its_authored_length_across_a_transition` |
-| 30 | The booking ledger row is written after the CalDAV PUT, so a failure in between makes the visitor's own retr… | `backend/tasksd/service.py:919` | medium | `test_a_booking_retried_after_a_failed_write_is_not_a_conflict_with_itself` |
-| 31 | resolve_list ignores the collection's component set, so a task can be written into a VEVENT-only calendar (a… | `backend/tasksd/service.py:210` | medium | `test_a_task_cannot_be_written_into_an_event_only_calendar` |
+| 30 ✅ | The booking ledger row is written after the CalDAV PUT, so a failure in between makes the visitor's own retr… | `backend/tasksd/service.py:919` | medium | `test_a_booking_retried_after_a_failed_write_is_not_a_conflict_with_itself` |
+| 31 ✅ | resolve_list ignores the collection's component set, so a task can be written into a VEVENT-only calendar (a… | `backend/tasksd/service.py:210` | medium | `test_a_task_cannot_be_written_into_an_event_only_calendar` |
 | 32 | list_oauth_grants reads `scope` as a bare column in a multi-aggregate GROUP BY, so the connections screen ca… | `backend/tasksd/db/store.py:983` | low | `test_a_grants_scope_does_not_depend_on_row_order` |
 | 33 | A bulk row corrected in any field except its title replays the old client_id, so the correction is silently … | `frontend/src/components/AddMultipleModal.tsx:298` | low | `does not close reporting success on a correction the server drops` |
-| 34 | POST /api/tasks/reorder writes permanent, unreclaimable sidecar rows for uids that do not exist | `backend/tasksd/app.py:1042` | low | `test_a_reorder_naming_an_unknown_uid_writes_no_sidecar_row` |
+| 34 ✅ | POST /api/tasks/reorder writes permanent, unreclaimable sidecar rows for uids that do not exist | `backend/tasksd/app.py:1042` | low | `test_a_reorder_naming_an_unknown_uid_writes_no_sidecar_row` |
 | 35 | Disconnecting a connector is not idempotent: a retry after a lost response 404s and the SPA puts the revoked… | `backend/tasksd/mcp/routes.py:410` | low | `test_disconnecting_a_connection_twice_is_not_an_error` |
 | 36 | A JSON-RPC request (with an id) whose method starts with `notifications/` gets no reply at all, so the clien… | `backend/tasksd/mcp/server.py:114` | low | `test_a_notification_method_sent_with_an_id_gets_a_reply` |
-| 37 | move_event maps Radicale's 409 no-uid-conflict to "calendar server unavailable" (502) instead of the conflic… | `backend/tasksd/sync/engine.py:349` | low | `test_a_move_into_a_calendar_holding_that_uid_is_a_conflict_not_an_outage` |
+| 37 ✅ | move_event maps Radicale's 409 no-uid-conflict to "calendar server unavailable" (502) instead of the conflic… | `backend/tasksd/sync/engine.py:349` | low | `test_a_move_into_a_calendar_holding_that_uid_is_a_conflict_not_an_outage` |
 
 ## Stage 4 — User-visible correctness & rendering ⬜ OPEN
 
