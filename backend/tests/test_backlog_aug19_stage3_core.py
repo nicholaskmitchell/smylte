@@ -204,114 +204,109 @@ def test_a_task_created_after_a_drag_is_not_sunk_below_the_whole_account():
 # The oracle for the port above, and the reason it can be trusted across two
 # languages: `frontend/src/order.ts` was RUN over 402 generated task sets —
 # random dues (date-only and timed), priorities including 0, titles differing
-# only by case, duplicate and gapped sort_orders, plus two degenerate sets where
-# every task is identical but for its uid — and the Python port reproduced its
-# output on all 402. These eight are the ones that exercise the most: mixed
-# placed/unplaced, ties on every key, and the case pairs.
+# only by case, duplicate and gapped sort_orders, a uid copied into a second list
+# in 40% of them, and two degenerate sets where every task is identical but for
+# its list — and the Python port reproduced its output on all 402. These eight
+# are the ones that exercise the most.
+#
+# They discriminate: with the pre-fix uid-only keying (finding 22, which the port
+# inherited) the corpus drops to 300/402.
 #
 # Pinned as a table rather than as a live cross-check because CI has no node.
 # Regenerate by running order.ts over the cases if the comparator ever changes;
 # if these ever disagree, order.ts is right and this port is wrong.
+# (tasks, expected order as 'list/uid') — produced by RUNNING order.ts.
 CROSS_CHECKED = [
     (
         [
-            {'uid': 'u00', 'sort_order': 1.0, 'due': None, 'priority': 0, 'summary': 'Alpha'},
-            {'uid': 'u01', 'sort_order': 1.0, 'due': '2026-12-31', 'priority': 5, 'summary': ''},
-            {'uid': 'u02', 'sort_order': 1.0, 'due': '2027-03-03T18:30', 'priority': 5, 'summary': None},
-            {'uid': 'u03', 'sort_order': 1.0, 'due': '2027-03-03T18:30', 'priority': 9, 'summary': 'gamma'},
-            {'uid': 'u04', 'sort_order': 1.0, 'due': '2026-12-31', 'priority': 5, 'summary': None},
-            {'uid': 'u05', 'sort_order': None, 'due': None, 'priority': 0, 'summary': 'alpha'},
-            {'uid': 'u06', 'sort_order': 1.0, 'due': '2026-01-05', 'priority': 5, 'summary': ''},
+            {'uid': 'u00', 'list': 'home', 'sort_order': 2.0, 'due': '2026-01-05', 'priority': None, 'summary': 'Beta'},
+            {'uid': 'u01', 'list': 'inbox', 'sort_order': None, 'due': '2026-01-05T00:00', 'priority': None, 'summary': 'Alpha'},
+            {'uid': 'u02', 'list': 'inbox', 'sort_order': 100.0, 'due': '2027-03-03T18:30', 'priority': 5, 'summary': 'gamma'},
+            {'uid': 'u03', 'list': 'work', 'sort_order': 1.0, 'due': '2026-06-01T09:00', 'priority': 1, 'summary': 'alpha'},
+            {'uid': 'u04', 'list': 'work', 'sort_order': 100.0, 'due': '2026-06-01T09:00', 'priority': 9, 'summary': 'gamma'},
+            {'uid': 'u05', 'list': 'inbox', 'sort_order': 7.0, 'due': '2026-01-05T00:00', 'priority': None, 'summary': 'Beta'},
+            {'uid': 'u06', 'list': 'home', 'sort_order': 1.0, 'due': '2026-01-05T00:00', 'priority': 5, 'summary': ''},
+            {'uid': 'u07', 'list': 'home', 'sort_order': 7.0, 'due': '2027-03-03T18:30', 'priority': 9, 'summary': 'alpha'},
+            {'uid': 'u05', 'list': 'work', 'sort_order': 1.0, 'due': '2026-01-05T00:00', 'priority': None, 'summary': 'Beta'},
         ],
-        ['u06', 'u01', 'u04', 'u02', 'u03', 'u05', 'u00'],
+        ['home/u06', 'inbox/u01', 'work/u05', 'work/u03', 'home/u00', 'inbox/u05', 'home/u07', 'work/u04', 'inbox/u02'],
     ),
     (
         [
-            {'uid': 'u00', 'sort_order': 1.0, 'due': '2026-01-05T00:00', 'priority': 5, 'summary': 'alpha'},
-            {'uid': 'u01', 'sort_order': 2.0, 'due': '2027-03-03T18:30', 'priority': 9, 'summary': ''},
-            {'uid': 'u02', 'sort_order': 1.0, 'due': '2026-06-01T09:00', 'priority': 9, 'summary': 'Beta'},
-            {'uid': 'u03', 'sort_order': 7.0, 'due': '2027-03-03T18:30', 'priority': 5, 'summary': ''},
-            {'uid': 'u04', 'sort_order': 2.0, 'due': '2026-01-05T00:00', 'priority': 0, 'summary': 'alpha'},
-            {'uid': 'u05', 'sort_order': None, 'due': '2027-03-03T18:30', 'priority': 1, 'summary': 'gamma'},
-            {'uid': 'u06', 'sort_order': 1.0, 'due': '2026-01-05', 'priority': 0, 'summary': 'gamma'},
-            {'uid': 'u07', 'sort_order': 1.0, 'due': '2027-03-03T18:30', 'priority': 5, 'summary': 'gamma'},
-            {'uid': 'u08', 'sort_order': 100.0, 'due': '2027-03-03T18:30', 'priority': 0, 'summary': 'Alpha'},
+            {'uid': 'u00', 'list': 'home', 'sort_order': 100.0, 'due': '2026-12-31', 'priority': 0, 'summary': 'Beta'},
+            {'uid': 'u01', 'list': 'work', 'sort_order': 2.5, 'due': '2026-01-05T00:00', 'priority': 9, 'summary': ''},
+            {'uid': 'u02', 'list': 'inbox', 'sort_order': 100.0, 'due': '2026-01-05T00:00', 'priority': None, 'summary': 'Alpha'},
+            {'uid': 'u03', 'list': 'inbox', 'sort_order': None, 'due': '2027-03-03T18:30', 'priority': None, 'summary': 'alpha'},
+            {'uid': 'u04', 'list': 'home', 'sort_order': 100.0, 'due': '2026-01-05', 'priority': None, 'summary': 'Beta'},
+            {'uid': 'u04', 'list': 'inbox', 'sort_order': 100.0, 'due': '2026-01-05', 'priority': None, 'summary': 'Beta'},
         ],
-        ['u00', 'u06', 'u02', 'u05', 'u07', 'u04', 'u01', 'u03', 'u08'],
+        ['work/u01', 'inbox/u02', 'home/u04', 'inbox/u04', 'home/u00', 'inbox/u03'],
     ),
     (
         [
-            {'uid': 'u00', 'sort_order': 100.0, 'due': '2026-01-05T00:00', 'priority': 0, 'summary': 'gamma'},
-            {'uid': 'u01', 'sort_order': None, 'due': None, 'priority': 1, 'summary': None},
-            {'uid': 'u02', 'sort_order': 2.5, 'due': None, 'priority': None, 'summary': 'Alpha'},
-            {'uid': 'u03', 'sort_order': 1.0, 'due': '2026-01-05T00:00', 'priority': 9, 'summary': 'gamma'},
-            {'uid': 'u04', 'sort_order': 7.0, 'due': '2026-12-31', 'priority': 9, 'summary': 'alpha'},
-            {'uid': 'u05', 'sort_order': 1.0, 'due': None, 'priority': 5, 'summary': 'Alpha'},
-            {'uid': 'u06', 'sort_order': 100.0, 'due': '2026-01-05', 'priority': 1, 'summary': 'Alpha'},
-            {'uid': 'u07', 'sort_order': 1.0, 'due': '2026-01-05', 'priority': 0, 'summary': 'Alpha'},
-            {'uid': 'u08', 'sort_order': 100.0, 'due': '2027-03-03T18:30', 'priority': 5, 'summary': 'Alpha'},
-            {'uid': 'u09', 'sort_order': 2.5, 'due': '2027-03-03T18:30', 'priority': 0, 'summary': 'alpha'},
+            {'uid': 'u00', 'list': 'home', 'sort_order': 7.0, 'due': None, 'priority': 0, 'summary': 'gamma'},
+            {'uid': 'u01', 'list': 'home', 'sort_order': 2.0, 'due': None, 'priority': 1, 'summary': None},
+            {'uid': 'u02', 'list': 'inbox', 'sort_order': 7.0, 'due': None, 'priority': 1, 'summary': ''},
+            {'uid': 'u03', 'list': 'inbox', 'sort_order': 1.0, 'due': '2026-12-31', 'priority': None, 'summary': 'Alpha'},
+            {'uid': 'u04', 'list': 'work', 'sort_order': None, 'due': '2027-03-03T18:30', 'priority': 9, 'summary': ''},
+            {'uid': 'u05', 'list': 'home', 'sort_order': 7.0, 'due': '2026-12-31', 'priority': 9, 'summary': 'Beta'},
+            {'uid': 'u06', 'list': 'inbox', 'sort_order': 2.0, 'due': None, 'priority': 9, 'summary': 'alpha'},
+            {'uid': 'u07', 'list': 'inbox', 'sort_order': 2.5, 'due': '2026-06-01T09:00', 'priority': 5, 'summary': None},
+            {'uid': 'u00', 'list': 'inbox', 'sort_order': 2.0, 'due': None, 'priority': 0, 'summary': 'gamma'},
         ],
-        ['u03', 'u07', 'u01', 'u05', 'u09', 'u02', 'u04', 'u06', 'u00', 'u08'],
+        ['inbox/u03', 'work/u04', 'home/u01', 'inbox/u06', 'inbox/u00', 'inbox/u07', 'home/u05', 'inbox/u02', 'home/u00'],
     ),
     (
         [
-            {'uid': 'u00', 'sort_order': 7.0, 'due': '2027-03-03T18:30', 'priority': None, 'summary': 'Beta'},
-            {'uid': 'u01', 'sort_order': 7.0, 'due': '2026-12-31', 'priority': 1, 'summary': 'gamma'},
-            {'uid': 'u02', 'sort_order': None, 'due': '2026-12-31', 'priority': 1, 'summary': 'Alpha'},
-            {'uid': 'u03', 'sort_order': 1.0, 'due': '2026-01-05', 'priority': 0, 'summary': 'Beta'},
-            {'uid': 'u04', 'sort_order': None, 'due': '2026-06-01T09:00', 'priority': None, 'summary': None},
-            {'uid': 'u05', 'sort_order': 1.0, 'due': '2026-12-31', 'priority': 0, 'summary': 'Beta'},
+            {'uid': 'u00', 'list': 'inbox', 'sort_order': 2.0, 'due': '2027-03-03T18:30', 'priority': None, 'summary': 'Alpha'},
+            {'uid': 'u01', 'list': 'home', 'sort_order': None, 'due': None, 'priority': 0, 'summary': 'alpha'},
+            {'uid': 'u02', 'list': 'work', 'sort_order': 100.0, 'due': None, 'priority': 5, 'summary': 'alpha'},
+            {'uid': 'u03', 'list': 'work', 'sort_order': 100.0, 'due': '2026-06-01T09:00', 'priority': 1, 'summary': 'alpha'},
+            {'uid': 'u04', 'list': 'work', 'sort_order': 7.0, 'due': '2026-12-31', 'priority': 5, 'summary': 'Alpha'},
+            {'uid': 'u02', 'list': 'inbox', 'sort_order': 100.0, 'due': None, 'priority': 5, 'summary': 'alpha'},
         ],
-        ['u03', 'u04', 'u02', 'u05', 'u01', 'u00'],
+        ['inbox/u00', 'work/u04', 'work/u03', 'work/u02', 'inbox/u02', 'home/u01'],
     ),
     (
         [
-            {'uid': 'u00', 'sort_order': 1.0, 'due': '2027-03-03T18:30', 'priority': None, 'summary': 'alpha'},
-            {'uid': 'u01', 'sort_order': 7.0, 'due': '2026-06-01T09:00', 'priority': 5, 'summary': 'Beta'},
-            {'uid': 'u02', 'sort_order': 7.0, 'due': '2026-01-05', 'priority': 0, 'summary': 'Beta'},
-            {'uid': 'u03', 'sort_order': 2.0, 'due': None, 'priority': 0, 'summary': ''},
-            {'uid': 'u04', 'sort_order': 7.0, 'due': '2026-01-05T00:00', 'priority': 0, 'summary': 'Beta'},
-            {'uid': 'u05', 'sort_order': None, 'due': '2026-06-01T09:00', 'priority': None, 'summary': 'Beta'},
-            {'uid': 'u06', 'sort_order': None, 'due': '2026-01-05', 'priority': 0, 'summary': ''},
-            {'uid': 'u07', 'sort_order': 7.0, 'due': '2026-01-05T00:00', 'priority': None, 'summary': 'alpha'},
-            {'uid': 'u08', 'sort_order': 1.0, 'due': '2026-12-31', 'priority': 5, 'summary': ''},
+            {'uid': 'u00', 'list': 'inbox', 'sort_order': 7.0, 'due': '2027-03-03T18:30', 'priority': 9, 'summary': 'Alpha'},
+            {'uid': 'u01', 'list': 'inbox', 'sort_order': 1.0, 'due': '2026-12-31', 'priority': 1, 'summary': 'alpha'},
+            {'uid': 'u02', 'list': 'work', 'sort_order': None, 'due': '2026-12-31', 'priority': 0, 'summary': None},
+            {'uid': 'u03', 'list': 'inbox', 'sort_order': 2.5, 'due': '2026-12-31', 'priority': 1, 'summary': 'gamma'},
+            {'uid': 'u04', 'list': 'work', 'sort_order': 7.0, 'due': '2027-03-03T18:30', 'priority': None, 'summary': 'gamma'},
+            {'uid': 'u03', 'list': 'work', 'sort_order': 2.5, 'due': '2026-12-31', 'priority': 1, 'summary': 'gamma'},
         ],
-        ['u06', 'u05', 'u08', 'u00', 'u03', 'u07', 'u02', 'u04', 'u01'],
+        ['inbox/u01', 'inbox/u03', 'work/u03', 'work/u02', 'inbox/u00', 'work/u04'],
     ),
     (
         [
-            {'uid': 'u00', 'sort_order': None, 'due': '2026-01-05', 'priority': 9, 'summary': ''},
-            {'uid': 'u01', 'sort_order': 1.0, 'due': '2026-06-01T09:00', 'priority': 0, 'summary': 'Alpha'},
-            {'uid': 'u02', 'sort_order': 2.5, 'due': None, 'priority': 1, 'summary': 'Beta'},
-            {'uid': 'u03', 'sort_order': 1.0, 'due': '2026-01-05', 'priority': 9, 'summary': 'Alpha'},
-            {'uid': 'u04', 'sort_order': 1.0, 'due': '2027-03-03T18:30', 'priority': None, 'summary': 'Alpha'},
-            {'uid': 'u05', 'sort_order': 2.5, 'due': '2026-01-05', 'priority': 0, 'summary': ''},
-            {'uid': 'u06', 'sort_order': 2.0, 'due': '2027-03-03T18:30', 'priority': 0, 'summary': ''},
-            {'uid': 'u07', 'sort_order': 100.0, 'due': '2027-03-03T18:30', 'priority': 1, 'summary': ''},
+            {'uid': 'u00', 'list': 'home', 'sort_order': 2.0, 'due': '2027-03-03T18:30', 'priority': None, 'summary': 'alpha'},
+            {'uid': 'u01', 'list': 'work', 'sort_order': 100.0, 'due': '2027-03-03T18:30', 'priority': 5, 'summary': 'Beta'},
+            {'uid': 'u02', 'list': 'work', 'sort_order': 2.5, 'due': '2026-06-01T09:00', 'priority': 1, 'summary': None},
+            {'uid': 'u03', 'list': 'work', 'sort_order': 2.0, 'due': '2027-03-03T18:30', 'priority': 1, 'summary': 'alpha'},
+            {'uid': 'u04', 'list': 'work', 'sort_order': None, 'due': '2026-01-05T00:00', 'priority': 5, 'summary': 'Alpha'},
+            {'uid': 'u05', 'list': 'inbox', 'sort_order': 2.5, 'due': None, 'priority': 1, 'summary': 'Beta'},
+            {'uid': 'u06', 'list': 'home', 'sort_order': 100.0, 'due': None, 'priority': None, 'summary': 'alpha'},
+            {'uid': 'u07', 'list': 'work', 'sort_order': 1.0, 'due': '2026-06-01T09:00', 'priority': 1, 'summary': 'gamma'},
+            {'uid': 'u03', 'list': 'inbox', 'sort_order': 1.0, 'due': '2027-03-03T18:30', 'priority': 1, 'summary': 'alpha'},
         ],
-        ['u03', 'u00', 'u01', 'u04', 'u06', 'u05', 'u02', 'u07'],
+        ['work/u04', 'work/u07', 'inbox/u03', 'work/u03', 'home/u00', 'work/u02', 'inbox/u05', 'work/u01', 'home/u06'],
     ),
     (
         [
-            {'uid': 't0', 'sort_order': None, 'due': None, 'priority': None, 'summary': 'same'},
-            {'uid': 't1', 'sort_order': None, 'due': None, 'priority': None, 'summary': 'same'},
-            {'uid': 't2', 'sort_order': None, 'due': None, 'priority': None, 'summary': 'same'},
-            {'uid': 't3', 'sort_order': None, 'due': None, 'priority': None, 'summary': 'same'},
-            {'uid': 't4', 'sort_order': None, 'due': None, 'priority': None, 'summary': 'same'},
-            {'uid': 't5', 'sort_order': None, 'due': None, 'priority': None, 'summary': 'same'},
+            {'uid': 'shared', 'list': 'inbox', 'sort_order': 1.0, 'due': '2027-12-31', 'priority': None, 'summary': 'dragged into place'},
+            {'uid': 'shared', 'list': 'work', 'sort_order': None, 'due': '2026-01-01', 'priority': None, 'summary': 'dragged into place'},
+            {'uid': 'other', 'list': 'inbox', 'sort_order': 2.0, 'due': '2026-06-06', 'priority': None, 'summary': 'other'},
         ],
-        ['t0', 't1', 't2', 't3', 't4', 't5'],
+        ['work/shared', 'inbox/shared', 'inbox/other'],
     ),
     (
         [
-            {'uid': 'p0', 'sort_order': 3.0, 'due': None, 'priority': None, 'summary': None},
-            {'uid': 'p1', 'sort_order': 3.0, 'due': None, 'priority': None, 'summary': None},
-            {'uid': 'p2', 'sort_order': 3.0, 'due': None, 'priority': None, 'summary': None},
-            {'uid': 'p3', 'sort_order': 3.0, 'due': None, 'priority': None, 'summary': None},
-            {'uid': 'p4', 'sort_order': 3.0, 'due': None, 'priority': None, 'summary': None},
+            {'uid': 't', 'list': 'inbox', 'sort_order': None, 'due': None, 'priority': None, 'summary': 'same'},
+            {'uid': 't', 'list': 'work', 'sort_order': None, 'due': None, 'priority': None, 'summary': 'same'},
+            {'uid': 't', 'list': 'home', 'sort_order': None, 'due': None, 'priority': None, 'summary': 'same'},
         ],
-        ['p0', 'p1', 'p2', 'p3', 'p4'],
+        ['inbox/t', 'work/t', 'home/t'],
     ),
 ]
 
@@ -320,7 +315,7 @@ CROSS_CHECKED = [
 def test_the_port_agrees_with_order_ts(tasks, expected):
     from tasksd.mcp.api import _in_display_order
 
-    assert [t["uid"] for t in _in_display_order(tasks)] == expected
+    assert [f"{t['list']}/{t['uid']}" for t in _in_display_order(tasks)] == expected
 
 
 def test_the_title_key_reproduces_localecompares_case_rule():

@@ -291,12 +291,22 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
   // browser. Only uids that still name a task with children are kept: a task
   // deleted here or in another client would otherwise leave the set growing
   // forever, and re-creating a uid is impossible anyway.
+  //
+  // Pruned against `kidsByParent`, which is built from ALL `tasks` and is what
+  // that sentence actually describes. It used to prune against `kidRows`, which
+  // is built from `shownTasks` and only for rows whose parent is RENDERED RIGHT
+  // NOW — so it meant "has a child on screen this instant". Any folded tree in a
+  // hidden list, or under a completed parent while the default
+  // showCompleted={false} was in force, was absent from it and got dropped the
+  // moment the user folded anything else. `onCollapsedTasksChange` goes straight
+  // to `saveSettingsSoon({collapsed_tasks})`, so the loss was written to the
+  // account, survived a reload and followed the user to another browser.
   const collapsedSet = useMemo(() => new Set(collapsedTasks), [collapsedTasks])
   const setCollapsed = useCallback((uid: string, next: boolean) => {
     if (next === collapsedSet.has(uid)) return
-    const kept = collapsedTasks.filter((x) => x !== uid && kidRows.has(x))
+    const kept = collapsedTasks.filter((x) => x !== uid && kidsByParent.has(x))
     onCollapsedTasksChange(next ? [...kept, uid] : kept)
-  }, [collapsedSet, collapsedTasks, kidRows, onCollapsedTasksChange])
+  }, [collapsedSet, collapsedTasks, kidsByParent, onCollapsedTasksChange])
   // Sorted, not just filtered. These render straight into the list view, which
   // used to show them in raw array order — so a new task appeared at the bottom
   // and then jumped when the refetch replaced the array. `compareTasks` is a
