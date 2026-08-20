@@ -30,14 +30,20 @@ export function Login({ onLogin }: { onLogin: (user: string) => void }) {
     <div className="login-wrap">
       <form className="login-card" onSubmit={submit}>
         <div className="login-brand">Smylte<span className="dot">.</span></div>
+        {/* htmlFor/id, the pair every other form in the app uses (TaskModal,
+            CalendarView, TabsSection, AppearancePanel). Without it both fields
+            here were unlabelled to a screen reader — on the one form in the app
+            where getting it wrong means the user cannot sign in at all. */}
         <div className="field">
-          <label className="label">Username</label>
-          <input className="input" value={username} autoFocus autoComplete="username"
+          <label className="label" htmlFor="login-username">Username</label>
+          <input id="login-username" className="input" value={username} autoFocus
+            autoComplete="username"
             onChange={(e) => setUsername(e.target.value)} />
         </div>
         <div className="field">
-          <label className="label">Password</label>
-          <input className="input" type="password" value={password} autoComplete="current-password"
+          <label className="label" htmlFor="login-password">Password</label>
+          <input id="login-password" className="input" type="password" value={password}
+            autoComplete="current-password"
             onChange={(e) => setPassword(e.target.value)} />
         </div>
         {err && <div className="login-err">{err}</div>}

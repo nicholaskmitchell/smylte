@@ -445,6 +445,11 @@ export function App() {
   // also replaced the tasks array under any optimistic paint in flight. UI
   // preferences have nothing to say about task data, so they are not a reason
   // to refetch it.
+  // Declared here rather than beside the other callbacks below because the SSE
+  // effect needs it: an expired session is invisible to EventSource, so the
+  // reconnect loop probes over HTTP and reports back through this.
+  const onExpire = useCallback(() => setAuth('out'), [])
+
   useEffect(() => {
     if (auth !== 'in') return
     let timer: ReturnType<typeof setTimeout> | undefined
@@ -452,9 +457,9 @@ export function App() {
       if (type === 'settings_updated') return
       clearTimeout(timer)
       timer = setTimeout(() => setRev((r) => r + 1), 250)
-    })
+    }, onExpire)
     return () => { clearTimeout(timer); unsubscribe() }
-  }, [auth])
+  }, [auth, onExpire])
 
   // Dismiss the settings menu on an outside click (like Søren's). Escape is
   // SettingsMenu's own: it has a drill-down to unwind — the archived-calendar
@@ -481,7 +486,6 @@ export function App() {
     changeTheme(theme === 'dark' ? 'light' : 'dark')
   }, [theme, changeTheme])
 
-  const onExpire = useCallback(() => setAuth('out'), [])
   // Logging out clears the mirror; an expired session deliberately does not,
   // since it is usually the same person about to sign back in and keeping it
   // makes that instant.

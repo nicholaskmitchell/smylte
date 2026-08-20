@@ -38,7 +38,10 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import userEvent from '@testing-library/user-event'
 
 import { DataProvider, useTaskData } from './data'
-import { addModule, resizeModule, sanitizeLayout, MODULE_KINDS, type DashboardModule } from './dashboard'
+import {
+  addModule, moveModule, removeModule, resizeModule, sanitizeLayout, MODULE_KINDS,
+  type DashboardModule,
+} from './dashboard'
 import { setCacheUser } from './cache'
 import { AppearancePanel } from './components/AppearancePanel'
 import { ArchivedCalendarsSection } from './components/ArchivedCalendarsSection'
@@ -456,24 +459,42 @@ describe('aug19 stage 4b — TaskModal', () => {
   }
 
   // AUDIT open: TaskModal.tsx:121
-  it.fails('closes on Escape, like every other dialog in the app', async () => {
+  it('closes on Escape, like every other dialog in the app', async () => {
     // The app's most-used dialog registers no keydown listener at all, while
     // AddMultipleModal, AppearancePanel, DayPopover, SettingsMenu and the
     // booking-link editor all honour Escape. With `aria-modal="true"` and no
     // focus trap either, a keyboard or screen-reader user has no keyboard route
-    // out of it. The key is dispatched at the dialog so it bubbles through the
-    // modal, the scrim, the document and the window — a handler on any of those
-    // satisfies this.
+    // out of it.
+    //
+    // WIDENED. Dispatching at the dialog was satisfied by a handler on ANY
+    // ancestor, including one bound to the modal element itself — and a
+    // dialog-local handler only fires while focus is inside the dialog, which is
+    // exactly the complaint. So the key is also dispatched at `document` and at
+    // `window`, where only a global listener answers.
     const onClose = vi.fn()
-    render(<TaskModal {...props} onClose={onClose} />)
+    const { unmount } = render(<TaskModal {...props} onClose={onClose} />)
+
     fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' })
-    expect(onClose).toHaveBeenCalled()
+    expect(onClose, 'Escape at the dialog').toHaveBeenCalled()
+    unmount()
+
+    // …and from wherever focus actually is. A modal with no focus trap can be
+    // left with focus on the page behind it, which is the state a keyboard user
+    // most needs the escape hatch from.
+    for (const target of [document, window] as const) {
+      const close = vi.fn()
+      const view = render(<TaskModal {...props} onClose={close} />)
+      fireEvent.keyDown(target as unknown as Element, { key: 'Escape' })
+      expect(close, `Escape at ${target === document ? 'document' : 'window'}`)
+        .toHaveBeenCalled()
+      view.unmount()
+    }
   })
 })
 
 describe('aug19 stage 4b — the login form', () => {
   // AUDIT open: Login.tsx:34
-  it.fails('gives both fields an accessible name', async () => {
+  it('gives both fields an accessible name', async () => {
     // Both labels are siblings of their inputs with no htmlFor, no id and no
     // aria-label, and they do not wrap them — so a screen reader announces
     // "edit text, blank" and "password edit, blank", and clicking a label
@@ -498,7 +519,7 @@ describe('aug19 stage 4b — the login form', () => {
 
 describe('aug19 stage 4b — archived calendars', () => {
   // AUDIT open: ArchivedCalendarsSection.tsx:39
-  it.fails('stops saying "Loading…" once the fetch has failed', async () => {
+  it('stops saying "Loading…" once the fetch has failed', async () => {
     // `setLoaded(true)` sits inside the guarded callback, after the awaited
     // request; `makeGuard` swallows the rejection and returns undefined, so on
     // failure the statement is never reached and `loaded` stays false for the
@@ -516,6 +537,34 @@ describe('aug19 stage 4b — archived calendars', () => {
     await act(async () => { await Promise.resolve() })
     expect(screen.queryByText('Loading…'),
       'the archived-calendars section is still saying Loading…').toBeNull()
+  })
+
+  // WIDENING: `ArchivedEvents` — the sibling ten lines below in the same file,
+  // with the identical shape for `api.events`. Reached by drilling into an
+  // archived calendar's agenda, which is the only place its "Loading…" shows.
+  it('stops saying "Loading…" once the EVENT fetch has failed', async () => {
+    m.calendars.mockResolvedValue([{ ...cal, id: 'c1', href: '/c1/', name: 'Old work' }])
+    m.events.mockRejectedValue(new Error('network down'))
+    render(<ArchivedCalendarsSection archived={['c1']} onChange={vi.fn()}
+      onExpire={vi.fn()}
+      viewing={{ ...cal, id: 'c1', href: '/c1/', name: 'Old work' }} onViewing={vi.fn()} />)
+
+    await act(async () => { await Promise.resolve() })
+    expect(screen.queryByText('Loading…'),
+      'the archived-events agenda is still saying Loading…').toBeNull()
+  })
+
+  // Control (passes today, must keep passing). Settling `loaded` in a `finally`
+  // must not also settle it BEFORE the rows arrive: a repair that sets it
+  // eagerly would satisfy both pins and render "No archived calendars." over a
+  // list that is about to appear.
+  it('still lists the archived calendars when the fetch succeeds', async () => {
+    m.calendars.mockResolvedValue([{ ...cal, id: 'c1', href: '/c1/', name: 'Old work' }])
+    render(<ArchivedCalendarsSection archived={['c1']} onChange={vi.fn()}
+      onExpire={vi.fn()} viewing={null} onViewing={vi.fn()} />)
+
+    expect(await screen.findByText('Old work')).toBeInTheDocument()
+    expect(screen.queryByText('No archived calendars.')).toBeNull()
   })
 })
 
@@ -604,7 +653,7 @@ describe('aug19 stage 4b — the theme rename bar', () => {
 
 describe('aug19 stage 4b — the dashboard grid', () => {
   // AUDIT open: dashboard.ts:93
-  it.fails('never emits a module below the row the server accepts', () => {
+  it('never emits a module below the row the server accepts', () => {
     // `clampToGrid` bounds y to MAX_ROWS = 200, but `packDown` runs AFTER the
     // clamp and re-derives y by stacking, and nothing re-clamps the result. So
     // `sanitizeLayout` — the function whose entire job is to hand the caller a
@@ -626,6 +675,43 @@ describe('aug19 stage 4b — the dashboard grid', () => {
     const out = sanitizeLayout(mods)
     expect(out).toHaveLength(MODULE_KINDS.length)
     expect(out.map((mo) => mo.y).filter((y) => y > 200)).toEqual([])
+  })
+
+  // WIDENING: `sanitizeLayout` is not what the app PUTs. HomeView holds the
+  // result of `moveModule`/`resizeModule`/`addModule`/`removeModule` as its
+  // live layout and sends that, so a clamp applied only in `sanitizeLayout`
+  // leaves every intermediate over the bound — and it is an intermediate that
+  // 422s the settings write.
+  it('never emits a module below that row from any editing operation', () => {
+    let mods: DashboardModule[] = []
+    MODULE_KINDS.forEach((kind, i) => { mods = addModule(mods, kind, `m${i}`) })
+    for (const mod of [...mods]) mods = resizeModule(mods, mod.id, 12, 40)
+    expect(mods.map((m) => m.y).filter((y) => y > 200), 'after resizeModule').toEqual([])
+
+    const moved = moveModule(mods, mods[mods.length - 1].id, 0, 200)
+    expect(moved.map((m) => m.y).filter((y) => y > 200), 'after moveModule').toEqual([])
+
+    const added = addModule(moved, MODULE_KINDS[0], 'extra')
+    expect(added.map((m) => m.y).filter((y) => y > 200), 'after addModule').toEqual([])
+
+    const removed = removeModule(added, added[0].id)
+    expect(removed.map((m) => m.y).filter((y) => y > 200), 'after removeModule').toEqual([])
+  })
+
+  // Control (passes today, must keep passing): an ordinary layout is untouched
+  // by the clamp, and — the reason this is here — the pinned module still holds
+  // the row the drag put it on. The naive repair clamps inside `packDown`'s
+  // pinned `while`, where a clamped y can still overlap and the loop never
+  // terminates; the other naive repair drops the pinned branch entirely and the
+  // dragged card snaps back.
+  it('leaves a normal layout alone and keeps a pinned module on its row', () => {
+    let mods: DashboardModule[] = []
+    MODULE_KINDS.slice(0, 3).forEach((kind, i) => { mods = addModule(mods, kind, `n${i}`) })
+    expect(sanitizeLayout(mods)).toEqual(mods)
+
+    const target = mods[0]
+    const moved = moveModule(mods, target.id, target.x, target.y + 6)
+    expect(moved.find((m) => m.id === target.id)?.y).toBe(target.y + 6)
   })
 })
 
@@ -651,7 +737,7 @@ describe('aug19 stage 4b — an SSE reconnect that 401s', () => {
   }
 
   // AUDIT open: api.ts:475
-  it.fails('discovers a session that lapsed while the tab was idle', async () => {
+  it('discovers a session that lapsed while the tab was idle', async () => {
     // The comment above `subscribe` names this case ("a 401 once the session TTL
     // lapses") and the handling it describes is an unbounded capped-backoff
     // reconnect loop. EventSource exposes no status, so a 401 is
@@ -662,10 +748,14 @@ describe('aug19 stage 4b — an SSE reconnect that 401s', () => {
     // login card — while firing an unauthenticated GET /api/events every 30 s
     // for the life of the page.
     //
-    // Deliberately permissive about the repair: a fix may probe the session over
-    // HTTP (`api.me()` and an onExpire callback, as suggested), or give up and
-    // surface a "live updates disconnected" state. Either one satisfies this.
-    // What it may not do is retry silently forever having never asked anybody.
+    // NARROWED, deliberately, and this replaces what stood here. The original
+    // blessed either repair — probe the session, or "give up and surface a live
+    // updates disconnected state" — and accepted `probed || gaveUp`. The second
+    // outcome is not reachable: `subscribe` takes one callback and has no
+    // channel to surface any UI state, so "gave up" means a tab that is silently
+    // frozen, which is the very thing the finding is about. So the contract is
+    // the outcome the user needs: the app finds out, and says so by routing to
+    // the auth guard the rest of the SPA already uses.
     const { subscribe } = await vi.importActual<typeof import('./api')>('./api')
     const fetchMock = vi.fn().mockResolvedValue({
       status: 401, ok: false, statusText: 'Unauthorized',
@@ -676,7 +766,9 @@ describe('aug19 stage 4b — an SSE reconnect that 401s', () => {
     vi.stubGlobal('fetch', fetchMock)
     vi.useFakeTimers()
     try {
-      const stop = subscribe(vi.fn())
+      const onExpire = vi.fn()
+      const stop = (subscribe as unknown as
+        (f: (t: string) => void, e?: () => void) => () => void)(vi.fn(), onExpire)
       FakeES.instances[0].accept()           // the stream the tab has been on
 
       // The session lapses; the server restarts; every reconnect now answers 401.
@@ -688,9 +780,51 @@ describe('aug19 stage 4b — an SSE reconnect that 401s', () => {
         await vi.advanceTimersByTimeAsync(60_000)
         if (FakeES.instances.length === before) { gaveUp = true; break }
       }
-      const probed = fetchMock.mock.calls.length > 0        // it asked the server
-      expect(probed || gaveUp,
-        'the reconnect loop neither probed the session nor stopped retrying').toBe(true)
+      void gaveUp
+      expect(fetchMock.mock.calls.length,
+        'the reconnect loop never asked the server whether the session was alive')
+        .toBeGreaterThan(0)
+      expect(onExpire,
+        'the session was found to be gone and nothing told the app').toHaveBeenCalled()
+      stop()
+    } finally {
+      vi.useRealTimers()
+      vi.unstubAllGlobals()
+    }
+  })
+
+  // Control — green today (the second argument is simply ignored) and the more
+  // important half of this finding once it is not. A server that is down is not
+  // a session that is gone: if the probe says the session is FINE, the loop must
+  // keep reconnecting and must not sign anybody out. Otherwise one 502 from the
+  // tunnel logs the user out of a live session, which is a worse bug than the
+  // one being fixed — and no pin would notice, because the pin above only asks
+  // that `onExpire` fires.
+  it('keeps reconnecting, and signs nobody out, while the session is alive', async () => {
+    const { subscribe } = await vi.importActual<typeof import('./api')>('./api')
+    const fetchMock = vi.fn().mockResolvedValue({
+      status: 200, ok: true, statusText: 'OK',
+      json: () => Promise.resolve({ authenticated: true, user: 'admin' }),
+    })
+    const onExpire = vi.fn()
+    FakeES.instances = []
+    vi.stubGlobal('EventSource', FakeES)
+    vi.stubGlobal('fetch', fetchMock)
+    vi.useFakeTimers()
+    try {
+      const stop = (subscribe as unknown as
+        (f: (t: string) => void, e?: () => void) => () => void)(vi.fn(), onExpire)
+      FakeES.instances[0].accept()
+
+      for (let i = 0; i < 20; i++) {
+        const before = FakeES.instances.length
+        FakeES.instances[before - 1].hardFail()
+        await vi.advanceTimersByTimeAsync(60_000)
+        expect(FakeES.instances.length,
+          'the loop stopped reconnecting although the session was alive')
+          .toBeGreaterThan(before)
+      }
+      expect(onExpire, 'a healthy session was signed out').not.toHaveBeenCalled()
       stop()
     } finally {
       vi.useRealTimers()

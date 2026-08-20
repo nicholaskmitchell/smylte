@@ -98,8 +98,16 @@ export function packDown(mods: DashboardModule[], pinned?: string): DashboardMod
     if (m.id === pinned) {
       // Push anything already placed that collides with the pinned module out
       // of its way, then keep its row exactly.
+      //
+      // `if`, not `while`, and the difference is not style: one push always
+      // clears the overlap by construction (the pushed module starts at the
+      // pinned one's bottom edge), and with the MAX_ROWS clamp below a `while`
+      // can never terminate — a clamped y can still overlap, so the loop spins
+      // forever rather than failing a test.
       for (let i = 0; i < placed.length; i++) {
-        while (overlaps(placed[i], m)) placed[i] = { ...placed[i], y: m.y + m.h }
+        if (overlaps(placed[i], m)) {
+          placed[i] = { ...placed[i], y: Math.min(MAX_ROWS, m.y + m.h) }
+        }
       }
       placed.push(m)
       continue
@@ -109,7 +117,14 @@ export function packDown(mods: DashboardModule[], pinned?: string): DashboardMod
     while (y > 0 && !placed.some((p) => overlaps(p, { ...m, y: y - 1 }))) y--
     // …then down past anything it landed on.
     while (placed.some((p) => overlaps(p, { ...m, y }))) y++
-    placed.push({ ...m, y })
+    // Clamped to the same bound `clampToGrid` applies and the server enforces
+    // (`y: le=200` in app.py). Stacking past it produced a layout the settings
+    // PUT answers 422 for, so the WHOLE settings write was refused and the new
+    // layout was kept only locally — lost on the next reload, with no error the
+    // user could act on. Two modules can now share a row at the very bottom of a
+    // 200-row grid, which is reachable only from an absurd layout and is
+    // strictly better than losing the write.
+    placed.push({ ...m, y: Math.min(MAX_ROWS, y) })
   }
   return placed
 }
