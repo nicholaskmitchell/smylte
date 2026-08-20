@@ -488,14 +488,27 @@ def set_sort_orders(conn: sqlite3.Connection, placed: list[tuple[str, str]]) -> 
     Rows are created on demand: a task that has never had a sidecar (which is
     every task until something is dragged) gets one here rather than being
     skipped, which is what makes the whole sequence explicit afterwards.
+
+    …but only for a uid that actually names a live item in that collection. A
+    sidecar row is the one thing a cache rebuild cannot reconstruct, so
+    `orphan_sidecar` marks a row when its item goes and `gc_orphans` sweeps only
+    rows already marked — a row minted for a uid that never existed has
+    `orphaned_at IS NULL` forever and can never be reclaimed. `PUT
+    …/tasks/{uid}/sidecar` was given a `has_task` guard and a nine-line comment
+    about exactly this in the 2026-08-07 sweep; `POST /api/tasks/reorder` writes
+    to the same table through a different door, validated only that the LIST
+    resolves, with `uid` an unbounded free-text string and 20 000 entries allowed
+    per request. The guard belongs here, where every door passes.
     """
     for i, (href, uid) in enumerate(placed, start=1):
         conn.execute(
-            "INSERT INTO sidecar (collection_href, uid, sort_order) VALUES (?, ?, ?) "
+            "INSERT INTO sidecar (collection_href, uid, sort_order) "
+            "SELECT ?, ?, ? WHERE EXISTS "
+            "(SELECT 1 FROM items WHERE collection_href=? AND uid=?) "
             "ON CONFLICT(collection_href, uid) DO UPDATE SET "
             "sort_order=excluded.sort_order, "
             "updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')",
-            (href, uid, float(i)),
+            (href, uid, float(i), href, uid),
         )
 
 
@@ -668,12 +681,31 @@ def get_events_in_range(
     row feeds the booking conflict check, so losing it let an anonymous visitor
     book straight over a multi-day block. Admit it on the upper bound alone, like
     a recurring master, and let scheduling.busy_intervals — which already parses
-    `duration` — do the precise interval math."""
+    `duration` — do the precise interval math.
+
+    The upper bound is not a valid gate for a recurring row either, and the
+    docstring above was half right for the same reason it was half wrong: a
+    recurrence set projects BACKWARDS as well as forwards. `has_rrule` is set for
+    RDATE too, and `recurring_ical_events` applies RECURRENCE-ID overrides, so a
+    resource can hold an instant EARLIER than its cached master DTSTART — which
+    is `items.dtstart`, because `read.extract` caches the master row. Any window
+    ending before that dropped the whole resource, occurrence and all.
+
+    This app creates the shape itself: `apply_occurrence_override` writes an
+    override with a new DTSTART and deliberately leaves the master rule alone, so
+    dragging the FIRST occurrence of a series earlier is enough. Thunderbird's
+    and Apple's "move this occurrence" produce it too. `_link_busy` queries only
+    +/-1 day around the requested day, so the moved meeting contributed no busy
+    interval and an anonymous visitor could book straight over it.
+
+    So recurring rows are admitted unconditionally and `recur.expand_occurrences`
+    does the precise filtering it already does. The extra rows cost one expansion
+    each, bounded by the stage-2 search budget."""
     return list(
         conn.execute(
             "SELECT * FROM items WHERE collection_href=? AND component='VEVENT' "
-            "AND dtstart <= ? AND (has_rrule=1 OR duration IS NOT NULL "
-            "OR COALESCE(dtend, dtstart) >= ?) "
+            "AND (has_rrule=1 OR (dtstart <= ? AND (duration IS NOT NULL "
+            "OR COALESCE(dtend, dtstart) >= ?))) "
             "ORDER BY dtstart",
             (collection_href, end_iso, start_iso),
         )

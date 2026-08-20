@@ -379,7 +379,7 @@ def build_tools(api) -> dict[str, Tool]:
         scope=SCOPE_WRITE, read_only=False, idempotent=True,
     )
     def _update_calendar(calendar_id, name=None, color=None):
-        return api.update_collection(calendar_id, name=name, color=color)
+        return api.update_collection(calendar_id, name=name, color=color, kind="calendar")
 
     @tool(
         "smylte_delete_calendar", "Delete a calendar",
@@ -389,7 +389,7 @@ def build_tools(api) -> dict[str, Tool]:
         scope=SCOPE_WRITE, read_only=False, destructive=True, idempotent=True,
     )
     def _delete_calendar(calendar_id):
-        api.delete_collection(calendar_id)
+        api.delete_collection(calendar_id, kind="calendar")
         return {"deleted": calendar_id}
 
     @tool(

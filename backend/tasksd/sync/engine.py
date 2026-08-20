@@ -21,10 +21,12 @@ import re
 import uuid
 from dataclasses import dataclass
 
+from icalendar import Calendar
+
 from .. import ical
 from ..dav.client import CollectionInfo, DavClient
-from ..dav.errors import (DavError, InvalidSyncToken, MalformedResponse, NotFound,
-                          PreconditionFailed)
+from ..dav.errors import (Conflict, DavError, InvalidSyncToken, MalformedResponse,
+                          NotFound, PreconditionFailed)
 from ..db import store
 from ..db.store import tx as _tx
 
@@ -43,6 +45,21 @@ def _uids_in(raw: bytes | None) -> set[str]:
         for m in _UID_RE.finditer(raw or b"")
         if m.group(1).strip()
     }
+
+
+def _restamp_uid(raw: bytes, uid: str) -> bytes:
+    """`raw` with every component's UID replaced by `uid`.
+
+    Used when a split has to be rebuilt against a fresher copy: the tail already
+    exists on the server under the UID the first build minted, and a PUT that
+    changes a resource's UID is a 409, not an update.
+    """
+    cal = Calendar.from_ical(raw)
+    for comp in cal.walk("VEVENT"):
+        if "UID" in comp:
+            del comp["UID"]
+        comp.add("UID", uid)
+    return cal.to_ical()
 
 
 class ConflictError(DavError):
@@ -387,7 +404,16 @@ class SyncEngine:
         current = self.dav.get(row["href"])      # NotFound => already gone; surfaces as 404
         try:
             self.dav.put(new_href, current.data, if_none_match="*")
-        except PreconditionFailed as e:
+        except (PreconditionFailed, Conflict) as e:
+            # PreconditionFailed covers an occupied HREF. Radicale also enforces
+            # UID uniqueness per collection and answers 409 `no-uid-conflict` when
+            # the same UID already lives there under a different filename — the
+            # same condition, a different spelling, and it sailed past this guard
+            # onto app.py's DavError catch-all, telling the user "calendar server
+            # unavailable, try again shortly" (502) about a conflict this line
+            # already has the right words for. `Conflict`'s own docstring in
+            # dav/errors.py lists MKCALENDAR cases and not this one, which is
+            # what made the omission look deliberate.
             raise ConflictError(f"event {uid} already exists in the target calendar") from e
         try:
             self.dav.delete(row["href"], if_match=current.etag)
@@ -453,6 +479,7 @@ class SyncEngine:
         if not delete_tail:
             tail_href = f"{collection_href}{uuid.uuid4().hex}.ics"
             self.dav.put(tail_href, tail, if_none_match="*")
+            tail_uid = ical.extract_from_raw(tail).uid
 
         def write_head(ics: bytes | None, etag: str | None) -> None:
             # A head of None means the split left nothing before the anchor —
@@ -467,22 +494,42 @@ class SyncEngine:
                 self.dav.put(href, ics, if_match=etag)
 
         try:
-            write_head(head, row["etag"])
-        except PreconditionFailed:
-            fresh = self.dav.get(href)
-            head, tail = build(fresh.data)
-            if tail_href is not None:
-                self.dav.put(tail_href, tail)   # replace our own just-written tail
             try:
-                write_head(head, fresh.etag)
-            except PreconditionFailed as e:
+                write_head(head, row["etag"])
+            except PreconditionFailed:
+                fresh = self.dav.get(href)
+                head, tail = build(fresh.data)
                 if tail_href is not None:
-                    # Don't strand a tail next to an untruncated head.
-                    try:
-                        self.dav.delete(tail_href)
-                    except DavError:
-                        pass
-                raise ConflictError(f"edit conflict on {uid}: retry the change") from e
+                    # `split_series` mints a fresh uuid4 UID for the tail on every
+                    # call, so the rebuilt body carries a DIFFERENT UID than the
+                    # resource already sitting at `tail_href` — and Radicale
+                    # refuses exactly that with 409 `no-uid-conflict`. Which is
+                    # `Conflict`, not `PreconditionFailed`, so it escaped the
+                    # whole handler: the head was never truncated, the tail was
+                    # never cleaned up, and the user was told the calendar server
+                    # was unavailable. Re-stamping the first UID makes the
+                    # replacement an ordinary overwrite of our own resource.
+                    tail = _restamp_uid(tail, tail_uid)
+                    self.dav.put(tail_href, tail)
+                try:
+                    write_head(head, fresh.etag)
+                except PreconditionFailed as e:
+                    raise ConflictError(
+                        f"edit conflict on {uid}: retry the change") from e
+        except BaseException:
+            # Unconditional, because the inner handler only ever covered ONE of
+            # the ways this can fail. A concurrent delete of the master makes
+            # `self.dav.get(href)` raise NotFound; a transport error, a rebuild
+            # that now refuses the anchor, or a process signal all land here too —
+            # and every one of them used to leave a headless duplicate series on
+            # the owner's calendar under a UID nothing else references.
+            if tail_href is not None:
+                try:
+                    self.dav.delete(tail_href)
+                except DavError:
+                    log.warning("split_event: could not clean up the tail at %s",
+                                tail_href)
+            raise
         if head is None:
             # The resource is gone from the wire, so there is nothing to read
             # back — purge the projection the way delete_task does.

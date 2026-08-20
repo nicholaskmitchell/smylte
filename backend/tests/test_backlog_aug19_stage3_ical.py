@@ -244,9 +244,6 @@ def test_a_duration_only_event_blocks_its_authored_length_across_a_transition():
 # ── AUDIT: split_event's 412 recovery strands a duplicate series ────────────
 
 @pytest.mark.radicale
-@pytest.mark.xfail(strict=True, reason=(
-    "split_event's 412 recovery re-PUTs the tail with a freshly minted UID, "
-    "which Radicale refuses 409, leaving an ownerless duplicate series behind"))
 def test_a_contended_this_and_following_split_leaves_no_duplicate_series(
     engine, dav, event_collection
 ):
@@ -281,6 +278,16 @@ def test_a_contended_this_and_following_split_leaves_no_duplicate_series(
     head plus eight in the tail if the split completed, or ten in the untouched
     original if it was refused and rolled back. Only the stranded-duplicate
     outcome — the head still whole AND a tail beside it — can exceed ten.
+    
+    **Fixed** two ways, because the finding is two failures wearing one symptom.
+    The rebuilt tail now re-stamps the UID the first build minted, so replacing
+    our own just-written resource is an ordinary overwrite rather than a
+    `no-uid-conflict` 409. And the cleanup moved from the inner
+    `except PreconditionFailed` — which covered exactly one of the ways this can
+    fail — to a `try/except BaseException` around the whole recovery, so a
+    concurrent delete of the master (`dav.get` raising NotFound), a transport
+    error, or a rebuild that now refuses the anchor all delete the tail instead
+    of stranding a headless duplicate series under a UID nothing references.
     """
     col = event_collection.href
     uid = "series@x"

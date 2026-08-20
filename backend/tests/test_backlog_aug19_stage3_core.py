@@ -194,9 +194,6 @@ def test_a_task_created_after_a_drag_is_not_sunk_below_the_whole_account():
 
 # ── AUDIT: the booking ledger row is written after the CalDAV PUT ───────────
 
-@pytest.mark.xfail(strict=True, reason="service.py:919 inserts the ledger row "
-                                       "after create_event's PUT, so a failure "
-                                       "between them makes the retry a 409")
 def test_a_booking_retried_after_a_failed_write_is_not_a_conflict_with_itself():
     """The replay hook keys entirely on the ledger — `get_booking_by_event`
     (service.py:864) — but the ledger row is inserted at line 919, *after*
@@ -217,6 +214,14 @@ def test_a_booking_retried_after_a_failed_write_is_not_a_conflict_with_itself():
     one booking, which both named repairs satisfy: writing the ledger row before
     the PUT, or looking `{client_id}@tasksd` up in the link's calendar before
     raising SlotTaken.
+    
+    **Fixed** by making the replay hook independent of the ledger rather than by
+    reordering the writes — writing the ledger first would trade this for a row
+    describing an event that was never created. `_recover_orphaned_booking` looks
+    the client_id's event up in the link's own calendar and rebuilds the missing
+    row from it, in the link's timezone so the confirmation names the time the
+    visitor picked. Scoped to the link's calendar, so a client_id reused against
+    a DIFFERENT link still raises rather than disclosing the other booking.
     """
     tz = ZoneInfo("America/Chicago")
     now = datetime(2026, 7, 13, 8, 0, tzinfo=tz)          # a Monday, link-local
@@ -274,15 +279,18 @@ def test_a_booking_retried_after_a_failed_write_is_not_a_conflict_with_itself():
             "the retry landed a second booking rather than being recognised as "
             "the same one"
         )
+        # Recognised as a REPLAY, not as a fresh booking: `created` is what the
+        # route charges against the link's per-link ceiling, and charging a
+        # replay put the published-link denial-of-service back the last time.
+        assert _created is False, (
+            "the recovered booking was reported as newly created, so the retry "
+            "spends another unit of the link's booking budget")
     finally:
         svc.close()
 
 
 # ── AUDIT: get_events_in_range gates recurring rows on the master DTSTART ───
 
-@pytest.mark.xfail(strict=True, reason="store.py:661 gates every row on the "
-                                       "master DTSTART, so an override moved "
-                                       "before the series start is invisible")
 def test_an_occurrence_moved_before_its_series_start_is_still_in_the_window():
     """The candidate query admits recurring rows on the upper bound alone
     (`dtstart <= end_iso`) because a master "projects occurrences *forward*".
@@ -308,6 +316,13 @@ def test_an_occurrence_moved_before_its_series_start_is_still_in_the_window():
     Driven through `TaskService.events_in_range`, the method all three go
     through, so any fix — relaxing the lower gate for recurring rows, or caching
     a `min_occurrence` column — satisfies it.
+    
+    **Fixed** by admitting recurring rows unconditionally and letting
+    `expand_occurrences` do the precise filtering it already does. The lower
+    bound was as wrong as the upper one for the same reason, and the docstring
+    justifying it was half right: a recurrence set projects backwards as well as
+    forwards. The extra candidate rows cost one expansion each, bounded by the
+    stage-2 search budget; the controls below hold that the query still filters.
     """
     cal = "/u/cal/"
     raw = foreign_event_raw(
@@ -334,15 +349,35 @@ def test_an_occurrence_moved_before_its_series_start_is_still_in_the_window():
             f"it (got {starts}); its master DTSTART is 7 Sep, so the row never "
             f"reaches expand_occurrences. The booking page will offer that hour."
         )
+
+        # The control: widening the candidate query must not stop it FILTERING.
+        # A non-recurring event outside the window still has to be absent, and a
+        # recurring series whose every occurrence is outside it must expand to
+        # nothing rather than leaking a phantom row into the grid.
+        far = foreign_event_raw("far-1", "Far", dtstart="20271201T090000Z",
+                                dtend="20271201T093000Z")
+        store.upsert_item(svc._conn, cal, Item(f"{cal}far-1.ics", '"1"', far),
+                          extract_from_raw(far))
+        elsewhere = foreign_event_raw(
+            "series-2", "Elsewhere", dtstart="20270301T090000Z",
+            dtend="20270301T093000Z", rrule="FREQ=WEEKLY;COUNT=3")
+        store.upsert_item(svc._conn, cal, Item(f"{cal}series-2.ics", '"1"', elsewhere),
+                          extract_from_raw(elsewhere))
+
+        again = svc.events_in_range(cal, "2026-08-23T00:00:00", "2026-08-26T00:00:00")
+        summaries = {e["summary"] for e in again}
+        assert "Far" not in summaries, (
+            f"a non-recurring event 15 months away is in the window: {summaries}")
+        assert "Elsewhere" not in summaries, (
+            f"a series with no occurrence in the window leaked into it: {summaries}")
+        assert len(again) == len(found), (
+            f"the window gained rows it should not have: {again}")
     finally:
         svc.close()
 
 
 # ── AUDIT: the task tools accept a calendar id and vice versa ───────────────
 
-@pytest.mark.xfail(strict=True, reason="mcp/api.py:_href resolves any "
-                                       "collection, so smylte_delete_list "
-                                       "deletes a calendar")
 def test_a_calendar_id_is_refused_by_the_task_tools():
     """`McpApi._href` resolves ids through `TaskService.resolve_list`, which
     matches any non-deleted collection by href or slug and never looks at
@@ -367,6 +402,13 @@ def test_a_calendar_id_is_refused_by_the_task_tools():
     anything. What is asserted is the outcome — the calendar is not deleted, and
     the model is not handed an ordinary-looking empty page — so a guard in
     `_href`, in `resolve_list` or in `service.delete_collection` all satisfy it.
+    
+    **Fixed** at `service.resolve_list`, which now takes the component it is
+    resolving for — so this closes with the HTTP-layer finding rather than
+    separately. `mcp/api._href` already carried a `kind`; it just never reached
+    the resolver. `update_collection`/`delete_collection` needed `kind` threaded
+    through too, since one pair of methods backs both the list and the calendar
+    tools.
     """
     svc = TaskService(_offline_settings())
     try:
@@ -410,9 +452,6 @@ def test_a_calendar_id_is_refused_by_the_task_tools():
 # ── AUDIT: resolve_list ignores the collection's component set ──────────────
 
 @pytest.mark.radicale
-@pytest.mark.xfail(strict=True, reason="service.resolve_list matches on slug "
-                                       "alone, so POST /api/lists/{calendar}/"
-                                       "tasks writes a VTODO no reader returns")
 def test_a_task_cannot_be_written_into_an_event_only_calendar(client):
     """The READ side of this service is strictly segregated by component:
     `list_lists` filters "VTODO", `list_calendars` filters "VEVENT",
@@ -437,6 +476,14 @@ def test_a_task_cannot_be_written_into_an_event_only_calendar(client):
     Asserted as "the write is refused" (any 4xx — the status is not the point),
     against the real routes and the real Radicale, because a create that answers
     201 and then cannot be read back is the worst of the two outcomes.
+    
+    **Fixed** by giving `resolve_list` a `component` argument and passing it from
+    every item route: VTODO from `/api/lists/{id}/tasks*`, VEVENT from
+    `/api/calendars/{id}/events*` and from `move`'s destination. The routes that
+    deliberately span both kinds — collection rename, delete and reorder, which
+    the SPA drives from either tab — pass nothing and keep the old behaviour;
+    the controls below hold that line, because a filter applied too widely takes
+    the app offline rather than closing a hole.
     """
     lst = client.post("/api/lists", json={"name": f"L-{uuid.uuid4().hex[:8]}"}).json()
     cal = client.post("/api/calendars", json={"name": f"C-{uuid.uuid4().hex[:8]}"}).json()
@@ -459,6 +506,21 @@ def test_a_task_cannot_be_written_into_an_event_only_calendar(client):
             f"invisible to the calendar grid and to _link_busy, so the public "
             f"booking page will offer that hour as free."
         )
+        # The control, and it carries the whole risk of this fix: `resolve_list`
+        # is behind EVERY /api/lists and /api/calendars route, so a component
+        # filter applied too widely takes the app offline rather than closing a
+        # hole. The matching pairs must still work…
+        assert client.post(f"/api/lists/{lst['id']}/tasks",
+                           json={"summary": "buy milk"}).status_code == 201
+        assert client.post(f"/api/calendars/{cal['id']}/events", json={
+            "summary": "Standup", "start": "2026-07-10T14:00:00",
+            "end": "2026-07-10T15:00:00"}).status_code == 201
+        # …and so must the routes that DELIBERATELY span both kinds: the SPA
+        # renames and reorders collections from either tab through these.
+        assert client.patch(f"/api/calendars/{lst['id']}",
+                            json={"name": "renamed"}).status_code == 200
+        assert client.post("/api/calendars/reorder",
+                           json={"ids": [lst["id"], cal["id"]]}).status_code in (200, 204)
     finally:
         client.delete(f"/api/lists/{lst['id']}")
         client.delete(f"/api/calendars/{cal['id']}")
@@ -467,9 +529,6 @@ def test_a_task_cannot_be_written_into_an_event_only_calendar(client):
 # ── AUDIT: POST /api/tasks/reorder writes sidecar rows for unknown uids ─────
 
 @pytest.mark.radicale
-@pytest.mark.xfail(strict=True, reason="app.py:1042 never checks the uid, so a "
-                                       "reorder mints permanent, unreclaimable "
-                                       "sidecar rows")
 def test_a_reorder_naming_an_unknown_uid_writes_no_sidecar_row(client):
     """`reorder_tasks` validates that each entry's *list* resolves (404) and
     that no `(href, uid)` pair repeats (422). The uid itself is unbounded
@@ -493,6 +552,12 @@ def test_a_reorder_naming_an_unknown_uid_writes_no_sidecar_row(client):
     Asserted exactly as the sibling route's test does (test_api.py:895): the
     sidecar count is unchanged. Dropping the entry and rejecting the request
     both satisfy that, so the status code is deliberately not asserted.
+    
+    **Fixed** in `store.set_sort_orders` rather than in the route, so every door
+    into that table passes the same guard: the INSERT is now
+    `SELECT ... WHERE EXISTS (SELECT 1 FROM items ...)`. The sibling
+    `PUT .../sidecar` got a `has_task` check in the 2026-08-07 sweep and this
+    path was written to the same table without one.
     """
     lst = client.post("/api/lists", json={"name": f"L-{uuid.uuid4().hex[:8]}"}).json()
     svc = client.app.state.service
@@ -521,9 +586,6 @@ def test_a_reorder_naming_an_unknown_uid_writes_no_sidecar_row(client):
 # ── AUDIT: move_event maps a no-uid-conflict 409 to "server unavailable" ────
 
 @pytest.mark.radicale
-@pytest.mark.xfail(strict=True, reason="engine.py:349 guards only "
-                                       "PreconditionFailed, so Radicale's "
-                                       "no-uid-conflict 409 escapes as a 502")
 def test_a_move_into_a_calendar_holding_that_uid_is_a_conflict_not_an_outage(client):
     """The destination PUT is guarded only against `PreconditionFailed`, which
     covers an occupied destination *href*. Radicale also enforces UID uniqueness
@@ -544,6 +606,10 @@ def test_a_move_into_a_calendar_holding_that_uid_is_a_conflict_not_an_outage(cli
 
     Asserted as the status the caller receives, not the exception class: 409,
     which is what ConflictError already maps to.
+    
+    **Fixed** by catching `Conflict` alongside `PreconditionFailed` on the
+    destination PUT. The engine already had the right words two lines below; they
+    just never fired for this spelling of the same condition.
     """
     src = client.post("/api/calendars", json={"name": f"S-{uuid.uuid4().hex[:8]}"}).json()
     dst = client.post("/api/calendars", json={"name": f"D-{uuid.uuid4().hex[:8]}"}).json()

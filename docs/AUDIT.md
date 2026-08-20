@@ -34,7 +34,7 @@ The 2026-08-19 references were written against this commit and have not drifted 
 Ticked findings keep their original references, which point into the tree as it
 was when they were filed. They are history, not navigation.
 
-**45 open**, all from the 2026-08-19 sweep immediately below; every older
+**38 open**, all from the 2026-08-19 sweep immediately below; every older
 finding is closed. The 2026-08-07 backlog is closed, and so are both findings the
 remediation filed against itself (the missing CSP — issue #57 — and the unbounded
 `_count_consumed` walk, below). The
@@ -74,7 +74,7 @@ Three of the 69 are the same defect seen at a different layer, so they are filed
 once and the backlog counts **66**. Every one of the ten HIGHs was reproduced by
 hand with a runnable probe against a live Radicale 3.7.4 before being written down.
 
-**45 open, 21 closed** — the seven crash paths went first, as **Stage 1**
+**38 open, 28 closed** — the seven crash paths went first, as **Stage 1**
 (`docs/STAGES.md`), and **Stage 2** is closing on top of them; their pins are
 ordinary regression tests now and must stay green. The rest are still pinned by a test that asserts the corrected behaviour
 and fails today — see `docs/STAGES.md` for the stage plan and the
@@ -821,7 +821,7 @@ scope='thisandfuture' (via split_series) and for recurrence_id='   '.
 
 **Pinned by** `test_a_malformed_recurrence_id_names_the_argument_not_the_server (parametrized: '2026-09-08 09:00', '   ', 'not-a-date' — 3 XFAILs)` in `backend/tests/test_backlog_aug19_stage1.py`.
 
-#### [ ] Every task tool accepts a calendar id and every calendar tool accepts a task-list id, so smylte_delete_list can destroy a calendar and smylte_list_tasks answers "you have none" for one
+#### [x] Every task tool accepts a calendar id and every calendar tool accepts a task-list id, so smylte_delete_list can destroy a calendar and smylte_list_tasks answers "you have none" for one
 
 `backend/tasksd/mcp/api.py:176` · **medium** · bug · stage 3
 
@@ -1256,7 +1256,7 @@ both use 2026-07-13, so neither transition is exercised on this branch.
 
 **Pinned by** `test_a_duration_only_event_blocks_its_authored_length_across_a_transition` in `backend/tests/test_backlog_aug19_stage3_ical.py`.
 
-#### [ ] The booking ledger row is written after the CalDAV PUT, so a failure in between makes the visitor's own retry a 409 and turns one booking into two
+#### [x] The booking ledger row is written after the CalDAV PUT, so a failure in between makes the visitor's own retry a 409 and turns one booking into two
 
 `backend/tasksd/service.py:919` · **medium** · bug · stage 3
 
@@ -1338,7 +1338,7 @@ Change nothing in scheduling.py and both defects reproduce while the suite stays
 
 ### Sync engine
 
-#### [ ] split_event's 412 recovery always fails with a 409 and strands a duplicate recurring series on the server
+#### [x] split_event's 412 recovery always fails with a 409 and strands a duplicate recurring series on the server
 
 `backend/tasksd/sync/engine.py:435` · **high** · bug · stage 3
 
@@ -1384,7 +1384,7 @@ Second trigger, same block, verified the same way: foreign client deletes the se
 
 **Pinned by** `test_a_contended_this_and_following_split_leaves_no_duplicate_series` in `backend/tests/test_backlog_aug19_stage3_ical.py`.
 
-#### [ ] move_event maps Radicale's 409 no-uid-conflict to "calendar server unavailable" (502) instead of the conflict it already has a message for
+#### [x] move_event maps Radicale's 409 no-uid-conflict to "calendar server unavailable" (502) instead of the conflict it already has a message for
 
 `backend/tasksd/sync/engine.py:349` · **low** · bug · `minor` · stage 3
 
@@ -1576,7 +1576,7 @@ Failure scenario: a read-only MCP connector calls smylte_search_tasks{query:"a",
 
 **Pinned by** `test_searching_a_large_list_is_not_quadratic_in_the_lists_size` in `backend/tests/test_backlog_aug19_stage2.py`.
 
-#### [ ] get_events_in_range gates on the master's DTSTART, so a RECURRENCE-ID override moved earlier than the series start is invisible to the calendar grid AND to the booking conflict check
+#### [x] get_events_in_range gates on the master's DTSTART, so a RECURRENCE-ID override moved earlier than the series start is invisible to the calendar grid AND to the booking conflict check
 
 `backend/tasksd/db/store.py:661` · **medium** · bug · stage 3
 
@@ -2343,7 +2343,7 @@ No test covers it: tests/test_scheduling.py:481 `test_owner_link_crud` only patc
 
 **Pinned by** `test_a_null_booking_link_field_is_refused_not_a_half_applied_500` in `backend/tests/test_backlog_aug19_stage1.py`.
 
-#### [ ] POST /api/tasks/reorder writes permanent, unreclaimable sidecar rows for uids that do not exist
+#### [x] POST /api/tasks/reorder writes permanent, unreclaimable sidecar rows for uids that do not exist
 
 `backend/tasksd/app.py:1042` · **low** · bug · `minor` · stage 3
 
@@ -2424,7 +2424,7 @@ Sequence on any `systemctl restart tasks` (or SIGTERM) that lands mid-sweep — 
 
 ### Service layer
 
-#### [ ] resolve_list ignores the collection's component set, so a task can be written into a VEVENT-only calendar (and an event into a VTODO-only list) and then never read back
+#### [x] resolve_list ignores the collection's component set, so a task can be written into a VEVENT-only calendar (and an event into a VTODO-only list) and then never read back
 
 `backend/tasksd/service.py:210` · **medium** · bug · stage 3
 
