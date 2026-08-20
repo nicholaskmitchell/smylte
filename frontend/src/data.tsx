@@ -366,19 +366,42 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
   // the PATCH it should have been. Only fields the caller explicitly SET are
   // compared, so a server-side normalisation of something we left alone cannot
   // provoke a write.
+  // Both sides normalised before comparing, because two of these fields do not
+  // have the same SHAPE on the way out as on the way in:
+  //
+  //   body.due       'YYYY-MM-DDTHH:MM'      Task.due        _iso() -> with seconds
+  //   body.priority  'high'                  Task.priority   the iCal integer 1
+  //
+  // Compared raw, every bulk row carrying a timed due or a priority looked like
+  // a replay of a different body and provoked a PATCH — a 20-row add became 40
+  // writes, each a CalDAV PUT with a SEQUENCE bump every other client sees. The
+  // comment below claims "a server-side normalisation of something we left alone
+  // cannot provoke a write"; normalisation of the fields we DID set is exactly
+  // what provoked it. `priority_label` is the DTO's own label form and is what
+  // the body should have been compared against all along.
+  const sameDue = (sent: string | undefined, got: string | null): boolean => {
+    const a = sent ?? null
+    const b = got ?? null
+    if (a === b) return true
+    if (a === null || b === null) return false
+    // A timed value differs only by the seconds the server appends.
+    return a.includes('T') && b.startsWith(a) && /^:\d{2}$/.test(b.slice(a.length))
+  }
+
   const reconcileReplay = async (
     listId: string, body: CreateTaskBody, got: Task,
   ): Promise<Task> => {
     const patch: Record<string, unknown> = {}
     if ('summary' in body && body.summary !== got.summary) patch.summary = body.summary
-    if ('due' in body && (body.due ?? null) !== (got.due ?? null)) patch.due = body.due ?? null
+    if ('due' in body && !sameDue(body.due, got.due)) patch.due = body.due ?? null
     if ('start' in body && (body.start ?? null) !== (got.start ?? null)) {
       patch.start = body.start ?? null
     }
     if ('notes' in body && (body.notes ?? null) !== (got.notes ?? null)) {
       patch.notes = body.notes ?? null
     }
-    if ('priority' in body && (body.priority ?? 'none') !== (got.priority ?? 'none')) {
+    if ('priority' in body
+        && (body.priority ?? 'none') !== (got.priority_label ?? 'none')) {
       patch.priority = body.priority
     }
     if ('tags' in body
@@ -405,9 +428,16 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
     const failed: number[] = []
     for (let i = 0; i < items.length; i++) {
       try {
-        let t = await api.createTask(items[i].listId, { ...items[i].body, client_id: cids[i] })
-        t = await reconcileReplay(items[i].listId, items[i].body, t)
-        settleCreate(uids[i], key, t)
+        const created = await api.createTask(
+          items[i].listId, { ...items[i].body, client_id: cids[i] })
+        settleCreate(uids[i], key, created)
+        // OUTSIDE the try that decides whether this row failed. The create has
+        // landed and been painted; a transient failure on the follow-up
+        // correction must not mark the row as failed, which would keep it in the
+        // composer and have the user add it a second time.
+        void reconcileReplay(items[i].listId, items[i].body, created)
+          .then((fixed) => { if (fixed !== created) settleCreate(uids[i], key, fixed) })
+          .catch((e) => console.error(e))
       } catch (e) {
         if (e instanceof AuthError) {
           // Session died mid-batch. Drop every stand-in that can no longer land

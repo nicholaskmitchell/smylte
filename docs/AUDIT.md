@@ -3141,7 +3141,7 @@ waved through.
 why it is unreachable from `expand_occurrences`; it now also says that
 `_exact_durations` is the source of truth for an expanded instance.
 
-#### [ ] MERGED_SETTINGS omits the two security-relevant settings and the one its own evidence excused
+#### [x] MERGED_SETTINGS omits the two security-relevant settings and the one its own evidence excused
 
 `frontend/src/App.tsx:248` · **medium** · security
 
@@ -3161,7 +3161,21 @@ destroying the collection.
 state the read was supposed to populate", not "is it a scalar". Better still,
 disable the controls while `settingsFailed.current` — the labels are lying too.
 
-#### [ ] reconcileReplay fires on the ordinary create path and its stated invariant is backwards
+**Fixed** by adding all three and rewriting the comment to state the real
+predicate, which "scalar" never was: read-modify-write is.
+
+Two pins, and the second is what makes the first trustworthy. Half-fix checked:
+adding `session_ttl_s` alone — the obvious partial repair, since it is the one
+the finding leads with — passes the session-length pin and is caught by the
+appearance one, which asserts that no PUT may carry an `appearance` object
+without a `themes` key.
+
+That pin also had to WAIT OUT the 400 ms debounce rather than wait FOR a PUT:
+once the gate holds the write there is no PUT to wait for, so
+`waitFor(putSettings called)` would have failed on the fix instead of on the bug
+— a scaffolding assertion that only breaks once the code is right.
+
+#### [x] reconcileReplay fires on the ordinary create path and its stated invariant is backwards
 
 `frontend/src/data.tsx:351` · **medium** · bug
 
@@ -3181,6 +3195,23 @@ instant, map the priority label to its integer), or compare against the body the
 server echoes rather than the DTO. The pin cannot catch this — its `createTask`
 double echoes `body.due` verbatim and never returns a numeric priority — so widen
 the double first.
+
+**Fixed**, and the double was widened first exactly as this entry instructs: it
+now appends the seconds `_iso()` emits and returns the iCal integer alongside
+`priority_label`. Without that the mismatch is invisible to every test in the
+file.
+
+`due` is compared through a `sameDue` helper that accepts the appended seconds;
+`priority` is compared against `got.priority_label`, which is the DTO's own label
+form and what the body should have been measured against all along.
+
+The reconcile also moved OUT of `createMany`'s `try`. It ran inside it, so a
+transient failure on a redundant PATCH marked a create that had fully landed as a
+failed row — the composer kept the row and the user added it twice. The create is
+settled first now, and the correction follows as a detached promise that logs
+rather than failing the row.
+
+Half-fix checked: normalise `due` and leave `priority`, which the pin catches.
 
 #### [x] _intrinsic_order matches order.ts only when the server timezone equals the browser's
 

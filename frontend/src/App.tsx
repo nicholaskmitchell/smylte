@@ -238,17 +238,33 @@ export function App() {
   // session TTL kept accepting preference changes, never fell back to the login
   // form, and lost every one of them on the next reload with no explanation.
   // A 422 (a layout the server's bounds reject) vanished the same way.
-  // The preferences whose value is composed from what the client already holds —
-  // `[...hidden, id]`, `[...groups, g]`, a reordered tab strip. Those are the
-  // ones a failed read turns into a delete: the local state is the shipped
-  // default, so the first gesture PUTs a one-element array over whatever the
-  // account had. Scalars the user picks outright (a session length, a start tab)
-  // are not read-modify-write and stay writable, since the value they carry is
-  // the one just chosen rather than a merge with state that was never loaded.
+  // The preferences whose value is COMPUTED FROM STATE THE READ WAS SUPPOSED TO
+  // POPULATE. Those are the ones a failed read turns into a delete: the local
+  // state is the shipped default, so the first gesture PUTs it over whatever the
+  // account had.
+  //
+  // The predicate used to be "is it a merge with an array we hold", which let
+  // three through that belong here:
+  //
+  //  * `session_ttl_s` CYCLES. `nextSessionTtl` is read-modify-write over
+  //    exactly the state that failed to load: with the read broken the panel
+  //    reads "7 days" whatever the account holds, and one click PUTs 30 — a 30x
+  //    lengthening of the field app.py calls out as security-relevant, from a
+  //    label that was already lying.
+  //  * `home_timezone` toggles the same way, and it decides where floating
+  //    events land in the public booking page's busy set.
+  //  * `appearance` was excused as having a localStorage mirror — but
+  //    `cacheAppearance` REMOVES that mirror whenever no theme is active. An
+  //    account with saved themes and none active therefore starts from `{}`, and
+  //    picking a theme emits `{active: id}` with no `themes` key.
+  //    `update_settings` does a shallow `current.update(patch)`, so that one PUT
+  //    destroys the whole theme collection.
+  //
+  // "Scalar" was never the question. Read-modify-write is.
   const MERGED_SETTINGS = [
     'hidden_calendars', 'archived_calendars', 'hidden_lists', 'task_groups',
     'collapsed_groups', 'collapsed_tasks', 'dashboard', 'calendar_task_lists',
-    'tab_order',
+    'tab_order', 'session_ttl_s', 'home_timezone', 'appearance',
   ] as const
 
   const saveSettings = useCallback((patch: Settings) => {
