@@ -5,7 +5,8 @@
 
 import { useEffect, type CSSProperties } from 'react'
 import type { CalEvent, Task } from '../api'
-import type { DayEv } from '../calendar'
+import { eventKey, type DayEv } from '../calendar'
+import { taskKey } from '../order'
 import { dayKey } from '../util'
 import { fmtClock, type TimeFormat } from '../time'
 import { useTimeFormat } from '../timeformat'
@@ -100,10 +101,10 @@ export function DayPopover({ day, x, y, events, tasks = [], styleOf, taskStyleOf
             { weekday: 'short', month: 'short', day: 'numeric' })}
         </div>
         {events.map((e) => (
-          <AgendaEvent key={e.id} ev={e} day={day} style={styleOf(e)} onOpen={onOpen} />
+          <AgendaEvent key={eventKey(e)} ev={e} day={day} style={styleOf(e)} onOpen={onOpen} />
         ))}
         {tasks.map((t) => (
-          <AgendaTask key={t.uid} task={t} style={taskStyleOf?.(t)} onOpen={onOpenTask} />
+          <AgendaTask key={taskKey(t)} task={t} style={taskStyleOf?.(t)} onOpen={onOpenTask} />
         ))}
       </div>
     </div>

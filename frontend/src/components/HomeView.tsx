@@ -4,7 +4,7 @@ import { useIsMobile } from '../hooks'
 import { useCalendarData, useTaskData, type TaskData } from '../data'
 import { cssColor, makeGuard, addDays, dayKey, isOverdue, ymd } from '../util'
 import { fmtDue } from '../time'
-import { sortTasks } from '../order'
+import { sortTasks, taskKey } from '../order'
 import { useTimeFormat } from '../timeformat'
 import { bucketByDay, monthGrid, type DayEv } from '../calendar'
 import { DayPopover } from './DayPopover'
@@ -378,7 +378,7 @@ function TaskList({ items, colorOf, empty, overdue, done, loaded }: {
       {items.map((t) => {
         const c = colorOf(t.list)
         return (
-          <li key={`${t.list}:${t.uid}`} className={`dash-task ${done ? 'done' : ''}`}>
+          <li key={taskKey(t)} className={`dash-task ${done ? 'done' : ''}`}>
             <span className="list-dot" style={c ? { background: c } : undefined} />
             <span className="dash-task-title">{t.summary || '(untitled)'}</span>
             {t.due && (

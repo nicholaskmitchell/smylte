@@ -229,10 +229,18 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
   // lies. The SSE `rev` bump refetches shortly after as a safety net. Rollbacks
   // restore only the affected task — never a whole-array snapshot, which would
   // clobber interleaved changes to other tasks.
-  const patchLocal = (uid: string, patch: Partial<Task>) =>
-    setTasks((ts) => ts.map((t) => (t.uid === uid ? { ...t, ...patch } : t)))
+  //
+  // Keyed by (list, uid), like `sortTasks` and the reorder snapshot below: the
+  // backend keys items on (collection_href, uid), so a uid copied into a second
+  // list is two distinct tasks. Matching on the bare uid made them one as far as
+  // every optimistic write was concerned — ticking one row's box marked both
+  // done on screen, and deleting one removed both, each disagreeing with the
+  // server until a full refetch. `patchLocal` takes the whole task rather than a
+  // uid so the list travels with it.
+  const patchLocal = (target: Task, patch: Partial<Task>) =>
+    setTasks((ts) => ts.map((t) => (taskKey(t) === taskKey(target) ? { ...t, ...patch } : t)))
   const settle = (dto: Task | undefined, orig: Task) =>
-    setTasks((ts) => ts.map((t) => (t.uid === orig.uid ? (dto ?? orig) : t)))
+    setTasks((ts) => ts.map((t) => (taskKey(t) === taskKey(orig) ? (dto ?? orig) : t)))
 
   // A pending create renders immediately as a local stand-in carrying the uid
   // the server *will* give it (`uidFor`, from the same client_id the request
@@ -419,27 +427,33 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
   }
 
   const addSub = (parent: string, summary: string) => {
-    const p = tasks.find((x) => x.uid === parent)   // a subtask lives in its parent's list
+    // A subtask lives in its parent's list. With one uid in two lists this can
+    // still pick the wrong copy — the caller passes a bare uid — but both
+    // candidates carry the same parent uid, so the subtask lands under a real
+    // parent either way. Retyping TaskGroup's whole uid-shaped prop surface is
+    // a separate finding; see docs/AUDIT.md.
+    const p = tasks.find((x) => x.uid === parent)
     if (p) void create(p.list, { summary, parent }, pending.current.get(parent))
   }
 
   const toggle = async (t: Task) => {
     const done = !t.completed
     invalidateFetches()
-    patchLocal(t.uid, {
+    patchLocal(t, {
       completed: done, cancelled: false, status: done ? 'COMPLETED' : 'NEEDS-ACTION',
     })
     settle(await guard(() => api.complete(t.list, t.uid, done)), t)
   }
 
   const remove = async (t: Task) => {
-    const at = tasks.findIndex((x) => x.uid === t.uid)  // where to restore it on failure
+    const gone = taskKey(t)                            // (list, uid): see patchLocal
+    const at = tasks.findIndex((x) => taskKey(x) === gone)  // where to restore it on failure
     const key = loadKey
     invalidateFetches()
-    setTasks((ts) => ts.filter((x) => x.uid !== t.uid))
+    setTasks((ts) => ts.filter((x) => taskKey(x) !== gone))
     if ((await guard(() => api.deleteTask(t.list, t.uid))) === undefined && key === keyRef.current) {
       setTasks((ts) => {
-        if (ts.some((x) => x.uid === t.uid)) return ts
+        if (ts.some((x) => taskKey(x) === gone)) return ts
         const next = ts.slice()
         next.splice(at < 0 ? next.length : Math.min(at, next.length), 0, t)
         return next
@@ -464,7 +478,7 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
       opt.cancelled = patch.status === 'CANCELLED'
     }
     invalidateFetches()
-    patchLocal(t.uid, opt)
+    patchLocal(t, opt)
     settle(await guard(() => api.patchTask(t.list, t.uid, patch)), t)
   }
 
@@ -494,7 +508,7 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
       console.info(`repairing subtask ${t.uid}: parent ${p} → ${real.uid}`)
       // Painted locally too, so the row settles on the repaired parent rather
       // than waiting for the write's own SSE bump to come back around.
-      patchLocal(t.uid, { parent: real.uid })
+      patchLocal(t, { parent: real.uid })
       void guard(() => api.patchTask(t.list, t.uid, { parent: real.uid }))
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps

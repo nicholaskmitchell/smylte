@@ -7,7 +7,7 @@ import {
   addDays, cssColor, dayKey, isOverdue, makeGuard, toLocalInput, ymd,
 } from '../util'
 import { fmtClock, fmtDue, inputLang } from '../time'
-import { sortTasks } from '../order'
+import { sortTasks, taskKey } from '../order'
 import { useTimeFormat } from '../timeformat'
 import { AddMultipleModal } from './AddMultipleModal'
 import { dateOut, TaskModal } from './TaskModal'
@@ -423,7 +423,7 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
           <div className="scroll">
             {completedTasks.length === 0 && <div className="empty">No completed tasks.</div>}
             {completedTasks.map((t) => (
-              <TaskGroup key={t.uid} task={t} childrenOf={completedKids} dot={dotFor(t)}
+              <TaskGroup key={taskKey(t)} task={t} childrenOf={completedKids} dot={dotFor(t)}
                 progressOf={progressOf} collapsed={collapsedSet} onCollapse={setCollapsed}
                 onToggle={toggle} onRemove={remove} onOpen={setDetail} onAddSub={addSub} />
             ))}
@@ -449,7 +449,7 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
             )}
             <div className="scroll">
               {active.map((t) => (
-                <TaskGroup key={t.uid} task={t} childrenOf={childrenOf} dot={dotFor(t)}
+                <TaskGroup key={taskKey(t)} task={t} childrenOf={childrenOf} dot={dotFor(t)}
                   progressOf={progressOf} collapsed={collapsedSet} onCollapse={setCollapsed}
                   onToggle={toggle} onRemove={remove} onOpen={setDetail} onAddSub={addSub}
                   drag={reorderDrag} />
@@ -463,7 +463,7 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
                 <>
                   <div className="section-label label">Completed · {done.length}</div>
                   {done.map((t) => (
-                    <TaskGroup key={t.uid} task={t} childrenOf={childrenOf} dot={dotFor(t)}
+                    <TaskGroup key={taskKey(t)} task={t} childrenOf={childrenOf} dot={dotFor(t)}
                       progressOf={progressOf} collapsed={collapsedSet} onCollapse={setCollapsed}
                       onToggle={toggle} onRemove={remove} onOpen={setDetail} onAddSub={addSub} />
                   ))}
@@ -600,7 +600,7 @@ function TaskGroup({ task, childrenOf, dot, progressOf, depth = 0, seen,
         onToggle={onToggle} onRemove={onRemove} onOpen={onOpen}
         onAddSub={() => { onCollapse(task.uid, false); setAdding(true) }} />
       {!isCollapsed && kids.map((k) => (
-        <TaskGroup key={k.uid} task={k} childrenOf={childrenOf} dot={dot}
+        <TaskGroup key={taskKey(k)} task={k} childrenOf={childrenOf} dot={dot}
           progressOf={progressOf} depth={depth + 1} seen={path}
           collapsed={collapsed} onCollapse={onCollapse}
           onToggle={onToggle} onRemove={onRemove} onOpen={onOpen} onAddSub={onAddSub} />
@@ -649,14 +649,14 @@ function DayColumn({ date, isToday, open, done, overdue, dotOf, onToggle, onOpen
           <>
             <div className="col-label label overdue">Overdue</div>
             {overdue.map((t) => (
-              <DayCard key={t.uid} task={t} showDate dot={dotOf(t)} onToggle={onToggle} onOpen={onOpen}
+              <DayCard key={taskKey(t)} task={t} showDate dot={dotOf(t)} onToggle={onToggle} onOpen={onOpen}
                 onDrag={onDragTask} />
             ))}
             {open.length > 0 && <div className="col-label label">Today</div>}
           </>
         )}
         {open.map((t) => (
-          <DayCard key={t.uid} task={t} dot={dotOf(t)} onToggle={onToggle} onOpen={onOpen} onDrag={onDragTask} />
+          <DayCard key={taskKey(t)} task={t} dot={dotOf(t)} onToggle={onToggle} onOpen={onOpen} onDrag={onDragTask} />
         ))}
         {open.length + overdue.length + done.length === 0 && !adding && (
           <div className="col-empty">—</div>
@@ -665,7 +665,7 @@ function DayColumn({ date, isToday, open, done, overdue, dotOf, onToggle, onOpen
           <>
             <div className="col-label label">Done · {done.length}</div>
             {done.map((t) => (
-              <DayCard key={t.uid} task={t} dot={dotOf(t)} onToggle={onToggle} onOpen={onOpen} onDrag={onDragTask} />
+              <DayCard key={taskKey(t)} task={t} dot={dotOf(t)} onToggle={onToggle} onOpen={onOpen} onDrag={onDragTask} />
             ))}
           </>
         )}

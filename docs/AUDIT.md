@@ -2009,7 +2009,7 @@ untick-round-trip control.
 
 **Pinned by** `2026-08-19 — the calendar grid > keeps a midnight-ending event on its one day when it is made all-day` and `… > keeps a multi-day midnight-ending span on the days it covered` in `frontend/src/backlog.aug19.stage4a.test.tsx`.
 
-#### [ ] The duplicate-React-key fix landed on one of the five sites named; task chips, mobile dots, the mobile agenda and DayPopover still key on the bare id/uid
+#### [x] The duplicate-React-key fix landed on one of the five sites named; task chips, mobile dots, the mobile agenda and DayPopover still key on the bare id/uid
 
 `frontend/src/components/CalendarView.tsx:614` · **low** · rendering · `minor` · stage 4
 
@@ -2040,7 +2040,26 @@ The existing stage-4 test ('renders both copies when one UID lives in two calend
 
 **Suggested fix.** Apply the same key at the remaining sites: `${t.list}::${t.uid}` for tasks and `${e.calendar}::${e.id}` for events, in the task chip, both mobile-dot maps, both mobile-agenda maps and both DayPopover maps. Extend the stage-4 test to assert no duplicate-key warning for (a) one task uid in two lists and (b) the day popover, and scope `applyLocal`/`del` by `e.calendar` as the original finding's suggested fix already spelled out.
 
-**Pinned by** `aug19 stage 4b — chip, dot, agenda and popover identity > gives every task chip and every popover row a key unique per collection` in `frontend/src/backlog.aug19.stage4b.test.tsx`.
+**Fixed** at all six sites, with one vocabulary rather than three. `taskKey`
+(order.ts) is unchanged and now used everywhere; a new `eventKey` in calendar.ts
+is its twin, and `HomeView`'s ad-hoc `${t.list}:${t.uid}` — which collides for any
+list id containing a colon — moved onto it. NUL, not `::`: an event `id` already
+contains `::` for a recurrence instance, so that separator is ambiguous exactly
+where it matters. A React key never reaches the DOM, so nothing renders it.
+
+The `applyLocal`/`del` half this entry's suggested fix names is done too, scoped
+by the event's collection href with a `!href ||` fallback — `calHref` answers ''
+until the calendar list has loaded, and without the fallback every optimistic
+paint on a cold grid would match nothing while still reporting success, so
+nothing would reload to cover for it. There is a control for exactly that.
+
+Widened first with the mobile EVENT dot and agenda row (the original duplicated a
+task uid on the mobile leg, so two of the six sites were undriven) and with the
+scoping half, which had no assertion at all. Half-fix checked: fixing the keys and
+leaving the mutations on the bare uid — the key warnings go away and the two
+delete pins still fail.
+
+**Pinned by** `aug19 stage 4b — chip, dot, agenda and popover identity > gives every task chip and every popover row a key unique per collection`, `… > gives every event dot and mobile agenda row a key unique per collection` and `… > removes only the calendar copy that was deleted` in `frontend/src/backlog.aug19.stage4b.test.tsx`.
 
 ### Home & scheduling views
 
@@ -2292,7 +2311,7 @@ Scenario: a three-row batch is submitted; the POST for row 2 lands on Radicale b
 
 **Pinned by** `aug19 stage 3 — correcting a bulk row before a retry > does not close reporting success on a correction the server drops` in `frontend/src/backlog.aug19.stage3.test.tsx`.
 
-#### [ ] Tasks pane rows key on the bare UID, so a task copied into a second list produces duplicate React keys and deleting one copy erases both rows
+#### [x] Tasks pane rows key on the bare UID, so a task copied into a second list produces duplicate React keys and deleting one copy erases both rows
 
 `frontend/src/components/TasksView.tsx:442` · **low** · rendering · `minor` · stage 4
 
@@ -2310,7 +2329,25 @@ Reproduced against the real component (vitest): two lists l1 'Work' and l2 'Home
 
 **Suggested fix.** Key rows on `${t.list}:${t.uid}` in TasksView (416, 442, 456, 642, 649, 658) as HomeView already does, and scope the provider's optimistic mutations to `(list, uid)` rather than uid alone (data.tsx patchLocal/settle/settleCreate/remove).
 
-**Pinned by** `aug19 stage 4b — the tasks pane and one uid in two lists > deletes only the copy whose row was clicked` in `frontend/src/backlog.aug19.stage4b.test.tsx`.
+**Fixed** on `taskKey` at all seven row sites, and — the half this entry's
+suggested fix also names — in the provider's optimistic mutations: `patchLocal`
+(which now takes the whole task so the list travels with it), `settle` and
+`remove`. Deliberately NOT changed: `settleCreate` and the create/bulk rollbacks,
+whose uids come from `uidFor(clientId())` and cannot collide, and `repairParents`,
+already guarded by `real.list !== t.list`.
+
+Widened with the case a user hits every day: ticking one copy's box marked BOTH
+done on screen, which is worse than the delete because nothing about it looks
+destructive. Half-fix checked: fixing the keys alone, which both this pin and the
+toggle pin still catch.
+
+`addSub` still resolves its parent by bare uid — it is handed one — and that,
+along with `TasksView`'s own uid-keyed maps (`byUid`, `parentByUid`, `kidRows`,
+`collapsedSet` and `TaskGroup`'s whole uid-shaped prop surface), is filed
+separately rather than smuggled into a keying fix. With one uid in two lists both
+rows show one row's subtasks, progress and fold state. See below.
+
+**Pinned by** `aug19 stage 4b — the tasks pane and one uid in two lists > deletes only the copy whose row was clicked` and `… > completes only the copy whose box was ticked` in `frontend/src/backlog.aug19.stage4b.test.tsx`.
 
 #### [ ] The Completed pane hides a completed RELATED-TO ring entirely, though the list view has explicit code to render one
 
@@ -3007,6 +3044,36 @@ end can be told from an authored one — `expand_occurrences` has the master and
 the current behaviour exactly so that changing it is a decision.
 
 ## Filed during remediation — 2026-08-20
+
+#### [ ] TasksView resolves subtasks, progress and fold state by bare uid, so one uid in two lists shows one row's children under both
+
+`frontend/src/components/TasksView.tsx:203` · **low** · bug
+
+The sibling of the keying finding closed above, and deliberately left open there
+rather than folded in. The React keys and the provider's optimistic mutations are
+now scoped by `(list, uid)`; the pane's own maps are not. `byUid`
+(`TasksView.tsx:203` and `:239`), `parentByUid`/`kidsByParent` (`:209-218`),
+`kidRows`, `collapsedSet`, the drag's `drag.over === task.uid` comparison
+(`:575`) and `TaskGroup`'s entire prop surface — `childrenOf`, `progressOf`,
+`collapsed`, `onCollapse`, `seen` — are all typed on a bare uid string.
+
+So with the same uid in two lists both rows render one row's subtasks, one row's
+progress ring and one row's fold state, and collapsing either collapses both.
+`data.tsx`'s `addSub` has the same shape for the same reason: it is handed a uid
+and picks the first match. Nothing is lost on the server — both candidates carry
+the same parent uid, so a subtask lands under a real parent either way — but the
+pane shows a merge of two tasks.
+
+Not fixed with the keying finding because closing it means retyping `TaskGroup`
+end to end, and a refactor of that size inside a keying fix is how the Stage 3
+regressions got in.
+
+**Suggested fix.** Type the recursion on `Task` (or on `taskKey`) rather than on
+`uid`, in one pass: `byUid` → keyed by `taskKey`, `parentOf` returning the parent
+TASK rather than a uid, `TaskGroup`'s props taking the task. `collapsedTasks` is
+persisted as a uid list in settings, so it needs a migration or a
+tolerate-both read. Pin it with two lists sharing a uid where only one copy has a
+subtask, and assert the other row has none.
 
 #### [ ] HEAD on a booking link 404s while GET serves the SPA, so a link checker reports the owner's published link dead
 

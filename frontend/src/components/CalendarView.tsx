@@ -10,8 +10,9 @@ import { fmtClock, inputLang } from '../time'
 import { useTimeFormat } from '../timeformat'
 import {
   bucketByDay, bucketTasksByDay, cellCapacity, chipsShown, dragBody, daysBetween,
-  endFromDuration, lastDayOf, monthGrid, shiftYmd, type CalendarFit, type DayEv,
+  endFromDuration, eventKey, lastDayOf, monthGrid, shiftYmd, type CalendarFit, type DayEv,
 } from '../calendar'
+import { taskKey } from '../order'
 import { useIsMobile } from '../hooks'
 import { AgendaEvent, AgendaTask, DayPopover } from './DayPopover'
 import { Sidebar } from './Sidebar'
@@ -312,11 +313,22 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
   // Optimistically paint an edit onto the events we can represent locally: a
   // non-recurring event, or a single occurrence (scope "this"). Series-wide
   // edits return false — the caller reloads for those instead.
-  const applyLocal = (uid: string, body: Record<string, unknown>): boolean => {
+  const applyLocal = (cal: string, uid: string, body: Record<string, unknown>): boolean => {
     const single = body.scope === 'this' && !!body.recurrence_id
-    if (!single && events.some((e) => e.uid === uid && e.is_recurring)) return false
+    // A UID is only unique WITHIN a collection — the backend keys items on
+    // (collection_href, uid), so the same uid in two calendars is two resources.
+    // Matching on uid alone painted an edit aimed at one onto both, and the
+    // other one's row then disagreed with the server until a full refetch.
+    //
+    // `!href ||` is load-bearing: `calHref` answers '' until the calendar list
+    // has loaded, and without the fallback every optimistic paint on a cold grid
+    // would silently match nothing while still reporting success, so nothing
+    // would reload to cover for it.
+    const href = calHref(cal)
+    const mine = (e: CalEvent) => e.uid === uid && (!href || e.calendar === href)
+    if (!single && events.some((e) => mine(e) && e.is_recurring)) return false
     patchEvents((evs) => evs.map((e) => {
-      if (e.uid !== uid) return e
+      if (!mine(e)) return e
       if (single && e.id !== `${uid}::${body.recurrence_id}`) return e
       const n = { ...e }
       if (typeof body.summary === 'string') n.summary = body.summary
@@ -366,7 +378,7 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
       })
       return
     }
-    const painted = applyLocal(uid, body)
+    const painted = applyLocal(cal, uid, body)
     const ok = await guard(() => api.patchEvent(cal, uid, body))
     const moved = !!(ok && moveTo && moveTo !== cal)
     if (moved) {
@@ -386,8 +398,9 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
     // Drop the affected instances right away; reload rolls back on failure.
     const rid = opts?.recurrence_id
     const scope = opts?.scope || 'all'
+    const href = calHref(cal)                 // see applyLocal for the '' fallback
     patchEvents((evs) => evs.filter((e) => {
-      if (e.uid !== uid) return true
+      if (e.uid !== uid || (href && e.calendar !== href)) return true
       if (scope === 'this' && rid) return e.id !== `${uid}::${rid}`
       if (scope === 'thisandfuture' && rid) return (e.recurrence_id || '') < rid
       return false
@@ -554,10 +567,10 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
                       (dayEvents.length > 0 || dayTasks.length > 0) && (
                         <span className="ev-dots">
                           {dayEvents.slice(0, 6).map((e) => (
-                            <i key={e.id} className={`ev-dot ${e.all_day ? 'allday' : ''}`} style={evStyle(e)} />
+                            <i key={eventKey(e)} className={`ev-dot ${e.all_day ? 'allday' : ''}`} style={evStyle(e)} />
                           ))}
                           {dayTasks.slice(0, Math.max(0, 6 - dayEvents.length)).map((t) => (
-                            <i key={t.uid} className="ev-dot task" style={taskStyle(t)} />
+                            <i key={taskKey(t)} className="ev-dot task" style={taskStyle(t)} />
                           ))}
                         </span>
                       )
@@ -574,7 +587,7 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
                             // to, or subscribed from, a second calendar gave two
                             // chips one key. React then drops one and can bind
                             // the wrong click target to the other.
-                            <div key={`${e.calendar}::${e.id}`}
+                            <div key={eventKey(e)}
                               className={`cal-ev ${e.all_day ? 'allday' : ''} ${e.cont ? 'cont' : ''}`}
                               style={evStyle(e)}
                               dir={textDir(e.summary)}
@@ -623,7 +636,7 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
                           const timed = !!t.due && t.due.includes('T') && !t.due_is_date
                           const done = t.completed || t.cancelled
                           return (
-                            <div key={t.uid} className={`cal-task ${done ? 'done' : ''}`}
+                            <div key={taskKey(t)} className={`cal-task ${done ? 'done' : ''}`}
                               style={taskStyle(t)} dir={textDir(t.summary)} title={t.summary || ''}
                               onClick={(ev) => { ev.stopPropagation(); setTaskDetail(t) }}>
                               <span className="tick" aria-hidden="true">{done ? '☑' : '☐'}</span>
@@ -657,11 +670,11 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
                   <button className="btn" onClick={() => setDraft({ date: focusDay })}>+ Event</button>
                 </div>
                 {focusEvents.map((e) => (
-                  <AgendaEvent key={e.id} ev={e} day={focusDay} style={evStyle(e)}
+                  <AgendaEvent key={eventKey(e)} ev={e} day={focusDay} style={evStyle(e)}
                     onOpen={() => setDraft({ event: e })} />
                 ))}
                 {focusTasks.map((t) => (
-                  <AgendaTask key={t.uid} task={t} style={taskStyle(t)}
+                  <AgendaTask key={taskKey(t)} task={t} style={taskStyle(t)}
                     onOpen={() => setTaskDetail(t)} />
                 ))}
                 {focusEvents.length === 0 && focusTasks.length === 0 && (

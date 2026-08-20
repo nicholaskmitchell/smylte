@@ -41,6 +41,22 @@ export const shiftIso = (v: string, n: number) => {
   return hasZone(v) ? d.toISOString() : `${ymd(d)}T${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
+/** A rendered event's identity, unique across collections.
+ *
+ * The twin of `taskKey` in order.ts, and it exists for the same reason: the
+ * backend keys items on (collection_href, uid), so the same UID genuinely can
+ * appear in two calendars — a copy, or the same invitation accepted in two
+ * accounts. `id` is already unique per instance of a SERIES (uid, or
+ * uid::recurrence_id) but only within one collection.
+ *
+ * NUL, not "::" — `id` itself contains "::" for a recurrence instance, so that
+ * separator is ambiguous exactly where it matters. Nothing renders this: a React
+ * key is reconciliation identity and never reaches the DOM.
+ */
+export function eventKey(e: Pick<CalEvent, 'calendar' | 'id'>): string {
+  return `${e.calendar}\u0000${e.id}`
+}
+
 /** Milliseconds in an iCalendar DURATION (RFC 5545 §3.3.6), or null.
  *
  * Weeks are exclusive of the other parts in the grammar, and a leading `-` is
