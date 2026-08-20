@@ -260,7 +260,7 @@ No App.test.tsx case renders a view across a logout/login cycle, so the suite is
 
 **Pinned by** `aug19 stage 3 — logging out and back in > does not paint the previous session’s events to the next one` in `frontend/src/backlog.aug19.stage3.test.tsx`.
 
-#### [ ] A failed events fetch permanently records the month as "asked", so the calendar grid stays blank or stale with no retry path
+#### [x] A failed events fetch permanently records the month as "asked", so the calendar grid stays blank or stale with no retry path
 
 `frontend/src/data.tsx:576` · **medium** · bug · `minor` · stage 4
 
@@ -300,6 +300,19 @@ Only an SSE data event, archiving a calendar, or an event edit (`reload`) ever r
 </details>
 
 **Suggested fix.** Make `asked` reflect only successful fetches. In `fetchWindow`, have the guarded body return a sentinel and drop the record when the guard swallowed a failure: `void guard(async () => { …; setWindows(…); return true }).then((ok) => { if (ok === undefined) asked.current.delete(key) }).finally(() => inflight.current.delete(key))`. (Also delete the key when a response is dropped as superseded.) Add a CalendarView test that rejects the first `api.events`, navigates away and back, and asserts a third call plus the event on screen.
+
+**Fixed** as the suggested fix describes, with one deliberate difference: the
+superseded branch returns `true` as well, so a stale-but-successful response does
+NOT un-ask a window a newer fetch is already handling. `undefined` from
+`makeGuard`'s catch is the only signal that means "this failed", and clearing on
+every settle would re-request on every fast page-turn. The write-only `inflight`
+ref went with it — three writes, no reads.
+
+The pin was widened first, in both directions: a SECOND failure on the same
+window must also recover (the original passed against a repair that recovers
+once), and a window that succeeded must NOT be re-requested when the user pages
+back to it. Run against a half-fix that deletes the record unconditionally, the
+pin still fails on that second half.
 
 **Pinned by** `2026-08-19 — the calendar grid > re-requests a month whose first fetch failed` in `frontend/src/backlog.aug19.stage4a.test.tsx`.
 
@@ -367,7 +380,7 @@ Login.test.tsx:19-23
 
 **Pinned by** `aug19 stage 4b — the login form > gives both fields an accessible name` in `frontend/src/backlog.aug19.stage4b.test.tsx`.
 
-#### [ ] loadKey encodes list ORDER, so a sidebar drag-reorder refetches every task in the account and discards the fetch already in flight
+#### [x] loadKey encodes list ORDER, so a sidebar drag-reorder refetches every task in the account and discards the fetch already in flight
 
 `frontend/src/data.tsx:180` · **low** · bug · `minor` · stage 4
 
@@ -399,6 +412,22 @@ Scenario: 8 task lists, an SSE-driven refetch is 400 ms into its fan-out. The us
 </details>
 
 **Suggested fix.** Key on the list *set*, not its order: `const loadKey = `*|${[...lists.map((l) => l.id)].sort().join(',')}``. Nothing downstream depends on order (the fan-out is `Promise.all` and the result is flattened, then sorted at render by `sortTasks`). Add a data/TasksView test that reorders the sidebar and asserts `api.tasks` is not called again.
+
+**Fixed** by sorting the ids in `loadKey` itself, and the location matters more
+than the change: both consumers — the effect's dependency and the in-flight
+commit guard — read that one constant. Sorting only the dependency would stop the
+refetch while leaving the guard order-sensitive, so a response already on the
+wire would be discarded with nothing left to re-issue it: strictly worse than the
+bug being fixed.
+
+That half-fix is exactly what was run, and it is caught — not by the pin, which
+still passes against it, but by a CONTROL added alongside: `keeps a task fetch
+that was in flight when the order changed`. That control is green today (the
+refetch masks the discard) and only becomes load-bearing once the refetch is
+removed, which is the whole reason it is here. The pin itself was also widened to
+fire the drag on the real Sidebar rows rather than calling `setLists` from a
+probe, and a second control asserts that adding or removing a list still
+refetches, so "never re-run the effect" cannot satisfy it.
 
 **Pinned by** `aug19 stage 4b — reordering the sidebar > does not refetch every task in the account when only the order changed` in `frontend/src/backlog.aug19.stage4b.test.tsx`.
 
@@ -1976,7 +2005,7 @@ The existing stage-4 test ('renders both copies when one UID lives in two calend
 
 ### Home & scheduling views
 
-#### [ ] The Home mini calendar never refetches on an SSE change, so its dots go stale while every other module on the same dashboard updates
+#### [x] The Home mini calendar never refetches on an SSE change, so its dots go stale while every other module on the same dashboard updates
 
 `frontend/src/components/HomeView.tsx:141` · **medium** · bug · stage 4
 
@@ -2002,7 +2031,22 @@ Failure scenario: the user leaves the Home tab open (which is what a dashboard i
 
 **Suggested fix.** Add `rev` to the effect's dependency array (and thread `rev` down from the props — it is already a prop on HomeView). `requestWindow`'s `asked` stamp already includes `rev`, so this costs exactly one refetch per change burst and nothing on ordinary re-renders. CalendarView.tsx:242 carries the identical dep array and the same defect; it is partly masked there because CalendarView calls `reloadHere()` after its own writes, while the mini calendar is read-only and has no such path.
 
-**Pinned by** `2026-08-19 — the Home mini calendar > repaints when the account changes under an open dashboard` in `frontend/src/backlog.aug19.stage4a.test.tsx`.
+**Fixed** at BOTH sites named here — the mini calendar and the CalendarView twin
+— by adding `requestWindow` to the two dependency arrays rather than `rev`. The
+signal was already in the callback: `requestWindow` is a `useCallback` over
+`[rev, enabled, fetchWindow]`, so its identity changes on every bump. Threading
+`rev` in separately (as suggested) would work, but it puts a second source of
+truth beside one the effect already closes over, and leaves the dep array still
+not naming what the effect reads. Deduping is unaffected — `asked` is stamped
+with `rev`, so a re-run within one rev is a no-op, and the pin asserts that.
+
+The twin was pinned by nothing at all before this; it has its own pin now (`the
+calendar tab repaints when the account changes under it`), which fails against a
+half-fix that repairs only HomeView. It is the same finding rather than a second
+one: this entry's own suggested fix names it, and the calendar tab is the bigger
+surface, being where a user watches for what their other clients wrote.
+
+**Pinned by** `2026-08-19 — the Home mini calendar > repaints when the account changes under an open dashboard` and `… > the calendar tab repaints when the account changes under it` in `frontend/src/backlog.aug19.stage4a.test.tsx`.
 
 #### [ ] A rejected booking-link save leaves the editor permanently disabled — the in-flight guard is set but never cleared, and the whole form is unrecoverable
 

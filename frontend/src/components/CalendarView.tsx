@@ -239,7 +239,17 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
   useEffect(() => {
     requestWindow(from, to, visibleCals)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [from, to, visibleCals.map((c) => c.id).join(',')])
+    // `requestWindow` is the missing signal, and it was already here: it is a
+    // useCallback over [rev, enabled, fetchWindow], so its identity changes on
+    // every SSE bump. Without it in the deps this effect was invariant under
+    // `rev` — every other data source on the page consumes it, so the rest of
+    // the screen repainted while these events stayed as they were. Adding
+    // `rev` directly would work too, but it would be a second source of truth
+    // for a signal the callback already carries, and the dep array would still
+    // be lying about what the effect reads. Deduping is unaffected:
+    // `requestWindow` stamps `asked` with `rev`, so a re-run within one rev is
+    // a no-op.
+  }, [from, to, visibleCals.map((c) => c.id).join(','), requestWindow])
 
   const reloadHere = () => reload(from, to, visibleCals)
   const patchEvents = (next: (prev: CalEvent[]) => CalEvent[]) => setEvents(from, to, next)

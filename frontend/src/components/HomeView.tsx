@@ -138,7 +138,17 @@ export function HomeView({ rev, onExpire, layout, onLayoutChange,
     if (!needsCal) return
     requestWindow(from, to, wanted)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [needsCal, from, to, wanted.map((c) => c.id).join(',')])
+    // `requestWindow` is the missing signal, and it was already here: it is a
+    // useCallback over [rev, enabled, fetchWindow], so its identity changes on
+    // every SSE bump. Without it in the deps this effect was invariant under
+    // `rev` — every other data source on the page consumes it, so the rest of
+    // the screen repainted while these events stayed as they were. Adding
+    // `rev` directly would work too, but it would be a second source of truth
+    // for a signal the callback already carries, and the dep array would still
+    // be lying about what the effect reads. Deduping is unaffected:
+    // `requestWindow` stamps `asked` with `rev`, so a re-run within one rev is
+    // a no-op.
+  }, [needsCal, from, to, wanted.map((c) => c.id).join(','), requestWindow])
 
   // Two sequential requests with no staleness guard: the effect re-runs on
   // `rev`, so two SSE-driven refreshes put two batches in flight and whichever

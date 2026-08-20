@@ -177,7 +177,17 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
   // `rev` bump refetches again once the server has published the change).
   // Every list is fetched and hidden ones filtered at render, so a visibility
   // toggle is instant (no refetch) — exactly like the calendar grid.
-  const loadKey = `*|${lists.map((l) => l.id).join(',')}`
+  // Sorted: the identity is the list SET. A sidebar drag-reorder hands back the
+  // same ids in a new order, and an order-sensitive key made that a full
+  // refetch of every task in the account for data that cannot have changed —
+  // while ALSO failing the commit guard below, so any response already in
+  // flight was thrown away. Nothing downstream wants the order: the fan-out is
+  // a `Promise.all`, the result is flattened, and rows are ordered at render by
+  // `sortTasks`. Both consumers read this one constant, which is why it is
+  // fixed here rather than in the effect's dependency list — sorting only the
+  // dep would stop the refetch while leaving the guard order-sensitive, and
+  // then an in-flight response would be discarded with nothing to re-issue it.
+  const loadKey = `*|${lists.map((l) => l.id).slice().sort().join(',')}`
   const keyRef = useRef(loadKey)
   keyRef.current = loadKey
   const fetchToken = useRef(0)
@@ -597,26 +607,38 @@ function CalendarProvider({ rev, guard, enabled, children }: {
   // grid stayed empty until something unrelated bumped `rev`. A fetch should
   // only ever be superseded by a newer fetch for the SAME window.
   const gen = useRef(new Map<string, number>())
-  const inflight = useRef(new Set<string>())
 
+  // What a window has been asked for, so re-renders do not re-request it. The
+  // calendar set and `rev` are part of the identity: archiving a calendar or a
+  // server-side change has to refetch, a scroll does not.
+  //
+  // Declared above `fetchWindow` because the failure path has to reach it.
+  const asked = useRef(new Map<string, string>())
 
   const fetchWindow = useCallback((from: string, to: string, forCals: List[]) => {
     const key = windowKey(from, to)
     const mine = (gen.current.get(key) ?? 0) + 1
     gen.current.set(key, mine)
-    inflight.current.add(key)
     void guard(async () => {
       const per = await Promise.all(forCals.map((c) => api.events(c.id, from, to)))
       const rows = per.filter(Array.isArray).flat()
-      if (gen.current.get(key) !== mine) return
-      setWindows((w) => new Map(w).set(key, rows))
-    }).finally(() => inflight.current.delete(key))
+      if (gen.current.get(key) === mine) setWindows((w) => new Map(w).set(key, rows))
+      return true
+    }).then((ok) => {
+      // `requestWindow` records the window BEFORE the fetch, so a failure left
+      // it recorded as fetched with nothing in `windows` — and the fan-out is a
+      // `Promise.all`, so one 502 through the tunnel blanks the whole month.
+      // Paging away and back never re-requested it; only an SSE bump, archiving
+      // a calendar or an edit ever recovered it, because those change the stamp.
+      //
+      // `undefined` is what `makeGuard` returns from its catch and the only way
+      // to get it: the superseded branch above returns `true` too, deliberately,
+      // so a stale-but-successful response does not un-ask a window that a newer
+      // fetch is already handling. Clearing on every settle would re-request on
+      // every fast page-turn.
+      if (ok === undefined) asked.current.delete(key)
+    })
   }, [guard])
-
-  // What a window has been asked for, so re-renders do not re-request it. The
-  // calendar set and `rev` are part of the identity: archiving a calendar or a
-  // server-side change has to refetch, a scroll does not.
-  const asked = useRef(new Map<string, string>())
 
   // Everything this provider holds, dropped when the session goes away.
   //
@@ -640,7 +662,6 @@ function CalendarProvider({ rev, guard, enabled, children }: {
     setLoaded(false)
     asked.current.clear()
     gen.current.clear()
-    inflight.current.clear()
     seeded.current = null
     latest.current = ''
   }, [enabled])
