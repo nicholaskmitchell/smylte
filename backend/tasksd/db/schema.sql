@@ -60,6 +60,14 @@ CREATE TABLE IF NOT EXISTS items (
     related_parent   TEXT,                   -- parent UID (subtasks/checklist)
     sequence         INTEGER,
     has_rrule        INTEGER NOT NULL DEFAULT 0,
+    -- The earliest instant this RESOURCE can produce (read._min_instant): the
+    -- master DTSTART, or earlier if an RDATE or a RECURRENCE-ID override starts
+    -- before it. `dtstart` is the master's alone, and gating a window on it drops
+    -- an occurrence dragged earlier than its own series start; gating on nothing
+    -- makes every recurring row a candidate for every window, which is a cost an
+    -- anonymous booking-page request can choose. NULL on rows written before this
+    -- column, which the query treats as "unknown, admit it".
+    min_instant      TEXT,
     location         TEXT,
     created          TEXT,
     last_modified    TEXT,

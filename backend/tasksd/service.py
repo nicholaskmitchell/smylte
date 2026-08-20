@@ -899,7 +899,8 @@ class TaskService:
             if client_id:
                 prior = store.get_booking_by_event(self._conn, f"{client_id}@tasksd")
                 if prior is None:
-                    prior = self._recover_orphaned_booking(link, token, client_id)
+                    prior = self._recover_orphaned_booking(
+                        link, token, client_id, start_iso, name=name, email=email)
                 if prior is not None:
                     if prior["link_token"] == token:
                         return self._confirmation(link, prior), False
@@ -970,7 +971,8 @@ class TaskService:
             "timezone": link["timezone"],
         }, True
 
-    def _recover_orphaned_booking(self, link, token: str, client_id: str):
+    def _recover_orphaned_booking(self, link, token: str, client_id: str,
+                                  start_iso: str, *, name: str, email: str):
         """A ledger row rebuilt from an event this booking already wrote.
 
         The whole replay mechanism keys on the ledger, and the ledger row is
@@ -988,14 +990,38 @@ class TaskService:
 
         So the hook does not depend on the ledger being there: the EVENT is the
         record, since `create_event` derives its UID from the client_id, and the
-        ledger is rebuilt from it. Restricted to the link's own calendar, so a
-        client_id reused against a different link still raises rather than
-        disclosing the other booking's times.
+        ledger is rebuilt from it.
+
+        It is NOT enough to scope this to the link's calendar, which is what the
+        first version did while claiming that "a client_id reused against a
+        different link still raises rather than disclosing the other booking's
+        times". Two links on ONE calendar is the default shape of this feature,
+        and there the calendar check passes for both: a caller of link B,
+        presenting a client_id used on link A, was handed A's booking TIMES under
+        B's title, and the ledger permanently recorded A's booking under B with
+        the real booker's name and email erased.
+
+        What proves intent without disclosing anything is the REQUEST: recover
+        only when the orphaned event sits at the very instant this caller is
+        asking for. That is exactly the shape finding 30 is about — the visitor's
+        page keeps the client_id stable *for the chosen slot*, so a retry names
+        the same instant — and it tells a caller nothing they did not already
+        supply. Anything else falls through to the "client_id already used"
+        refusal below, which is the honest answer: their earlier booking did land.
 
         Returns the new ledger row, or None if there is no such event.
         """
         row = store.get_item(self._conn, link["calendar_href"], f"{client_id}@tasksd")
         if row is None or row["component"] != "VEVENT":
+            return None
+        try:
+            asked = datetime.fromisoformat(start_iso)
+            found = datetime.fromisoformat(row["dtstart"] or "")
+        except ValueError:
+            return None
+        if asked.tzinfo is None or found.tzinfo is None:
+            return None
+        if asked.astimezone(timezone.utc) != found.astimezone(timezone.utc):
             return None
         # In the LINK's zone, the way the ordinary path writes it. The cached
         # row holds whatever the wire said (this app writes bookings in UTC), and
@@ -1016,7 +1042,10 @@ class TaskService:
         store.insert_booking(
             self._conn, id=booking_id, link_token=token,
             calendar_href=link["calendar_href"], event_uid=row["uid"],
-            client_name="", client_email="", notes=None,
+            # The caller's own, not blanks: we only get here when this request
+            # names the instant the orphaned event occupies, which means this IS
+            # the same visitor retrying the same slot.
+            client_name=name, client_email=email, notes=None,
             start_at=_local(row["dtstart"]),
             end_at=_local(row["dtend"] or row["dtstart"]),
         )

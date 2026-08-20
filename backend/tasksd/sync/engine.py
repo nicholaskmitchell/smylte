@@ -493,10 +493,21 @@ class SyncEngine:
             else:
                 self.dav.put(href, ics, if_match=etag)
 
+        # Whether the head write might have LANDED. The distinction is the whole
+        # of the cleanup below: a 412 or a 409 is the server REFUSING, so the head
+        # is provably untouched and the tail is safely removable — but a transport
+        # error is a write whose outcome we do not know, and the commit may have
+        # happened with only the reply lost. Deleting the tail then destroys the
+        # only copy of every "following" occurrence, which is exactly what writing
+        # the tail first (see above) exists to prevent.
+        head_uncertain = False
         try:
             try:
+                head_uncertain = True
                 write_head(head, row["etag"])
+                head_uncertain = False
             except PreconditionFailed:
+                head_uncertain = False
                 fresh = self.dav.get(href)
                 head, tail = build(fresh.data)
                 if tail_href is not None:
@@ -512,23 +523,40 @@ class SyncEngine:
                     tail = _restamp_uid(tail, tail_uid)
                     self.dav.put(tail_href, tail)
                 try:
+                    head_uncertain = True
                     write_head(head, fresh.etag)
+                    head_uncertain = False
                 except PreconditionFailed as e:
+                    head_uncertain = False
                     raise ConflictError(
                         f"edit conflict on {uid}: retry the change") from e
         except BaseException:
-            # Unconditional, because the inner handler only ever covered ONE of
-            # the ways this can fail. A concurrent delete of the master makes
-            # `self.dav.get(href)` raise NotFound; a transport error, a rebuild
-            # that now refuses the anchor, or a process signal all land here too —
-            # and every one of them used to leave a headless duplicate series on
-            # the owner's calendar under a UID nothing else references.
-            if tail_href is not None:
+            # Wider than the inner `except PreconditionFailed` it replaced, which
+            # covered ONE of the ways this can fail: a concurrent delete of the
+            # master makes `self.dav.get(href)` raise NotFound, and a rebuild that
+            # now refuses the anchor raises ValueError — both used to leave a
+            # headless duplicate series on the owner's calendar under a UID
+            # nothing else references.
+            #
+            # But NOT unconditional. `head_uncertain` means a head write was in
+            # flight when this failed, so the truncation may have committed with
+            # only the response lost; deleting the tail there destroys the later
+            # occurrences and tells the user the operation failed. Leaving a
+            # visible duplicate is the recoverable direction, and it is the one
+            # this function's write-tail-first ordering was chosen for.
+            if tail_href is not None and not head_uncertain:
                 try:
                     self.dav.delete(tail_href)
                 except DavError:
                     log.warning("split_event: could not clean up the tail at %s",
                                 tail_href)
+            elif tail_href is not None:
+                log.error(
+                    "split_event: a head write for %s was in flight when the split "
+                    "failed, so it may have committed; leaving the tail at %s rather "
+                    "than risk deleting the only copy of the later occurrences",
+                    uid, tail_href,
+                )
             raise
         if head is None:
             # The resource is gone from the wire, so there is nothing to read

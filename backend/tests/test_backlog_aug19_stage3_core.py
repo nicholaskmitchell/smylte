@@ -585,6 +585,34 @@ def test_a_calendar_id_is_refused_by_the_task_tools():
                 f"is told the list is empty, where a merely misspelled id would "
                 f"have got the ToolError naming the right discovery tool."
             )
+
+        # THE MIRROR, and it is half the finding: "every task tool accepts a
+        # calendar id AND every calendar tool accepts a task-list id". Driving
+        # only the first direction leaves `_COMPONENT` half-mapped and this test
+        # green — verified: dropping `"calendar": "VEVENT"` from that dict passes
+        # everything above while `smylte_delete_calendar(<a task list>)` still
+        # deletes the list and every task on it. The HTTP twin (the next test)
+        # drives both directions; this one did not copy that discipline.
+        try:
+            answer = tools["smylte_delete_calendar"].handler(calendar_id="errands")
+        except Exception as exc:                        # noqa: BLE001 — any refusal
+            answer = f"refused ({type(exc).__name__}: {exc})"
+        assert deleted == [], (
+            f"smylte_delete_calendar issued a collection DELETE against {deleted} "
+            f"for a TASK-LIST id, and answered {answer!r}. Every task on it is "
+            f"gone, from Radicale and from every other client on the account."
+        )
+
+        try:
+            rows = tools["smylte_list_events"].handler(calendar_id="errands")
+        except Exception:                               # noqa: BLE001 — any refusal
+            pass
+        else:
+            pytest.fail(
+                f"smylte_list_events answered {rows} for a TASK-LIST id — the "
+                f"model is told the calendar is empty rather than that it named "
+                f"the wrong kind of collection."
+            )
     finally:
         svc.close()
 
@@ -706,21 +734,39 @@ def test_a_reorder_naming_an_unknown_uid_writes_no_sidecar_row(client):
         with svc._lock:
             return svc._conn.execute("SELECT count(*) FROM sidecar").fetchone()[0]
 
+    other = client.post("/api/lists", json={"name": f"O-{uuid.uuid4().hex[:8]}"}).json()
     try:
         real = client.post(f"/api/lists/{lst['id']}/tasks",
                            json={"summary": "still here"}).json()
+        # A REAL task, in a DIFFERENT list. The guard has to be scoped to the
+        # collection, not just to the uid: the message below says "not in this
+        # collection", and a check written as `WHERE uid=?` satisfies the
+        # unknown-uid case while still minting an unreclaimable row under the
+        # wrong collection_href — verified to pass this test before this line
+        # existed.
+        elsewhere = client.post(f"/api/lists/{other['id']}/tasks",
+                                json={"summary": "belongs to the other list"}).json()
         before = sidecar_rows()
         client.post("/api/tasks/reorder", json={"items": [
             {"list": lst["id"], "uid": real["uid"]},
             {"list": lst["id"], "uid": "ghost-deleted-on-the-phone"},
+            {"list": lst["id"], "uid": elsewhere["uid"]},
         ]})
         assert sidecar_rows() == before + 1, (
             f"the reorder minted {sidecar_rows() - before} sidecar rows for 1 live "
-            f"task: a row for a uid that is not in this collection, with "
-            f"orphaned_at IS NULL, which gc_orphans can never reclaim."
+            f"task in this list: a row for a uid that is not in this collection, "
+            f"with orphaned_at IS NULL, which gc_orphans can never reclaim."
         )
+        # …and the one legitimate row is the one that was asked for.
+        with svc._lock:
+            placed = svc._conn.execute(
+                "SELECT collection_href, uid FROM sidecar WHERE sort_order IS NOT NULL"
+            ).fetchall()
+        assert [r["uid"] for r in placed] == [real["uid"]], (
+            f"the wrong task was given a position: {[dict(r) for r in placed]}")
     finally:
         client.delete(f"/api/lists/{lst['id']}")
+        client.delete(f"/api/lists/{other['id']}")
 
 
 # ── AUDIT: move_event maps a no-uid-conflict 409 to "server unavailable" ────
