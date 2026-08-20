@@ -1880,7 +1880,7 @@ Failure scenario: the user has themes "Alpha" and "Beta". They click Rename on A
 
 ### Calendar view
 
-#### [ ] The resize grip on an event that runs past the six-week window truncates the span when released on its own cell
+#### [x] The resize grip on an event that runs past the six-week window truncates the span when released on its own cell
 
 `frontend/src/components/CalendarView.tsx:556` · **medium** · bug · stage 4
 
@@ -1910,9 +1910,22 @@ A six-month block is cut to six weeks by a drag that moved zero pixels. No test 
 
 **Suggested fix.** Pass the clamp into the arithmetic instead of hiding it in the render: give `dragBody` the displayed last day (or a `clipped` flag) and return null when `mode==='resize'` and the drop day equals the clamped grip day, so releasing the grip where it is drawn is a no-op exactly as it is for an unclipped event. Cheaper alternative: don't render `.ev-resize` at all when `evLast > lastKey` (the grip cannot honestly mean "the last day" there), and add a component test that a dragStart+drop on the same cell issues no patchEvent for a window-clipped span.
 
-**Pinned by** `2026-08-19 — the calendar grid > does not truncate a window-clipped span dropped where its grip is drawn` in `frontend/src/backlog.aug19.stage4a.test.tsx`.
+**Fixed** by passing the grid's clamp into the arithmetic — `dragBody` gained an
+optional fifth argument and refuses a resize whose drop cell is the clamped one
+AND whose event genuinely runs past it. Both halves of that condition are load-
+bearing, and the cheaper alternative this entry offers (do not draw the grip on a
+clipped event) was rejected: it takes away the only way to SHORTEN a long span
+from the visible window, and the pin already asserts the grip exists.
 
-#### [ ] endFromDuration returns the string "NaN-NaN-NaNTNaN:NaN" instead of null when the duration overflows Date, so an unrelated edit is rejected by the server
+Widened first with a TIMED clipped span — the all-day case goes through a
+different branch of `dragBody` — plus two controls. The positive one earned its
+keep immediately: run against a half-fix that refuses every drop on a clipped
+event, the pins still pass and `still resizes a window-clipped span dropped on an
+earlier cell` is what fails.
+
+**Pinned by** `2026-08-19 — the calendar grid > does not truncate a window-clipped span dropped where its grip is drawn` and `… > does not truncate a window-clipped TIMED span dropped on its own cell` in `frontend/src/backlog.aug19.stage4a.test.tsx`.
+
+#### [x] endFromDuration returns the string "NaN-NaN-NaNTNaN:NaN" instead of null when the duration overflows Date, so an unrelated edit is rejected by the server
 
 `frontend/src/calendar.ts:70` · **low** · bug · `minor` · stage 4
 
@@ -1940,9 +1953,22 @@ backend/tasksd/app.py `_parse_datelike` -> HTTPException(422, "invalid date/date
 
 **Suggested fix.** Add `if (isNaN(out.getTime())) return null` before the format in `endFromDuration` (and consider rejecting a non-finite `ms` in `durationMs`). Add table-driven tests for `durationMs`/`endFromDuration` covering P1W, PT0S, a negative sign, a bare 'P', and an overflowing duration — none of these are covered today.
 
+**Fixed** at both guards, which is one more than the entry asks for: `isNaN` on
+the computed end in `endFromDuration`, and `Number.isFinite` on `ms` in
+`durationMs` — `\d+` has no upper bound, so a day count of a few hundred digits
+overflows to Infinity before any Date exists. The pin was widened to drive that
+second input, having originally driven one value through one guard.
+
+The table this entry asks for is now beside it as an ordinary control (`parses
+every DURATION shape RFC 5545 allows, and refuses the rest`): P1W, P1D, P1DT2H30M,
+PT0S — legal and zero, which is not the same as null — a signed duration, and the
+shapes that must stay refused. Closing the "neither helper had a direct test" half
+of the finding, and it is what stops a repair tightening the parser into rejecting
+real durations.
+
 **Pinned by** `2026-08-19 — the calendar grid > sends no fabricated end for a DURATION that overflows the calendar` in `frontend/src/backlog.aug19.stage4a.test.tsx`.
 
-#### [ ] Ticking "all day" on a timed event that ends at midnight adds a day the grid never showed
+#### [x] Ticking "all day" on a timed event that ends at midnight adds a day the grid never showed
 
 `frontend/src/components/CalendarView.tsx:777` · **low** · bug · `minor` · stage 4
 
@@ -1968,7 +1994,20 @@ The event now covers Mar 2 AND Mar 3 in this app and in every other CalDAV clien
 
 **Suggested fix.** Derive the all-day picker value from the same rule the rest of the module uses: `const endVal = allDay ? lastDayOf({ ...e, start, end }) : ...`, or at minimum `allDay ? (endIsExclusive({end, end_is_date:false}) ? shiftYmd(end.slice(0,10), -1) : end.slice(0,10)) : ...`, clamped to be >= startVal. Add a test that ticking 'all day' on a midnight-ending event writes an exclusive DTEND one day after the start.
 
-**Pinned by** `2026-08-19 — the calendar grid > keeps a midnight-ending event on its one day when it is made all-day` in `frontend/src/backlog.aug19.stage4a.test.tsx`.
+**Fixed** in `endVal` only, and the `end.includes('T')` guard is the whole fix:
+for an event that is ALREADY all-day, `end` was seeded as the inclusive day with
+no `T`, so subtracting again would shorten every real all-day event by a day on
+every save. That is exactly the half-fix that was run — subtract whenever
+`allDay` is ticked — and it satisfies BOTH pins here while breaking two
+long-standing green tests in `CalendarView.test.tsx` (`shows the inclusive last
+day…` and `keeps an all-day span the same length…`). The pins could not catch it;
+the pre-existing controls did.
+
+Widened with a multi-day midnight-ending span (so the subtraction has to land on
+the right day rather than merely happen), a non-midnight control, and an
+untick-round-trip control.
+
+**Pinned by** `2026-08-19 — the calendar grid > keeps a midnight-ending event on its one day when it is made all-day` and `… > keeps a multi-day midnight-ending span on the days it covered` in `frontend/src/backlog.aug19.stage4a.test.tsx`.
 
 #### [ ] The duplicate-React-key fix landed on one of the five sites named; task chips, mobile dots, the mobile agenda and DayPopover still key on the bare id/uid
 

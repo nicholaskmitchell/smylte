@@ -55,6 +55,9 @@ export function durationMs(d: string | null | undefined): number | null {
   if (!w && !dd && !hh && !mm && !ss) return null      // bare "P" / "PT"
   const ms = (Number(w || 0) * 7 + Number(dd || 0)) * 86400000
     + Number(hh || 0) * 3600000 + Number(mm || 0) * 60000 + Number(ss || 0) * 1000
+  // `\d+` has no upper bound, so a day count of a few hundred digits makes
+  // `Number` overflow to Infinity long before any Date is involved.
+  if (!Number.isFinite(ms)) return null
   return sign === '-' ? -ms : ms
 }
 
@@ -67,6 +70,12 @@ export function endFromDuration(start: string, duration: string | null | undefin
   const d = parseDate(start)
   if (isNaN(d.getTime())) return null
   const out = new Date(d.getTime() + ms)
+  // The START was guarded and the RESULT was not, so a duration large enough to
+  // push it outside Date's +/-8.64e15 ms range formatted as the literal string
+  // "NaN-NaN-NaNTNaN:NaN" — truthy, where this function's contract is null. That
+  // truthiness defeated the modal's `endUnknown` guard and PATCHed the NaN
+  // string on any save, including a pure rename, which the API answers 422.
+  if (isNaN(out.getTime())) return null
   return `${ymd(out)}T${pad(out.getHours())}:${pad(out.getMinutes())}`
 }
 
@@ -204,6 +213,7 @@ export function bucketTasksByDay(tasks: Task[], days: Date[]): Map<string, Task[
  */
 export function dragBody(
   ev: CalEvent, fromDay: string, toDay: string, mode: 'move' | 'resize',
+  windowLast?: string,
 ): Record<string, unknown> | null {
   if (!ev.start) return null
 
@@ -214,6 +224,17 @@ export function dragBody(
     if (ev.end) body.end = shiftIso(ev.end, delta)
     return body
   }
+
+  // The grid clamps a long event's grip to the last visible day, so for a span
+  // that continues past the rendered window that cell is the one cell a drop on
+  // cannot honestly mean "end here" — it is the only cell the user could not
+  // have chosen. Without this, grabbing the grip and letting go without moving
+  // was not the no-op it is for every other event: it wrote a DTEND at the
+  // window edge and deleted the rest, six months cut to six weeks by a drag
+  // that moved zero pixels. Compared here rather than in the component because
+  // the drop cell is half of the question; refusing every drop on a clipped
+  // event would take away the only way to SHORTEN one from the visible window.
+  if (windowLast && toDay >= windowLast && lastDayOf(ev) > windowLast) return null
 
   const startDay = dayKey(ev.start)
   const day = toDay < startDay ? startDay : toDay      // never drag the end past the start
