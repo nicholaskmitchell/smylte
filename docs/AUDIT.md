@@ -34,7 +34,7 @@ The 2026-08-19 references were written against this commit and have not drifted 
 Ticked findings keep their original references, which point into the tree as it
 was when they were filed. They are history, not navigation.
 
-**49 open**, all from the 2026-08-19 sweep immediately below; every older
+**45 open**, all from the 2026-08-19 sweep immediately below; every older
 finding is closed. The 2026-08-07 backlog is closed, and so are both findings the
 remediation filed against itself (the missing CSP — issue #57 — and the unbounded
 `_count_consumed` walk, below). The
@@ -74,7 +74,7 @@ Three of the 69 are the same defect seen at a different layer, so they are filed
 once and the backlog counts **66**. Every one of the ten HIGHs was reproduced by
 hand with a runnable probe against a live Radicale 3.7.4 before being written down.
 
-**49 open, 17 closed** — the seven crash paths went first, as **Stage 1**
+**45 open, 21 closed** — the seven crash paths went first, as **Stage 1**
 (`docs/STAGES.md`), and **Stage 2** is closing on top of them; their pins are
 ordinary regression tests now and must stay green. The rest are still pinned by a test that asserts the corrected behaviour
 and fails today — see `docs/STAGES.md` for the stage plan and the
@@ -403,7 +403,7 @@ Scenario: 8 task lists, an SSE-driven refetch is 400 ms into its fan-out. The us
 
 ### iCalendar edit path
 
-#### [ ] "This event" on the first slot of a RANGE=THISANDFUTURE override rewrites every later occurrence
+#### [x] "This event" on the first slot of a RANGE=THISANDFUTURE override rewrites every later occurrence
 
 `backend/tasksd/ical/edit.py:642` · **high** · bug · stage 3
 
@@ -452,7 +452,7 @@ User-visible: the user clicks the Jan 13 chip, picks "This event", renames it �
 
 **Pinned by** `test_editing_the_slot_a_this_and_future_override_anchors_leaves_later_ones_alone` in `backend/tests/test_backlog_aug19_stage3_ical.py`.
 
-#### [ ] Dragging a foreign MONTHLY/YEARLY series deletes the dragged occurrence and moves nothing else
+#### [x] Dragging a foreign MONTHLY/YEARLY series deletes the dragged occurrence and moves nothing else
 
 `backend/tasksd/ical/edit.py:829` · **high** · bug · stage 3
 
@@ -595,7 +595,7 @@ App path: PATCH /api/calendars/{cal}/events/{uid} {"repeat":"daily"} (or `smylte
 
 **Pinned by** `test_changing_the_repeat_is_prompt_with_a_far_future_override` in `backend/tests/test_backlog_aug19_stage2.py`.
 
-#### [ ] split_series never checks that the anchor is an occurrence, so "this and following" duplicates a non-recurring event and silently no-ops its delete
+#### [x] split_series never checks that the anchor is an occurrence, so "this and following" duplicates a non-recurring event and silently no-ops its delete
 
 `backend/tasksd/ical/edit.py:1084` · **medium** · bug · stage 3
 
@@ -2244,7 +2244,7 @@ Failure: the user clicks a task row, the dialog opens, they press Escape to back
 
 ### HTTP API — request models
 
-#### [ ] A zone-offset datetime accepted by _parse_datelike is written as TZID="UTC±HH:MM" and read back as floating — the instant silently moves
+#### [x] A zone-offset datetime accepted by _parse_datelike is written as TZID="UTC±HH:MM" and read back as floating — the instant silently moves
 
 `backend/tasksd/app.py:531` · **medium** · bug · stage 3
 

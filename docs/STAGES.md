@@ -12,9 +12,9 @@ of how the harness behaved in practice — its "Two strengths of pin" and
 
 `docs/AUDIT.md` is the evidence. This is the plan for closing it.
 
-**49 open, 17 closed.** Stages 1 and 2 are done and Stage 3 is in progress;
-stages 4-5 remain. Of the 49 still open, 48 are pinned by a test that asserts
-the corrected behaviour and fails today — 44 as `xfail(strict=True)` /
+**45 open, 21 closed.** Stages 1 and 2 are done and Stage 3 is in progress;
+stages 4-5 remain. Of the 45 still open, 44 are pinned by a test that asserts
+the corrected behaviour and fails today — 40 as `xfail(strict=True)` /
 `it.fails`, and 4 as ordinary passing tests (see "Test gaps that were only gaps"
 below). One is deliberately **not** pinned; see
 "The one that is not pinned" below. The harness
@@ -209,7 +209,7 @@ in that sweep's 66.
 
 ## Stage 3 — Silent data corruption 🟨 IN PROGRESS
 
-24 findings · 6 high, 12 medium, 6 low · **3 closed, 21 open**
+24 findings · 6 high, 12 medium, 6 low · **7 closed, 17 open**
 
 Nothing raises and the answer is silently wrong. The dangerous class, and the largest — it needs the most care per fix because the failure leaves no trace and several of these corrupt data another CalDAV client authored.
 
@@ -222,6 +222,18 @@ filed as a test gap — "nothing drives `busy_intervals` across a DST transition
 all" — and writing the missing case is what found 18 and 29 in the first place.
 Its pin asserts exactly those two behaviours, so fixing them closed it, with no
 change of its own. The stage boundaries are a sorting aid, not a partition.
+
+**Two of the four edit-path fixes were wrong on the first attempt, and the
+widened pins are what said so.** Finding 15's audit entry prescribes adding a
+plain single-slot override beside the RANGE=THISANDFUTURE one and leaving the
+range component in place. Doing exactly that leaves two components claiming one
+RECURRENCE-ID value, which no reader can rank — the expansion still applied the
+range override's values to every later occurrence, and the pin stayed red in a
+way that looked like the original bug. What works is re-homing: the range
+override MOVES to the next occurrence, keeping its RANGE and shifting its
+DTSTART by the same step, so every RECURRENCE-ID value appears exactly once. And
+the detached instance has to carry the range override's own times across, or
+"rename this one" silently rescheduled it back to the master's hour.
 
 **The obvious repair would have traded one wrong answer for another.** Adding the
 whole DURATION to the instant fixes `PT2H` and breaks `P1D`: RFC 5545 §3.3.6
@@ -236,8 +248,8 @@ before the real fix landed.
 | # | Finding | Where | Sev | Pin |
 |---|---|---|---|---|
 | 14 | A failed GET /api/settings is swallowed silently, and the next preference gesture overwrites the account's s… | `frontend/src/App.tsx:203` | high | `does not write a defaults-derived preference back over the account` |
-| 15 | "This event" on the first slot of a RANGE=THISANDFUTURE override rewrites every later occurrence | `backend/tasksd/ical/edit.py:642` | high | `test_editing_the_slot_a_this_and_future_override_anchors_leaves_later_ones_alone` |
-| 16 | Dragging a foreign MONTHLY/YEARLY series deletes the dragged occurrence and moves nothing else | `backend/tasksd/ical/edit.py:829` | high | `test_dragging_a_monthly_series_moves_it_instead_of_desynchronizing_the_rule` |
+| 15 ✅ | "This event" on the first slot of a RANGE=THISANDFUTURE override rewrites every later occurrence | `backend/tasksd/ical/edit.py:642` | high | `test_editing_the_slot_a_this_and_future_override_anchors_leaves_later_ones_alone` |
+| 16 ✅ | Dragging a foreign MONTHLY/YEARLY series deletes the dragged occurrence and moves nothing else | `backend/tasksd/ical/edit.py:829` | high | `test_dragging_a_monthly_series_moves_it_instead_of_desynchronizing_the_rule` |
 | 17 | smylte_list_tasks implements the comparator order.ts documents as wrong, so after one drag every newly-creat… | `backend/tasksd/mcp/api.py:133` | high | `test_a_task_created_after_a_drag_is_not_sunk_below_the_whole_account` |
 | 18 ✅ | busy_intervals drops any event crossing the DST fall-back transition, so an anonymous POST double-books the … | `backend/tasksd/scheduling.py:148` | high | `test_a_meeting_across_the_fall_back_transition_still_blocks_its_slot` |
 | 19 | split_event's 412 recovery always fails with a 409 and strands a duplicate recurring series on the server | `backend/tasksd/sync/engine.py:435` | high | `test_a_contended_this_and_following_split_leaves_no_duplicate_series` |
@@ -245,8 +257,8 @@ before the real fix landed.
 | 21 | Logout does not clear the in-memory data mirror, so the calendar keeps painting the previous session's event… | `frontend/src/data.tsx:505` | medium | `does not paint the previous session’s events to the next one` |
 | 22 | sortTasks keys its effective-position map by bare uid, so one task copied into a second list silently rewrit… | `frontend/src/order.ts:128` | medium | `keeps a dragged row where it was dropped when a copy shares its uid` |
 | 23 | Folding one subtask tree silently deletes the folded state of every tree that is not currently rendered — an… | `frontend/src/components/TasksView.tsx:297` | medium | `keeps a hidden list’s folded trees when another tree is folded` |
-| 24 | A zone-offset datetime accepted by _parse_datelike is written as TZID="UTC±HH:MM" and read back as floating … | `backend/tasksd/app.py:531` | medium | `test_an_event_created_with_a_zone_offset_keeps_the_instant_it_names` |
-| 25 | split_series never checks that the anchor is an occurrence, so "this and following" duplicates a non-recurri… | `backend/tasksd/ical/edit.py:1084` | medium | `test_this_and_following_on_a_non_repeating_event_does_not_duplicate_it` |
+| 24 ✅ | A zone-offset datetime accepted by _parse_datelike is written as TZID="UTC±HH:MM" and read back as floating … | `backend/tasksd/app.py:531` | medium | `test_an_event_created_with_a_zone_offset_keeps_the_instant_it_names` |
+| 25 ✅ | split_series never checks that the anchor is an occurrence, so "this and following" duplicates a non-recurri… | `backend/tasksd/ical/edit.py:1084` | medium | `test_this_and_following_on_a_non_repeating_event_does_not_duplicate_it` |
 | 26 ✅ | Recurrence expansion emits occurrences whose end precedes their start on the DST spring-forward (and 3x-long… | `backend/tasksd/ical/recur.py:234` | medium | `test_every_expanded_occurrence_across_spring_forward_blocks_real_time` |
 | 27 | Every task tool accepts a calendar id and every calendar tool accepts a task-list id, so smylte_delete_list … | `backend/tasksd/mcp/api.py:176` | medium | `test_a_calendar_id_is_refused_by_the_task_tools` |
 | 28 | A refresh that narrows scope without repeating `offline_access` returns no refresh token, and the client's R… | `backend/tasksd/mcp/oauth.py:516` | medium | `test_narrowing_scope_on_refresh_does_not_end_the_grant` |
