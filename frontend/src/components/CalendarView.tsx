@@ -408,8 +408,10 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
     setDrag(null); setOverDay(null)
     if (!d) return
     // The date arithmetic lives in calendar.ts, where it is tested directly;
-    // null means the drag changed nothing.
-    const body = dragBody(d.ev, d.fromDay, key, d.mode)
+    // null means the drag changed nothing. `lastVisible` is the clamp the grid
+    // applies when drawing a resize grip: without it, a drop on the clamped cell
+    // reads as "end here" and truncates everything past the window.
+    const body = dragBody(d.ev, d.fromDay, key, d.mode, ymd(days[41]))
     if (!body) return
     if (d.ev.is_recurring) setMoveAsk({ ev: d.ev, body })
     else save(body, calIdOf(d.ev), d.ev.uid)
@@ -470,7 +472,7 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
   }
 
   const todayKey = ymd(new Date())
-  const lastKey = ymd(days[41])            // final visible day, for resize grips
+  const lastKey = ymd(days[41])            // final visible day, for resize grips (and dropOnDay's clamp)
   // Where new events land by default: the first shown (non-hidden) calendar,
   // among those not archived; else the first visible one.
   const defaultCal = visibleCals.find((c) => !hidden.has(c.id))?.id || visibleCals[0]?.id || ''
@@ -784,7 +786,27 @@ function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete }: {
 
   // Keep start/end input formats consistent with the all-day toggle.
   const startVal = allDay ? start.slice(0, 10) : (start.includes('T') ? start : `${start}T09:00`)
-  const endVal = allDay ? end.slice(0, 10) : (end.includes('T') ? end : `${end}T10:00`)
+  // Ticking "all day" on a TIMED event has to answer the same question
+  // `endIsExclusive`/`lastDayOf` answer everywhere else the event is shown or
+  // dragged: a DTEND sitting exactly on local midnight ends at the START of that
+  // day, so the last day it covers is the one before. Slicing ten characters off
+  // reinterpreted that exclusive instant as an inclusive last day, and
+  // `endOut = shiftYmd(clampedEnd, 1)` below then added another on top — a
+  // 20:00-to-midnight event became two days in every CalDAV client, after an
+  // edit the user believed only changed the representation.
+  //
+  // The `includes('T')` guard is what makes this safe, and it is the whole fix:
+  // for an event that is ALREADY all-day, `end` was seeded as the inclusive day
+  // (no `T`) further up, so subtracting again would shorten every real all-day
+  // event by a day on every save.
+  const endLastDay = () => {
+    if (!end.includes('T')) return end.slice(0, 10)
+    const inclusive = end.slice(11, 16) === '00:00'
+      ? shiftYmd(end.slice(0, 10), -1)
+      : end.slice(0, 10)
+    return inclusive < startVal ? startVal : inclusive
+  }
+  const endVal = allDay ? endLastDay() : (end.includes('T') ? end : `${end}T10:00`)
 
   // Moving the start drags the end along, preserving the event's duration — no
   // more fixing the end by hand after every start change.

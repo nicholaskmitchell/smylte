@@ -36,7 +36,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import userEvent from '@testing-library/user-event'
 
 import { isValidToken, resolve, sanitizeTokens, type Appearance, type CustomTheme } from './appearance'
-import { endFromDuration } from './calendar'
+import { durationMs, endFromDuration } from './calendar'
 import { DataProvider } from './data'
 import { setCacheUser } from './cache'
 import { AppearancePanel } from './components/AppearancePanel'
@@ -203,7 +203,7 @@ describe('2026-08-19 — the calendar grid', () => {
 
   // ── AUDIT (open): CalendarView.tsx:556 — the resize grip on a span that runs
   //    past the six-week window truncates it when released on its own cell ──
-  it.fails('does not truncate a window-clipped span dropped where its grip is drawn', async () => {
+  it('does not truncate a window-clipped span dropped where its grip is drawn', async () => {
     // EVIDENCE. The grid clamps a long event's grip to the last visible day
     // (`evLast > lastKey ? lastKey : evLast`), but `dragBody` compares the newly
     // built end against the event's REAL stored end, so for any span that
@@ -244,9 +244,88 @@ describe('2026-08-19 — the calendar grid', () => {
     expect(m.patchEvent.mock.calls).toEqual([])
   })
 
+  // WIDENING: the same gesture on a TIMED clipped span. The all-day case above
+  // goes through `dragBody`'s `ev.all_day` branch; this one goes through the
+  // `else` that reads a time off the old end, so a repair placed in one branch
+  // does not cover the other.
+  it('does not truncate a window-clipped TIMED span dropped on its own cell', async () => {
+    openCalendar([ev({
+      uid: 'proj', id: 'proj', summary: 'Project',
+      start: '2026-03-01T09:00:00', end: '2026-09-01T17:00:00',
+    })])
+    await chipsFor('Project')
+
+    const cells = document.querySelectorAll('.cal-cell')
+    const lastCell = cells[41]
+    const grip = lastCell.querySelector('.ev-resize')
+    expect(grip).toBeTruthy()
+
+    const dataTransfer = { setData: vi.fn(), getData: vi.fn(), effectAllowed: '' }
+    fireEvent.dragStart(grip!, { dataTransfer })
+    fireEvent.drop(lastCell, { dataTransfer })
+    await act(async () => { await Promise.resolve() })
+
+    expect(m.patchEvent.mock.calls).toEqual([])
+  })
+
+  // POSITIVE CONTROL — the case that stops "return null for anything clipped".
+  // Shortening a long span from the visible window is a real gesture and the
+  // only one available for an event whose true end is months away; a repair
+  // that refuses every drop on a clipped event takes it away silently. This is
+  // also why the cheap alternative the finding offers (do not draw the grip at
+  // all) is wrong: the pin above asserts the grip exists, and this asserts it
+  // still does something.
+  it('still resizes a window-clipped span dropped on an earlier cell', async () => {
+    openCalendar([ev({
+      uid: 'sab', id: 'sab', summary: 'Sabbatical', all_day: true,
+      start: '2026-03-01', start_is_date: true,
+      end: '2026-09-01', end_is_date: true,
+    })])
+    await chipsFor('Sabbatical')
+
+    const cells = document.querySelectorAll('.cal-cell')
+    const lastCell = cells[41]                       // where the grip is drawn
+    const grip = lastCell.querySelector('.ev-resize')
+    const target = cells[20]                         // 2026-03-21, well inside the window
+
+    const dataTransfer = { setData: vi.fn(), getData: vi.fn(), effectAllowed: '' }
+    fireEvent.dragStart(grip!, { dataTransfer })
+    fireEvent.drop(target, { dataTransfer })
+    await act(async () => { await Promise.resolve() })
+
+    await waitFor(() => expect(m.patchEvent).toHaveBeenCalled())
+    // DTEND is exclusive: dropping on the 21st means the span ends on the 22nd.
+    expect(patchBody()).toMatchObject({ end: '2026-03-22' })
+  })
+
+  // Control (passes today): an event whose real end IS the last visible day is
+  // not clipped, and dropping its grip where it already sits is the ordinary
+  // no-op. A repair keyed on the drop cell alone rather than on the event's
+  // true end would break this.
+  it('is still a no-op to drop an unclipped grip on its own last cell', async () => {
+    openCalendar([ev({
+      uid: 'wk', id: 'wk', summary: 'Workshop', all_day: true,
+      start: '2026-04-09', start_is_date: true,
+      end: '2026-04-12', end_is_date: true,          // exclusive: last day is 04-11
+    })])
+    await chipsFor('Workshop')
+
+    const cells = document.querySelectorAll('.cal-cell')
+    const lastCell = cells[41]                       // 2026-04-11
+    const grip = lastCell.querySelector('.ev-resize')
+    expect(grip).toBeTruthy()
+
+    const dataTransfer = { setData: vi.fn(), getData: vi.fn(), effectAllowed: '' }
+    fireEvent.dragStart(grip!, { dataTransfer })
+    fireEvent.drop(lastCell, { dataTransfer })
+    await act(async () => { await Promise.resolve() })
+
+    expect(m.patchEvent.mock.calls).toEqual([])
+  })
+
   // ── AUDIT (open): calendar.ts:70 — endFromDuration returns the string
   //    "NaN-NaN-NaNTNaN:NaN" instead of null when the duration overflows ────
-  it.fails('sends no fabricated end for a DURATION that overflows the calendar', async () => {
+  it('sends no fabricated end for a DURATION that overflows the calendar', async () => {
     // EVIDENCE. `endFromDuration` guards `isNaN` on the START but never on the
     // computed end, so a DURATION large enough to push `start + ms` outside the
     // ±8.64e15 ms Date range formats as "NaN-NaN-NaNTNaN:NaN" — a truthy string
@@ -276,11 +355,49 @@ describe('2026-08-19 — the calendar grid', () => {
     // derived". Asserted as falsy, not as `null`, so a repair that returns
     // undefined or '' is equally acceptable.
     expect(endFromDuration('2026-03-02T09:00:00', 'P100000000D')).toBeFalsy()
+
+    // The SECOND overflow, and a different guard: a day count too large for
+    // Number itself makes `ms` Infinity before any Date is built, so
+    // `endFromDuration`'s isNaN check on the result would still not be enough —
+    // `durationMs` has to refuse it. Widened here because the original drove one
+    // input through one guard and would have passed against half the repair.
+    expect(durationMs(`P${'9'.repeat(400)}D`)).toBeNull()
+    expect(endFromDuration('2026-03-02T09:00:00', `P${'9'.repeat(400)}D`)).toBeFalsy()
+  })
+
+  // Control (passes today except where noted, and must stay passing): the
+  // table the finding says neither helper ever had. Written as an ordinary
+  // test because that is what it is — the grammar below is already handled
+  // correctly, and the gap was that nothing said so, which let the overflow
+  // case above hide. A repair that tightens the parser to reject the overflow
+  // by rejecting more of the grammar breaks this.
+  it('parses every DURATION shape RFC 5545 allows, and refuses the rest', () => {
+    const H = 3600000
+    for (const [raw, ms] of [
+      ['P1W', 7 * 24 * H],
+      ['P1D', 24 * H],
+      ['P1DT2H30M', 26.5 * H],
+      ['PT1H30M', 1.5 * H],
+      ['PT0S', 0],                   // legal, and zero — NOT the same as null
+      ['-PT1H', -H],
+      ['+PT1H', H],
+    ] as Array<[string, number]>) {
+      expect(durationMs(raw)).toBe(ms)
+    }
+    for (const bad of ['P', 'PT', '', '   ', 'P1.5D', 'P1W2D', '1H', 'PT1H30', null, undefined]) {
+      expect(durationMs(bad as string | null | undefined)).toBeNull()
+    }
+
+    // …and the wrapper's contract on top of it.
+    expect(endFromDuration('2026-03-02T09:00:00', 'PT1H30M')).toBe('2026-03-02T10:30')
+    expect(endFromDuration('2026-03-02T09:00:00', 'PT0S')).toBe('2026-03-02T09:00')
+    expect(endFromDuration('2026-03-02T09:00:00', 'P')).toBeNull()
+    expect(endFromDuration('not-a-date', 'PT1H')).toBeNull()
   })
 
   // ── AUDIT (open): CalendarView.tsx:777 — ticking "all day" on a timed event
   //    that ends at midnight adds a day the grid never showed ───────────────
-  it.fails('keeps a midnight-ending event on its one day when it is made all-day', async () => {
+  it('keeps a midnight-ending event on its one day when it is made all-day', async () => {
     // EVIDENCE. `endIsExclusive`/`lastDayOf` treat a timed DTEND sitting exactly
     // on local midnight as exclusive everywhere the event is displayed
     // (bucketByDay, the chips, DayPopover) and everywhere it is dragged — the
@@ -306,6 +423,58 @@ describe('2026-08-19 — the calendar grid', () => {
     await waitFor(() => expect(m.patchEvent).toHaveBeenCalled())
     // DTEND is exclusive for an all-day event, so one day means start + 1.
     expect(patchBody()).toMatchObject({ start: '2026-03-02', end: '2026-03-03' })
+  })
+
+  // WIDENING for the same finding: a span that ends at midnight several days
+  // later. The single-day case above is satisfied by any repair that subtracts
+  // a day from a midnight end; this says the subtraction has to land on the
+  // right day rather than collapsing the span.
+  it('keeps a multi-day midnight-ending span on the days it covered', async () => {
+    const user = openCalendar([ev({ start: '2026-03-02T20:00:00', end: '2026-03-05T00:00:00' })])
+    await openEvent(user)
+    await user.click(screen.getByLabelText('all day'))
+
+    expect(screen.getByLabelText('End (last day)')).toHaveValue('2026-03-04')
+
+    await user.click(screen.getByText('Save'))
+    await waitFor(() => expect(m.patchEvent).toHaveBeenCalled())
+    expect(patchBody()).toMatchObject({ start: '2026-03-02', end: '2026-03-05' })
+  })
+
+  // Control (passes today, must keep passing). The obvious repair — subtract a
+  // day whenever `allDay` is ticked — satisfies both pins above and silently
+  // shortens EVERY ordinary timed event by a day. These two cases are the ones
+  // that catch it, together with `all-day end conversion` in
+  // CalendarView.test.tsx, which drives a genuinely all-day event whose `end`
+  // state is already the inclusive day.
+  it('still gives a non-midnight timed event its own single all-day day', async () => {
+    const user = openCalendar([ev({ start: '2026-03-02T09:00:00', end: '2026-03-02T17:00:00' })])
+    await openEvent(user)
+    await user.click(screen.getByLabelText('all day'))
+
+    expect(screen.getByLabelText('End (last day)')).toHaveValue('2026-03-02')
+
+    await user.click(screen.getByText('Save'))
+    await waitFor(() => expect(m.patchEvent).toHaveBeenCalled())
+    expect(patchBody()).toMatchObject({ start: '2026-03-02', end: '2026-03-03' })
+  })
+
+  // Control: ticking the box and changing your mind must give back what was
+  // there. A repair that rewrites `end` state on the way in cannot pass this.
+  it('gives a timed event its own times back when all-day is unticked', async () => {
+    const user = openCalendar([ev({ start: '2026-03-02T20:00:00', end: '2026-03-03T00:00:00' })])
+    await openEvent(user)
+    const box = screen.getByLabelText('all day')
+    await user.click(box)
+    await user.click(box)
+
+    expect(screen.getByLabelText('End')).toHaveValue('2026-03-03T00:00')
+
+    await user.click(screen.getByText('Save'))
+    await waitFor(() => expect(m.patchEvent).toHaveBeenCalled())
+    expect(patchBody()).toMatchObject({
+      start: '2026-03-02T20:00', end: '2026-03-03T00:00',
+    })
   })
 })
 
