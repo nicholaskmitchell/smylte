@@ -1128,8 +1128,12 @@ def _shift_until(until, delta: timedelta, master: Event):
 _DAY_SELECTING = ("BYMONTHDAY", "BYYEARDAY", "BYWEEKNO", "BYMONTH", "BYSETPOS")
 
 
-def _desynchronizing(rule: dict, day_delta: int) -> str | None:
-    """The BY* part a day-shift would leave naming the old day, if any."""
+def _desynchronizing(rule: dict, day_delta: int, new_weekday: int | None = None) -> str | None:
+    """The BY* part a day-shift would leave naming the old day, if any.
+
+    `new_weekday` is the weekday (Mon=0) DTSTART has AFTER the shift — the
+    caller has already applied it — and is needed only for the BYDAY case below.
+    None means "unknown", which keeps the old conservative answer."""
     if not day_delta:
         return None                         # a time-only drag moves nothing else
     for key in _DAY_SELECTING:
@@ -1139,7 +1143,22 @@ def _desynchronizing(rule: dict, day_delta: int) -> str | None:
     if byday and not all(c in _WEEKDAYS for c in byday):
         return "BYDAY"                      # ordinal, e.g. 1TU — not a rotation
     if byday and "WEEKLY" not in [str(f).upper() for f in rule.get("FREQ", [])]:
-        return "BYDAY"                      # only the WEEKLY rotation is handled
+        # Under a FREQ shorter than WEEKLY, BYDAY is a FILTER over the days the
+        # rule already generates, not a selector that pins it to one weekday —
+        # so a shift that lands INSIDE the set desynchronizes nothing. Refusing
+        # on the shape blocked `FREQ=DAILY;BYDAY=MO,TU,WE,TH,FR`, which is what
+        # Google Calendar writes for "Every weekday": one of the commonest
+        # series any account holds, and it answered 422 where it had previously
+        # worked. The finding-16 fix traded a silent corruption for a refusal,
+        # and this was that refusal landing on a legitimate series.
+        #
+        # Decided on the PROPERTY instead: does the moved start still fall on a
+        # day the rule names? `new_weekday` is None when the caller could not
+        # determine it, and then the shape test stands — failing closed, as
+        # before.
+        if new_weekday is None:
+            return "BYDAY"
+        return None if _WEEKDAYS[new_weekday] in byday else "BYDAY"
     return None
 
 
@@ -1171,7 +1190,13 @@ def _shift_rrule(master: Event, delta: timedelta, day_delta: int) -> None:
     rule = _rrule_dict(master)
     if rule is None:
         return
-    blocker = _desynchronizing(rule, day_delta)
+    # DTSTART has ALREADY been shifted by the caller when this runs, so this is
+    # the weekday the series would end up on — which is exactly what the BYDAY
+    # property test below needs.
+    dtstart = master.get("DTSTART")
+    start_value = getattr(dtstart, "dt", None)
+    new_weekday = start_value.weekday() if start_value is not None else None
+    blocker = _desynchronizing(rule, day_delta, new_weekday)
     if blocker is not None:
         raise ValueError(
             f"cannot move a series whose repeat rule pins it to a particular day "

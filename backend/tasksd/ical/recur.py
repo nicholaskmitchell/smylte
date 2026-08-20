@@ -30,7 +30,7 @@ import recurring_ical_events
 from icalendar import Calendar
 
 from .rrule_budget import SearchBudgetExceeded, search_budget
-from .read import _iso, _text, advance, split_duration
+from .read import _iso, _text, advance, split_duration, wire_durations
 
 log = logging.getLogger("tasksd.recur")
 
@@ -136,7 +136,7 @@ def _thisandfuture_shifts(cal: Calendar) -> dict[str, timedelta]:
     return out
 
 
-def _exact_durations(cal: Calendar) -> dict[str | None, timedelta]:
+def _exact_durations(cal: Calendar, wire: dict[str | None, str]) -> dict[str | None, timedelta]:
     """ISO RECURRENCE-ID (None for the master) -> the EXACT length it authored.
 
     Only components that authored a time-based `DURATION` appear. RFC 5545 §3.3.6
@@ -168,13 +168,19 @@ def _exact_durations(cal: Calendar) -> dict[str | None, timedelta]:
         dur = comp.get("DURATION")
         if dur is None or comp.get("DTEND") is not None:
             continue
-        parts = split_duration(dur.to_ical())
+        rid = comp.get("RECURRENCE-ID")
+        # The WIRE text, not `to_ical()`. icalendar parses a DURATION into a
+        # normalized `timedelta`, so `PT24H` comes back out as `P1D` — and this
+        # function's entire job is to tell those two apart. Reading the
+        # re-serialization here classified every exact duration of a day or more
+        # as nominal and left the instance unrepaired.
+        key = str(rid.to_ical().decode()) if rid is not None else None
+        parts = split_duration(wire.get(key) or dur.to_ical())
         if parts is None:
             continue
         nominal, exact = parts
         if nominal or not exact:
             continue                      # nominal in whole or in part: wall clock
-        rid = comp.get("RECURRENCE-ID")
         out[_iso(rid)[0] if rid is not None else None] = exact
     return out
 
@@ -491,7 +497,7 @@ def expand_occurrences(
         raise ValueError(f"refusing to expand recurrence: {why}")
     override_anchors = _override_anchors(cal)
     tf_shifts = _thisandfuture_shifts(cal)
-    exact_durations = _exact_durations(cal)
+    exact_durations = _exact_durations(cal, wire_durations(raw_ics))
     query = recurring_ical_events.of(cal, components=["VEVENT"])
     try:
         with search_budget(_MAX_SEARCH_STEPS):
