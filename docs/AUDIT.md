@@ -34,8 +34,8 @@ The 2026-08-19 references were written against this commit and have not drifted 
 Ticked findings keep their original references, which point into the tree as it
 was when they were filed. They are history, not navigation.
 
-**28 open** from the 2026-08-19 sweep, plus **10** filed by the Stage 3
-adversarial review (below), immediately below; every older
+**28 open** from the 2026-08-19 sweep, plus **7** still open of the 10 filed by
+the Stage 3 adversarial review and **1** from its follow-up (both below), immediately below; every older
 finding is closed. The 2026-08-07 backlog is closed, and so are both findings the
 remediation filed against itself (the missing CSP — issue #57 — and the unbounded
 `_count_consumed` walk, below). The
@@ -75,7 +75,7 @@ Three of the 69 are the same defect seen at a different layer, so they are filed
 once and the backlog counts **66**. Every one of the ten HIGHs was reproduced by
 hand with a runnable probe against a live Radicale 3.7.4 before being written down.
 
-**38 open, 38 closed** — the seven crash paths went first, as **Stage 1**
+**36 open, 44 closed** — the seven crash paths went first, as **Stage 1**
 (`docs/STAGES.md`), and **Stage 2** is closing on top of them; their pins are
 ordinary regression tests now and must stay green. The rest are still pinned by a test that asserts the corrected behaviour
 and fails today — see `docs/STAGES.md` for the stage plan and the
@@ -2607,6 +2607,77 @@ fastapi/routing.py:466-472 is the interceptor:
 
 **Pinned by** `test_a_chunked_oversized_body_is_a_413_through_the_real_app` in `backend/tests/test_backlog_aug19_stage1.py`.
 
+## Filed during the Stage 3 review's own follow-up — 2026-08-20
+
+A design review of the three fixes above, run before they were committed, found
+four more. Three were defects in those fixes and are closed with them; the fourth
+is a pre-existing bug of the same family and is open.
+
+#### [x] The exact-duration repair truncated an RDATE;VALUE=PERIOD block to the master's DURATION
+
+`backend/tasksd/ical/recur.py:251` · **high** · bug
+
+`_repair_span`'s first exact-duration version read the governing length as "the
+authored override's if one claims this instant, else the master's". An
+`RDATE;VALUE=PERIOD` slot is neither — the library takes its length from the
+period — so a four-hour block came back as thirty minutes, on an ordinary
+January day with no transition near it, releasing three and a half hours of a
+real commitment to the public booking page. The same failure the narrowing of
+this function exists to prevent, through a door nobody enumerated.
+
+**Fixed** by triggering on the artifact's SIGNATURE rather than on a list of
+families: the emitted pair must state the authored length in WALL CLOCK and
+deliver something else in real time. Anything else came from elsewhere and is
+left alone, which fails closed. Pinned by
+`test_an_rdate_period_keeps_its_own_length_not_the_masters`.
+
+#### [x] A DATE-valued EXDATE did not block a re-homed range override, resurrecting a deleted occurrence
+
+`backend/tasksd/ical/edit.py:781` · **medium** · bug
+
+A DATE-valued EXDATE on a timed series removes the whole day —
+`recurring_ical_events` keeps a separate date-keyed exclusion set — and
+`_same_instant` answers False outright for a date/datetime pair. So the
+skip-excluded-slots check compared instants only, the override was re-homed onto
+the excluded day, and the deleted occurrence came back. `VALUE=DATE` is what a
+client writes when the user deletes a whole day.
+
+**Fixed** in `_excluded`, mirroring the library's second exclusion set. Pinned by
+`test_a_date_valued_exdate_still_blocks_a_re_homed_override`.
+
+#### [x] The unprobeable-rule refusal locked every occurrence of an RDATE-only series
+
+`backend/tasksd/ical/edit.py:747` · **medium** · bug
+
+The `_UNKNOWN` sentinel that stopped an unprobeable rule from DELETING a range
+override answered `_UNKNOWN` for any resource with no RRULE — turning "delete the
+override" into "refuse forever" for an RDATE-only series, which is a real series
+the library expands normally. A fix for a data-loss bug closed a door the loss
+did not.
+
+**Fixed** by answering from the RDATE list when there is no rule, and reserving
+"genuinely nothing later" for a resource that generates nothing at all. Pinned by
+`test_an_rdate_only_series_can_still_have_one_occurrence_edited`.
+
+#### [ ] apply_occurrence_override seeds a covered-but-not-anchoring slot from the master, losing the range override's time and location
+
+`backend/tasksd/ical/edit.py:806` · **medium** · bug
+
+Editing "this event" on a slot a `RANGE=THISANDFUTURE` override COVERS but does
+not ANCHOR builds the new single-slot override from the master
+(`_new_override(master, anchor)`) rather than from the governing override. The
+instance snaps back to the master's hour and loses the LOCATION the range
+override supplied — the same loss `_detach_thisandfuture` carries DTSTART/DTEND
+across to avoid, one branch over. `_governing_thisandfuture` already exists and
+is not consulted here.
+
+`test_recur.py::test_editing_a_thisandfuture_instance_edits_that_one` asserts
+only `.summary`, which is why this has been invisible.
+
+**Suggested fix.** Seed from `_governing_thisandfuture(cal, anchor)` when one
+covers the slot, carrying its DTSTART/DTEND across as `_detach_thisandfuture`
+does. Widen that test to assert `.start` and `.location`.
+
 ## Filed during the Stage 3 adversarial review — 2026-08-20
 
 Three reviewers were run over the Stage 3 diff (`5c0abb1..648e6a3`) with
@@ -2621,18 +2692,25 @@ tail on a lost response, and `_recover_orphaned_booking` disclosing across links
 Two pins (27, 34) were widened in the same commit after being shown to pass
 against a half-fix.
 
-The ten below are **open**. They are filed rather than fixed because each is its
+**Three of the ten are now closed** — the three that were consequences of Stage 3
+itself, rather than bugs the sweep would have found anyway. Each was pinned
+before it was fixed, and each pin was then run against a plausible half-fix to
+confirm it catches one. That last step earned its keep: pin A passed against a
+fix that skipped claimed slots but not EXDATE'd ones, so it was widened before
+the marker came off.
+
+The seven below are **open**. They are filed rather than fixed because each is its
 own change with its own risk, and the lesson of that same review is that a fix
 written in a hurry to close a review comment is how three of the four regressions
 above got in. Nothing here is pinned yet.
 
 One theme is worth stating up front, because it is about the harness rather than
 the code: **every backend pin in Stage 3 was widened with controls, and not one
-frontend pin was.** Five of the ten below are frontend, and four of those are
-"the pin drives one of the N cases its own evidence names". The next stage should
-treat a frontend pin as needing the same parametrisation a backend one gets.
+frontend pin was.** Five of the ten were frontend, and four of those are "the pin
+drives one of the N cases its own evidence names". The next stage should treat a
+frontend pin as needing the same parametrisation a backend one gets.
 
-#### [ ] _detach_thisandfuture destroys a neighbouring override and re-creates the duplicate RECURRENCE-ID it was written to avoid
+#### [x] _detach_thisandfuture destroys a neighbouring override and re-creates the duplicate RECURRENCE-ID it was written to avoid
 
 `backend/tasksd/ical/edit.py:774` · **high** · bug
 
@@ -2651,7 +2729,7 @@ and re-home onto the first free generated slot after the anchor; if there is
 none, drop the range override as the last-occurrence branch already does. Pin the
 neighbouring-override case and assert RECURRENCE-ID values stay unique.
 
-#### [ ] _next_generated silently drops a range override when the rule is unprobeable
+#### [x] _next_generated silently drops a range override when the rule is unprobeable
 
 `backend/tasksd/ical/edit.py:774` · **medium** · bug
 
@@ -2794,7 +2872,7 @@ with a sequence, which is a DeprecationWarning today and an
 **Suggested fix.** The screen answers "what can this connection still do", which
 is the UNION of live tokens' scopes. Fix the parameter binding at the same time.
 
-#### [ ] A fall-back instance blocks three times the time it occupies
+#### [x] A fall-back instance blocks three times the time it occupies
 
 `backend/tasksd/ical/recur.py:251` · **low** · bug
 
