@@ -163,6 +163,17 @@ def _title_key(s: str) -> tuple:
     return (s.casefold(), tuple(0 if c.islower() else 1 for c in s))
 
 
+def _task_key(t: dict) -> tuple:
+    """A task's identity ACROSS lists — `taskKey` in order.ts.
+
+    `list_tasks` merges every list's rows, and the backend keys items on
+    `(collection_href, uid)`, so the same uid genuinely appears twice when a
+    VTODO has been copied between lists in another CalDAV client. Keyed on the
+    bare uid, the unplaced-task loop below overwrites the placed twin's entry.
+    """
+    return (t.get("list") or "", t.get("uid") or "")
+
+
 def _in_display_order(tasks: list[dict]) -> list[dict]:
     """`tasks` in the order the app shows them, as a new list.
 
@@ -197,15 +208,15 @@ def _in_display_order(tasks: list[dict]) -> list[dict]:
     if not placed:
         return sorted(tasks, key=_intrinsic_order)
 
-    at: dict[str, float] = {t["uid"]: float(i) for i, t in enumerate(placed)}
+    at: dict[tuple, float] = {_task_key(t): float(i) for i, t in enumerate(placed)}
     keys = [_intrinsic_order(t) for t in placed]
     for t in tasks:
         if t.get("sort_order") is not None:
             continue
         mine = _intrinsic_order(t)
         nxt = next((i for i, k in enumerate(keys) if mine < k), -1)
-        at[t["uid"]] = float(len(placed)) if nxt < 0 else nxt - 0.5
-    return sorted(tasks, key=lambda t: (at[t["uid"]], _intrinsic_order(t)))
+        at[_task_key(t)] = float(len(placed)) if nxt < 0 else nxt - 0.5
+    return sorted(tasks, key=lambda t: (at[_task_key(t)], _intrinsic_order(t)))
 
 
 @contextmanager

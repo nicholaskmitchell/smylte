@@ -115,6 +115,24 @@ export function compareTasks(a: Task, b: Task): number {
  * come after it. Ordering by that single number, tie-broken by the intrinsic
  * keys, is a genuine total order again.
  */
+/**
+ * A task's identity ACROSS lists.
+ *
+ * The backend keys items on `(collection_href, uid)`, and `sortTasks` is handed
+ * the merged multi-list set — so the same uid genuinely can appear twice.
+ * Copying a VTODO between lists in Tasks.org, DAVx5 or Thunderbird preserves the
+ * uid, and the trust model treats those clients as equal-rights writers.
+ *
+ * Keyed on the bare uid, the unplaced-task loop below overwrote the placed
+ * twin's entry, so the row the user had dragged into position jumped somewhere
+ * else on every render — and `data.reorder` builds the POST payload from
+ * `sortTasks(tasks)`, so the next drag persisted the scrambled sequence for the
+ * whole account.
+ */
+export function taskKey(t: Task): string {
+  return `${t.list}\u0000${t.uid}`
+}
+
 export function sortTasks(tasks: Task[]): Task[] {
   const placed = tasks
     .filter((t) => t.sort_order != null)
@@ -125,15 +143,15 @@ export function sortTasks(tasks: Task[]): Task[] {
   if (!placed.length) return [...tasks].sort(compareIntrinsic)
 
   const at = new Map<string, number>()
-  placed.forEach((t, i) => at.set(t.uid, i))
+  placed.forEach((t, i) => at.set(taskKey(t), i))
   for (const t of tasks) {
     if (t.sort_order != null) continue
     const next = placed.findIndex((p) => compareIntrinsic(t, p) < 0)
     // Half a step before its first later neighbour — or the end, when it is
     // later than everything, which is where it used to land unconditionally.
-    at.set(t.uid, next < 0 ? placed.length : next - 0.5)
+    at.set(taskKey(t), next < 0 ? placed.length : next - 0.5)
   }
 
   return [...tasks].sort(
-    (a, b) => (at.get(a.uid)! - at.get(b.uid)!) || compareIntrinsic(a, b))
+    (a, b) => (at.get(taskKey(a))! - at.get(taskKey(b))!) || compareIntrinsic(a, b))
 }

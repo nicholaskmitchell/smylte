@@ -12,11 +12,10 @@ of how the harness behaved in practice — its "Two strengths of pin" and
 
 `docs/AUDIT.md` is the evidence. This is the plan for closing it.
 
-**33 open, 33 closed.** Stages 1 and 2 are done and Stage 3 is all but done —
-only its five frontend findings remain; stages 4-5 are untouched. Of the 33 still
-open, 32 are pinned by a test that asserts the corrected behaviour and fails
-today — 28 as `xfail(strict=True)` / `it.fails`, and 4 as ordinary passing tests
-(see "Test gaps that were only gaps" below). One is deliberately **not** pinned; see
+**28 open, 38 closed.** Stages 1, 2 and 3 are done; stages 4-5 remain. Of the 28
+still open, 27 are pinned by a test that asserts the corrected behaviour and
+fails today — 23 as `xfail(strict=True)` / `it.fails`, and 4 as ordinary passing
+tests (see "Test gaps that were only gaps" below). One is deliberately **not** pinned; see
 "The one that is not pinned" below. The harness
 described under *Stage 0* further down still applies unchanged; these pins live in
 their own files so the closed 2026-08-16 stages stay closed:
@@ -183,6 +182,15 @@ authorization CODES have to be excluded too, because eviction has no idleness
 requirement — that is the point of it — so a registration burst timed against a
 consent screen would otherwise break the flow the owner was in the middle of.
 
+**Finding 14's first fix introduced a worse bug than the one it closed.** Gating
+the settings writes on "the read succeeded" also blocks a gesture racing the
+initial load — a millisecond window turned into a silently dropped preference and
+a confusing toast, and four existing App tests said so immediately. The gate has
+to be on "the read FAILED", which is what the finding is actually about. And the
+flag has to be a ref: half the `change*` callbacks are `useCallback(..., [])`, so
+they capture the first `saveSettings` for the life of the app and a value read
+out of that closure is the one from before the read ever finished.
+
 And one thing about the harness, following Stage 1's "a pin is only as good as
 the inputs it drives": pin 11 was **widened before the fix landed**, with a third
 override at a near anchor placed after the two far-future ones. With the
@@ -207,11 +215,15 @@ The last row was filed during remediation, not by the sweep; it is under
 `## Filed during remediation — 2026-08-20` in `docs/AUDIT.md` and is not counted
 in that sweep's 66.
 
-## Stage 3 — Silent data corruption 🟨 IN PROGRESS
+## Stage 3 — Silent data corruption ✅ DONE
 
-24 findings · 6 high, 12 medium, 6 low · **19 closed, 5 open**
+24 findings · closed · `backend/tests/test_backlog_aug19_stage3_core.py`, `..._stage3_ical.py`, `frontend/src/backlog.aug19.stage3.test.tsx`
 
-Nothing raises and the answer is silently wrong. The dangerous class, and the largest — it needs the most care per fix because the failure leaves no trace and several of these corrupt data another CalDAV client authored.
+Nothing raises and the answer is silently wrong. The dangerous class, and the largest — it needed the most care per fix because the failure leaves no trace and several of these corrupt data another CalDAV client authored.
+
+All 24 are fixed and ticked in `docs/AUDIT.md`; the xfail / `it.fails` markers are
+gone and those tests are ordinary regression tests that must stay green. Finding
+64 (Stage 5) went with them.
 
 Three are done — 18, 26 and 29, which are one defect at three sites: a duration
 or a comparison evaluated on WALL CLOCK where it needed the instant. Two things
@@ -222,6 +234,15 @@ filed as a test gap — "nothing drives `busy_intervals` across a DST transition
 all" — and writing the missing case is what found 18 and 29 in the first place.
 Its pin asserts exactly those two behaviours, so fixing them closed it, with no
 change of its own. The stage boundaries are a sorting aid, not a partition.
+
+**Finding 22 was in the Python port of order.ts as well as in order.ts.** The
+map that gives each task one effective position was keyed on the bare uid, and
+the backend keys items on `(collection_href, uid)` — so a VTODO copied between
+lists in another client is two tasks with one key, and the unplaced twin
+overwrote the placed one's position. `mcp/api` had inherited it from the same
+source an hour earlier. Both now key on `(list, uid)`, and the cross-check corpus
+was regenerated with duplicate uids in 40% of its cases: with the old keying it
+drops to 300/402, so the corpus discriminates rather than merely agreeing.
 
 **Finding 17's fix was cross-checked by running the other implementation.**
 `mcp/api._display_order` claimed to mirror `frontend/src/order.ts` "key for key",
@@ -267,16 +288,16 @@ before the real fix landed.
 
 | # | Finding | Where | Sev | Pin |
 |---|---|---|---|---|
-| 14 | A failed GET /api/settings is swallowed silently, and the next preference gesture overwrites the account's s… | `frontend/src/App.tsx:203` | high | `does not write a defaults-derived preference back over the account` |
+| 14 ✅ | A failed GET /api/settings is swallowed silently, and the next preference gesture overwrites the account's s… | `frontend/src/App.tsx:203` | high | `does not write a defaults-derived preference back over the account` |
 | 15 ✅ | "This event" on the first slot of a RANGE=THISANDFUTURE override rewrites every later occurrence | `backend/tasksd/ical/edit.py:642` | high | `test_editing_the_slot_a_this_and_future_override_anchors_leaves_later_ones_alone` |
 | 16 ✅ | Dragging a foreign MONTHLY/YEARLY series deletes the dragged occurrence and moves nothing else | `backend/tasksd/ical/edit.py:829` | high | `test_dragging_a_monthly_series_moves_it_instead_of_desynchronizing_the_rule` |
 | 17 ✅ | smylte_list_tasks implements the comparator order.ts documents as wrong, so after one drag every newly-creat… | `backend/tasksd/mcp/api.py:133` | high | `test_a_task_created_after_a_drag_is_not_sunk_below_the_whole_account` |
 | 18 ✅ | busy_intervals drops any event crossing the DST fall-back transition, so an anonymous POST double-books the … | `backend/tasksd/scheduling.py:148` | high | `test_a_meeting_across_the_fall_back_transition_still_blocks_its_slot` |
 | 19 ✅ | split_event's 412 recovery always fails with a 409 and strands a duplicate recurring series on the server | `backend/tasksd/sync/engine.py:435` | high | `test_a_contended_this_and_following_split_leaves_no_duplicate_series` |
 | 20 ✅ | get_events_in_range gates on the master's DTSTART, so a RECURRENCE-ID override moved earlier than the series… | `backend/tasksd/db/store.py:661` | medium | `test_an_occurrence_moved_before_its_series_start_is_still_in_the_window` |
-| 21 | Logout does not clear the in-memory data mirror, so the calendar keeps painting the previous session's event… | `frontend/src/data.tsx:505` | medium | `does not paint the previous session’s events to the next one` |
-| 22 | sortTasks keys its effective-position map by bare uid, so one task copied into a second list silently rewrit… | `frontend/src/order.ts:128` | medium | `keeps a dragged row where it was dropped when a copy shares its uid` |
-| 23 | Folding one subtask tree silently deletes the folded state of every tree that is not currently rendered — an… | `frontend/src/components/TasksView.tsx:297` | medium | `keeps a hidden list’s folded trees when another tree is folded` |
+| 21 ✅ | Logout does not clear the in-memory data mirror, so the calendar keeps painting the previous session's event… | `frontend/src/data.tsx:505` | medium | `does not paint the previous session’s events to the next one` |
+| 22 ✅ | sortTasks keys its effective-position map by bare uid, so one task copied into a second list silently rewrit… | `frontend/src/order.ts:128` | medium | `keeps a dragged row where it was dropped when a copy shares its uid` |
+| 23 ✅ | Folding one subtask tree silently deletes the folded state of every tree that is not currently rendered — an… | `frontend/src/components/TasksView.tsx:297` | medium | `keeps a hidden list’s folded trees when another tree is folded` |
 | 24 ✅ | A zone-offset datetime accepted by _parse_datelike is written as TZID="UTC±HH:MM" and read back as floating … | `backend/tasksd/app.py:531` | medium | `test_an_event_created_with_a_zone_offset_keeps_the_instant_it_names` |
 | 25 ✅ | split_series never checks that the anchor is an occurrence, so "this and following" duplicates a non-recurri… | `backend/tasksd/ical/edit.py:1084` | medium | `test_this_and_following_on_a_non_repeating_event_does_not_duplicate_it` |
 | 26 ✅ | Recurrence expansion emits occurrences whose end precedes their start on the DST spring-forward (and 3x-long… | `backend/tasksd/ical/recur.py:234` | medium | `test_every_expanded_occurrence_across_spring_forward_blocks_real_time` |
@@ -286,7 +307,7 @@ before the real fix landed.
 | 30 ✅ | The booking ledger row is written after the CalDAV PUT, so a failure in between makes the visitor's own retr… | `backend/tasksd/service.py:919` | medium | `test_a_booking_retried_after_a_failed_write_is_not_a_conflict_with_itself` |
 | 31 ✅ | resolve_list ignores the collection's component set, so a task can be written into a VEVENT-only calendar (a… | `backend/tasksd/service.py:210` | medium | `test_a_task_cannot_be_written_into_an_event_only_calendar` |
 | 32 ✅ | list_oauth_grants reads `scope` as a bare column in a multi-aggregate GROUP BY, so the connections screen ca… | `backend/tasksd/db/store.py:983` | low | `test_a_grants_scope_does_not_depend_on_row_order` |
-| 33 | A bulk row corrected in any field except its title replays the old client_id, so the correction is silently … | `frontend/src/components/AddMultipleModal.tsx:298` | low | `does not close reporting success on a correction the server drops` |
+| 33 ✅ | A bulk row corrected in any field except its title replays the old client_id, so the correction is silently … | `frontend/src/components/AddMultipleModal.tsx:298` | low | `does not close reporting success on a correction the server drops` |
 | 34 ✅ | POST /api/tasks/reorder writes permanent, unreclaimable sidecar rows for uids that do not exist | `backend/tasksd/app.py:1042` | low | `test_a_reorder_naming_an_unknown_uid_writes_no_sidecar_row` |
 | 35 ✅ | Disconnecting a connector is not idempotent: a retry after a lost response 404s and the SPA puts the revoked… | `backend/tasksd/mcp/routes.py:410` | low | `test_disconnecting_a_connection_twice_is_not_an_error` |
 | 36 ✅ | A JSON-RPC request (with an id) whose method starts with `notifications/` gets no reply at all, so the clien… | `backend/tasksd/mcp/server.py:114` | low | `test_a_notification_method_sent_with_an_id_gets_a_reply` |

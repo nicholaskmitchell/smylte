@@ -1,12 +1,11 @@
 /**
  * The 2026-08-19 sweep, stage 3: silent data loss in the SPA.
  *
- * **These five findings are OPEN.** Every test below asserts the behaviour the
- * app SHOULD have and fails against the code as it stands, so each is marked
- * `it.fails` — the file passes while the finding is open and the moment one is
- * fixed its pin XPASSes, the file goes red, and somebody has to tick the finding
- * off and drop the marker. Same contract as `backlog.stage4.test.tsx`, whose
- * api-mocking preamble this copies.
+ * **All five are CLOSED.** Each of these was an `it.fails` pin asserting the
+ * behaviour the app should have while failing against the code as it stood; the
+ * markers are gone and these are ordinary regression tests now, which must stay
+ * green. Same contract as `backlog.stage4.test.tsx`, whose api-mocking preamble
+ * this copies.
  *
  * The theme is one class of defect: state that overwrites or discards the
  * user's real data without saying so. Nothing here throws, nothing is logged
@@ -22,7 +21,11 @@
  * and asserts the result a user or the API would see. None reads source text.
  * Where a finding could correctly be repaired in more than one shape, the
  * assertion names the outcome rather than the repair — STAGES.md records what
- * pins that only accept the fix you imagined cost the last time.
+ * pins that only accept the fix you imagined cost the last time. That mattered
+ * here: the bulk-composer finding allowed three repairs and the one taken (a
+ * replayed create is reconciled against the body it was given, and the
+ * difference sent as the PATCH it should have been) is not the one the
+ * suggested fix leads with.
  */
 import { useState } from 'react'
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
@@ -98,7 +101,7 @@ describe('aug19 stage 3 — a failed settings read', () => {
   // -- AUDIT: App.tsx:203 — a failed GET /api/settings is swallowed silently,
   //    and the next preference gesture overwrites the account's stored settings
   //    with the shipped defaults --
-  it.fails('does not write a defaults-derived preference back over the account', async () => {
+  it('does not write a defaults-derived preference back over the account', async () => {
     /**
      * EVIDENCE. The settings bootstrap ends in
      * `.catch(() => { /* keep the locally-cached theme + appearance *\/ })`.
@@ -158,7 +161,7 @@ describe('aug19 stage 3 — sortTasks with a uid in two lists', () => {
   // -- AUDIT: order.ts:128 — sortTasks keys its effective-position map by bare
   //    uid, so one task copied into a second list silently rewrites another
   //    task's manual drag position --
-  it.fails('keeps a dragged row where it was dropped when a copy shares its uid', () => {
+  it('keeps a dragged row where it was dropped when a copy shares its uid', () => {
     /**
      * EVIDENCE. `sortTasks` gives every task ONE effective position in a
      * `Map<string, number>` keyed by `t.uid`. The array it is handed is the
@@ -228,7 +231,7 @@ describe('aug19 stage 3 — folding a tree while another list is hidden', () => 
   // -- AUDIT: TasksView.tsx:297 — folding one subtask tree silently deletes the
   //    folded state of every tree that is not currently rendered, and the loss
   //    is written to the server --
-  it.fails('keeps a hidden list’s folded trees when another tree is folded', async () => {
+  it('keeps a hidden list’s folded trees when another tree is folded', async () => {
     /**
      * EVIDENCE. `setCollapsed` prunes the account-synced `collapsed_tasks` set
      * against `kidRows`, which the comment above it calls "uids that still name
@@ -288,7 +291,7 @@ describe('aug19 stage 3 — correcting a bulk row before a retry', () => {
   // -- AUDIT: AddMultipleModal.tsx:298 — a bulk row corrected in any field
   //    except its title replays the old client_id, so the correction is
   //    silently discarded and the modal reports success --
-  it.fails('does not close reporting success on a correction the server drops', async () => {
+  it('does not close reporting success on a correction the server drops', async () => {
     /**
      * EVIDENCE. `patchRow` mints a fresh idempotency id only when `summary`
      * changes. Every other property a row carries — due date/time, start,
@@ -436,7 +439,7 @@ describe('aug19 stage 3 — logging out and back in', () => {
   // -- AUDIT: data.tsx:505 — logout does not clear the in-memory data mirror,
   //    so the calendar keeps painting the previous session's events and never
   //    refetches them --
-  it.fails('does not paint the previous session’s events to the next one', async () => {
+  it('does not paint the previous session’s events to the next one', async () => {
     /**
      * EVIDENCE. `onLogout` deliberately calls `clearCache()` + `setCacheUser('')`
      * so the disk mirror cannot outlive a session — cache.ts is user-keyed and

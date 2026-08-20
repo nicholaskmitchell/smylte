@@ -34,7 +34,7 @@ The 2026-08-19 references were written against this commit and have not drifted 
 Ticked findings keep their original references, which point into the tree as it
 was when they were filed. They are history, not navigation.
 
-**33 open**, all from the 2026-08-19 sweep immediately below; every older
+**28 open**, all from the 2026-08-19 sweep immediately below; every older
 finding is closed. The 2026-08-07 backlog is closed, and so are both findings the
 remediation filed against itself (the missing CSP — issue #57 — and the unbounded
 `_count_consumed` walk, below). The
@@ -74,7 +74,7 @@ Three of the 69 are the same defect seen at a different layer, so they are filed
 once and the backlog counts **66**. Every one of the ten HIGHs was reproduced by
 hand with a runnable probe against a live Radicale 3.7.4 before being written down.
 
-**33 open, 33 closed** — the seven crash paths went first, as **Stage 1**
+**28 open, 38 closed** — the seven crash paths went first, as **Stage 1**
 (`docs/STAGES.md`), and **Stage 2** is closing on top of them; their pins are
 ordinary regression tests now and must stay green. The rest are still pinned by a test that asserts the corrected behaviour
 and fails today — see `docs/STAGES.md` for the stage plan and the
@@ -196,7 +196,7 @@ The same request rejected with a 422 if the character is put in the list NAME in
 
 ### Frontend core
 
-#### [ ] A failed GET /api/settings is swallowed silently, and the next preference gesture overwrites the account's stored settings with the shipped defaults
+#### [x] A failed GET /api/settings is swallowed silently, and the next preference gesture overwrites the account's stored settings with the shipped defaults
 
 `frontend/src/App.tsx:203` · **high** · bug · stage 3
 
@@ -231,7 +231,7 @@ Concrete loss: the owner has 5 archived calendars and 3 sidebar groups. /api/set
 
 **Pinned by** `aug19 stage 3 — a failed settings read > does not write a defaults-derived preference back over the account` in `frontend/src/backlog.aug19.stage3.test.tsx`.
 
-#### [ ] Logout does not clear the in-memory data mirror, so the calendar keeps painting the previous session's events and never refetches them
+#### [x] Logout does not clear the in-memory data mirror, so the calendar keeps painting the previous session's events and never refetches them
 
 `frontend/src/data.tsx:505` · **medium** · security · stage 3
 
@@ -2076,7 +2076,7 @@ Failure scenario: the user adds all eight modules and stretches them to full wid
 
 ### Tasks view
 
-#### [ ] sortTasks keys its effective-position map by bare uid, so one task copied into a second list silently rewrites another task's manual drag position
+#### [x] sortTasks keys its effective-position map by bare uid, so one task copied into a second list silently rewrites another task's manual drag position
 
 `frontend/src/order.ts:128` · **medium** · bug · `minor` · stage 3
 
@@ -2114,7 +2114,7 @@ Alpha was dragged to the top of the list; because a Home copy carrying the same 
 
 **Pinned by** `aug19 stage 3 — sortTasks with a uid in two lists > keeps a dragged row where it was dropped when a copy shares its uid` in `frontend/src/backlog.aug19.stage3.test.tsx`.
 
-#### [ ] Folding one subtask tree silently deletes the folded state of every tree that is not currently rendered — and the loss is written to the server
+#### [x] Folding one subtask tree silently deletes the folded state of every tree that is not currently rendered — and the loss is written to the server
 
 `frontend/src/components/TasksView.tsx:297` · **medium** · bug · `minor` · stage 3
 
@@ -2146,7 +2146,7 @@ User-visible: hide the Home list, fold a couple of Work trees, unhide Home — e
 
 **Pinned by** `aug19 stage 3 — folding a tree while another list is hidden > keeps a hidden list’s folded trees when another tree is folded` in `frontend/src/backlog.aug19.stage3.test.tsx`.
 
-#### [ ] A bulk row corrected in any field except its title replays the old client_id, so the correction is silently discarded and the modal reports success
+#### [x] A bulk row corrected in any field except its title replays the old client_id, so the correction is silently discarded and the modal reports success
 
 `frontend/src/components/AddMultipleModal.tsx:298` · **low** · bug · stage 3
 

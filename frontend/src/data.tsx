@@ -24,7 +24,7 @@ import {
   type CalEvent, type CreateTaskBody, type List, type Task, type TaskGroup,
 } from './api'
 import { orderLists } from './lists'
-import { sortTasks } from './order'
+import { sortTasks, taskKey } from './order'
 import {
   cacheCalendars, cacheEvents, cacheLists, cacheTasks,
   readCachedCalendars, readCachedEvents, readCachedLists, readCachedTasks,
@@ -325,6 +325,52 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
   // Deliberately bypasses `guard`: a nine-row batch that fails would raise nine
   // toasts. Failures come back as indexes instead and the modal reports them in
   // place, against the rows that produced them.
+  // What the create ASKED for, against what came back.
+  //
+  // A create is idempotent on its client_id: the second POST under a slug is
+  // answered by confirming the resource already written under it, body ignored
+  // (`_put_new` swallows the 412 when the occupant carries the same UID, and
+  // `create_task` returns the stored resource). That is exactly right for the
+  // failure the composer's retry exists for — the write landed and the reply was
+  // lost — and it is why a kept row must NOT mint a fresh id: doing so would
+  // author a duplicate.
+  //
+  // But a row keeps its id across a retry while every field except its title can
+  // be edited in between, and the whole shared strip is re-read on each submit.
+  // So the user could correct the due date, press Add, and have the correction
+  // silently dropped: the server confirmed the old resource, `settleCreate`
+  // painted the old DTO, nothing was reported as failed, and the modal closed on
+  // a success it did not get.
+  //
+  // No server signal is needed to notice. If the resource that came back does
+  // not carry what this call asked for, this was a replay of an earlier body,
+  // and the difference is exactly the correction the user made — so send it as
+  // the PATCH it should have been. Only fields the caller explicitly SET are
+  // compared, so a server-side normalisation of something we left alone cannot
+  // provoke a write.
+  const reconcileReplay = async (
+    listId: string, body: CreateTaskBody, got: Task,
+  ): Promise<Task> => {
+    const patch: Record<string, unknown> = {}
+    if ('summary' in body && body.summary !== got.summary) patch.summary = body.summary
+    if ('due' in body && (body.due ?? null) !== (got.due ?? null)) patch.due = body.due ?? null
+    if ('start' in body && (body.start ?? null) !== (got.start ?? null)) {
+      patch.start = body.start ?? null
+    }
+    if ('notes' in body && (body.notes ?? null) !== (got.notes ?? null)) {
+      patch.notes = body.notes ?? null
+    }
+    if ('priority' in body && (body.priority ?? 'none') !== (got.priority ?? 'none')) {
+      patch.priority = body.priority
+    }
+    if ('tags' in body
+        && (body.tags ?? []).join('\u0000') !== (got.tags ?? []).join('\u0000')) {
+      patch.tags = body.tags
+    }
+    if (!Object.keys(patch).length) return got
+    return await api.patchTask(listId, got.uid, patch)
+  }
+
   const createMany = async (
     items: Array<{ listId: string; body: CreateTaskBody; cid: string }>,
     onProgress: (done: number) => void,
@@ -341,7 +387,8 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
     const failed: number[] = []
     for (let i = 0; i < items.length; i++) {
       try {
-        const t = await api.createTask(items[i].listId, { ...items[i].body, client_id: cids[i] })
+        let t = await api.createTask(items[i].listId, { ...items[i].body, client_id: cids[i] })
+        t = await reconcileReplay(items[i].listId, items[i].body, t)
         settleCreate(uids[i], key, t)
       } catch (e) {
         if (e instanceof AuthError) {
@@ -473,7 +520,10 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
     // `tasks` and restoring it wholesale also reverted anything that landed
     // while the reorder was in flight — an SSE update, a completed task, an edit
     // from another tab — silently undoing a write the user had just made.
-    const before = new Map(tasks.map((t) => [t.uid, t.sort_order ?? null]))
+    // Keyed by (list, uid), like sortTasks: a uid copied into a second list is
+    // two distinct tasks, and collapsing them onto one key restored the wrong
+    // one's position on a failed reorder.
+    const before = new Map(tasks.map((t) => [taskKey(t), t.sort_order ?? null]))
     setTasks(next)
     const ok = await guard(() =>
       api.reorderTasks(placed.map((t) => ({ list: t.list, uid: t.uid }))))
@@ -481,7 +531,7 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
     // than leaving the UI claiming a move that never landed.
     if (ok === undefined) {
       setTasks((cur) => cur.map((t) => (
-        before.has(t.uid) ? { ...t, sort_order: before.get(t.uid)! } : t)))
+        before.has(taskKey(t)) ? { ...t, sort_order: before.get(taskKey(t))! } : t)))
     }
   }
 
@@ -549,6 +599,7 @@ function CalendarProvider({ rev, guard, enabled, children }: {
   const gen = useRef(new Map<string, number>())
   const inflight = useRef(new Set<string>())
 
+
   const fetchWindow = useCallback((from: string, to: string, forCals: List[]) => {
     const key = windowKey(from, to)
     const mine = (gen.current.get(key) ?? 0) + 1
@@ -566,6 +617,33 @@ function CalendarProvider({ rev, guard, enabled, children }: {
   // calendar set and `rev` are part of the identity: archiving a calendar or a
   // server-side change has to refetch, a scroll does not.
   const asked = useRef(new Map<string, string>())
+
+  // Everything this provider holds, dropped when the session goes away.
+  //
+  // `onLogout` deliberately clears the DISK mirror (App.tsx calls `clearCache()`
+  // and `setCacheUser('')`, and cache.ts is user- and version-keyed for exactly
+  // that reason) — but `DataProvider` sits ABOVE the auth branch on purpose, so
+  // it never unmounts and nothing reset this state. On the next login
+  // `CalendarView` remounted, `eventsFor` hit `windows` and painted the previous
+  // session's rows, and `requestWindow` short-circuited because `asked` still
+  // held the same stamp, so the month was never refetched at all.
+  //
+  // In the multi-account reading of the trust model that serves one account's
+  // events to another; in the single-account one it means "log out at night, log
+  // back in in the morning" shows a frozen snapshot missing everything DAVx5 or
+  // Apple wrote overnight. `TaskProvider` already refetches — its effects list
+  // `enabled` as a dep — which made this an inconsistency rather than a design.
+  useEffect(() => {
+    if (enabled) return
+    setCals([])
+    setWindows(new Map())
+    setLoaded(false)
+    asked.current.clear()
+    gen.current.clear()
+    inflight.current.clear()
+    seeded.current = null
+    latest.current = ''
+  }, [enabled])
 
   const requestWindow = useCallback((from: string, to: string, forCals: List[]) => {
     const key = windowKey(from, to)
