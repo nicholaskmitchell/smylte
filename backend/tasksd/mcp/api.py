@@ -22,6 +22,7 @@ from contextlib import contextmanager
 from datetime import date, datetime, time as time_of_day, timedelta
 
 from ..ical import EventEdit, TaskEdit, rrule_from_spec
+from ..ical.read import normalize_offset
 from ..service import priority_from_label
 from .tools import ToolError
 
@@ -35,6 +36,14 @@ def _parse_dt(value, *, field: str):
 
     Empty means "unset" rather than an error, because that is how a caller
     clears a due date — the tool schemas say so explicitly.
+
+    "The same rules the HTTP API uses" was an assertion this function did not
+    keep: it is a second hand-written copy of `app._parse_datelike`, and both
+    handed an offset-bearing value straight through to icalendar, which wrote it
+    as a fabricated `TZID="UTC-07:00"`. The shared part now lives in
+    `ical.read.normalize_offset` so the sentence is true by construction rather
+    than by inspection — this sweep filed five findings whose common shape is a
+    comment asserting a safety property the code does not deliver.
     """
     if value is None:
         return None
@@ -43,7 +52,7 @@ def _parse_dt(value, *, field: str):
         return None
     try:
         if "T" in s or " " in s:
-            return datetime.fromisoformat(s.replace(" ", "T"))
+            return normalize_offset(datetime.fromisoformat(s.replace(" ", "T")))
         return date.fromisoformat(s)
     except ValueError:
         raise ToolError(

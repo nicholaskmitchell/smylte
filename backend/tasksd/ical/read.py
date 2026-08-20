@@ -146,6 +146,33 @@ def advance(value, raw, total: timedelta):
     return out
 
 
+def normalize_offset(dt: datetime) -> datetime:
+    """A datetime carrying a bare numeric offset, re-expressed as UTC.
+
+    `fromisoformat("2026-08-10T09:00:00-07:00")` yields a fixed-offset
+    `datetime.timezone`, and icalendar serializes one of those as a FABRICATED
+    `TZID="UTC-07:00"` — a zone name no CalDAV client can resolve, this app's own
+    reader included. The value then reads back FLOATING, so the instant moves by
+    the whole offset: a 09:00 Pacific meeting became 09:00 in whatever zone the
+    owner authors in, `busy_intervals` placed it there, and the public booking
+    page advertised the hour the owner was actually busy while blocking one they
+    were free.
+
+    `ical/edit.py::_set_datelike` documents this exact trap and defends against
+    it — but only when the property being overwritten is ALREADY zone-aware, so
+    it covers neither a create (no old value) nor a PATCH of a floating property,
+    which is what all of this app's own writes are. Normalizing here covers all
+    three, because every date-bearing field on every route funnels through
+    `_parse_datelike`. UTC round-trips losslessly (icalendar emits `...Z`), and
+    `_set_datelike` can still re-express a UTC value into an old property's real
+    zone. Zero-offset input was already safe by accident: Python maps `+00:00`
+    and `Z` to `timezone.utc`.
+    """
+    if dt.tzinfo is not None and type(dt.tzinfo) is timezone:
+        return dt.astimezone(timezone.utc)
+    return dt
+
+
 def _text(comp, key: str) -> str | None:
     v = comp.get(key)
     return None if v is None else str(v)

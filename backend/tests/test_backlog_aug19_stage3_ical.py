@@ -51,7 +51,7 @@ import pytest
 from tasksd import scheduling
 from tasksd.dav.errors import DavError
 from tasksd.ical import EventEdit
-from tasksd.ical.edit import apply_occurrence_override, shift_series
+from tasksd.ical.edit import apply_occurrence_override, shift_series, split_series
 from tasksd.ical.recur import expand_occurrences
 from tests.helpers import foreign_event_raw
 
@@ -324,9 +324,6 @@ def test_a_contended_this_and_following_split_leaves_no_duplicate_series(
 
 # ── AUDIT: "this event" on a THISANDFUTURE override's own slot ──────────────
 
-@pytest.mark.xfail(strict=True, reason=(
-    "apply_occurrence_override matches on the RECURRENCE-ID instant alone, so "
-    "editing a RANGE=THISANDFUTURE override's own slot rewrites every later one"))
 def test_editing_the_slot_a_this_and_future_override_anchors_leaves_later_ones_alone():
     """`_find_override` matches purely on the RECURRENCE-ID *instant* and never
     looks at `rid.params`. For an Apple/Thunderbird
@@ -385,12 +382,56 @@ def test_editing_the_slot_a_this_and_future_override_anchors_leaves_later_ones_a
         "override governs:\n  " + "\n  ".join(damaged)
     )
 
+    # The edited instance keeps the time the RANGE override gave it (10:00), not
+    # the master's 09:00. This is the half the first attempt at the fix got
+    # wrong: `_new_override` places DTSTART at the rule's slot, so detaching an
+    # instance silently rescheduled it back an hour — a different corruption in
+    # place of the one being fixed.
+    detached = after["2026-01-13T09:00:00+00:00"]
+    assert detached.summary == "just this one" and detached.location == "Room C"
+    assert detached.start == "2026-01-13T10:00:00+00:00", (
+        f"the edited occurrence moved to {detached.start}: detaching it from the "
+        f"range override snapped it back to the master's hour"
+    )
+
+    # And every RECURRENCE-ID value appears exactly once. Two components claiming
+    # one instance is unorderable for any reader, and the FIRST attempt at this
+    # fix did precisely that — added a plain override beside the range one — at
+    # which point the expansion still applied the range one to every later slot
+    # and the failure looked identical to the original bug.
+    rids = [ln.split(":", 1)[1] for ln in edited.decode().splitlines()
+            if ln.startswith("RECURRENCE-ID")]
+    assert len(rids) == len(set(rids)), f"duplicate RECURRENCE-ID values: {rids}"
+
+
+def test_detaching_the_last_occurrence_of_a_range_override_does_not_strand_it():
+    """The edge the re-homing has to handle: when the range override anchors the
+    FINAL occurrence there is nothing after it to govern, so it must be dropped
+    rather than moved to a slot the series does not generate."""
+    raw = foreign_event_raw(
+        "tf2@x", "Standup", dtstart="20260106T090000Z", dtend="20260106T093000Z",
+        rrule="FREQ=WEEKLY;COUNT=2",
+        overrides=((
+            "RECURRENCE-ID;RANGE=THISANDFUTURE:20260113T090000Z",
+            "DTSTART:20260113T100000Z", "DTEND:20260113T103000Z",
+            "SUMMARY:TF", "LOCATION:Room B"),),
+    )
+    edited = apply_occurrence_override(
+        raw, "2026-01-13T09:00:00+00:00", EventEdit(summary="last one"))
+    occurrences = expand_occurrences(edited, date(2026, 1, 1), date(2026, 3, 1))
+
+    assert len(occurrences) == 2, (
+        f"the series gained or lost an occurrence: "
+        f"{[(o.recurrence_id, o.start) for o in occurrences]}")
+    assert occurrences[-1].summary == "last one"
+    assert occurrences[-1].start == "2026-01-13T10:00:00+00:00"
+    rids = [ln.split(":", 1)[1] for ln in edited.decode().splitlines()
+            if ln.startswith("RECURRENCE-ID")]
+    assert len(rids) == len(set(rids)), f"duplicate RECURRENCE-ID values: {rids}"
+
 
 # ── AUDIT: dragging a foreign MONTHLY series desynchronizes its rule ────────
 
-@pytest.mark.xfail(strict=True, reason=(
-    "_shift_rrule moves DTSTART but leaves BYMONTHDAY / ordinal BYDAY naming "
-    "the old day, so a dragged monthly series gains and loses occurrences"))
 def test_dragging_a_monthly_series_moves_it_instead_of_desynchronizing_the_rule():
     """`_shift_rrule` rotates only `BYDAY` on a `WEEKLY` rule; its docstring
     dismisses the rest as "left untouched". Untouched is not a no-op:
@@ -456,12 +497,38 @@ def test_dragging_a_monthly_series_moves_it_instead_of_desynchronizing_the_rule(
     )
 
 
+@pytest.mark.parametrize("rrule, new_start, expected", [
+    # A time-only drag desynchronizes nothing, whatever the rule pins.
+    ("FREQ=MONTHLY;BYMONTHDAY=6;COUNT=4", "2026-01-06T11:00:00+00:00",
+     [date(2026, 1, 6), date(2026, 2, 6), date(2026, 3, 6), date(2026, 4, 6)]),
+    # The one BY* rotation that IS handled must keep working.
+    ("FREQ=WEEKLY;BYDAY=TU;COUNT=4", "2026-01-07T09:00:00+00:00",
+     [date(2026, 1, 7), date(2026, 1, 14), date(2026, 1, 21), date(2026, 1, 28)]),
+    ("FREQ=WEEKLY;COUNT=4", "2026-01-07T09:00:00+00:00",
+     [date(2026, 1, 7), date(2026, 1, 14), date(2026, 1, 21), date(2026, 1, 28)]),
+    ("FREQ=DAILY;COUNT=4", "2026-01-07T09:00:00+00:00",
+     [date(2026, 1, 7), date(2026, 1, 8), date(2026, 1, 9), date(2026, 1, 10)]),
+])
+def test_a_series_that_can_be_moved_is_still_moved(rrule, new_start, expected):
+    """The control, and it is not optional. A refusal satisfies the pin above,
+    so a fix that refused EVERY "all events" reschedule would pass it while
+    breaking the ordinary gesture — the same trap the search-budget pins in
+    stage 2 needed controls for. These four must still move."""
+    raw = foreign_event_raw(
+        "ok@x", "Series", dtstart="20260106T090000Z", dtend="20260106T093000Z",
+        rrule=rrule)
+    out = shift_series(
+        raw, "2026-01-06T09:00:00+00:00",
+        EventEdit(dtstart=datetime.fromisoformat(new_start),
+                  dtend=datetime.fromisoformat(new_start) + timedelta(minutes=30)))
+    got = [datetime.fromisoformat(o.start).date()
+           for o in expand_occurrences(out, date(2026, 1, 1), date(2026, 7, 1))]
+    assert got == expected, f"{rrule} dragged to {new_start} produced {got}"
+
+
 # ── AUDIT: split_series never checks the anchor is an occurrence ────────────
 
 @pytest.mark.radicale
-@pytest.mark.xfail(strict=True, reason=(
-    "split_series derives the head from an absent RRULE, so 'this and "
-    "following' on a non-repeating event duplicates it under a second UID"))
 def test_this_and_following_on_a_non_repeating_event_does_not_duplicate_it(
     client, calendar
 ):
@@ -494,6 +561,17 @@ def test_this_and_following_on_a_non_repeating_event_does_not_duplicate_it(
     re-applying a stale `recurrence_id` against the fresh copy — by bounding the
     head at an instant that was never an occurrence and restarting the tail's
     rule there.
+
+    **Fixed** by `edit._require_occurrence`, called before the head is derived:
+    a master carrying neither RRULE nor RDATE raises "this event does not
+    repeat", and an anchor no rule generates raises "recurrence_id does not name
+    an occurrence". An RDATE-only resource is a real series, so the test is "does
+    anything generate this anchor", not "is there an RRULE"; the membership probe
+    reuses the stage-2 cost guard, and an unprobeable rule is ALLOWED, since
+    refusing an edit is the outcome that costs the user something.
+
+    The DELETE route needed the same `except ValueError -> 422` its PATCH sibling
+    already had, or the new refusal escaped as a 500.
     """
     created = client.post(f"/api/calendars/{calendar}/events", json={
         "summary": "Lunch", "start": "2026-01-06T09:00:00", "end": "2026-01-06T09:30:00",
@@ -515,6 +593,49 @@ def test_this_and_following_on_a_non_repeating_event_does_not_duplicate_it(
         "edit — the calendar now holds "
         f"{[(e['uid'], e['summary'], e['start']) for e in events]}"
     )
+    assert events[0]["summary"] == "Lunch", (
+        "the refused edit was partly applied to the original")
+
+    # The DELETE mirror: it answered 204 while deleting nothing, and the SPA
+    # removes the row optimistically — so the user watched it disappear and found
+    # it again on the next sync.
+    deleted = client.request(
+        "DELETE", f"/api/calendars/{calendar}/events/{uid}",
+        params={"scope": "thisandfuture", "recurrence_id": "2026-05-01T10:00:00"})
+    assert deleted.status_code == 422, (
+        f"deleting 'this and following' from an instant that is not an occurrence "
+        f"answered {deleted.status_code}; it deletes nothing, so it must not "
+        f"report success")
+    still = client.get(f"/api/calendars/{calendar}/events",
+                       params={"start": "2026-01-01", "end": "2026-12-31"}).json()
+    assert len(still) == 1, "the event should still be there"
+
+
+@pytest.mark.parametrize("recurrence_id, ok", [
+    ("2026-01-20T09:00:00+00:00", True),    # a real occurrence
+    ("2026-01-06T09:00:00+00:00", True),    # the series' own first slot
+    ("2026-01-21T09:00:00+00:00", False),   # one day off
+    ("2026-01-20T10:00:00+00:00", False),   # one hour off
+])
+def test_a_split_anchor_must_name_an_occurrence_of_the_series(recurrence_id, ok):
+    """The half the end-to-end pin above cannot reach, and the one with teeth on
+    a REAL series: an anchor that is off by a day or an hour bounded the head at
+    an instant the rule never generated and restarted the tail there, moving
+    every later occurrence. Two tabs produce it, and so does `engine.split_event`
+    re-applying a stale `recurrence_id` against a fresh copy after a 412.
+
+    The `True` rows are the control: a check that refused every split would
+    satisfy the duplication pin while breaking the feature outright.
+    """
+    raw = foreign_event_raw(
+        "s@x", "Weekly", dtstart="20260106T090000Z", dtend="20260106T093000Z",
+        rrule="FREQ=WEEKLY;COUNT=4")
+    if ok:
+        head, tail = split_series(raw, recurrence_id, EventEdit(summary="v2"))
+        assert b"SUMMARY:v2" in tail
+    else:
+        with pytest.raises(ValueError, match="does not name an occurrence"):
+            split_series(raw, recurrence_id, EventEdit(summary="v2"))
 
 
 # ── AUDIT: expansion emits occurrences whose end precedes their start ───────
@@ -644,9 +765,6 @@ def test_the_fall_back_mirror_does_not_stretch_an_instance_to_three_times_its_le
 # ── AUDIT: an offset-bearing datetime is written as TZID="UTC±HH:MM" ────────
 
 @pytest.mark.radicale
-@pytest.mark.xfail(strict=True, reason=(
-    'an offset-bearing start is serialized as TZID="UTC-07:00", which nothing '
-    "can resolve, so the event reads back floating and the instant moves"))
 def test_an_event_created_with_a_zone_offset_keeps_the_instant_it_names(
     client, calendar
 ):
@@ -687,6 +805,18 @@ def test_an_event_created_with_a_zone_offset_keeps_the_instant_it_names(
     The pin asks only that the instant survive the round trip; whether it comes
     back as UTC, as the original offset, or in the owner's zone is the fixer's
     choice.
+
+    **Fixed** in `ical.read.normalize_offset`, called from BOTH parsers: a bare
+    fixed offset is re-expressed as UTC, which icalendar emits as `…Z` and which
+    round-trips losslessly, while a real `ZoneInfo` is left alone so a series
+    keeps its own TZID. `_set_datelike` can still re-express a UTC value into an
+    old property's zone.
+
+    Both parsers, because `mcp/api._parse_dt` is a second hand-written copy whose
+    docstring says "the same rules the HTTP API uses" and had the identical bug —
+    and the finding's own failure scenario goes through `smylte_create_event`, so
+    fixing only the HTTP edge would have left the path it describes open. That
+    sentence is now true by construction rather than by inspection.
     """
     created = client.post(f"/api/calendars/{calendar}/events", json={
         "summary": "Pacific standup",
@@ -710,3 +840,50 @@ def test_an_event_created_with_a_zone_offset_keeps_the_instant_it_names(
         f"the event reads back as {start!r} = {parsed.astimezone(UTC)}, but the "
         "client asked for 09:00 at -07:00, which is 2026-08-10T16:00:00Z"
     )
+    assert 'TZID="UTC' not in client.get(
+        f"/api/calendars/{calendar}/events/{uid}").text, "a fabricated TZID leaked"
+
+
+@pytest.mark.parametrize("sent, expect_utc", [
+    ("2026-08-10T09:00:00-07:00", datetime(2026, 8, 10, 16, 0, tzinfo=UTC)),
+    ("2026-08-10T09:00:00+05:30", datetime(2026, 8, 10, 3, 30, tzinfo=UTC)),
+    # The two spellings that were already safe by accident — a fix must not
+    # disturb them.
+    ("2026-08-10T09:00:00Z", datetime(2026, 8, 10, 9, 0, tzinfo=UTC)),
+    ("2026-08-10T09:00:00+00:00", datetime(2026, 8, 10, 9, 0, tzinfo=UTC)),
+])
+def test_the_mcp_create_path_keeps_the_instant_too(sent, expect_utc):
+    """The route the finding's own failure scenario runs through.
+    `mcp/api._parse_dt` is a separate copy of the HTTP parser — its docstring
+    claims "the same rules the HTTP API uses" — and it carried the same defect,
+    so a fix applied only to `app._parse_datelike` would have left
+    `smylte_create_event` writing unresolvable TZIDs.
+
+    Driven at the parser plus the builder rather than over MCP, because what is
+    being asserted is the bytes that reach Radicale.
+    """
+    from tasksd.ical import build_new_event
+    from tasksd.ical.read import extract_from_raw
+    from tasksd.mcp.api import _parse_dt
+
+    raw = build_new_event(
+        "z@tasksd", summary="S", dtstart=_parse_dt(sent, field="start"))
+    assert 'TZID="UTC' not in raw.decode(), (
+        f"{sent} was written as a fabricated TZID: "
+        + next(ln for ln in raw.decode().splitlines() if ln.startswith("DTSTART")))
+    back = datetime.fromisoformat(extract_from_raw(raw).dtstart)
+    assert back.tzinfo is not None and back.astimezone(UTC) == expect_utc, (
+        f"{sent} read back as {back}, not {expect_utc}")
+
+
+def test_a_real_named_zone_is_not_flattened_to_utc():
+    """The control on the other side. Normalizing must catch a BARE OFFSET, not
+    every aware value: a datetime carrying a real `ZoneInfo` has a zone name
+    other clients can resolve and a series anchored to it must keep it, or every
+    recurring event would silently lose its DST behaviour."""
+    from tasksd.ical.read import normalize_offset
+
+    z = datetime(2026, 8, 10, 9, 0, tzinfo=ZoneInfo("America/Los_Angeles"))
+    assert normalize_offset(z).tzinfo is z.tzinfo
+    naive = datetime(2026, 8, 10, 9, 0)
+    assert normalize_offset(naive) is naive          # floating stays floating

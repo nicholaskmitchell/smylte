@@ -14,7 +14,7 @@ import logging
 import os
 import re
 import secrets
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Annotated, Literal
 from zoneinfo import ZoneInfo
 
@@ -47,6 +47,7 @@ from .dav.errors import AuthError as DavAuthError
 from .dav.errors import DavError
 from .dav.errors import NotFound as DavNotFound
 from .dav.xml import XML_SAFE_PATTERN_SCALAR, clean_color
+from .ical.read import normalize_offset
 from .ical import EventEdit, TaskEdit, rrule_from_spec
 from .csp import CSPMiddleware, policy_for_index
 from .limits import BodySizeLimitMiddleware
@@ -558,7 +559,7 @@ def _parse_datelike(s: str | None) -> date | datetime | None:
         return None
     try:
         if "T" in s or " " in s:
-            return datetime.fromisoformat(s.replace(" ", "T"))
+            return normalize_offset(datetime.fromisoformat(s.replace(" ", "T")))
         return date.fromisoformat(s)
     except ValueError:
         raise HTTPException(422, f"invalid date/datetime: {s!r}") from None
@@ -1163,10 +1164,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         href = await _href(request, cal_id)
         _check_scope(scope)
         _check_recurrence_id(recurrence_id, scope)
-        await _run(
-            _svc(request).delete_event, href, uid,
-            recurrence_id=recurrence_id, scope=scope,
-        )
+        try:
+            await _run(
+                _svc(request).delete_event, href, uid,
+                recurrence_id=recurrence_id, scope=scope,
+            )
+        except ValueError as e:
+            # The same mapping `patch_event` has, and for the same reasons — the
+            # scoped delete reaches `split_series`, which now refuses an anchor
+            # that names no occurrence. Without this the refusal escaped as a 500
+            # where the sibling route answers a clean 422.
+            raise HTTPException(422, str(e)) from None
         return Response(status_code=204)
 
     # -- scheduling (booking links; owner side) --
