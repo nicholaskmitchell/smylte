@@ -415,9 +415,18 @@ def register(app, *, settings, authenticator, client_ip, run, login_hashes):
     async def drop_connection(request: Request, family_id: str):
         _require_owner(request)
         dropped = await run(request.app.state.service.oauth, _revoke_family, family_id)
-        if not dropped:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "unknown connection")
-        log.info("mcp: connection %s disconnected by the owner", family_id)
+        # Idempotent: a family that is already gone is the state the caller asked
+        # for, not an error. The 404 made a retry after a lost response read as a
+        # failure, and `ConnectionsSection.disconnect` restores the optimistic
+        # removal on ANY failure — `makeGuard` returns undefined for both a
+        # dropped connection and an HttpError, so the two are indistinguishable
+        # to it. The owner was shown a revoked grant back in the list of live
+        # ones, and the section is loaded once in an empty-dep useEffect and
+        # never refetched, so it stayed wrong for as long as the panel was open.
+        # Nothing leaks by answering 204 either way: the route is already
+        # cookie-gated to the owner.
+        if dropped:
+            log.info("mcp: connection %s disconnected by the owner", family_id)
         return Response(status_code=204)
 
     def _require_owner(request: Request) -> None:

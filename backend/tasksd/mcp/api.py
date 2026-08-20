@@ -117,37 +117,95 @@ def _hhmm(value: str, *, field: str) -> time_of_day:
         raise ToolError(f"{field}={value!r} is not a time. Use 'HH:MM'.") from None
 
 
-def _display_order(t: dict):
-    """The order the app shows tasks in, which is what these tools advertise.
+def _intrinsic_order(t: dict):
+    """Everything except the manual position: due, priority, title, then uid.
 
-    Mirrors `frontend/src/order.ts` — manual position, due date, priority, title,
-    then uid — key for key, including nulls-last on every one. The two cannot
-    share code across languages, so they are kept deliberately parallel: the tool
-    description promises "ordered the way the app shows them", and a model paging
-    with `limit` is entitled to that being true.
-
-    The final uid tie-break is the point, not a flourish. Rows arrive here as one
-    list's block after another's, so without a TOTAL order `limit=3` returned
-    "whichever list came first" — and the soonest deadline on the account could
-    be missing from a page that looked ordered. `order.ts`' header makes the same
-    argument at length.
+    The port of `compareIntrinsic` in `frontend/src/order.ts`. `due` is parsed to
+    an instant rather than compared as a string, mirroring `dueAt` — lexical
+    comparison happens to agree for ISO values of equal shape and stops agreeing
+    the moment a date-only and a timed value meet, or an offset appears.
 
     Sort keys are `(is_null, value)` pairs so a missing value sorts last without
-    ever comparing None to a number.
+    ever comparing None to a number. The final uid tie-break is the point, not a
+    flourish: rows arrive as one list's block after another's, so without a TOTAL
+    order `limit=3` returned "whichever list came first" and the soonest deadline
+    on the account could be missing from a page that looked ordered.
     """
-    due = t.get("due") or None
-    # A date-only due sorts as that day's start, which is how the app reads it.
-    due_key = f"{due}T00:00" if due and "T" not in due else due
+    due = _as_dt(_parse_dt(t.get("due"), field="due")) if t.get("due") else None
     priority = t.get("priority") or None       # iCal: 0/absent means unset
-    order = t.get("sort_order")
     summary = t.get("summary") or None
     return (
-        (order is None, order or 0),
-        (due_key is None, due_key or ""),
+        (due is None, due or datetime.min),
         (priority is None, priority or 0),
-        (summary is None, (summary or "").casefold()),
+        (summary is None, _title_key(summary or "")),
         t.get("uid") or "",
     )
+
+
+def _title_key(s: str) -> tuple:
+    """A sort key approximating `String.prototype.localeCompare`.
+
+    order.ts compares titles with `localeCompare`, which is a collation, not a
+    codepoint comparison: case is a TERTIARY difference, and lowercase sorts
+    before uppercase for otherwise identical letters. Python's `<` is codepoint
+    order (so "Alpha" < "alpha") and `casefold` alone calls them equal — either
+    way the two implementations put "alpha" and "Alpha" in different places, and
+    this ordering is what decides which rows `limit` keeps.
+
+    Casefold first, then lowercase-before-uppercase, which reproduces ICU for
+    the ASCII case. It does NOT reproduce full ICU: accent folding ("é" sorting
+    with "e") needs a collation table the stdlib does not carry, so a title
+    differing only by an accent may land on the other side of its neighbour. The
+    uid tie-break keeps the result a deterministic total order regardless, which
+    is the property `limit` actually depends on; a cross-check against the real
+    order.ts over 400 generated cases is recorded in the pin.
+    """
+    return (s.casefold(), tuple(0 if c.islower() else 1 for c in s))
+
+
+def _in_display_order(tasks: list[dict]) -> list[dict]:
+    """`tasks` in the order the app shows them, as a new list.
+
+    The port of `sortTasks`, which is what every view calls — NOT of
+    `compareTasks`, which is what this used to reproduce. `compareTasks` sorts a
+    null position last, and order.ts' own docstring says at length why that is
+    not how a list is ordered: a drag renumbers the whole account (the server's
+    `ReorderTasks` model says so explicitly — "nothing left null once a drag
+    lands"), so after the first drag a null position stops meaning "ordinary,
+    unplaced" and starts meaning "created since the last drag". Sinking those
+    below everything is not what anyone wants — and here it was worse than a
+    display quirk, because this ordering is the ONE thing that decides which rows
+    `limit` keeps. Every task made since the last drag fell off page one, while
+    the tool description promises "ordered the way the app shows them".
+
+    Not a pairwise comparator, for the reason order.ts gives: comparing
+    placed-to-placed by position while comparing placed-to-unplaced by due date
+    is not transitive — P1(pos 1, due Dec), P2(pos 2, due Jan), U(due Jun) gives
+    P1 < P2 < U < P1 — and sorting on an inconsistent comparator is undefined.
+    So each task gets ONE effective position: a placed task keeps its own,
+    normalised to its index so gaps and duplicates cannot matter, and an unplaced
+    task takes half a step before the first placed task it intrinsically
+    precedes. Ordering by that single number, tie-broken by the intrinsic keys,
+    is a total order again.
+    """
+    placed = sorted(
+        (t for t in tasks if t.get("sort_order") is not None),
+        key=lambda t: (t["sort_order"], _intrinsic_order(t)),
+    )
+    # Nothing has been dragged — the common case, and every case before the first
+    # drag: the intrinsic order is the whole answer.
+    if not placed:
+        return sorted(tasks, key=_intrinsic_order)
+
+    at: dict[str, float] = {t["uid"]: float(i) for i, t in enumerate(placed)}
+    keys = [_intrinsic_order(t) for t in placed]
+    for t in tasks:
+        if t.get("sort_order") is not None:
+            continue
+        mine = _intrinsic_order(t)
+        nxt = next((i for i, k in enumerate(keys) if mine < k), -1)
+        at[t["uid"]] = float(len(placed)) if nxt < 0 else nxt - 0.5
+    return sorted(tasks, key=lambda t: (at[t["uid"]], _intrinsic_order(t)))
 
 
 @contextmanager
@@ -264,8 +322,7 @@ class McpApi:
                 if overdue_only and (due >= now or t["completed"] or t["cancelled"]):
                     continue
             out.append(t)
-        out.sort(key=_display_order)
-        return out
+        return _in_display_order(out)
 
     def get_task(self, list_id, uid):
         task = self._svc.get_task(self._href(list_id), uid)

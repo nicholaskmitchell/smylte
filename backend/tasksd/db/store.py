@@ -1070,15 +1070,31 @@ def revoke_oauth_family(conn: sqlite3.Connection, family_id: str) -> int:
 
 def list_oauth_grants(conn: sqlite3.Connection, *, now: float) -> list[dict]:
     """One row per live grant (family), for the connections screen: which client,
-    what it may do, when it was granted and when it was last refreshed."""
+    what it may do, when it was granted and when it was last refreshed.
+
+    `scope` comes from the family's NEWEST live token, via a correlated subquery,
+    rather than being read as a bare column out of the GROUP BY. SQLite pins a
+    bare column to a particular row only when the query holds exactly one
+    min()/max() aggregate; this one has three, so the value came from an
+    arbitrary row of the group. Scope is not constant within a family —
+    `_grant_refresh` implements RFC 6749 §6 narrowing and reissues into the SAME
+    family_id, while the previous wide-scoped access token stays live for the
+    rest of its hour and the previous refresh row is deliberately kept until it
+    expires. So the owner's only view of what a connector may do, and the screen
+    they act on to revoke one, could show a capability level that no live token
+    carried, in either direction, decided by scan order.
+    """
     return [
         dict(r)
         for r in conn.execute(
-            "SELECT t.family_id, t.client_id, t.scope, t.resource, "
+            "SELECT t.family_id, t.client_id, t.resource, "
+            "       (SELECT x.scope FROM oauth_tokens x WHERE x.family_id = t.family_id "
+            "          AND x.expires_at > ?1 ORDER BY x.created_at DESC, x.rowid DESC "
+            "          LIMIT 1) AS scope, "
             "       MIN(t.created_at) AS granted_at, MAX(t.created_at) AS refreshed_at, "
             "       MAX(t.expires_at) AS expires_at, c.client_name "
             "FROM oauth_tokens t LEFT JOIN oauth_clients c ON c.client_id = t.client_id "
-            "WHERE t.expires_at > ? GROUP BY t.family_id ORDER BY granted_at DESC",
+            "WHERE t.expires_at > ?1 GROUP BY t.family_id ORDER BY granted_at DESC",
             (now,),
         )
     ]

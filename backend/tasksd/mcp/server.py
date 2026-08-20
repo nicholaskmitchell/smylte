@@ -139,7 +139,17 @@ class McpServer:
                 # list is friendlier than "method not found".
                 payload = {"resources": []} if method.startswith("resources") else {"prompts": []}
             elif method.startswith("notifications/"):
-                return None
+                # `is_notification`, like every other branch. This one returned
+                # an unconditional None, discarding the id — and the transport
+                # then answers 202 with an empty body (or omits the entry from a
+                # batch), so a client that sent
+                # {"id": N, "method": "notifications/initialized"} holds a
+                # promise for N that is never settled. JSON-RPC 2.0 requires a
+                # response to any message carrying an id, and shipping MCP
+                # clients do send that one with an id; the failure mode is a
+                # silent hang during the handshake rather than a readable error.
+                # An empty result is the friendlier of the two legal answers.
+                return None if is_notification else _result(rid, {})
             else:
                 return None if is_notification else _error(
                     rid, METHOD_NOT_FOUND, f"unknown method: {method}"
