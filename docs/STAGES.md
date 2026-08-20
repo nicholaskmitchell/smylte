@@ -12,17 +12,17 @@ of how the harness behaved in practice — its "Two strengths of pin" and
 
 `docs/AUDIT.md` is the evidence. This is the plan for closing it.
 
-**24 open, 58 closed.** Stages 1, 2 and 3 are done; stage 4 is in progress and
-stage 5 has not started. Of the 24 still open:
+**22 open, 60 closed.** Stages 1, 2 and 3 are done; stage 4 is in progress and
+stage 5 has not started. Of the 22 still open:
 
 | where it came from | open |
 |---|---|
-| the sweep itself (stages 4 and 5) | 14 |
+| the sweep itself (stages 4 and 5) | 12 |
 | filed by the adversarial review of Stage 3 | 7 |
 | filed by that review's own follow-up | 1 |
 | filed during remediation (see `docs/AUDIT.md`) | 2 |
 
-13 of the 14 sweep findings are pinned — 9 as `xfail(strict=True)` / `it.fails`
+11 of the 12 sweep findings are pinned — 7 as `xfail(strict=True)` / `it.fails`
 and 4 as ordinary passing tests (see "Test gaps that were only gaps" below); the
 unpinned one is finding 62. None of the review's 8 is pinned yet. The review's
 other 3, the ones Stage 3 itself caused, are closed — along with 3 more the
@@ -388,13 +388,13 @@ before the real fix landed.
 
 ## Stage 4 — User-visible correctness & rendering ⬜ IN PROGRESS
 
-21 findings · 8 medium, 13 low · **14 closed, 7 open**
+21 findings · 8 medium, 13 low · **16 closed, 5 open**
 
 Closed so far: **38**, **45** (the two backend ones — the paths a stranger
 reaches), **41**, **42**, **54** (the provider's fetch identity — when the app
 decides to ask the server again), **40**, **49**, **50** (calendar date math) and
 **51**, **56** (one uid, two collections), **57** (the Completed pane's ring) and
-**39**, **46**, **48** (appearance).
+**39**, **46**, **48** (appearance) and **43**, **44** (the booking-link editor).
 Every pin was widened before its fix and then run against a plausible half-fix.
 
 **Three half-fixes so far, and not one was caught by its own pin.** In each case
@@ -410,6 +410,8 @@ the thing that failed was a control:
 | 39 | split the patch in `edit()` only | the `onClear` and `resetMode` widenings — not the original pin, and not the two that drive the other control kinds |
 | 46 | tighten the hex regex only | its own pin |
 | 48 | reset `renaming` inside `selectTheme` only | the Duplicate widening |
+| 43 | clear `saving` in a `finally`, `save()` returning true | its own pins |
+| 44 | validate the overlap, keep `daysToAvail`'s silent filter | `never drops a range the user typed backwards` — the assertion the `if (sent)` hatch had made unreachable |
 
 Two lessons, and neither is the one the review predicted.
 
@@ -447,8 +449,8 @@ The user can see it is wrong. Contained, mostly small, and the stage where a fix
 | 40 ✅ | The resize grip on an event that runs past the six-week window truncates the span when released on its own c… | `frontend/src/components/CalendarView.tsx:556` | medium | `does not truncate a window-clipped span dropped where its grip is drawn` |
 | 41 ✅ | A failed events fetch permanently records the month as "asked", so the calendar grid stays blank or stale wi… | `frontend/src/data.tsx:576` | medium | `re-requests a month whose first fetch failed` |
 | 42 ✅ | The Home mini calendar never refetches on an SSE change, so its dots go stale while every other module on th… | `frontend/src/components/HomeView.tsx:141` | medium | `repaints when the account changes under an open dashboard` |
-| 43 | A rejected booking-link save leaves the editor permanently disabled — the in-flight guard is set but never c… | `frontend/src/components/SchedulingView.tsx:225` | medium | `comes back to life when the save is rejected` |
-| 44 | The availability editor lets the owner build overlapping weekly windows the server rejects with a 422, and s… | `frontend/src/components/SchedulingView.tsx:178` | medium | `never submits a week the server will refuse, and never drops a range` |
+| 43 ✅ | A rejected booking-link save leaves the editor permanently disabled — the in-flight guard is set but never c… | `frontend/src/components/SchedulingView.tsx:225` | medium | `comes back to life when the save is rejected` |
+| 44 ✅ | The availability editor lets the owner build overlapping weekly windows the server rejects with a 422, and s… | `frontend/src/components/SchedulingView.tsx:178` | medium | `never submits a week the server will refuse, and never drops a range` |
 | 45 ✅ | On the consent screen "Cancel" is the form's default button, so pressing Enter after typing the password dec… | `backend/tasksd/mcp/routes.py:638` | medium | `test_pressing_enter_on_the_consent_form_connects_rather_than_declining` |
 | 46 ✅ | isColor accepts hex literals CSS rejects (5 and 7 digits) and non-color functions like calc(), so a mistyped… | `frontend/src/appearance.ts:324` | low | `refuses hex lengths CSS does not have, and functions that are not colours` |
 | 47 | The archived-calendars settings section renders "Loading…" forever when its fetch fails — the sibling sectio… | `frontend/src/components/ArchivedCalendarsSection.tsx:39` | low | `stops saying "Loading…" once the fetch has failed` |

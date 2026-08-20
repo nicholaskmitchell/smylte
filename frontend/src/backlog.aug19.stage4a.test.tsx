@@ -584,7 +584,7 @@ async function openLinkEditor() {
 describe('2026-08-19 — the booking-link editor', () => {
   // ── AUDIT (open): SchedulingView.tsx:225 — a rejected save leaves the editor
   //    permanently disabled; the in-flight guard is set but never cleared ───
-  it.fails('comes back to life when the save is rejected', async () => {
+  it('comes back to life when the save is rejected', async () => {
     // EVIDENCE. `LinkModal.save()` sets `saving = true` before calling
     // `onSave(...)`, and nothing ever sets it back. `onSave` is typed
     // `(body, token?) => void`, so the modal cannot observe the outcome;
@@ -612,10 +612,66 @@ describe('2026-08-19 — the booking-link editor', () => {
     expect(m.createSchedulingLink).toHaveBeenCalledTimes(2)
   })
 
+  // WIDENING: the same defect on the EDIT path, which the finding names and
+  // which reaches `patchSchedulingLink` instead of `createSchedulingLink`.
+  it('comes back to life when an edit is rejected', async () => {
+    const existing = {
+      token: 'tok1', title: 'Intro call', description: null, calendar: 'c1',
+      duration_minutes: 30, timezone: 'UTC', availability: { '0': ['09:00-17:00'] },
+      show_busy: false, buffer_minutes: 0, min_notice_hours: 24, horizon_days: 30,
+      url: 'https://x/book/tok1',
+    }
+    m.schedulingLinks.mockResolvedValue([existing as never])
+    m.patchSchedulingLink.mockRejectedValue(new HttpError(422, 'availability ranges overlap on weekday 0'))
+    const user = setupUser()
+    render(<SchedulingView rev={0} onExpire={vi.fn()} />)
+
+    await user.click(await screen.findByRole('button', { name: /edit/i }))
+    const dialog = await screen.findByRole('dialog')
+    const saveBtn = within(dialog).getByRole('button', { name: /save/i })
+    await user.click(saveBtn)
+    await act(async () => { await Promise.resolve() })
+
+    expect(saveBtn).not.toBeDisabled()
+    await user.click(saveBtn)
+    await waitFor(() => expect(m.patchSchedulingLink).toHaveBeenCalledTimes(2))
+  })
+
+  // Control (passes today, must keep passing): what the user typed survives the
+  // rejection. The modal is deliberately left open so they can fix and retry, so
+  // a repair that re-enables the button by REMOUNTING the modal would satisfy
+  // both pins above and throw the form away — the same loss, one step later.
+  it('keeps what the user typed when the save is rejected', async () => {
+    m.createSchedulingLink.mockRejectedValue(new HttpError(422, 'nope'))
+    const user = await openLinkEditor()
+
+    const monday = document.querySelectorAll('.sched-day')[0] as HTMLElement
+    const first = monday.querySelectorAll('input[type=time]')[0] as HTMLInputElement
+    fireEvent.change(first, { target: { value: '08:15' } })
+
+    await user.click(screen.getByRole('button', { name: /create link/i }))
+    await act(async () => { await Promise.resolve() })
+
+    expect(screen.getByPlaceholderText('30-minute intro call')).toHaveValue('Intro call')
+    expect((document.querySelectorAll('.sched-day')[0]
+      .querySelectorAll('input[type=time]')[0] as HTMLInputElement).value).toBe('08:15')
+  })
+
   // ── AUDIT (open): SchedulingView.tsx:178 — the availability editor builds
   //    overlapping windows the server 422s, and silently deletes an inverted
   //    range ────────────────────────────────────────────────────────────────
-  it.fails('never submits a week the server will refuse, and never drops a range', async () => {
+  // WIDENED, and the widening is the point. This used to wrap its assertions in
+  // `if (sent) { … }`, so a fix that merely refuses to submit executed ZERO
+  // assertions and passed — it could not tell "refused and explained" from
+  // "refused silently and threw the range away". Split into three tests whose
+  // assertions all run in both branches.
+  //
+  // The contract is the server's, not this file's. `parse_availability`
+  // (backend/tasksd/scheduling.py:60) requires every field filled, `s < e`
+  // strictly (EQUAL endpoints are illegal), and no overlap once the day's
+  // ranges are SORTED — so submission order is irrelevant and exactly adjacent
+  // ranges are LEGAL. An empty day is omitted rather than rejected.
+  it('never submits a week the server will refuse', async () => {
     // EVIDENCE. `daysToAvail` is the client's whole validation of the weekly
     // grid and implements exactly one of `parse_availability`'s two per-day
     // rules. It filters `s && e && s < e`, mirroring the server's
@@ -623,20 +679,9 @@ describe('2026-08-19 — the booking-link editor', () => {
     // same function — so two ranges on one day are serialized verbatim and come
     // back as 422 "availability ranges overlap on weekday 0", a raw toast the UI
     // had no way to anticipate (and, with the pin above, one that also bricks
-    // the editor). The reverse half is worse: an inverted range is DROPPED, not
-    // reported. Friday 17:00–09:00 — a night shift, or simply the two fields
-    // entered backwards — creates a link advertising no Friday slots, and
-    // reopening the editor shows Friday as "Unavailable" with no record the
-    // range was ever typed.
-    //
-    // Both halves are built here through the UI exactly as a user would, and the
-    // assertion is on what reaches the API. Refusing to submit and explaining
-    // why is correct; submitting something the server accepts is correct;
-    // submitting an overlap, or quietly discarding the day the user configured,
-    // is not.
+    // the editor).
     const user = await openLinkEditor()
 
-    // Monday defaults to 09:00–17:00. "+ range" appends an empty pair.
     const monday = () => document.querySelectorAll('.sched-day')[0] as HTMLElement
     await user.click(within(monday()).getByTitle('Add another range'))
     let mon = monday().querySelectorAll('input[type=time]')
@@ -644,7 +689,35 @@ describe('2026-08-19 — the booking-link editor', () => {
     mon = monday().querySelectorAll('input[type=time]')
     fireEvent.change(mon[3], { target: { value: '12:00' } })
 
-    // Friday: the same two fields, entered backwards.
+    await user.click(screen.getByRole('button', { name: /create link/i }))
+    await act(async () => { await Promise.resolve() })
+
+    // Unconditional in both branches: nothing overlapping may reach the API…
+    const sent = m.createSchedulingLink.mock.calls[0]?.[0] as BookingLinkInput | undefined
+    const monRanges = ((sent?.availability ?? {})['0'] ?? [])
+      .map((r) => r.split('-') as [string, string])
+    const sorted = [...monRanges].sort((a, b) => a[0].localeCompare(b[0]))
+    expect(sorted.some((r, i) => i > 0 && r[0] < sorted[i - 1][1])).toBe(false)
+
+    // …and if it did not, the two ranges the user typed are still on screen and
+    // the reason is somewhere they can read. Refusing silently is not a fix.
+    if (!sent) {
+      const times = Array.from(monday().querySelectorAll('input[type=time]'))
+        .map((el) => (el as HTMLInputElement).value)
+      expect(times).toContain('10:00')
+      expect(times).toContain('12:00')
+      expect(monday().textContent).toMatch(/overlap/i)
+    }
+  })
+
+  it('never drops a range the user typed backwards', async () => {
+    // The reverse half, and the worse one: an inverted range is DROPPED, not
+    // reported. Friday 17:00–09:00 — a night shift, or simply the two fields
+    // entered backwards — creates a link advertising no Friday slots, and
+    // reopening the editor shows Friday as "Unavailable" with no record the
+    // range was ever typed.
+    const user = await openLinkEditor()
+
     const friday = () => document.querySelectorAll('.sched-day')[4] as HTMLElement
     let fri = friday().querySelectorAll('input[type=time]')
     fireEvent.change(fri[0], { target: { value: '17:00' } })
@@ -656,14 +729,41 @@ describe('2026-08-19 — the booking-link editor', () => {
 
     const sent = m.createSchedulingLink.mock.calls[0]?.[0] as BookingLinkInput | undefined
     if (sent) {
-      const av = sent.availability ?? {}
-      const monRanges = (av['0'] ?? []).map((r) => r.split('-') as [string, string])
-      const sorted = [...monRanges].sort((a, b) => a[0].localeCompare(b[0]))
-      const overlapping = sorted.some((r, i) => i > 0 && r[0] < sorted[i - 1][1])
-      expect(overlapping).toBe(false)
-      expect(av['4'] ?? []).not.toHaveLength(0)
+      // Submitted: Friday must not have been silently emptied.
+      expect(sent.availability?.['4'] ?? []).not.toHaveLength(0)
+    } else {
+      // Refused: the values are still there and the day says why.
+      const times = Array.from(friday().querySelectorAll('input[type=time]'))
+        .map((el) => (el as HTMLInputElement).value)
+      expect(times).toEqual(['17:00', '09:00'])
+      expect(friday().textContent).toMatch(/before|end|order|invalid/i)
     }
   })
+
+  // Control (passes today, must keep passing). The server's overlap test is
+  // `next.start < prev.end`, so ranges that merely TOUCH are legal — 09:00–12:00
+  // and 12:00–17:00 is a lunch break, not an error. A client-side check written
+  // as `<=` would refuse a week the server accepts, which is the same defect
+  // pointing the other way.
+  it('still submits two adjacent ranges on one day', async () => {
+    const user = await openLinkEditor()
+
+    const monday = () => document.querySelectorAll('.sched-day')[0] as HTMLElement
+    let mon = monday().querySelectorAll('input[type=time]')
+    fireEvent.change(mon[1], { target: { value: '12:00' } })
+    await user.click(within(monday()).getByTitle('Add another range'))
+    mon = monday().querySelectorAll('input[type=time]')
+    fireEvent.change(mon[2], { target: { value: '12:00' } })
+    mon = monday().querySelectorAll('input[type=time]')
+    fireEvent.change(mon[3], { target: { value: '17:00' } })
+
+    await user.click(screen.getByRole('button', { name: /create link/i }))
+    await waitFor(() => expect(m.createSchedulingLink).toHaveBeenCalledTimes(1))
+
+    const sent = m.createSchedulingLink.mock.calls[0][0] as BookingLinkInput
+    expect(sent.availability?.['0']).toEqual(['09:00-12:00', '12:00-17:00'])
+  })
+
 })
 
 // ── appearance ──────────────────────────────────────────────────────────────
