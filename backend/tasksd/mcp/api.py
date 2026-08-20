@@ -66,9 +66,12 @@ def _as_dt(value: date | datetime | None) -> datetime | None:
     return datetime.combine(value, time_of_day.min)
 
 
+# `fullmatch` at the call site, not `match`: `$` also matches before a trailing
+# newline. The caller's `.strip()` happens to cover this one today — which is
+# exactly why it is worth fixing at the pattern, where the guarantee belongs.
 _DURATION = re.compile(
-    r"^(?P<sign>[+-])?P(?:(?P<w>\d+)W)?(?:(?P<d>\d+)D)?"
-    r"(?:T(?:(?P<h>\d+)H)?(?:(?P<m>\d+)M)?(?:(?P<s>\d+)S)?)?$"
+    r"(?P<sign>[+-])?P(?:(?P<w>\d+)W)?(?:(?P<d>\d+)D)?"
+    r"(?:T(?:(?P<h>\d+)H)?(?:(?P<m>\d+)M)?(?:(?P<s>\d+)S)?)?"
 )
 
 
@@ -83,7 +86,7 @@ def parse_duration(value: str | None) -> timedelta | None:
     """
     if not value:
         return None
-    m = _DURATION.match(str(value).strip())
+    m = _DURATION.fullmatch(str(value).strip())
     if not m:
         return None
     parts = {k: int(v) for k, v in m.groupdict().items() if k != "sign" and v}

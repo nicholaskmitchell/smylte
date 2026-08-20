@@ -320,15 +320,27 @@ class TaskService:
             for r in rows:
                 col = r["collection_href"]
                 if col not in by_col:
+                    items = [i for i in store.get_items(self._conn, col)
+                             if i["component"] == "VTODO"]
                     by_col[col] = (
                         store.get_all_categories(self._conn, col),
                         store.get_all_sidecar(self._conn, col),
-                        [i for i in store.get_items(self._conn, col) if i["component"] == "VTODO"],
+                        items,
+                        # Built ONCE per collection, alongside the three lookups
+                        # it belongs with. It used to be built inside the loop
+                        # below, which made the whole function O(rows x items):
+                        # `store.search` has no LIMIT, so a one-character FTS
+                        # query over a 5 000-task list matched every row and
+                        # rebuilt the map 5 000 times — 2.87 s, holding the
+                        # global lock the whole way. `_children_map` is a pure
+                        # staticmethod over `items`, so the hoisted map is
+                        # bit-for-bit the one each iteration was recomputing.
+                        self._children_map(items),
                     )
         out = []
         for r in rows:
-            cats, side, items = by_col[r["collection_href"]]
-            out.append(self._task_dto(r, cats, side, self._children_map(items)))
+            cats, side, _items, children = by_col[r["collection_href"]]
+            out.append(self._task_dto(r, cats, side, children))
         return out
 
     # ── writes ───────────────────────────────────────────────────────────────

@@ -73,7 +73,7 @@ Three of the 69 are the same defect seen at a different layer, so they are filed
 once and the backlog counts **66**. Every one of the ten HIGHs was reproduced by
 hand with a runnable probe against a live Radicale 3.7.4 before being written down.
 
-**57 open, 9 closed** — the seven crash paths went first, as **Stage 1**
+**55 open, 11 closed** — the seven crash paths went first, as **Stage 1**
 (`docs/STAGES.md`), and **Stage 2** is closing on top of them; their pins are
 ordinary regression tests now and must stay green. The rest are still pinned by a test that asserts the corrected behaviour
 and fails today — see `docs/STAGES.md` for the stage plan and the
@@ -1172,7 +1172,7 @@ which lies entirely inside the first pass and never crosses 07:00Z.
 
 **Pinned by** `test_a_meeting_across_the_fall_back_transition_still_blocks_its_slot` in `backend/tests/test_backlog_aug19_stage3_ical.py`.
 
-#### [ ] _check_client_id's regex accepts a trailing newline, so an anonymous booking POST answers 409 with the owner's internal CalDAV href
+#### [x] _check_client_id's regex accepts a trailing newline, so an anonymous booking POST answers 409 with the owner's internal CalDAV href
 
 `backend/tasksd/app.py:157` · **medium** · security · `minor` · stage 2
 
@@ -1539,7 +1539,7 @@ Failure scenario: the owner publishes their booking link and, as people routinel
 
 ### SQLite cache & store
 
-#### [ ] service.search rebuilds the whole collection's children map once per result row, so one uncapped FTS query burns seconds of CPU
+#### [x] service.search rebuilds the whole collection's children map once per result row, so one uncapped FTS query burns seconds of CPU
 
 `backend/tasksd/service.py:331` · **medium** · bug · `minor` · stage 2
 

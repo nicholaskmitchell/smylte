@@ -22,7 +22,9 @@ from zoneinfo import ZoneInfo
 
 from icalendar.prop import vDuration
 
-_RANGE_RE = re.compile(r"^(\d{2}):(\d{2})-(\d{2}):(\d{2})$")
+# `fullmatch` below, not `match`: Python's `$` also matches before a trailing
+# newline, so "09:00-17:00\n" satisfied a pattern written to be exact.
+_RANGE_RE = re.compile(r"(\d{2}):(\d{2})-(\d{2}):(\d{2})")
 
 log = logging.getLogger("tasksd.scheduling")
 
@@ -78,7 +80,7 @@ def parse_availability(raw: str | dict | None) -> dict[int, list[tuple[time, tim
             raise ValueError(f"availability[{key}] must be a list of 'HH:MM-HH:MM' ranges")
         parsed: list[tuple[time, time]] = []
         for r in ranges:
-            m = _RANGE_RE.match(r) if isinstance(r, str) else None
+            m = _RANGE_RE.fullmatch(r) if isinstance(r, str) else None
             if not m:
                 raise ValueError(f"bad availability range {r!r} (expected 'HH:MM-HH:MM')")
             h1, m1, h2, m2 = (int(g) for g in m.groups())

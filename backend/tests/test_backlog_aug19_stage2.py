@@ -46,7 +46,7 @@ import dataclasses
 import threading
 import time
 import uuid
-from datetime import date
+from datetime import date, time as dtime, timedelta
 
 import pytest
 
@@ -313,8 +313,6 @@ def _svc_with_tasks(n: int, extra: tuple[tuple[str, str | None], ...] = ()):
     return svc
 
 
-@pytest.mark.xfail(strict=True, reason="_children_map is rebuilt inside the result "
-                                       "loop, so search is O(rows x items)")
 def test_searching_a_large_list_is_not_quadratic_in_the_lists_size():
     """`store.search` has no LIMIT, and `TaskService.search` calls
     `self._children_map(items)` *inside* the loop over the matching rows, where
@@ -339,6 +337,17 @@ def test_searching_a_large_list_is_not_quadratic_in_the_lists_size():
     LIMIT, or pushing the paging into SQL all satisfy it — so it asserts only
     that the answer arrives promptly and is still right about parent/child
     counts.
+
+    **Fixed** by hoisting: the map is built once inside the existing
+    `if col not in by_col:` block and read back as a fourth tuple element.
+    `_children_map` is a pure staticmethod over `items`, so what each iteration
+    now reads is bit-for-bit what it used to recompute. 2.87 s -> 0.09 s.
+
+    Deliberately NOT a LIMIT on `store.search`, which was the other obvious
+    repair: `mcp/tools.py` paginates after the DTOs are built, so a LIMIT would
+    silently truncate a result the caller believes is complete — trading a slow
+    answer for a wrong one. Bounding the query is worth doing and is its own
+    change, with the paging moved first.
     """
     svc = _svc_with_tasks(3000, extra=(("zeta-parent", None),
                                        ("zeta-kid-1", "zeta-parent"),
@@ -504,8 +513,6 @@ def test_rotating_the_credentials_ends_an_mcp_grant_too(_scratch_up, tmp_path):
 # ── AUDIT: _CLIENT_ID_RE accepts a trailing newline ────────────────────────
 
 @pytest.mark.radicale
-@pytest.mark.xfail(strict=True, reason="`$` matches before a trailing newline, so a "
-                                       "hex+\\n client_id reaches the href slug")
 def test_a_client_id_with_a_trailing_newline_is_refused(client):
     """`_CLIENT_ID_RE = re.compile(r"^[0-9a-f]{16,64}$")` is used with
     `re.match`, and Python's `$` matches at end-of-string OR just before a
@@ -535,6 +542,14 @@ def test_a_client_id_with_a_trailing_newline_is_refused(client):
     Pinned end-to-end because the leak is the interesting half. Any rejection
     satisfies it — `re.fullmatch`, `\\Z`, an explicit charset check — as long as
     the value never becomes a slug.
+
+    **Fixed** in both halves, and the sweep for siblings mattered more than the
+    finding: `re.fullmatch` in `_check_client_id`, `parse_availability`,
+    `parse_duration`, `_EMAIL_RE` and `clean_color` — every `^…$` + `.match()`
+    pair in the backend, three of which were neutralised only by a caller's
+    `.strip()`. And the raise site now logs the href and answers with a fixed
+    message, so the disclosure is closed for every caller of `_put_new` rather
+    than only for the one route the finding reached it through.
     """
     cal = client.post("/api/calendars",
                       json={"name": f"C-{uuid.uuid4().hex[:8]}"})
@@ -597,3 +612,116 @@ def test_a_client_id_with_a_trailing_newline_is_refused(client):
     assert ".ics" not in body and "/" not in body, (
         f"the 409 body hands an anonymous caller an internal CalDAV href: {body[:300]}"
     )
+
+
+# The end-to-end pin above reaches exactly ONE of the five validators that had
+# this shape, and only through the booking route. These reach each of them
+# directly, because "the caller happens to .strip() first" is how three of them
+# were already neutralised — an accident, not a guarantee, and one refactor away
+# from not being true.
+
+@pytest.mark.parametrize("cid", [
+    "0123456789abcdef\n",              # the filed shape: `$` before a newline
+    "0123456789abcdef\n\n",            # two, so a single rstrip would not do
+    "0123456789abcdef ",               # trailing space
+    "0123456789ABCDEF",                # the pattern says lowercase
+    "0123456789abcde",                 # 15 — one under the minimum
+    "g123456789abcdef",                # not hex
+    "0123456789abcdef\rx",             # a CR mid-value
+])
+def test_a_client_id_that_is_not_plain_hex_is_refused(cid):
+    """`_check_client_id` guards the value that becomes a resource SLUG, so it is
+    the one of the five where the newline mattered on its own."""
+    from fastapi import HTTPException
+
+    from tasksd.app import _check_client_id
+
+    with pytest.raises(HTTPException) as e:
+        _check_client_id(cid)
+    assert e.value.status_code == 422
+
+
+def test_a_well_formed_client_id_is_still_accepted():
+    """The control: `fullmatch` must not have narrowed the accepted set."""
+    from tasksd.app import _check_client_id
+
+    _check_client_id(None)                       # optional field
+    _check_client_id("0123456789abcdef")         # 16, the minimum
+    _check_client_id("f" * 64)                   # 64, the maximum
+    _check_client_id(uuid.uuid4().hex)           # what the SPA actually sends
+
+
+@pytest.mark.parametrize("rng", ["09:00-17:00\n", "09:00-17:00 ", "\n09:00-17:00"])
+def test_an_availability_range_with_stray_whitespace_is_refused(rng):
+    """`parse_availability` has no `.strip()` anywhere near it, so this one was
+    live: the value reaches `booking_links.availability` and the message the user
+    would have got ("expected 'HH:MM-HH:MM'") describes a pattern it did not
+    enforce."""
+    from tasksd.scheduling import parse_availability
+
+    with pytest.raises(ValueError):
+        parse_availability({"0": [rng]})
+
+
+def test_an_ordinary_availability_range_still_parses():
+    from tasksd.scheduling import parse_availability
+
+    assert parse_availability({"0": ["09:00-17:00"]})[0] == [
+        (dtime(9, 0), dtime(17, 0))]
+
+
+@pytest.mark.parametrize("dur", ["PT1H30M\nX", "PT1H30M\n30M", "P T1H"])
+def test_a_duration_with_something_after_a_newline_is_not_a_duration(dur):
+    """`parse_duration` returns None for anything it does not recognise, and None
+    means "no DURATION" — which is how a two-hour meeting once read as a
+    zero-length point and the free/busy sweep offered the rest of it as free.
+
+    Note what is NOT asserted: a bare `"PT1H30M\n"` is still accepted, because
+    the caller strips and the control below depends on that. The gap `fullmatch`
+    closes is a newline with content AFTER it, which no strip touches."""
+    from tasksd.mcp.api import parse_duration
+
+    assert parse_duration(dur) is None
+
+
+def test_an_ordinary_duration_still_parses():
+    from tasksd.mcp.api import parse_duration
+
+    assert parse_duration("PT1H30M") == timedelta(hours=1, minutes=30)
+    assert parse_duration("P2D") == timedelta(days=2)
+    assert parse_duration("  PT30M  ") == timedelta(minutes=30)   # the .strip() stays
+
+
+@pytest.mark.parametrize("color", ["#aabbcc\nx", "#aabbccx", "#aabbc", "aabbcc"])
+def test_a_color_that_is_not_a_color_is_dropped(color):
+    """`clean_color` feeds a value that reaches the CSSOM. Like `parse_duration`
+    it strips, so a bare trailing newline was already covered and stays accepted;
+    the point of fixing it at the pattern is that the next caller need not
+    remember to strip, and that a newline with content after it is refused."""
+    from tasksd.dav.xml import clean_color
+
+    assert clean_color(color) is None
+
+
+def test_an_ordinary_color_still_survives():
+    from tasksd.dav.xml import clean_color
+
+    assert clean_color("#D9480F") == "#D9480F"
+    assert clean_color("  #d9480f80  ") == "#d9480f80"          # 8-digit + strip
+
+
+def test_the_xml_safe_pattern_does_not_have_this_bug():
+    """Recorded so nobody re-audits it. `XML_SAFE_PATTERN` is `^[^FORBIDDEN]*$`
+    and the forbidden class is NEGATED, so the greedy star cannot consume a
+    forbidden character to leave `$` sitting before a trailing newline — there is
+    no position where the whole expression matches a string containing one. The
+    other five were all `^<positive>$`, which is the shape that has the gap."""
+    import re
+
+    from tasksd.dav.xml import XML_SAFE_PATTERN
+
+    rx = re.compile(XML_SAFE_PATTERN)
+    assert rx.match("ordinary text\n")                      # a newline is legal text
+    assert not rx.match("poison \ufffe")
+    assert not rx.match("poison \ufffe\n")                   # the trailing-newline probe
+    assert not rx.match("\ufffe\n")

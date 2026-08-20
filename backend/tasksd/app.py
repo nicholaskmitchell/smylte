@@ -162,11 +162,17 @@ class CreateTask(BaseModel):
 
 # The client-supplied creation id becomes the resource's href slug, so it must
 # stay in Radicale's canonical URL-safe form (plain hex — see engine.create_task).
-_CLIENT_ID_RE = re.compile(r"^[0-9a-f]{16,64}$")
+#
+# `fullmatch`, not `match`. Python's `$` matches at end-of-string OR just before
+# a trailing newline, so `re.match(r"^[0-9a-f]{16,64}$", "0"*16 + "\n")` succeeds
+# — a validator whose own message says "hex characters" admitting a control byte
+# into a URL path. urlsplit then strips the newline, so the two ids address one
+# resource while carrying different UIDs. See the pin for where that ends up.
+_CLIENT_ID_RE = re.compile(r"[0-9a-f]{16,64}")
 
 
 def _check_client_id(cid: str | None) -> None:
-    if cid is not None and not _CLIENT_ID_RE.match(cid):
+    if cid is not None and not _CLIENT_ID_RE.fullmatch(cid):
         raise HTTPException(422, "client_id must be 16-64 lowercase hex characters")
 
 
@@ -295,7 +301,11 @@ class PublicBook(BaseModel):
 
 
 # Deliberately modest — enough to catch typos without embedding RFC 5322.
-_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+# `fullmatch` for the same reason as `_CLIENT_ID_RE`: `\s` in the negated classes
+# does not save it, because `$` allows the trailing newline to sit OUTSIDE every
+# group. The caller's `.strip()` currently hides that, and a caller's cleanup is
+# not a property of the validator.
+_EMAIL_RE = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
 
 
 class TaskGroup(BaseModel):
@@ -1403,7 +1413,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def public_booking_book(request: Request, token: str, body: PublicBook):
         _public_throttle(request, public_post_limiter)
         _check_client_id(body.client_id)
-        if not _EMAIL_RE.match(body.email.strip()):
+        if not _EMAIL_RE.fullmatch(body.email.strip()):
             raise HTTPException(422, "invalid email address")
         if not body.name.strip():
             raise HTTPException(422, "name is required")

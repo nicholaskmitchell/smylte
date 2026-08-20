@@ -334,7 +334,17 @@ class SyncEngine:
             stored = self.dav.get(href)
             fields = ical.extract_from_raw(stored.data)
             if fields is None or fields.uid != uid:
-                raise ConflictError(f"a different resource already exists at {href}") from e
+                # The href names the Radicale user and the collection's UUID, and
+                # `app.py` returns `str(exc)` verbatim as the 409 body — including
+                # on POST /api/public/booking/{token}/book, the one write path an
+                # anonymous caller reaches. `test_public_page_requires_no_auth_
+                # and_leaks_nothing` asserts the public payload carries no hrefs;
+                # this raise handed one over. Log it, answer without it — the
+                # shape `SlotTaken` already uses on that route.
+                log.warning("create collided with a foreign resource at %s", href)
+                raise ConflictError(
+                    "a different resource already exists with that client_id"
+                ) from e
 
     def edit_task(self, collection_href: str, uid: str, edit: ical.TaskEdit) -> str:
         return self._edit(collection_href, uid, ical.apply_changes, edit, kind="task")
