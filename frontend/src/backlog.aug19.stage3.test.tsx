@@ -1,11 +1,17 @@
 /**
  * The 2026-08-19 sweep, stage 3: silent data loss in the SPA.
  *
- * **All five are CLOSED.** Each of these was an `it.fails` pin asserting the
- * behaviour the app should have while failing against the code as it stood; the
- * markers are gone and these are ordinary regression tests now, which must stay
- * green. Same contract as `backlog.stage4.test.tsx`, whose api-mocking preamble
- * this copies.
+ * **All CLOSED.** Each of these was an `it.fails` pin asserting the behaviour
+ * the app should have while failing against the code as it stood; the markers
+ * are gone and these are ordinary regression tests now, which must stay green.
+ * Same contract as `backlog.stage4.test.tsx`, whose api-mocking preamble this
+ * copies.
+ *
+ * The original five are the sweep's; three more at the foot were filed by the
+ * ADVERSARIAL REVIEW of this stage and closed later, which is why the create
+ * double in the fourth test normalises the way the server does — it did not,
+ * and that is precisely why `reconcileReplay`'s type mismatches were invisible
+ * to it.
  *
  * The theme is one class of defect: state that overwrites or discards the
  * user's real data without saying so. Nothing here throws, nothing is logged
@@ -29,11 +35,11 @@
  */
 import { useState } from 'react'
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 import { App } from './App'
-import { DataProvider } from './data'
+import { DataProvider, useTaskData } from './data'
 import { sortTasks } from './order'
 import { TasksView } from './components/TasksView'
 import { setCacheUser } from './cache'
@@ -96,6 +102,18 @@ const openSettings = async (section?: string) => {
 }
 
 // ── the settings bootstrap ─────────────────────────────────────────────────
+
+/** What the server does to a due value on the way back out: `_iso()` emits
+ *  seconds, and a date-only due stays a date. The client sends
+ *  `YYYY-MM-DDTHH:MM`. */
+const normalizeDue = (due: string | null): string | null =>
+  due && due.includes('T') && due.length === 16 ? `${due}:00` : due
+
+/** ical/edit.py's PRIORITY map. `Task.priority` is the iCal INTEGER; the create
+ *  body carries the label. */
+const PRIORITY: Record<string, number | null> = {
+  none: null, low: 9, medium: 5, high: 1,
+}
 
 describe('aug19 stage 3 — a failed settings read', () => {
   // -- AUDIT: App.tsx:203 — a failed GET /api/settings is swallowed silently,
@@ -336,14 +354,23 @@ describe('aug19 stage 3 — correcting a bulk row before a retry', () => {
 
     // A miniature of the CalDAV slug rule: the resource written under a
     // client_id is what a replay is answered with, body ignored.
+    //
+    // WIDENED to normalise the way the server does — see `normalizeDue` /
+    // `PRIORITY` above. The original echoed `body.due` verbatim and never
+    // returned a numeric priority, so `reconcileReplay`'s type mismatches were
+    // invisible to it: every bulk row with a timed due or a priority provoked a
+    // spurious PATCH and no test could see it.
     const server = new Map<string, Task>()
     let loseOnce = 'Pack the kitchen'
     m.createTask.mockImplementation(async (list: string, body: Record<string, unknown>) => {
       const cid = body.client_id as string
       if (!server.has(cid)) {
+        const label = (body.priority as string) ?? 'none'
         server.set(cid, task({
           uid: uidFor(cid), list, summary: body.summary as string,
-          due: (body.due as string) ?? null, href: `/${list}/${cid}.ics`,
+          due: normalizeDue((body.due as string) ?? null),
+          priority: PRIORITY[label] ?? null, priority_label: label,
+          href: `/${list}/${cid}.ics`,
         }))
       }
       if (body.summary === loseOnce) {           // the write landed; the reply did not
@@ -356,7 +383,10 @@ describe('aug19 stage 3 — correcting a bulk row before a retry', () => {
     m.patchTask.mockImplementation(async (list: string, uid: string, patch: Record<string, unknown>) => {
       const entry = [...server.entries()].find(([, t]) => t.uid === uid)
       if (!entry) throw new HttpError(404, 'no such task')
-      const next = { ...entry[1], ...(('due' in patch) ? { due: (patch.due as string) ?? null } : {}) }
+      const next = {
+        ...entry[1],
+        ...(('due' in patch) ? { due: normalizeDue((patch.due as string) ?? null) } : {}),
+      }
       server.set(entry[0], next)
       return next
     })
@@ -499,5 +529,147 @@ describe('aug19 stage 3 — logging out and back in', () => {
     expect(screen.queryByText('ALICE SECRET')).not.toBeInTheDocument()
     await waitFor(() =>
       expect(m.events.mock.calls.length).toBeGreaterThan(eventFetches))
+  })
+})
+
+
+/** Exposes the provider's actions to the test. */
+function Probe3({ onReady }: { onReady: (d: ReturnType<typeof useTaskData>) => void }) {
+  const d = useTaskData()
+  onReady(d)
+  return <div />
+}
+
+// ── Filed by the Stage 3 adversarial review — OPEN when written ─────────────
+
+describe('2026-08-20 review — the settings write path', () => {
+  it('writes no setting computed from a read that failed', async () => {
+    // MERGED_SETTINGS gates the read-modify-write preferences behind a failed
+    // load, and its rationale — scalars are safe because "the value they carry
+    // is the one just chosen" — is false for CYCLING controls, which are
+    // read-modify-write over exactly the state that failed to load.
+    //
+    // `session_ttl_s` cycles. With the read failed, `sessionTtl` is null, the
+    // panel reads "7 days" whatever the account holds, and ONE click PUTs 30
+    // days — a 30x lengthening of the field app.py calls out as
+    // security-relevant, silently, from a label that was already lying.
+    //
+    // Asserted as the OUTCOME: nothing about the session length reaches the API
+    // while the read is broken. Suppressing the write, disabling the control, or
+    // both, all satisfy it.
+    m.me.mockResolvedValue({ authenticated: true, user: 'admin' })
+    m.getSettings.mockRejectedValue(new HttpError(502, 'bad gateway'))
+    const user = userEvent.setup()
+    render(<App />)
+    await screen.findByRole('button', { name: 'Tasks' })
+    await waitFor(() => expect(m.getSettings).toHaveBeenCalled())
+    await openSettings('Account')
+
+    const ttl = await screen.findByLabelText('How long to stay signed in')
+    await user.click(ttl)
+    await act(async () => { await Promise.resolve() })
+
+    const wroteTtl = m.putSettings.mock.calls
+      .map((c) => c[0] as Record<string, unknown>)
+      .filter((b) => 'session_ttl_s' in b)
+    expect(wroteTtl, 'a failed read let one click rewrite the session length').toEqual([])
+  })
+
+  it('writes no appearance object that would destroy the theme collection', async () => {
+    // `appearance` was excused in the original pin's own evidence as having a
+    // localStorage mirror — but `cacheAppearance` REMOVES the mirror whenever no
+    // theme is active. So an account with saved themes and none active starts
+    // from `{}`, and `selectTheme` produces literally `{active: id}` with no
+    // `themes` key. `update_settings` does `current.update(patch)` — a shallow
+    // replace — so the account's whole theme collection is destroyed by picking
+    // a theme.
+    //
+    // Asserted as the outcome: nothing is written, or what is written still
+    // carries the themes. Both are safe; a bare `{active}` is not.
+    m.me.mockResolvedValue({ authenticated: true, user: 'admin' })
+    m.getSettings.mockRejectedValue(new HttpError(502, 'bad gateway'))
+    const user = userEvent.setup()
+    render(<App />)
+    await screen.findByRole('button', { name: 'Tasks' })
+    await waitFor(() => expect(m.getSettings).toHaveBeenCalled())
+    await openSettings('Appearance')
+    await user.click(await screen.findByLabelText('Customize appearance'))
+
+    const picker = await screen.findByRole('combobox', { name: 'Theme' })
+    const options = within(picker).getAllByRole('option')
+      .map((o) => (o as HTMLOptionElement).value).filter(Boolean)
+    expect(options.length, 'no theme to select').toBeGreaterThan(0)
+    await user.selectOptions(picker, options[0])
+    // `changeAppearance` goes through `saveSettingsSoon`, which debounces 400ms.
+    // Waited out rather than waited FOR: once the gate holds the write there is
+    // no PUT to wait for, and `waitFor(putSettings called)` would fail on the
+    // fixed rather than on the bug. Real timers here — this file uses them.
+    await act(async () => { await new Promise((r) => setTimeout(r, 700)) })
+
+    const wrote = m.putSettings.mock.calls
+      .map((c) => c[0] as Record<string, unknown>)
+      .filter((b) => 'appearance' in b)
+    for (const body of wrote) {
+      const appearance = body.appearance as Record<string, unknown>
+      expect(Array.isArray(appearance?.themes),
+        `PUT ${JSON.stringify(body)} would replace the theme collection`).toBe(true)
+    }
+    expect(wrote.length === 0 || wrote.every(
+      (b) => Array.isArray((b.appearance as Record<string, unknown>)?.themes))).toBe(true)
+  })
+
+  it('sends no correction for a bulk row the server merely normalised', async () => {
+    // `reconcileReplay` runs after EVERY `api.createTask` in a bulk add, and two
+    // of its comparisons are type-mismatched against the real DTO:
+    // `CreateTaskBody.priority` is a LABEL ('high') while `Task.priority` is the
+    // iCal INTEGER (1), and `body.due` is `YYYY-MM-DDTHH:MM` while the server
+    // returns `_iso()` output with seconds. So every row with a timed due or a
+    // priority looks like a replay of a different body and provokes a PATCH — a
+    // 20-row add becomes 40 writes, each a CalDAV PUT with a SEQUENCE bump every
+    // other client sees.
+    //
+    // Its own comment claims "a server-side normalisation of something we left
+    // alone cannot provoke a write". Normalisation of the fields we DID set is
+    // exactly what provokes it.
+    //
+    // Worse, the reconcile sits inside `createMany`'s try, so a transient
+    // failure on that redundant PATCH marks a create that fully landed as a
+    // failed row — the composer keeps it, and the user adds it twice.
+    m.lists.mockResolvedValue([work])
+    m.tasks.mockResolvedValue([])
+    const server = new Map<string, Task>()
+    m.createTask.mockImplementation(async (list: string, body: Record<string, unknown>) => {
+      const cid = body.client_id as string
+      const label = (body.priority as string) ?? 'none'
+      if (!server.has(cid)) {
+        server.set(cid, task({
+          uid: uidFor(cid), list, summary: body.summary as string,
+          due: normalizeDue((body.due as string) ?? null),
+          priority: PRIORITY[label] ?? null, priority_label: label,
+          href: `/${list}/${cid}.ics`,
+        }))
+      }
+      return server.get(cid)!
+    })
+
+    let d!: ReturnType<typeof useTaskData>
+    render(
+      <DataProvider rev={0} onExpire={vi.fn()}>
+        <Probe3 onReady={(x) => { d = x }} />
+      </DataProvider>,
+    )
+    await waitFor(() => expect(m.tasks).toHaveBeenCalled())
+
+    await act(async () => {
+      await d.createMany(
+        [{ listId: 'l1', cid: 'row-1',
+          body: { summary: 'Call the vet', due: '2026-08-10T09:30', priority: 'high' } }],
+        () => {},
+      )
+    })
+
+    expect(m.createTask).toHaveBeenCalledTimes(1)
+    expect(m.patchTask.mock.calls, 'the server normalised what we sent and we "corrected" it')
+      .toEqual([])
   })
 })

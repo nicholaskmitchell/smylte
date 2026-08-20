@@ -12,19 +12,19 @@ of how the harness behaved in practice — its "Two strengths of pin" and
 
 `docs/AUDIT.md` is the evidence. This is the plan for closing it.
 
-**12 open, 70 closed.** Stages 1, 2 and 3 are done; stage 4 is done and
-stage 5 has not started. Of the 12 still open:
+**10 open, 72 closed.** Stages 1, 2 and 3 are done; stage 4 is done and
+stage 5 has not started. Of the 10 still open:
 
 | where it came from | open |
 |---|---|
 | the sweep itself (stage 5) | 7 |
-| filed by the adversarial review of Stage 3 | 2 |
+| filed by the adversarial review of Stage 3 | 0 |
 | filed by that review's own follow-up | 1 |
 | filed during remediation (see `docs/AUDIT.md`) | 5 |
 
 6 of the 7 remaining sweep findings are pinned — 2 as `xfail(strict=True)` /
 `it.fails` and 4 as ordinary passing tests (see "Test gaps that were only gaps" below); the
-unpinned one is finding 62. Five of the review's 8 are now closed; the rest are unpinned. The review's
+unpinned one is finding 62. **All 7 of the review's open findings are now closed**, each pinned first. The 8th — from that review's own follow-up — is still open and unpinned. The review's
 other 3, the ones Stage 3 itself caused, are closed — along with 3 more the
 follow-up found in those very fixes. See `## Filed during the Stage 3 adversarial review` in
 `docs/AUDIT.md`. One is deliberately **not** pinned; see
