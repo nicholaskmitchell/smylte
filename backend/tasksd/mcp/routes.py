@@ -151,10 +151,18 @@ def register(app, *, settings, authenticator, client_ip, run, login_hashes):
             return False
         return authenticator.check_credentials(username, password)
 
+    def credential_version() -> str:
+        # Read through the Authenticator rather than captured, so a rotation
+        # takes effect without rebuilding this server. With auth disabled there
+        # are no credentials to bind to and every grant carries "" — which then
+        # matches, because there is no rotation to detect in that posture.
+        return "" if authenticator is None else authenticator.credential_version
+
     oauth = OAuthServer(
         issuer=issuer, mcp_url=mcp_url,
         secret=settings.session_secret or "mcp-dev-secret",
         verify_password=verify_password,
+        credential_version=credential_version,
     )
     consent_limiter = RateLimiter(**_CONSENT_LIMITER)
     consent_post_limiter = RateLimiter(**_CONSENT_POST_LIMITER)

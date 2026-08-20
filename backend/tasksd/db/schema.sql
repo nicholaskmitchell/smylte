@@ -248,7 +248,13 @@ CREATE TABLE IF NOT EXISTS oauth_tokens (
     family_id            TEXT NOT NULL,
     used_at              REAL,
     expires_at           REAL NOT NULL,
-    created_at           REAL NOT NULL
+    created_at           REAL NOT NULL,
+    -- Which credentials this grant was minted under (Authenticator.
+    -- credential_version). Checked on every bearer AND before a refresh is
+    -- consumed, so rotating the password -- or TASKS_SESSION_SECRET -- ends the
+    -- MCP grants the same way it ends the browser sessions. Without it,
+    -- docs/DEPLOY.md's "sign out everywhere" left a 30-day backdoor.
+    cv                   TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_oauth_tokens_exp ON oauth_tokens(expires_at);
 CREATE INDEX IF NOT EXISTS idx_oauth_tokens_family ON oauth_tokens(family_id);

@@ -34,9 +34,10 @@ The 2026-08-19 references were written against this commit and have not drifted 
 Ticked findings keep their original references, which point into the tree as it
 was when they were filed. They are history, not navigation.
 
-**59 open**, all from the 2026-08-19 sweep immediately below; every older
-finding is closed. The 2026-08-07 backlog is closed, and so is the one finding the
-remediation filed against itself (the missing CSP — issue #57, below). The
+**53 open**, all from the 2026-08-19 sweep immediately below; every older
+finding is closed. The 2026-08-07 backlog is closed, and so are both findings the
+remediation filed against itself (the missing CSP — issue #57 — and the unbounded
+`_count_consumed` walk, below). The
 evidence stays here — a ticked box records what the bug was and why it mattered,
 and the issues that link into these sections still resolve.
 
@@ -73,7 +74,7 @@ Three of the 69 are the same defect seen at a different layer, so they are filed
 once and the backlog counts **66**. Every one of the ten HIGHs was reproduced by
 hand with a runnable probe against a live Radicale 3.7.4 before being written down.
 
-**55 open, 11 closed** — the seven crash paths went first, as **Stage 1**
+**53 open, 13 closed** — the seven crash paths went first, as **Stage 1**
 (`docs/STAGES.md`), and **Stage 2** is closing on top of them; their pins are
 ordinary regression tests now and must stay green. The rest are still pinned by a test that asserts the corrected behaviour
 and fails today — see `docs/STAGES.md` for the stage plan and the
@@ -987,7 +988,7 @@ In a batch the same message is simply absent from the returned array, so a clien
 
 ### MCP OAuth authorization server
 
-#### [ ] Rotating the app password (and even TASKS_SESSION_SECRET) does not revoke any MCP OAuth grant — the documented "sign out everywhere" leaves a full read/write backdoor open for 30 days
+#### [x] Rotating the app password (and even TASKS_SESSION_SECRET) does not revoke any MCP OAuth grant — the documented "sign out everywhere" leaves a full read/write backdoor open for 30 days
 
 `backend/tasksd/mcp/oauth.py:551` · **high** · security · stage 2
 
@@ -1070,7 +1071,7 @@ Sequence: user opens the consent page (username field is `autofocus`), types the
 
 **Pinned by** `test_pressing_enter_on_the_consent_form_connects_rather_than_declining` in `backend/tests/test_backlog_aug19_stage45.py`.
 
-#### [ ] MAX_CLIENTS refuses new registrations instead of evicting stale ones, so anonymous registrants can lock the owner out of connecting any client for 24 h at a time
+#### [x] MAX_CLIENTS refuses new registrations instead of evicting stale ones, so anonymous registrants can lock the owner out of connecting any client for 24 h at a time
 
 `backend/tasksd/mcp/oauth.py:208` · **low** · security · stage 2
 
