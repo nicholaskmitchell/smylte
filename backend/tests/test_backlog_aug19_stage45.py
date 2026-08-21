@@ -36,16 +36,18 @@ import dataclasses
 import hashlib
 import os
 import pathlib
+import inspect
 import re
 import shutil
 import sqlite3
+import textwrap
 import subprocess
 import tempfile
 import threading
 import time
 import uuid
 from datetime import timedelta, timezone
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, quote, urlsplit
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -515,6 +517,14 @@ def test_a_closed_service_does_not_sweep_against_a_dead_connection():
     svc = _closable_service()
     svc.close()
 
+    # `close()` must RELEASE, not merely set a flag. A repair that flipped
+    # `_closed` and returned — leaving the httpx client and the SQLite
+    # connection open — satisfied every other assertion here while leaking both
+    # on each shutdown. The flag is the guard; releasing is the job.
+    with pytest.raises(sqlite3.ProgrammingError):
+        svc._conn.execute("select 1")
+    assert svc._dav._http.is_closed, "close() left the HTTP client open"
+
     try:
         stats = svc.sync_all()
     except sqlite3.ProgrammingError as e:
@@ -562,6 +572,22 @@ def test_closing_between_two_slices_does_not_kill_the_sweep():
         )
     assert swept, "the sweep never reached its first collection"
 
+    # …and the read happens INSIDE the lock. Every pin here is single-threaded,
+    # so none can distinguish a check outside it — a review moved both reads out
+    # and all three stayed green, reinstating the TOCTOU the fix's own comment
+    # says it eliminates. Structural of necessity, like the workflow pin: what
+    # is asserted is that the `_closed` read and the `has_collection` query it
+    # guards sit in one `with self._lock:` block.
+    src = inspect.getsource(TaskService.sync_all)
+    body = textwrap.dedent(src[src.index("for href in hrefs:"):])
+    guarded = re.search(
+        r"with self\._lock:\s*\n(?:\s*#[^\n]*\n)*\s*if self\._closed:", body)
+    assert guarded, (
+        "the per-slice `_closed` check is not the first statement inside "
+        "`with self._lock:`. Read outside the lock it can go stale between the "
+        f"check and the query it guards. Body was:\n{body[:400]}"
+    )
+
 
 def test_an_open_service_still_sweeps_every_collection():
     """Control, and the one that matters.
@@ -607,7 +633,26 @@ def _contents_permission(perms) -> str | None:
 # to desktop-release.yml alone leaves that gap wide open.
 _WORKFLOWS = ("desktop-release.yml", "ci.yml")
 
-_INSTALLS = re.compile(r"\bnpm (ci|install)\b|\bdotnet (publish|build|restore|test)\b")
+# Every package manager these workflows actually invoke. `pip` was missing, and
+# that was not cosmetic: it exempted `ci.yml`'s `backend`, `workflows` and
+# `security` jobs — three of its five — from the whole check, while `ci.yml`'s
+# own header comment claims "NuGet restore and `pip install` do the equivalent".
+# A review moved `permissions:` off workflow scope onto two jobs and the pin
+# stayed green.
+# Broader than `_INSTALLS`: any package manager, not just the ones in use here.
+# Used only for the release job, where the answer must be "none at all".
+_ANY_INSTALL = re.compile(
+    r"\bnpm (ci|install|exec)\b|\byarn (install|add)\b|\bpnpm (install|add)\b"
+    r"|\bpip install\b|\bpip-audit\b|\buv (pip|sync)\b|\bpoetry install\b"
+    r"|\bdotnet (publish|build|restore|test)\b|\bnuget restore\b"
+    r"|\bgem install\b|\bcargo (build|install)\b|\bgo (get|mod|install)\b"
+)
+
+_INSTALLS = re.compile(
+    r"\bnpm (ci|install)\b"
+    r"|\bdotnet (publish|build|restore|test)\b"
+    r"|\bpip install\b|\bpip-audit\b|\buv (pip|sync)\b|\bpoetry install\b"
+)
 
 
 def _third_party_jobs(wf: dict) -> dict[str, dict]:
@@ -672,10 +717,32 @@ def test_the_build_jobs_hold_no_write_token():
         top = wf.get("permissions")
         jobs = _third_party_jobs(wf)
         assert jobs, f"no job in {filename} installs dependencies any more?"
+        # Declared-ness is asserted for EVERY job, not only the installing ones:
+        # a job that gains an install step later must not be able to inherit a
+        # grant nobody wrote down. `_third_party_jobs` then narrows the stricter
+        # not-write and persist-credentials checks.
+        for name, job in (wf.get("jobs") or {}).items():
+            if "permissions" not in job and top is None:
+                raise AssertionError(
+                    f"job {name!r} in {filename} declares no `permissions:` at "
+                    f"either scope, so its token is whatever the repository "
+                    f"default is set to"
+                )
 
         for name, job in jobs.items():
             checked.append(f"{filename}:{name}")
             declared = job["permissions"] if "permissions" in job else top
+            checkout = [
+                st for st in (job.get("steps") or [])
+                if str(st.get("uses") or "").startswith("actions/checkout@")
+            ]
+            for st in checkout:
+                assert (st.get("with") or {}).get("persist-credentials") is False, (
+                    f"job {name!r} in {filename} runs third-party install code "
+                    f"after a checkout that LEFT THE TOKEN in .git/config — "
+                    f"`persist-credentials` defaults to true, and this is half "
+                    f"of the finding's own suggested fix"
+                )
             assert declared is not None, (
                 f"job {name!r} in {filename} runs third-party install/build "
                 f"code and declares no `permissions:` at either scope, so its "
@@ -708,6 +775,18 @@ def test_the_release_job_can_still_publish():
     release = (wf.get("jobs") or {}).get("release")
     assert release is not None, "the release job is gone"
 
+    # The WORKFLOW-SCOPE default must not be write. Granting it there and
+    # narrowing the two build jobs to `read` is functionally equivalent today
+    # and passes every other assertion here — but it inverts least privilege:
+    # any job added later inherits the release-publishing token by default
+    # rather than having to ask for it, which is how this finding happened in
+    # the first place. A review walked that shape past the earlier version.
+    assert _contents_permission(wf.get("permissions")) != "write", (
+        "desktop-release.yml grants contents: write at WORKFLOW scope. Even "
+        "with every current job narrowed, a job added later inherits it — the "
+        "write must live on `release` and nowhere else"
+    )
+
     declared = release["permissions"] if "permissions" in release else wf.get("permissions")
     assert _contents_permission(declared) == "write", (
         "the release job cannot write contents, so `gh release upload` will "
@@ -715,6 +794,20 @@ def test_the_release_job_can_still_publish():
     )
     # …and it must not have become a job that installs dependencies, which is
     # what would make the grant dangerous again.
+    # Comment lines stripped first: these steps carry long shell comments, and a
+    # bare word like "go" or "npm" in prose is not an invocation.
+    runs = "\n".join(
+        line for st in (release.get("steps") or [])
+        for line in str(st.get("run") or "").splitlines()
+        if not line.lstrip().startswith("#")
+    )
+    assert not _ANY_INSTALL.search(runs), (
+        f"the release job — which holds contents: write — now runs a package "
+        f"manager. `_third_party_jobs` is a DENYLIST keyed to the managers this "
+        f"repo uses today and cannot be trusted to notice a new one, so this is "
+        f"the complement: the release steps move artifacts and call `gh`, and "
+        f"install nothing. Matched in: {runs[:200]!r}"
+    )
     assert "release" not in _third_party_jobs(wf), (
         "the release job now runs dependency install code while holding "
         "contents: write — the finding, moved rather than fixed"
@@ -735,6 +828,13 @@ def _parse_systemd_env(text: str) -> dict[str, str]:
     """
     out: dict[str, str] = {}
     key = val = ""
+    # Whether this value passed through a quoted section. systemd only trims
+    # trailing whitespace it saw in the UNQUOTED state — `last_value_whitespace`
+    # is tracked in VALUE and never in SINGLE_/DOUBLE_QUOTE_VALUE — so
+    # `KEY="hunter2 "` keeps its space while `KEY=hunter2 ` does not. Mirroring
+    # that matters: without it this parser demanded a round trip systemd does
+    # not perform, and reported a correct fix as broken.
+    quoted = False
     state = "ws"
     for c in text:
         if state == "ws":
@@ -758,9 +858,9 @@ def _parse_systemd_env(text: str) -> dict[str, str]:
             if c in "\n\r":
                 out[key], state = "", "ws"
             elif c == "'":
-                state = "sq"
+                state, quoted = "sq", True
             elif c == '"':
-                state = "dq"
+                state, quoted = "dq", True
             elif c == "\\":
                 state = "vesc"
             elif c in " \t":
@@ -769,7 +869,8 @@ def _parse_systemd_env(text: str) -> dict[str, str]:
                 val, state = c, "value"
         elif state == "value":
             if c in "\n\r":
-                out[key], state = val.rstrip(" \t"), "ws"
+                out[key] = val if quoted else val.rstrip(" \t")
+                state, quoted = "ws", False
             elif c == "\\":
                 state = "vesc"
             else:
@@ -791,7 +892,7 @@ def _parse_systemd_env(text: str) -> dict[str, str]:
         elif state == "dqesc":
             val, state = val + c, "dq"
     if state in ("pre", "value", "vesc"):
-        out[key] = val.rstrip(" \t")
+        out[key] = val if quoted else val.rstrip(" \t")
     elif state in ("sq", "sqesc", "dq", "dqesc"):
         out[key] = val                             # unterminated quote, no error
     return out
@@ -899,6 +1000,21 @@ def test_setup_sh_writes_a_password_systemd_reads_back_unchanged():
         "leading single quote": "'otter-tunnel-9",
         "trailing backslash": "otter2024\\",
         "embedded double quote": 'ott"er-9',
+        # A TAB is where bash's quoting and systemd's diverge, and it is what
+        # let `printf '%q'` past this pin: %q emits ANSI-C `$'pi\thome2024'`,
+        # which systemd's parser has no state for — the `$` and both quotes are
+        # literal and the `\t` loses its backslash, giving `pithome2024`. Same
+        # silent-401 install as the original bug.
+        "embedded tab": "pi\thome2024",
+        # Non-ASCII, for the same reason under a C locale: %q escapes each byte
+        # as `\xNN`, which systemd reads as the literal characters.
+        "non-ascii": "caf\u00e9-2024",
+        # `read` strips leading and trailing IFS whitespace unless IFS is
+        # cleared, so a pasted password with a space installs a DIFFERENT one —
+        # no quoting fixes that, and nothing here covered it.
+        "leading space": " hunter2",
+        "trailing space": "hunter2 ",
+        "trailing tab": "hunter2\t",
     }
     for label, password in hostile.items():
         root = pathlib.Path(tempfile.mkdtemp(prefix="aug19-setup-"))
@@ -1022,6 +1138,10 @@ def test_a_confidential_client_authenticates_with_its_secret_and_only_that(oauth
     allowed to send the empty `client_secret=` that real clients send while a
     non-empty one is refused.
     """
+    def _basic_raw(client_id: str, secret: str) -> dict[str, str]:
+        raw = base64.b64encode(f"{client_id}:{secret}".encode()).decode()
+        return {"Authorization": f"Basic {raw}"}
+
     def _basic(client_id: str, secret: str) -> dict[str, str]:
         raw = base64.b64encode(f"{client_id}:{secret}".encode()).decode()
         return {"Authorization": f"Basic {raw}"}
@@ -1076,6 +1196,37 @@ def test_a_confidential_client_authenticates_with_its_secret_and_only_that(oauth
     impostor = _exchange(public, client_secret="invented")
     assert impostor.status_code == 401, impostor.text
     assert impostor.json()["error"] == "invalid_client"
+
+    # -- and the percent-decoding, which is the third thing this pin's docstring
+    #    names and the one it did not reach. RFC 6749 §2.3.1 says the Basic
+    #    header carries the *form-urlencoded* id and secret, so `_basic_auth`
+    #    unquotes both; dropping that `unquote()` left every other assertion
+    #    here green while a secret containing a reserved character could no
+    #    longer authenticate at all.
+    pct = _register(oauth_app, token_endpoint_auth_method="client_secret_basic")
+    # EVERY byte percent-encoded, including the unreserved ones. `quote` alone
+    # would be a no-op on a minted secret that happens to be urlsafe, which
+    # would make this assertion vacuous — and a vacuous assertion is exactly
+    # what let the missing `unquote` through. `%61` is still "a" to a decoder
+    # and is not "a" to anything else.
+    pct_enc = "".join(f"%{b:02X}" for b in pct["client_secret"].encode())
+    assert pct_enc != pct["client_secret"], "the secret was not actually encoded"
+    ok_pct = _exchange(pct, headers=_basic_raw(pct["client_id"], pct_enc),
+                       client_id=None)
+    assert ok_pct.status_code == 200, (
+        f"a form-urlencoded Basic credential was refused — `unquote` is what "
+        f"RFC 6749 §2.3.1 requires here: {ok_pct.text}"
+    )
+
+    # A header that is not base64, and one that is but carries no colon, must
+    # both refuse rather than raise.
+    for bad in ("Basic !!!not-base64!!!",
+                "Basic " + base64.b64encode(b"nocolonhere").decode()):
+        r = _exchange(pct, headers={"Authorization": bad}, client_id=None)
+        assert r.status_code in (400, 401), (
+            f"a malformed Basic header produced {r.status_code}, not a refusal: "
+            f"{r.text[:200]}"
+        )
 
 
 # ── AUDIT (test gap): busy_intervals is never driven across a DST change ────
@@ -1212,6 +1363,30 @@ def test_a_204_delete_carries_no_body_and_no_content_type(client):
     assert body == b"", f"the ASGI app sent a body with its 204: {body!r}"
     assert "content-type" not in headers, headers
     assert "content-length" not in headers, headers
+
+    # EVERY route that answers 204, not just this one. The finding says "every
+    # DELETE route"; driving one left the other three free to regress, and a
+    # review reverted `delete_list` to `return None` with the whole suite green.
+    #
+    # Asserted over the SOURCE rather than the route table, deliberately. The
+    # routes return the Response themselves instead of declaring
+    # `status_code=204` on the decorator, so `APIRoute.status_code` is None and
+    # cannot select them; walking the router tree for DELETE methods finds none
+    # either, because of how the API router is mounted. A text assertion is the
+    # honest instrument here, and it fails for the right reason: a handler that
+    # answers 204 any other way stops matching.
+    handlers = [
+        b for b in re.split(r"\n(?=    @|@)", _read("backend/tasksd/app.py"))
+        if "204" in b and "def " in b
+    ]
+    bodiless = [b for b in handlers if "return Response(status_code=204)" in b]
+    assert len(bodiless) >= 4, (
+        f"expected at least four handlers returning a bare 204 Response, found "
+        f"{len(bodiless)} of {len(handlers)} that mention 204 at all. FastAPI "
+        f"serializes a handler's return value, which puts a content-type — and "
+        f"on some versions a `null` body — on a status that must carry neither. "
+        f"TestClient hides this; a real socket does not."
+    )
 
     client.delete(f"/api/lists/{lid}")
 

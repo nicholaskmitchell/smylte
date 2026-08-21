@@ -32,9 +32,9 @@
  * docs/STAGES.md records what pins that only accept the fix you imagined cost
  * the last time.
  */
-import { useState, type ReactElement } from 'react'
+import { createRef, useState, type ReactElement } from 'react'
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 import { DataProvider, useTaskData } from './data'
@@ -43,8 +43,11 @@ import {
   type DashboardModule,
 } from './dashboard'
 import { setCacheUser } from './cache'
+import { DEFAULT_TAB_ORDER } from './tabs'
+import { useIsMobile } from './hooks'
 import { breakpointListeners, resetBreakpoint, setBreakpoint } from './test/setup'
 import { AddMultipleModal } from './components/AddMultipleModal'
+import { SettingsMenu } from './components/SettingsMenu'
 import { AppearancePanel } from './components/AppearancePanel'
 import { ArchivedCalendarsSection } from './components/ArchivedCalendarsSection'
 import { CalendarView } from './components/CalendarView'
@@ -1107,11 +1110,68 @@ describe('aug19 leftovers — every dialog answers Escape at the window', () => 
     await act(async () => { release() })
   })
 
-  // SettingsMenu is deliberately NOT in the table, and is not untested either:
-  // its Escape means "go back one step" (agenda -> section -> closed), so it
-  // takes `useEscape(back)` rather than `useEscape(onClose)` and its own suite
-  // — SettingsMenu.test.tsx, which drives all three levels — is the control.
-  // Rebuilding its twenty-prop harness here would duplicate that, not add to it.
+  // SettingsMenu was left out of the table on the grounds that its own suite is
+  // the control. It is not, and a review proved it: reverting it to a
+  // hand-rolled **`document`** listener left all 725 tests green, because
+  // `SettingsMenu.test.tsx` uses `userEvent.keyboard('{Escape}')`, which
+  // dispatches at `document.activeElement` and bubbles to `document` AND
+  // `window` — it cannot tell the two bindings apart, which is precisely the
+  // distinction this table exists for. So it is in the table now, driven with
+  // its real prop surface.
+  it('SettingsMenu answers an Escape at the window', async () => {
+    // What this table is for: the BINDING. On a desktop there is no drill-down
+    // to unwind, so `back()` falls through to `onClose` — its own suite covers
+    // the mobile agenda -> section -> closed sequence, and that part is
+    // genuinely fine. What its suite cannot check is that the listener is on
+    // `window` at all, because `userEvent.keyboard` bubbles through both.
+    const onClose = vi.fn()
+    render(<SettingsMenu panelRef={createRef<HTMLDivElement>()}
+      theme="light" onToggleTheme={vi.fn()} onCustomizeAppearance={vi.fn()}
+      tabOrder={DEFAULT_TAB_ORDER} startTab="home"
+      onTabOrderChange={vi.fn()} onStartTabChange={vi.fn()}
+      timeFormat="12h" onToggleTimeFormat={vi.fn()}
+      homeTz="" onToggleHomeTz={vi.fn()}
+      calFit="dynamic" onToggleCalFit={vi.fn()}
+      archivedCals={[]} onArchivedCalsChange={vi.fn()}
+      showCompleted={false} onToggleShowCompleted={vi.fn()}
+      user="admin" sessionTtl={null} onCycleSessionTtl={vi.fn()}
+      onLogout={vi.fn()} onExpire={vi.fn()} onClose={onClose} />)
+
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(onClose, 'SettingsMenu did not answer an Escape dispatched at the window')
+      .toHaveBeenCalled()
+  })
+
+  // And the enumeration itself. A table is only as good as its membership, and
+  // nothing derived that membership from the code — which is how finding 58
+  // happened: TaskModal was missing from a set nobody maintained. This reads
+  // the component tree and fails when a dialog adopts the hook without joining
+  // the table, so the next one cannot be forgotten silently.
+  it('every component using useEscape is covered by this file', async () => {
+    // `import.meta.glob` is Vite's, and this project does not pull in
+    // vite/client's ambient types, so it is reached through a narrow cast
+    // rather than by widening the whole tsconfig for one test.
+    const files = (import.meta as unknown as {
+      glob: (p: string, o: object) => Record<string, () => Promise<string>>
+    }).glob('./components/*.tsx', { query: '?raw', import: 'default' })
+    const users: string[] = []
+    for (const [path, load] of Object.entries(files)) {
+      const src = await load()
+      if (/\buseEscape\s*\(/.test(src)) users.push(path.split('/').pop()!.replace('.tsx', ''))
+    }
+    expect(users.length, 'nothing imports useEscape any more?').toBeGreaterThan(0)
+
+    const covered = new Set([
+      ...dialogs.map(([name]) => name),
+      'SettingsMenu',              // the case just above
+      'SchedulingView',            // backlog.stage4.test.tsx:228, at window
+    ])
+    const missing = users.filter((u) => !covered.has(u))
+    expect(missing,
+      `${missing.join(', ')} use(s) useEscape and is in no Escape test. Add it `
+      + 'to `dialogs` above, or to `covered` with the file that drives it.')
+      .toEqual([])
+  })
 })
 
 // ── the SSE stream and a lapsed session ─────────────────────────────────────
@@ -1473,6 +1533,37 @@ describe('aug19 stage 4b — the mobile breakpoint', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('flips at the same width the stylesheet uses', async () => {
+    // `hooks.ts` asks for this in a comment — keep MOBILE_QUERY in sync with
+    // app.css — and nothing enforced it. With a stub that answered `matches`
+    // for any query, moving the hook to 480px while the stylesheet kept 720px
+    // passed every test in this file: the app would swap to the mobile tree at
+    // one width and restyle at another, so between them the phone layout
+    // renders with desktop rules.
+    // Read off disk. Vitest does not process CSS by default, so both a plain
+    // import and Vite's `?raw` loader come back empty here — an empty string
+    // would make this assertion vacuous, which is the failure mode this whole
+    // test exists to close.
+    const { readFileSync } = await import('node:fs')
+    const css = readFileSync('src/styles/app.css', 'utf8')
+    const widths = [...css.matchAll(/@media[^{]*max-width:\s*(\d+)px/g)]
+      .map((m) => Number(m[1]))
+    expect(widths.length, 'app.css has no max-width media query any more?')
+      .toBeGreaterThan(0)
+    const breakpoint = Math.max(...widths)
+
+    // One pixel either side of the stylesheet's own breakpoint.
+    const { result } = renderHook(() => useIsMobile())
+    act(() => { setBreakpoint(breakpoint) })
+    expect(result.current,
+      `useIsMobile is false at ${breakpoint}px, where app.css switches to the `
+      + 'mobile rules').toBe(true)
+    act(() => { setBreakpoint(breakpoint + 1) })
+    expect(result.current,
+      `useIsMobile is still true at ${breakpoint + 1}px, past where app.css `
+      + 'switches back').toBe(false)
   })
 
   // WIDENING, and the half of this finding the pin above cannot reach. Every
