@@ -20,7 +20,17 @@ import '@testing-library/jest-dom/vitest'
 type Listener = (e: MediaQueryListEvent) => void
 
 const listeners = new Set<Listener>()
-let matches = false
+// A viewport WIDTH, not a bare boolean, and the query is actually evaluated
+// against it. The stub used to answer `matches` for every query it was handed,
+// which made the app's real breakpoint unassertable: changing `MOBILE_QUERY`
+// from 720px to 480px while app.css kept its three `@media (max-width: 720px)`
+// blocks passed every test here, and `hooks.ts`'s own "keep in sync with
+// app.css" comment had nothing enforcing it. A stub that ignores its argument
+// can only ever prove that the hook re-read *something*.
+let width = 1200
+let limit = 720
+
+const MAX_WIDTH = /\(\s*max-width\s*:\s*(\d+)px\s*\)/
 
 /** Cross the mobile breakpoint, notifying everything currently subscribed.
  *
@@ -28,9 +38,9 @@ let matches = false
  *  does, on the re-render this very call provokes) would otherwise mutate the
  *  set mid-iteration. Callers wrap this in `act()` when a component is
  *  listening. */
-export function setBreakpoint(next: boolean): void {
-  matches = next
-  for (const fn of [...listeners]) fn({ matches: next } as MediaQueryListEvent)
+export function setBreakpoint(next: boolean | number): void {
+  width = typeof next === 'number' ? next : (next ? 400 : 1200)
+  for (const fn of [...listeners]) fn({ matches: width <= limit } as MediaQueryListEvent)
 }
 
 /** How many listeners are subscribed — lets a suite assert that unmounting
@@ -49,7 +59,7 @@ export function breakpointListeners(): number {
  *  nobody. Measured: the rotation case passes alone and fails whole-file,
  *  `breakpointListeners()` stuck at 0. */
 export function resetBreakpoint(): void {
-  matches = false
+  width = 1200
   listeners.clear()
   installStub()
 }
@@ -58,7 +68,13 @@ function installStub(): void {
   // A getter, not a captured boolean: `useIsMobile` calls `matchMedia` once on
   // mount and once in its effect, and both must see the CURRENT breakpoint.
   window.matchMedia = ((query: string) => ({
-    get matches() { return matches },
+    get matches() {
+      // The query decides, so a component asking about a DIFFERENT breakpoint
+      // gets a different answer — which is the whole point.
+      const m = MAX_WIDTH.exec(query)
+      if (m) limit = Number(m[1])
+      return m ? width <= Number(m[1]) : false
+    },
     media: query,
     onchange: null,
     addEventListener: (_type: string, fn: Listener) => { listeners.add(fn) },
