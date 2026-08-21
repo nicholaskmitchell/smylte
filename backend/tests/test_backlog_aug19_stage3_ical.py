@@ -1303,33 +1303,72 @@ def test_an_exact_day_long_duration_survives_the_cache_and_the_expansion():
         )
 
 
-def test_dragging_an_every_weekday_series_inside_its_own_day_set_is_allowed():
-    """`FREQ=DAILY;BYDAY=MO,TU,WE,TH,FR` is what Google Calendar writes for
-    "Every weekday", so this is not an exotic rule — it is one of the most common
-    series any account holds.
+def test_dragging_an_every_weekday_series_refuses_rather_than_corrupting_it():
+    """The REVERSE of what this test asserted when the finding was first closed,
+    and the reversal is the finding.
 
-    Under FREQ=DAILY, BYDAY is a FILTER over the generated days, not a selector
-    that pins the rule to one weekday. Moving DTSTART from a Monday to a Tuesday
-    desynchronizes nothing: every weekday is still in the set, and the rule still
-    generates the same days. But `_desynchronizing` tests the SHAPE ("is there a
-    BYDAY on a non-WEEKLY rule?") rather than the property, so it refuses with
-    422 — a series that used to drag correctly now cannot be moved at all.
+    The audit asked for `FREQ=DAILY;BYDAY=MO,TU,WE,TH,FR` — Google Calendar's
+    "Every weekday" — to become draggable, on the reasoning that BYDAY under a
+    sub-weekly FREQ is a filter rather than a day selector, so a shift inside the
+    set desynchronizes nothing. Allowing it was shipped, and an adversarial
+    review reproduced what it does:
 
-    The finding-16 fix traded a silent corruption for a refusal; this is that
-    refusal landing on a legitimate series.
+        BEFORE  Jan 7, 9, 14, 16, 19      (the user had deleted Jan 12)
+        AFTER   Jan 9, 12, 16, 19, 21
+
+    Jan 12 — deleted — is back. Jan 14 — live — is gone. The RRULE never rotated,
+    so the series did not move at all; only DTSTART and the EXDATEs did.
+    `shift_series` shifts every EXDATE, RDATE and RECURRENCE-ID by `delta`, and
+    with the rule's own days unchanged those land on the wrong occurrences.
+
+    So the suggested fix was wrong on its own terms, and its premise — that this
+    series "previously worked correctly" — was wrong too: before finding 16 it
+    silently corrupted in exactly this way. Refusing is the honest answer, and
+    this test now pins the refusal so the next attempt has to reckon with it.
+
+    The finding is REOPENED in docs/AUDIT.md with this evidence.
     """
     raw = foreign_event_raw(
         "wd@x", "Standup", dtstart="20260105T090000Z", dtend="20260105T093000Z",
         rrule="FREQ=DAILY;BYDAY=MO,TU,WE,TH,FR;COUNT=10")
     moved = datetime(2026, 1, 6, 9, 0, tzinfo=timezone.utc)      # Mon -> Tue
-    out = shift_series(
-        raw, "2026-01-05T09:00:00+00:00",
-        EventEdit(dtstart=moved, dtend=moved + timedelta(minutes=30)))
-    days = [datetime.fromisoformat(o.start).date()
-            for o in expand_occurrences(out, date(2026, 1, 1), date(2026, 3, 1))]
-    assert days, "the moved series produced no occurrences"
-    assert all(d.weekday() < 5 for d in days), f"a weekend day appeared: {days}"
-    assert days[0] == date(2026, 1, 6), f"the series did not move: {days[:3]}"
+    with pytest.raises(ValueError, match="BYDAY"):
+        shift_series(
+            raw, "2026-01-05T09:00:00+00:00",
+            EventEdit(dtstart=moved, dtend=moved + timedelta(minutes=30)))
+
+
+def test_a_weekday_drag_does_not_move_an_exdate_onto_a_live_occurrence():
+    """What the refusal above is protecting, stated as the outcome rather than
+    as the mechanism — so a future fix that makes the drag work has something to
+    satisfy rather than just a `pytest.raises` to delete.
+
+    Either the edit is refused, or the occurrence set afterwards is the one the
+    user asked for: their deleted day still deleted, their live days still live.
+    """
+    raw = foreign_event_raw(
+        "mwf@x", "standup", dtstart="20260107T090000Z", dtend="20260107T093000Z",
+        rrule="FREQ=DAILY;BYDAY=MO,WE,FR;COUNT=6",
+        extra=("EXDATE:20260112T090000Z",))
+    before = [datetime.fromisoformat(o.start).date()
+              for o in expand_occurrences(raw, date(2026, 1, 1), date(2026, 2, 1))]
+    assert date(2026, 1, 12) not in before      # the user deleted it
+    assert date(2026, 1, 14) in before          # and this one is real
+
+    moved = datetime(2026, 1, 9, 9, 0, tzinfo=timezone.utc)      # Wed -> Fri
+    try:
+        out = shift_series(
+            raw, "2026-01-07T09:00:00+00:00",
+            EventEdit(dtstart=moved, dtend=moved + timedelta(minutes=30)))
+    except ValueError:
+        return                                  # refused: nothing was corrupted
+
+    after = [datetime.fromisoformat(o.start).date()
+             for o in expand_occurrences(out, date(2026, 1, 1), date(2026, 2, 1))]
+    assert date(2026, 1, 12) not in after, (
+        f"an occurrence the user had DELETED came back: {after}")
+    assert date(2026, 1, 14) in after, (
+        f"a live occurrence was deleted by a drag that did not touch it: {after}")
 
 
 def test_a_weekday_series_dragged_onto_a_weekend_is_still_refused():
@@ -1349,3 +1388,117 @@ def test_a_weekday_series_dragged_onto_a_weekend_is_still_refused():
         shift_series(
             raw, "2026-01-05T09:00:00+00:00",
             EventEdit(dtstart=moved, dtend=moved + timedelta(minutes=30)))
+
+
+def test_an_alarms_duration_is_not_mistaken_for_the_events():
+    """A VALARM is a SUBCOMPONENT of a VEVENT, and it carries its own DURATION —
+    the repeat interval that sits beside `REPEAT:` (RFC 5545 §3.8.6.3). Apple
+    Calendar and DAVx5 write one for any repeating or snoozing alarm, so this is
+    an ordinary resource, not a crafted one.
+
+    `wire_durations` scans content lines with a single boolean and tracks only
+    `BEGIN:VEVENT`/`END:VEVENT`, so the alarm's line lands in the same branch as
+    the event's. Producers put VALARM last, so the alarm's value is the one that
+    survives to `END:VEVENT` — and `extract` PREFERS the wire value over
+    `to_ical()`, so it is what reaches the cache's `duration` column, which
+    `busy_intervals` re-parses.
+
+    A two-hour appointment therefore blocks five minutes, and the hour and
+    fifty-five minutes left over are offered to anonymous visitors on the public
+    booking page. That is the same failure the wire-DURATION work was written to
+    stop, one layer further out and larger.
+
+    Two more shapes are pinned with it, because they are the same defect and the
+    same blast radius: a value that makes the event vanish from the busy set
+    entirely, and a parameterised DURATION whose first colon is inside the
+    parameter rather than before the value.
+    """
+    from tasksd.ical.read import extract_from_raw, split_duration, wire_durations
+
+    def alarmed(dur: str, alarm: str = "PT5M") -> str:
+        return (
+            "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:al@x\r\n"
+            "DTSTART:20260909T140000Z\r\n"
+            f"DURATION:{dur}\r\nSUMMARY:Deposition\r\n"
+            "BEGIN:VALARM\r\nACTION:DISPLAY\r\nTRIGGER:-PT15M\r\n"
+            f"DURATION:{alarm}\r\nREPEAT:3\r\nEND:VALARM\r\n"
+            "END:VEVENT\r\nEND:VCALENDAR\r\n"
+        )
+
+    # The alarm's interval, whatever it is, is never the event's length.
+    for alarm in ("PT5M", "P0D", "PT0S", "-PT5M"):
+        raw = alarmed("PT2H", alarm)
+        assert wire_durations(raw) == {None: "PT2H"}, (
+            f"a VALARM DURATION:{alarm} was read as the event's: "
+            f"{wire_durations(raw)}"
+        )
+        assert extract_from_raw(raw).duration == "PT2H", (
+            f"a VALARM DURATION:{alarm} reached the cache column as "
+            f"{extract_from_raw(raw).duration!r}"
+        )
+
+    # …and the whole point of the column: what the busy set makes of it.
+    ev = {"start": "2026-09-09T14:00:00+00:00", "end": None,
+          "duration": extract_from_raw(alarmed("PT2H")).duration,
+          "all_day": False, "start_is_date": False, "end_is_date": False}
+    busy = scheduling.busy_intervals([ev], timezone.utc)
+    assert busy, "the event left the busy set entirely"
+    assert _span(busy[0]) == timedelta(hours=2), (
+        f"the busy interval is {_span(busy[0])}, not the authored 2 hours "
+        f"— the difference is offered to anonymous visitors"
+    )
+
+    # A DURATION line this scan cannot read cleanly must never REPLACE what the
+    # library made of it. `X-A=a:b:PT8H` is malformed — RFC 5545 §3.1 forbids a
+    # colon in an unquoted parameter value, so the value really is `b:PT8H` —
+    # and the point is not which of the two readings wins but that an
+    # unparseable string is never what gets cached and re-parsed downstream.
+    param = (
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:p@x\r\n"
+        "DTSTART:20260909T140000Z\r\n"
+        "DURATION;X-EVOLUTION-ALARM-UID=a:b:PT8H\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+    )
+    cached = extract_from_raw(param).duration
+    assert cached is None or split_duration(cached) is not None, (
+        f"an unparseable DURATION reached the cache column as {cached!r}; "
+        f"busy_intervals re-parses this and drops what it cannot read, which "
+        f"removes the event from the busy set entirely"
+    )
+
+
+def test_unfolding_a_large_resource_stays_linear():
+    """A COST BOUND, not a benchmark — the same shape as `rrule_budget`'s.
+
+    `unfold` runs inside `expand_occurrences`, which the PUBLIC BOOKING PAGE
+    reaches for every event calendar, uncached, and which runs inside the
+    service's global lock. So its cost is an anonymous visitor's lever on the
+    owner's whole app, and the resource size is set by whatever CalDAV client
+    wrote the item — Radicale's default cap is 100 MB, well past the app's own
+    1 MB body limit, which does not apply to bytes arriving through sync.
+
+    The first version accumulated with `out[-1] += line[1:]`. The list holds a
+    reference at concat time, so CPython cannot append in place and every
+    continuation line copied the whole accumulated string: measured 0.63 s for
+    200k folded lines and 16 s for a 4 MB resource, against the icalendar
+    parser's own 0.27 s for the same input.
+
+    The bound is deliberately loose — 20x headroom over the measured ~0.04 s, so
+    a slow CI box cannot flake it — because it only has to separate linear from
+    quadratic, and quadratic misses it by two orders of magnitude.
+    """
+    import time
+    from tasksd.ical.read import unfold
+
+    folded = ("BEGIN:VCALENDAR\r\nDESCRIPTION:x"
+              + "".join("\r\n abcd" for _ in range(200_000))
+              + "\r\nEND:VCALENDAR\r\n")
+    started = time.perf_counter()
+    lines = unfold(folded)
+    elapsed = time.perf_counter() - started
+
+    assert lines[1] == "DESCRIPTION:x" + "abcd" * 200_000
+    assert elapsed < 1.0, (
+        f"unfolding 200k folded lines took {elapsed:.2f}s — that is the "
+        f"quadratic shape returning, on a path the public booking page reaches "
+        f"under the global service lock"
+    )

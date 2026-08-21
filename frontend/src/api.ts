@@ -505,9 +505,26 @@ export function subscribe(
       // that is meant to be quiet — and would fire an unmocked `fetch` inside
       // api.test.ts, which drives exactly one failure.
       if (++hardFails >= _SSE_PROBE_AFTER && !probing) {
+        // Counted back down, not left over the threshold. Leaving it there made
+        // every subsequent reconnect probe again, so against a server that is
+        // merely down — or any proxy that buffers /api/events into oblivion —
+        // the tab became a permanent /api/me poller for the life of the page.
+        // That is the traffic this was meant to remove, doubled.
+        hardFails = 0
         probing = true
         void api.me()
-          .catch((e) => { if (e instanceof AuthError) { stopped = true; clearTimeout(retry); onExpire?.() } })
+          .catch((e) => {
+            // `stopped` re-checked: the caller may have unsubscribed while this
+            // was in flight, and firing `onExpire` then bounces a session that
+            // has since been re-established back to the login card.
+            if (e instanceof AuthError && !stopped) {
+              stopped = true
+              clearTimeout(retry)
+              es?.close()
+              es = null
+              onExpire?.()
+            }
+          })
           .finally(() => { probing = false })
       }
       if (stopped) return

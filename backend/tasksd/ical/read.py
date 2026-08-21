@@ -113,15 +113,46 @@ def unfold(raw: bytes | str) -> list[str]:
 
     A line beginning with a space or tab continues the one before it, and the
     single leading whitespace character is what was inserted by the folder.
+
+    Each logical line is accumulated in a LIST and joined once. The obvious
+    `out[-1] += line[1:]` is quadratic — the list holds a reference at concat
+    time, so CPython's in-place append optimisation cannot apply and every
+    continuation copies the whole accumulated string. That is not academic here:
+    this runs inside `expand_occurrences`, which the public booking page reaches
+    for every event calendar, uncached, under the service's global lock. Measured
+    on a 4 MB resource, the quadratic version cost 16 s against the icalendar
+    parser's 0.27 s.
     """
     text = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else raw
     out: list[str] = []
+    parts: list[str] = []
     for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
-        if line[:1] in (" ", "\t") and out:
-            out[-1] += line[1:]
+        if line[:1] in (" ", "\t") and parts:
+            parts.append(line[1:])
         else:
-            out.append(line)
+            if parts:
+                out.append("".join(parts))
+            parts = [line]
+    if parts:
+        out.append("".join(parts))
     return out
+
+
+def _value_of(line: str) -> str | None:
+    """The value half of a content line, with any parameters stripped.
+
+    Not `line.split(":", 1)[1]`: a parameter value may itself contain a colon
+    when it is quoted (RFC 5545 §3.2), and `DURATION;X-A=a:b:PT8H` is a real
+    shape Evolution emits. The name ends at the first `;` or `:` outside quotes,
+    and the VALUE begins after the first unquoted `:`.
+    """
+    quoted = False
+    for i, ch in enumerate(line):
+        if ch == '"':
+            quoted = not quoted
+        elif ch == ":" and not quoted:
+            return line[i + 1:].strip()
+    return None
 
 
 def wire_durations(raw: bytes | str) -> dict[str | None, str]:
@@ -142,24 +173,48 @@ def wire_durations(raw: bytes | str) -> dict[str | None, str]:
 
     Keyed on the RECURRENCE-ID's raw value rather than a parsed instant: this
     runs before any parsing and only has to line up with itself.
+
+    SUBCOMPONENTS ARE SKIPPED WHOLE, and that is the sharp edge. A VALARM lives
+    INSIDE a VEVENT and carries its own DURATION — the repeat interval beside
+    `REPEAT:`, which Apple Calendar and DAVx5 write for any repeating alarm.
+    A scan that tracked only `BEGIN/END:VEVENT` read that as the event's, and
+    since producers put VALARM last it was the value that survived: a two-hour
+    appointment cached as five minutes, with the rest offered to anonymous
+    visitors on the public booking page. Depth is tracked, and only lines at the
+    VEVENT's own level are read.
+
+    A resource with two VEVENTs and no RECURRENCE-ID on either is malformed but
+    accepted upstream; `find_component` takes the FIRST, so this does too rather
+    than letting the second overwrite it.
     """
     out: dict[str | None, str] = {}
-    depth_in_vevent = False
+    depth = 0                       # nesting below the VEVENT we are inside
+    in_vevent = False
     duration: str | None = None
     rid: str | None = None
     for line in unfold(raw):
         upper = line.upper()
-        if upper.startswith("BEGIN:VEVENT"):
-            depth_in_vevent, duration, rid = True, None, None
-        elif upper.startswith("END:VEVENT"):
-            if depth_in_vevent and duration is not None:
-                out[rid] = duration
-            depth_in_vevent = False
-        elif depth_in_vevent:
+        if upper.startswith("BEGIN:"):
+            if not in_vevent:
+                if upper.startswith("BEGIN:VEVENT"):
+                    in_vevent, depth, duration, rid = True, 0, None, None
+            else:
+                depth += 1          # a subcomponent: everything in it is not ours
+            continue
+        if upper.startswith("END:"):
+            if in_vevent:
+                if depth:
+                    depth -= 1
+                else:
+                    if duration is not None and rid not in out:
+                        out[rid] = duration
+                    in_vevent = False
+            continue
+        if in_vevent and not depth:
             if _DURATION_LINE.match(line):
-                duration = line.split(":", 1)[1].strip() if ":" in line else None
+                duration = _value_of(line)
             elif _RECURRENCE_LINE.match(line):
-                rid = line.split(":", 1)[1].strip() if ":" in line else None
+                rid = _value_of(line)
     return out
 
 
@@ -315,7 +370,22 @@ def extract(cal: Calendar, *, wire: dict[str | None, str] | None = None) -> Item
             # loss landed on the booking page's busy set.
             rid = comp.get("RECURRENCE-ID")
             key = str(rid.to_ical().decode()) if rid is not None else None
-            f.duration = (wire or {}).get(key) or comp.get("DURATION").to_ical().decode()
+            # Only when it PARSES. The wire text is attacker-influenced — it
+            # comes from whatever client wrote the resource — and a value
+            # icalendar rejected must not reach this column just because a
+            # hand-written scan found it. Anything unparseable falls back to the
+            # library's own reading, which is what shipped before.
+            authored = (wire or {}).get(key)
+            if authored is None or split_duration(authored) is None:
+                authored = comp.get("DURATION").to_ical().decode()
+            # …and None when NEITHER reading parses. Storing a string
+            # `busy_intervals` cannot re-parse is worse than storing nothing:
+            # it drops the interval inside a bare `except: continue`, so the
+            # event leaves the busy set entirely and the public booking page
+            # offers the whole of it. Predates this column carrying wire text —
+            # `to_ical()` returns the same garbage for a malformed line — but it
+            # is one line to close here.
+            f.duration = authored if split_duration(authored) is not None else None
     f.min_instant = _min_instant(cal, f.dtstart)
     return f
 

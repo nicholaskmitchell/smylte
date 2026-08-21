@@ -12,15 +12,25 @@ of how the harness behaved in practice — its "Two strengths of pin" and
 
 `docs/AUDIT.md` is the evidence. This is the plan for closing it.
 
-**10 open, 72 closed.** Stages 1, 2 and 3 are done; stage 4 is done and
-stage 5 has not started. Of the 10 still open:
+**13 open, 72 closed.** Stages 1, 2, 3 and 4 are done; stage 5 has not started.
+
+The sweep opened at 36/44. Stage 4 closed 28 — its own 21 plus the 7 the Stage 3
+adversarial review had left open — and remediation FILED 5 more along the way,
+so the open count fell by 23 rather than 28. Of the 13 still open:
 
 | where it came from | open |
 |---|---|
-| the sweep itself (stage 5) | 7 |
+| the sweep itself (all stage 5) | 7 |
 | filed by the adversarial review of Stage 3 | 0 |
 | filed by that review's own follow-up | 1 |
 | filed during remediation (see `docs/AUDIT.md`) | 5 |
+
+The five filed during remediation are worth naming, because four of the five were
+found by writing a test rather than by reading code: `HEAD /book/<token>` 404ing
+(found by asserting it in a pin and watching it fail on the spelling that already
+worked), `TasksView`'s uid-keyed maps, the `useEscape` consolidation, one failing
+calendar blanking a whole month, and `find_free_time`'s DST-unsafe end
+arithmetic. Closing a finding properly is itself a way of finding the next one.
 
 6 of the 7 remaining sweep findings are pinned — 2 as `xfail(strict=True)` /
 `it.fails` and 4 as ordinary passing tests (see "Test gaps that were only gaps" below); the
