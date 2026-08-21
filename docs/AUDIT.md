@@ -3454,7 +3454,7 @@ defect is a DISAGREEMENT between two zones, so a run that happened to be in
 America/Chicago would pass against the bug. Half-fix checked: ignore the `zone`
 argument and keep `.astimezone()`.
 
-#### [ ] _desynchronizing falsely refuses Google Calendar's "every weekday"
+#### [x] _desynchronizing falsely refuses Google Calendar's "every weekday"
 
 `backend/tasksd/ical/edit.py:1006` · **medium** · bug
 
@@ -3507,6 +3507,27 @@ the user's deleted days deleted and their live days live — by
 **A real fix would have to rotate the whole recurrence set**, not just judge
 DTSTART: shift the rule's days, EXDATEs, RDATEs and override anchors together, or
 refuse. That is a substantially larger change than this entry assumed.
+
+**Closed as a decision, not a fix — handed off as
+[#63](https://github.com/nicholaskmitchell/smylte/issues/63).**
+
+The refusal stays, and it is the right behaviour. This entry's premise was that
+the drag "previously worked correctly"; it did not — before finding 16 it
+silently corrupted the series in exactly the way recorded above, and the 422 was
+the improvement. One attempt at the suggested fix shipped and destroyed user
+data, and judging DTSTART alone cannot address it, because the damage is in the
+properties AROUND the rule rather than in the rule's own validity.
+
+The issue carries the whole record: the false premise, the measured loss, both
+reasons the attempt failed, what a real fix has to rotate together, and the open
+design question of what a "day change" even means for a filter-style rule.
+
+Two tests hold the line meanwhile, and the second is the specification a future
+fix must satisfy whichever way it goes:
+`test_dragging_an_every_weekday_series_refuses_rather_than_corrupting_it` pins
+the refusal, and `test_a_weekday_drag_does_not_move_an_exdate_onto_a_live_occurrence`
+pins the OUTCOME — a drag either is refused, or leaves the user's deleted days
+deleted and their live days live.
 
 #### [x] The refresh-token scope check runs after the single-use consumption, burning the grant on a bad scope
 
