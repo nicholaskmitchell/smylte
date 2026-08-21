@@ -65,7 +65,20 @@ def init_db(conn: sqlite3.Connection) -> None:
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(collections)")}
     if "ord" not in cols:
         conn.execute("ALTER TABLE collections ADD COLUMN ord INTEGER")
+    tok_cols = {r["name"] for r in conn.execute("PRAGMA table_info(oauth_tokens)")}
+    if "cv" not in tok_cols:
+        # Grants issued before this column read '' and are refused on first use,
+        # so an upgrade costs every MCP client one re-authorization. That is the
+        # conservative direction and the same cost the session `cv` already
+        # documents: a token whose provenance cannot be established is not one
+        # to trust for the next 30 days.
+        conn.execute("ALTER TABLE oauth_tokens ADD COLUMN cv TEXT NOT NULL DEFAULT ''")
     item_cols = {r["name"] for r in conn.execute("PRAGMA table_info(items)")}
+    if "min_instant" not in item_cols:
+        # NULL until the row is next upserted, and the candidate query admits a
+        # NULL rather than filtering on it — the conservative direction, since a
+        # missing lower bound must not hide an occurrence. A resync fills it in.
+        conn.execute("ALTER TABLE items ADD COLUMN min_instant TEXT")
     if "fts_rowid" not in item_cols:
         # Rows written before this column keep NULL and fall back to the old
         # scoped delete, so no rebuild is needed; they pick up a rowid the next
@@ -241,8 +254,9 @@ def upsert_item(
         """INSERT INTO items (collection_href, uid, href, etag, raw_ics, component, summary,
              description, status, priority, percent_complete, completed, due,
              due_is_date, dtstart, dtstart_is_date, dtend, dtend_is_date, duration,
-             related_parent, sequence, has_rrule, location, created, last_modified, synced_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,
+             related_parent, sequence, has_rrule, min_instant, location, created,
+             last_modified, synced_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,
                    strftime('%Y-%m-%dT%H:%M:%fZ','now'))
            ON CONFLICT(collection_href, uid) DO UPDATE SET
              href=excluded.href, etag=excluded.etag, raw_ics=excluded.raw_ics,
@@ -253,7 +267,8 @@ def upsert_item(
              dtstart_is_date=excluded.dtstart_is_date, dtend=excluded.dtend,
              dtend_is_date=excluded.dtend_is_date, duration=excluded.duration,
              related_parent=excluded.related_parent, sequence=excluded.sequence,
-             has_rrule=excluded.has_rrule, location=excluded.location, created=excluded.created,
+             has_rrule=excluded.has_rrule, min_instant=excluded.min_instant,
+             location=excluded.location, created=excluded.created,
              last_modified=excluded.last_modified, synced_at=excluded.synced_at""",
         (
             collection_href, fields.uid, item.href, item.etag, item.data, fields.component,
@@ -262,7 +277,7 @@ def upsert_item(
             int(fields.due_is_date), fields.dtstart, int(fields.dtstart_is_date),
             fields.dtend, int(fields.dtend_is_date), fields.duration,
             fields.related_parent, fields.sequence, int(fields.has_rrule),
-            fields.location, fields.created, fields.last_modified,
+            fields.min_instant, fields.location, fields.created, fields.last_modified,
         ),
     )
     conn.execute(
@@ -480,14 +495,27 @@ def set_sort_orders(conn: sqlite3.Connection, placed: list[tuple[str, str]]) -> 
     Rows are created on demand: a task that has never had a sidecar (which is
     every task until something is dragged) gets one here rather than being
     skipped, which is what makes the whole sequence explicit afterwards.
+
+    …but only for a uid that actually names a live item in that collection. A
+    sidecar row is the one thing a cache rebuild cannot reconstruct, so
+    `orphan_sidecar` marks a row when its item goes and `gc_orphans` sweeps only
+    rows already marked — a row minted for a uid that never existed has
+    `orphaned_at IS NULL` forever and can never be reclaimed. `PUT
+    …/tasks/{uid}/sidecar` was given a `has_task` guard and a nine-line comment
+    about exactly this in the 2026-08-07 sweep; `POST /api/tasks/reorder` writes
+    to the same table through a different door, validated only that the LIST
+    resolves, with `uid` an unbounded free-text string and 20 000 entries allowed
+    per request. The guard belongs here, where every door passes.
     """
     for i, (href, uid) in enumerate(placed, start=1):
         conn.execute(
-            "INSERT INTO sidecar (collection_href, uid, sort_order) VALUES (?, ?, ?) "
+            "INSERT INTO sidecar (collection_href, uid, sort_order) "
+            "SELECT ?, ?, ? WHERE EXISTS "
+            "(SELECT 1 FROM items WHERE collection_href=? AND uid=?) "
             "ON CONFLICT(collection_href, uid) DO UPDATE SET "
             "sort_order=excluded.sort_order, "
             "updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')",
-            (href, uid, float(i)),
+            (href, uid, float(i), href, uid),
         )
 
 
@@ -532,13 +560,19 @@ def update_booking_link(
         raise ValueError(f"unknown booking link fields: {bad}")
     if get_booking_link(conn, token) is None:
         return None
-    for k, v in fields.items():
-        conn.execute(
-            # {k} is vetted against _LINK_FIELDS above — not attacker input.
-            f"UPDATE booking_links SET {k}=?, "  # nosec B608
-            "updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE token=?",
-            (v, token),
-        )
+    # One statement per field on an autocommit connection is one COMMIT per
+    # field, so a value the schema rejects part-way through left the earlier
+    # fields permanently applied — the caller saw a 500 and a half-changed link.
+    # Same repair, and the same reason, as reorder_tasks: `with conn:` is not a
+    # transaction under isolation_level=None.
+    with tx(conn):
+        for k, v in fields.items():
+            conn.execute(
+                # {k} is vetted against _LINK_FIELDS above — not attacker input.
+                f"UPDATE booking_links SET {k}=?, "  # nosec B608
+                "updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE token=?",
+                (v, token),
+            )
     return get_booking_link(conn, token)
 
 
@@ -654,14 +688,44 @@ def get_events_in_range(
     row feeds the booking conflict check, so losing it let an anonymous visitor
     book straight over a multi-day block. Admit it on the upper bound alone, like
     a recurring master, and let scheduling.busy_intervals — which already parses
-    `duration` — do the precise interval math."""
+    `duration` — do the precise interval math.
+
+    The upper bound is not a valid gate for a recurring row either, and the
+    docstring above was half right for the same reason it was half wrong: a
+    recurrence set projects BACKWARDS as well as forwards. `has_rrule` is set for
+    RDATE too, and `recurring_ical_events` applies RECURRENCE-ID overrides, so a
+    resource can hold an instant EARLIER than its cached master DTSTART — which
+    is `items.dtstart`, because `read.extract` caches the master row. Any window
+    ending before that dropped the whole resource, occurrence and all.
+
+    This app creates the shape itself: `apply_occurrence_override` writes an
+    override with a new DTSTART and deliberately leaves the master rule alone, so
+    dragging the FIRST occurrence of a series earlier is enough. Thunderbird's
+    and Apple's "move this occurrence" produce it too. `_link_busy` queries only
+    +/-1 day around the requested day, so the moved meeting contributed no busy
+    interval and an anonymous visitor could book straight over it.
+
+    So a recurring row is gated on `min_instant` — the earliest instant the whole
+    RESOURCE can produce, across its overrides and RDATEs — rather than on the
+    master's DTSTART. Admitting them unconditionally instead was the first
+    attempt and it is not affordable: the stage-2 search budget bounds ONE
+    expansion, `_link_busy` runs one per recurring row while holding the global
+    lock, and both public booking routes reach it unauthenticated. Measured, 50
+    far-future never-matching series (ordinary foreign-client output) went from 0
+    candidate rows to 50, and a two-day booking window from ~0 s to 9.13 s.
+
+    A NULL `min_instant` — a row cached before the column existed — is admitted,
+    so an incomplete upgrade cannot hide an occurrence."""
     return list(
         conn.execute(
             "SELECT * FROM items WHERE collection_href=? AND component='VEVENT' "
-            "AND dtstart <= ? AND (has_rrule=1 OR duration IS NOT NULL "
-            "OR COALESCE(dtend, dtstart) >= ?) "
+            "AND CASE WHEN has_rrule=1 "
+            "         THEN COALESCE(min_instant, dtstart) IS NULL "
+            "              OR COALESCE(min_instant, dtstart) <= ? "
+            "         ELSE dtstart <= ? AND (duration IS NOT NULL "
+            "              OR COALESCE(dtend, dtstart) >= ?) END "
             "ORDER BY dtstart",
-            (collection_href, end_iso, start_iso),
+            (collection_href, end_iso, end_iso, start_iso),
         )
     )
 
@@ -873,6 +937,48 @@ def gc_oauth(conn: sqlite3.Connection, *, now: float, client_idle_s: float) -> i
     return cur.rowcount or 0
 
 
+def evict_oauth_clients(conn: sqlite3.Connection, *, limit: int) -> int:
+    """Drop up to `limit` least-recently-used clients that hold NOTHING.
+
+    The companion to `gc_oauth`, for when the table is at its cap and the sweep
+    freed nothing: `gc_oauth` spares a client until it has been idle, and idle
+    time is exactly what a registration flood does not give you. Registration is
+    unauthenticated, so without this the cap protected the table by locking the
+    OWNER out of it — a denial of service performed by the defence.
+
+    Two exclusions, and both matter:
+
+    * a client holding a TOKEN is a working grant. Evicting it signs a real
+      client out, which is the thing the cap was supposed to prevent.
+    * a client holding a live CODE is mid-consent — the owner is on the screen
+      right now. Eviction has no idleness requirement (that is the point), so
+      without this a registration burst timed against a consent would break it.
+
+    `last_used_at` is seeded from `created_at` (see `create_oauth_client`), so a
+    never-used client orders by when it registered and a flood evicts itself
+    oldest-first.
+
+    What this does NOT protect is the gap between a legitimate client's
+    registration and its authorize call, where it holds neither a token nor a
+    code and is evictable like any junk row. That window is a few seconds of a
+    flow the user is actively driving, and the client re-registers on a failure;
+    closing it would need a grace period, which is the idleness requirement this
+    function exists to do without.
+    """
+    cur = conn.execute(
+        "DELETE FROM oauth_clients WHERE client_id IN ("
+        "  SELECT client_id FROM oauth_clients"
+        "   WHERE client_id NOT IN (SELECT DISTINCT client_id FROM oauth_tokens)"
+        "     AND client_id NOT IN (SELECT DISTINCT client_id FROM oauth_codes)"
+        "   ORDER BY last_used_at ASC, created_at ASC"
+        "   LIMIT ?"
+        ")",
+        (limit,),
+    )
+    conn.commit()
+    return cur.rowcount or 0
+
+
 def create_oauth_code(
     conn: sqlite3.Connection,
     *,
@@ -924,11 +1030,17 @@ def create_oauth_token(
     family_id: str,
     expires_at: float,
     now: float,
+    cv: str = "",
 ) -> None:
+    # `cv` defaults to '' so a direct caller predating it still compiles — and
+    # gets a token refused on first use rather than one silently exempt from the
+    # check. Failing closed is the only safe default for a field whose whole job
+    # is revocation.
     conn.execute(
         "INSERT INTO oauth_tokens (token_hash, kind, client_id, scope, resource, "
-        "family_id, used_at, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?)",
-        (token_hash, kind, client_id, scope, resource, family_id, expires_at, now),
+        "family_id, used_at, expires_at, created_at, cv) "
+        "VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)",
+        (token_hash, kind, client_id, scope, resource, family_id, expires_at, now, cv),
     )
     conn.commit()
 
@@ -976,11 +1088,38 @@ def revoke_oauth_family(conn: sqlite3.Connection, family_id: str) -> int:
 
 def list_oauth_grants(conn: sqlite3.Connection, *, now: float) -> list[dict]:
     """One row per live grant (family), for the connections screen: which client,
-    what it may do, when it was granted and when it was last refreshed."""
-    return [
+    what it may do, when it was granted and when it was last refreshed.
+
+    `scope` is the UNION of the family's live tokens' scopes, because the question
+    the screen answers is "what can this connection still do" and the answer is
+    what ANY live token permits.
+
+    Scope is not constant within a family: `_grant_refresh` implements RFC 6749
+    §6 narrowing and reissues into the SAME family_id, while the previous
+    wide-scoped ACCESS token stays live for the rest of its hour. Reading a bare
+    column out of the GROUP BY took it from an arbitrary row (SQLite pins one
+    only when the query holds exactly one min()/max() aggregate, and this has
+    three); reading the newest live token's scope was deterministic but
+    systematically wrong in the UNSAFE direction — after a narrowing refresh the
+    screen read "read-only" while the connector kept writing with a token that
+    had another hour to run. A scoped MCP token can trigger that deliberately by
+    refreshing with `scope=mcp:read` straight after the code exchange. Revocation
+    always worked, so this was deception rather than escalation, but the screen
+    exists to be acted on.
+
+    The union is taken in Python rather than SQL: scopes are space-separated
+    strings and SQLite has no set type, so a SQL version would mean a recursive
+    CTE to split them. First-seen order (oldest token first) is preserved so the
+    chips read stably rather than reshuffling on every poll.
+    """
+    # Plain `?` placeholders, one per query. The single-query version used `?1`
+    # twice — a NUMBERED placeholder, which CPython's sqlite3 classifies as NAMED
+    # (its name is the literal "?1"), so binding a sequence to it was a
+    # DeprecationWarning on 3.12 and an sqlite3.ProgrammingError from 3.14.
+    rows = [
         dict(r)
         for r in conn.execute(
-            "SELECT t.family_id, t.client_id, t.scope, t.resource, "
+            "SELECT t.family_id, t.client_id, t.resource, "
             "       MIN(t.created_at) AS granted_at, MAX(t.created_at) AS refreshed_at, "
             "       MAX(t.expires_at) AS expires_at, c.client_name "
             "FROM oauth_tokens t LEFT JOIN oauth_clients c ON c.client_id = t.client_id "
@@ -988,3 +1127,24 @@ def list_oauth_grants(conn: sqlite3.Connection, *, now: float) -> list[dict]:
             (now,),
         )
     ]
+    # `used_at IS NULL` matters as much as `expires_at`. `use_refresh_token`
+    # marks a rotated-out refresh row used and leaves its expiry alone, so a
+    # spent one stays "live" for the whole REFRESH_TTL_S — thirty days. Without
+    # this clause a grant narrowed to read-only went on reporting write for a
+    # month, which is the same deception the union was introduced to end, just
+    # 720x longer than the one hour the docstring above describes. Access tokens
+    # are never marked used, so this only excludes what it should.
+    live: dict[str, list[str]] = {}
+    for family_id, scope in conn.execute(
+        "SELECT family_id, scope FROM oauth_tokens "
+        "WHERE expires_at > ? AND used_at IS NULL "
+        "ORDER BY created_at ASC, rowid ASC",
+        (now,),
+    ):
+        seen = live.setdefault(family_id, [])
+        for word in (scope or "").split():
+            if word not in seen:
+                seen.append(word)
+    for row in rows:
+        row["scope"] = " ".join(live.get(row["family_id"], []))
+    return rows

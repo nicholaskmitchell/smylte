@@ -346,6 +346,16 @@
 .child-progress { font-family: var(--mono); font-size: calc(10px * var(--fs-scale)); color: var(--fg-faint); }
 
 .empty { padding: 40px var(--gutter); color: var(--fg-faint); font-size: calc(14px * var(--fs-scale)); }
+
+/* A month that could not load every calendar. Sits above the grid rather than
+   replacing it: the events that DID load are still worth showing, and the
+   point of the banner is that a short month never reads as a complete one. */
+.cal-partial {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 8px var(--gutter);
+  color: var(--fg-faint); font-size: calc(13px * var(--fs-scale));
+  border-bottom: 1px solid var(--line);
+}
 .section-label { padding: 14px var(--gutter) 4px; }
 
 /* ---- tasks view switcher (List / 3-Day / Week) ---- */

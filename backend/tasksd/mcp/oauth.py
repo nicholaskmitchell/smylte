@@ -45,11 +45,14 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import re
 import secrets
 import time
 from dataclasses import dataclass
 from urllib.parse import urlencode, urlsplit, urlunsplit
+
+log = logging.getLogger("tasksd.mcp")
 
 # ── lifetimes ────────────────────────────────────────────────────────────────
 # Short access tokens because the spec asks for them and refresh is cheap; a
@@ -132,7 +135,7 @@ class OAuthServer:
     """
 
     def __init__(self, *, issuer: str, mcp_url: str, secret: str,
-                 verify_password, now=time.time):
+                 verify_password, credential_version=None, now=time.time):
         self.issuer = issuer.rstrip("/")
         # The canonical resource identifier, RFC 8707 §2: what a token is bound
         # to and what the client must name. One spelling only.
@@ -143,6 +146,12 @@ class OAuthServer:
         self._key = hmac.new(secret.encode(), b"tasksd/mcp/oauth-request",
                              hashlib.sha256).digest()
         self._verify_password = verify_password
+        # A closure, like `verify_password`, and read at USE time rather than
+        # captured: the value must move the moment the credentials do, and this
+        # server does not own the Authenticator. Absent (auth disabled, or a
+        # direct construction in a test) it degrades to a constant, which keeps
+        # the comparison total without inventing a revocation signal.
+        self._credential_version = credential_version or (lambda: "")
         self._now = now
 
     # ── metadata documents ───────────────────────────────────────────────────
@@ -206,8 +215,26 @@ class OAuthServer:
 
         store.gc_oauth(conn, now=self._now(), client_idle_s=CLIENT_IDLE_S)
         if store.count_oauth_clients(conn) >= MAX_CLIENTS:
-            raise OAuthError("invalid_request", "too many registered clients",
-                             status=429)
+            # The sweep spares a client until it has been idle for CLIENT_IDLE_S,
+            # and idle time is exactly what a flood does not give it. So a burst
+            # of anonymous registrations filled the table and every subsequent
+            # registration 429'd — including the OWNER's, connecting a real MCP
+            # client, who cannot register and therefore cannot authorize. The cap
+            # denied service on behalf of the attacker.
+            #
+            # Evict instead: oldest first, and only rows holding neither a token
+            # nor a live code, so nothing that is a working grant or a consent in
+            # progress is touched. 429 only if that frees nothing — which now
+            # means every one of the 500 is a real client, where refusing is the
+            # correct answer and no eviction policy could help.
+            freed = store.evict_oauth_clients(
+                conn, limit=store.count_oauth_clients(conn) - MAX_CLIENTS + 1)
+            if freed:
+                log.info("oauth: evicted %d idle client registration(s) to admit a new one",
+                         freed)
+            if store.count_oauth_clients(conn) >= MAX_CLIENTS:
+                raise OAuthError("invalid_request", "too many registered clients",
+                                 status=429)
 
         # Type-checked before use: registration is open and its body is wholly
         # attacker-chosen, and `scope_set` calls `.split()` — so a JSON list or
@@ -472,24 +499,75 @@ class OAuthServer:
             raise OAuthError("invalid_grant", "unknown refresh token")
         if not hmac.compare_digest(row["client_id"], client["client_id"]):
             raise OAuthError("invalid_grant", "the token was issued to another client")
+        # BEFORE `use_refresh_token`, and the order is the whole point: a refresh
+        # token is single-use, so checking after would burn the one use on a
+        # request we were going to refuse anyway. The client's next legitimate
+        # attempt would then read as a REPLAY, killing the family and answering
+        # "this refresh token was already used" — a misleading message about a
+        # theft that did not happen, for what is really "the password changed".
+        try:
+            self._check_cv(row)
+        except OAuthError as e:
+            raise OAuthError(
+                "invalid_grant",
+                "the credentials this grant was issued under have changed; "
+                "reauthorize the client",
+            ) from e
 
-        state = store.use_refresh_token(conn, token_hash, now=self._now())
-        if state == "invalid":
-            raise OAuthError("invalid_grant", "the refresh token has expired")
-        if state == "replayed":
-            # Two presentations of a single-use token means a copy is loose and
-            # we cannot tell which holder is the legitimate one. End the grant.
+        # REPLAY IS DETECTED FIRST, before any other refusal can short-circuit
+        # past it. `used_at` is already on the row we fetched above, and a token
+        # that carries one has been presented twice: a copy is loose and we
+        # cannot tell which holder is legitimate, so the grant ends here
+        # regardless of what else is wrong with the request.
+        #
+        # Ordering this after the scope check — which is where it briefly was —
+        # handed an attacker a free probe: a stolen token presented with a
+        # deliberately over-wide `scope` answered `invalid_scope` without
+        # consuming its single use and without arming this alarm, so theft could
+        # be confirmed repeatedly and silently. This is the app's ONLY signal of
+        # refresh-token reuse; nothing may be able to step around it.
+        if row["used_at"] is not None:
             store.revoke_oauth_family(conn, row["family_id"])
             raise OAuthError("invalid_grant",
                              "this refresh token was already used; the grant has been revoked")
 
         # A refresh may narrow scope but never widen it (RFC 6749 §6).
+        #
+        # Checked before the token is CONSUMED, for the reason argued above for
+        # `_check_cv`: a client sending one over-wide scope used to have its
+        # single use burned on a request that was refused anyway, so its next
+        # ORDINARY refresh read as a replay and destroyed the whole grant — an
+        # alarm about a theft that did not happen, which also desensitises the
+        # alarm above. The replay check now sits ahead of this, so refusing a
+        # scope costs the client nothing and still cannot hide a reuse.
         granted = scope_set(row["scope"])
         if form.get("scope"):
             asked = scope_set(form.get("scope"))
             if asked - granted:
                 raise OAuthError("invalid_scope", "a refresh cannot widen scope")
             granted = asked
+
+        state = store.use_refresh_token(conn, token_hash, now=self._now())
+        if state == "invalid":
+            raise OAuthError("invalid_grant", "the refresh token has expired")
+        if state == "replayed":
+            # The `used_at` read above is not atomic with this claim, so two
+            # concurrent presentations can both pass it. This is the atomic
+            # arbiter and it means the same thing.
+            store.revoke_oauth_family(conn, row["family_id"])
+            raise OAuthError("invalid_grant",
+                             "this refresh token was already used; the grant has been revoked")
+        # `offline_access` is a grant SHAPE, not an API capability, so a client
+        # narrowing to `mcp:read mcp:write` — an ordinary thing to do, since the
+        # token response echoes scope back — is not asking to give up refreshing.
+        # `_issue_pair` gates the new refresh token on the scope it is handed, so
+        # without this the response carried no refresh_token; RFC 6749 §6 then
+        # tells the client to keep using the one it has, `use_refresh_token`
+        # reports "replayed", and `revoke_oauth_family` destroys the grant. The
+        # reuse detector fired on a client doing exactly what the spec says, and
+        # the user re-typed their password with no explanation anywhere.
+        if SCOPE_OFFLINE in scope_set(row["scope"]):
+            granted = granted | {SCOPE_OFFLINE}
         return self._issue_pair(conn, client_id=client["client_id"],
                                 scope=scope_str(granted), resource=row["resource"],
                                 family_id=row["family_id"])
@@ -499,11 +577,12 @@ class OAuthServer:
         from ..db import store
 
         now = self._now()
+        cv = self._credential_version()
         access = secrets.token_urlsafe(32)
         store.create_oauth_token(
             conn, token_hash=sha256_hex(access), kind="access", client_id=client_id,
             scope=scope, resource=resource, family_id=family_id,
-            expires_at=now + ACCESS_TTL_S, now=now,
+            expires_at=now + ACCESS_TTL_S, now=now, cv=cv,
         )
         out = {
             "access_token": access,
@@ -518,7 +597,7 @@ class OAuthServer:
             store.create_oauth_token(
                 conn, token_hash=sha256_hex(refresh), kind="refresh",
                 client_id=client_id, scope=scope, resource=resource,
-                family_id=family_id, expires_at=now + REFRESH_TTL_S, now=now,
+                family_id=family_id, expires_at=now + REFRESH_TTL_S, now=now, cv=cv,
             )
             out["refresh_token"] = refresh
         store.touch_oauth_client(conn, client_id, now)
@@ -569,7 +648,34 @@ class OAuthServer:
         if not hmac.compare_digest(row["resource"], self.mcp_url):
             raise OAuthError("invalid_token",
                              "this token was issued for another resource", status=401)
+        self._check_cv(row)
         return row
+
+    def _check_cv(self, row) -> None:
+        """Refuse a grant minted under credentials that have since changed.
+
+        docs/DEPLOY.md calls rotating the password "signing out everywhere" and
+        it was only ever true of browser sessions: an MCP access token kept
+        answering, and its refresh token kept rotating into a fresh 30 days,
+        which makes the documented incident response a no-op against the one
+        credential-less client an attacker would most want to keep.
+
+        `hmac.compare_digest` on principle rather than necessity — the value is
+        not a secret, but a `cv` in the row is attacker-influenceable in the
+        sense that they choose WHICH row (their own token) is compared, and a
+        constant-time compare costs nothing.
+        """
+        expected = self._credential_version()
+        # `.get`, not `[]`: both callers hand over a dict from `get_oauth_token`,
+        # and a row from a database that somehow missed the migration must be
+        # refused rather than raise a KeyError out of the resource server.
+        if not hmac.compare_digest(str(row.get("cv") or "").encode(), expected.encode()):
+            raise OAuthError(
+                "invalid_token",
+                "the credentials this grant was issued under have changed; "
+                "reauthorize the client",
+                status=401,
+            )
 
     def _check_resource(self, value: str | None, *, redirectable: bool = False) -> None:
         """RFC 8707. Absent is tolerated — older clients predate the requirement

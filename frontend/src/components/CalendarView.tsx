@@ -10,8 +10,9 @@ import { fmtClock, inputLang } from '../time'
 import { useTimeFormat } from '../timeformat'
 import {
   bucketByDay, bucketTasksByDay, cellCapacity, chipsShown, dragBody, daysBetween,
-  endFromDuration, lastDayOf, monthGrid, shiftYmd, type CalendarFit, type DayEv,
+  endFromDuration, eventKey, lastDayOf, monthGrid, shiftYmd, type CalendarFit, type DayEv,
 } from '../calendar'
+import { taskKey } from '../order'
 import { useIsMobile } from '../hooks'
 import { AgendaEvent, AgendaTask, DayPopover } from './DayPopover'
 import { Sidebar } from './Sidebar'
@@ -179,7 +180,8 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
   const guard = makeGuard(onExpire)
   const isMobile = useIsMobile()
   const tf = useTimeFormat()
-  const { cals, loaded, setCals, eventsFor, requestWindow, setEvents, reload } = useCalendarData()
+  const { cals, loaded, setCals, eventsFor, requestWindow, setEvents, reload,
+    windowErrors } = useCalendarData()
   // Tasks need no fetch of their own: the provider above this already holds
   // every task of every list, and HomeView reads both datasets the same way.
   const { lists: taskLists, tasks, listsLoaded, saveDetail, remove: removeTask } = useTaskData()
@@ -236,10 +238,21 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
   // for. The provider owns the request, so a window already fetched this
   // session — or mirrored to disk — paints without going near the network.
   const events = eventsFor(from, to)
+  const failedCals = windowErrors(from, to)
   useEffect(() => {
     requestWindow(from, to, visibleCals)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [from, to, visibleCals.map((c) => c.id).join(',')])
+    // `requestWindow` is the missing signal, and it was already here: it is a
+    // useCallback over [rev, enabled, fetchWindow], so its identity changes on
+    // every SSE bump. Without it in the deps this effect was invariant under
+    // `rev` — every other data source on the page consumes it, so the rest of
+    // the screen repainted while these events stayed as they were. Adding
+    // `rev` directly would work too, but it would be a second source of truth
+    // for a signal the callback already carries, and the dep array would still
+    // be lying about what the effect reads. Deduping is unaffected:
+    // `requestWindow` stamps `asked` with `rev`, so a re-run within one rev is
+    // a no-op.
+  }, [from, to, visibleCals.map((c) => c.id).join(','), requestWindow])
 
   const reloadHere = () => reload(from, to, visibleCals)
   const patchEvents = (next: (prev: CalEvent[]) => CalEvent[]) => setEvents(from, to, next)
@@ -302,11 +315,22 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
   // Optimistically paint an edit onto the events we can represent locally: a
   // non-recurring event, or a single occurrence (scope "this"). Series-wide
   // edits return false — the caller reloads for those instead.
-  const applyLocal = (uid: string, body: Record<string, unknown>): boolean => {
+  const applyLocal = (cal: string, uid: string, body: Record<string, unknown>): boolean => {
     const single = body.scope === 'this' && !!body.recurrence_id
-    if (!single && events.some((e) => e.uid === uid && e.is_recurring)) return false
+    // A UID is only unique WITHIN a collection — the backend keys items on
+    // (collection_href, uid), so the same uid in two calendars is two resources.
+    // Matching on uid alone painted an edit aimed at one onto both, and the
+    // other one's row then disagreed with the server until a full refetch.
+    //
+    // `!href ||` is load-bearing: `calHref` answers '' until the calendar list
+    // has loaded, and without the fallback every optimistic paint on a cold grid
+    // would silently match nothing while still reporting success, so nothing
+    // would reload to cover for it.
+    const href = calHref(cal)
+    const mine = (e: CalEvent) => e.uid === uid && (!href || e.calendar === href)
+    if (!single && events.some((e) => mine(e) && e.is_recurring)) return false
     patchEvents((evs) => evs.map((e) => {
-      if (e.uid !== uid) return e
+      if (!mine(e)) return e
       if (single && e.id !== `${uid}::${body.recurrence_id}`) return e
       const n = { ...e }
       if (typeof body.summary === 'string') n.summary = body.summary
@@ -356,7 +380,7 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
       })
       return
     }
-    const painted = applyLocal(uid, body)
+    const painted = applyLocal(cal, uid, body)
     const ok = await guard(() => api.patchEvent(cal, uid, body))
     const moved = !!(ok && moveTo && moveTo !== cal)
     if (moved) {
@@ -376,8 +400,9 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
     // Drop the affected instances right away; reload rolls back on failure.
     const rid = opts?.recurrence_id
     const scope = opts?.scope || 'all'
+    const href = calHref(cal)                 // see applyLocal for the '' fallback
     patchEvents((evs) => evs.filter((e) => {
-      if (e.uid !== uid) return true
+      if (e.uid !== uid || (href && e.calendar !== href)) return true
       if (scope === 'this' && rid) return e.id !== `${uid}::${rid}`
       if (scope === 'thisandfuture' && rid) return (e.recurrence_id || '') < rid
       return false
@@ -398,8 +423,10 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
     setDrag(null); setOverDay(null)
     if (!d) return
     // The date arithmetic lives in calendar.ts, where it is tested directly;
-    // null means the drag changed nothing.
-    const body = dragBody(d.ev, d.fromDay, key, d.mode)
+    // null means the drag changed nothing. `lastVisible` is the clamp the grid
+    // applies when drawing a resize grip: without it, a drop on the clamped cell
+    // reads as "end here" and truncates everything past the window.
+    const body = dragBody(d.ev, d.fromDay, key, d.mode, ymd(days[41]))
     if (!body) return
     if (d.ev.is_recurring) setMoveAsk({ ev: d.ev, body })
     else save(body, calIdOf(d.ev), d.ev.uid)
@@ -460,7 +487,7 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
   }
 
   const todayKey = ymd(new Date())
-  const lastKey = ymd(days[41])            // final visible day, for resize grips
+  const lastKey = ymd(days[41])            // final visible day, for resize grips (and dropOnDay's clamp)
   // Where new events land by default: the first shown (non-hidden) calendar,
   // among those not archived; else the first visible one.
   const defaultCal = visibleCals.find((c) => !hidden.has(c.id))?.id || visibleCals[0]?.id || ''
@@ -510,6 +537,21 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
           </div>
         ) : (
           <div ref={scrollRef} className={`cal-scroll${fitted ? ' fixed' : ''}`}>
+            {/* A month that is SHORT must say so. The fan-out keeps whatever
+                loaded rather than blanking the grid on one calendar's 502, and
+                without this the user reads a partial month as a complete one —
+                the failure mode the all-or-nothing fetch at least made obvious.
+                Retry re-requests the whole window; one unhealthy collection is
+                usually unhealthy for all of them. */}
+            {failedCals.length > 0 && (
+              <div className="cal-partial" role="status">
+                Couldn&rsquo;t load {failedCals.join(', ')} — this month may be
+                missing events.{' '}
+                <button className="btn ghost" onClick={reloadHere}>
+                  Retry
+                </button>
+              </div>
+            )}
             <div className="cal-grid">
               {DOW.map((d) => <div key={d} className="cal-dow">{d}</div>)}
               {days.map((d) => {
@@ -542,10 +584,10 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
                       (dayEvents.length > 0 || dayTasks.length > 0) && (
                         <span className="ev-dots">
                           {dayEvents.slice(0, 6).map((e) => (
-                            <i key={e.id} className={`ev-dot ${e.all_day ? 'allday' : ''}`} style={evStyle(e)} />
+                            <i key={eventKey(e)} className={`ev-dot ${e.all_day ? 'allday' : ''}`} style={evStyle(e)} />
                           ))}
                           {dayTasks.slice(0, Math.max(0, 6 - dayEvents.length)).map((t) => (
-                            <i key={t.uid} className="ev-dot task" style={taskStyle(t)} />
+                            <i key={taskKey(t)} className="ev-dot task" style={taskStyle(t)} />
                           ))}
                         </span>
                       )
@@ -562,7 +604,7 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
                             // to, or subscribed from, a second calendar gave two
                             // chips one key. React then drops one and can bind
                             // the wrong click target to the other.
-                            <div key={`${e.calendar}::${e.id}`}
+                            <div key={eventKey(e)}
                               className={`cal-ev ${e.all_day ? 'allday' : ''} ${e.cont ? 'cont' : ''}`}
                               style={evStyle(e)}
                               dir={textDir(e.summary)}
@@ -611,7 +653,7 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
                           const timed = !!t.due && t.due.includes('T') && !t.due_is_date
                           const done = t.completed || t.cancelled
                           return (
-                            <div key={t.uid} className={`cal-task ${done ? 'done' : ''}`}
+                            <div key={taskKey(t)} className={`cal-task ${done ? 'done' : ''}`}
                               style={taskStyle(t)} dir={textDir(t.summary)} title={t.summary || ''}
                               onClick={(ev) => { ev.stopPropagation(); setTaskDetail(t) }}>
                               <span className="tick" aria-hidden="true">{done ? '☑' : '☐'}</span>
@@ -645,11 +687,11 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
                   <button className="btn" onClick={() => setDraft({ date: focusDay })}>+ Event</button>
                 </div>
                 {focusEvents.map((e) => (
-                  <AgendaEvent key={e.id} ev={e} day={focusDay} style={evStyle(e)}
+                  <AgendaEvent key={eventKey(e)} ev={e} day={focusDay} style={evStyle(e)}
                     onOpen={() => setDraft({ event: e })} />
                 ))}
                 {focusTasks.map((t) => (
-                  <AgendaTask key={t.uid} task={t} style={taskStyle(t)}
+                  <AgendaTask key={taskKey(t)} task={t} style={taskStyle(t)}
                     onOpen={() => setTaskDetail(t)} />
                 ))}
                 {focusEvents.length === 0 && focusTasks.length === 0 && (
@@ -774,7 +816,27 @@ function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete }: {
 
   // Keep start/end input formats consistent with the all-day toggle.
   const startVal = allDay ? start.slice(0, 10) : (start.includes('T') ? start : `${start}T09:00`)
-  const endVal = allDay ? end.slice(0, 10) : (end.includes('T') ? end : `${end}T10:00`)
+  // Ticking "all day" on a TIMED event has to answer the same question
+  // `endIsExclusive`/`lastDayOf` answer everywhere else the event is shown or
+  // dragged: a DTEND sitting exactly on local midnight ends at the START of that
+  // day, so the last day it covers is the one before. Slicing ten characters off
+  // reinterpreted that exclusive instant as an inclusive last day, and
+  // `endOut = shiftYmd(clampedEnd, 1)` below then added another on top — a
+  // 20:00-to-midnight event became two days in every CalDAV client, after an
+  // edit the user believed only changed the representation.
+  //
+  // The `includes('T')` guard is what makes this safe, and it is the whole fix:
+  // for an event that is ALREADY all-day, `end` was seeded as the inclusive day
+  // (no `T`) further up, so subtracting again would shorten every real all-day
+  // event by a day on every save.
+  const endLastDay = () => {
+    if (!end.includes('T')) return end.slice(0, 10)
+    const inclusive = end.slice(11, 16) === '00:00'
+      ? shiftYmd(end.slice(0, 10), -1)
+      : end.slice(0, 10)
+    return inclusive < startVal ? startVal : inclusive
+  }
+  const endVal = allDay ? endLastDay() : (end.includes('T') ? end : `${end}T10:00`)
 
   // Moving the start drags the end along, preserving the event's duration — no
   // more fixing the end by hand after every start change.

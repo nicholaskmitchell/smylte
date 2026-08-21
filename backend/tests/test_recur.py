@@ -8,7 +8,7 @@ master whose own DTSTART is in the past.
 from __future__ import annotations
 
 import time
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -1001,6 +1001,9 @@ def _thisandfuture_series() -> bytes:
             "DTSTART:20260113T100000Z",
             "DTEND:20260113T103000Z",
             "SUMMARY:TF",
+            # A LOCATION the MASTER does not carry, so "which component was this
+            # seeded from" is answerable rather than a matter of inspection.
+            "LOCATION:Room B",
         ),),
     )
 
@@ -1106,16 +1109,77 @@ def test_deleting_a_thisandfuture_overrides_own_slot_keeps_the_later_ones():
 
 
 def test_editing_a_thisandfuture_instance_edits_that_one():
+    """WIDENED. This asserted only `.summary`, and that is exactly why the
+    finding below stayed invisible: the summary is the one field the edit itself
+    sets, so it is right whichever component the override was seeded from.
+
+    2026-01-20 is a slot the RANGE=THISANDFUTURE override COVERS but does not
+    ANCHOR, so `_find_override` finds nothing and the new single-slot override
+    used to be built from the MASTER. The instance then snapped back to the
+    master's 09:00 and lost the LOCATION the range override supplied — a
+    "rename this one" that silently rescheduled the meeting an hour earlier and
+    moved it to a different room.
+
+    `.start` and `.location` are what tell the two seeds apart.
+    """
     raw = apply_occurrence_override(
         _thisandfuture_series(), "2026-01-20T09:00:00+00:00",
         EventEdit(summary="just this one"),
     )
-    by_anchor = {o.recurrence_id: o.summary
-                 for o in recur.expand_occurrences(raw, *_TF_WIN)}
-    assert by_anchor["2026-01-20T09:00:00+00:00"] == "just this one"
+    occs = {o.recurrence_id: o for o in recur.expand_occurrences(raw, *_TF_WIN)}
+    edited = occs["2026-01-20T09:00:00+00:00"]
+    assert edited.summary == "just this one"
+    assert edited.start == "2026-01-20T10:00:00+00:00", (
+        f"editing one instance rescheduled it from the range override's 10:00 "
+        f"back to the master's 09:00: {edited.start}"
+    )
+    assert edited.location == "Room B", (
+        f"editing one instance dropped the location the range override supplied: "
+        f"{edited.location!r}"
+    )
     # The occurrences on either side still belong to the THISANDFUTURE override.
-    assert by_anchor["2026-01-13T09:00:00+00:00"] == "TF"
-    assert by_anchor["2026-01-27T09:00:00+00:00"] == "TF"
+    assert occs["2026-01-13T09:00:00+00:00"].summary == "TF"
+    assert occs["2026-01-27T09:00:00+00:00"].summary == "TF"
+    assert occs["2026-01-13T09:00:00+00:00"].start == "2026-01-13T10:00:00+00:00"
+    assert occs["2026-01-27T09:00:00+00:00"].start == "2026-01-27T10:00:00+00:00"
+    # …and the one BEFORE the range override still belongs to the master, so a
+    # repair cannot simply seed every override from the range one.
+    assert occs["2026-01-06T09:00:00+00:00"].start == "2026-01-06T09:00:00+00:00"
+    assert not occs["2026-01-06T09:00:00+00:00"].location
+
+
+def test_editing_an_instance_before_a_range_override_seeds_from_the_master():
+    """Control, and the one that makes "governing" mean something.
+
+    2026-01-06 is BEFORE the RANGE=THISANDFUTURE override at 2026-01-13, so the
+    range override does not govern it — §3.2.13 is "this and future", not "this
+    and every". A repair that seeded a new single-slot override from any range
+    override it could find, rather than from the one that COVERS the anchor,
+    would move this instance to 10:00 and into Room B: values the user has never
+    seen on this occurrence.
+
+    Verified as an over-correction: replacing `_governing_thisandfuture` with
+    "the first THISANDFUTURE override in the resource" passes every other case
+    in this file and fails this one.
+    """
+    raw = apply_occurrence_override(
+        _thisandfuture_series(), "2026-01-06T09:00:00+00:00",
+        EventEdit(summary="the first one"),
+    )
+    occs = {o.recurrence_id: o for o in recur.expand_occurrences(raw, *_TF_WIN)}
+    first = occs["2026-01-06T09:00:00+00:00"]
+    assert first.summary == "the first one"
+    assert first.start == "2026-01-06T09:00:00+00:00", (
+        f"an instance before the range override was moved to the range "
+        f"override's hour: {first.start}"
+    )
+    assert not first.location, (
+        f"an instance before the range override inherited its location: "
+        f"{first.location!r}"
+    )
+    # …and the range override still governs everything from its own slot on.
+    assert occs["2026-01-13T09:00:00+00:00"].start == "2026-01-13T10:00:00+00:00"
+    assert occs["2026-01-27T09:00:00+00:00"].summary == "TF"
 
 
 def test_a_plain_override_anchors_on_its_recurrence_id_exactly():
@@ -1264,3 +1328,63 @@ def test_shifting_a_series_without_a_repeat_change_keeps_its_overrides():
                   rrule=rrule_from_spec("weekly")),
     )
     assert "special" in [o.summary for o in recur.expand_occurrences(shifted, *_RC_WIN)]
+
+
+# ── the search budget (2026-08-19 stage 2, finding 8) ────────────────────────
+
+@pytest.mark.parametrize("rrule, dtstart", [
+    # Every one of these is SATISFIABLE and must keep expanding. A guard that
+    # only forbids slowness is satisfied by a version that refuses everything,
+    # so these are the half of the contract that stops the cure being worse.
+    ("FREQ=WEEKLY;BYDAY=MO", "19700101T090000Z"),
+    ("FREQ=MONTHLY;BYMONTHDAY=31", "19700101T090000Z"),      # skips short months
+    ("FREQ=MONTHLY;BYMONTHDAY=-1", "19700101T090000Z"),      # last day of month
+    ("FREQ=YEARLY;BYMONTH=2;BYMONTHDAY=29", "19700101T090000Z"),  # leap day: valid
+    ("FREQ=DAILY;BYMONTH=2;BYMONTHDAY=29;BYDAY=MO", "19700101T090000Z"),
+    ("FREQ=HOURLY", "20240101T090000Z"),                     # the density boundary
+])
+def test_a_satisfiable_rule_is_never_refused_by_the_search_budget(rrule, dtstart):
+    """The budget prices a rule's SEARCH, and a sparse-but-real rule from an old
+    DTSTART is the shape most likely to be caught by mistake.
+
+    Measured over a 42-day grid, the most expensive legitimate rule here costs
+    890 dateutil periods from a 1970 DTSTART against a 5000 budget — 5.6x
+    headroom — and window width barely moves it (682 -> 733 going from 42 days
+    to five years), because the cost is the DTSTART -> window skip, not the
+    window. The never-matching rules that cost real time walk 95,760.
+    """
+    # DTEND has to travel with DTSTART. Leaving the helper's 2026 default against
+    # a 1970 DTSTART makes every occurrence a 56-year-long event, so all of them
+    # overlap the window and the unrelated `_occurrence_cap` fires first — which
+    # would let this test pass while proving nothing about the budget.
+    begin = datetime.strptime(dtstart, "%Y%m%dT%H%M%SZ")
+    raw = foreign_event_raw(
+        "ok", rrule=rrule, dtstart=dtstart,
+        dtend=(begin + timedelta(minutes=30)).strftime("%Y%m%dT%H%M%SZ"),
+    )
+    # No exception is the assertion: a refusal raises ValueError.
+    recur.expand_occurrences(raw, date(2026, 8, 1), date(2026, 9, 12))
+
+
+def test_the_search_budget_actually_fires():
+    """The guard wraps a PRIVATE attribute of dateutil (`_iterinfo.rebuild`), so
+    a future release that renames it would turn the bound into a silent no-op
+    and nothing else in the suite would notice — every test would still pass,
+    just slowly, and the unauthenticated DoS would be back.
+
+    So assert the mechanism, not just the outcome: a deliberately tiny budget
+    must stop an ordinary rule that would otherwise complete easily.
+    """
+    from dateutil.rrule import rrulestr
+
+    from tasksd.ical.rrule_budget import SearchBudgetExceeded, search_budget
+
+    with pytest.raises(SearchBudgetExceeded):
+        with search_budget(2):
+            rrulestr("FREQ=DAILY", dtstart=datetime(1970, 1, 1, 9, 0)).between(
+                datetime(2026, 8, 1), datetime(2026, 9, 12))
+
+    # ...and outside a budget block the wrapper is inert, so importing this
+    # module cannot affect any other dateutil user in the process.
+    assert rrulestr("FREQ=DAILY", dtstart=datetime(2026, 1, 1, 9, 0)).between(
+        datetime(2026, 8, 1), datetime(2026, 9, 12))

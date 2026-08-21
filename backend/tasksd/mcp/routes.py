@@ -151,10 +151,18 @@ def register(app, *, settings, authenticator, client_ip, run, login_hashes):
             return False
         return authenticator.check_credentials(username, password)
 
+    def credential_version() -> str:
+        # Read through the Authenticator rather than captured, so a rotation
+        # takes effect without rebuilding this server. With auth disabled there
+        # are no credentials to bind to and every grant carries "" — which then
+        # matches, because there is no rotation to detect in that posture.
+        return "" if authenticator is None else authenticator.credential_version
+
     oauth = OAuthServer(
         issuer=issuer, mcp_url=mcp_url,
         secret=settings.session_secret or "mcp-dev-secret",
         verify_password=verify_password,
+        credential_version=credential_version,
     )
     consent_limiter = RateLimiter(**_CONSENT_LIMITER)
     consent_post_limiter = RateLimiter(**_CONSENT_POST_LIMITER)
@@ -407,9 +415,18 @@ def register(app, *, settings, authenticator, client_ip, run, login_hashes):
     async def drop_connection(request: Request, family_id: str):
         _require_owner(request)
         dropped = await run(request.app.state.service.oauth, _revoke_family, family_id)
-        if not dropped:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "unknown connection")
-        log.info("mcp: connection %s disconnected by the owner", family_id)
+        # Idempotent: a family that is already gone is the state the caller asked
+        # for, not an error. The 404 made a retry after a lost response read as a
+        # failure, and `ConnectionsSection.disconnect` restores the optimistic
+        # removal on ANY failure — `makeGuard` returns undefined for both a
+        # dropped connection and an HttpError, so the two are indistinguishable
+        # to it. The owner was shown a revoked grant back in the list of live
+        # ones, and the section is loaded once in an empty-dep useEffect and
+        # never refetched, so it stayed wrong for as long as the panel was open.
+        # Nothing leaks by answering 204 either way: the route is already
+        # cookie-gated to the owner.
+        if dropped:
+            log.info("mcp: connection %s disconnected by the owner", family_id)
         return Response(status_code=204)
 
     def _require_owner(request: Request) -> None:
@@ -542,7 +559,18 @@ input:focus { outline: 2px solid #d9480f; outline-offset: -1px; }
 .choice > span { flex: 1; }
 .choice em { display: block; margin-top: 2px; font-style: normal;
   color: #6b6157; font-size: 13px; }
-.actions { display: flex; gap: 10px; margin-top: 20px; }
+/* row-reverse, and the button order in the form below is reversed to
+   match: Connect is FIRST in tree order so that HTML's implicit
+   submission — pressing Enter after typing the password, the ordinary way
+   anybody fills in two fields — activates it. With Cancel first the browser
+   POSTed action=deny, the request was refused before the password was even
+   looked at, and the user had just typed their password into a form that
+   told the client they refused it. Nothing could correct it in place: the
+   browser has already navigated to the client's callback, and this page
+   ships `default-src 'none'` so no script can intervene. The visual order
+   (Cancel left, Connect right) is preserved here; the cost is that Tab
+   reaches Connect before Cancel. */
+.actions { display: flex; flex-direction: row-reverse; gap: 10px; margin-top: 20px; }
 button { flex: 1; padding: 10px 14px; border: 1px solid #1a1714; background: #1a1714;
   color: #faf8f5; font: 500 14px/1 inherit; cursor: pointer; }
 button.ghost { background: none; color: #1a1714; border-color: #d6cec2; }
@@ -635,8 +663,9 @@ def _consent_page(req, signed: str, *, issuer: str, grant: str = "full",
             '<label><span>Password</span>'
             '<input type="password" name="password" autocomplete="current-password" required></label>'
             '<div class="actions">'
-            '<button type="submit" name="action" value="deny" class="ghost">Cancel</button>'
+            # First in tree order = the form's default button. See .actions above.
             '<button type="submit" name="action" value="approve">Connect</button>'
+            '<button type="submit" name="action" value="deny" class="ghost">Cancel</button>'
             "</div></form>"
             '<p class="foot">Signing in here grants this application a token for '
             "your tasks and calendar. You can disconnect it at any time from "

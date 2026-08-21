@@ -22,14 +22,15 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, replace
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from datetime import time as dtime
 from math import ceil
 
 import recurring_ical_events
 from icalendar import Calendar
 
-from .read import _iso, _text
+from .rrule_budget import SearchBudgetExceeded, search_budget
+from .read import _iso, _text, advance, split_duration, wire_durations
 
 log = logging.getLogger("tasksd.recur")
 
@@ -44,6 +45,22 @@ _MAX_PER_DAY = 24
 # ~3.6k, 24/day for five years is ~44k) while refusing the ancient-DTSTART dense
 # rules whose skip phase dominates everything. See _instances_before.
 _MAX_TOTAL_INSTANCES = 200_000
+
+# Periods dateutil may walk, per expansion, before we stop it. The guards above
+# bound a rule's YIELD; this bounds its SEARCH, which is the part an
+# unsatisfiable rule makes unbounded — UNTIL and COUNT are tested only when an
+# instance is actually produced, so neither bounds a rule that produces none.
+# See tasksd/ical/rrule_budget.py for why this is a cost bound rather than a
+# satisfiability check.
+#
+# Measured over a 42-day grid: the most expensive LEGITIMATE rule found costs 890
+# periods (FREQ=DAILY;BYMONTH=2;BYMONTHDAY=29;BYDAY=MO from a 1970 DTSTART — the
+# skip phase dominates, and window width barely moves it), while every
+# never-matching rule that costs real time walks 95,760. 5000 sits between with
+# 5.6x headroom under the worst legitimate rule and 19x under the expensive
+# hostile ones. The budget is per expand_occurrences call, so it also caps a
+# resource carrying many VEVENTs rather than each rule separately.
+_MAX_SEARCH_STEPS = 5000
 
 # How many instances each FREQ yields per day before BY* parts are applied.
 _FREQ_PER_DAY = {"SECONDLY": 86400, "MINUTELY": 1440, "HOURLY": 24}
@@ -69,8 +86,15 @@ def _end_fields(comp) -> tuple[str | None, bool]:
     if dtend is not None:
         return _iso(dtend)
     dtstart, dur = comp.get("DTSTART"), comp.get("DURATION")
+    # UNREACHABLE from `expand_occurrences`: `recurring_ical_events` pops DURATION
+    # from every component it emits and always writes DTEND
+    # (adapters/component.py). Kept for a caller that hands over a raw component,
+    # but it is NOT the source of truth for an expanded instance's length —
+    # `_exact_durations` reads that off the original calendar.
     if dtstart is not None and dur is not None:
-        return _iso(dtstart.dt + dur.dt)
+        # Not `dtstart.dt + dur.dt`: see `advance`. That is the same wall-clock
+        # addition `_repair_span` below exists to undo, one layer earlier.
+        return _iso(advance(dtstart.dt, dur.to_ical(), dur.dt))
     return None, False
 
 
@@ -109,6 +133,57 @@ def _thisandfuture_shifts(cal: Calendar) -> dict[str, timedelta]:
         if iso is None or not _same_shape(rid.dt, dtstart.dt):
             continue                      # mismatched pair: no meaningful offset
         out[iso] = dtstart.dt - rid.dt
+    return out
+
+
+def _exact_durations(cal: Calendar, wire: dict[str | None, str]) -> dict[str | None, timedelta]:
+    """ISO RECURRENCE-ID (None for the master) -> the EXACT length it authored.
+
+    Only components that authored a time-based `DURATION` appear. RFC 5545 §3.3.6
+    makes hours/minutes/seconds exact and weeks/days nominal, so a `PT30M` series
+    occupies thirty minutes of real time on every instance while a `P1D` one
+    means "the same time tomorrow" — the second is what the library's wall-clock
+    arithmetic already produces, so only the first needs repairing.
+
+    Keyed by governing component rather than taken from the master alone, because
+    a `RANGE=THISANDFUTURE` override supplies the values for every instance it
+    covers — including its length — and `recurring_ical_events` emits those
+    instances from it. Applying the master's duration to an instance the master
+    does not govern would be a new wrong answer in place of the old one.
+
+    A component authoring DTEND is deliberately absent, and the reason is §3.3.6
+    rather than §3.8.5.3. It is worth being precise, because the obvious citation
+    argues the opposite: §3.8.5.3 says a DTEND-authored recurrence carries the
+    same EXACT duration to every instance, and applying that literally is what
+    turned an overnight 22:00->06:00 shift across the fall-back night from the 9
+    real hours it occupies into 8 — the regression this file was narrowed to undo.
+
+    The honest argument is about information, not about that clause: a DURATION
+    carries the nominal/exact distinction in its own bytes, and a DTEND does not.
+    With nothing to say which reading was meant, wall-clock preservation is the
+    only non-destructive answer and it is what every other client does.
+    """
+    out: dict[str | None, timedelta] = {}
+    for comp in cal.walk("VEVENT"):
+        dur = comp.get("DURATION")
+        if dur is None or comp.get("DTEND") is not None:
+            continue
+        rid = comp.get("RECURRENCE-ID")
+        # The WIRE text, not `to_ical()`. icalendar parses a DURATION into a
+        # normalized `timedelta`, so `PT24H` comes back out as `P1D` — and this
+        # function's entire job is to tell those two apart. Reading the
+        # re-serialization here classified every exact duration of a day or more
+        # as nominal and left the instance unrepaired.
+        key = str(rid.to_ical().decode()) if rid is not None else None
+        # `or` on the PARSE, not on the string: an unparseable wire value must
+        # fall back to the library's reading rather than disable the repair.
+        parts = split_duration(wire.get(key)) or split_duration(dur.to_ical())
+        if parts is None:
+            continue
+        nominal, exact = parts
+        if nominal or not exact:
+            continue                      # nominal in whole or in part: wall clock
+        out[_iso(rid)[0] if rid is not None else None] = exact
     return out
 
 
@@ -229,11 +304,115 @@ def _pathological_rule(cal: Calendar, window_end: date | datetime | None = None)
     return None
 
 
-def _occurrence(comp, override_anchors: set[str], tf_shifts: dict[str, timedelta]) -> Occurrence:
+def _repair_span(start_iso: str | None, end_iso: str | None,
+                 exact: timedelta | None = None) -> str | None:
+    """The instance end, when the library emitted one that precedes its start.
+
+    `recurring_ical_events` derives each instance's end by wall-clock arithmetic
+    on that instance's DTSTART. When the instance's local start falls inside the
+    hour the clock SKIPS, the two ends resolve with different offsets and the
+    emitted occurrence runs BACKWARDS:
+
+        2026-03-08T02:30:00-06:00 -> 2026-03-08T03:00:00-05:00     -30 minutes
+
+    `busy_intervals` discards any interval that is not strictly positive, so the
+    owner's recurring 02:30 commitment stopped blocking bookings on that one day
+    and the public page handed the time to an anonymous visitor. The SPA rendered
+    it "3:30 AM - 3:00 AM".
+
+    …and one more, when the governing component authored an EXACT length (see
+    `_exact_durations`) AND the emitted pair still states that length in wall
+    clock: a `DURATION:PT30M` instance owes thirty minutes of real time, and on
+    the fall-back day the library emits a pair that reads thirty and spans
+    ninety. That over-blocks
+    rather than under-blocks, so it withholds availability rather than allowing a
+    double-booking — the milder direction, which is why it was left open when
+    this function was first narrowed rather than fixed in a hurry.
+
+    NOT every span whose exact duration disagrees with its wall-clock one. The
+    first version of this repaired all of them, on the reasoning that the stated
+    span is a wall-clock quantity — and that is wrong in a way that costs exactly
+    what it was meant to save. RFC 5545 §3.8.5.3 says a DTEND-authored
+    recurrence carries the same EXACT duration to every instance, and for the
+    master's own occurrence the DTSTART/DTEND the library emits are the bytes the
+    author wrote, correct by construction. Repairing those turned an overnight
+    22:00->06:00 shift across the fall-back night from the 9 real hours it
+    occupies into 8, and released the last hour to the booking page.
+
+    So the remaining disagreement — an instance spanning a transition being an
+    hour LONGER than the master's — is left alone. It blocks more time than it
+    occupies, which withholds availability rather than double-booking, and that
+    is the direction to err in on this path. It is filed as its own finding
+    rather than papered over here.
+
+    The end is rebuilt in the START's zone, which is a fixed offset recovered
+    from an ISO string. That is exact as an instant, which is what every consumer
+    of this value compares on; the wall-clock rendering of the repaired end can
+    name the pre-transition offset.
+    """
+    if start_iso is None or end_iso is None:
+        return end_iso
+    try:
+        start, end = datetime.fromisoformat(start_iso), datetime.fromisoformat(end_iso)
+    except ValueError:
+        return end_iso
+    if start.tzinfo is None or end.tzinfo is None:
+        return end_iso                     # floating: no offset to disagree about
+    if end.astimezone(timezone.utc) <= start.astimezone(timezone.utc):
+        wall = end.replace(tzinfo=None) - start.replace(tzinfo=None)
+        if wall <= timedelta(0):
+            return end_iso                 # authored as zero/negative; not an artifact
+        return (start.astimezone(timezone.utc) + wall).astimezone(
+            start.tzinfo).isoformat()
+
+    # Forward-going, so nothing above applies — but if the governing component
+    # authored an EXACT length, every instance owes exactly that much real time
+    # and the library's wall-clock arithmetic does not deliver it across a
+    # transition. `exact` is None for a DTEND-authored component, which is the
+    # case that must be left alone.
+    if exact is None:
+        return end_iso
+    if end.astimezone(timezone.utc) - start.astimezone(timezone.utc) == exact:
+        return end_iso                     # already the authored length
+    # The DST artifact has a signature: the emitted pair states the authored
+    # length in WALL CLOCK and delivers something else in real time. Anything
+    # whose wall-clock span is a different length came from somewhere else, and
+    # rewriting it destroys an authored value.
+    #
+    # This guard is not belt-and-braces. Without it an `RDATE;VALUE=PERIOD` block
+    # — whose length the library takes from the period, not the master — was
+    # truncated to the master's DURATION: a four-hour commitment reported as
+    # thirty minutes, on an ordinary January day with no transition anywhere near
+    # it, releasing three and a half hours to the public booking page. Which is
+    # the failure this whole function was narrowed to prevent, arriving through a
+    # different door. Failing closed on every family not enumerated is the point.
+    if end.replace(tzinfo=None) - start.replace(tzinfo=None) != exact:
+        return end_iso
+    return (start.astimezone(timezone.utc) + exact).astimezone(
+        start.tzinfo).isoformat()
+
+
+def _occurrence(comp, override_anchors: set[str], tf_shifts: dict[str, timedelta],
+                exact_durations: dict[str | None, timedelta] | None = None) -> Occurrence:
     start, start_is_date = _iso(comp.get("DTSTART"))
     end, end_is_date = _end_fields(comp)
     rid = comp.get("RECURRENCE-ID")
     rid_iso = _iso(rid)[0] if rid is not None else None
+    if not start_is_date and not end_is_date:
+        # WHICH component authored this instance's length. Not simply
+        # `.get(rid_iso)`: `recurring_ical_events` stamps a RECURRENCE-ID on every
+        # instance it emits, including the ones a plain series generates, so the
+        # emitted value says nothing on its own about whether an override is in
+        # play. `override_anchors` is the set of rids an AUTHORED override
+        # carries — so a hit means the governing component is that override (a
+        # RANGE=THISANDFUTURE one stamps its own rid on every instance it covers,
+        # which is exactly the case that must not read the master's length), and
+        # a miss means the master governs. An override that authored a DTEND is
+        # absent from the map and correctly yields None rather than falling back
+        # to a length it does not have.
+        durations = exact_durations or {}
+        governing = rid_iso if rid_iso in override_anchors else None
+        end = _repair_span(start, end, durations.get(governing))
     anchor = rid_iso or start or ""
     is_override = bool(anchor) and rid_iso in override_anchors
     shift = tf_shifts.get(rid_iso) if rid_iso is not None else None
@@ -320,15 +499,28 @@ def expand_occurrences(
         raise ValueError(f"refusing to expand recurrence: {why}")
     override_anchors = _override_anchors(cal)
     tf_shifts = _thisandfuture_shifts(cal)
+    exact_durations = _exact_durations(cal, wire_durations(raw_ics))
     query = recurring_ical_events.of(cal, components=["VEVENT"])
-    comps = query.between(window_start, window_end)
+    try:
+        with search_budget(_MAX_SEARCH_STEPS):
+            comps = query.between(window_start, window_end)
+    except SearchBudgetExceeded as e:
+        # Into the vocabulary this function already raises, so every caller
+        # degrades the way it already does for a too-dense rule: the calendar
+        # shows the master row, and `_link_busy` treats the series as an opaque
+        # busy span. Blocking the window rather than freeing it is the safe
+        # direction on the booking path.
+        raise ValueError(
+            f"refusing to expand recurrence: the rule searched past "
+            f"{_MAX_SEARCH_STEPS} periods without producing an occurrence"
+        ) from e
 
     out: list[Occurrence] = []
     seen: set[str] = set()
     for comp in comps:
         if str(comp.get("STATUS") or "").upper() == "CANCELLED":
             continue
-        occ = _occurrence(comp, override_anchors, tf_shifts)
+        occ = _occurrence(comp, override_anchors, tf_shifts, exact_durations)
         if occ.recurrence_id in seen:
             # The anchor keys the UI row and addresses the instance for a
             # per-occurrence edit or delete, so a duplicate is not cosmetic: two

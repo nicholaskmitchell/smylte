@@ -258,6 +258,14 @@ Two levers, in the order to reach for them:
 
 An ordinary restart signs nobody out; only a change to one of these does.
 
+**MCP grants go with them.** Either lever also ends every OAuth grant on the
+remote MCP endpoint: an access token stops answering at once and its refresh
+token can no longer be exchanged, so a client cannot quietly re-arm another 30
+days. Reconnect each MCP client afterwards — it will send you back through the
+consent screen, which is the point. (This has not always been true: before the
+`cv` column on `oauth_tokens`, both levers left every MCP grant working, and
+"signing out everywhere" reached only the browser sessions.)
+
 ## Backups (spec §9 — important)
 Back up **both**:
 - `~/radicale/collections` — the source of truth (all `.ics`).

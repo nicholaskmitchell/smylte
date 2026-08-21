@@ -32,11 +32,26 @@ export function ArchivedCalendarsSection({ archived, onChange, onExpire, viewing
   const guard = makeGuard(onExpire)
   const [cals, setCals] = useState<List[]>([])
   const [loaded, setLoaded] = useState(false)
+  const [failed, setFailed] = useState(false)
 
   // Fetch the full calendar list (incl. archived — the backend never filters)
   // once, then match against the archived id set.
+  //
+  // `setLoaded` in a `.finally`, the way ConnectionsSection does it: it used to
+  // sit INSIDE the guarded callback after the await, and `makeGuard` swallows
+  // the rejection, so a failed fetch never reached the statement and the section
+  // said "Loading…" for the life of the mount — no error, no retry, and the only
+  // way out was to leave the settings section and come back.
   useEffect(() => {
-    guard(async () => { setCals(await api.calendars()); setLoaded(true) })
+    guard(async () => {
+      const rows = await api.calendars()
+      // A 200 carrying junk is not a list. `data.tsx` guards its fan-out the
+      // same way rather than trusting the shape.
+      if (Array.isArray(rows)) setCals(rows)
+      else setFailed(true)
+    })
+      .catch(() => setFailed(true))
+      .finally(() => setLoaded(true))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -56,6 +71,10 @@ export function ArchivedCalendarsSection({ archived, onChange, onExpire, viewing
     <div className="arch-list">
       {!loaded ? (
         <div className="arch-empty">Loading…</div>
+      ) : failed ? (
+        // Distinguished from an empty archive on purpose: "No archived
+        // calendars." over a failed fetch is a confident lie about the account.
+        <div className="arch-empty">Couldn&rsquo;t load your archived calendars.</div>
       ) : archivedCals.length === 0 ? (
         <div className="arch-empty">No archived calendars.</div>
       ) : archivedCals.map((c) => (
@@ -83,6 +102,7 @@ function ArchivedEvents({ cal, onExpire, onRestore }: {
   const tf = useTimeFormat()
   const [events, setEvents] = useState<CalEvent[]>([])
   const [loaded, setLoaded] = useState(false)
+  const [failed, setFailed] = useState(false)
 
   const { from, to } = useMemo(() => {
     const now = new Date()
@@ -92,11 +112,15 @@ function ArchivedEvents({ cal, onExpire, onRestore }: {
     }
   }, [])
 
+  // The same shape, and the same repair — see the sibling above.
   useEffect(() => {
     guard(async () => {
-      setEvents(await api.events(cal.id, ymd(from), ymd(to)))
-      setLoaded(true)
+      const rows = await api.events(cal.id, ymd(from), ymd(to))
+      if (Array.isArray(rows)) setEvents(rows)
+      else setFailed(true)
     })
+      .catch(() => setFailed(true))
+      .finally(() => setLoaded(true))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cal.id])
 
@@ -120,6 +144,8 @@ function ArchivedEvents({ cal, onExpire, onRestore }: {
       <div className="arch-events">
         {!loaded ? (
           <div className="arch-empty">Loading…</div>
+        ) : failed ? (
+          <div className="arch-empty">Couldn&rsquo;t load this calendar&rsquo;s events.</div>
         ) : days.length === 0 ? (
           <div className="arch-empty">No events in this window.</div>
         ) : days.map(([day, evs]) => (

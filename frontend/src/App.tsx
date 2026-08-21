@@ -72,6 +72,19 @@ export function App() {
   // workbench, not a row of settings. Tabs, connected apps and archived
   // calendars are sections inside the settings panel now.
   const [appearanceOpen, setAppearanceOpen] = useState(false)
+  // Did the settings read FAIL? Not "has it succeeded" — the difference matters.
+  // Gating on success also blocks a gesture racing the initial load, which turns
+  // a millisecond window into a silently dropped preference and a confusing
+  // toast: a new failure mode in place of the one being fixed. This is the
+  // read-side twin of data.tsx's `listsOk`, narrowed to the case that actually
+  // loses data. See `MERGED_SETTINGS` and `saveSettings` below.
+  //
+  // A ref, not state, because nothing renders from it and because half the
+  // `change*` callbacks below are `useCallback(..., [])` — they capture the
+  // FIRST `saveSettings` and hold it for the life of the app, so a value read
+  // out of a closure would be the one from before the read ever finished. A ref
+  // is read at call time and cannot go stale.
+  const settingsFailed = useRef(false)
   // Seeded from the pre-paint cache so the editor opens showing what is already
   // on screen; the server overwrites it a moment later like every other setting.
   const [appearance, setAppearance] = useState<Appearance>(() => readCachedAppearance() ?? {})
@@ -138,6 +151,7 @@ export function App() {
   // truth (localStorage is only the pre-paint cache to avoid a flash).
   useEffect(() => {
     if (auth !== 'in') return
+    settingsFailed.current = false
     api.getSettings()
       .then((s) => {
         if (s.theme === 'dark' || s.theme === 'light') applyTheme(s.theme)
@@ -200,8 +214,23 @@ export function App() {
         }
         if (Array.isArray(s.dashboard)) setDashboard(sanitizeLayout(s.dashboard))
       })
-      .catch(() => { /* keep the locally-cached theme + appearance */ })
-  }, [auth, applyTheme])
+      .catch((e) => {
+        // The old handler was a bare `.catch(() => {})` with a comment saying it
+        // keeps the locally-cached theme and appearance. True of those two — they
+        // have a localStorage mirror — and of nothing else. The other eleven
+        // preferences sat at their shipped defaults with no toast, no error
+        // state and no retry (this effect re-runs on an `auth` transition only;
+        // a `rev` bump does not re-run it), and the user had no way to tell.
+        //
+        // `settingsOk` stays false, which is what actually stops the loss; the
+        // toast is so the user knows why a preference will not stick, and the
+        // AuthError branch matches what the WRITE path already does — a tab open
+        // past its session TTL used to keep accepting preference changes.
+        if (e instanceof AuthError) { setAuth('out'); return }
+        settingsFailed.current = true
+        showToast("Couldn't load your preferences — changes won't be saved until this reloads")
+      })
+  }, [auth, applyTheme, showToast])
 
   // Every UI preference is written the same way, so the failure handling lives
   // in one place. These used to be `.catch(() => {})` — which swallowed an
@@ -209,7 +238,57 @@ export function App() {
   // session TTL kept accepting preference changes, never fell back to the login
   // form, and lost every one of them on the next reload with no explanation.
   // A 422 (a layout the server's bounds reject) vanished the same way.
+  // The preferences whose value is COMPUTED FROM STATE THE READ WAS SUPPOSED TO
+  // POPULATE. Those are the ones a failed read turns into a delete: the local
+  // state is the shipped default, so the first gesture PUTs it over whatever the
+  // account had.
+  //
+  // The predicate used to be "is it a merge with an array we hold", which let
+  // three through that belong here:
+  //
+  //  * `session_ttl_s` CYCLES. `nextSessionTtl` is read-modify-write over
+  //    exactly the state that failed to load: with the read broken the panel
+  //    reads "7 days" whatever the account holds, and one click PUTs 30 — a 30x
+  //    lengthening of the field app.py calls out as security-relevant, from a
+  //    label that was already lying.
+  //  * `home_timezone` toggles the same way, and it decides where floating
+  //    events land in the public booking page's busy set.
+  //  * `appearance` was excused as having a localStorage mirror — but
+  //    `cacheAppearance` REMOVES that mirror whenever no theme is active. An
+  //    account with saved themes and none active therefore starts from `{}`, and
+  //    picking a theme emits `{active: id}` with no `themes` key.
+  //    `update_settings` does a shallow `current.update(patch)`, so that one PUT
+  //    destroys the whole theme collection.
+  //
+  // "Scalar" was never the question. Read-modify-write is — and the rule is
+  // applied to the CLASS, not to the three the review happened to name. Every
+  // remaining toggle here is `next = !current` or `nextX(current)` over state
+  // this same read populates, so each one turns a failed read into a silent
+  // flip to the opposite of what the account holds: the row shows the shipped
+  // default, the user presses it once expecting to change what they see, and
+  // the account's real value is overwritten by the negation of a lie.
+  //
+  // `start_tab` and `tasks_view` are NOT here on purpose: both carry the value
+  // just chosen from a picker, so what is written is what the user asked for
+  // whether or not the read landed.
+  const MERGED_SETTINGS = [
+    'hidden_calendars', 'archived_calendars', 'hidden_lists', 'task_groups',
+    'collapsed_groups', 'collapsed_tasks', 'dashboard', 'calendar_task_lists',
+    'tab_order', 'session_ttl_s', 'home_timezone', 'appearance',
+    'sidebar_collapsed', 'show_completed_tasks', 'calendar_show_done_tasks',
+    'calendar_fit', 'time_format',
+  ] as const
+
   const saveSettings = useCallback((patch: Settings) => {
+    if (settingsFailed.current) {
+      const held = MERGED_SETTINGS.filter((k) => k in patch)
+      if (held.length) {
+        patch = Object.fromEntries(
+          Object.entries(patch).filter(([k]) => !held.includes(k as never))) as Settings
+        showToast("Your preferences didn't load, so this change wasn't saved — reload to try again")
+      }
+      if (!Object.keys(patch).length) return
+    }
     api.putSettings(patch).catch((e) => {
       if (e instanceof AuthError) { setAuth('out'); return }
       // Offline is the ordinary case and the local state stands in fine; a
@@ -394,6 +473,11 @@ export function App() {
   // also replaced the tasks array under any optimistic paint in flight. UI
   // preferences have nothing to say about task data, so they are not a reason
   // to refetch it.
+  // Declared here rather than beside the other callbacks below because the SSE
+  // effect needs it: an expired session is invisible to EventSource, so the
+  // reconnect loop probes over HTTP and reports back through this.
+  const onExpire = useCallback(() => setAuth('out'), [])
+
   useEffect(() => {
     if (auth !== 'in') return
     let timer: ReturnType<typeof setTimeout> | undefined
@@ -401,9 +485,9 @@ export function App() {
       if (type === 'settings_updated') return
       clearTimeout(timer)
       timer = setTimeout(() => setRev((r) => r + 1), 250)
-    })
+    }, onExpire)
     return () => { clearTimeout(timer); unsubscribe() }
-  }, [auth])
+  }, [auth, onExpire])
 
   // Dismiss the settings menu on an outside click (like Søren's). Escape is
   // SettingsMenu's own: it has a drill-down to unwind — the archived-calendar
@@ -430,7 +514,6 @@ export function App() {
     changeTheme(theme === 'dark' ? 'light' : 'dark')
   }, [theme, changeTheme])
 
-  const onExpire = useCallback(() => setAuth('out'), [])
   // Logging out clears the mirror; an expired session deliberately does not,
   // since it is usually the same person about to sign back in and keeping it
   // makes that instant.

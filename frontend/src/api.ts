@@ -236,7 +236,10 @@ export interface Settings {
   hidden_lists?: string[]          // task-list ids hidden from the combined "All lists" view
   task_groups?: TaskGroup[]        // named, collapsible groupings of task lists
   collapsed_groups?: string[]      // ids of task groups currently collapsed in the sidebar
-  collapsed_tasks?: string[]       // uids of tasks whose subtask trees are folded away
+  // `taskKey`s (`list\0uid`) of tasks whose subtask trees are folded away.
+  // Bare uids written by earlier versions are still honoured on read — see
+  // TasksView's tolerate-both note — and retire as the user toggles them.
+  collapsed_tasks?: string[]
   session_ttl_s?: number | null    // how long a login lasts; null defers to the deployment
   show_completed_tasks?: boolean   // show completed/cancelled tasks inline in the main view (default hidden)
   time_format?: TimeFormat         // 12- or 24-hour clock across the app (see time.ts); default '12h'
@@ -443,19 +446,40 @@ export const api = {
 // up: events published while we were disconnected are gone, so the reconnect
 // itself has to stand in for them.
 const _SSE_MAX_BACKOFF_MS = 30_000
+// Consecutive hard failures before the loop asks whether the session is alive.
+const _SSE_PROBE_AFTER = 3
 
-export function subscribe(onChange: (type: string) => void): () => void {
+/**
+ * @param onExpire called once the session is established to be GONE, so the app
+ *   can route to the login card the way every other 401 does.
+ *
+ *   EventSource exposes no status, so a 401 is indistinguishable from a 502 and
+ *   nothing in this path could ever tell them apart: a tab whose session lapsed
+ *   over a weekend kept showing Friday's data — no staleness chrome, no login
+ *   card — while firing an unauthenticated GET every 30 s for the life of the
+ *   page. After `PROBE_AFTER` consecutive hard failures the loop asks over HTTP.
+ *
+ *   Only an AuthError stops it. A server that is down is not a session that is
+ *   gone, and signing a live session out on one 502 from the tunnel would be a
+ *   worse bug than the one this fixes.
+ */
+export function subscribe(
+  onChange: (type: string) => void, onExpire?: () => void,
+): () => void {
   let es: EventSource | null = null
   let retry: ReturnType<typeof setTimeout> | undefined
   let attempts = 0
   let missed = false        // disconnected at least once since the last open
   let stopped = false
+  let hardFails = 0
+  let probing = false
 
   const open = () => {
     if (stopped) return
     es = new EventSource('/api/events')
     es.onopen = () => {
       attempts = 0
+      hardFails = 0             // a stream that opened proves the session
       if (missed) {
         missed = false
         onChange('reconnect')   // resync whatever changed while we were away
@@ -478,6 +502,34 @@ export function subscribe(onChange: (type: string) => void): () => void {
       if (es && es.readyState !== EventSource.CLOSED) return
       es?.close()
       es = null
+      if (stopped) return
+      // Three, not one: one hard failure is an ordinary blip (a restart, a
+      // tunnel hiccup) and probing on it would put an HTTP request on a path
+      // that is meant to be quiet — and would fire an unmocked `fetch` inside
+      // api.test.ts, which drives exactly one failure.
+      if (++hardFails >= _SSE_PROBE_AFTER && !probing) {
+        // Counted back down, not left over the threshold. Leaving it there made
+        // every subsequent reconnect probe again, so against a server that is
+        // merely down — or any proxy that buffers /api/events into oblivion —
+        // the tab became a permanent /api/me poller for the life of the page.
+        // That is the traffic this was meant to remove, doubled.
+        hardFails = 0
+        probing = true
+        void api.me()
+          .catch((e) => {
+            // `stopped` re-checked: the caller may have unsubscribed while this
+            // was in flight, and firing `onExpire` then bounces a session that
+            // has since been re-established back to the login card.
+            if (e instanceof AuthError && !stopped) {
+              stopped = true
+              clearTimeout(retry)
+              es?.close()
+              es = null
+              onExpire?.()
+            }
+          })
+          .finally(() => { probing = false })
+      }
       if (stopped) return
       const backoff = Math.min(_SSE_MAX_BACKOFF_MS, 1000 * 2 ** attempts)
       attempts++

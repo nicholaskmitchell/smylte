@@ -7,7 +7,7 @@ import {
   addDays, cssColor, dayKey, isOverdue, makeGuard, toLocalInput, ymd,
 } from '../util'
 import { fmtClock, fmtDue, inputLang } from '../time'
-import { sortTasks } from '../order'
+import { sortTasks, taskKey } from '../order'
 import { useTimeFormat } from '../timeformat'
 import { AddMultipleModal } from './AddMultipleModal'
 import { dateOut, TaskModal } from './TaskModal'
@@ -21,6 +21,12 @@ const VIEWS: ReadonlyArray<readonly [TasksViewMode, string]> = [
  *  `onOver(null, from)` clears the highlight only if `from` still owns it, so a
  *  dragleave firing after the next row's dragenter doesn't blank it. */
 interface ReorderDrag {
+  /** `taskKey`s, not bare uids. The same uid legitimately lives in two lists,
+   *  and every one of these was a bare uid: `orderIndex` did
+   *  `findIndex(t => t.uid === uid)` over ALL tasks and `dropOnDay` did
+   *  `tasks.find(x => x.uid === dragUid)`, both first-wins — so dragging the
+   *  Home copy reordered, or rescheduled, the Work one. On a real CalDAV
+   *  write. */
   uid: string | null
   over: string | null
   /** Which side of `over` the row will land on. The insert is deliberate —
@@ -135,8 +141,8 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
   // indicator and the insert cannot disagree. (`active` is a filtered subset and
   // is not defined until further down.)
   const orderedAll = useMemo(() => sortTasks(tasks), [tasks])
-  const orderIndex = (uid: string | null) =>
-    uid === null ? -1 : orderedAll.findIndex((t) => t.uid === uid)
+  const orderIndex = (key: string | null) =>
+    key === null ? -1 : orderedAll.findIndex((t) => taskKey(t) === key)
   const reorderDrag: ReorderDrag = {
     uid: orderUid,
     over: orderOver,
@@ -149,14 +155,19 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
       const dragged = orderUid
       setOrderUid(null)
       setOrderOver(null)
-      if (dragged) void reorder(dragged, target)
+      // Resolved back to the rows they name before the wire call: `reorder`
+      // splices `sortTasks(tasks)` by uid, which is right ON THE WIRE (a uid is
+      // unique within a collection) but ambiguous locally.
+      const a = dragged && orderedAll.find((t) => taskKey(t) === dragged)
+      const b = orderedAll.find((t) => taskKey(t) === target)
+      if (a && b) void reorder(a.uid, b.uid)
     },
   }
   // Day-column drag: dropping a card on a column reschedules it to that day.
   // A timed due keeps its local time-of-day; an all-day due stays all-day.
   const [dragUid, setDragUid] = useState<string | null>(null)
   const dropOnDay = (key: string) => {
-    const t = tasks.find((x) => x.uid === dragUid)
+    const t = tasks.find((x) => taskKey(x) === dragUid)
     setDragUid(null)
     if (!t) return
     if (t.due && dayKey(t.due) === key) return
@@ -199,31 +210,46 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
   //    existed, pointing at the create id instead of the uid derived from it.
   //    They are repaired on the wire above; this is what nests them at once,
   //    and what covers a row the repair has not reached or was refused.
-  const { parentByUid, kidsByParent } = useMemo(() => {
-    const byUid = new Map(tasks.map((t) => [t.uid, t] as const))
-    const parents = new Map<string, string>()
+  //
+  // Keyed by `taskKey` — (list, uid) — not by the bare uid, and the parent is
+  // resolved WITHIN the child's own list. A CalDAV UID is unique per
+  // COLLECTION, so the same uid legitimately lives in two lists, and a
+  // uid-keyed `byUid` is last-wins: the l1 child's `parent` resolved to the l2
+  // copy, failed the same-list guard, and the subtask was dropped from the pane
+  // ENTIRELY — invisible, so uncompletable and undeletable, while the sidebar
+  // count still counted it. Where it did nest, both copies shared one set of
+  // children, one progress ring and one fold state.
+  const { parentByKey, kidsByParent } = useMemo(() => {
+    const inList = new Map(tasks.map((t) => [taskKey(t), t] as const))
+    const find = (list: string, uid: string) => inList.get(`${list}\u0000${uid}`)
+    const parents = new Map<string, Task>()
     const kids = new Map<string, Task[]>()
     for (const t of tasks) {
       const raw = t.parent
       if (!raw) continue
-      const p = byUid.get(raw) ?? (LEGACY_PARENT.test(raw) ? byUid.get(uidFor(raw)) : undefined)
-      if (!p || p.list !== t.list) continue
-      parents.set(t.uid, p.uid)
-      const mine = kids.get(p.uid)
+      // The same-list rule is STRUCTURAL now — `find` only looks inside
+      // `t.list` — rather than a whole-account lookup filtered afterwards. That
+      // filter is what was silently discarding rows.
+      const p = find(t.list, raw)
+        ?? (LEGACY_PARENT.test(raw) ? find(t.list, uidFor(raw)) : undefined)
+      if (!p) continue
+      parents.set(taskKey(t), p)
+      const mine = kids.get(taskKey(p))
       if (mine) mine.push(t)
-      else kids.set(p.uid, [t])
+      else kids.set(taskKey(p), [t])
     }
-    return { parentByUid: parents, kidsByParent: kids }
+    return { parentByKey: parents, kidsByParent: kids }
   }, [tasks])
-  const parentOf = (t: Task) => parentByUid.get(t.uid) ?? null
+  /** The parent TASK, not a uid — a uid cannot say which list it means. */
+  const parentOf = (t: Task) => parentByKey.get(taskKey(t)) ?? null
 
   // Subtask progress is derived from that map rather than read off the DTO.
   // The server's child_count/completed_child_count are a snapshot of the last
   // refetch, so a subtask created or ticked just now left its parent's x/y
   // stale until an SSE bump landed a whole refetch later — while the nesting
   // beside it, already computed locally, had moved.
-  const progressOf = (uid: string) => {
-    const kids = kidsByParent.get(uid)
+  const progressOf = (t: Task) => {
+    const kids = kidsByParent.get(taskKey(t))
     return kids ? { total: kids.length, done: kids.filter(isDone).length } : null
   }
 
@@ -236,11 +262,10 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
   // ordinary path is a completed parent with an open subtask while "show
   // completed" is off (the default) — the parent lands in `done`, which isn't
   // rendered, and the subtask goes with it.
-  const byUid = new Map(shownTasks.map((t) => [t.uid, t] as const))
+  const shownKeys = new Set(shownTasks.map(taskKey))
   const rendersUnder = (t: Task) => {
-    const parent = parentOf(t)
-    const p = parent ? byUid.get(parent) : undefined
-    return p && (showCompleted || !isDone(p)) ? p : undefined
+    const p = parentOf(t)
+    return p && shownKeys.has(taskKey(p)) && (showCompleted || !isDone(p)) ? p : undefined
   }
   // A RELATED-TO loop — which nothing on either side of the wire prevents —
   // leaves every task in it with a rendered parent, so a plain "no parent here"
@@ -248,20 +273,26 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
   // the pane. Walking up until the chain repeats finds the loop; its lowest uid
   // is elected the root, deterministically, so exactly one row anchors it and
   // the rest hang beneath (TaskGroup's `seen` stops the ring closing again).
-  const parentIsRendered = (t: Task) => {
+  //
+  // Parameterised by the "renders under" predicate rather than closing over
+  // `rendersUnder`, because the Completed pane needs the identical election
+  // over a DIFFERENT parent rule — see `completedTops` below. The two disagree
+  // about which parents count, and they must not disagree about rings.
+  const anchorsRing = (t: Task, under: (x: Task) => Task | undefined) => {
     const seen = new Set<string>([t.uid])
-    for (let cur = rendersUnder(t); cur; cur = rendersUnder(cur)) {
+    for (let cur = under(t); cur; cur = under(cur)) {
       if (!seen.has(cur.uid)) { seen.add(cur.uid); continue }
       // `seen` now holds the whole ring plus the tail that led into it; only
       // the ring matters, and re-walking from `cur` collects exactly that.
       const ring: string[] = []
-      for (let x: Task | undefined = cur; x && !ring.includes(x.uid); x = rendersUnder(x)) {
+      for (let x: Task | undefined = cur; x && !ring.includes(x.uid); x = under(x)) {
         ring.push(x.uid)
       }
       return t.uid !== ring.reduce((a, b) => (a < b ? a : b))
     }
-    return !!rendersUnder(t)
+    return !!under(t)
   }
+  const parentIsRendered = (t: Task) => anchorsRing(t, rendersUnder)
   const tops = shownTasks.filter((t) => !parentIsRendered(t))
 
   // Nesting goes as deep as the data does: a subtask can have subtasks of its
@@ -273,30 +304,64 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
     const m = new Map<string, Task[]>()
     for (const t of shownTasks) {
       if (!parentIsRendered(t)) continue
-      const p = parentOf(t)!
-      const mine = m.get(p)
+      const key = taskKey(parentOf(t)!)
+      const mine = m.get(key)
       if (mine) mine.push(t)
-      else m.set(p, [t])
+      else m.set(key, [t])
     }
     // Subtasks get the same order as top-level rows — they are collected in
     // array order above, which is exactly the thing that used to shuffle.
     for (const [p, kids] of m) m.set(p, sortTasks(kids))
     return m
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tasks, hiddenSet, showCompleted, parentByUid])
-  const childrenOf = useCallback((uid: string) => kidRows.get(uid) ?? [], [kidRows])
+  }, [tasks, hiddenSet, showCompleted, parentByKey])
+  const childrenOf = useCallback(
+    (t: Task) => kidRows.get(taskKey(t)) ?? [], [kidRows])
 
   // Folded subtask trees. Account-synced like the sidebar's collapsed groups,
   // so a tree you tidied away stays tidy on the next load and in the next
   // browser. Only uids that still name a task with children are kept: a task
   // deleted here or in another client would otherwise leave the set growing
   // forever, and re-creating a uid is impossible anyway.
+  //
+  // Pruned against `kidsByParent`, which is built from ALL `tasks` and is what
+  // that sentence actually describes. It used to prune against `kidRows`, which
+  // is built from `shownTasks` and only for rows whose parent is RENDERED RIGHT
+  // NOW — so it meant "has a child on screen this instant". Any folded tree in a
+  // hidden list, or under a completed parent while the default
+  // showCompleted={false} was in force, was absent from it and got dropped the
+  // moment the user folded anything else. `onCollapsedTasksChange` goes straight
+  // to `saveSettingsSoon({collapsed_tasks})`, so the loss was written to the
+  // account, survived a reload and followed the user to another browser.
+  //
+  // Re-keyed on `taskKey` like everything else here — with a TOLERATE-BOTH read,
+  // because unlike the other maps this one is PERSISTED. `collapsed_tasks` is a
+  // list of bare uids in the account's settings, written by every version of
+  // this pane so far, and `onCollapsedTasksChange` goes straight to
+  // `saveSettingsSoon`. A straight re-key would have matched none of them: every
+  // folded tree in every account would have sprung open on first load, and the
+  // prune below would then have written that loss back to the server.
+  //
+  // So a row is folded if EITHER spelling is present, the prune keeps a legacy
+  // uid while any task still bears it, and a fold written from now on is written
+  // as a key. The old entries retire as users touch them; nothing has to
+  // migrate, and an account that is never touched keeps working.
   const collapsedSet = useMemo(() => new Set(collapsedTasks), [collapsedTasks])
-  const setCollapsed = useCallback((uid: string, next: boolean) => {
-    if (next === collapsedSet.has(uid)) return
-    const kept = collapsedTasks.filter((x) => x !== uid && kidRows.has(x))
-    onCollapsedTasksChange(next ? [...kept, uid] : kept)
-  }, [collapsedSet, collapsedTasks, kidRows, onCollapsedTasksChange])
+  const legacyParents = useMemo(
+    () => new Set([...kidsByParent.keys()].map((k) => k.split('\u0000')[1])),
+    [kidsByParent])
+  const isCollapsed = useCallback(
+    (t: Task) => collapsedSet.has(taskKey(t)) || collapsedSet.has(t.uid),
+    [collapsedSet])
+  const setCollapsed = useCallback((t: Task, next: boolean) => {
+    const key = taskKey(t)
+    if (next === (collapsedSet.has(key) || collapsedSet.has(t.uid))) return
+    // Drops BOTH spellings of this row, so toggling a legacy entry off does not
+    // leave the uid behind to re-fold it on the next load.
+    const kept = collapsedTasks.filter((x) =>
+      x !== key && x !== t.uid && (kidsByParent.has(x) || legacyParents.has(x)))
+    onCollapsedTasksChange(next ? [...kept, key] : kept)
+  }, [collapsedSet, collapsedTasks, kidsByParent, legacyParents, onCollapsedTasksChange])
   // Sorted, not just filtered. These render straight into the list view, which
   // used to show them in raw array order — so a new task appeared at the bottom
   // and then jumped when the refetch replaced the array. `compareTasks` is a
@@ -331,21 +396,28 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
   // of that flag. So with the default showCompleted={false} a completed child
   // of a completed parent was promoted to a row of its own, sitting beside the
   // parent it belongs under, and the tree the pane is meant to show was flat.
-  const completedTops = shownTasks.filter((t) => {
-    if (!isDone(t)) return false
+  //
+  // A plain "my parent is not also done" test is a `tops` with the ring
+  // handling stripped out, and it loses a done RELATED-TO ring completely:
+  // every task in the ring has a done parent, so none of them is a top and the
+  // pane renders none of them — not even a stub. Nothing on either side of the
+  // wire prevents such a ring, and other clients write them. Reuse the same
+  // election `tops` uses, over this pane's own parent rule.
+  const completedUnder = (t: Task) => {
     const p = parentOf(t)
-    const parent = p ? byUid.get(p) : undefined
-    return !(parent && isDone(parent))
-  })
-  const completedKids = useCallback((uid: string) => {
+    return p && shownKeys.has(taskKey(p)) && isDone(p) ? p : undefined
+  }
+  const completedTops = shownTasks.filter(
+    (t) => isDone(t) && !anchorsRing(t, completedUnder))
+  const completedKids = useCallback((parent: Task) => {
     const kids = shownTasks.filter((t) => {
       if (!isDone(t)) return false
       const p = parentOf(t)
-      return p === uid
+      return !!p && taskKey(p) === taskKey(parent)
     })
     return sortTasks(kids)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tasks, hiddenSet, parentByUid])
+  }, [tasks, hiddenSet, parentByKey])
   const completedTasks = [
     ...sortTasks(completedTops.filter((t) => t.due)).reverse(),
     ...sortTasks(completedTops.filter((t) => !t.due)),
@@ -413,8 +485,8 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
           <div className="scroll">
             {completedTasks.length === 0 && <div className="empty">No completed tasks.</div>}
             {completedTasks.map((t) => (
-              <TaskGroup key={t.uid} task={t} childrenOf={completedKids} dot={dotFor(t)}
-                progressOf={progressOf} collapsed={collapsedSet} onCollapse={setCollapsed}
+              <TaskGroup key={taskKey(t)} task={t} childrenOf={completedKids} dot={dotFor(t)}
+                progressOf={progressOf} isCollapsed={isCollapsed} onCollapse={setCollapsed}
                 onToggle={toggle} onRemove={remove} onOpen={setDetail} onAddSub={addSub} />
             ))}
           </div>
@@ -439,8 +511,8 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
             )}
             <div className="scroll">
               {active.map((t) => (
-                <TaskGroup key={t.uid} task={t} childrenOf={childrenOf} dot={dotFor(t)}
-                  progressOf={progressOf} collapsed={collapsedSet} onCollapse={setCollapsed}
+                <TaskGroup key={taskKey(t)} task={t} childrenOf={childrenOf} dot={dotFor(t)}
+                  progressOf={progressOf} isCollapsed={isCollapsed} onCollapse={setCollapsed}
                   onToggle={toggle} onRemove={remove} onOpen={setDetail} onAddSub={addSub}
                   drag={reorderDrag} />
               ))}
@@ -453,8 +525,8 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
                 <>
                   <div className="section-label label">Completed · {done.length}</div>
                   {done.map((t) => (
-                    <TaskGroup key={t.uid} task={t} childrenOf={childrenOf} dot={dotFor(t)}
-                      progressOf={progressOf} collapsed={collapsedSet} onCollapse={setCollapsed}
+                    <TaskGroup key={taskKey(t)} task={t} childrenOf={childrenOf} dot={dotFor(t)}
+                      progressOf={progressOf} isCollapsed={isCollapsed} onCollapse={setCollapsed}
                       onToggle={toggle} onRemove={remove} onOpen={setDetail} onAddSub={addSub} />
                   ))}
                 </>
@@ -538,15 +610,17 @@ const MAX_INDENT = 6
  * gave out. A row already on its own path is dropped rather than repeated.
  */
 function TaskGroup({ task, childrenOf, dot, progressOf, depth = 0, seen,
-  collapsed, onCollapse, onToggle, onRemove, onOpen, onAddSub, drag }: {
+  isCollapsed, onCollapse, onToggle, onRemove, onOpen, onAddSub, drag }: {
   task: Task
-  childrenOf: (uid: string) => Task[]
+  childrenOf: (t: Task) => Task[]
   dot?: string | null
-  progressOf: (uid: string) => Progress
+  progressOf: (t: Task) => Progress
   depth?: number
+  /** Ancestors on the path here, as `taskKey`s — a bare uid could stop a ring
+   *  that does not exist, or fail to stop one that does. */
   seen?: ReadonlySet<string>
-  collapsed: ReadonlySet<string>
-  onCollapse: (uid: string, next: boolean) => void
+  isCollapsed: (t: Task) => boolean
+  onCollapse: (t: Task, next: boolean) => void
   onToggle: (t: Task) => void; onRemove: (t: Task) => void
   onOpen: (t: Task) => void; onAddSub: (parent: string, summary: string) => void
   /** Manual reorder, list view only (opt-in). Wraps the whole subtree, not just
@@ -555,14 +629,15 @@ function TaskGroup({ task, childrenOf, dot, progressOf, depth = 0, seen,
   drag?: ReorderDrag
 }) {
   const [adding, setAdding] = useState(false)
-  const kids = childrenOf(task.uid).filter((k) => !seen?.has(k.uid))
-  const isCollapsed = collapsed.has(task.uid)
-  const path = useMemo(() => new Set([...(seen ?? []), task.uid]), [seen, task.uid])
+  const kids = childrenOf(task).filter((k) => !seen?.has(taskKey(k)))
+  const folded = isCollapsed(task)
+  const path = useMemo(
+    () => new Set([...(seen ?? []), taskKey(task)]), [seen, task])
   const indent = Math.min(depth, MAX_INDENT)
   return (
     <div
       className={drag
-        ? `task-drag ${drag.over === task.uid && drag.uid !== task.uid
+        ? `task-drag ${drag.over === taskKey(task) && drag.uid !== taskKey(task)
             ? (drag.below ? 'drag-over drag-below' : 'drag-over') : ''}`
         : undefined}
       draggable={!!drag}
@@ -575,27 +650,27 @@ function TaskGroup({ task, childrenOf, dot, progressOf, depth = 0, seen,
           e.preventDefault()
           return
         }
-        drag.onStart(task.uid)
+        drag.onStart(taskKey(task))
         e.dataTransfer.effectAllowed = 'move'
         // Firefox refuses to start a drag with nothing on the transfer.
         e.dataTransfer.setData('text/plain', task.uid)
       })}
-      onDragOver={drag && ((e) => { e.preventDefault(); drag.onOver(task.uid) })}
-      onDragLeave={drag && (() => drag.onOver(null, task.uid))}
-      onDrop={drag && ((e) => { e.preventDefault(); drag.onDrop(task.uid) })}
+      onDragOver={drag && ((e) => { e.preventDefault(); drag.onOver(taskKey(task)) })}
+      onDragLeave={drag && (() => drag.onOver(null, taskKey(task)))}
+      onDrop={drag && ((e) => { e.preventDefault(); drag.onDrop(taskKey(task)) })}
       onDragEnd={drag && (() => drag.onStart(null))}>
-      <TaskRow task={task} dot={dot} depth={indent} progress={progressOf(task.uid)}
-        collapsed={kids.length > 0 ? isCollapsed : undefined}
-        onCollapse={(next) => onCollapse(task.uid, next)}
+      <TaskRow task={task} dot={dot} depth={indent} progress={progressOf(task)}
+        collapsed={kids.length > 0 ? folded : undefined}
+        onCollapse={(next) => onCollapse(task, next)}
         onToggle={onToggle} onRemove={onRemove} onOpen={onOpen}
-        onAddSub={() => { onCollapse(task.uid, false); setAdding(true) }} />
-      {!isCollapsed && kids.map((k) => (
-        <TaskGroup key={k.uid} task={k} childrenOf={childrenOf} dot={dot}
+        onAddSub={() => { onCollapse(task, false); setAdding(true) }} />
+      {!folded && kids.map((k) => (
+        <TaskGroup key={taskKey(k)} task={k} childrenOf={childrenOf} dot={dot}
           progressOf={progressOf} depth={depth + 1} seen={path}
-          collapsed={collapsed} onCollapse={onCollapse}
+          isCollapsed={isCollapsed} onCollapse={onCollapse}
           onToggle={onToggle} onRemove={onRemove} onOpen={onOpen} onAddSub={onAddSub} />
       ))}
-      {!isCollapsed && adding && (
+      {!folded && adding && (
         <div className="task" style={indentStyle(indent + 1)}>
           <InlineCreate placeholder="Subtask" grow
             onSubmit={(v) => { onAddSub(task.uid, v); setAdding(false) }}
@@ -617,7 +692,7 @@ function DayColumn({ date, isToday, open, done, overdue, dotOf, onToggle, onOpen
   dotOf: (t: Task) => string | null | undefined
   onToggle: (t: Task) => void; onOpen: (t: Task) => void
   onAdd: (summary: string) => void
-  dragActive: boolean; onDropTask: () => void; onDragTask: (uid: string | null) => void
+  dragActive: boolean; onDropTask: () => void; onDragTask: (key: string | null) => void
 }) {
   const [adding, setAdding] = useState(false)
   // dragover bubbles up from the cards, so entering a child re-asserts `over`.
@@ -639,14 +714,14 @@ function DayColumn({ date, isToday, open, done, overdue, dotOf, onToggle, onOpen
           <>
             <div className="col-label label overdue">Overdue</div>
             {overdue.map((t) => (
-              <DayCard key={t.uid} task={t} showDate dot={dotOf(t)} onToggle={onToggle} onOpen={onOpen}
+              <DayCard key={taskKey(t)} task={t} showDate dot={dotOf(t)} onToggle={onToggle} onOpen={onOpen}
                 onDrag={onDragTask} />
             ))}
             {open.length > 0 && <div className="col-label label">Today</div>}
           </>
         )}
         {open.map((t) => (
-          <DayCard key={t.uid} task={t} dot={dotOf(t)} onToggle={onToggle} onOpen={onOpen} onDrag={onDragTask} />
+          <DayCard key={taskKey(t)} task={t} dot={dotOf(t)} onToggle={onToggle} onOpen={onOpen} onDrag={onDragTask} />
         ))}
         {open.length + overdue.length + done.length === 0 && !adding && (
           <div className="col-empty">—</div>
@@ -655,7 +730,7 @@ function DayColumn({ date, isToday, open, done, overdue, dotOf, onToggle, onOpen
           <>
             <div className="col-label label">Done · {done.length}</div>
             {done.map((t) => (
-              <DayCard key={t.uid} task={t} dot={dotOf(t)} onToggle={onToggle} onOpen={onOpen} onDrag={onDragTask} />
+              <DayCard key={taskKey(t)} task={t} dot={dotOf(t)} onToggle={onToggle} onOpen={onOpen} onDrag={onDragTask} />
             ))}
           </>
         )}
@@ -686,7 +761,9 @@ function DayCard({ task, showDate, dot, onToggle, onOpen, onDrag }: {
   return (
     <div className={`day-card ${done ? 'done' : ''}`} draggable
       onDragStart={(e) => {
-        onDrag(task.uid)
+        // The KEY, not the uid — the day column resolves it back to this row,
+        // and a bare uid is first-wins across lists.
+        onDrag(taskKey(task))
         e.dataTransfer.setData('text/plain', task.uid)  // Firefox needs data to start a drag
         e.dataTransfer.effectAllowed = 'move'
       }}

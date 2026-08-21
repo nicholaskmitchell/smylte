@@ -14,7 +14,7 @@ import logging
 import os
 import re
 import secrets
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Annotated, Literal
 from zoneinfo import ZoneInfo
 
@@ -47,6 +47,7 @@ from .dav.errors import AuthError as DavAuthError
 from .dav.errors import DavError
 from .dav.errors import NotFound as DavNotFound
 from .dav.xml import XML_SAFE_PATTERN_SCALAR, clean_color
+from .ical.read import normalize_offset
 from .ical import EventEdit, TaskEdit, rrule_from_spec
 from .csp import CSPMiddleware, policy_for_index
 from .limits import BodySizeLimitMiddleware
@@ -82,6 +83,14 @@ CollectionName = Annotated[
     str,
     Field(min_length=1, max_length=200, pattern=XML_SAFE_PATTERN_SCALAR),
 ]
+
+# The same rule for item text. A collection name was guarded and a task summary
+# was not, so the app could write a SUMMARY its OWN read path cannot parse:
+# Radicale copies item bytes verbatim into <C:calendar-data>, and one U+FFFE
+# there makes the multistatus unparseable. The sharpest way in is anonymous —
+# PublicBook.name and .notes become the booked event's SUMMARY and DESCRIPTION.
+# No length bound here: the callers set their own, which differ per field.
+XmlSafeText = Annotated[str, Field(pattern=XML_SAFE_PATTERN_SCALAR)]
 
 
 class CreateList(BaseModel):
@@ -142,23 +151,29 @@ def _check_color(color: str | None) -> None:
 
 
 class CreateTask(BaseModel):
-    summary: str
-    notes: str | None = None
+    summary: XmlSafeText
+    notes: XmlSafeText | None = None
     priority: str | None = None       # none|low|medium|high
     due: str | None = None            # ISO date or datetime
     start: str | None = None
-    tags: list[str] | None = None
+    tags: list[XmlSafeText] | None = None
     parent: str | None = None         # parent task UID (subtask/checklist item)
     client_id: str | None = None      # idempotency: a replayed create reuses the slug
 
 
 # The client-supplied creation id becomes the resource's href slug, so it must
 # stay in Radicale's canonical URL-safe form (plain hex — see engine.create_task).
-_CLIENT_ID_RE = re.compile(r"^[0-9a-f]{16,64}$")
+#
+# `fullmatch`, not `match`. Python's `$` matches at end-of-string OR just before
+# a trailing newline, so `re.match(r"^[0-9a-f]{16,64}$", "0"*16 + "\n")` succeeds
+# — a validator whose own message says "hex characters" admitting a control byte
+# into a URL path. urlsplit then strips the newline, so the two ids address one
+# resource while carrying different UIDs. See the pin for where that ends up.
+_CLIENT_ID_RE = re.compile(r"[0-9a-f]{16,64}")
 
 
 def _check_client_id(cid: str | None) -> None:
-    if cid is not None and not _CLIENT_ID_RE.match(cid):
+    if cid is not None and not _CLIENT_ID_RE.fullmatch(cid):
         raise HTTPException(422, "client_id must be 16-64 lowercase hex characters")
 
 
@@ -181,12 +196,12 @@ def _check_session_ttl(ttl: int | None) -> None:
 
 
 class EditTask(BaseModel):
-    summary: str | None = None
-    notes: str | None = None
+    summary: XmlSafeText | None = None
+    notes: XmlSafeText | None = None
     priority: str | None = None
     due: str | None = None
     start: str | None = None
-    tags: list[str] | None = None
+    tags: list[XmlSafeText] | None = None
     status: str | None = None         # NEEDS-ACTION|IN-PROCESS|COMPLETED|CANCELLED
     parent: str | None = None         # parent task UID; explicit null unparents
 
@@ -219,23 +234,23 @@ class Repeat(BaseModel):
 
 
 class CreateEvent(Repeat):
-    summary: str
+    summary: XmlSafeText
     start: str                        # ISO date (all-day) or datetime
     end: str | None = None
     all_day: bool = False
-    location: str | None = None
-    description: str | None = None
-    tags: list[str] | None = None
+    location: XmlSafeText | None = None
+    description: XmlSafeText | None = None
+    tags: list[XmlSafeText] | None = None
     client_id: str | None = None      # idempotency: a replayed create reuses the slug
 
 
 class EditEvent(Repeat):
-    summary: str | None = None
-    description: str | None = None
-    location: str | None = None
+    summary: XmlSafeText | None = None
+    description: XmlSafeText | None = None
+    location: XmlSafeText | None = None
     start: str | None = None
     end: str | None = None
-    tags: list[str] | None = None
+    tags: list[XmlSafeText] | None = None
     status: str | None = None         # CONFIRMED|TENTATIVE|CANCELLED
     # Per-occurrence editing (Tier 3): which slice of a recurring series to touch.
     recurrence_id: str | None = None  # the occurrence anchor (original-slot ISO)
@@ -247,8 +262,8 @@ class MoveEvent(BaseModel):
 
 
 class CreateBookingLink(BaseModel):
-    title: str = Field(min_length=1, max_length=200)
-    description: str | None = Field(default=None, max_length=2000)
+    title: XmlSafeText = Field(min_length=1, max_length=200)
+    description: XmlSafeText | None = Field(default=None, max_length=2000)
     calendar: str                                     # calendar id or href
     duration_minutes: int = Field(default=30, ge=5, le=480)
     timezone: str = Field(min_length=1, max_length=64)   # IANA name
@@ -261,8 +276,8 @@ class CreateBookingLink(BaseModel):
 
 
 class EditBookingLink(BaseModel):
-    title: str | None = Field(default=None, min_length=1, max_length=200)
-    description: str | None = Field(default=None, max_length=2000)
+    title: XmlSafeText | None = Field(default=None, min_length=1, max_length=200)
+    description: XmlSafeText | None = Field(default=None, max_length=2000)
     calendar: str | None = None
     duration_minutes: int | None = Field(default=None, ge=5, le=480)
     timezone: str | None = Field(default=None, min_length=1, max_length=64)
@@ -276,14 +291,22 @@ class EditBookingLink(BaseModel):
 
 class PublicBook(BaseModel):
     start: str                                        # ISO datetime WITH offset
-    name: str = Field(min_length=1, max_length=200)
-    email: str = Field(min_length=3, max_length=320)
-    notes: str | None = Field(default=None, max_length=2000)
+    name: XmlSafeText = Field(min_length=1, max_length=200)
+    # Guarded like name and notes: _EMAIL_RE below rejects neither U+FFFE nor a
+    # control byte (it only forbids @ and whitespace), and service.book writes
+    # the address verbatim into the event DESCRIPTION — so this is the same
+    # anonymous poisoning path, one field over.
+    email: XmlSafeText = Field(min_length=3, max_length=320)
+    notes: XmlSafeText | None = Field(default=None, max_length=2000)
     client_id: str | None = None                      # idempotency, like event creates
 
 
 # Deliberately modest — enough to catch typos without embedding RFC 5322.
-_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+# `fullmatch` for the same reason as `_CLIENT_ID_RE`: `\s` in the negated classes
+# does not save it, because `$` allows the trailing newline to sit OUTSIDE every
+# group. The caller's `.strip()` currently hides that, and a caller's cleanup is
+# not a property of the validator.
+_EMAIL_RE = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
 
 
 class TaskGroup(BaseModel):
@@ -424,9 +447,14 @@ class SettingsPatch(BaseModel):
     # Ids of task groups the user has collapsed in the sidebar (member lists
     # hidden from the rail until expanded). Empty means every group is expanded.
     collapsed_groups: list[str] | None = None
-    # UIDs of tasks whose subtasks are folded away in the tasks view. Nesting is
-    # arbitrarily deep, so this is how a large tree stays readable; empty means
-    # everything is expanded. Pruned client-side against the tasks on hand.
+    # `taskKey`s — `list\0uid` — of tasks whose subtasks are folded away in the
+    # tasks view. Not bare UIDs: a CalDAV UID is unique per COLLECTION, so the
+    # same one can live in two lists and each copy folds independently. Bare
+    # UIDs written by older clients are still honoured on read and retire as the
+    # user toggles them, so this stays a plain list of opaque strings here.
+    # Nesting is arbitrarily deep, so this is how a large tree stays readable;
+    # empty means everything is expanded. Pruned client-side against the tasks
+    # on hand.
     collapsed_tasks: list[str] | None = None
     # How long a login lasts before it has to be repeated, in seconds. Only the
     # values in _SESSION_TTLS are accepted. Absent means the deployment's own
@@ -536,7 +564,7 @@ def _parse_datelike(s: str | None) -> date | datetime | None:
         return None
     try:
         if "T" in s or " " in s:
-            return datetime.fromisoformat(s.replace(" ", "T"))
+            return normalize_offset(datetime.fromisoformat(s.replace(" ", "T")))
         return date.fromisoformat(s)
     except ValueError:
         raise HTTPException(422, f"invalid date/datetime: {s!r}") from None
@@ -888,16 +916,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def _run(fn, *a, **kw):
         return await asyncio.to_thread(fn, *a, **kw)
 
-    async def _href(request: Request, list_id: str) -> str:
+    async def _href(request: Request, list_id: str, *, component: str | None = None) -> str:
         # Threaded like every other service call. `resolve_list` takes the global
         # service lock, which is held across CalDAV I/O (a sync sweep, a write,
         # a PROPPATCH) for as long as the 30 s DAV timeout allows. Called
         # synchronously it blocked the EVENT LOOP rather than a worker thread,
         # so one slow Radicale froze the whole process — /healthz, /api/login,
         # the SSE keepalives and the static SPA included.
-        href = await _run(_svc(request).resolve_list, list_id)
+        href = await _run(_svc(request).resolve_list, list_id, component=component)
         if href is None:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown list {list_id}")
+            kind = {"VTODO": "list", "VEVENT": "calendar"}.get(component or "", "list")
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown {kind} {list_id}")
         return href
 
     async def _check_parent(request: Request, href: str, parent: str | None,
@@ -964,12 +993,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # -- tasks --
     @api.get("/lists/{list_id}/tasks")
     async def get_tasks(request: Request, list_id: str, include_done: bool = Query(True)):
-        href = await _href(request, list_id)
+        href = await _href(request, list_id, component="VTODO")
         return await _run(_svc(request).list_tasks, href, include_done=include_done)
 
     @api.post("/lists/{list_id}/tasks", status_code=201)
     async def post_task(request: Request, list_id: str, body: CreateTask):
-        href = await _href(request, list_id)
+        href = await _href(request, list_id, component="VTODO")
         _check_client_id(body.client_id)
         await _check_parent(request, href, body.parent)
         return await _run(
@@ -980,7 +1009,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @api.get("/lists/{list_id}/tasks/{uid}")
     async def get_one_task(request: Request, list_id: str, uid: str):
-        href = await _href(request, list_id)
+        href = await _href(request, list_id, component="VTODO")
         dto = await _run(_svc(request).get_task, href, uid)
         if dto is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown task {uid}")
@@ -988,7 +1017,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @api.patch("/lists/{list_id}/tasks/{uid}")
     async def patch_task(request: Request, list_id: str, uid: str, body: EditTask):
-        href = await _href(request, list_id)
+        href = await _href(request, list_id, component="VTODO")
         await _check_parent(request, href, body.parent, uid=uid)
         dto = await _run(_svc(request).edit_task, href, uid, _edit_from_patch(body))
         if dto is None:
@@ -997,17 +1026,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @api.post("/lists/{list_id}/tasks/{uid}/complete")
     async def complete_task(request: Request, list_id: str, uid: str, done: bool = Query(True)):
-        href = await _href(request, list_id)
+        href = await _href(request, list_id, component="VTODO")
         return await _run(_svc(request).complete_task, href, uid, done=done)
 
     @api.post("/lists/{list_id}/tasks/{uid}/cancel")
     async def cancel_task(request: Request, list_id: str, uid: str):
-        href = await _href(request, list_id)
+        href = await _href(request, list_id, component="VTODO")
         return await _run(_svc(request).cancel_task, href, uid)
 
     @api.delete("/lists/{list_id}/tasks/{uid}", status_code=204)
     async def delete_task(request: Request, list_id: str, uid: str):
-        href = await _href(request, list_id)
+        href = await _href(request, list_id, component="VTODO")
         await _run(_svc(request).delete_task, href, uid)
         return Response(status_code=204)
 
@@ -1025,7 +1054,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 # Threaded, for the reason given on `_href`: this takes the
                 # global service lock, and up to _MAX_REORDER_TASKS distinct
                 # list ids can reach it in one request.
-                resolved = await _run(svc.resolve_list, item.list)
+                resolved = await _run(svc.resolve_list, item.list, component="VTODO")
                 if resolved is None:
                     raise HTTPException(
                         status.HTTP_404_NOT_FOUND, f"unknown list {item.list}")
@@ -1044,7 +1073,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @api.put("/lists/{list_id}/tasks/{uid}/sidecar")
     async def put_sidecar(request: Request, list_id: str, uid: str, body: Sidecar):
-        href = await _href(request, list_id)
+        href = await _href(request, list_id, component="VTODO")
         # Check before writing, like every sibling route. store.set_sidecar does
         # INSERT OR IGNORE with no referential check, so an unknown uid used to
         # answer 200 with a body of `null` AND leave a row behind with
@@ -1070,7 +1099,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @api.get("/calendars/{cal_id}/events")
     async def get_events(request: Request, cal_id: str,
                          start: str = Query(...), end: str = Query(...)):
-        href = await _href(request, cal_id)
+        href = await _href(request, cal_id, component="VEVENT")
         # 422 on a bad window bound. _parse_datelike reads "" as "unset", which
         # is right for an optional field but not for a required bound — the empty
         # string went straight through to the service and 500ed there.
@@ -1081,7 +1110,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @api.post("/calendars/{cal_id}/events", status_code=201)
     async def post_event(request: Request, cal_id: str, body: CreateEvent):
-        href = await _href(request, cal_id)
+        href = await _href(request, cal_id, component="VEVENT")
         _check_client_id(body.client_id)
         return await _run(
             _svc(request).create_event, href, body.summary,
@@ -1093,7 +1122,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @api.get("/calendars/{cal_id}/events/{uid}")
     async def get_one_event(request: Request, cal_id: str, uid: str):
-        href = await _href(request, cal_id)
+        href = await _href(request, cal_id, component="VEVENT")
         dto = await _run(_svc(request).get_event, href, uid)
         if dto is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown event {uid}")
@@ -1101,7 +1130,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @api.patch("/calendars/{cal_id}/events/{uid}")
     async def patch_event(request: Request, cal_id: str, uid: str, body: EditEvent):
-        href = await _href(request, cal_id)
+        href = await _href(request, cal_id, component="VEVENT")
         _check_scope(body.scope or "all")
         _check_recurrence_id(body.recurrence_id, body.scope or "all")
         try:
@@ -1112,14 +1141,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except ValueError as e:
             # e.g. a series shift that would switch all-day <-> timed
             raise HTTPException(422, str(e)) from None
+        except OverflowError:
+            # A boundary date parses fine and only blows up in the arithmetic
+            # deep in the edit path. OverflowError is not a ValueError, so it
+            # escaped as a 500 — the same trap the public booking route already
+            # guards. The rule writer saturates now, so this is the backstop for
+            # any other date arithmetic that reaches the edge.
+            raise HTTPException(422, "date is out of range") from None
         if dto is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown event {uid}")
         return dto
 
     @api.post("/calendars/{cal_id}/events/{uid}/move")
     async def move_event(request: Request, cal_id: str, uid: str, body: MoveEvent):
-        src = await _href(request, cal_id)
-        dst = await _href(request, body.calendar)
+        src = await _href(request, cal_id, component="VEVENT")
+        dst = await _href(request, body.calendar, component="VEVENT")
         dto = await _run(_svc(request).move_event, src, dst, uid)
         if dto is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown event {uid}")
@@ -1131,19 +1167,36 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         recurrence_id: str | None = Query(default=None),
         scope: str = Query(default="all"),   # all|this|thisandfuture
     ):
-        href = await _href(request, cal_id)
+        href = await _href(request, cal_id, component="VEVENT")
         _check_scope(scope)
         _check_recurrence_id(recurrence_id, scope)
-        await _run(
-            _svc(request).delete_event, href, uid,
-            recurrence_id=recurrence_id, scope=scope,
-        )
+        try:
+            await _run(
+                _svc(request).delete_event, href, uid,
+                recurrence_id=recurrence_id, scope=scope,
+            )
+        except ValueError as e:
+            # The same mapping `patch_event` has, and for the same reasons — the
+            # scoped delete reaches `split_series`, which now refuses an anchor
+            # that names no occurrence. Without this the refusal escaped as a 500
+            # where the sibling route answers a clean 422.
+            raise HTTPException(422, str(e)) from None
         return Response(status_code=204)
 
     # -- scheduling (booking links; owner side) --
     _LINK_SIMPLE_FIELDS = ("title", "description", "duration_minutes", "timezone",
                            "availability", "show_busy", "buffer_minutes",
                            "min_notice_hours", "horizon_days", "enabled")
+
+    # Every EditBookingLink field is Optional so it can be OMITTED, which makes an
+    # explicit `null` indistinguishable from "leave alone" by type — only
+    # `model_fields_set` tells them apart. These columns are NOT NULL, so a sent
+    # null reached SQLite as an IntegrityError, which no handler maps: a 500, with
+    # the fields updated before it already committed. (`description` is nullable;
+    # `timezone`/`availability` already answer 422 from _normalize_link_fields;
+    # `show_busy`/`enabled` coerce to 0.)
+    _LINK_NOT_NULL = ("title", "duration_minutes", "buffer_minutes",
+                      "min_notice_hours", "horizon_days")
 
     @api.get("/scheduling/links")
     async def get_booking_links(request: Request):
@@ -1162,6 +1215,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def patch_booking_link(request: Request, token: str, body: EditBookingLink):
         fs = body.model_fields_set          # only fields the client actually sent
         fields = {k: getattr(body, k) for k in _LINK_SIMPLE_FIELDS if k in fs}
+        nulled = [k for k in _LINK_NOT_NULL if k in fields and fields[k] is None]
+        if nulled:
+            raise HTTPException(
+                422, f"these fields cannot be null: {', '.join(sorted(nulled))}")
         if "calendar" in fs:
             fields["calendar_href"] = await _href(request, body.calendar)
         try:
@@ -1370,7 +1427,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def public_booking_book(request: Request, token: str, body: PublicBook):
         _public_throttle(request, public_post_limiter)
         _check_client_id(body.client_id)
-        if not _EMAIL_RE.match(body.email.strip()):
+        if not _EMAIL_RE.fullmatch(body.email.strip()):
             raise HTTPException(422, "invalid email address")
         if not body.name.strip():
             raise HTTPException(422, "name is required")
@@ -1486,12 +1543,36 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     # -- public booking deep link: serve the SPA shell (StaticFiles only maps
     #    real paths, so /book/<token> needs an explicit route) --
-    @app.get("/book/{token}")
+    #
+    # HEAD is registered explicitly, and has to be. `@app.get` builds a FastAPI
+    # `APIRoute`, which registers `methods={"GET"}` and nothing else — Starlette's
+    # plain `Route` derives HEAD from GET, `APIRoute` does not. So HEAD fell
+    # through to the SPA mount, which looked for a file called `book/<token>`,
+    # did not find one, and answered a bare JSON 404. HEAD is what link
+    # checkers, mail-security scanners and chat unfurlers send FIRST, and
+    # several treat a 404 as a dead link — so a live booking link got flagged or
+    # stripped before any human clicked it, and the owner never heard about it.
+    # Starlette drops the body for a HEAD itself; only the route has to exist.
+    @app.api_route("/book/{token}", methods=["GET", "HEAD"], include_in_schema=False)
     async def booking_spa(token: str):
         index = os.path.join(settings.static_dir, "index.html")
         if not os.path.isfile(index):
             raise HTTPException(status.HTTP_404_NOT_FOUND, "frontend not built")
         return FileResponse(index)
+
+    # Both spellings, for the same reason the well-known routes above register
+    # theirs: the SPA mount at "/" returns a FULL match for every path, so
+    # Starlette hands `/book/<token>/` to the mount inside its route loop and
+    # `redirect_slashes` — which only runs when the loop found nothing — never
+    # executes. The mount looks for a file called `book/<token>`, does not find
+    # one, and raises a bare JSON 404 that reads exactly like a dead link. The
+    # SPA's own router accepts the slash (frontend/src/main.tsx), and a path
+    # that looks like a folder invites one, typed by hand or added by a mail
+    # client.
+    app.add_api_route(
+        "/book/{token}/", booking_spa, methods=["GET", "HEAD"],
+        include_in_schema=False,
+    )
 
     # -- remote MCP server + its OAuth authorization server (opt-in) --
     # Registered here, before the static mount, because that mount matches every

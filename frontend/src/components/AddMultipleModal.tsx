@@ -1,11 +1,11 @@
 import {
   useEffect, useRef, useState,
-  type ClipboardEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode,
-} from 'react'
+  type ClipboardEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, useCallback } from 'react'
 import { clientId, PRIORITIES, type CreateTaskBody, type List } from '../api'
 import { sameValue } from '../util'
 import { inputLang } from '../time'
 import { useTimeFormat } from '../timeformat'
+import { useEscape } from '../hooks'
 
 // Each create is a CalDAV PUT plus a re-read GET behind a single server-side
 // lock, so a batch this size is already a slow half-minute. It also bounds what
@@ -276,11 +276,10 @@ export function AddMultipleModal({ lists, defaultList, initialTitle, onSubmit, o
 
   // Closing mid-batch would strand a half-created run with nowhere to report
   // its failures, so every dismissal is suppressed while it's in flight.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && !busy) onClose() }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [busy, onClose])
+  // The guard is preserved by passing a no-op rather than by not calling the
+  // hook: hooks cannot be conditional, and a dismissal mid-batch would strand a
+  // half-created run with nowhere to report its failures.
+  useEscape(useCallback(() => { if (!busy) onClose() }, [busy, onClose]))
 
   // Focus moves by row key, not index, so it survives inserts and removals.
   useEffect(() => {

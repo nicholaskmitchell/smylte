@@ -41,7 +41,7 @@ class _StubService:
     def __init__(self) -> None:
         self._lock = threading.RLock()
 
-    def resolve_list(self, list_id: str) -> str | None:
+    def resolve_list(self, list_id: str, *, component: str | None = None) -> str | None:
         with self._lock:
             return f"/u/{list_id}/"
 

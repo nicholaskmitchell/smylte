@@ -4,7 +4,7 @@ import { useIsMobile } from '../hooks'
 import { useCalendarData, useTaskData, type TaskData } from '../data'
 import { cssColor, makeGuard, addDays, dayKey, isOverdue, ymd } from '../util'
 import { fmtDue } from '../time'
-import { sortTasks } from '../order'
+import { sortTasks, taskKey } from '../order'
 import { useTimeFormat } from '../timeformat'
 import { bucketByDay, monthGrid, type DayEv } from '../calendar'
 import { DayPopover } from './DayPopover'
@@ -108,7 +108,7 @@ export function HomeView({ rev, onExpire, layout, onLayoutChange,
   const { lists, tasks, loaded, create } = useTaskData()
   // The mini calendar reads the same calendars and window the Calendar tab
   // does, so opening one after the other costs no second fan-out.
-  const { cals, eventsFor, requestWindow } = useCalendarData()
+  const { cals, eventsFor, requestWindow, windowErrors } = useCalendarData()
   const [links, setLinks] = useState<BookingLink[]>([])
   const [bookings, setBookings] = useState<Booking[]>([])
 
@@ -134,11 +134,27 @@ export function HomeView({ rev, onExpire, layout, onLayoutChange,
   const wanted = useMemo(
     () => (needsCal ? cals.filter((c) => !archived.has(c.id)) : []), [needsCal, cals, archived])
   const events = needsCal ? eventsFor(from, to) : []
+  // The mini calendar has to report a failed calendar for itself. `fetchWindow`
+  // uses `allSettled`, so an ordinary 502 never reaches `makeGuard`'s catch and
+  // the error toast that used to cover this page is gone. `CalendarView` grew a
+  // banner in its place; this module reads the same signal, or a dashboard
+  // would show a month quietly short of events with nothing to say so.
+  const calErrors = needsCal ? windowErrors(from, to) : []
   useEffect(() => {
     if (!needsCal) return
     requestWindow(from, to, wanted)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [needsCal, from, to, wanted.map((c) => c.id).join(',')])
+    // `requestWindow` is the missing signal, and it was already here: it is a
+    // useCallback over [rev, enabled, fetchWindow], so its identity changes on
+    // every SSE bump. Without it in the deps this effect was invariant under
+    // `rev` — every other data source on the page consumes it, so the rest of
+    // the screen repainted while these events stayed as they were. Adding
+    // `rev` directly would work too, but it would be a second source of truth
+    // for a signal the callback already carries, and the dep array would still
+    // be lying about what the effect reads. Deduping is unaffected:
+    // `requestWindow` stamps `asked` with `rev`, so a re-run within one rev is
+    // a no-op.
+  }, [needsCal, from, to, wanted.map((c) => c.id).join(','), requestWindow])
 
   // Two sequential requests with no staleness guard: the effect re-runs on
   // `rev`, so two SSE-driven refreshes put two batches in flight and whichever
@@ -179,6 +195,7 @@ export function HomeView({ rev, onExpire, layout, onLayoutChange,
 
   const body = (m: DashboardModule) => (
     <ModuleBody kind={m.kind} tasks={tasks} lists={lists} days={days} byDay={byDay}
+      calErrors={calErrors}
       links={links} bookings={bookings} colorOf={colorOf} eventColor={eventColor}
       onExpire={onExpire} loaded={loaded} create={create} />
   )
@@ -282,13 +299,15 @@ export function HomeView({ rev, onExpire, layout, onLayoutChange,
 
 // ── module bodies ──────────────────────────────────────────────────────────
 
-function ModuleBody({ kind, tasks, lists, days, byDay, links, bookings, colorOf,
+function ModuleBody({ kind, tasks, lists, days, byDay, calErrors, links, bookings, colorOf,
   eventColor, onExpire, loaded, create }: {
   kind: ModuleKind
   tasks: Task[]
   lists: List[]
   days: Date[]
   byDay: Map<string, DayEv[]>
+  /** Calendars whose fetch failed for this window, by name. */
+  calErrors: string[]
   links: BookingLink[]
   bookings: Booking[]
   colorOf: (listId: string) => string | null
@@ -334,7 +353,7 @@ function ModuleBody({ kind, tasks, lists, days, byDay, links, bookings, colorOf,
         colorOf={colorOf} empty="Nothing completed yet." done loaded={loaded} />
     }
     case 'mini_calendar':
-      return <MiniCalendar days={days} byDay={byDay} eventColor={eventColor} />
+      return <MiniCalendar days={days} byDay={byDay} eventColor={eventColor} failed={calErrors} />
     case 'booking_links':
       return <LinkList links={links} />
     case 'bookings':
@@ -368,7 +387,7 @@ function TaskList({ items, colorOf, empty, overdue, done, loaded }: {
       {items.map((t) => {
         const c = colorOf(t.list)
         return (
-          <li key={`${t.list}:${t.uid}`} className={`dash-task ${done ? 'done' : ''}`}>
+          <li key={taskKey(t)} className={`dash-task ${done ? 'done' : ''}`}>
             <span className="list-dot" style={c ? { background: c } : undefined} />
             <span className="dash-task-title">{t.summary || '(untitled)'}</span>
             {t.due && (
@@ -403,7 +422,8 @@ function dotColors(evs: DayEv[], eventColor: (e: CalEvent) => string | null): (s
   return out
 }
 
-function MiniCalendar({ days, byDay, eventColor }: {
+function MiniCalendar({ days, byDay, eventColor, failed = [] }: {
+  failed?: string[]
   days: Date[]
   byDay: Map<string, DayEv[]>
   eventColor: (e: CalEvent) => string | null
@@ -424,6 +444,11 @@ function MiniCalendar({ days, byDay, eventColor }: {
 
   return (
     <div className="mini-cal">
+      {failed.length > 0 && (
+        <div className="cal-partial" role="status">
+          Couldn&rsquo;t load {failed.join(', ')} &mdash; some events may be missing.
+        </div>
+      )}
       <div className="mini-cal-head">
         {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((d, i) => (
           <span key={i} className="label">{d}</span>
