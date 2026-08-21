@@ -54,6 +54,7 @@ from fastapi.testclient import TestClient
 from tasksd import scheduling
 from tasksd.app import create_app
 from tasksd.dav.client import CollectionInfo
+from tasksd.mcp.api import McpApi
 from tasksd.db import store
 from tasksd.service import TaskService
 from tasksd.sync import SyncStats
@@ -417,11 +418,26 @@ def test_a_booking_link_serves_the_spa_with_or_without_a_trailing_slash(tmp_path
         )
         assert 'id="root"' in r.text
 
-        # NOT asserted here: that HEAD answers too. It does not — FastAPI's
-        # APIRoute, unlike Starlette's Route, does not derive HEAD from GET, so
-        # `HEAD /book/<token>` 404s today on BOTH spellings while GET serves the
-        # shell. That is a real inconsistency and a separate finding; pinning it
-        # here would make this pin drive a fix wider than the finding it names.
+        # HEAD is asserted here now. It was deliberately left out when this pin
+        # was written — it fails on BOTH spellings, so it is a different finding
+        # and pinning it here would have driven a wider fix than this one names.
+        # That finding is closed below; the assertion lives here because this is
+        # where the route is, and because a repair that registers HEAD for one
+        # spelling and not the other is exactly the shape this pin already
+        # guards against.
+        h = client.head(path)
+        assert h.status_code == 200, (
+            f"HEAD {path} -> {h.status_code} — link checkers, mail-security "
+            f"scanners and chat unfurlers send HEAD first, and several treat a "
+            f"404 as a dead link"
+        )
+        assert "text/html" in h.headers.get("content-type", ""), (
+            f"HEAD {path} did not answer as the SPA shell: "
+            f"{h.headers.get('content-type')}"
+        )
+        assert h.content == b"", (
+            f"HEAD {path} carried a body: {h.content[:80]!r}"
+        )
 
     # -- controls: the repair is the second spelling, not a catch-all --
     # A route that swallowed everything under /book/ would serve the shell for
@@ -437,6 +453,10 @@ def test_a_booking_link_serves_the_spa_with_or_without_a_trailing_slash(tmp_path
     assert missing.status_code == 404, (
         f"GET /nope -> {missing.status_code}; an unrelated path stopped 404ing"
     )
+    # …and the same controls under HEAD, since that is a second method on the
+    # same routes and a catch-all added for it would be just as wrong.
+    assert client.head("/book/Ab3-_x9Q/extra").status_code == 404
+    assert client.head("/nope").status_code == 404
 
 
 # ── AUDIT: shutdown tears down the service under a running sweep ───────────
@@ -1194,6 +1214,137 @@ def test_a_204_delete_carries_no_body_and_no_content_type(client):
     assert "content-length" not in headers, headers
 
     client.delete(f"/api/lists/{lid}")
+
+
+# ── AUDIT: find_free_time derives an end by wall-clock addition ─────────────
+
+class _EventsService:
+    """The narrowest stand-in for TaskService that `find_free_time` needs: the
+    calendars it fans out over, and the rows in each."""
+
+    def __init__(self, rows: list[dict]):
+        self._rows = rows
+
+    def list_lists(self):
+        return [{"href": "/u/cal/", "components": {"VEVENT"}}]
+
+    def list_calendars(self):
+        return [{"href": "/u/cal/", "components": {"VEVENT"}}]
+
+    def events_in_range(self, href, s, e):
+        return list(self._rows)
+
+    def resolve_list(self, list_id, component=None):
+        return "/u/cal/"
+
+
+def _busy_event(**kw) -> dict:
+    base = {"uid": "b1", "summary": "Standup", "start": None, "end": None,
+            "duration": None, "status": None, "all_day": False,
+            "start_is_date": False, "end_is_date": False, "calendar": "/u/cal/"}
+    base.update(kw)
+    return base
+
+
+def test_find_free_time_holds_a_durations_real_length_across_a_transition(monkeypatch):
+    """`b_end = b_start + length` adds WALL-CLOCK time. Across a DST transition
+    that is the wrong hour, and it is the same defect Stage 3 closed at
+    `scheduling.py:163` — where the repair was `advance()`, which applies an RFC
+    5545 duration's nominal and exact halves separately (§3.3.6). The MCP path
+    was never touched because the finding named only the scheduling one.
+
+    Concretely, with the server in America/Chicago: an event starting
+    2026-03-08 01:30 CST with `DURATION:PT2H` really ends two hours of ABSOLUTE
+    time later — 09:30Z, which is 04:30 CDT. Adding to the wall clock gives
+    03:30 instead, an hour short, so `find_free_time` offers a slot at 03:30
+    that the owner is sitting in a meeting for. This is what an MCP client calls
+    to pick a meeting time, so the wrong hour becomes a real double-booking.
+
+    **The fix this finding suggests does not work as written**, and the pin is
+    shaped to prove it: `_as_dt` ends `.astimezone().replace(tzinfo=None)`, so
+    `b_start` is NAIVE by the time it reaches the addition — and `advance`'s
+    whole job is to add the exact half to the INSTANT, which a naive value does
+    not have. `advance(b_start, ...)` on the flattened value changes nothing.
+    The duration has to be applied while the value is still zone-aware, and
+    flattened only afterwards.
+    """
+    monkeypatch.setenv("TZ", "America/Chicago")
+    time.tzset()
+
+    api = McpApi(_EventsService([_busy_event(
+        start="2026-03-08T01:30:00-06:00", duration="PT2H")]))
+    free = api.find_free_time("2026-03-08", "2026-03-09",
+                              minutes=30, day_start="01:00", day_end="06:00")
+    starts = [f["start"] for f in free]
+
+    # The meeting really runs to 04:30 local, so nothing may be offered before
+    # it. An offer at 03:30 is the bug: an hour of a real commitment sold twice.
+    assert not any(f["start"] <= "2026-03-08T03:30" < f["end"] for f in free), (
+        f"find_free_time offered a slot inside a PT2H meeting that had not "
+        f"finished — the DURATION was added to the wall clock, not the "
+        f"instant: {free}"
+    )
+    assert any(f["start"] == "2026-03-08T04:30" for f in free), (
+        f"the gap after the meeting does not start at 04:30: {starts}"
+    )
+
+
+def test_find_free_time_still_blocks_the_ordinary_cases(monkeypatch):
+    """Control. The fix moves WHERE the duration is applied, so the ordinary
+    shapes — which are almost every event — must be untouched.
+
+    On the nominal/exact split, and this corrects the finding a second time:
+    `advance` cannot express it on this path, because the values never carry a
+    named zone. `_parse_dt` runs every offset-bearing datetime through
+    `normalize_offset`, which re-expresses it as **UTC** (deliberately — a bare
+    numeric offset round-trips through icalendar as a fabricated
+    `TZID="UTC-07:00"` no client can resolve). So a busy start here is a date, a
+    floating naive datetime, or UTC — and UTC has no transitions, so its nominal
+    and exact halves coincide.
+
+    What the fix actually buys is the ORDERING: applying the duration before
+    flattening to the server's local clock preserves the instant across a
+    transition, which flattening first destroys. That is what the pin above
+    demonstrates and it is the whole of the defect. `advance` is used rather
+    than a plain `+` because it is the function that already encodes §3.3.6 and
+    the day this DTO learns to carry a real zone it will be right for free.
+
+    One behaviour does change beyond the bug, and only for a DURATION spanning a
+    transition: a `P1D` on a UTC-anchored start now lands 24 real hours later
+    (04:00Z → 04:00Z) rather than at the same server-local wall clock. That is
+    the value the DTO actually holds being read as what it is.
+    """
+    monkeypatch.setenv("TZ", "America/Chicago")
+    time.tzset()
+
+    # An ordinary same-day meeting, nowhere near a transition.
+    api = McpApi(_EventsService([_busy_event(
+        start="2026-07-13T10:00:00-05:00", duration="PT1H")]))
+    free = api.find_free_time("2026-07-13", "2026-07-14",
+                              minutes=30, day_start="09:00", day_end="17:00")
+    assert any(f["start"] == "2026-07-13T09:00" and f["end"] == "2026-07-13T10:00"
+               for f in free), f"the morning gap moved: {free}"
+    assert any(f["start"] == "2026-07-13T11:00" for f in free), (
+        f"an ordinary PT1H meeting no longer ends at 11:00: {free}"
+    )
+
+    # An all-day event still blocks its whole day — it has no DURATION at all,
+    # so it takes the `b_start + timedelta(days=1)` branch the fix did not touch.
+    allday = McpApi(_EventsService([_busy_event(
+        start="2026-07-13", all_day=True, start_is_date=True)]))
+    assert allday.find_free_time("2026-07-13", "2026-07-14", minutes=30) == [], (
+        "an all-day event stopped blocking its day"
+    )
+
+    # And an event with neither end nor duration still blocks the assumed 30
+    # minutes rather than nothing: reporting occupied time as free is the worse
+    # error, and the fix runs right beside that fallback.
+    bare = McpApi(_EventsService([_busy_event(start="2026-07-13T10:00:00-05:00")]))
+    gaps = bare.find_free_time("2026-07-13", "2026-07-14",
+                               minutes=30, day_start="09:00", day_end="17:00")
+    assert any(f["start"] == "2026-07-13T10:30" for f in gaps), (
+        f"an end-less event stopped blocking its assumed half hour: {gaps}"
+    )
 
 
 # ── AUDIT (test gap): the won't-do write path is exercised by nothing ───────

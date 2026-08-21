@@ -1538,7 +1538,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     # -- public booking deep link: serve the SPA shell (StaticFiles only maps
     #    real paths, so /book/<token> needs an explicit route) --
-    @app.get("/book/{token}")
+    #
+    # HEAD is registered explicitly, and has to be. `@app.get` builds a FastAPI
+    # `APIRoute`, which registers `methods={"GET"}` and nothing else — Starlette's
+    # plain `Route` derives HEAD from GET, `APIRoute` does not. So HEAD fell
+    # through to the SPA mount, which looked for a file called `book/<token>`,
+    # did not find one, and answered a bare JSON 404. HEAD is what link
+    # checkers, mail-security scanners and chat unfurlers send FIRST, and
+    # several treat a 404 as a dead link — so a live booking link got flagged or
+    # stripped before any human clicked it, and the owner never heard about it.
+    # Starlette drops the body for a HEAD itself; only the route has to exist.
+    @app.api_route("/book/{token}", methods=["GET", "HEAD"], include_in_schema=False)
     async def booking_spa(token: str):
         index = os.path.join(settings.static_dir, "index.html")
         if not os.path.isfile(index):
@@ -1555,7 +1565,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # that looks like a folder invites one, typed by hand or added by a mail
     # client.
     app.add_api_route(
-        "/book/{token}/", booking_spa, methods=["GET"], include_in_schema=False
+        "/book/{token}/", booking_spa, methods=["GET", "HEAD"],
+        include_in_schema=False,
     )
 
     # -- remote MCP server + its OAuth authorization server (opt-in) --

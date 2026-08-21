@@ -3592,7 +3592,7 @@ Two lessons worth keeping, because they generalise past this stage:
 
 ## Filed during remediation — 2026-08-20
 
-#### [ ] Five dialogs inline the same Escape effect with three different bindings, and nothing makes the modal contract checkable
+#### [x] Five dialogs inline the same Escape effect with three different bindings, and nothing makes the modal contract checkable
 
 `frontend/src/hooks.ts:16` · **low** · test-gap
 
@@ -3612,7 +3612,25 @@ callback, so the `busy` guard is `useEscape(busy ? noop : onClose)`); leave
 enumerates the dialog components and asserts each closes on an Escape dispatched
 at `window` — the coverage that would have caught 58 before it was filed.
 
-#### [ ] One failing calendar blanks the whole month, and the retry does not help
+**Fixed**, with one deliberate deviation: `SettingsMenu` was consolidated too.
+This entry said to leave it because its Escape means "go back one step" rather
+than "close" — but the hook takes a callback, so `useEscape(back)` preserves the
+semantics exactly and removes the last hand-rolled copy. Its own suite drives all
+three levels (agenda → section → closed) and is the control for that.
+
+The guarded one is `useEscape(useCallback(() => { if (!busy) onClose() }, …))`
+rather than the entry's `busy ? noop : onClose` — same behaviour, but a stable
+callback identity, so the listener is not torn down and re-registered on every
+render.
+
+The test is the table this entry asks for: four dialogs enumerated in one array,
+each asserted to close on an Escape dispatched at **`window`**, plus that each
+unsubscribes on unmount. A new dialog joins by being added to the array, which is
+the coverage that would have caught 58. Two half-fixes checked — binding the hook
+to `document` fails five of them (a `document` listener does not see a keydown at
+`window`), and dropping the `busy` guard fails the mid-batch control.
+
+#### [x] One failing calendar blanks the whole month, and the retry does not help
 
 `frontend/src/data.tsx:608` · **low** · bug
 
@@ -3631,7 +3649,30 @@ alternative is to keep the all-or-nothing fetch and add an explicit "couldn't lo
 Work" state with a retry. Whichever is chosen, `eventsFor`'s fallback to the disk
 mirror needs to be part of the reasoning.
 
-#### [ ] find_free_time derives an event's end by wall-clock addition — the DST-unsafe twin of a call Stage 3 already fixed
+**Decided and fixed:** `allSettled`, paint what arrived, **and name what did
+not**. Neither option this entry offers is right alone — the concern it raises
+about silent under-reporting is real, so the reporting is what makes keeping the
+partial window safe, and it is asserted as part of the same pin.
+
+`CalendarView` renders a `role="status"` banner naming the calendars that failed,
+with a Retry that re-requests the window. Three details the entry's framing did
+not cover:
+
+* An `AuthError` from any calendar is re-thrown rather than recorded as a broken
+  collection — it is the session, not the calendar, and the app must route to the
+  login card rather than report the owner's whole account as broken.
+* The window is left un-asked only when **every** calendar failed, so a healthy
+  month is not re-requested on every page-turn because one collection is still
+  down. Finding 41's pin stays green.
+* `eventsFor`'s disk-mirror fallback is untouched: it answers when the window has
+  no rows at all, and a partial window now HAS rows, so the mirror no longer
+  masks a partial fetch with a stale complete one.
+
+Half-fixes checked: `allSettled` with no reporting (the silent under-report this
+entry warns about) fails the pin, and reverting to `Promise.all` fails it on the
+blank month.
+
+#### [x] find_free_time derives an event's end by wall-clock addition — the DST-unsafe twin of a call Stage 3 already fixed
 
 `backend/tasksd/mcp/api.py:635` · **medium** · bug
 
@@ -3650,6 +3691,34 @@ double-booking on the owner's calendar.
 does, and add a pin driving `find_free_time` across both the spring-forward and
 the fall-back — the DST test gap (finding 64) was closed for `busy_intervals`
 only, and closing it there is what uncovered two live defects.
+
+**Fixed — but not as suggested, because the suggestion does not work.**
+`advance(b_start, …)` changes nothing: `_as_dt` ends
+`.astimezone().replace(tzinfo=None)`, so `b_start` is **naive** by the time it
+reaches the addition, and `advance`'s whole job is to add the exact half to the
+*instant*, which a naive value does not have. Verified — applied literally as
+written, the pin still fails.
+
+The fix is the ORDERING: apply the duration to the still-aware start, then
+flatten. `b_end = _as_dt(advance(raw_start, event.get("duration"), length))`.
+
+A second correction to this entry: `advance` cannot express the nominal/exact
+split here at all, because these values never carry a named zone. `_parse_dt`
+runs every offset-bearing datetime through `normalize_offset`, which
+re-expresses it as **UTC** — so a busy start is a date, a floating naive
+datetime, or UTC, and UTC has no transitions. `advance` is used anyway because it
+is the function that already encodes §3.3.6, and the day this DTO learns to carry
+a real zone it will be right for free.
+
+Pinned by an event at 2026-03-08 01:30 CST with `DURATION:PT2H`: it really ends
+04:30 CDT, and the old code offered a free slot at 03:30 — an hour of a real
+meeting sold twice, on the path an MCP client uses to pick a time. Controls cover
+the ordinary same-day case, all-day events, and the end-less fallback.
+
+One behaviour changes beyond the bug, and only for a DURATION spanning a
+transition: a `P1D` on a UTC-anchored start now lands 24 real hours later rather
+than at the same server-local wall clock. That is the value the DTO actually
+holds being read as what it is.
 
 #### [ ] TasksView resolves subtasks, progress and fold state by bare uid, so one uid in two lists shows one row's children under both
 
@@ -3681,7 +3750,7 @@ persisted as a uid list in settings, so it needs a migration or a
 tolerate-both read. Pin it with two lists sharing a uid where only one copy has a
 subtask, and assert the other row has none.
 
-#### [ ] HEAD on a booking link 404s while GET serves the SPA, so a link checker reports the owner's published link dead
+#### [x] HEAD on a booking link 404s while GET serves the SPA, so a link checker reports the owner's published link dead
 
 `backend/tasksd/app.py:1541` · **low** · bug
 
@@ -3697,6 +3766,17 @@ HEAD is what link checkers, mail-security scanners and chat-app unfurlers send
 first, and several treat a 404 as a dead link — which is how a published booking
 link gets flagged or stripped before any human clicks it. The owner never hears
 about it, the same failure mode as the trailing-slash finding.
+
+**Fixed** by registering HEAD on both spellings — `@app.api_route(...,
+methods=["GET", "HEAD"])` for the bare one and the same list on the
+`add_api_route` for the trailing slash. Starlette drops the body for a HEAD
+itself; only the route has to exist.
+
+The assertion lives in the trailing-slash pin next door rather than in a new one,
+because that is where the route is and the two failure shapes are the same. Half-
+fixes checked: registering HEAD on the bare spelling only fails it, and widening
+the route to `{token:path}` instead — a catch-all that would serve the shell for
+paths no booking link can produce — fails the existing control.
 
 **Suggested fix.** `methods=["GET", "HEAD"]` on both spellings of the booking
 route (the `add_api_route` call already registers one of them, so this is one

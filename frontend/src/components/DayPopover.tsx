@@ -10,6 +10,7 @@ import { taskKey } from '../order'
 import { dayKey } from '../util'
 import { fmtClock, type TimeFormat } from '../time'
 import { useTimeFormat } from '../timeformat'
+import { useEscape } from '../hooks'
 
 /** The time label for an event as it appears on `day`: a continuation day shows
  *  the end time if the span finishes that day, and otherwise reads as all day. */
@@ -82,11 +83,7 @@ export function DayPopover({ day, x, y, events, tasks = [], styleOf, taskStyleOf
   onOpenTask?: (t: Task) => void
   onClose: () => void
 }) {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
+  useEscape(onClose)
   const long = new Date(`${day}T00:00`).toLocaleDateString(undefined,
     { weekday: 'long', month: 'long', day: 'numeric' })
   // Clamp to the viewport so edge cells don't push the popover off-screen.
