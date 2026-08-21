@@ -370,7 +370,13 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
   // have the same SHAPE on the way out as on the way in:
   //
   //   body.due       'YYYY-MM-DDTHH:MM'      Task.due        _iso() -> with seconds
+  //   body.start     'YYYY-MM-DDTHH:MM'      Task.start      _iso() -> with seconds
   //   body.priority  'high'                  Task.priority   the iCal integer 1
+  //
+  // THREE rows, not the two this comment first listed. `start` was missed
+  // because `bodyFrom` only emits a time on it for a timed row, so the corpus
+  // the widened double drove never carried one — the same blind spot, one field
+  // over. `sameDue` is named for `due` and used for both; the rule is identical.
   //
   // Compared raw, every bulk row carrying a timed due or a priority looked like
   // a replay of a different body and provoked a PATCH — a 20-row add became 40
@@ -394,7 +400,7 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
     const patch: Record<string, unknown> = {}
     if ('summary' in body && body.summary !== got.summary) patch.summary = body.summary
     if ('due' in body && !sameDue(body.due, got.due)) patch.due = body.due ?? null
-    if ('start' in body && (body.start ?? null) !== (got.start ?? null)) {
+    if ('start' in body && !sameDue(body.start, got.start)) {
       patch.start = body.start ?? null
     }
     if ('notes' in body && (body.notes ?? null) !== (got.notes ?? null)) {
@@ -431,13 +437,25 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
         const created = await api.createTask(
           items[i].listId, { ...items[i].body, client_id: cids[i] })
         settleCreate(uids[i], key, created)
-        // OUTSIDE the try that decides whether this row failed. The create has
-        // landed and been painted; a transient failure on the follow-up
-        // correction must not mark the row as failed, which would keep it in the
-        // composer and have the user add it a second time.
-        void reconcileReplay(items[i].listId, items[i].body, created)
-          .then((fixed) => { if (fixed !== created) settleCreate(uids[i], key, fixed) })
-          .catch((e) => console.error(e))
+        // AWAITED, but its failure is not this row's failure.
+        //
+        // The create has landed and been painted; a transient failure on the
+        // follow-up correction must not mark the row failed, which would keep it
+        // in the composer and have the user add it a second time. That is what
+        // the inner catch is for.
+        //
+        // It must NOT be detached, though: `createMany` resolving is what closes
+        // AddMultipleModal, so a correction still in flight lands on a task the
+        // user can already see and act on — ticking its box, or deleting it —
+        // and `settleCreate` then writes the server's older DTO back over them.
+        // Awaiting keeps the whole batch inside the modal, which is where it was
+        // before this was moved.
+        try {
+          const fixed = await reconcileReplay(items[i].listId, items[i].body, created)
+          if (fixed !== created) settleCreate(uids[i], key, fixed)
+        } catch (e) {
+          console.error(e)
+        }
       } catch (e) {
         if (e instanceof AuthError) {
           // Session died mid-batch. Drop every stand-in that can no longer land

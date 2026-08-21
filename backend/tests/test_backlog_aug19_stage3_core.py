@@ -1204,3 +1204,47 @@ def test_task_order_without_a_zone_is_unchanged():
     ]
     from tasksd.mcp.api import _in_display_order
     assert [t["uid"] for t in _in_display_order(tasks)] == ["a", "b", "c"]
+
+
+@pytest.mark.radicale
+def test_a_stolen_refresh_token_cannot_be_probed_past_the_reuse_detector(mcp_app):
+    """Reuse detection must not be reachable-around.
+
+    Moving the scope check above `use_refresh_token` — the fix for the burned-token
+    finding — also moved it above the replay branch, so a presentation carrying a
+    widening `scope` answered `invalid_scope` and returned before the detector
+    ever ran. An attacker holding a stolen refresh token could then confirm, for
+    free and repeatedly, that it still existed and was still bound to that
+    client, without spending its single use and without revoking the grant.
+
+    That detector is this app's ONLY signal of refresh-token theft, and the owner
+    sees it as "this refresh token was already used". Nothing may step around it.
+
+    Pinned as the outcome, not the ordering: after the legitimate client has
+    rotated, ANY further presentation of the stale token ends the grant, whatever
+    else the request carries.
+    """
+    granted = _connect(mcp_app)
+    stale = granted["refresh_token"]
+    body = {"grant_type": "refresh_token", "refresh_token": stale,
+            "client_id": granted["reg"]["client_id"]}
+
+    rotated = mcp_app.post("/oauth/token", data=dict(body))
+    assert rotated.status_code == 200, rotated.text
+
+    # The attacker's probe: the stale token, dressed up so the request would be
+    # refused for a DIFFERENT reason if anything checked that first.
+    probe = mcp_app.post("/oauth/token", data={**body, "scope": "mcp:read mcp:admin"})
+    assert probe.status_code != 200, probe.text
+    assert "already used" in probe.text, (
+        f"a replay carrying an over-wide scope was refused for the scope and "
+        f"never reached the reuse detector: {probe.status_code} {probe.text[:200]}"
+    )
+
+    # …and the grant really is gone, not merely reported as such.
+    after = mcp_app.post("/oauth/token", data={
+        "grant_type": "refresh_token", "refresh_token": rotated.json()["refresh_token"],
+        "client_id": granted["reg"]["client_id"]})
+    assert after.status_code != 200, (
+        f"the family survived a detected reuse: {after.status_code} {after.text[:200]}"
+    )

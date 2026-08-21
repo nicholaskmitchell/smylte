@@ -3247,7 +3247,7 @@ defect is a DISAGREEMENT between two zones, so a run that happened to be in
 America/Chicago would pass against the bug. Half-fix checked: ignore the `zone`
 argument and keep `.astimezone()`.
 
-#### [x] _desynchronizing falsely refuses Google Calendar's "every weekday"
+#### [ ] _desynchronizing falsely refuses Google Calendar's "every weekday"
 
 `backend/tasksd/ical/edit.py:1006` · **medium** · bug
 
@@ -3263,20 +3263,43 @@ is the refusal landing on a legitimate series.
 still satisfy the rule? `_require_occurrence` next door already has the
 machinery. Refuse only when it does not.
 
-**Fixed** exactly that way, and more cheaply than expected: `_shift_rrule` runs
-AFTER the caller has already shifted DTSTART, so the moved weekday is simply
-`master.get("DTSTART").dt.weekday()` — no probe, no search budget. Under a FREQ
-shorter than WEEKLY, BYDAY is a filter over the days the rule already generates,
-so a shift landing inside the set desynchronizes nothing; `_desynchronizing`
-refuses only when the new weekday is not in it, and still fails closed when the
-weekday cannot be determined.
+**REOPENED — the suggested fix does not work, and shipping it lost data.**
 
-Reading DTSTART at the wrong moment was the first attempt and the control caught
-it: taking the weekday BEFORE the shift and adding `day_delta` gave
-Saturday + 5 = Thursday, which is in the set, so a Monday→Saturday drag was
-allowed through. The control (`test_a_weekday_series_dragged_onto_a_weekend_is_still_refused`)
-is also what catches the lazy half-fix — whitelisting `FREQ=DAILY;BYDAY=…`
-outright — which the pin itself passes.
+It was implemented as described (test the property: does the moved DTSTART still
+fall on a day the rule names?) and shipped in `Stage 4 (9/11)`. The adversarial
+review of that stage reproduced what it does:
+
+```
+BEFORE  Jan 7, 9, 14, 16, 19      (the user had deleted Jan 12)
+AFTER   Jan 9, 12, 16, 19, 21
+```
+
+Jan 12 — deleted by the user — is back. Jan 14 — live — is gone. Two reasons,
+and the second is fatal:
+
+1. **The occurrence set does not move.** Every weekday is still in the set
+   whatever weekday DTSTART lands on, so allowing the drag produces a series that
+   did not move. Not what the user asked for either.
+2. **Everything around the rule moves anyway.** `shift_series` shifts every
+   EXDATE, RDATE and RECURRENCE-ID by `delta` before `_shift_rrule` runs. With the
+   rule's own days unchanged, those land on the wrong occurrences — and an
+   override's RECURRENCE-ID lands on a day the rule never generates, rendering as
+   a duplicate beside the series.
+
+This entry's premise was also wrong: "dragging that series now answers 422 where
+it previously worked correctly". Before finding 16 it did not work correctly — it
+silently corrupted in exactly the way above. The 422 was the improvement.
+
+**Reverted.** `_desynchronizing` refuses BYDAY on a non-WEEKLY rule again, and
+the reasoning is now a comment there so the next attempt starts from it. The
+refusal is pinned by `test_dragging_an_every_weekday_series_refuses_rather_than_corrupting_it`,
+and the OUTCOME a future fix must satisfy — a drag either is refused or leaves
+the user's deleted days deleted and their live days live — by
+`test_a_weekday_drag_does_not_move_an_exdate_onto_a_live_occurrence`.
+
+**A real fix would have to rotate the whole recurrence set**, not just judge
+DTSTART: shift the rule's days, EXDATEs, RDATEs and override anchors together, or
+refuse. That is a substantially larger change than this entry assumed.
 
 #### [x] The refresh-token scope check runs after the single-use consumption, burning the grant on a bad scope
 
@@ -3348,6 +3371,44 @@ end can be told from an authored one — `expand_occurrences` has the master and
 `_occurrence` does not. Pinned by
 `test_a_fall_back_instance_over_blocks_rather_than_under_blocks`, which asserts
 the current behaviour exactly so that changing it is a decision.
+
+## Filed during the Stage 4 adversarial review — 2026-08-21
+
+Three reviewers were run over the Stage 4 diff (`4258838..1f31d31`) with the same
+briefs Stage 3 used: correctness of the fixes, quality of the pins, and the trust
+model. They reproduced **8 defects, all consequences of that diff**, and two of
+them were the same shape as the Stage 3 precedent — a fix that traded a loud
+refusal for a silent corruption.
+
+**All 8 are closed**, each pinned before it was fixed. They are recorded here
+rather than as new numbered findings because none would have existed without the
+work that introduced them:
+
+| what | severity | where |
+|---|---|---|
+| a VALARM's `DURATION` read as the VEVENT's | high | `ical/read.py` |
+| `_desynchronizing`'s property test destroying EXDATEs | high | `ical/edit.py` — **reverted**, finding reopened above |
+| the refresh-token reuse detector reachable-around | high | `mcp/oauth.py` |
+| `unfold` quadratic on the anonymous read path | medium-high | `ical/read.py` |
+| `createMany` resolving with a correction in flight | medium | `data.tsx` |
+| `list_oauth_grants` crediting SPENT refresh tokens | medium | `db/store.py` |
+| `reconcileReplay`'s `start`, the same shape bug as `due` | medium | `data.tsx` |
+| the SSE probe never resetting its counter | low | `api.ts` |
+
+Two lessons worth keeping, because they generalise past this stage:
+
+* **The VALARM bug is what a hand-written parser costs.** `wire_durations` exists
+  because icalendar normalizes a `timedelta` and loses the nominal/exact
+  distinction — a real problem — but replacing a library's parse with a scan over
+  raw text means owning every structural rule the library already knew, and
+  subcomponents were the one that was missed. The fix now also refuses to prefer
+  a wire value that does not parse, so the whole class fails back to the library
+  rather than forward into the cache.
+* **Two of the three high findings were fixes that removed a refusal.** #45's
+  Enter-approves, D5's allow-the-drag, and the OAuth reorder all made something
+  that used to say no start saying yes. That is worth treating as a category:
+  when a fix's shape is "stop refusing", the question to ask is what the refusal
+  was protecting, and the answer is not always in the finding.
 
 ## Filed during remediation — 2026-08-20
 

@@ -1143,22 +1143,30 @@ def _desynchronizing(rule: dict, day_delta: int, new_weekday: int | None = None)
     if byday and not all(c in _WEEKDAYS for c in byday):
         return "BYDAY"                      # ordinal, e.g. 1TU — not a rotation
     if byday and "WEEKLY" not in [str(f).upper() for f in rule.get("FREQ", [])]:
-        # Under a FREQ shorter than WEEKLY, BYDAY is a FILTER over the days the
-        # rule already generates, not a selector that pins it to one weekday —
-        # so a shift that lands INSIDE the set desynchronizes nothing. Refusing
-        # on the shape blocked `FREQ=DAILY;BYDAY=MO,TU,WE,TH,FR`, which is what
-        # Google Calendar writes for "Every weekday": one of the commonest
-        # series any account holds, and it answered 422 where it had previously
-        # worked. The finding-16 fix traded a silent corruption for a refusal,
-        # and this was that refusal landing on a legitimate series.
+        # REVERTED to a refusal after an attempt to allow this was shown to lose
+        # data. The reasoning that looked right: under a FREQ shorter than
+        # WEEKLY, BYDAY is a FILTER over the days the rule already generates
+        # rather than a selector pinning it to one weekday, so a shift landing
+        # inside the set "desynchronizes nothing" — and
+        # `FREQ=DAILY;BYDAY=MO,TU,WE,TH,FR` (Google Calendar's "Every weekday")
+        # is a common series to want to drag.
         #
-        # Decided on the PROPERTY instead: does the moved start still fall on a
-        # day the rule names? `new_weekday` is None when the caller could not
-        # determine it, and then the shape test stands — failing closed, as
-        # before.
-        if new_weekday is None:
-            return "BYDAY"
-        return None if _WEEKDAYS[new_weekday] in byday else "BYDAY"
+        # It is wrong twice, and the second reason is the fatal one:
+        #
+        #  1. The occurrence set does not move. Every weekday is still in the
+        #     set whatever weekday DTSTART lands on, so allowing the drag
+        #     produces a series that did not move — not what was asked for.
+        #  2. Everything AROUND the rule moves anyway. `shift_series` shifts
+        #     every EXDATE, RDATE and RECURRENCE-ID by `delta` before this runs.
+        #     With the rule's own days unchanged, a +2-day drag of an MWF
+        #     standup moved an EXDATE off the occurrence the user had deleted
+        #     and onto a live one — the deleted instance came back, a real one
+        #     vanished, and an override's RECURRENCE-ID landed on a day the rule
+        #     never generates, rendering as a duplicate beside the series.
+        #
+        # `new_weekday` is kept in the signature and unused, so the next attempt
+        # starts from the note above rather than rediscovering it.
+        return "BYDAY"                      # only the WEEKLY rotation is handled
     return None
 
 

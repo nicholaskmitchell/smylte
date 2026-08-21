@@ -1112,9 +1112,9 @@ def list_oauth_grants(conn: sqlite3.Connection, *, now: float) -> list[dict]:
     CTE to split them. First-seen order (oldest token first) is preserved so the
     chips read stably rather than reshuffling on every poll.
     """
-    # `?` twice with a two-element tuple, not `?1` twice with a one-element one.
-    # `?1` is a NUMBERED placeholder, and CPython's sqlite3 classifies it as
-    # NAMED — its name is the literal "?1" — so binding a sequence to it is a
+    # Plain `?` placeholders, one per query. The single-query version used `?1`
+    # twice — a NUMBERED placeholder, which CPython's sqlite3 classifies as NAMED
+    # (its name is the literal "?1"), so binding a sequence to it was a
     # DeprecationWarning on 3.12 and an sqlite3.ProgrammingError from 3.14.
     rows = [
         dict(r)
@@ -1127,9 +1127,17 @@ def list_oauth_grants(conn: sqlite3.Connection, *, now: float) -> list[dict]:
             (now,),
         )
     ]
+    # `used_at IS NULL` matters as much as `expires_at`. `use_refresh_token`
+    # marks a rotated-out refresh row used and leaves its expiry alone, so a
+    # spent one stays "live" for the whole REFRESH_TTL_S — thirty days. Without
+    # this clause a grant narrowed to read-only went on reporting write for a
+    # month, which is the same deception the union was introduced to end, just
+    # 720x longer than the one hour the docstring above describes. Access tokens
+    # are never marked used, so this only excludes what it should.
     live: dict[str, list[str]] = {}
     for family_id, scope in conn.execute(
-        "SELECT family_id, scope FROM oauth_tokens WHERE expires_at > ? "
+        "SELECT family_id, scope FROM oauth_tokens "
+        "WHERE expires_at > ? AND used_at IS NULL "
         "ORDER BY created_at ASC, rowid ASC",
         (now,),
     ):

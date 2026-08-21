@@ -673,3 +673,85 @@ describe('2026-08-20 review — the settings write path', () => {
       .toEqual([])
   })
 })
+
+describe('2026-08-21 review — regressions found in the Stage 4 fixes', () => {
+  it('does not resolve createMany while a correction is still in flight', async () => {
+    // AddMultipleModal closes the instant `onSubmit` resolves, so detaching the
+    // reconcile opened a window where the user is looking at a row whose second
+    // `settleCreate` has not landed. Tick its box, or delete it, and the older
+    // server DTO is written back over them — and `settleCreate` re-appends a row
+    // that was deleted in that window.
+    //
+    // Asserted as the outcome: nothing is still pending when the batch resolves.
+    m.lists.mockResolvedValue([work])
+    m.tasks.mockResolvedValue([])
+    let patchPending = false
+    m.createTask.mockImplementation(async (list: string, body: Record<string, unknown>) =>
+      task({
+        uid: uidFor(body.client_id as string), list,
+        summary: body.summary as string,
+        due: normalizeDue((body.due as string) ?? null),
+        // Deliberately NOT normalised, so a correction really is provoked.
+        priority: null, priority_label: 'none',
+      }))
+    m.patchTask.mockImplementation(async () => {
+      patchPending = true
+      await new Promise((r) => setTimeout(r, 30))
+      patchPending = false
+      return task({ uid: 'x' })
+    })
+
+    let d!: ReturnType<typeof useTaskData>
+    render(
+      <DataProvider rev={0} onExpire={vi.fn()}>
+        <Probe3 onReady={(x) => { d = x }} />
+      </DataProvider>,
+    )
+    await waitFor(() => expect(m.tasks).toHaveBeenCalled())
+
+    await act(async () => {
+      await d.createMany(
+        [{ listId: 'l1', cid: 'r1', body: { summary: 'Call the vet', priority: 'high' } }],
+        () => {},
+      )
+    })
+
+    expect(m.patchTask).toHaveBeenCalledTimes(1)
+    expect(patchPending,
+      'createMany resolved — and the modal closed — while a correction was still in flight')
+      .toBe(false)
+  })
+
+  it('sends no correction for a bulk row whose START the server merely normalised', async () => {
+    // The same shape mismatch as `due`, one field over: `bodyFrom` emits
+    // `start: 'YYYY-MM-DDTHH:MM'` and `_iso()` returns it with seconds. Missed
+    // when `due` was fixed because the widened double never drove a timed start.
+    m.lists.mockResolvedValue([work])
+    m.tasks.mockResolvedValue([])
+    m.createTask.mockImplementation(async (list: string, body: Record<string, unknown>) =>
+      task({
+        uid: uidFor(body.client_id as string), list,
+        summary: body.summary as string,
+        start: normalizeDue((body.start as string) ?? null),
+      }))
+
+    let d!: ReturnType<typeof useTaskData>
+    render(
+      <DataProvider rev={0} onExpire={vi.fn()}>
+        <Probe3 onReady={(x) => { d = x }} />
+      </DataProvider>,
+    )
+    await waitFor(() => expect(m.tasks).toHaveBeenCalled())
+
+    await act(async () => {
+      await d.createMany(
+        [{ listId: 'l1', cid: 'r1',
+           body: { summary: 'Pack', start: '2026-08-10T09:30' } }],
+        () => {},
+      )
+    })
+
+    expect(m.patchTask.mock.calls,
+      'the server merely normalised `start` and we "corrected" it').toEqual([])
+  })
+})

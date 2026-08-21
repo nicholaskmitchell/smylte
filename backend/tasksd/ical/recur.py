@@ -175,7 +175,9 @@ def _exact_durations(cal: Calendar, wire: dict[str | None, str]) -> dict[str | N
         # re-serialization here classified every exact duration of a day or more
         # as nominal and left the instance unrepaired.
         key = str(rid.to_ical().decode()) if rid is not None else None
-        parts = split_duration(wire.get(key) or dur.to_ical())
+        # `or` on the PARSE, not on the string: an unparseable wire value must
+        # fall back to the library's reading rather than disable the repair.
+        parts = split_duration(wire.get(key)) or split_duration(dur.to_ical())
         if parts is None:
             continue
         nominal, exact = parts

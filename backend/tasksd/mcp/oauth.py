@@ -514,16 +514,32 @@ class OAuthServer:
                 "reauthorize the client",
             ) from e
 
+        # REPLAY IS DETECTED FIRST, before any other refusal can short-circuit
+        # past it. `used_at` is already on the row we fetched above, and a token
+        # that carries one has been presented twice: a copy is loose and we
+        # cannot tell which holder is legitimate, so the grant ends here
+        # regardless of what else is wrong with the request.
+        #
+        # Ordering this after the scope check — which is where it briefly was —
+        # handed an attacker a free probe: a stolen token presented with a
+        # deliberately over-wide `scope` answered `invalid_scope` without
+        # consuming its single use and without arming this alarm, so theft could
+        # be confirmed repeatedly and silently. This is the app's ONLY signal of
+        # refresh-token reuse; nothing may be able to step around it.
+        if row["used_at"] is not None:
+            store.revoke_oauth_family(conn, row["family_id"])
+            raise OAuthError("invalid_grant",
+                             "this refresh token was already used; the grant has been revoked")
+
         # A refresh may narrow scope but never widen it (RFC 6749 §6).
         #
-        # Also BEFORE `use_refresh_token`, for the reason argued nine lines
-        # above for `_check_cv` — and the argument was not applied here when it
-        # should have been. A client sending one over-wide scope had its
-        # single-use token burned on a request that was refused anyway, so its
-        # next ORDINARY refresh read as a replay: `revoke_oauth_family` destroyed
-        # the whole grant and the owner was shown "this refresh token was already
-        # used", an alarm about a theft that did not happen. That also
-        # desensitises the one alarm that should mean a stolen token.
+        # Checked before the token is CONSUMED, for the reason argued above for
+        # `_check_cv`: a client sending one over-wide scope used to have its
+        # single use burned on a request that was refused anyway, so its next
+        # ORDINARY refresh read as a replay and destroyed the whole grant — an
+        # alarm about a theft that did not happen, which also desensitises the
+        # alarm above. The replay check now sits ahead of this, so refusing a
+        # scope costs the client nothing and still cannot hide a reuse.
         granted = scope_set(row["scope"])
         if form.get("scope"):
             asked = scope_set(form.get("scope"))
@@ -535,8 +551,9 @@ class OAuthServer:
         if state == "invalid":
             raise OAuthError("invalid_grant", "the refresh token has expired")
         if state == "replayed":
-            # Two presentations of a single-use token means a copy is loose and
-            # we cannot tell which holder is the legitimate one. End the grant.
+            # The `used_at` read above is not atomic with this claim, so two
+            # concurrent presentations can both pass it. This is the atomic
+            # arbiter and it means the same thing.
             store.revoke_oauth_family(conn, row["family_id"])
             raise OAuthError("invalid_grant",
                              "this refresh token was already used; the grant has been revoked")
