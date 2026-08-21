@@ -236,7 +236,10 @@ export interface Settings {
   hidden_lists?: string[]          // task-list ids hidden from the combined "All lists" view
   task_groups?: TaskGroup[]        // named, collapsible groupings of task lists
   collapsed_groups?: string[]      // ids of task groups currently collapsed in the sidebar
-  collapsed_tasks?: string[]       // uids of tasks whose subtask trees are folded away
+  // `taskKey`s (`list\0uid`) of tasks whose subtask trees are folded away.
+  // Bare uids written by earlier versions are still honoured on read — see
+  // TasksView's tolerate-both note — and retire as the user toggles them.
+  collapsed_tasks?: string[]
   session_ttl_s?: number | null    // how long a login lasts; null defers to the deployment
   show_completed_tasks?: boolean   // show completed/cancelled tasks inline in the main view (default hidden)
   time_format?: TimeFormat         // 12- or 24-hour clock across the app (see time.ts); default '12h'

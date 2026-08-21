@@ -1567,6 +1567,16 @@ effective-permission rule, plus a check that `release` has not itself become a
 job that installs dependencies — which would be the finding moved rather than
 fixed.
 
+**Widened again after a wrong-fix review.** Four shapes were accepted by the
+version above: `permissions:` moved off workflow scope onto two of ci.yml's five
+jobs (the other three run `pip install`, which `_INSTALLS` did not match);
+deleting every `persist-credentials: false`, which was asserted nowhere though it
+is half this entry's own suggested fix; adding an installer to the one job
+holding `contents: write`, which the control's denylist could not see; and
+keeping write at workflow scope with the build jobs narrowed, which is
+functionally equivalent today but inverts least privilege for any job added
+later. All four now fail.
+
 **Not done, and deliberately not done quietly:** this entry closes by asking that
 the six action uses be pinned to commit SHAs. Resolving `@v4` to a SHA means
 reading the `actions/*` repositories, which are outside the GitHub scope granted
@@ -3663,8 +3673,20 @@ at `window` — the coverage that would have caught 58 before it was filed.
 **Fixed**, with one deliberate deviation: `SettingsMenu` was consolidated too.
 This entry said to leave it because its Escape means "go back one step" rather
 than "close" — but the hook takes a callback, so `useEscape(back)` preserves the
-semantics exactly and removes the last hand-rolled copy. Its own suite drives all
-three levels (agenda → section → closed) and is the control for that.
+semantics exactly and removes the last hand-rolled copy.
+
+The claim that "its own suite is the control for that" was **false**, and a
+wrong-fix review proved it: reverting `SettingsMenu` to a hand-rolled
+**`document`** listener left all 725 tests green. `SettingsMenu.test.tsx` uses
+`userEvent.keyboard('{Escape}')`, which dispatches at `document.activeElement`
+and bubbles to `document` AND `window`, so it cannot tell the two bindings apart
+— precisely the distinction this finding calls "not cosmetic". It is in the
+Escape table now, driven with `fireEvent.keyDown(window, …)`.
+
+The table's membership was also hand-maintained, which is exactly how finding 58
+happened. A test now reads the component tree for `useEscape` importers and fails
+when one is in no Escape test, so the next dialog cannot leave the set
+silently.
 
 The guarded one is `useEscape(useCallback(() => { if (!busy) onClose() }, …))`
 rather than the entry's `busy ? noop : onClose` — same behaviour, but a stable
@@ -3712,9 +3734,14 @@ not cover:
 * The window is left un-asked only when **every** calendar failed, so a healthy
   month is not re-requested on every page-turn because one collection is still
   down. Finding 41's pin stays green.
-* `eventsFor`'s disk-mirror fallback is untouched: it answers when the window has
-  no rows at all, and a partial window now HAS rows, so the mirror no longer
-  masks a partial fetch with a stale complete one.
+* ~~`eventsFor`'s disk-mirror fallback is untouched: it answers when the window
+  has no rows at all~~ — **false, and it caused a regression.** `eventsFor` tests
+  PRESENCE, not rows: `if (rows) return rows`, and `[]` is truthy. So a window
+  where every calendar failed wrote an empty array that shadowed the mirror,
+  where `Promise.all` used to reject and fall through to it. Fixed by writing the
+  window only when something landed; pinned, with the assertion ordered AFTER the
+  banner because the obvious ordering passed against the regression by catching
+  the first paint.
 
 Half-fixes checked: `allSettled` with no reporting (the silent under-report this
 entry warns about) fails the pin, and reverting to `Promise.all` fails it on the
@@ -3750,13 +3777,26 @@ written, the pin still fails.
 The fix is the ORDERING: apply the duration to the still-aware start, then
 flatten. `b_end = _as_dt(advance(raw_start, event.get("duration"), length))`.
 
-A second correction to this entry: `advance` cannot express the nominal/exact
-split here at all, because these values never carry a named zone. `_parse_dt`
-runs every offset-bearing datetime through `normalize_offset`, which
-re-expresses it as **UTC** — so a busy start is a date, a floating naive
-datetime, or UTC, and UTC has no transitions. `advance` is used anyway because it
-is the function that already encodes §3.3.6, and the day this DTO learns to carry
-a real zone it will be right for free.
+**That was wrong, and the closing review caught it.** The reasoning above stops
+one line early: `normalize_offset` does make the value UTC, and UTC does have no
+transitions — but `_as_dt` then converts the result back to **LOCAL**, which is
+where the transitions live. So the nominal half was resolved as 24 real hours and
+re-rendered against a clock where the day was 23 or 25, and `find_free_time`
+offered an hour the owner was booked. The paragraph that declared the `P1D`
+change deliberate was a declared regression.
+
+The frame is the whole of it, and getting it wrong is two different bugs:
+`b_start + length` puts the EXACT half on the wall clock, and
+`advance(raw_start, …)` puts the NOMINAL half on UTC. Each half now goes in its
+own frame — exact to the aware value, i.e. the instant; nominal to the local wall
+clock afterwards — decomposed with `split_duration` directly, because nothing on
+this path carries a real zone for `advance` to work against (`normalize_offset`
+has made it UTC, and `.astimezone()` yields a fixed offset, which has no
+transitions either).
+
+Pinned across the fall-back with `P1D`, and with `P1DT2H`, which is the one shape
+no single frame gets right. Both mutations — everything on the instant, and
+everything on the wall clock — fail.
 
 Pinned by an event at 2026-03-08 01:30 CST with `DURATION:PT2H`: it really ends
 04:30 CDT, and the old code offered a free slot at 03:30 — an hour of a real

@@ -16,6 +16,49 @@ of how the harness behaved in practice — its "Two strengths of pin" and
 so are the seven findings the Stage 3 and Stage 4 adversarial reviews filed and
 never staged.
 
+### What the closing reviews established — and the number that did not improve
+
+Two adversarial reviews ran over the whole stage, as Stage 4 had: one on the
+correctness of the fixes, one writing plausible-but-wrong fixes to see how many
+the suite would accept.
+
+**The wrong-fix reviewer got 16 through — up from 14 at Stage 4.** The diff
+reviewer found four regressions this stage introduced, three of them material.
+Both numbers are worse than last time, on a stage that was supposed to be
+smaller and safer. That is the honest headline.
+
+Three things are worth carrying forward.
+
+**Every regression was in shared machinery, not in the finding's own code.**
+`allSettled` fixed the month and broke the disk-mirror fallback, because
+`eventsFor` tests presence and `[]` is truthy. The banner replaced a toast that
+also covered a page nobody thought about. Re-keying the pane stopped at the drag
+paths. The pattern is not carelessness in the fix; it is that a fix to a shared
+seam changes every caller, and the finding only names one.
+
+**Two of the four were fixes to fixes — and one had a paragraph justifying it.**
+`find_free_time`'s note argued at length that UTC has no transitions, which is
+true, and stopped one line before `_as_dt` converts back to local, which is
+where they are. A written rationale is not evidence; it is a claim with more
+words. The reviews falsified five such notes, and the corrections are in place
+rather than the notes being quietly deleted.
+
+**The pin holes were nearly all one shape: a filter that no longer matches.**
+`_INSTALLS` had no `pip`, so three jobs were exempt. The Escape table was a
+hand-written list. The 204 pin drove one route of four. `_third_party_jobs` was
+a denylist used as a control. The stub answered every query the same. In each
+case the assertion was right and its REACH was wrong — which is invisible from
+inside, because everything it does reach passes. Where possible the reach is now
+derived from the code (importers of `useEscape`, handlers mentioning 204, jobs in
+the workflow) rather than enumerated by hand.
+
+**The process mistake, recorded because it cost something.** Both reviews were
+run concurrently against one working tree and interfered — the diff reviewer saw
+the other's mutations appear and vanish, and a stop-hook fired asking for the
+in-flight wrong fixes to be committed. They should have been serialised, or given
+separate worktrees. It did surface one genuine finding by accident (the
+`SettingsMenu` binding), which is luck, not method.
+
 One of the 85 is closed as a DECISION rather than a fix: `_desynchronizing`'s
 refusal of a `FREQ=DAILY;BYDAY=…` drag stays, because the entry's premise was
 false (the drag never worked; the 422 was the improvement) and the one attempt
@@ -588,7 +631,7 @@ The pipeline that ships the code and the tests that watch it. Closing these is w
 
 | # | Finding | Where | Sev | Pin |
 |---|---|---|---|---|
-| 59 ✅ | desktop-release.yml grants `contents: write` at workflow scope, so `npm ci` and NuGet restore in the build j… | `.github/workflows/desktop-release.yml:22` | medium | `test_the_desktop_release_build_jobs_hold_no_write_token` |
+| 59 ✅ | desktop-release.yml grants `contents: write` at workflow scope, so `npm ci` and NuGet restore in the build j… | `.github/workflows/desktop-release.yml:22` | medium | `test_the_build_jobs_hold_no_write_token` |
 | 60 ✅ | setup.sh writes the typed Radicale password into a systemd EnvironmentFile without escaping, and systemd's p… | `deploy/setup.sh:44` | medium | `test_setup_sh_writes_a_password_systemd_reads_back_unchanged` |
 | 61 ✅ | setup.ts's matchMedia stub hardcodes the desktop breakpoint, so CalendarView's and HomeView's entire mobile … | `frontend/src/test/setup.ts:5` | medium | `renders the mobile calendar and the mobile dashboard` |
 | 62 ✅ | Shutdown tears down the SQLite connection and DAV client under a still-running sync sweep | `backend/tasksd/app.py:774` | low | `test_a_closed_service_does_not_sweep_against_a_dead_connection` + `…_closing_between_two_slices…` |
