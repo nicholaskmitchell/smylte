@@ -2819,7 +2819,7 @@ Compare the sibling route, which is tested: tests/test_api.py:895 `test_a_sideca
 
 **Pinned by** `test_a_reorder_naming_an_unknown_uid_writes_no_sidecar_row` in `backend/tests/test_backlog_aug19_stage3_core.py`.
 
-#### [ ] Shutdown tears down the SQLite connection and DAV client under a still-running sync sweep
+#### [x] Shutdown tears down the SQLite connection and DAV client under a still-running sync sweep
 
 `backend/tasksd/app.py:774` · **low** · bug · `minor` · stage 5
 
@@ -2857,7 +2857,37 @@ Sequence on any `systemctl restart tasks` (or SIGTERM) that lands mid-sweep — 
 
 **Suggested fix.** Give `TaskService` a `_closed` flag set under the lock in `close()` and checked at the top of each `sync_all` slice (returning early), or have the lifespan wait for the in-flight sweep before closing — e.g. keep a reference to the thread/future and `await asyncio.wait_for(shield(...))` with a short bound before `svc.close()`. Either way `close()` must not run concurrently with a live sweep.
 
-**Not pinned.** A behavioural pin for this one is a coin flip: it reproduces in isolation but XPASSes once the rest of its file has run, and a flaky `strict=True` marker is a random red build. The constraint, and what a real pin would need (a hook between two slices of `sync_all`), is recorded in `docs/STAGES.md` and at the finding's place in `backend/tests/test_backlog_aug19_stage45.py`.
+**Was not pinned**, and the note explaining why asked whoever fixed this to add
+a seam between two slices of `sync_all` so teardown could be ORDERED against the
+sweep rather than raced with it.
+
+**Fixed** with the `_closed` flag this entry suggests: set under the lock in
+`close()`, checked under the lock at the top of `sync_all` *and again on every
+slice*. `close()` is also idempotent now, since teardown can run twice.
+
+**The seam turned out not to be needed, and no production code grew a test
+hook.** What was flaky was the RACE — whether `close()` happens to win the gap
+between two slices. The fix's invariant is not a race at all: a closed service
+must not touch its connection, whenever it was closed. Two pins assert exactly
+that and both fail deterministically against the old code. The mid-sweep case is
+driven by making the ENGINE's `sync` call `close()` when it is invoked for the
+first collection, which puts the teardown precisely where this entry says it
+lands — a stub in the test, not a hook in the service.
+
+Half-fix checked: guarding only at the top of `sync_all` and not per slice
+leaves the mid-sweep pin failing, which is the whole point of the finding —
+`sync_all` releases the lock between collections deliberately, so one check at
+the top proves nothing about the sixth slice.
+
+The control is the one that matters. The fix is a guard that returns early, and
+the failure mode of any such guard is returning early *always*: `_closed`
+starting `True` satisfies both pins completely and turns background sync into a
+silent no-op — the app simply stops seeing anything changed in another client,
+with no error anywhere. Verified that it fails the control.
+
+The race itself is still not pinned, and that is recorded rather than dropped:
+nothing here proves the interleaving is impossible, only that it is now
+harmless.
 
 ### Service layer
 
