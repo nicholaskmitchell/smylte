@@ -507,6 +507,49 @@ describe('aug19 stage 4b — the tasks pane and one uid in two lists', () => {
       .toBeInTheDocument()
   })
 
+  it('reschedules the copy that was dragged, not the other list\u2019s', async () => {
+    // Filed by the closing review as a scope claim this commit overstated. The
+    // nesting and fold maps were re-keyed; `dropOnDay` still did
+    // `tasks.find(x => x.uid === dragUid)` and `orderIndex` still did
+    // `findIndex(t => t.uid === uid)`, both FIRST-WINS across all lists. So
+    // dragging the Home copy onto a day column wrote a new due date to the
+    // WORK one — a real CalDAV write to a task the user never touched, while
+    // the one they dragged did not move.
+    m.lists.mockResolvedValue([work, home])
+    m.tasks.mockImplementation(async (listId: string) =>
+      [task({ uid: 'shared', list: listId, summary: 'Ship it', due: todayYmd(),
+        href: `/${listId}/shared.ics` })])
+    m.patchTask.mockImplementation(async (listId: string, uid: string, body: unknown) =>
+      task({ uid, list: listId, summary: 'Ship it', ...(body as object) }))
+
+    render(
+      <DataProvider rev={0} onExpire={vi.fn()}>
+        <TasksView onExpire={vi.fn()} view="week" onView={vi.fn()}
+          sideCollapsed={false} onToggleSide={vi.fn()}
+          hiddenLists={[]} onHiddenListsChange={vi.fn()}
+          groups={[]} onGroupsChange={vi.fn()}
+          collapsedGroups={[]} onCollapsedGroupsChange={vi.fn()}
+          collapsedTasks={[]} onCollapsedTasksChange={vi.fn()}
+          showCompleted={false} />
+      </DataProvider>,
+    )
+    await waitFor(() => expect(screen.getAllByText('Ship it')).toHaveLength(2))
+
+    // The SECOND card is the Home copy — the lists are fetched in order.
+    const cards = Array.from(document.querySelectorAll('.day-card')) as HTMLElement[]
+    expect(cards.length, 'both copies should be draggable cards').toBe(2)
+    const dataTransfer = { setData: vi.fn(), getData: vi.fn(), effectAllowed: '' }
+    fireEvent.dragStart(cards[1], { dataTransfer })
+    const col = document.querySelectorAll('.day-col')[1] as HTMLElement
+    fireEvent.drop(col, { dataTransfer })
+
+    await waitFor(() => expect(m.patchTask).toHaveBeenCalled())
+    const [listId, uid] = m.patchTask.mock.calls[0]
+    expect({ listId, uid },
+      'the drag rescheduled the other list\u2019s copy of the same uid')
+      .toEqual({ listId: 'l2', uid: 'shared' })
+  })
+
   it('honours a fold saved as a bare uid, and retires it on the next toggle', async () => {
     // The migration control, and the one that matters most here. `collapsed_tasks`
     // is PERSISTED — a list of bare uids in the account's settings, written by

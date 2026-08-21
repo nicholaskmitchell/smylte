@@ -41,13 +41,13 @@ import {
 } from './appearance'
 import { durationMs, endFromDuration } from './calendar'
 import { DataProvider } from './data'
-import { setCacheUser } from './cache'
+import { cacheEvents, setCacheUser } from './cache'
 import { AppearancePanel } from './components/AppearancePanel'
 import { CalendarView } from './components/CalendarView'
 import { HomeView } from './components/HomeView'
 import { SchedulingView } from './components/SchedulingView'
 import type { DashboardModule } from './dashboard'
-import { api, HttpError, type BookingLinkInput, type CalEvent, type List, type Task } from './api'
+import { api, AuthError, HttpError, type BookingLinkInput, type CalEvent, type List, type Task } from './api'
 
 vi.mock('./api', async (importOriginal) => {
   const mod = await importOriginal<typeof import('./api')>()
@@ -121,12 +121,17 @@ afterEach(() => { vi.useRealTimers() })
 
 /** The Calendar tab with its month held above it, exactly as App holds it — a
  *  fixed cursor would make ‹ › no-ops and quietly pass the navigation pin. */
-function CalHarness({ rev = 0 }: { rev?: number }) {
+function CalHarness({ rev = 0, onExpire = vi.fn() }: {
+  rev?: number
+  /** Held by the PROVIDER, which is where `makeGuard` routes an AuthError —
+   *  the calendar view's own prop never sees a fan-out failure. */
+  onExpire?: () => void
+}) {
   const now = new Date()
   const [cursor, setCursor] = useState(() => new Date(now.getFullYear(), now.getMonth(), 1))
   const [shown, setShown] = useState<string[]>([])
   return (
-    <DataProvider rev={rev} onExpire={vi.fn()}>
+    <DataProvider rev={rev} onExpire={onExpire}>
       <CalendarView onExpire={vi.fn()} cursor={cursor} onCursorChange={setCursor}
         sideCollapsed={false} onToggleSide={vi.fn()}
         hiddenCalendars={[]} onHiddenCalendarsChange={vi.fn()}
@@ -138,9 +143,9 @@ function CalHarness({ rev = 0 }: { rev?: number }) {
   )
 }
 
-function openCalendar(events?: CalEvent[]) {
+function openCalendar(events?: CalEvent[], over: { onExpire?: () => void } = {}) {
   if (events) m.events.mockResolvedValue(events)
-  render(<CalHarness />)
+  render(<CalHarness {...over} />)
   return setupUser()
 }
 
@@ -368,6 +373,86 @@ describe('2026-08-19 — the calendar grid', () => {
     expect(banner, 'the banner does not say the month may be incomplete')
       .toHaveTextContent(/missing events/i)
     expect(within(banner).getByRole('button', { name: 'Retry' })).toBeInTheDocument()
+  })
+
+  it('still paints the disk mirror when EVERY calendar fails, and says so', async () => {
+    // Filed by the closing review as a regression this very fix introduced.
+    // `allSettled` never rejects, so a total failure reached
+    // `setWindows(key, [])` — and `eventsFor` tests PRESENCE, not length
+    // (`if (rows) return rows`), so the empty array shadowed the disk mirror.
+    // `Promise.all` used to reject, leave no entry, and fall through to the
+    // cache. The month therefore went from "last session's events" to blank:
+    // a worse blank than the one the finding is about, because the rows to
+    // draw were sitting on disk the whole time.
+    m.calendars.mockResolvedValue([cal, { ...cal, id: 'c2', href: '/c2/', name: 'Personal' }])
+    m.events.mockRejectedValue(new HttpError(502, 'bad gateway'))
+    // What a previous healthy session left behind. The mirror is user-keyed and
+    // the shared beforeEach clears the user, so it has to be set or every write
+    // is a silent no-op — which would make this test pass against the bug.
+    setCacheUser('someone')
+    cacheEvents('2026-03-01', '2026-04-12',
+      [ev({ uid: 'cached', id: 'cached', summary: 'From the mirror' })])
+
+    openCalendar()
+
+    // The banner FIRST, deliberately. It only renders once the fan-out has
+    // settled, so waiting on it is what proves the assertion below runs after
+    // the failure has landed rather than during the first paint — when
+    // `windows` has no entry yet and the mirror answers whatever the code does.
+    // Asserted the other way round, this passed against the regression.
+    const banner = await screen.findByRole('status')
+    expect(screen.queryByText('From the mirror'),
+      'a total failure blanked the month instead of falling back to the disk mirror')
+      .toBeInTheDocument()
+    expect(banner).toHaveTextContent(/Work/)
+    expect(banner, 'a total failure named only some of the calendars')
+      .toHaveTextContent(/Personal/)
+  })
+
+  it('names every failed calendar, however it failed', async () => {
+    // Two different failure shapes at once: a rejection, and a 200 carrying a
+    // body that is not an array — which `data.tsx` has always treated as a
+    // failure (`rows.filter(Array.isArray)`) and which must be reported like
+    // one, or it is exactly the silent under-report the finding warns about.
+    // Reporting only the first name passes a one-failure test.
+    m.calendars.mockResolvedValue([
+      cal,
+      { ...cal, id: 'c2', href: '/c2/', name: 'Personal' },
+      { ...cal, id: 'c3', href: '/c3/', name: 'Family' },
+    ])
+    m.events.mockImplementation(async (calId: string) => {
+      if (calId === 'c2') throw new HttpError(502, 'bad gateway')
+      if (calId === 'c3') return { detail: 'nope' } as never   // 200, not a list
+      return [ev({ uid: 'ok', id: 'ok', summary: 'Standup' })]
+    })
+
+    openCalendar()
+
+    expect(await screen.findByText('Standup')).toBeInTheDocument()
+    const banner = await screen.findByRole('status')
+    expect(banner, 'the rejected calendar is unnamed').toHaveTextContent(/Personal/)
+    expect(banner, 'the calendar that answered 200 with junk is unnamed')
+      .toHaveTextContent(/Family/)
+    expect(banner, 'a healthy calendar was named as failed').not.toHaveTextContent(/Work/)
+  })
+
+  it('signs out rather than blaming the calendars when the session has lapsed', async () => {
+    // An AuthError from any calendar is the SESSION, not that collection. Left
+    // to the banner it renders "Couldn't load Work, Personal — this month may
+    // be missing events" with a Retry that 401s forever, instead of routing to
+    // the login card. The re-throw that prevents this was asserted by nothing.
+    m.calendars.mockResolvedValue([cal, { ...cal, id: 'c2', href: '/c2/', name: 'Personal' }])
+    m.events.mockImplementation(async (calId: string) => {
+      if (calId === 'c2') throw new AuthError('session expired')
+      return [ev({ uid: 'ok', id: 'ok', summary: 'Standup' })]
+    })
+    const onExpire = vi.fn()
+    openCalendar(undefined, { onExpire })
+
+    await waitFor(() => expect(onExpire,
+      'a lapsed session was reported as a broken calendar').toHaveBeenCalled())
+    expect(screen.queryByRole('status'),
+      'a lapsed session rendered the couldn\u2019t-load banner').toBeNull()
   })
 
   // Control: an all-healthy month is unchanged — no banner, every calendar's

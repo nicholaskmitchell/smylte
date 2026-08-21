@@ -108,7 +108,7 @@ export function HomeView({ rev, onExpire, layout, onLayoutChange,
   const { lists, tasks, loaded, create } = useTaskData()
   // The mini calendar reads the same calendars and window the Calendar tab
   // does, so opening one after the other costs no second fan-out.
-  const { cals, eventsFor, requestWindow } = useCalendarData()
+  const { cals, eventsFor, requestWindow, windowErrors } = useCalendarData()
   const [links, setLinks] = useState<BookingLink[]>([])
   const [bookings, setBookings] = useState<Booking[]>([])
 
@@ -134,6 +134,12 @@ export function HomeView({ rev, onExpire, layout, onLayoutChange,
   const wanted = useMemo(
     () => (needsCal ? cals.filter((c) => !archived.has(c.id)) : []), [needsCal, cals, archived])
   const events = needsCal ? eventsFor(from, to) : []
+  // The mini calendar has to report a failed calendar for itself. `fetchWindow`
+  // uses `allSettled`, so an ordinary 502 never reaches `makeGuard`'s catch and
+  // the error toast that used to cover this page is gone. `CalendarView` grew a
+  // banner in its place; this module reads the same signal, or a dashboard
+  // would show a month quietly short of events with nothing to say so.
+  const calErrors = needsCal ? windowErrors(from, to) : []
   useEffect(() => {
     if (!needsCal) return
     requestWindow(from, to, wanted)
@@ -189,6 +195,7 @@ export function HomeView({ rev, onExpire, layout, onLayoutChange,
 
   const body = (m: DashboardModule) => (
     <ModuleBody kind={m.kind} tasks={tasks} lists={lists} days={days} byDay={byDay}
+      calErrors={calErrors}
       links={links} bookings={bookings} colorOf={colorOf} eventColor={eventColor}
       onExpire={onExpire} loaded={loaded} create={create} />
   )
@@ -292,13 +299,15 @@ export function HomeView({ rev, onExpire, layout, onLayoutChange,
 
 // ── module bodies ──────────────────────────────────────────────────────────
 
-function ModuleBody({ kind, tasks, lists, days, byDay, links, bookings, colorOf,
+function ModuleBody({ kind, tasks, lists, days, byDay, calErrors, links, bookings, colorOf,
   eventColor, onExpire, loaded, create }: {
   kind: ModuleKind
   tasks: Task[]
   lists: List[]
   days: Date[]
   byDay: Map<string, DayEv[]>
+  /** Calendars whose fetch failed for this window, by name. */
+  calErrors: string[]
   links: BookingLink[]
   bookings: Booking[]
   colorOf: (listId: string) => string | null
@@ -344,7 +353,7 @@ function ModuleBody({ kind, tasks, lists, days, byDay, links, bookings, colorOf,
         colorOf={colorOf} empty="Nothing completed yet." done loaded={loaded} />
     }
     case 'mini_calendar':
-      return <MiniCalendar days={days} byDay={byDay} eventColor={eventColor} />
+      return <MiniCalendar days={days} byDay={byDay} eventColor={eventColor} failed={calErrors} />
     case 'booking_links':
       return <LinkList links={links} />
     case 'bookings':
@@ -413,7 +422,8 @@ function dotColors(evs: DayEv[], eventColor: (e: CalEvent) => string | null): (s
   return out
 }
 
-function MiniCalendar({ days, byDay, eventColor }: {
+function MiniCalendar({ days, byDay, eventColor, failed = [] }: {
+  failed?: string[]
   days: Date[]
   byDay: Map<string, DayEv[]>
   eventColor: (e: CalEvent) => string | null
@@ -434,6 +444,11 @@ function MiniCalendar({ days, byDay, eventColor }: {
 
   return (
     <div className="mini-cal">
+      {failed.length > 0 && (
+        <div className="cal-partial" role="status">
+          Couldn&rsquo;t load {failed.join(', ')} &mdash; some events may be missing.
+        </div>
+      )}
       <div className="mini-cal-head">
         {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((d, i) => (
           <span key={i} className="label">{d}</span>

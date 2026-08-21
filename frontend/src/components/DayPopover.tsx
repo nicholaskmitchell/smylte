@@ -3,7 +3,7 @@
 // mini calendar (where a day click opens a read-only list) — passing no `onOpen`
 // is what makes it read-only, so the dashboard never grows an event editor.
 
-import { useEffect, type CSSProperties } from 'react'
+import { type CSSProperties } from 'react'
 import type { CalEvent, Task } from '../api'
 import { eventKey, type DayEv } from '../calendar'
 import { taskKey } from '../order'

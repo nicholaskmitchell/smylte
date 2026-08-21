@@ -23,7 +23,7 @@ from datetime import date, datetime, time as time_of_day, timedelta
 from zoneinfo import ZoneInfo
 
 from ..ical import EventEdit, TaskEdit, rrule_from_spec
-from ..ical.read import advance, normalize_offset
+from ..ical.read import normalize_offset, split_duration
 from ..service import priority_from_label
 from .tools import ToolError
 
@@ -694,23 +694,53 @@ class McpApi:
                 # or the other, never both — so it has to be read before any
                 # fallback, or the fallback silently shortens a real meeting.
                 #
-                # Applied to the STILL-AWARE start, then flattened. `b_end =
-                # b_start + length` added wall-clock time, which is the wrong
-                # hour across a DST transition — the identical defect Stage 3
-                # closed at scheduling.py:163. `advance` splits the duration the
-                # way RFC 5545 §3.3.6 defines it: the weeks/days half is nominal
-                # ("a day later" is the same time tomorrow, 23 real hours across
-                # the spring-forward) and the time half is exact.
+                # `advance` splits the duration the way RFC 5545 §3.3.6
+                # defines it — the weeks/days half is NOMINAL ("a day later" is
+                # the same wall-clock time tomorrow, 23 or 25 real hours across
+                # a transition) and the time half is EXACT — and it applies
+                # each half in whatever frame it is handed. So the frame is the
+                # whole of this fix, and getting it wrong is two different bugs:
                 #
-                # The order matters and is the whole fix. `_as_dt` ends
-                # `.astimezone().replace(tzinfo=None)`, so calling `advance` on
-                # `b_start` — as this finding's own suggested fix said to —
-                # would hand it a NAIVE value with no instant to add the exact
-                # half to, and change nothing at all.
+                #   * `b_start + length` (the original) adds everything to the
+                #     wall clock, so the EXACT half is an hour out across a
+                #     transition. That is the defect Stage 3 closed at
+                #     scheduling.py:163.
+                #   * `advance(raw_start, …)` — the first repair — hands it the
+                #     value `normalize_offset` produced, which is **UTC**. UTC
+                #     has no transitions, so the nominal half becomes 24 real
+                #     hours; `_as_dt` then converts back to LOCAL, where the
+                #     transitions do live, and the NOMINAL half is an hour out.
+                #     It fixed one half by breaking the other.
+                #
+                # So each half is applied in its OWN frame, which is the only
+                # arrangement that gets both right:
+                #
+                #   exact  -> added to the aware value, i.e. to the INSTANT,
+                #             and only then flattened to local;
+                #   nominal-> added to that local WALL CLOCK afterwards.
+                #
+                # `advance` does this split too, but it can only do it correctly
+                # given a value carrying a real zone, and nothing here has one:
+                # `normalize_offset` has already re-expressed the start as UTC,
+                # and `.astimezone()` yields a FIXED OFFSET rather than a zone,
+                # so nominal arithmetic on either cannot see a transition. Hence
+                # the split is done here, against `split_duration`, which is the
+                # same decomposition `advance` uses.
+                #
+                # Checked both ways round: `P1D` from 09:00 the day before the
+                # fall-back must end 09:00 the next day (25 real hours), and
+                # `PT2H` from 01:30 before the spring-forward must end 04:30
+                # (2 real hours). `P1DT2H` needs both halves at once.
+                parts = split_duration(event.get("duration"))
                 length = parse_duration(event.get("duration"))
-                if length:
-                    b_end = _as_dt(
-                        advance(raw_start, event.get("duration"), length))
+                if parts is not None:
+                    nominal, exact = parts
+                    b_end = _as_dt(raw_start + exact if isinstance(raw_start, datetime)
+                                   else raw_start) + nominal
+                elif length:
+                    # Unparseable text but a usable total: no worse off than the
+                    # plain addition this replaced.
+                    b_end = b_start + length
             if event.get("all_day"):
                 # DTEND is exclusive for an all-day event; with none, it is one day.
                 b_end = b_end or (b_start + timedelta(days=1))
