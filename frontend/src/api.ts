@@ -46,6 +46,11 @@ export interface Task {
   notes: string | null
   status: string
   completed: boolean
+  // The instant the VTODO records as COMPLETED, or null. Distinct from the flag
+  // above, which is derived from STATUS: a client can write STATUS:COMPLETED and
+  // no COMPLETED property, so this is null for some completed tasks and anything
+  // ordering by it needs a fallback.
+  completed_at: string | null
   cancelled: boolean
   priority: number | null
   priority_label: string
@@ -65,8 +70,22 @@ export interface Task {
   // null until something is dragged, and stays null for tasks another CalDAV
   // client created — the sidecar never goes on the wire.
   sort_order: number | null
+  // Sidecar too, and unused by any view today — declared because the endpoint
+  // returns it, and a field the server sends that the type denies exists is how
+  // the four below went missing in the first place.
+  kanban_column: string | null
+  // This task carries an RRULE or RDATE. VTODO recurrence is GATED (see
+  // docs/recurrence-findings.md) so nothing in this app advances such a task —
+  // but one written by Tasks.org or jtx Board is already in the cache, and a
+  // view that completes it should be able to say so rather than treating it as
+  // an ordinary task.
+  has_rrule: boolean
   href: string
   etag: string
+  // Wire timestamps, both nullable: CREATED and LAST-MODIFIED are optional
+  // properties and plenty of clients omit them.
+  created: string | null
+  last_modified: string | null
 }
 
 // The priority vocabulary the backend maps to iCal PRIORITY ints (edit.py's
