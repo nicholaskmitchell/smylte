@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { clientId } from '../api'
+import { useEscape } from '../hooks'
 import {
   DEFAULTS, FONT_CHOICES, GROUPS, MAX_NAME_LEN, MAX_THEMES, PRESETS, SHARED_DEFAULTS,
   TOKENS, defaultValue, ensureFont, findPreset, isSharedToken, isValidToken,
@@ -45,11 +46,9 @@ export function AppearancePanel({ appearance, onChange, mode, onMode, onClose }:
   const [renaming, setRenaming] = useState(false)
   const [name, setName] = useState('')
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [onClose])
+  // Was bound to `document`, which does not see a keydown dispatched at
+  // `window` — one of the three bindings this hook exists to collapse.
+  useEscape(onClose)
 
   // Close the rename row whenever the theme it was opened for stops being the
   // active one. `renaming`/`name` are captured when Rename is pressed and were

@@ -180,7 +180,8 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
   const guard = makeGuard(onExpire)
   const isMobile = useIsMobile()
   const tf = useTimeFormat()
-  const { cals, loaded, setCals, eventsFor, requestWindow, setEvents, reload } = useCalendarData()
+  const { cals, loaded, setCals, eventsFor, requestWindow, setEvents, reload,
+    windowErrors } = useCalendarData()
   // Tasks need no fetch of their own: the provider above this already holds
   // every task of every list, and HomeView reads both datasets the same way.
   const { lists: taskLists, tasks, listsLoaded, saveDetail, remove: removeTask } = useTaskData()
@@ -237,6 +238,7 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
   // for. The provider owns the request, so a window already fetched this
   // session — or mirrored to disk — paints without going near the network.
   const events = eventsFor(from, to)
+  const failedCals = windowErrors(from, to)
   useEffect(() => {
     requestWindow(from, to, visibleCals)
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -535,6 +537,21 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
           </div>
         ) : (
           <div ref={scrollRef} className={`cal-scroll${fitted ? ' fixed' : ''}`}>
+            {/* A month that is SHORT must say so. The fan-out keeps whatever
+                loaded rather than blanking the grid on one calendar's 502, and
+                without this the user reads a partial month as a complete one —
+                the failure mode the all-or-nothing fetch at least made obvious.
+                Retry re-requests the whole window; one unhealthy collection is
+                usually unhealthy for all of them. */}
+            {failedCals.length > 0 && (
+              <div className="cal-partial" role="status">
+                Couldn&rsquo;t load {failedCals.join(', ')} — this month may be
+                missing events.{' '}
+                <button className="btn ghost" onClick={reloadHere}>
+                  Retry
+                </button>
+              </div>
+            )}
             <div className="cal-grid">
               {DOW.map((d) => <div key={d} className="cal-dow">{d}</div>)}
               {days.map((d) => {

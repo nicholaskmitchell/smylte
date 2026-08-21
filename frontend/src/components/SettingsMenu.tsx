@@ -15,7 +15,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { calendarFitLabel, type CalendarFit } from '../calendar'
-import { useIsMobile } from '../hooks'
+import { useIsMobile, useEscape } from '../hooks'
 import { sessionLabel } from '../session'
 import { timeFormatLabel, type TimeFormat } from '../time'
 import type { List } from '../api'
@@ -101,11 +101,12 @@ export function SettingsMenu({
     onClose()
   }, [viewingCal, isMobile, view, onClose])
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') back() }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [back])
+  // `useEscape(back)`, not `useEscape(onClose)`. The finding said to leave this
+  // one hand-rolled because its Escape means "go back one step" rather than
+  // "close" — but the hook takes a callback, so the semantics are preserved
+  // exactly and this is the last hand-rolled copy. Its own suite covers all
+  // three levels (agenda -> section -> closed) and is the control.
+  useEscape(back)
 
   const active = SECTIONS.find((s) => s.id === section)!
   // What the title bar says. Beside a visible nav it would only be saying the

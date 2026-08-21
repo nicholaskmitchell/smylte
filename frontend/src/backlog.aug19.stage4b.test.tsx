@@ -32,7 +32,7 @@
  * docs/STAGES.md records what pins that only accept the fix you imagined cost
  * the last time.
  */
-import { useState } from 'react'
+import { useState, type ReactElement } from 'react'
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -44,6 +44,7 @@ import {
 } from './dashboard'
 import { setCacheUser } from './cache'
 import { breakpointListeners, resetBreakpoint, setBreakpoint } from './test/setup'
+import { AddMultipleModal } from './components/AddMultipleModal'
 import { AppearancePanel } from './components/AppearancePanel'
 import { ArchivedCalendarsSection } from './components/ArchivedCalendarsSection'
 import { CalendarView } from './components/CalendarView'
@@ -865,6 +866,98 @@ describe('aug19 stage 4b — the dashboard grid', () => {
     const moved = moveModule(mods, target.id, target.x, target.y + 6)
     expect(moved.find((m) => m.id === target.id)?.y).toBe(target.y + 6)
   })
+})
+
+// ── the modal contract, made checkable ──────────────────────────────────────
+
+describe('aug19 leftovers — every dialog answers Escape at the window', () => {
+  // AUDIT: hooks.ts:16 — five dialogs inlined the same effect with THREE
+  // different bindings (two on `window`, one on `document`, one guarded by
+  // `busy`), and nothing made the contract checkable. That is how TaskModal —
+  // the app's most-used dialog — shipped with no Escape handler at all for as
+  // long as it did: there was no list for it to be missing from.
+  //
+  // The binding difference is not cosmetic. A `document` listener does not see
+  // a keydown dispatched at `window`, so this table dispatches at **window**
+  // deliberately: it is the widest spelling, it subsumes `document` (a keydown
+  // there bubbles up), and a dialog-local listener fails it — which is correct,
+  // because a dialog-local listener only fires while focus is inside the
+  // dialog, and with no focus trap that is exactly the state a keyboard user
+  // needs the escape hatch from.
+  //
+  // Enumerated rather than written out per dialog, so a NEW dialog joins by
+  // being added to one array. That is the coverage that would have caught
+  // finding 58 before it was filed.
+  const dialogs: Array<[string, (onClose: () => void) => ReactElement]> = [
+    ['TaskModal', (onClose) => (
+      <TaskModal task={null} lists={[work]} defaultList="l1" onClose={onClose}
+        onCreate={vi.fn()} onSave={vi.fn()} onDelete={vi.fn()} onMultiple={vi.fn()} />
+    )],
+    ['DayPopover', (onClose) => (
+      <DayPopover day={todayYmd()} x={40} y={40} events={[]} tasks={[]}
+        styleOf={() => undefined} onClose={onClose} />
+    )],
+    ['AddMultipleModal', (onClose) => (
+      <AddMultipleModal lists={[work]} defaultList="l1"
+        onSubmit={vi.fn()} onClose={onClose} />
+    )],
+    ['AppearancePanel', (onClose) => (
+      <AppearancePanel appearance={{}} onChange={vi.fn()} mode="light"
+        onMode={vi.fn()} onClose={onClose} />
+    )],
+  ]
+
+  it.each(dialogs)('%s closes on an Escape dispatched at the window', (_name, make) => {
+    const onClose = vi.fn()
+    const view = render(make(onClose))
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(onClose, 'the dialog did not answer an Escape at the window')
+      .toHaveBeenCalled()
+    view.unmount()
+  })
+
+  it.each(dialogs)('%s unsubscribes when it unmounts', (_name, make) => {
+    // A dialog whose listener outlives it closes the NEXT one that opens, or
+    // sets state on a dead tree. Same reason the breakpoint listener is counted
+    // above.
+    const onClose = vi.fn()
+    render(make(onClose)).unmount()
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(onClose, 'the Escape listener outlived the dialog that registered it')
+      .not.toHaveBeenCalled()
+  })
+
+  // Control: the guard that kept AddMultipleModal out of the first pass. Escape
+  // must NOT close it mid-batch — a dismissal there strands a half-created run
+  // with nowhere to report its failures — so consolidating onto the hook has to
+  // preserve the condition, not drop it.
+  it('AddMultipleModal still refuses Escape while a batch is in flight', async () => {
+    const onClose = vi.fn()
+    // Resolves the failed-row array the real `onSubmit` contract returns — an
+    // undefined there is an unhandled rejection inside the component, not a
+    // finding.
+    let release: () => void = () => {}
+    const onSubmit = vi.fn(() =>
+      new Promise<string[]>((res) => { release = () => res([]) }))
+    render(<AddMultipleModal lists={[work]} defaultList="l1"
+      onSubmit={onSubmit as never} onClose={onClose} />)
+
+    const user = userEvent.setup()
+    await user.type(screen.getByLabelText('Title, row 1'), 'buy milk')
+    await user.click(screen.getByRole('button', { name: 'Add 1 task' }))
+    await waitFor(() => expect(onSubmit).toHaveBeenCalled())
+
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(onClose, 'Escape closed the composer mid-batch').not.toHaveBeenCalled()
+
+    await act(async () => { release() })
+  })
+
+  // SettingsMenu is deliberately NOT in the table, and is not untested either:
+  // its Escape means "go back one step" (agenda -> section -> closed), so it
+  // takes `useEscape(back)` rather than `useEscape(onClose)` and its own suite
+  // — SettingsMenu.test.tsx, which drives all three levels — is the control.
+  // Rebuilding its twenty-prop harness here would duplicate that, not add to it.
 })
 
 // ── the SSE stream and a lapsed session ─────────────────────────────────────

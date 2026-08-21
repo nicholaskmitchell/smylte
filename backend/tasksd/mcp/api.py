@@ -23,7 +23,7 @@ from datetime import date, datetime, time as time_of_day, timedelta
 from zoneinfo import ZoneInfo
 
 from ..ical import EventEdit, TaskEdit, rrule_from_spec
-from ..ical.read import normalize_offset
+from ..ical.read import advance, normalize_offset
 from ..service import priority_from_label
 from .tools import ToolError
 
@@ -684,7 +684,8 @@ class McpApi:
         for event in self.list_events(start, end, calendar_id):
             if (event.get("status") or "").upper() == "CANCELLED":
                 continue
-            b_start = _as_dt(_parse_dt(event.get("start"), field="start"))
+            raw_start = _parse_dt(event.get("start"), field="start")
+            b_start = _as_dt(raw_start)
             if b_start is None:
                 continue
             b_end = _as_dt(_parse_dt(event.get("end"), field="end"))
@@ -692,9 +693,24 @@ class McpApi:
                 # DURATION is the other half of the pair — an event carries one
                 # or the other, never both — so it has to be read before any
                 # fallback, or the fallback silently shortens a real meeting.
+                #
+                # Applied to the STILL-AWARE start, then flattened. `b_end =
+                # b_start + length` added wall-clock time, which is the wrong
+                # hour across a DST transition — the identical defect Stage 3
+                # closed at scheduling.py:163. `advance` splits the duration the
+                # way RFC 5545 §3.3.6 defines it: the weeks/days half is nominal
+                # ("a day later" is the same time tomorrow, 23 real hours across
+                # the spring-forward) and the time half is exact.
+                #
+                # The order matters and is the whole fix. `_as_dt` ends
+                # `.astimezone().replace(tzinfo=None)`, so calling `advance` on
+                # `b_start` — as this finding's own suggested fix said to —
+                # would hand it a NAIVE value with no instant to add the exact
+                # half to, and change nothing at all.
                 length = parse_duration(event.get("duration"))
                 if length:
-                    b_end = b_start + length
+                    b_end = _as_dt(
+                        advance(raw_start, event.get("duration"), length))
             if event.get("all_day"):
                 # DTEND is exclusive for an all-day event; with none, it is one day.
                 b_end = b_end or (b_start + timedelta(days=1))

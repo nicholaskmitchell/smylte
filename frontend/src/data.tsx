@@ -90,6 +90,13 @@ export interface CalendarData {
   requestWindow: (from: string, to: string, cals: List[]) => void
   setEvents: (from: string, to: string, next: (prev: CalEvent[]) => CalEvent[]) => void
   reload: (from: string, to: string, cals: List[]) => void
+  /** Calendars whose fetch for this window failed, by name.
+   *
+   *  The fan-out keeps whatever loaded rather than discarding the month, which
+   *  means the grid can be SHORT — so what is missing has to be sayable, or the
+   *  user reads a partial month as a complete one. Empty when everything
+   *  landed. */
+  windowErrors: (from: string, to: string) => string[]
 }
 
 const TaskCtx = createContext<TaskData | null>(null)
@@ -628,6 +635,7 @@ function CalendarProvider({ rev, guard, enabled, children }: {
   // and the only place an instant paint is the difference between a grid of
   // events and a blank one.
   const [windows, setWindows] = useState<Map<string, CalEvent[]>>(new Map())
+  const [windowFails, setWindowFails] = useState<Map<string, string[]>>(new Map())
   const seeded = useRef<{ key: string; rows: CalEvent[] } | null>(null)
   const latest = useRef<string>('')
 
@@ -682,10 +690,43 @@ function CalendarProvider({ rev, guard, enabled, children }: {
     const mine = (gen.current.get(key) ?? 0) + 1
     gen.current.set(key, mine)
     void guard(async () => {
-      const per = await Promise.all(forCals.map((c) => api.events(c.id, from, to)))
-      const rows = per.filter(Array.isArray).flat()
-      if (gen.current.get(key) === mine) setWindows((w) => new Map(w).set(key, rows))
-      return true
+      // `allSettled`, not `all`. One calendar answering 502 used to reject the
+      // whole window, so every OTHER calendar's events were discarded with it
+      // and the user got a blank month. Finding 41 fixed the part that made
+      // that permanent — the window is no longer recorded as fetched on failure
+      // — but the re-request had the same shape, so while one collection was
+      // unhealthy the month stayed empty.
+      //
+      // Keeping what arrived is only half of it: a month that is short and does
+      // not say so is a confident lie, and this grid sits beside a booking page
+      // whose whole job is not to under-report. So the failures are recorded by
+      // name and rendered, and a partial window is never silently partial.
+      const per = await Promise.allSettled(forCals.map((c) => api.events(c.id, from, to)))
+      const rows = per.flatMap((r) =>
+        r.status === 'fulfilled' && Array.isArray(r.value) ? r.value : [])
+      const failed = forCals
+        .filter((c, i) => per[i].status === 'rejected'
+          || !Array.isArray((per[i] as PromiseFulfilledResult<CalEvent[]>).value))
+        .map((c) => c.name)
+      // An AuthError anywhere is the session, not one collection: let it out to
+      // `guard` so the app routes to the login card rather than reporting the
+      // owner's whole account as a set of broken calendars.
+      const auth = per.find((r) => r.status === 'rejected'
+        && (r as PromiseRejectedResult).reason instanceof AuthError)
+      if (auth) throw (auth as PromiseRejectedResult).reason
+      if (gen.current.get(key) === mine) {
+        setWindows((w) => new Map(w).set(key, rows))
+        setWindowFails((m) => {
+          const next = new Map(m)
+          if (failed.length) next.set(key, failed)
+          else next.delete(key)
+          return next
+        })
+      }
+      // Only a WHOLE-window failure leaves the window un-asked, so a healthy
+      // calendar's month is not re-requested on every page-turn because a
+      // broken one is still broken.
+      return failed.length < forCals.length ? true : undefined
     }).then((ok) => {
       // `requestWindow` records the window BEFORE the fetch, so a failure left
       // it recorded as fetched with nothing in `windows` — and the fan-out is a
@@ -721,6 +762,7 @@ function CalendarProvider({ rev, guard, enabled, children }: {
     if (enabled) return
     setCals([])
     setWindows(new Map())
+    setWindowFails(new Map())
     setLoaded(false)
     asked.current.clear()
     gen.current.clear()
@@ -762,8 +804,12 @@ function CalendarProvider({ rev, guard, enabled, children }: {
     })
   }, [])
 
+  const windowErrors = useCallback(
+    (from: string, to: string): string[] => windowFails.get(windowKey(from, to)) ?? [],
+    [windowFails])
+
   const value: CalendarData = {
-    cals, loaded, setCals, eventsFor, requestWindow, setEvents, reload,
+    cals, loaded, setCals, eventsFor, requestWindow, setEvents, reload, windowErrors,
   }
   return <CalendarCtx.Provider value={value}>{children}</CalendarCtx.Provider>
 }

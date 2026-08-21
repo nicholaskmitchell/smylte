@@ -337,6 +337,55 @@ describe('2026-08-19 — the calendar grid', () => {
     expect(m.patchEvent.mock.calls).toEqual([])
   })
 
+  // ── AUDIT: one failing calendar blanks the whole month ────────────────────
+  it('keeps the calendars that loaded when one of them fails', async () => {
+    // `fetchWindow` fanned out with `Promise.all`, so a single calendar
+    // answering 502 rejected the whole window and `windows` got no rows at all
+    // — every other calendar's events discarded with it. Finding 41 fixed the
+    // part that made it permanent (the window is no longer recorded as fetched
+    // on failure, so paging back re-requests it), but the re-request has the
+    // same shape: while one collection is unhealthy the user sees an EMPTY
+    // month rather than the events that did load.
+    //
+    // The finding refused to pick between the two repairs and said so — "a
+    // design question, not a defect with one answer". Decided: paint what
+    // arrived AND name what did not. Both halves are asserted here, because
+    // `allSettled` alone silently under-reports, and a month that is short
+    // without saying so is a confident lie about the account.
+    m.calendars.mockResolvedValue([cal, { ...cal, id: 'c2', href: '/c2/', name: 'Personal' }])
+    m.events.mockImplementation(async (calId: string) => {
+      if (calId === 'c2') throw new HttpError(502, 'bad gateway')
+      return [ev({ uid: 'ok', id: 'ok', summary: 'Standup' })]
+    })
+
+    openCalendar()
+
+    // The healthy calendar's events are on screen…
+    expect(await screen.findByText('Standup')).toBeInTheDocument()
+    // …and the broken one is NAMED, not silently absent.
+    const banner = await screen.findByRole('status')
+    expect(banner).toHaveTextContent(/Personal/)
+    expect(banner, 'the banner does not say the month may be incomplete')
+      .toHaveTextContent(/missing events/i)
+    expect(within(banner).getByRole('button', { name: 'Retry' })).toBeInTheDocument()
+  })
+
+  // Control: an all-healthy month is unchanged — no banner, every calendar's
+  // events present. A repair that reported failure whenever it could not prove
+  // success would put this banner over every ordinary month.
+  it('says nothing when every calendar loads', async () => {
+    m.calendars.mockResolvedValue([cal, { ...cal, id: 'c2', href: '/c2/', name: 'Personal' }])
+    m.events.mockImplementation(async (calId: string) =>
+      [ev({ uid: calId, id: calId, summary: calId === 'c2' ? 'Personal thing' : 'Standup' })])
+
+    openCalendar()
+
+    expect(await screen.findByText('Standup')).toBeInTheDocument()
+    expect(await screen.findByText('Personal thing')).toBeInTheDocument()
+    expect(screen.queryByRole('status'),
+      'a healthy month reported a failure').toBeNull()
+  })
+
   // WIDENING of that control, and it is the half the review walked through.
   // The refusal above is deliberately TWO conditions — the drop cell is the
   // clamped one AND the event really continues past it — and only the first

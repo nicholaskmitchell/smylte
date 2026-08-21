@@ -4,6 +4,7 @@ import { api, type Availability, type Booking, type BookingLink, type BookingLin
 import { makeGuard } from '../util'
 import { fmtWhen, inputLang } from '../time'
 import { useTimeFormat } from '../timeformat'
+import { useEscape } from '../hooks'
 
 // Owner side of client scheduling: manage booking links (availability, target
 // calendar, redacted-busy toggle) and see who booked. The public counterpart
@@ -300,11 +301,7 @@ function LinkModal({ link, cals, onClose, onSave, onDelete }: {
 
   // The modal contract every other dialog here keeps (see TabsModal): Escape
   // closes it, and a screen reader is told it is a dialog rather than a div.
-  useEffect(() => {
-    const onKey = (e: globalThis.KeyboardEvent) => { if (e.key === 'Escape') onClose() }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
+  useEscape(onClose)
 
   return (
     <div className="overlay" onClick={onClose}>
