@@ -226,6 +226,94 @@ export interface TaskGroup {
   lists: string[]
 }
 
+// ── the day plan (the Today tab) ───────────────────────────────────────────
+//
+// A day plan is a SNAPSHOT, not a query. Every other task surface in this app
+// recomputes "what is due today" from the wire on each paint, so the list moves
+// under the owner all day. `day_plan` is the sidecar row that freezes what a
+// day held when it was first opened, and from then on the day is something the
+// owner arranges rather than a filter that keeps changing.
+//
+// The table lives in SQLite only — there is no VTODO, VEVENT or CalDAV property
+// for "I plan to do this today", and inventing one would write this app's
+// planning model into collections that Tasks.org, jtx Board and Thunderbird
+// share. So a day is app-only state, like `sort_order` and the task groups.
+
+/** What a day entry points at: a task on a list, or a note that lives only in
+ *  the day. */
+export type DayEntryKind = 'task' | 'note'
+
+/** How an entry got onto the day: `auto` from the first open's snapshot,
+ *  `carried` from the previous plan's leftovers, `user` from a deliberate add.
+ *  The backend's carry-over rule reads this — only `user` entries follow the
+ *  owner into the next day — so it is a fact about the row, not a label. */
+export type DayEntrySource = 'auto' | 'carried' | 'user'
+
+export interface DayEntry {
+  entry_id: string
+  day: string                // YYYY-MM-DD
+  kind: DayEntryKind
+  // Task entries: the list's SHORT id, the same value `Task.list` carries, so
+  // an entry joins back to its task on (list, uid). Null on a note.
+  list: string | null
+  uid: string | null
+  // Note entries: the text. Null on a TASK entry, deliberately — a task entry's
+  // text is the task's own SUMMARY, read live, so there is no second copy here
+  // to go stale when the task is renamed.
+  title: string | null
+  source: DayEntrySource
+  position: number | null
+  // The instant the entry was ticked, or null. A NOTE's field: a task's
+  // doneness is its VTODO STATUS, the one answer every client on the account
+  // shares, so `done` on a task entry is refused by the backend with a 422
+  // rather than written as a second one. TodayView routes a task row's checkbox
+  // through `api.complete` for the same reason.
+  done_at: string | null
+  // "I decided not to do this", which is the most useful thing a past day can
+  // report. Dropping stamps this column rather than deleting the row, so a
+  // dropped entry still comes back on every read and the client filters it.
+  dropped_at: string | null
+  created_at: string
+}
+
+export interface DayPlan {
+  day: string
+  /** This day has a plan: it has been opened, or something has been added to
+   *  it. Not the same as "a snapshot was derived" — adding a row to a day nobody
+   *  has opened makes it planned without deriving one, and the server tracks
+   *  those separately.
+   *
+   *  False means neither has happened, and `entries` is then `[]`. The converse
+   *  does not hold, which is the whole reason this flag exists: an opened day
+   *  the owner emptied is planned with nothing in it, and re-opening it must not
+   *  snapshot over that. */
+  planned: boolean
+  entries: DayEntry[]
+}
+
+/** Everything POST /day/{day}/entries accepts. `list` + `uid` name a task;
+ *  `title` carries a note. Which pair is required follows from `kind`. */
+export interface CreateDayEntryBody {
+  // Client-generated, like `client_id` on a task create and for the same
+  // reason: a POST retried after a dropped response has to land on the row the
+  // first attempt made rather than beside it.
+  entry_id: string
+  kind: DayEntryKind
+  list?: string
+  uid?: string
+  title?: string
+}
+
+/** Everything PATCH /day/{day}/entries/{entry_id} accepts. Every field is
+ *  optional and an omitted one is left alone — `done: false` and `dropped:
+ *  false` are real values (the undo path), so they cannot be spelled by
+ *  omission. */
+export interface PatchDayEntryBody {
+  done?: boolean
+  dropped?: boolean
+  position?: number
+}
+
 // One application connected through the MCP connector. Identified by its
 // rotation family rather than by any token value — the grant is the thing the
 // owner recognises, and no secret needs to leave the server to name it.
@@ -384,6 +472,26 @@ export const api = {
     j<Task>('POST', `/api/lists/${listId}/tasks/${encodeURIComponent(uid)}/cancel`),
   deleteTask: (listId: string, uid: string) =>
     j<null>('DELETE', `/api/lists/${listId}/tasks/${encodeURIComponent(uid)}`),
+
+  // the day plan (the Today tab)
+  //
+  // `openDay` is the ONLY call that can create a plan, and `day` below is a
+  // pure read that never does. The split is the contract, not a convention: a
+  // GET that quietly opened days would fill the record with plans the owner
+  // never made — a client prefetching a week would open six days it never
+  // showed anyone, each frozen at whatever happened to be due at prefetch time
+  // — and the `planned` flag would stop meaning what it says.
+  openDay: (day: string) => j<DayPlan>('POST', `/api/day/${day}/open`),
+  day: (day: string) => j<DayPlan>('GET', `/api/day/${day}`),
+  // Planned days in [from, to), `to` EXCLUSIVE and the span bounded to 190 days
+  // server-side (a wider one answers 422). Days never opened are simply absent,
+  // so an empty array means "nothing planned in there".
+  days: (from: string, to: string) =>
+    j<DayPlan[]>('GET', `/api/day?from=${from}&to=${to}`),
+  addDayEntry: (day: string, body: CreateDayEntryBody) =>
+    j<DayEntry>('POST', `/api/day/${day}/entries`, body),
+  patchDayEntry: (day: string, entryId: string, body: PatchDayEntryBody) =>
+    j<DayEntry>('PATCH', `/api/day/${day}/entries/${encodeURIComponent(entryId)}`, body),
 
   // calendars / events
   calendars: () => j<List[]>('GET', '/api/calendars'),

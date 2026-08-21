@@ -1,13 +1,37 @@
 import { describe, expect, it, beforeEach } from 'vitest'
 import {
-  DEFAULT_TAB_ORDER, TAB_KEY, cacheTab, isTab, moveTab, readCachedTab,
-  resolveStartTab, sanitizeTabOrder, sanitizeTabStart,
+  DEFAULT_TAB_ORDER, DEFAULT_TAB_START, TABS, TAB_KEY, TAB_LABELS, cacheTab, isTab,
+  moveTab, readCachedTab, resolveStartTab, sanitizeTabOrder, sanitizeTabStart,
 } from './tabs'
+
+describe('the shipped strip', () => {
+  it('leads with Today', () => {
+    expect(DEFAULT_TAB_ORDER[0]).toBe('today')
+    expect(TAB_LABELS.today).toBe('Today')
+  })
+
+  it('still opens a fresh account on Home', () => {
+    // Leading the strip and being the landing page are separate choices —
+    // moving the landing page would change where every account that never
+    // touched the setting lands, which a strip reorder has no business doing.
+    expect(DEFAULT_TAB_START).toBe('home')
+    expect(resolveStartTab(DEFAULT_TAB_START, undefined, DEFAULT_TAB_ORDER)).toBe('home')
+  })
+
+  it('names every tab exactly once, in both directions', () => {
+    // TABS is derived from TAB_LABELS and the order is written out separately,
+    // so a tab added to one and forgotten in the other is a real possibility —
+    // and `sanitizeTabOrder` would then silently append it to every stored
+    // order forever, or drop it from the strip entirely.
+    expect([...DEFAULT_TAB_ORDER].sort()).toEqual([...TABS].sort())
+    expect(DEFAULT_TAB_ORDER).toHaveLength(new Set(DEFAULT_TAB_ORDER).size)
+  })
+})
 
 describe('sanitizeTabOrder', () => {
   it('keeps a well-formed order as it stands', () => {
-    expect(sanitizeTabOrder(['calendar', 'home', 'scheduling', 'tasks']))
-      .toEqual(['calendar', 'home', 'scheduling', 'tasks'])
+    expect(sanitizeTabOrder(['calendar', 'home', 'scheduling', 'tasks', 'today']))
+      .toEqual(['calendar', 'home', 'scheduling', 'tasks', 'today'])
   })
 
   it('falls back to the shipped order when nothing is stored', () => {
@@ -60,9 +84,12 @@ describe('moveTab', () => {
   })
 
   it('does nothing at either end, or for a tab that is not there', () => {
+    // Read off the strip rather than named, so this keeps testing the ENDS as
+    // tabs are added or reordered instead of testing whichever two tabs used to
+    // be at them.
     const order = DEFAULT_TAB_ORDER
-    expect(moveTab(order, 'home', -1)).toBe(order)
-    expect(moveTab(order, 'scheduling', 1)).toBe(order)
+    expect(moveTab(order, order[0], -1)).toBe(order)
+    expect(moveTab(order, order[order.length - 1], 1)).toBe(order)
     expect(moveTab(['home'], 'tasks', 1)).toEqual(['home'])
   })
 })
@@ -77,7 +104,7 @@ describe('resolveStartTab', () => {
   })
 
   it('falls back to the strip’s first tab when nothing is remembered', () => {
-    expect(resolveStartTab('last', undefined, DEFAULT_TAB_ORDER)).toBe('home')
+    expect(resolveStartTab('last', undefined, DEFAULT_TAB_ORDER)).toBe(DEFAULT_TAB_ORDER[0])
     expect(resolveStartTab('last', undefined, ['calendar', 'home', 'tasks', 'scheduling']))
       .toBe('calendar')
   })

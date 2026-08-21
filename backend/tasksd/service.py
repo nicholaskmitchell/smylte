@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import secrets
 import threading
 import uuid
@@ -57,6 +58,108 @@ def _parse_window(s: str) -> date | datetime:
     if "T" in s or " " in s:
         return datetime.fromisoformat(s.replace(" ", "T"))
     return date.fromisoformat(s)
+
+
+# ── day keys ─────────────────────────────────────────────────────────────────
+#
+# A day key is the primary key of a day plan and half of every day_plan row, so
+# it has exactly one spelling: YYYY-MM-DD. The regex is not redundant with the
+# parse below it — since 3.11 `date.fromisoformat` also accepts the ISO *basic*
+# format and week dates, so "20260821" and "2026-W34-1" both parse and both name
+# a real day. Admitting them would give the same calendar day two different
+# primary keys: a plan written under one is invisible to a read under the other,
+# and the "has this day been opened?" guard silently answers no, re-snapshotting
+# a day the owner has already arranged.
+_DAY_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+# How far a range read may span. Bounded because the query is a range scan the
+# caller chooses the width of, and a day plan is rendered a week or a month at a
+# time — 190 days is two quarters plus slack, which is more than any view asks
+# for and small enough that a hand-rolled `from=0001-01-01` cannot walk the
+# whole table. The bound lives HERE, beside the query it protects: the route
+# repeats neither the number nor the check, it just turns `day_range`'s
+# ValueError into its 422 — which is how it answers every other bad argument.
+DAY_RANGE_MAX_DAYS = 190
+
+# How far back `open_day` looks for a plan to carry unfinished work from. It has
+# to be bounded — an unbounded backwards search is a full scan of day_plan — and
+# a month is a judgement call rather than a derived number: past that, yesterday's
+# unfinished work is not carry-over, it is archaeology, and dragging a list the
+# owner has not seen since spring into today would bury the day they asked for.
+_CARRY_LOOKBACK_DAYS = 30
+
+
+def day_key(value: str) -> str:
+    """Validate a day key and return it. Raises ValueError (routes → 422)."""
+    s = (value or "").strip()
+    if not _DAY_RE.fullmatch(s):
+        raise ValueError(f"day must be YYYY-MM-DD, got {value!r}")
+    try:
+        date.fromisoformat(s)          # catches 2026-02-30 and friends
+    except ValueError:
+        raise ValueError(f"{value!r} is not a real calendar date") from None
+    return s
+
+
+def _due_day(due: str | None, *, is_date: bool, zone: ZoneInfo | None) -> str:
+    """The calendar day a cached DUE falls on IN THE OWNER'S ZONE, or "" if it
+    has none.
+
+    The zone is the whole point. `dayKey` (frontend/src/util.ts) hands a due
+    value to `Date` and reads local components back, so a task cached as
+    `2026-08-22T00:00:00+00:00` — what `read._iso` makes of
+    `DUE:20260822T000000Z` — is Wednesday the 22nd in UTC and Tuesday the 21st
+    on a screen in America/New_York. Bucketing by the string's own first ten
+    characters answered 2026-08-22, so the snapshot for the 21st omitted a task
+    the very same screen was listing as due today.
+
+    So a zone-carrying value is converted before its day is taken: into
+    `home_timezone` when the owner has set one, and otherwise into this
+    process's local zone — `astimezone(None)` — which is the nearest thing the
+    server has to the browser's.
+
+    Two shapes are deliberately NOT converted, because converting them would
+    invent an instant the wire never named:
+
+      * a DATE-valued DUE (`items.due_is_date`) — what "due Tuesday" is on the
+        wire, and what this app's own date picker writes. It is already a bare
+        calendar day. `is_date` is the ROW's own flag, not a guess from the
+        string's shape, so a DATE value can never be mistaken for an instant.
+      * a floating datetime — naive local wall time, which `dayKey` also reads
+        as-is. Its day is the day it already spells.
+    """
+    if not due:
+        return ""
+    if is_date:
+        return due[:10]
+    try:
+        value = datetime.fromisoformat(due)
+    except ValueError:
+        # A cached value this cannot parse is not worth dropping the task over:
+        # fall back to the ten characters, which is what every value got before
+        # the conversion existed. `_iso` writes `datetime.isoformat()`, so this
+        # is unreachable for anything this app cached itself.
+        return due[:10]
+    if value.tzinfo is None:
+        return value.date().isoformat()
+    # `astimezone(zone)` with zone=None converts to the process's local zone,
+    # which is exactly the unset-`home_timezone` fallback — no second branch.
+    return value.astimezone(zone).date().isoformat()
+
+
+def _snapshot_order(row) -> tuple[str, str, str, str]:
+    """The order a first snapshot lays tasks out in, within one group."""
+    return (row["due"] or "", row["summary"] or "", row["collection_href"], row["uid"])
+
+
+def _stamp() -> str:
+    """Now, in the exact shape the schema's DEFAULT writes — strftime's
+    '%Y-%m-%dT%H:%M:%fZ' is seconds with milliseconds and a literal Z, which is
+    what `isoformat(timespec="milliseconds")` produces once the +00:00 is folded
+    back to Z. Matching it matters because done_at and created_at end up in the
+    same column family and are compared as strings: one written '…+00:00' would
+    sort after every Z-stamped row regardless of when it happened."""
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
 class TaskService:
@@ -1108,6 +1211,416 @@ class TaskService:
             "duration_minutes": link["duration_minutes"],
             "timezone": link["timezone"],
         }
+
+    # ── day plan (the Today tab's snapshot) ──────────────────────────────────
+    #
+    # A day plan is app-only state (schema.sql says why), so everything here is
+    # SQL under the service lock — no DAV, no engine. Every method that WRITES
+    # publishes {"type": "day_updated", "day": …}: a plan is edited from one tab
+    # and read in another, and unlike a task edit there is no task_updated event
+    # for the other tab to notice, so without this the second tab shows
+    # yesterday's arrangement until it is reloaded.
+
+    @staticmethod
+    def _day_entry_dto(row) -> dict[str, Any]:
+        return {
+            "entry_id": row["entry_id"],
+            "day": row["day"],
+            "kind": row["kind"],
+            # The list's SHORT id, like `_task_dto`'s "list" and the SSE
+            # payloads — never the href. The client joins a day entry back to
+            # the task it names on (list, uid), and it only ever holds short ids.
+            "list": _slug(row["collection_href"]) if row["collection_href"] else None,
+            "uid": row["uid"],
+            "title": row["title"],
+            "source": row["source"],
+            "position": row["position"],
+            "done_at": row["done_at"],
+            "dropped_at": row["dropped_at"],
+            "created_at": row["created_at"],
+        }
+
+    def _day_plan_dto(self, day: str, entries, opened: bool) -> dict[str, Any]:
+        """One day's plan. `planned` is the marker OR the presence of entries,
+        because the two record different things: the marker says the automatic
+        snapshot has been BUILT, an entry says the owner has put something on
+        the day. A hand-add deliberately leaves the marker alone (see
+        `add_day_entry`, and the day still owes itself one snapshot), so a day
+        holding nothing but hand-added rows has no marker — and calling that day
+        unplanned would draw it as untouched with its own entries on screen."""
+        return {
+            "day": day,
+            "planned": opened or bool(entries),
+            "entries": [self._day_entry_dto(r) for r in entries],
+        }
+
+    def open_day(self, day: str, *, create: bool) -> dict[str, Any]:
+        """The plan for a day, optionally building it if it has never been built.
+
+        `create` has no default on purpose. With create=False this is a pure
+        read that writes NOTHING — not an entry, not even the opened marker —
+        because GET is also how the app looks at a day it is not visiting:
+        prefetching next week, or a range read landing on an empty day. A GET
+        that quietly opened days would fill the log with plans the owner never
+        made, freeze each of those days' snapshots at whatever was due when the
+        prefetch happened, and — worst — make the marker lie about which days
+        were actually planned.
+
+        With create=True on a day that has never been opened, the snapshot is
+        built once: what is due that day, what is already late, and what was
+        left unfinished on the last day that had a plan. Afterwards the MARKER —
+        and only the marker — makes this a read like any other, so re-opening
+        never re-snapshots and never resurrects an entry the owner dropped.
+
+        Entries already on the day do NOT stand in for the marker. They used to:
+        the day's first hand-add called `mark_day_opened`, and short-circuiting
+        on `entries` meant a day whose first write was an add never got its
+        snapshot at all — due-today, overdue and carried rows suppressed for
+        that day forever, from a client that offers the add box before the open
+        has even answered. So the snapshot merges into what is there instead,
+        skipping anything the day already holds (`_snapshot_for`).
+        """
+        day = day_key(day)
+        with self._lock:
+            entries = store.get_day_entries(self._conn, day)
+            opened = store.day_is_opened(self._conn, day)
+            if not create or opened:
+                return self._day_plan_dto(day, entries, opened)
+            pending = self._snapshot_for(day, entries)
+            # Behind whatever the owner has already placed, computed the same
+            # way `add_day_entry` appends. Rows that are already on the day keep
+            # the positions they were given: a snapshot arriving late must not
+            # renumber the arrangement it is joining.
+            base = max((r["position"] or 0.0 for r in entries), default=0.0)
+            # One transaction for the whole snapshot INCLUDING the marker. The
+            # connection is in autocommit (see store.tx), so without it a
+            # failure part-way through would leave entries behind with no
+            # marker — and the next open would treat the day as never opened and
+            # snapshot it again, on top of the rows that did land.
+            with store.tx(self._conn):
+                for i, fields in enumerate(pending, start=1):
+                    # A dense sequence from `base`: every row of a fresh
+                    # snapshot gets a position, so nothing in the day is left
+                    # unordered and the reading order does not depend on a
+                    # tie-break. PATCH takes any float, so a client moving a row
+                    # between two of these still has the whole interval to land
+                    # in.
+                    store.insert_day_entry(
+                        self._conn, day=day, position=base + float(i), **fields
+                    )
+                store.mark_day_opened(self._conn, day)
+            entries = store.get_day_entries(self._conn, day)
+            dto = self._day_plan_dto(day, entries, True)
+        self._publish({"type": "day_updated", "day": day})
+        return dto
+
+    def _snapshot_for(self, day: str, existing) -> list[dict[str, Any]]:
+        """The entries a first open of `day` should create, in order. Called
+        under the lock; writes nothing itself.
+
+        `existing` is what the day already holds — a day whose first write was a
+        hand-add is snapshotted on its first open all the same, so the snapshot
+        has to MERGE with those rows rather than land beside them. Nothing here
+        is proposed for a task or a note the day already carries.
+
+        Order is due-today, then overdue, then carried — the day's own work
+        first, what is already late behind it, and yesterday's leftovers last.
+        Within each group the sort key is (due, summary, collection_href, uid),
+        which is total — a UID is unique per COLLECTION, not globally
+        (invariant #4), so the href has to be in the key for two lists holding
+        the same UID to have a defined order — and a total key is what makes the
+        snapshot for a given cache reproducible.
+        """
+        # Resolved once for the whole scan rather than per task: it is a
+        # settings read, and every DUE in the account buckets against the same
+        # zone.
+        home = self._home_tz()
+        due_today: list[Any] = []
+        overdue: list[Any] = []
+        for col in store.get_collections(self._conn):
+            if "VTODO" not in (col["components"] or ""):
+                continue
+            # Every task in every list, raw_ics and all — the same read
+            # `list_tasks` does on each render. Affordable HERE because the
+            # opened marker makes it happen at most once per day, rather than
+            # once per view of the day.
+            for it in store.get_items(self._conn, col["href"]):
+                if it["component"] != "VTODO":
+                    continue
+                # Subtasks ride with their parent: a checklist item is not a
+                # separate thing to plan, and admitting them would let one
+                # parent task drag twenty rows into the day.
+                if it["related_parent"]:
+                    continue
+                if (it["status"] or "") in ("COMPLETED", "CANCELLED"):
+                    continue
+                key = _due_day(it["due"], is_date=bool(it["due_is_date"]), zone=home)
+                if not key:
+                    continue            # undated work is chosen, never snapshotted
+                if key == day:
+                    due_today.append(it)
+                elif key < day:
+                    overdue.append(it)
+        out: list[dict[str, Any]] = []
+        # Seeded from the rows the day already has, so the dedupe below covers
+        # them too — otherwise a task hand-added this morning would get a second
+        # row the moment the snapshot ran, and two rows for one task means two
+        # checkboxes that disagree about whether it is done. DROPPED rows count:
+        # the snapshot re-proposing something the owner just dropped is the very
+        # resurrection the opened marker exists to prevent.
+        seen: set[tuple[str, str]] = {
+            (r["collection_href"], r["uid"]) for r in existing if r["kind"] == "task"
+        }
+        # Notes have no (list, uid) to be identified by — `add_day_entry` treats
+        # the exact text as a note's identity on a day, so the carry below does
+        # too.
+        note_titles: set[str] = {r["title"] for r in existing if r["kind"] == "note"}
+        for group in (due_today, overdue):
+            for it in sorted(group, key=_snapshot_order):
+                self._append_task_entry(out, seen, it["collection_href"], it["uid"], "auto")
+        for row in self._carry_into(day):
+            if row["kind"] == "note":
+                if row["title"] in note_titles:
+                    continue
+                note_titles.add(row["title"])
+                out.append({
+                    "entry_id": uuid.uuid4().hex, "kind": "note",
+                    "title": row["title"], "source": "carried",
+                })
+                continue
+            self._append_task_entry(
+                out, seen, row["collection_href"], row["uid"], "carried"
+            )
+        return out
+
+    @staticmethod
+    def _append_task_entry(
+        out: list[dict[str, Any]], seen: set[tuple[str, str]],
+        href: str, uid: str, source: str,
+    ) -> None:
+        """Add one task entry unless (collection, uid) is already in the plan.
+
+        The dedupe is what stops a task appearing twice on the same day: an
+        overdue task the owner also carried forward by hand qualifies under both
+        rules, and two rows for one task means two checkboxes that disagree
+        about whether it is done. (collection_href, uid) is the identity of a
+        task everywhere in this app — a UID is unique per COLLECTION, not
+        globally (invariant #4) — so the same UID in two lists is two entries,
+        deliberately.
+        """
+        key = (href, uid)
+        if key in seen:
+            return
+        seen.add(key)
+        out.append({
+            "entry_id": uuid.uuid4().hex, "kind": "task",
+            "collection_href": href, "uid": uid, "source": source,
+        })
+
+    def _carry_into(self, day: str) -> list[Any]:
+        """Rows from the most recent prior plan that should follow the owner
+        into `day`. Called under the lock.
+
+        Only source=user entries carry. An auto entry re-derives itself from the
+        wire every morning (it is still due, or still late, so the snapshot
+        picks it up again), and a carried entry deliberately carries exactly
+        once: a task the owner chose on Monday and then ignored on Tuesday has
+        been declined, and following them all week is how a plan turns into a
+        list nobody reads.
+
+        Done and dropped entries stay behind, and a task entry whose task is no
+        longer an open VTODO stays behind too — completed elsewhere, cancelled,
+        or gone from the wire entirely. The ENTRY on its own day survives all of
+        that (no FK, by design); what must not happen is carrying a finished or
+        vanished task forward into a day it was never planned for.
+
+        The most recent prior day is taken as-is, even when nothing survives the
+        filter. Skipping an empty day to reach an older one would resurrect
+        entries the owner already left behind once.
+        """
+        first = (date.fromisoformat(day) - timedelta(days=_CARRY_LOOKBACK_DAYS)).isoformat()
+        planned = store.get_day_range(self._conn, first, day)   # `day` is exclusive
+        if not planned:
+            return []
+        out = []
+        for row in planned[max(planned)]:
+            if row["source"] != "user" or row["done_at"] or row["dropped_at"]:
+                continue
+            if row["kind"] == "task":
+                item = store.get_item(self._conn, row["collection_href"], row["uid"])
+                if item is None or item["component"] != "VTODO":
+                    continue
+                if (item["status"] or "") in ("COMPLETED", "CANCELLED"):
+                    continue
+            out.append(row)
+        return out
+
+    def add_day_entry(
+        self, day: str, *, entry_id: str, kind: str,
+        list_id: str | None = None, uid: str | None = None, title: str | None = None,
+    ) -> dict[str, Any]:
+        """Put a task or a note on a day by hand (source=user).
+
+        Idempotent three ways, because this is the one route a client retries:
+        the same entry_id, the same task, or the same note text on the same day
+        all return the entry that is already there rather than a second row. The
+        task and note lookups skip DROPPED entries (see store.find_day_entry) —
+        having dropped something this morning, adding it back this afternoon has
+        to work.
+
+        Raises ValueError (routes → 422) for a malformed day, an unknown kind,
+        a task entry naming a list that does not resolve, an empty note, or an
+        entry_id the day already uses for something else.
+        """
+        day = day_key(day)
+        if kind not in ("task", "note"):
+            raise ValueError(f"kind must be task or note, got {kind!r}")
+        href: str | None = None
+        if kind == "task":
+            if not uid:
+                raise ValueError("a task entry needs a uid")
+            # Resolved, not trusted: an unresolvable list id would be stored as
+            # a collection_href nothing can join back to, and the entry would
+            # render forever as a task that cannot be opened, completed or
+            # removed. `component="VTODO"` for the same reason every task route
+            # passes it — an event calendar holds no task to point at.
+            href = self.resolve_list(list_id, component="VTODO") if list_id else None
+            if href is None:
+                raise ValueError(f"unknown list {list_id!r}")
+            # A task entry's text is the task's own SUMMARY, read live through
+            # (list, uid). Storing a copy here would be a second title that goes
+            # stale the moment the task is renamed.
+            title = None
+        else:
+            title = (title or "").strip()
+            if not title:
+                raise ValueError("a note entry needs a title")
+            uid = None
+        with self._lock:
+            existing = store.find_day_entry(self._conn, day, entry_id=entry_id)
+            if existing is not None:
+                # A replay presents the same entry again, so it matches and is
+                # answered from the row that landed. A DIFFERENT entry under an
+                # id this day already uses is a client bug, and both silent
+                # answers to it are wrong: inserting collides with the primary
+                # key (an IntegrityError, which no handler maps — a 500), and
+                # handing back the row that is there tells the caller their task
+                # was added when a different one was. Refused instead, the same
+                # way and for the same reason as `book_slot`'s "client_id
+                # already used".
+                if (existing["kind"], existing["collection_href"],
+                        existing["uid"], existing["title"]) != (kind, href, uid, title):
+                    raise ValueError(f"entry_id {entry_id!r} is already used on {day}")
+                return self._day_entry_dto(existing)
+            existing = (
+                store.find_day_entry(self._conn, day, collection_href=href, uid=uid)
+                if kind == "task"
+                else store.find_day_entry(self._conn, day, title=title)
+            )
+            if existing is not None:
+                return self._day_entry_dto(existing)
+            entries = store.get_day_entries(self._conn, day)
+            # Appended at the end of the day. Computed from the rows already in
+            # hand rather than with a MAX() query: a day holds a handful of
+            # entries, and this call has just read all of them anyway.
+            position = max((r["position"] or 0.0 for r in entries), default=0.0) + 1.0
+            # Adding to a day does NOT mark it opened. The marker means "the
+            # automatic snapshot has been built", and writing it here suppressed
+            # that snapshot forever: `open_day` short-circuits on the marker, so
+            # a day whose first write was a hand-add never got its due-today,
+            # overdue or carried rows at all — and the shipped client offers the
+            # add box whether or not the open succeeded, so that was one failed
+            # request away. The day still reports planned=true, through the
+            # entries arm of `_day_plan_dto`.
+            #
+            # One statement, so no `tx`: the connection is in autocommit (see
+            # store.tx) and a lone INSERT is atomic by itself.
+            row = store.insert_day_entry(
+                self._conn, day=day, entry_id=entry_id, kind=kind, source="user",
+                collection_href=href, uid=uid, title=title, position=position,
+            )
+            dto = self._day_entry_dto(row)
+        self._publish({"type": "day_updated", "day": day})
+        return dto
+
+    def patch_day_entry(
+        self, day: str, entry_id: str, *,
+        done: bool | None = None, dropped: bool | None = None,
+        position: float | None = None,
+    ) -> dict[str, Any] | None:
+        """Tick, drop or reposition one entry. None for an entry_id this day does
+        not have (the route turns that into a 404).
+
+        Dropping stamps a column; it never deletes the row. "I did not do this"
+        is the single most useful thing a past day can tell you, and a DELETE
+        would erase exactly that. It also keeps the entry out of the next day's
+        carry-over, which is the other half of what dropping means.
+
+        done=False / dropped=False clear their stamps — the undo path — which is
+        why these arrive as tri-state booleans rather than flags: None is "the
+        client did not send this field", and only the fields it did send reach
+        the UPDATE.
+
+        `done` is a NOTE's field, and sending it for a task entry raises
+        ValueError (routes → 422). Dropping and repositioning apply to every
+        entry; doneness does not, because a task already has one answer that
+        every client on the account can see.
+        """
+        day = day_key(day)
+        fields: dict[str, object] = {}
+        if done is not None:
+            fields["done_at"] = _stamp() if done else None
+        if dropped is not None:
+            fields["dropped_at"] = _stamp() if dropped else None
+        if position is not None:
+            fields["position"] = float(position)
+        with self._lock:
+            # Read before write, because the rule below needs the entry's KIND —
+            # and this is also the 404 check now. Nothing can land in between:
+            # the service owns the one connection and serialises every access
+            # behind this lock.
+            row = store.find_day_entry(self._conn, day, entry_id=entry_id)
+            if row is None:
+                return None
+            # Whether a TASK is done is its VTODO STATUS — the single answer the
+            # Tasks pane, a phone and Thunderbird all read and write. A done_at
+            # on a task entry would be a second answer, and the two disagree the
+            # moment the task is ticked anywhere else. A note is the opposite
+            # case: it exists nowhere but in the day, so its own stamp is the
+            # only answer there is. TodayView already routes a task row's
+            # checkbox through `api.complete`; this closes the path rather than
+            # leaving a column that silently records a lie.
+            if done is not None and row["kind"] == "task":
+                raise ValueError(
+                    "done applies to a note entry; a task's doneness is its "
+                    "VTODO STATUS — complete the task instead"
+                )
+            row = store.update_day_entry(self._conn, day, entry_id, **fields)
+            dto = self._day_entry_dto(row)
+        # Only when something was actually written: a PATCH with an empty body
+        # is a read, and an SSE event for it would have every other tab refetch
+        # for nothing.
+        if fields:
+            self._publish({"type": "day_updated", "day": day})
+        return dto
+
+    def day_range(self, from_day: str, to_day: str) -> list[dict[str, Any]]:
+        """Every planned day in [from_day, to_day), oldest first. `to_day` is
+        EXCLUSIVE, like the calendar window bounds elsewhere in this service.
+
+        Unplanned days are absent rather than present-and-empty — that is what
+        the client draws as "not planned yet", and it keeps a month query to the
+        days that exist. Raises ValueError (routes → 422) past
+        DAY_RANGE_MAX_DAYS."""
+        start, end = day_key(from_day), day_key(to_day)
+        span = (date.fromisoformat(end) - date.fromisoformat(start)).days
+        if span > DAY_RANGE_MAX_DAYS:
+            raise ValueError(f"range is bounded to {DAY_RANGE_MAX_DAYS} days, asked for {span}")
+        with self._lock:
+            planned = store.get_day_range(self._conn, start, end)
+        # Every day the map holds is planned by definition: it is there because
+        # it has a marker, entries, or both.
+        return [self._day_plan_dto(d, rows, True) for d, rows in planned.items()]
 
     # ── session revocation (explicit logout) ─────────────────────────────────
     def revoke_session(self, jti: str, expires_at: float) -> None:
