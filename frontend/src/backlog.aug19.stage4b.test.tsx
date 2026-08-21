@@ -43,6 +43,7 @@ import {
   type DashboardModule,
 } from './dashboard'
 import { setCacheUser } from './cache'
+import { breakpointListeners, resetBreakpoint, setBreakpoint } from './test/setup'
 import { AppearancePanel } from './components/AppearancePanel'
 import { ArchivedCalendarsSection } from './components/ArchivedCalendarsSection'
 import { CalendarView } from './components/CalendarView'
@@ -1224,6 +1225,76 @@ describe('aug19 stage 4b — the mobile breakpoint', () => {
       expect(screen.queryByRole('button', { name: 'Arrange' })).toBeNull()
     } finally {
       vi.useRealTimers()
+    }
+  })
+
+  // WIDENING, and the half of this finding the pin above cannot reach. Every
+  // mobile assertion here — and in Sidebar, SettingsMenu and the pin above —
+  // installs a stub whose `addEventListener` is a NO-OP and then mounts. That
+  // fixes the breakpoint at mount time, so what is exercised is
+  // `useState(() => matchMedia(...).matches)` and never the effect underneath
+  // it. The effect is the entire reason the hook is not a plain read: a
+  // rotation, a window resize or a devtools device-toolbar toggle crosses the
+  // breakpoint WITHOUT remounting anything.
+  //
+  // `hooks.test.ts` does drive that change, but against `renderHook` — the hook
+  // alone, with no component reading it. Nothing anywhere asserted that a real
+  // view answers the change, which is where it would actually be noticed.
+  //
+  // This uses the SHARED stub from test/setup.ts, which now keeps a real
+  // listener registry precisely so a suite can cross the breakpoint without
+  // replacing the stub wholesale — the last piece of this finding's suggested
+  // fix.
+  it('follows the breakpoint across a rotation, without remounting', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    vi.setSystemTime(new Date(2026, 2, 5))
+    try {
+      m.events.mockResolvedValue([ev({ summary: 'Retro' })])
+
+      // Desktop first — the shared stub's default, and no local stub in sight.
+      resetBreakpoint()
+      const view = render(<CalendarHarness />)
+      await waitFor(() => expect(document.querySelectorAll('.cal-ev').length)
+        .toBeGreaterThan(0))
+      expect(document.querySelector('.day-agenda'),
+        'the mobile agenda rendered at the desktop breakpoint').toBeNull()
+
+      const before = document.querySelector('.cal-scroll')
+      expect(before, 'the calendar did not render').not.toBeNull()
+      expect(breakpointListeners(),
+        'nothing subscribed to the breakpoint, so no change could ever arrive')
+        .toBeGreaterThan(0)
+
+      // The phone turns sideways. Nothing unmounts.
+      act(() => { setBreakpoint(true) })
+
+      await waitFor(() => expect(document.querySelector('.day-agenda')).not.toBeNull())
+      expect(document.querySelectorAll('.cal-ev'),
+        'the desktop chips survived a crossing into the mobile layout')
+        .toHaveLength(0)
+      expect(document.querySelectorAll('.ev-dot').length).toBeGreaterThan(0)
+      // Same DOM node throughout: this is a re-render, not a remount. If the
+      // view had been torn down and rebuilt the assertions above would pass
+      // while saying nothing about the effect.
+      expect(document.querySelector('.cal-scroll'),
+        'the calendar remounted rather than re-rendering').toBe(before)
+
+      // …and back, because a fix that latches on the first change would pass
+      // everything above.
+      act(() => { setBreakpoint(false) })
+      await waitFor(() => expect(document.querySelector('.day-agenda')).toBeNull())
+      expect(document.querySelectorAll('.cal-ev').length).toBeGreaterThan(0)
+
+      // Unmounting must unsubscribe, or every crossed breakpoint sets state on
+      // a dead tree for the life of the page.
+      const subscribed = breakpointListeners()
+      view.unmount()
+      expect(breakpointListeners(),
+        'the breakpoint listener outlived the component that registered it')
+        .toBeLessThan(subscribed)
+    } finally {
+      vi.useRealTimers()
+      resetBreakpoint()
     }
   })
 })
