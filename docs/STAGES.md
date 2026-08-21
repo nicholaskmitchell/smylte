@@ -12,17 +12,19 @@ of how the harness behaved in practice — its "Two strengths of pin" and
 
 `docs/AUDIT.md` is the evidence. This is the plan for closing it.
 
-**13 open, 72 closed.** Stages 1, 2, 3 and 4 are done; stage 5 has not started.
+**14 open, 71 closed.** Stages 1, 2, 3 and 4 are done; stage 5 has not started.
 
 The sweep opened at 36/44. Stage 4 closed 28 — its own 21 plus the 7 the Stage 3
-adversarial review had left open — and remediation FILED 5 more along the way,
-so the open count fell by 23 rather than 28. Of the 13 still open:
+adversarial review had left open — remediation FILED 5 more along the way, and
+the closing review REOPENED one (D5, `_desynchronizing`), so the open count fell
+by 22 rather than 28. Of the 14 still open:
 
 | where it came from | open |
 |---|---|
 | the sweep itself (all stage 5) | 7 |
 | filed by the adversarial review of Stage 3 | 0 |
 | filed by that review's own follow-up | 1 |
+| REOPENED by the Stage 4 review (D5) | 1 |
 | filed during remediation (see `docs/AUDIT.md`) | 5 |
 
 The five filed during remediation are worth naming, because four of the five were
@@ -431,8 +433,27 @@ the thing that failed was a control:
 
 Thirteen half-fix checks over the stage. **Every one was caught**, but only six
 by the pin the finding shipped with: four needed a case added during widening,
-and three needed a control. Two lessons, and neither is the one the review
-predicted.
+and three needed a control.
+
+**The closing review then found 8 more, all caused by this stage** — recorded
+under `## Filed during the Stage 4 adversarial review` in `docs/AUDIT.md`, all
+closed, and one of them (D5) REVERTED with its finding reopened because the
+audit's suggested fix turned out not to work at all. That is 8 self-inflicted
+defects in 28 fixes, against Stage 3's 4-in-24. **The rate did not improve, and
+the half-fix discipline caught none of them** — a half-fix probes the repair you
+thought of, and every one of these was somewhere the repair was not.
+
+What did catch them was three adversarial readers with different briefs, running
+their own probes. That is the technique that has now worked twice; the pin
+harness is what stops a closed finding reopening, not what finds the next one.
+
+**And a category worth naming.** Two of the three high-severity ones were fixes
+whose shape was *stop refusing*: #45's Enter-approves, D5's allow-the-drag, and
+the OAuth scope reorder all made something that used to say no start saying yes.
+When a fix removes a refusal, ask what the refusal was protecting — the finding
+does not always know, and D5's did not.
+
+Two more lessons, and neither is the one the Stage 3 review predicted.
 
 **A pin does not catch an over-correction.** Widening makes a pin detect the BUG
 more reliably; it cannot make it detect a fix that goes too far, because a pin
