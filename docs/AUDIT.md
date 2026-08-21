@@ -1177,7 +1177,7 @@ The branch is also completely uncovered, and the test that claims to cover it do
 
 **Pinned by** `test_a_table_full_of_junk_clients_does_not_lock_the_owner_out` in `backend/tests/test_backlog_aug19_stage2.py`.
 
-#### [ ] Test gap: the confidential-client path — client_secret_basic/post, the Basic header parser and the secret comparison — has zero coverage despite being advertised in the AS metadata
+#### [x] Test gap: the confidential-client path — client_secret_basic/post, the Basic header parser and the secret comparison — has zero coverage despite being advertised in the AS metadata
 
 `backend/tasksd/mcp/oauth.py:417` · **low** · test-gap · `minor` · stage 5
 
@@ -1203,6 +1203,17 @@ None of these five outcomes is asserted anywhere in tests/test_mcp.py.
 **Suggested fix.** Add a test module section that registers with each of `client_secret_basic` and `client_secret_post`, completes the code exchange with the secret, and asserts 401 for (a) a wrong secret, (b) a confidential client presenting no secret, plus a case pinning that a public client sending an empty `client_secret` is still accepted while a non-empty one is refused.
 
 **Pinned by** `test_a_confidential_client_authenticates_with_its_secret_and_only_that` in `backend/tests/test_backlog_aug19_stage45.py`.
+
+**Closed.** All five outcomes this entry lists are asserted, plus two it does
+not: a wrong secret over `client_secret_post`, and a public client presenting an
+invented secret. Verified by the mutations the entry names — inverting the
+branch so a confidential client presenting NO secret is admitted (caught: the
+naked case returns 200), and dropping the public-client refusal so an invented
+secret is silently ignored (caught: the impostor case returns 200).
+
+One mutation this entry suggests turned out to be benign and is recorded as
+such: `sha256_hex(secret or "")` still fails the comparison against a real
+stored hash, so it changes no behaviour and no test can or should catch it.
 
 ### Scheduling & public booking
 
@@ -2936,7 +2947,7 @@ Failure scenario: the model calls `smylte_create_task(list_id="cal", summary="bu
 
 ### Test suite
 
-#### [ ] setup.ts's matchMedia stub hardcodes the desktop breakpoint, so CalendarView's and HomeView's entire mobile renders are never exercised
+#### [x] setup.ts's matchMedia stub hardcodes the desktop breakpoint, so CalendarView's and HomeView's entire mobile renders are never exercised
 
 `frontend/src/test/setup.ts:5` · **medium** · test-gap · stage 5
 
@@ -2959,7 +2970,29 @@ CalendarView.test.tsx (592 lines) and HomeView.test.tsx (432 lines) are absent, 
 
 **Pinned by** `aug19 stage 4b — the mobile breakpoint > renders the mobile calendar and the mobile dashboard` in `frontend/src/backlog.aug19.stage4b.test.tsx`.
 
-#### [ ] No test observes anything about a 204 beyond its status code, and the source comment states the suite is green either way
+**Closed.** The five behaviours this entry enumerates are driven, and the
+mutation it names — `if (isMobile && key !== focusDay)` → `if (false && …)` —
+fails the pin.
+
+The other half of the suggested fix was still outstanding and is done here:
+`test/setup.ts`'s shared stub now keeps a **real listener registry**, with
+`setBreakpoint`, `breakpointListeners` and `resetBreakpoint` exported, so a
+suite can cross the breakpoint without replacing the stub wholesale. That
+mattered more than it looked: every mobile assertion in the tree installed a
+stub whose `addEventListener` is a no-op and then mounted, which exercises
+`useState(() => matchMedia(…).matches)` and never the effect underneath — and
+the effect is the whole reason `useIsMobile` is not a plain read. A rotation, a
+resize or the devtools device toolbar crosses the breakpoint without remounting
+anything. `hooks.test.ts` drove that change against `renderHook`, the hook alone
+with no component reading it; nothing asserted a real view answers it.
+
+A new case does, through the shared stub: desktop → mobile → desktop on a
+mounted `CalendarView`, asserting the same `.cal-scroll` node throughout (a
+re-render, not a remount — otherwise the assertions would pass while saying
+nothing about the effect), and that unmounting unsubscribes. Both mutations
+caught: deleting the `addEventListener` call, and dropping the cleanup.
+
+#### [x] No test observes anything about a 204 beyond its status code, and the source comment states the suite is green either way
 
 `backend/tests/test_api.py:76` · **low** · test-gap · `minor` · stage 5
 
@@ -2990,7 +3023,14 @@ Concrete scenario: revert tasksd/app.py:955 to `return None` (or to any serializ
 
 **Pinned by** `test_a_204_delete_carries_no_body_and_no_content_type` in `backend/tests/test_backlog_aug19_stage45.py`.
 
-#### [ ] The won't-do write route and its MCP twin have no behavioural test at all — only a comment in test_api.py claims otherwise
+**Closed**, and with the stronger of the two options this entry offers: the
+assertion runs through TestClient *and* by driving the ASGI app directly, so the
+`http.response.start` message itself is examined — the blind spot the source
+comment names. Verified by the mutation the entry names: reverting
+`return Response(status_code=204)` to `return None` fails it on the
+`content-type: application/json` a bodiless status must not carry.
+
+#### [x] The won't-do write route and its MCP twin have no behavioural test at all — only a comment in test_api.py claims otherwise
 
 `backend/tests/test_api.py:69` · **low** · test-gap · `minor` · stage 5
 
@@ -3022,6 +3062,13 @@ $ grep -rn "cancel" backend/tests/*.py | grep -v "notifications/cancelled" | gre
 and one MCP-level case driving `smylte_cancel_task` (including that it is refused on a read-only grant, which is untested for this tool too).
 
 **Pinned by** `test_cancelling_a_task_is_wont_do_and_not_done + test_the_cancel_tool_needs_write_access_and_marks_the_task_wont_do` in `backend/tests/test_backlog_aug19_stage45.py`.
+
+**Closed**, both halves: the API route and the connector twin, the latter
+including that a read-only grant cannot reach `smylte_cancel_task` — untested
+for this tool as the entry notes. Verified by both mutations it names: making
+`cancel_task` write `COMPLETED` (caught), and dropping `d["cancelled"]` from the
+`include_done=False` filter so a won't-do task never leaves the open list
+(caught).
 
 ### Auth, session & limits
 

@@ -12,7 +12,8 @@ of how the harness behaved in practice — its "Two strengths of pin" and
 
 `docs/AUDIT.md` is the evidence. This is the plan for closing it.
 
-**11 open, 74 closed.** Stages 1, 2, 3 and 4 are done; stage 5 is in progress.
+**7 open, 78 closed.** Stages 1-5 are all done; what is left is the seven findings the Stage 3 and
+Stage 4 adversarial reviews filed and never staged.
 
 The sweep opened at 36/44. Stage 4 closed 28 — its own 21 plus the 7 the Stage 3
 adversarial review had left open — remediation FILED 5 more along the way, and
@@ -568,9 +569,9 @@ The user can see it is wrong. Contained, mostly small, and the stage where a fix
 | 57 ✅ | The Completed pane hides a completed RELATED-TO ring entirely, though the list view has explicit code to ren… | `frontend/src/components/TasksView.tsx:334` | low | `shows a completed ring another client authored` |
 | 58 ✅ | TaskModal — the app's most-used dialog — has no Escape handler, breaking the modal contract every other dial… | `frontend/src/components/TaskModal.tsx:121` | low | `closes on Escape, like every other dialog in the app` |
 
-## Stage 5 — Delivery infrastructure & test gaps ⬜ OPEN
+## Stage 5 — Delivery infrastructure & test gaps ✅ DONE
 
-8 findings · 3 medium, 5 low · **4 closed, 4 open**
+8 findings · 3 medium, 5 low · **8 closed, 0 open** ✅
 
 One is already closed: **64** (no test drives `busy_intervals` across a DST transition) was shut by the Stage 3 fixes for the two defects that writing its missing case uncovered — see Stage 3 above.
 
@@ -580,12 +581,12 @@ The pipeline that ships the code and the tests that watch it. Closing these is w
 |---|---|---|---|---|
 | 59 ✅ | desktop-release.yml grants `contents: write` at workflow scope, so `npm ci` and NuGet restore in the build j… | `.github/workflows/desktop-release.yml:22` | medium | `test_the_desktop_release_build_jobs_hold_no_write_token` |
 | 60 ✅ | setup.sh writes the typed Radicale password into a systemd EnvironmentFile without escaping, and systemd's p… | `deploy/setup.sh:44` | medium | `test_setup_sh_writes_a_password_systemd_reads_back_unchanged` |
-| 61 | setup.ts's matchMedia stub hardcodes the desktop breakpoint, so CalendarView's and HomeView's entire mobile … | `frontend/src/test/setup.ts:5` | medium | `renders the mobile calendar and the mobile dashboard` |
+| 61 ✅ | setup.ts's matchMedia stub hardcodes the desktop breakpoint, so CalendarView's and HomeView's entire mobile … | `frontend/src/test/setup.ts:5` | medium | `renders the mobile calendar and the mobile dashboard` |
 | 62 ✅ | Shutdown tears down the SQLite connection and DAV client under a still-running sync sweep | `backend/tasksd/app.py:774` | low | `test_a_closed_service_does_not_sweep_against_a_dead_connection` + `…_closing_between_two_slices…` |
-| 63 | Test gap: the confidential-client path — client_secret_basic/post, the Basic header parser and the secret co… | `backend/tasksd/mcp/oauth.py:417` | low | `test_a_confidential_client_authenticates_with_its_secret_and_only_that` |
+| 63 ✅ | Test gap: the confidential-client path — client_secret_basic/post, the Basic header parser and the secret co… | `backend/tasksd/mcp/oauth.py:417` | low | `test_a_confidential_client_authenticates_with_its_secret_and_only_that` |
 | 64 ✅ | Test gap: no test drives busy_intervals across a DST transition at all, which is why two real slot-math defe… | `backend/tests/test_scheduling.py:77` | low | `test_busy_intervals_hold_their_absolute_length_across_a_dst_change` |
-| 65 | No test observes anything about a 204 beyond its status code, and the source comment states the suite is gre… | `backend/tests/test_api.py:76` | low | `test_a_204_delete_carries_no_body_and_no_content_type` |
-| 66 | The won't-do write route and its MCP twin have no behavioural test at all — only a comment in test_api.py cl… | `backend/tests/test_api.py:69` | low | `test_cancelling_a_task_is_wont_do_and_not_done + test_the_cancel_tool_needs_write_access_and_marks_the_task_wont_do` |
+| 65 ✅ | No test observes anything about a 204 beyond its status code, and the source comment states the suite is gre… | `backend/tests/test_api.py:76` | low | `test_a_204_delete_carries_no_body_and_no_content_type` |
+| 66 ✅ | The won't-do write route and its MCP twin have no behavioural test at all — only a comment in test_api.py cl… | `backend/tests/test_api.py:69` | low | `test_cancelling_a_task_is_wont_do_and_not_done + test_the_cancel_tool_needs_write_access_and_marks_the_task_wont_do` |
 
 # Sweep — 2026-08-16 · closed
 
