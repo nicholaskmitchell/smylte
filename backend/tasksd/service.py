@@ -74,9 +74,33 @@ class TaskService:
         self._lock = threading.RLock()
         self._listeners: set[asyncio.Queue] = set()
         self._loop: asyncio.AbstractEventLoop | None = None
+        # Set under the lock by `close()`, read under the lock by `sync_all`.
+        # See `close()` for why a flag is needed and not just an ordering fix.
+        self._closed = False
 
     def close(self) -> None:
+        """Release the DAV client and the database.
+
+        The flag exists because closing CANNOT be ordered against a running
+        sweep from the outside. The lifespan cancels the asyncio task, but
+        `_sync_loop` spends its time in `await asyncio.to_thread(svc.sync_all)`
+        and `concurrent.futures.Future.cancel()` fails on an already-running
+        work item — so `await loop_task` returns immediately while the worker
+        thread is still inside `sync_all`. `sync_all` then deliberately releases
+        the lock between collections, and `close()` acquires it in one of those
+        gaps.
+
+        Before the flag, the next slice ran `store.has_collection(self._conn, …)`
+        against a closed connection. That call sits OUTSIDE the per-collection
+        `try/except`, so the ProgrammingError escaped `sync_all` entirely: no
+        collection recorded it, the remaining collections were never swept, and
+        asyncio logged "exception was never retrieved" on every restart that
+        landed mid-sweep.
+        """
         with self._lock:
+            if self._closed:
+                return                    # idempotent: teardown can run twice
+            self._closed = True
             self._dav.close()
             self._conn.close()
 
@@ -133,12 +157,21 @@ class TaskService:
         # (which serialize on the same lock) interleave between slices instead
         # of stalling for the full background pass every poll interval.
         with self._lock:
+            if self._closed:
+                return []
             self._engine.discover()
             collections_changed = self._engine.last_discovery_changed
             hrefs = [r["href"] for r in store.get_collections(self._conn)]
         stats: list[SyncStats] = []
         for href in hrefs:
             with self._lock:
+                # Re-checked EVERY slice, not just once at the top: the whole
+                # point of releasing the lock between collections is that
+                # something else can take it, and `close()` is the something
+                # else that matters. Checked inside the lock so the answer
+                # cannot go stale between the check and the query below it.
+                if self._closed:
+                    break
                 if not store.has_collection(self._conn, href):
                     continue
                 try:

@@ -12,7 +12,7 @@ of how the harness behaved in practice — its "Two strengths of pin" and
 
 `docs/AUDIT.md` is the evidence. This is the plan for closing it.
 
-**12 open, 73 closed.** Stages 1, 2, 3 and 4 are done; stage 5 is in progress.
+**11 open, 74 closed.** Stages 1, 2, 3 and 4 are done; stage 5 is in progress.
 
 The sweep opened at 36/44. Stage 4 closed 28 — its own 21 plus the 7 the Stage 3
 adversarial review had left open — remediation FILED 5 more along the way, and
@@ -75,20 +75,32 @@ ORDINARY PASSING TESTS, not pins. Marking a passing test `xfail(strict=True)`
 would XPASS and break the build, which is the opposite of what the harness is for.
 This mirrors `test_backlog_stage5.py`, which already handles the same case.
 
-### The one that is not pinned
+### The one that was not pinned — and what pinning it in the end taught
 
-Finding 62 (shutdown tearing the service down under a running sweep) has **no
-pin**. It reproduces on demand in isolation — swap the service's `RLock` for one
-that yields on release and `close()` reliably wins the gap between two slices —
-but not once the rest of its file has run: three consecutive whole-file runs gave
-xfail / XPASS / xfail. Under `strict=True` an XPASS is a red build, so pinning it
-would hand CI a coin flip, which is worse than leaving it open and visible.
+Finding 62 (shutdown tearing the service down under a running sweep) shipped
+with **no pin**, and the note here said why: it reproduces on demand in
+isolation — swap the service's `RLock` for one that yields on release and
+`close()` reliably wins the gap between two slices — but not once the rest of
+its file has run. Three consecutive whole-file runs gave xfail / XPASS / xfail,
+and under `strict=True` an XPASS is a red build, so pinning it would have handed
+CI a coin flip. The note asked whoever fixed it to add a seam — a hook between
+two slices of `sync_all` — and pin it then.
 
-What a real pin needs is a seam this code does not have: a hook between two
-slices of `sync_all`, so teardown can be *ordered* against the sweep rather than
-raced with it. Whoever fixes the finding should add that seam and pin it then.
-The reasoning is repeated in full at the finding's place in
-`backend/tests/test_backlog_aug19_stage45.py`.
+**Stage 5 closed it without the seam, and the reason generalises.** Everything
+above is about pinning the RACE: whether `close()` happens to win a particular
+gap. That is genuinely non-deterministic and no amount of care makes it a good
+test. But the FIX's invariant is not a race — *a closed service must not touch
+its connection, whenever it was closed* — and that is ordinary, deterministic
+and easy to assert. Two pins do, both failing against the old code every time.
+
+The mid-sweep case still needed teardown to land between two slices, and got
+there by making the ENGINE's `sync` call `close()` on the first collection: a
+stub in the test, not a hook in the service. That is the transferable part —
+**when a race is hard to pin, look for the invariant the fix establishes, and
+for a seam that already exists in the collaborators rather than one the
+production code has to grow.** The race itself is still unpinned, and that
+remains recorded rather than quietly dropped: nothing proves the interleaving
+impossible, only that it is now harmless.
 
 ## Stage 1 — Crash paths ✅ DONE
 
@@ -558,7 +570,7 @@ The user can see it is wrong. Contained, mostly small, and the stage where a fix
 
 ## Stage 5 — Delivery infrastructure & test gaps ⬜ OPEN
 
-8 findings · 3 medium, 5 low · **3 closed, 5 open**
+8 findings · 3 medium, 5 low · **4 closed, 4 open**
 
 One is already closed: **64** (no test drives `busy_intervals` across a DST transition) was shut by the Stage 3 fixes for the two defects that writing its missing case uncovered — see Stage 3 above.
 
@@ -569,7 +581,7 @@ The pipeline that ships the code and the tests that watch it. Closing these is w
 | 59 ✅ | desktop-release.yml grants `contents: write` at workflow scope, so `npm ci` and NuGet restore in the build j… | `.github/workflows/desktop-release.yml:22` | medium | `test_the_desktop_release_build_jobs_hold_no_write_token` |
 | 60 ✅ | setup.sh writes the typed Radicale password into a systemd EnvironmentFile without escaping, and systemd's p… | `deploy/setup.sh:44` | medium | `test_setup_sh_writes_a_password_systemd_reads_back_unchanged` |
 | 61 | setup.ts's matchMedia stub hardcodes the desktop breakpoint, so CalendarView's and HomeView's entire mobile … | `frontend/src/test/setup.ts:5` | medium | `renders the mobile calendar and the mobile dashboard` |
-| 62 | Shutdown tears down the SQLite connection and DAV client under a still-running sync sweep | `backend/tasksd/app.py:774` | low | _not pinned — see below_ |
+| 62 ✅ | Shutdown tears down the SQLite connection and DAV client under a still-running sync sweep | `backend/tasksd/app.py:774` | low | `test_a_closed_service_does_not_sweep_against_a_dead_connection` + `…_closing_between_two_slices…` |
 | 63 | Test gap: the confidential-client path — client_secret_basic/post, the Basic header parser and the secret co… | `backend/tasksd/mcp/oauth.py:417` | low | `test_a_confidential_client_authenticates_with_its_secret_and_only_that` |
 | 64 ✅ | Test gap: no test drives busy_intervals across a DST transition at all, which is why two real slot-math defe… | `backend/tests/test_scheduling.py:77` | low | `test_busy_intervals_hold_their_absolute_length_across_a_dst_change` |
 | 65 | No test observes anything about a 204 beyond its status code, and the source comment states the suite is gre… | `backend/tests/test_api.py:76` | low | `test_a_204_delete_carries_no_body_and_no_content_type` |

@@ -38,6 +38,7 @@ import os
 import pathlib
 import re
 import shutil
+import sqlite3
 import subprocess
 import tempfile
 import threading
@@ -52,7 +53,11 @@ from fastapi.testclient import TestClient
 
 from tasksd import scheduling
 from tasksd.app import create_app
+from tasksd.dav.client import CollectionInfo
 from tasksd.db import store
+from tasksd.service import TaskService
+from tasksd.sync import SyncStats
+from tasksd.config import Settings
 from tests.conftest import api_settings
 
 pytestmark = [pytest.mark.backlog, pytest.mark.stage4, pytest.mark.stage5]
@@ -64,6 +69,19 @@ MCP_URL = f"{ISSUER}/mcp"
 CALLBACK = "https://claude.ai/api/mcp/auth_callback"
 PASSWORD = "testpass123"          # api_settings' auth_password
 TZ = ZoneInfo("America/Chicago")
+
+
+def _service_settings() -> Settings:
+    """Settings pointed at a port nothing listens on — same shape
+    test_service_unit.py uses. Nothing here reaches CalDAV on purpose."""
+    return Settings(
+        radicale_url="http://127.0.0.1:1", radicale_user="u", radicale_password="p",
+        db_path=":memory:", sync_interval_s=3600, request_timeout_s=1,
+        static_dir="/nonexistent", hook_secret="h", auth_enabled=False,
+        auth_user="", auth_password_hash="", auth_password="",
+        session_secret="", session_ttl_s=60, cookie_secure=False,
+        access_required=False, access_team_domain="", access_aud="",
+    )
 
 
 def _read(rel: str) -> str:
@@ -421,31 +439,135 @@ def test_a_booking_link_serves_the_spa_with_or_without_a_trailing_slash(tmp_path
     )
 
 
-# ── AUDIT: shutdown closes the DB and DAV client under a running sweep ──────
-
-@pytest.mark.radicale
 # ── AUDIT: shutdown tears down the service under a running sweep ───────────
 #
-# DELIBERATELY NOT PINNED. The finding is real and stands in docs/AUDIT.md: the
-# lifespan cancels the asyncio future while the worker thread carries on, so
-# `svc.close()` runs against a live sweep and the next slice's
-# `store.has_collection` — outside the per-collection try/except — raises
-# sqlite3.ProgrammingError.
+# The note that stood here said this finding could not be pinned: it reproduces
+# in isolation but XPASSed once the rest of the file had run (three whole-file
+# runs gave xfail / XPASS / xfail), and it asked whoever fixed it to add a seam
+# between two slices of `sync_all` so teardown could be ORDERED against the
+# sweep rather than raced with it.
 #
-# It reproduces on demand in isolation (swap the service's RLock for one that
-# yields on release and `close()` reliably wins the gap between two slices:
-# sweep:start -> close:enter -> close:done -> sweep:RAISED ProgrammingError).
-# It does NOT reproduce reliably once other tests in this file have run: three
-# consecutive whole-file runs gave xfail / XPASS / xfail. Under `strict=True`
-# an XPASS is a red build, so pinning this would hand CI a coin flip — the
-# opposite of what the harness is for, and worse than leaving it unpinned.
+# The seam turned out not to be needed, and no production code grew a test hook.
+# What was flaky is the RACE — whether `close()` happens to win the gap between
+# two slices. The FIX's invariant is not a race at all: a closed service must
+# not touch its connection, whenever it was closed. That is what is pinned
+# below, deterministically, and the mid-sweep case is driven by making the
+# engine's own `sync` call `close()` — a stub in the test, not a hook in the
+# service.
 #
-# What a real pin needs is a seam this code does not have: a hook between two
-# slices of `sync_all`, so the teardown can be ordered against the sweep instead
-# of raced with it. Whoever fixes the finding should add that seam and pin it
-# then. Per docs/STAGES.md, "a constraint that weakens the tests deserves the
-# same scrutiny as a finding" — this note is that constraint written down, not
-# an excuse to skip it.
+# The race itself stays unpinned, and that is still recorded rather than
+# quietly dropped: nothing here proves the interleaving is impossible, only that
+# it is harmless when it happens.
+
+
+def _closable_service():
+    """A TaskService with two collections and no reachable CalDAV server.
+
+    `sync_all`'s first act is `self._engine.discover()`, which is a network
+    call; the settings point at a closed port so it raises rather than hanging.
+    That is fine for both cases here — neither is about discovery — but it does
+    mean the CLOSED case has to be distinguishable from the unreachable one,
+    which is why the assertions below are about `sqlite3.ProgrammingError`
+    specifically and not about "did it raise".
+    """
+    svc = TaskService(_service_settings())
+    for href, name in (("/u/cal-a/", "A"), ("/u/cal-b/", "B")):
+        store.upsert_collection(
+            svc._conn, CollectionInfo(href=href, displayname=name, components={"VEVENT"}))
+    return svc
+
+
+def test_a_closed_service_does_not_sweep_against_a_dead_connection():
+    """`close()` takes the lock, closes `_conn` and `_dav`, and returns. Nothing
+    stopped `sync_all` running afterwards, and its slices reach
+    `store.has_collection(self._conn, href)` — which sits OUTSIDE the
+    per-collection `try/except Exception`, so the error escapes `sync_all`
+    entirely rather than being recorded against one collection.
+
+    On a real shutdown that is exactly what happens: the lifespan cancels the
+    asyncio future, but `concurrent.futures.Future.cancel()` fails on an
+    already-running work item, so `await loop_task` returns at once while the
+    worker thread is still inside `sync_all`. Nothing awaits that future any
+    more, so asyncio logs an "exception was never retrieved" traceback on every
+    `systemctl restart tasks` that lands mid-sweep, and the remaining
+    collections are never swept.
+    """
+    svc = _closable_service()
+    svc.close()
+
+    try:
+        stats = svc.sync_all()
+    except sqlite3.ProgrammingError as e:
+        pytest.fail(
+            f"sync_all ran against the closed connection: {e}. A closed service "
+            f"must not touch its database at all."
+        )
+    assert stats == [], f"a closed service reported a sweep it cannot have done: {stats}"
+
+
+def test_closing_between_two_slices_does_not_kill_the_sweep():
+    """The finding's actual sequence, made deterministic.
+
+    `sync_all` deliberately releases the lock between collections — "Lock per
+    collection, not for the whole sweep" — so `close()` acquires it in one of
+    those gaps. Rather than racing a real thread for that gap, the engine's
+    `sync` closes the service when it is called for the FIRST collection, which
+    puts `close()` exactly where the finding says it lands: after one slice has
+    completed and before the next begins.
+
+    What must not happen is the next slice raising out of `sync_all`. Whether
+    the sweep then stops or continues is the fix's choice; that it does not
+    explode is not.
+    """
+    svc = _closable_service()
+    swept: list[str] = []
+
+    def _sync(href):
+        swept.append(href)
+        if len(swept) == 1:
+            svc.close()               # the teardown, landing between two slices
+        return SyncStats(collection_href=href)
+
+    svc._engine.discover = lambda: None
+    svc._engine.last_discovery_changed = False
+    svc._engine.sync = _sync
+
+    try:
+        svc.sync_all()
+    except sqlite3.ProgrammingError as e:
+        pytest.fail(
+            f"a close() between two slices killed the sweep with {e} — the "
+            f"error escapes sync_all, so nothing records it and the remaining "
+            f"collections are silently never swept"
+        )
+    assert swept, "the sweep never reached its first collection"
+
+
+def test_an_open_service_still_sweeps_every_collection():
+    """Control, and the one that matters.
+
+    The fix is a guard that makes `sync_all` return early, and the failure mode
+    of any such guard is returning early always. A `_closed` flag that starts
+    true, or is checked before it is ever cleared, would satisfy both pins above
+    completely while turning background sync into a no-op — the app would simply
+    stop seeing anything anyone changed in another client, with no error
+    anywhere.
+    """
+    svc = _closable_service()
+    swept: list[str] = []
+    svc._engine.discover = lambda: None
+    svc._engine.last_discovery_changed = False
+    svc._engine.sync = lambda href: (swept.append(href), SyncStats(collection_href=href))[1]
+
+    try:
+        stats = svc.sync_all()
+    finally:
+        svc.close()
+
+    assert sorted(swept) == ["/u/cal-a/", "/u/cal-b/"], (
+        f"an OPEN service did not sweep every collection: {swept}"
+    )
+    assert len(stats) == 2, f"the sweep reported {len(stats)} results, not 2"
 
 
 # ── AUDIT: desktop-release.yml grants contents: write to every job ──────────
