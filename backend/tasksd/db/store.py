@@ -627,6 +627,200 @@ def bookings_count_by_link(conn: sqlite3.Connection) -> dict[str, int]:
     }
 
 
+# ── day plan (sidecar-class; see schema.sql) ─────────────────────────────────
+#
+# Two tables, one idea: `day_plan` holds the entries and `day_plan_opened`
+# records that a day was snapshotted at all, so "opened and emptied" is
+# distinguishable from "never opened". Nothing here commits: like the cache
+# helpers above, these run inside whatever transaction the caller opened (the
+# service wraps a snapshot build in `tx`, because a half-written plan with no
+# marker would be re-snapshotted on the next open and end up duplicated).
+
+# The day's reading order. `position IS NULL` first in the key so unpositioned
+# rows TRAIL rather than lead — the same trick as get_collections' `ord IS NULL`
+# — then created_at, then entry_id. All three are needed for a stable read:
+# created_at is only millisecond-resolution, so the rows of one snapshot can
+# share a value, and without the final tie-break two entries would be free to
+# swap places between two reads of the same unchanged day.
+_DAY_ORDER = "position IS NULL, position, created_at, entry_id"
+
+
+def get_day_entries(conn: sqlite3.Connection, day: str) -> list[sqlite3.Row]:
+    """Every entry on a day, in reading order — dropped ones included.
+
+    A dropped entry is part of the day's record (it says the owner decided NOT
+    to do this), so filtering happens in the caller that has a reason to, never
+    here."""
+    return list(
+        conn.execute(
+            # _DAY_ORDER is a module constant — not caller input.
+            f"SELECT * FROM day_plan WHERE day=? ORDER BY {_DAY_ORDER}",  # nosec B608
+            (day,),
+        )
+    )
+
+
+def day_is_opened(conn: sqlite3.Connection, day: str) -> bool:
+    return conn.execute(
+        "SELECT 1 FROM day_plan_opened WHERE day=?", (day,)
+    ).fetchone() is not None
+
+
+def mark_day_opened(conn: sqlite3.Connection, day: str) -> None:
+    """Record that this day has been planned. INSERT OR IGNORE, so re-opening a
+    day keeps the ORIGINAL opened_at: the column answers "when was this day
+    first planned", and a re-open overwriting it would erase that."""
+    conn.execute("INSERT OR IGNORE INTO day_plan_opened (day) VALUES (?)", (day,))
+
+
+def insert_day_entry(
+    conn: sqlite3.Connection,
+    *,
+    day: str,
+    entry_id: str,
+    kind: str,
+    source: str,
+    collection_href: str | None = None,
+    uid: str | None = None,
+    title: str | None = None,
+    position: float | None = None,
+) -> sqlite3.Row:
+    """Add one entry to a day and return the stored row.
+
+    Returned rather than echoed back from the arguments, so the caller's DTO
+    carries the DB's own `created_at` (the schema default) instead of a second,
+    slightly different, idea of now.
+    """
+    conn.execute(
+        """INSERT INTO day_plan (day, entry_id, kind, collection_href, uid, title,
+                                 source, position)
+           VALUES (?,?,?,?,?,?,?,?)""",
+        (day, entry_id, kind, collection_href, uid, title, source, position),
+    )
+    return find_day_entry(conn, day, entry_id=entry_id)
+
+
+_DAY_ENTRY_FIELDS = {"done_at", "dropped_at", "position"}
+
+
+def update_day_entry(
+    conn: sqlite3.Connection, day: str, entry_id: str, **fields: object
+) -> sqlite3.Row | None:
+    """Patch an entry's mutable columns; None for an entry_id this day doesn't
+    have (the route turns that into a 404).
+
+    An explicit None VALUE clears the column — that is how "done" is undone —
+    so unlike `set_sidecar`'s caller the route must pass only the fields it
+    actually means to change, and PATCH's unsent fields never arrive here.
+
+    One UPDATE for all of them rather than the statement-per-field loop
+    `set_sidecar` and `update_booking_link` use. Those need a transaction to be
+    atomic (the connection is in autocommit — see `tx`); a single statement is
+    atomic on its own, and this one runs on the PATCH path where there is no
+    other reason to open one.
+
+    `rowcount` is what distinguishes "no such entry" from a patch that changed
+    nothing: SQLite counts the rows the statement PROCESSED, not the ones whose
+    values differed, so re-ticking an already-ticked entry still reports 1 and
+    only a missing row reports 0. Were it the other way round, a client sending
+    the state it already believes in — which is exactly what a retry does —
+    would be told its entry is gone.
+    """
+    bad = set(fields) - _DAY_ENTRY_FIELDS
+    if bad:
+        raise ValueError(f"unknown day entry fields: {bad}")
+    if fields:
+        # The column names are vetted against _DAY_ENTRY_FIELDS above — not
+        # attacker input; the values are bound.
+        assignments = ", ".join(f"{k}=?" for k in fields)
+        cur = conn.execute(
+            f"UPDATE day_plan SET {assignments} WHERE day=? AND entry_id=?",  # nosec B608
+            (*fields.values(), day, entry_id),
+        )
+        if not cur.rowcount:
+            return None
+    return find_day_entry(conn, day, entry_id=entry_id)
+
+
+def get_day_range(
+    conn: sqlite3.Connection, from_day: str, to_day: str
+) -> dict[str, list[sqlite3.Row]]:
+    """Every planned day in [from_day, to_day) → its entries, oldest day first.
+
+    `to_day` is EXCLUSIVE, matching the calendar-window convention the rest of
+    the app uses. Days that were never opened are absent rather than present and
+    empty: absence is exactly what a caller renders as "not planned yet", and
+    materialising a row per unplanned day would make a six-month query mostly
+    padding. ISO day keys compare correctly as strings, so the window is a plain
+    range predicate over an indexed column in both tables (day is the marker's
+    primary key, and idx_day_plan_day covers the entries).
+
+    A day carrying entries but NO marker row cannot be produced by this module —
+    every writer marks the day — but it is still listed if the DB somehow holds
+    one (a hand edit, a partial restore). Dropping those entries from the read
+    would make real rows invisible while they went on occupying their day.
+    """
+    out: dict[str, list[sqlite3.Row]] = {
+        r["day"]: []
+        for r in conn.execute(
+            "SELECT day FROM day_plan_opened WHERE day >= ? AND day < ? ORDER BY day",
+            (from_day, to_day),
+        )
+    }
+    for row in conn.execute(
+        # `day` leads the key here so the rows arrive grouped by day, each
+        # group already in reading order.
+        f"SELECT * FROM day_plan WHERE day >= ? AND day < ? "  # nosec B608
+        f"ORDER BY day, {_DAY_ORDER}",
+        (from_day, to_day),
+    ):
+        out.setdefault(row["day"], []).append(row)
+    return dict(sorted(out.items()))
+
+
+def find_day_entry(
+    conn: sqlite3.Connection,
+    day: str,
+    *,
+    entry_id: str | None = None,
+    collection_href: str | None = None,
+    uid: str | None = None,
+    title: str | None = None,
+) -> sqlite3.Row | None:
+    """One entry on a day, looked up three ways: by its own `entry_id`, by the
+    task it names (`collection_href` + `uid`), or by a note's exact `title`.
+    Exactly one of the three has to be supplied.
+
+    The task and title lookups are what make adding an entry idempotent, and
+    they skip DROPPED rows: a task the owner dropped this morning has to be
+    addable again this afternoon, and answering with the dropped row would look
+    to the client like the add silently did nothing. The `entry_id` lookup does
+    not filter — it is identity, and the primary key already guarantees at most
+    one row, dropped or not.
+    """
+    where = ["day=?"]
+    params: list[object] = [day]
+    if entry_id is not None:
+        where.append("entry_id=?")
+        params.append(entry_id)
+    elif uid is not None and collection_href is not None:
+        where.append("collection_href=? AND uid=?")
+        params += [collection_href, uid]
+    elif title is not None:
+        where.append("kind='note' AND title=?")
+        params.append(title)
+    else:
+        raise ValueError("find_day_entry needs entry_id, collection_href+uid, or title")
+    if entry_id is None:
+        where.append("dropped_at IS NULL")
+    return conn.execute(
+        # Every fragment above is a literal in this function — not caller input.
+        f"SELECT * FROM day_plan WHERE {' AND '.join(where)} "  # nosec B608
+        f"ORDER BY {_DAY_ORDER} LIMIT 1",
+        params,
+    ).fetchone()
+
+
 # ── search / queries ─────────────────────────────────────────────────────────
 
 def search(conn: sqlite3.Connection, query: str) -> list[sqlite3.Row]:

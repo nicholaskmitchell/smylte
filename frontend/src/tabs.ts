@@ -3,12 +3,20 @@
 // the part that has to survive a hand-edited or out-of-date settings blob — can
 // be reasoned about and tested on its own.
 
-export type Tab = 'home' | 'tasks' | 'calendar' | 'scheduling'
+// `today` and the backend's SettingsPatch ship TOGETHER. The server validates
+// `tab_order`, `start_tab` and `last_tab` against Literal unions of its own
+// (app.py), so a client that PUTs a token the server has not learned yet gets a
+// 422 and the whole settings write is rejected — not just the tab. The backend
+// therefore accepts "today" first and this token follows; deploying this half
+// against an older server would break every settings write from this tab strip,
+// not merely the Today tab.
+export type Tab = 'today' | 'home' | 'tasks' | 'calendar' | 'scheduling'
 
 /** Which tab the app opens on: a fixed one, or wherever the user left off. */
 export type TabStart = Tab | 'last'
 
 export const TAB_LABELS: Record<Tab, string> = {
+  today: 'Today',
   home: 'Home',
   tasks: 'Tasks',
   calendar: 'Calendar',
@@ -17,8 +25,16 @@ export const TAB_LABELS: Record<Tab, string> = {
 
 export const TABS = Object.keys(TAB_LABELS) as Tab[]
 
-/** The shipped strip. Home leads, and is what a fresh account opens on. */
-export const DEFAULT_TAB_ORDER: Tab[] = ['home', 'tasks', 'calendar', 'scheduling']
+/** The shipped strip. Today leads: it is the surface the day is worked from,
+ *  and the one place in the app that holds state of its own. */
+export const DEFAULT_TAB_ORDER: Tab[] = ['today', 'home', 'tasks', 'calendar', 'scheduling']
+
+/** …but a fresh account still OPENS on Home, which is what it has always opened
+ *  on. Leading the strip and being the landing page are separate choices, and
+ *  moving the landing page would change where every existing account that never
+ *  touched the setting lands — a strip reorder should not do that. Anyone who
+ *  wants Today first on open picks it in Settings, or reorders the strip and
+ *  chooses "Last used tab". */
 export const DEFAULT_TAB_START: TabStart = 'home'
 
 export function isTab(v: unknown): v is Tab {

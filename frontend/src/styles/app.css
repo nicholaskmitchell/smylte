@@ -320,8 +320,20 @@
 }
 .twisty:hover { color: var(--accent); }
 .twisty.open { transform: rotate(90deg); }
+/* One number, read by two rules. `.today-check-gap` stands in for this box on a
+   row that has nothing to tick and has to match its width exactly, and the two
+   used to be written out separately — so the 21px override in the <=720px block
+   below moved the checkbox and left the gap at 17px, shunting those titles 4px
+   left of every neighbour on every phone.
+   It lives on :root rather than on `.check` itself for a cascade reason: the gap
+   rule sits ~500 lines further down the file, so a value set on each selector
+   would be re-set AFTER the media override at equal specificity and win over it,
+   leaving the bug exactly where it was. Inherited from the root, the override is
+   the last word for both. */
+:root { --check-size: 17px; }
 .check {
-  width: 17px; height: 17px; flex: none; margin-top: 2px; border: 1px solid var(--fg-faint);
+  width: var(--check-size); height: var(--check-size);
+  flex: none; margin-top: 2px; border: 1px solid var(--fg-faint);
   border-radius: var(--radius); background: none; cursor: pointer; display: inline-flex;
   align-items: center; justify-content: center; color: transparent;
 }
@@ -763,7 +775,9 @@
   .day-col-body { padding-bottom: calc(24px + env(safe-area-inset-bottom)); }
   .task { padding-top: 11px; padding-bottom: 11px; }
   .task.sub { padding-left: calc(var(--gutter) + var(--task-depth, 1) * 18px); }
-  .check { width: 21px; height: 21px; }
+  /* On :root, so `.check` and `.today-check-gap` move together — see the note
+     beside the base value. */
+  :root { --check-size: 21px; }
   .task-actions { gap: 8px; }
   .task-actions button { font-size: calc(12px * var(--fs-scale)); padding: 5px 6px; }
   .scroll { padding-bottom: calc(40px + env(safe-area-inset-bottom)); }
@@ -1213,3 +1227,81 @@
 .conn-actions { display: flex; gap: 6px; flex: none; }
 .btn.danger { border-color: var(--warn); color: var(--warn); background: none; }
 .btn.danger:hover { background: color-mix(in oklch, var(--warn) 12%, transparent); }
+
+/* ── the Today tab ───────────────────────────────────────────────────────────
+   Every colour here resolves through a token from tokens.css, every font-size
+   through --fs-scale, every family through --serif/--sans/--mono, and the two
+   density levers (--gutter horizontally, --row-y on a row) are used where they
+   apply. That is what lets the Appearance editor reach this tab the way it
+   reaches every other one: a rule written in hex would look right in the
+   shipped theme and be wrong — often invisible — under a custom or preset one,
+   and nothing about the shipped look would give it away.
+
+   The two markers below are load-bearing. TodayView.test.tsx slices this file
+   between them and fails on a literal colour, because a token discipline that
+   is only a convention is one hurried rule away from not holding. */
+/* today-tab:css:start */
+.today-add { flex-wrap: wrap; }
+/* The reading of the typed line, under the box that produced it. Advisory
+   only — Enter commits whether or not it has been looked at — so it is sized
+   and coloured as a caption rather than as a control. */
+.today-chip {
+  flex-basis: 100%; margin: 0;
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  font-size: calc(12px * var(--fs-scale)); color: var(--fg-muted);
+}
+.today-chip .label { color: var(--accent); }
+/* A summary is user text of any length and any script: let it wrap inside the
+   chip rather than pushing the parsed due date off the line. */
+.today-chip-sum { color: var(--fg); min-width: 0; overflow-wrap: anywhere; }
+
+.today-list { list-style: none; margin: 0; padding: 0; }
+.today-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: var(--row-y) var(--gutter);
+  border-bottom: 1px solid var(--rule-faint);
+}
+.today-row:hover { background: var(--bg-elev); }
+/* Stands in for the checkbox on a row that has nothing to tick, and has to be
+   exactly as wide as `.check` or the titles of a mixed list stop lining up. */
+.today-check-gap { width: var(--check-size); flex: none; }
+.today-title {
+  flex: 1; min-width: 0; font-size: calc(15px * var(--fs-scale)); color: var(--fg);
+}
+.today-row.done .today-title { color: var(--fg-faint); text-decoration: line-through; }
+.today-row.gone .today-title { color: var(--fg-faint); font-style: italic; }
+.today-due { font-size: calc(11px * var(--fs-scale)); color: var(--fg-muted); flex: none; }
+.today-due.overdue { color: var(--warn); }
+
+/* Row controls: bare glyph buttons, like .task-actions. */
+.today-drop, .today-plus {
+  background: none; border: 0; cursor: pointer; flex: none; line-height: 1;
+  font-family: var(--mono); font-size: calc(12px * var(--fs-scale));
+  color: var(--fg-faint); padding: 2px 4px;
+}
+.today-drop { opacity: 0; transition: opacity 0.12s; }
+.today-row:hover .today-drop,
+.today-drop:focus-visible { opacity: 1; }
+.today-drop:hover { color: var(--warn); }
+.today-plus { color: var(--accent); font-size: calc(15px * var(--fs-scale)); }
+/* A touchscreen has no pointer to hover with, so a control revealed only on
+   hover is simply unreachable there — the same gap the :active rules in
+   tokens.css exist to close for buttons. Dropping a row is the one way to take
+   something off a day, so it cannot be desktop-only. */
+@media (hover: none) { .today-drop { opacity: 1; } }
+
+/* A suggestion is something that is NOT on the day yet, so it reads a step
+   quieter than the rows above it. */
+.today-sug .today-title { color: var(--fg-muted); }
+
+/* Today's events. Read-only rows (AgendaEvent with no onOpen); this only pulls
+   their padding out to the page gutter, since they sit in a full-width pane
+   here rather than inside a popover. */
+.today-agenda .agenda-ev {
+  padding: 8px var(--gutter); font-size: calc(14px * var(--fs-scale));
+}
+
+/* A quieter `.empty`, for the place that reports "nothing here" INSIDE the page
+   rather than instead of it. Colour and family stay inherited from `.empty`. */
+.today-quiet { padding: 8px var(--gutter); font-size: calc(13px * var(--fs-scale)); }
+/* today-tab:css:end */

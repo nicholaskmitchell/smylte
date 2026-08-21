@@ -4,11 +4,12 @@
 --   * CACHE tables (collections, sync_state, items, categories, items_fts) are a
 --     derived projection of what is on the wire. Delete them, full-resync, and
 --     you get byte-identical application state back (invariant #1).
---   * SIDECAR tables (sidecar, list_settings, completions, attachments) hold
---     app-only state that exists NOWHERE on the wire (kanban column, manual sort,
---     pins, per-list settings). These are the one thing in this file that a
---     resync cannot rebuild — so they are decoupled from the cache (no FK to
---     items) and survive an item briefly disappearing (delete-and-recreate).
+--   * SIDECAR tables (sidecar, list_settings, completions, attachments,
+--     day_plan) hold app-only state that exists NOWHERE on the wire (kanban
+--     column, manual sort, pins, per-list settings, the day's plan). These are
+--     the one thing in this file that a resync cannot rebuild — so they are
+--     decoupled from the cache (no FK to items) and survive an item briefly
+--     disappearing (delete-and-recreate).
 --
 -- journal_mode=WAL and foreign_keys=ON are set per-connection in store.connect().
 
@@ -266,3 +267,51 @@ CREATE TABLE IF NOT EXISTS oauth_tokens (
 );
 CREATE INDEX IF NOT EXISTS idx_oauth_tokens_exp ON oauth_tokens(expires_at);
 CREATE INDEX IF NOT EXISTS idx_oauth_tokens_family ON oauth_tokens(family_id);
+
+-- ── day plan (SIDECAR: what the owner decided to do on a given day) ──────────
+--
+-- A day plan is a DECISION, and the wire has no vocabulary for one. CalDAV can
+-- say a task is due Tuesday and that it is done; it cannot say "on Tuesday I
+-- chose to pick this up, put it third, and dropped that other one unfinished".
+-- So these two tables are sidecar-class in the strongest sense: not a slow
+-- projection of the wire but the only copy that exists. A resync rebuilds
+-- nothing here. Dropping them loses every past day permanently — the order the
+-- owner arranged, the notes they wrote (which live nowhere else at all), the
+-- carried-over history, and the record of what was dropped rather than
+-- finished. Today's plan would rebuild itself on the next open, but only as the
+-- automatic snapshot: due-today plus overdue, in due order, with every hand
+-- edit gone. That is the cost, and it is why docs/DEPLOY.md's backup section
+-- enumerates the sidecar-class tables by name: these two belong in that list,
+-- and nothing about a resync makes up for their absence.
+--
+-- Deliberately NO foreign key to items, exactly like `sidecar` and for a
+-- stronger reason: the day's log must stay true even after the task it names is
+-- completed-and-deleted, moved between lists by another client, or
+-- delete-and-recreated by a sync. An entry whose task has left the wire is not
+-- corruption — it is the honest record that the work was planned that day.
+CREATE TABLE IF NOT EXISTS day_plan (
+    day             TEXT NOT NULL,           -- YYYY-MM-DD, the local calendar day
+    entry_id        TEXT NOT NULL,           -- client-generated; unique within the day
+    kind            TEXT NOT NULL,           -- task | note
+    collection_href TEXT,                    -- task entries: which list the uid is in
+    uid             TEXT,                    -- task entries: the VTODO UID (invariant #4)
+    title           TEXT,                    -- note entries: the text itself
+    source          TEXT NOT NULL,           -- auto (snapshot) | carried (yesterday) | user
+    position        REAL,                    -- manual order within the day
+    done_at         TEXT,
+    dropped_at      TEXT,                    -- stamped, never DELETEd: the day keeps its record
+    created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    PRIMARY KEY (day, entry_id)
+);
+CREATE INDEX IF NOT EXISTS idx_day_plan_day ON day_plan(day);
+
+-- "Opened but empty" and "never opened" are different days, and only this table
+-- can tell them apart: day_plan alone answers both with zero rows. The
+-- difference is load-bearing, because opening a day with create=true BUILDS the
+-- snapshot — so a day the owner deliberately emptied would be re-snapshotted on
+-- the next visit, resurrecting the very entries they dropped. The marker is
+-- what makes the snapshot happen exactly once per day.
+CREATE TABLE IF NOT EXISTS day_plan_opened (
+    day        TEXT PRIMARY KEY,
+    opened_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
