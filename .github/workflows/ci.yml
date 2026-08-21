@@ -9,11 +9,24 @@ on:
     branches: [main]
   pull_request:
 
+# Declared, and read-only. Nothing here publishes anything — every job installs
+# and runs third-party code (`npm ci` runs install scripts for the whole
+# dependency tree; NuGet restore and `pip install` do the equivalent), and
+# `actions/checkout` leaves the token in `.git/config` by default. With no
+# `permissions:` key at all the effective grant was whatever the REPOSITORY
+# default happened to be — a setting no reviewer of this file can see, and one
+# an admin can widen without a commit. On a `pull_request` from a fork the token
+# is read-only regardless, but a push build is not a fork build.
+permissions:
+  contents: read
+
 jobs:
   backend:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -52,6 +65,8 @@ jobs:
         working-directory: frontend
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -69,6 +84,8 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
@@ -92,6 +109,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -104,6 +123,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
