@@ -1289,6 +1289,63 @@ def test_find_free_time_holds_a_durations_real_length_across_a_transition(monkey
     )
 
 
+def test_find_free_time_keeps_a_nominal_duration_nominal(monkeypatch):
+    """The other half of §3.3.6, and the half the first fix got WRONG.
+
+    A DURATION's weeks/days part is NOMINAL: `P1D` means "the same wall-clock
+    time tomorrow", which across a transition is 23 or 25 real hours, not 24.
+    The time part is EXACT. `advance` splits them — but it splits them in
+    whatever frame it is handed, and the first fix handed it the value
+    `normalize_offset` produces, which is **UTC**. The nominal half was then
+    added to the UTC wall clock and `_as_dt` converted the result back to
+    LOCAL, which is where the transitions live. So the end moved by the DST
+    delta and `find_free_time` offered an hour the owner is booked.
+
+    The frame has to be the LOCAL one — the clock `_as_dt` flattens against and
+    the clock a reader sees. Then the nominal half lands on the same wall-clock
+    time and the exact half still lands on the instant.
+
+    Driven at 09:00 local the day before the FALL-BACK, where a nominal day is
+    25 real hours: adding 24 to the instant lands an hour early, and that hour
+    is inside a real commitment.
+    """
+    monkeypatch.setenv("TZ", "America/New_York")
+    time.tzset()
+
+    api = McpApi(_EventsService([_busy_event(
+        start="2026-10-31T09:00:00-04:00", duration="P1D")]))
+    free = api.find_free_time("2026-10-31", "2026-11-02",
+                              minutes=30, day_start="07:00", day_end="23:59")
+
+    assert not any(f["start"] <= "2026-11-01T08:30" < f["end"] for f in free), (
+        f"a nominal P1D was resolved in UTC and flattened to local, so it ended "
+        f"an hour early and 08:30 on the 1st was offered inside it: {free}"
+    )
+    assert any(f["start"] == "2026-11-01T09:00" for f in free), (
+        f"the gap after a nominal P1D does not start at the same wall-clock "
+        f"time the next day: {free}"
+    )
+
+
+def test_find_free_time_splits_a_mixed_duration(monkeypatch):
+    """`P1DT2H` carries both halves, so it is the one shape that cannot be got
+    right by picking a single frame — the day is nominal and the two hours are
+    exact. A repair that resolved everything in local wall clock would pass the
+    nominal case above and fail here; one that resolved everything on the
+    instant would pass the exact case and fail the nominal one."""
+    monkeypatch.setenv("TZ", "America/New_York")
+    time.tzset()
+
+    api = McpApi(_EventsService([_busy_event(
+        start="2026-10-31T09:00:00-04:00", duration="P1DT2H")]))
+    free = api.find_free_time("2026-10-31", "2026-11-02",
+                              minutes=30, day_start="07:00", day_end="23:59")
+    # Nominal day → 09:00 the next day; exact +2h on the instant → 11:00 local.
+    assert any(f["start"] == "2026-11-01T11:00" for f in free), (
+        f"P1DT2H did not resolve as a nominal day plus two exact hours: {free}"
+    )
+
+
 def test_find_free_time_still_blocks_the_ordinary_cases(monkeypatch):
     """Control. The fix moves WHERE the duration is applied, so the ordinary
     shapes — which are almost every event — must be untouched.

@@ -715,7 +715,14 @@ function CalendarProvider({ rev, guard, enabled, children }: {
         && (r as PromiseRejectedResult).reason instanceof AuthError)
       if (auth) throw (auth as PromiseRejectedResult).reason
       if (gen.current.get(key) === mine) {
-        setWindows((w) => new Map(w).set(key, rows))
+        // Only when SOMETHING landed. `[]` is truthy, and `eventsFor` tests
+        // presence rather than length (`if (rows) return rows`), so writing an
+        // empty array for a window where every calendar failed shadowed the
+        // disk mirror — the month painted blank where `Promise.all` used to
+        // reject, leave no entry, and fall through to the cache. That is a
+        // worse blank than the one this finding is about, because the rows to
+        // draw were sitting on disk.
+        if (failed.length < forCals.length) setWindows((w) => new Map(w).set(key, rows))
         setWindowFails((m) => {
           const next = new Map(m)
           if (failed.length) next.set(key, failed)

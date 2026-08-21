@@ -21,6 +21,12 @@ const VIEWS: ReadonlyArray<readonly [TasksViewMode, string]> = [
  *  `onOver(null, from)` clears the highlight only if `from` still owns it, so a
  *  dragleave firing after the next row's dragenter doesn't blank it. */
 interface ReorderDrag {
+  /** `taskKey`s, not bare uids. The same uid legitimately lives in two lists,
+   *  and every one of these was a bare uid: `orderIndex` did
+   *  `findIndex(t => t.uid === uid)` over ALL tasks and `dropOnDay` did
+   *  `tasks.find(x => x.uid === dragUid)`, both first-wins — so dragging the
+   *  Home copy reordered, or rescheduled, the Work one. On a real CalDAV
+   *  write. */
   uid: string | null
   over: string | null
   /** Which side of `over` the row will land on. The insert is deliberate —
@@ -135,8 +141,8 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
   // indicator and the insert cannot disagree. (`active` is a filtered subset and
   // is not defined until further down.)
   const orderedAll = useMemo(() => sortTasks(tasks), [tasks])
-  const orderIndex = (uid: string | null) =>
-    uid === null ? -1 : orderedAll.findIndex((t) => t.uid === uid)
+  const orderIndex = (key: string | null) =>
+    key === null ? -1 : orderedAll.findIndex((t) => taskKey(t) === key)
   const reorderDrag: ReorderDrag = {
     uid: orderUid,
     over: orderOver,
@@ -149,14 +155,19 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
       const dragged = orderUid
       setOrderUid(null)
       setOrderOver(null)
-      if (dragged) void reorder(dragged, target)
+      // Resolved back to the rows they name before the wire call: `reorder`
+      // splices `sortTasks(tasks)` by uid, which is right ON THE WIRE (a uid is
+      // unique within a collection) but ambiguous locally.
+      const a = dragged && orderedAll.find((t) => taskKey(t) === dragged)
+      const b = orderedAll.find((t) => taskKey(t) === target)
+      if (a && b) void reorder(a.uid, b.uid)
     },
   }
   // Day-column drag: dropping a card on a column reschedules it to that day.
   // A timed due keeps its local time-of-day; an all-day due stays all-day.
   const [dragUid, setDragUid] = useState<string | null>(null)
   const dropOnDay = (key: string) => {
-    const t = tasks.find((x) => x.uid === dragUid)
+    const t = tasks.find((x) => taskKey(x) === dragUid)
     setDragUid(null)
     if (!t) return
     if (t.due && dayKey(t.due) === key) return
@@ -626,7 +637,7 @@ function TaskGroup({ task, childrenOf, dot, progressOf, depth = 0, seen,
   return (
     <div
       className={drag
-        ? `task-drag ${drag.over === task.uid && drag.uid !== task.uid
+        ? `task-drag ${drag.over === taskKey(task) && drag.uid !== taskKey(task)
             ? (drag.below ? 'drag-over drag-below' : 'drag-over') : ''}`
         : undefined}
       draggable={!!drag}
@@ -639,14 +650,14 @@ function TaskGroup({ task, childrenOf, dot, progressOf, depth = 0, seen,
           e.preventDefault()
           return
         }
-        drag.onStart(task.uid)
+        drag.onStart(taskKey(task))
         e.dataTransfer.effectAllowed = 'move'
         // Firefox refuses to start a drag with nothing on the transfer.
         e.dataTransfer.setData('text/plain', task.uid)
       })}
-      onDragOver={drag && ((e) => { e.preventDefault(); drag.onOver(task.uid) })}
-      onDragLeave={drag && (() => drag.onOver(null, task.uid))}
-      onDrop={drag && ((e) => { e.preventDefault(); drag.onDrop(task.uid) })}
+      onDragOver={drag && ((e) => { e.preventDefault(); drag.onOver(taskKey(task)) })}
+      onDragLeave={drag && (() => drag.onOver(null, taskKey(task)))}
+      onDrop={drag && ((e) => { e.preventDefault(); drag.onDrop(taskKey(task)) })}
       onDragEnd={drag && (() => drag.onStart(null))}>
       <TaskRow task={task} dot={dot} depth={indent} progress={progressOf(task)}
         collapsed={kids.length > 0 ? folded : undefined}
@@ -681,7 +692,7 @@ function DayColumn({ date, isToday, open, done, overdue, dotOf, onToggle, onOpen
   dotOf: (t: Task) => string | null | undefined
   onToggle: (t: Task) => void; onOpen: (t: Task) => void
   onAdd: (summary: string) => void
-  dragActive: boolean; onDropTask: () => void; onDragTask: (uid: string | null) => void
+  dragActive: boolean; onDropTask: () => void; onDragTask: (key: string | null) => void
 }) {
   const [adding, setAdding] = useState(false)
   // dragover bubbles up from the cards, so entering a child re-asserts `over`.
@@ -750,7 +761,9 @@ function DayCard({ task, showDate, dot, onToggle, onOpen, onDrag }: {
   return (
     <div className={`day-card ${done ? 'done' : ''}`} draggable
       onDragStart={(e) => {
-        onDrag(task.uid)
+        // The KEY, not the uid — the day column resolves it back to this row,
+        // and a bare uid is first-wins across lists.
+        onDrag(taskKey(task))
         e.dataTransfer.setData('text/plain', task.uid)  // Firefox needs data to start a drag
         e.dataTransfer.effectAllowed = 'move'
       }}

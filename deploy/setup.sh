@@ -22,7 +22,7 @@ if [ -f "$ENVFILE" ]; then
 else
   SESSION=$(python3 -c "import secrets;print(secrets.token_hex(32))")
   HOOK=$(python3 -c "import secrets;print(secrets.token_hex(24))")
-  read -rsp "Radicale password for $USER_NAME: " RADPW; echo
+  IFS= read -rsp "Radicale password for $USER_NAME: " RADPW; echo
   # Guarded like $HASH below, and for the same reason — except that an empty
   # Radicale password fails QUIETER: the service starts, the app logs in, and
   # every CalDAV call 401s, so the UI shows an empty account. Re-running this
@@ -32,7 +32,7 @@ else
     echo "empty Radicale password — env file not written; re-run setup" >&2
     exit 1
   fi
-  read -rp  "App login username [nick]: " AUSER; AUSER=${AUSER:-nick}
+  IFS= read -rp  "App login username [nick]: " AUSER; AUSER=${AUSER:-nick}
   echo "Set the APP login password:"
   # NB: a failing command substitution inside an assignment does NOT trip
   # `set -e` — check explicitly, or a mismatched/aborted prompt would write
