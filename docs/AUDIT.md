@@ -3747,7 +3747,7 @@ transition: a `P1D` on a UTC-anchored start now lands 24 real hours later rather
 than at the same server-local wall clock. That is the value the DTO actually
 holds being read as what it is.
 
-#### [ ] TasksView resolves subtasks, progress and fold state by bare uid, so one uid in two lists shows one row's children under both
+#### [x] TasksView resolves subtasks, progress and fold state by bare uid, so one uid in two lists shows one row's children under both
 
 `frontend/src/components/TasksView.tsx:203` · **low** · bug
 
@@ -3776,6 +3776,33 @@ TASK rather than a uid, `TaskGroup`'s props taking the task. `collapsedTasks` is
 persisted as a uid list in settings, so it needs a migration or a
 tolerate-both read. Pin it with two lists sharing a uid where only one copy has a
 subtask, and assert the other row has none.
+
+**Fixed** as described — `parentByKey`/`kidsByParent`/`kidRows`/`shownKeys` keyed
+on `taskKey`, `parentOf` returning the parent TASK, `progressOf`/`childrenOf`/
+`completedKids` taking a `Task`, `seen` carrying `taskKey`s, and `TaskGroup`
+taking `isCollapsed(t)`/`onCollapse(t, next)` in place of a uid set.
+
+**The observed behaviour was worse than this entry states, and the pin says so.**
+It reads as "both rows show one row's subtasks" — a merge. What actually happened
+first is a DROP: `byUid` was built over ALL tasks and is last-wins, so the l1
+child's `parent` resolved to the **l2** copy, failed the `p.list !== t.list`
+guard, and the subtask never rendered at all — invisible, and so uncompletable,
+uneditable and undeletable, while the sidebar count still included it. The
+same-list rule is structural now (the lookup only searches the child's own list)
+rather than a whole-account lookup filtered afterwards, which is what was
+discarding the row.
+
+`collapsed_tasks` got the tolerate-both read this entry asks for, and it earned
+it: a fold is honoured under EITHER spelling, the prune keeps a legacy bare uid
+while any task still bears it, and new folds are written as `taskKey`. A straight
+re-key would have sprung open every folded tree in every account on first load
+and then written that loss back through `saveSettingsSoon`. Half-fix checked —
+removing the legacy tolerance fails the migration control.
+
+Three existing tests asserted the stored payload as bare uids. They were updated
+deliberately, not made to pass: the Stage 3 pin now asserts the PROPERTY it is
+about (an off-screen folded tree is not discarded) rather than the literal list,
+since pinning the literal made it a test of the wire format instead.
 
 #### [x] HEAD on a booking link 404s while GET serves the SPA, so a link checker reports the owner's published link dead
 

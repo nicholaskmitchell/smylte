@@ -350,6 +350,25 @@ describe('aug19 stage 4b — chip, dot, agenda and popover identity', () => {
 })
 
 /** The tasks pane over a real provider — the Sidebar comes with it. */
+/** The pane with `collapsed_tasks` actually round-tripping, the way App holds
+ *  it. `tasksSetup`'s `vi.fn()` swallows the change, so a fold never comes back
+ *  down as a prop and nothing ever collapses — a harness that would report the
+ *  fold working whatever the code did. */
+function FoldHarness({ initial = [] as string[] }) {
+  const [collapsedTasks, setCollapsedTasks] = useState<string[]>(initial)
+  return (
+    <DataProvider rev={0} onExpire={vi.fn()}>
+      <TasksView onExpire={vi.fn()} view="list" onView={vi.fn()}
+        sideCollapsed={false} onToggleSide={vi.fn()}
+        hiddenLists={[]} onHiddenListsChange={vi.fn()}
+        groups={[]} onGroupsChange={vi.fn()}
+        collapsedGroups={[]} onCollapsedGroupsChange={vi.fn()}
+        collapsedTasks={collapsedTasks} onCollapsedTasksChange={setCollapsedTasks}
+        showCompleted={false} />
+    </DataProvider>
+  )
+}
+
 function tasksSetup() {
   render(
     <DataProvider rev={0} onExpire={vi.fn()}>
@@ -424,6 +443,98 @@ describe('aug19 stage 4b — the tasks pane and one uid in two lists', () => {
     // one leaves the pane and the other stays — either way, not both.
     await waitFor(() => expect(screen.queryAllByText('Ship it')).toHaveLength(1))
     expect(rows()[0].className).not.toMatch(/\bdone\b/)
+  })
+
+  // AUDIT: TasksView.tsx:203 — the sibling of the keying finding above, left
+  // open there on purpose: "a refactor of that size inside a keying fix is how
+  // the Stage 3 regressions got in". The React keys and the provider's
+  // optimistic mutations are scoped by (list, uid); the pane's own maps are not.
+  // `byUid`, `parentByUid`/`kidsByParent`, `kidRows`, `collapsedSet` and
+  // `TaskGroup`'s entire prop surface are typed on a bare uid string, so with
+  // one uid in two lists both rows show ONE row's subtasks, ONE row's progress
+  // ring and ONE row's fold state.
+  it('shows each copy of a shared uid its own subtasks and its own ring', async () => {
+    // Same uid in both lists; only the WORK copy has a subtask under it.
+    m.lists.mockResolvedValue([work, home])
+    m.tasks.mockImplementation(async (listId: string) => (listId === 'l1'
+      ? [task({ uid: 'shared', list: 'l1', summary: 'Ship it' }),
+         task({ uid: 'kid', list: 'l1', summary: 'Write the notes', parent: 'shared' })]
+      : [task({ uid: 'shared', list: 'l2', summary: 'Ship it' })]))
+    tasksSetup()
+
+    await waitFor(() => expect(screen.getAllByText('Ship it')).toHaveLength(2))
+    // Exactly one 'Write the notes' on screen — not one under each copy, and
+    // not zero. Zero is what happens today, and it is worse than the finding
+    // states: `byUid` is last-wins over ALL tasks, so the l1 child's `parent`
+    // resolves to the l2 copy, fails the same-list guard, and the subtask is
+    // dropped from the pane entirely — invisible, and so uncompletable and
+    // undeletable, while the sidebar count still includes it.
+    expect(screen.getAllByText('Write the notes'),
+      'the subtask rendered under both copies of the uid').toHaveLength(1)
+
+    // …and exactly one copy shows a subtask count, since only one has children.
+    expect(document.querySelectorAll('.child-progress'),
+      'both copies of the uid drew a subtask count, but only one has a subtask')
+      .toHaveLength(1)
+    expect(document.querySelector('.child-progress')?.textContent).toBe('0/1')
+  })
+
+  it('folds each copy of a shared uid independently', async () => {
+    // Fold state is persisted per uid in settings, so this is the one that
+    // needs a tolerate-both read rather than a straight re-key: a migration
+    // that dropped the old shape would silently unfold everyone's trees.
+    m.lists.mockResolvedValue([work, home])
+    m.tasks.mockImplementation(async (listId: string) => [
+      task({ uid: 'shared', list: listId, summary: 'Ship it' }),
+      task({ uid: `kid-${listId}`, list: listId, summary: `Sub ${listId}`,
+        parent: 'shared' }),
+    ])
+    render(<FoldHarness />)
+    const user = userEvent.setup()
+
+    await waitFor(() => expect(screen.getAllByText('Ship it')).toHaveLength(2))
+    expect(screen.getByText('Sub l1')).toBeInTheDocument()
+    expect(screen.getByText('Sub l2')).toBeInTheDocument()
+
+    // Fold the FIRST copy only.
+    const carets = screen.getAllByTitle(/^Hide subtasks of Ship it$/)
+    expect(carets.length, 'both rows should offer a fold control').toBe(2)
+    await user.click(carets[0])
+
+    await waitFor(() => expect(screen.queryByText('Sub l1')).toBeNull())
+    expect(screen.getByText('Sub l2'),
+      "folding one copy of the uid folded the other list's row too")
+      .toBeInTheDocument()
+  })
+
+  it('honours a fold saved as a bare uid, and retires it on the next toggle', async () => {
+    // The migration control, and the one that matters most here. `collapsed_tasks`
+    // is PERSISTED — a list of bare uids in the account's settings, written by
+    // every version of this pane so far — and `onCollapsedTasksChange` goes
+    // straight to `saveSettingsSoon`. A straight re-key to `taskKey` matches
+    // none of them, so every folded tree in every account springs open on first
+    // load and the prune then writes that loss back to the server. Silent, and
+    // not recoverable from the client.
+    m.lists.mockResolvedValue([work])
+    m.tasks.mockResolvedValue([
+      task({ uid: 'shared', list: 'l1', summary: 'Ship it' }),
+      task({ uid: 'kid', list: 'l1', summary: 'Write the notes', parent: 'shared' }),
+    ])
+    render(<FoldHarness initial={['shared']} />)     // the OLD spelling
+    const user = userEvent.setup()
+
+    await screen.findByText('Ship it')
+    expect(screen.queryByText('Write the notes'),
+      'a fold saved under the old bare-uid spelling was ignored').toBeNull()
+
+    // Unfolding it drops the legacy entry rather than leaving it to re-fold the
+    // row on the next load.
+    await user.click(screen.getByTitle('Show subtasks of Ship it'))
+    expect(await screen.findByText('Write the notes')).toBeInTheDocument()
+
+    // …and folding again writes the new spelling, which also works.
+    await user.click(screen.getByTitle('Hide subtasks of Ship it'))
+    await waitFor(() => expect(screen.queryByText('Write the notes')).toBeNull())
   })
 
   // Control (passes today, must keep passing). Scoping a mutation must not stop

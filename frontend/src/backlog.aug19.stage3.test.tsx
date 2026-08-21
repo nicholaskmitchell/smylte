@@ -299,7 +299,18 @@ describe('aug19 stage 3 — folding a tree while another list is hidden', () => 
     expect(onCollapsedTasksChange).toHaveBeenCalled()
     const calls = onCollapsedTasksChange.mock.calls
     const next = calls[calls.length - 1][0] as string[]
-    expect([...next].sort()).toEqual(['h1', 'w1'])
+    // The Home tree's entry survives — that is the whole finding — and the Work
+    // tree gains one. Asserted as membership rather than as an exact list,
+    // because the STORED SPELLING changed when the pane was re-keyed on
+    // (list, uid): a fold is now written as `taskKey`, and a bare uid saved by
+    // an earlier version is honoured and kept until the user toggles it. What
+    // this pin is about — an off-screen folded tree not being discarded — is
+    // untouched by that, and pinning the literal would have made it a test of
+    // the wire format instead.
+    expect(next, "the hidden list's folded tree was discarded").toContain('h1')
+    expect(next.some((x) => x === 'w1' || x.endsWith('\u0000w1')),
+      `the tree just folded is not in ${JSON.stringify(next)}`).toBe(true)
+    expect(next).toHaveLength(2)
   })
 })
 
