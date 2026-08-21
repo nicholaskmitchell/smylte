@@ -459,9 +459,30 @@ def _contents_permission(perms) -> str | None:
     return perms.get("contents")
 
 
-@pytest.mark.xfail(strict=True, reason="workflow-scope `contents: write` hands "
-                                       "the release token to npm ci and NuGet restore")
-def test_the_desktop_release_build_jobs_hold_no_write_token():
+# Every workflow that runs third-party install or build code. `ci.yml` is here
+# because the finding names it — "ci.yml's separate `permissions` gap means the
+# same npm postinstall reaches a token on every PR run too" — and a fix applied
+# to desktop-release.yml alone leaves that gap wide open.
+_WORKFLOWS = ("desktop-release.yml", "ci.yml")
+
+_INSTALLS = re.compile(r"\bnpm (ci|install)\b|\bdotnet (publish|build|restore|test)\b")
+
+
+def _third_party_jobs(wf: dict) -> dict[str, dict]:
+    """The jobs whose steps run dependency code, found by what they RUN.
+
+    By what they run rather than by name, because a job called `lint` that grew
+    an `npm ci` is exactly as exposed as one called `build`.
+    """
+    out = {}
+    for name, job in (wf.get("jobs") or {}).items():
+        runs = " ".join(str(s.get("run") or "") for s in (job.get("steps") or []))
+        if _INSTALLS.search(runs):
+            out[name] = job
+    return out
+
+
+def test_the_build_jobs_hold_no_write_token():
     """`permissions: contents: write` is declared at workflow scope, so it
     applies to every job rather than to `release`, the only one that publishes.
     `actions/checkout@v4` defaults `persist-credentials: true` and writes
@@ -482,30 +503,80 @@ def test_the_desktop_release_build_jobs_hold_no_write_token():
     harness that can execute a GitHub Actions workflow from this suite, so what
     it asserts is GitHub's own effective-permission rule — a job's own
     `permissions:` replaces the workflow's — applied to whichever jobs run
-    third-party dependency code, found by what their steps actually run rather
-    than by name. Moving the grant onto `release`, or adding
+    third-party dependency code. Moving the grant onto `release`, or adding
     `permissions: contents: read` to the build jobs, both pass.
+
+    WIDENED on two counts, both of which a fix could otherwise walk straight
+    past:
+
+    * **Both workflows.** This drove only `desktop-release.yml`, and the
+      finding's evidence names `ci.yml` as carrying the same exposure on every
+      PR run. Fixing one file passed.
+    * **Silence is not a read grant.** `ci.yml` declares no `permissions:` at
+      all, at either scope — so its token is whatever the REPOSITORY default
+      happens to be, which this file cannot see and an admin can change without
+      a commit. An undeclared permission therefore fails here rather than
+      passing: the effective grant has to be written down in the workflow to be
+      worth asserting at all. Without this the whole `ci.yml` half is vacuous,
+      since `None != "write"` is true today.
     """
     # PyYAML rides in with uvicorn[standard]; skip rather than fake a pin if
     # it ever stops doing so — an ImportError is not this finding's failure.
     yaml = pytest.importorskip("yaml")
-    wf = yaml.safe_load(_read(".github/workflows/desktop-release.yml"))
-    top = wf.get("permissions")
 
-    checked = []
-    for name, job in (wf.get("jobs") or {}).items():
-        runs = " ".join(str(s.get("run") or "") for s in (job.get("steps") or []))
-        if not re.search(r"\bnpm (ci|install)\b|\bdotnet (publish|build|restore|test)\b", runs):
-            continue
-        checked.append(name)
-        effective = _contents_permission(
-            job["permissions"] if "permissions" in job else top)
-        assert effective != "write", (
-            f"job {name!r} runs third-party install/build code with "
-            f"contents: write in scope — checkout leaves the token in "
-            f".git/config, so an npm postinstall can publish releases"
-        )
-    assert checked, "no job in desktop-release.yml installs dependencies any more?"
+    checked: list[str] = []
+    for filename in _WORKFLOWS:
+        wf = yaml.safe_load(_read(f".github/workflows/{filename}"))
+        top = wf.get("permissions")
+        jobs = _third_party_jobs(wf)
+        assert jobs, f"no job in {filename} installs dependencies any more?"
+
+        for name, job in jobs.items():
+            checked.append(f"{filename}:{name}")
+            declared = job["permissions"] if "permissions" in job else top
+            assert declared is not None, (
+                f"job {name!r} in {filename} runs third-party install/build "
+                f"code and declares no `permissions:` at either scope, so its "
+                f"token is whatever the repository default is set to — a "
+                f"setting no reviewer of this file can see"
+            )
+            assert _contents_permission(declared) != "write", (
+                f"job {name!r} in {filename} runs third-party install/build "
+                f"code with contents: write in scope — checkout leaves the "
+                f"token in .git/config, so an npm postinstall can publish "
+                f"releases"
+            )
+    assert len(checked) >= 4, f"only checked {checked}"
+
+
+def test_the_release_job_can_still_publish():
+    """Control, and the one that stops the fix going too far.
+
+    `contents: write` is not gratuitous — `release` calls `gh release upload`
+    and `gh release edit`, and without the grant the whole desktop update path
+    silently stops shipping. A repair that set `contents: read` at workflow
+    scope and moved nothing onto the job would satisfy the pin above completely
+    while breaking every release, and nothing else in this suite would notice.
+
+    Asserted through the same effective-permission rule, so it holds however the
+    grant is spelled.
+    """
+    yaml = pytest.importorskip("yaml")
+    wf = yaml.safe_load(_read(".github/workflows/desktop-release.yml"))
+    release = (wf.get("jobs") or {}).get("release")
+    assert release is not None, "the release job is gone"
+
+    declared = release["permissions"] if "permissions" in release else wf.get("permissions")
+    assert _contents_permission(declared) == "write", (
+        "the release job cannot write contents, so `gh release upload` will "
+        "403 and no desktop build can ever ship again"
+    )
+    # …and it must not have become a job that installs dependencies, which is
+    # what would make the grant dangerous again.
+    assert "release" not in _third_party_jobs(wf), (
+        "the release job now runs dependency install code while holding "
+        "contents: write — the finding, moved rather than fixed"
+    )
 
 
 # ── AUDIT: setup.sh writes the Radicale password unescaped ──────────────────
@@ -584,7 +655,8 @@ def _parse_systemd_env(text: str) -> dict[str, str]:
     return out
 
 
-def _run_setup_sh(password: str, root: pathlib.Path) -> pathlib.Path:
+def _run_setup_sh(password: str, root: pathlib.Path, *, username: str = "",
+                  expect_refusal: bool = False) -> pathlib.Path | None:
     """Run deploy/setup.sh for real, answering its prompts, with every path it
     touches redirected into `root` and every system command stubbed.
 
@@ -626,10 +698,23 @@ def _run_setup_sh(password: str, root: pathlib.Path) -> pathlib.Path:
     sh.write_text(script)
 
     env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}")
-    # stdin: the Radicale password, then Enter to take the default app username.
-    proc = subprocess.run(["bash", str(sh)], input=f"{password}\n\n", text=True,
-                          capture_output=True, timeout=120, env=env)
+    # stdin: the Radicale password, then the app username (empty takes the
+    # default). `username` is driven because `TASKS_AUTH_USER` is the SECOND
+    # value the heredoc interpolates from a prompt and carries exactly the same
+    # exposure — a fix applied to the password alone leaves it open.
+    proc = subprocess.run(["bash", str(sh)], input=f"{password}\n{username}\n",
+                          text=True, capture_output=True, timeout=120, env=env)
     envfile = etc / "tasks" / "tasks.env"
+    if expect_refusal:
+        assert proc.returncode != 0, (
+            f"setup.sh accepted input it should have refused (rc=0): "
+            f"{proc.stdout[-400:]}"
+        )
+        assert not envfile.is_file(), (
+            "setup.sh refused but wrote an env file anyway — re-running the "
+            "script will now see it and leave the broken file in place"
+        )
+        return None
     assert proc.returncode == 0 and envfile.is_file(), (
         f"the sandboxed setup.sh did not write an env file (rc={proc.returncode}): "
         f"{proc.stdout[-400:]} {proc.stderr[-400:]}"
@@ -637,8 +722,6 @@ def _run_setup_sh(password: str, root: pathlib.Path) -> pathlib.Path:
     return envfile
 
 
-@pytest.mark.xfail(strict=True, reason="setup.sh interpolates the Radicale "
-                                       "password into the env file unescaped")
 def test_setup_sh_writes_a_password_systemd_reads_back_unchanged():
     """setup.sh interpolates `$RADPW`, read from an interactive prompt, straight
     into a `KEY=value` line of /etc/tasks/tasks.env. The bash side is safe — an
@@ -664,15 +747,24 @@ def test_setup_sh_writes_a_password_systemd_reads_back_unchanged():
     care HOW the values are quoted — only that systemd hands back what was
     typed.
     """
+    # WIDENED to drive `TASKS_AUTH_USER` as well. The heredoc interpolates TWO
+    # prompt-read values and the finding names both; escaping only the password
+    # leaves the username carrying the identical defect, and the username is the
+    # one an installer is more likely to paste something odd into.
     hostile = {
         "backslash": r"pi\home2024",
         "leading double quote": '"tunnel-otter-9',
         "leading single quote": "'otter-tunnel-9",
+        "trailing backslash": "otter2024\\",
+        "embedded double quote": 'ott"er-9',
     }
     for label, password in hostile.items():
         root = pathlib.Path(tempfile.mkdtemp(prefix="aug19-setup-"))
+        # The same hostile string in the username slot, so one loop drives both
+        # interpolations and a one-sided repair cannot pass.
+        user = f"ni{password}ck".replace("\n", "")
         try:
-            envfile = _run_setup_sh(password, root)
+            envfile = _run_setup_sh(password, root, username=user)
             parsed = _parse_systemd_env(envfile.read_text(encoding="utf-8"))
         finally:
             shutil.rmtree(root, ignore_errors=True)
@@ -682,12 +774,85 @@ def test_setup_sh_writes_a_password_systemd_reads_back_unchanged():
             f"{parsed.get('RADICALE_PASSWORD')!r}, not the password that was "
             f"typed ({password!r}) — every CalDAV call would 401"
         )
+        assert parsed.get("TASKS_AUTH_USER") == user, (
+            f"{label}: systemd reads TASKS_AUTH_USER as "
+            f"{parsed.get('TASKS_AUTH_USER')!r}, not the username that was "
+            f"typed ({user!r}) — nobody can log in to the app at all"
+        )
         for key in ("TASKS_AUTH_PASSWORD_HASH", "TASKS_SESSION_SECRET",
                     "TASKS_HOOK_SECRET"):
             assert parsed.get(key), (
                 f"{label}: {key} is missing from the parsed env file — the "
                 f"password swallowed the rest of it"
             )
+
+
+def test_setup_sh_refuses_an_empty_radicale_password():
+    """The finding's third failure scenario, and the one no amount of quoting
+    fixes: pressing Enter at the password prompt writes `RADICALE_PASSWORD=`
+    and the install is permanently 401 against Radicale.
+
+    `$HASH` two lines above already gets this exact guard, with a comment
+    explaining why — "a mismatched/aborted prompt would write an empty
+    TASKS_AUTH_PASSWORD_HASH and the service would refuse to start". `$RADPW`
+    got none, and its failure is quieter: the service starts fine and every
+    CalDAV call fails.
+
+    Refusing has to mean writing NO file. Line 20 short-circuits on an existing
+    env file — "leaving it untouched (delete it to regenerate)" — so a refusal
+    that still wrote something would make re-running the script a no-op, which
+    is the trap the whole finding is about.
+    """
+    root = pathlib.Path(tempfile.mkdtemp(prefix="aug19-setup-empty-"))
+    try:
+        _run_setup_sh("", root, expect_refusal=True)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_setup_sh_still_writes_an_ordinary_install_unchanged():
+    """Control, and the one that stops the fix going too far.
+
+    The over-correction that matters here is the GUARD, not the quoting. A
+    `[ -n "$RADPW" ]` where `[ -z ... ]` was meant refuses every valid password
+    and accepts the empty one — an installer that cannot install, which is worse
+    than the bug. Verified: that inversion fails this test and the empty-password
+    test together.
+
+    The quoting is harder to overdo than it looks, and this control deliberately
+    does not claim otherwise. systemd STRIPS the surrounding quotes by design, so
+    both `"hunter2"` and `'hunter2'` read back as `hunter2` — neither spelling is
+    a defect on an ordinary value, and only the escaping inside them decides
+    whether a hostile one survives. That is the pin's job, not this one's.
+    Single-quoting without escaping, for instance, passes here and is caught
+    above by the leading-single-quote case.
+
+    So what this asserts is the narrow thing it can: an ordinary password and an
+    ordinary username round-trip byte-for-byte, and every other key in the file
+    — none of which the fix should have touched — still parses.
+    """
+    root = pathlib.Path(tempfile.mkdtemp(prefix="aug19-setup-ok-"))
+    try:
+        envfile = _run_setup_sh("hunter2", root, username="nick")
+        parsed = _parse_systemd_env(envfile.read_text(encoding="utf-8"))
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+    assert parsed.get("RADICALE_PASSWORD") == "hunter2", (
+        f"an ordinary password did not survive: "
+        f"{parsed.get('RADICALE_PASSWORD')!r}"
+    )
+    assert parsed.get("TASKS_AUTH_USER") == "nick", (
+        f"an ordinary username did not survive: {parsed.get('TASKS_AUTH_USER')!r}"
+    )
+    # The rest of the file is untouched by the fix and must stay that way.
+    assert parsed.get("RADICALE_URL") == "http://127.0.0.1:5232"
+    assert parsed.get("TASKS_AUTH_ENABLED") == "true"
+    assert parsed.get("TASKS_SESSION_TTL") == "604800"
+    assert parsed.get("TASKS_COOKIE_SECURE") == "true"
+    for key in ("TASKS_AUTH_PASSWORD_HASH", "TASKS_SESSION_SECRET",
+                "TASKS_HOOK_SECRET", "TASKS_DB", "TASKS_STATIC"):
+        assert parsed.get(key), f"{key} is missing from an ordinary install"
 
 
 # ── AUDIT (test gap): the confidential-client path has no coverage ──────────

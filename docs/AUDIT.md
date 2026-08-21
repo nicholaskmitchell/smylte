@@ -1505,7 +1505,7 @@ branch away.
 
 ### CI & deploy
 
-#### [ ] desktop-release.yml grants `contents: write` at workflow scope, so `npm ci` and NuGet restore in the build jobs run with the release-publishing token on disk
+#### [x] desktop-release.yml grants `contents: write` at workflow scope, so `npm ci` and NuGet restore in the build jobs run with the release-publishing token on disk
 
 `.github/workflows/desktop-release.yml:22` · **medium** · security · `minor` · stage 5
 
@@ -1534,9 +1534,36 @@ Failure scenario: a transitive dev-dependency of the Vite/vitest tree publishes 
 
 **Suggested fix.** Set `permissions: contents: read` at the top of the workflow and move `permissions: contents: write` onto the `release` job only (it is the sole job that calls `gh release`). Additionally pass `persist-credentials: false` to the `actions/checkout@v4` steps in `web` and `client` — neither uses git after checkout. Separately, all six action uses in this repo are pinned by mutable tag (`actions/checkout@v4`, `setup-node@v4`, `setup-python@v5`, `setup-dotnet@v4`, `upload-artifact@v4`, `download-artifact@v4`); pin them to commit SHAs so a retagged action cannot silently change what the release job runs.
 
-**Pinned by** `test_the_desktop_release_build_jobs_hold_no_write_token` in `backend/tests/test_backlog_aug19_stage45.py`.
+**Pinned by** `test_the_build_jobs_hold_no_write_token` in `backend/tests/test_backlog_aug19_stage45.py`.
 
-#### [ ] setup.sh writes the typed Radicale password into a systemd EnvironmentFile without escaping, and systemd's parser eats backslashes and treats a leading quote as an unterminated string that swallows every remaining secret
+**Fixed** as suggested: `contents: read` at workflow scope, `contents: write`
+moved onto `release` — the only job that publishes and the only one that runs no
+dependency code — and `persist-credentials: false` on every checkout, since no
+job here uses git after it.
+
+**`ci.yml` got the same treatment, and it needed more of it.** It declared no
+`permissions:` at all, at either scope, so its effective grant was the
+*repository* default — a setting no reviewer of the file can see and an admin can
+widen without a commit. That is also why the pin was widened to fail on an
+undeclared permission rather than pass: `None != "write"` is true, so the whole
+`ci.yml` half would otherwise have been vacuous. Half-fix checked — repairing
+`desktop-release.yml` alone leaves the pin failing.
+
+The control is the half that earned its keep: `contents: read` at workflow scope
+with nothing moved onto `release` satisfies the pin completely and silently stops
+every desktop release from shipping. It is asserted through the same
+effective-permission rule, plus a check that `release` has not itself become a
+job that installs dependencies — which would be the finding moved rather than
+fixed.
+
+**Not done, and deliberately not done quietly:** this entry closes by asking that
+the six action uses be pinned to commit SHAs. Resolving `@v4` to a SHA means
+reading the `actions/*` repositories, which are outside the GitHub scope granted
+to the session that did this work. The permissions change is what the pin
+asserts and what closes the finding; the SHA pinning is left open here as a
+follow-up rather than reached for out of scope.
+
+#### [x] setup.sh writes the typed Radicale password into a systemd EnvironmentFile without escaping, and systemd's parser eats backslashes and treats a leading quote as an unterminated string that swallows every remaining secret
 
 `deploy/setup.sh:44` · **medium** · bug · `minor` · stage 5
 
@@ -1576,6 +1603,27 @@ Failure scenario 3 (unvalidated empty): pressing Enter at the `Radicale password
 **Suggested fix.** Emit the two interpolated values in systemd's double-quoted form with the escapes its DOUBLE_QUOTE_VALUE_ESCAPE state understands — backslash and double-quote each prefixed with a backslash — e.g. `q() { printf '"%s"' "$(printf '%s' "$1" | sed 's/[\\"]/\\&/g')"; }` and then `RADICALE_PASSWORD=$(q "$RADPW")` / `TASKS_AUTH_USER=$(q "$AUSER")`. Add a `[ -n "$RADPW" ] || { echo "empty Radicale password" >&2; exit 1; }` next to the existing HASH guard, since re-running the script will not repair a bad file.
 
 **Pinned by** `test_setup_sh_writes_a_password_systemd_reads_back_unchanged` in `backend/tests/test_backlog_aug19_stage45.py`.
+
+**Fixed** as suggested — a `q()` helper emitting systemd's double-quoted form
+with backslash and double-quote escaped, applied to both prompt-read values, and
+the empty-password guard `$HASH` already had.
+
+Widened twice before the fix. `TASKS_AUTH_USER` is the second value the heredoc
+interpolates from a prompt and carries the identical defect; the pin drove only
+the password, so escaping one and not the other passed. And the third failure
+scenario — Enter at the prompt — is not a quoting bug at all and no amount of
+escaping addresses it, so it has its own test, which additionally asserts that
+refusing writes NO file: the check at the top of the script short-circuits on an
+existing env file, so a refusal that still wrote something would make re-running
+the script a no-op, which is the trap the finding is about.
+
+The control asserts an ordinary install round-trips byte-for-byte. Its first
+docstring claimed it guarded against "forgetting the quotes are not part of the
+value"; that is not a reachable over-correction — systemd strips them by design,
+and `'hunter2'` and `"hunter2"` both read back as `hunter2`. Corrected to name
+what it actually catches: an inverted `[ -n ]`/`[ -z ]` guard, which refuses
+every valid password while accepting the empty one, and which fails this control
+and the empty-password test together.
 
 ### CSP & static serving
 

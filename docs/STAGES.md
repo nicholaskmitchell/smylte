@@ -12,7 +12,7 @@ of how the harness behaved in practice — its "Two strengths of pin" and
 
 `docs/AUDIT.md` is the evidence. This is the plan for closing it.
 
-**14 open, 71 closed.** Stages 1, 2, 3 and 4 are done; stage 5 has not started.
+**12 open, 73 closed.** Stages 1, 2, 3 and 4 are done; stage 5 is in progress.
 
 The sweep opened at 36/44. Stage 4 closed 28 — its own 21 plus the 7 the Stage 3
 adversarial review had left open — remediation FILED 5 more along the way, and
@@ -558,7 +558,7 @@ The user can see it is wrong. Contained, mostly small, and the stage where a fix
 
 ## Stage 5 — Delivery infrastructure & test gaps ⬜ OPEN
 
-8 findings · 3 medium, 5 low · **1 closed, 7 open**
+8 findings · 3 medium, 5 low · **3 closed, 5 open**
 
 One is already closed: **64** (no test drives `busy_intervals` across a DST transition) was shut by the Stage 3 fixes for the two defects that writing its missing case uncovered — see Stage 3 above.
 
@@ -566,8 +566,8 @@ The pipeline that ships the code and the tests that watch it. Closing these is w
 
 | # | Finding | Where | Sev | Pin |
 |---|---|---|---|---|
-| 59 | desktop-release.yml grants `contents: write` at workflow scope, so `npm ci` and NuGet restore in the build j… | `.github/workflows/desktop-release.yml:22` | medium | `test_the_desktop_release_build_jobs_hold_no_write_token` |
-| 60 | setup.sh writes the typed Radicale password into a systemd EnvironmentFile without escaping, and systemd's p… | `deploy/setup.sh:44` | medium | `test_setup_sh_writes_a_password_systemd_reads_back_unchanged` |
+| 59 ✅ | desktop-release.yml grants `contents: write` at workflow scope, so `npm ci` and NuGet restore in the build j… | `.github/workflows/desktop-release.yml:22` | medium | `test_the_desktop_release_build_jobs_hold_no_write_token` |
+| 60 ✅ | setup.sh writes the typed Radicale password into a systemd EnvironmentFile without escaping, and systemd's p… | `deploy/setup.sh:44` | medium | `test_setup_sh_writes_a_password_systemd_reads_back_unchanged` |
 | 61 | setup.ts's matchMedia stub hardcodes the desktop breakpoint, so CalendarView's and HomeView's entire mobile … | `frontend/src/test/setup.ts:5` | medium | `renders the mobile calendar and the mobile dashboard` |
 | 62 | Shutdown tears down the SQLite connection and DAV client under a still-running sync sweep | `backend/tasksd/app.py:774` | low | _not pinned — see below_ |
 | 63 | Test gap: the confidential-client path — client_secret_basic/post, the Basic header parser and the secret co… | `backend/tasksd/mcp/oauth.py:417` | low | `test_a_confidential_client_authenticates_with_its_secret_and_only_that` |
