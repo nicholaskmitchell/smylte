@@ -3,12 +3,14 @@
 // mini calendar (where a day click opens a read-only list) — passing no `onOpen`
 // is what makes it read-only, so the dashboard never grows an event editor.
 
-import { useEffect, type CSSProperties } from 'react'
+import { type CSSProperties } from 'react'
 import type { CalEvent, Task } from '../api'
-import type { DayEv } from '../calendar'
+import { eventKey, type DayEv } from '../calendar'
+import { taskKey } from '../order'
 import { dayKey } from '../util'
 import { fmtClock, type TimeFormat } from '../time'
 import { useTimeFormat } from '../timeformat'
+import { useEscape } from '../hooks'
 
 /** The time label for an event as it appears on `day`: a continuation day shows
  *  the end time if the span finishes that day, and otherwise reads as all day. */
@@ -81,11 +83,7 @@ export function DayPopover({ day, x, y, events, tasks = [], styleOf, taskStyleOf
   onOpenTask?: (t: Task) => void
   onClose: () => void
 }) {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
+  useEscape(onClose)
   const long = new Date(`${day}T00:00`).toLocaleDateString(undefined,
     { weekday: 'long', month: 'long', day: 'numeric' })
   // Clamp to the viewport so edge cells don't push the popover off-screen.
@@ -100,10 +98,10 @@ export function DayPopover({ day, x, y, events, tasks = [], styleOf, taskStyleOf
             { weekday: 'short', month: 'short', day: 'numeric' })}
         </div>
         {events.map((e) => (
-          <AgendaEvent key={e.id} ev={e} day={day} style={styleOf(e)} onOpen={onOpen} />
+          <AgendaEvent key={eventKey(e)} ev={e} day={day} style={styleOf(e)} onOpen={onOpen} />
         ))}
         {tasks.map((t) => (
-          <AgendaTask key={t.uid} task={t} style={taskStyleOf?.(t)} onOpen={onOpenTask} />
+          <AgendaTask key={taskKey(t)} task={t} style={taskStyleOf?.(t)} onOpen={onOpenTask} />
         ))}
       </div>
     </div>

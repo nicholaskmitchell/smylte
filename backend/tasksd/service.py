@@ -74,9 +74,33 @@ class TaskService:
         self._lock = threading.RLock()
         self._listeners: set[asyncio.Queue] = set()
         self._loop: asyncio.AbstractEventLoop | None = None
+        # Set under the lock by `close()`, read under the lock by `sync_all`.
+        # See `close()` for why a flag is needed and not just an ordering fix.
+        self._closed = False
 
     def close(self) -> None:
+        """Release the DAV client and the database.
+
+        The flag exists because closing CANNOT be ordered against a running
+        sweep from the outside. The lifespan cancels the asyncio task, but
+        `_sync_loop` spends its time in `await asyncio.to_thread(svc.sync_all)`
+        and `concurrent.futures.Future.cancel()` fails on an already-running
+        work item — so `await loop_task` returns immediately while the worker
+        thread is still inside `sync_all`. `sync_all` then deliberately releases
+        the lock between collections, and `close()` acquires it in one of those
+        gaps.
+
+        Before the flag, the next slice ran `store.has_collection(self._conn, …)`
+        against a closed connection. That call sits OUTSIDE the per-collection
+        `try/except`, so the ProgrammingError escaped `sync_all` entirely: no
+        collection recorded it, the remaining collections were never swept, and
+        asyncio logged "exception was never retrieved" on every restart that
+        landed mid-sweep.
+        """
         with self._lock:
+            if self._closed:
+                return                    # idempotent: teardown can run twice
+            self._closed = True
             self._dav.close()
             self._conn.close()
 
@@ -133,12 +157,21 @@ class TaskService:
         # (which serialize on the same lock) interleave between slices instead
         # of stalling for the full background pass every poll interval.
         with self._lock:
+            if self._closed:
+                return []
             self._engine.discover()
             collections_changed = self._engine.last_discovery_changed
             hrefs = [r["href"] for r in store.get_collections(self._conn)]
         stats: list[SyncStats] = []
         for href in hrefs:
             with self._lock:
+                # Re-checked EVERY slice, not just once at the top: the whole
+                # point of releasing the lock between collections is that
+                # something else can take it, and `close()` is the something
+                # else that matters. Checked inside the lock so the answer
+                # cannot go stale between the check and the query below it.
+                if self._closed:
+                    break
                 if not store.has_collection(self._conn, href):
                     continue
                 try:
@@ -207,11 +240,35 @@ class TaskService:
             "sort_mode": settings_row["sort_mode"] if settings_row else None,
         }
 
-    def resolve_list(self, list_id: str) -> str | None:
-        """Accept either a full href or the short slug; return the href."""
+    def resolve_list(self, list_id: str, *, component: str | None = None) -> str | None:
+        """Accept either a full href or the short slug; return the href.
+
+        `component` is what the caller is about to WRITE or READ there — "VTODO"
+        for the task routes, "VEVENT" for the event ones — and a collection that
+        does not hold it does not resolve.
+
+        The read side of this service has always been segregated by component:
+        `list_lists` filters on VTODO, `list_calendars` on VEVENT, `get_task` and
+        `get_event` on the item's own component, and `_link_busy` skips any
+        collection without VEVENT — `test_api.py::test_tabs_are_separated` says
+        that is deliberate. The write side had no such check: this resolver
+        matched on href-or-slug alone, and it sits behind every `/api/lists/...`
+        route, every `/api/calendars/...` route and both MCP resolvers. So a
+        VTODO could be written into an event-only calendar, where it landed on
+        Radicale, occupied a UID, and was then invisible to every reader in this
+        app — `smylte_delete_list` would happily delete a calendar, too.
+
+        `_normalize_link_fields` already did this for one caller ("calendar must
+        be an existing event calendar"), so the need was recognised and applied
+        once. Callers that deliberately span both kinds — collection rename,
+        delete and reorder, which the SPA uses from both tabs — pass nothing and
+        keep the old behaviour.
+        """
         with self._lock:
             for row in store.get_collections(self._conn):
                 if list_id in (row["href"], _slug(row["href"])):
+                    if component and component not in (row["components"] or ""):
+                        return None
                     return row["href"]
         return None
 
@@ -320,15 +377,27 @@ class TaskService:
             for r in rows:
                 col = r["collection_href"]
                 if col not in by_col:
+                    items = [i for i in store.get_items(self._conn, col)
+                             if i["component"] == "VTODO"]
                     by_col[col] = (
                         store.get_all_categories(self._conn, col),
                         store.get_all_sidecar(self._conn, col),
-                        [i for i in store.get_items(self._conn, col) if i["component"] == "VTODO"],
+                        items,
+                        # Built ONCE per collection, alongside the three lookups
+                        # it belongs with. It used to be built inside the loop
+                        # below, which made the whole function O(rows x items):
+                        # `store.search` has no LIMIT, so a one-character FTS
+                        # query over a 5 000-task list matched every row and
+                        # rebuilt the map 5 000 times — 2.87 s, holding the
+                        # global lock the whole way. `_children_map` is a pure
+                        # staticmethod over `items`, so the hoisted map is
+                        # bit-for-bit the one each iteration was recomputing.
+                        self._children_map(items),
                     )
         out = []
         for r in rows:
-            cats, side, items = by_col[r["collection_href"]]
-            out.append(self._task_dto(r, cats, side, self._children_map(items)))
+            cats, side, _items, children = by_col[r["collection_href"]]
+            out.append(self._task_dto(r, cats, side, children))
         return out
 
     # ── writes ───────────────────────────────────────────────────────────────
@@ -862,6 +931,9 @@ class TaskService:
             # booking's times (nor collide with its event resource).
             if client_id:
                 prior = store.get_booking_by_event(self._conn, f"{client_id}@tasksd")
+                if prior is None:
+                    prior = self._recover_orphaned_booking(
+                        link, token, client_id, start_iso, name=name, email=email)
                 if prior is not None:
                     if prior["link_token"] == token:
                         return self._confirmation(link, prior), False
@@ -931,6 +1003,91 @@ class TaskService:
             "duration_minutes": link["duration_minutes"],
             "timezone": link["timezone"],
         }, True
+
+    def _recover_orphaned_booking(self, link, token: str, client_id: str,
+                                  start_iso: str, *, name: str, email: str):
+        """A ledger row rebuilt from an event this booking already wrote.
+
+        The whole replay mechanism keys on the ledger, and the ledger row is
+        inserted AFTER `create_event` has PUT the VEVENT to Radicale. Anything
+        between the two — `_refresh_from_wire`'s second round trip raising
+        DavError, a process restart — leaves the event on the owner's calendar
+        with no ledger row. The visitor's retry, with the same client_id their
+        page deliberately keeps stable for the chosen slot, is then not
+        recognised as a replay; once the background sync pulls the orphan into
+        the cache, `_link_busy` sees it, the slot disappears, and `book_slot`
+        tells them "that time is not available" about their OWN booking. They
+        pick another slot and the owner gets two events for one person, one of
+        which is invisible in Settings -> Bookings and uncounted against the
+        link's ceiling.
+
+        So the hook does not depend on the ledger being there: the EVENT is the
+        record, since `create_event` derives its UID from the client_id, and the
+        ledger is rebuilt from it.
+
+        It is NOT enough to scope this to the link's calendar, which is what the
+        first version did while claiming that "a client_id reused against a
+        different link still raises rather than disclosing the other booking's
+        times". Two links on ONE calendar is the default shape of this feature,
+        and there the calendar check passes for both: a caller of link B,
+        presenting a client_id used on link A, was handed A's booking TIMES under
+        B's title, and the ledger permanently recorded A's booking under B with
+        the real booker's name and email erased.
+
+        What proves intent without disclosing anything is the REQUEST: recover
+        only when the orphaned event sits at the very instant this caller is
+        asking for. That is exactly the shape finding 30 is about — the visitor's
+        page keeps the client_id stable *for the chosen slot*, so a retry names
+        the same instant — and it tells a caller nothing they did not already
+        supply. Anything else falls through to the "client_id already used"
+        refusal below, which is the honest answer: their earlier booking did land.
+
+        Returns the new ledger row, or None if there is no such event.
+        """
+        row = store.get_item(self._conn, link["calendar_href"], f"{client_id}@tasksd")
+        if row is None or row["component"] != "VEVENT":
+            return None
+        try:
+            asked = datetime.fromisoformat(start_iso)
+            found = datetime.fromisoformat(row["dtstart"] or "")
+        except ValueError:
+            return None
+        if asked.tzinfo is None or found.tzinfo is None:
+            return None
+        if asked.astimezone(timezone.utc) != found.astimezone(timezone.utc):
+            return None
+        # In the LINK's zone, the way the ordinary path writes it. The cached
+        # row holds whatever the wire said (this app writes bookings in UTC), and
+        # a confirmation that named the same instant in a different offset would
+        # read to the visitor as a different time than the one they picked.
+        tz = ZoneInfo(link["timezone"])
+
+        def _local(value):
+            if not value:
+                return ""
+            try:
+                dt = datetime.fromisoformat(value)
+            except ValueError:
+                return value
+            return (dt.astimezone(tz) if dt.tzinfo else dt).isoformat()
+
+        booking_id = uuid.uuid4().hex
+        store.insert_booking(
+            self._conn, id=booking_id, link_token=token,
+            calendar_href=link["calendar_href"], event_uid=row["uid"],
+            # The caller's own, not blanks: we only get here when this request
+            # names the instant the orphaned event occupies, which means this IS
+            # the same visitor retrying the same slot.
+            client_name=name, client_email=email, notes=None,
+            start_at=_local(row["dtstart"]),
+            end_at=_local(row["dtend"] or row["dtstart"]),
+        )
+        log.warning(
+            "booking ledger row was missing for event %s on link %s; rebuilt from "
+            "the calendar (a write failed between the PUT and the ledger insert)",
+            row["uid"], token,
+        )
+        return store.get_booking_by_event(self._conn, row["uid"])
 
     @staticmethod
     def _confirmation(link, booking) -> dict[str, Any]:

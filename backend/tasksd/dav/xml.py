@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 from lxml import etree
 
-from .errors import DavError
+from .errors import DavError, MalformedResponse
 
 # --- namespaces ---------------------------------------------------------------
 DAV = "DAV:"
@@ -169,8 +169,13 @@ XML_SAFE_PATTERN_SCALAR = rf"^[^{_C0}{_NONCHARS}]*$"
 # has to hold on both paths and this file is already where a validator shared
 # across layers goes (see XML_SAFE_PATTERN_SCALAR above, whose comment records
 # what three hand-written copies cost last time).
+#
+# The anchors stay in COLOR_PATTERN: it is handed to pydantic and to the MCP tool
+# schemas as a JSON Schema `pattern`, where an unanchored expression is an
+# unanchored SEARCH. `_COLOR_RE` is used with `fullmatch` below, so the `$`
+# /trailing-newline gap does not apply to the Python side either way.
 COLOR_PATTERN = r"^#[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?$"
-_COLOR_RE = re.compile(COLOR_PATTERN)
+_COLOR_RE = re.compile(r"#[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?")
 
 
 def clean_color(value: str | None) -> str | None:
@@ -178,7 +183,7 @@ def clean_color(value: str | None) -> str | None:
     if not isinstance(value, str):
         return None
     v = value.strip()
-    return v if _COLOR_RE.match(v) else None
+    return v if _COLOR_RE.fullmatch(v) else None
 
 _XML_FORBIDDEN = re.compile(f"[{XML_FORBIDDEN_CLASS}]")
 
@@ -260,8 +265,26 @@ class MultiStatus:
     sync_token: str | None
 
 
+# Explicit rather than lxml's defaults, so the two guarantees this parser needs
+# are stated where they can be read. `resolve_entities=False` + `no_network=True`
+# are what stop an XXE reading /etc/passwd through the sync loop (pinned by
+# test_an_external_entity_is_not_fetched); `recover=False` is deliberate — this
+# parses bytes from adversary #2, and silently accepting the readable half of a
+# truncated response is worse than refusing the response.
+_PARSER = etree.XMLParser(resolve_entities=False, no_network=True, recover=False)
+
+
 def parse_multistatus(data: bytes) -> MultiStatus:
-    root = etree.fromstring(data)
+    # Inside the taxonomy, for the same reason client.py wraps httpx.HTTPError:
+    # callers (and the API's 502 mapping) see one error type. Radicale copies an
+    # item's iCalendar bytes into <C:calendar-data> with stdlib ElementTree,
+    # which validates no characters, so one U+FFFE another client wrote produces
+    # a well-formed-looking 207 that lxml refuses — and an XMLSyntaxError out of
+    # here landed past every place built to contain a bad resource.
+    try:
+        root = etree.fromstring(data, _PARSER)
+    except etree.XMLSyntaxError as e:
+        raise MalformedResponse(f"unparseable multistatus: {e}") from e
     responses: list[Response] = []
     for resp in root.findall(RESPONSE):
         href = resp.findtext(HREF) or ""

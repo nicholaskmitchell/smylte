@@ -20,8 +20,10 @@ from __future__ import annotations
 import re
 from contextlib import contextmanager
 from datetime import date, datetime, time as time_of_day, timedelta
+from zoneinfo import ZoneInfo
 
 from ..ical import EventEdit, TaskEdit, rrule_from_spec
+from ..ical.read import normalize_offset, split_duration
 from ..service import priority_from_label
 from .tools import ToolError
 
@@ -35,6 +37,14 @@ def _parse_dt(value, *, field: str):
 
     Empty means "unset" rather than an error, because that is how a caller
     clears a due date — the tool schemas say so explicitly.
+
+    "The same rules the HTTP API uses" was an assertion this function did not
+    keep: it is a second hand-written copy of `app._parse_datelike`, and both
+    handed an offset-bearing value straight through to icalendar, which wrote it
+    as a fabricated `TZID="UTC-07:00"`. The shared part now lives in
+    `ical.read.normalize_offset` so the sentence is true by construction rather
+    than by inspection — this sweep filed five findings whose common shape is a
+    comment asserting a safety property the code does not deliver.
     """
     if value is None:
         return None
@@ -43,7 +53,7 @@ def _parse_dt(value, *, field: str):
         return None
     try:
         if "T" in s or " " in s:
-            return datetime.fromisoformat(s.replace(" ", "T"))
+            return normalize_offset(datetime.fromisoformat(s.replace(" ", "T")))
         return date.fromisoformat(s)
     except ValueError:
         raise ToolError(
@@ -66,9 +76,12 @@ def _as_dt(value: date | datetime | None) -> datetime | None:
     return datetime.combine(value, time_of_day.min)
 
 
+# `fullmatch` at the call site, not `match`: `$` also matches before a trailing
+# newline. The caller's `.strip()` happens to cover this one today — which is
+# exactly why it is worth fixing at the pattern, where the guarantee belongs.
 _DURATION = re.compile(
-    r"^(?P<sign>[+-])?P(?:(?P<w>\d+)W)?(?:(?P<d>\d+)D)?"
-    r"(?:T(?:(?P<h>\d+)H)?(?:(?P<m>\d+)M)?(?:(?P<s>\d+)S)?)?$"
+    r"(?P<sign>[+-])?P(?:(?P<w>\d+)W)?(?:(?P<d>\d+)D)?"
+    r"(?:T(?:(?P<h>\d+)H)?(?:(?P<m>\d+)M)?(?:(?P<s>\d+)S)?)?"
 )
 
 
@@ -83,7 +96,7 @@ def parse_duration(value: str | None) -> timedelta | None:
     """
     if not value:
         return None
-    m = _DURATION.match(str(value).strip())
+    m = _DURATION.fullmatch(str(value).strip())
     if not m:
         return None
     parts = {k: int(v) for k, v in m.groupdict().items() if k != "sign" and v}
@@ -105,37 +118,137 @@ def _hhmm(value: str, *, field: str) -> time_of_day:
         raise ToolError(f"{field}={value!r} is not a time. Use 'HH:MM'.") from None
 
 
-def _display_order(t: dict):
-    """The order the app shows tasks in, which is what these tools advertise.
+def _due_instant(t: dict, zone) -> float | None:
+    """A task's deadline as an absolute instant, the way `dueAt` computes it.
 
-    Mirrors `frontend/src/order.ts` — manual position, due date, priority, title,
-    then uid — key for key, including nulls-last on every one. The two cannot
-    share code across languages, so they are kept deliberately parallel: the tool
-    description promises "ordered the way the app shows them", and a model paging
-    with `limit` is entitled to that being true.
+    `order.ts` resolves a date-only due against BROWSER-local midnight and a
+    naive timed due against the browser's zone. `_as_dt` resolved both against
+    the SERVER's — `value.astimezone().replace(tzinfo=None)` — and the two only
+    agree when the two zones do. With the browser in America/Chicago and the
+    server in UTC, which is the ordinary Docker deployment, a task due 23:00
+    local and an all-day task the next day swap places; this ordering is what
+    decides which rows `limit` keeps, so the soonest deadline can fall off a page
+    that looks ordered.
 
-    The final uid tie-break is the point, not a flourish. Rows arrive here as one
-    list's block after another's, so without a TOTAL order `limit=3` returned
-    "whichever list came first" — and the soonest deadline on the account could
-    be missing from a page that looked ordered. `order.ts`' header makes the same
-    argument at length.
+    `zone` is the owner's `home_timezone` — the honest stand-in for "the zone
+    they read their calendar in", and the same value `busy_intervals` already
+    uses for floating times. None keeps the previous behaviour (the server's
+    local zone), which is what a caller with no service handle gets.
+    """
+    raw = t.get("due")
+    if not raw:
+        return None
+    value = _parse_dt(raw, field="due")
+    if value is None:
+        return None
+    if not isinstance(value, datetime):
+        value = datetime.combine(value, time_of_day.min)
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=zone) if zone is not None else value.astimezone()
+    return value.timestamp()
+
+
+def _intrinsic_order(t: dict, zone=None):
+    """Everything except the manual position: due, priority, title, then uid.
+
+    The port of `compareIntrinsic` in `frontend/src/order.ts`. `due` is compared
+    as an INSTANT rather than as a string — lexical comparison happens to agree
+    for ISO values of equal shape and stops agreeing the moment a date-only and a
+    timed value meet, or an offset appears — and the instant is resolved in the
+    reader's zone rather than the server's. See `_due_instant`.
 
     Sort keys are `(is_null, value)` pairs so a missing value sorts last without
-    ever comparing None to a number.
+    ever comparing None to a number. The final uid tie-break is the point, not a
+    flourish: rows arrive as one list's block after another's, so without a TOTAL
+    order `limit=3` returned "whichever list came first" and the soonest deadline
+    on the account could be missing from a page that looked ordered.
     """
-    due = t.get("due") or None
-    # A date-only due sorts as that day's start, which is how the app reads it.
-    due_key = f"{due}T00:00" if due and "T" not in due else due
+    due = _due_instant(t, zone)
     priority = t.get("priority") or None       # iCal: 0/absent means unset
-    order = t.get("sort_order")
     summary = t.get("summary") or None
     return (
-        (order is None, order or 0),
-        (due_key is None, due_key or ""),
+        (due is None, due if due is not None else 0.0),
         (priority is None, priority or 0),
-        (summary is None, (summary or "").casefold()),
+        (summary is None, _title_key(summary or "")),
         t.get("uid") or "",
     )
+
+
+def _title_key(s: str) -> tuple:
+    """A sort key approximating `String.prototype.localeCompare`.
+
+    order.ts compares titles with `localeCompare`, which is a collation, not a
+    codepoint comparison: case is a TERTIARY difference, and lowercase sorts
+    before uppercase for otherwise identical letters. Python's `<` is codepoint
+    order (so "Alpha" < "alpha") and `casefold` alone calls them equal — either
+    way the two implementations put "alpha" and "Alpha" in different places, and
+    this ordering is what decides which rows `limit` keeps.
+
+    Casefold first, then lowercase-before-uppercase, which reproduces ICU for
+    the ASCII case. It does NOT reproduce full ICU: accent folding ("é" sorting
+    with "e") needs a collation table the stdlib does not carry, so a title
+    differing only by an accent may land on the other side of its neighbour. The
+    uid tie-break keeps the result a deterministic total order regardless, which
+    is the property `limit` actually depends on; a cross-check against the real
+    order.ts over 400 generated cases is recorded in the pin.
+    """
+    return (s.casefold(), tuple(0 if c.islower() else 1 for c in s))
+
+
+def _task_key(t: dict) -> tuple:
+    """A task's identity ACROSS lists — `taskKey` in order.ts.
+
+    `list_tasks` merges every list's rows, and the backend keys items on
+    `(collection_href, uid)`, so the same uid genuinely appears twice when a
+    VTODO has been copied between lists in another CalDAV client. Keyed on the
+    bare uid, the unplaced-task loop below overwrites the placed twin's entry.
+    """
+    return (t.get("list") or "", t.get("uid") or "")
+
+
+def _in_display_order(tasks: list[dict], zone=None) -> list[dict]:
+    """`tasks` in the order the app shows them, as a new list.
+
+    The port of `sortTasks`, which is what every view calls — NOT of
+    `compareTasks`, which is what this used to reproduce. `compareTasks` sorts a
+    null position last, and order.ts' own docstring says at length why that is
+    not how a list is ordered: a drag renumbers the whole account (the server's
+    `ReorderTasks` model says so explicitly — "nothing left null once a drag
+    lands"), so after the first drag a null position stops meaning "ordinary,
+    unplaced" and starts meaning "created since the last drag". Sinking those
+    below everything is not what anyone wants — and here it was worse than a
+    display quirk, because this ordering is the ONE thing that decides which rows
+    `limit` keeps. Every task made since the last drag fell off page one, while
+    the tool description promises "ordered the way the app shows them".
+
+    Not a pairwise comparator, for the reason order.ts gives: comparing
+    placed-to-placed by position while comparing placed-to-unplaced by due date
+    is not transitive — P1(pos 1, due Dec), P2(pos 2, due Jan), U(due Jun) gives
+    P1 < P2 < U < P1 — and sorting on an inconsistent comparator is undefined.
+    So each task gets ONE effective position: a placed task keeps its own,
+    normalised to its index so gaps and duplicates cannot matter, and an unplaced
+    task takes half a step before the first placed task it intrinsically
+    precedes. Ordering by that single number, tie-broken by the intrinsic keys,
+    is a total order again.
+    """
+    placed = sorted(
+        (t for t in tasks if t.get("sort_order") is not None),
+        key=lambda t: (t["sort_order"], _intrinsic_order(t, zone)),
+    )
+    # Nothing has been dragged — the common case, and every case before the first
+    # drag: the intrinsic order is the whole answer.
+    if not placed:
+        return sorted(tasks, key=lambda t: _intrinsic_order(t, zone))
+
+    at: dict[tuple, float] = {_task_key(t): float(i) for i, t in enumerate(placed)}
+    keys = [_intrinsic_order(t, zone) for t in placed]
+    for t in tasks:
+        if t.get("sort_order") is not None:
+            continue
+        mine = _intrinsic_order(t, zone)
+        nxt = next((i for i, k in enumerate(keys) if mine < k), -1)
+        at[_task_key(t)] = float(len(placed)) if nxt < 0 else nxt - 0.5
+    return sorted(tasks, key=lambda t: (at[_task_key(t)], _intrinsic_order(t, zone)))
 
 
 @contextmanager
@@ -171,10 +284,48 @@ class McpApi:
     def __init__(self, service):
         self._svc = service
 
+    def _home_zone(self):
+        """The zone the owner reads their calendar in, or None.
+
+        `order.ts` resolves a due date against the BROWSER's midnight; the
+        server's own zone is not that, and in the ordinary Docker deployment it
+        is UTC while the owner is somewhere else. `home_timezone` is the closest
+        thing this process has to the reader's zone and is already what
+        `busy_intervals` uses for floating times.
+
+        Fail-soft in the same shape as `TaskService._home_tz`: a stored blob can
+        hold anything, and an unusable zone must degrade to the old behaviour
+        rather than break every task listing. Read through whatever the service
+        exposes, so a stub without settings still works.
+        """
+        getter = getattr(self._svc, "get_settings", None)
+        if getter is None:
+            return None
+        try:
+            name = getter().get("home_timezone")
+        except Exception:  # noqa: BLE001 — an ordering must not fail on settings
+            return None
+        if not isinstance(name, str) or not name:
+            return None
+        try:
+            return ZoneInfo(name)
+        except Exception:  # noqa: BLE001 — a stored blob can hold anything
+            return None
+
     # ── resolution ───────────────────────────────────────────────────────────
 
+    _COMPONENT = {"list": "VTODO", "calendar": "VEVENT"}
+
     def _href(self, list_id: str, *, kind: str = "list") -> str:
-        href = self._svc.resolve_list(list_id)
+        """The collection href for an id — of the right KIND.
+
+        `kind` used to affect only the wording of the error, so every task tool
+        accepted a calendar id and every calendar tool accepted a task-list id:
+        `smylte_delete_list` deleted calendars, and `smylte_create_task` wrote a
+        VTODO into an event-only calendar where no reader in this app would ever
+        return it again.
+        """
+        href = self._svc.resolve_list(list_id, component=self._COMPONENT.get(kind))
         if href is None:
             raise ToolError(
                 f"There is no {kind} with id {list_id!r}. Call "
@@ -197,15 +348,18 @@ class McpApi:
     def create_calendar(self, *, name, color=None):
         return self._svc.create_calendar(name, color=color)
 
-    def update_collection(self, list_id, *, name=None, color=None):
+    # `kind` threaded rather than defaulted: these two back BOTH
+    # smylte_update_list/smylte_delete_list AND their calendar twins, so without
+    # it `smylte_delete_list(<a calendar id>)` deleted the calendar.
+    def update_collection(self, list_id, *, name=None, color=None, kind="list"):
         if name is None and color is None:
             raise ToolError("Nothing to change — pass a name or a color.")
         return self._svc.update_collection(
-            self._href(list_id), name=name, color=color, clear_color=False
+            self._href(list_id, kind=kind), name=name, color=color, clear_color=False
         )
 
-    def delete_collection(self, list_id):
-        self._svc.delete_collection(self._href(list_id))
+    def delete_collection(self, list_id, *, kind="list"):
+        self._svc.delete_collection(self._href(list_id, kind=kind))
 
     # ── tasks ────────────────────────────────────────────────────────────────
 
@@ -239,8 +393,7 @@ class McpApi:
                 if overdue_only and (due >= now or t["completed"] or t["cancelled"]):
                     continue
             out.append(t)
-        out.sort(key=_display_order)
-        return out
+        return _in_display_order(out, self._home_zone())
 
     def get_task(self, list_id, uid):
         task = self._svc.get_task(self._href(list_id), uid)
@@ -489,16 +642,26 @@ class McpApi:
     def delete_event(self, calendar_id, uid, *, recurrence_id=None, scope="all"):
         if scope not in ("all", "this", "thisandfuture"):
             raise ToolError("scope must be 'all', 'this' or 'thisandfuture'.")
-        if scope in ("this", "thisandfuture") and not recurrence_id:
+        # `.strip()`, like the HTTP route: "   " is not an anchor, and `not
+        # recurrence_id` alone let it through to be parsed deep in the edit path.
+        if scope in ("this", "thisandfuture") and not (recurrence_id or "").strip():
             raise ToolError(f"scope={scope!r} needs recurrence_id.")
         # Same reason as delete_task: a silent no-op reported as a deletion.
         href = self._href(calendar_id, kind="calendar")
         if self._svc.get_event(href, uid) is None:
             raise ToolError(f"No event {uid!r} on calendar {calendar_id!r} to delete.")
         with _not_found(f"No event {uid!r} on calendar {calendar_id!r} to delete."):
-            self._svc.delete_event(
-                href, uid, recurrence_id=recurrence_id, scope=scope,
-            )
+            try:
+                self._svc.delete_event(
+                    href, uid, recurrence_id=recurrence_id, scope=scope,
+                )
+            except ValueError as exc:
+                # The arm update_event already had. Without it, an unreadable
+                # recurrence_id reached `date.fromisoformat` in the edit path and
+                # McpServer's catch-all reported it as "the calendar server may
+                # be unreachable" — sending the model after an outage that was
+                # not happening, over an argument it chose and could fix.
+                raise ToolError(str(exc)) from None
 
     # ── free/busy ────────────────────────────────────────────────────────────
 
@@ -521,7 +684,8 @@ class McpApi:
         for event in self.list_events(start, end, calendar_id):
             if (event.get("status") or "").upper() == "CANCELLED":
                 continue
-            b_start = _as_dt(_parse_dt(event.get("start"), field="start"))
+            raw_start = _parse_dt(event.get("start"), field="start")
+            b_start = _as_dt(raw_start)
             if b_start is None:
                 continue
             b_end = _as_dt(_parse_dt(event.get("end"), field="end"))
@@ -529,8 +693,53 @@ class McpApi:
                 # DURATION is the other half of the pair — an event carries one
                 # or the other, never both — so it has to be read before any
                 # fallback, or the fallback silently shortens a real meeting.
+                #
+                # `advance` splits the duration the way RFC 5545 §3.3.6
+                # defines it — the weeks/days half is NOMINAL ("a day later" is
+                # the same wall-clock time tomorrow, 23 or 25 real hours across
+                # a transition) and the time half is EXACT — and it applies
+                # each half in whatever frame it is handed. So the frame is the
+                # whole of this fix, and getting it wrong is two different bugs:
+                #
+                #   * `b_start + length` (the original) adds everything to the
+                #     wall clock, so the EXACT half is an hour out across a
+                #     transition. That is the defect Stage 3 closed at
+                #     scheduling.py:163.
+                #   * `advance(raw_start, …)` — the first repair — hands it the
+                #     value `normalize_offset` produced, which is **UTC**. UTC
+                #     has no transitions, so the nominal half becomes 24 real
+                #     hours; `_as_dt` then converts back to LOCAL, where the
+                #     transitions do live, and the NOMINAL half is an hour out.
+                #     It fixed one half by breaking the other.
+                #
+                # So each half is applied in its OWN frame, which is the only
+                # arrangement that gets both right:
+                #
+                #   exact  -> added to the aware value, i.e. to the INSTANT,
+                #             and only then flattened to local;
+                #   nominal-> added to that local WALL CLOCK afterwards.
+                #
+                # `advance` does this split too, but it can only do it correctly
+                # given a value carrying a real zone, and nothing here has one:
+                # `normalize_offset` has already re-expressed the start as UTC,
+                # and `.astimezone()` yields a FIXED OFFSET rather than a zone,
+                # so nominal arithmetic on either cannot see a transition. Hence
+                # the split is done here, against `split_duration`, which is the
+                # same decomposition `advance` uses.
+                #
+                # Checked both ways round: `P1D` from 09:00 the day before the
+                # fall-back must end 09:00 the next day (25 real hours), and
+                # `PT2H` from 01:30 before the spring-forward must end 04:30
+                # (2 real hours). `P1DT2H` needs both halves at once.
+                parts = split_duration(event.get("duration"))
                 length = parse_duration(event.get("duration"))
-                if length:
+                if parts is not None:
+                    nominal, exact = parts
+                    b_end = _as_dt(raw_start + exact if isinstance(raw_start, datetime)
+                                   else raw_start) + nominal
+                elif length:
+                    # Unparseable text but a usable total: no worse off than the
+                    # plain addition this replaced.
                     b_end = b_start + length
             if event.get("all_day"):
                 # DTEND is exclusive for an all-day event; with none, it is one day.

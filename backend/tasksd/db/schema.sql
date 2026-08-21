@@ -60,6 +60,14 @@ CREATE TABLE IF NOT EXISTS items (
     related_parent   TEXT,                   -- parent UID (subtasks/checklist)
     sequence         INTEGER,
     has_rrule        INTEGER NOT NULL DEFAULT 0,
+    -- The earliest instant this RESOURCE can produce (read._min_instant): the
+    -- master DTSTART, or earlier if an RDATE or a RECURRENCE-ID override starts
+    -- before it. `dtstart` is the master's alone, and gating a window on it drops
+    -- an occurrence dragged earlier than its own series start; gating on nothing
+    -- makes every recurring row a candidate for every window, which is a cost an
+    -- anonymous booking-page request can choose. NULL on rows written before this
+    -- column, which the query treats as "unknown, admit it".
+    min_instant      TEXT,
     location         TEXT,
     created          TEXT,
     last_modified    TEXT,
@@ -248,7 +256,13 @@ CREATE TABLE IF NOT EXISTS oauth_tokens (
     family_id            TEXT NOT NULL,
     used_at              REAL,
     expires_at           REAL NOT NULL,
-    created_at           REAL NOT NULL
+    created_at           REAL NOT NULL,
+    -- Which credentials this grant was minted under (Authenticator.
+    -- credential_version). Checked on every bearer AND before a refresh is
+    -- consumed, so rotating the password -- or TASKS_SESSION_SECRET -- ends the
+    -- MCP grants the same way it ends the browser sessions. Without it,
+    -- docs/DEPLOY.md's "sign out everywhere" left a 30-day backdoor.
+    cv                   TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_oauth_tokens_exp ON oauth_tokens(expires_at);
 CREATE INDEX IF NOT EXISTS idx_oauth_tokens_family ON oauth_tokens(family_id);

@@ -840,8 +840,12 @@ describe('<TasksView> collapsing subtasks', () => {
     expect(screen.queryByText('Pack the kitchen')).not.toBeInTheDocument()
     expect(screen.queryByText('Buy boxes')).not.toBeInTheDocument()
     expect(screen.getByText('Move house')).toBeInTheDocument()
-    // Written through to the account, like the sidebar's collapsed groups.
-    expect(onCollapsedTasksChange).toHaveBeenCalledWith(['p1'])
+    // Written through to the account, like the sidebar's collapsed groups —
+    // as a `taskKey`, since the pane is keyed on (list, uid): the same uid can
+    // live in two lists and each copy folds on its own. A bare uid stored by an
+    // earlier version is still honoured on read; see the migration control in
+    // backlog.aug19.stage4b.test.tsx.
+    expect(onCollapsedTasksChange).toHaveBeenCalledWith(['l1\u0000p1'])
   })
 
   it('opens folded from a stored set, and expands again', async () => {
@@ -876,7 +880,11 @@ describe('<TasksView> collapsing subtasks', () => {
     const { user, onCollapsedTasksChange } = setup('list', false, ['gone', 'c1'])
     await screen.findByText('Move house')
     await user.click(screen.getByRole('button', { name: 'Hide subtasks of Move house' }))
-    expect(onCollapsedTasksChange).toHaveBeenCalledWith(['c1', 'p1'])
+    // 'gone' is dropped; 'c1' is KEPT even though it is the old bare-uid
+    // spelling, because a task with that uid still has children — dropping it
+    // would unfold a tree the user folded. The new entry is written as a
+    // `taskKey`.
+    expect(onCollapsedTasksChange).toHaveBeenCalledWith(['c1', 'l1\u0000p1'])
   })
 })
 

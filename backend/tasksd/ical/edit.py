@@ -24,6 +24,16 @@ from uuid import uuid4
 from dateutil.rrule import rrulestr
 from icalendar import Calendar, Event, Todo, vRecur
 
+from .recur import _MAX_SEARCH_STEPS, _instances_before
+from .rrule_budget import SearchBudgetExceeded, search_budget
+
+# How far an override's RECURRENCE-ID may sit from DTSTART, in instances, before
+# reconciling it is priced as too expensive to be worth probing. ~55 years of a
+# daily rule. A legitimate probe costs one dateutil step; only a far-future
+# anchor is expensive, and _instances_before over-estimates for coarse FREQs,
+# which errs toward skipping more probes — the safe direction here.
+_MAX_PROBE_INSTANCES = 20_000
+
 # Sentinel: a field left UNSET is not touched; None means "clear this property".
 UNSET: Any = object()
 
@@ -280,6 +290,47 @@ def _find_master_event(cal: Calendar):
     return events[0] if events else None
 
 
+# Arithmetic near datetime's edges raises OverflowError, which is not a
+# ValueError, so nothing on the edit path caught it: a foreign
+# UNTIL=99991231T235959Z made every drag of that series a 500, and "repeat until
+# 9999-12-31" from the UI did the same. Saturate rather than refuse — a rule
+# running to the end of representable time is unbounded in every practical
+# sense, and refusing would leave the foreign series exactly as uneditable, just
+# with a tidier status code. The margin leaves room for a zone conversion (±14h)
+# and a subsequent drag to move it again without walking off the end.
+_UNTIL_GUARD = timedelta(days=2)
+
+
+def _saturate(dt: datetime) -> datetime:
+    """`dt`, pulled inside the range datetime arithmetic can survive."""
+    lo, hi = datetime.min + _UNTIL_GUARD, datetime.max - _UNTIL_GUARD
+    naive = dt.replace(tzinfo=None)
+    if naive > hi:
+        return hi.replace(tzinfo=dt.tzinfo)
+    if naive < lo:
+        return lo.replace(tzinfo=dt.tzinfo)
+    return dt
+
+
+def _bound(*, high: bool, tzinfo) -> datetime:
+    """The saturation value itself, in the shape the caller returns."""
+    edge = datetime.max - _UNTIL_GUARD if high else datetime.min + _UNTIL_GUARD
+    return edge.replace(tzinfo=tzinfo)
+
+
+def _safely(compute, *, high: bool, tzinfo):
+    """`compute()`, saturating instead of overflowing.
+
+    The RESULT has to be clamped, not just the input: pre-clamping only survives
+    a delta smaller than the guard, so a bounded series dragged a day worked and
+    the same series dragged a month still raised. That distinction is why the
+    stage-1 pin (which drags one day) passed against a half-fix."""
+    try:
+        return _saturate(compute())
+    except (OverflowError, ValueError):
+        return _bound(high=high, tzinfo=tzinfo)
+
+
 def _coerce_until(until, dtstart) -> date | datetime:
     """UNTIL, expressed in the value type RFC 5545 §3.3.10 requires of it.
 
@@ -297,7 +348,10 @@ def _coerce_until(until, dtstart) -> date | datetime:
         until = datetime.combine(until, time(23, 59, 59), tzinfo=dtstart.tzinfo)
     elif until.tzinfo is None and dtstart.tzinfo is not None:
         until = until.replace(tzinfo=dtstart.tzinfo)
-    return _as_utc(until) if dtstart.tzinfo is not None else until.replace(tzinfo=None)
+    until = _saturate(until)
+    if dtstart.tzinfo is not None:
+        return _safely(lambda: _as_utc(until), high=True, tzinfo=timezone.utc)
+    return until.replace(tzinfo=None)
 
 
 def _normalized_rule(rule: dict | None, event: Event) -> dict | None:
@@ -424,17 +478,41 @@ def _reconcile_overrides(cal: Calendar, master: Event) -> None:
         # to agree on tz-awareness and an override's RECURRENCE-ID need not agree
         # with the master's (an older write may have lost or fabricated a zone).
         start, at = _comparable(dtstart.dt, anchor)
+        # The FREQ whitelist above bounds the RULE; it does not bound the PROBE
+        # TARGET, and that is the attacker-controlled half. `at` is the
+        # override's RECURRENCE-ID, written by whatever client made it, so a
+        # far-future anchor makes dateutil walk from DTSTART to it before it can
+        # answer: measured 10.17s for two overrides, 51.40s for ten, all under
+        # the global service lock, on an ordinary "change the repeat" edit.
+        #
+        # Reuse the read path's own arithmetic to price the walk before doing
+        # it. Over the limit, keep the override without probing — the safe
+        # direction this function's docstring already argues for, and the same
+        # answer it gives a foreign rule. A legitimate probe costs one step, so
+        # nothing real is near this.
+        if _instances_before(rule, dtstart, at) > _MAX_PROBE_INSTANCES:
+            return True
         rr = rrulestr(_rule_for_probe(rule, start, dtstart.dt), dtstart=start)
         return bool(rr.between(at, at, inc=True))
 
-    cal.subcomponents = [
-        c for c in cal.subcomponents
-        if not (
-            getattr(c, "name", "") == "VEVENT"
-            and c.get("RECURRENCE-ID") is not None
-            and not _generated(c.get("RECURRENCE-ID").dt)
-        )
-    ]
+    def _keep(c) -> bool:
+        if getattr(c, "name", "") != "VEVENT" or c.get("RECURRENCE-ID") is None:
+            return True
+        try:
+            return _generated(c.get("RECURRENCE-ID").dt)
+        except SearchBudgetExceeded:
+            # The shared budget is the backstop behind the arithmetic above: a
+            # shape it prices as cheap but that still walks. Keep the override,
+            # same safe direction. Deciding this per component rather than for
+            # the whole comprehension means one expensive probe cannot make
+            # every LATER override un-reconcilable, which would silently keep
+            # genuinely orphaned ones.
+            return True
+
+    # One budget for the whole reconcile, so a resource carrying many overrides
+    # is bounded in aggregate and not merely per probe.
+    with search_budget(_MAX_SEARCH_STEPS):
+        cal.subcomponents = [c for c in cal.subcomponents if _keep(c)]
 
 
 def _stamp(event: Event, now: datetime) -> None:
@@ -608,6 +686,25 @@ def _find_override(cal: Calendar, anchor):
     return None
 
 
+def _claimed_anchors(cal: Calendar, *, exclude: Event | None = None) -> list:
+    """Every instant an override component already addresses, except `exclude`.
+
+    Two components may not both claim one RECURRENCE-ID value — a reader has no
+    way to rank them — so anything that MOVES an override has to know which slots
+    are spoken for. Nothing in this file answered that before: `_find_override`
+    looks up one instant, `_governing_thisandfuture` filters by RANGE, and
+    `_drop_overrides` partitions by side of a split.
+    """
+    out = []
+    for c in cal.walk("VEVENT"):
+        if c is exclude:
+            continue
+        rid = c.get("RECURRENCE-ID")
+        if rid is not None:
+            out.append(rid.dt)
+    return out
+
+
 def _new_override(master: Event, anchor) -> Event:
     """A fresh override VEVENT for `anchor`: a complete copy of the master with
     the recurrence properties stripped, RECURRENCE-ID set to the original slot,
@@ -626,6 +723,196 @@ def _new_override(master: Event, anchor) -> Event:
     return ev
 
 
+# "The rule could not be evaluated", as distinct from "the rule was evaluated and
+# there is nothing later". `_next_generated` used to answer None for both, and
+# its only caller deleted an override for both — which is right for the second
+# and permanent data loss for the first.
+_UNKNOWN = object()
+
+
+def _as_sortable(v):
+    """A key that orders dates and datetimes, aware or not, without raising."""
+    if isinstance(v, datetime):
+        return (v.astimezone(timezone.utc).replace(tzinfo=None) if v.tzinfo
+                else v)
+    return datetime.combine(v, time())
+
+
+def _after(values, moment) -> list:
+    """Those of `values` strictly after `moment`."""
+    return [v for v in values
+            if not _same_instant(v, moment) and _at_or_after(v, moment)]
+
+
+def _excluded(slot, excluded) -> bool:
+    """Is `slot` removed by one of these EXDATE values?
+
+    A DATE-valued EXDATE on a TIMED series removes the whole day — that is what
+    `recurring_ical_events` does, keeping a separate date-keyed exclusion set —
+    and `_same_instant` answers False outright for a date/datetime pair, so
+    comparing instants alone let a re-homed override land on an excluded slot and
+    resurrect a deleted occurrence.
+    """
+    for x in excluded:
+        x = _period_start(x)
+        if _same_instant(x, slot):
+            return True
+        if not isinstance(x, datetime) and isinstance(slot, datetime):
+            if x == slot.date():
+                return True
+    return False
+
+
+def _first_free(slots, after, blocked, excluded):
+    """The earliest of `slots` strictly after `after` that nothing has claimed."""
+    for slot in slots:
+        if _same_instant(slot, after) or not _at_or_after(slot, after):
+            continue
+        if any(_same_instant(b, slot) for b in blocked):
+            continue
+        if _excluded(slot, excluded):
+            continue
+        return slot
+    return None
+
+
+def _next_generated(master: Event, after, *, blocked=()) -> date | datetime | None:
+    """The series' next occurrence strictly after `after` that is FREE.
+
+    Free means: generated by the rule, not excluded by an EXDATE, and not already
+    addressed by one of `blocked` (the anchors other override components claim).
+    Used to re-home a THISANDFUTURE override, so landing on an occupied or
+    excluded slot is not a near miss — it either destroys another component's
+    edit or points at an occurrence that does not exist.
+
+    Returns `_UNKNOWN` when the rule cannot be evaluated at all: a FREQ outside
+    our own vocabulary, a probe priced over `_MAX_PROBE_INSTANCES`, or the shared
+    search budget firing. The caller must not treat that as "nothing later".
+    """
+    rule = _rrule_dict(master)
+    dtstart = master.get("DTSTART")
+    rdates = [_period_start(r) for r in _datelist_values(master, "RDATE")]
+    if dtstart is None:
+        return _UNKNOWN
+    if rule is None:
+        # No rule at all. An RDATE-only resource is still a series — the library
+        # puts RDATEs into the same rruleset and a range override governs them —
+        # so answer from the list. Nothing at all generating anything is the one
+        # case where "there is no next occurrence" is genuinely true.
+        return _first_free(sorted(_after(rdates, after)), after, blocked,
+                           _datelist_values(master, "EXDATE")) if rdates else None
+    if not {str(f).upper() for f in rule.get("FREQ", [])} <= set(_FREQ.values()):
+        return _UNKNOWN
+    if _instances_before(rule, dtstart, after) > _MAX_PROBE_INSTANCES:
+        return _UNKNOWN
+
+    excluded = _datelist_values(master, "EXDATE")
+    extra = _after(rdates, after)
+    # Every slot we might have to skip, plus one that cannot be: at most
+    # len(blocked) + len(excluded) are unavailable, so a free one appears within
+    # that many if it exists at all. This is what makes the walk terminate — a
+    # loop of `.after()` calls has no such bound.
+    budget = len(blocked) + len(excluded) + 1
+    try:
+        start, at = _comparable(dtstart.dt, after)
+        rr = rrulestr(_rule_for_probe(rule, start, dtstart.dt), dtstart=start)
+        with search_budget(_MAX_SEARCH_STEPS):
+            candidates = list(rr.xafter(at, count=budget))
+    except (SearchBudgetExceeded, ValueError, TypeError):
+        return _UNKNOWN
+
+    slots = sorted(
+        # Back into the anchor's own awareness before comparing or returning —
+        # `_comparable` may have stripped both ends to wall clock, and the value
+        # is about to become a RECURRENCE-ID.
+        [(nxt.replace(tzinfo=after.tzinfo)
+          if isinstance(after, datetime) and after.tzinfo and not nxt.tzinfo
+          else (nxt if isinstance(after, datetime) else nxt.date()))
+         for nxt in candidates] + extra,
+        key=_as_sortable,
+    )
+    free = _first_free(slots, after, blocked, excluded)
+    if free is not None:
+        return free
+    # `xafter` yields fewer than `count` when the rule runs out (COUNT/UNTIL), so
+    # a short list genuinely means there is nothing left. A FULL list every entry
+    # of which was blocked should be impossible — at most `len(blocked) +
+    # len(excluded)` slots can be — but "impossible, so return None" is how bug B
+    # lost a user's data, and None deletes the override. Fail closed instead.
+    return None if len(candidates) < budget else _UNKNOWN
+
+
+def _detach_thisandfuture(cal: Calendar, master: Event, governing: Event, anchor) -> Event:
+    """A single-slot override for `anchor`, with the range override re-homed.
+
+    Two components may not both claim one RECURRENCE-ID value — the reader has no
+    way to rank them, and the first attempt at this fix did exactly that: it
+    added a plain override beside the range one and the expansion still applied
+    the range one's values to every later occurrence, so the pin stayed red for a
+    reason that looked like the original bug.
+
+    So the range override is MOVED to the next occurrence after `anchor`, keeping
+    RANGE=THISANDFUTURE and shifting its DTSTART/DTEND by the same step, which
+    preserves the offset it applies (`_tf_shift` is DTSTART - RECURRENCE-ID) and
+    leaves it governing exactly the occurrences it governed before, minus the one
+    being detached. The new single-slot override is seeded from the range
+    override rather than the master so the instance keeps the values the user is
+    looking at.
+
+    If there is no next occurrence the range override governed only this slot, so
+    it is dropped rather than left pointing past the end of the series. If the
+    rule cannot be evaluated the edit is REFUSED — see the `_UNKNOWN` branch.
+
+    "The next occurrence" means the next FREE one. Taking the next slot the rule
+    generates, without asking whether another component already claims it, put
+    two components on one RECURRENCE-ID and destroyed the edit that was there —
+    the same unrankable state this docstring says the first attempt was rejected
+    for, one slot over.
+    """
+    detached = _new_override(governing, anchor)
+    # `_new_override` places DTSTART at the anchor, which is the RULE's slot —
+    # but a range override that moved this-and-future to 10:00 means 10:00 is
+    # what the user is looking at and clicked on. Carry its own times across, or
+    # detaching one instance would silently reschedule it back to the master's
+    # hour. Safe to read directly: we are here only because this override's
+    # RECURRENCE-ID matched the anchor, so its DTSTART/DTEND ARE this slot's.
+    for key in ("DTSTART", "DTEND", "DURATION"):
+        prop = governing.get(key)
+        _replace(detached, key)
+        if prop is not None:
+            detached.add(key, prop.dt)
+    cal.add_component(detached)
+
+    nxt = _next_generated(master, anchor,
+                          blocked=_claimed_anchors(cal, exclude=governing))
+    if nxt is _UNKNOWN:
+        # Refuse rather than delete. Dropping the override here loses the
+        # summary, the moved time and the location a foreign client authored for
+        # every later occurrence, permanently, on the next PUT — and the user is
+        # told the edit succeeded. Refusing costs them one edit and names a scope
+        # that works. `patch_event` maps this to 422 and `update_event` to a
+        # ToolError, so the sentence below is what they actually read.
+        raise ValueError(
+            "this occurrence is covered by a 'this and future' change and the "
+            "series' repeat rule cannot be evaluated here; edit the whole series "
+            "instead, or change the repeat first"
+        )
+    if nxt is None:
+        cal.subcomponents = [c for c in cal.subcomponents if c is not governing]
+        return detached
+
+    step = nxt - anchor
+    _replace(governing, "RECURRENCE-ID")
+    governing.add("RECURRENCE-ID", nxt, parameters={"RANGE": "THISANDFUTURE"})
+    for key in ("DTSTART", "DTEND"):
+        prop = governing.get(key)
+        if prop is not None:
+            moved = prop.dt + step
+            _replace(governing, key)
+            governing.add(key, moved)
+    return detached
+
+
 def apply_occurrence_override(
     raw: bytes | str, recurrence_id: str, edit: EventEdit, *, now: datetime | None = None
 ) -> bytes:
@@ -641,8 +928,45 @@ def apply_occurrence_override(
     anchor = _anchor_from_iso(recurrence_id, master)
     override = _find_override(cal, anchor)
     if override is None:
-        override = _new_override(master, anchor)
+        # Seeded from whatever GOVERNS this slot, which is not always the
+        # master. A RANGE=THISANDFUTURE override carries the values for its own
+        # slot and every later one (RFC 5545 §3.2.13), so on a slot it COVERS
+        # but does not ANCHOR, the master is not what the user is looking at.
+        # Seeding from the master snapped the instance back to the master's hour
+        # and dropped the LOCATION the range override supplied — a "rename this
+        # one" that silently rescheduled the meeting and moved the room.
+        #
+        # `_detach_thisandfuture` one branch down already carries DTSTART/DTEND
+        # across for exactly this reason; this is the same argument for the
+        # branch that had never been given it, and `_governing_thisandfuture`
+        # has been sitting in this file unconsulted here.
+        governing = _governing_thisandfuture(cal, anchor)
+        override = _new_override(governing or master, anchor)
+        if governing is not None:
+            # `_new_override` puts DTSTART at the anchor — the RULE's slot — so
+            # the range override's own shift has to be re-applied, not copied:
+            # its DTSTART/DTEND belong to ITS anchor, several occurrences back.
+            # `_tf_shift` is that offset (DTSTART - RECURRENCE-ID), the same
+            # quantity the read path computes to place these instances.
+            shift = _tf_shift(governing)
+            for key in ("DTSTART", "DTEND"):
+                prop = override.get(key)
+                if prop is not None:
+                    _replace(override, key)
+                    override.add(key, prop.dt + shift)
         cal.add_component(override)
+    elif _is_thisandfuture(override.get("RECURRENCE-ID")):
+        # `_find_override` matches on the RECURRENCE-ID instant and ignores
+        # RANGE, so editing "this event" on the slot a THISANDFUTURE override
+        # ANCHORS used to mutate that shared component in place — and RFC 5545
+        # §3.2.13 makes it carry the values for its own slot AND every later
+        # occurrence, so the rename, the move, the new location silently applied
+        # to all of them, permanently, in the bytes PUT to Radicale.
+        #
+        # This is the third path with this hazard: `exclude_occurrence` and
+        # `split_series` were each given a guard when their turn came, and
+        # `_is_thisandfuture` has been sitting in this file unconsulted here.
+        override = _detach_thisandfuture(cal, master, override, anchor)
     # An override is a single instance; it never carries the series rule.
     _apply_event_fields(override, replace(edit, rrule=UNSET), now)
     return cal.to_ical()
@@ -808,19 +1132,109 @@ def _shift_until(until, delta: timedelta, master: Event):
     path."""
     dtstart = master.get("DTSTART")
     zone = getattr(getattr(dtstart, "dt", None), "tzinfo", None)
-    if zone is None or not isinstance(until, datetime) or until.tzinfo is None:
-        return until + delta
-    return (until.astimezone(zone) + delta).astimezone(timezone.utc)
+    high = delta >= timedelta(0)
+    if not isinstance(until, datetime):
+        # A DATE-valued UNTIL: date.max is the edge here, not datetime.max.
+        try:
+            return until + delta
+        except (OverflowError, ValueError):
+            return date.max - _UNTIL_GUARD if high else date.min + _UNTIL_GUARD
+    if zone is None or until.tzinfo is None:
+        return _safely(lambda: _saturate(until) + delta,
+                       high=high, tzinfo=until.tzinfo)
+    return _safely(lambda: (_saturate(until).astimezone(zone) + delta).astimezone(timezone.utc),
+                   high=high, tzinfo=timezone.utc)
+
+
+# BY* parts that name WHICH DAY the rule fires on. Moving DTSTART without them
+# leaves the rule pointing at the old day, so the series desynchronizes from its
+# own start. BYDAY is handled separately: a plain weekday list on a WEEKLY rule
+# rotates cleanly, an ordinal one ("1TU") does not.
+_DAY_SELECTING = ("BYMONTHDAY", "BYYEARDAY", "BYWEEKNO", "BYMONTH", "BYSETPOS")
+
+
+def _desynchronizing(rule: dict, day_delta: int, new_weekday: int | None = None) -> str | None:
+    """The BY* part a day-shift would leave naming the old day, if any.
+
+    `new_weekday` is the weekday (Mon=0) DTSTART has AFTER the shift — the
+    caller has already applied it — and is needed only for the BYDAY case below.
+    None means "unknown", which keeps the old conservative answer."""
+    if not day_delta:
+        return None                         # a time-only drag moves nothing else
+    for key in _DAY_SELECTING:
+        if rule.get(key):
+            return key
+    byday = [str(d).upper() for d in rule.get("BYDAY", [])]
+    if byday and not all(c in _WEEKDAYS for c in byday):
+        return "BYDAY"                      # ordinal, e.g. 1TU — not a rotation
+    if byday and "WEEKLY" not in [str(f).upper() for f in rule.get("FREQ", [])]:
+        # REVERTED to a refusal after an attempt to allow this was shown to lose
+        # data. The reasoning that looked right: under a FREQ shorter than
+        # WEEKLY, BYDAY is a FILTER over the days the rule already generates
+        # rather than a selector pinning it to one weekday, so a shift landing
+        # inside the set "desynchronizes nothing" — and
+        # `FREQ=DAILY;BYDAY=MO,TU,WE,TH,FR` (Google Calendar's "Every weekday")
+        # is a common series to want to drag.
+        #
+        # It is wrong twice, and the second reason is the fatal one:
+        #
+        #  1. The occurrence set does not move. Every weekday is still in the
+        #     set whatever weekday DTSTART lands on, so allowing the drag
+        #     produces a series that did not move — not what was asked for.
+        #  2. Everything AROUND the rule moves anyway. `shift_series` shifts
+        #     every EXDATE, RDATE and RECURRENCE-ID by `delta` before this runs.
+        #     With the rule's own days unchanged, a +2-day drag of an MWF
+        #     standup moved an EXDATE off the occurrence the user had deleted
+        #     and onto a live one — the deleted instance came back, a real one
+        #     vanished, and an override's RECURRENCE-ID landed on a day the rule
+        #     never generates, rendering as a duplicate beside the series.
+        #
+        # `new_weekday` is kept in the signature and unused, so the next attempt
+        # starts from the note above rather than rediscovering it.
+        return "BYDAY"                      # only the WEEKLY rotation is handled
+    return None
 
 
 def _shift_rrule(master: Event, delta: timedelta, day_delta: int) -> None:
     """UNTIL moves with the series (preserving the occurrence count), and a
     WEEKLY BYDAY list rotates with the day offset so "every Mon" dragged one
-    day becomes "every Tue". Other BY* parts (foreign clients only — our own
-    rules never carry them) are left untouched."""
+    day becomes "every Tue".
+
+    Every other day-selecting BY* part makes the reschedule impossible to
+    express, and the old docstring's "left untouched" was not the no-op it
+    sounds like: `shift_series` moves DTSTART by `delta` while `BYMONTHDAY` /
+    ordinal `BYDAY` / `BYMONTH` keep naming the OLD day, so the new DTSTART no
+    longer satisfies the rule. Dragging one occurrence of a DAVx5-style
+    `FREQ=MONTHLY;BYMONTHDAY=6;COUNT=4` by a day turned Jan 6/Feb 6/Mar 6/Apr 6
+    into Jan 7/Feb 6/Mar 6/Apr 6/**May 6** — five occurrences instead of four,
+    only the dragged one moved, and a May the user never asked for, because COUNT
+    is now consumed from a later start. `FREQ=MONTHLY;BYDAY=1TU` behaves the
+    same. Those are the ordinary shapes DAVx5, jtx, Thunderbird and Apple write
+    for "monthly", so this is not an exotic input, and the write goes to Radicale
+    so the loss is permanent.
+
+    Refusing is the honest answer and the one the audit recommends: rotating
+    BYMONTHDAY across month lengths, ordinal BYDAY across weeks, and BYMONTH
+    across a year boundary is a lot of arithmetic to get subtly wrong, and the
+    user has a working alternative the error names. It is the same shape as the
+    all-day/timed refusal `shift_series` already raises, and `patch_event` maps
+    ValueError to 422.
+    """
     rule = _rrule_dict(master)
     if rule is None:
         return
+    # DTSTART has ALREADY been shifted by the caller when this runs, so this is
+    # the weekday the series would end up on — which is exactly what the BYDAY
+    # property test below needs.
+    dtstart = master.get("DTSTART")
+    start_value = getattr(dtstart, "dt", None)
+    new_weekday = start_value.weekday() if start_value is not None else None
+    blocker = _desynchronizing(rule, day_delta, new_weekday)
+    if blocker is not None:
+        raise ValueError(
+            f"cannot move a series whose repeat rule pins it to a particular day "
+            f"({blocker}); edit the occurrence instead, or change the repeat"
+        )
     changed = False
     if "UNTIL" in rule:
         rule["UNTIL"] = [_shift_until(u, delta, master) for u in rule["UNTIL"]]
@@ -1027,6 +1441,65 @@ def _partition_datelist(event: Event, key: str, anchor, *, keep_before: bool) ->
     )
 
 
+def _require_occurrence(master: Event, rule: dict | None, anchor) -> None:
+    """Refuse a "this and following" split the resource cannot support.
+
+    `split_series` derived the head purely from the master's RRULE, with no
+    `else` branch and no check that the anchor is a slot the rule generates. Two
+    silently wrong outcomes followed:
+
+    * On a NON-RECURRING event the head came back completely unbounded and a tail
+      was minted anyway, so one event became two resources with two UIDs — and
+      because the tail carries the original's ATTENDEE/ORGANIZER, a second
+      invitation. The delete variant PUT the unchanged resource, answered 204,
+      and the SPA optimistically removed a row that still existed.
+    * On a real series a STALE anchor (two tabs, or `engine.split_event`
+      re-applying a `recurrence_id` against a fresh copy after a 412) bounded the
+      head at an instant that was never an occurrence and restarted the tail's
+      rule from it, moving every later occurrence.
+
+    Both raise ValueError, which `patch_event` and the MCP tools already map to a
+    clean 422.
+
+    An RDATE-only resource is a legitimate series, so the check is "does anything
+    generate this anchor", not "is there an RRULE". The membership probe reuses
+    `_reconcile_overrides`' cost guard for the reason recorded there: the anchor
+    is caller-supplied and dateutil walks from DTSTART to reach it. Over the
+    limit the probe is skipped and the split is ALLOWED — the same safe direction
+    that function takes, since refusing an edit is the outcome with a cost.
+    """
+    dtstart = master.get("DTSTART")
+    if dtstart is None:
+        return
+    rdates = _datelist_values(master, "RDATE")
+    if any(_same_instant(_period_start(r), anchor) for r in rdates):
+        return
+    if rule is None:
+        if rdates:
+            # A pure RDATE list that does not name this anchor.
+            raise ValueError(
+                "recurrence_id does not name an occurrence of this series")
+        raise ValueError("this event does not repeat; use scope='all'")
+    if _same_instant(dtstart.dt, anchor):
+        return                              # the series' own first occurrence
+    if not {str(f).upper() for f in rule.get("FREQ", [])} <= set(_FREQ.values()):
+        # The same FREQ whitelist `_reconcile_overrides` uses, for the same
+        # reason: probing a foreign rule means letting dateutil iterate from its
+        # DTSTART, and a rule outside our own vocabulary is not one we can price.
+        return
+    if _instances_before(rule, dtstart, anchor) > _MAX_PROBE_INSTANCES:
+        return
+    try:
+        start, at = _comparable(dtstart.dt, anchor)
+        rr = rrulestr(_rule_for_probe(rule, start, dtstart.dt), dtstart=start)
+        with search_budget(_MAX_SEARCH_STEPS):
+            generated = bool(rr.between(at, at, inc=True))
+    except (SearchBudgetExceeded, ValueError, TypeError):
+        return                              # unprobeable: allow, as above
+    if not generated:
+        raise ValueError("recurrence_id does not name an occurrence of this series")
+
+
 def _count_consumed(rule: dict, dtstart: date | datetime, anchor) -> int:
     """How many RRULE-generated occurrences fall strictly before `anchor` — the
     head's share of a COUNT-bounded series. (EXDATE'd instances still consume
@@ -1035,10 +1508,22 @@ def _count_consumed(rule: dict, dtstart: date | datetime, anchor) -> int:
     start, end = _comparable(dtstart, anchor)
     rr = rrulestr(vRecur(rule).to_ical().decode(), dtstart=start)
     consumed = 0
-    for occ in rr:                      # finite: the rule carries COUNT
-        if occ >= end:
-            break
-        consumed += 1
+    try:
+        # NOT finite just because the rule carries COUNT — that was the comment
+        # here, and it is wrong for the same reason UNTIL is: dateutil tests
+        # COUNT only when it produces an instance, so a rule that never matches
+        # walks to year 9999 regardless. Measured 3.53s on the authenticated
+        # "this and following" split path with FREQ=DAILY;COUNT=5;BYMONTH=2;
+        # BYMONTHDAY=30. Filed as its own finding rather than fixed silently.
+        with search_budget(_MAX_SEARCH_STEPS):
+            for occ in rr:
+                if occ >= end:
+                    break
+                consumed += 1
+    except SearchBudgetExceeded:
+        # The head consumed whatever the walk found before the budget ran out.
+        # The caller already clamps this to at least 1, so a zero here is safe.
+        pass
     return consumed
 
 
@@ -1082,6 +1567,7 @@ def split_series(
             "edit single occurrences instead"
         )
     rule = _rrule_dict(hmaster)
+    _require_occurrence(hmaster, rule, anchor)
     if rule is not None:
         rule.pop("COUNT", None)
         rule["UNTIL"] = [_until_before(anchor)]

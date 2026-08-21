@@ -1,0 +1,1188 @@
+/**
+ * The 2026-08-19 sweep, stage 4a: user-visible correctness in the calendar,
+ * the scheduling editor and the appearance layer.
+ *
+ * **These nine findings are OPEN.** Every test below asserts the behaviour the
+ * app SHOULD have and fails against the code as it stands, so each is marked
+ * `it.fails` — the file passes while a finding is open, and the moment one is
+ * fixed its pin XPASSes, the file goes red, and somebody has to tick the
+ * finding off in docs/AUDIT.md and drop the marker. Same contract as
+ * `backlog.stage4.test.tsx`, whose api-mocking preamble this copies.
+ *
+ * The theme is one class of defect: the screen and the wire disagree with what
+ * the user did. A month that failed to load once is recorded as loaded and
+ * never asked for again; a resize grip clamped to the window edge truncates a
+ * six-month block when it is released on its own cell; the dashboard's mini
+ * calendar keeps painting yesterday's dots while every other module on the same
+ * page refreshes; a rejected booking-link save bricks the form the user just
+ * filled in; the availability grid builds a week the server refuses and
+ * silently deletes a range typed backwards; a corner radius set in light mode
+ * evaporates on the flip to dark; an overflowing DURATION is written to the API
+ * as the literal string "NaN-NaN-NaNTNaN:NaN"; and ticking "all day" on an
+ * event that ends at midnight quietly gives it a second day.
+ *
+ * All nine are BEHAVIOURAL: each drives the real component or the real exported
+ * function and asserts what a user or the API would see. None reads source
+ * text. Where a finding admits more than one correct repair the assertion names
+ * the outcome, not the repair — STAGES.md records what pins that only accept
+ * the fix you imagined cost the last time. Two ordinary passing tests sit
+ * alongside the pins as controls, marked as such: they exist so a "fix" that
+ * over-corrects (rejecting real colours, sharing tokens that are meant to be
+ * per-mode) cannot satisfy its pin by breaking something else.
+ */
+import { useState } from 'react'
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+
+import {
+  DEFAULTS, FONT_CHOICES, PRESETS, SHARED_DEFAULTS, isValidToken, resolve, sanitizeTokens,
+  type Appearance, type CustomTheme,
+} from './appearance'
+import { durationMs, endFromDuration } from './calendar'
+import { DataProvider } from './data'
+import { cacheEvents, setCacheUser } from './cache'
+import { AppearancePanel } from './components/AppearancePanel'
+import { CalendarView } from './components/CalendarView'
+import { HomeView } from './components/HomeView'
+import { SchedulingView } from './components/SchedulingView'
+import type { DashboardModule } from './dashboard'
+import { api, AuthError, HttpError, type BookingLinkInput, type CalEvent, type List, type Task } from './api'
+
+vi.mock('./api', async (importOriginal) => {
+  const mod = await importOriginal<typeof import('./api')>()
+  const mocked = Object.fromEntries(Object.keys(mod.api).map((k) => [k, vi.fn()]))
+  return { ...mod, api: mocked, subscribe: vi.fn(() => () => {}) }
+})
+const m = vi.mocked(api)
+
+const cal: List = {
+  id: 'c1', href: '/c1/', name: 'Work', is_task_list: false, is_calendar: true,
+  open_count: 0, task_count: 0, event_count: 1, total: 1, color: '#D9480F',
+}
+const taskList: List = {
+  id: 'tl1', href: '/tl1/', name: 'Errands', is_task_list: true, is_calendar: false,
+  open_count: 0, task_count: 0, event_count: 0, total: 0, color: '#1565C0',
+}
+
+const ev = (o: Partial<CalEvent> = {}): CalEvent => ({
+  uid: 'u1', id: 'u1', recurrence_id: null, is_recurring: false, calendar: '/c1/',
+  summary: 'Standup', description: null, location: null,
+  start: '2026-03-02T09:00:00', start_is_date: false,
+  end: '2026-03-02T09:30:00', end_is_date: false, duration: null,
+  all_day: false, status: null, tags: [], has_rrule: false,
+  href: '/c1/u1.ics', etag: '"1"', ...o,
+})
+
+const theme = (o: Partial<CustomTheme> = {}): CustomTheme => ({
+  id: 't1', name: 'Mine', base: 'light', light: {}, dark: {}, ...o,
+})
+
+/** userEvent has to be told about the fake clock or every await hangs. */
+const setupUser = () => userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+
+beforeEach(() => {
+  // The calendar grid opens on today's month, so the clock decides which
+  // fixtures render. March 2026 begins on a Sunday, which makes the six-week
+  // window exactly 2026-03-01 … 2026-04-11 — the clamp the resize pin is about.
+  vi.useFakeTimers({ shouldAdvanceTime: true })
+  vi.setSystemTime(new Date(2026, 2, 5))
+  // `clearAllMocks` clears CALLS. It does not drain a `mockResolvedValueOnce`
+  // queue, and it does not drop an implementation — so a test that loads
+  // several one-shot answers leaves whatever it did not consume sitting in
+  // front of the next test's default. Measured: with finding 41's fix reverted,
+  // its own pin consumes two of the four answers it queues and the leftover
+  // REJECTION lands on the next test's first fetch, failing finding 40's pin
+  // for a reason that has nothing to do with finding 40. Reset, so every test
+  // starts from the defaults set below and this file stays order-independent.
+  for (const fn of Object.values(m)) {
+    if (typeof fn === 'function' && 'mockReset' in fn) (fn as { mockReset(): void }).mockReset()
+  }
+  vi.clearAllMocks()
+  setCacheUser('')
+  localStorage.clear()
+  m.calendars.mockResolvedValue([cal])
+  m.lists.mockResolvedValue([taskList])
+  m.tasks.mockResolvedValue([] as Task[])
+  m.events.mockResolvedValue([])
+  m.patchEvent.mockResolvedValue(ev())
+  m.createEvent.mockResolvedValue(ev())
+  m.deleteEvent.mockResolvedValue(null as never)
+  m.schedulingLinks.mockResolvedValue([])
+  m.schedulingBookings.mockResolvedValue([])
+  // Implementations survive clearAllMocks, so a rejection set inside one test
+  // would leak into the next and make this file order-dependent.
+  m.createSchedulingLink.mockResolvedValue({} as never)
+})
+
+afterEach(() => { vi.useRealTimers() })
+
+// ── the calendar tab ────────────────────────────────────────────────────────
+
+/** The Calendar tab with its month held above it, exactly as App holds it — a
+ *  fixed cursor would make ‹ › no-ops and quietly pass the navigation pin. */
+function CalHarness({ rev = 0, onExpire = vi.fn() }: {
+  rev?: number
+  /** Held by the PROVIDER, which is where `makeGuard` routes an AuthError —
+   *  the calendar view's own prop never sees a fan-out failure. */
+  onExpire?: () => void
+}) {
+  const now = new Date()
+  const [cursor, setCursor] = useState(() => new Date(now.getFullYear(), now.getMonth(), 1))
+  const [shown, setShown] = useState<string[]>([])
+  return (
+    <DataProvider rev={rev} onExpire={onExpire}>
+      <CalendarView onExpire={vi.fn()} cursor={cursor} onCursorChange={setCursor}
+        sideCollapsed={false} onToggleSide={vi.fn()}
+        hiddenCalendars={[]} onHiddenCalendarsChange={vi.fn()}
+        archivedCalendars={[]} onArchivedCalendarsChange={vi.fn()}
+        calTaskLists={shown} onCalTaskListsChange={setShown}
+        calShowDone={false} onCalShowDoneChange={vi.fn()}
+        fit="dynamic" />
+    </DataProvider>
+  )
+}
+
+function openCalendar(events?: CalEvent[], over: { onExpire?: () => void } = {}) {
+  if (events) m.events.mockResolvedValue(events)
+  render(<CalHarness {...over} />)
+  return setupUser()
+}
+
+/** Wait for an event's chips to be on the grid. Separate from `openEvent`
+ *  because the drag pin wants the chip in place without opening its modal. */
+async function chipsFor(name: string) {
+  await waitFor(() => expect(screen.getAllByTitle(new RegExp(`^${name}`))[0]).toBeInTheDocument())
+}
+
+/** Open an event's edit modal by clicking its chip. A multi-day span renders
+ *  one chip per day it covers; the first is the one on its start day. */
+async function openEvent(user: ReturnType<typeof setupUser>, name = 'Standup') {
+  await waitFor(() => expect(screen.getAllByTitle(new RegExp(`^${name}`))[0]).toBeInTheDocument())
+  await user.click(screen.getAllByTitle(new RegExp(`^${name}`))[0])
+  return screen.findByRole('dialog')
+}
+
+const patchBody = () => m.patchEvent.mock.calls[0][2] as Record<string, unknown>
+
+describe('2026-08-19 — the calendar grid', () => {
+  // ── AUDIT (open): data.tsx:576 — a failed events fetch records the month as
+  //    "asked", so the grid stays blank with no retry path ─────────────────
+  it('re-requests a month whose first fetch failed', async () => {
+    // EVIDENCE. `requestWindow` writes the window into `asked` BEFORE issuing
+    // the fetch and short-circuits every later request while `rev` and the
+    // calendar set are unchanged. `fetchWindow` deletes from `gen` and
+    // `inflight` but never from `asked`, and the fan-out is a `Promise.all`, so
+    // one 502 through the tunnel leaves the month recorded as fetched with
+    // nothing in `windows` — `eventsFor` then falls back to the disk mirror,
+    // which on a fresh browser is empty. Reproduced by hand: mount on March
+    // (one call, rejects), page to April (two calls, April paints), page back
+    // to March — no third call, and March is blank forever. Only an SSE bump,
+    // archiving a calendar or an event edit ever recovers it.
+    //
+    // The assertion is the month on screen, not the call count: any correct
+    // repair — dropping the `asked` record on failure, retrying, recording only
+    // successes — has to end with the user seeing their events.
+    //
+    // WIDENED. The single-failure case below passed against a repair that
+    // recovers exactly once, so a second failure is driven too: a flaky tunnel
+    // does not fail once and then behave. And the dedupe is asserted to SURVIVE
+    // — a month that succeeded is not re-requested when the user pages back to
+    // it — so "delete the record unconditionally" cannot satisfy this either.
+    // Both directions matter: this provider sits under every tab, and a
+    // request storm here is finding 22 all over again.
+    const march = ev({ id: 'march', summary: 'March event',
+      start: '2026-03-10T09:00:00', end: '2026-03-10T09:30:00' })
+    m.events
+      .mockRejectedValueOnce(new Error('502 bad gateway'))
+      .mockResolvedValueOnce([])                       // April, first visit
+      .mockRejectedValueOnce(new Error('502 bad gateway'))   // March, second try
+      .mockResolvedValue([march])
+
+    const user = openCalendar()
+    await screen.findByText(/^Today$/)
+    await waitFor(() => expect(m.events).toHaveBeenCalledTimes(1))
+
+    const next = () => screen.getByRole('button', { name: '›' })
+    const prev = () => screen.getByRole('button', { name: '‹' })
+
+    await user.click(next())                                    // April
+    await waitFor(() => expect(m.events).toHaveBeenCalledTimes(2))
+    await user.click(prev())                                    // back to March — fails again
+    await waitFor(() => expect(m.events).toHaveBeenCalledTimes(3))
+    await user.click(next())                                    // April again: already have it
+    await user.click(prev())                                    // March, third try — succeeds
+
+    expect(await screen.findByText('March event')).toBeInTheDocument()
+
+    // April succeeded on its first visit, so neither return trip may re-request
+    // it. Four calls total: March, April, March, March.
+    expect(m.events).toHaveBeenCalledTimes(4)
+  })
+
+  // ── AUDIT (open): CalendarView.tsx:556 — the resize grip on a span that runs
+  //    past the six-week window truncates it when released on its own cell ──
+  it('does not truncate a window-clipped span dropped where its grip is drawn', async () => {
+    // EVIDENCE. The grid clamps a long event's grip to the last visible day
+    // (`evLast > lastKey ? lastKey : evLast`), but `dragBody` compares the newly
+    // built end against the event's REAL stored end, so for any span that
+    // continues past the rendered grid, grabbing the grip and letting go without
+    // moving is not the no-op it is for every other event: it PATCHes a DTEND at
+    // the window edge and deletes the rest. Reproduced by hand on an all-day
+    // 'Sabbatical' 2026-03-01 → 2026-09-01: the grip renders in the 2026-04-11
+    // cell (days[41]) and a dragStart + drop on that same cell sent
+    // {"start":"2026-03-01","end":"2026-04-12"} — six months cut to six weeks by
+    // a drag that moved zero pixels, with no confirmation and no undo.
+    //
+    // Correct is a no-op, which is what the same gesture already does for an
+    // unclipped event. Whether that comes from teaching `dragBody` the clamp or
+    // from not drawing a grip that cannot honestly mean "the last day", nothing
+    // may reach the API.
+    openCalendar([ev({
+      uid: 'sab', id: 'sab', summary: 'Sabbatical', all_day: true,
+      start: '2026-03-01', start_is_date: true,
+      end: '2026-09-01', end_is_date: true,
+    })])
+    await chipsFor('Sabbatical')
+
+    const cells = document.querySelectorAll('.cal-cell')
+    expect(cells).toHaveLength(42)
+    const lastCell = cells[41]                       // 2026-04-11, the window edge
+    const grip = lastCell.querySelector('.ev-resize')
+    expect(grip).toBeTruthy()
+
+    // jsdom builds a DragEvent with no dataTransfer, and the handler sets data
+    // on it (Firefox needs data present to start a drag at all).
+    const dataTransfer = { setData: vi.fn(), getData: vi.fn(), effectAllowed: '' }
+    fireEvent.dragStart(grip!, { dataTransfer })
+    fireEvent.drop(lastCell, { dataTransfer })
+    await act(async () => { await Promise.resolve() })
+
+    // Asserted on the calls array rather than `not.toHaveBeenCalled()` so the
+    // failure prints the DTEND that was written.
+    expect(m.patchEvent.mock.calls).toEqual([])
+  })
+
+  // WIDENING: the same gesture on a TIMED clipped span. The all-day case above
+  // goes through `dragBody`'s `ev.all_day` branch; this one goes through the
+  // `else` that reads a time off the old end, so a repair placed in one branch
+  // does not cover the other.
+  it('does not truncate a window-clipped TIMED span dropped on its own cell', async () => {
+    openCalendar([ev({
+      uid: 'proj', id: 'proj', summary: 'Project',
+      start: '2026-03-01T09:00:00', end: '2026-09-01T17:00:00',
+    })])
+    await chipsFor('Project')
+
+    const cells = document.querySelectorAll('.cal-cell')
+    const lastCell = cells[41]
+    const grip = lastCell.querySelector('.ev-resize')
+    expect(grip).toBeTruthy()
+
+    const dataTransfer = { setData: vi.fn(), getData: vi.fn(), effectAllowed: '' }
+    fireEvent.dragStart(grip!, { dataTransfer })
+    fireEvent.drop(lastCell, { dataTransfer })
+    await act(async () => { await Promise.resolve() })
+
+    expect(m.patchEvent.mock.calls).toEqual([])
+  })
+
+  // POSITIVE CONTROL — the case that stops "return null for anything clipped".
+  // Shortening a long span from the visible window is a real gesture and the
+  // only one available for an event whose true end is months away; a repair
+  // that refuses every drop on a clipped event takes it away silently. This is
+  // also why the cheap alternative the finding offers (do not draw the grip at
+  // all) is wrong: the pin above asserts the grip exists, and this asserts it
+  // still does something.
+  it('still resizes a window-clipped span dropped on an earlier cell', async () => {
+    openCalendar([ev({
+      uid: 'sab', id: 'sab', summary: 'Sabbatical', all_day: true,
+      start: '2026-03-01', start_is_date: true,
+      end: '2026-09-01', end_is_date: true,
+    })])
+    await chipsFor('Sabbatical')
+
+    const cells = document.querySelectorAll('.cal-cell')
+    const lastCell = cells[41]                       // where the grip is drawn
+    const grip = lastCell.querySelector('.ev-resize')
+    const target = cells[20]                         // 2026-03-21, well inside the window
+
+    const dataTransfer = { setData: vi.fn(), getData: vi.fn(), effectAllowed: '' }
+    fireEvent.dragStart(grip!, { dataTransfer })
+    fireEvent.drop(target, { dataTransfer })
+    await act(async () => { await Promise.resolve() })
+
+    await waitFor(() => expect(m.patchEvent).toHaveBeenCalled())
+    // DTEND is exclusive: dropping on the 21st means the span ends on the 22nd.
+    expect(patchBody()).toMatchObject({ end: '2026-03-22' })
+  })
+
+  // Control (passes today): an event whose real end IS the last visible day is
+  // not clipped, and dropping its grip where it already sits is the ordinary
+  // no-op. A repair keyed on the drop cell alone rather than on the event's
+  // true end would break this.
+  it('is still a no-op to drop an unclipped grip on its own last cell', async () => {
+    openCalendar([ev({
+      uid: 'wk', id: 'wk', summary: 'Workshop', all_day: true,
+      start: '2026-04-09', start_is_date: true,
+      end: '2026-04-12', end_is_date: true,          // exclusive: last day is 04-11
+    })])
+    await chipsFor('Workshop')
+
+    const cells = document.querySelectorAll('.cal-cell')
+    const lastCell = cells[41]                       // 2026-04-11
+    const grip = lastCell.querySelector('.ev-resize')
+    expect(grip).toBeTruthy()
+
+    const dataTransfer = { setData: vi.fn(), getData: vi.fn(), effectAllowed: '' }
+    fireEvent.dragStart(grip!, { dataTransfer })
+    fireEvent.drop(lastCell, { dataTransfer })
+    await act(async () => { await Promise.resolve() })
+
+    expect(m.patchEvent.mock.calls).toEqual([])
+  })
+
+  // ── AUDIT: one failing calendar blanks the whole month ────────────────────
+  it('keeps the calendars that loaded when one of them fails', async () => {
+    // `fetchWindow` fanned out with `Promise.all`, so a single calendar
+    // answering 502 rejected the whole window and `windows` got no rows at all
+    // — every other calendar's events discarded with it. Finding 41 fixed the
+    // part that made it permanent (the window is no longer recorded as fetched
+    // on failure, so paging back re-requests it), but the re-request has the
+    // same shape: while one collection is unhealthy the user sees an EMPTY
+    // month rather than the events that did load.
+    //
+    // The finding refused to pick between the two repairs and said so — "a
+    // design question, not a defect with one answer". Decided: paint what
+    // arrived AND name what did not. Both halves are asserted here, because
+    // `allSettled` alone silently under-reports, and a month that is short
+    // without saying so is a confident lie about the account.
+    m.calendars.mockResolvedValue([cal, { ...cal, id: 'c2', href: '/c2/', name: 'Personal' }])
+    m.events.mockImplementation(async (calId: string) => {
+      if (calId === 'c2') throw new HttpError(502, 'bad gateway')
+      return [ev({ uid: 'ok', id: 'ok', summary: 'Standup' })]
+    })
+
+    openCalendar()
+
+    // The healthy calendar's events are on screen…
+    expect(await screen.findByText('Standup')).toBeInTheDocument()
+    // …and the broken one is NAMED, not silently absent.
+    const banner = await screen.findByRole('status')
+    expect(banner).toHaveTextContent(/Personal/)
+    expect(banner, 'the banner does not say the month may be incomplete')
+      .toHaveTextContent(/missing events/i)
+    expect(within(banner).getByRole('button', { name: 'Retry' })).toBeInTheDocument()
+  })
+
+  it('still paints the disk mirror when EVERY calendar fails, and says so', async () => {
+    // Filed by the closing review as a regression this very fix introduced.
+    // `allSettled` never rejects, so a total failure reached
+    // `setWindows(key, [])` — and `eventsFor` tests PRESENCE, not length
+    // (`if (rows) return rows`), so the empty array shadowed the disk mirror.
+    // `Promise.all` used to reject, leave no entry, and fall through to the
+    // cache. The month therefore went from "last session's events" to blank:
+    // a worse blank than the one the finding is about, because the rows to
+    // draw were sitting on disk the whole time.
+    m.calendars.mockResolvedValue([cal, { ...cal, id: 'c2', href: '/c2/', name: 'Personal' }])
+    m.events.mockRejectedValue(new HttpError(502, 'bad gateway'))
+    // What a previous healthy session left behind. The mirror is user-keyed and
+    // the shared beforeEach clears the user, so it has to be set or every write
+    // is a silent no-op — which would make this test pass against the bug.
+    setCacheUser('someone')
+    cacheEvents('2026-03-01', '2026-04-12',
+      [ev({ uid: 'cached', id: 'cached', summary: 'From the mirror' })])
+
+    openCalendar()
+
+    // The banner FIRST, deliberately. It only renders once the fan-out has
+    // settled, so waiting on it is what proves the assertion below runs after
+    // the failure has landed rather than during the first paint — when
+    // `windows` has no entry yet and the mirror answers whatever the code does.
+    // Asserted the other way round, this passed against the regression.
+    const banner = await screen.findByRole('status')
+    expect(screen.queryByText('From the mirror'),
+      'a total failure blanked the month instead of falling back to the disk mirror')
+      .toBeInTheDocument()
+    expect(banner).toHaveTextContent(/Work/)
+    expect(banner, 'a total failure named only some of the calendars')
+      .toHaveTextContent(/Personal/)
+  })
+
+  it('names every failed calendar, however it failed', async () => {
+    // Two different failure shapes at once: a rejection, and a 200 carrying a
+    // body that is not an array — which `data.tsx` has always treated as a
+    // failure (`rows.filter(Array.isArray)`) and which must be reported like
+    // one, or it is exactly the silent under-report the finding warns about.
+    // Reporting only the first name passes a one-failure test.
+    m.calendars.mockResolvedValue([
+      cal,
+      { ...cal, id: 'c2', href: '/c2/', name: 'Personal' },
+      { ...cal, id: 'c3', href: '/c3/', name: 'Family' },
+    ])
+    m.events.mockImplementation(async (calId: string) => {
+      if (calId === 'c2') throw new HttpError(502, 'bad gateway')
+      if (calId === 'c3') return { detail: 'nope' } as never   // 200, not a list
+      return [ev({ uid: 'ok', id: 'ok', summary: 'Standup' })]
+    })
+
+    openCalendar()
+
+    expect(await screen.findByText('Standup')).toBeInTheDocument()
+    const banner = await screen.findByRole('status')
+    expect(banner, 'the rejected calendar is unnamed').toHaveTextContent(/Personal/)
+    expect(banner, 'the calendar that answered 200 with junk is unnamed')
+      .toHaveTextContent(/Family/)
+    expect(banner, 'a healthy calendar was named as failed').not.toHaveTextContent(/Work/)
+  })
+
+  it('signs out rather than blaming the calendars when the session has lapsed', async () => {
+    // An AuthError from any calendar is the SESSION, not that collection. Left
+    // to the banner it renders "Couldn't load Work, Personal — this month may
+    // be missing events" with a Retry that 401s forever, instead of routing to
+    // the login card. The re-throw that prevents this was asserted by nothing.
+    m.calendars.mockResolvedValue([cal, { ...cal, id: 'c2', href: '/c2/', name: 'Personal' }])
+    m.events.mockImplementation(async (calId: string) => {
+      if (calId === 'c2') throw new AuthError('session expired')
+      return [ev({ uid: 'ok', id: 'ok', summary: 'Standup' })]
+    })
+    const onExpire = vi.fn()
+    openCalendar(undefined, { onExpire })
+
+    await waitFor(() => expect(onExpire,
+      'a lapsed session was reported as a broken calendar').toHaveBeenCalled())
+    expect(screen.queryByRole('status'),
+      'a lapsed session rendered the couldn\u2019t-load banner').toBeNull()
+  })
+
+  // Control: an all-healthy month is unchanged — no banner, every calendar's
+  // events present. A repair that reported failure whenever it could not prove
+  // success would put this banner over every ordinary month.
+  it('says nothing when every calendar loads', async () => {
+    m.calendars.mockResolvedValue([cal, { ...cal, id: 'c2', href: '/c2/', name: 'Personal' }])
+    m.events.mockImplementation(async (calId: string) =>
+      [ev({ uid: calId, id: calId, summary: calId === 'c2' ? 'Personal thing' : 'Standup' })])
+
+    openCalendar()
+
+    expect(await screen.findByText('Standup')).toBeInTheDocument()
+    expect(await screen.findByText('Personal thing')).toBeInTheDocument()
+    expect(screen.queryByRole('status'),
+      'a healthy month reported a failure').toBeNull()
+  })
+
+  // WIDENING of that control, and it is the half the review walked through.
+  // The refusal above is deliberately TWO conditions — the drop cell is the
+  // clamped one AND the event really continues past it — and only the first
+  // has a driver. Dropping `&& lastDayOf(ev) > windowLast` refuses every drop
+  // on the last visible cell, and the whole suite stays green: the one test
+  // that drops there is the no-op control above, which EXPECTS no PATCH and so
+  // passes against the fix and against the over-correction alike.
+  //
+  // What that costs: nothing on the six-week grid can be extended to end on the
+  // last visible day. The drag does nothing, with no error and no feedback —
+  // the user has to page to the next month to make an event end on a day
+  // already in front of them.
+  it('still extends an unclipped event to end on the last visible day', async () => {
+    openCalendar([ev({
+      uid: 'sprint', id: 'sprint', summary: 'Sprint', all_day: true,
+      start: '2026-04-05', start_is_date: true,
+      end: '2026-04-08', end_is_date: true,           // exclusive: last day is 04-07
+    })])
+    await chipsFor('Sprint')
+
+    const cells = document.querySelectorAll('.cal-cell')
+    const grip = cells[37].querySelector('.ev-resize')  // 2026-04-07, its real end
+    expect(grip, 'the grip is not on the event\u2019s own last day').toBeTruthy()
+
+    const dataTransfer = { setData: vi.fn(), getData: vi.fn(), effectAllowed: '' }
+    fireEvent.dragStart(grip!, { dataTransfer })
+    fireEvent.drop(cells[41], { dataTransfer })        // 2026-04-11, the window edge
+    await act(async () => { await Promise.resolve() })
+
+    await waitFor(() => expect(m.patchEvent,
+      'dropping a grip on the last visible day did nothing at all').toHaveBeenCalled())
+    expect(patchBody()).toMatchObject({ end: '2026-04-12' })
+  })
+
+  // ── AUDIT (open): calendar.ts:70 — endFromDuration returns the string
+  //    "NaN-NaN-NaNTNaN:NaN" instead of null when the duration overflows ────
+  it('sends no fabricated end for a DURATION that overflows the calendar', async () => {
+    // EVIDENCE. `endFromDuration` guards `isNaN` on the START but never on the
+    // computed end, so a DURATION large enough to push `start + ms` outside the
+    // ±8.64e15 ms Date range formats as "NaN-NaN-NaNTNaN:NaN" — a truthy string
+    // where the docstring promises null. That truthiness defeats the modal's
+    // `endUnknown` protection ("rather than send a fabricated end and destroy
+    // whatever the resource actually holds, leave `end` out of the write"), the
+    // End picker renders blank, and any save — including a pure rename — PATCHes
+    // the NaN string. `_parse_datelike` answers 422 "invalid date/datetime", so
+    // the user's rename is lost behind a cryptic toast. DURATION arrives off the
+    // wire from other CalDAV clients (DAVx5, the phone clients), and neither
+    // `durationMs` nor `endFromDuration` had a direct test.
+    //
+    // The assertion is what goes on the wire: an `end` the API can parse, or no
+    // `end` at all. Both are correct; the NaN string is not.
+    const user = openCalendar([ev({
+      start: '2026-03-02T09:00:00', end: null, duration: 'P100000000D',
+    })])
+    await openEvent(user)
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Renamed' } })
+    await user.click(screen.getByText('Save'))
+
+    await waitFor(() => expect(m.patchEvent).toHaveBeenCalled())
+    const sent = patchBody()
+    expect(sent.summary).toBe('Renamed')
+    expect(String(sent.end ?? '')).toMatch(/^(\d{4}-\d{2}-\d{2}(T\d{2}:\d{2})?)?$/)
+    // And the helper's own documented contract — "or null if it cannot be
+    // derived". Asserted as falsy, not as `null`, so a repair that returns
+    // undefined or '' is equally acceptable.
+    expect(endFromDuration('2026-03-02T09:00:00', 'P100000000D')).toBeFalsy()
+
+    // The SECOND overflow, and a different guard: a day count too large for
+    // Number itself makes `ms` Infinity before any Date is built, so
+    // `endFromDuration`'s isNaN check on the result would still not be enough —
+    // `durationMs` has to refuse it. Widened here because the original drove one
+    // input through one guard and would have passed against half the repair.
+    expect(durationMs(`P${'9'.repeat(400)}D`)).toBeNull()
+    expect(endFromDuration('2026-03-02T09:00:00', `P${'9'.repeat(400)}D`)).toBeFalsy()
+  })
+
+  // Control (passes today except where noted, and must stay passing): the
+  // table the finding says neither helper ever had. Written as an ordinary
+  // test because that is what it is — the grammar below is already handled
+  // correctly, and the gap was that nothing said so, which let the overflow
+  // case above hide. A repair that tightens the parser to reject the overflow
+  // by rejecting more of the grammar breaks this.
+  it('parses every DURATION shape RFC 5545 allows, and refuses the rest', () => {
+    const H = 3600000
+    for (const [raw, ms] of [
+      ['P1W', 7 * 24 * H],
+      ['P1D', 24 * H],
+      ['P1DT2H30M', 26.5 * H],
+      ['PT1H30M', 1.5 * H],
+      ['PT0S', 0],                   // legal, and zero — NOT the same as null
+      ['-PT1H', -H],
+      ['+PT1H', H],
+    ] as Array<[string, number]>) {
+      expect(durationMs(raw)).toBe(ms)
+    }
+    for (const bad of ['P', 'PT', '', '   ', 'P1.5D', 'P1W2D', '1H', 'PT1H30', null, undefined]) {
+      expect(durationMs(bad as string | null | undefined)).toBeNull()
+    }
+
+    // …and the wrapper's contract on top of it.
+    expect(endFromDuration('2026-03-02T09:00:00', 'PT1H30M')).toBe('2026-03-02T10:30')
+    expect(endFromDuration('2026-03-02T09:00:00', 'PT0S')).toBe('2026-03-02T09:00')
+    expect(endFromDuration('2026-03-02T09:00:00', 'P')).toBeNull()
+    expect(endFromDuration('not-a-date', 'PT1H')).toBeNull()
+  })
+
+  // ── AUDIT (open): CalendarView.tsx:777 — ticking "all day" on a timed event
+  //    that ends at midnight adds a day the grid never showed ───────────────
+  it('keeps a midnight-ending event on its one day when it is made all-day', async () => {
+    // EVIDENCE. `endIsExclusive`/`lastDayOf` treat a timed DTEND sitting exactly
+    // on local midnight as exclusive everywhere the event is displayed
+    // (bucketByDay, the chips, DayPopover) and everywhere it is dragged — the
+    // resize branch of `dragBody` was fixed for precisely this. The modal is the
+    // one place that never consults it: ticking the box slices ten characters
+    // off the timed end, so the exclusive midnight instant is reinterpreted as
+    // an inclusive last day and `endOut = shiftYmd(clampedEnd, 1)` then adds
+    // another day on top. Reproduced by hand on DTSTART 2026-03-02T20:00 /
+    // DTEND 2026-03-03T00:00 — an event calendar.test.ts already pins as
+    // rendering on 2026-03-02 only: the picker labelled "End (last day)" reads
+    // 2026-03-03 the instant the box is ticked, and Save writes
+    // {"start":"2026-03-02","end":"2026-03-04"}. The event now covers two days
+    // here and in every other CalDAV client, after an edit the user believed
+    // only changed the representation.
+    const user = openCalendar([ev({ start: '2026-03-02T20:00:00', end: '2026-03-03T00:00:00' })])
+    await openEvent(user)
+    await user.click(screen.getByLabelText('all day'))
+
+    // What the user is shown, before anything is saved.
+    expect(screen.getByLabelText('End (last day)')).toHaveValue('2026-03-02')
+
+    await user.click(screen.getByText('Save'))
+    await waitFor(() => expect(m.patchEvent).toHaveBeenCalled())
+    // DTEND is exclusive for an all-day event, so one day means start + 1.
+    expect(patchBody()).toMatchObject({ start: '2026-03-02', end: '2026-03-03' })
+  })
+
+  // WIDENING for the same finding: a span that ends at midnight several days
+  // later. The single-day case above is satisfied by any repair that subtracts
+  // a day from a midnight end; this says the subtraction has to land on the
+  // right day rather than collapsing the span.
+  it('keeps a multi-day midnight-ending span on the days it covered', async () => {
+    const user = openCalendar([ev({ start: '2026-03-02T20:00:00', end: '2026-03-05T00:00:00' })])
+    await openEvent(user)
+    await user.click(screen.getByLabelText('all day'))
+
+    expect(screen.getByLabelText('End (last day)')).toHaveValue('2026-03-04')
+
+    await user.click(screen.getByText('Save'))
+    await waitFor(() => expect(m.patchEvent).toHaveBeenCalled())
+    expect(patchBody()).toMatchObject({ start: '2026-03-02', end: '2026-03-05' })
+  })
+
+  // Control (passes today, must keep passing). The obvious repair — subtract a
+  // day whenever `allDay` is ticked — satisfies both pins above and silently
+  // shortens EVERY ordinary timed event by a day. These two cases are the ones
+  // that catch it, together with `all-day end conversion` in
+  // CalendarView.test.tsx, which drives a genuinely all-day event whose `end`
+  // state is already the inclusive day.
+  it('still gives a non-midnight timed event its own single all-day day', async () => {
+    const user = openCalendar([ev({ start: '2026-03-02T09:00:00', end: '2026-03-02T17:00:00' })])
+    await openEvent(user)
+    await user.click(screen.getByLabelText('all day'))
+
+    expect(screen.getByLabelText('End (last day)')).toHaveValue('2026-03-02')
+
+    await user.click(screen.getByText('Save'))
+    await waitFor(() => expect(m.patchEvent).toHaveBeenCalled())
+    expect(patchBody()).toMatchObject({ start: '2026-03-02', end: '2026-03-03' })
+  })
+
+  // Control: ticking the box and changing your mind must give back what was
+  // there. A repair that rewrites `end` state on the way in cannot pass this.
+  it('gives a timed event its own times back when all-day is unticked', async () => {
+    const user = openCalendar([ev({ start: '2026-03-02T20:00:00', end: '2026-03-03T00:00:00' })])
+    await openEvent(user)
+    const box = screen.getByLabelText('all day')
+    await user.click(box)
+    await user.click(box)
+
+    expect(screen.getByLabelText('End')).toHaveValue('2026-03-03T00:00')
+
+    await user.click(screen.getByText('Save'))
+    await waitFor(() => expect(m.patchEvent).toHaveBeenCalled())
+    expect(patchBody()).toMatchObject({
+      start: '2026-03-02T20:00', end: '2026-03-03T00:00',
+    })
+  })
+})
+
+
+// ── the dashboard ───────────────────────────────────────────────────────────
+
+describe('2026-08-19 — the Home mini calendar', () => {
+  const layout: DashboardModule[] = [{ id: 'mc', kind: 'mini_calendar', x: 0, y: 0, w: 6, h: 6 }]
+
+  // ── AUDIT (open): HomeView.tsx:141 — the mini calendar never refetches on an
+  //    SSE change, so its dots go stale while the rest of the page updates ──
+  it('repaints when the account changes under an open dashboard', async () => {
+    // EVIDENCE. HomeView's event fetch effect depends on `needsCal`, `from`,
+    // `to` and the joined calendar-id string — all invariant under `rev`, the
+    // SSE change signal. Every other data source on the same page consumes it:
+    // `useTaskData` refetches on `[loadKey, rev, …]`, the scheduling modules on
+    // `[rev, needsSched]`, `CalendarProvider` on `[rev, enabled]`.
+    // `requestWindow` even stamps its dedupe key with `rev` specifically so a
+    // bump forces a refetch — but the effect that would call it never re-runs.
+    // Verified by hand: rerender at rev=1 and `api.calendars` is called twice
+    // while `api.events` stays at 1, with the day button still reading the old
+    // count. The user leaves Home open (which is what a dashboard is for),
+    // their phone adds a meeting, Today/Overdue/Upcoming/Booking links all
+    // repaint, and the mini calendar keeps yesterday's dots until the tab is
+    // switched away and back.
+    const { rerender } = render(
+      <DataProvider rev={0} onExpire={vi.fn()}>
+        <HomeView rev={0} onExpire={vi.fn()} layout={layout} onLayoutChange={vi.fn()} />
+      </DataProvider>,
+    )
+    await waitFor(() => expect(m.events).toHaveBeenCalledTimes(1))
+
+    // Another CalDAV client adds a meeting; Radicale's hook fires
+    // /internal/changed and the SPA turns the SSE event into a `rev` bump.
+    m.events.mockResolvedValue([ev({
+      id: 'added', summary: 'Added elsewhere',
+      start: '2026-03-10T09:00:00', end: '2026-03-10T09:30:00',
+    })])
+    // A rerender, not a second mount: `asked` lives in the provider above the
+    // tabs, so remounting HomeView is the very thing that masks this.
+    rerender(
+      <DataProvider rev={1} onExpire={vi.fn()}>
+        <HomeView rev={1} onExpire={vi.fn()} layout={layout} onLayoutChange={vi.fn()} />
+      </DataProvider>,
+    )
+
+    // The day cell's accessible name is the whole user-visible payload here:
+    // "…, 1 event" is what a screen reader reads and what the dots draw from.
+    expect(await screen.findByLabelText(/1 event$/)).toBeInTheDocument()
+
+    // …and exactly once. `requestWindow` stamps its dedupe key with `rev`, so a
+    // repair that re-runs the effect must still dedupe within a rev — otherwise
+    // every unrelated re-render of an open dashboard is a fresh fan-out across
+    // every visible calendar, which is the request storm finding 22 closed.
+    const after = m.events.mock.calls.length
+    rerender(
+      <DataProvider rev={1} onExpire={vi.fn()}>
+        <HomeView rev={1} onExpire={vi.fn()} layout={layout} onLayoutChange={vi.fn()} />
+      </DataProvider>,
+    )
+    await act(async () => { await Promise.resolve() })
+    expect(m.events).toHaveBeenCalledTimes(after)
+  })
+
+  // ── AUDIT (open): CalendarView.tsx:242 — the SAME defect, in the tab that IS
+  //    the calendar. Named in finding 42's suggested fix, pinned by nothing ──
+  it('the calendar tab repaints when the account changes under it', async () => {
+    // EVIDENCE. `CalendarView`'s event effect carries the identical dep array —
+    // `[from, to, visibleCals.map(c => c.id).join(',')]` — every part of which
+    // is invariant under an SSE change. It is masked, not absent: CalendarView
+    // calls `reloadHere()` after its OWN writes, so the stale window is only
+    // visible when the change came from somewhere else. That is precisely the
+    // case the mini-calendar finding is about, so it is the same finding, not a
+    // second one — and it is the bigger surface, because the calendar tab is
+    // where a user watches for what their other clients wrote.
+    //
+    // Left open here on purpose, as an outcome: whether the repair is a `rev`
+    // prop, a `requestWindow` dep, or a subscription, the chip has to appear.
+    const { rerender } = render(<CalHarness rev={0} />)
+    await screen.findByText(/^Today$/)
+    await waitFor(() => expect(m.events).toHaveBeenCalledTimes(1))
+
+    m.events.mockResolvedValue([ev({
+      id: 'elsewhere', summary: 'Booked from my phone',
+      start: '2026-03-10T09:00:00', end: '2026-03-10T09:30:00',
+    })])
+    rerender(<CalHarness rev={1} />)
+
+    expect(await screen.findAllByTitle(/^Booked from my phone/)).not.toHaveLength(0)
+  })
+})
+
+// ── the booking-link editor ─────────────────────────────────────────────────
+
+async function openLinkEditor() {
+  const user = setupUser()
+  render(<SchedulingView rev={0} onExpire={vi.fn()} />)
+  await user.click(await screen.findByRole('button', { name: 'New link' }))
+  await screen.findByRole('dialog')
+  await user.type(screen.getByPlaceholderText('30-minute intro call'), 'Intro call')
+  return user
+}
+
+describe('2026-08-19 — the booking-link editor', () => {
+  // ── AUDIT (open): SchedulingView.tsx:225 — a rejected save leaves the editor
+  //    permanently disabled; the in-flight guard is set but never cleared ───
+  it('comes back to life when the save is rejected', async () => {
+    // EVIDENCE. `LinkModal.save()` sets `saving = true` before calling
+    // `onSave(...)`, and nothing ever sets it back. `onSave` is typed
+    // `(body, token?) => void`, so the modal cannot observe the outcome;
+    // `SchedulingView.save` awaits `guard(...)`, which returns undefined on any
+    // failure, and deliberately leaves the modal open so the user can fix and
+    // retry — but `saving` is stuck true, so `disabled={!valid || saving}` keeps
+    // Create dead and the Enter handler returns at `if (!valid || saving)`. The
+    // only way out is Escape, which discards title, description, timezone,
+    // buffers, notice, horizon and the whole seven-day availability grid the
+    // user just filled in. Reproduced by hand with a 422 from
+    // `createSchedulingLink`: the dialog is still mounted, the button is
+    // disabled, and a second click produces no further call. The triggers are
+    // ordinary — a typo in the free-text Timezone field, overlapping
+    // availability (the pin below), a dropped connection, a 502 from the tunnel.
+    const user = await openLinkEditor()
+    m.createSchedulingLink.mockRejectedValue(
+      new HttpError(422, 'availability ranges overlap on weekday 0'))
+
+    const create = screen.getByRole('button', { name: /create link/i })
+    await user.click(create)
+    await waitFor(() => expect(m.createSchedulingLink).toHaveBeenCalledTimes(1))
+
+    expect(create).not.toBeDisabled()
+    await user.click(create)                       // the retry the toast invites
+    expect(m.createSchedulingLink).toHaveBeenCalledTimes(2)
+  })
+
+  // WIDENING: the same defect on the EDIT path, which the finding names and
+  // which reaches `patchSchedulingLink` instead of `createSchedulingLink`.
+  it('comes back to life when an edit is rejected', async () => {
+    const existing = {
+      token: 'tok1', title: 'Intro call', description: null, calendar: 'c1',
+      duration_minutes: 30, timezone: 'UTC', availability: { '0': ['09:00-17:00'] },
+      show_busy: false, buffer_minutes: 0, min_notice_hours: 24, horizon_days: 30,
+      url: 'https://x/book/tok1',
+    }
+    m.schedulingLinks.mockResolvedValue([existing as never])
+    m.patchSchedulingLink.mockRejectedValue(new HttpError(422, 'availability ranges overlap on weekday 0'))
+    const user = setupUser()
+    render(<SchedulingView rev={0} onExpire={vi.fn()} />)
+
+    await user.click(await screen.findByRole('button', { name: /edit/i }))
+    const dialog = await screen.findByRole('dialog')
+    const saveBtn = within(dialog).getByRole('button', { name: /save/i })
+    await user.click(saveBtn)
+    await act(async () => { await Promise.resolve() })
+
+    expect(saveBtn).not.toBeDisabled()
+    await user.click(saveBtn)
+    await waitFor(() => expect(m.patchSchedulingLink).toHaveBeenCalledTimes(2))
+  })
+
+  // Control (passes today, must keep passing): what the user typed survives the
+  // rejection. The modal is deliberately left open so they can fix and retry, so
+  // a repair that re-enables the button by REMOUNTING the modal would satisfy
+  // both pins above and throw the form away — the same loss, one step later.
+  it('keeps what the user typed when the save is rejected', async () => {
+    m.createSchedulingLink.mockRejectedValue(new HttpError(422, 'nope'))
+    const user = await openLinkEditor()
+
+    const monday = document.querySelectorAll('.sched-day')[0] as HTMLElement
+    const first = monday.querySelectorAll('input[type=time]')[0] as HTMLInputElement
+    fireEvent.change(first, { target: { value: '08:15' } })
+
+    await user.click(screen.getByRole('button', { name: /create link/i }))
+    await act(async () => { await Promise.resolve() })
+
+    expect(screen.getByPlaceholderText('30-minute intro call')).toHaveValue('Intro call')
+    expect((document.querySelectorAll('.sched-day')[0]
+      .querySelectorAll('input[type=time]')[0] as HTMLInputElement).value).toBe('08:15')
+  })
+
+  // ── AUDIT (open): SchedulingView.tsx:178 — the availability editor builds
+  //    overlapping windows the server 422s, and silently deletes an inverted
+  //    range ────────────────────────────────────────────────────────────────
+  // WIDENED, and the widening is the point. This used to wrap its assertions in
+  // `if (sent) { … }`, so a fix that merely refuses to submit executed ZERO
+  // assertions and passed — it could not tell "refused and explained" from
+  // "refused silently and threw the range away". Split into three tests whose
+  // assertions all run in both branches.
+  //
+  // The contract is the server's, not this file's. `parse_availability`
+  // (backend/tasksd/scheduling.py:60) requires every field filled, `s < e`
+  // strictly (EQUAL endpoints are illegal), and no overlap once the day's
+  // ranges are SORTED — so submission order is irrelevant and exactly adjacent
+  // ranges are LEGAL. An empty day is omitted rather than rejected.
+  it('never submits a week the server will refuse', async () => {
+    // EVIDENCE. `daysToAvail` is the client's whole validation of the weekly
+    // grid and implements exactly one of `parse_availability`'s two per-day
+    // rules. It filters `s && e && s < e`, mirroring the server's
+    // `if s >= e: raise`, but not the overlap rule four lines below it in the
+    // same function — so two ranges on one day are serialized verbatim and come
+    // back as 422 "availability ranges overlap on weekday 0", a raw toast the UI
+    // had no way to anticipate (and, with the pin above, one that also bricks
+    // the editor).
+    const user = await openLinkEditor()
+
+    const monday = () => document.querySelectorAll('.sched-day')[0] as HTMLElement
+    await user.click(within(monday()).getByTitle('Add another range'))
+    let mon = monday().querySelectorAll('input[type=time]')
+    fireEvent.change(mon[2], { target: { value: '10:00' } })
+    mon = monday().querySelectorAll('input[type=time]')
+    fireEvent.change(mon[3], { target: { value: '12:00' } })
+
+    await user.click(screen.getByRole('button', { name: /create link/i }))
+    await act(async () => { await Promise.resolve() })
+
+    // WIDENED AGAIN. Asking only "does anything overlapping reach the API" let a
+    // repair pass that SILENTLY REWRITES the week — sort the ranges, merge the
+    // overlaps, and the payload is clean while bearing no relation to what the
+    // owner typed. So the assertion is EQUALITY with what was typed: either the
+    // exact two ranges go, or nothing goes and the screen says why.
+    const sent = m.createSchedulingLink.mock.calls[0]?.[0] as BookingLinkInput | undefined
+    if (sent) {
+      expect(sent.availability?.['0'],
+        'Monday was rewritten into something the owner never entered')
+        .toEqual(['09:00-17:00', '10:00-12:00'])
+    } else {
+      // Refused: the two ranges the user typed are still on screen and the
+      // reason is somewhere they can read. Refusing silently is not a fix.
+      const times = Array.from(monday().querySelectorAll('input[type=time]'))
+        .map((el) => (el as HTMLInputElement).value)
+      expect(times).toContain('10:00')
+      expect(times).toContain('12:00')
+      expect(monday().textContent).toMatch(/overlap/i)
+    }
+  })
+
+  it('never drops a range the user typed backwards', async () => {
+    // The reverse half, and the worse one: an inverted range is DROPPED, not
+    // reported. Friday 17:00–09:00 — a night shift, or simply the two fields
+    // entered backwards — creates a link advertising no Friday slots, and
+    // reopening the editor shows Friday as "Unavailable" with no record the
+    // range was ever typed.
+    const user = await openLinkEditor()
+
+    const friday = () => document.querySelectorAll('.sched-day')[4] as HTMLElement
+    let fri = friday().querySelectorAll('input[type=time]')
+    fireEvent.change(fri[0], { target: { value: '17:00' } })
+    fri = friday().querySelectorAll('input[type=time]')
+    fireEvent.change(fri[1], { target: { value: '09:00' } })
+
+    await user.click(screen.getByRole('button', { name: /create link/i }))
+    await act(async () => { await Promise.resolve() })
+
+    const sent = m.createSchedulingLink.mock.calls[0]?.[0] as BookingLinkInput | undefined
+    if (sent) {
+      // Submitted: Friday must be what was TYPED, not a helpfully reversed
+      // version of it. A repair that turns 17:00-09:00 into 09:00-17:00
+      // satisfies "not empty" and publishes a link advertising the middle of
+      // the owner's working day to strangers — worse than the silent drop this
+      // finding is about, because the drop at least left Friday visibly empty.
+      expect(sent.availability?.['4'],
+        'Friday was rewritten into a range the owner never entered')
+        .toEqual(['17:00-09:00'])
+    } else {
+      // Refused: the values are still there and the day says why.
+      const times = Array.from(friday().querySelectorAll('input[type=time]'))
+        .map((el) => (el as HTMLInputElement).value)
+      expect(times).toEqual(['17:00', '09:00'])
+      expect(friday().textContent).toMatch(/before|end|order|invalid/i)
+    }
+  })
+
+  // Control (passes today, must keep passing). The server's overlap test is
+  // `next.start < prev.end`, so ranges that merely TOUCH are legal — 09:00–12:00
+  // and 12:00–17:00 is a lunch break, not an error. A client-side check written
+  // as `<=` would refuse a week the server accepts, which is the same defect
+  // pointing the other way.
+  it('still submits two adjacent ranges on one day', async () => {
+    const user = await openLinkEditor()
+
+    const monday = () => document.querySelectorAll('.sched-day')[0] as HTMLElement
+    let mon = monday().querySelectorAll('input[type=time]')
+    fireEvent.change(mon[1], { target: { value: '12:00' } })
+    await user.click(within(monday()).getByTitle('Add another range'))
+    mon = monday().querySelectorAll('input[type=time]')
+    fireEvent.change(mon[2], { target: { value: '12:00' } })
+    mon = monday().querySelectorAll('input[type=time]')
+    fireEvent.change(mon[3], { target: { value: '17:00' } })
+
+    await user.click(screen.getByRole('button', { name: /create link/i }))
+    await waitFor(() => expect(m.createSchedulingLink).toHaveBeenCalledTimes(1))
+
+    const sent = m.createSchedulingLink.mock.calls[0][0] as BookingLinkInput
+    expect(sent.availability?.['0']).toEqual(['09:00-12:00', '12:00-17:00'])
+  })
+
+})
+
+// ── appearance ──────────────────────────────────────────────────────────────
+
+function openAppearance(appearance: Appearance = {}, mode: 'light' | 'dark' = 'light') {
+  const onChange = vi.fn()
+  render(<AppearancePanel appearance={appearance} onChange={onChange}
+    mode={mode} onMode={vi.fn()} onClose={vi.fn()} />)
+  const last = () => onChange.mock.calls[onChange.mock.calls.length - 1][0] as Appearance
+  return { onChange, last }
+}
+
+describe('2026-08-19 — appearance', () => {
+  // ── AUDIT (open): appearance.ts:324 — isColor accepts hex literals CSS
+  //    rejects and non-colour functions, so a mistyped colour is stored,
+  //    synced and applied while the editor reports it valid ─────────────────
+  it('refuses hex lengths CSS does not have, and functions that are not colours', () => {
+    // EVIDENCE. The audit already closed this exact failure mode for bare words
+    // ("any 3–20 letter word … stored and applied as an override that silently
+    // blanks the property"), and the fix replaced that shape test with
+    // membership in NAMED_COLORS. The other two branches were left as shape
+    // tests. `/^#[0-9a-f]{3,8}$/i` accepts 5- and 7-digit hex, which are not
+    // legal CSS <hex-color> values (only 3, 4, 6 and 8 are), and the function
+    // branch only checks that every `name(` occurrence is in COLOR_FNS plus
+    // paren balance — never a parse. Ran against the real module:
+    // isValidToken('--bg','#12345') -> true, ('--bg','#1234567') -> true,
+    // ('--accent','calc(1px)') -> true, and sanitizeTokens passes them through.
+    // So `isValidToken` says fine, ColorControl never applies its `bad` class,
+    // the value is written to the theme, mirrored to localStorage, PUT to the
+    // account and set on the CSSOM — where `body { background: var(--bg) }`
+    // becomes invalid at computed-value time and is dropped. That is the exact
+    // "editor says fine, app renders as if the token had no value" state the
+    // previous fix existed to eliminate.
+    //
+    // Paste `#0a0a0` into Surfaces → Background (a six-digit hex with one
+    // character dropped) and the page paints on the browser's default canvas
+    // while the panel counts it as a live override that survives a reload.
+    // WIDENED. Two hex digits and one are as illegal as five, and the function
+    // branch admits more than `calc`: anything whose NAME is in COLOR_FNS, in
+    // any position, with balanced parens. A `var()` naming a token that is not
+    // a colour is the case the finding's own evidence leads with, and it is
+    // decidable here — TOKENS records each token's kind — while `var(--accent)`
+    // in the control below is legitimate and must stay valid. That distinction
+    // is the whole finding: a colour may alias another COLOUR.
+    for (const bad of ['#1', '#12', '#12345', '#1234567', '#123456789']) {
+      expect(isValidToken('--bg', bad), bad).toBe(false)
+    }
+    for (const bad of ['calc(1px)', 'rgb(1,2,3), 0 0 0 200vmax red', 'attr(data-x)',
+                       'translate(1px)', 'oklch(0.6 0.19 42) drop-shadow(0 0 red)',
+                       'var(--serif)', 'var(--nope)']) {
+      expect(isValidToken('--accent', bad), bad).toBe(false)
+    }
+    // Nothing downstream catches it either — sanitizeTokens re-runs the same check.
+    expect(sanitizeTokens({ '--bg': '#12345' })).toEqual({})
+  })
+
+  // A CONTROL, not a pin: this passes today and must still pass after the fix.
+  // A validator that rejects `#12345` by rejecting everything would satisfy the
+  // pin above and break the editor, so the real values are pinned beside it.
+  it('still accepts every hex length and colour function CSS does have', () => {
+    for (const ok of ['#fff', '#fff0', '#ffffff', '#ffffff80', '#FBFAF7']) {
+      expect(isValidToken('--bg', ok)).toBe(true)
+    }
+    for (const ok of ['oklch(0.60 0.19 42)', 'rgb(20, 19, 26)', 'rgba(20, 19, 26, 0.6)',
+                      'hsl(210 50% 40%)', 'color-mix(in oklch, red, blue)', 'var(--accent)',
+                      'var(--accent, #fff)', 'color(display-p3 1 0 0)',
+                      'transparent', 'rebeccapurple']) {
+      expect(isValidToken('--accent', ok), ok).toBe(true)
+    }
+
+    // The control that matters most: every value the app SHIPS has to survive
+    // its own validator. A tightened `isColor` that drops one of these blanks
+    // that token for everybody, and the failure is invisible in review because
+    // the panel goes on reporting the value as valid-but-absent.
+    for (const m of ['light', 'dark'] as const) {
+      expect(sanitizeTokens(DEFAULTS[m]), `DEFAULTS.${m}`).toEqual(DEFAULTS[m])
+      for (const preset of PRESETS) {
+        expect(sanitizeTokens(preset[m]), `${preset.name}.${m}`).toEqual(preset[m])
+      }
+    }
+    expect(sanitizeTokens(SHARED_DEFAULTS)).toEqual(SHARED_DEFAULTS)
+  })
+
+  // ── AUDIT (open): AppearancePanel.tsx:69 — shape, density and type tokens are
+  //    stored per light/dark map, so nine of them revert on every theme flip ─
+  it('keeps a shape token when the theme flips to dark', async () => {
+    // EVIDENCE. Nine of the 23 customizable tokens are not mode-specific in the
+    // shipped design: --serif, --sans, --mono, --radius, --fs-scale, --gutter,
+    // --row-y, --label-case and --tracking live only in SHARED_DEFAULTS and are
+    // declared only in the `:root` block of tokens.css — the
+    // `:root[data-theme="dark"]` block restates colours and nothing else. But
+    // CustomTheme has only `light` and `dark` maps, `edit()` merges every patch
+    // into `active[mode]` alone, and `resolve()`/`applyTokens()` clear all 23
+    // inline properties and re-apply only the current mode's. Ran against the
+    // real module: a theme with light:{'--radius':'8px', …} resolves to {} in
+    // dark, and applyTokens then leaves style="". So Corners 8px, Text size 1.3
+    // or Interface Georgia set in light mode are gone the moment the app flips —
+    // every button, input and modal squares off, the UI shrinks, the typeface
+    // changes, with the theme still selected and named — and there is no way in
+    // the panel to author these once for both modes. appearance.ts's own PRESETS
+    // comment names this failure ("a token it forgets would fall through to
+    // Smylte's value and read as a rendering bug in one mode only") and a test
+    // enforces density for presets, while user themes are left in exactly the
+    // sparse state that comment warns about.
+    //
+    // Asserted through `resolve`, which is what the app applies, so a fix that
+    // splits the patch across both maps and a fix that adds a shared bucket both
+    // satisfy it. The second half is the guard rail: colours must stay
+    // mode-specific, or a dark theme would be repainted in its light values.
+    const { last } = openAppearance({ active: 't1', themes: [theme()] }, 'light')
+
+    fireEvent.change(screen.getByLabelText('Corners'), { target: { value: '8' } })
+    const withRadius = last()
+    expect(resolve(withRadius, 'light')['--radius']).toBe('8px')
+    expect(resolve(withRadius, 'dark')['--radius']).toBe('8px')
+
+    fireEvent.change(screen.getByLabelText('Accent'), { target: { value: '#00ff00' } })
+    const withAccent = last()
+    expect(resolve(withAccent, 'light')['--accent']).toBe('#00ff00')
+    expect(resolve(withAccent, 'dark')['--accent']).toBeUndefined()
+  })
+
+  // WIDENING: every assertion above starts from a theme this session's WRITE
+  // path just produced, so all of them are satisfied by a fix that only splits
+  // the patch across both maps. An adversarial review shipped exactly that —
+  // `themeTokens` reduced to `sanitizeTokens(mode === 'dark' ? theme.dark :
+  // theme.light)`, no read-side merge at all — and the whole suite stayed green.
+  //
+  // The read side is the half that matters to anyone who already has a theme:
+  // `docs/AUDIT.md` makes it the stated reason the split-the-patch option was
+  // chosen over a `shared` bucket — "already-saved themes are repaired on the
+  // READ path by `themeTokens`… no migration, no schema change". Every theme
+  // saved before that commit has the shared token in ONE map, and nothing here
+  // drove that shape.
+  //
+  // So this seeds it directly: an 8px corner radius and a serif interface font
+  // stored in `light` only, exactly as the old write path left them, flipped to
+  // dark without touching the panel.
+  it('repairs a theme already saved with a shared token in one mode only', () => {
+    const saved: Appearance = {
+      active: 't1',
+      themes: [theme({
+        light: { '--radius': '8px', '--sans': 'Georgia, serif', '--accent': '#ff0000' },
+        dark: {},
+      })],
+    }
+
+    expect(resolve(saved, 'light')['--radius']).toBe('8px')
+    expect(resolve(saved, 'dark')['--radius'],
+      'a corner radius saved before the split reverts on the flip to dark')
+      .toBe('8px')
+    expect(resolve(saved, 'dark')['--sans'],
+      'a typeface saved before the split reverts on the flip to dark')
+      .toBe('Georgia, serif')
+
+    // …and the same in the other direction, for anyone whose theme was authored
+    // in dark mode.
+    const savedDark: Appearance = {
+      active: 't1',
+      themes: [theme({ light: {}, dark: { '--radius': '8px', '--label-case': 'none' } })],
+    }
+    expect(resolve(savedDark, 'light')['--radius']).toBe('8px')
+    expect(resolve(savedDark, 'light')['--label-case']).toBe('none')
+
+    // Control: the repair reaches the nine SHARED tokens and stops there. A
+    // colour saved in light must not bleed into dark, or every dark theme is
+    // repainted in its light values — which is the failure the guard rail in
+    // the pin above is about, reached from the read side this time.
+    expect(resolve(saved, 'dark')['--accent'],
+      'a light-mode colour leaked into dark through the read-side repair')
+      .toBeUndefined()
+  })
+
+  // WIDENING: the slider above is one of THREE control kinds, and `--radius` is
+  // one of the nine shared tokens. A repair wired into the length control alone
+  // passes the pin and leaves the typeface and the label casing reverting.
+  it('keeps every shared token, whichever control set it', async () => {
+    const { last } = openAppearance({ active: 't1', themes: [theme()] }, 'light')
+
+    // The select's values are whole font STACKS, not labels.
+    const sans = FONT_CHOICES.sans[1].stack        // "System sans"
+    fireEvent.change(screen.getByLabelText(/^Interface/), { target: { value: sans } })
+    expect(resolve(last(), 'dark')['--sans'], '--sans (font control)').toBe(sans)
+
+    fireEvent.change(screen.getByLabelText(/^Labels/), { target: { value: 'none' } })
+    expect(resolve(last(), 'dark')['--label-case'], '--label-case (keyword)').toBe('none')
+
+    fireEvent.change(screen.getByLabelText(/^Gutter/), { target: { value: '40' } })
+    expect(resolve(last(), 'dark')['--gutter'], '--gutter (length)').toBe('40px')
+  })
+
+  // WIDENING: the fork path. With no theme active, `edit()` seeds a new one
+  // from the shipped design and merges the patch into `fork[mode]` — a
+  // different branch from the one above, and the one a first-time user hits.
+  it('keeps a shared token set on a theme the edit itself created', async () => {
+    const { last } = openAppearance({}, 'light')
+
+    fireEvent.change(screen.getByLabelText('Corners'), { target: { value: '8' } })
+    expect(resolve(last(), 'light')['--radius']).toBe('8px')
+    expect(resolve(last(), 'dark')['--radius']).toBe('8px')
+  })
+
+  // WIDENING: clearing has to be symmetric with setting, or the reset arrow
+  // stops working the moment the fix lands — the token would be cleared from
+  // the current mode and go on resolving from the other one.
+  it('clears a shared token out of both modes', async () => {
+    const withRadius: Appearance = {
+      active: 't1', themes: [theme({ light: { '--radius': '8px' }, dark: { '--radius': '8px' } })],
+    }
+    const { last } = openAppearance(withRadius, 'light')
+
+    // The per-token reset arrow, labelled per token ("Reset Corners").
+    fireEvent.click(screen.getByLabelText('Reset Corners'))
+
+    expect(resolve(last(), 'light')['--radius']).toBeUndefined()
+    expect(resolve(last(), 'dark')['--radius']).toBeUndefined()
+  })
+
+  // WIDENING: "Reset light" says it drops every override for this mode. Once a
+  // shared token counts for both, leaving it in the other map means the button
+  // visibly does nothing — the override counter, which counts shared tokens in
+  // both modes, would still read above zero straight after a reset.
+  it('drops shared tokens from both modes on a per-mode reset', async () => {
+    const withRadius: Appearance = {
+      active: 't1', themes: [theme({ light: { '--radius': '8px' }, dark: { '--radius': '8px' } })],
+    }
+    const { last } = openAppearance(withRadius, 'light')
+
+    fireEvent.click(screen.getByText(/Reset light/i))
+
+    expect(resolve(last(), 'light')['--radius']).toBeUndefined()
+    expect(resolve(last(), 'dark')['--radius']).toBeUndefined()
+  })
+})

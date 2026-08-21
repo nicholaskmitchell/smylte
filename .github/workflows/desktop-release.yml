@@ -19,8 +19,15 @@ concurrency:
   group: desktop-release
   cancel-in-progress: false
 
+# Read at workflow scope, write ONLY on `release`. GitHub applies a workflow's
+# `permissions:` to every job, so declaring write here handed it to `web` and
+# `client` too — and `actions/checkout` defaults `persist-credentials: true`,
+# which writes the token into `.git/config` as an `http.extraheader`. The next
+# step in `web` is `npm ci`, running install scripts for the whole dependency
+# tree. One compromised transitive dev-dependency could read that config and
+# publish a release every desktop client executes on next launch.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   web:
@@ -29,7 +36,11 @@ jobs:
       run:
         working-directory: frontend
     steps:
+      # Nothing after checkout uses git, so the token has no reason to stay on
+      # disk while third-party install scripts run.
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -59,7 +70,11 @@ jobs:
   client:
     runs-on: windows-latest
     steps:
+      # Same reasoning as `web`: NuGet restore and MSBuild run restored code,
+      # and `Microsoft.Web.WebView2` floats on `1.0.*`.
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
@@ -79,6 +94,11 @@ jobs:
   release:
     needs: [web, client]
     runs-on: ubuntu-latest
+    # The one job that publishes, and the only one that needs to write. It runs
+    # no dependency install code at all — its steps are `gh` calls over the
+    # artifacts the other two built.
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4

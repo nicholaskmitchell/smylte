@@ -24,7 +24,7 @@ import {
   type CalEvent, type CreateTaskBody, type List, type Task, type TaskGroup,
 } from './api'
 import { orderLists } from './lists'
-import { sortTasks } from './order'
+import { sortTasks, taskKey } from './order'
 import {
   cacheCalendars, cacheEvents, cacheLists, cacheTasks,
   readCachedCalendars, readCachedEvents, readCachedLists, readCachedTasks,
@@ -90,6 +90,13 @@ export interface CalendarData {
   requestWindow: (from: string, to: string, cals: List[]) => void
   setEvents: (from: string, to: string, next: (prev: CalEvent[]) => CalEvent[]) => void
   reload: (from: string, to: string, cals: List[]) => void
+  /** Calendars whose fetch for this window failed, by name.
+   *
+   *  The fan-out keeps whatever loaded rather than discarding the month, which
+   *  means the grid can be SHORT — so what is missing has to be sayable, or the
+   *  user reads a partial month as a complete one. Empty when everything
+   *  landed. */
+  windowErrors: (from: string, to: string) => string[]
 }
 
 const TaskCtx = createContext<TaskData | null>(null)
@@ -177,7 +184,17 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
   // `rev` bump refetches again once the server has published the change).
   // Every list is fetched and hidden ones filtered at render, so a visibility
   // toggle is instant (no refetch) — exactly like the calendar grid.
-  const loadKey = `*|${lists.map((l) => l.id).join(',')}`
+  // Sorted: the identity is the list SET. A sidebar drag-reorder hands back the
+  // same ids in a new order, and an order-sensitive key made that a full
+  // refetch of every task in the account for data that cannot have changed —
+  // while ALSO failing the commit guard below, so any response already in
+  // flight was thrown away. Nothing downstream wants the order: the fan-out is
+  // a `Promise.all`, the result is flattened, and rows are ordered at render by
+  // `sortTasks`. Both consumers read this one constant, which is why it is
+  // fixed here rather than in the effect's dependency list — sorting only the
+  // dep would stop the refetch while leaving the guard order-sensitive, and
+  // then an in-flight response would be discarded with nothing to re-issue it.
+  const loadKey = `*|${lists.map((l) => l.id).slice().sort().join(',')}`
   const keyRef = useRef(loadKey)
   keyRef.current = loadKey
   const fetchToken = useRef(0)
@@ -219,10 +236,18 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
   // lies. The SSE `rev` bump refetches shortly after as a safety net. Rollbacks
   // restore only the affected task — never a whole-array snapshot, which would
   // clobber interleaved changes to other tasks.
-  const patchLocal = (uid: string, patch: Partial<Task>) =>
-    setTasks((ts) => ts.map((t) => (t.uid === uid ? { ...t, ...patch } : t)))
+  //
+  // Keyed by (list, uid), like `sortTasks` and the reorder snapshot below: the
+  // backend keys items on (collection_href, uid), so a uid copied into a second
+  // list is two distinct tasks. Matching on the bare uid made them one as far as
+  // every optimistic write was concerned — ticking one row's box marked both
+  // done on screen, and deleting one removed both, each disagreeing with the
+  // server until a full refetch. `patchLocal` takes the whole task rather than a
+  // uid so the list travels with it.
+  const patchLocal = (target: Task, patch: Partial<Task>) =>
+    setTasks((ts) => ts.map((t) => (taskKey(t) === taskKey(target) ? { ...t, ...patch } : t)))
   const settle = (dto: Task | undefined, orig: Task) =>
-    setTasks((ts) => ts.map((t) => (t.uid === orig.uid ? (dto ?? orig) : t)))
+    setTasks((ts) => ts.map((t) => (taskKey(t) === taskKey(orig) ? (dto ?? orig) : t)))
 
   // A pending create renders immediately as a local stand-in carrying the uid
   // the server *will* give it (`uidFor`, from the same client_id the request
@@ -325,6 +350,81 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
   // Deliberately bypasses `guard`: a nine-row batch that fails would raise nine
   // toasts. Failures come back as indexes instead and the modal reports them in
   // place, against the rows that produced them.
+  // What the create ASKED for, against what came back.
+  //
+  // A create is idempotent on its client_id: the second POST under a slug is
+  // answered by confirming the resource already written under it, body ignored
+  // (`_put_new` swallows the 412 when the occupant carries the same UID, and
+  // `create_task` returns the stored resource). That is exactly right for the
+  // failure the composer's retry exists for — the write landed and the reply was
+  // lost — and it is why a kept row must NOT mint a fresh id: doing so would
+  // author a duplicate.
+  //
+  // But a row keeps its id across a retry while every field except its title can
+  // be edited in between, and the whole shared strip is re-read on each submit.
+  // So the user could correct the due date, press Add, and have the correction
+  // silently dropped: the server confirmed the old resource, `settleCreate`
+  // painted the old DTO, nothing was reported as failed, and the modal closed on
+  // a success it did not get.
+  //
+  // No server signal is needed to notice. If the resource that came back does
+  // not carry what this call asked for, this was a replay of an earlier body,
+  // and the difference is exactly the correction the user made — so send it as
+  // the PATCH it should have been. Only fields the caller explicitly SET are
+  // compared, so a server-side normalisation of something we left alone cannot
+  // provoke a write.
+  // Both sides normalised before comparing, because two of these fields do not
+  // have the same SHAPE on the way out as on the way in:
+  //
+  //   body.due       'YYYY-MM-DDTHH:MM'      Task.due        _iso() -> with seconds
+  //   body.start     'YYYY-MM-DDTHH:MM'      Task.start      _iso() -> with seconds
+  //   body.priority  'high'                  Task.priority   the iCal integer 1
+  //
+  // THREE rows, not the two this comment first listed. `start` was missed
+  // because `bodyFrom` only emits a time on it for a timed row, so the corpus
+  // the widened double drove never carried one — the same blind spot, one field
+  // over. `sameDue` is named for `due` and used for both; the rule is identical.
+  //
+  // Compared raw, every bulk row carrying a timed due or a priority looked like
+  // a replay of a different body and provoked a PATCH — a 20-row add became 40
+  // writes, each a CalDAV PUT with a SEQUENCE bump every other client sees. The
+  // comment below claims "a server-side normalisation of something we left alone
+  // cannot provoke a write"; normalisation of the fields we DID set is exactly
+  // what provoked it. `priority_label` is the DTO's own label form and is what
+  // the body should have been compared against all along.
+  const sameDue = (sent: string | undefined, got: string | null): boolean => {
+    const a = sent ?? null
+    const b = got ?? null
+    if (a === b) return true
+    if (a === null || b === null) return false
+    // A timed value differs only by the seconds the server appends.
+    return a.includes('T') && b.startsWith(a) && /^:\d{2}$/.test(b.slice(a.length))
+  }
+
+  const reconcileReplay = async (
+    listId: string, body: CreateTaskBody, got: Task,
+  ): Promise<Task> => {
+    const patch: Record<string, unknown> = {}
+    if ('summary' in body && body.summary !== got.summary) patch.summary = body.summary
+    if ('due' in body && !sameDue(body.due, got.due)) patch.due = body.due ?? null
+    if ('start' in body && !sameDue(body.start, got.start)) {
+      patch.start = body.start ?? null
+    }
+    if ('notes' in body && (body.notes ?? null) !== (got.notes ?? null)) {
+      patch.notes = body.notes ?? null
+    }
+    if ('priority' in body
+        && (body.priority ?? 'none') !== (got.priority_label ?? 'none')) {
+      patch.priority = body.priority
+    }
+    if ('tags' in body
+        && (body.tags ?? []).join('\u0000') !== (got.tags ?? []).join('\u0000')) {
+      patch.tags = body.tags
+    }
+    if (!Object.keys(patch).length) return got
+    return await api.patchTask(listId, got.uid, patch)
+  }
+
   const createMany = async (
     items: Array<{ listId: string; body: CreateTaskBody; cid: string }>,
     onProgress: (done: number) => void,
@@ -341,8 +441,28 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
     const failed: number[] = []
     for (let i = 0; i < items.length; i++) {
       try {
-        const t = await api.createTask(items[i].listId, { ...items[i].body, client_id: cids[i] })
-        settleCreate(uids[i], key, t)
+        const created = await api.createTask(
+          items[i].listId, { ...items[i].body, client_id: cids[i] })
+        settleCreate(uids[i], key, created)
+        // AWAITED, but its failure is not this row's failure.
+        //
+        // The create has landed and been painted; a transient failure on the
+        // follow-up correction must not mark the row failed, which would keep it
+        // in the composer and have the user add it a second time. That is what
+        // the inner catch is for.
+        //
+        // It must NOT be detached, though: `createMany` resolving is what closes
+        // AddMultipleModal, so a correction still in flight lands on a task the
+        // user can already see and act on — ticking its box, or deleting it —
+        // and `settleCreate` then writes the server's older DTO back over them.
+        // Awaiting keeps the whole batch inside the modal, which is where it was
+        // before this was moved.
+        try {
+          const fixed = await reconcileReplay(items[i].listId, items[i].body, created)
+          if (fixed !== created) settleCreate(uids[i], key, fixed)
+        } catch (e) {
+          console.error(e)
+        }
       } catch (e) {
         if (e instanceof AuthError) {
           // Session died mid-batch. Drop every stand-in that can no longer land
@@ -362,27 +482,33 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
   }
 
   const addSub = (parent: string, summary: string) => {
-    const p = tasks.find((x) => x.uid === parent)   // a subtask lives in its parent's list
+    // A subtask lives in its parent's list. With one uid in two lists this can
+    // still pick the wrong copy — the caller passes a bare uid — but both
+    // candidates carry the same parent uid, so the subtask lands under a real
+    // parent either way. Retyping TaskGroup's whole uid-shaped prop surface is
+    // a separate finding; see docs/AUDIT.md.
+    const p = tasks.find((x) => x.uid === parent)
     if (p) void create(p.list, { summary, parent }, pending.current.get(parent))
   }
 
   const toggle = async (t: Task) => {
     const done = !t.completed
     invalidateFetches()
-    patchLocal(t.uid, {
+    patchLocal(t, {
       completed: done, cancelled: false, status: done ? 'COMPLETED' : 'NEEDS-ACTION',
     })
     settle(await guard(() => api.complete(t.list, t.uid, done)), t)
   }
 
   const remove = async (t: Task) => {
-    const at = tasks.findIndex((x) => x.uid === t.uid)  // where to restore it on failure
+    const gone = taskKey(t)                            // (list, uid): see patchLocal
+    const at = tasks.findIndex((x) => taskKey(x) === gone)  // where to restore it on failure
     const key = loadKey
     invalidateFetches()
-    setTasks((ts) => ts.filter((x) => x.uid !== t.uid))
+    setTasks((ts) => ts.filter((x) => taskKey(x) !== gone))
     if ((await guard(() => api.deleteTask(t.list, t.uid))) === undefined && key === keyRef.current) {
       setTasks((ts) => {
-        if (ts.some((x) => x.uid === t.uid)) return ts
+        if (ts.some((x) => taskKey(x) === gone)) return ts
         const next = ts.slice()
         next.splice(at < 0 ? next.length : Math.min(at, next.length), 0, t)
         return next
@@ -407,7 +533,7 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
       opt.cancelled = patch.status === 'CANCELLED'
     }
     invalidateFetches()
-    patchLocal(t.uid, opt)
+    patchLocal(t, opt)
     settle(await guard(() => api.patchTask(t.list, t.uid, patch)), t)
   }
 
@@ -437,7 +563,7 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
       console.info(`repairing subtask ${t.uid}: parent ${p} → ${real.uid}`)
       // Painted locally too, so the row settles on the repaired parent rather
       // than waiting for the write's own SSE bump to come back around.
-      patchLocal(t.uid, { parent: real.uid })
+      patchLocal(t, { parent: real.uid })
       void guard(() => api.patchTask(t.list, t.uid, { parent: real.uid }))
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -473,7 +599,10 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
     // `tasks` and restoring it wholesale also reverted anything that landed
     // while the reorder was in flight — an SSE update, a completed task, an edit
     // from another tab — silently undoing a write the user had just made.
-    const before = new Map(tasks.map((t) => [t.uid, t.sort_order ?? null]))
+    // Keyed by (list, uid), like sortTasks: a uid copied into a second list is
+    // two distinct tasks, and collapsing them onto one key restored the wrong
+    // one's position on a failed reorder.
+    const before = new Map(tasks.map((t) => [taskKey(t), t.sort_order ?? null]))
     setTasks(next)
     const ok = await guard(() =>
       api.reorderTasks(placed.map((t) => ({ list: t.list, uid: t.uid }))))
@@ -481,7 +610,7 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
     // than leaving the UI claiming a move that never landed.
     if (ok === undefined) {
       setTasks((cur) => cur.map((t) => (
-        before.has(t.uid) ? { ...t, sort_order: before.get(t.uid)! } : t)))
+        before.has(taskKey(t)) ? { ...t, sort_order: before.get(taskKey(t))! } : t)))
     }
   }
 
@@ -506,6 +635,7 @@ function CalendarProvider({ rev, guard, enabled, children }: {
   // and the only place an instant paint is the difference between a grid of
   // events and a blank one.
   const [windows, setWindows] = useState<Map<string, CalEvent[]>>(new Map())
+  const [windowFails, setWindowFails] = useState<Map<string, string[]>>(new Map())
   const seeded = useRef<{ key: string; rows: CalEvent[] } | null>(null)
   const latest = useRef<string>('')
 
@@ -547,25 +677,105 @@ function CalendarProvider({ rev, guard, enabled, children }: {
   // grid stayed empty until something unrelated bumped `rev`. A fetch should
   // only ever be superseded by a newer fetch for the SAME window.
   const gen = useRef(new Map<string, number>())
-  const inflight = useRef(new Set<string>())
+
+  // What a window has been asked for, so re-renders do not re-request it. The
+  // calendar set and `rev` are part of the identity: archiving a calendar or a
+  // server-side change has to refetch, a scroll does not.
+  //
+  // Declared above `fetchWindow` because the failure path has to reach it.
+  const asked = useRef(new Map<string, string>())
 
   const fetchWindow = useCallback((from: string, to: string, forCals: List[]) => {
     const key = windowKey(from, to)
     const mine = (gen.current.get(key) ?? 0) + 1
     gen.current.set(key, mine)
-    inflight.current.add(key)
     void guard(async () => {
-      const per = await Promise.all(forCals.map((c) => api.events(c.id, from, to)))
-      const rows = per.filter(Array.isArray).flat()
-      if (gen.current.get(key) !== mine) return
-      setWindows((w) => new Map(w).set(key, rows))
-    }).finally(() => inflight.current.delete(key))
+      // `allSettled`, not `all`. One calendar answering 502 used to reject the
+      // whole window, so every OTHER calendar's events were discarded with it
+      // and the user got a blank month. Finding 41 fixed the part that made
+      // that permanent — the window is no longer recorded as fetched on failure
+      // — but the re-request had the same shape, so while one collection was
+      // unhealthy the month stayed empty.
+      //
+      // Keeping what arrived is only half of it: a month that is short and does
+      // not say so is a confident lie, and this grid sits beside a booking page
+      // whose whole job is not to under-report. So the failures are recorded by
+      // name and rendered, and a partial window is never silently partial.
+      const per = await Promise.allSettled(forCals.map((c) => api.events(c.id, from, to)))
+      const rows = per.flatMap((r) =>
+        r.status === 'fulfilled' && Array.isArray(r.value) ? r.value : [])
+      const failed = forCals
+        .filter((c, i) => per[i].status === 'rejected'
+          || !Array.isArray((per[i] as PromiseFulfilledResult<CalEvent[]>).value))
+        .map((c) => c.name)
+      // An AuthError anywhere is the session, not one collection: let it out to
+      // `guard` so the app routes to the login card rather than reporting the
+      // owner's whole account as a set of broken calendars.
+      const auth = per.find((r) => r.status === 'rejected'
+        && (r as PromiseRejectedResult).reason instanceof AuthError)
+      if (auth) throw (auth as PromiseRejectedResult).reason
+      if (gen.current.get(key) === mine) {
+        // Only when SOMETHING landed. `[]` is truthy, and `eventsFor` tests
+        // presence rather than length (`if (rows) return rows`), so writing an
+        // empty array for a window where every calendar failed shadowed the
+        // disk mirror — the month painted blank where `Promise.all` used to
+        // reject, leave no entry, and fall through to the cache. That is a
+        // worse blank than the one this finding is about, because the rows to
+        // draw were sitting on disk.
+        if (failed.length < forCals.length) setWindows((w) => new Map(w).set(key, rows))
+        setWindowFails((m) => {
+          const next = new Map(m)
+          if (failed.length) next.set(key, failed)
+          else next.delete(key)
+          return next
+        })
+      }
+      // Only a WHOLE-window failure leaves the window un-asked, so a healthy
+      // calendar's month is not re-requested on every page-turn because a
+      // broken one is still broken.
+      return failed.length < forCals.length ? true : undefined
+    }).then((ok) => {
+      // `requestWindow` records the window BEFORE the fetch, so a failure left
+      // it recorded as fetched with nothing in `windows` — and the fan-out is a
+      // `Promise.all`, so one 502 through the tunnel blanks the whole month.
+      // Paging away and back never re-requested it; only an SSE bump, archiving
+      // a calendar or an edit ever recovered it, because those change the stamp.
+      //
+      // `undefined` is what `makeGuard` returns from its catch and the only way
+      // to get it: the superseded branch above returns `true` too, deliberately,
+      // so a stale-but-successful response does not un-ask a window that a newer
+      // fetch is already handling. Clearing on every settle would re-request on
+      // every fast page-turn.
+      if (ok === undefined) asked.current.delete(key)
+    })
   }, [guard])
 
-  // What a window has been asked for, so re-renders do not re-request it. The
-  // calendar set and `rev` are part of the identity: archiving a calendar or a
-  // server-side change has to refetch, a scroll does not.
-  const asked = useRef(new Map<string, string>())
+  // Everything this provider holds, dropped when the session goes away.
+  //
+  // `onLogout` deliberately clears the DISK mirror (App.tsx calls `clearCache()`
+  // and `setCacheUser('')`, and cache.ts is user- and version-keyed for exactly
+  // that reason) — but `DataProvider` sits ABOVE the auth branch on purpose, so
+  // it never unmounts and nothing reset this state. On the next login
+  // `CalendarView` remounted, `eventsFor` hit `windows` and painted the previous
+  // session's rows, and `requestWindow` short-circuited because `asked` still
+  // held the same stamp, so the month was never refetched at all.
+  //
+  // In the multi-account reading of the trust model that serves one account's
+  // events to another; in the single-account one it means "log out at night, log
+  // back in in the morning" shows a frozen snapshot missing everything DAVx5 or
+  // Apple wrote overnight. `TaskProvider` already refetches — its effects list
+  // `enabled` as a dep — which made this an inconsistency rather than a design.
+  useEffect(() => {
+    if (enabled) return
+    setCals([])
+    setWindows(new Map())
+    setWindowFails(new Map())
+    setLoaded(false)
+    asked.current.clear()
+    gen.current.clear()
+    seeded.current = null
+    latest.current = ''
+  }, [enabled])
 
   const requestWindow = useCallback((from: string, to: string, forCals: List[]) => {
     const key = windowKey(from, to)
@@ -601,8 +811,12 @@ function CalendarProvider({ rev, guard, enabled, children }: {
     })
   }, [])
 
+  const windowErrors = useCallback(
+    (from: string, to: string): string[] => windowFails.get(windowKey(from, to)) ?? [],
+    [windowFails])
+
   const value: CalendarData = {
-    cals, loaded, setCals, eventsFor, requestWindow, setEvents, reload,
+    cals, loaded, setCals, eventsFor, requestWindow, setEvents, reload, windowErrors,
   }
   return <CalendarCtx.Provider value={value}>{children}</CalendarCtx.Provider>
 }

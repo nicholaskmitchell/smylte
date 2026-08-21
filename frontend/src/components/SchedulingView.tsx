@@ -4,6 +4,7 @@ import { api, type Availability, type Booking, type BookingLink, type BookingLin
 import { makeGuard } from '../util'
 import { fmtWhen, inputLang } from '../time'
 import { useTimeFormat } from '../timeformat'
+import { useEscape } from '../hooks'
 
 // Owner side of client scheduling: manage booking links (availability, target
 // calendar, redacted-busy toggle) and see who booked. The public counterpart
@@ -65,14 +66,21 @@ export function SchedulingView({ rev, onExpire }: { rev: number; onExpire: () =>
     if ((await guard(() => api.deleteSchedulingLink(l.token))) === undefined) setLinks(prev)
   }
 
-  const save = async (body: BookingLinkInput, token?: string) => {
+  /** Whether the write landed — the modal needs it to clear its in-flight guard.
+   *
+   *  Typed `=> void` before, so the modal set `saving` and could never observe
+   *  the outcome: `guard` swallows the failure, the modal is deliberately left
+   *  open so the user can fix and retry, and `disabled={!valid || saving}` then
+   *  kept Create dead forever. The only way out was Escape, which discards the
+   *  whole seven-day grid they had just filled in. */
+  const save = async (body: BookingLinkInput, token?: string): Promise<boolean> => {
     const saved = await guard(() => token
       ? api.patchSchedulingLink(token, body)
       : api.createSchedulingLink(body))
-    if (saved) {
-      setLinks((ls) => token ? ls.map((x) => (x.token === token ? saved : x)) : [...ls, saved])
-      setEditing(null)
-    }
+    if (!saved) return false
+    setLinks((ls) => token ? ls.map((x) => (x.token === token ? saved : x)) : [...ls, saved])
+    setEditing(null)
+    return true
   }
 
   return (
@@ -171,11 +179,58 @@ const availToDays = (av: Availability): DayRanges[] =>
     return { on: ranges.length > 0, ranges: ranges.length ? ranges : [DEFAULT_RANGE.split('-') as [string, string]] }
   })
 
+/** A wholly-untouched pair — what "+ range" appends and the user never filled
+ *  in. Dropped rather than complained about, the way the server omits an empty
+ *  day rather than rejecting it. */
+const isBlankRange = ([s, e]: [string, string]) => !s && !e
+
+/**
+ * Why the server would refuse each day, keyed by weekday index.
+ *
+ * A mirror of `parse_availability` (backend/tasksd/scheduling.py:60), which is
+ * where the rules actually live, and it is deliberately exact:
+ *   - both fields filled;
+ *   - `s < e` STRICTLY — equal endpoints are illegal there too;
+ *   - no overlap once the day's ranges are SORTED, so submission order does not
+ *     matter and exactly adjacent ranges (`…-12:00` then `12:00-…`) are LEGAL.
+ *     A `<=` here would refuse a lunch break the server accepts.
+ *
+ * The client used to implement the first rule as a silent FILTER and not the
+ * second at all: two ranges on one day were serialized verbatim and came back
+ * as a raw 422 the UI had no way to anticipate, while a range typed backwards
+ * was dropped without a word — the link then advertised no availability that
+ * day, and reopening the editor showed it as "Unavailable" with no record the
+ * range had ever been typed.
+ */
+export function availErrors(days: DayRanges[]): Map<number, string> {
+  const out = new Map<number, string>()
+  days.forEach((d, i) => {
+    if (!d.on) return
+    const filled = d.ranges.filter((r) => !isBlankRange(r))
+    if (filled.some(([s, e]) => !s || !e)) {
+      out.set(i, 'Fill in both times, or remove the range.')
+      return
+    }
+    if (filled.some(([s, e]) => s >= e)) {
+      out.set(i, 'Each range must start before it ends.')
+      return
+    }
+    const sorted = [...filled].sort((a, b) => a[0].localeCompare(b[0]))
+    if (sorted.some((r, k) => k > 0 && r[0] < sorted[k - 1][1])) {
+      out.set(i, 'These ranges overlap.')
+    }
+  })
+  return out
+}
+
 const daysToAvail = (days: DayRanges[]): Availability => {
   const av: Availability = {}
   days.forEach((d, i) => {
     if (!d.on) return
-    const rs = d.ranges.filter(([s, e]) => s && e && s < e).map(([s, e]) => `${s}-${e}`)
+    // Only the untouched "+ range" placeholder is dropped. Everything else is
+    // the user's, and `availErrors` decides whether it may be submitted —
+    // filtering here is what silently discarded an inverted range.
+    const rs = d.ranges.filter((r) => !isBlankRange(r)).map(([s, e]) => `${s}-${e}`)
     if (rs.length) av[String(i)] = rs
   })
   return av
@@ -185,7 +240,7 @@ function LinkModal({ link, cals, onClose, onSave, onDelete }: {
   link: BookingLink | null
   cals: List[]
   onClose: () => void
-  onSave: (body: BookingLinkInput, token?: string) => void
+  onSave: (body: BookingLinkInput, token?: string) => Promise<boolean>
   onDelete: (l: BookingLink) => void
 }) {
   const lang = inputLang(useTimeFormat())
@@ -212,18 +267,24 @@ function LinkModal({ link, cals, onClose, onSave, onDelete }: {
         (k === r ? (pos === 0 ? [v, x[1]] : [x[0], v]) : x) as [string, string]),
     })
 
+  const dayErrors = availErrors(days)
   const valid = title.trim() && calendar && tz.trim()
     && Object.keys(daysToAvail(days)).length > 0
+    && dayErrors.size === 0
 
   // `valid` bounds validity, not flight. Without this a double-click — or a
   // second Enter in any field, which also calls save() — published TWO live
   // booking links with two public URLs, one of which nobody knows exists.
   const [saving, setSaving] = useState(false)
 
-  const save = () => {
+  const save = async () => {
     if (!valid || saving) return
     setSaving(true)
-    onSave({
+    // Cleared on FAILURE only. A `finally` would set state on a modal the
+    // success path has already unmounted, and — worse — it invites `save` to
+    // return true unconditionally, which puts the button back while leaving the
+    // editor exactly as broken as before.
+    const ok = await onSave({
       title: title.trim(),
       description: description.trim() || null,
       calendar,
@@ -235,15 +296,12 @@ function LinkModal({ link, cals, onClose, onSave, onDelete }: {
       min_notice_hours: notice,
       horizon_days: horizon,
     }, link?.token)
+    if (!ok) setSaving(false)
   }
 
   // The modal contract every other dialog here keeps (see TabsModal): Escape
   // closes it, and a screen reader is told it is a dialog rather than a div.
-  useEffect(() => {
-    const onKey = (e: globalThis.KeyboardEvent) => { if (e.key === 'Escape') onClose() }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
+  useEscape(onClose)
 
   return (
     <div className="overlay" onClick={onClose}>
@@ -259,7 +317,7 @@ function LinkModal({ link, cals, onClose, onSave, onDelete }: {
           <input className="input" autoFocus value={title} maxLength={200}
             placeholder="30-minute intro call"
             onChange={(e) => setTitle(e.target.value)}
-            onKeyDown={(e: KeyboardEvent) => { if (e.key === 'Enter') save() }} />
+            onKeyDown={(e: KeyboardEvent) => { if (e.key === 'Enter') void save() }} />
         </div>
         <div className="field">
           <label className="label">Description (shown to clients)</label>
@@ -297,7 +355,10 @@ function LinkModal({ link, cals, onClose, onSave, onDelete }: {
                   <span>{name.slice(0, 3)}</span>
                 </label>
                 {days[i].on ? (
-                  <div className="sched-ranges">
+                  <div className="sched-ranges" aria-invalid={dayErrors.has(i) || undefined}>
+                    {dayErrors.has(i) && (
+                      <span className="sched-err" role="alert">{dayErrors.get(i)}</span>
+                    )}
                     {days[i].ranges.map((r, k) => (
                       <span key={k} className="sched-range">
                         <input className="input" type="time" value={r[0]} lang={lang}

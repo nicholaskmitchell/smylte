@@ -13,3 +13,24 @@ export function useIsMobile(): boolean {
   }, [])
   return mobile
 }
+
+/**
+ * Close on Escape, from wherever focus happens to be.
+ *
+ * Bound to `window`, which is the widest of the three spellings already in the
+ * tree (DayPopover and SchedulingView use `window`, AppearancePanel uses
+ * `document`) and subsumes them: a keydown on the document bubbles to the
+ * window. A listener on the modal element does NOT subsume either — it only
+ * fires while focus is inside the dialog, and with no focus trap that is exactly
+ * the state a keyboard user needs the escape hatch from.
+ *
+ * `globalThis.KeyboardEvent` because React re-exports a `KeyboardEvent` type of
+ * its own, and a component importing that one shadows the DOM's.
+ */
+export function useEscape(onEscape: () => void): void {
+  useEffect(() => {
+    const onKey = (e: globalThis.KeyboardEvent) => { if (e.key === 'Escape') onEscape() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onEscape])
+}

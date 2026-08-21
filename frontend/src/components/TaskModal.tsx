@@ -8,6 +8,7 @@
 // drag, which reschedules through the same rule.
 
 import { useRef, useState, type KeyboardEvent } from 'react'
+import { useEscape } from '../hooks'
 import type { CreateTaskBody, List, Task } from '../api'
 import { dayKey, hasZone, instantFromLocal, sameValue, toLocalInput } from '../util'
 import { inputLang } from '../time'
@@ -113,6 +114,12 @@ export function TaskModal({ task, lists, defaultList, initialTitle, onClose, onC
 
   // Whether the press that started this click landed on the scrim itself.
   const scrimPress = useRef(false)
+
+  // The modal contract every other dialog in the app keeps, and the app's
+  // most-used dialog was the one that did not: with `aria-modal="true"`, no
+  // focus trap and no keydown listener at all, a keyboard or screen-reader user
+  // had no way out of it but the mouse.
+  useEscape(onClose)
 
   return (
     // Closes on a press AND release that both land on the scrim. A bare onClick

@@ -22,6 +22,10 @@ __pycache__/
 
 # ── Node / frontend build artifacts (rebuilt by autopull) ────────────────────
 /frontend/node_modules/
+# Unanchored too. Running npx from the repo ROOT creates a second node_modules
+# here, which `/frontend/node_modules/` does not match — a vitest cache file from
+# it was committed before this line existed.
+node_modules/
 /frontend/dist/
 
 # ── .NET / Windows client build artifacts (built by CI, never committed) ─────

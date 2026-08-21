@@ -21,9 +21,12 @@ import re
 import uuid
 from dataclasses import dataclass
 
+from icalendar import Calendar
+
 from .. import ical
 from ..dav.client import CollectionInfo, DavClient
-from ..dav.errors import DavError, InvalidSyncToken, NotFound, PreconditionFailed
+from ..dav.errors import (Conflict, DavError, InvalidSyncToken, MalformedResponse,
+                          NotFound, PreconditionFailed)
 from ..db import store
 from ..db.store import tx as _tx
 
@@ -42,6 +45,21 @@ def _uids_in(raw: bytes | None) -> set[str]:
         for m in _UID_RE.finditer(raw or b"")
         if m.group(1).strip()
     }
+
+
+def _restamp_uid(raw: bytes, uid: str) -> bytes:
+    """`raw` with every component's UID replaced by `uid`.
+
+    Used when a split has to be rebuilt against a fresher copy: the tail already
+    exists on the server under the UID the first build minted, and a PUT that
+    changes a resource's UID is a 409, not an update.
+    """
+    cal = Calendar.from_ical(raw)
+    for comp in cal.walk("VEVENT"):
+        if "UID" in comp:
+            del comp["UID"]
+        comp.add("UID", uid)
+    return cal.to_ical()
 
 
 class ConflictError(DavError):
@@ -243,7 +261,36 @@ class SyncEngine:
     def _multiget(self, collection_href: str, hrefs: list[str]) -> list:
         out: list = []
         for i in range(0, len(hrefs), self.batch):
-            out.extend(self.dav.multiget(collection_href, hrefs[i : i + self.batch]))
+            batch = hrefs[i : i + self.batch]
+            try:
+                out.extend(self.dav.multiget(collection_href, batch))
+            except MalformedResponse as e:
+                # Narrow on purpose: a transport failure must NOT become fifty
+                # retries. One resource Radicale cannot represent in XML — a U+FFFE in a
+                # SUMMARY another client wrote — poisons the WHOLE multistatus,
+                # so the batch tells us nothing about the other 49. Refetch them
+                # one at a time over GET, which returns raw bytes and parses no
+                # XML at all: the poisoned href fails alone and reaches
+                # `_upsert_body`, whose malformed-resource path counts it skipped
+                # (suppressing gc_orphans) and lets the token advance. Without
+                # this the collection re-fetches the same doomed batch forever
+                # and silently stops receiving any change from any client.
+                log.warning("multiget failed for %s (%d hrefs), refetching "
+                            "singly: %s", collection_href, len(batch), e)
+                out.extend(self._get_each(batch))
+        return out
+
+    def _get_each(self, hrefs: list[str]) -> list:
+        """Per-href GET fallback. A missing href is skipped the way multiget
+        skips it; anything else unreadable is left for `_upsert_body` to log."""
+        out: list = []
+        for href in hrefs:
+            try:
+                out.append(self.dav.get(href))
+            except NotFound:
+                continue
+            except DavError as e:
+                log.warning("skipping unreadable resource %s: %s", href, e)
         return out
 
     # ── write path ───────────────────────────────────────────────────────────
@@ -304,7 +351,17 @@ class SyncEngine:
             stored = self.dav.get(href)
             fields = ical.extract_from_raw(stored.data)
             if fields is None or fields.uid != uid:
-                raise ConflictError(f"a different resource already exists at {href}") from e
+                # The href names the Radicale user and the collection's UUID, and
+                # `app.py` returns `str(exc)` verbatim as the 409 body — including
+                # on POST /api/public/booking/{token}/book, the one write path an
+                # anonymous caller reaches. `test_public_page_requires_no_auth_
+                # and_leaks_nothing` asserts the public payload carries no hrefs;
+                # this raise handed one over. Log it, answer without it — the
+                # shape `SlotTaken` already uses on that route.
+                log.warning("create collided with a foreign resource at %s", href)
+                raise ConflictError(
+                    "a different resource already exists with that client_id"
+                ) from e
 
     def edit_task(self, collection_href: str, uid: str, edit: ical.TaskEdit) -> str:
         return self._edit(collection_href, uid, ical.apply_changes, edit, kind="task")
@@ -347,7 +404,16 @@ class SyncEngine:
         current = self.dav.get(row["href"])      # NotFound => already gone; surfaces as 404
         try:
             self.dav.put(new_href, current.data, if_none_match="*")
-        except PreconditionFailed as e:
+        except (PreconditionFailed, Conflict) as e:
+            # PreconditionFailed covers an occupied HREF. Radicale also enforces
+            # UID uniqueness per collection and answers 409 `no-uid-conflict` when
+            # the same UID already lives there under a different filename — the
+            # same condition, a different spelling, and it sailed past this guard
+            # onto app.py's DavError catch-all, telling the user "calendar server
+            # unavailable, try again shortly" (502) about a conflict this line
+            # already has the right words for. `Conflict`'s own docstring in
+            # dav/errors.py lists MKCALENDAR cases and not this one, which is
+            # what made the omission look deliberate.
             raise ConflictError(f"event {uid} already exists in the target calendar") from e
         try:
             self.dav.delete(row["href"], if_match=current.etag)
@@ -413,6 +479,7 @@ class SyncEngine:
         if not delete_tail:
             tail_href = f"{collection_href}{uuid.uuid4().hex}.ics"
             self.dav.put(tail_href, tail, if_none_match="*")
+            tail_uid = ical.extract_from_raw(tail).uid
 
         def write_head(ics: bytes | None, etag: str | None) -> None:
             # A head of None means the split left nothing before the anchor —
@@ -426,23 +493,71 @@ class SyncEngine:
             else:
                 self.dav.put(href, ics, if_match=etag)
 
+        # Whether the head write might have LANDED. The distinction is the whole
+        # of the cleanup below: a 412 or a 409 is the server REFUSING, so the head
+        # is provably untouched and the tail is safely removable — but a transport
+        # error is a write whose outcome we do not know, and the commit may have
+        # happened with only the reply lost. Deleting the tail then destroys the
+        # only copy of every "following" occurrence, which is exactly what writing
+        # the tail first (see above) exists to prevent.
+        head_uncertain = False
         try:
-            write_head(head, row["etag"])
-        except PreconditionFailed:
-            fresh = self.dav.get(href)
-            head, tail = build(fresh.data)
-            if tail_href is not None:
-                self.dav.put(tail_href, tail)   # replace our own just-written tail
             try:
-                write_head(head, fresh.etag)
-            except PreconditionFailed as e:
+                head_uncertain = True
+                write_head(head, row["etag"])
+                head_uncertain = False
+            except PreconditionFailed:
+                head_uncertain = False
+                fresh = self.dav.get(href)
+                head, tail = build(fresh.data)
                 if tail_href is not None:
-                    # Don't strand a tail next to an untruncated head.
-                    try:
-                        self.dav.delete(tail_href)
-                    except DavError:
-                        pass
-                raise ConflictError(f"edit conflict on {uid}: retry the change") from e
+                    # `split_series` mints a fresh uuid4 UID for the tail on every
+                    # call, so the rebuilt body carries a DIFFERENT UID than the
+                    # resource already sitting at `tail_href` — and Radicale
+                    # refuses exactly that with 409 `no-uid-conflict`. Which is
+                    # `Conflict`, not `PreconditionFailed`, so it escaped the
+                    # whole handler: the head was never truncated, the tail was
+                    # never cleaned up, and the user was told the calendar server
+                    # was unavailable. Re-stamping the first UID makes the
+                    # replacement an ordinary overwrite of our own resource.
+                    tail = _restamp_uid(tail, tail_uid)
+                    self.dav.put(tail_href, tail)
+                try:
+                    head_uncertain = True
+                    write_head(head, fresh.etag)
+                    head_uncertain = False
+                except PreconditionFailed as e:
+                    head_uncertain = False
+                    raise ConflictError(
+                        f"edit conflict on {uid}: retry the change") from e
+        except BaseException:
+            # Wider than the inner `except PreconditionFailed` it replaced, which
+            # covered ONE of the ways this can fail: a concurrent delete of the
+            # master makes `self.dav.get(href)` raise NotFound, and a rebuild that
+            # now refuses the anchor raises ValueError — both used to leave a
+            # headless duplicate series on the owner's calendar under a UID
+            # nothing else references.
+            #
+            # But NOT unconditional. `head_uncertain` means a head write was in
+            # flight when this failed, so the truncation may have committed with
+            # only the response lost; deleting the tail there destroys the later
+            # occurrences and tells the user the operation failed. Leaving a
+            # visible duplicate is the recoverable direction, and it is the one
+            # this function's write-tail-first ordering was chosen for.
+            if tail_href is not None and not head_uncertain:
+                try:
+                    self.dav.delete(tail_href)
+                except DavError:
+                    log.warning("split_event: could not clean up the tail at %s",
+                                tail_href)
+            elif tail_href is not None:
+                log.error(
+                    "split_event: a head write for %s was in flight when the split "
+                    "failed, so it may have committed; leaving the tail at %s rather "
+                    "than risk deleting the only copy of the later occurrences",
+                    uid, tail_href,
+                )
+            raise
         if head is None:
             # The resource is gone from the wire, so there is nothing to read
             # back — purge the projection the way delete_task does.

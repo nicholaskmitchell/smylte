@@ -17,9 +17,17 @@ const loginMock = vi.mocked(api.login)
 beforeEach(() => { loginMock.mockReset() })
 
 function fields() {
-  const [username] = screen.getAllByRole('textbox')
-  const password = document.querySelector('input[type="password"]') as HTMLInputElement
-  return { username, password, button: screen.getByRole('button', { name: /sign in/i }) }
+  // By LABEL, which is the point: both inputs were unlabelled, and this helper
+  // routed around that — the username by position among the textboxes, the
+  // password by a raw type selector (a password input has no `textbox` role at
+  // all, so `getByRole` could not reach it). Reaching them by their accessible
+  // name is what a screen reader does, so the workaround staying here beside
+  // the fix would have gone on passing if the labels were ever unwired again.
+  return {
+    username: screen.getByLabelText('Username'),
+    password: screen.getByLabelText('Password'),
+    button: screen.getByRole('button', { name: /sign in/i }),
+  }
 }
 
 describe('<Login>', () => {
