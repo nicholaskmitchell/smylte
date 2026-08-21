@@ -342,6 +342,15 @@ class TaskService:
             "notes": it["description"],
             "status": status,
             "completed": status == "COMPLETED",
+            # The VTODO COMPLETED property, not a restatement of the flag above.
+            # `completed` is derived from STATUS; this is the instant the wire
+            # actually records, and the two can disagree — a foreign client may
+            # set STATUS:COMPLETED and write no COMPLETED at all, so a reader
+            # sorting by it needs a fallback rather than assuming it is there.
+            # It was cached from the first sync (schema.sql's items.completed,
+            # written by read.py) and simply never surfaced, which left every
+            # "recently completed" view guessing from the due date instead.
+            "completed_at": it["completed"],
             "cancelled": status == "CANCELLED",
             "priority": it["priority"],
             "priority_label": _priority_label(it["priority"]),

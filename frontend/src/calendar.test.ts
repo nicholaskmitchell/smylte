@@ -365,7 +365,11 @@ describe('bucketTasksByDay', () => {
     percent_complete: null, due: '2026-03-04', due_is_date: true,
     start: null, start_is_date: true, tags: [], parent: null, children: [],
     child_count: 0, completed_child_count: 0, derived_percent: null,
-    pinned: false, sort_order: null, href: '/l1/t1.ics', etag: '"1"', ...o,
+    pinned: false, sort_order: null,
+  // Present on every DTO the server sends; see api.ts's Task.
+  completed_at: null, kanban_column: null, has_rrule: false,
+  created: null, last_modified: null,
+  href: '/l1/t1.ics', etag: '"1"', ...o,
   })
   const days = Array.from({ length: 7 }, (_, i) => new Date(2026, 2, 1 + i))
 
