@@ -752,6 +752,52 @@ describe('aug19 stage 4b — the theme rename bar', () => {
     const names = within(picker).getAllByRole('option').map((o) => o.textContent)
     expect(new Set(names).size).toBe(names.length)
   })
+
+  // WIDENING: Import is the THIRD retarget path, and the finding names all
+  // three ("the picker, Duplicate and Import"). The shipped one-line effect —
+  // `useEffect(() => setRenaming(false), [appearance.active])` — does cover it,
+  // but nothing drove it: an adversarial review deleted the effect and reset
+  // `renaming` inside `selectTheme` and `duplicate` by hand, and the whole
+  // suite stayed green while Import went on retargeting a live rename.
+  //
+  // Import is if anything the worst of the three, because the theme it
+  // retargets onto is one the user has never seen: they press Save expecting to
+  // rename "Alpha" and rename the file they just imported instead, leaving two
+  // themes called Alpha and no way to tell them apart.
+  it('never renames the theme Import just added with the old name', async () => {
+    const user = userEvent.setup()
+    render(<AppearanceHarness initial={{
+      active: 'a', themes: [{ id: 'a', name: 'Alpha', base: 'light', light: {}, dark: {} }],
+    }} />)
+
+    await user.click(screen.getByRole('button', { name: 'Rename' }))
+    expect(screen.getByLabelText('Theme name')).toHaveValue('Alpha')
+
+    // The real control is a hidden <input type="file"> the Import button
+    // clicks; jsdom cannot drive that click through to a picker, so the file is
+    // handed to the input directly — the same change event the picker fires.
+    const file = new File(
+      [JSON.stringify({ smylte_theme: 1, name: 'Nordic', base: 'light',
+        light: { '--accent': '#5e81ac' }, dark: { '--accent': '#88c0d0' } })],
+      'nordic.smylte-theme.json', { type: 'application/json' })
+    const picker = document.querySelector('input[type="file"]') as HTMLInputElement
+    expect(picker, 'the Import control is gone').not.toBeNull()
+    await user.upload(picker, file)
+
+    await screen.findByRole('option', { name: 'Nordic' })
+
+    const field = screen.queryByLabelText('Theme name')
+    if (field) expect(field).not.toHaveValue('Alpha')
+    const save = screen.queryByRole('button', { name: 'Save' })
+    if (save) await user.click(save)
+
+    const select = screen.getByRole('combobox', { name: 'Theme' })
+    const names = within(select).getAllByRole('option').map((o) => o.textContent)
+    expect(names, 'the imported theme was renamed with the old theme\u2019s name')
+      .toContain('Nordic')
+    expect(names).toContain('Alpha')
+    expect(new Set(names).size).toBe(names.length)
+  })
 })
 
 // ── bounds: a layout the server will refuse ─────────────────────────────────
@@ -930,6 +976,59 @@ describe('aug19 stage 4b — an SSE reconnect that 401s', () => {
           .toBeGreaterThan(before)
       }
       expect(onExpire, 'a healthy session was signed out').not.toHaveBeenCalled()
+      stop()
+    } finally {
+      vi.useRealTimers()
+      vi.unstubAllGlobals()
+    }
+  })
+
+  // …and the case the control above NAMES but does not drive. It says "one 502
+  // from the tunnel logs the user out of a live session"; it then answers the
+  // probe **200**, which is the server saying the session is fine — a different
+  // scenario, and the easy one. When the server is down the probe does not
+  // answer at all: `api.me()` rejects, with an HttpError for a 5xx the tunnel
+  // synthesises or a TypeError for a socket that never opened. Neither is an
+  // AuthError, and neither is evidence about the session.
+  //
+  // An adversarial review shipped `onExpire` on ANY probe rejection and the
+  // suite stayed green, because nothing drove a probe that fails. That reads as
+  // "your session expired, sign in again" to everyone holding the tab open
+  // through a deploy or a dropped tunnel — one restart signs out the whole
+  // account, and their unsaved composer text goes with it.
+  it.each([
+    ['a 502 from the tunnel', () => Promise.resolve({
+      status: 502, ok: false, statusText: 'Bad Gateway',
+      json: () => Promise.resolve({ detail: 'bad gateway' }),
+    })],
+    ['a socket that never opened', () => Promise.reject(new TypeError('Failed to fetch'))],
+  ])('keeps the session while the server is unreachable: %s', async (_label, answer) => {
+    const { subscribe } = await vi.importActual<typeof import('./api')>('./api')
+    const fetchMock = vi.fn().mockImplementation(answer)
+    const onExpire = vi.fn()
+    FakeES.instances = []
+    vi.stubGlobal('EventSource', FakeES)
+    vi.stubGlobal('fetch', fetchMock)
+    vi.useFakeTimers()
+    try {
+      const stop = (subscribe as unknown as
+        (f: (t: string) => void, e?: () => void) => () => void)(vi.fn(), onExpire)
+      FakeES.instances[0].accept()
+
+      for (let i = 0; i < 20; i++) {
+        const before = FakeES.instances.length
+        FakeES.instances[before - 1].hardFail()
+        await vi.advanceTimersByTimeAsync(60_000)
+        expect(FakeES.instances.length,
+          'the loop stopped reconnecting although nothing said the session was gone')
+          .toBeGreaterThan(before)
+      }
+      expect(fetchMock.mock.calls.length,
+        'the probe never ran, so this proves nothing about how it answers')
+        .toBeGreaterThan(0)
+      expect(onExpire,
+        'an unreachable server signed the user out of a live session')
+        .not.toHaveBeenCalled()
       stop()
     } finally {
       vi.useRealTimers()

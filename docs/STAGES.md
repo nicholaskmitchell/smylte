@@ -466,6 +466,56 @@ each caught only by a case added during widening, and in #39's and #48's the
 ORIGINAL pin passed against the half-fix. That is the review's criticism landing
 exactly as it described it.
 
+### The pin-quality review — a second reviewer, aimed at the TESTS
+
+The closing review above read the diff for defects. A separate one then attacked
+the pins themselves: it wrote 20 plausible-but-wrong fixes and counted how many
+the suite accepted. **Fourteen got through.**
+
+That is the real correction to the line above. "Thirteen half-fix checks, every
+one caught" was true — of the thirteen half-fixes *I* thought of. A different
+reader thinking of different wrong fixes got past two thirds of them. A half-fix
+check measures the pin against the author's imagination, and reports back the
+author's imagination.
+
+Nothing the fourteen found was a product bug: the shipped code was right in every
+case. They were **test holes**, which is worse in one specific way — each is a
+finding marked closed that would reopen without failing anything. The four
+shapes, in order of how often they recurred:
+
+* **The pin tests the wrong layer.** #45's pins hand-wrote their own POST body,
+  so they exercised the ROUTE and never the consent PAGE the finding is about.
+  D4's pin called `_in_display_order` directly, so shipping the `zone` parameter
+  and never passing it at the `list_tasks` call site passed everything.
+* **The pin asks whether something happened, not whether it is right.** Both #44
+  pins asked only that SOMETHING was submitted, so a repair pass that reverses a
+  backwards range and merges overlapping ones satisfied them — and published a
+  booking link advertising the middle of the owner's working day.
+* **The assertion is evaluated after the state it names is gone.** #47's control
+  ended `await findByText('Old work')`, which WAITS: the transient "No archived
+  calendars." had already been repainted by the time the negative assertion ran.
+  `useState(true)` passed a control whose docstring says it cannot.
+* **The pin asserts a proxy for the property.** #51/56 counted React
+  duplicate-key warnings, and `key={i}` is unique among siblings — so the index
+  raised none while reinstating exactly the positional identity the finding is
+  about.
+
+And two that are neither: **a fix wired into only some of the sites its own note
+names** (#48's Import path, #39's read-side repair, D1's per-VEVENT key, D2's
+`home_timezone`), and **`docs/AUDIT.md` prose making claims the tests do not
+support** — five of them, now corrected in place rather than quietly dropped.
+
+The remedies are all the same move: **drive the real thing**. The page, not the
+route. The call site, not the helper. Equality with what was typed, not presence.
+The in-flight tick, not the settled one. Node identity, not the warning count.
+
+**The transferable rule.** Where a pin cannot catch an over-correction and a
+control can (the lesson above), a half-fix check cannot catch a pin that never
+asked the right question — only a reader who did not write it can. Both reviews
+now sit in the loop for the same reason: **the author is the wrong person to
+measure their own coverage, and the suite passing is not evidence that it would
+have failed.**
+
 One contract was superseded rather than added to: `backlog.stage4.test.tsx` had
 pinned `var(--x)` as a valid colour, and #46 makes a `var()` naming a non-colour
 token invalid. Changing a green test to match new code is normally the

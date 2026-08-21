@@ -34,6 +34,7 @@ import re
 import uuid
 from datetime import datetime
 from urllib.parse import parse_qs, urlsplit
+import os
 import time
 from zoneinfo import ZoneInfo
 
@@ -1191,12 +1192,87 @@ def test_task_order_matches_the_browser_when_the_server_is_in_another_zone(monke
     )
 
 
+class _ZonedService(_StubService):
+    """`_StubService` plus the one thing `_home_zone` reads.
+
+    Deliberately a SUBCLASS rather than a field on `_StubService`: the base has
+    no `get_settings` at all, and `_home_zone`'s `getattr(..., None)` branch —
+    the one that keeps a bare stub working — has no other driver.
+    """
+
+    def __init__(self, tasks, *, settings):
+        super().__init__(tasks)
+        self._settings = settings
+
+    def get_settings(self):
+        return dict(self._settings)
+
+    def resolve_list(self, list_id, component=None):
+        return f"/u/{list_id}/"
+
+
+def test_list_tasks_orders_in_the_owners_home_zone(monkeypatch):
+    """The pin above calls `_in_display_order` DIRECTLY, so it cannot see the
+    call site. An adversarial review shipped the `zone` parameter, the
+    docstring and `_home_zone()` while leaving `list_tasks` calling
+    `_in_display_order(out)` — every backend test stayed green and every real
+    MCP request went on sorting in the server's zone.
+
+    So this drives the whole path a Claude request actually takes: `McpApi`
+    over a service whose stored `home_timezone` is the owner's, with the
+    PROCESS in UTC. Nothing here reaches into `_in_display_order`; the only
+    thing asserted is the order `smylte_list_tasks` hands back.
+    """
+    monkeypatch.setenv("TZ", "UTC")
+    time.tzset()
+
+    api = McpApi(_ZonedService(
+        {"/u/inbox/": [
+            _task("b", summary="All-day thing", due="2026-01-06"),
+            _task("a", summary="Late call", due="2026-01-05T23:00:00-06:00"),
+        ]},
+        settings={"home_timezone": "America/Chicago"},
+    ))
+    got = [t["uid"] for t in api.list_tasks()]
+    assert got == ["a", "b"], (
+        f"list_tasks ordered in the SERVER's zone, not the owner's: {got}"
+    )
+
+
+def test_list_tasks_falls_back_when_the_stored_zone_is_junk(monkeypatch):
+    """The other half of the call site: `_home_zone` is fail-soft, and a stored
+    blob can hold anything. An unusable zone must degrade to the server's clock
+    — the behaviour before the change — and must not raise out of a listing."""
+    monkeypatch.setenv("TZ", "UTC")
+    time.tzset()
+
+    rows = [_task("b", summary="All-day thing", due="2026-01-06"),
+            _task("a", summary="Late call", due="2026-01-05T23:00:00-06:00")]
+    for junk in ({"home_timezone": "Mars/Olympus_Mons"}, {"home_timezone": ""},
+                 {"home_timezone": None}, {}):
+        api = McpApi(_ZonedService({"/u/inbox/": list(rows)}, settings=junk))
+        got = [t["uid"] for t in api.list_tasks()]
+        assert got == ["b", "a"], (
+            f"a stored zone of {junk.get('home_timezone')!r} did not degrade to "
+            f"the server's clock: {got}"
+        )
+
+
 def test_task_order_without_a_zone_is_unchanged():
     """The control for the signature change. Every caller that has no service
     handle — the 402-case corpus check above, and any direct use — passes no
     zone, and must keep getting exactly the ordering it got before: resolved
     against the server's own local clock. A fix that made the zone mandatory, or
-    that defaulted it to UTC, would move that corpus silently."""
+    that defaulted it to UTC, would move that corpus silently.
+
+    The corpus is `CROSS_CHECKED`, and the review pointed out that as first
+    written this control could not do that job: it compared two DATE-ONLY dues,
+    and a uniform change of zone shifts every naive value by the same offset, so
+    it is order-preserving — no date-only pair can ever observe the default.
+    Not one due in the 402-case corpus carries an explicit offset either. The
+    pair below does, and straddles UTC midnight, so silently defaulting the zone
+    to UTC reverses it.
+    """
     tasks = [
         _task("a", summary="One", due="2026-01-05"),
         _task("b", summary="Two", due="2026-01-06"),
@@ -1204,6 +1280,24 @@ def test_task_order_without_a_zone_is_unchanged():
     ]
     from tasksd.mcp.api import _in_display_order
     assert [t["uid"] for t in _in_display_order(tasks)] == ["a", "b", "c"]
+
+    # Server in Chicago, no zone passed: the 23:00-Chicago call is still the
+    # 5th here and must sort before the all-day 6th. Resolved against UTC it
+    # would be the 6th at 05:00 and would sort after.
+    os.environ["TZ"] = "America/Chicago"
+    time.tzset()
+    try:
+        straddling = [
+            _task("late", summary="Late call", due="2026-01-05T23:00:00-06:00"),
+            _task("allday", summary="All-day thing", due="2026-01-06"),
+        ]
+        got = [t["uid"] for t in _in_display_order(straddling)]
+        assert got == ["late", "allday"], (
+            f"passing no zone stopped resolving against the SERVER's clock: {got}"
+        )
+    finally:
+        del os.environ["TZ"]
+        time.tzset()
 
 
 @pytest.mark.radicale

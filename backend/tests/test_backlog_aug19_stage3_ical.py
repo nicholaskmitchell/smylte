@@ -1303,6 +1303,88 @@ def test_an_exact_day_long_duration_survives_the_cache_and_the_expansion():
         )
 
 
+def test_an_overrides_own_duration_is_not_classified_by_the_masters():
+    """WIDENING. Both halves of the pin above use a SINGLE-VEVENT resource, so
+    nothing in them distinguishes "the authored DURATION of this VEVENT" from
+    "the authored DURATION of this RESOURCE". An adversarial review collapsed
+    `wire_durations`' per-RECURRENCE-ID map to one entry — `out[None]`, read
+    back as `wire.get(None)` in both `extract` and `_exact_durations` — and the
+    whole ical suite stayed green.
+
+    That collapse hands every instance the FIRST VEVENT's duration text, and the
+    master is written first. A master authored `P1D` (NOMINAL: "a day", which
+    across a spring-forward is 23 real hours) and an override authored `PT24H`
+    (EXACT: 24 real hours, RFC 5545 §3.3.6) are the two values that disagree by
+    exactly the hour, so the override's own kind is what has to survive.
+
+    2026-03-07 23:00 America/Chicago is the instance that straddles the
+    transition. Under the collapse it is classified nominal like the master and
+    spans 23:00:00 — an hour of a real appointment released to the public
+    booking page, which is the failure the whole mechanism exists to prevent.
+    """
+    raw = foreign_event_raw(
+        "mixed@x", "Block", dtstart="TZID=America/Chicago:20260305T230000",
+        dtend=None, vtimezone=CHICAGO_VTIMEZONE,
+        extra=("DURATION:P1D", "RRULE:FREQ=DAILY;COUNT=4"),
+        overrides=((
+            "RECURRENCE-ID;TZID=America/Chicago:20260307T230000",
+            "DTSTART;TZID=America/Chicago:20260307T230000",
+            "SUMMARY:Block",
+            "DURATION:PT24H",
+        ),),
+    )
+
+    from tasksd.ical.read import wire_durations
+    wire = wire_durations(raw)
+    assert wire.get("20260307T230000") == "PT24H", (
+        f"the override's own DURATION did not survive the scan: {wire!r}"
+    )
+    assert wire.get(None) == "P1D", (
+        f"the master's own DURATION did not survive the scan: {wire!r}"
+    )
+
+    spans = {
+        o.start: (datetime.fromisoformat(o.end) - datetime.fromisoformat(o.start))
+        for o in expand_occurrences(raw, date(2026, 3, 1), date(2026, 3, 20))
+    }
+    assert spans, "the series produced no occurrences"
+    overridden = [st for st in spans if st.startswith("2026-03-07T23:00")]
+    assert overridden, f"the overridden instance is missing: {sorted(spans)}"
+    assert spans[overridden[0]] == timedelta(hours=24), (
+        f"the 7 March instance spans {spans[overridden[0]]} — the override's "
+        f"EXACT PT24H was classified by the master's NOMINAL P1D"
+    )
+    others = {st: sp for st, sp in spans.items() if st != overridden[0]}
+    assert others, "the master produced no un-overridden instances"
+    for st, sp in others.items():
+        assert sp == timedelta(hours=24), (
+            f"the un-overridden instance at {st} spans {sp}, not a day"
+        )
+
+    # Control, and it needs its own resource. Only ONE instance of this series
+    # straddles the transition — 2026-03-07 23:00 — and above it is the
+    # overridden one, so nothing in that calendar can show what the MASTER's
+    # nominal P1D does there. A repair that reached the override's kind by
+    # treating every DURATION as exact would pass everything above.
+    #
+    # The same master with the override removed: its 7 March instance must span
+    # 23 real hours, because "a day" is nominal and that day is 23 hours long.
+    plain = foreign_event_raw(
+        "plain@x", "Block", dtstart="TZID=America/Chicago:20260305T230000",
+        dtend=None, vtimezone=CHICAGO_VTIMEZONE,
+        extra=("DURATION:P1D", "RRULE:FREQ=DAILY;COUNT=4"))
+    plain_spans = {
+        o.start: (datetime.fromisoformat(o.end) - datetime.fromisoformat(o.start))
+        for o in expand_occurrences(plain, date(2026, 3, 1), date(2026, 3, 20))
+    }
+    straddling = [st for st in plain_spans if st.startswith("2026-03-07T23:00")]
+    assert straddling, f"the un-overridden series lost 7 March: {sorted(plain_spans)}"
+    assert plain_spans[straddling[0]] == timedelta(hours=23), (
+        f"an un-overridden NOMINAL P1D across the spring-forward spans "
+        f"{plain_spans[straddling[0]]}, not the 23 real hours that day holds"
+    )
+
+
 def test_dragging_an_every_weekday_series_refuses_rather_than_corrupting_it():
     """The REVERSE of what this test asserted when the finding was first closed,
     and the reversal is the finding.

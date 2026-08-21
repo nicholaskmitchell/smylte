@@ -87,6 +87,17 @@ beforeEach(() => {
   // window exactly 2026-03-01 … 2026-04-11 — the clamp the resize pin is about.
   vi.useFakeTimers({ shouldAdvanceTime: true })
   vi.setSystemTime(new Date(2026, 2, 5))
+  // `clearAllMocks` clears CALLS. It does not drain a `mockResolvedValueOnce`
+  // queue, and it does not drop an implementation — so a test that loads
+  // several one-shot answers leaves whatever it did not consume sitting in
+  // front of the next test's default. Measured: with finding 41's fix reverted,
+  // its own pin consumes two of the four answers it queues and the leftover
+  // REJECTION lands on the next test's first fetch, failing finding 40's pin
+  // for a reason that has nothing to do with finding 40. Reset, so every test
+  // starts from the defaults set below and this file stays order-independent.
+  for (const fn of Object.values(m)) {
+    if (typeof fn === 'function' && 'mockReset' in fn) (fn as { mockReset(): void }).mockReset()
+  }
   vi.clearAllMocks()
   setCacheUser('')
   localStorage.clear()
@@ -324,6 +335,40 @@ describe('2026-08-19 — the calendar grid', () => {
     await act(async () => { await Promise.resolve() })
 
     expect(m.patchEvent.mock.calls).toEqual([])
+  })
+
+  // WIDENING of that control, and it is the half the review walked through.
+  // The refusal above is deliberately TWO conditions — the drop cell is the
+  // clamped one AND the event really continues past it — and only the first
+  // has a driver. Dropping `&& lastDayOf(ev) > windowLast` refuses every drop
+  // on the last visible cell, and the whole suite stays green: the one test
+  // that drops there is the no-op control above, which EXPECTS no PATCH and so
+  // passes against the fix and against the over-correction alike.
+  //
+  // What that costs: nothing on the six-week grid can be extended to end on the
+  // last visible day. The drag does nothing, with no error and no feedback —
+  // the user has to page to the next month to make an event end on a day
+  // already in front of them.
+  it('still extends an unclipped event to end on the last visible day', async () => {
+    openCalendar([ev({
+      uid: 'sprint', id: 'sprint', summary: 'Sprint', all_day: true,
+      start: '2026-04-05', start_is_date: true,
+      end: '2026-04-08', end_is_date: true,           // exclusive: last day is 04-07
+    })])
+    await chipsFor('Sprint')
+
+    const cells = document.querySelectorAll('.cal-cell')
+    const grip = cells[37].querySelector('.ev-resize')  // 2026-04-07, its real end
+    expect(grip, 'the grip is not on the event\u2019s own last day').toBeTruthy()
+
+    const dataTransfer = { setData: vi.fn(), getData: vi.fn(), effectAllowed: '' }
+    fireEvent.dragStart(grip!, { dataTransfer })
+    fireEvent.drop(cells[41], { dataTransfer })        // 2026-04-11, the window edge
+    await act(async () => { await Promise.resolve() })
+
+    await waitFor(() => expect(m.patchEvent,
+      'dropping a grip on the last visible day did nothing at all').toHaveBeenCalled())
+    expect(patchBody()).toMatchObject({ end: '2026-04-12' })
   })
 
   // ── AUDIT (open): calendar.ts:70 — endFromDuration returns the string
@@ -893,6 +938,57 @@ describe('2026-08-19 — appearance', () => {
     const withAccent = last()
     expect(resolve(withAccent, 'light')['--accent']).toBe('#00ff00')
     expect(resolve(withAccent, 'dark')['--accent']).toBeUndefined()
+  })
+
+  // WIDENING: every assertion above starts from a theme this session's WRITE
+  // path just produced, so all of them are satisfied by a fix that only splits
+  // the patch across both maps. An adversarial review shipped exactly that —
+  // `themeTokens` reduced to `sanitizeTokens(mode === 'dark' ? theme.dark :
+  // theme.light)`, no read-side merge at all — and the whole suite stayed green.
+  //
+  // The read side is the half that matters to anyone who already has a theme:
+  // `docs/AUDIT.md` makes it the stated reason the split-the-patch option was
+  // chosen over a `shared` bucket — "already-saved themes are repaired on the
+  // READ path by `themeTokens`… no migration, no schema change". Every theme
+  // saved before that commit has the shared token in ONE map, and nothing here
+  // drove that shape.
+  //
+  // So this seeds it directly: an 8px corner radius and a serif interface font
+  // stored in `light` only, exactly as the old write path left them, flipped to
+  // dark without touching the panel.
+  it('repairs a theme already saved with a shared token in one mode only', () => {
+    const saved: Appearance = {
+      active: 't1',
+      themes: [theme({
+        light: { '--radius': '8px', '--sans': 'Georgia, serif', '--accent': '#ff0000' },
+        dark: {},
+      })],
+    }
+
+    expect(resolve(saved, 'light')['--radius']).toBe('8px')
+    expect(resolve(saved, 'dark')['--radius'],
+      'a corner radius saved before the split reverts on the flip to dark')
+      .toBe('8px')
+    expect(resolve(saved, 'dark')['--sans'],
+      'a typeface saved before the split reverts on the flip to dark')
+      .toBe('Georgia, serif')
+
+    // …and the same in the other direction, for anyone whose theme was authored
+    // in dark mode.
+    const savedDark: Appearance = {
+      active: 't1',
+      themes: [theme({ light: {}, dark: { '--radius': '8px', '--label-case': 'none' } })],
+    }
+    expect(resolve(savedDark, 'light')['--radius']).toBe('8px')
+    expect(resolve(savedDark, 'light')['--label-case']).toBe('none')
+
+    // Control: the repair reaches the nine SHARED tokens and stops there. A
+    // colour saved in light must not bleed into dark, or every dark theme is
+    // repainted in its light values — which is the failure the guard rail in
+    // the pin above is about, reached from the read side this time.
+    expect(resolve(saved, 'dark')['--accent'],
+      'a light-mode colour leaked into dark through the read-side repair')
+      .toBeUndefined()
   })
 
   // WIDENING: the slider above is one of THREE control kinds, and `--radius` is
