@@ -575,6 +575,97 @@ describe('2026-08-20 review — the settings write path', () => {
     expect(wroteTtl, 'a failed read let one click rewrite the session length').toEqual([])
   })
 
+  it('writes no home timezone computed from a read that failed', async () => {
+    // WIDENING. The pin above drives `session_ttl_s` and the one below drives
+    // `appearance`; `home_timezone` is the third setting the finding names and
+    // nothing drove it. An adversarial review shipped the list with
+    // `session_ttl_s` and `appearance` in it and `home_timezone` left out — the
+    // whole suite stayed green, and the checked half-fix ("`session_ttl_s`
+    // alone") does not reach it either.
+    //
+    // It is the one of the three with a consequence outside the account.
+    // `toggleHomeTz` is `homeTz ? '' : Intl…resolvedOptions().timeZone`, pure
+    // read-modify-write over the state the read was supposed to populate: with
+    // the read broken `homeTz` is '', the row reads "Not set" whatever the
+    // account holds, and one click replaces the stored zone with the LAPTOP's.
+    // `busy_intervals` resolves floating times through that zone, so the public
+    // booking page's busy set moves by the offset — hours the owner really has
+    // appointments in become bookable by strangers.
+    m.me.mockResolvedValue({ authenticated: true, user: 'admin' })
+    m.getSettings.mockRejectedValue(new HttpError(502, 'bad gateway'))
+    const user = userEvent.setup()
+    render(<App />)
+    await screen.findByRole('button', { name: 'Tasks' })
+    await waitFor(() => expect(m.getSettings).toHaveBeenCalled())
+    await openSettings('General')
+
+    const tz = await screen.findByLabelText('Timezone your events are written in')
+    await user.click(tz)
+    await act(async () => { await Promise.resolve() })
+
+    const wroteTz = m.putSettings.mock.calls
+      .map((c) => c[0] as Record<string, unknown>)
+      .filter((b) => 'home_timezone' in b)
+    expect(wroteTz,
+      "a failed read let one click rewrite the booking page's busy-set zone")
+      .toEqual([])
+  })
+
+  it('writes no clock or density toggle computed from a read that failed', async () => {
+    // The same finding, applied to the CLASS rather than to the three settings
+    // it named. `time_format`, `sidebar_collapsed`, `show_completed_tasks`,
+    // `calendar_show_done_tasks` and `calendar_fit` are every one of them
+    // `next = !current` / `nextX(current)` over state this read populates, so a
+    // failed read makes the row show the shipped default and one press write
+    // the NEGATION of a lie over whatever the account held. Lower stakes than
+    // the session length or the booking zone, but the same defect and the same
+    // rule, and the rule is what the list says it implements.
+    //
+    // Driven through the clock, which is the one of the five that changes every
+    // surface in the app at once.
+    m.me.mockResolvedValue({ authenticated: true, user: 'admin' })
+    m.getSettings.mockRejectedValue(new HttpError(502, 'bad gateway'))
+    const user = userEvent.setup()
+    render(<App />)
+    await screen.findByRole('button', { name: 'Tasks' })
+    await waitFor(() => expect(m.getSettings).toHaveBeenCalled())
+    await openSettings('General')
+
+    await user.click(await screen.findByLabelText('12- or 24-hour clock'))
+    await act(async () => { await Promise.resolve() })
+
+    const wrote = m.putSettings.mock.calls
+      .map((c) => c[0] as Record<string, unknown>)
+      .filter((b) => 'time_format' in b)
+    expect(wrote, 'a failed read let one click flip the clock for the account')
+      .toEqual([])
+  })
+
+  it('still writes every one of those settings when the read succeeded', async () => {
+    // The control for all four pins above, and the one that matters most: the
+    // gate is a REFUSAL, and a refusal that fires when it should not makes the
+    // whole settings panel inert. `settingsFailed` is a ref set in the read's
+    // catch, so a fix that set it eagerly, or forgot to leave it false on the
+    // happy path, would be invisible to every pin here — they all drive a
+    // FAILED read.
+    m.me.mockResolvedValue({ authenticated: true, user: 'admin' })
+    m.getSettings.mockResolvedValue({ home_timezone: 'Europe/Berlin' })
+    const user = userEvent.setup()
+    render(<App />)
+    await screen.findByRole('button', { name: 'Tasks' })
+    await waitFor(() => expect(m.getSettings).toHaveBeenCalled())
+    await openSettings('General')
+
+    await user.click(await screen.findByLabelText('12- or 24-hour clock'))
+    await user.click(await screen.findByLabelText('Timezone your events are written in'))
+    await act(async () => { await Promise.resolve() })
+
+    const keys = new Set(m.putSettings.mock.calls
+      .flatMap((c) => Object.keys(c[0] as Record<string, unknown>)))
+    expect(keys, 'a successful read still refused the clock').toContain('time_format')
+    expect(keys, 'a successful read still refused the timezone').toContain('home_timezone')
+  })
+
   it('writes no appearance object that would destroy the theme collection', async () => {
     // `appearance` was excused in the original pin's own evidence as having a
     // localStorage mirror — but `cacheAppearance` REMOVES the mirror whenever no

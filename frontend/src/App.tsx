@@ -260,11 +260,23 @@ export function App() {
   //    `update_settings` does a shallow `current.update(patch)`, so that one PUT
   //    destroys the whole theme collection.
   //
-  // "Scalar" was never the question. Read-modify-write is.
+  // "Scalar" was never the question. Read-modify-write is — and the rule is
+  // applied to the CLASS, not to the three the review happened to name. Every
+  // remaining toggle here is `next = !current` or `nextX(current)` over state
+  // this same read populates, so each one turns a failed read into a silent
+  // flip to the opposite of what the account holds: the row shows the shipped
+  // default, the user presses it once expecting to change what they see, and
+  // the account's real value is overwritten by the negation of a lie.
+  //
+  // `start_tab` and `tasks_view` are NOT here on purpose: both carry the value
+  // just chosen from a picker, so what is written is what the user asked for
+  // whether or not the read landed.
   const MERGED_SETTINGS = [
     'hidden_calendars', 'archived_calendars', 'hidden_lists', 'task_groups',
     'collapsed_groups', 'collapsed_tasks', 'dashboard', 'calendar_task_lists',
     'tab_order', 'session_ttl_s', 'home_timezone', 'appearance',
+    'sidebar_collapsed', 'show_completed_tasks', 'calendar_show_done_tasks',
+    'calendar_fit', 'time_format',
   ] as const
 
   const saveSettings = useCallback((patch: Settings) => {

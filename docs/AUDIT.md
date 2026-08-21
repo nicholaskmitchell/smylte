@@ -364,13 +364,22 @@ session that is gone, and logging a live session out on one 502 from the tunnel
 would be worse than the bug being fixed — and no pin would notice, since the pin
 only asks that `onExpire` fires.
 
+A later review pointed out that the sentence above named a case the control did
+not drive: a probe answering **200** is the server saying the session is fine,
+which is the easy half. When the server is really down the probe does not answer
+at all — `api.me()` REJECTS, with an `HttpError` for a 5xx the tunnel
+synthesises or a `TypeError` for a socket that never opened, neither of them an
+`AuthError` and neither of them evidence about the session. `onExpire` on any
+probe rejection passed everything. Two more controls now drive exactly that, so
+the sentence and the tests say the same thing.
+
 **Pinned by** `aug19 stage 4b — an SSE reconnect that 401s > discovers a session that lapsed while the tab was idle` in `frontend/src/backlog.aug19.stage4b.test.tsx`.
 
 #### [x] The login form's two labels are not associated with their inputs, so both fields are unlabelled — the one form in the app that gets this wrong
 
 `frontend/src/components/Login.tsx:34` · **low** · rendering · `minor` · stage 4
 
-`<label className="label">Username</label>` and `<label className="label">Password</label>` are siblings of their inputs with no `htmlFor`, no `id`, and no `aria-label`, and they do not wrap the inputs. Both controls therefore have no accessible name: a screen reader announces "edit text, blank" and "password edit, blank", and clicking either label does not focus its field. Every other form in the app pairs them correctly — TaskModal.tsx:137,153 (`htmlFor="task-title"` / `"task-notes"`), CalendarView.tsx:876-925 (eight `htmlFor`/`id` pairs), TabsSection.tsx:58, AppearancePanel.tsx:270 — so this is an isolated miss on the only page an unauthenticated visitor ever sees. Login.test.tsx works around it rather than catching it: it reaches the fields with `screen.getAllByRole('textbox')[0]` and `document.querySelector('input[type="password"]')` instead of `getByLabelText`, which is exactly the query that would fail today.
+`<label className="label">Username</label>` and `<label className="label">Password</label>` are siblings of their inputs with no `htmlFor`, no `id`, and no `aria-label`, and they do not wrap the inputs. Both controls therefore have no accessible name: a screen reader announces "edit text, blank" and "password edit, blank", and clicking either label does not focus its field. Every other form in the app pairs them correctly — TaskModal.tsx:137,153 (`htmlFor="task-title"` / `"task-notes"`), CalendarView.tsx:876-925 (eight `htmlFor`/`id` pairs), TabsSection.tsx:58, AppearancePanel.tsx:270 — so this is an isolated miss on the only page an unauthenticated visitor ever sees. Login.test.tsx works around it rather than catching it: it reaches the fields with `screen.getAllByRole('textbox')[0]` and `document.querySelector('input[type="password"]')` instead of `getByLabelText`, which is exactly the query that would fail today. *(The fix left that workaround standing next to the new pin; a later review flagged it, and `fields()` now reaches both inputs by their accessible name — unwiring either `htmlFor` fails four existing tests, not just the pin.)*
 
 <details><summary>Evidence</summary>
 
@@ -1790,6 +1799,15 @@ this bug's fingerprint ("only in light" was never something the editor could
 express on purpose), so it counts for both. No migration, no schema change, and
 the theme is repaired the next time it loads.
 
+That read-side repair is the stated reason this option was chosen over the
+`shared` bucket, and a later review found it had no test: every case here seeds a
+theme with the token in BOTH maps, or reads back a value the new WRITE path just
+produced, so `themeTokens` reduced to the current mode's map alone passed the
+whole suite while every theme a real user had already saved went on losing its
+corner radius and typeface on the flip to dark. A case now seeds this bug's
+actual fingerprint — the token in one map only, both directions — with a control
+that a colour saved in light still does not bleed into dark.
+
 The `shared` bucket was rejected for three reasons, the third decisive: it needs a
 matching field on `app.py`'s pydantic `CustomTheme` or every settings PUT silently
 drops the user's shape tokens; `parseTheme`/`serializeTheme` are version-stamped,
@@ -1933,7 +1951,17 @@ guard `data.tsx` uses, since a 200 carrying junk is not a list.
 Widened to drive the sibling, and that is what earned it: the half-fix (repair the
 first section only) leaves the original pin passing and is caught by the
 `ArchivedEvents` case alone. A control asserts a successful fetch still lists the
-rows, so a repair that settles `loaded` eagerly cannot pass.
+rows.
+
+That last claim was FALSE as first written, and a later review walked through it:
+`loaded` starting `true` passed the whole suite. The control ended
+`await screen.findByText('Old work')` and only then looked for
+"No archived calendars." — and `findByText` WAITS, so it flushed the fetch and
+evaluated the negative assertion after the transient lie had been repainted. The
+lie is observable only in the tick before the promise settles, so the control now
+holds the fetch open and asserts the in-flight state SYNCHRONOUSLY. Both
+eager-settle shapes — `useState(true)` and a `setLoaded(true)` above the await —
+are caught.
 
 **Pinned by** `aug19 stage 4b — archived calendars > stops saying "Loading…" once the fetch has failed` and `… > stops saying "Loading…" once the EVENT fetch has failed` in `frontend/src/backlog.aug19.stage4b.test.tsx`.
 
@@ -2261,7 +2289,12 @@ departure from the suggested shape: `saving` is cleared on FAILURE only, not in 
 `finally`. A `finally` sets state on a modal the success path has already
 unmounted, and, worse, it invites `save` to return `true` unconditionally, which
 puts the button back while leaving the editor exactly as broken. That is the
-half-fix that was run, and both pins catch it.
+half-fix that was run, and both pins catch it — with one exception a later review
+found and this entry originally overstated: `save` returning `true`
+unconditionally *and* clearing `saving` in a `finally` passes both pins. React 18
+no-ops the `setState` on the unmounted success path, so that spelling has no
+user-visible consequence, and it is recorded here as an inaccuracy in this note
+rather than as a hole in the tests.
 
 Widened with the EDIT path (`patchSchedulingLink`, which the finding names and
 the original pin never reached) and a control asserting the form survives the
@@ -3174,6 +3207,28 @@ That pin also had to WAIT OUT the 400 ms debounce rather than wait FOR a PUT:
 once the gate holds the write there is no PUT to wait for, so
 `waitFor(putSettings called)` would have failed on the fix instead of on the bug
 — a scaffolding assertion that only breaks once the code is right.
+
+**Reopened and finished** after a later review, on two counts.
+
+First, `home_timezone` — one of the three this entry names — had no pin. The list
+shipped with `session_ttl_s` and `appearance` in it and the timezone missing, and
+the whole suite stayed green; the checked half-fix ("`session_ttl_s` alone") does
+not reach it either. It has its own pin now, driving the Time zone row after a
+failed read.
+
+Second, the fix applied the stated predicate to the three settings the finding
+named rather than to the CLASS it declares. `sidebar_collapsed`,
+`show_completed_tasks`, `calendar_show_done_tasks`, `calendar_fit` and
+`time_format` are every one of them `next = !current` / `nextX(current)` over
+state this same read populates — the definition the comment gives — and none was
+in the list. Lower stakes than the session length or the booking zone, but the
+same defect: the row shows the shipped default, the user presses it once, and the
+negation of a lie is written over the account's real value. All five added, with
+a pin on the clock and a CONTROL that a SUCCESSFUL read still lets both the clock
+and the timezone through — the gate is a refusal, and every pin here drives a
+FAILED read, so nothing else in the file would notice a gate that never lifts.
+(`start_tab` and `tasks_view` stay out: both carry the value just chosen from a
+picker, so what is written is what the user asked for either way.)
 
 #### [x] reconcileReplay fires on the ordinary create path and its stated invariant is backwards
 
