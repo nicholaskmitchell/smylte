@@ -1304,4 +1304,105 @@
 /* A quieter `.empty`, for the place that reports "nothing here" INSIDE the page
    rather than instead of it. Colour and family stay inherited from `.empty`. */
 .today-quiet { padding: 8px var(--gutter); font-size: calc(13px * var(--fs-scale)); }
+
+/* ---- habits ------------------------------------------------------------
+   The repeating spine of the day, in its own group above it. Everything here
+   is one of two jobs: making a habit row read as a habit rather than as a jot,
+   and keeping its weekly count a record rather than a verdict. */
+
+/* The group's own edge. Every row already carries a --rule-faint hairline, so
+   the last habit gets the fuller --rule instead: that one line is the whole
+   visual statement that the spine is above the day and not part of it. */
+.today-habits .today-row:last-child { border-bottom-color: var(--rule); }
+
+/* Sits in the slot a task's `.list-dot` occupies (7px wide + its 6px margin),
+   so a habit title, a task title and a note title share one left edge. Without
+   the fixed width the glyph's own advance would set it, and the column would
+   move with the font the theme happens to choose. */
+.today-habit-mark {
+  width: 13px; flex: none; text-align: center;
+  font-size: calc(11px * var(--fs-scale)); color: var(--fg-faint);
+}
+/* A habit that is done is still a habit: the title greys and strikes through
+   like any other done row (`.today-row.done`), but the mark keeps its weight so
+   the group stays readable as a group at a glance down the left edge. */
+
+/* --fg-faint, whatever the ratio says, and NEVER --warn or --pri-high. "1 of 5
+   this week" is a record of what happened, not a failure to be flagged: colour
+   it as one and the surface the owner opens every morning starts telling them
+   off, which is how a daily surface gets closed for good. The count is omitted
+   below two occurrences entirely (MIN_WEEK_COUNT), so there is no "0 of 1"
+   state for a colour to be tempted by. */
+.today-habit-count {
+  font-size: calc(11px * var(--fs-scale)); color: var(--fg-faint); flex: none;
+}
+
+/* The way in to the sheet, in the tab header. Deliberately in the Today header
+   rather than in Settings: the moment you want to change a habit is the morning
+   you are looking at it. */
+.today-habits-open { flex: none; margin-left: 10px; }
+
+/* ---- the habits sheet --------------------------------------------------
+   `.modal` supplies the frame, the elevation and the corner radius (it is in
+   the rounding opt-in list at the top of this file); everything below is only
+   what a list of RULES needs on top of that. */
+.habit-sheet { gap: 10px; }
+.habit-blurb {
+  margin: 0; font-size: calc(12px * var(--fs-scale)); color: var(--fg-muted);
+}
+/* `.empty`'s 40px of padding is sized for a whole pane, not for a gap between
+   two controls in a dialog. */
+.habit-empty { padding: 12px 0; font-size: calc(13px * var(--fs-scale)); }
+
+.habit-list {
+  list-style: none; margin: 0; padding: 0;
+  max-height: 52vh; overflow-y: auto;
+}
+.habit-edit {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 10px 0; border-bottom: 1px solid var(--rule-faint);
+}
+.habit-edit:last-child { border-bottom: 0; }
+/* A paused habit is still on the list — it is the screen that un-pauses it —
+   so it recedes rather than disappearing. */
+.habit-edit.paused .habit-name, .habit-edit.paused .habit-day { color: var(--fg-faint); }
+
+.habit-edit-top { display: flex; align-items: center; gap: 8px; }
+/* The name is the flexible part: the two buttons beside it are fixed-width
+   labels and must not be squeezed onto two lines by a long title. */
+.habit-name { flex: 1; min-width: 0; }
+.habit-edit-top .btn { flex: none; }
+
+.habit-days { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+/* `.chip` (tokens.css) carries the whole of a chip's look — the mono face, the
+   10px size and its tracking, the muted colour, the rule and the radius — and
+   these ARE chips, so they wear it rather than restating it and drifting from
+   every other chip in the app the next time one of those values moves. What is
+   left here is only what a PRESSABLE chip needs on top: a button brings its own
+   background and arrow cursor, the target is a little larger than a static
+   chip's, and the day names take the label casing. */
+.habit-day {
+  background: none; cursor: pointer; padding: 3px 7px;
+  text-transform: var(--label-case);
+}
+.habit-day.on { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+/* Hover-guarded like every other control in this app — on a touchscreen there
+   is no pointer to leave, so a tapped chip would keep its hover styling until
+   something else was tapped and read as stuck. See tokens.css. */
+@media (hover: hover) {
+  .habit-day:hover { border-color: var(--accent); color: var(--accent); }
+  .habit-day.on:hover { color: var(--bg); }
+}
+.habit-every, .habit-paused { margin-left: 4px; }
+
+/* The delete warning. --warn here IS the right token — this one is a warning
+   about an irreversible action, which is the opposite of the weekly count. */
+.habit-warn {
+  margin: 0; font-size: calc(12px * var(--fs-scale)); color: var(--warn);
+  line-height: 1.35;
+}
+
+.habit-add { display: flex; gap: 8px; align-items: center; }
+.habit-add .input { flex: 1; min-width: 0; }
+.habit-add .btn { flex: none; }
 /* today-tab:css:end */

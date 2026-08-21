@@ -1169,6 +1169,10 @@ describe('aug19 leftovers — every dialog answers Escape at the window', () => 
       ...dialogs.map(([name]) => name),
       'SettingsMenu',              // the case just above
       'SchedulingView',            // backlog.stage4.test.tsx:228, at window
+      // The habits sheet, which is a dialog like the rest. Driven by
+      // TodayView.test.tsx's 'closes on an Escape dispatched at the window' and
+      // its companion asserting the listener leaves with the sheet.
+      'TodayView',
     ])
     const missing = users.filter((u) => !covered.has(u))
     expect(missing,

@@ -272,12 +272,15 @@ Back up **both**:
 - the app's **sidecar-class tables** from `~/tasks/backend/tasks.db`:
   `sidecar`, `list_settings`, `completions`, `attachments`, **`booking_links`**
   and **`bookings`** (every scheduling-link config plus client names/emails/
-  notes — this exists nowhere on the wire), and **`day_plan`** plus
+  notes — this exists nowhere on the wire), **`day_plan`** plus
   **`day_plan_opened`** (the Today tab's whole record: what the owner added to a
   day by hand, what they ticked, what they dropped rather than did, and which
-  days were opened at all). All of these are app-only state that a resync CANNOT
-  rebuild (see docs/phase0-findings.md). Only the *cache* tables
-  (items/collections/sync_state/FTS) are disposable — "the DB is a disposable
+  days were opened at all), and **`habits`** (the rules that put entries on a
+  day — they are never PUT to Radicale and carry no RRULE, so the wire has no
+  copy; losing them stops every habit recurring, though the occurrences already
+  in `day_plan` keep their titles and stay readable). All of these are app-only
+  state that a resync CANNOT rebuild (see docs/phase0-findings.md). Only the
+  *cache* tables (items/collections/sync_state/FTS) are disposable — "the DB is a disposable
   cache" stopped being the whole truth when scheduling landed.
 
 ## Rollback

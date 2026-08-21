@@ -5,11 +5,12 @@
 --     derived projection of what is on the wire. Delete them, full-resync, and
 --     you get byte-identical application state back (invariant #1).
 --   * SIDECAR tables (sidecar, list_settings, completions, attachments,
---     day_plan) hold app-only state that exists NOWHERE on the wire (kanban
---     column, manual sort, pins, per-list settings, the day's plan). These are
---     the one thing in this file that a resync cannot rebuild — so they are
---     decoupled from the cache (no FK to items) and survive an item briefly
---     disappearing (delete-and-recreate).
+--     day_plan, habits) hold app-only state that exists NOWHERE on the wire
+--     (kanban column, manual sort, pins, per-list settings, the day's plan, and
+--     the habits that put entries on it). These are the one thing in this file
+--     that a resync cannot rebuild — so they are decoupled from the cache (no
+--     FK to items) and survive an item briefly disappearing
+--     (delete-and-recreate).
 --
 -- journal_mode=WAL and foreign_keys=ON are set per-connection in store.connect().
 
@@ -292,11 +293,19 @@ CREATE INDEX IF NOT EXISTS idx_oauth_tokens_family ON oauth_tokens(family_id);
 CREATE TABLE IF NOT EXISTS day_plan (
     day             TEXT NOT NULL,           -- YYYY-MM-DD, the local calendar day
     entry_id        TEXT NOT NULL,           -- client-generated; unique within the day
-    kind            TEXT NOT NULL,           -- task | note
+    kind            TEXT NOT NULL,           -- task | note | habit
     collection_href TEXT,                    -- task entries: which list the uid is in
     uid             TEXT,                    -- task entries: the VTODO UID (invariant #4)
-    title           TEXT,                    -- note entries: the text itself
-    source          TEXT NOT NULL,           -- auto (snapshot) | carried (yesterday) | user
+    title           TEXT,                    -- note + habit entries: the text itself
+    source          TEXT NOT NULL,           -- auto (snapshot) | carried (yesterday) | user | habit
+    -- habit entries: which rule minted this occurrence. No foreign key to
+    -- `habits`, for the same reason day_plan has none to `items`: deleting a
+    -- habit removes the RULE, and the days it already ran on keep saying so.
+    -- The occurrence carries its own copy of the title (above), so a dangling
+    -- habit_id costs the row nothing — it still reads exactly as it did on the
+    -- day it was planned. A column added by store.init_db on existing DBs;
+    -- see the ALTER there for why it must not be split from the DTO that reads it.
+    habit_id        TEXT,
     position        REAL,                    -- manual order within the day
     done_at         TEXT,
     dropped_at      TEXT,                    -- stamped, never DELETEd: the day keeps its record
@@ -314,4 +323,32 @@ CREATE INDEX IF NOT EXISTS idx_day_plan_day ON day_plan(day);
 CREATE TABLE IF NOT EXISTS day_plan_opened (
     day        TEXT PRIMARY KEY,
     opened_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+-- A habit is a RULE THAT INSERTS ENTRIES, not a second ledger of its own. Its
+-- occurrences are ordinary `day_plan` rows with kind='habit' and source='habit',
+-- carrying a COPY of the title and the id of the rule that minted them — so
+-- every question about a past day is still answered by day_plan alone, and
+-- deleting the rule cannot rewrite what a day says. (The `completions` table
+-- above is NOT this: it is gated groundwork for VTODO recurrence — see
+-- docs/recurrence-findings.md — and habits never touch it.)
+--
+-- App-only in the strongest sense: nothing here is ever PUT to Radicale and no
+-- RRULE is written for it, so a resync rebuilds none of it. Sidecar-class, and
+-- listed as such in the file header and in docs/DEPLOY.md's backup section.
+CREATE TABLE IF NOT EXISTS habits (
+    id         TEXT PRIMARY KEY,          -- uuid4 hex
+    title      TEXT NOT NULL,
+    -- '' = every day, else a comma list from mon,tue,wed,thu,fri,sat,sun in
+    -- that order. Deliberately NOT an RRULE and deliberately not a bitmask: the
+    -- names are what the API takes and what a human reading the DB sees, and
+    -- service._WEEKDAYS is the one place they are mapped to Python's weekday()
+    -- numbering (0=Monday).
+    days       TEXT NOT NULL DEFAULT '',
+    -- Set to hide the habit from FUTURE snapshots. Past occurrences are rows in
+    -- day_plan and are untouched by it: pausing means "stop scheduling this",
+    -- never "pretend the last three weeks did not happen".
+    paused_at  TEXT,
+    position   REAL,                      -- manual order in the habits list
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
