@@ -692,16 +692,19 @@ describe('2026-08-19 — the booking-link editor', () => {
     await user.click(screen.getByRole('button', { name: /create link/i }))
     await act(async () => { await Promise.resolve() })
 
-    // Unconditional in both branches: nothing overlapping may reach the API…
+    // WIDENED AGAIN. Asking only "does anything overlapping reach the API" let a
+    // repair pass that SILENTLY REWRITES the week — sort the ranges, merge the
+    // overlaps, and the payload is clean while bearing no relation to what the
+    // owner typed. So the assertion is EQUALITY with what was typed: either the
+    // exact two ranges go, or nothing goes and the screen says why.
     const sent = m.createSchedulingLink.mock.calls[0]?.[0] as BookingLinkInput | undefined
-    const monRanges = ((sent?.availability ?? {})['0'] ?? [])
-      .map((r) => r.split('-') as [string, string])
-    const sorted = [...monRanges].sort((a, b) => a[0].localeCompare(b[0]))
-    expect(sorted.some((r, i) => i > 0 && r[0] < sorted[i - 1][1])).toBe(false)
-
-    // …and if it did not, the two ranges the user typed are still on screen and
-    // the reason is somewhere they can read. Refusing silently is not a fix.
-    if (!sent) {
+    if (sent) {
+      expect(sent.availability?.['0'],
+        'Monday was rewritten into something the owner never entered')
+        .toEqual(['09:00-17:00', '10:00-12:00'])
+    } else {
+      // Refused: the two ranges the user typed are still on screen and the
+      // reason is somewhere they can read. Refusing silently is not a fix.
       const times = Array.from(monday().querySelectorAll('input[type=time]'))
         .map((el) => (el as HTMLInputElement).value)
       expect(times).toContain('10:00')
@@ -729,8 +732,14 @@ describe('2026-08-19 — the booking-link editor', () => {
 
     const sent = m.createSchedulingLink.mock.calls[0]?.[0] as BookingLinkInput | undefined
     if (sent) {
-      // Submitted: Friday must not have been silently emptied.
-      expect(sent.availability?.['4'] ?? []).not.toHaveLength(0)
+      // Submitted: Friday must be what was TYPED, not a helpfully reversed
+      // version of it. A repair that turns 17:00-09:00 into 09:00-17:00
+      // satisfies "not empty" and publishes a link advertising the middle of
+      // the owner's working day to strangers — worse than the silent drop this
+      // finding is about, because the drop at least left Friday visibly empty.
+      expect(sent.availability?.['4'],
+        'Friday was rewritten into a range the owner never entered')
+        .toEqual(['17:00-09:00'])
     } else {
       // Refused: the values are still there and the day says why.
       const times = Array.from(friday().querySelectorAll('input[type=time]'))

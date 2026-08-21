@@ -139,6 +139,42 @@ _CONTROL = re.compile(r"<(button|input)\b([^>]*)>", re.I)
 _ATTR = re.compile(r'([\w-]+)\s*=\s*"([^"]*)"')
 
 
+def _submit_controls(page: str) -> list[dict[str, str]]:
+    """Every SUBMIT control in the consent form, in tree order.
+
+    Separate from `_implicit_submission` because two different questions are
+    being asked of the same markup: which control the browser activates on
+    Enter, and whether a control exists at all that can produce a given action.
+    """
+    form = _FORM.search(page)
+    assert form, "the consent page has no <form> to submit"
+    out: list[dict[str, str]] = []
+    for m in _CONTROL.finditer(form.group(0)):
+        tag, raw = m.group(1).lower(), m.group(2)
+        attrs = dict(_ATTR.findall(raw))
+        kind = (attrs.get("type") or ("submit" if tag == "button" else "text")).lower()
+        if kind in ("submit", "image"):
+            out.append(attrs)
+    return out
+
+
+def _rendered_action_order(page: str) -> list[str]:
+    """The action buttons in the order a SIGHTED user sees them, left to right.
+
+    Tree order is not screen order here: `.actions` is
+    `display: flex; flex-direction: row-reverse`, deliberately, so that Connect
+    can be first in the DOM (and so win HTML's implicit submission) while Cancel
+    stays on the left where it has always been. Both halves are load-bearing and
+    only one of them is in the markup, so this reads the stylesheet too.
+    """
+    values = [a.get("value", "") for a in _submit_controls(page)]
+    block = re.search(r"\.actions\s*\{([^}]*)\}", page, re.I)
+    assert block, "the consent page has no .actions rule"
+    if re.search(r"flex-direction\s*:\s*row-reverse", block.group(1), re.I):
+        values.reverse()
+    return values
+
+
 def _implicit_submission(page: str) -> dict[str, str]:
     """What the browser POSTs when the user presses Enter in a text field.
 
@@ -275,11 +311,42 @@ def test_pressing_enter_on_the_consent_form_connects_rather_than_declining(oauth
         f"{tok.json()['scope']!r}"
     )
 
-    # -- control: an explicit decline must still decline --
-    # This is what stops the repair being "treat every POST as an approval".
+    # -- control: the user must still be ABLE to decline, and to find Cancel --
+    #
+    # WIDENED after an adversarial review walked two different repairs past the
+    # version of this that hand-wrote `action=deny`. Both left a broken screen:
+    #
+    #   * `<button type="button" … value="deny">` — Connect becomes the default
+    #     button, so the pin above passes, and Cancel is INERT. This page ships
+    #     `default-src 'none'`, so no script can wire it up; the user cannot
+    #     decline at all and the client is left hanging with no `access_denied`.
+    #   * deleting `flex-direction: row-reverse` — the pin above still passes,
+    #     and Connect now RENDERS where Cancel used to be. Anyone declining by
+    #     muscle memory grants the token instead.
+    #
+    # So the decline is derived from the page rather than assumed, and the
+    # rendered order is asserted rather than only the tree order.
     _, challenge = _pkce()
     page = _consent_page(oauth_app, reg, challenge)
-    declined = _submit(oauth_app, page, action="deny")
+
+    controls = _submit_controls(page)
+    assert [c.get("value") for c in controls][:1] == ["approve"], (
+        "the form's first submit control is not Connect, so Enter will not "
+        f"connect: {[c.get('value') for c in controls]}"
+    )
+    denies = [c for c in controls if c.get("value") == "deny"]
+    assert denies, (
+        "no SUBMIT control on the consent form can produce a decline — Cancel "
+        "cannot be pressed, and the page's CSP forbids a script that would fix it"
+    )
+    assert _rendered_action_order(page) == ["deny", "approve"], (
+        "Connect no longer renders on the right where it has always been; a "
+        "user declining by muscle memory would grant the token: "
+        f"{_rendered_action_order(page)}"
+    )
+
+    # …and the control the page really offers does really decline.
+    declined = _submit(oauth_app, page, action=denies[0].get("value", "deny"))
     assert _redirect_query(declined).get("error") == ["access_denied"], (
         "pressing Cancel no longer declines: "
         f"{declined.status_code} -> {declined.headers.get('location')}"
