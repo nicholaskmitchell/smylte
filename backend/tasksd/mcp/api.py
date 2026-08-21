@@ -18,13 +18,14 @@ what to try instead.
 from __future__ import annotations
 
 import re
+import secrets
 from contextlib import contextmanager
 from datetime import date, datetime, time as time_of_day, timedelta
 from zoneinfo import ZoneInfo
 
 from ..ical import EventEdit, TaskEdit, rrule_from_spec
 from ..ical.read import normalize_offset, split_duration
-from ..service import priority_from_label
+from ..service import day_key as _day_key, priority_from_label
 from .tools import ToolError
 
 # A free/busy sweep loads every event in the window across every calendar, so
@@ -803,3 +804,285 @@ class McpApi:
                 f"No booking link {token!r}. Call smylte_list_booking_links for the tokens."
             )
         return link
+
+    # ── the day ──────────────────────────────────────────────────────────────
+    #
+    # Two rules govern everything here, and both exist because the caller is a
+    # model rather than a browser.
+    #
+    # A model has no clock. The browser resolves local midnight for itself; a
+    # model's idea of the date comes from its context and may be stale or in
+    # another zone, and the server's own zone is UTC in the ordinary Docker
+    # deployment while the owner is somewhere else. So no tool takes a REQUIRED
+    # day: every one defaults to the owner's day (`_home_zone`, the same helper
+    # the task ordering uses) and every answer echoes the day it resolved.
+    #
+    # A read never creates. `open_day` is only ever called with create=False
+    # from here, and an unplanned day is answered with `preview_day` — what
+    # opening it WOULD derive — instead of by opening it. A connector that could
+    # open days would fill the log with plans nobody made, and the day plan is
+    # only worth keeping while it is an honest record of what the owner actually
+    # intended.
+
+    def _today(self) -> str:
+        """The owner's calendar day, not the server's.
+
+        `datetime.now(None)` is local naive time, which is the right fallback
+        when `home_timezone` is unset: it is the same clock the deployment's own
+        logs and the browser-on-the-same-box would use. There is no correct
+        answer when the server is elsewhere and the setting is empty, which is
+        what the setting is for.
+        """
+        return datetime.now(self._home_zone()).date().isoformat()
+
+    def _day_or_today(self, day: str | None) -> str:
+        """Validate a supplied day, or fall back to the owner's today."""
+        if day is None or str(day).strip() == "":
+            return self._today()
+        try:
+            return _day_key(str(day))
+        except ValueError as exc:
+            raise ToolError(f"{exc}. Omit `day` for today.") from None
+
+    def _writable_day(self, day: str | None) -> str:
+        """A day this connector may put something on: today or later, never past.
+
+        Adding to tomorrow is ordinary planning — the owner is stating an
+        intention now. Writing to a past day is something else: it manufactures a
+        record of what they meant to do on a day that has already happened, and
+        the whole value of this log is that it was written at the time. The plan
+        can then never be told apart from a backfill, which is exactly the
+        property the retrospective depends on.
+        """
+        resolved = self._day_or_today(day)
+        today = self._today()
+        if resolved < today:
+            raise ToolError(
+                f"{resolved} is in the past, and a past day cannot be planned — "
+                f"the day plan is a record of what was intended at the time. "
+                f"Today is {today}; pass that or a later day."
+            )
+        return resolved
+
+    def _entries_with_tasks(self, entries: list[dict]) -> list[dict]:
+        """Day entries with the task each one names folded in.
+
+        A day entry is a POINTER: the wire stores no title and no done flag for a
+        task entry, deliberately, because the VTODO is the single truth for both.
+        Handing a model bare (list, uid) pairs would make it call
+        smylte_get_task once per row to learn what any of them say, so the join
+        happens once here instead.
+
+        Tasks are read a LIST at a time rather than one call per entry: each
+        `get_task` takes the global service lock, and a twelve-row day would take
+        it twelve times behind whatever CalDAV I/O happens to be in flight.
+        """
+        wanted = {e["list"] for e in entries if e["kind"] == "task" and e["list"]}
+        by_key: dict[tuple[str, str], dict] = {}
+        for list_id in sorted(wanted):
+            href = self._svc.resolve_list(list_id, component="VTODO")
+            if href is None:
+                # The list has left the wire. The ENTRY still stands — that is
+                # the no-FK guarantee — so this is a hole in the join, not an
+                # error, and `task: None` below is what says so.
+                continue
+            for t in self._svc.list_tasks(href, include_done=True):
+                by_key[(t["list"], t["uid"])] = t
+        out = []
+        for e in entries:
+            row = dict(e)
+            if e["kind"] == "task":
+                t = by_key.get((e["list"], e["uid"]))
+                row["task"] = None if t is None else {
+                    "list": t["list"], "uid": t["uid"], "summary": t["summary"],
+                    "due": t["due"], "due_is_date": t["due_is_date"],
+                    "completed": t["completed"], "cancelled": t["cancelled"],
+                    "priority_label": t["priority_label"],
+                    # Gated: nothing in this app advances a recurring VTODO
+                    # (docs/recurrence-findings.md). Surfaced so a model can say
+                    # so rather than treating it as an ordinary task.
+                    "has_rrule": t["has_rrule"],
+                }
+            out.append(row)
+        return out
+
+    def today(self) -> dict:
+        """Today's plan, or a preview of one for a day that has none.
+
+        Never writes — see the section note above. `planned` distinguishes the
+        two answers, and `preview` is only ever present on the unplanned one so a
+        model cannot mistake a proposal for something the owner committed to.
+        """
+        day = self._today()
+        plan = self._svc.open_day(day, create=False)
+        entries = self._entries_with_tasks(plan["entries"])
+        out = {"day": day, "planned": plan["planned"], "entries": entries}
+        if not plan["planned"]:
+            out["preview"] = self._entries_with_tasks(self._svc.preview_day(day))
+        return out
+
+    def plan_day(self, *, day=None, list_id=None, uid=None, title=None) -> dict:
+        """Put one task or one note on a day.
+
+        Exactly one of (list_id + uid) or title, checked here because the tool
+        schemas cannot express it: `mcp/validate.py` implements no oneOf, and a
+        keyword it does not implement would be advertised and silently
+        unenforced.
+
+        The entry_id is minted here rather than asked of the model. A model holds
+        nothing between calls, so an id it invented would be fresh on every
+        retry and could not deduplicate anything — but `add_day_entry` also
+        matches on the task and on the note text, which is the idempotency that
+        actually applies to this caller.
+        """
+        resolved = self._writable_day(day)
+        has_task, has_note = bool(list_id or uid), bool(title and title.strip())
+        if has_task and has_note:
+            raise ToolError(
+                "Pass either list_id + uid (to put an existing task on the day) "
+                "or title (for a one-off note), not both."
+            )
+        if not has_task and not has_note:
+            raise ToolError(
+                "Nothing to add. Pass list_id + uid to put an existing task on "
+                "the day, or title for a one-off note."
+            )
+        if has_task and not (list_id and uid):
+            raise ToolError(
+                "A task entry needs BOTH list_id and uid. Call smylte_list_tasks "
+                "to find them, or pass title instead for a one-off note."
+            )
+        if has_task:
+            self._href(list_id)          # raises the standard ToolError if unknown
+        try:
+            return self._svc.add_day_entry(
+                resolved, entry_id=secrets.token_hex(16),
+                kind="task" if has_task else "note",
+                list_id=list_id, uid=uid, title=title,
+            )
+        except ValueError as exc:
+            raise ToolError(str(exc)) from None
+
+    def update_day_entry(self, entry_id, *, day=None, done=None, dropped=None,
+                         position=None) -> dict:
+        """Tick a note, or drop any entry off a day.
+
+        `done` on a TASK entry is refused by the service, and the message points
+        at smylte_complete_task rather than restating the refusal: a task's
+        doneness is its VTODO STATUS, which every other client on the account
+        reads too, and recording it here as well would give the same question two
+        answers that disagree the moment the task is ticked anywhere else.
+        """
+        if done is None and dropped is None and position is None:
+            raise ToolError(
+                "Nothing to change — pass done, dropped or position."
+            )
+        resolved = self._day_or_today(day)
+        try:
+            entry = self._svc.patch_day_entry(
+                resolved, entry_id, done=done, dropped=dropped, position=position,
+            )
+        except ValueError as exc:
+            raise ToolError(
+                f"{exc} To finish a task, call smylte_complete_task with its "
+                f"list and uid — that writes the VTODO every client reads."
+            ) from None
+        if entry is None:
+            raise ToolError(
+                f"There is no entry {entry_id!r} on {resolved}. Call "
+                f"smylte_get_today for the entries on today, or smylte_review_day "
+                f"with a day for another one."
+            )
+        return entry
+
+    def review_day(self, *, day=None, from_day=None, to_day=None) -> dict:
+        """What was planned against what actually happened.
+
+        One day, or a range. Not both: a call carrying `day` AND `from`/`to` is
+        ambiguous about which it means, and answering the wrong one silently is
+        worse than a sentence saying so.
+
+        Completions come from the task's own COMPLETED stamp, not from the plan,
+        so this answers for days before the day plan existed at all — and it
+        picks up what was finished off-plan, which is usually the more
+        interesting half of a retrospective.
+        """
+        ranged = bool(from_day or to_day)
+        if day and ranged:
+            raise ToolError(
+                "Pass either day (one day) or from + to (a range), not both."
+            )
+        if ranged and not (from_day and to_day):
+            raise ToolError("A range needs both from and to; `to` is exclusive.")
+        if ranged:
+            start, end = self._day_or_today(from_day), self._day_or_today(to_day)
+            try:
+                plans = self._svc.day_range(start, end)
+            except ValueError as exc:
+                raise ToolError(str(exc)) from None
+            days = [p["day"] for p in plans]
+        else:
+            resolved = self._day_or_today(day)
+            plan = self._svc.open_day(resolved, create=False)
+            plans = [plan] if plan["planned"] else []
+            start, end, days = resolved, resolved, [resolved]
+        # `end` is exclusive everywhere in this service, so a single day is the
+        # half-open span [day, day+1) rather than a second code path.
+        span_end = end if ranged else (
+            date.fromisoformat(start) + timedelta(days=1)).isoformat()
+        done_by_day = self._completions_by_day(start, span_end)
+        by_day = {p["day"]: p for p in plans}
+        # A day with completions but no plan still belongs in a range review:
+        # `day_range` omits unplanned days by design, but finishing five things
+        # on a day you never planned is exactly what a look-back should show.
+        # The single-day case already asks about one named day, planned or not.
+        wanted = sorted(set(by_day) | set(done_by_day)) if ranged else days
+        out = []
+        for d in wanted:
+            plan = by_day.get(d)
+            entries = self._entries_with_tasks(plan["entries"]) if plan else []
+            live = [e for e in entries if not e["dropped_at"]]
+            out.append({
+                "day": d,
+                "planned": bool(plan),
+                # `source` is what makes this worth reading: it separates what
+                # the owner CHOSE from what merely turned up on the day.
+                "chosen": [e for e in live if e["source"] == "user"],
+                "carried": [e for e in live if e["source"] == "carried"],
+                "derived": [e for e in live if e["source"] == "auto"],
+                "dropped": [e for e in entries if e["dropped_at"]],
+                "completed_that_day": done_by_day.get(d, []),
+            })
+        return {"from": start, "to": end, "days": out} if ranged else out[0]
+
+    def _completions_by_day(self, start: str, end: str) -> dict[str, list]:
+        """Tasks finished in [start, end), bucketed by the day they were finished.
+
+        Bucketed with the same rule the snapshot uses — a stamp carrying a zone
+        is converted to the owner's before its day is taken — so "finished on the
+        21st" means the same thing here as it does everywhere else in this app. A
+        stamp that will not parse is dropped rather than guessed at, and a task
+        completed by a client that wrote no COMPLETED property simply has no day
+        to file it under.
+        """
+        zone = self._home_zone()
+        out: dict[str, list] = {}
+        for href in self._task_lists(None):
+            for t in self._svc.list_tasks(href, include_done=True):
+                stamp = t.get("completed_at")
+                if not stamp:
+                    continue
+                try:
+                    when = datetime.fromisoformat(stamp)
+                except ValueError:
+                    continue
+                if when.tzinfo is not None:
+                    when = when.astimezone(zone)
+                key = when.date().isoformat()
+                if not (start <= key < end):
+                    continue
+                out.setdefault(key, []).append({
+                    "list": t["list"], "uid": t["uid"], "summary": t["summary"],
+                    "completed_at": stamp,
+                })
+        return out

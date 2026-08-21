@@ -1314,6 +1314,53 @@ class TaskService:
         self._publish({"type": "day_updated", "day": day})
         return dto
 
+    def preview_day(self, day: str) -> list[dict[str, Any]]:
+        """What opening `day` WOULD put on it, without opening it.
+
+        The same derivation `open_day(create=True)` inserts — due that day, then
+        already late, then unfinished from the last planned day — run and thrown
+        away. `_snapshot_for` writes nothing itself, so this costs one read and
+        cannot leave a trace.
+
+        It exists for the MCP connector, which has to answer "what is on today"
+        for a day the owner has not opened yet. Reading is the only thing a
+        connector may do to an unplanned day: a read that opened days would fill
+        the log with plans nobody made, and freeze each of those days' snapshots
+        at whatever happened to be due when something asked. So the honest
+        answer is a preview, clearly not a plan, and the marker stays unset until
+        a person opens the day themselves.
+
+        Entries the day already holds are excluded, exactly as they are on a real
+        open — so on a day that IS planned this returns what a snapshot would
+        still add, which is [] for a day that has already had one.
+
+        Returned in the shape `_day_entry_dto` produces, so a caller has one
+        entry shape to handle rather than two — with the row-only columns
+        (`position`, `done_at`, `dropped_at`, `created_at`) null, because none of
+        these is a row. The `entry_id`s are the ones a real open would have
+        minted and are thrown away with the rest: nothing may be patched by them.
+        """
+        day = day_key(day)
+        with self._lock:
+            existing = store.get_day_entries(self._conn, day)
+            pending = self._snapshot_for(day, existing)
+        return [
+            {
+                "entry_id": f["entry_id"],
+                "day": day,
+                "kind": f["kind"],
+                "list": _slug(f["collection_href"]) if f.get("collection_href") else None,
+                "uid": f.get("uid"),
+                "title": f.get("title"),
+                "source": f["source"],
+                "position": None,
+                "done_at": None,
+                "dropped_at": None,
+                "created_at": None,
+            }
+            for f in pending
+        ]
+
     def _snapshot_for(self, day: str, existing) -> list[dict[str, Any]]:
         """The entries a first open of `day` should create, in order. Called
         under the lock; writes nothing itself.

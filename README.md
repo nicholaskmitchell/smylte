@@ -90,9 +90,17 @@ match `tokens.css`.
 
 **Connect it to Claude.** Settings → Account → Connected apps, once
 `TASKS_MCP_ENABLED=true`, exposes a remote **MCP server** at `/mcp` that Claude
-(or any MCP client) can be pointed at as a custom connector — around two dozen
+(or any MCP client) can be pointed at as a custom connector — around thirty
 tools over lists, tasks, subtasks, search, tags, calendars, events including the
-recurrence scopes, free/busy, and booking links.
+recurrence scopes, free/busy, booking links, and the day plan.
+
+The day tools are read-only about *whether a day exists*: a connector can see
+today, put something on it, tick a note and review how a day went, but only the
+owner can open a day in the app. Asking about a day nobody has opened returns a
+clearly-labelled preview of what opening it would derive, and writes nothing —
+the plan is worth keeping only while it records what was actually intended, so
+nothing here can manufacture one, and a day in the past cannot be planned at
+all.
 
 It is an OAuth 2.1 authorization server as well as the resource server, because
 there is one account here and no identity provider to delegate to. Knowing the

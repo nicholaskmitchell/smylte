@@ -116,6 +116,17 @@ _TAGS = {
     "type": "array", "items": {"type": "string", "pattern": XML_SAFE_PATTERN},
     "description": "Tags (iCalendar CATEGORIES). Replaces the whole set.",
 }
+# A calendar day. Every day-taking tool leaves this OPTIONAL and defaults to the
+# owner's own day, because the caller has no clock of its own — see the day
+# section's note.
+_DAY_PATTERN = "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+_DAY = {
+    "type": "string", "pattern": _DAY_PATTERN,
+    "description": (
+        "A day, 'YYYY-MM-DD'. Omit for today in the owner's own timezone, which "
+        "is the right default — you have no reliable clock of your own."
+    ),
+}
 _SCOPE = {
     "type": "string", "enum": ["all", "this", "thisandfuture"], "default": "all",
     "description": (
@@ -344,6 +355,120 @@ def build_tools(api) -> dict[str, Tool]:
     )
     def _list_tags():
         return {"tags": api.all_tags()}
+
+    # ── the day ──────────────────────────────────────────────────────────────
+    #
+    # The day plan is what the owner said they would do TODAY, which is a
+    # different question from what is due. Two things about these schemas are
+    # deliberate and worth not undoing:
+    #
+    # No tool takes a REQUIRED day. A model has no clock — its idea of the date
+    # comes from its context and may be stale or in another zone — so the day
+    # defaults to the owner's, resolved server-side from `home_timezone`, and
+    # every answer echoes the day it settled on.
+    #
+    # Every field is a scalar. `mcp/validate.py` recurses into array items but
+    # never checks an object's properties, so a "plan these five things" schema
+    # taking an array of objects would be advertised and silently unenforced —
+    # the exact failure that file exists to prevent. One entry per call instead.
+
+    @tool(
+        "smylte_get_today", "What is on today",
+        "The owner's plan for today: what they committed to, what carried over "
+        "from yesterday, and what was derived from what is due. Each task entry "
+        "comes with the task itself, so this is one call rather than one per "
+        "row.\n\n"
+        "Takes no arguments on purpose — it is always today, in the owner's own "
+        "timezone. Use smylte_review_day to look at any other day.\n\n"
+        "A day the owner has not opened yet answers planned=false. That is a "
+        "normal answer, not an error, and it comes with `preview`: what opening "
+        "the day WOULD put on it. A preview is not a plan and nothing has been "
+        "recorded — say so rather than reporting it as their day. Nothing in "
+        "this toolset can open a day; only the owner can, in the app.",
+        _obj({}),
+    )
+    def _get_today():
+        return api.today()
+
+    @tool(
+        "smylte_plan_day", "Put something on a day",
+        "Add one thing to a day: an existing task (list_id + uid) or a one-off "
+        "note (title) that does not need to become a task. Entries added this "
+        "way are marked as chosen by the owner, which is what the look-back "
+        "separates from what merely turned up.\n\n"
+        "Today by default; pass `day` to plan ahead. A day in the past is "
+        "refused — the plan is a record of what was intended at the time, and "
+        "backfilling one destroys the only thing it is good for.\n\n"
+        "Safe to retry: adding a task already on that day returns the entry that "
+        "is there rather than a second copy.",
+        _obj({
+            "day": _DAY,
+            "list_id": {**_LIST_ID, "description":
+                        _LIST_ID["description"] + " With `uid`, names the task to add."},
+            "uid": {"type": "string",
+                    "description": "Task uid, from smylte_list_tasks. Needs list_id too."},
+            "title": {"type": "string", "minLength": 1, "maxLength": 2000,
+                      "pattern": XML_SAFE_PATTERN,
+                      "description": "A one-off note for the day, instead of a task."},
+        }),
+        scope=SCOPE_WRITE, read_only=False, idempotent=True,
+    )
+    def _plan_day(day=None, list_id=None, uid=None, title=None):
+        return api.plan_day(day=day, list_id=list_id, uid=uid, title=title)
+
+    @tool(
+        "smylte_update_day_entry", "Tick or drop something on a day",
+        "Mark a NOTE done, drop any entry off a day, or move one up or down. "
+        "entry_id comes from smylte_get_today or smylte_review_day.\n\n"
+        "To finish a TASK, call smylte_complete_task instead — a task's doneness "
+        "lives on the task itself, where every other client on this account "
+        "reads it, and this tool refuses `done` for one.\n\n"
+        "Dropping is not deleting: the entry stays on the day marked as dropped, "
+        "because \"planned it and did not do it\" is worth keeping. It does stop "
+        "the entry carrying over to the next day.",
+        _obj({
+            "entry_id": {"type": "string", "minLength": 1, "maxLength": 64,
+                         "description": "From smylte_get_today or smylte_review_day."},
+            "day": _DAY,
+            "done": {"type": "boolean",
+                     "description": "Tick or un-tick a NOTE. Refused for a task entry."},
+            "dropped": {"type": "boolean",
+                        "description": "Take it off the day (true), or put it back (false)."},
+            "position": {"type": "number",
+                         "description": "Sort key within the day; lower comes first."},
+        }, ["entry_id"]),
+        scope=SCOPE_WRITE, read_only=False, idempotent=True,
+    )
+    def _update_day_entry(entry_id, day=None, done=None, dropped=None, position=None):
+        return api.update_day_entry(
+            entry_id, day=day, done=done, dropped=dropped, position=position)
+
+    @tool(
+        "smylte_review_day", "How a day went",
+        "What was planned against what actually happened — one day, or a range "
+        "with from + to (`to` is EXCLUSIVE). Entries come back split by where "
+        "they came from: `chosen` by the owner, `carried` from a previous day, "
+        "`derived` from what was due, and `dropped` for what they took off.\n\n"
+        "`completed_that_day` is read from each task's own completion stamp "
+        "rather than from the plan, so it answers for days before any of this "
+        "existed — and it catches what was finished off-plan, which is usually "
+        "the more interesting half.\n\n"
+        "Defaults to today. Pass `day` OR from + to, never both.",
+        _obj({
+            "day": {**_DAY, "description":
+                    "The day to review, 'YYYY-MM-DD'. Defaults to today in the "
+                    "owner's timezone. Do not combine with from/to."},
+            "from": {"type": "string", "pattern": _DAY_PATTERN,
+                     "description": "Start of a range, inclusive. Needs `to`."},
+            "to": {"type": "string", "pattern": _DAY_PATTERN,
+                   "description": "End of a range, EXCLUSIVE. Needs `from`."},
+        }),
+    )
+    def _review_day(day=None, **rest):
+        # `from` is a Python keyword, so the handler cannot name it as a
+        # parameter — it arrives through **rest and is renamed here, the same
+        # accommodation app.py makes with Query(alias="from").
+        return api.review_day(day=day, from_day=rest.get("from"), to_day=rest.get("to"))
 
     # ── calendars and events ─────────────────────────────────────────────────
 
