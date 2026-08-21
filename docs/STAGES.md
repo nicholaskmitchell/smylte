@@ -12,8 +12,17 @@ of how the harness behaved in practice — its "Two strengths of pin" and
 
 `docs/AUDIT.md` is the evidence. This is the plan for closing it.
 
-**7 open, 78 closed.** Stages 1-5 are all done; what is left is the seven findings the Stage 3 and
-Stage 4 adversarial reviews filed and never staged.
+**0 open, 85 closed.** ✅ **The sweep is closed.** All five stages are done, and
+so are the seven findings the Stage 3 and Stage 4 adversarial reviews filed and
+never staged.
+
+One of the 85 is closed as a DECISION rather than a fix: `_desynchronizing`'s
+refusal of a `FREQ=DAILY;BYDAY=…` drag stays, because the entry's premise was
+false (the drag never worked; the 422 was the improvement) and the one attempt
+that shipped destroyed user data. It is handed off as
+[#63](https://github.com/nicholaskmitchell/smylte/issues/63) with the whole
+record, and two tests hold the line — one pinning the refusal, one pinning the
+OUTCOME any future fix must satisfy.
 
 The sweep opened at 36/44. Stage 4 closed 28 — its own 21 plus the 7 the Stage 3
 adversarial review had left open — remediation FILED 5 more along the way, and
