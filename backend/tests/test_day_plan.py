@@ -182,6 +182,41 @@ def test_snapshot_takes_due_today_and_overdue_as_auto(svc):
     assert all(e["done_at"] is None and e["dropped_at"] is None for e in plan["entries"])
 
 
+def test_a_preview_entry_has_the_same_shape_as_a_real_one(svc):
+    """`preview_day` builds its dicts BY HAND — a second, independent spelling of
+    `_day_entry_dto` — and its own docstring promises the caller one entry shape
+    to handle rather than two. Nothing enforces that promise but this test.
+
+    A field added to one and forgotten in the other makes a preview entry and a
+    real entry differ in exactly the way the docstring says they do not, and the
+    caller reading the missing key is the MCP connector: the one caller with no
+    person watching it, answering "what is on today" for a day nobody has opened.
+    """
+    preview = svc.preview_day(DAY)
+    assert preview
+    plan = svc.open_day(DAY, create=True)
+    for p, e in zip(preview, plan["entries"], strict=True):
+        # Same keys, exactly — this is the assertion that catches the omission.
+        assert set(p) == set(e)
+        # Same derivation, so they agree about everything a preview can know.
+        assert [p[k] for k in ("kind", "list", "uid", "title", "source", "habit_id")] == \
+               [e[k] for k in ("kind", "list", "uid", "title", "source", "habit_id")]
+        # …and the row-only columns are null, because none of these is a row.
+        assert (p["position"], p["done_at"], p["dropped_at"], p["created_at"]) == (None,) * 4
+
+
+def test_an_ordinary_entry_has_a_null_habit_id(svc):
+    """A task entry and a note entry name no habit, so the column is NULL — and
+    it is PRESENT, which is the half that matters. `habit_id` is only ever set by
+    the rule that mints an occurrence (see test_habits.py)."""
+    plan = svc.open_day(DAY, create=True)
+    note = svc.add_day_entry(DAY, entry_id=uuid.uuid4().hex, kind="note",
+                             title="Ring the bank")
+    assert all(e["habit_id"] is None for e in plan["entries"])
+    assert note["habit_id"] is None
+    assert {e["kind"] for e in svc.open_day(DAY, create=False)["entries"]} == {"task", "note"}
+
+
 # ── which day a DUE is filed under ───────────────────────────────────────────
 
 def test_a_zoned_due_is_filed_under_the_owners_day(svc):
@@ -502,6 +537,55 @@ def test_an_entry_survives_its_task_leaving_the_wire(svc):
     # Dropped rather than ticked — `done` is a note's field, and this entry
     # names a task, whose doneness was its VTODO's right up until it vanished.
     assert svc.patch_day_entry(DAY, entry["entry_id"], dropped=True)["dropped_at"]
+
+
+# ── upgrading a database written before habits ───────────────────────────────
+
+def test_an_older_database_gains_the_habit_id_column(tmp_path):
+    """The hand-written ALTER in `store.init_db`, and why it is not optional.
+
+    There is no migration runner here: `executescript` runs CREATE TABLE IF NOT
+    EXISTS, which does nothing at all to a day_plan that already exists, so a
+    column added to schema.sql reaches an upgraded database ONLY through the
+    PRAGMA/ALTER block. Without it `_day_entry_dto`'s `row["habit_id"]` raises
+    IndexError — sqlite3.Row's answer for a column the query did not return —
+    and IndexError is outside the taxonomy app.py maps, so the failure is a 500
+    on every read of every day, not just the days holding a habit.
+
+    Written against a hand-built pre-habits table rather than a captured file, so
+    it keeps testing the upgrade rather than a fixture that ages out.
+    """
+    conn = store.connect(str(tmp_path / "old.db"))
+    conn.executescript(
+        """CREATE TABLE day_plan (
+               day             TEXT NOT NULL,
+               entry_id        TEXT NOT NULL,
+               kind            TEXT NOT NULL,
+               collection_href TEXT,
+               uid             TEXT,
+               title           TEXT,
+               source          TEXT NOT NULL,
+               position        REAL,
+               done_at         TEXT,
+               dropped_at      TEXT,
+               created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+               PRIMARY KEY (day, entry_id)
+           );
+           INSERT INTO day_plan (day, entry_id, kind, title, source)
+           VALUES ('2026-08-21', 'legacy', 'note', 'Written before habits', 'user');"""
+    )
+    store.init_db(conn)
+    assert "habit_id" in {r["name"] for r in conn.execute("PRAGMA table_info(day_plan)")}
+
+    # The pre-existing row reads through the real DTO, with a null habit_id —
+    # nothing to backfill, because "no rule minted this" IS null.
+    row = store.find_day_entry(conn, "2026-08-21", entry_id="legacy")
+    dto = TaskService._day_entry_dto(row)
+    assert dto["habit_id"] is None and dto["title"] == "Written before habits"
+    # Idempotent: init_db runs on every start, and the second pass must not try
+    # to add the column again (SQLite has no ADD COLUMN IF NOT EXISTS).
+    store.init_db(conn)
+    conn.close()
 
 
 # ── ranges ───────────────────────────────────────────────────────────────────

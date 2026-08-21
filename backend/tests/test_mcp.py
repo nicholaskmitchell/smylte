@@ -20,6 +20,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from tasksd.app import create_app
+from tasksd.db import store
 from tests.conftest import api_settings
 
 pytestmark = pytest.mark.radicale
@@ -1383,3 +1384,236 @@ def test_today_is_the_owners_day_not_the_servers(mcp):
     # 25 hours apart: they cannot both be the server's own date, whatever the
     # clock says when this runs.
     assert len(seen) == 2, seen
+
+
+# ── habits on the day ────────────────────────────────────────────────────────
+#
+# A habit is A RULE THAT INSERTS ENTRIES, and what reaches this connector is the
+# entry: an ordinary day_plan row with kind="habit" carrying a copy of the
+# habit's title. Every property the day plan already had has to keep holding for
+# it — but one thing is genuinely different, and it is what these tests are
+# about. A task's doneness is its VTODO STATUS, out on the wire where every
+# client can see it, so a connector that loses or invents one is contradicted
+# loudly. A habit's doneness is a single stamp in one table on one machine, so a
+# connector that drops it from a review, or lets it be written after the fact,
+# turns the record into a guess with nothing anywhere to disagree.
+#
+# Habits are DEFINED through the service in these fixtures rather than through a
+# tool, because there deliberately is no tool: the rule is the owner's own
+# standing decision. Opening a day goes through the service for the stronger
+# reason — no tool here may open one at all.
+
+
+def _a_habit_on(svc, day, *, title, days=""):
+    """A habit, plus the occurrence a real open of `day` mints for it.
+
+    Two service calls, standing in for the owner at the app: defining the rule,
+    and opening the day. What the connector sees afterwards is exactly what it
+    sees in production, which is the only way to build this fixture — no tool
+    creates a habit, and no tool opens a day.
+
+    The open runs with the service's today pinned to `day`, which is not a
+    convenience: an occurrence only ever reaches a day ON that day, because
+    `service._habit_minting_allowed` refuses a past one on BOTH the first
+    snapshot and the top-up. So a caller wanting an occurrence on a day that is
+    now PAST — the retrospective tests below — is staging history rather than
+    forging it, and the row it gets is exactly the row that would have been
+    written at the time. Without the pin those tests would build their fixture
+    through a hole the service no longer has, and would keep passing while the
+    thing they describe had become impossible.
+    """
+    habit = svc.create_habit(title=title, days=days)
+    with pytest.MonkeyPatch.context() as m:
+        m.setattr(svc, "_today", lambda: day)
+        plan = svc.open_day(day, create=True)
+    entry = next(e for e in plan["entries"] if e["habit_id"] == habit["id"])
+    return habit, entry
+
+
+def test_a_habit_occurrence_is_in_the_review(mcp):
+    """The review bucketed on three `==` tests over `source` — user, carried,
+    auto — with no residual, so an occurrence carrying source="habit" matched
+    none of them and fell out of the retrospective entirely. Silently: the day
+    still answered and still looked complete, it simply had no habits in it. That
+    is the half most worth reviewing, because whether a habit was kept is
+    recorded nowhere else on the account.
+    """
+    token = _connect(mcp)["access_token"]
+    svc = mcp.app.state.service
+    today = _call(mcp, token, "smylte_get_today")["structuredContent"]["day"]
+    habit, occ = _a_habit_on(svc, today, title=f"Meditate {uuid.uuid4().hex[:6]}")
+
+    out = _call(mcp, token, "smylte_review_day")["structuredContent"]
+    assert out["day"] == today and out["planned"] is True
+    mine = [e for e in out["habits"] if e["entry_id"] == occ["entry_id"]]
+    assert len(mine) == 1, out["habits"]
+    assert mine[0]["kind"] == "habit" and mine[0]["source"] == "habit"
+    assert mine[0]["habit_id"] == habit["id"]
+    # The COPY the occurrence took, not a join: that copy is what lets the row
+    # keep reading correctly after the rule is renamed or deleted.
+    assert mine[0]["title"] == habit["title"]
+    # One arm, not several — the arms are a partition, not four filters that
+    # happen to be disjoint today.
+    for arm in ("chosen", "carried", "derived", "other", "dropped"):
+        assert occ["entry_id"] not in [e["entry_id"] for e in out[arm]], arm
+
+
+def test_no_entry_can_fall_out_of_the_review(mcp):
+    """The shape rather than the habits arm. `habits` fixes the source that
+    exists today; the residual is what stops the NEXT one disappearing the same
+    way, because three equality tests were exhaustive only by luck.
+
+    The unknown-source row is written through the store because nothing else can
+    write one — that is the point of it. It stands in for a source added later,
+    and the assertion is that the review reports it rather than swallowing it.
+    """
+    token = _connect(mcp)["access_token"]
+    svc = mcp.app.state.service
+    today, _list_id, task = _a_task_due_today(mcp, token)
+    _habit, occ = _a_habit_on(svc, today, title=f"Stretch {uuid.uuid4().hex[:6]}")
+    chosen = _call(mcp, token, "smylte_plan_day",
+                   {"title": f"Call the bank {uuid.uuid4().hex[:6]}"})["structuredContent"]
+    odd = uuid.uuid4().hex
+    store.insert_day_entry(
+        svc._conn, day=today, entry_id=odd, kind="note", source="imported",
+        title=f"From somewhere this code has never heard of {odd[:6]}",
+        position=99.0,
+    )
+
+    out = _call(mcp, token, "smylte_review_day")["structuredContent"]
+    arms = ("chosen", "carried", "derived", "habits", "other")
+    bucketed = [e["entry_id"] for arm in arms for e in out[arm]]
+    assert len(bucketed) == len(set(bucketed)), "an entry landed in two arms"
+    live = {e["entry_id"] for e in
+            _call(mcp, token, "smylte_get_today")["structuredContent"]["entries"]
+            if not e["dropped_at"]}
+    assert set(bucketed) == live, "an entry is on the day but in none of the arms"
+
+    assert [e["entry_id"] for e in out["other"]] == [odd]
+    # Self-describing, which is what makes the residual usable rather than a
+    # mystery: the model can read the source it does not recognise.
+    assert out["other"][0]["source"] == "imported"
+    assert occ["entry_id"] in [e["entry_id"] for e in out["habits"]]
+    assert chosen["entry_id"] in [e["entry_id"] for e in out["chosen"]]
+    assert task["uid"] in [e["uid"] for e in out["derived"]]
+
+
+def test_every_entry_has_the_same_shape_whatever_its_kind(mcp):
+    """`task` was attached only to kind="task" rows, so a day mixing kinds came
+    back in two record shapes and the missing key was the only thing separating
+    them: a reader that reaches for row["task"] raises on the first habit, and
+    one that tests `"task" in row` has learnt a rule that changes meaning the day
+    a fourth kind exists.
+    """
+    token = _connect(mcp)["access_token"]
+    svc = mcp.app.state.service
+    today, _list_id, task = _a_task_due_today(mcp, token)
+    _habit, occ = _a_habit_on(svc, today, title=f"Read {uuid.uuid4().hex[:6]}")
+    note = _call(mcp, token, "smylte_plan_day",
+                 {"title": f"Water the plants {uuid.uuid4().hex[:6]}"})["structuredContent"]
+
+    entries = _call(mcp, token, "smylte_get_today")["structuredContent"]["entries"]
+    assert {"task", "habit", "note"} <= {e["kind"] for e in entries}
+    assert all("task" in e for e in entries), "a kind came back without the key"
+
+    by_id = {e["entry_id"]: e for e in entries}
+    # Null on the kinds that name no task. Structural, not a failed join — which
+    # is why `kind` has to be read alongside it.
+    assert by_id[occ["entry_id"]]["task"] is None
+    assert by_id[note["entry_id"]]["task"] is None
+    # And the join still happens, which is the whole reason for the key.
+    row = next(e for e in entries if e["kind"] == "task" and e["uid"] == task["uid"])
+    assert row["task"]["summary"] == "Renew passport"
+
+
+def test_a_habit_is_ticked_here_which_a_task_is_not(mcp):
+    """A habit occurrence exists only in the day plan, so the stamp written here
+    is the entire record that it was kept — there is no VTODO to contradict it,
+    which is exactly why `done` is accepted for one and refused for a task."""
+    token = _connect(mcp)["access_token"]
+    svc = mcp.app.state.service
+    today = _call(mcp, token, "smylte_get_today")["structuredContent"]["day"]
+    _habit, occ = _a_habit_on(svc, today, title=f"Push-ups {uuid.uuid4().hex[:6]}")
+
+    ticked = _call(mcp, token, "smylte_update_day_entry",
+                   {"entry_id": occ["entry_id"], "done": True})["structuredContent"]
+    assert ticked["done_at"]
+    review = _call(mcp, token, "smylte_review_day")["structuredContent"]
+    mine = next(e for e in review["habits"] if e["entry_id"] == occ["entry_id"])
+    assert mine["done_at"] == ticked["done_at"]
+
+
+def test_a_past_day_can_be_tidied_but_not_re_ticked(mcp):
+    """`update_day_entry` resolved its day with `_day_or_today`, so `done` could
+    be set on ANY past day. On a note that is untidy; on a habit it is the whole
+    value of the thing — a log that can be filled in on Friday for Tuesday
+    measures nothing, and afterwards it is indistinguishable from one that was
+    kept honestly.
+
+    Dropping and repositioning stay allowed on the same day, and that difference
+    is the point rather than an oversight: admitting a plan went unmet subtracts
+    from the day, and an order is not a claim about what happened.
+    """
+    token = _connect(mcp)["access_token"]
+    svc = mcp.app.state.service
+    today = _call(mcp, token, "smylte_get_today")["structuredContent"]["day"]
+    past = (date.fromisoformat(today) - timedelta(days=30)).isoformat()
+    _habit, occ = _a_habit_on(svc, past, title=f"Journal {uuid.uuid4().hex[:6]}")
+
+    # Both directions: un-ticking erases a record made on the day as surely as
+    # backfilling invents one.
+    for done in (True, False):
+        r = _call(mcp, token, "smylte_update_day_entry",
+                  {"entry_id": occ["entry_id"], "day": past, "done": done})
+        assert r["isError"] is True, done
+        said = r["content"][0]["text"]
+        assert past in said and "done" in said, said
+
+    # And the refusal happened before anything was written.
+    review = _call(mcp, token, "smylte_review_day", {"day": past})["structuredContent"]
+    mine = next(e for e in review["habits"] if e["entry_id"] == occ["entry_id"])
+    assert mine["done_at"] is None
+
+    # The same entry, on the same past day: tidying, which is not falsifying.
+    dropped = _call(mcp, token, "smylte_update_day_entry",
+                    {"entry_id": occ["entry_id"], "day": past,
+                     "dropped": True})["structuredContent"]
+    assert dropped["dropped_at"]
+    moved = _call(mcp, token, "smylte_update_day_entry",
+                  {"entry_id": occ["entry_id"], "day": past,
+                   "position": 0.5})["structuredContent"]
+    assert moved["position"] == 0.5
+
+
+def test_a_habit_on_an_unopened_day_is_visible_but_cannot_be_ticked(mcp, tmp_path):
+    """The claim the tool descriptions make, pinned to the code that has to keep
+    it true.
+
+    On a day nobody has opened, a habit exists only as a PREVIEW row — an
+    entry_id `preview_day` mints and throws away — and nothing in this toolset
+    can open the day, because a read that opened days would fill the log with
+    plans nobody made. So today's habits are visible here and UN-TICKABLE until
+    the owner opens the app. A description that said otherwise would fail in the
+    most expensive direction: a model reporting a habit done that was never
+    recorded anywhere.
+    """
+    token = _connect(mcp)["access_token"]
+    svc = mcp.app.state.service
+    title = f"Walk the dog {uuid.uuid4().hex[:6]}"
+    habit = svc.create_habit(title=title, days="")
+    assert _day_rows(tmp_path) == (0, 0), "defining a habit must not touch a day"
+
+    out = _call(mcp, token, "smylte_get_today")["structuredContent"]
+    assert out["planned"] is False
+    mine = [e for e in out["preview"] if e["habit_id"] == habit["id"]]
+    assert len(mine) == 1, out["preview"]
+    assert mine[0]["kind"] == "habit" and mine[0]["title"] == title
+    # The preview carries the same record shape as a real entry, `task` included.
+    assert mine[0]["task"] is None
+
+    r = _call(mcp, token, "smylte_update_day_entry",
+              {"entry_id": mine[0]["entry_id"], "done": True})
+    assert r["isError"] is True
+    assert "no entry" in r["content"][0]["text"]
+    # And the attempt did not open the day on its way past.
+    assert _day_rows(tmp_path) == (0, 0)

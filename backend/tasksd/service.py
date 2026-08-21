@@ -89,6 +89,110 @@ DAY_RANGE_MAX_DAYS = 190
 _CARRY_LOOKBACK_DAYS = 30
 
 
+# ── habits ───────────────────────────────────────────────────────────────────
+#
+# A habit is A RULE THAT INSERTS ENTRIES. Its occurrences are ordinary day_plan
+# rows (kind="habit", source="habit") and there is no second ledger — nothing
+# here is ever PUT to Radicale, no RRULE is written for it, and the gated
+# `completions` table is not involved (docs/recurrence-findings.md). Everything
+# about WHICH days a habit runs on is decided in this section.
+
+# The seven day names, indexed by Python's `date.weekday()` — 0=Monday. This
+# tuple is the ONE place the names and the numbers meet: `habit_runs_on` indexes
+# straight into it with a weekday derived from the day key, and
+# `normalize_habit_days` orders by `index()`. 0=Monday is not a fresh choice —
+# scheduling.py already keys booking availability "0" (Monday) .. "6" (Sunday) —
+# and mon..sun is the order a week is written in. A SECOND mapping anywhere (a
+# dict in the route layer, a lookup in the client) is how "wed" comes to mean
+# Wednesday on one path and Thursday on the other, silently, for one weekday
+# only; `test_habits.py` round-trips this tuple against `weekday()` for that
+# reason.
+_WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+
+# Tokens that mean the caller handed us a RECURRENCE RULE rather than a day
+# list. Refused by name, with a message that points at the design note: "every
+# second Tuesday", BYDAY=MO, FREQ=WEEKLY and friends are the request that turns
+# a habit into VTODO recurrence, which is GATED and is deliberately not what
+# this table implements. The two-letter iCal codes are in the set for the same
+# reason — MO,WE,FR is neither a weekday name nor a typo of one, and a bare
+# "unknown day 'mo'" would send the reader hunting for a spelling mistake
+# instead of showing them the boundary they just walked into.
+_RRULE_TOKENS = frozenset({
+    "rrule", "freq", "byday", "bysetpos", "interval", "until", "count", "wkst",
+    "daily", "weekly", "monthly", "yearly",
+    "mo", "tu", "we", "th", "fr", "sa", "su",
+})
+
+# How far into the PAST a day may be and still be given habit occurrences — on
+# either path that mints them, the first snapshot and the top-up alike. See
+# `_habit_minting_allowed` for why it is not zero.
+_HABIT_MINT_GRACE_DAYS = 1
+
+
+def normalize_habit_days(value: str | None) -> str:
+    """Validate a habit's `days` and return its canonical spelling. Raises
+    ValueError (routes → 422).
+
+    "" (and None) is every day — the common case, spelled as the absence of a
+    restriction rather than as all seven names, so "every day" has exactly one
+    representation.
+
+    Otherwise a comma list of the seven names from `_WEEKDAYS`, re-ordered
+    mon..sun. The order is normalised because "fri,mon" and "mon,fri" are ONE
+    schedule: stored verbatim they would be two strings that compare unequal, so
+    a client diffing the habit it just sent against the one it got back would see
+    a change that did not happen, and any future group-by-schedule would split
+    one rule into two.
+
+    A duplicate is REFUSED rather than quietly collapsed. Silently accepting
+    "mon,mon" would mean the value the client sent is not the value it gets back,
+    with nothing to say why — and a duplicate is far more likely a client bug
+    worth reporting than an intention worth guessing at.
+    """
+    raw = (value or "").strip()
+    if not raw:
+        return ""
+    parts = [p.strip().lower() for p in raw.split(",")]
+    if any(c in raw for c in "=;:") or any(p in _RRULE_TOKENS for p in parts):
+        raise ValueError(
+            f"days is a comma list of weekday names like 'mon,wed,fri' (or '' "
+            f"for every day), not a recurrence rule — got {value!r}. A habit is "
+            f"a rule that inserts day-plan entries, and never an RRULE: task "
+            f"recurrence is gated, see docs/recurrence-findings.md."
+        )
+    out: list[str] = []
+    for p in parts:
+        if p not in _WEEKDAYS:
+            raise ValueError(
+                f"unknown day {p!r}; days is a comma list of "
+                f"{', '.join(_WEEKDAYS)} (or '' for every day)"
+            )
+        if p in out:
+            raise ValueError(f"day {p!r} is listed twice in {value!r}")
+        out.append(p)
+    return ",".join(sorted(out, key=_WEEKDAYS.index))
+
+
+def habit_runs_on(days: str, day: str) -> bool:
+    """Is a habit scheduled on `days` due to run on the day key `day`?
+
+    The weekday is derived from the DAY KEY'S OWN CHARACTERS —
+    `date.fromisoformat(day).weekday()` — and never from a clock. Three
+    different ideas of "now" are in play at once (the browser's, `home_timezone`,
+    and the server's, which is UTC in the ordinary deployment), and asking any of
+    them what day it is would let the plan for Friday be filled with Thursday's
+    habits whenever two of them disagree. A day key is a string that names one
+    calendar day; taking the weekday from the string is zone-free by
+    construction and is the only mechanical way to keep the three in step.
+
+    `days` is assumed canonical (`normalize_habit_days` on the way in), so the
+    membership test is exact rather than fuzzy.
+    """
+    if not days:
+        return True                 # '' is every day
+    return _WEEKDAYS[date.fromisoformat(day).weekday()] in days.split(",")
+
+
 def day_key(value: str) -> str:
     """Validate a day key and return it. Raises ValueError (routes → 422)."""
     s = (value or "").strip()
@@ -1234,6 +1338,14 @@ class TaskService:
             "uid": row["uid"],
             "title": row["title"],
             "source": row["source"],
+            # habit entries: the rule that minted this occurrence, NULL for
+            # everything else. Dangling by design once that habit is deleted —
+            # the row keeps its copied title and stays readable. This line and
+            # store.init_db's `habit_id` ALTER are one change: sqlite3.Row
+            # raises IndexError for a column the table does not have, and
+            # nothing maps IndexError, so shipping this half alone 500s every
+            # read of every day.
+            "habit_id": row["habit_id"],
             "position": row["position"],
             "done_at": row["done_at"],
             "dropped_at": row["dropped_at"],
@@ -1279,18 +1391,63 @@ class TaskService:
         that day forever, from a client that offers the add box before the open
         has even answered. So the snapshot merges into what is there instead,
         skipping anything the day already holds (`_snapshot_for`).
+
+        HABITS are the one thing a marked day still receives. A habit is a rule,
+        and a rule made this morning has to reach today — the alternative is that
+        creating a habit does nothing visible until tomorrow, on the one screen it
+        exists for. So an already-planned day gets a TOP-UP: an occurrence for
+        each active habit scheduled on that weekday that has no row on the day
+        yet, and nothing else. Tasks are never re-derived; the snapshot-once rule
+        is untouched. Four cases, in full:
+
+          * no marker, not past    — the full snapshot (habits first, then
+                                     due-today, overdue, carried) and the marker.
+          * no marker, day in past — the same snapshot MINUS the habits: the
+                                     tasks still derive (they are read off the
+                                     wire and assert nothing about that day), but
+                                     no occurrence is minted, because a habit
+                                     occurrence exists nowhere but in the row.
+          * marker, day not past   — habit top-up only.
+          * marker, day in past    — nothing at all.
+
+        The last two lines of that table are one rule, not two: a past day is the
+        record of what was intended AT THE TIME, and writing today's rules into
+        it is a forgery, however small. Both paths ask `_habit_entries_for`, and
+        it is the one that refuses — first-open and top-up alike, with a one-day
+        grace on "past" (see `_habit_minting_allowed`).
         """
         day = day_key(day)
         with self._lock:
             entries = store.get_day_entries(self._conn, day)
             opened = store.day_is_opened(self._conn, day)
-            if not create or opened:
+            if not create:
                 return self._day_plan_dto(day, entries, opened)
-            pending = self._snapshot_for(day, entries)
+            if opened:
+                # No pastness check here: `_habit_entries_for` makes it, for this
+                # caller and for `_snapshot_for` both. Asking it HERE is what let
+                # the first open of a past day mint habits — the same rule, spelt
+                # at one of its two call sites.
+                pending = self._habit_entries_for(day, entries)
+                if not pending:
+                    # The ordinary case for every re-open of a planned day.
+                    # Returning here keeps it a pure read: no transaction, and no
+                    # `day_updated` event for every other tab to refetch on —
+                    # `patch_day_entry` draws the same line for the same reason.
+                    return self._day_plan_dto(day, entries, True)
+            else:
+                pending = self._snapshot_for(day, entries)
             # Behind whatever the owner has already placed, computed the same
             # way `add_day_entry` appends. Rows that are already on the day keep
             # the positions they were given: a snapshot arriving late must not
-            # renumber the arrangement it is joining.
+            # renumber the arrangement it is joining, and neither must an
+            # evening top-up — a habit added at 18:00 joins the end of the day
+            # the owner has spent all day arranging, it does not jump to the top
+            # of it. (Habits lead `pending`, never the day: on a first snapshot
+            # of a day whose first write was a hand-add — `_snapshot_for` MERGES
+            # with those rows rather than landing beside them — `base` is
+            # non-zero, so the habits sit behind the hand-added rows too. They
+            # read first only when the day was empty, which is the usual case
+            # but not the rule.)
             base = max((r["position"] or 0.0 for r in entries), default=0.0)
             # One transaction for the whole snapshot INCLUDING the marker. The
             # connection is in autocommit (see store.tx), so without it a
@@ -1308,6 +1465,10 @@ class TaskService:
                     store.insert_day_entry(
                         self._conn, day=day, position=base + float(i), **fields
                     )
+                # Unconditional, and a no-op on the top-up path: `mark_day_opened`
+                # is INSERT OR IGNORE and keeps the ORIGINAL opened_at, so a day
+                # that gains a habit occurrence in the evening still records when
+                # it was first planned.
                 store.mark_day_opened(self._conn, day)
             entries = store.get_day_entries(self._conn, day)
             dto = self._day_plan_dto(day, entries, True)
@@ -1317,10 +1478,13 @@ class TaskService:
     def preview_day(self, day: str) -> list[dict[str, Any]]:
         """What opening `day` WOULD put on it, without opening it.
 
-        The same derivation `open_day(create=True)` inserts — due that day, then
-        already late, then unfinished from the last planned day — run and thrown
-        away. `_snapshot_for` writes nothing itself, so this costs one read and
-        cannot leave a trace.
+        The same derivation `open_day(create=True)` inserts — habits first, then
+        due that day, then already late, then unfinished from the last planned
+        day — run and thrown away. `_snapshot_for` writes nothing itself, so this
+        costs one read and cannot leave a trace. A PAST day previews no habits,
+        for the same reason opening one mints none (`_habit_entries_for`): a
+        preview that showed them would describe a day the open it stands in for
+        would not produce.
 
         It exists for the MCP connector, which has to answer "what is on today"
         for a day the owner has not opened yet. Reading is the only thing a
@@ -1331,8 +1495,20 @@ class TaskService:
         a person opens the day themselves.
 
         Entries the day already holds are excluded, exactly as they are on a real
-        open — so on a day that IS planned this returns what a snapshot would
-        still add, which is [] for a day that has already had one.
+        open — a FIRST open, which is the one this previews and the only one it
+        speaks for. On a day that has ALREADY been planned this is not a forecast
+        of the next open and does not claim to be: `_snapshot_for` re-derives
+        due-today and overdue from the wire as it stands now, while a re-open of
+        a marked day tops up habits and nothing else. Probed: open a day, then
+        give a task a DUE on it, and the preview names a task no open will ever
+        add. (A habit created after the open does appear on both, because the
+        top-up runs this same `_habit_entries_for`.)
+
+        Which is why the emptiness this used to promise for a planned day was
+        never a property of the code, and is not worth making into one. The one
+        caller asks about days NOBODY HAS OPENED — `mcp/api.py::today` reaches
+        for a preview only when `planned` is false — and on those the derivation
+        and the open are the same derivation.
 
         Returned in the shape `_day_entry_dto` produces, so a caller has one
         entry shape to handle rather than two — with the row-only columns
@@ -1353,6 +1529,13 @@ class TaskService:
                 "uid": f.get("uid"),
                 "title": f.get("title"),
                 "source": f["source"],
+                # Present here for the same reason every other key is: this dict
+                # is a SECOND hand-written spelling of `_day_entry_dto`, and the
+                # docstring above promises a caller one entry shape rather than
+                # two. A field added to one and not the other makes a preview
+                # entry and a real entry differ in exactly the way that promise
+                # says they do not.
+                "habit_id": f.get("habit_id"),
                 "position": None,
                 "done_at": None,
                 "dropped_at": None,
@@ -1370,10 +1553,14 @@ class TaskService:
         has to MERGE with those rows rather than land beside them. Nothing here
         is proposed for a task or a note the day already carries.
 
-        Order is due-today, then overdue, then carried — the day's own work
-        first, what is already late behind it, and yesterday's leftovers last.
-        Within each group the sort key is (due, summary, collection_href, uid),
-        which is total — a UID is unique per COLLECTION, not globally
+        Order is habits, then due-today, then overdue, then carried — what the
+        owner does every day, the day's own work, what is already late behind it,
+        and yesterday's leftovers last. A PAST day gets no habits at all and so
+        leads with due-today; `_habit_entries_for` makes that call, not this
+        function.
+
+        Within each task group the sort key is (due, summary, collection_href,
+        uid), which is total — a UID is unique per COLLECTION, not globally
         (invariant #4), so the href has to be in the key for two lists holding
         the same UID to have a defined order — and a total key is what makes the
         snapshot for a given cache reproducible.
@@ -1408,7 +1595,15 @@ class TaskService:
                     due_today.append(it)
                 elif key < day:
                     overdue.append(it)
-        out: list[dict[str, Any]] = []
+        # Habits lead the snapshot, ahead of due-today and overdue: they are what
+        # the owner decided to do EVERY day, so they read first, before whatever
+        # merely happens to fall due. Empty for a past day — this call is the
+        # ONLY habit-minting path a first open has, so the refusal inside it is
+        # what keeps `POST /api/day/2020-01-01/open` from writing today's rules
+        # into 2020. They dedupe on `habit_id` inside `_habit_entries_for` rather
+        # than through the `seen` set below — an occurrence names no task, so it
+        # has no (collection_href, uid) to be identified by.
+        out: list[dict[str, Any]] = self._habit_entries_for(day, existing)
         # Seeded from the rows the day already has, so the dedupe below covers
         # them too — otherwise a task hand-added this morning would get a second
         # row the moment the snapshot ran, and two rows for one task means two
@@ -1426,7 +1621,24 @@ class TaskService:
             for it in sorted(group, key=_snapshot_order):
                 self._append_task_entry(out, seen, it["collection_href"], it["uid"], "auto")
         for row in self._carry_into(day):
-            if row["kind"] == "note":
+            # Explicit per-kind dispatch, ending in a `continue` rather than in a
+            # task. This was "note, and EVERYTHING ELSE IS A TASK", which is a
+            # trap the moment a third kind exists: a habit occurrence reaching
+            # the task arm is laundered into
+            # {kind: "task", collection_href: None, uid: None} — a permanent
+            # blank row nothing can join back to a task, on a day the owner
+            # cannot explain — and it also puts (None, None) into `seen`, so the
+            # NEXT such row is silently swallowed by the dedupe instead. One
+            # unknown kind would therefore produce one corrupt row plus a
+            # disappearance, and neither would raise anything to notice.
+            #
+            # `_carry_into` already keeps habit occurrences out (they are
+            # source="habit", and only source="user" carries), so this is the
+            # second of two guards that fail for different reasons: that one
+            # states the rule "an occurrence never carries", this one states
+            # "a kind this function does not understand is not a task".
+            kind = row["kind"]
+            if kind == "note":
                 if row["title"] in note_titles:
                     continue
                 note_titles.add(row["title"])
@@ -1435,9 +1647,16 @@ class TaskService:
                     "title": row["title"], "source": "carried",
                 })
                 continue
-            self._append_task_entry(
-                out, seen, row["collection_href"], row["uid"], "carried"
-            )
+            if kind == "task":
+                self._append_task_entry(
+                    out, seen, row["collection_href"], row["uid"], "carried"
+                )
+                continue
+            # Everything else — a habit occurrence that somehow reached here, or
+            # a kind added after this loop was written — carries nothing. This
+            # arm is the point of the dispatch: it is what the task branch used
+            # to swallow.
+            continue
         return out
 
     @staticmethod
@@ -1502,6 +1721,109 @@ class TaskService:
             out.append(row)
         return out
 
+    def _habit_entries_for(self, day: str, existing) -> list[dict[str, Any]]:
+        """The habit occurrences `day` should be given, in habit order. Called
+        under the lock; writes nothing itself.
+
+        The whole rule lives here, in one place, so the first snapshot and every
+        later top-up cannot drift apart: a day not already past
+        (`_habit_minting_allowed`), an ACTIVE habit (`paused_at IS NULL`) whose
+        `days` include this day key's weekday, and no row for that habit on the
+        day yet. Pausing therefore hides a habit from FUTURE days only — the rows
+        it already put on past days are ordinary day_plan entries and nothing
+        here can reach them.
+
+        THE PASTNESS GATE BELONGS TO THIS FUNCTION, not to the two callers. It
+        used to sit at a call site, and only one of the two asked it: `open_day`
+        gated its top-up branch, while the first snapshot of a never-opened day
+        reached here through `_snapshot_for` and minted freely. So
+        `POST /api/day/2020-01-01/open` wrote TODAY's rules into a day that had
+        already happened. That is worse than it sounds: an occurrence's row is
+        the ONLY record of it anywhere — no VTODO behind it to disagree — so
+        afterwards nothing can tell a backfilled one from a kept one, and the
+        phantom un-ticked rows read as MISSES in `review_day`'s habits arm and in
+        the "n of m this week" the tab counts off these same rows. A first open
+        of a past day still snapshots its TASKS — those re-derive from the wire
+        and claim nothing about what the owner intended that day — but it mints
+        no habits.
+
+        Presence is read off `existing`, the rows the day already holds, and a
+        DROPPED row COUNTS AS PRESENT — the same rule `_snapshot_for`'s `seen`
+        set follows. A habit dropped this morning must not come back this
+        afternoon: that is the resurrection the opened marker exists to prevent,
+        and on the top-up path it would happen on every visit to the tab rather
+        than once.
+        """
+        if not self._habit_minting_allowed(day):
+            return []
+        present = {r["habit_id"] for r in existing if r["habit_id"]}
+        out: list[dict[str, Any]] = []
+        for habit in store.list_habits(self._conn):
+            # `list_habits` returns paused habits too — the screen that un-pauses
+            # them needs to see them — so the filter belongs to this rule, not to
+            # the query.
+            if habit["paused_at"] or habit["id"] in present:
+                continue
+            if not habit_runs_on(habit["days"], day):
+                continue
+            out.append({
+                "entry_id": uuid.uuid4().hex, "kind": "habit",
+                # The title is COPIED onto the row, never joined at read time.
+                # That copy is what lets the occurrence outlive its rule: delete
+                # the habit and this day still says what the owner planned, with
+                # only a dangling habit_id to show the rule is gone.
+                "title": habit["title"], "habit_id": habit["id"],
+                # source="habit" is load-bearing, not a label. `_carry_into`
+                # keeps only source="user" rows, so "an occurrence never carries
+                # into the next day" falls out of this line for free —
+                # tomorrow's occurrence is tomorrow's rule running again, never
+                # today's leftover following the owner around.
+                "source": "habit",
+            })
+        return out
+
+    def _habit_minting_allowed(self, day: str) -> bool:
+        """May `day` be given habit occurrences at all?
+
+        Today and later, plus one day of grace. Asked on BOTH paths that mint
+        them — the first snapshot of a never-opened day and the top-up of an
+        already-planned one — because it is asked from their single shared
+        caller, `_habit_entries_for`. It used to be asked at one of the two call
+        sites instead, and the other one wrote today's rules into days that had
+        already happened.
+
+        A past day is the record of what was intended at the time; writing
+        today's rules into it is a forgery however small it is — and the same
+        reason `mcp/api.py::_writable_day` refuses to plan a past day at all.
+
+        The grace is deliberate and is not slack. `home_timezone` is unset by
+        default and the server runs UTC in the ordinary deployment, so a browser
+        in New York between 20:00 and midnight sends the key for a day the server
+        already calls yesterday. Without the grace, habits would stop appearing
+        every evening at 20:00 local and start again at midnight — a feature that
+        dies every night, presenting as "habits are broken after dinner" rather
+        than as the timezone bug it is. One day is enough for the case that
+        matters: measured against the server's own UTC clock, a browser anywhere
+        from UTC-12 to UTC+14 is never more than one calendar day behind it. And
+        it costs only this — a genuinely stale tab, left open overnight, may add
+        yesterday's habit rows to yesterday.
+        """
+        return (
+            date.fromisoformat(day)
+            >= date.fromisoformat(self._today()) - timedelta(days=_HABIT_MINT_GRACE_DAYS)
+        )
+
+    def _today(self) -> str:
+        """The owner's calendar day, not necessarily the server's.
+
+        `home_timezone` when they have set one; otherwise `datetime.now(None)`,
+        this process's local clock, which is the honest fallback — it is what the
+        deployment's own logs use and there is no better answer available when
+        the setting is empty. `mcp/api.py::_today` answers the same question the
+        same way for the connector.
+        """
+        return datetime.now(self._home_tz()).date().isoformat()
+
     def add_day_entry(
         self, day: str, *, entry_id: str, kind: str,
         list_id: str | None = None, uid: str | None = None, title: str | None = None,
@@ -1514,6 +1836,29 @@ class TaskService:
         task and note lookups skip DROPPED entries (see store.find_day_entry) —
         having dropped something this morning, adding it back this afternoon has
         to work.
+
+        kind="habit" is NOT accepted here, and that is the point of the check
+        below rather than an omission. A habit occurrence is minted BY A RULE:
+        `_habit_entries_for` decides which habits run on which day, from the day
+        key's own weekday. A client able to hand one in could fabricate an
+        occurrence on a day the rule does not schedule — a record of a habit
+        having come round on a day it never did, indistinguishable afterwards
+        from a real one, in the one table whose whole value is that it was
+        written at the time.
+
+        That check is the ONLY thing standing between an in-process caller and a
+        forged occurrence. Nothing catches it further down, and this paragraph
+        used to claim otherwise: it named `store.find_day_entry` as a second,
+        cruder guard that "has no habit arm and would raise". Traced with the
+        check removed, kind="habit" takes the else branch below, and
+        `find_day_entry(conn, day, title=...)` queries the `kind='note' AND
+        title=?` arm — it matches nothing and returns None, no exception — so
+        control falls through to `insert_day_entry` and the bogus row LANDS,
+        source="user" and habit_id=None, on a day no rule scheduled it for. The
+        named fallback would have written the very thing it was credited with
+        preventing. (`CreateDayEntry.kind` is a Literal, so an HTTP client is
+        also refused at the edge — but the MCP tools and every other caller in
+        this process arrive here directly, with only the line below in the way.)
 
         Raises ValueError (routes → 422) for a malformed day, an unknown kind,
         a task entry naming a list that does not resolve, an empty note, or an
@@ -1608,10 +1953,11 @@ class TaskService:
         client did not send this field", and only the fields it did send reach
         the UPDATE.
 
-        `done` is a NOTE's field, and sending it for a task entry raises
-        ValueError (routes → 422). Dropping and repositioning apply to every
-        entry; doneness does not, because a task already has one answer that
-        every client on the account can see.
+        `done` belongs to the entries whose doneness exists NOWHERE ELSE — a
+        note, and a habit occurrence, both of which live only in this table.
+        Sending it for a TASK entry raises ValueError (routes → 422): a task
+        already has one answer, its VTODO STATUS, that every client on the
+        account can see. Dropping and repositioning apply to every entry.
         """
         day = day_key(day)
         fields: dict[str, object] = {}
@@ -1634,13 +1980,15 @@ class TaskService:
             # on a task entry would be a second answer, and the two disagree the
             # moment the task is ticked anywhere else. A note is the opposite
             # case: it exists nowhere but in the day, so its own stamp is the
-            # only answer there is. TodayView already routes a task row's
-            # checkbox through `api.complete`; this closes the path rather than
-            # leaving a column that silently records a lie.
+            # only answer there is — and a habit occurrence is a note in this
+            # respect, since ticking today's run is a fact about today and about
+            # nothing on the wire. TodayView already routes a task row's checkbox
+            # through `api.complete`; this closes the path rather than leaving a
+            # column that silently records a lie.
             if done is not None and row["kind"] == "task":
                 raise ValueError(
-                    "done applies to a note entry; a task's doneness is its "
-                    "VTODO STATUS — complete the task instead"
+                    "done applies to a note or habit entry; a task's doneness "
+                    "is its VTODO STATUS — complete the task instead"
                 )
             row = store.update_day_entry(self._conn, day, entry_id, **fields)
             dto = self._day_entry_dto(row)
@@ -1668,6 +2016,130 @@ class TaskService:
         # Every day the map holds is planned by definition: it is there because
         # it has a marker, entries, or both.
         return [self._day_plan_dto(d, rows, True) for d, rows in planned.items()]
+
+    # ── habits (the rules that put entries on a day) ─────────────────────────
+    #
+    # Four methods, and between them they are a habit's entire lifecycle. None of
+    # them writes to day_plan: an occurrence is minted by `_habit_entries_for`
+    # when a day is opened, and a day already written is nobody's to rewrite.
+    #
+    # Every write publishes {"type": "day_updated", …} and NEVER
+    # settings_updated. App.tsx ignores settings_updated for its `rev` bump on
+    # purpose — a UI preference has nothing to say about task data, and treating
+    # it as a reason to refetch turned one drag of an appearance slider into a
+    # request storm — so a habit change announced that way would reach the Today
+    # tab only on the next manual reload, which is the one screen the change
+    # exists for. `day_updated` is also what TodayView re-opens the day on, and
+    # re-opening is what runs the habit top-up: that is how a habit created at
+    # noon shows up at noon rather than tomorrow.
+
+    @staticmethod
+    def _habit_dto(row) -> dict[str, Any]:
+        return {
+            "id": row["id"],
+            "title": row["title"],
+            "days": row["days"],
+            "paused_at": row["paused_at"],
+            "position": row["position"],
+            "created_at": row["created_at"],
+        }
+
+    def list_habits(self) -> list[dict[str, Any]]:
+        """Every habit in position order, PAUSED ONES INCLUDED — this is the list
+        the settings screen edits, not the subset today happens to schedule."""
+        with self._lock:
+            return [self._habit_dto(r) for r in store.list_habits(self._conn)]
+
+    def create_habit(
+        self, *, title: str, days: str | None = None, position: float | None = None
+    ) -> dict[str, Any]:
+        """Define a habit. Raises ValueError (routes → 422) for an empty title or
+        a `days` that is not a canonical weekday list.
+
+        Nothing is put on any day here. The habit takes effect when a day is next
+        opened — today included, through the top-up — so creating one is a single
+        write that cannot half-succeed into a day.
+        """
+        title = (title or "").strip()
+        if not title:
+            raise ValueError("a habit needs a title")
+        days = normalize_habit_days(days)
+        with self._lock:
+            if position is None:
+                # Appended to the end of the list, computed from the rows in hand
+                # rather than with a MAX() query — the same shape as
+                # `add_day_entry`, and an account holds a handful of habits.
+                position = max(
+                    (h["position"] or 0.0 for h in store.list_habits(self._conn)),
+                    default=0.0,
+                ) + 1.0
+            row = store.create_habit(self._conn, uuid.uuid4().hex, {
+                "title": title, "days": days, "position": float(position),
+            })
+            dto = self._habit_dto(row)
+        self._publish({"type": "day_updated", "day": self._today()})
+        return dto
+
+    def update_habit(
+        self, habit_id: str, *, title: str | None = None, days: str | None = None,
+        paused: bool | None = None, position: float | None = None,
+    ) -> dict[str, Any] | None:
+        """Rename, reschedule, pause/resume or reorder one habit. None for an id
+        that does not exist (the route turns that into a 404).
+
+        `paused` is a tri-state boolean for the reason `patch_day_entry`'s `done`
+        is one: None means "the client did not send this field", and False is a
+        real value — resuming. Pausing stamps `paused_at`, which hides the habit
+        from FUTURE snapshots and top-ups only. The occurrences it has already put
+        on past days are ordinary day_plan rows that nothing in this section can
+        reach, so a paused habit's history reads exactly as it did.
+
+        A rename works the same way, and deliberately: an occurrence copies the
+        title at the moment it is minted, so yesterday's row still says what the
+        owner actually planned yesterday. Only occurrences minted from now on
+        carry the new name.
+        """
+        fields: dict[str, object] = {}
+        if title is not None:
+            title = title.strip()
+            if not title:
+                raise ValueError("a habit needs a title")
+            fields["title"] = title
+        if days is not None:
+            fields["days"] = normalize_habit_days(days)
+        if paused is not None:
+            fields["paused_at"] = _stamp() if paused else None
+        if position is not None:
+            fields["position"] = float(position)
+        with self._lock:
+            row = store.update_habit(self._conn, habit_id, fields)
+            if row is None:
+                return None
+            dto = self._habit_dto(row)
+        # Only when something was actually written — a PATCH with an empty body
+        # is a read, and an event for it would have every other tab refetch for
+        # nothing (`patch_day_entry` draws the same line).
+        if fields:
+            self._publish({"type": "day_updated", "day": self._today()})
+        return dto
+
+    def delete_habit(self, habit_id: str) -> bool:
+        """Delete the RULE, and only the rule. False for an unknown id (route →
+        404).
+
+        The occurrences this habit already put on past days stay exactly as they
+        are — their copied title, their done/dropped stamps, and a habit_id that
+        now points at nothing. That dangling id is the design, not debris: those
+        rows are the record that the owner planned this on those days, and a
+        habit deleted in September must not be able to rewrite August. Nothing in
+        this app ever DELETEs from day_plan, and a "tidy up orphaned occurrences"
+        sweep would erase precisely the history this preserves.
+        """
+        with self._lock:
+            gone = store.delete_habit(self._conn, habit_id)
+        if gone:
+            self._publish({"type": "day_updated", "day": self._today()})
+        return gone
 
     # ── session revocation (explicit logout) ─────────────────────────────────
     def revoke_session(self, jti: str, expires_at: float) -> None:

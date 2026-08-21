@@ -311,6 +311,48 @@ class PatchDayEntry(BaseModel):
     position: float | None = Field(default=None, allow_inf_nan=False)
 
 
+# A habit's `days`: "" (every day) or a comma list of mon,tue,wed,thu,fri,sat,sun.
+# The bound is a shape bound only — the VOCABULARY is checked by
+# `service.normalize_habit_days`, which also normalises the order and refuses an
+# rrule-shaped value by name. That check is not restated as a route-level pattern
+# for the reason `_check_day` gives: one rule, one place, or the edge and the
+# store end up disagreeing about which strings mean the same schedule.
+# Loose rather than exact: the canonical spelling of all seven days is 27
+# characters, but `normalize_habit_days` also accepts the same list written with
+# spaces and capitals ("Mon, Tue, …"), and a client sending that should get the
+# service's own message about the vocabulary rather than a length error about a
+# value it is allowed to write.
+_HABIT_DAYS_MAX = 64
+
+
+class CreateHabit(BaseModel):
+    """A rule that puts an entry on every day it schedules.
+
+    Bounded and XML-safe like the other free text a client sends. A habit lives
+    only in SQLite and never reaches the wire — no PUT, no RRULE — so this is not
+    the XML boundary CollectionName defends; it is the same cheap bound applied
+    at the same edge as every other text field, so there is one rule to remember.
+    The title is COPIED onto each occurrence, which is what makes it worth
+    bounding here rather than once it is already in a day.
+    """
+
+    title: XmlSafeText = Field(min_length=1, max_length=200)
+    days: str = Field(default="", max_length=_HABIT_DAYS_MAX)
+    # Same guard, same reason, as Sidecar.sort_order: a non-finite float parses
+    # out of JSON but cannot be serialized back into it, so one Infinity here
+    # would 500 every later read of the habits list.
+    position: float | None = Field(default=None, allow_inf_nan=False)
+
+
+class EditHabit(BaseModel):
+    title: XmlSafeText | None = Field(default=None, min_length=1, max_length=200)
+    days: str | None = Field(default=None, max_length=_HABIT_DAYS_MAX)
+    # Tri-state on purpose, like PatchDayEntry.done: None is "not sent", and
+    # false is a real value — resuming a paused habit.
+    paused: bool | None = None
+    position: float | None = Field(default=None, allow_inf_nan=False)
+
+
 class CreateBookingLink(BaseModel):
     title: XmlSafeText = Field(min_length=1, max_length=200)
     description: XmlSafeText | None = Field(default=None, max_length=2000)
@@ -1215,6 +1257,66 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if dto is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown day entry {entry_id}")
         return dto
+
+    # -- habits (the rules that put entries on a day) --
+    #
+    # A habit is app-only state and never reaches Radicale, so these four are
+    # SQL under the service lock like the day-plan routes above. They are also
+    # deliberately NOT under /settings: the service publishes `day_updated` for
+    # each of them (App.tsx ignores `settings_updated` for its refetch bump), and
+    # a habit belongs to the day plan, not to UI preferences.
+    @api.get("/habits")
+    async def get_habits(request: Request):
+        """Every habit in position order, paused ones included — the paused ones
+        are exactly what the screen that resumes them has to show."""
+        return await _run(_svc(request).list_habits)
+
+    @api.post("/habits", status_code=201)
+    async def post_habit(request: Request, body: CreateHabit):
+        try:
+            return await _run(
+                _svc(request).create_habit,
+                title=body.title, days=body.days, position=body.position,
+            )
+        except ValueError as e:
+            # An empty title, or a `days` that is not a weekday list — including
+            # an rrule-shaped one, whose message names
+            # docs/recurrence-findings.md rather than leaving the caller to guess
+            # why "FREQ=WEEKLY;BYDAY=MO" is not a schedule this app takes.
+            raise HTTPException(422, str(e)) from None
+
+    @api.patch("/habits/{habit_id}")
+    async def patch_habit(request: Request, habit_id: str, body: EditHabit):
+        # An explicit null is refused rather than ignored, the same way
+        # _LINK_NOT_NULL refuses one on a booking link. None is how the service
+        # spells "the client did not send this field", so a null would be
+        # silently dropped and the caller told its edit landed when nothing was
+        # written. There is no field here a null could sensibly mean anything for:
+        # "every day" is "", and resuming is paused=false.
+        nulled = sorted(k for k in body.model_fields_set if getattr(body, k) is None)
+        if nulled:
+            raise HTTPException(
+                422, f"these fields cannot be null: {', '.join(nulled)}")
+        try:
+            dto = await _run(
+                _svc(request).update_habit, habit_id,
+                title=body.title, days=body.days,
+                paused=body.paused, position=body.position,
+            )
+        except ValueError as e:
+            raise HTTPException(422, str(e)) from None
+        if dto is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown habit {habit_id}")
+        return dto
+
+    @api.delete("/habits/{habit_id}", status_code=204)
+    async def delete_habit(request: Request, habit_id: str):
+        """Delete the DEFINITION. Every occurrence this habit already put on a
+        day stays there, with the title it copied at the time — that is the
+        record of what the owner planned, and it is not a rule's to withdraw."""
+        if not await _run(_svc(request).delete_habit, habit_id):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown habit {habit_id}")
+        return Response(status_code=204)
 
     # -- calendars / events --
     @api.get("/calendars")

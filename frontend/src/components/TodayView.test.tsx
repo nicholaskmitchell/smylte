@@ -1,12 +1,12 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
-import { act, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { TodayView, dueFromParse, orderEntries } from './TodayView'
+import { TodayView, dueFromParse, orderEntries, weekStartOf } from './TodayView'
 import { DataProvider } from '../data'
 import { setCacheUser } from '../cache'
-import { api, type DayEntry, type DayPlan, type List, type Task } from '../api'
+import { api, type DayEntry, type DayPlan, type Habit, type List, type Task } from '../api'
 
 // The whole API module, like every other component suite here: each method
 // becomes a vi.fn(), so nothing touches the network and the day endpoints can
@@ -54,25 +54,53 @@ const task = (o: Partial<Task> = {}): Task => ({
 const entry = (o: Partial<DayEntry> = {}): DayEntry => ({
   entry_id: 'e1', day: today(), kind: 'note', list: null, uid: null,
   title: 'Water the plants', source: 'user', position: 1,
-  done_at: null, dropped_at: null, created_at: '2026-08-21T08:00:00.000Z', ...o,
+  done_at: null, dropped_at: null, habit_id: null,
+  created_at: '2026-08-21T08:00:00.000Z', ...o,
+})
+
+/** One occurrence of a habit: an ORDINARY day-plan row, which is the whole
+ *  design — kind and source say where it came from, `habit_id` is the identity
+ *  the week is counted under, and `title` is the copy taken from the rule when
+ *  the row was minted. */
+const occurrence = (o: Partial<DayEntry> = {}): DayEntry => entry({
+  entry_id: 'h-today', kind: 'habit', source: 'habit', habit_id: 'hb1',
+  title: 'Read', position: 0, ...o,
+})
+
+const habit = (o: Partial<Habit> = {}): Habit => ({
+  id: 'hb1', title: 'Read', days: '', paused_at: null, position: 1,
+  created_at: '2026-08-01T08:00:00.000Z', ...o,
 })
 
 const plan = (entries: DayEntry[] = [], day = today()): DayPlan =>
   ({ day, planned: true, entries })
 
-function setup() {
+/** `opts` reaches `userEvent.setup` untouched. The only caller that passes
+ *  anything is a fake-timer suite: userEvent's own delays are `setTimeout`s, so
+ *  under a frozen clock they never resolve unless it is told how to move one. */
+function setup(opts: Parameters<typeof userEvent.setup>[0] = {}) {
   render(
     <DataProvider rev={0} onExpire={vi.fn()}>
       <TodayView rev={0} onExpire={vi.fn()} />
     </DataProvider>,
   )
-  return userEvent.setup()
+  return userEvent.setup(opts)
 }
 
-/** The day's own rows (not the suggestion lists, which reuse the row class). */
-const dayRows = () => [...document.querySelectorAll('.today-row:not(.today-sug)')]
+/** The day's own rows (not the suggestion lists, which reuse the row class).
+ *  Habit occurrences are excluded too: they are day rows, but they paint in
+ *  their own group above the day and `habitTitles` below reads that one. */
+const dayRows = () =>
+  [...document.querySelectorAll('.today-row:not(.today-sug):not(.today-habit)')]
 const rowTitles = () =>
   dayRows().map((r) => r.querySelector('.today-title')?.textContent ?? '')
+
+/** The habits group's rows, read through the list's accessible name rather than
+ *  through the row class, so this fails if the group stops being a named group
+ *  and not merely if a class is renamed. */
+const habitTitles = () =>
+  [...(screen.queryByRole('list', { name: 'Habits' })?.querySelectorAll('.today-title') ?? [])]
+    .map((t) => t.textContent ?? '')
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -83,6 +111,24 @@ beforeEach(() => {
   m.calendars.mockResolvedValue([])
   m.events.mockResolvedValue([])
   m.openDay.mockResolvedValue(plan())
+  // The week behind the habit counts, and the habit definitions the sheet
+  // edits. Both default to empty so every suite that is not about habits sees
+  // the surface exactly as it was before they existed.
+  m.days.mockResolvedValue([])
+  m.habits.mockResolvedValue([])
+  m.createHabit.mockImplementation(async (body) =>
+    habit({ id: 'hb-new', title: body.title, days: body.days ?? '' }))
+  // Spelled out field by field rather than spread, because the wire shapes
+  // differ where it matters: the body carries `paused`, a boolean, and the
+  // habit carries `paused_at`, a stamp. A mock that echoed the body back would
+  // hand the component a field the real endpoint never sends.
+  m.patchHabit.mockImplementation(async (id, body) => habit({
+    id,
+    ...(body.title !== undefined ? { title: body.title } : {}),
+    ...(body.days !== undefined ? { days: body.days } : {}),
+    paused_at: body.paused ? '2026-08-21T10:00:00.000Z' : null,
+  }))
+  m.deleteHabit.mockResolvedValue(null)
   m.patchDayEntry.mockImplementation(async (_d, id) => entry({ entry_id: id }))
   m.addDayEntry.mockImplementation(async (d, body) => entry({
     entry_id: body.entry_id, day: d, kind: body.kind,
@@ -423,6 +469,398 @@ describe('<TodayView> the add box', () => {
   })
 })
 
+// ── habits on the day ───────────────────────────────────────────────────────
+
+describe('<TodayView> habits', () => {
+  it('paints them in their own group above the rest of the day', async () => {
+    // The habit carries the LATER position deliberately: reading order alone
+    // would put the note first, so a test built on a habit that already sorts
+    // to the top would pass whether or not the partition exists.
+    m.openDay.mockResolvedValue(plan([
+      entry({ entry_id: 'n1', title: 'Water the plants', position: 1 }),
+      occurrence({ entry_id: 'h1', title: 'Read', position: 2 }),
+    ]))
+    setup()
+    await screen.findByText('Read')
+
+    expect(habitTitles()).toEqual(['Read'])
+    expect(rowTitles()).toEqual(['Water the plants'])
+    const group = screen.getByRole('list', { name: 'Habits' })
+    const note = screen.getByText('Water the plants')
+    expect(group.compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING,
+      'the habits group did not come first').toBeTruthy()
+  })
+
+  it('still counts them in the day totals', async () => {
+    m.openDay.mockResolvedValue(plan([
+      occurrence({ entry_id: 'h1' }),
+      entry({ entry_id: 'n1', title: 'Water the plants' }),
+    ]))
+    m.patchDayEntry.mockResolvedValue(
+      occurrence({ entry_id: 'h1', done_at: '2026-08-21T10:00:00.000Z' }))
+    const user = setup()
+
+    // The figure and the ROWS UNDER IT, together: "2 on the day" over a screen
+    // showing one row is the one number here nobody could reconcile, and the
+    // figure on its own is computed from the fetched entries — it would read
+    // the same with the habits group deleted, which is the state this is here
+    // to rule out.
+    expect(await screen.findByText(/2 open · 2 on the day/)).toBeInTheDocument()
+    expect([...habitTitles(), ...rowTitles()]).toEqual(['Read', 'Water the plants'])
+
+    // And the open half moves with the habit, down the same `!done_at` arm a
+    // note takes — ticked from the row on screen, which is the only place the
+    // occurrence can be ticked from.
+    await user.click(screen.getByRole('button', { name: 'Check Read' }))
+    expect(await screen.findByText(/1 open · 2 on the day/)).toBeInTheDocument()
+  })
+
+  it('ticks on the entry itself, never through the task API', async () => {
+    m.openDay.mockResolvedValue(plan([occurrence({ entry_id: 'h1' })]))
+    m.patchDayEntry.mockResolvedValue(
+      occurrence({ entry_id: 'h1', done_at: '2026-08-21T10:00:00.000Z' }))
+    const user = setup()
+    await screen.findByText('Read')
+
+    await user.click(screen.getByRole('button', { name: 'Check Read' }))
+
+    // A habit occurrence exists nowhere but in the day, exactly like a note, so
+    // the day is the only place its doneness can live. There is no VTODO behind
+    // it to complete — a habit never reaches Radicale at all.
+    await waitFor(() =>
+      expect(m.patchDayEntry).toHaveBeenCalledWith(today(), 'h1', { done: true }))
+    expect(m.complete).not.toHaveBeenCalled()
+    await waitFor(() =>
+      expect(document.querySelector('.today-habit')?.className).toContain('done'))
+  })
+
+  it('never offers one as a suggestion', async () => {
+    m.tasks.mockResolvedValue([task({ uid: 'a', summary: 'Stretch', due: today() })])
+    m.openDay.mockResolvedValue(plan([occurrence({ title: 'Read' })]))
+    setup()
+
+    // The control: the suggestion lists are working on this render.
+    expect(await screen.findByRole('button', { name: 'Add Stretch to today' }))
+      .toBeInTheDocument()
+    // "Read" is on this screen EXACTLY ONCE, and the one is the habit row.
+    // Counted rather than merely looked for: "no Add Read button" and "the
+    // suggestions read Stretch" are both true of a screen with no habit on it
+    // at all, so on their own they would hold with the habits group deleted and
+    // pin nothing. A habit that leaked into the lists below would be a second
+    // one, and a habit that stopped rendering would be none.
+    const reads = [...document.querySelectorAll('.today-title')]
+      .filter((t) => t.textContent === 'Read')
+    expect(reads).toHaveLength(1)
+    expect(reads[0].closest('.today-row')?.className).toContain('today-habit')
+    // A habit is scheduled, not suggested. Offering to add something that is
+    // already coming back tomorrow offers a decision already made.
+    expect(screen.queryByRole('button', { name: 'Add Read to today' }))
+      .not.toBeInTheDocument()
+    expect([...document.querySelectorAll('.today-sug .today-title')]
+      .map((t) => t.textContent)).toEqual(['Stretch'])
+  })
+})
+
+// ── the weekly count ────────────────────────────────────────────────────────
+
+describe('<TodayView> the weekly count', () => {
+  // Friday, so the week has four days behind it. Pinned rather than derived
+  // from the real clock because a suite that happened to run on a Monday would
+  // have no prior days to count and every assertion here would pass vacuously.
+  // The zone is America/New_York, from vite.config.ts.
+  const FRIDAY = new Date(2026, 7, 21, 9, 0)
+  const MON = '2026-08-17'
+  const TUE = '2026-08-18'
+  const WED = '2026-08-19'
+
+  /** One day of the week as the range read returns it: a plan holding a single
+   *  occurrence of the habit under test. */
+  const on = (day: string, o: Partial<DayEntry> = {}) =>
+    plan([occurrence({ entry_id: `h-${day}`, day, ...o })], day)
+
+  const DONE = '2026-08-17T09:00:00.000Z'
+
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    vi.setSystemTime(FRIDAY)
+  })
+  afterEach(() => { vi.useRealTimers() })
+
+  it('counts the occurrences that exist, not the weekdays in the week', async () => {
+    m.days.mockResolvedValue([on(MON, { done_at: DONE }), on(WED)])
+    m.openDay.mockResolvedValue(plan([occurrence()]))
+    setup()
+
+    // Monday done, Wednesday not, today not: three occurrences, one ticked.
+    // Tuesday and Thursday have no plan at all, which is the whole argument for
+    // this denominator — an absent row could mean the habit was not scheduled,
+    // or was missed, or that THE APP WAS NEVER OPENED THAT DAY, and nothing on
+    // the wire can tell those apart afterwards.
+    expect(await screen.findByText('1 of 3 this week')).toBeInTheDocument()
+    // "1 of 5" is what counting scheduled weekdays would have said, and it
+    // would be charging the owner for two days they were never asked about.
+    expect(screen.queryByText(/of 5 this week/)).not.toBeInTheDocument()
+
+    // ONE read for every habit on the screen, and `days` rather than `openDay`:
+    // reading a week must not OPEN five days the owner never looked at.
+    expect(m.days).toHaveBeenCalledTimes(1)
+    expect(m.days).toHaveBeenCalledWith(MON, '2026-08-22')
+  })
+
+  it('says nothing at all when only one occurrence exists', async () => {
+    m.days.mockResolvedValue([])
+    m.openDay.mockResolvedValue(plan([occurrence()]))
+    setup()
+    await screen.findByText('Read')
+    // A Monday morning has nothing to report. "0 of 1 this week" is a
+    // scoreboard opened on the first play.
+    expect(screen.queryByText(/this week/)).not.toBeInTheDocument()
+  })
+
+  it('starts reporting at the second occurrence', async () => {
+    m.days.mockResolvedValue([on(MON, { done_at: DONE })])
+    m.openDay.mockResolvedValue(plan([occurrence()]))
+    setup()
+    expect(await screen.findByText('1 of 2 this week')).toBeInTheDocument()
+  })
+
+  it('leaves a dropped occurrence out of BOTH halves', async () => {
+    m.days.mockResolvedValue([
+      on(MON, { done_at: DONE }),
+      // Ticked and THEN dropped, which is what makes this the interesting case:
+      // an implementation that only removed it from the denominator would still
+      // count it in the numerator and report 2 of 3 for the wrong reason.
+      on(TUE, { done_at: DONE, dropped_at: '2026-08-18T20:00:00.000Z' }),
+      on(WED, { done_at: DONE }),
+    ])
+    m.openDay.mockResolvedValue(plan([occurrence()]))
+    setup()
+
+    // "I decided not to do this" is a decision the day recorded, not a failure
+    // to act on one. Counting it whole says 3 of 4; counting only its
+    // denominator says 2 of 4. The record says 2 of 3.
+    expect(await screen.findByText('2 of 3 this week')).toBeInTheDocument()
+  })
+
+  it('moves on the click, from the day already in hand', async () => {
+    m.days.mockResolvedValue([on(MON, { done_at: DONE }), on(WED)])
+    m.openDay.mockResolvedValue(plan([occurrence({ entry_id: 'h1' })]))
+    m.patchDayEntry.mockResolvedValue(
+      occurrence({ entry_id: 'h1', done_at: '2026-08-21T10:00:00.000Z' }))
+    const user = setup({ advanceTimers: vi.advanceTimersByTime })
+    expect(await screen.findByText('1 of 3 this week')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Check Read' }))
+
+    // Today's rows come from the plan this view is holding, which has already
+    // absorbed the optimistic tick — so the count moves now rather than after a
+    // round trip. It also proves the range read's copy of today is REPLACED and
+    // not added to: counting both would have said 2 of 4.
+    expect(await screen.findByText('2 of 3 this week')).toBeInTheDocument()
+    expect(m.days).toHaveBeenCalledTimes(1)
+  })
+})
+
+// ── the habits sheet ────────────────────────────────────────────────────────
+
+describe('<TodayView> the habits sheet', () => {
+  const openSheet = async (user: ReturnType<typeof userEvent.setup>) => {
+    await user.click(await screen.findByRole('button', { name: 'Habits' }))
+    return screen.findByRole('dialog', { name: 'Habits' })
+  }
+
+  it('lists the rules, paused ones included, with the days they come up on',
+    async () => {
+      m.habits.mockResolvedValue([
+        habit(),
+        habit({ id: 'hb2', title: 'Stretch', days: 'mon,wed', paused_at: '2026-08-20T08:00:00.000Z' }),
+      ])
+      const user = setup()
+      await openSheet(user)
+
+      expect(await screen.findByLabelText('Rename Read')).toHaveValue('Read')
+      // A paused habit is on this list precisely because this is the screen
+      // that un-pauses it.
+      expect(screen.getByRole('button', { name: 'Resume Stretch' })).toBeInTheDocument()
+      // '' is every day, and the chips say so rather than sitting dark — a row
+      // of unlit chips beside the words "every day" reads as the opposite of
+      // what it means.
+      expect(screen.getByRole('button', { name: 'Mon for Read' }))
+        .toHaveAttribute('aria-pressed', 'true')
+      expect(screen.getByRole('button', { name: 'Sun for Read' }))
+        .toHaveAttribute('aria-pressed', 'true')
+      expect(screen.getByRole('button', { name: 'Wed for Stretch' }))
+        .toHaveAttribute('aria-pressed', 'true')
+      expect(screen.getByRole('button', { name: 'Tue for Stretch' }))
+        .toHaveAttribute('aria-pressed', 'false')
+    })
+
+  it('adds one', async () => {
+    const user = setup()
+    const sheet = await openSheet(user)
+    await user.type(screen.getByLabelText('New habit'), 'Stretch')
+    // Scoped to the sheet: the quick-add form behind it has an "Add" too.
+    await user.click(within(sheet).getByRole('button', { name: 'Add' }))
+
+    await waitFor(() => expect(m.createHabit).toHaveBeenCalledWith({ title: 'Stretch' }))
+    expect(await screen.findByLabelText('Rename Stretch')).toBeInTheDocument()
+    expect(screen.getByLabelText('New habit')).toHaveValue('')
+  })
+
+  it('renames one', async () => {
+    m.habits.mockResolvedValue([habit()])
+    const user = setup()
+    await openSheet(user)
+    const name = await screen.findByLabelText('Rename Read')
+
+    await user.clear(name)
+    await user.type(name, 'Read a chapter')
+    await user.tab()                       // committing on blur, as Sidebar does
+
+    await waitFor(() =>
+      expect(m.patchHabit).toHaveBeenCalledWith('hb1', { title: 'Read a chapter' }))
+  })
+
+  it('pauses and resumes one', async () => {
+    m.habits.mockResolvedValue([habit()])
+    const user = setup()
+    await openSheet(user)
+
+    await user.click(await screen.findByRole('button', { name: 'Pause Read' }))
+    await waitFor(() => expect(m.patchHabit).toHaveBeenCalledWith('hb1', { paused: true }))
+    // `paused` is a real boolean on the wire, not an omission: resuming has to
+    // be spellable, which is why it is tri-state server-side.
+    await user.click(await screen.findByRole('button', { name: 'Resume Read' }))
+    await waitFor(() => expect(m.patchHabit).toHaveBeenCalledWith('hb1', { paused: false }))
+  })
+
+  it('reschedules one, in the order the server canonicalises to', async () => {
+    m.habits.mockResolvedValue([habit({ days: '' })])
+    const user = setup()
+    await openSheet(user)
+
+    await user.click(await screen.findByRole('button', { name: 'Wed for Read' }))
+
+    // '' is all seven, so turning one off leaves the other six — written
+    // mon..sun, which is what the server re-orders to, so what we send is what
+    // comes back and the row does not appear to change under the owner.
+    await waitFor(() => expect(m.patchHabit)
+      .toHaveBeenCalledWith('hb1', { days: 'mon,tue,thu,fri,sat,sun' }))
+  })
+
+  it('reads a second quick chip click against the first one, not against the wire',
+    async () => {
+      m.habits.mockResolvedValue([habit({ days: '' })])
+      // Held open, so the second click happens with the first PATCH still in
+      // flight — which is the whole of the bug. A `days` derived from the row
+      // as the server last sent it is derived from the PRE-patch schedule for
+      // as long as the reply takes.
+      let settle: (h: Habit) => void = () => {}
+      m.patchHabit.mockReturnValueOnce(new Promise((r) => { settle = r }) as never)
+      const user = setup()
+      await openSheet(user)
+
+      await user.click(await screen.findByRole('button', { name: 'Mon for Read' }))
+      await waitFor(() => expect(m.patchHabit)
+        .toHaveBeenCalledWith('hb1', { days: 'tue,wed,thu,fri,sat,sun' }))
+      // Unlit before any reply: that optimistic row is what the next click has
+      // to read, and it is also what the owner is looking at when they make it.
+      expect(screen.getByRole('button', { name: 'Mon for Read' }))
+        .toHaveAttribute('aria-pressed', 'false')
+
+      await user.click(screen.getByRole('button', { name: 'Wed for Read' }))
+
+      // Monday is NOT in it. Derived from the wire's row, both clicks would
+      // have started from all seven and this one would have sent Monday back
+      // on — a change the owner made, undone by last-write-wins.
+      await waitFor(() => expect(m.patchHabit)
+        .toHaveBeenLastCalledWith('hb1', { days: 'tue,thu,fri,sat,sun' }))
+      expect(screen.getByRole('button', { name: 'Wed for Read' }))
+        .toHaveAttribute('aria-pressed', 'false')
+
+      // And the first click's reply, arriving last, knows nothing of the second
+      // — settling the row on it would put Wednesday back for as long as the
+      // second reply took.
+      await act(async () => { settle(habit({ days: 'tue,wed,thu,fri,sat,sun' })) })
+      expect(screen.getByRole('button', { name: 'Wed for Read' }))
+        .toHaveAttribute('aria-pressed', 'false')
+      expect(screen.getByRole('button', { name: 'Mon for Read' }))
+        .toHaveAttribute('aria-pressed', 'false')
+    })
+
+  it('reads clearing the last day as clearing the restriction', async () => {
+    m.habits.mockResolvedValue([habit({ days: 'mon' })])
+    const user = setup()
+    await openSheet(user)
+
+    await user.click(await screen.findByRole('button', { name: 'Mon for Read' }))
+
+    // The vocabulary has no way to say "no days" and needs none: the chips are
+    // a restriction, so clearing the last of them clears the restriction rather
+    // than asking for a habit that never comes up.
+    await waitFor(() => expect(m.patchHabit).toHaveBeenCalledWith('hb1', { days: '' }))
+  })
+
+  it('warns that past days keep their occurrences, then deletes', async () => {
+    m.habits.mockResolvedValue([habit()])
+    const user = setup()
+    await openSheet(user)
+
+    await user.click(await screen.findByRole('button', { name: 'Delete Read' }))
+    // Two presses, and the second is offered beside the warning rather than
+    // instead of it: deleting a habit removes the RULE, and every day it has
+    // already run on keeps the line it put there.
+    expect(screen.getByText(/keeps the line it put there/i)).toBeInTheDocument()
+    expect(m.deleteHabit).not.toHaveBeenCalled()
+
+    await user.click(screen.getByRole('button', { name: 'Confirm delete Read' }))
+    await waitFor(() => expect(m.deleteHabit).toHaveBeenCalledWith('hb1'))
+    await waitFor(() =>
+      expect(screen.queryByLabelText('Rename Read')).not.toBeInTheDocument())
+  })
+
+  it('closes on an Escape dispatched at the window', async () => {
+    // At the WINDOW, not at the focused element: a listener bound to the dialog
+    // only fires while focus is inside it, and with no focus trap that is
+    // exactly the state a keyboard user needs the escape hatch from. See
+    // `useEscape` in hooks.ts, which is the binding every other overlay here
+    // uses and the one this sheet reuses rather than re-inventing.
+    const user = setup()
+    await openSheet(user)
+    fireEvent.keyDown(window, { key: 'Escape' })
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Habits' })).not.toBeInTheDocument())
+  })
+
+  it('takes its Escape listener with it when it closes', async () => {
+    const add = vi.spyOn(window, 'addEventListener')
+    const remove = vi.spyOn(window, 'removeEventListener')
+    try {
+      const user = setup()
+      await openSheet(user)
+      // Indexed rather than `.at(-1)`: this project targets ES2020, where
+      // `Array.prototype.at` does not exist.
+      const keydowns = add.mock.calls.filter(([t]) => t === 'keydown')
+      expect(keydowns.length, 'the sheet registered no keydown listener at the window')
+        .toBeGreaterThan(0)
+      const handler = keydowns[keydowns.length - 1][1]
+
+      await user.click(screen.getByRole('button', { name: 'Close' }))
+      await waitFor(() =>
+        expect(screen.queryByRole('dialog', { name: 'Habits' })).not.toBeInTheDocument())
+
+      // The EXACT handler that was registered, not merely "a keydown listener
+      // was removed". One that outlives the sheet closes the next dialog to
+      // open, or sets state on a tree that is gone.
+      expect(remove.mock.calls.some(([t, fn]) => t === 'keydown' && fn === handler))
+        .toBe(true)
+    } finally {
+      add.mockRestore()
+      remove.mockRestore()
+    }
+  })
+})
+
 // ── pure helpers ────────────────────────────────────────────────────────────
 
 describe('orderEntries', () => {
@@ -450,6 +888,26 @@ describe('orderEntries', () => {
     const rows = [entry({ entry_id: 'b', position: 2 }), entry({ entry_id: 'a', position: 1 })]
     orderEntries(rows)
     expect(rows.map((e) => e.entry_id)).toEqual(['b', 'a'])
+  })
+})
+
+describe('weekStartOf', () => {
+  it('takes the week back to Monday', () => {
+    expect(weekStartOf('2026-08-21')).toBe('2026-08-17')   // Friday
+    expect(weekStartOf('2026-08-17')).toBe('2026-08-17')   // Monday itself
+  })
+
+  it('puts SUNDAY at the end of its week, not the start of the next one', () => {
+    // The case the whole conversion exists for: `Date.getDay()` answers 0 for
+    // Sunday, so the naive subtraction leaves Sunday exactly where it is and
+    // starts a fresh week on it — splitting one week's occurrences across two
+    // counts, every seventh day, for anyone who looks on a Sunday.
+    expect(weekStartOf('2026-08-23')).toBe('2026-08-17')
+  })
+
+  it('crosses a month and a year boundary', () => {
+    expect(weekStartOf('2026-09-02')).toBe('2026-08-31')   // Wednesday
+    expect(weekStartOf('2027-01-01')).toBe('2026-12-28')   // Friday
   })
 })
 

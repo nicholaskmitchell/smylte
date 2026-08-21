@@ -876,6 +876,9 @@ class McpApi:
         Tasks are read a LIST at a time rather than one call per entry: each
         `get_task` takes the global service lock, and a twelve-row day would take
         it twelve times behind whatever CalDAV I/O happens to be in flight.
+
+        Every record that comes back carries `task`, whatever its kind — see the
+        loop for why the alternative was a trap.
         """
         wanted = {e["list"] for e in entries if e["kind"] == "task" and e["list"]}
         by_key: dict[tuple[str, str], dict] = {}
@@ -891,18 +894,32 @@ class McpApi:
         out = []
         for e in entries:
             row = dict(e)
-            if e["kind"] == "task":
-                t = by_key.get((e["list"], e["uid"]))
-                row["task"] = None if t is None else {
-                    "list": t["list"], "uid": t["uid"], "summary": t["summary"],
-                    "due": t["due"], "due_is_date": t["due_is_date"],
-                    "completed": t["completed"], "cancelled": t["cancelled"],
-                    "priority_label": t["priority_label"],
-                    # Gated: nothing in this app advances a recurring VTODO
-                    # (docs/recurrence-findings.md). Surfaced so a model can say
-                    # so rather than treating it as an ordinary task.
-                    "has_rrule": t["has_rrule"],
-                }
+            # `task` is set on EVERY record, null where there is nothing to join
+            # to. It used to be attached only to kind="task" rows, which meant a
+            # day mixing kinds handed the model TWO record shapes and the missing
+            # key was the only thing separating them: a reader that reaches for
+            # `row["task"]` raises on the first note or habit occurrence, and one
+            # that tests `"task" in row` has learnt a rule that silently changes
+            # meaning the day a fourth kind exists. A uniform shape says the same
+            # thing without either failure.
+            #
+            # Null therefore means one of two things, and `kind` is what tells
+            # them apart. On a task row it is the hole in the join: the list has
+            # left the wire (the `continue` above) or the task itself has, and
+            # the entry outlives either by design — there is no FK. On any other
+            # kind it is structural: a note and a habit occurrence name no task
+            # and never will, so there was nothing to look up in the first place.
+            t = by_key.get((e["list"], e["uid"])) if e["kind"] == "task" else None
+            row["task"] = None if t is None else {
+                "list": t["list"], "uid": t["uid"], "summary": t["summary"],
+                "due": t["due"], "due_is_date": t["due_is_date"],
+                "completed": t["completed"], "cancelled": t["cancelled"],
+                "priority_label": t["priority_label"],
+                # Gated: nothing in this app advances a recurring VTODO
+                # (docs/recurrence-findings.md). Surfaced so a model can say
+                # so rather than treating it as an ordinary task.
+                "has_rrule": t["has_rrule"],
+            }
             out.append(row)
         return out
 
@@ -912,6 +929,13 @@ class McpApi:
         Never writes — see the section note above. `planned` distinguishes the
         two answers, and `preview` is only ever present on the unplanned one so a
         model cannot mistake a proposal for something the owner committed to.
+
+        Habits are the sharp edge of that. A preview row's `entry_id` is minted
+        by `preview_day` and thrown away, so on a day nobody has opened the
+        habits are VISIBLE but not tickable — `update_day_entry` finds no row and
+        says so — and nothing in this toolset can open the day to change that.
+        The tool descriptions say so outright, because the alternative is a model
+        discovering it by reporting a habit done that was never recorded.
         """
         day = self._today()
         plan = self._svc.open_day(day, create=False)
@@ -965,19 +989,63 @@ class McpApi:
 
     def update_day_entry(self, entry_id, *, day=None, done=None, dropped=None,
                          position=None) -> dict:
-        """Tick a note, or drop any entry off a day.
+        """Tick a note or a habit occurrence, or drop any entry off a day.
 
         `done` on a TASK entry is refused by the service, and the message points
         at smylte_complete_task rather than restating the refusal: a task's
         doneness is its VTODO STATUS, which every other client on the account
         reads too, and recording it here as well would give the same question two
-        answers that disagree the moment the task is ticked anywhere else.
+        answers that disagree the moment the task is ticked anywhere else. A note
+        and a habit occurrence are the opposite case — they live only in the day
+        plan, so the stamp written here is the only record there is.
+
+        Which is why `done` is refused on a PAST day; see below.
         """
         if done is None and dropped is None and position is None:
             raise ToolError(
                 "Nothing to change — pass done, dropped or position."
             )
         resolved = self._day_or_today(day)
+        # NOT `_writable_day`, which would refuse the whole call: this tool has
+        # to keep working on a past day, because only ONE of the three fields is
+        # a claim about what happened.
+        #
+        # `done` is that one. It says "this was actually done", and the only
+        # thing that makes the stamp worth anything is that it was written on the
+        # day. A habit is where the difference bites: its occurrence is ticked
+        # HERE and nowhere else, so a model backfilling "yes, Tuesday too" is not
+        # tidying a record, it is writing the record — these rows are the only
+        # thing the app counts into a habit's "n of m this week", and afterwards
+        # nothing distinguishes a filled-in tick from a kept one. `done=False`
+        # is refused for the same reason in the other direction: erasing a tick
+        # made on the day rewrites the day just as thoroughly.
+        #
+        # `dropped` and `position` are not claims about what happened. Dropping
+        # says "this did not happen", which SUBTRACTS from the day rather than
+        # adding to it — no record is manufactured by admitting a plan went
+        # unmet, and the row itself stays (the service stamps, never deletes), so
+        # the day still shows it was planned. A position is only the order the
+        # rows are read in. Tidying history is not falsifying it, so both stay
+        # allowed on any day.
+        #
+        # `_habit_minting_allowed` draws the same line on the other half of the
+        # rule — a PAST day is given no habit rows, whether it is being opened
+        # for the first time or topped up — and it allows one day of grace there
+        # for a browser whose local day key is behind the server's. None is needed here: both sides of the comparison
+        # below are resolved server-side in the owner's own zone (`_day_or_today`
+        # falls back to `_today`, and an explicit `day` is compared against it),
+        # so a day that reads as past IS past, and the message says which day the
+        # owner is actually on.
+        today = self._today()
+        if done is not None and resolved < today:
+            raise ToolError(
+                f"{resolved} has already happened, so `done` cannot be changed "
+                f"on it — a tick is a record that something was done AT THE "
+                f"TIME, and a habit log that can be filled in afterwards is "
+                f"worth nothing. Today is {today}. You CAN still drop an entry "
+                f"from {resolved} or reorder it: saying it did not happen, or "
+                f"tidying the order, does not rewrite what did."
+            )
         try:
             entry = self._svc.patch_day_entry(
                 resolved, entry_id, done=done, dropped=dropped, position=position,
@@ -1001,6 +1069,10 @@ class McpApi:
         One day, or a range. Not both: a call carrying `day` AND `from`/`to` is
         ambiguous about which it means, and answering the wrong one silently is
         worse than a sentence saying so.
+
+        Live entries come back bucketed by `source` — `chosen`, `carried`,
+        `derived`, `habits`, and `other` for anything this code does not
+        recognise — plus `dropped`. See the loop for why the residual exists.
 
         Completions come from the task's own COMPLETED stamp, not from the plan,
         so this answers for days before the day plan existed at all — and it
@@ -1037,19 +1109,45 @@ class McpApi:
         # on a day you never planned is exactly what a look-back should show.
         # The single-day case already asks about one named day, planned or not.
         wanted = sorted(set(by_day) | set(done_by_day)) if ranged else days
+        # `source` is what makes this worth reading: it separates what the owner
+        # CHOSE from what merely turned up on the day, and habits from both.
+        #
+        # One pass over a source→arm map, rather than one `==` comprehension per
+        # arm. The arms then PARTITION the day by construction, which is the
+        # property that was missing: three equality tests covered the three
+        # sources that existed when they were written, so when occurrences
+        # arrived carrying source="habit" they matched none of them and dropped
+        # out of the retrospective in silence — the half of the day most worth
+        # reviewing, since whether a habit was ticked is recorded nowhere else.
+        #
+        # `other` is a residual bucket and not an assertion, deliberately. An
+        # assertion here raises inside a tool handler, and `server._call` turns
+        # any non-ToolError into "smylte_review_day could not be completed
+        # (AssertionError). The calendar server may be unreachable" — so an
+        # unrecognised source would cost the model the WHOLE day's review and
+        # point it at an outage that is not happening. The residual costs it one
+        # unfamiliar key holding rows that carry their own `source` for it to
+        # read. Always present, empty or not: an answer whose keys come and go is
+        # the inconsistent shape `_entries_with_tasks` was just fixed for.
+        arm_of = {"user": "chosen", "carried": "carried", "auto": "derived",
+                  "habit": "habits"}
         out = []
         for d in wanted:
             plan = by_day.get(d)
             entries = self._entries_with_tasks(plan["entries"]) if plan else []
-            live = [e for e in entries if not e["dropped_at"]]
+            buckets: dict[str, list] = {
+                "chosen": [], "carried": [], "derived": [], "habits": [], "other": [],
+            }
+            for e in entries:
+                # Dropped rows are their own arm and are not bucketed by source:
+                # "planned it and did not do it" is one answer whatever put it
+                # there.
+                if not e["dropped_at"]:
+                    buckets[arm_of.get(e["source"], "other")].append(e)
             out.append({
                 "day": d,
                 "planned": bool(plan),
-                # `source` is what makes this worth reading: it separates what
-                # the owner CHOSE from what merely turned up on the day.
-                "chosen": [e for e in live if e["source"] == "user"],
-                "carried": [e for e in live if e["source"] == "carried"],
-                "derived": [e for e in live if e["source"] == "auto"],
+                **buckets,
                 "dropped": [e for e in entries if e["dropped_at"]],
                 "completed_that_day": done_by_day.get(d, []),
             })

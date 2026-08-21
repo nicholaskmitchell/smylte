@@ -359,8 +359,8 @@ def build_tools(api) -> dict[str, Tool]:
     # ── the day ──────────────────────────────────────────────────────────────
     #
     # The day plan is what the owner said they would do TODAY, which is a
-    # different question from what is due. Two things about these schemas are
-    # deliberate and worth not undoing:
+    # different question from what is due. Three things here are deliberate and
+    # worth not undoing:
     #
     # No tool takes a REQUIRED day. A model has no clock — its idea of the date
     # comes from its context and may be stale or in another zone — so the day
@@ -371,20 +371,37 @@ def build_tools(api) -> dict[str, Tool]:
     # never checks an object's properties, so a "plan these five things" schema
     # taking an array of objects would be advertised and silently unenforced —
     # the exact failure that file exists to prevent. One entry per call instead.
+    #
+    # There is no habit tool, on purpose. A habit is a RULE the owner defines in
+    # the app; what reaches these four tools is its OCCURRENCE, an ordinary
+    # day entry with kind="habit" that is read, ticked and dropped like any
+    # other. Occurrences are the part a day is a record of — the rule itself is
+    # the owner's own standing decision, and a connector that could write it
+    # would be inventing the routine rather than helping them keep it. So the
+    # descriptions below have to teach three things a model would otherwise find
+    # by failing: habits exist on the day, a habit is ticked HERE (unlike a
+    # task), and one cannot be added HERE (unlike a note).
 
     @tool(
         "smylte_get_today", "What is on today",
         "The owner's plan for today: what they committed to, what carried over "
-        "from yesterday, and what was derived from what is due. Each task entry "
-        "comes with the task itself, so this is one call rather than one per "
-        "row.\n\n"
+        "from yesterday, what was derived from what is due, and their HABITS — "
+        "the recurring things a rule puts on every day it schedules, arriving as "
+        "entries with kind=\"habit\" and source=\"habit\". Every entry carries "
+        "`task`: the task it names, joined in so this is one call rather than "
+        "one per row, and null on a note or a habit, which name none.\n\n"
         "Takes no arguments on purpose — it is always today, in the owner's own "
         "timezone. Use smylte_review_day to look at any other day.\n\n"
         "A day the owner has not opened yet answers planned=false. That is a "
         "normal answer, not an error, and it comes with `preview`: what opening "
-        "the day WOULD put on it. A preview is not a plan and nothing has been "
-        "recorded — say so rather than reporting it as their day. Nothing in "
-        "this toolset can open a day; only the owner can, in the app.",
+        "the day WOULD put on it, habits included. A preview is not a plan and "
+        "nothing has been recorded — say so rather than reporting it as their "
+        "day. Its entry_ids name no row either, so nothing in a preview can be "
+        "ticked or dropped, and nothing in this toolset can open a day; only the "
+        "owner can, in the app. Until they do, today's habits are visible here "
+        "but UN-TICKABLE — say that rather than reporting one done. (`preview` "
+        "also goes away the moment the day holds anything at all, including "
+        "something you put there yourself with smylte_plan_day.)",
         _obj({}),
     )
     def _get_today():
@@ -396,6 +413,11 @@ def build_tools(api) -> dict[str, Tool]:
         "note (title) that does not need to become a task. Entries added this "
         "way are marked as chosen by the owner, which is what the look-back "
         "separates from what merely turned up.\n\n"
+        "Habits are NOT added here, and cannot be. A habit is a rule the owner "
+        "defines in the app, and it schedules its own occurrence on every day it "
+        "runs — nothing hands one in. A note that merely names a habit is not "
+        "the habit: it is a second row beside the real occurrence, ticked "
+        "separately and counted by nothing.\n\n"
         "Today by default; pass `day` to plan ahead. A day in the past is "
         "refused — the plan is a record of what was intended at the time, and "
         "backfilling one destroys the only thing it is good for.\n\n"
@@ -418,20 +440,40 @@ def build_tools(api) -> dict[str, Tool]:
 
     @tool(
         "smylte_update_day_entry", "Tick or drop something on a day",
-        "Mark a NOTE done, drop any entry off a day, or move one up or down. "
-        "entry_id comes from smylte_get_today or smylte_review_day.\n\n"
+        "Mark a NOTE or a HABIT occurrence done, drop any entry off a day, or "
+        "move one up or down. entry_id comes from smylte_get_today or "
+        "smylte_review_day.\n\n"
+        "A habit is ticked HERE, unlike a task: its occurrence lives only in the "
+        "day plan, so this stamp is the entire record that the habit was kept "
+        "that day. It says nothing about the rule behind it, which only the "
+        "owner edits, in the app.\n\n"
         "To finish a TASK, call smylte_complete_task instead — a task's doneness "
         "lives on the task itself, where every other client on this account "
         "reads it, and this tool refuses `done` for one.\n\n"
+        "`done` is refused on a day that has already passed, in either "
+        "direction: a tick records that something was actually done at the time, "
+        "and a habit log that can be filled in afterwards measures nothing. "
+        "`dropped` and `position` ARE still allowed on a past day — admitting a "
+        "plan went unmet, or tidying the order, does not rewrite what "
+        "happened.\n\n"
+        "Only an entry that exists can be changed. An entry_id out of a "
+        "`preview` (what smylte_get_today returns for a day the owner has not "
+        "opened) names no row and is refused, and no tool here can open a day — "
+        "so a habit stays un-tickable from this connector until the owner opens "
+        "the app.\n\n"
         "Dropping is not deleting: the entry stays on the day marked as dropped, "
         "because \"planned it and did not do it\" is worth keeping. It does stop "
-        "the entry carrying over to the next day.",
+        "the entry carrying over to the next day. Dropping a habit occurrence "
+        "applies to THAT day only: the rule schedules a fresh one tomorrow, "
+        "which today's dropped row does not prevent.",
         _obj({
             "entry_id": {"type": "string", "minLength": 1, "maxLength": 64,
                          "description": "From smylte_get_today or smylte_review_day."},
             "day": _DAY,
             "done": {"type": "boolean",
-                     "description": "Tick or un-tick a NOTE. Refused for a task entry."},
+                     "description": "Tick or un-tick a NOTE or a HABIT occurrence. "
+                                    "Refused for a task entry (use "
+                                    "smylte_complete_task), and refused on a past day."},
             "dropped": {"type": "boolean",
                         "description": "Take it off the day (true), or put it back (false)."},
             "position": {"type": "number",
@@ -446,9 +488,17 @@ def build_tools(api) -> dict[str, Tool]:
     @tool(
         "smylte_review_day", "How a day went",
         "What was planned against what actually happened — one day, or a range "
-        "with from + to (`to` is EXCLUSIVE). Entries come back split by where "
-        "they came from: `chosen` by the owner, `carried` from a previous day, "
-        "`derived` from what was due, and `dropped` for what they took off.\n\n"
+        "with from + to (`to` is EXCLUSIVE). Live entries come back split by "
+        "where they came from: `chosen` by the owner, `carried` from a previous "
+        "day, `derived` from what was due, `habits` for the occurrences a habit "
+        "rule scheduled, and `other`, a residual that is normally empty — "
+        "anything in it carries its own `source` field saying what it is. "
+        "`dropped` holds what was taken off the day, whatever put it there.\n\n"
+        "The habits are the half most worth reading. A habit occurrence is "
+        "ticked on its own day and recorded nowhere else, so `done_at` on one of "
+        "these rows is the whole answer to whether the owner kept it — and an "
+        "un-ticked one on a past day stays that way, because this connector "
+        "refuses to backfill a tick.\n\n"
         "`completed_that_day` is read from each task's own completion stamp "
         "rather than from the plan, so it answers for days before any of this "
         "existed — and it catches what was finished off-plan, which is usually "
