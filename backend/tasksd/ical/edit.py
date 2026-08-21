@@ -928,7 +928,32 @@ def apply_occurrence_override(
     anchor = _anchor_from_iso(recurrence_id, master)
     override = _find_override(cal, anchor)
     if override is None:
-        override = _new_override(master, anchor)
+        # Seeded from whatever GOVERNS this slot, which is not always the
+        # master. A RANGE=THISANDFUTURE override carries the values for its own
+        # slot and every later one (RFC 5545 §3.2.13), so on a slot it COVERS
+        # but does not ANCHOR, the master is not what the user is looking at.
+        # Seeding from the master snapped the instance back to the master's hour
+        # and dropped the LOCATION the range override supplied — a "rename this
+        # one" that silently rescheduled the meeting and moved the room.
+        #
+        # `_detach_thisandfuture` one branch down already carries DTSTART/DTEND
+        # across for exactly this reason; this is the same argument for the
+        # branch that had never been given it, and `_governing_thisandfuture`
+        # has been sitting in this file unconsulted here.
+        governing = _governing_thisandfuture(cal, anchor)
+        override = _new_override(governing or master, anchor)
+        if governing is not None:
+            # `_new_override` puts DTSTART at the anchor — the RULE's slot — so
+            # the range override's own shift has to be re-applied, not copied:
+            # its DTSTART/DTEND belong to ITS anchor, several occurrences back.
+            # `_tf_shift` is that offset (DTSTART - RECURRENCE-ID), the same
+            # quantity the read path computes to place these instances.
+            shift = _tf_shift(governing)
+            for key in ("DTSTART", "DTEND"):
+                prop = override.get(key)
+                if prop is not None:
+                    _replace(override, key)
+                    override.add(key, prop.dt + shift)
         cal.add_component(override)
     elif _is_thisandfuture(override.get("RECURRENCE-ID")):
         # `_find_override` matches on the RECURRENCE-ID instant and ignores
