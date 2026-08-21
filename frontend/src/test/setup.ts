@@ -87,7 +87,10 @@ function installStub(): void {
 
 installStub()
 
-// Reset the breakpoint state only — deliberately NOT `window.matchMedia`
-// itself. Several suites install their own stub in `beforeEach` and restore it
-// in `afterEach`; reassigning the global here would race their teardown.
+// Resets the breakpoint AND reinstalls the shared stub — see `resetBreakpoint`.
+// An earlier draft of this comment said the opposite ("deliberately NOT
+// `window.matchMedia` itself"), which was left behind when the reinstall was
+// added and would have led someone to "fix" the code to match it. Hook order is
+// what makes the reinstall safe: a test file's own `afterEach` runs BEFORE this
+// one, so a suite that installs a local stub still tears it down first.
 afterEach(resetBreakpoint)

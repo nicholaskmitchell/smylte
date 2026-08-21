@@ -447,9 +447,14 @@ class SettingsPatch(BaseModel):
     # Ids of task groups the user has collapsed in the sidebar (member lists
     # hidden from the rail until expanded). Empty means every group is expanded.
     collapsed_groups: list[str] | None = None
-    # UIDs of tasks whose subtasks are folded away in the tasks view. Nesting is
-    # arbitrarily deep, so this is how a large tree stays readable; empty means
-    # everything is expanded. Pruned client-side against the tasks on hand.
+    # `taskKey`s — `list\0uid` — of tasks whose subtasks are folded away in the
+    # tasks view. Not bare UIDs: a CalDAV UID is unique per COLLECTION, so the
+    # same one can live in two lists and each copy folds independently. Bare
+    # UIDs written by older clients are still honoured on read and retire as the
+    # user toggles them, so this stays a plain list of opaque strings here.
+    # Nesting is arbitrarily deep, so this is how a large tree stays readable;
+    # empty means everything is expanded. Pruned client-side against the tasks
+    # on hand.
     collapsed_tasks: list[str] | None = None
     # How long a login lasts before it has to be repeated, in seconds. Only the
     # values in _SESSION_TTLS are accepted. Absent means the deployment's own
