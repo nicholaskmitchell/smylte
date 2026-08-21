@@ -203,6 +203,69 @@ describe('aug19 stage 4b — chip, dot, agenda and popover identity', () => {
     expect(keyWarnings(), 'the day popover').toBe(0)
   })
 
+  // WIDENING: "React raised no duplicate-key warning" is satisfied by a key
+  // that is merely unique among SIBLINGS, and `key={i}` is exactly that. An
+  // adversarial review got the index past every warning-counting pin above,
+  // which reinstates the whole defect silently: an index key ties the DOM node
+  // to the POSITION rather than to the row, so the moment the day's list
+  // reorders, React repaints each node with a different row's content instead
+  // of moving the node — and any state or handler bound to the node follows the
+  // position, not the event. That is the "a click handler can bind to the wrong
+  // instance" half of the finding, and no warning is ever raised for it.
+  //
+  // So this asserts identity directly: swap the order and demand that each
+  // node FOLLOWED ITS ROW. A key derived from the row passes however it is
+  // composed; a positional key cannot.
+  it('moves a row\u2019s node with the row when the day reorders', () => {
+    const due = todayYmd()
+    // Two collections, one uid — the collision the finding is about. The
+    // summaries differ only so the test can say which node is which; the key
+    // is not derived from them either way.
+    const evAt = (calendar: string, summary: string): DayEv =>
+      ev({ uid: 'shared', id: 'shared', calendar, summary })
+    const taskAt = (list: string, summary: string) =>
+      task({ uid: 't1', list, summary, due })
+
+    const props = (order: 0 | 1) => ({
+      day: due, x: 40, y: 40,
+      events: order === 0
+        ? [evAt('/c1/', 'Standup work'), evAt('/c2/', 'Standup home')]
+        : [evAt('/c2/', 'Standup home'), evAt('/c1/', 'Standup work')],
+      tasks: order === 0
+        ? [taskAt('l1', 'Passport work'), taskAt('l2', 'Passport home')]
+        : [taskAt('l2', 'Passport home'), taskAt('l1', 'Passport work')],
+      styleOf: () => undefined,
+      taskStyleOf: () => undefined,
+      onClose: vi.fn(),
+    })
+
+    const { rerender } = render(<DayPopover {...props(0)} />)
+    const before = {
+      evWork: screen.getByText('Standup work').closest('.agenda-ev'),
+      evHome: screen.getByText('Standup home').closest('.agenda-ev'),
+      taskWork: screen.getByText(/Passport work/).closest('.agenda-task'),
+      taskHome: screen.getByText(/Passport home/).closest('.agenda-task'),
+    }
+    expect(before.evWork).not.toBe(before.evHome)
+    expect(before.taskWork).not.toBe(before.taskHome)
+
+    rerender(<DayPopover {...props(1)} />)
+
+    expect(screen.getByText('Standup work').closest('.agenda-ev'),
+      'the event row was repainted in place instead of moved: its key is positional')
+      .toBe(before.evWork)
+    expect(screen.getByText('Standup home').closest('.agenda-ev'),
+      'the event row was repainted in place instead of moved: its key is positional')
+      .toBe(before.evHome)
+    expect(screen.getByText(/Passport work/).closest('.agenda-task'),
+      'the task row was repainted in place instead of moved: its key is positional')
+      .toBe(before.taskWork)
+    expect(screen.getByText(/Passport home/).closest('.agenda-task'),
+      'the task row was repainted in place instead of moved: its key is positional')
+      .toBe(before.taskHome)
+    expect(keyWarnings(), 'the reordered day popover').toBe(0)
+  })
+
   // WIDENING: the mobile leg above duplicates a TASK uid, so the event dot and
   // the agenda's event row — two of the six sites the finding names — were
   // never driven by anything. Same defect, different map.
@@ -238,13 +301,24 @@ describe('aug19 stage 4b — chip, dot, agenda and popover identity', () => {
     render(<CalendarHarness />)
     await waitFor(() => expect(document.querySelectorAll('.cal-ev')).toHaveLength(2))
 
-    await user.click(document.querySelectorAll('.cal-ev')[0] as HTMLElement)
+    const before = Array.from(document.querySelectorAll('.cal-ev'))
+    await user.click(before[0] as HTMLElement)
     const dialog = await screen.findByRole('dialog')
     await user.click(within(dialog).getByText('Delete'))
 
     await waitFor(() => expect(m.deleteEvent).toHaveBeenCalledTimes(1))
     // The wire call is already correct; it is local state that loses both.
     expect(document.querySelectorAll('.cal-ev')).toHaveLength(1)
+    // …and the ONE that survived is the second copy's own node, not the first
+    // copy's node repainted with the second's content. That distinction is
+    // invisible to a duplicate-key warning and is the whole of the defect: a
+    // positional key (`key={i}`) hands the removal to React as "the list got
+    // shorter", so node 0 stays and node 1 is destroyed — the surviving row
+    // inherits the deleted row's DOM node, its scroll position, and anything
+    // bound to it.
+    expect(document.querySelectorAll('.cal-ev')[0],
+      'the surviving copy inherited the deleted copy\u2019s node: the key is positional')
+      .toBe(before[1])
   })
 
   // Control (passes today, must keep passing): scoping the local mutation must
@@ -307,13 +381,22 @@ describe('aug19 stage 4b — the tasks pane and one uid in two lists', () => {
     await waitFor(() => expect(screen.getAllByText('Ship it')).toHaveLength(2))
     expect(keyWarnings()).toBe(0)
 
-    const first = screen.getAllByText('Ship it')[0].closest('.task') as HTMLElement
-    await user.click(within(first).getByTitle('Delete'))
+    const before = screen.getAllByText('Ship it')
+      .map((n) => n.closest('.task') as HTMLElement)
+    await user.click(within(before[0]).getByTitle('Delete'))
 
     await waitFor(() => expect(m.deleteTask).toHaveBeenCalledTimes(1))
     expect(m.deleteTask.mock.calls[0][0]).toBe('l1')          // only the Work copy
     // …and the other list's task is still on screen.
     expect(screen.queryAllByText('Ship it')).toHaveLength(1)
+    // The surviving row must be the HOME copy's own node. `key={i}` satisfies
+    // every warning-counting assertion in this file — indices are unique among
+    // siblings — while tying each node to its POSITION, so removing the first
+    // row leaves node 0 in place wearing the second row's text. See the
+    // popover's reorder test for the other face of the same defect.
+    expect(screen.getByText('Ship it').closest('.task'),
+      'the Home copy inherited the deleted Work copy\u2019s row node')
+      .toBe(before[1])
   })
 
   // WIDENING: delete is one of four provider mutations that match on the bare
@@ -558,11 +641,33 @@ describe('aug19 stage 4b — archived calendars', () => {
   // must not also settle it BEFORE the rows arrive: a repair that sets it
   // eagerly would satisfy both pins and render "No archived calendars." over a
   // list that is about to appear.
+  //
+  // The assertion that does that work is the FIRST one, and it is deliberately
+  // SYNCHRONOUS. An adversarial review got `useState(true)` — never render
+  // "Loading…" at all — past the earlier version of this control, because
+  // `findByText('Old work')` WAITS: it flushes the fetch, and only then is the
+  // negative assertion evaluated, by which time the transient lie has already
+  // been repainted into the true list. The lie is only observable in the tick
+  // before the promise settles, so that is where it has to be caught.
+  //
+  // What is asserted there is the property, not the wording: the section must
+  // not CLAIM AN EMPTY ARCHIVE while it is still fetching. "Loading…", a
+  // spinner or a skeleton all satisfy it.
   it('still lists the archived calendars when the fetch succeeds', async () => {
-    m.calendars.mockResolvedValue([{ ...cal, id: 'c1', href: '/c1/', name: 'Old work' }])
+    let release: (rows: List[]) => void = () => {}
+    m.calendars.mockReturnValue(new Promise<List[]>((res) => { release = res }))
     render(<ArchivedCalendarsSection archived={['c1']} onChange={vi.fn()}
       onExpire={vi.fn()} viewing={null} onViewing={vi.fn()} />)
 
+    // In flight — nothing has been fetched yet, so nothing may be claimed.
+    expect(screen.queryByText('No archived calendars.'),
+      'the archive was reported empty before the fetch had answered').toBeNull()
+    expect(screen.queryByText(/Couldn.t load/),
+      'the fetch was reported failed before it had answered').toBeNull()
+
+    await act(async () => {
+      release([{ ...cal, id: 'c1', href: '/c1/', name: 'Old work' }])
+    })
     expect(await screen.findByText('Old work')).toBeInTheDocument()
     expect(screen.queryByText('No archived calendars.')).toBeNull()
   })
