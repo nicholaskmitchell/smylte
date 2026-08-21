@@ -3172,7 +3172,7 @@ did not.
 "genuinely nothing later" for a resource that generates nothing at all. Pinned by
 `test_an_rdate_only_series_can_still_have_one_occurrence_edited`.
 
-#### [ ] apply_occurrence_override seeds a covered-but-not-anchoring slot from the master, losing the range override's time and location
+#### [x] apply_occurrence_override seeds a covered-but-not-anchoring slot from the master, losing the range override's time and location
 
 `backend/tasksd/ical/edit.py:806` · **medium** · bug
 
@@ -3190,6 +3190,33 @@ only `.summary`, which is why this has been invisible.
 **Suggested fix.** Seed from `_governing_thisandfuture(cal, anchor)` when one
 covers the slot, carrying its DTSTART/DTEND across as `_detach_thisandfuture`
 does. Widen that test to assert `.start` and `.location`.
+
+**Fixed** there, with one correction to the mechanics: the range override's
+DTSTART/DTEND are **not** copied across. They belong to ITS anchor, several
+occurrences back, so copying them would put every edited instance on the range
+override's own date. What carries over is the SHIFT — `_tf_shift`, the
+override's DTSTART minus its RECURRENCE-ID, the same quantity
+`recur._thisandfuture_shifts` computes on the read path to place these instances
+— re-applied to the anchor `_new_override` produced. (`_detach_thisandfuture`
+copies directly because it is only reached when the override's RECURRENCE-ID
+matched the anchor, so its times ARE that slot's.)
+
+The widened test is what made this visible. It asserted only `.summary` — the one
+field the edit itself sets, and therefore right whichever component seeded the
+override; `.start` and `.location` are what tell the two seeds apart. The shared
+fixture grew a LOCATION the master does not carry, so the question is answerable
+rather than a matter of inspection.
+
+Half-fix checked: seeding from the governing override without re-applying the
+shift leaves the instance at the master's 09:00, so the pin still fails.
+
+The control needed a second pass, and that is the part worth recording. The
+over-correction here is seeding from ANY range override rather than the one that
+COVERS the anchor — §3.2.13 is "this and future", not "this and every" — and the
+first version of the control did not reach it: nothing in the file edited a slot
+BEFORE the range override, so replacing `_governing_thisandfuture` with "the
+first THISANDFUTURE override in the resource" passed everything. A case that
+edits 2026-01-06 now fails it.
 
 ## Filed during the Stage 3 adversarial review — 2026-08-20
 
