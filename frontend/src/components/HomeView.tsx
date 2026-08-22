@@ -4,7 +4,7 @@ import { useIsMobile } from '../hooks'
 import { useCalendarData, useTaskData, type TaskData } from '../data'
 import { cssColor, makeGuard, addDays, dayKey, isOverdue, ymd } from '../util'
 import { fmtDue } from '../time'
-import { sortTasks, taskKey } from '../order'
+import { sortByCompletion, sortTasks, taskKey } from '../order'
 import { useTimeFormat } from '../timeformat'
 import { bucketByDay, monthGrid, type DayEv } from '../calendar'
 import { DayPopover } from './DayPopover'
@@ -340,16 +340,13 @@ function ModuleBody({ kind, tasks, lists, days, byDay, calErrors, links, booking
         colorOf={colorOf} empty="Nothing in the next seven days." loaded={loaded} />
     }
     case 'completed': {
-      // There is no completion timestamp on the wire, so "recent" is by due date
-      // descending — the same proxy the Tasks pane's completed view uses, and
-      // like it, undated tasks are appended rather than floated to the top by
-      // the reverse.
+      // Most recently finished first, by the COMPLETED stamp the wire has always
+      // carried. This module used to sort by due date descending under a comment
+      // asserting no such stamp existed; it did, and `_task_dto` simply never
+      // sent it. `sortByCompletion` is shared with the Tasks pane's completed
+      // view, which had the same block written out a second time.
       const done = tops.filter((t) => t.completed || t.cancelled)
-      return <TaskList
-        items={[
-          ...sortTasks(done.filter((t) => t.due)).reverse(),
-          ...sortTasks(done.filter((t) => !t.due)),
-        ].slice(0, 40)}
+      return <TaskList items={sortByCompletion(done).slice(0, 40)}
         colorOf={colorOf} empty="Nothing completed yet." done loaded={loaded} />
     }
     case 'mini_calendar':

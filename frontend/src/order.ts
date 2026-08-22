@@ -155,3 +155,57 @@ export function sortTasks(tasks: Task[]): Task[] {
   return [...tasks].sort(
     (a, b) => (at.get(taskKey(a))! - at.get(taskKey(b))!) || compareIntrinsic(a, b))
 }
+
+/**
+ * Completed and cancelled tasks, most recently finished first.
+ *
+ * `completed_at` is the VTODO COMPLETED property — the instant the wire actually
+ * records — and it is the only honest answer to "what did I finish lately". It
+ * has always been on the wire (`ical/edit.py` writes it on every completion) and
+ * cached (`items.completed`); it simply was not in the task DTO, so both callers
+ * of this ordering fell back to sorting by DUE date descending and a comment
+ * asserting no timestamp existed.
+ *
+ * Two groups, not one, because the fallback is not comparable with the real
+ * thing: a task can be COMPLETED with no COMPLETED property (a foreign client's
+ * choice), and a CANCELLED one never gets a stamp at all, since cancelling is
+ * not completing. Interleaving a due date with a completion instant would order
+ * by two different quantities and read as random. So tasks that know when they
+ * were finished come first, newest first; everything else keeps the old
+ * due-descending proxy behind them, undated last.
+ *
+ * Shared rather than duplicated: the Tasks pane's completed view and the Home
+ * dashboard's "recently completed" module had this same block written out twice
+ * and would otherwise have to be fixed twice.
+ */
+export function sortByCompletion(tasks: Task[]): Task[] {
+  // Parsed once per task into a map, not per comparison: `at` is read by the
+  // partition below AND by every step of the sort, and a comparator that
+  // re-parses a string on each call is the cost `dueAt` documents avoiding.
+  // Parsed rather than string-compared, because another client may anchor the
+  // stamp to a zone while this app writes UTC, and those two do not sort
+  // lexically against each other.
+  const at = new Map<string, number>()
+  for (const t of tasks) {
+    if (!t.completed_at) continue
+    // Local parse rather than util's parseDate, keeping this module free of
+    // imports the way its header describes — the same choice `dueAt` makes.
+    // COMPLETED is a DATE-TIME in RFC 5545, so the bare-date branch is only
+    // defensiveness against a malformed value.
+    const ms = t.completed_at.includes('T')
+      ? new Date(t.completed_at).getTime()
+      : new Date(`${t.completed_at}T00:00`).getTime()
+    if (!isNaN(ms)) at.set(taskKey(t), ms)
+  }
+  const stamped = tasks.filter((t) => at.has(taskKey(t)))
+  const rest = tasks.filter((t) => !at.has(taskKey(t)))
+  return [
+    // Tie-broken by the intrinsic order so this stays a TOTAL order, the same
+    // property `compareTasks` exists to guarantee — two tasks completed in the
+    // same second must not permute between renders.
+    ...stamped.sort((a, b) =>
+      (at.get(taskKey(b))! - at.get(taskKey(a))!) || compareIntrinsic(a, b)),
+    ...sortTasks(rest.filter((t) => t.due)).reverse(),
+    ...sortTasks(rest.filter((t) => !t.due)),
+  ]
+}

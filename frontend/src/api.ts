@@ -46,6 +46,11 @@ export interface Task {
   notes: string | null
   status: string
   completed: boolean
+  // The instant the VTODO records as COMPLETED, or null. Distinct from the flag
+  // above, which is derived from STATUS: a client can write STATUS:COMPLETED and
+  // no COMPLETED property, so this is null for some completed tasks and anything
+  // ordering by it needs a fallback.
+  completed_at: string | null
   cancelled: boolean
   priority: number | null
   priority_label: string
@@ -65,8 +70,22 @@ export interface Task {
   // null until something is dragged, and stays null for tasks another CalDAV
   // client created — the sidecar never goes on the wire.
   sort_order: number | null
+  // Sidecar too, and unused by any view today — declared because the endpoint
+  // returns it, and a field the server sends that the type denies exists is how
+  // the four below went missing in the first place.
+  kanban_column: string | null
+  // This task carries an RRULE or RDATE. VTODO recurrence is GATED (see
+  // docs/recurrence-findings.md) so nothing in this app advances such a task —
+  // but one written by Tasks.org or jtx Board is already in the cache, and a
+  // view that completes it should be able to say so rather than treating it as
+  // an ordinary task.
+  has_rrule: boolean
   href: string
   etag: string
+  // Wire timestamps, both nullable: CREATED and LAST-MODIFIED are optional
+  // properties and plenty of clients omit them.
+  created: string | null
+  last_modified: string | null
 }
 
 // The priority vocabulary the backend maps to iCal PRIORITY ints (edit.py's
@@ -205,6 +224,183 @@ export interface TaskGroup {
   id: string
   name: string
   lists: string[]
+}
+
+// ── the day plan (the Today tab) ───────────────────────────────────────────
+//
+// A day plan is a SNAPSHOT, not a query. Every other task surface in this app
+// recomputes "what is due today" from the wire on each paint, so the list moves
+// under the owner all day. `day_plan` is the sidecar row that freezes what a
+// day held when it was first opened, and from then on the day is something the
+// owner arranges rather than a filter that keeps changing.
+//
+// The table lives in SQLite only — there is no VTODO, VEVENT or CalDAV property
+// for "I plan to do this today", and inventing one would write this app's
+// planning model into collections that Tasks.org, jtx Board and Thunderbird
+// share. So a day is app-only state, like `sort_order` and the task groups.
+
+/** What a day entry points at: a task on a list, a note that lives only in the
+ *  day, or one occurrence of a HABIT (see `Habit` below).
+ *
+ *  A habit occurrence is an ORDINARY day-plan row — it ticks, drops and orders
+ *  like everything else here, and there is no second ledger behind it. Widening
+ *  this union is silent: nothing in the app switches on `kind` exhaustively, so
+ *  the compiler cannot point at the places that now see a third value. They are
+ *  enumerated in TodayView.tsx, which is the only module that reads it. */
+export type DayEntryKind = 'task' | 'note' | 'habit'
+
+/** How an entry got onto the day: `auto` from the first open's snapshot,
+ *  `carried` from the previous plan's leftovers, `user` from a deliberate add,
+ *  `habit` minted by a habit rule when the day was opened.
+ *  The backend's carry-over rule reads this — only `user` entries follow the
+ *  owner into the next day — so it is a fact about the row, not a label. That
+ *  is also why a habit occurrence is not carried: tomorrow gets its own from
+ *  the rule, and a carried one would double it. */
+export type DayEntrySource = 'auto' | 'carried' | 'user' | 'habit'
+
+export interface DayEntry {
+  entry_id: string
+  day: string                // YYYY-MM-DD
+  kind: DayEntryKind
+  // Task entries: the list's SHORT id, the same value `Task.list` carries, so
+  // an entry joins back to its task on (list, uid). Null on a note.
+  list: string | null
+  uid: string | null
+  // Note entries: the text. Null on a TASK entry, deliberately — a task entry's
+  // text is the task's own SUMMARY, read live, so there is no second copy here
+  // to go stale when the task is renamed.
+  //
+  // A HABIT occurrence carries a title too, and that one IS a copy — taken from
+  // the habit the moment the row was minted. That is the opposite choice from a
+  // task entry and the right one for it: renaming a habit must not rewrite what
+  // last Tuesday says the owner planned, because a past day is a finished
+  // record rather than a projection of the current rules.
+  title: string | null
+  source: DayEntrySource
+  position: number | null
+  // The instant the entry was ticked, or null. A NOTE's field: a task's
+  // doneness is its VTODO STATUS, the one answer every client on the account
+  // shares, so `done` on a task entry is refused by the backend with a 422
+  // rather than written as a second one. TodayView routes a task row's checkbox
+  // through `api.complete` for the same reason.
+  done_at: string | null
+  // "I decided not to do this", which is the most useful thing a past day can
+  // report. Dropping stamps this column rather than deleting the row, so a
+  // dropped entry still comes back on every read and the client filters it.
+  dropped_at: string | null
+  // The habit rule that minted this occurrence; null on every other kind. It
+  // deliberately has no foreign key behind it and is allowed to DANGLE: deleting
+  // a habit removes the rule, and the days it already ran on keep their rows.
+  // Nothing resolves it back to a definition — the row carries its own copied
+  // title — so its only job is to be an identity the week's occurrences of one
+  // habit can be counted under.
+  habit_id: string | null
+  created_at: string
+}
+
+export interface DayPlan {
+  day: string
+  /** This day has a plan: it has been opened, or something has been added to
+   *  it. Not the same as "a snapshot was derived" — adding a row to a day nobody
+   *  has opened makes it planned without deriving one, and the server tracks
+   *  those separately.
+   *
+   *  False means neither has happened, and `entries` is then `[]`. The converse
+   *  does not hold, which is the whole reason this flag exists: an opened day
+   *  the owner emptied is planned with nothing in it, and re-opening it must not
+   *  snapshot over that. */
+  planned: boolean
+  entries: DayEntry[]
+}
+
+/** Everything POST /day/{day}/entries accepts. `list` + `uid` name a task;
+ *  `title` carries a note. Which pair is required follows from `kind`. */
+export interface CreateDayEntryBody {
+  // Client-generated, like `client_id` on a task create and for the same
+  // reason: a POST retried after a dropped response has to land on the row the
+  // first attempt made rather than beside it.
+  entry_id: string
+  // 'task' or 'note' only, and narrower than `DayEntry.kind` on purpose. A
+  // habit OCCURRENCE is minted by its rule when a day is opened, never handed
+  // in by a client — the backend refuses kind='habit' here with a 422 — so
+  // admitting it would only let a caller spell a request that cannot succeed.
+  kind: Exclude<DayEntryKind, 'habit'>
+  list?: string
+  uid?: string
+  title?: string
+}
+
+/** Everything PATCH /day/{day}/entries/{entry_id} accepts. Every field is
+ *  optional and an omitted one is left alone — `done: false` and `dropped:
+ *  false` are real values (the undo path), so they cannot be spelled by
+ *  omission. */
+export interface PatchDayEntryBody {
+  done?: boolean
+  dropped?: boolean
+  position?: number
+}
+
+// ── habits (the repeating spine of a day) ──────────────────────────────────
+//
+// A habit is A RULE THAT INSERTS ENTRIES, not a parallel subsystem. Opening a
+// day gives it one ordinary `day_plan` row per active habit scheduled on that
+// weekday (kind="habit", source="habit"), and from there the row behaves like
+// any other: it is ticked through `patchDayEntry`, dropped through the same
+// call, and ordered by the same key.
+//
+// Nothing here reaches the wire. There is no VTODO for a habit, no RRULE is
+// written for one, and the gated `completions` table is not involved — VTODO
+// recurrence is deliberately still closed (docs/recurrence-findings.md) and a
+// habit is not a way in through the side door. Like `day_plan` itself, this is
+// app-only state that the collections shared with Tasks.org, jtx Board and
+// Thunderbird never learn about.
+
+export interface Habit {
+  id: string
+  title: string
+  /** '' is EVERY DAY, spelled as the absence of a restriction rather than as
+   *  all seven names, so "every day" has exactly one representation. Otherwise
+   *  a comma list drawn from `HABIT_DAYS`. Always in mon..sun order coming
+   *  back: the server re-orders on write, so "fri,mon" and "mon,fri" cannot
+   *  return as two strings that compare unequal and make a client think a
+   *  schedule changed when it did not. */
+  days: string
+  /** Set while the habit is paused. Pausing hides it from days opened FROM NOW
+   *  ON; every occurrence it has already put on a day stays exactly as it was,
+   *  because those are rows in the day plan and the rule cannot reach them. */
+  paused_at: string | null
+  position: number | null
+  created_at: string
+}
+
+/** The seven day names a habit's `days` is written in, in the order the server
+ *  canonicalises to.
+ *
+ *  ORDER AND SPELLING ONLY — deliberately NOT a name→weekday-number table.
+ *  Which days a habit runs on is decided server-side, off the day key's own
+ *  characters (`service.habit_runs_on`), and a second name↔number mapping on
+ *  this side is exactly how "wed" comes to mean Wednesday on one path and
+ *  Thursday on the other, silently and for one weekday only. Nothing in the
+ *  frontend may turn one of these strings into an index. */
+export const HABIT_DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] as const
+
+/** Everything POST /habits accepts. `days` defaults to '' (every day) and
+ *  `position` to the end of the list. */
+export interface CreateHabitBody {
+  title: string
+  days?: string
+  position?: number
+}
+
+/** Everything PATCH /habits/{id} accepts. Every field is optional and an
+ *  omitted one is left alone — `paused: false` is a real value (resuming), so
+ *  it cannot be spelled by omission. Same shape, same reason, as
+ *  `PatchDayEntryBody`. */
+export interface PatchHabitBody {
+  title?: string
+  days?: string
+  paused?: boolean
+  position?: number
 }
 
 // One application connected through the MCP connector. Identified by its
@@ -365,6 +561,46 @@ export const api = {
     j<Task>('POST', `/api/lists/${listId}/tasks/${encodeURIComponent(uid)}/cancel`),
   deleteTask: (listId: string, uid: string) =>
     j<null>('DELETE', `/api/lists/${listId}/tasks/${encodeURIComponent(uid)}`),
+
+  // the day plan (the Today tab)
+  //
+  // `openDay` is the ONLY call that can create a plan, and `day` below is a
+  // pure read that never does. The split is the contract, not a convention: a
+  // GET that quietly opened days would fill the record with plans the owner
+  // never made — a client prefetching a week would open six days it never
+  // showed anyone, each frozen at whatever happened to be due at prefetch time
+  // — and the `planned` flag would stop meaning what it says.
+  openDay: (day: string) => j<DayPlan>('POST', `/api/day/${day}/open`),
+  day: (day: string) => j<DayPlan>('GET', `/api/day/${day}`),
+  // Planned days in [from, to), `to` EXCLUSIVE and the span bounded to 190 days
+  // server-side (a wider one answers 422). Days never opened are simply absent,
+  // so an empty array means "nothing planned in there".
+  days: (from: string, to: string) =>
+    j<DayPlan[]>('GET', `/api/day?from=${from}&to=${to}`),
+  addDayEntry: (day: string, body: CreateDayEntryBody) =>
+    j<DayEntry>('POST', `/api/day/${day}/entries`, body),
+  patchDayEntry: (day: string, entryId: string, body: PatchDayEntryBody) =>
+    j<DayEntry>('PATCH', `/api/day/${day}/entries/${encodeURIComponent(entryId)}`, body),
+
+  // habits (the rules that put entries on a day)
+  //
+  // These four manage DEFINITIONS. Nothing here reads or writes a day: the
+  // occurrences are day-plan rows, reached through the calls above, and the
+  // only moment the two meet is when opening a day mints the rows a rule is
+  // owed. Keeping them apart is what makes "there is no second ledger" true
+  // rather than aspirational.
+  //
+  // `habits` lists PAUSED habits too — this is the list the habits sheet edits,
+  // not the subset today happens to schedule.
+  habits: () => j<Habit[]>('GET', '/api/habits'),
+  createHabit: (body: CreateHabitBody) => j<Habit>('POST', '/api/habits', body),
+  patchHabit: (id: string, body: PatchHabitBody) =>
+    j<Habit>('PATCH', `/api/habits/${encodeURIComponent(id)}`, body),
+  // The DEFINITION only, which is the whole of what a habit is. Occurrences
+  // already on a day are ordinary rows and survive it — they keep their copied
+  // title and a `habit_id` that now points at nothing, so a past day still says
+  // what the owner planned.
+  deleteHabit: (id: string) => j<null>('DELETE', `/api/habits/${encodeURIComponent(id)}`),
 
   // calendars / events
   calendars: () => j<List[]>('GET', '/api/calendars'),

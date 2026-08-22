@@ -186,6 +186,10 @@ export function sanitizeTask(v: unknown): Task | null {
     notes: orNull(o.notes),
     status: orNull(o.status) ?? 'NEEDS-ACTION',
     completed: bool(o.completed),
+    // Absent from anything this cache wrote before the field existed, which
+    // `orNull` already renders as null — the same "unstamped" case a foreign
+    // client's COMPLETED-less task produces, so `sortByCompletion` handles it.
+    completed_at: orNull(o.completed_at),
     cancelled: bool(o.cancelled),
     priority: numOrNull(o.priority),
     priority_label: orNull(o.priority_label) ?? 'none',
@@ -205,8 +209,12 @@ export function sanitizeTask(v: unknown): Task | null {
     // on the way through the disk cache, so a missing line means manual order
     // would work on a fresh load and silently vanish on a cached one.
     sort_order: numOrNull(o.sort_order),
+    kanban_column: orNull(o.kanban_column),
+    has_rrule: bool(o.has_rrule),
     href: orNull(o.href) ?? '',
     etag: orNull(o.etag) ?? '',
+    created: orNull(o.created),
+    last_modified: orNull(o.last_modified),
   }
 }
 

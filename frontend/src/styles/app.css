@@ -320,8 +320,20 @@
 }
 .twisty:hover { color: var(--accent); }
 .twisty.open { transform: rotate(90deg); }
+/* One number, read by two rules. `.today-check-gap` stands in for this box on a
+   row that has nothing to tick and has to match its width exactly, and the two
+   used to be written out separately — so the 21px override in the <=720px block
+   below moved the checkbox and left the gap at 17px, shunting those titles 4px
+   left of every neighbour on every phone.
+   It lives on :root rather than on `.check` itself for a cascade reason: the gap
+   rule sits ~500 lines further down the file, so a value set on each selector
+   would be re-set AFTER the media override at equal specificity and win over it,
+   leaving the bug exactly where it was. Inherited from the root, the override is
+   the last word for both. */
+:root { --check-size: 17px; }
 .check {
-  width: 17px; height: 17px; flex: none; margin-top: 2px; border: 1px solid var(--fg-faint);
+  width: var(--check-size); height: var(--check-size);
+  flex: none; margin-top: 2px; border: 1px solid var(--fg-faint);
   border-radius: var(--radius); background: none; cursor: pointer; display: inline-flex;
   align-items: center; justify-content: center; color: transparent;
 }
@@ -763,7 +775,9 @@
   .day-col-body { padding-bottom: calc(24px + env(safe-area-inset-bottom)); }
   .task { padding-top: 11px; padding-bottom: 11px; }
   .task.sub { padding-left: calc(var(--gutter) + var(--task-depth, 1) * 18px); }
-  .check { width: 21px; height: 21px; }
+  /* On :root, so `.check` and `.today-check-gap` move together — see the note
+     beside the base value. */
+  :root { --check-size: 21px; }
   .task-actions { gap: 8px; }
   .task-actions button { font-size: calc(12px * var(--fs-scale)); padding: 5px 6px; }
   .scroll { padding-bottom: calc(40px + env(safe-area-inset-bottom)); }
@@ -1213,3 +1227,218 @@
 .conn-actions { display: flex; gap: 6px; flex: none; }
 .btn.danger { border-color: var(--warn); color: var(--warn); background: none; }
 .btn.danger:hover { background: color-mix(in oklch, var(--warn) 12%, transparent); }
+
+/* ── the Today tab ───────────────────────────────────────────────────────────
+   Every colour here resolves through a token from tokens.css, every font-size
+   through --fs-scale, every family through --serif/--sans/--mono, and the two
+   density levers (--gutter horizontally, --row-y on a row) are used where they
+   apply. That is what lets the Appearance editor reach this tab the way it
+   reaches every other one: a rule written in hex would look right in the
+   shipped theme and be wrong — often invisible — under a custom or preset one,
+   and nothing about the shipped look would give it away.
+
+   The two markers below are load-bearing. TodayView.test.tsx slices this file
+   between them and fails on a literal colour, because a token discipline that
+   is only a convention is one hurried rule away from not holding. */
+/* today-tab:css:start */
+.today-add { flex-wrap: wrap; }
+/* The reading of the typed line, under the box that produced it. Advisory
+   only — Enter commits whether or not it has been looked at — so it is sized
+   and coloured as a caption rather than as a control. */
+.today-chip {
+  flex-basis: 100%; margin: 0;
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  font-size: calc(12px * var(--fs-scale)); color: var(--fg-muted);
+}
+.today-chip .label { color: var(--accent); }
+/* A summary is user text of any length and any script: let it wrap inside the
+   chip rather than pushing the parsed due date off the line. */
+.today-chip-sum { color: var(--fg); min-width: 0; overflow-wrap: anywhere; }
+
+.today-list { list-style: none; margin: 0; padding: 0; }
+.today-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: var(--row-y) var(--gutter);
+  border-bottom: 1px solid var(--rule-faint);
+}
+.today-row:hover { background: var(--bg-elev); }
+/* Stands in for the checkbox on a row that has nothing to tick, and has to be
+   exactly as wide as `.check` or the titles of a mixed list stop lining up. */
+.today-check-gap { width: var(--check-size); flex: none; }
+.today-title {
+  flex: 1; min-width: 0; font-size: calc(15px * var(--fs-scale)); color: var(--fg);
+}
+.today-row.done .today-title { color: var(--fg-faint); text-decoration: line-through; }
+.today-row.gone .today-title { color: var(--fg-faint); font-style: italic; }
+.today-due { font-size: calc(11px * var(--fs-scale)); color: var(--fg-muted); flex: none; }
+.today-due.overdue { color: var(--warn); }
+
+/* Row controls: bare glyph buttons, like .task-actions. */
+.today-drop, .today-plus {
+  background: none; border: 0; cursor: pointer; flex: none; line-height: 1;
+  font-family: var(--mono); font-size: calc(12px * var(--fs-scale));
+  color: var(--fg-faint); padding: 2px 4px;
+}
+.today-drop { opacity: 0; transition: opacity 0.12s; }
+.today-row:hover .today-drop,
+.today-drop:focus-visible { opacity: 1; }
+.today-drop:hover { color: var(--warn); }
+.today-plus { color: var(--accent); font-size: calc(15px * var(--fs-scale)); }
+/* A touchscreen has no pointer to hover with, so a control revealed only on
+   hover is simply unreachable there — the same gap the :active rules in
+   tokens.css exist to close for buttons. Dropping a row is the one way to take
+   something off a day, so it cannot be desktop-only. */
+@media (hover: none) { .today-drop { opacity: 1; } }
+
+/* A suggestion is something that is NOT on the day yet, so it reads a step
+   quieter than the rows above it. */
+.today-sug .today-title { color: var(--fg-muted); }
+
+/* ---- the look-back -----------------------------------------------------
+   Stepping back through recent days. The day picker is chrome; everything
+   below it is the same rows this file already styles, so the whole of the
+   look-back's CSS is these few rules — a parallel set of `.today-past-row`
+   selectors would have been a second place to fix every future row bug. */
+
+/* `align-self` because `.content-head` aligns on the BASELINE: a two-button nav
+   left to that hangs off the title's baseline and sits a few pixels proud of
+   everything beside it. `flex: none` for the same reason `.today-habits-open`
+   has it — the header's flexible element is the spacer, and a nav that could
+   shrink would crush its own arrows on a narrow screen. */
+.today-nav {
+  display: flex; align-items: center; align-self: center; gap: 4px; flex: none;
+}
+
+/* A tick that was already made, in the slot `.check` occupies on a live row —
+   the `.today-check-gap` beside it in the markup is what supplies the width, so
+   a read-only list keeps the same left edge as a live one.
+   --accent, and never --warn: the only thing this mark ever reports is that
+   something WAS done ON THE DAY BEING READ. Every row that paints it stands on
+   evidence belonging to that day — an entry's own done stamp, which only the
+   live day is allowed to write, or a task's COMPLETED stamp bucketed onto that
+   day by `dayKey` — and never on a task's current state, which would let a tick
+   made this morning mark a day last week. There is no failure state here for a
+   colour to be tempted by — an untouched row carries no mark at all rather than
+   an empty one — and a look-back that paints a quiet day in the warning colour
+   is the scorecard this whole feature exists not to be. */
+.today-mark {
+  text-align: center; font-size: calc(11px * var(--fs-scale)); color: var(--accent);
+}
+
+/* Declined, and kept on the record. It recedes rather than striking through:
+   the strike is `.done`'s, and a row wearing both would say "finished" and
+   "never happened" in the same breath. */
+.today-dropped .today-title { color: var(--fg-faint); }
+
+/* Today's events. Read-only rows (AgendaEvent with no onOpen); this only pulls
+   their padding out to the page gutter, since they sit in a full-width pane
+   here rather than inside a popover. */
+.today-agenda .agenda-ev {
+  padding: 8px var(--gutter); font-size: calc(14px * var(--fs-scale));
+}
+
+/* A quieter `.empty`, for the place that reports "nothing here" INSIDE the page
+   rather than instead of it. Colour and family stay inherited from `.empty`. */
+.today-quiet { padding: 8px var(--gutter); font-size: calc(13px * var(--fs-scale)); }
+
+/* ---- habits ------------------------------------------------------------
+   The repeating spine of the day, in its own group above it. Everything here
+   is one of two jobs: making a habit row read as a habit rather than as a jot,
+   and keeping its weekly count a record rather than a verdict. */
+
+/* The group's own edge. Every row already carries a --rule-faint hairline, so
+   the last habit gets the fuller --rule instead: that one line is the whole
+   visual statement that the spine is above the day and not part of it. */
+.today-habits .today-row:last-child { border-bottom-color: var(--rule); }
+
+/* Sits in the slot a task's `.list-dot` occupies (7px wide + its 6px margin),
+   so a habit title, a task title and a note title share one left edge. Without
+   the fixed width the glyph's own advance would set it, and the column would
+   move with the font the theme happens to choose. */
+.today-habit-mark {
+  width: 13px; flex: none; text-align: center;
+  font-size: calc(11px * var(--fs-scale)); color: var(--fg-faint);
+}
+/* A habit that is done is still a habit: the title greys and strikes through
+   like any other done row (`.today-row.done`), but the mark keeps its weight so
+   the group stays readable as a group at a glance down the left edge. */
+
+/* --fg-faint, whatever the ratio says, and NEVER --warn or --pri-high. "1 of 5
+   this week" is a record of what happened, not a failure to be flagged: colour
+   it as one and the surface the owner opens every morning starts telling them
+   off, which is how a daily surface gets closed for good. The count is omitted
+   below two occurrences entirely (MIN_WEEK_COUNT), so there is no "0 of 1"
+   state for a colour to be tempted by. */
+.today-habit-count {
+  font-size: calc(11px * var(--fs-scale)); color: var(--fg-faint); flex: none;
+}
+
+/* The way in to the sheet, in the tab header. Deliberately in the Today header
+   rather than in Settings: the moment you want to change a habit is the morning
+   you are looking at it. */
+.today-habits-open { flex: none; margin-left: 10px; }
+
+/* ---- the habits sheet --------------------------------------------------
+   `.modal` supplies the frame, the elevation and the corner radius (it is in
+   the rounding opt-in list at the top of this file); everything below is only
+   what a list of RULES needs on top of that. */
+.habit-sheet { gap: 10px; }
+.habit-blurb {
+  margin: 0; font-size: calc(12px * var(--fs-scale)); color: var(--fg-muted);
+}
+/* `.empty`'s 40px of padding is sized for a whole pane, not for a gap between
+   two controls in a dialog. */
+.habit-empty { padding: 12px 0; font-size: calc(13px * var(--fs-scale)); }
+
+.habit-list {
+  list-style: none; margin: 0; padding: 0;
+  max-height: 52vh; overflow-y: auto;
+}
+.habit-edit {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 10px 0; border-bottom: 1px solid var(--rule-faint);
+}
+.habit-edit:last-child { border-bottom: 0; }
+/* A paused habit is still on the list — it is the screen that un-pauses it —
+   so it recedes rather than disappearing. */
+.habit-edit.paused .habit-name, .habit-edit.paused .habit-day { color: var(--fg-faint); }
+
+.habit-edit-top { display: flex; align-items: center; gap: 8px; }
+/* The name is the flexible part: the two buttons beside it are fixed-width
+   labels and must not be squeezed onto two lines by a long title. */
+.habit-name { flex: 1; min-width: 0; }
+.habit-edit-top .btn { flex: none; }
+
+.habit-days { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+/* `.chip` (tokens.css) carries the whole of a chip's look — the mono face, the
+   10px size and its tracking, the muted colour, the rule and the radius — and
+   these ARE chips, so they wear it rather than restating it and drifting from
+   every other chip in the app the next time one of those values moves. What is
+   left here is only what a PRESSABLE chip needs on top: a button brings its own
+   background and arrow cursor, the target is a little larger than a static
+   chip's, and the day names take the label casing. */
+.habit-day {
+  background: none; cursor: pointer; padding: 3px 7px;
+  text-transform: var(--label-case);
+}
+.habit-day.on { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+/* Hover-guarded like every other control in this app — on a touchscreen there
+   is no pointer to leave, so a tapped chip would keep its hover styling until
+   something else was tapped and read as stuck. See tokens.css. */
+@media (hover: hover) {
+  .habit-day:hover { border-color: var(--accent); color: var(--accent); }
+  .habit-day.on:hover { color: var(--bg); }
+}
+.habit-every, .habit-paused { margin-left: 4px; }
+
+/* The delete warning. --warn here IS the right token — this one is a warning
+   about an irreversible action, which is the opposite of the weekly count. */
+.habit-warn {
+  margin: 0; font-size: calc(12px * var(--fs-scale)); color: var(--warn);
+  line-height: 1.35;
+}
+
+.habit-add { display: flex; gap: 8px; align-items: center; }
+.habit-add .input { flex: 1; min-width: 0; }
+.habit-add .btn { flex: none; }
+/* today-tab:css:end */

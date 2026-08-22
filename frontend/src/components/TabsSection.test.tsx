@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { TabsSection } from './TabsSection'
-import { DEFAULT_TAB_ORDER, type Tab, type TabStart } from '../tabs'
+import { DEFAULT_TAB_ORDER, TAB_LABELS, type Tab, type TabStart } from '../tabs'
 
 function show(order: Tab[] = DEFAULT_TAB_ORDER, start: TabStart = 'home') {
   const onOrderChange = vi.fn()
@@ -20,19 +20,27 @@ describe('<TabsSection>', () => {
   })
 
   it('moves a tab along the strip', async () => {
+    // Uncontrolled: `order` stays the shipped strip across both clicks, so each
+    // expectation is that strip with one swap applied, not a running total.
     const { onOrderChange } = show()
     await userEvent.click(screen.getByRole('button', { name: 'Move Tasks left' }))
-    expect(onOrderChange).toHaveBeenCalledWith(['tasks', 'home', 'calendar', 'scheduling'])
+    expect(onOrderChange)
+      .toHaveBeenCalledWith(['today', 'tasks', 'home', 'calendar', 'scheduling'])
 
     await userEvent.click(screen.getByRole('button', { name: 'Move Tasks right' }))
-    expect(onOrderChange).toHaveBeenLastCalledWith(['home', 'calendar', 'tasks', 'scheduling'])
+    expect(onOrderChange)
+      .toHaveBeenLastCalledWith(['today', 'home', 'calendar', 'tasks', 'scheduling'])
   })
 
   it('cannot move the ends off the strip', () => {
+    // Named off the strip rather than hardcoded, so this keeps testing the ENDS
+    // as tabs are added or reordered instead of two tabs that used to be at them.
+    const first = TAB_LABELS[DEFAULT_TAB_ORDER[0]]
+    const last = TAB_LABELS[DEFAULT_TAB_ORDER[DEFAULT_TAB_ORDER.length - 1]]
     show()
-    expect(screen.getByRole('button', { name: 'Move Home left' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: 'Move Scheduling right' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: 'Move Home right' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: `Move ${first} left` })).toBeDisabled()
+    expect(screen.getByRole('button', { name: `Move ${last} right` })).toBeDisabled()
+    expect(screen.getByRole('button', { name: `Move ${first} right` })).toBeEnabled()
   })
 
   it('picks the tab the app opens on', async () => {

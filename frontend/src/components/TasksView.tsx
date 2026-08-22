@@ -7,7 +7,7 @@ import {
   addDays, cssColor, dayKey, isOverdue, makeGuard, toLocalInput, ymd,
 } from '../util'
 import { fmtClock, fmtDue, inputLang } from '../time'
-import { sortTasks, taskKey } from '../order'
+import { sortByCompletion, sortTasks, taskKey } from '../order'
 import { useTimeFormat } from '../timeformat'
 import { AddMultipleModal } from './AddMultipleModal'
 import { dateOut, TaskModal } from './TaskModal'
@@ -418,10 +418,9 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
     return sortTasks(kids)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tasks, hiddenSet, parentByKey])
-  const completedTasks = [
-    ...sortTasks(completedTops.filter((t) => t.due)).reverse(),
-    ...sortTasks(completedTops.filter((t) => !t.due)),
-  ]
+  // Most recently finished first — see `sortByCompletion`, shared with the Home
+  // dashboard's module so the two panes cannot drift apart again.
+  const completedTasks = sortByCompletion(completedTops)
   const openOn = (key: string) =>
     sortTasks(shownTasks.filter((t) => !t.completed && !t.cancelled && dueDay(t) === key))
   const doneOn = (key: string) =>

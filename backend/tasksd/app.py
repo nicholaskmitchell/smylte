@@ -52,7 +52,7 @@ from .ical import EventEdit, TaskEdit, rrule_from_spec
 from .csp import CSPMiddleware, policy_for_index
 from .limits import BodySizeLimitMiddleware
 from .scheduling import SlotTaken
-from .service import TaskService, priority_from_label
+from .service import TaskService, day_key, priority_from_label
 from .sync.engine import ConflictError
 
 log = logging.getLogger("tasksd")
@@ -177,6 +177,21 @@ def _check_client_id(cid: str | None) -> None:
         raise HTTPException(422, "client_id must be 16-64 lowercase hex characters")
 
 
+def _check_day(day: str) -> str:
+    """A day-plan path parameter, or 422.
+
+    `service.day_key` is imported rather than restated as a route-level pattern.
+    A pattern could pin the SHAPE but not the day — "2026-02-30" is exactly four
+    digits, two digits, two digits, and is not a date — so the calendar check has
+    to run in Python regardless, and splitting one rule across a constraint and a
+    function is how the edge and the store end up disagreeing about which strings
+    name the same day. This string is a primary key; it gets one definition."""
+    try:
+        return day_key(day)
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from None
+
+
 # How long a session may live, as the Settings menu offers it. An allowlist
 # rather than a range: this is a security-relevant field reachable through
 # PUT /api/settings, and a bounds check still lets a hand-edited blob — or an
@@ -259,6 +274,83 @@ class EditEvent(Repeat):
 
 class MoveEvent(BaseModel):
     calendar: str                     # destination calendar id
+
+
+class CreateDayEntry(BaseModel):
+    """One thing the owner is putting on a day by hand.
+
+    `entry_id` is client-generated, like `client_id` on a task create and for
+    the same reason: a POST that is retried after a dropped response has to land
+    on the row the first attempt made, not beside it. The service also matches on
+    the task (or the note text), so a client that generates a fresh id per
+    attempt still cannot double-add.
+    """
+
+    entry_id: str = Field(min_length=1, max_length=64)
+    kind: Literal["task", "note"]
+    # `list` + `uid` name a task; `title` carries a note. Which pair is required
+    # follows from `kind`, and the service answers 422 for the wrong shape —
+    # both are Optional here only so both shapes parse.
+    list: str | None = Field(default=None, max_length=512)
+    uid: str | None = Field(default=None, max_length=512)
+    # Bounded and XML-safe like the other free text a client sends. A day note
+    # lives only in SQLite, so this is not the XML boundary CollectionName
+    # defends — it is the cheap bound on what a client may store, applied at the
+    # same edge as every other text field so there is one rule to remember.
+    title: XmlSafeText | None = Field(default=None, max_length=2000)
+
+
+class PatchDayEntry(BaseModel):
+    # Tri-state on purpose: None means "not sent", and false is a real value
+    # (un-tick, un-drop). The service only writes the fields that arrive.
+    done: bool | None = None
+    dropped: bool | None = None
+    # Same guard, same reason, as Sidecar.sort_order: a non-finite float parses
+    # out of JSON but cannot be serialized back into it, so one Infinity here
+    # would 500 every later read of the whole day.
+    position: float | None = Field(default=None, allow_inf_nan=False)
+
+
+# A habit's `days`: "" (every day) or a comma list of mon,tue,wed,thu,fri,sat,sun.
+# The bound is a shape bound only — the VOCABULARY is checked by
+# `service.normalize_habit_days`, which also normalises the order and refuses an
+# rrule-shaped value by name. That check is not restated as a route-level pattern
+# for the reason `_check_day` gives: one rule, one place, or the edge and the
+# store end up disagreeing about which strings mean the same schedule.
+# Loose rather than exact: the canonical spelling of all seven days is 27
+# characters, but `normalize_habit_days` also accepts the same list written with
+# spaces and capitals ("Mon, Tue, …"), and a client sending that should get the
+# service's own message about the vocabulary rather than a length error about a
+# value it is allowed to write.
+_HABIT_DAYS_MAX = 64
+
+
+class CreateHabit(BaseModel):
+    """A rule that puts an entry on every day it schedules.
+
+    Bounded and XML-safe like the other free text a client sends. A habit lives
+    only in SQLite and never reaches the wire — no PUT, no RRULE — so this is not
+    the XML boundary CollectionName defends; it is the same cheap bound applied
+    at the same edge as every other text field, so there is one rule to remember.
+    The title is COPIED onto each occurrence, which is what makes it worth
+    bounding here rather than once it is already in a day.
+    """
+
+    title: XmlSafeText = Field(min_length=1, max_length=200)
+    days: str = Field(default="", max_length=_HABIT_DAYS_MAX)
+    # Same guard, same reason, as Sidecar.sort_order: a non-finite float parses
+    # out of JSON but cannot be serialized back into it, so one Infinity here
+    # would 500 every later read of the habits list.
+    position: float | None = Field(default=None, allow_inf_nan=False)
+
+
+class EditHabit(BaseModel):
+    title: XmlSafeText | None = Field(default=None, min_length=1, max_length=200)
+    days: str | None = Field(default=None, max_length=_HABIT_DAYS_MAX)
+    # Tri-state on purpose, like PatchDayEntry.done: None is "not sent", and
+    # false is a real value — resuming a paused habit.
+    paused: bool | None = None
+    position: float | None = Field(default=None, allow_inf_nan=False)
 
 
 class CreateBookingLink(BaseModel):
@@ -421,11 +513,25 @@ class SettingsPatch(BaseModel):
     # ("last" reopens wherever the user left off), and that remembered tab.
     # The client sanitizes the order on read — an unknown or missing entry there
     # is a display bug, not a data one — so this only bounds the blob's size.
-    tab_order: list[Literal["home", "tasks", "calendar", "scheduling"]] | None = Field(
-        default=None, max_length=8
-    )
-    start_tab: Literal["home", "tasks", "calendar", "scheduling", "last"] | None = None
-    last_tab: Literal["home", "tasks", "calendar", "scheduling"] | None = None
+    #
+    # "today" (the fifth tab) has to be accepted here BEFORE the frontend ships
+    # it, and the ordering is not a nicety. `sanitizeTabOrder` appends any
+    # shipped tab a stored blob lacks (frontend/src/tabs.ts), so the first
+    # settings write from a client that knows the Today tab PUTs "today" in
+    # `tab_order` whether or not the user has touched the strip. A backend that
+    # 422s it does not merely drop that one field: the write is rejected whole,
+    # so the theme, the dashboard layout and everything else in the same PUT are
+    # lost too — the exact failure `frontend/src/dashboard.ts` (lines ~60-66)
+    # records for a module height the server would not take. Backend first,
+    # frontend second; the reverse order breaks settings for anyone who deploys
+    # them apart.
+    tab_order: list[
+        Literal["home", "tasks", "calendar", "scheduling", "today"]
+    ] | None = Field(default=None, max_length=8)
+    start_tab: Literal[
+        "home", "tasks", "calendar", "scheduling", "today", "last"
+    ] | None = None
+    last_tab: Literal["home", "tasks", "calendar", "scheduling", "today"] | None = None
     tasks_view: Literal["list", "day3", "week"] | None = None
     sidebar_collapsed: bool | None = None
     # Ids of calendars the user has hidden in the calendar view. Empty/absent
@@ -1085,6 +1191,132 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown task {uid}")
         fields = {k: v for k, v in body.model_dump().items() if v is not None}
         return await _run(_svc(request).set_sidecar, href, uid, **fields)
+
+    # -- day plan (the Today tab) --
+    @api.post("/day/{day}/open")
+    async def post_day_open(request: Request, day: str):
+        """Open a day, building its snapshot the first time. The only route that
+        BUILDS a snapshot: GET below is a pure read, so a client prefetching a
+        week cannot open six days it never showed anyone, and POST
+        /day/{day}/entries puts a row on a day — which is enough to make it
+        report planned — without ever deriving one."""
+        return await _run(_svc(request).open_day, _check_day(day), create=True)
+
+    @api.get("/day")
+    async def get_day_range(
+        request: Request,
+        # `from` is a Python keyword, so the parameter carries the alias the
+        # contract's query string actually uses.
+        from_: str = Query(..., alias="from"),
+        to: str = Query(...),
+    ):
+        """Planned days in [from, to) — `to` EXCLUSIVE. Days that were never
+        opened are absent, so an empty list means "nothing planned in there",
+        and a `to` at or before `from` is an empty range rather than an error.
+
+        The span bound is enforced by the service (`DAY_RANGE_MAX_DAYS`), whose
+        ValueError lands as the 422 below; the number lives next to the query it
+        protects rather than being written out again here."""
+        try:
+            return await _run(_svc(request).day_range, _check_day(from_), _check_day(to))
+        except ValueError as e:
+            raise HTTPException(422, str(e)) from None
+
+    @api.get("/day/{day}")
+    async def get_day(request: Request, day: str):
+        return await _run(_svc(request).open_day, _check_day(day), create=False)
+
+    @api.post("/day/{day}/entries", status_code=201)
+    async def post_day_entry(request: Request, day: str, body: CreateDayEntry):
+        # 422 rather than the 404 the task routes answer for an unknown list.
+        # The id is a field of the BODY here, not the path: a 404 on a POST whose
+        # path exists would read as "there is no such day", which is never true —
+        # every well-formed day exists, planned or not.
+        checked = _check_day(day)
+        try:
+            return await _run(
+                _svc(request).add_day_entry, checked,
+                entry_id=body.entry_id, kind=body.kind,
+                list_id=body.list, uid=body.uid, title=body.title,
+            )
+        except ValueError as e:
+            raise HTTPException(422, str(e)) from None
+
+    @api.patch("/day/{day}/entries/{entry_id}")
+    async def patch_day_entry(request: Request, day: str, entry_id: str, body: PatchDayEntry):
+        try:
+            dto = await _run(
+                _svc(request).patch_day_entry, _check_day(day), entry_id,
+                done=body.done, dropped=body.dropped, position=body.position,
+            )
+        except ValueError as e:
+            # `done` on a TASK entry: a task's doneness is its VTODO STATUS, not
+            # a column here. 422 rather than 404 — the entry exists, the field
+            # does not apply to it.
+            raise HTTPException(422, str(e)) from None
+        if dto is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown day entry {entry_id}")
+        return dto
+
+    # -- habits (the rules that put entries on a day) --
+    #
+    # A habit is app-only state and never reaches Radicale, so these four are
+    # SQL under the service lock like the day-plan routes above. They are also
+    # deliberately NOT under /settings: the service publishes `day_updated` for
+    # each of them (App.tsx ignores `settings_updated` for its refetch bump), and
+    # a habit belongs to the day plan, not to UI preferences.
+    @api.get("/habits")
+    async def get_habits(request: Request):
+        """Every habit in position order, paused ones included — the paused ones
+        are exactly what the screen that resumes them has to show."""
+        return await _run(_svc(request).list_habits)
+
+    @api.post("/habits", status_code=201)
+    async def post_habit(request: Request, body: CreateHabit):
+        try:
+            return await _run(
+                _svc(request).create_habit,
+                title=body.title, days=body.days, position=body.position,
+            )
+        except ValueError as e:
+            # An empty title, or a `days` that is not a weekday list — including
+            # an rrule-shaped one, whose message names
+            # docs/recurrence-findings.md rather than leaving the caller to guess
+            # why "FREQ=WEEKLY;BYDAY=MO" is not a schedule this app takes.
+            raise HTTPException(422, str(e)) from None
+
+    @api.patch("/habits/{habit_id}")
+    async def patch_habit(request: Request, habit_id: str, body: EditHabit):
+        # An explicit null is refused rather than ignored, the same way
+        # _LINK_NOT_NULL refuses one on a booking link. None is how the service
+        # spells "the client did not send this field", so a null would be
+        # silently dropped and the caller told its edit landed when nothing was
+        # written. There is no field here a null could sensibly mean anything for:
+        # "every day" is "", and resuming is paused=false.
+        nulled = sorted(k for k in body.model_fields_set if getattr(body, k) is None)
+        if nulled:
+            raise HTTPException(
+                422, f"these fields cannot be null: {', '.join(nulled)}")
+        try:
+            dto = await _run(
+                _svc(request).update_habit, habit_id,
+                title=body.title, days=body.days,
+                paused=body.paused, position=body.position,
+            )
+        except ValueError as e:
+            raise HTTPException(422, str(e)) from None
+        if dto is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown habit {habit_id}")
+        return dto
+
+    @api.delete("/habits/{habit_id}", status_code=204)
+    async def delete_habit(request: Request, habit_id: str):
+        """Delete the DEFINITION. Every occurrence this habit already put on a
+        day stays there, with the title it copied at the time — that is the
+        record of what the owner planned, and it is not a rule's to withdraw."""
+        if not await _run(_svc(request).delete_habit, habit_id):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown habit {habit_id}")
+        return Response(status_code=204)
 
     # -- calendars / events --
     @api.get("/calendars")

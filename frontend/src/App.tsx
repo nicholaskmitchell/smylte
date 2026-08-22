@@ -28,6 +28,7 @@ import { TasksView } from './components/TasksView'
 import { CalendarView } from './components/CalendarView'
 import { SchedulingView } from './components/SchedulingView'
 import { HomeView } from './components/HomeView'
+import { TodayView } from './components/TodayView'
 import { AppearancePanel } from './components/AppearancePanel'
 import { SettingsMenu } from './components/SettingsMenu'
 
@@ -38,7 +39,16 @@ export function App() {
   const [user, setUser] = useState('')
   // Seeded from the boot cache so the app paints the tab it will settle on,
   // rather than flashing the default while the settings fetch is in flight.
-  const [tab, setTab] = useState<Tab>(() => readCachedTab() ?? DEFAULT_TAB_ORDER[0])
+  //
+  // The fallback is DEFAULT_TAB_START, not the strip's first tab. Those were the
+  // same value until Today took the head of the strip while Home stayed the tab
+  // a fresh account opens on (see tabs.ts) — and seeding from the strip would
+  // have painted Today for the length of the /api/settings round trip and then
+  // yanked the view to Home, which is precisely the flash this seed exists to
+  // remove. `isTab` narrows away the 'last' case, which names no tab to paint;
+  // with nothing remembered "last" resolves to the strip's head anyway.
+  const [tab, setTab] = useState<Tab>(
+    () => readCachedTab() ?? (isTab(DEFAULT_TAB_START) ? DEFAULT_TAB_START : DEFAULT_TAB_ORDER[0]))
   const [tabOrder, setTabOrder] = useState<Tab[]>(DEFAULT_TAB_ORDER)
   const [startTab, setStartTab] = useState<TabStart>(DEFAULT_TAB_START)
   // A tab picked while settings were still loading wins over the stored choice —
@@ -617,6 +627,17 @@ export function App() {
           fit={calFit} />
       )}
       {!booting && tab === 'scheduling' && <SchedulingView rev={rev} onExpire={onExpire} />}
+      {!booting && tab === 'today' && (
+        // The same two calendar-visibility sets the Home dashboard is handed,
+        // and read-only here for the same reason: the Calendar tab owns editing
+        // (and pruning) them. Passing them is not cosmetic — TodayView asks the
+        // data layer for the same window over the same calendar SET, and
+        // `requestWindow` keys its dedupe on that set, so a Today tab that
+        // asked over the archived calendars too would re-fan-out over every
+        // calendar on each switch between the two tabs.
+        <TodayView rev={rev} onExpire={onExpire}
+          hiddenCalendars={hiddenCals} archivedCalendars={archivedCals} />
+      )}
       {!booting && tab === 'home' && (
         <HomeView rev={rev} onExpire={onExpire}
           layout={dashboard} onLayoutChange={changeDashboard}
