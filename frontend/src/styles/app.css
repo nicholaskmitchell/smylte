@@ -1294,6 +1294,42 @@
    quieter than the rows above it. */
 .today-sug .today-title { color: var(--fg-muted); }
 
+/* ---- the look-back -----------------------------------------------------
+   Stepping back through recent days. The day picker is chrome; everything
+   below it is the same rows this file already styles, so the whole of the
+   look-back's CSS is these few rules — a parallel set of `.today-past-row`
+   selectors would have been a second place to fix every future row bug. */
+
+/* `align-self` because `.content-head` aligns on the BASELINE: a two-button nav
+   left to that hangs off the title's baseline and sits a few pixels proud of
+   everything beside it. `flex: none` for the same reason `.today-habits-open`
+   has it — the header's flexible element is the spacer, and a nav that could
+   shrink would crush its own arrows on a narrow screen. */
+.today-nav {
+  display: flex; align-items: center; align-self: center; gap: 4px; flex: none;
+}
+
+/* A tick that was already made, in the slot `.check` occupies on a live row —
+   the `.today-check-gap` beside it in the markup is what supplies the width, so
+   a read-only list keeps the same left edge as a live one.
+   --accent, and never --warn: the only thing this mark ever reports is that
+   something WAS done ON THE DAY BEING READ. Every row that paints it stands on
+   evidence belonging to that day — an entry's own done stamp, which only the
+   live day is allowed to write, or a task's COMPLETED stamp bucketed onto that
+   day by `dayKey` — and never on a task's current state, which would let a tick
+   made this morning mark a day last week. There is no failure state here for a
+   colour to be tempted by — an untouched row carries no mark at all rather than
+   an empty one — and a look-back that paints a quiet day in the warning colour
+   is the scorecard this whole feature exists not to be. */
+.today-mark {
+  text-align: center; font-size: calc(11px * var(--fs-scale)); color: var(--accent);
+}
+
+/* Declined, and kept on the record. It recedes rather than striking through:
+   the strike is `.done`'s, and a row wearing both would say "finished" and
+   "never happened" in the same breath. */
+.today-dropped .today-title { color: var(--fg-faint); }
+
 /* Today's events. Read-only rows (AgendaEvent with no onOpen); this only pulls
    their padding out to the page gutter, since they sit in a full-width pane
    here rather than inside a popover. */
