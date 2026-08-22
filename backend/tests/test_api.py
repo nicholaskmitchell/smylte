@@ -69,8 +69,16 @@ def test_task_crud_and_subtasks(client):
     # complete + won't-do
     done = client.post(f"/api/lists/{lid}/tasks/{t['uid']}/complete").json()
     assert done["completed"] and done["percent_complete"] == 100
+    # The COMPLETED property, round-tripped through real Radicale rather than
+    # inferred: `edit.py` writes it, `read.py` parses it back and the DTO carries
+    # it. It was cached but never served, so every "recently completed" view had
+    # to guess from the due date instead.
+    assert done["completed_at"], "completing a task must record when"
     reopened = client.post(f"/api/lists/{lid}/tasks/{t['uid']}/complete?done=false").json()
     assert not reopened["completed"]
+    # Reopening clears the stamp (edit.py's `_replace` with no re-add), so a task
+    # cannot come back carrying the instant it was finished the last time.
+    assert reopened["completed_at"] is None
 
     # delete
     assert client.delete(f"/api/lists/{lid}/tasks/{sub['uid']}").status_code == 204

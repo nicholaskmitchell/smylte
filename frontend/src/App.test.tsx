@@ -3,6 +3,13 @@ import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { App } from './App'
 import { api, AuthError, HttpError, subscribe } from './api'
+import { DEFAULT_TAB_ORDER, TAB_LABELS } from './tabs'
+
+/** The shipped strip, as the top bar spells it. Derived rather than written out
+ *  so adding a tab does not silently need this file edited in four places —
+ *  what the strip *should* contain is pinned in tabs.test.ts, and what belongs
+ *  here is that the shell renders it. */
+const SHIPPED = DEFAULT_TAB_ORDER.map((t) => TAB_LABELS[t])
 
 // Mock the whole API module: every method becomes a vi.fn() so the shell and
 // whichever view mounts never touch the network (jsdom has no EventSource).
@@ -55,9 +62,10 @@ describe('<App> auth gate', () => {
     expect(subscribe).not.toHaveBeenCalled()
   })
 
-  it('renders the shell with all four tabs once authenticated', async () => {
+  it('renders the shell with every tab once authenticated', async () => {
     render(<App />)
     expect(await screen.findByRole('button', { name: 'Tasks' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Today' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Calendar' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Scheduling' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Home' })).toBeInTheDocument()
@@ -68,13 +76,17 @@ describe('<App> auth gate', () => {
     expect(subscribe).toHaveBeenCalledOnce()    // live updates wired up
   })
 
-  it('opens on Home, at the head of the strip', async () => {
+  it('opens on Home, which is no longer the head of the strip', async () => {
     render(<App />)
     const home = await screen.findByRole('button', { name: 'Home' })
+    // Today leads the strip; Home is still what a fresh account lands on. The
+    // two used to be the same tab, and the boot seed reads DEFAULT_TAB_START
+    // rather than the strip's head precisely so they can differ without the
+    // first paint flashing the wrong view (see App.tsx and tabs.ts).
     expect(home.className).toContain('active')
-    expect(screen.getByRole('button', { name: 'Tasks' }).className).not.toContain('active')
+    expect(screen.getByRole('button', { name: 'Today' }).className).not.toContain('active')
     expect([...document.querySelectorAll('.tabs .tab')].map((b) => b.textContent))
-      .toEqual(['Home', 'Tasks', 'Calendar', 'Scheduling'])
+      .toEqual(SHIPPED)
   })
 
   it('switches tabs on a click', async () => {
@@ -245,18 +257,23 @@ describe('<App> tab preferences', () => {
     document.querySelector('.tabs .tab.active')?.textContent ?? null
 
   it('renders the account’s saved order', async () => {
-    m.getSettings.mockResolvedValue({ tab_order: ['calendar', 'scheduling', 'home', 'tasks'] })
+    m.getSettings.mockResolvedValue({
+      tab_order: ['calendar', 'scheduling', 'home', 'tasks', 'today'],
+    })
     render(<App />)
     await screen.findByRole('button', { name: 'Tasks' })
-    await waitFor(() => expect(strip()).toEqual(['Calendar', 'Scheduling', 'Home', 'Tasks']))
+    await waitFor(() =>
+      expect(strip()).toEqual(['Calendar', 'Scheduling', 'Home', 'Tasks', 'Today']))
   })
 
   it('repairs a stored order that lost a tab', async () => {
     m.getSettings.mockResolvedValue({ tab_order: ['scheduling'] as never })
     render(<App />)
     await screen.findByRole('button', { name: 'Tasks' })
-    // A missing tab would leave its view unreachable, so it is appended.
-    await waitFor(() => expect(strip()).toEqual(['Scheduling', 'Home', 'Tasks', 'Calendar']))
+    // A missing tab would leave its view unreachable, so it is appended — in
+    // shipped order, behind whatever the stored blob did name.
+    await waitFor(() =>
+      expect(strip()).toEqual(['Scheduling', 'Today', 'Home', 'Tasks', 'Calendar']))
   })
 
   it('opens on the chosen tab', async () => {
@@ -303,9 +320,10 @@ describe('<App> tab preferences', () => {
     await openSettings('General')
     await userEvent.click(screen.getByRole('button', { name: 'Move Calendar left' }))
     expect(m.putSettings).toHaveBeenCalledWith({
-      tab_order: ['home', 'calendar', 'tasks', 'scheduling'],
+      tab_order: ['today', 'home', 'calendar', 'tasks', 'scheduling'],
     })
-    await waitFor(() => expect(strip()).toEqual(['Home', 'Calendar', 'Tasks', 'Scheduling']))
+    await waitFor(() =>
+      expect(strip()).toEqual(['Today', 'Home', 'Calendar', 'Tasks', 'Scheduling']))
   })
 
   it('saves the tab to open on', async () => {

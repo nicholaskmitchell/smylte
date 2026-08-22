@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { compareTasks, sortTasks } from './order'
+import { compareTasks, sortByCompletion, sortTasks } from './order'
 import type { Task } from './api'
 
 const task = (o: Partial<Task> = {}): Task => ({
@@ -8,6 +8,10 @@ const task = (o: Partial<Task> = {}): Task => ({
   percent_complete: null, due: null, due_is_date: true, start: null, start_is_date: true,
   tags: [], parent: null, children: [], child_count: 0, completed_child_count: 0,
   derived_percent: null, pinned: false, sort_order: null,
+  // Present on every DTO the server sends; see api.ts's Task.
+  completed_at: null, kanban_column: null, has_rrule: false,
+  created: null, last_modified: null,
+ 
   href: '/l1/u1.ics', etag: '"1"', ...o,
 })
 
@@ -179,5 +183,79 @@ describe('sortTasks', () => {
     expect(out).not.toBe(ts)
     expect(ts.map((t) => t.uid)).toEqual(['b', 'a'])
     expect(out.map((t) => t.uid)).toEqual(['a', 'b'])
+  })
+})
+
+describe('sortByCompletion', () => {
+  const done = (o: Partial<Task> = {}) =>
+    task({ completed: true, status: 'COMPLETED', ...o })
+
+  it('puts the most recently completed first', () => {
+    const ts = [
+      done({ uid: 'old', completed_at: '2026-08-01T09:00:00Z' }),
+      done({ uid: 'new', completed_at: '2026-08-20T09:00:00Z' }),
+      done({ uid: 'mid', completed_at: '2026-08-10T09:00:00Z' }),
+    ]
+    expect(sortByCompletion(ts).map((t) => t.uid)).toEqual(['new', 'mid', 'old'])
+  })
+
+  it('ranks a stamped task above an unstamped one, whatever its due date', () => {
+    // The two groups measure different quantities — a completion instant and a
+    // deadline — so they are never interleaved. A task finished in January still
+    // outranks one that merely fell due in December but recorded no stamp.
+    const stamped = done({ uid: 'stamped', completed_at: '2026-01-01T09:00:00Z',
+      due: '2026-01-01' })
+    const bare = done({ uid: 'bare', completed_at: null, due: '2026-12-31' })
+    expect(sortByCompletion([bare, stamped]).map((t) => t.uid)).toEqual(['stamped', 'bare'])
+  })
+
+  it('falls back to due-descending for unstamped tasks, undated last', () => {
+    // The behaviour this ordering had everywhere before COMPLETED was exposed;
+    // it still has to hold, because a CANCELLED task never gets a stamp and a
+    // foreign client may write STATUS:COMPLETED without one.
+    const ts = [
+      done({ uid: 'undated', completed_at: null, due: null }),
+      done({ uid: 'early', completed_at: null, due: '2026-01-01' }),
+      done({ uid: 'late', completed_at: null, due: '2026-12-31' }),
+    ]
+    expect(sortByCompletion(ts).map((t) => t.uid)).toEqual(['late', 'early', 'undated'])
+  })
+
+  it('treats a cancelled task as unstamped', () => {
+    // Cancelling is not completing, so `ical/edit.py` writes no COMPLETED for it.
+    const cancelled = task({ uid: 'cancelled', cancelled: true, status: 'CANCELLED',
+      completed_at: null, due: '2026-12-31' })
+    const finished = done({ uid: 'finished', completed_at: '2026-01-01T09:00:00Z' })
+    expect(sortByCompletion([cancelled, finished]).map((t) => t.uid))
+      .toEqual(['finished', 'cancelled'])
+  })
+
+  it('is a total order when two tasks share an instant', () => {
+    // Same guarantee `compareTasks` exists for: two rows completed in the same
+    // second must not swap places between renders, whatever order they arrive in.
+    const at = '2026-08-20T09:00:00Z'
+    const a = done({ uid: 'a', summary: 'Alpha', completed_at: at })
+    const b = done({ uid: 'b', summary: 'Bravo', completed_at: at })
+    expect(sortByCompletion([a, b]).map((t) => t.uid))
+      .toEqual(sortByCompletion([b, a]).map((t) => t.uid))
+  })
+
+  it('ignores an unparseable stamp rather than sorting it to the top', () => {
+    // NaN compares false against everything, so an unusable value has to drop to
+    // the fallback group instead of poisoning the comparator.
+    const bad = done({ uid: 'bad', completed_at: 'not a date', due: '2026-01-01' })
+    const good = done({ uid: 'good', completed_at: '2026-01-01T09:00:00Z' })
+    expect(sortByCompletion([bad, good]).map((t) => t.uid)).toEqual(['good', 'bad'])
+  })
+
+  it('returns a new array and leaves the input alone', () => {
+    const ts = [
+      done({ uid: 'a', completed_at: '2026-01-01T09:00:00Z' }),
+      done({ uid: 'b', completed_at: '2026-08-01T09:00:00Z' }),
+    ]
+    const out = sortByCompletion(ts)
+    expect(out).not.toBe(ts)
+    expect(ts.map((t) => t.uid)).toEqual(['a', 'b'])
+    expect(out.map((t) => t.uid)).toEqual(['b', 'a'])
   })
 })

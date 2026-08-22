@@ -84,6 +84,18 @@ def init_db(conn: sqlite3.Connection) -> None:
         # scoped delete, so no rebuild is needed; they pick up a rowid the next
         # time they are upserted.
         conn.execute("ALTER TABLE items ADD COLUMN fts_rowid INTEGER")
+    day_cols = {r["name"] for r in conn.execute("PRAGMA table_info(day_plan)")}
+    if "habit_id" not in day_cols:
+        # Every entry written before habits existed keeps NULL, which is exactly
+        # what "no rule minted this" means — nothing to backfill.
+        #
+        # This ALTER and `service._day_entry_dto`'s `row["habit_id"]` are ONE
+        # change and must ship together. sqlite3.Row raises IndexError for a
+        # column the query did not return, and IndexError is outside the whole
+        # error taxonomy app.py maps — so a build carrying the DTO line without
+        # this block answers 500 to every read of every day, not just the days
+        # holding a habit. Upgrading in the other order is merely inert.
+        conn.execute("ALTER TABLE day_plan ADD COLUMN habit_id TEXT")
 
 
 # ── collections ──────────────────────────────────────────────────────────────
@@ -625,6 +637,303 @@ def bookings_count_by_link(conn: sqlite3.Connection) -> dict[str, int]:
         r["link_token"]: r["n"]
         for r in conn.execute("SELECT link_token, COUNT(*) AS n FROM bookings GROUP BY link_token")
     }
+
+
+# ── day plan (sidecar-class; see schema.sql) ─────────────────────────────────
+#
+# Two tables, one idea: `day_plan` holds the entries and `day_plan_opened`
+# records that a day was snapshotted at all, so "opened and emptied" is
+# distinguishable from "never opened". Nothing here commits: like the cache
+# helpers above, these run inside whatever transaction the caller opened (the
+# service wraps a snapshot build in `tx`, because a half-written plan with no
+# marker would be re-snapshotted on the next open and end up duplicated).
+
+# The day's reading order. `position IS NULL` first in the key so unpositioned
+# rows TRAIL rather than lead — the same trick as get_collections' `ord IS NULL`
+# — then created_at, then entry_id. All three are needed for a stable read:
+# created_at is only millisecond-resolution, so the rows of one snapshot can
+# share a value, and without the final tie-break two entries would be free to
+# swap places between two reads of the same unchanged day.
+_DAY_ORDER = "position IS NULL, position, created_at, entry_id"
+
+
+def get_day_entries(conn: sqlite3.Connection, day: str) -> list[sqlite3.Row]:
+    """Every entry on a day, in reading order — dropped ones included.
+
+    A dropped entry is part of the day's record (it says the owner decided NOT
+    to do this), so filtering happens in the caller that has a reason to, never
+    here."""
+    return list(
+        conn.execute(
+            # _DAY_ORDER is a module constant — not caller input.
+            f"SELECT * FROM day_plan WHERE day=? ORDER BY {_DAY_ORDER}",  # nosec B608
+            (day,),
+        )
+    )
+
+
+def day_is_opened(conn: sqlite3.Connection, day: str) -> bool:
+    return conn.execute(
+        "SELECT 1 FROM day_plan_opened WHERE day=?", (day,)
+    ).fetchone() is not None
+
+
+def mark_day_opened(conn: sqlite3.Connection, day: str) -> None:
+    """Record that this day has been planned. INSERT OR IGNORE, so re-opening a
+    day keeps the ORIGINAL opened_at: the column answers "when was this day
+    first planned", and a re-open overwriting it would erase that."""
+    conn.execute("INSERT OR IGNORE INTO day_plan_opened (day) VALUES (?)", (day,))
+
+
+def insert_day_entry(
+    conn: sqlite3.Connection,
+    *,
+    day: str,
+    entry_id: str,
+    kind: str,
+    source: str,
+    collection_href: str | None = None,
+    uid: str | None = None,
+    title: str | None = None,
+    position: float | None = None,
+    habit_id: str | None = None,
+) -> sqlite3.Row:
+    """Add one entry to a day and return the stored row.
+
+    Returned rather than echoed back from the arguments, so the caller's DTO
+    carries the DB's own `created_at` (the schema default) instead of a second,
+    slightly different, idea of now.
+
+    `habit_id` names the rule that minted a kind='habit' occurrence, and is NULL
+    for everything else. The occurrence also gets its own `title` — a copy of the
+    habit's, taken at insert time — because the row has to keep reading correctly
+    after the rule is renamed or deleted.
+    """
+    conn.execute(
+        """INSERT INTO day_plan (day, entry_id, kind, collection_href, uid, title,
+                                 source, position, habit_id)
+           VALUES (?,?,?,?,?,?,?,?,?)""",
+        (day, entry_id, kind, collection_href, uid, title, source, position,
+         habit_id),
+    )
+    return find_day_entry(conn, day, entry_id=entry_id)
+
+
+_DAY_ENTRY_FIELDS = {"done_at", "dropped_at", "position"}
+
+
+def update_day_entry(
+    conn: sqlite3.Connection, day: str, entry_id: str, **fields: object
+) -> sqlite3.Row | None:
+    """Patch an entry's mutable columns; None for an entry_id this day doesn't
+    have (the route turns that into a 404).
+
+    An explicit None VALUE clears the column — that is how "done" is undone —
+    so unlike `set_sidecar`'s caller the route must pass only the fields it
+    actually means to change, and PATCH's unsent fields never arrive here.
+
+    One UPDATE for all of them rather than the statement-per-field loop
+    `set_sidecar` and `update_booking_link` use. Those need a transaction to be
+    atomic (the connection is in autocommit — see `tx`); a single statement is
+    atomic on its own, and this one runs on the PATCH path where there is no
+    other reason to open one.
+
+    `rowcount` is what distinguishes "no such entry" from a patch that changed
+    nothing: SQLite counts the rows the statement PROCESSED, not the ones whose
+    values differed, so re-ticking an already-ticked entry still reports 1 and
+    only a missing row reports 0. Were it the other way round, a client sending
+    the state it already believes in — which is exactly what a retry does —
+    would be told its entry is gone.
+    """
+    bad = set(fields) - _DAY_ENTRY_FIELDS
+    if bad:
+        raise ValueError(f"unknown day entry fields: {bad}")
+    if fields:
+        # The column names are vetted against _DAY_ENTRY_FIELDS above — not
+        # attacker input; the values are bound.
+        assignments = ", ".join(f"{k}=?" for k in fields)
+        cur = conn.execute(
+            f"UPDATE day_plan SET {assignments} WHERE day=? AND entry_id=?",  # nosec B608
+            (*fields.values(), day, entry_id),
+        )
+        if not cur.rowcount:
+            return None
+    return find_day_entry(conn, day, entry_id=entry_id)
+
+
+def get_day_range(
+    conn: sqlite3.Connection, from_day: str, to_day: str
+) -> dict[str, list[sqlite3.Row]]:
+    """Every planned day in [from_day, to_day) → its entries, oldest day first.
+
+    `to_day` is EXCLUSIVE, matching the calendar-window convention the rest of
+    the app uses. Days that were never opened are absent rather than present and
+    empty: absence is exactly what a caller renders as "not planned yet", and
+    materialising a row per unplanned day would make a six-month query mostly
+    padding. ISO day keys compare correctly as strings, so the window is a plain
+    range predicate over an indexed column in both tables (day is the marker's
+    primary key, and idx_day_plan_day covers the entries).
+
+    A day carrying entries but NO marker row cannot be produced by this module —
+    every writer marks the day — but it is still listed if the DB somehow holds
+    one (a hand edit, a partial restore). Dropping those entries from the read
+    would make real rows invisible while they went on occupying their day.
+    """
+    out: dict[str, list[sqlite3.Row]] = {
+        r["day"]: []
+        for r in conn.execute(
+            "SELECT day FROM day_plan_opened WHERE day >= ? AND day < ? ORDER BY day",
+            (from_day, to_day),
+        )
+    }
+    for row in conn.execute(
+        # `day` leads the key here so the rows arrive grouped by day, each
+        # group already in reading order.
+        f"SELECT * FROM day_plan WHERE day >= ? AND day < ? "  # nosec B608
+        f"ORDER BY day, {_DAY_ORDER}",
+        (from_day, to_day),
+    ):
+        out.setdefault(row["day"], []).append(row)
+    return dict(sorted(out.items()))
+
+
+def find_day_entry(
+    conn: sqlite3.Connection,
+    day: str,
+    *,
+    entry_id: str | None = None,
+    collection_href: str | None = None,
+    uid: str | None = None,
+    title: str | None = None,
+) -> sqlite3.Row | None:
+    """One entry on a day, looked up three ways: by its own `entry_id`, by the
+    task it names (`collection_href` + `uid`), or by a note's exact `title`.
+    Exactly one of the three has to be supplied.
+
+    The task and title lookups are what make adding an entry idempotent, and
+    they skip DROPPED rows: a task the owner dropped this morning has to be
+    addable again this afternoon, and answering with the dropped row would look
+    to the client like the add silently did nothing. The `entry_id` lookup does
+    not filter — it is identity, and the primary key already guarantees at most
+    one row, dropped or not.
+
+    There is deliberately NO habit arm, and the title arm deliberately keeps its
+    `kind='note'` filter. A habit OCCURRENCE is minted by a rule, never handed in
+    by a client (`service.add_day_entry` refuses kind='habit' and says why), so
+    nothing needs to look one up here — and the top-up that does need to know
+    which habits already have a row on a day reads `habit_id` off the day's rows
+    it is already holding, where a DROPPED row correctly counts as present.
+    Dropping the `kind='note'` filter to make the title arm serve habits too
+    would break the note path instead: an occurrence copies its habit's title
+    onto the row, so adding a note whose text matches one would be answered with
+    the habit occurrence, and the note would silently never be created.
+    """
+    where = ["day=?"]
+    params: list[object] = [day]
+    if entry_id is not None:
+        where.append("entry_id=?")
+        params.append(entry_id)
+    elif uid is not None and collection_href is not None:
+        where.append("collection_href=? AND uid=?")
+        params += [collection_href, uid]
+    elif title is not None:
+        where.append("kind='note' AND title=?")
+        params.append(title)
+    else:
+        raise ValueError("find_day_entry needs entry_id, collection_href+uid, or title")
+    if entry_id is None:
+        where.append("dropped_at IS NULL")
+    return conn.execute(
+        # Every fragment above is a literal in this function — not caller input.
+        f"SELECT * FROM day_plan WHERE {' AND '.join(where)} "  # nosec B608
+        f"ORDER BY {_DAY_ORDER} LIMIT 1",
+        params,
+    ).fetchone()
+
+
+# ── habits (SIDECAR: the rules that put entries on a day; see schema.sql) ────
+#
+# A habit is a RULE. It owns no occurrences: those are ordinary `day_plan` rows
+# written by `insert_day_entry` like any other entry, which is why nothing in
+# this section reads or writes day_plan at all. Deleting a habit therefore
+# CANNOT touch a past day — there is no cascade to write, and no sweep of
+# "orphaned" occurrences to be tempted into writing, because a dangling
+# habit_id beside a copied title is a complete record on its own.
+
+_HABIT_FIELDS = {"title", "days", "paused_at", "position"}
+
+# Position first, NULLs last, then created_at — the same "unpositioned rows
+# TRAIL" shape as _DAY_ORDER, and for the same reason: a habit that has never
+# been dragged must not jump ahead of the ones that have. created_at breaks the
+# tie so two habits made in the same millisecond still read in a fixed order.
+_HABIT_ORDER = "position IS NULL, position, created_at, id"
+
+
+def create_habit(conn: sqlite3.Connection, id: str, fields: dict) -> sqlite3.Row:
+    bad = set(fields) - _HABIT_FIELDS
+    if bad:
+        raise ValueError(f"unknown habit fields: {bad}")
+    cols = ["id", *fields.keys()]
+    conn.execute(
+        # cols are vetted against _HABIT_FIELDS above — not attacker input.
+        f"INSERT INTO habits ({', '.join(cols)}) "  # nosec B608
+        f"VALUES ({', '.join('?' * len(cols))})",
+        (id, *fields.values()),
+    )
+    return get_habit(conn, id)
+
+
+def get_habit(conn: sqlite3.Connection, id: str) -> sqlite3.Row | None:
+    return conn.execute("SELECT * FROM habits WHERE id=?", (id,)).fetchone()
+
+
+def list_habits(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Every habit in display order, PAUSED ONES INCLUDED.
+
+    Filtering paused rows out here would hide them from the screen that exists
+    to un-pause them. The one caller that must skip them — the snapshot — says
+    so itself, next to the rest of its scheduling rule."""
+    # _HABIT_ORDER is a module constant — not caller input.
+    return list(conn.execute(f"SELECT * FROM habits ORDER BY {_HABIT_ORDER}"))  # nosec B608
+
+
+def update_habit(
+    conn: sqlite3.Connection, id: str, fields: dict
+) -> sqlite3.Row | None:
+    """Patch a habit's columns; None for an id that does not exist (the route
+    turns that into a 404).
+
+    One UPDATE for all the fields rather than the statement-per-field loop
+    `update_booking_link` uses, for the reason `update_day_entry` gives: a single
+    statement is atomic on its own, so an autocommit connection needs no
+    transaction around it and a rejected value cannot leave earlier fields
+    applied."""
+    bad = set(fields) - _HABIT_FIELDS
+    if bad:
+        raise ValueError(f"unknown habit fields: {bad}")
+    if fields:
+        # The column names are vetted against _HABIT_FIELDS above — not attacker
+        # input; the values are bound.
+        assignments = ", ".join(f"{k}=?" for k in fields)
+        cur = conn.execute(
+            f"UPDATE habits SET {assignments} WHERE id=?",  # nosec B608
+            (*fields.values(), id),
+        )
+        if not cur.rowcount:
+            return None
+    return get_habit(conn, id)
+
+
+def delete_habit(conn: sqlite3.Connection, id: str) -> bool:
+    """Remove the RULE. One statement, and it names one table on purpose.
+
+    The occurrences this habit already put on past days stay exactly where they
+    are, with the title they copied at the time and a now-dangling `habit_id`.
+    That is the record of what the owner planned, and no "tidy up orphaned
+    occurrences" sweep may ever be added here: it would erase precisely the
+    history this design keeps. Nothing in this app DELETEs from day_plan at all
+    (dropping an entry stamps `dropped_at`), and that must stay true."""
+    return conn.execute("DELETE FROM habits WHERE id=?", (id,)).rowcount > 0
 
 
 # ── search / queries ─────────────────────────────────────────────────────────
