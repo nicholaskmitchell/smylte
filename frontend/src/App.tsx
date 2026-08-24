@@ -18,6 +18,7 @@ import { isSessionTtl, nextSessionTtl, sessionLabel } from './session'
 import {
   DEFAULT_TIME_FORMAT, isTimeFormat, nextTimeFormat, timeFormatLabel, type TimeFormat,
 } from './time'
+import { sanitizeCapacityByWeekday } from './capacity'
 import { TimeFormatProvider } from './timeformat'
 import {
   DEFAULT_TAB_ORDER, DEFAULT_TAB_START, TAB_LABELS, cacheTab, isTab, readCachedTab,
@@ -65,6 +66,12 @@ export function App() {
   const [collapsedTasks, setCollapsedTasks] = useState<string[]>([])
   const [showCompleted, setShowCompleted] = useState(false)
   const [timeFormat, setTimeFormat] = useState<TimeFormat>(DEFAULT_TIME_FORMAT)
+  // How long a day is expected to hold. Null is "never said", and it stays null
+  // rather than defaulting to an assumed working day — see
+  // `service._effective_capacity`, which every reader of this agrees with.
+  const [dayCapacity, setDayCapacity] = useState<number | null>(null)
+  const [dayCapacityByWeekday, setDayCapacityByWeekday] =
+    useState<Record<string, number>>({})
   const [homeTz, setHomeTz] = useState('')     // '' = fall back to each link's zone
   // An allowlist, not a hidden-set: no task list is drawn on the calendar until
   // it is opted in (see the SettingsPatch comment for why this one is inverted).
@@ -204,6 +211,19 @@ export function App() {
         }
         if (typeof s.show_completed_tasks === 'boolean') setShowCompleted(s.show_completed_tasks)
         if (isTimeFormat(s.time_format)) setTimeFormat(s.time_format)
+        // Treated as hand-edited, like every other settings value here. A
+        // non-number default is dropped to null rather than coerced: a capacity
+        // read out of junk would be a number nobody gave, which is the one
+        // thing this feature must not produce.
+        // A negative stored value is the CLEAR sentinel at rest, and reads back
+        // as "never said" — the same answer the server's resolution gives it.
+        setDayCapacity(
+          typeof s.day_capacity_minutes === 'number'
+            && Number.isFinite(s.day_capacity_minutes)
+            && s.day_capacity_minutes >= 0
+            ? s.day_capacity_minutes
+            : null)
+        setDayCapacityByWeekday(sanitizeCapacityByWeekday(s.day_capacity_by_weekday))
         if (typeof s.home_timezone === 'string') setHomeTz(s.home_timezone)
         if (Array.isArray(s.calendar_task_lists)) {
           setCalTaskLists(s.calendar_task_lists.filter((x) => typeof x === 'string'))
@@ -287,6 +307,14 @@ export function App() {
     'tab_order', 'session_ttl_s', 'home_timezone', 'appearance',
     'sidebar_collapsed', 'show_completed_tasks', 'calendar_show_done_tasks',
     'calendar_fit', 'time_format',
+    // The per-weekday map is READ-MODIFY-WRITE: the section rebuilds the whole
+    // object to change one weekday, and `store.update_settings` merges
+    // shallowly — so writing it after a failed read would replace the account's
+    // real map with one built from the empty default. `day_capacity_minutes` is
+    // deliberately NOT here, for the same reason `start_tab` is not: it carries
+    // the value just typed into a field, so what is written is what was asked
+    // for whether or not the read landed.
+    'day_capacity_by_weekday',
   ] as const
 
   const saveSettings = useCallback((patch: Settings) => {
@@ -466,6 +494,23 @@ export function App() {
 
   // 12- or 24-hour clock. Two values, so the row cycles like the theme rather
   // than offering a picker.
+  const changeDayCapacity = useCallback((next: number | null) => {
+    setDayCapacity(next)
+    // -1 CLEARS, the same sentinel this feature uses on every other surface.
+    // It is needed here specifically because `store.update_settings` merges
+    // shallowly and SKIPS None — so sending null would leave the old value in
+    // place and the owner could never get back to "never said" once they had
+    // said something. 0 cannot be the clear: "I do not work today" is a real
+    // capacity, and the whole point of the null case is that it is different
+    // from a zero-length day.
+    saveSettings({ day_capacity_minutes: next ?? -1 })
+  }, [])
+
+  const changeDayCapacityByWeekday = useCallback((next: Record<string, number>) => {
+    setDayCapacityByWeekday(next)
+    saveSettings({ day_capacity_by_weekday: next })
+  }, [])
+
   const toggleTimeFormat = useCallback(() => {
     const next = nextTimeFormat(timeFormat)
     setTimeFormat(next)
@@ -598,6 +643,9 @@ export function App() {
             tabOrder={tabOrder} startTab={startTab}
             onTabOrderChange={changeTabOrder} onStartTabChange={changeStartTab}
             timeFormat={timeFormat} onToggleTimeFormat={toggleTimeFormat}
+            dayCapacity={dayCapacity} onDayCapacityChange={changeDayCapacity}
+            dayCapacityByWeekday={dayCapacityByWeekday}
+            onDayCapacityByWeekdayChange={changeDayCapacityByWeekday}
             homeTz={homeTz} onToggleHomeTz={toggleHomeTz}
             calFit={calFit} onToggleCalFit={toggleCalFit}
             archivedCals={archivedCals} onArchivedCalsChange={changeArchivedCals}

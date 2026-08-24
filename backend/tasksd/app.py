@@ -655,7 +655,13 @@ class SettingsPatch(BaseModel):
     # Bounded at a day on both, for the reason every int here is bounded: an
     # unbounded value reaches SQLite as an OverflowError, which is outside the
     # taxonomy this module maps and so a 500 rather than a 422.
-    day_capacity_minutes: int | None = Field(default=None, ge=0, le=1440)
+    # `ge=-1` because -1 is the CLEAR sentinel, the same one this feature uses
+    # on every other surface. It is needed here specifically: `update_settings`
+    # merges shallowly and skips None, so without a sentinel an owner who once
+    # set a default could never get back to "never said". 0 cannot be the clear
+    # — "I do not work today" is a real capacity, and the null case existing at
+    # all is what stops the app inventing a working day for people.
+    day_capacity_minutes: int | None = Field(default=None, ge=-1, le=1440)
     day_capacity_by_weekday: dict[str, int] | None = Field(default=None, max_length=7)
 
     @field_validator("day_capacity_by_weekday")

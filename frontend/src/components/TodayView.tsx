@@ -191,7 +191,9 @@ import {
 } from '../api'
 import { useCalendarData, useTaskData } from '../data'
 import { useEscape } from '../hooks'
-import { addDays, cssColor, dayKey, isOverdue, makeGuard, textDir, ymd } from '../util'
+import {
+  addDays, cssColor, dayKey, isOverdue, makeGuard, parseDate, textDir, ymd,
+} from '../util'
 import { fmtClock, fmtDue, fmtDuration } from '../time'
 import { useTimeFormat } from '../timeformat'
 import { sortByCompletion, sortTasks, taskKey } from '../order'
@@ -1388,6 +1390,44 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
   // the number of rows under it would be unreadable.
   const openCount = (entries ?? []).filter((e) => !rowDone(e, taskFor(e), isToday)).length
 
+  // ── how full the day is ──────────────────────────────────────────────────
+  //
+  // Over the LIVE rows, so a dropped entry costs the day nothing — declining
+  // something is how you get back under, and a total that kept counting it
+  // would make the one control that helps useless.
+  //
+  // Rows with no estimate contribute NOTHING rather than some assumed default.
+  // That leaves the total honestly low on a half-estimated day, which is the
+  // right direction: a number that guessed would be a number nobody could act
+  // on, and `unestimated` below says how much of the day it is silent about.
+  const planned = useMemo(
+    () => (entries ?? []).reduce((n, e) => n + (e.estimate_minutes ?? 0), 0), [entries])
+  const unestimated = useMemo(
+    () => (entries ?? []).filter((e) => e.estimate_minutes == null).length, [entries])
+
+  /** Minutes of calendar on this day. Shown BESIDE the capacity and never
+   *  subtracted from it: an event is committed time, but whether a given one is
+   *  work is a judgement the app does not get to make on the owner's behalf —
+   *  lunch and the dentist are on the same calendar as the standup. So the
+   *  collision is made visible and the arithmetic is left alone. */
+  const meetingMinutes = useMemo(() => todaysEvents.reduce((n, ev) => {
+    // An all-day event is a LABEL on the day, not a claim on its hours — "Anna's
+    // birthday" is not eight hours of meeting — so it is skipped rather than
+    // counted as the whole day and swamping the figure.
+    if (ev.all_day || !ev.start || !ev.end) return n
+    // Through `parseDate`, like every other reader of an event's times in this
+    // app: a bare date and a datetime are different shapes, and `new Date()`
+    // reads the first as UTC midnight, which is the previous day for anyone west
+    // of it.
+    const start = parseDate(ev.start).getTime()
+    const end = parseDate(ev.end).getTime()
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return n
+    return n + Math.round((end - start) / 60000)
+  }, 0), [todaysEvents])
+
+  const capacity = plan && plan.day === day ? plan.capacity : null
+  const over = capacity != null && planned > capacity
+
   // The habits sheet edits RULES, so it is not part of any one day and does not
   // live in the day's state. It is opened from the header of the tab the habits
   // actually show up on rather than from Settings: the moment you want to change
@@ -1737,6 +1777,57 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
             </div>
           )}
         </form>
+      )}
+
+      {/* HOW FULL THE DAY IS. Present whenever the day has a capacity to be read
+          against — which is any day the owner, or their weekday default, has
+          given one — and absent entirely otherwise. An account that has never
+          stated a capacity sees nothing here at all, because there is no honest
+          number to put in it and inventing an eight-hour day for them is the
+          one thing this feature must not do.
+
+          On the day itself rather than only inside the ritual, because the
+          moment it earns its keep is 2pm, when you are deciding whether to take
+          one more thing on — which is exactly when nobody is running a ritual. */}
+      {capacity != null && entries !== null && (
+        <div className={`today-load ${over ? 'over' : ''}`}>
+          <div className="today-load-line">
+            <span className="today-load-fig mono">
+              {fmtDuration(planned)} of {fmtDuration(capacity)}
+            </span>
+            {meetingMinutes > 0 && (
+              // Beside the figure, never inside it. See `meetingMinutes`.
+              <span className="today-load-cal mono">
+                · {fmtDuration(meetingMinutes)} on the calendar
+              </span>
+            )}
+            {unestimated > 0 && (
+              // What the total is silent about. Without this the number reads as
+              // the whole day when it may be a third of it, and quietly under-
+              // reporting is worse than not reporting.
+              <span className="today-load-rest mono">
+                · {unestimated} not estimated
+              </span>
+            )}
+          </div>
+          {/* Decorative: the figure above already says it in words, and a bar
+              that announced itself would say the same thing twice to a screen
+              reader. */}
+          <div className="today-load-bar" aria-hidden="true">
+            <div className="today-load-fill"
+              style={{ width: `${Math.min(100, capacity ? (planned / capacity) * 100 : 0)}%` }} />
+          </div>
+          {over && (
+            // Said in WORDS as well as in colour, because the colour is the half
+            // that does not survive a screen reader, a greyscale screenshot or a
+            // custom theme. `role="status"` and not `alert`: this is a fact about
+            // a day you can still change, not an error.
+            <p className="today-load-over" role="status">
+              That is {fmtDuration(planned - capacity)} more than you said you
+              would work.
+            </p>
+          )}
+        </div>
       )}
 
       <div className="scroll">
