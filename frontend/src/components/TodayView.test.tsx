@@ -1623,6 +1623,32 @@ describe('<TodayView> what the add box promises', () => {
     expect(screen.getByRole('button', { name: 'Add as note' })).toBeInTheDocument()
   })
 
+  it('forgets the chosen kind when the line is abandoned', async () => {
+    // Emptying the box abandons the line, and the pin was a statement about
+    // that line. Typing ON is a different thing and keeps it — see the test
+    // above.
+    const user = setup()
+    const box = screen.getByLabelText('Add to today')
+    await user.type(box, 'gym at 7')
+    await user.click(await screen.findByRole('button', { name: 'Make it a note' }))
+    expect(fateChip()!.textContent).toMatch(/Note/)
+
+    await user.clear(box)
+    await user.type(box, 'gym at 8')
+    await waitFor(() => expect(fateChip()?.textContent).toMatch(/Task/))
+  })
+
+  it('names the list once — in the picker when there is one', async () => {
+    m.lists.mockResolvedValue([list, otherList])
+    const user = setup()
+    await user.type(screen.getByLabelText('Add to today'), 'gym at 7')
+    await screen.findByLabelText('List for the new task')
+
+    // The picker is naming it, so the sentence above does not say it again.
+    expect(fateChip()!.textContent).not.toMatch(/on Work/)
+    expect(fateChip()!.textContent).toMatch(/other apps/)
+  })
+
   it('forgets the chosen kind once the line is committed', async () => {
     const user = setup()
     await user.type(screen.getByLabelText('Add to today'), 'gym at 7')
@@ -1812,9 +1838,33 @@ describe('<TodayView> telling the three kinds apart', () => {
     setup()
     await screen.findByText('Ship it')
 
-    const mark = document.querySelector('.today-kind-mark')
-    expect(mark).toHaveClass('task')
-    expect((mark as HTMLElement).style.background).toBe('')
+    const mark = document.querySelector('.today-kind-mark')!
+    expect(mark.getAttribute('data-kind')).toBe('task')
+    expect((mark.querySelector('.today-kind-box') as HTMLElement).style.background).toBe('')
+  })
+
+  it('never wears a bare kind name as a class', () => {
+    // A SCAR. The first cut spelled the class list `today-kind-mark ${kind}`,
+    // which put a bare `task` class on every task row — and `.task` is the
+    // Tasks pane's ROW rule in this same global stylesheet, three hundred lines
+    // up. The mark inherited `display: flex` and the row's gutter padding and
+    // painted as a 52x19 slab instead of a 7px square. Every test passed: jsdom
+    // applies no layout, so nothing in this file could have seen it, and it
+    // took running the app to find.
+    //
+    // Asserted on the SOURCE rather than on a render, because that is where the
+    // mistake lives and where it would come back — a template literal dropping
+    // an arbitrary string into a global class namespace.
+    // Matched on the ATTRIBUTE rather than on the string, so the account of the
+    // mistake in TodayRow's own comment — which quotes the bad spelling — does
+    // not trip its own test.
+    const src = readFileSync(resolve(process.cwd(), 'src/components/TodayView.tsx'), 'utf8')
+    expect(src).not.toMatch(/className=\{`today-kind-mark/)
+    for (const k of ['task', 'note', 'habit']) {
+      expect(src).not.toContain(`className="today-kind-mark ${k}"`)
+    }
+    // And the attribute that replaced it is actually there.
+    expect(src).toContain('data-kind={entry.kind}')
   })
 
   it('wears the list colour when there is one', async () => {
@@ -1825,7 +1875,7 @@ describe('<TodayView> telling the three kinds apart', () => {
     setup()
     await screen.findByText('Ship it')
 
-    expect((document.querySelector('.today-kind-mark') as HTMLElement).style.background)
+    expect((document.querySelector('.today-kind-box') as HTMLElement).style.background)
       .toBeTruthy()
   })
 
@@ -1870,7 +1920,7 @@ describe('<TodayView> telling the three kinds apart', () => {
     await screen.findByRole('button', { name: /Add Ship it to today/ })
 
     const sug = document.querySelector('.today-sug')!
-    expect(sug.querySelectorAll('.today-kind-mark.task')).toHaveLength(1)
+    expect(sug.querySelectorAll('.today-kind-mark[data-kind="task"]')).toHaveLength(1)
   })
 })
 
