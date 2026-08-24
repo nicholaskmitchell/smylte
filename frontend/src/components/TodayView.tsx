@@ -880,6 +880,13 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
       // `habit_id` is null on everything a client can add: an occurrence is
       // minted by its rule when a day is opened, never posted from here.
       source: 'user', position: null, done_at: null, dropped_at: null, habit_id: null,
+      // Null, even for a task the account has estimated before. The remembered
+      // estimate lives in the sidecar, which only the server has read — so this
+      // row paints unestimated for the length of one round trip and takes the
+      // real answer from the DTO. Guessing here would mean guessing wrong
+      // whenever the sidecar disagreed, and a number that flickers to a
+      // different number is worse than one that arrives a beat late.
+      estimate_minutes: null,
       created_at: new Date().toISOString(),
     }
     setPlan((p) => (p && p.day === on
@@ -904,6 +911,9 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
     const optimistic: DayEntry = {
       entry_id, day: on, kind: 'note', list: null, uid: null, title,
       source: 'user', position: null, done_at: null, dropped_at: null, habit_id: null,
+      // A note has nothing to remember an estimate for it, so this one is not
+      // even provisional — it starts unestimated and the ritual asks.
+      estimate_minutes: null,
       created_at: new Date().toISOString(),
     }
     setPlan((p) => (p && p.day === on

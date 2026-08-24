@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import time
 import uuid
+from datetime import date
 
 import pytest
 from helpers import foreign_raw
@@ -540,6 +541,187 @@ def test_an_entry_survives_its_task_leaving_the_wire(svc):
 
 
 # ── upgrading a database written before habits ───────────────────────────────
+
+# ── estimates ────────────────────────────────────────────────────────────────
+#
+# The rule these pin: the ENTRY is what its day counts, and the estimate on it
+# is a COPY taken when the row was made. What a task, a note or a habit
+# "remembers" only ever decides what the NEXT entry starts at — so re-estimating
+# something today can never rewrite what a finished day said the work would take.
+
+
+def test_an_estimate_is_set_and_cleared_on_the_entry(svc):
+    plan = svc.open_day(DAY, create=True)
+    eid = plan["entries"][0]["entry_id"]
+
+    dto = svc.patch_day_entry(DAY, eid, estimate_minutes=45)
+    assert dto["estimate_minutes"] == 45
+
+    # 0 is a REAL estimate — "not worth counting" — and must survive, which is
+    # why the clear needs a sentinel of its own rather than borrowing falsiness.
+    assert svc.patch_day_entry(DAY, eid, estimate_minutes=0)["estimate_minutes"] == 0
+    # -1 is that sentinel.
+    assert svc.patch_day_entry(DAY, eid, estimate_minutes=-1)["estimate_minutes"] is None
+
+
+def test_estimating_a_task_teaches_the_task_for_next_time(svc):
+    plan = svc.open_day(DAY, create=True)
+    entry = next(e for e in plan["entries"] if e["uid"] == "due-today")
+    svc.patch_day_entry(DAY, entry["entry_id"], estimate_minutes=25)
+
+    # The sidecar learned it, so a later day starts from this answer instead of
+    # asking again. This is the column that has been writable and unread since
+    # the sidecar table was created.
+    side = store.get_sidecar(svc._conn, LIST_A, "due-today")
+    assert side["estimated_minutes"] == 25
+    # And it reaches the task DTO, which nothing read it through before.
+    assert svc.get_task(LIST_A, "due-today")["estimated_minutes"] == 25
+
+
+def test_a_new_entry_starts_from_what_the_task_remembers(svc):
+    store.set_sidecar(svc._conn, LIST_B, "someday", estimated_minutes=90)
+    svc.open_day(DAY, create=True)
+    dto = svc.add_day_entry(
+        DAY, entry_id="hand", kind="task", list_id="home", uid="someday")
+    assert dto["estimate_minutes"] == 90
+
+
+def test_a_note_starts_unestimated_because_nothing_remembers_one(svc):
+    svc.open_day(DAY, create=True)
+    dto = svc.add_day_entry(DAY, entry_id="jot", kind="note", title="Ring the bank")
+    assert dto["estimate_minutes"] is None
+
+
+def test_a_snapshot_row_starts_from_what_the_task_remembers(svc):
+    store.set_sidecar(svc._conn, LIST_A, "due-today", estimated_minutes=15)
+    plan = svc.open_day(DAY, create=True)
+    entry = next(e for e in plan["entries"] if e["uid"] == "due-today")
+    assert entry["estimate_minutes"] == 15
+
+
+def test_re_estimating_a_task_does_not_rewrite_a_day_already_planned(svc):
+    """THE POINT OF COPYING RATHER THAN JOINING.
+
+    A day is a snapshot of what was intended at the time, and how long the owner
+    thought something would take is part of that. Reading the estimate through a
+    join would make today's re-think retroactively edit every past day the task
+    ever appeared on.
+    """
+    store.set_sidecar(svc._conn, LIST_A, "due-today", estimated_minutes=15)
+    svc.open_day(DAY, create=True)
+
+    store.set_sidecar(svc._conn, LIST_A, "due-today", estimated_minutes=240)
+    entry = next(e for e in svc.open_day(DAY, create=False)["entries"]
+                 if e["uid"] == "due-today")
+    assert entry["estimate_minutes"] == 15
+
+
+def test_a_carried_entry_keeps_the_estimate_it_was_carried_with(svc):
+    svc.open_day(PREV, create=True)
+    chosen = svc.add_day_entry(
+        PREV, entry_id="c1", kind="note", title="Finish the draft")
+    svc.patch_day_entry(PREV, chosen["entry_id"], estimate_minutes=50)
+
+    carried = next(e for e in svc.open_day(DAY, create=True)["entries"]
+                   if e["title"] == "Finish the draft")
+    # A note has no task to remember for it, so the row it carried from is the
+    # only place yesterday's answer exists. Losing it here would make the ritual
+    # ask again every morning the jot survived.
+    assert carried["source"] == "carried"
+    assert carried["estimate_minutes"] == 50
+
+
+def test_a_habit_occurrence_copies_the_estimate_off_its_rule(svc):
+    # TODAY rather than this file's fixed DAY: minting is gated on pastness
+    # (`_habit_minting_allowed`), because an occurrence's row is the only record
+    # of it anywhere and backfilling one into a finished day is a forgery. So a
+    # test about occurrences has to ask for a day that may still have them.
+    today = date.today().isoformat()
+    svc.create_habit(title="Read", estimate_minutes=20)
+    entry = next(e for e in svc.open_day(today, create=True)["entries"]
+                 if e["kind"] == "habit")
+    assert entry["estimate_minutes"] == 20
+
+    # Re-estimating the RULE leaves the day that already ran it alone, exactly as
+    # renaming it leaves that day's title alone.
+    hb = svc.list_habits()[0]
+    svc.update_habit(hb["id"], estimate_minutes=90)
+    again = next(e for e in svc.open_day(today, create=False)["entries"]
+                 if e["kind"] == "habit")
+    assert again["estimate_minutes"] == 20
+
+
+def test_estimating_a_note_teaches_no_task(svc):
+    svc.open_day(DAY, create=True)
+    dto = svc.add_day_entry(DAY, entry_id="jot", kind="note", title="Ring the bank")
+    svc.patch_day_entry(DAY, dto["entry_id"], estimate_minutes=10)
+    # Nothing to write through to, and nothing written: a note names no task.
+    assert store.get_sidecar(svc._conn, LIST_A, "due-today") is None
+
+
+def test_an_older_database_gains_the_estimate_columns(tmp_path):
+    """The second and third hand-written ALTERs, on the same rule as habit_id.
+
+    Estimates arrived after both `day_plan` and `habits` existed, so the same
+    trap applies to both: `_day_entry_dto` reads `row["estimate_minutes"]` and
+    `_habit_dto` reads it off the rule, and sqlite3.Row answers IndexError for a
+    column the query did not return — a 500 on every read of every day and of
+    the habits list, not a degraded one.
+
+    Hand-built pre-estimate tables rather than a captured file, so this keeps
+    testing the upgrade rather than a fixture that ages out.
+    """
+    conn = store.connect(str(tmp_path / "old.db"))
+    conn.executescript(
+        """CREATE TABLE day_plan (
+               day             TEXT NOT NULL,
+               entry_id        TEXT NOT NULL,
+               kind            TEXT NOT NULL,
+               collection_href TEXT,
+               uid             TEXT,
+               title           TEXT,
+               source          TEXT NOT NULL,
+               habit_id        TEXT,
+               position        REAL,
+               done_at         TEXT,
+               dropped_at      TEXT,
+               created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+               PRIMARY KEY (day, entry_id)
+           );
+           CREATE TABLE habits (
+               id         TEXT PRIMARY KEY,
+               title      TEXT NOT NULL,
+               days       TEXT NOT NULL DEFAULT '',
+               paused_at  TEXT,
+               position   REAL,
+               created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+           );
+           INSERT INTO day_plan (day, entry_id, kind, title, source)
+           VALUES ('2026-08-21', 'legacy', 'note', 'Written before estimates', 'user');
+           INSERT INTO habits (id, title, days) VALUES ('hb-old', 'Read', '');"""
+    )
+    store.init_db(conn)
+    assert "estimate_minutes" in {
+        r["name"] for r in conn.execute("PRAGMA table_info(day_plan)")}
+    assert "estimate_minutes" in {
+        r["name"] for r in conn.execute("PRAGMA table_info(habits)")}
+
+    # Both pre-existing rows read through the REAL DTOs, unestimated. NULL is
+    # the honest answer — nobody said how long these take — and it is what keeps
+    # them out of the day's total rather than counting them as zero-length work.
+    row = store.find_day_entry(conn, "2026-08-21", entry_id="legacy")
+    dto = TaskService._day_entry_dto(row)
+    assert dto["estimate_minutes"] is None
+    assert dto["title"] == "Written before estimates"
+
+    habit = next(iter(store.list_habits(conn)))
+    assert TaskService._habit_dto(habit)["estimate_minutes"] is None
+
+    # Idempotent: init_db runs on every start, and the second pass must not try
+    # to add either column again (SQLite has no ADD COLUMN IF NOT EXISTS).
+    store.init_db(conn)
+    conn.close()
+
 
 def test_an_older_database_gains_the_habit_id_column(tmp_path):
     """The hand-written ALTER in `store.init_db`, and why it is not optional.

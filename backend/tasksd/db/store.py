@@ -96,6 +96,26 @@ def init_db(conn: sqlite3.Connection) -> None:
         # this block answers 500 to every read of every day, not just the days
         # holding a habit. Upgrading in the other order is merely inert.
         conn.execute("ALTER TABLE day_plan ADD COLUMN habit_id TEXT")
+    if "estimate_minutes" not in day_cols:
+        # Every entry written before estimates existed keeps NULL, which is
+        # exactly what "nobody said how long this would take" means — and the
+        # day's total is over the rows that HAVE one, so an un-upgraded plan
+        # simply totals what it can rather than reading as a day of zero-length
+        # work. Nothing to backfill, and no sensible value to backfill with.
+        #
+        # Same one-change rule as `habit_id` above, for the same mechanical
+        # reason: `service._day_entry_dto` reads `row["estimate_minutes"]`, and
+        # sqlite3.Row answers IndexError for a column the query did not return.
+        # IndexError is outside the taxonomy app.py maps, so the DTO line
+        # without this block is a 500 on every read of every day. The reverse
+        # order is inert.
+        conn.execute("ALTER TABLE day_plan ADD COLUMN estimate_minutes INTEGER")
+    habit_cols = {r["name"] for r in conn.execute("PRAGMA table_info(habits)")}
+    if "estimate_minutes" not in habit_cols:
+        # Habits written before estimates keep NULL, and their occurrences are
+        # minted unestimated — which is what "nobody has said how long this
+        # takes" means. One answer on the rule fixes every future day of it.
+        conn.execute("ALTER TABLE habits ADD COLUMN estimate_minutes INTEGER")
 
 
 # ── collections ──────────────────────────────────────────────────────────────
@@ -697,6 +717,7 @@ def insert_day_entry(
     title: str | None = None,
     position: float | None = None,
     habit_id: str | None = None,
+    estimate_minutes: int | None = None,
 ) -> sqlite3.Row:
     """Add one entry to a day and return the stored row.
 
@@ -708,18 +729,25 @@ def insert_day_entry(
     for everything else. The occurrence also gets its own `title` — a copy of the
     habit's, taken at insert time — because the row has to keep reading correctly
     after the rule is renamed or deleted.
+
+    `estimate_minutes` is likewise a COPY taken at insert time, not a join. For a
+    task the caller reads it off `sidecar` (the estimate that task remembers) and
+    hands it in here; from then on it belongs to this day and this row. That is
+    what stops re-estimating a task in March from rewriting what January's plan
+    said it would take — the same reasoning that gives a habit occurrence its own
+    title rather than resolving one.
     """
     conn.execute(
         """INSERT INTO day_plan (day, entry_id, kind, collection_href, uid, title,
-                                 source, position, habit_id)
-           VALUES (?,?,?,?,?,?,?,?,?)""",
+                                 source, position, habit_id, estimate_minutes)
+           VALUES (?,?,?,?,?,?,?,?,?,?)""",
         (day, entry_id, kind, collection_href, uid, title, source, position,
-         habit_id),
+         habit_id, estimate_minutes),
     )
     return find_day_entry(conn, day, entry_id=entry_id)
 
 
-_DAY_ENTRY_FIELDS = {"done_at", "dropped_at", "position"}
+_DAY_ENTRY_FIELDS = {"done_at", "dropped_at", "position", "estimate_minutes"}
 
 
 def update_day_entry(
@@ -860,7 +888,7 @@ def find_day_entry(
 # "orphaned" occurrences to be tempted into writing, because a dangling
 # habit_id beside a copied title is a complete record on its own.
 
-_HABIT_FIELDS = {"title", "days", "paused_at", "position"}
+_HABIT_FIELDS = {"title", "days", "paused_at", "position", "estimate_minutes"}
 
 # Position first, NULLs last, then created_at — the same "unpositioned rows
 # TRAIL" shape as _DAY_ORDER, and for the same reason: a habit that has never

@@ -31,12 +31,29 @@ const MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000
 // one. Dropping *bytes* is not — the tail of a JSON document is not a valid
 // document — so a payload over the ceiling is refused whole.
 //
-// A task DTO serializes to roughly 300 bytes, so the row cap lands near 600 KB
-// and the ceiling has room above it for the outliers (a task carrying a long
-// note) that the row count alone would not catch. Both sit well inside the ~5 MB
-// an origin usually gets, with the events window and the lists budgeted for too.
-const MAX_ROWS = 2000
-const MAX_BYTES = 1024 * 1024
+// The two bounds are meant to do DIFFERENT jobs: the row cap is the ordinary
+// one, and the byte ceiling exists for the outliers above it that a row count
+// cannot catch — a handful of tasks carrying very long notes. That only works
+// while a full row-capped payload of ORDINARY rows fits under the ceiling with
+// room to spare, and for a long time it did not.
+//
+// This comment used to estimate a task DTO at "roughly 300 bytes", putting the
+// row cap "near 600 KB". Measured, a plain task is about 508 bytes and 2000 of
+// them serialize to ~1.02 MB — which was three per cent UNDER a 1 MiB ceiling,
+// not half of it. The two bounds had quietly become one, the ceiling was
+// protecting nothing, and adding a single nullable field to `Task` (25 bytes a
+// row) pushed the row-capped payload over it and disabled the task cache
+// outright for any account near the cap. Silently: an over-ceiling payload is
+// refused whole and the entry removed, so the symptom is a mirror that simply
+// stops painting.
+//
+// 2 MiB restores the gap the design assumed — roughly double what the row cap
+// can produce — and is still well inside the ~5 MB an origin usually gets, with
+// the events window and the lists budgeted for alongside. `cache.test.ts` pins
+// the relationship rather than the numbers, so the next field added to a Task
+// cannot re-close it in silence.
+export const MAX_ROWS = 2000
+export const MAX_BYTES = 2 * 1024 * 1024
 
 // Which account the cached rows belong to. Set from /api/me — but that is a
 // round trip, and the whole point of the mirror is to paint before it returns.
@@ -210,6 +227,10 @@ export function sanitizeTask(v: unknown): Task | null {
     // would work on a fresh load and silently vanish on a cached one.
     sort_order: numOrNull(o.sort_order),
     kanban_column: orNull(o.kanban_column),
+    // Absent from anything this cache wrote before estimates existed, which
+    // `numOrNull` renders as null — "nobody said how long this takes", the same
+    // thing a task nobody has estimated says. Nothing to migrate.
+    estimated_minutes: numOrNull(o.estimated_minutes),
     has_rrule: bool(o.has_rrule),
     href: orNull(o.href) ?? '',
     etag: orNull(o.etag) ?? '',

@@ -307,6 +307,18 @@ CREATE TABLE IF NOT EXISTS day_plan (
     -- see the ALTER there for why it must not be split from the DTO that reads it.
     habit_id        TEXT,
     position        REAL,                    -- manual order within the day
+    -- What this entry is expected to take, in minutes, ON THIS DAY. NULL is
+    -- "not estimated", which is a real and common answer: the day's total is
+    -- over the rows that have one, and a half-estimated plan is still a plan.
+    --
+    -- On the ENTRY rather than on the task, because a note and a habit
+    -- occurrence exist nowhere but here and would otherwise carry none at all.
+    -- A task additionally REMEMBERS its last estimate in `sidecar`, which
+    -- pre-fills this at entry-creation time — copied, never joined, so
+    -- re-estimating a task in March cannot rewrite what January's plan said it
+    -- would take. A column added by store.init_db on existing DBs; see the
+    -- ALTER there for why it must not be split from the DTO that reads it.
+    estimate_minutes INTEGER,
     done_at         TEXT,
     dropped_at      TEXT,                    -- stamped, never DELETEd: the day keeps its record
     created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
@@ -350,5 +362,14 @@ CREATE TABLE IF NOT EXISTS habits (
     -- never "pretend the last three weeks did not happen".
     paused_at  TEXT,
     position   REAL,                      -- manual order in the habits list
+    -- How long an occurrence of this habit is expected to take. The RULE
+    -- remembers it and every occurrence is minted with a COPY, exactly as the
+    -- title is — so a habit is estimated once rather than every morning, and
+    -- changing the rule leaves past days saying what they said. A task
+    -- remembers its estimate in `sidecar` and a note is remembered by the
+    -- carry; this is the third of those three, and habits need their own
+    -- because an occurrence has no wire object and never carries.
+    -- A column added by store.init_db on existing DBs.
+    estimate_minutes INTEGER,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );

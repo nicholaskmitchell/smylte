@@ -575,6 +575,16 @@ class TaskService:
             "pinned": bool(s["pinned"]) if s else False,
             "kanban_column": s["kanban_column"] if s else None,
             "sort_order": s["sort_order"] if s else None,
+            # The estimate this task REMEMBERS, and the first thing to read a
+            # column that has been writable and unread since the sidecar table
+            # was created ("DURATION is exclusive with DUE; keep it here").
+            # It is not the estimate of any particular day: planning a task
+            # copies this onto that day's entry, and the entry is what the day
+            # counts. This is only what the next plan will start from.
+            #
+            # No migration: a database old enough to lack this column predates
+            # the table it is on.
+            "estimated_minutes": s["estimated_minutes"] if s else None,
             "has_rrule": bool(it["has_rrule"]),
             "href": it["href"],
             "etag": it["etag"],
@@ -1347,6 +1357,14 @@ class TaskService:
             # read of every day.
             "habit_id": row["habit_id"],
             "position": row["position"],
+            # What this entry was expected to take, on this day. NULL is "not
+            # estimated" and stays NULL — the total is over the rows that carry
+            # one, so an unestimated row costs the day nothing rather than
+            # counting as zero-length work. Same one-change rule as `habit_id`
+            # above and the same mechanical reason: this line and
+            # store.init_db's `estimate_minutes` ALTER ship together or every
+            # read of every day is a 500.
+            "estimate_minutes": row["estimate_minutes"],
             "done_at": row["done_at"],
             "dropped_at": row["dropped_at"],
             "created_at": row["created_at"],
@@ -1536,6 +1554,12 @@ class TaskService:
                 # entry and a real entry differ in exactly the way that promise
                 # says they do not.
                 "habit_id": f.get("habit_id"),
+                # A preview entry carries the estimate it WOULD be created with
+                # — the one a task remembers in `sidecar` — because that is what
+                # opening the day would actually write, and a preview that
+                # under-reported the day's total would be answering a different
+                # question from the one asked.
+                "estimate_minutes": f.get("estimate_minutes"),
                 "position": None,
                 "done_at": None,
                 "dropped_at": None,
@@ -1645,11 +1669,18 @@ class TaskService:
                 out.append({
                     "entry_id": uuid.uuid4().hex, "kind": "note",
                     "title": row["title"], "source": "carried",
+                    # A note has no task behind it and so nothing to remember an
+                    # estimate for it — the row being carried is the only place
+                    # yesterday's answer exists. Dropping it here would make the
+                    # ritual ask again about the same jot every morning it
+                    # survived.
+                    "estimate_minutes": row["estimate_minutes"],
                 })
                 continue
             if kind == "task":
                 self._append_task_entry(
-                    out, seen, row["collection_href"], row["uid"], "carried"
+                    out, seen, row["collection_href"], row["uid"], "carried",
+                    estimate=row["estimate_minutes"],
                 )
                 continue
             # Everything else — a habit occurrence that somehow reached here, or
@@ -1659,12 +1690,30 @@ class TaskService:
             continue
         return out
 
-    @staticmethod
+    def _remembered_estimate(self, href: str, uid: str) -> int | None:
+        """The estimate this task remembers, from `sidecar`. Called under the lock.
+
+        The sidecar is the task's LAST estimate, not any day's: planning a task
+        copies this onto that day's entry (see `insert_day_entry`), and from
+        then on the entry is what that day counts. So this only ever decides
+        what a NEW entry starts at, which is the whole point — the ritual should
+        not ask twice about a task that comes round every week.
+        """
+        row = store.get_sidecar(self._conn, href, uid)
+        return row["estimated_minutes"] if row else None
+
     def _append_task_entry(
+        self,
         out: list[dict[str, Any]], seen: set[tuple[str, str]],
-        href: str, uid: str, source: str,
+        href: str, uid: str, source: str, estimate: int | None = None,
     ) -> None:
         """Add one task entry unless (collection, uid) is already in the plan.
+
+        `estimate` is what the row should start at, and the two callers mean
+        different things by it. A CARRIED row passes the estimate the entry it
+        is carrying already had — the most direct reading of "this is the same
+        piece of work, moved" — while a derived row passes nothing and falls
+        back to what the task itself remembers.
 
         The dedupe is what stops a task appearing twice on the same day: an
         overdue task the owner also carried forward by hand qualifies under both
@@ -1681,6 +1730,10 @@ class TaskService:
         out.append({
             "entry_id": uuid.uuid4().hex, "kind": "task",
             "collection_href": href, "uid": uid, "source": source,
+            "estimate_minutes": (
+                estimate if estimate is not None
+                else self._remembered_estimate(href, uid)
+            ),
         })
 
     def _carry_into(self, day: str) -> list[Any]:
@@ -1773,6 +1826,12 @@ class TaskService:
                 # the habit and this day still says what the owner planned, with
                 # only a dangling habit_id to show the rule is gone.
                 "title": habit["title"], "habit_id": habit["id"],
+                # Copied for the same reason the title is, and it is the reason
+                # habits needed a column of their own: an occurrence has no wire
+                # object to remember an estimate for it and never carries, so
+                # without this the ritual would ask how long "Read" takes every
+                # single morning.
+                "estimate_minutes": habit["estimate_minutes"],
                 # source="habit" is load-bearing, not a label. `_carry_into`
                 # keeps only source="user" rows, so "an occurrence never carries
                 # into the next day" falls out of this line for free —
@@ -1930,6 +1989,14 @@ class TaskService:
             row = store.insert_day_entry(
                 self._conn, day=day, entry_id=entry_id, kind=kind, source="user",
                 collection_href=href, uid=uid, title=title, position=position,
+                # A task entry starts at what its task remembers; a note has
+                # nothing to remember one, so it starts unestimated and the
+                # ritual asks. Copied at insert time rather than joined — see
+                # `insert_day_entry`.
+                estimate_minutes=(
+                    self._remembered_estimate(href, uid)
+                    if kind == "task" and href and uid else None
+                ),
             )
             dto = self._day_entry_dto(row)
         self._publish({"type": "day_updated", "day": day})
@@ -1938,7 +2005,7 @@ class TaskService:
     def patch_day_entry(
         self, day: str, entry_id: str, *,
         done: bool | None = None, dropped: bool | None = None,
-        position: float | None = None,
+        position: float | None = None, estimate_minutes: int | None = None,
     ) -> dict[str, Any] | None:
         """Tick, drop or reposition one entry. None for an entry_id this day does
         not have (the route turns that into a 404).
@@ -1967,6 +2034,16 @@ class TaskService:
             fields["dropped_at"] = _stamp() if dropped else None
         if position is not None:
             fields["position"] = float(position)
+        if estimate_minutes is not None:
+            # -1 CLEARS. `done` and `dropped` spell their undo with a real
+            # `False`, but an int has no spare falsy value to borrow: 0 is a
+            # legitimate estimate ("not worth counting") and None already means
+            # "the client did not send this field". So the sentinel is explicit
+            # rather than smuggled, and the edge model's lower bound is -1
+            # precisely so this is the only negative that can arrive.
+            fields["estimate_minutes"] = (
+                None if estimate_minutes < 0 else int(estimate_minutes)
+            )
         with self._lock:
             # Read before write, because the rule below needs the entry's KIND —
             # and this is also the 404 check now. Nothing can land in between:
@@ -1989,6 +2066,22 @@ class TaskService:
                 raise ValueError(
                     "done applies to a note or habit entry; a task's doneness "
                     "is its VTODO STATUS — complete the task instead"
+                )
+            # Estimating a TASK also teaches the task, so the next day that
+            # plans it starts from this answer instead of asking again. Only a
+            # task: a note and a habit occurrence have no sidecar row to teach —
+            # a note is remembered by the carry, a habit by its rule.
+            #
+            # WRITE-through, never read-through, and that asymmetry is the whole
+            # of it. The entry is what its day counts; this only moves where the
+            # NEXT entry starts. Joining instead would make re-estimating in
+            # March rewrite what January's plan said the work would take, which
+            # is the same mistake a habit occurrence avoids by copying its title.
+            if ("estimate_minutes" in fields and row["kind"] == "task"
+                    and row["collection_href"] and row["uid"]):
+                store.set_sidecar(
+                    self._conn, row["collection_href"], row["uid"],
+                    estimated_minutes=fields["estimate_minutes"],
                 )
             row = store.update_day_entry(self._conn, day, entry_id, **fields)
             dto = self._day_entry_dto(row)
@@ -2041,6 +2134,11 @@ class TaskService:
             "days": row["days"],
             "paused_at": row["paused_at"],
             "position": row["position"],
+            # What one run of this is expected to take. Copied onto every
+            # occurrence at mint time, exactly as the title is — so this only
+            # ever decides what FUTURE days start at, and changing it leaves
+            # last Tuesday saying what last Tuesday said.
+            "estimate_minutes": row["estimate_minutes"],
             "created_at": row["created_at"],
         }
 
@@ -2051,7 +2149,8 @@ class TaskService:
             return [self._habit_dto(r) for r in store.list_habits(self._conn)]
 
     def create_habit(
-        self, *, title: str, days: str | None = None, position: float | None = None
+        self, *, title: str, days: str | None = None, position: float | None = None,
+        estimate_minutes: int | None = None,
     ) -> dict[str, Any]:
         """Define a habit. Raises ValueError (routes → 422) for an empty title or
         a `days` that is not a canonical weekday list.
@@ -2075,6 +2174,7 @@ class TaskService:
                 ) + 1.0
             row = store.create_habit(self._conn, uuid.uuid4().hex, {
                 "title": title, "days": days, "position": float(position),
+                "estimate_minutes": estimate_minutes,
             })
             dto = self._habit_dto(row)
         self._publish({"type": "day_updated", "day": self._today()})
@@ -2083,6 +2183,7 @@ class TaskService:
     def update_habit(
         self, habit_id: str, *, title: str | None = None, days: str | None = None,
         paused: bool | None = None, position: float | None = None,
+        estimate_minutes: int | None = None,
     ) -> dict[str, Any] | None:
         """Rename, reschedule, pause/resume or reorder one habit. None for an id
         that does not exist (the route turns that into a 404).
@@ -2111,6 +2212,13 @@ class TaskService:
             fields["paused_at"] = _stamp() if paused else None
         if position is not None:
             fields["position"] = float(position)
+        if estimate_minutes is not None:
+            # -1 clears, the same sentinel `patch_day_entry` uses and for the
+            # same reason: 0 is a real estimate and None already means "not
+            # sent", so an int needs one spelled out.
+            fields["estimate_minutes"] = (
+                None if estimate_minutes < 0 else int(estimate_minutes)
+            )
         with self._lock:
             row = store.update_habit(self._conn, habit_id, fields)
             if row is None:
