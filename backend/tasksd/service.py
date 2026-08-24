@@ -1380,6 +1380,11 @@ class TaskService:
             "estimate_minutes": row["estimate_minutes"],
             "done_at": row["done_at"],
             "dropped_at": row["dropped_at"],
+            # The day this was deliberately moved to, or null. Distinct from
+            # `dropped_at`: "doing it Thursday" and "decided against it" are
+            # different things for a day to remember. Same one-change rule as
+            # the columns above — this line and the ALTER ship together.
+            "rolled_to": row["rolled_to"],
             "created_at": row["created_at"],
         }
 
@@ -1635,6 +1640,11 @@ class TaskService:
                 "position": None,
                 "done_at": None,
                 "dropped_at": None,
+                # Always null in a preview: nothing that has not been created
+                # can have been moved. Present because this dict is a second
+                # hand-written spelling of `_day_entry_dto` and the docstring
+                # promises callers ONE entry shape.
+                "rolled_to": None,
                 "created_at": None,
             }
             for f in pending
@@ -1835,7 +1845,14 @@ class TaskService:
             return []
         out = []
         for row in planned[max(planned)]:
-            if row["source"] != "user" or row["done_at"] or row["dropped_at"]:
+            # `rolled_to` alongside done and dropped, and it is load-bearing
+            # rather than tidy: a row the owner deliberately moved to Thursday
+            # has been decided about, and without this line the automatic carry
+            # would ALSO pull it into tomorrow — so they would find two of it,
+            # one from their decision and one from the safety net that exists
+            # for when they make none.
+            if (row["source"] != "user" or row["done_at"] or row["dropped_at"]
+                    or row["rolled_to"]):
                 continue
             if row["kind"] == "task":
                 item = store.get_item(self._conn, row["collection_href"], row["uid"])
@@ -1970,6 +1987,68 @@ class TaskService:
         # and an event for it would have every other tab refetch for nothing.
         if fields:
             self._publish({"type": "day_updated", "day": day})
+        return dto
+
+    def roll_entry(self, day: str, entry_id: str, to_day: str) -> dict[str, Any] | None:
+        """Move one entry to another day. None for an entry_id this day lacks.
+
+        MOVES NOTHING. It creates an entry on `to_day` and stamps this one with
+        where it went — because the day that planned the work is still the day
+        that planned it, and a log you can rewrite by rescheduling is not a log.
+        `rolled_to` is deliberately not `dropped_at`: "doing it Thursday" and
+        "decided against it" are different answers, and a look-back that can
+        tell them apart is worth more than one that files both under abandoned.
+
+        Idempotent, and for free: `add_day_entry` already answers with the row
+        that is there for the same task, or the same note text, on the same day.
+        So a retried roll lands on one entry, and a second roll of the same row
+        to the same day changes nothing.
+
+        FROM a past day is allowed. That manufactures no record of the past day
+        — the new row lands on a day that has not happened — and the planning
+        ritual's leftovers step needs exactly this when a shutdown was skipped.
+        TO a past day is refused: an entry appearing on a finished day is the
+        forgery every other rule here exists to prevent.
+
+        A HABIT OCCURRENCE cannot be rolled. Tomorrow gets its own from the rule,
+        so moving one would either duplicate it or fabricate an occurrence on a
+        day the rule does not schedule — the thing `add_day_entry`'s kind check
+        is the last line against. The refusal is explicit here so the message
+        says why rather than surfacing that check's wording.
+        """
+        day = day_key(day)
+        to_day = day_key(to_day)
+        if to_day == day:
+            raise ValueError(f"{entry_id} is already on {day}")
+        if to_day < self._today():
+            raise ValueError(
+                f"{to_day} has already happened; work can only be moved forward"
+            )
+        with self._lock:
+            row = store.find_day_entry(self._conn, day, entry_id=entry_id)
+            if row is None:
+                return None
+            if row["kind"] == "habit":
+                raise ValueError(
+                    "a habit occurrence cannot be moved; tomorrow gets its own "
+                    "from the rule"
+                )
+            if row["dropped_at"]:
+                raise ValueError("a dropped entry has already been decided about")
+        # OUTSIDE the lock, because `add_day_entry` takes it itself — and it is
+        # the one that has to resolve the list, dedupe and publish. Nothing can
+        # race in between that matters: a second roll of the same row finds the
+        # entry already there and answers it.
+        self.add_day_entry(
+            to_day, entry_id=uuid.uuid4().hex, kind=row["kind"],
+            list_id=_slug(row["collection_href"]) if row["collection_href"] else None,
+            uid=row["uid"], title=row["title"],
+        )
+        with self._lock:
+            moved = store.update_day_entry(
+                self._conn, day, entry_id, rolled_to=to_day)
+            dto = self._day_entry_dto(moved)
+        self._publish({"type": "day_updated", "day": day})
         return dto
 
     def _ritual_writable(self, day: str) -> bool:

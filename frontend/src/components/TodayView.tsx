@@ -592,14 +592,21 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
     () => (plan && plan.day === day ? orderEntries(plan.entries) : null),
     [plan, day])
 
-  // The LIVE rows: what the day currently holds. Dropped entries come back on
-  // every read by design (the server stamps rather than deletes, so a day can
-  // still say what was declined) and are filtered out here, the one place with
-  // a reason to — everything that paints the day as a list of things to do
-  // reads this. The look-back is the exception and reads `allEntries`, because
-  // "I decided against this" is the most useful thing a finished day can say.
+  // The LIVE rows: what the day currently holds. Dropped and MOVED entries come
+  // back on every read by design (the server stamps rather than deletes, so a
+  // day can still say what was declined and where work went) and are filtered
+  // out here, the one place with a reason to — everything that paints the day
+  // as a list of things to do reads this. The look-back is the exception and
+  // reads `allEntries`, because "I decided against this" and "I moved this to
+  // Thursday" are two of the most useful things a finished day can say.
+  //
+  // Both leave the day's list and its TOTAL. Moving something forward is how
+  // you get back under a capacity you have overrun, so a total that kept
+  // counting it would make the one control that helps useless — the same
+  // reasoning that takes a dropped row out.
   const entries = useMemo(
-    () => allEntries?.filter((e) => !e.dropped_at) ?? null, [allEntries])
+    () => allEntries?.filter((e) => !e.dropped_at && !e.rolled_to) ?? null,
+    [allEntries])
 
   // A RENDER-LEVEL partition over the array `orderEntries` already ordered —
   // both halves keep the positions the server gave them, and nothing is sorted
@@ -909,6 +916,8 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
       // whenever the sidecar disagreed, and a number that flickers to a
       // different number is worse than one that arrives a beat late.
       estimate_minutes: null,
+      // A row that has just been added has not been moved anywhere.
+      rolled_to: null,
       created_at: new Date().toISOString(),
     }
     setPlan((p) => (p && p.day === on
@@ -936,6 +945,8 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
       // A note has nothing to remember an estimate for it, so this one is not
       // even provisional — it starts unestimated and the ritual asks.
       estimate_minutes: null,
+      // A row that has just been added has not been moved anywhere.
+      rolled_to: null,
       created_at: new Date().toISOString(),
     }
     setPlan((p) => (p && p.day === on

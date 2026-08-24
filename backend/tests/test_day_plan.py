@@ -559,6 +559,128 @@ def test_an_entry_survives_its_task_leaving_the_wire(svc):
 
 # ── upgrading a database written before habits ───────────────────────────────
 
+# ── rolling work forward ─────────────────────────────────────────────────────
+#
+# The deliberate half of "unfinished work does not vanish". The automatic carry
+# is the other half and stays exactly as it was — these tests are as much about
+# the two not colliding as about the move itself.
+
+
+def test_rolling_creates_on_the_target_and_stamps_the_source(svc):
+    """MOVES NOTHING. The day that planned the work is still the day that
+    planned it, so the row stays where it is and only records where it went."""
+    today = _today()
+    tomorrow = (date.today() + timedelta(days=1)).isoformat()
+    svc.open_day(today, create=True)
+    src = svc.add_day_entry(today, entry_id="n1", kind="note", title="Finish the draft")
+
+    moved = svc.roll_entry(today, src["entry_id"], tomorrow)
+    assert moved["rolled_to"] == tomorrow
+    # Still on its own day, and NOT dropped: those are different answers.
+    assert moved["dropped_at"] is None
+    assert "n1" in [e["entry_id"] for e in svc.open_day(today, create=False)["entries"]]
+    # And present on the target, which was never opened by this.
+    landed = svc.open_day(tomorrow, create=False)
+    assert [e["title"] for e in landed["entries"]] == ["Finish the draft"]
+    # `create=False` throughout, so nothing above has built tomorrow a snapshot
+    # — the only row on it is the one that was moved there.
+
+
+def test_rolling_does_not_open_the_target_day(svc):
+    """The rule the whole day plan is built around. Opening a day is the only
+    call that derives a snapshot, and a roll must leave the target free to do
+    that for itself when the owner actually arrives."""
+    tomorrow = (date.today() + timedelta(days=1)).isoformat()
+    svc.open_day(_today(), create=True)
+    src = svc.add_day_entry(_today(), entry_id="n1", kind="note", title="Later")
+    svc.roll_entry(_today(), src["entry_id"], tomorrow)
+
+    assert not store.day_is_opened(svc._conn, tomorrow)
+    # It reports planned — it holds a row — but its snapshot has not been built,
+    # so arriving tomorrow still derives due-today, overdue and the carry.
+    assert svc.open_day(tomorrow, create=False)["planned"] is True
+
+
+def test_rolling_the_same_row_twice_lands_once(svc):
+    tomorrow = (date.today() + timedelta(days=1)).isoformat()
+    svc.open_day(_today(), create=True)
+    src = svc.add_day_entry(_today(), entry_id="n1", kind="note", title="Once")
+    svc.roll_entry(_today(), src["entry_id"], tomorrow)
+    svc.roll_entry(_today(), src["entry_id"], tomorrow)
+    assert len(svc.open_day(tomorrow, create=False)["entries"]) == 1
+
+
+def test_a_rolled_row_is_not_also_carried(svc):
+    """THE COLLISION THIS FEATURE COULD HAVE CAUSED. A row the owner moved to
+    Thursday has been decided about; without `rolled_to` in `_carry_into`'s
+    filter the automatic safety net would ALSO pull it into tomorrow, and they
+    would find two of it — one from their decision and one from the rule that
+    exists for when they make none."""
+    today = _today()
+    tomorrow = (date.today() + timedelta(days=1)).isoformat()
+    later = (date.today() + timedelta(days=3)).isoformat()
+    svc.open_day(today, create=True)
+    src = svc.add_day_entry(today, entry_id="n1", kind="note", title="Thursday's job")
+    svc.roll_entry(today, src["entry_id"], later)
+
+    titles = [e["title"] for e in svc.open_day(tomorrow, create=True)["entries"]]
+    assert "Thursday's job" not in titles
+
+
+def test_an_unrolled_row_still_carries(svc):
+    # The other side of the same line: the safety net is untouched for anything
+    # the ritual did not decide about.
+    today = _today()
+    tomorrow = (date.today() + timedelta(days=1)).isoformat()
+    svc.open_day(today, create=True)
+    svc.add_day_entry(today, entry_id="n1", kind="note", title="Nobody decided")
+
+    titles = [e["title"] for e in svc.open_day(tomorrow, create=True)["entries"]]
+    assert "Nobody decided" in titles
+
+
+def test_work_can_only_be_moved_forward(svc):
+    yesterday = (date.today() - timedelta(days=1)).isoformat()
+    svc.open_day(_today(), create=True)
+    src = svc.add_day_entry(_today(), entry_id="n1", kind="note", title="Back in time")
+    with pytest.raises(ValueError):
+        svc.roll_entry(_today(), src["entry_id"], yesterday)
+    # And not to the day it is already on.
+    with pytest.raises(ValueError):
+        svc.roll_entry(_today(), src["entry_id"], _today())
+
+
+def test_leftovers_can_be_rolled_out_of_a_past_day(svc):
+    """Allowed, and needed. It manufactures no record of the past day — the new
+    row lands on a day that has not happened — and the planning ritual's
+    leftovers step depends on exactly this when a shutdown was skipped."""
+    svc.open_day(PREV, create=True)
+    src = svc.add_day_entry(PREV, entry_id="n1", kind="note", title="Missed it")
+    moved = svc.roll_entry(PREV, src["entry_id"], _today())
+    assert moved["rolled_to"] == _today()
+    assert [e["title"] for e in svc.open_day(_today(), create=False)["entries"]] \
+        == ["Missed it"]
+
+
+def test_a_habit_occurrence_cannot_be_moved(svc):
+    """Tomorrow gets its own from the rule, so moving one would either duplicate
+    it or fabricate an occurrence on a day the rule does not schedule — the
+    forgery `add_day_entry`'s kind check is the last line against."""
+    today = _today()
+    tomorrow = (date.today() + timedelta(days=1)).isoformat()
+    svc.create_habit(title="Read")
+    occ = next(e for e in svc.open_day(today, create=True)["entries"]
+               if e["kind"] == "habit")
+    with pytest.raises(ValueError):
+        svc.roll_entry(today, occ["entry_id"], tomorrow)
+
+
+def test_rolling_an_unknown_entry_is_a_miss_not_an_error(svc):
+    tomorrow = (date.today() + timedelta(days=1)).isoformat()
+    svc.open_day(_today(), create=True)
+    assert svc.roll_entry(_today(), "nope", tomorrow) is None
+
+
 # ── capacity, and what the owner says about a day ────────────────────────────
 
 

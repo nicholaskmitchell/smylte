@@ -110,6 +110,11 @@ def init_db(conn: sqlite3.Connection) -> None:
         # without this block is a 500 on every read of every day. The reverse
         # order is inert.
         conn.execute("ALTER TABLE day_plan ADD COLUMN estimate_minutes INTEGER")
+    if "rolled_to" not in day_cols:
+        # NULL on every entry written before the shutdown ritual, which is
+        # exactly what "nobody moved this" means — nothing to backfill. Same
+        # one-change rule as the two above: `_day_entry_dto` reads this key.
+        conn.execute("ALTER TABLE day_plan ADD COLUMN rolled_to TEXT")
     habit_cols = {r["name"] for r in conn.execute("PRAGMA table_info(habits)")}
     if "estimate_minutes" not in habit_cols:
         # Habits written before estimates keep NULL, and their occurrences are
@@ -806,7 +811,9 @@ def insert_day_entry(
     return find_day_entry(conn, day, entry_id=entry_id)
 
 
-_DAY_ENTRY_FIELDS = {"done_at", "dropped_at", "position", "estimate_minutes"}
+_DAY_ENTRY_FIELDS = {
+    "done_at", "dropped_at", "position", "estimate_minutes", "rolled_to",
+}
 
 
 def update_day_entry(

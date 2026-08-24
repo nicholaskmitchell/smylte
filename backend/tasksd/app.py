@@ -326,6 +326,13 @@ class PatchDay(BaseModel):
     reflection: XmlSafeText | None = Field(default=None, max_length=4000)
 
 
+class RollEntry(BaseModel):
+    """Where an entry is being moved to. A day key, validated by the route's
+    `_check_day` like every other one in the path."""
+
+    to: str = Field(min_length=1, max_length=10)
+
+
 class PatchDayEntry(BaseModel):
     # Tri-state on purpose: None means "not sent", and false is a real value
     # (un-tick, un-drop). The service only writes the fields that arrive.
@@ -1346,6 +1353,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         except ValueError as e:
             raise HTTPException(422, str(e)) from None
+
+    @api.post("/day/{day}/entries/{entry_id}/roll")
+    async def post_roll_entry(request: Request, day: str, entry_id: str, body: RollEntry):
+        """Move one entry to another day.
+
+        A POST rather than a PATCH because it CREATES: the entry on the target
+        day is new, and this one is stamped with where it went. Nothing moves and
+        nothing is deleted — see `service.roll_entry`."""
+        try:
+            dto = await _run(
+                _svc(request).roll_entry, _check_day(day), entry_id, _check_day(body.to))
+        except ValueError as e:
+            raise HTTPException(422, str(e)) from None
+        if dto is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown day entry {entry_id}")
+        return dto
 
     @api.patch("/day/{day}/entries/{entry_id}")
     async def patch_day_entry(request: Request, day: str, entry_id: str, body: PatchDayEntry):
