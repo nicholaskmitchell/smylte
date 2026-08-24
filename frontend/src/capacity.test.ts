@@ -117,17 +117,23 @@ describe('sanitizeCapacityByWeekday', () => {
 })
 
 describe('capacityInput', () => {
-  it('shows a whole number of hours the way it was probably typed', () => {
-    // Somebody who typed "5h" should not come back to "300".
+  it('says the number back the way a person would', () => {
+    // It used to print a bare integer for anything that was not a whole hour,
+    // so typing "until 6pm" at half past four left the field reading `89` —
+    // correct, and useless: a time went in and an unlabelled number came back.
     expect(capacityInput(300)).toBe('5h')
     expect(capacityInput(60)).toBe('1h')
-    expect(capacityInput(330)).toBe('330')
-    expect(capacityInput(0)).toBe('0')
+    expect(capacityInput(89)).toBe('1h 29m')
+    expect(capacityInput(330)).toBe('5h 30m')
+    expect(capacityInput(45)).toBe('45m')
+    expect(capacityInput(0)).toBe('0m')
     expect(capacityInput(null)).toBe('')
   })
 
   it('round-trips through the parser', () => {
-    for (const m of [0, 45, 60, 90, 300, 330, 1440]) {
+    // Every shape `capacityInput` produces has to read back as the number it
+    // came from, because it IS the field's value — not a label beside one.
+    for (const m of [0, 1, 45, 59, 60, 89, 90, 300, 330, 1439, 1440]) {
       expect(parseCapacity(capacityInput(m), NINE_AM), String(m)).toBe(m)
     }
   })
