@@ -331,6 +331,18 @@
    leaving the bug exactly where it was. Inherited from the root, the override is
    the last word for both. */
 :root { --check-size: 17px; }
+/* The width of the Today tab's kind-mark column — the cell that holds a task's
+   filled square, a note's hollow one and a habit's ↻, and that gives all three
+   one left edge. Declared here beside `--check-size` and for the same cascade
+   reason: it is read by one rule today, but it is the second structural width
+   this screen's left edge depends on, and the two belong together where anyone
+   changing one will see the other.
+   Structural, NOT themeable: like `--check-size` it is deliberately absent from
+   `tokens.css` and from `appearance.ts`'s allowlist, because the appearance
+   editor reaches colours, radii, families and scales — not the geometry that
+   keeps a mixed list aligned. Adding it there would let a saved theme break the
+   left edge this exists to hold. */
+:root { --today-mark-w: 13px; }
 .check {
   width: var(--check-size); height: var(--check-size);
   flex: none; margin-top: 2px; border: 1px solid var(--fg-faint);
@@ -1254,6 +1266,31 @@
 /* A summary is user text of any length and any script: let it wrap inside the
    chip rather than pushing the parsed due date off the line. */
 .today-chip-sum { color: var(--fg); min-width: 0; overflow-wrap: anywhere; }
+/* WHAT it will be — the word the row below will call itself by, so the box and
+   the list share one vocabulary (see KIND_LABEL). --fg, because this is the
+   answer the line exists to give and the rest of it is context. */
+.today-chip-kind {
+  color: var(--fg); font-family: var(--mono);
+  text-transform: var(--label-case); letter-spacing: calc(0.04em * var(--tracking));
+}
+/* WHERE it will end up, which is the half that actually differs between the
+   two and the half the old chip never said. Quieter than the kind: it is the
+   consequence, read once and then known. */
+.today-chip-fate { color: var(--fg-faint); min-width: 0; overflow-wrap: anywhere; }
+
+/* The controls under the chip — the kind swap and, when a task is being made
+   and there is more than one list, the target picker. A row of its own rather
+   than inside the chip: `aria-describedby` points at the chip, and a control
+   inside a description gets read out as part of it.
+   `flex-basis: 100%` puts it on its own line inside `.today-add`'s wrap, the
+   same way the chip does. */
+.today-add-opts {
+  flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+}
+.today-add-opts .btn, .today-add-opts .input { flex: none; }
+/* Sized down from `.btn.ghost`: this sits under a caption, not beside the
+   input, and at full button size it competes with Add for the eye. */
+.today-swap { font-size: calc(11px * var(--fs-scale)); padding: 3px 8px; }
 
 .today-list { list-style: none; margin: 0; padding: 0; }
 .today-row {
@@ -1351,13 +1388,41 @@
    visual statement that the spine is above the day and not part of it. */
 .today-habits .today-row:last-child { border-bottom-color: var(--rule); }
 
-/* Sits in the slot a task's `.list-dot` occupies (7px wide + its 6px margin),
-   so a habit title, a task title and a note title share one left edge. Without
-   the fixed width the glyph's own advance would set it, and the column would
-   move with the font the theme happens to choose. */
-.today-habit-mark {
-  width: 13px; flex: none; text-align: center;
-  font-size: calc(11px * var(--fs-scale)); color: var(--fg-faint);
+/* ---- the kind column --------------------------------------------------
+   One cell, one width, on every row this screen paints — the day's rows, the
+   habits group, the suggestions and the look-back's off-plan list.
+
+   The width is fixed rather than left to the content because the content is
+   three different things: a 7px box, a 7px box with a border, and a glyph whose
+   own advance moves with whichever font the theme picks. Left to itself the
+   column would be a different width per row and per theme.
+
+   This comment used to claim that a habit title, a task title and a note title
+   shared one left edge. They did not. A task rendered `.list-dot` and a habit
+   rendered this glyph, both 13px — and a note rendered NEITHER, so its title
+   started 13px to the left on every row. There is one element now, always
+   present, so the claim is true by construction rather than by three call sites
+   agreeing. */
+.today-kind-mark {
+  width: var(--today-mark-w); flex: none; text-align: center; line-height: 1;
+  font-family: var(--mono); font-size: calc(11px * var(--fs-scale));
+  color: var(--fg-faint);
+}
+/* FILLED — a task, which lives on a list and reaches every other CalDAV client
+   on the account. `--fg`, not `--fg-faint`: the inline style carries the list's
+   own colour when it has one, and this is what shows when it does not. The old
+   `.list-dot` default was --fg-faint, which put a faint dot against a faint
+   rule and made the one distinction that matters on this screen — does this
+   leave the app? — almost invisible on any list nobody had coloured. */
+.today-kind-mark.task {
+  height: 7px; align-self: center; background: var(--fg);
+}
+/* HOLLOW — a note, which exists nowhere but in this day. Same box as the task's
+   so the column cannot shift, and `box-sizing` so the border grows inward
+   rather than making this one 2px wider than that one. */
+.today-kind-mark.note {
+  height: 7px; align-self: center;
+  background: none; border: 1px solid var(--fg-faint); box-sizing: border-box;
 }
 /* A habit that is done is still a habit: the title greys and strikes through
    like any other done row (`.today-row.done`), but the mark keeps its weight so
@@ -1375,8 +1440,31 @@
 
 /* The way in to the sheet, in the tab header. Deliberately in the Today header
    rather than in Settings: the moment you want to change a habit is the morning
-   you are looking at it. */
-.today-habits-open { flex: none; margin-left: 10px; }
+   you are looking at it.
+   `align-self` for the same reason `.today-nav` has it — `.content-head` aligns
+   on the BASELINE, and a button left to that hangs off the title's baseline and
+   sits proud of everything beside it. It was an `.icon-btn` holding a single
+   glyph, which is square enough not to show it; a `.btn` holding a word is not. */
+.today-habits-open { flex: none; align-self: center; margin-left: 10px; }
+
+/* A button that reads as a link, for the two places habits are offered in the
+   middle of a sentence. It has to be a BUTTON — it opens a dialog, it goes
+   nowhere, and an <a href="#"> would promise navigation and be announced as a
+   link — but inside running prose it has to look like the words around it, so
+   it inherits size and family and takes only the accent and the underline.
+   Underline always, not on hover: this sits in a paragraph, and a control that
+   is only discoverable by sweeping a pointer over the text is no control at all
+   on a touchscreen. Hover just deepens it, guarded like every other control
+   here (see tokens.css) so a tap does not leave it stuck. */
+.today-linkish {
+  background: none; border: 0; padding: 0; cursor: pointer;
+  font: inherit; color: var(--accent); text-decoration: underline;
+}
+@media (hover: hover) { .today-linkish:hover { color: var(--fg); } }
+
+/* The habits hint: `.today-quiet` supplies the inside-the-page padding and
+   size, and this only lets a sentence breathe on the line above the calendar. */
+.today-habits-hint { max-width: 62ch; line-height: 1.45; }
 
 /* ---- the habits sheet --------------------------------------------------
    `.modal` supplies the frame, the elevation and the corner radius (it is in

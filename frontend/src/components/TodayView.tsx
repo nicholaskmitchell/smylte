@@ -206,6 +206,25 @@ const REVIEW_GROUPS = [
   { key: 'dropped', label: 'Dropped' },
 ] as const
 
+/**
+ * A day entry's `kind` → what that kind is called, for the row's mark.
+ *
+ * Keyed by plain string and read with a fallback, for exactly the reason
+ * `REVIEW_ARM` is: `DayEntryKind` widens SILENTLY — api.ts says so in as many
+ * words, because nothing in this app switches on it exhaustively — and an
+ * unfamiliar kind announcing itself as "Entry" costs a reader nothing, while a
+ * lookup that came back `undefined` would hand assistive tech a nameless
+ * `role="img"` on every row of a kind this build has not heard of.
+ *
+ * The three names are the ones the add box uses for the same three things, on
+ * purpose: what the box promises to create and what the row then calls itself
+ * have to be one vocabulary, or the teaching the box now does is undone by the
+ * list directly beneath it.
+ */
+const KIND_LABEL: Record<string, string> = {
+  task: 'Task', note: 'Note', habit: 'Habit',
+}
+
 /** The smallest denominator the weekly count is willing to be shown at.
  *
  *  With one occurrence there is nothing to say: "0 of 1 this week" on a Monday
@@ -729,11 +748,29 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
 
   // ── the add box ──────────────────────────────────────────────────────────
   const [text, setText] = useState('')
-  // The reading was declined for the line as it stands. Cleared on the next
-  // keystroke because `parseEntry` reads the WHOLE line — one more character
-  // can change or withdraw the reading, so the thing that was declined no
-  // longer exists to stay declined.
-  const [declined, setDeclined] = useState(false)
+  /**
+   * What the owner has said this line should BECOME, or null to let the reading
+   * decide. This replaces a boolean `declined`, and the widening is the point.
+   *
+   * `declined` could only ever say "not the thing you read", which was enough
+   * when the only two outcomes were "task, because a date was found" and "note,
+   * because one was not". But that made the box a coin the parser tossed: a
+   * line with a time silently authored a REAL VTODO on a real list, and a line
+   * without one silently authored a note that exists nowhere but in this day
+   * and reaches no other client on the account. Those are very different
+   * things to have done by accident, and nothing on the screen named either.
+   *
+   * So the override is now two-way — "make this a task" is as sayable as "make
+   * this a note" — and the chip below states the answer either way.
+   *
+   * IT DOES NOT RESET ON A KEYSTROKE, and that is a deliberate departure from
+   * `declined`, which did. `declined` was about a PARSE, and one more character
+   * can withdraw a parse, so the thing that had been declined stopped existing.
+   * A choice of kind is about INTENT: it survives typing the rest of the line,
+   * and clearing it under the owner's fingers would be a fresh instance of
+   * exactly the silent surprise this whole change removes. It clears on commit.
+   */
+  const [pinned, setPinned] = useState<'task' | 'note' | null>(null)
   // Re-read on every keystroke, which is what makes the chip a live preview
   // rather than something the user has to ask for. `day` is in the deps for the
   // same reason it is in the window's: `parseEntry` resolves "tomorrow" and
@@ -742,7 +779,44 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
   // day behind the one the entry would actually get.
   const parsed = useMemo(() => parseEntry(text, new Date()), [text, day])
   const reads = !!(parsed.dueDate || parsed.dueTime)
-  const showChip = reads && !declined
+
+  /**
+   * The collections a task can actually be created in.
+   *
+   * `useTaskData().lists` is every collection on the account — `GET /api/lists`
+   * answers calendars alongside task lists and flags which is which — and
+   * NOTHING in this app has ever read that flag outside a test fixture. So the
+   * old `lists[0]` was "whatever happens to sit first in the sidebar", which on
+   * an account whose first collection is a calendar meant the box authored its
+   * tasks into a calendar. Filtering here is what makes the picker below honest
+   * and fixes the automatic path at the same time.
+   */
+  const taskLists = useMemo(() => lists.filter((l) => l.is_task_list), [lists])
+  const [listId, setListId] = useState('')
+  // Keep the target valid as the visible set changes — a list that has been
+  // deleted, hidden or was never a task list must not stay selected. Same shape
+  // and same reason as the Tasks pane's quick add.
+  useEffect(() => {
+    if (!taskLists.some((l) => l.id === listId)) setListId(taskLists[0]?.id ?? '')
+  }, [taskLists, listId])
+
+  /**
+   * What Enter will actually create — the one expression the chip, the swap
+   * control, the submit button's name and `commit` all read.
+   *
+   * The automatic arm is byte-for-byte the rule this box has always followed:
+   * a reading plus somewhere to put it makes a task, everything else makes a
+   * note. What changed is that it is now WRITTEN DOWN in one place instead of
+   * being spelled out again at the branch, and that a pin can override it.
+   *
+   * `listId` is part of it rather than checked later, because "there is nowhere
+   * to put a task" has to resolve to `note` BEFORE anything paints: a chip
+   * promising a task on an account with no task lists would be a promise the
+   * commit could not keep.
+   */
+  const willBe: 'task' | 'note' = listId
+    ? (pinned ?? (reads ? 'task' : 'note'))
+    : 'note'
 
   const commit = async () => {
     const raw = text.trim()
@@ -752,30 +826,43 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
     // goes back on failure (as the dashboard's quick add does), so a rejected
     // line is never simply lost.
     setText('')
-    setDeclined(false)
+    setPinned(null)
     const on = day
-    // A parsed date or time authors a REAL TASK — something with a due date
-    // belongs on a list where the rest of the account can see it, and the day
-    // entry then points at it. Everything else is a note, which lives only in
-    // the day.
-    //
-    // A line that parsed but has nowhere to go — a brand-new account, or the
-    // lists fetch still in flight — falls back to a note carrying the LITERAL
-    // text, not `parsed.summary`: the parser DELETES the phrase it recognised,
-    // and a note that quietly lost its "at 7" is the silent loss daytext.ts's
-    // own header is written to avoid.
-    const listId = lists[0]?.id
-    const ok = showChip && listId
-      ? await addParsedTask(on, listId, parsed)
+    // A task's title is the parser's — the recognised phrase has been lifted
+    // out of it and into the due date. A NOTE's is the LITERAL line, always:
+    // the parser DELETES what it recognised, and a note that quietly lost its
+    // "at 7" is the silent loss daytext.ts's own header is written to avoid.
+    // That rule held for the old decline path and it has to hold for a pinned
+    // note as well, which is why it is keyed on `willBe` and not on `reads`.
+    const ok = willBe === 'task'
+      ? await addParsedTask(on, listId, parsed, reads)
       : await addNote(on, raw)
     if (!ok) setText(raw)
   }
 
-  const addParsedTask = async (on: string, listId: string, p: ParsedEntry): Promise<boolean> => {
-    // The first list in sidebar order. The box is deliberately ONE input — a
-    // list picker beside it is the friction this surface exists to remove — and
-    // the task is editable in the Tasks pane the moment it exists.
-    const t = await create(listId, { summary: p.summary, due: dueFromParse(p, on) })
+  /**
+   * Author a real task for this line, and point the day at it.
+   *
+   * `dated` is whether the parser actually found something. It decides whether
+   * a DUE is written at all, and the distinction only became reachable when the
+   * box grew a way to say "make this a task" about a line with no date in it.
+   * `dueFromParse` falls back to the day being planned, which is right when a
+   * time was given ("gym at 7" means 07:00 today) and wrong here: it would
+   * stamp a deadline of today onto a VTODO that every other client on the
+   * account will then show as due, off the back of the owner asking only for it
+   * to be a task. Being on today's plan is the day entry's job; a due date is a
+   * claim about the task itself, and this is not the place to invent one.
+   */
+  const addParsedTask = async (
+    on: string, list: string, p: ParsedEntry, dated: boolean,
+  ): Promise<boolean> => {
+    const t = await create(list, {
+      summary: p.summary,
+      // Omitted rather than sent empty — `CreateTaskBody`'s optional keys mean
+      // "leave unset", and the backend only copies non-None fields onto the
+      // VTODO.
+      ...(dated ? { due: dueFromParse(p, on) } : {}),
+    })
     if (!t) return false                 // `create` has already raised the toast
     return addTask(on, t)
   }
@@ -1169,10 +1256,23 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
             ever show on the day it was opened from: the control would be a
             write surface offered from a screen that says it is a finished
             record. It comes back the moment the owner does. */}
+        {/* A WORD, not a glyph. This was a bare `↻` carrying its name in
+            `aria-label` and `title` — which meant the only thing that ever said
+            "habits" to a sighted user was a tooltip, and a tooltip is a
+            desktop-only affordance: there is no hover on a phone, so on the
+            device a daily surface is most used on, the sole entry point to the
+            feature was an unexplained symbol.
+
+            The glyph stays, `aria-hidden`, beside the word rather than instead
+            of it — so the accessible name is exactly "Habits", which is what it
+            already was and what four suites match on exactly. Letting the ↻
+            into the name would have renamed the control to "↻ Habits" and
+            broken every one of them. */}
         {isToday && (
-          <button type="button" className="icon-btn today-habits-open"
-            aria-haspopup="dialog" aria-label="Habits" title="Habits"
-            onClick={() => setSheet(true)}>↻</button>
+          <button type="button" className="btn ghost today-habits-open"
+            aria-haspopup="dialog" onClick={() => setSheet(true)}>
+            <span className="mono" aria-hidden="true">↻</span> Habits
+          </button>
         )}
       </div>
 
@@ -1212,23 +1312,96 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
           onSubmit={(e) => { e.preventDefault(); void commit() }}>
           <input className="input" value={text} aria-label="Add to today"
             placeholder="Add to today — “invoice friday”, “gym at 7”…"
-            onChange={(e) => { setText(e.target.value); setDeclined(false) }} />
-          <button className="btn" type="submit" disabled={!text.trim()}>Add</button>
-          {showChip && (
-            // Advisory, never a gate: Enter commits whether or not this has been
-            // looked at, which is the difference between a preview and a
-            // confirmation step. The date and time are rendered through `fmtDue`
-            // with the live 12/24-hour setting, so what the chip promises is
-            // exactly what the row will read once it exists.
-            <p className="today-chip" role="status">
-              <span className="label">{parsed.guessed ? 'reading (guess)' : 'reading'}</span>
-              <span className="today-chip-sum" dir={textDir(parsed.summary)}>{parsed.summary}</span>
-              <span className="mono">
-                {fmtDue(dueFromParse(parsed, day), !parsed.dueTime, tf)}
+            // The chip below DESCRIBES this field rather than announcing at it.
+            // It used to be a `role="status"` live region, which was tolerable
+            // while it appeared only on the rare line that parsed; now that it
+            // is on for every line with a character in it, a live region would
+            // re-announce on every keystroke. Described-by is read on demand,
+            // and the submit button carries the same answer at the moment it is
+            // acted on — see its label.
+            aria-describedby={text.trim() ? 'today-add-fate' : undefined}
+            onChange={(e) => setText(e.target.value)} />
+          {/* The consequence, in the name of the control that causes it. This is
+              what a screen-reader user gets instead of the chip's colour and
+              wording, and it is better placed than the chip was: it is heard
+              when the button is reached, which is the instant before it fires. */}
+          <button className="btn" type="submit" disabled={!text.trim()}
+            aria-label={text.trim()
+              ? (willBe === 'task' ? 'Add as task' : 'Add as note')
+              : undefined}>Add</button>
+
+          {/* THE LINE THAT SAYS WHAT ENTER WILL DO.
+              It is on for any line with a character in it, not only for one
+              that parsed. That is the change: the old chip appeared only when a
+              date was recognised, so the case it never covered was the one that
+              needed covering most — a plain line silently becoming a note that
+              lives nowhere but in this day and reaches no other client on the
+              account. Both outcomes are now stated in the same words the rows
+              below use for the same three things (see KIND_LABEL).
+
+              Advisory, never a gate: Enter commits whether or not this has been
+              looked at, which is the difference between a preview and a
+              confirmation step. */}
+          {text.trim() && (
+            <p className="today-chip" id="today-add-fate">
+              <span className="label">will add</span>
+              <span className="today-chip-kind">{KIND_LABEL[willBe]}</span>
+              {/* A task shows the parser's title, because the recognised phrase
+                  has moved into the date beside it. A note shows the LINE, all
+                  of it — what a note keeps is what was typed. */}
+              <span className="today-chip-sum"
+                dir={textDir(willBe === 'task' ? parsed.summary : text.trim())}>
+                {willBe === 'task' ? parsed.summary : text.trim()}
               </span>
-              <button type="button" className="chip-x" onClick={() => setDeclined(true)}
-                aria-label="Add the line as typed instead">✕</button>
+              {willBe === 'task' && reads && (
+                // Through `fmtDue` with the live 12/24-hour setting, so what the
+                // chip promises is exactly what the row will read once it exists.
+                <span className="mono">
+                  {fmtDue(dueFromParse(parsed, day), !parsed.dueTime, tf)}
+                  {parsed.guessed ? ' (guess)' : ''}
+                </span>
+              )}
+              {/* Where it ends up, which is the half the old chip never said and
+                  the half that actually differs. */}
+              <span className="today-chip-fate">
+                {willBe === 'task'
+                  ? (taskLists.find((l) => l.id === listId)?.name
+                    ? `on ${taskLists.find((l) => l.id === listId)!.name} — it shows up in your other apps too`
+                    : 'on your lists — it shows up in your other apps too')
+                  : 'on this day only — it never leaves Smylte'}
+              </span>
             </p>
+          )}
+
+          {/* The CONTROLS, deliberately outside the paragraph above. Two
+              reasons, and they point the same way: a control never belongs
+              inside a region that describes something, and `aria-describedby`
+              would otherwise read the buttons' labels out as part of the
+              description. */}
+          {text.trim() && (
+            <div className="today-add-opts">
+              <button type="button" className="btn ghost today-swap"
+                onClick={() => setPinned(willBe === 'task' ? 'note' : 'task')}
+                // Absent when there is nowhere to put a task: `willBe` has
+                // already resolved to `note` for that reason, and offering a
+                // swap that silently does nothing is worse than offering none.
+                disabled={!listId}>
+                {willBe === 'task' ? 'Make it a note' : 'Make it a task'}
+              </button>
+              {willBe === 'task' && taskLists.length > 1 && (
+                // Only when there is a choice to make, and only when a task is
+                // what is being made. The box is still ONE input on the fast
+                // path — this appears beside a line already typed, it is never
+                // a field to fill in first.
+                <select className="input quickadd-list" value={listId}
+                  aria-label="List for the new task"
+                  onChange={(e) => setListId(e.target.value)}>
+                  {taskLists.map((l) => (
+                    <option key={l.id} value={l.id}>{l.name}</option>
+                  ))}
+                </select>
+              )}
+            </div>
           )}
         </form>
       )}
@@ -1259,13 +1432,42 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
                 contradict the screen it is printed on. */}
             {entries !== null && entries.length === 0 && (
               <p className="empty">
-                Nothing on today yet. Type a line above, or add one of the tasks below.
+                Nothing on today yet. Type a line above, add one of the tasks
+                below, or{' '}
+                {/* The third way in to habits, and the one that reaches the
+                    account most likely to need it: a brand-new day on a
+                    brand-new account, where the Habits GROUP is (rightly)
+                    absent because there is nothing to put in it. Without this
+                    the feature was invisible until you already had one. */}
+                <button type="button" className="today-linkish"
+                  onClick={() => setSheet(true)}>set up a habit</button>.
               </p>
             )}
             {dayRows.length > 0 && (
               <ul className="today-list">
                 {dayRows.map(renderRow)}
               </ul>
+            )}
+
+            {/* The other half of the habits trace: a day that HAS rows but no
+                habit occurrences. The empty state above covers the empty day
+                and this covers the worked one, and the two are mutually
+                exclusive by construction (`entries.length > 0` here, `=== 0`
+                there) — so the screen never says the same thing twice.
+
+                It is a line of prose rather than an empty "Habits" section, and
+                that is the same call the group above makes for the same reason:
+                a heading over nothing advertises a feature as a permanent empty
+                state on every account that does not want one. A sentence that
+                explains what the feature IS costs a line and teaches something;
+                a blank section costs a line and teaches nothing. */}
+            {habitRows.length === 0 && entries !== null && entries.length > 0 && (
+              <p className="empty today-quiet today-habits-hint">
+                A habit is a rule that puts a line on your day, on the days you
+                choose. It never becomes a task, and it never leaves this app.{' '}
+                <button type="button" className="today-linkish"
+                  onClick={() => setSheet(true)}>Set one up</button>.
+              </p>
             )}
 
             {/* Today's only. The events in hand are HomeView's window — the six
@@ -1295,8 +1497,11 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
                   <button type="button" className="today-plus"
                     aria-label={`Add ${t.summary || '(untitled)'} to today`}
                     onClick={() => void addTask(day, t)}>+</button>
-                  <span className="list-dot" style={colorOf(t.list)
-                    ? { background: colorOf(t.list)! } : undefined} />
+                  {/* The same column the day's rows keep, in its task face:
+                      a suggestion is a task, and one left edge has to run down
+                      the whole screen or the groups stop reading as one list. */}
+                  <span className="today-kind-mark task" role="img" aria-label="Task"
+                    style={colorOf(t.list) ? { background: colorOf(t.list)! } : undefined} />
                   <span className="today-title" dir={textDir(t.summary)}>
                     {t.summary || '(untitled)'}
                   </span>
@@ -1362,8 +1567,8 @@ function LookBack({ review, offPlan, renderRow, colorOf }: {
               <li key={taskKey(t)} className="today-row">
                 <span className="today-check-gap today-mark mono" role="img"
                   aria-label="Done">✓</span>
-                <span className="list-dot" style={colorOf(t.list)
-                  ? { background: colorOf(t.list)! } : undefined} />
+                <span className="today-kind-mark task" role="img" aria-label="Task"
+                  style={colorOf(t.list) ? { background: colorOf(t.list)! } : undefined} />
                 <span className="today-title" dir={textDir(t.summary)}>
                   {t.summary || '(untitled)'}
                 </span>
@@ -1520,15 +1725,31 @@ function TodayRow({
   return (
     <li className={cls}>
       {check}
-      {isTask && (
-        <span className="list-dot" style={color ? { background: color } : undefined} />
-      )}
-      {/* The habit's mark, in the slot a task's list dot occupies, so the two
-          kinds of row keep one left edge. Decorative and hidden from assistive
-          tech: the list it sits in is already named "Habits", and a screen
-          reader announcing "clockwise open circle arrow" before every title is
-          noise, not information. */}
-      {isHabit && <span className="today-habit-mark mono" aria-hidden="true">↻</span>}
+      {/* ONE element, always rendered, whatever the kind — which is the fix as
+          much as the marks themselves are. It used to be two conditionals, a
+          `.list-dot` for a task and a `↻` for a habit, and a NOTE matched
+          neither: it rendered nothing at all, so every note's title sat 13px
+          left of every other row's. A single cell of a fixed width cannot
+          reintroduce that, and it cannot be reintroduced by a fourth `kind`
+          either — `DayEntryKind` widens silently (see api.ts) and the arm that
+          would have been forgotten is now the one that no longer exists.
+
+          The three faces say the thing the day never said out loud: a FILLED
+          square is a task, which lives on a list and reaches every other CalDAV
+          client on the account; a HOLLOW one is a note, which exists nowhere
+          but in this day; `↻` is a habit. Fill against outline is deliberately
+          the same geometry — the left edge is free — and it survives a
+          colourless list, a custom theme and a greyscale screenshot, none of
+          which "a coloured dot versus nothing" does. */}
+      <span className={`today-kind-mark ${entry.kind}`} role="img"
+        aria-label={KIND_LABEL[entry.kind] ?? 'Entry'}
+        // The list's colour, when it has one, exactly as `.list-dot` took it.
+        // The CSS default underneath is --fg rather than --fg-faint: a task on
+        // a colourless list was previously a faint dot against a faint rule,
+        // which is the case this whole change is about.
+        style={isTask && color ? { background: color } : undefined}>
+        {isHabit ? '↻' : null}
+      </span>
       <span className="today-title" dir={textDir(title)}>{title}</span>
       {/* Omitted ENTIRELY below two occurrences — see MIN_WEEK_COUNT. Rendered
           in --fg-faint whatever the ratio says, and never in --warn: "1 of 5
