@@ -305,6 +305,14 @@ class CreateDayEntry(BaseModel):
     # defends — it is the cheap bound on what a client may store, applied at the
     # same edge as every other text field so there is one rule to remember.
     title: XmlSafeText | None = Field(default=None, max_length=2000)
+    # Minutes, and NOT tri-state: there is no clear sentinel here because there
+    # is nothing yet to clear — omitting it is how an entry is created without
+    # one. Bounded on both sides like every other duration this app takes; see
+    # PatchDayEntry.estimate_minutes for why the ceiling is not cosmetic.
+    #
+    # A stated estimate wins over the one the task remembers, which is what
+    # `add_day_entry` does with it.
+    estimate_minutes: int | None = Field(default=None, ge=0, le=1440)
 
 
 class PatchDay(BaseModel):
@@ -1350,6 +1358,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 _svc(request).add_day_entry, checked,
                 entry_id=body.entry_id, kind=body.kind,
                 list_id=body.list, uid=body.uid, title=body.title,
+                estimate_minutes=body.estimate_minutes,
             )
         except ValueError as e:
             raise HTTPException(422, str(e)) from None

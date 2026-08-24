@@ -150,6 +150,62 @@
 // to be handed more work. A finished day hands out nothing whichever mode today
 // was left in.
 //
+// ── the two rituals ────────────────────────────────────────────────────────
+//
+// The day now has a SHAPE as well as contents, and the two overlays are where
+// it gets one. `PlanRitual` in the morning — how long today is, what goes on
+// it, how long each thing takes — and `ShutdownRitual` at the end: what
+// happened, what follows you, a line about how it went. Both are three steps,
+// every step skippable, closable at any point, because a ritual you cannot
+// leave is a wizard and this tab is also the place you merely glance at.
+//
+// Neither is opened for you. The morning one is reached from a dismissible
+// band and the evening one from a header button, and that asymmetry is
+// deliberate: the morning is when a plan is worth prompting for, while a band
+// offering to close the day would be on screen from breakfast onwards.
+//
+// WHAT THE OWNER SAYS ABOUT A DAY lives in `day_ritual`, not in `day_plan`:
+// a capacity, a `committed_at`, a `shutdown_at` and a reflection belong to the
+// day rather than to any row on it. `capacity` on the plan DTO is RESOLVED —
+// this day's statement, else the weekday default, else the account's, else
+// NONE — and none is a real answer that means no total and no warning. An
+// account that never stated a capacity must not be told it has overcommitted
+// against a number it never gave, which is the one thing this feature must not
+// do. `capacity_minutes` beside it is what was stated for THIS day, so a day
+// that merely inherited stays distinguishable from one the owner set.
+//
+// THREE RULES ARE LIFTED INTO `ShutdownRitual` RATHER THAN RE-DERIVED THERE,
+// and each of them was a bug before it was a prop: `isDone` (a task's doneness
+// is its VTODO's — see the fence above), `titleOf` (a task entry carries NO
+// title, so reading `entry.title` printed a placeholder against every task on
+// the one screen whose job is deciding about them), and `renderRow` itself.
+// The ritual holds no second opinion about any row.
+//
+// ── moving work, which is not dropping it ──────────────────────────────────
+//
+// `rolled_to` is the second stamp a row can carry and it is emphatically not
+// `dropped_at`. "This is happening on Thursday" and "this is not happening" are
+// different answers, and the whole point of recording the decision WITH its
+// destination is that a look-back can say where the work went instead of
+// filing it under abandoned. `service.roll_entry` MOVES NOTHING: it writes a
+// row on the target day and stamps this one, so the day that planned the work
+// still shows it planned the work.
+//
+// The difference shows in exactly three places here, and all three are load-
+// bearing: `entries` filters both stamps out (so a decided row leaves the list
+// AND the day's total, which is how you get back under a capacity you have
+// overrun); `onDay` filters only `dropped_at` back IN, so a declined task can
+// be chosen again this afternoon while one with a destination is not offered
+// back under "Due today"; and the look-back gives `moved` its own heading with
+// the destination in place of the due date.
+//
+// This deliberately does not touch `service._carry_into`'s carry-once rule.
+// That rule is about work the system moves FOR you — "a task the owner chose on
+// Monday and then ignored on Tuesday has been declined" — and work you CHOSE to
+// move is a different thing. Both survive, and the automatic carry stays the
+// safety net for a day you never shut down: leaving a row alone in the shutdown
+// is a real answer, and it is the one the carry still answers.
+//
 // ── arranging ──────────────────────────────────────────────────────────────
 //
 // The fourth verb, and for a long time the only one of the four this file

@@ -127,6 +127,22 @@ _DAY = {
         "is the right default — you have no reliable clock of your own."
     ),
 }
+#: How long one entry is expected to take.
+#:
+#: Bounded at a day on both ends, and neither bound is cosmetic: a plan is a plan
+#: for one day, so above that it is a typo rather than an intention — and an
+#: unbounded int reaches SQLite as an OverflowError, which is outside the
+#: taxonomy the routes map. Zero is a real value ("this costs me nothing"), which
+#: is why the wire needs a separate sentinel to CLEAR one and why omitting the
+#: key is not the same as sending 0.
+_ESTIMATE = {
+    "type": "integer", "minimum": 0, "maximum": 1440,
+    "description": (
+        "Minutes this is expected to take. Omit rather than guess — an "
+        "unestimated row is counted as nothing and reported as such, which is "
+        "honest; an invented number is a plan the owner did not make."
+    ),
+}
 _SCOPE = {
     "type": "string", "enum": ["all", "this", "thisandfuture"], "default": "all",
     "description": (
@@ -392,6 +408,25 @@ def build_tools(api) -> dict[str, Tool]:
         "one per row, and null on a note or a habit, which name none.\n\n"
         "Takes no arguments on purpose — it is always today, in the owner's own "
         "timezone. Use smylte_review_day to look at any other day.\n\n"
+        "It also reports WHAT THE OWNER SAID about today, all of it read-only "
+        "here: `capacity` is how many minutes they are willing to work (null if "
+        "they have never said, which is a real answer — do not assume eight "
+        "hours), `capacity_minutes` is what they stated for TODAY specifically "
+        "as opposed to inheriting from a weekday default, `committed_at` and "
+        "`shutdown_at` are when they started and closed the day, and "
+        "`reflection` is the line they wrote at shutdown. `totals` reads "
+        "`planned_minutes` against that capacity, with `done_minutes` and "
+        "`unestimated` — the third number matters: rows with no estimate count "
+        "as nothing, so \"0m of 1h 20m\" on a day with unestimated rows does NOT "
+        "mean nothing happened.\n\n"
+        "Check `planned_minutes` against `capacity` before proposing more work. "
+        "A day already over is the one thing the owner asked to be warned "
+        "about.\n\n"
+        "None of it can be written from here, and that is deliberate. A "
+        "capacity, a start, a shutdown and a reflection are the owner's "
+        "declarations about their own day; a connector able to make them would "
+        "be manufacturing the record they exist to keep honest — the same call "
+        "that gives habits no tool for creating a rule.\n\n"
         "A day the owner has not opened yet answers planned=false. That is a "
         "normal answer, not an error, and it comes with `preview`: what opening "
         "the day WOULD put on it, habits included. A preview is not a plan and "
@@ -422,7 +457,13 @@ def build_tools(api) -> dict[str, Tool]:
         "refused — the plan is a record of what was intended at the time, and "
         "backfilling one destroys the only thing it is good for.\n\n"
         "Safe to retry: adding a task already on that day returns the entry that "
-        "is there rather than a second copy.",
+        "is there rather than a second copy.\n\n"
+        "`estimate_minutes` says how long the thing is expected to take, which "
+        "is what the day's total is built from. Leave it out rather than "
+        "guessing: an unestimated row is counted as nothing and reported as "
+        "such, which is honest, while an invented number is a plan the owner "
+        "did not make. A task with no estimate given starts at whatever the "
+        "same task took last time.",
         _obj({
             "day": _DAY,
             "list_id": {**_LIST_ID, "description":
@@ -432,17 +473,19 @@ def build_tools(api) -> dict[str, Tool]:
             "title": {"type": "string", "minLength": 1, "maxLength": 2000,
                       "pattern": XML_SAFE_PATTERN,
                       "description": "A one-off note for the day, instead of a task."},
+            "estimate_minutes": _ESTIMATE,
         }),
         scope=SCOPE_WRITE, read_only=False, idempotent=True,
     )
-    def _plan_day(day=None, list_id=None, uid=None, title=None):
-        return api.plan_day(day=day, list_id=list_id, uid=uid, title=title)
+    def _plan_day(day=None, list_id=None, uid=None, title=None, estimate_minutes=None):
+        return api.plan_day(day=day, list_id=list_id, uid=uid, title=title,
+                            estimate_minutes=estimate_minutes)
 
     @tool(
-        "smylte_update_day_entry", "Tick or drop something on a day",
-        "Mark a NOTE or a HABIT occurrence done, drop any entry off a day, or "
-        "move one up or down. entry_id comes from smylte_get_today or "
-        "smylte_review_day.\n\n"
+        "smylte_update_day_entry", "Tick, estimate, move or drop something on a day",
+        "Mark a NOTE or a HABIT occurrence done, say how long something will "
+        "take, send it to another day, drop it off this one, or move it up or "
+        "down. entry_id comes from smylte_get_today or smylte_review_day.\n\n"
         "A habit is ticked HERE, unlike a task: its occurrence lives only in the "
         "day plan, so this stamp is the entire record that the habit was kept "
         "that day. It says nothing about the rule behind it, which only the "
@@ -453,9 +496,23 @@ def build_tools(api) -> dict[str, Tool]:
         "`done` is refused on a day that has already passed, in either "
         "direction: a tick records that something was actually done at the time, "
         "and a habit log that can be filled in afterwards measures nothing. "
-        "`dropped` and `position` ARE still allowed on a past day — admitting a "
-        "plan went unmet, or tidying the order, does not rewrite what "
-        "happened.\n\n"
+        "`estimate_minutes` is refused on a past day for the same reason — an "
+        "estimate is what something was expected to take BEFORE it was "
+        "attempted, and one written afterwards is a number chosen with the "
+        "answer in hand. `dropped` and `position` ARE still allowed on a past "
+        "day: admitting a plan went unmet, or tidying the order, does not "
+        "rewrite what happened.\n\n"
+        "`move_to` sends the entry to another day. It MOVES NOTHING — a new "
+        "entry is created on the target day and this one is stamped with where "
+        "it went, so the day that planned the work still shows it planned the "
+        "work, and a look-back can say \"moved to Thursday\" rather than "
+        "reporting it abandoned. That is the difference from `dropped`, and it "
+        "is the whole point of having both: use `move_to` when the work is still "
+        "going to happen, `dropped` when it is not. Forward only — work cannot "
+        "be moved onto a day that has already happened — and not for a habit "
+        "occurrence, which gets a fresh one from its rule on every day the rule "
+        "schedules. Pass it on its own: moving is already an answer about the "
+        "entry, and `done`/`dropped` are the other two.\n\n"
         "Only an entry that exists can be changed. An entry_id out of a "
         "`preview` (what smylte_get_today returns for a day the owner has not "
         "opened) names no row and is refused, and no tool here can open a day — "
@@ -478,12 +535,26 @@ def build_tools(api) -> dict[str, Tool]:
                         "description": "Take it off the day (true), or put it back (false)."},
             "position": {"type": "number",
                          "description": "Sort key within the day; lower comes first."},
+            "estimate_minutes": {
+                **_ESTIMATE,
+                "minimum": -1,
+                "description": _ESTIMATE["description"]
+                + " Refused on a past day. Pass -1 to clear one, which is not "
+                  "the same as 0 — zero is a real estimate.",
+            },
+            "move_to": {**_DAY, "description":
+                        "Send this entry to this day, 'YYYY-MM-DD'. Creates a "
+                        "row there and stamps this one with where it went; "
+                        "nothing is deleted. Forward only, and never for a "
+                        "habit occurrence."},
         }, ["entry_id"]),
         scope=SCOPE_WRITE, read_only=False, idempotent=True,
     )
-    def _update_day_entry(entry_id, day=None, done=None, dropped=None, position=None):
+    def _update_day_entry(entry_id, day=None, done=None, dropped=None, position=None,
+                          estimate_minutes=None, move_to=None):
         return api.update_day_entry(
-            entry_id, day=day, done=done, dropped=dropped, position=position)
+            entry_id, day=day, done=done, dropped=dropped, position=position,
+            estimate_minutes=estimate_minutes, move_to=move_to)
 
     @tool(
         "smylte_review_day", "How a day went",
@@ -493,7 +564,19 @@ def build_tools(api) -> dict[str, Tool]:
         "day, `derived` from what was due, `habits` for the occurrences a habit "
         "rule scheduled, and `other`, a residual that is normally empty — "
         "anything in it carries its own `source` field saying what it is. "
-        "`dropped` holds what was taken off the day, whatever put it there.\n\n"
+        "`dropped` holds what was taken off the day, whatever put it there, and "
+        "`moved` holds what was sent to ANOTHER day — each of those rows carries "
+        "`rolled_to` saying which. Those two are separate arms because they are "
+        "separate answers: work that is happening on Thursday, and work that is "
+        "not happening. Reporting a moved row as dropped tells the owner they "
+        "abandoned something they rescheduled.\n\n"
+        "Each day also reports what the owner SAID about it — `capacity` (null "
+        "if they never said, which is a real answer), `capacity_minutes`, "
+        "`committed_at`, `shutdown_at` and the `reflection` they wrote at "
+        "shutdown — with `totals` giving `planned_minutes`, `done_minutes` and "
+        "`unestimated`. `done_minutes` counts only what was finished ON THAT "
+        "DAY: a task planned on Monday and ticked on Thursday is Thursday's "
+        "work. None of these can be written from this connector.\n\n"
         "The habits are the half most worth reading. A habit occurrence is "
         "ticked on its own day and recorded nowhere else, so `done_at` on one of "
         "these rows is the whole answer to whether the owner kept it — and an "
