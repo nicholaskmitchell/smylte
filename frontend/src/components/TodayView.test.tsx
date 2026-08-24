@@ -1105,6 +1105,408 @@ describe('<TodayView> the add box', () => {
   })
 })
 
+// ── arranging the day ───────────────────────────────────────────────────────
+
+describe('<TodayView> arranging the day', () => {
+  /** Three rows at positions 1, 2, 3 — A, B, C top to bottom. */
+  const abc = () => plan([
+    entry({ entry_id: 'a', title: 'Alpha', position: 1 }),
+    entry({ entry_id: 'b', title: 'Bravo', position: 2 }),
+    entry({ entry_id: 'c', title: 'Charlie', position: 3 }),
+  ])
+
+  /** Drag the row titled `from` onto the row titled `to`. */
+  const dragOnto = (from: string, to: string) => {
+    const row = (t: string) =>
+      dayRows().find((r) => r.querySelector('.today-title')?.textContent === t)!
+    fireEvent.dragStart(row(from))
+    fireEvent.dragOver(row(to))
+    fireEvent.drop(row(to))
+  }
+
+  it('drops a row between its new neighbours with ONE write', async () => {
+    // `day_plan.position` is a REAL and the server orders on it, so a move is a
+    // midpoint and nothing else has to be renumbered. A whole-list rewrite would
+    // be N writes for a gesture that moved one row.
+    m.openDay.mockResolvedValue(abc())
+    setup()
+    await screen.findByText('Alpha')
+
+    // Alpha onto Bravo: dragging DOWN lands it after the target, so between
+    // Bravo (2) and Charlie (3).
+    dragOnto('Alpha', 'Bravo')
+    await waitFor(() => expect(m.patchDayEntry).toHaveBeenCalledWith(
+      today(), 'a', { position: 2.5 }))
+    expect(m.patchDayEntry).toHaveBeenCalledTimes(1)
+  })
+
+  it('lands a row before the target when it is dragged upward', async () => {
+    // The other direction, and the reason the arithmetic is worth a test of its
+    // own: removing the dragged row shifts every later index by one, so an
+    // off-by-one here silently moves rows to the wrong side of their target.
+    m.openDay.mockResolvedValue(abc())
+    setup()
+    await screen.findByText('Alpha')
+
+    // Charlie onto Bravo: dragging UP lands it before the target, so between
+    // Alpha (1) and Bravo (2).
+    dragOnto('Charlie', 'Bravo')
+    await waitFor(() => expect(m.patchDayEntry).toHaveBeenCalledWith(
+      today(), 'c', { position: 1.5 }))
+  })
+
+  it('takes a row past the ends of the list', async () => {
+    m.openDay.mockResolvedValue(abc())
+    setup()
+    await screen.findByText('Alpha')
+
+    // Charlie to the top: before Alpha (1), so below it.
+    dragOnto('Charlie', 'Alpha')
+    await waitFor(() => expect(m.patchDayEntry).toHaveBeenCalledWith(
+      today(), 'c', { position: 0 }))
+  })
+
+  it('re-sorts on the drop rather than on the reply', async () => {
+    m.openDay.mockResolvedValue(abc())
+    m.patchDayEntry.mockImplementation(async (_d, id, body) =>
+      entry({ entry_id: id, ...body as object }))
+    setup()
+    await screen.findByText('Alpha')
+    expect(rowTitles()).toEqual(['Alpha', 'Bravo', 'Charlie'])
+
+    dragOnto('Alpha', 'Charlie')
+    await waitFor(() => expect(rowTitles()).toEqual(['Bravo', 'Charlie', 'Alpha']))
+  })
+
+  it('puts the row back exactly where it was when the move does not land', async () => {
+    m.openDay.mockResolvedValue(abc())
+    m.patchDayEntry.mockRejectedValue(new Error('nope'))
+    setup()
+    await screen.findByText('Alpha')
+
+    dragOnto('Alpha', 'Charlie')
+    await waitFor(() => expect(m.patchDayEntry).toHaveBeenCalled())
+    await waitFor(() => expect(rowTitles()).toEqual(['Alpha', 'Bravo', 'Charlie']))
+  })
+
+  it('never lets a habit be dragged', async () => {
+    // An occurrence's position is minted fresh by its rule every morning, so an
+    // order dragged into the spine would be gone tomorrow — and habits paint in
+    // their own group, so it would not even show where it was made.
+    m.openDay.mockResolvedValue(plan([
+      occurrence({ entry_id: 'h', title: 'Read', position: 1 }),
+      entry({ entry_id: 'a', title: 'Alpha', position: 2 }),
+      entry({ entry_id: 'b', title: 'Bravo', position: 3 }),
+    ]))
+    setup()
+    await screen.findByText('Alpha')
+
+    const habitRow = screen.getByRole('list', { name: 'Habits' })
+      .querySelector('.today-row')!
+    expect(habitRow.getAttribute('draggable')).not.toBe('true')
+    // The ordinary rows beside it still are.
+    expect(dayRows()[0].getAttribute('draggable')).toBe('true')
+  })
+
+  it('refuses to arrange while an add is still in flight', async () => {
+    // An optimistic row has no position until the server answers, and
+    // `orderEntries` sorts an unpositioned row to the END — so a midpoint taken
+    // now would be measured against a neighbour that is about to move.
+    m.openDay.mockResolvedValue(plan([
+      entry({ entry_id: 'a', title: 'Alpha', position: 1 }),
+      entry({ entry_id: 'b', title: 'Bravo', position: null }),
+    ]))
+    setup()
+    await screen.findByText('Alpha')
+
+    expect(dayRows().every((r) => r.getAttribute('draggable') !== 'true')).toBe(true)
+  })
+
+  it('offers no arranging on a day with one row, or none', async () => {
+    m.openDay.mockResolvedValue(plan([entry({ entry_id: 'a', title: 'Alpha', position: 1 })]))
+    setup()
+    await screen.findByText('Alpha')
+    expect(dayRows()[0].getAttribute('draggable')).not.toBe('true')
+  })
+
+  it('hands out no arranging on a finished day', async () => {
+    m.day.mockImplementation(async (d) => plan([
+      entry({ entry_id: 'a', day: d, title: 'Alpha', position: 1 }),
+      entry({ entry_id: 'b', day: d, title: 'Bravo', position: 2 }),
+    ], d))
+    const user = setup()
+    await user.click(await screen.findByRole('button', { name: 'Previous day' }))
+    await screen.findByText('Alpha')
+
+    expect(dayRows().every((r) => r.getAttribute('draggable') !== 'true')).toBe(true)
+  })
+
+  it('hands out no arranging while today is being reviewed', async () => {
+    // A review is a record of the day, and a record is not a thing you shuffle.
+    m.openDay.mockResolvedValue(abc())
+    const user = setup()
+    await screen.findByText('Alpha')
+    expect(dayRows()[0].getAttribute('draggable')).toBe('true')
+
+    await user.click(screen.getByRole('button', { name: 'Review' }))
+    await waitFor(() =>
+      expect(dayRows().every((r) => r.getAttribute('draggable') !== 'true')).toBe(true))
+  })
+})
+
+// ── reviewing today ─────────────────────────────────────────────────────────
+
+describe('<TodayView> reviewing today', () => {
+  /** A day with one row from each source, plus a dropped one — the same shape
+   *  the past-day suite builds, so the two screens are asserted to bucket a day
+   *  identically. */
+  const mixed = () => plan([
+    entry({ entry_id: 'e-user', source: 'user', title: 'Chosen thing', position: 1 }),
+    entry({ entry_id: 'e-carry', source: 'carried', title: 'Carried thing', position: 2 }),
+    entry({ entry_id: 'e-auto', source: 'auto', title: 'Derived thing', position: 3 }),
+    occurrence({ entry_id: 'e-hab', title: 'Read', position: 4 }),
+    entry({ entry_id: 'e-drop', source: 'user', title: 'Bailed on this',
+      dropped_at: '2026-08-24T12:00:00.000Z', position: 5 }),
+  ])
+
+  it('reviews today without opening anything', async () => {
+    // THE LOAD-BEARING TEST OF THIS FEATURE. `api.openDay` is the only call that
+    // can CREATE a plan, and the rule this whole file is built around is that it
+    // is called for today and for nothing else. A review is a render-level
+    // switch over data already in hand, so going in and back out must not move
+    // the open count and must never reach for the pure read either.
+    m.openDay.mockResolvedValue(mixed())
+    const user = setup()
+    await screen.findByText('Chosen thing')
+    expect(m.openDay).toHaveBeenCalledTimes(1)
+
+    await user.click(screen.getByRole('button', { name: 'Review' }))
+    await screen.findByText('Bailed on this')
+    await user.click(screen.getByRole('button', { name: 'Plan' }))
+    await screen.findByText('Chosen thing')
+
+    expect(m.openDay).toHaveBeenCalledTimes(1)
+    expect(m.day).not.toHaveBeenCalled()
+  })
+
+  it('splits today by where each row came from', async () => {
+    // The same five headings, from the same buckets, as a finished day — this
+    // is `LookBack` reused verbatim rather than a second description of a day.
+    m.openDay.mockResolvedValue(mixed())
+    const user = setup()
+    await screen.findByText('Chosen thing')
+    await user.click(screen.getByRole('button', { name: 'Review' }))
+
+    for (const h of ['Chosen', 'Carried over', 'Derived', 'Habits', 'Dropped']) {
+      expect(await screen.findByRole('list', { name: h })).toBeInTheDocument()
+    }
+    // The dropped row is only ever visible here: the day's own lists filter it.
+    expect(screen.getByText('Bailed on this')).toBeInTheDocument()
+  })
+
+  it('shows what was finished today and never planned', async () => {
+    m.tasks.mockResolvedValue([task({
+      uid: 'off', summary: 'Did this anyway', completed: true,
+      completed_at: `${today()}T14:30:00`,
+    })])
+    m.openDay.mockResolvedValue(plan([entry({ title: 'On the plan' })]))
+    const user = setup()
+    await screen.findByText('On the plan')
+    await user.click(screen.getByRole('button', { name: 'Review' }))
+
+    expect(await screen.findByRole('list', { name: 'Done off-plan' })).toBeInTheDocument()
+    expect(screen.getByText('Did this anyway')).toBeInTheDocument()
+  })
+
+  it('keeps today workable while it is being reviewed', async () => {
+    // The difference from a finished day, and the reason `readOnly` stays keyed
+    // on `isToday` and never on the mode: today is still running. Its rows tick,
+    // and a note still ticks through the entry PATCH.
+    m.openDay.mockResolvedValue(plan([entry({ title: 'Water the plants' })]))
+    const user = setup()
+    await screen.findByText('Water the plants')
+    await user.click(screen.getByRole('button', { name: 'Review' }))
+
+    const check = await screen.findByRole('button', { name: /^Check Water the plants/ })
+    await user.click(check)
+    await waitFor(() => expect(m.patchDayEntry).toHaveBeenCalledWith(
+      today(), 'e1', { done: true }))
+  })
+
+  it('still takes a line while today is being reviewed', async () => {
+    // Gated on `isToday`, not on the mode. "Note down the thing I actually did"
+    // is the commonest reason to be on this screen in the evening, and every
+    // other control on the row is still live.
+    m.openDay.mockResolvedValue(plan([entry({ title: 'Water the plants' })]))
+    const user = setup()
+    await screen.findByText('Water the plants')
+    await user.click(screen.getByRole('button', { name: 'Review' }))
+
+    await user.type(await screen.findByLabelText('Add to today'), 'rang the bank{Enter}')
+    await waitFor(() => expect(m.addDayEntry).toHaveBeenCalledWith(
+      today(), expect.objectContaining({ kind: 'note', title: 'rang the bank' })))
+  })
+
+  it('does not offer more work while reviewing', async () => {
+    m.tasks.mockResolvedValue([task({ due: today(), due_is_date: true })])
+    const user = setup()
+    await screen.findByRole('button', { name: /Add Ship it to today/ })
+
+    await user.click(screen.getByRole('button', { name: 'Review' }))
+    await waitFor(() => expect(
+      screen.queryByRole('button', { name: /Add Ship it to today/ })).not.toBeInTheDocument())
+    expect(screen.queryByText('Due today')).not.toBeInTheDocument()
+  })
+
+  it('counts the day the other way up while reviewing', async () => {
+    m.openDay.mockResolvedValue(plan([
+      entry({ entry_id: 'a', title: 'Done one', done_at: `${today()}T09:00:00`, position: 1 }),
+      entry({ entry_id: 'b', title: 'Still open', position: 2 }),
+    ]))
+    const user = setup()
+    await screen.findByText('Still open')
+    expect(screen.getByText(/1 open · 2 on the day/)).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Review' }))
+    expect(await screen.findByText(/1 done · 2 on the day/)).toBeInTheDocument()
+  })
+
+  it('keeps calling today Today', async () => {
+    // The heading is the one thing on this surface that must never lie about
+    // which day is on screen. Reviewing today is still today; "Look back" is
+    // reserved for a day that has actually finished.
+    const user = setup()
+    await screen.findByRole('button', { name: 'Review' })
+    await user.click(screen.getByRole('button', { name: 'Review' }))
+
+    expect(document.querySelector('.content-title')?.textContent).toBe('Today')
+  })
+
+  it('says so in the present tense when today has nothing on it yet', async () => {
+    const user = setup()
+    await screen.findByRole('button', { name: 'Review' })
+    await user.click(screen.getByRole('button', { name: 'Review' }))
+
+    expect(await screen.findByText(/Nothing on today yet, and nothing finished so far/))
+      .toBeInTheDocument()
+    expect(screen.queryByText(/Nothing was planned on this day/)).not.toBeInTheDocument()
+  })
+
+  it('offers no review toggle on a finished day, because the day is one', async () => {
+    m.day.mockImplementation(async (d) => plan([entry({ day: d, title: 'Yesterday' })], d))
+    const user = setup()
+    await user.click(await screen.findByRole('button', { name: 'Previous day' }))
+    await screen.findByText('Yesterday')
+
+    expect(screen.queryByRole('button', { name: 'Review' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Plan' })).not.toBeInTheDocument()
+    expect(document.querySelector('.content-title')?.textContent).toBe('Look back')
+  })
+
+  it('leaves a finished day read-only even when today was left in review', async () => {
+    // `mode` survives the trip, like the habits sheet does — but `readOnly` is
+    // keyed on `isToday`, so a past day is a record whichever mode today was in.
+    m.day.mockImplementation(async (d) => plan([entry({ day: d, title: 'Yesterday' })], d))
+    const user = setup()
+    await screen.findByRole('button', { name: 'Review' })
+    await user.click(screen.getByRole('button', { name: 'Review' }))
+    await user.click(screen.getByRole('button', { name: 'Previous day' }))
+    await screen.findByText('Yesterday')
+
+    expect(screen.queryByLabelText('Add to today')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^Check / })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^Remove / })).not.toBeInTheDocument()
+  })
+})
+
+// ── how much a suggestion group shows ───────────────────────────────────────
+
+describe('<TodayView> capping the suggestions', () => {
+  /** N open tasks due today, each with its own uid so they are distinct rows. */
+  const dueToday = (n: number) => Array.from({ length: n }, (_, i) =>
+    task({ uid: `u${i}`, summary: `Task ${i}`, due: today(), due_is_date: true }))
+
+  it('shows the first few of a long group, and says how many it is holding', async () => {
+    // Five groups each rendering everything they matched put the day itself off
+    // the top of the screen on any account with a backlog. The count is in the
+    // label so the bound is never a mystery.
+    m.tasks.mockResolvedValue(dueToday(8))
+    setup()
+    await screen.findByText('Task 0')
+
+    expect(document.querySelectorAll('.today-sug')).toHaveLength(5)
+    expect(await screen.findByRole('button', { name: 'Show all 8' })).toBeInTheDocument()
+    expect(screen.queryByText('Task 7')).not.toBeInTheDocument()
+  })
+
+  it('shows the rest on one press', async () => {
+    m.tasks.mockResolvedValue(dueToday(8))
+    const user = setup()
+    await screen.findByText('Task 0')
+
+    await user.click(screen.getByRole('button', { name: 'Show all 8' }))
+    expect(document.querySelectorAll('.today-sug')).toHaveLength(8)
+    expect(screen.getByText('Task 7')).toBeInTheDocument()
+    // Gone once there is nothing left to show — it names a remainder, and there
+    // isn't one.
+    expect(screen.queryByRole('button', { name: /^Show all/ })).not.toBeInTheDocument()
+  })
+
+  it('offers no way past a group that is already whole', async () => {
+    m.tasks.mockResolvedValue(dueToday(3))
+    setup()
+    await screen.findByText('Task 0')
+
+    expect(document.querySelectorAll('.today-sug')).toHaveLength(3)
+    expect(screen.queryByRole('button', { name: /^Show all/ })).not.toBeInTheDocument()
+  })
+
+  it('still keeps one task to one heading when a group is capped', async () => {
+    // THE REASON THE CAP IS AT THE RENDER. `group()` walks every item it matched
+    // into the `offered` set, and that set is what keeps the five groups
+    // disjoint. Capping where the groups are BUILT would leave the sixth
+    // due-today task un-offered, so it would come back under "Overdue" as a
+    // second "add" button for a row already listed above — and the first press
+    // makes the second a no-op the owner cannot explain.
+    //
+    // These eight are due EARLIER today, so every one of them is both
+    // `dayKey(due) === day` and `isOverdue`.
+    const t = Array.from({ length: 8 }, (_, i) => task({
+      uid: `u${i}`, summary: `Task ${i}`, due: `${today()}T00:01`, due_is_date: false,
+    }))
+    m.tasks.mockResolvedValue(t)
+    const user = setup()
+    await screen.findByText('Task 0')
+
+    expect(screen.getByText('Due today')).toBeInTheDocument()
+    expect(screen.queryByText('Overdue')).not.toBeInTheDocument()
+    expect(document.querySelectorAll('.today-sug')).toHaveLength(5)
+
+    // And the three the cap withheld are still that one group's, not a second
+    // group's — they appear under "Due today" and nowhere else.
+    await user.click(screen.getByRole('button', { name: 'Show all 8' }))
+    expect(document.querySelectorAll('.today-sug')).toHaveLength(8)
+    expect(screen.queryByText('Overdue')).not.toBeInTheDocument()
+  })
+
+  it('caps each group on its own', async () => {
+    // The cap is per group, not a budget shared across the panel: each heading
+    // answers a different question and one of them running long must not
+    // silence the next.
+    m.tasks.mockResolvedValue([
+      ...dueToday(7),
+      ...Array.from({ length: 7 }, (_, i) => task({
+        uid: `o${i}`, summary: `Late ${i}`, due: inDays(-3), due_is_date: true,
+      })),
+    ])
+    setup()
+    await screen.findByText('Task 0')
+
+    expect(document.querySelectorAll('.today-sug')).toHaveLength(10)
+    expect(screen.getAllByRole('button', { name: /^Show all 7$/ })).toHaveLength(2)
+  })
+})
+
 // ── what the add box promises ───────────────────────────────────────────────
 
 describe('<TodayView> what the add box promises', () => {

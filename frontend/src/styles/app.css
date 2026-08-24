@@ -1331,6 +1331,39 @@
    quieter than the rows above it. */
 .today-sug .today-title { color: var(--fg-muted); }
 
+/* ---- arranging the day -------------------------------------------------
+   `.drag-over` is NOT a shared class in this stylesheet — every user of it
+   scopes it to its own row type (`.side-item.drag-over`, `.task-drag.drag-over
+   > .task`, `.day-col.drag-over`, `.cal-cell.drag-over`) — so this is the
+   Today tab's own, drawn with the same 2px accent rule they all use, which is
+   what makes a drop target on this screen read as the same idea it does on
+   every other. */
+.today-row.drag-over { box-shadow: inset 0 2px 0 var(--accent); }
+/* The row in hand recedes rather than disappearing: the gap it leaves is what
+   tells you where it is coming FROM while you look for where it is going to. */
+.today-dragging { opacity: 0.45; }
+/* Only where there is a pointer to grab with. On a touchscreen the row is not
+   draggable at all (HTML5 DnD does not fire there — see TodayRow), and a grab
+   cursor advertising a gesture that cannot happen is worse than no cursor. */
+@media (hover: hover) {
+  .today-draggable { cursor: grab; }
+  .today-draggable:active { cursor: grabbing; }
+}
+
+/* The way past a capped group. Shaped like `.cal-more`, the calendar's "+N
+   more", because it is the same idea in the same voice — a quiet way past a
+   deliberate bound, not a control competing with the rows above it. It takes
+   the page gutter so it lines up under the titles rather than under the row's
+   left edge, which would read as a sixth row. */
+.today-more {
+  display: block; background: none; border: 0; cursor: pointer; text-align: left;
+  padding: 6px var(--gutter);
+  font-family: var(--mono); font-size: calc(11px * var(--fs-scale));
+  color: var(--fg-faint); text-transform: var(--label-case);
+  letter-spacing: calc(0.06em * var(--tracking));
+}
+@media (hover: hover) { .today-more:hover { color: var(--accent); } }
+
 /* ---- the look-back -----------------------------------------------------
    Stepping back through recent days. The day picker is chrome; everything
    below it is the same rows this file already styles, so the whole of the
@@ -1437,6 +1470,14 @@
 .today-habit-count {
   font-size: calc(11px * var(--fs-scale)); color: var(--fg-faint); flex: none;
 }
+
+/* Plan / Review, on today only. `align-self` for the reason `.today-nav` and
+   `.today-habits-open` have it — `.content-head` aligns on the baseline, and a
+   word-bearing button left to that sits proud of everything beside it.
+   `.btn.ghost` already carries the pressed look through `:active`; what says
+   which half you are on is the LABEL, which names the destination rather than
+   the current state, plus `aria-pressed` for anyone who cannot see it. */
+.today-review { flex: none; align-self: center; }
 
 /* The way in to the sheet, in the tab header. Deliberately in the Today header
    rather than in Settings: the moment you want to change a habit is the morning
