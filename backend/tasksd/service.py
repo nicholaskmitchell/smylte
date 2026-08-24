@@ -190,7 +190,20 @@ def habit_runs_on(days: str, day: str) -> bool:
     """
     if not days:
         return True                 # '' is every day
-    return _WEEKDAYS[date.fromisoformat(day).weekday()] in days.split(",")
+    return weekday_name(day) in days.split(",")
+
+
+def weekday_name(day: str) -> str:
+    """The `_WEEKDAYS` name for a day key: "2026-08-21" -> "fri".
+
+    THE SAME DERIVATION `habit_runs_on` makes, factored out rather than copied,
+    because a second reader of a weekday is exactly the second mapping the
+    `_WEEKDAYS` comment forbids. Off the day key's own characters and never off
+    a clock: three ideas of "now" are in play (the browser's, `home_timezone`,
+    the server's), and asking any of them would let Friday's capacity be looked
+    up under Thursday whenever two disagree.
+    """
+    return _WEEKDAYS[date.fromisoformat(day).weekday()]
 
 
 def day_key(value: str) -> str:
@@ -575,6 +588,16 @@ class TaskService:
             "pinned": bool(s["pinned"]) if s else False,
             "kanban_column": s["kanban_column"] if s else None,
             "sort_order": s["sort_order"] if s else None,
+            # The estimate this task REMEMBERS, and the first thing to read a
+            # column that has been writable and unread since the sidecar table
+            # was created ("DURATION is exclusive with DUE; keep it here").
+            # It is not the estimate of any particular day: planning a task
+            # copies this onto that day's entry, and the entry is what the day
+            # counts. This is only what the next plan will start from.
+            #
+            # No migration: a database old enough to lack this column predates
+            # the table it is on.
+            "estimated_minutes": s["estimated_minutes"] if s else None,
             "has_rrule": bool(it["has_rrule"]),
             "href": it["href"],
             "etag": it["etag"],
@@ -1347,8 +1370,21 @@ class TaskService:
             # read of every day.
             "habit_id": row["habit_id"],
             "position": row["position"],
+            # What this entry was expected to take, on this day. NULL is "not
+            # estimated" and stays NULL — the total is over the rows that carry
+            # one, so an unestimated row costs the day nothing rather than
+            # counting as zero-length work. Same one-change rule as `habit_id`
+            # above and the same mechanical reason: this line and
+            # store.init_db's `estimate_minutes` ALTER ship together or every
+            # read of every day is a 500.
+            "estimate_minutes": row["estimate_minutes"],
             "done_at": row["done_at"],
             "dropped_at": row["dropped_at"],
+            # The day this was deliberately moved to, or null. Distinct from
+            # `dropped_at`: "doing it Thursday" and "decided against it" are
+            # different things for a day to remember. Same one-change rule as
+            # the columns above — this line and the ALTER ship together.
+            "rolled_to": row["rolled_to"],
             "created_at": row["created_at"],
         }
 
@@ -1360,11 +1396,70 @@ class TaskService:
         `add_day_entry`, and the day still owes itself one snapshot), so a day
         holding nothing but hand-added rows has no marker — and calling that day
         unplanned would draw it as untouched with its own entries on screen."""
+        ritual = store.get_day_ritual(self._conn, day)
         return {
             "day": day,
             "planned": opened or bool(entries),
+            # What the owner SAID about this day, alongside what is on it.
+            #
+            # `capacity_minutes` is what they stated FOR THIS DAY and is null
+            # until they do — deliberately not resolved through the settings
+            # default here, because the two answer different questions. This one
+            # is "did they say something about today"; `capacity` below is "what
+            # number should the total be read against". Collapsing them would
+            # make a day that merely inherited a weekday default indistinguishable
+            # from one the owner actually looked at and set.
+            "capacity_minutes": ritual["capacity_minutes"] if ritual else None,
+            "capacity": self._effective_capacity(day, ritual),
+            "committed_at": ritual["committed_at"] if ritual else None,
+            "shutdown_at": ritual["shutdown_at"] if ritual else None,
+            "reflection": ritual["reflection"] if ritual else None,
             "entries": [self._day_entry_dto(r) for r in entries],
         }
+
+    def _effective_capacity(self, day: str, ritual=None) -> int | None:
+        """How many minutes this day should be read against, or None.
+
+        Four answers in order, and the last one is the important one:
+
+          1. what the owner said for THIS day
+          2. the default for this WEEKDAY, from settings
+          3. the account-wide default, from settings
+          4. NONE
+
+        None is a real answer, not a zero. An account that has never stated a
+        capacity must not be told it has overcommitted against a number it never
+        gave — so every reader of this has to handle null rather than falling
+        back to some assumed working day. That is the difference between a tool
+        that helps you notice something and one that invents a standard for you.
+
+        The weekday comes from the day key's own characters through
+        `weekday_name`, so it is zone-free and agrees with habit scheduling by
+        construction. The settings map is keyed by the SAME names habits use;
+        anything else in it is ignored rather than guessed at, because a settings
+        blob is hand-editable and a garbage key must not become a capacity.
+        """
+        if ritual is None:
+            ritual = store.get_day_ritual(self._conn, day)
+        if ritual and ritual["capacity_minutes"] is not None:
+            return ritual["capacity_minutes"]
+        settings = store.get_settings(self._conn)
+        by_weekday = settings.get("day_capacity_by_weekday")
+        if isinstance(by_weekday, dict):
+            value = by_weekday.get(weekday_name(day))
+            # `isinstance(x, bool)` first: bool is an int subclass, so JSON
+            # `true` would otherwise read as one minute. The same guard
+            # `_check_session_ttl` applies for the same reason.
+            if isinstance(value, int) and not isinstance(value, bool):
+                return value
+        default = settings.get("day_capacity_minutes")
+        # `>= 0` because a negative stored value is the clear sentinel at rest.
+        # `update_settings` merges shallowly and skips None, so "never said"
+        # after once having said something is spelled as -1 rather than by
+        # removing the key — and it has to read back as no capacity at all.
+        if isinstance(default, int) and not isinstance(default, bool) and default >= 0:
+            return default
+        return None
 
     def open_day(self, day: str, *, create: bool) -> dict[str, Any]:
         """The plan for a day, optionally building it if it has never been built.
@@ -1536,9 +1631,20 @@ class TaskService:
                 # entry and a real entry differ in exactly the way that promise
                 # says they do not.
                 "habit_id": f.get("habit_id"),
+                # A preview entry carries the estimate it WOULD be created with
+                # — the one a task remembers in `sidecar` — because that is what
+                # opening the day would actually write, and a preview that
+                # under-reported the day's total would be answering a different
+                # question from the one asked.
+                "estimate_minutes": f.get("estimate_minutes"),
                 "position": None,
                 "done_at": None,
                 "dropped_at": None,
+                # Always null in a preview: nothing that has not been created
+                # can have been moved. Present because this dict is a second
+                # hand-written spelling of `_day_entry_dto` and the docstring
+                # promises callers ONE entry shape.
+                "rolled_to": None,
                 "created_at": None,
             }
             for f in pending
@@ -1645,11 +1751,18 @@ class TaskService:
                 out.append({
                     "entry_id": uuid.uuid4().hex, "kind": "note",
                     "title": row["title"], "source": "carried",
+                    # A note has no task behind it and so nothing to remember an
+                    # estimate for it — the row being carried is the only place
+                    # yesterday's answer exists. Dropping it here would make the
+                    # ritual ask again about the same jot every morning it
+                    # survived.
+                    "estimate_minutes": row["estimate_minutes"],
                 })
                 continue
             if kind == "task":
                 self._append_task_entry(
-                    out, seen, row["collection_href"], row["uid"], "carried"
+                    out, seen, row["collection_href"], row["uid"], "carried",
+                    estimate=row["estimate_minutes"],
                 )
                 continue
             # Everything else — a habit occurrence that somehow reached here, or
@@ -1659,12 +1772,30 @@ class TaskService:
             continue
         return out
 
-    @staticmethod
+    def _remembered_estimate(self, href: str, uid: str) -> int | None:
+        """The estimate this task remembers, from `sidecar`. Called under the lock.
+
+        The sidecar is the task's LAST estimate, not any day's: planning a task
+        copies this onto that day's entry (see `insert_day_entry`), and from
+        then on the entry is what that day counts. So this only ever decides
+        what a NEW entry starts at, which is the whole point — the ritual should
+        not ask twice about a task that comes round every week.
+        """
+        row = store.get_sidecar(self._conn, href, uid)
+        return row["estimated_minutes"] if row else None
+
     def _append_task_entry(
+        self,
         out: list[dict[str, Any]], seen: set[tuple[str, str]],
-        href: str, uid: str, source: str,
+        href: str, uid: str, source: str, estimate: int | None = None,
     ) -> None:
         """Add one task entry unless (collection, uid) is already in the plan.
+
+        `estimate` is what the row should start at, and the two callers mean
+        different things by it. A CARRIED row passes the estimate the entry it
+        is carrying already had — the most direct reading of "this is the same
+        piece of work, moved" — while a derived row passes nothing and falls
+        back to what the task itself remembers.
 
         The dedupe is what stops a task appearing twice on the same day: an
         overdue task the owner also carried forward by hand qualifies under both
@@ -1681,6 +1812,10 @@ class TaskService:
         out.append({
             "entry_id": uuid.uuid4().hex, "kind": "task",
             "collection_href": href, "uid": uid, "source": source,
+            "estimate_minutes": (
+                estimate if estimate is not None
+                else self._remembered_estimate(href, uid)
+            ),
         })
 
     def _carry_into(self, day: str) -> list[Any]:
@@ -1710,7 +1845,14 @@ class TaskService:
             return []
         out = []
         for row in planned[max(planned)]:
-            if row["source"] != "user" or row["done_at"] or row["dropped_at"]:
+            # `rolled_to` alongside done and dropped, and it is load-bearing
+            # rather than tidy: a row the owner deliberately moved to Thursday
+            # has been decided about, and without this line the automatic carry
+            # would ALSO pull it into tomorrow — so they would find two of it,
+            # one from their decision and one from the safety net that exists
+            # for when they make none.
+            if (row["source"] != "user" or row["done_at"] or row["dropped_at"]
+                    or row["rolled_to"]):
                 continue
             if row["kind"] == "task":
                 item = store.get_item(self._conn, row["collection_href"], row["uid"])
@@ -1773,6 +1915,12 @@ class TaskService:
                 # the habit and this day still says what the owner planned, with
                 # only a dangling habit_id to show the rule is gone.
                 "title": habit["title"], "habit_id": habit["id"],
+                # Copied for the same reason the title is, and it is the reason
+                # habits needed a column of their own: an occurrence has no wire
+                # object to remember an estimate for it and never carries, so
+                # without this the ritual would ask how long "Read" takes every
+                # single morning.
+                "estimate_minutes": habit["estimate_minutes"],
                 # source="habit" is load-bearing, not a label. `_carry_into`
                 # keeps only source="user" rows, so "an occurrence never carries
                 # into the next day" falls out of this line for free —
@@ -1781,6 +1929,149 @@ class TaskService:
                 "source": "habit",
             })
         return out
+
+    def set_day_ritual(
+        self, day: str, *,
+        capacity_minutes: int | None = None, committed: bool | None = None,
+        shutdown: bool | None = None, reflection: str | None = None,
+    ) -> dict[str, Any]:
+        """Record what the owner says about a day: how long they will work, that
+        they have begun, that they have finished, and how it went.
+
+        REFUSED ON A PAST DAY, all four of them, and that is the same line
+        `mcp/api.py::update_day_entry` draws for `done`. Every one of these is a
+        statement about a day you can still act on: a capacity is a plan, and a
+        shutdown performed on Thursday for Monday is not a record of Monday. A
+        ritual that can be carried out afterwards is a form, not a boundary.
+
+        It carries `_HABIT_MINT_GRACE_DAYS` of grace, and for exactly the reason
+        habit minting does rather than as a softening of the rule: `home_timezone`
+        is unset by default and the server is UTC in the ordinary deployment, so
+        a browser in New York between 20:00 and midnight sends a key the server
+        already calls yesterday. Without the grace the shutdown ritual would be
+        refused every evening after dinner — which is when it is meant to happen.
+
+        `committed` and `shutdown` are tri-state booleans for the reason
+        `patch_day_entry`'s `done` is one: None means "not sent", and False is a
+        real value that clears the stamp, which is how a day is re-opened after
+        being closed too early.
+        """
+        day = day_key(day)
+        if not self._ritual_writable(day):
+            raise ValueError(
+                f"{day} has already happened; a capacity, a start and a shutdown "
+                "are statements about a day you can still act on"
+            )
+        fields: dict[str, object] = {}
+        if capacity_minutes is not None:
+            # -1 clears, the same sentinel and the same reason as an estimate: 0
+            # is a real capacity ("I am not working today") and None already
+            # means "not sent".
+            fields["capacity_minutes"] = (
+                None if capacity_minutes < 0 else int(capacity_minutes)
+            )
+        if committed is not None:
+            fields["committed_at"] = _stamp() if committed else None
+        if shutdown is not None:
+            fields["shutdown_at"] = _stamp() if shutdown else None
+        if reflection is not None:
+            # An emptied reflection clears rather than storing "", so "nothing
+            # written" has one representation.
+            fields["reflection"] = reflection.strip() or None
+        with self._lock:
+            # The written row is deliberately not read back here: `_day_plan_dto`
+            # reads the ritual itself, and an empty `fields` writes nothing at
+            # all (see `store.set_day_ritual`) so there may be no row to read.
+            store.set_day_ritual(self._conn, day, **fields)
+            entries = store.get_day_entries(self._conn, day)
+            opened = store.day_is_opened(self._conn, day)
+            dto = self._day_plan_dto(day, entries, opened)
+        # Only when something was written — a PATCH with an empty body is a read,
+        # and an event for it would have every other tab refetch for nothing.
+        if fields:
+            self._publish({"type": "day_updated", "day": day})
+        return dto
+
+    def roll_entry(self, day: str, entry_id: str, to_day: str) -> dict[str, Any] | None:
+        """Move one entry to another day. None for an entry_id this day lacks.
+
+        MOVES NOTHING. It creates an entry on `to_day` and stamps this one with
+        where it went — because the day that planned the work is still the day
+        that planned it, and a log you can rewrite by rescheduling is not a log.
+        `rolled_to` is deliberately not `dropped_at`: "doing it Thursday" and
+        "decided against it" are different answers, and a look-back that can
+        tell them apart is worth more than one that files both under abandoned.
+
+        Idempotent, and for free: `add_day_entry` already answers with the row
+        that is there for the same task, or the same note text, on the same day.
+        So a retried roll lands on one entry, and a second roll of the same row
+        to the same day changes nothing.
+
+        FROM a past day is allowed. That manufactures no record of the past day
+        — the new row lands on a day that has not happened — and the planning
+        ritual's leftovers step needs exactly this when a shutdown was skipped.
+        TO a past day is refused: an entry appearing on a finished day is the
+        forgery every other rule here exists to prevent.
+
+        A HABIT OCCURRENCE cannot be rolled. Tomorrow gets its own from the rule,
+        so moving one would either duplicate it or fabricate an occurrence on a
+        day the rule does not schedule — the thing `add_day_entry`'s kind check
+        is the last line against. The refusal is explicit here so the message
+        says why rather than surfacing that check's wording.
+        """
+        day = day_key(day)
+        to_day = day_key(to_day)
+        if to_day == day:
+            raise ValueError(f"{entry_id} is already on {day}")
+        if to_day < self._today():
+            raise ValueError(
+                f"{to_day} has already happened; work can only be moved forward"
+            )
+        with self._lock:
+            row = store.find_day_entry(self._conn, day, entry_id=entry_id)
+            if row is None:
+                return None
+            if row["kind"] == "habit":
+                raise ValueError(
+                    "a habit occurrence cannot be moved; tomorrow gets its own "
+                    "from the rule"
+                )
+            if row["dropped_at"]:
+                raise ValueError("a dropped entry has already been decided about")
+        # OUTSIDE the lock, because `add_day_entry` takes it itself — and it is
+        # the one that has to resolve the list, dedupe and publish. Nothing can
+        # race in between that matters: a second roll of the same row finds the
+        # entry already there and answers it.
+        self.add_day_entry(
+            to_day, entry_id=uuid.uuid4().hex, kind=row["kind"],
+            list_id=_slug(row["collection_href"]) if row["collection_href"] else None,
+            uid=row["uid"], title=row["title"],
+            # The estimate travels with the work. A task's would arrive anyway
+            # through the sidecar memory, but a NOTE remembers nothing — so
+            # without this, "ring the bank, 15m" moved to Thursday arrives on
+            # Thursday as an unestimated row, and the day it left is the only one
+            # that ever knew how long it takes.
+            estimate_minutes=row["estimate_minutes"],
+        )
+        with self._lock:
+            moved = store.update_day_entry(
+                self._conn, day, entry_id, rolled_to=to_day)
+            dto = self._day_entry_dto(moved)
+        self._publish({"type": "day_updated", "day": day})
+        return dto
+
+    def _ritual_writable(self, day: str) -> bool:
+        """May the owner still make a statement about this day?
+
+        Deliberately the same window as habit minting, sharing its constant. Two
+        different pastness rules on one screen — one for what a day may be given
+        and another for what may be said about it — would be two places to get
+        the timezone reasoning right and one place to get it wrong.
+        """
+        return (
+            date.fromisoformat(day)
+            >= date.fromisoformat(self._today()) - timedelta(days=_HABIT_MINT_GRACE_DAYS)
+        )
 
     def _habit_minting_allowed(self, day: str) -> bool:
         """May `day` be given habit occurrences at all?
@@ -1826,7 +2117,8 @@ class TaskService:
 
     def add_day_entry(
         self, day: str, *, entry_id: str, kind: str,
-        list_id: str | None = None, uid: str | None = None, title: str | None = None,
+        list_id: str | None = None, uid: str | None = None,
+        title: str | None = None, estimate_minutes: int | None = None,
     ) -> dict[str, Any]:
         """Put a task or a note on a day by hand (source=user).
 
@@ -1930,6 +2222,20 @@ class TaskService:
             row = store.insert_day_entry(
                 self._conn, day=day, entry_id=entry_id, kind=kind, source="user",
                 collection_href=href, uid=uid, title=title, position=position,
+                # A task entry starts at what its task remembers; a note has
+                # nothing to remember one, so it starts unestimated and the
+                # ritual asks. Copied at insert time rather than joined — see
+                # `insert_day_entry`.
+                #
+                # An estimate STATED by the caller wins over the remembered
+                # one. It is the fresher statement about this particular day,
+                # and the memory exists to save typing rather than to overrule
+                # somebody who has already typed.
+                estimate_minutes=(
+                    int(estimate_minutes) if estimate_minutes is not None
+                    else self._remembered_estimate(href, uid)
+                    if kind == "task" and href and uid else None
+                ),
             )
             dto = self._day_entry_dto(row)
         self._publish({"type": "day_updated", "day": day})
@@ -1938,7 +2244,7 @@ class TaskService:
     def patch_day_entry(
         self, day: str, entry_id: str, *,
         done: bool | None = None, dropped: bool | None = None,
-        position: float | None = None,
+        position: float | None = None, estimate_minutes: int | None = None,
     ) -> dict[str, Any] | None:
         """Tick, drop or reposition one entry. None for an entry_id this day does
         not have (the route turns that into a 404).
@@ -1967,6 +2273,16 @@ class TaskService:
             fields["dropped_at"] = _stamp() if dropped else None
         if position is not None:
             fields["position"] = float(position)
+        if estimate_minutes is not None:
+            # -1 CLEARS. `done` and `dropped` spell their undo with a real
+            # `False`, but an int has no spare falsy value to borrow: 0 is a
+            # legitimate estimate ("not worth counting") and None already means
+            # "the client did not send this field". So the sentinel is explicit
+            # rather than smuggled, and the edge model's lower bound is -1
+            # precisely so this is the only negative that can arrive.
+            fields["estimate_minutes"] = (
+                None if estimate_minutes < 0 else int(estimate_minutes)
+            )
         with self._lock:
             # Read before write, because the rule below needs the entry's KIND —
             # and this is also the 404 check now. Nothing can land in between:
@@ -1989,6 +2305,22 @@ class TaskService:
                 raise ValueError(
                     "done applies to a note or habit entry; a task's doneness "
                     "is its VTODO STATUS — complete the task instead"
+                )
+            # Estimating a TASK also teaches the task, so the next day that
+            # plans it starts from this answer instead of asking again. Only a
+            # task: a note and a habit occurrence have no sidecar row to teach —
+            # a note is remembered by the carry, a habit by its rule.
+            #
+            # WRITE-through, never read-through, and that asymmetry is the whole
+            # of it. The entry is what its day counts; this only moves where the
+            # NEXT entry starts. Joining instead would make re-estimating in
+            # March rewrite what January's plan said the work would take, which
+            # is the same mistake a habit occurrence avoids by copying its title.
+            if ("estimate_minutes" in fields and row["kind"] == "task"
+                    and row["collection_href"] and row["uid"]):
+                store.set_sidecar(
+                    self._conn, row["collection_href"], row["uid"],
+                    estimated_minutes=fields["estimate_minutes"],
                 )
             row = store.update_day_entry(self._conn, day, entry_id, **fields)
             dto = self._day_entry_dto(row)
@@ -2041,6 +2373,11 @@ class TaskService:
             "days": row["days"],
             "paused_at": row["paused_at"],
             "position": row["position"],
+            # What one run of this is expected to take. Copied onto every
+            # occurrence at mint time, exactly as the title is — so this only
+            # ever decides what FUTURE days start at, and changing it leaves
+            # last Tuesday saying what last Tuesday said.
+            "estimate_minutes": row["estimate_minutes"],
             "created_at": row["created_at"],
         }
 
@@ -2051,7 +2388,8 @@ class TaskService:
             return [self._habit_dto(r) for r in store.list_habits(self._conn)]
 
     def create_habit(
-        self, *, title: str, days: str | None = None, position: float | None = None
+        self, *, title: str, days: str | None = None, position: float | None = None,
+        estimate_minutes: int | None = None,
     ) -> dict[str, Any]:
         """Define a habit. Raises ValueError (routes → 422) for an empty title or
         a `days` that is not a canonical weekday list.
@@ -2075,6 +2413,7 @@ class TaskService:
                 ) + 1.0
             row = store.create_habit(self._conn, uuid.uuid4().hex, {
                 "title": title, "days": days, "position": float(position),
+                "estimate_minutes": estimate_minutes,
             })
             dto = self._habit_dto(row)
         self._publish({"type": "day_updated", "day": self._today()})
@@ -2083,6 +2422,7 @@ class TaskService:
     def update_habit(
         self, habit_id: str, *, title: str | None = None, days: str | None = None,
         paused: bool | None = None, position: float | None = None,
+        estimate_minutes: int | None = None,
     ) -> dict[str, Any] | None:
         """Rename, reschedule, pause/resume or reorder one habit. None for an id
         that does not exist (the route turns that into a 404).
@@ -2111,6 +2451,13 @@ class TaskService:
             fields["paused_at"] = _stamp() if paused else None
         if position is not None:
             fields["position"] = float(position)
+        if estimate_minutes is not None:
+            # -1 clears, the same sentinel `patch_day_entry` uses and for the
+            # same reason: 0 is a real estimate and None already means "not
+            # sent", so an int needs one spelled out.
+            fields["estimate_minutes"] = (
+                None if estimate_minutes < 0 else int(estimate_minutes)
+            )
         with self._lock:
             row = store.update_habit(self._conn, habit_id, fields)
             if row is None:

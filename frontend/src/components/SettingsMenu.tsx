@@ -23,6 +23,7 @@ import type { Tab, TabStart } from '../tabs'
 import { ArchivedCalendarsSection } from './ArchivedCalendarsSection'
 import { ConnectionsSection } from './ConnectionsSection'
 import { TabsSection } from './TabsSection'
+import { CapacitySection } from './CapacitySection'
 
 // The nav, in order. `label` is the accessible name of both the nav item and,
 // on a phone, the title bar — Søren's test asserts they agree.
@@ -40,6 +41,7 @@ export function SettingsMenu({
   theme, onToggleTheme, onCustomizeAppearance,
   tabOrder, startTab, onTabOrderChange, onStartTabChange,
   timeFormat, onToggleTimeFormat,
+  dayCapacity, onDayCapacityChange, dayCapacityByWeekday, onDayCapacityByWeekdayChange,
   homeTz, onToggleHomeTz,
   calFit, onToggleCalFit,
   archivedCals, onArchivedCalsChange,
@@ -56,6 +58,12 @@ export function SettingsMenu({
   onStartTabChange: (next: TabStart) => void
   timeFormat: TimeFormat
   onToggleTimeFormat: () => void
+  /** The account-wide working day, or null for "never said". */
+  dayCapacity: number | null
+  onDayCapacityChange: (next: number | null) => void
+  /** Sparse per-weekday exceptions, keyed by the `HABIT_DAYS` names. */
+  dayCapacityByWeekday: Record<string, number>
+  onDayCapacityByWeekdayChange: (next: Record<string, number>) => void
   homeTz: string
   onToggleHomeTz: () => void
   calFit: CalendarFit
@@ -155,6 +163,14 @@ export function SettingsMenu({
               pickers are drawn by the browser — Chrome, Edge and the Windows
               app follow this setting, Firefox follows your system's.
             </div>
+
+            {/* Beside the clock, because both answer "how does this account
+                measure time" — and a day's length belongs next to how the day
+                is drawn rather than buried under the Tasks panel. */}
+            <div className="menu-head">Working day</div>
+            <CapacitySection minutes={dayCapacity} byWeekday={dayCapacityByWeekday}
+              onChange={onDayCapacityChange}
+              onWeekdayChange={onDayCapacityByWeekdayChange} />
 
             <div className="menu-head">Time zone</div>
             <div className="menu-row">

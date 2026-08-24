@@ -74,6 +74,11 @@ export interface Task {
   // returns it, and a field the server sends that the type denies exists is how
   // the four below went missing in the first place.
   kanban_column: string | null
+  /** The estimate this task REMEMBERS — sidecar, so Smylte-only and invisible to
+   *  Tasks.org, jtx Board and Thunderbird. It is not any day's estimate:
+   *  planning the task copies this onto that day's entry, and the entry is what
+   *  that day counts. This only decides where the next plan starts. */
+  estimated_minutes: number | null
   // This task carries an RRULE or RDATE. VTODO recurrence is GATED (see
   // docs/recurrence-findings.md) so nothing in this app advances such a task —
   // but one written by Tasks.org or jtx Board is already in the cache, and a
@@ -295,6 +300,27 @@ export interface DayEntry {
   // title — so its only job is to be an identity the week's occurrences of one
   // habit can be counted under.
   habit_id: string | null
+  /** The day key this entry was deliberately MOVED to, or null.
+   *
+   *  Distinct from `dropped_at`, and the distinction is the point: "I am doing
+   *  this on Thursday" and "I decided against this" are different things for a
+   *  day to remember. The row stays on its own day either way — rolling creates
+   *  an entry on the target and stamps this one, so the day that planned the
+   *  work is still the day that planned it.
+   *
+   *  A stamped row is skipped by the automatic carry-over, or the owner would
+   *  find two of it: one from their decision and one from the safety net. */
+  rolled_to: string | null
+  // How long this entry is expected to take, on THIS day. Null is "nobody said",
+  // which is a real answer: the day's total is over the rows that carry one, so
+  // an unestimated row costs the day nothing rather than counting as free.
+  //
+  // A COPY, never a join. A task remembers its last estimate in the sidecar, a
+  // habit remembers one on its rule, and a note is remembered by the carry — but
+  // all three only decide what a NEW entry starts at. Once the row exists the
+  // row is what its day counts, which is what stops re-estimating something in
+  // March from rewriting what January's plan said it would take.
+  estimate_minutes: number | null
   created_at: string
 }
 
@@ -310,7 +336,39 @@ export interface DayPlan {
    *  the owner emptied is planned with nothing in it, and re-opening it must not
    *  snapshot over that. */
   planned: boolean
+  /** What the owner SAID for this day, or null if they never said anything.
+   *  Deliberately separate from `capacity` below: this one answers "did they
+   *  look at this day and set a number", which is what tells a day they
+   *  actually planned from one that merely inherited a weekday default. */
+  capacity_minutes: number | null
+  /** What the day's total should be READ AGAINST, resolved server-side through
+   *  what was said for the day, the weekday default, the account default, and
+   *  then nothing. **Null is a real answer** and every reader has to handle it
+   *  rather than falling back to some assumed working day — see
+   *  `service._effective_capacity`. */
+  capacity: number | null
+  /** The planning ritual was finished. */
+  committed_at: string | null
+  /** The shutdown ritual was finished. */
+  shutdown_at: string | null
+  /** A sentence or two on how the day went, written at shutdown. */
+  reflection: string | null
   entries: DayEntry[]
+}
+
+/** Everything PATCH /day/{day} accepts — what the owner SAYS about a day, as
+ *  opposed to what is on it. Every field tri-state: an omitted key is "not
+ *  asked about", and the falsy values are real (`committed: false` re-opens a
+ *  day begun by mistake). Refused entirely on a past day, with one day of
+ *  grace, because a capacity is a plan and a shutdown is a boundary. */
+export interface PatchDayBody {
+  /** Minutes, or **-1 to clear** — the same sentinel and the same reason as
+   *  `PatchDayEntryBody.estimate_minutes`: 0 is a real capacity ("not working
+   *  today"), so the clear cannot borrow falsiness. */
+  capacity_minutes?: number
+  committed?: boolean
+  shutdown?: boolean
+  reflection?: string
 }
 
 /** Everything POST /day/{day}/entries accepts. `list` + `uid` name a task;
@@ -338,6 +396,11 @@ export interface PatchDayEntryBody {
   done?: boolean
   dropped?: boolean
   position?: number
+  /** Minutes, or **-1 to clear**. The sentinel is explicit because an int has no
+   *  spare falsy value to borrow: 0 is a legitimate estimate and an omitted key
+   *  already means "not asked about". The backend bounds this at [-1, 1440], so
+   *  -1 is the only negative that can arrive. */
+  estimate_minutes?: number
 }
 
 // ── habits (the repeating spine of a day) ──────────────────────────────────
@@ -370,6 +433,10 @@ export interface Habit {
    *  because those are rows in the day plan and the rule cannot reach them. */
   paused_at: string | null
   position: number | null
+  /** How long one run of this takes. The RULE remembers it and every occurrence
+   *  is minted with a copy, exactly as the title is — so a habit is estimated
+   *  once rather than every morning, and changing it leaves past days alone. */
+  estimate_minutes: number | null
   created_at: string
 }
 
@@ -390,6 +457,7 @@ export interface CreateHabitBody {
   title: string
   days?: string
   position?: number
+  estimate_minutes?: number
 }
 
 /** Everything PATCH /habits/{id} accepts. Every field is optional and an
@@ -401,6 +469,10 @@ export interface PatchHabitBody {
   days?: string
   paused?: boolean
   position?: number
+  /** Minutes, or -1 to clear — the same sentinel and bounds as
+   *  `PatchDayEntryBody.estimate_minutes`, so a duration is spelled one way
+   *  wherever this app takes one. */
+  estimate_minutes?: number
 }
 
 // One application connected through the MCP connector. Identified by its
@@ -451,6 +523,17 @@ export interface Settings {
   // without this it assumed the *link's* zone and read every one of the owner's
   // own events at the wrong instant. '' clears it.
   home_timezone?: string
+  /** How many minutes an ordinary day is expected to hold, and the per-weekday
+   *  exceptions. Absent means NEVER SAID — a real answer, and the one the whole
+   *  capacity feature turns on: an account that has not stated a capacity is
+   *  never told it has overcommitted against a number it did not give.
+   *
+   *  The map is sparse and keyed by the `HABIT_DAYS` names, never by index —
+   *  the server's `_WEEKDAYS` is the one place those names meet a weekday
+   *  number, and a second mapping here is how "wed" comes to mean two different
+   *  days on two paths. See `capacity.ts`. */
+  day_capacity_minutes?: number
+  day_capacity_by_weekday?: Record<string, number>
 }
 
 // Creates carry a client-generated id that becomes the CalDAV resource slug,
@@ -572,6 +655,10 @@ export const api = {
   // — and the `planned` flag would stop meaning what it says.
   openDay: (day: string) => j<DayPlan>('POST', `/api/day/${day}/open`),
   day: (day: string) => j<DayPlan>('GET', `/api/day/${day}`),
+  // What the owner says about a day, as opposed to what is on it. A PATCH on
+  // the DAY rather than on an entry, because none of it belongs to any row.
+  patchDay: (day: string, body: PatchDayBody) =>
+    j<DayPlan>('PATCH', `/api/day/${day}`, body),
   // Planned days in [from, to), `to` EXCLUSIVE and the span bounded to 190 days
   // server-side (a wider one answers 422). Days never opened are simply absent,
   // so an empty array means "nothing planned in there".
@@ -579,6 +666,11 @@ export const api = {
     j<DayPlan[]>('GET', `/api/day?from=${from}&to=${to}`),
   addDayEntry: (day: string, body: CreateDayEntryBody) =>
     j<DayEntry>('POST', `/api/day/${day}/entries`, body),
+  // A POST because it CREATES: a new entry lands on the target day and this one
+  // is stamped with where it went. Nothing is moved and nothing is deleted.
+  rollDayEntry: (day: string, entryId: string, to: string) =>
+    j<DayEntry>('POST',
+      `/api/day/${day}/entries/${encodeURIComponent(entryId)}/roll`, { to }),
   patchDayEntry: (day: string, entryId: string, body: PatchDayEntryBody) =>
     j<DayEntry>('PATCH', `/api/day/${day}/entries/${encodeURIComponent(entryId)}`, body),
 

@@ -1,0 +1,297 @@
+// The morning ritual: three steps between an empty day and a day you have
+// committed to.
+//
+// A stepped flow rather than the running total alone, because the total answers
+// "am I overcommitted" and the ritual answers "what am I doing today" — and the
+// second question is the one that goes unasked. Sunsama's is the model: it opens
+// by asking when you want to stop, then walks picking, estimating and ordering,
+// and warns when eight hours of work meets a six-hour window.
+//
+// THREE STEPS, NOT SIX, and both reductions were found by building it.
+//
+// The plan named a separate "leftovers" step. That would have been a THIRD
+// surface for the same rows: the automatic carry already brings the last planned
+// day's chosen work onto today, and everything older is already the "Still open
+// from a recent plan" suggestion group. So that group is promoted to the top of
+// the picking step and reworded there — it gets its moment without a screen of
+// its own.
+//
+// Estimating and ordering were also separate, and are one screen here, because
+// they are two passes over the same list: a screen for each would be ceremony
+// rather than guidance. Committing is the last screen's button rather than a
+// step, for the same reason — a screen whose only content is a button is a
+// speed bump with a heading.
+//
+// It is CLOSABLE AT EVERY STEP and every step is skippable. A ritual you cannot
+// leave is a wizard, and this one stands between the owner and a list they may
+// simply have wanted to glance at.
+
+import { useRef, useState } from 'react'
+import type { ReactNode } from 'react'
+import type { DayEntry, Task } from '../api'
+import { useEscape } from '../hooks'
+import { taskKey } from '../order'
+import { textDir } from '../util'
+import { fmtDuration } from '../time'
+import { capacityInput, parseCapacity } from '../capacity'
+
+/** A suggestion group as `TodayView` builds it. */
+export interface SuggestGroup {
+  key: string
+  label: string
+  items: Task[]
+}
+
+/** The group that is really "what you did not finish last time". Promoted to
+ *  the top of the picking step and reworded there — the label `TodayView` gives
+ *  it is written for a quiet list under the day, not for the one screen whose
+ *  whole job is to make you look at it. */
+const LEFTOVER_KEY = 'open'
+
+const STEPS = ['How long is today?', 'What are you doing?', 'Shape it'] as const
+
+export function PlanRitual({
+  entries, suggestions, capacity, planned, meetingMinutes, unestimated,
+  committedAt, renderRow, colorOf, onCapacity, onAddTask, onCommit, onClose,
+}: {
+  /** The day's live rows, in reading order. */
+  entries: DayEntry[]
+  suggestions: SuggestGroup[]
+  /** What the day's total is read against, or null when nobody has said. */
+  capacity: number | null
+  planned: number
+  meetingMinutes: number
+  /** How many rows carry no estimate — what the total is silent about. */
+  unestimated: number
+  committedAt: string | null
+  /** The row renderer `TodayView` already owns, with its checkbox, its estimate
+   *  cell and its drag handlers. Lifted in rather than rebuilt, so a row behaves
+   *  identically inside the ritual and outside it. */
+  renderRow: (e: DayEntry) => ReactNode
+  colorOf: (listId: string | null) => string | null
+  onCapacity: (minutes: number | null) => void
+  onAddTask: (t: Task) => void
+  onCommit: () => void
+  onClose: () => void
+}) {
+  const [step, setStep] = useState(0)
+  /** Whether the press that started this click landed on the scrim itself. */
+  const scrimPress = useRef(false)
+  useEscape(onClose)
+
+  const over = capacity != null && planned > capacity
+  const last = step === STEPS.length - 1
+
+  return (
+    <div className="overlay"
+      // The scrim's two-event dance, copied from `TaskModal` rather than
+      // reinvented: a bare onClick fires whenever the release lands on the
+      // scrim, so a text drag-select that began inside and finished outside
+      // would discard the whole flow.
+      onMouseDown={(e) => { scrimPress.current = e.target === e.currentTarget }}
+      onClick={(e) => {
+        if (e.target === e.currentTarget && scrimPress.current) onClose()
+        scrimPress.current = false
+      }}>
+      <div className="modal plan-ritual" role="dialog" aria-modal="true"
+        aria-label="Plan your day" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <span className="modal-title">{STEPS[step]}</span>
+          <span className="plan-step mono">{step + 1} of {STEPS.length}</span>
+          <button className="icon-btn" onClick={onClose} aria-label="Close">✕</button>
+        </div>
+
+        {step === 0 && (
+          <CapacityStep capacity={capacity} meetingMinutes={meetingMinutes}
+            onCapacity={onCapacity} />
+        )}
+        {step === 1 && (
+          <PickStep suggestions={suggestions} colorOf={colorOf} onAddTask={onAddTask} />
+        )}
+        {step === 2 && (
+          <ShapeStep entries={entries} renderRow={renderRow} />
+        )}
+
+        {/* The running total rides along from the second step on, so the
+            consequence of adding something is visible in the same breath as the
+            adding — which is the whole reason the ritual is worth walking. */}
+        {step > 0 && capacity != null && (
+          <p className={`plan-total mono ${over ? 'over' : ''}`} role="status">
+            {fmtDuration(planned)} of {fmtDuration(capacity)}
+            {unestimated > 0 && ` · ${unestimated} not estimated`}
+            {over && ` · ${fmtDuration(planned - capacity)} over`}
+          </p>
+        )}
+
+        <div className="modal-actions plan-actions">
+          {step > 0 && (
+            <button className="btn ghost" onClick={() => setStep(step - 1)}>Back</button>
+          )}
+          <span className="spacer" />
+          {!last && (
+            // "Skip" and not a disabled Next: every step is optional, and a
+            // flow that refused to advance would be the wizard this is not.
+            <button className="btn ghost" onClick={() => setStep(step + 1)}>Skip</button>
+          )}
+          {last ? (
+            <button className="btn" onClick={onCommit}>
+              {committedAt ? 'Done' : 'Start the day'}
+            </button>
+          ) : (
+            <button className="btn" onClick={() => setStep(step + 1)}>Next</button>
+          )}
+        </div>
+
+        {/* Said at the moment of committing, in words, and it never blocks —
+            the button beside it does exactly what it says whether or not this
+            is here. A warning that stopped you would be a tool arguing with a
+            decision it does not have the standing to make. */}
+        {last && over && (
+          <p className="plan-warn" role="status">
+            That is {fmtDuration(planned - capacity!)} more than you said you
+            would work. You can start anyway — but it is easier to move
+            something now than at four o'clock.
+          </p>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/** Step one: how long today is. */
+function CapacityStep({ capacity, meetingMinutes, onCapacity }: {
+  capacity: number | null
+  meetingMinutes: number
+  onCapacity: (minutes: number | null) => void
+}) {
+  const [draft, setDraft] = useState(() => capacityInput(capacity))
+  const [refused, setRefused] = useState(false)
+
+  const commit = () => {
+    const raw = draft.trim()
+    if (!raw) { setRefused(false); if (capacity != null) onCapacity(null); return }
+    // The clock is passed in here and matters: this is the field that takes
+    // "until 6pm", and what it means depends on when it is typed. Resolved once,
+    // now, into a plain number of minutes — see `capacity.ts`.
+    const next = parseCapacity(raw, new Date())
+    if (next == null) { setRefused(true); return }
+    setRefused(false)
+    setDraft(capacityInput(next))
+    if (next !== capacity) onCapacity(next)
+  }
+
+  return (
+    <div className="plan-body">
+      <label className="plan-label" htmlFor="plan-capacity">
+        When are you stopping today?
+      </label>
+      <input id="plan-capacity" className="input" autoFocus value={draft}
+        placeholder="until 6pm, or 5h"
+        aria-label="How long you are working today"
+        onChange={(e) => { setDraft(e.target.value); setRefused(false) }}
+        onBlur={commit}
+        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commit() } }} />
+      {refused ? (
+        // The parser refuses rather than guesses, so this is where that shows.
+        // It names what it takes instead of saying "invalid", because the useful
+        // half of a rejection is the example.
+        <p className="plan-hint warn" role="status">
+          Try <span className="mono">until 6pm</span> or{' '}
+          <span className="mono">5h</span>.
+        </p>
+      ) : (
+        <p className="plan-hint">
+          Say it either way — <span className="mono">until 6pm</span> or{' '}
+          <span className="mono">5h</span>. It is only for today; Settings holds
+          the one that fills this in.
+        </p>
+      )}
+      {meetingMinutes > 0 && (
+        // Shown, never subtracted. Whether a given event is work is a judgement
+        // this app does not get to make on the owner's behalf, so the collision
+        // is put in front of them and the arithmetic is left alone.
+        <p className="plan-hint">
+          You already have {fmtDuration(meetingMinutes)} on the calendar today.
+        </p>
+      )}
+    </div>
+  )
+}
+
+/** Step two: what goes on the day. */
+function PickStep({ suggestions, colorOf, onAddTask }: {
+  suggestions: SuggestGroup[]
+  colorOf: (listId: string | null) => string | null
+  onAddTask: (t: Task) => void
+}) {
+  // Leftovers first, and reworded. The rest keep the order and the labels the
+  // day itself gives them, so nothing here is a second opinion about what
+  // matters — only about what to look at first.
+  const leftovers = suggestions.find((g) => g.key === LEFTOVER_KEY)
+  const rest = suggestions.filter((g) => g.key !== LEFTOVER_KEY)
+  const groups = leftovers
+    ? [{ ...leftovers, label: 'You did not finish these last time' }, ...rest]
+    : rest
+
+  if (!groups.length) {
+    return (
+      <div className="plan-body">
+        <p className="empty">
+          Nothing waiting. Whatever else today needs, type it into the box behind
+          this.
+        </p>
+      </div>
+    )
+  }
+  return (
+    <div className="plan-body plan-scroll">
+      {groups.map((g) => (
+        <section key={g.key}>
+          <div className="label section-label">{g.label}</div>
+          <ul className="today-list">
+            {g.items.map((t) => (
+              <li key={taskKey(t)} className="today-row today-sug">
+                <button type="button" className="today-plus"
+                  aria-label={`Add ${t.summary || '(untitled)'} to today`}
+                  onClick={() => onAddTask(t)}>+</button>
+                <span className="today-kind-mark" data-kind="task" role="img"
+                  aria-label="Task">
+                  <span className="today-kind-box" style={colorOf(t.list)
+                    ? { background: colorOf(t.list)! } : undefined} />
+                </span>
+                <span className="today-title" dir={textDir(t.summary)}>
+                  {t.summary || '(untitled)'}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ))}
+    </div>
+  )
+}
+
+/** Step three: how long each thing takes, and what order it happens in. */
+function ShapeStep({ entries, renderRow }: {
+  entries: DayEntry[]
+  renderRow: (e: DayEntry) => ReactNode
+}) {
+  if (!entries.length) {
+    return (
+      <div className="plan-body">
+        <p className="empty">Nothing on today yet.</p>
+      </div>
+    )
+  }
+  return (
+    <div className="plan-body plan-scroll">
+      <p className="plan-hint">
+        Press an estimate to set it. Drag a row to move it.
+      </p>
+      {/* The day's OWN rows, through the day's own renderer — so the estimate
+          cell, the checkbox and the drag behave here exactly as they do behind
+          this dialog, and there is no second implementation to drift. */}
+      <ul className="today-list">{entries.map(renderRow)}</ul>
+    </div>
+  )
+}

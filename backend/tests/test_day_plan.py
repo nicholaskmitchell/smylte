@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import time
 import uuid
+from datetime import date, timedelta
 
 import pytest
 from helpers import foreign_raw
@@ -24,6 +25,8 @@ from tasksd.config import Settings
 from tasksd.dav.client import CollectionInfo, Item
 from tasksd.db import store
 from tasksd.ical import extract_from_raw
+from tasksd.mcp.api import McpApi
+from tasksd.mcp.tools import ToolError
 from tasksd.service import TaskService
 
 # A Friday, with the days either side of it. Fixed rather than derived from
@@ -57,6 +60,7 @@ def _seed_task(
     conn, href: str, uid: str, summary: str, *,
     due: str | None = None, due_utc: str | None = None,
     status: str = "NEEDS-ACTION", parent: str | None = None,
+    completed_at: str | None = None,
 ) -> None:
     """Cache one VTODO as a foreign client would have written it.
 
@@ -71,6 +75,11 @@ def _seed_task(
         extra.append(f"DUE:{due_utc}")
     if parent is not None:
         extra.append(f"RELATED-TO:{parent}")
+    if completed_at is not None:
+        # The property `_completions_by_day` actually reads. STATUS alone says a
+        # task is finished; only COMPLETED says WHEN, and a day can only own a
+        # completion it has a stamp for.
+        extra.append(f"COMPLETED:{completed_at}")
     raw = foreign_raw(uid, summary, extra=tuple(extra))
     # foreign_raw hardcodes NEEDS-ACTION; swapping the whole line keeps one
     # STATUS property on the resource (two would be ambiguous to the parser).
@@ -115,16 +124,33 @@ def test_reading_a_never_opened_day_writes_nothing(svc):
     GET is how the app looks at days it is not visiting — a prefetched week, a
     range read landing on an empty day — so a read that quietly opened them
     would record plans the owner never made and freeze each day's snapshot at
-    whatever happened to be due when the prefetch ran. Both tables must be
+    whatever happened to be due when the prefetch ran. All three tables must be
     untouched afterwards, and the day must report itself unplanned even though
-    there IS work that would qualify for a snapshot."""
+    there IS work that would qualify for a snapshot.
+
+    Spelled as a whole-dict equality rather than a handful of key checks, and
+    kept that way deliberately: it is what makes a field ADDED to the plan shape
+    show up here, where its default on an untouched day gets looked at once."""
     plan = svc.open_day(DAY, create=False)
-    assert plan == {"day": DAY, "planned": False, "entries": []}
+    assert plan == {
+        "day": DAY, "planned": False, "entries": [],
+        # Nothing said about this day, and — the one that matters — no capacity
+        # invented for it. `capacity` is None rather than some assumed working
+        # day, because an account that never stated one must not be told it has
+        # overcommitted against a number it never gave.
+        "capacity_minutes": None, "capacity": None,
+        "committed_at": None, "shutdown_at": None, "reflection": None,
+    }
     assert _count(svc, "day_plan") == 0
     assert _count(svc, "day_plan_opened") == 0
+    # `day_ritual` is written lazily on the first statement about a day, and
+    # reading one is not a statement — reporting its nulls must not mint the row
+    # that holds them.
+    assert _count(svc, "day_ritual") == 0
     # And again — a read is a read however many times it is repeated.
     assert svc.open_day(DAY, create=False)["planned"] is False
     assert _count(svc, "day_plan_opened") == 0
+    assert _count(svc, "day_ritual") == 0
 
 
 def test_opening_a_day_twice_does_not_duplicate_it(svc):
@@ -541,6 +567,456 @@ def test_an_entry_survives_its_task_leaving_the_wire(svc):
 
 # ── upgrading a database written before habits ───────────────────────────────
 
+# ── rolling work forward ─────────────────────────────────────────────────────
+#
+# The deliberate half of "unfinished work does not vanish". The automatic carry
+# is the other half and stays exactly as it was — these tests are as much about
+# the two not colliding as about the move itself.
+
+
+def test_rolling_creates_on_the_target_and_stamps_the_source(svc):
+    """MOVES NOTHING. The day that planned the work is still the day that
+    planned it, so the row stays where it is and only records where it went."""
+    today = _today()
+    tomorrow = (date.today() + timedelta(days=1)).isoformat()
+    svc.open_day(today, create=True)
+    src = svc.add_day_entry(today, entry_id="n1", kind="note", title="Finish the draft")
+
+    moved = svc.roll_entry(today, src["entry_id"], tomorrow)
+    assert moved["rolled_to"] == tomorrow
+    # Still on its own day, and NOT dropped: those are different answers.
+    assert moved["dropped_at"] is None
+    assert "n1" in [e["entry_id"] for e in svc.open_day(today, create=False)["entries"]]
+    # And present on the target, which was never opened by this.
+    landed = svc.open_day(tomorrow, create=False)
+    assert [e["title"] for e in landed["entries"]] == ["Finish the draft"]
+    # `create=False` throughout, so nothing above has built tomorrow a snapshot
+    # — the only row on it is the one that was moved there.
+
+
+def test_rolling_does_not_open_the_target_day(svc):
+    """The rule the whole day plan is built around. Opening a day is the only
+    call that derives a snapshot, and a roll must leave the target free to do
+    that for itself when the owner actually arrives."""
+    tomorrow = (date.today() + timedelta(days=1)).isoformat()
+    svc.open_day(_today(), create=True)
+    src = svc.add_day_entry(_today(), entry_id="n1", kind="note", title="Later")
+    svc.roll_entry(_today(), src["entry_id"], tomorrow)
+
+    assert not store.day_is_opened(svc._conn, tomorrow)
+    # It reports planned — it holds a row — but its snapshot has not been built,
+    # so arriving tomorrow still derives due-today, overdue and the carry.
+    assert svc.open_day(tomorrow, create=False)["planned"] is True
+
+
+def test_rolling_the_same_row_twice_lands_once(svc):
+    tomorrow = (date.today() + timedelta(days=1)).isoformat()
+    svc.open_day(_today(), create=True)
+    src = svc.add_day_entry(_today(), entry_id="n1", kind="note", title="Once")
+    svc.roll_entry(_today(), src["entry_id"], tomorrow)
+    svc.roll_entry(_today(), src["entry_id"], tomorrow)
+    assert len(svc.open_day(tomorrow, create=False)["entries"]) == 1
+
+
+def test_a_rolled_row_is_not_also_carried(svc):
+    """THE COLLISION THIS FEATURE COULD HAVE CAUSED. A row the owner moved to
+    Thursday has been decided about; without `rolled_to` in `_carry_into`'s
+    filter the automatic safety net would ALSO pull it into tomorrow, and they
+    would find two of it — one from their decision and one from the rule that
+    exists for when they make none."""
+    today = _today()
+    tomorrow = (date.today() + timedelta(days=1)).isoformat()
+    later = (date.today() + timedelta(days=3)).isoformat()
+    svc.open_day(today, create=True)
+    src = svc.add_day_entry(today, entry_id="n1", kind="note", title="Thursday's job")
+    svc.roll_entry(today, src["entry_id"], later)
+
+    titles = [e["title"] for e in svc.open_day(tomorrow, create=True)["entries"]]
+    assert "Thursday's job" not in titles
+
+
+def test_an_unrolled_row_still_carries(svc):
+    # The other side of the same line: the safety net is untouched for anything
+    # the ritual did not decide about.
+    today = _today()
+    tomorrow = (date.today() + timedelta(days=1)).isoformat()
+    svc.open_day(today, create=True)
+    svc.add_day_entry(today, entry_id="n1", kind="note", title="Nobody decided")
+
+    titles = [e["title"] for e in svc.open_day(tomorrow, create=True)["entries"]]
+    assert "Nobody decided" in titles
+
+
+def test_work_can_only_be_moved_forward(svc):
+    yesterday = (date.today() - timedelta(days=1)).isoformat()
+    svc.open_day(_today(), create=True)
+    src = svc.add_day_entry(_today(), entry_id="n1", kind="note", title="Back in time")
+    with pytest.raises(ValueError):
+        svc.roll_entry(_today(), src["entry_id"], yesterday)
+    # And not to the day it is already on.
+    with pytest.raises(ValueError):
+        svc.roll_entry(_today(), src["entry_id"], _today())
+
+
+def test_leftovers_can_be_rolled_out_of_a_past_day(svc):
+    """Allowed, and needed. It manufactures no record of the past day — the new
+    row lands on a day that has not happened — and the planning ritual's
+    leftovers step depends on exactly this when a shutdown was skipped."""
+    svc.open_day(PREV, create=True)
+    src = svc.add_day_entry(PREV, entry_id="n1", kind="note", title="Missed it")
+    moved = svc.roll_entry(PREV, src["entry_id"], _today())
+    assert moved["rolled_to"] == _today()
+    assert [e["title"] for e in svc.open_day(_today(), create=False)["entries"]] \
+        == ["Missed it"]
+
+
+def test_a_habit_occurrence_cannot_be_moved(svc):
+    """Tomorrow gets its own from the rule, so moving one would either duplicate
+    it or fabricate an occurrence on a day the rule does not schedule — the
+    forgery `add_day_entry`'s kind check is the last line against."""
+    today = _today()
+    tomorrow = (date.today() + timedelta(days=1)).isoformat()
+    svc.create_habit(title="Read")
+    occ = next(e for e in svc.open_day(today, create=True)["entries"]
+               if e["kind"] == "habit")
+    with pytest.raises(ValueError):
+        svc.roll_entry(today, occ["entry_id"], tomorrow)
+
+
+def test_rolling_an_unknown_entry_is_a_miss_not_an_error(svc):
+    tomorrow = (date.today() + timedelta(days=1)).isoformat()
+    svc.open_day(_today(), create=True)
+    assert svc.roll_entry(_today(), "nope", tomorrow) is None
+
+
+# ── capacity, and what the owner says about a day ────────────────────────────
+
+
+def _today() -> str:
+    return date.today().isoformat()
+
+
+def test_capacity_is_none_until_somebody_says_otherwise(svc):
+    """THE ANSWER THAT MATTERS MOST, because it is the one that keeps the feature
+    from inventing a standard. An account that has never stated a capacity is
+    never told it has overcommitted — there is no assumed working day here."""
+    assert svc.open_day(DAY, create=False)["capacity"] is None
+
+
+def test_capacity_falls_through_the_account_default(svc):
+    svc.update_settings({"day_capacity_minutes": 300})
+    assert svc.open_day(DAY, create=False)["capacity"] == 300
+
+
+def test_a_weekday_default_beats_the_account_one(svc):
+    # DAY is a Friday. The map is keyed by the same weekday names habits use,
+    # resolved through the one place those names meet Python's numbering.
+    svc.update_settings({
+        "day_capacity_minutes": 300,
+        "day_capacity_by_weekday": {"fri": 120},
+    })
+    assert svc.open_day(DAY, create=False)["capacity"] == 120
+    # A day the map says nothing about still gets the account default.
+    assert svc.open_day("2026-08-20", create=False)["capacity"] == 300
+
+
+def test_what_the_owner_said_for_the_day_beats_everything(svc):
+    svc.update_settings({
+        "day_capacity_minutes": 300, "day_capacity_by_weekday": {"fri": 120},
+    })
+    svc.set_day_ritual(_today(), capacity_minutes=90)
+    plan = svc.open_day(_today(), create=False)
+    assert plan["capacity"] == 90
+    # And the two are reported separately on purpose: `capacity_minutes` is what
+    # they SAID, `capacity` is what the total is read against. A day that merely
+    # inherited a default must stay distinguishable from one they looked at.
+    assert plan["capacity_minutes"] == 90
+    assert svc.open_day(DAY, create=False)["capacity_minutes"] is None
+
+
+def test_a_junk_capacity_map_is_ignored_rather_than_guessed_at(svc):
+    # A settings blob is hand-editable, so a key that is not a weekday name, and
+    # a value that is not a sane count of minutes, must not become a capacity.
+    # `true` is the one worth pinning: bool is an int subclass, so an unguarded
+    # read would store JSON true as one minute.
+    svc.update_settings({
+        "day_capacity_minutes": 300,
+        "day_capacity_by_weekday": {"funday": 60, "fri": True},
+    })
+    assert svc.open_day(DAY, create=False)["capacity"] == 300
+
+
+def test_an_account_default_can_be_un_said(svc):
+    """`update_settings` merges shallowly and SKIPS None, so without a sentinel
+    an owner who once set a default could never get back to "never said" — the
+    state that keeps the app from putting a number on screen nobody gave. -1 is
+    that sentinel, the same one this feature uses everywhere else, and 0 cannot
+    be it because "I do not work today" is a real capacity."""
+    svc.update_settings({"day_capacity_minutes": 300})
+    assert svc.open_day(DAY, create=False)["capacity"] == 300
+    svc.update_settings({"day_capacity_minutes": -1})
+    assert svc.open_day(DAY, create=False)["capacity"] is None
+    # And zero still means zero.
+    svc.update_settings({"day_capacity_minutes": 0})
+    assert svc.open_day(DAY, create=False)["capacity"] == 0
+
+
+def test_a_capacity_of_zero_is_a_real_answer(svc):
+    # "I am not working today" is a statement, and it has to survive every falsy
+    # check between the wire and the read — which is why the clear needs a
+    # sentinel of its own rather than borrowing zero.
+    svc.set_day_ritual(_today(), capacity_minutes=0)
+    assert svc.open_day(_today(), create=False)["capacity"] == 0
+    # -1 is the clear, and it falls back through to nothing said at all.
+    svc.set_day_ritual(_today(), capacity_minutes=-1)
+    assert svc.open_day(_today(), create=False)["capacity"] is None
+
+
+def test_the_ritual_stamps_and_un_stamps(svc):
+    today = _today()
+    assert svc.set_day_ritual(today, committed=True)["committed_at"] is not None
+    # False CLEARS, which is how a day begun by mistake is re-opened. That is why
+    # these are tri-state rather than flags.
+    assert svc.set_day_ritual(today, committed=False)["committed_at"] is None
+
+    assert svc.set_day_ritual(today, shutdown=True)["shutdown_at"] is not None
+    assert svc.set_day_ritual(today, reflection="  Slow start, fine finish  ")[
+        "reflection"] == "Slow start, fine finish"
+    # An emptied reflection clears rather than storing "", so "nothing written"
+    # has exactly one representation.
+    assert svc.set_day_ritual(today, reflection="   ")["reflection"] is None
+
+
+def test_nothing_may_be_said_about_a_day_that_has_happened(svc):
+    """A capacity is a plan and a shutdown is a boundary; neither can be
+    performed after the fact. The same line `mcp/api.py::update_day_entry` draws
+    for `done`, and the reason the ritual is a ritual rather than a form."""
+    for kwargs in (
+        {"capacity_minutes": 120}, {"committed": True},
+        {"shutdown": True}, {"reflection": "went fine"},
+    ):
+        with pytest.raises(ValueError):
+            svc.set_day_ritual(DAY, **kwargs)
+
+
+def test_yesterday_is_still_writable_so_the_evening_ritual_works(svc):
+    """The grace, and it is not slack. `home_timezone` is unset by default and
+    the server runs UTC, so a browser in New York between 20:00 and midnight
+    sends a key the server already calls yesterday. Without this the shutdown
+    ritual would be refused every evening after dinner — which is when it is for.
+    Shared with habit minting rather than reasoned about twice."""
+    yesterday = (date.today() - timedelta(days=1)).isoformat()
+    assert svc.set_day_ritual(yesterday, shutdown=True)["shutdown_at"] is not None
+    two_days = (date.today() - timedelta(days=2)).isoformat()
+    with pytest.raises(ValueError):
+        svc.set_day_ritual(two_days, shutdown=True)
+
+
+def test_saying_something_about_a_day_does_not_open_it(svc):
+    """Stating a capacity is not planning. The marker means "the automatic
+    snapshot has been built", and setting one here would suppress that snapshot
+    forever — the same trap `add_day_entry` documents for hand-adds."""
+    svc.set_day_ritual(_today(), capacity_minutes=240)
+    assert _count(svc, "day_plan_opened") == 0
+    assert _count(svc, "day_plan") == 0
+    assert svc.open_day(_today(), create=False)["planned"] is False
+
+
+# ── estimates ────────────────────────────────────────────────────────────────
+#
+# The rule these pin: the ENTRY is what its day counts, and the estimate on it
+# is a COPY taken when the row was made. What a task, a note or a habit
+# "remembers" only ever decides what the NEXT entry starts at — so re-estimating
+# something today can never rewrite what a finished day said the work would take.
+
+
+def test_an_estimate_is_set_and_cleared_on_the_entry(svc):
+    plan = svc.open_day(DAY, create=True)
+    eid = plan["entries"][0]["entry_id"]
+
+    dto = svc.patch_day_entry(DAY, eid, estimate_minutes=45)
+    assert dto["estimate_minutes"] == 45
+
+    # 0 is a REAL estimate — "not worth counting" — and must survive, which is
+    # why the clear needs a sentinel of its own rather than borrowing falsiness.
+    assert svc.patch_day_entry(DAY, eid, estimate_minutes=0)["estimate_minutes"] == 0
+    # -1 is that sentinel.
+    assert svc.patch_day_entry(DAY, eid, estimate_minutes=-1)["estimate_minutes"] is None
+
+
+def test_estimating_a_task_teaches_the_task_for_next_time(svc):
+    plan = svc.open_day(DAY, create=True)
+    entry = next(e for e in plan["entries"] if e["uid"] == "due-today")
+    svc.patch_day_entry(DAY, entry["entry_id"], estimate_minutes=25)
+
+    # The sidecar learned it, so a later day starts from this answer instead of
+    # asking again. This is the column that has been writable and unread since
+    # the sidecar table was created.
+    side = store.get_sidecar(svc._conn, LIST_A, "due-today")
+    assert side["estimated_minutes"] == 25
+    # And it reaches the task DTO, which nothing read it through before.
+    assert svc.get_task(LIST_A, "due-today")["estimated_minutes"] == 25
+
+
+def test_a_new_entry_starts_from_what_the_task_remembers(svc):
+    store.set_sidecar(svc._conn, LIST_B, "someday", estimated_minutes=90)
+    svc.open_day(DAY, create=True)
+    dto = svc.add_day_entry(
+        DAY, entry_id="hand", kind="task", list_id="home", uid="someday")
+    assert dto["estimate_minutes"] == 90
+
+
+def test_a_note_starts_unestimated_because_nothing_remembers_one(svc):
+    svc.open_day(DAY, create=True)
+    dto = svc.add_day_entry(DAY, entry_id="jot", kind="note", title="Ring the bank")
+    assert dto["estimate_minutes"] is None
+
+
+def test_a_snapshot_row_starts_from_what_the_task_remembers(svc):
+    store.set_sidecar(svc._conn, LIST_A, "due-today", estimated_minutes=15)
+    plan = svc.open_day(DAY, create=True)
+    entry = next(e for e in plan["entries"] if e["uid"] == "due-today")
+    assert entry["estimate_minutes"] == 15
+
+
+def test_re_estimating_a_task_does_not_rewrite_a_day_already_planned(svc):
+    """THE POINT OF COPYING RATHER THAN JOINING.
+
+    A day is a snapshot of what was intended at the time, and how long the owner
+    thought something would take is part of that. Reading the estimate through a
+    join would make today's re-think retroactively edit every past day the task
+    ever appeared on.
+    """
+    store.set_sidecar(svc._conn, LIST_A, "due-today", estimated_minutes=15)
+    svc.open_day(DAY, create=True)
+
+    store.set_sidecar(svc._conn, LIST_A, "due-today", estimated_minutes=240)
+    entry = next(e for e in svc.open_day(DAY, create=False)["entries"]
+                 if e["uid"] == "due-today")
+    assert entry["estimate_minutes"] == 15
+
+
+def test_a_carried_entry_keeps_the_estimate_it_was_carried_with(svc):
+    svc.open_day(PREV, create=True)
+    chosen = svc.add_day_entry(
+        PREV, entry_id="c1", kind="note", title="Finish the draft")
+    svc.patch_day_entry(PREV, chosen["entry_id"], estimate_minutes=50)
+
+    carried = next(e for e in svc.open_day(DAY, create=True)["entries"]
+                   if e["title"] == "Finish the draft")
+    # A note has no task to remember for it, so the row it carried from is the
+    # only place yesterday's answer exists. Losing it here would make the ritual
+    # ask again every morning the jot survived.
+    assert carried["source"] == "carried"
+    assert carried["estimate_minutes"] == 50
+
+
+def test_a_habit_occurrence_copies_the_estimate_off_its_rule(svc):
+    # TODAY rather than this file's fixed DAY: minting is gated on pastness
+    # (`_habit_minting_allowed`), because an occurrence's row is the only record
+    # of it anywhere and backfilling one into a finished day is a forgery. So a
+    # test about occurrences has to ask for a day that may still have them.
+    today = date.today().isoformat()
+    svc.create_habit(title="Read", estimate_minutes=20)
+    entry = next(e for e in svc.open_day(today, create=True)["entries"]
+                 if e["kind"] == "habit")
+    assert entry["estimate_minutes"] == 20
+
+    # Re-estimating the RULE leaves the day that already ran it alone, exactly as
+    # renaming it leaves that day's title alone.
+    hb = svc.list_habits()[0]
+    svc.update_habit(hb["id"], estimate_minutes=90)
+    again = next(e for e in svc.open_day(today, create=False)["entries"]
+                 if e["kind"] == "habit")
+    assert again["estimate_minutes"] == 20
+
+
+def test_estimating_a_note_teaches_no_task(svc):
+    """A note names no task, so there is nothing to write an estimate through to.
+
+    This used to assert that ONE unrelated task — LIST_A/"due-today", which the
+    test never touches — had no sidecar row. That was true before the code under
+    test ran, so the test could not have failed however the write-through
+    behaved. It now counts the sidecar table across the write, which is the
+    thing actually claimed: estimating a note writes no sidecar row at all.
+    """
+    svc.open_day(DAY, create=True)
+    before = _count(svc, "sidecar")
+    dto = svc.add_day_entry(DAY, entry_id="jot", kind="note", title="Ring the bank")
+    svc.patch_day_entry(DAY, dto["entry_id"], estimate_minutes=10)
+    assert _count(svc, "sidecar") == before, "a note taught something a duration"
+
+    # And the control, so the count is measuring a real mechanism rather than a
+    # table nothing ever writes to: the same call on a TASK entry does write.
+    task_entry = _entry_id(svc.open_day(DAY, create=False), "due-today")
+    svc.patch_day_entry(DAY, task_entry, estimate_minutes=25)
+    assert store.get_sidecar(svc._conn, LIST_A, "due-today")["estimated_minutes"] == 25
+
+
+def test_an_older_database_gains_the_estimate_columns(tmp_path):
+    """The second and third hand-written ALTERs, on the same rule as habit_id.
+
+    Estimates arrived after both `day_plan` and `habits` existed, so the same
+    trap applies to both: `_day_entry_dto` reads `row["estimate_minutes"]` and
+    `_habit_dto` reads it off the rule, and sqlite3.Row answers IndexError for a
+    column the query did not return — a 500 on every read of every day and of
+    the habits list, not a degraded one.
+
+    Hand-built pre-estimate tables rather than a captured file, so this keeps
+    testing the upgrade rather than a fixture that ages out.
+    """
+    conn = store.connect(str(tmp_path / "old.db"))
+    conn.executescript(
+        """CREATE TABLE day_plan (
+               day             TEXT NOT NULL,
+               entry_id        TEXT NOT NULL,
+               kind            TEXT NOT NULL,
+               collection_href TEXT,
+               uid             TEXT,
+               title           TEXT,
+               source          TEXT NOT NULL,
+               habit_id        TEXT,
+               position        REAL,
+               done_at         TEXT,
+               dropped_at      TEXT,
+               created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+               PRIMARY KEY (day, entry_id)
+           );
+           CREATE TABLE habits (
+               id         TEXT PRIMARY KEY,
+               title      TEXT NOT NULL,
+               days       TEXT NOT NULL DEFAULT '',
+               paused_at  TEXT,
+               position   REAL,
+               created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+           );
+           INSERT INTO day_plan (day, entry_id, kind, title, source)
+           VALUES ('2026-08-21', 'legacy', 'note', 'Written before estimates', 'user');
+           INSERT INTO habits (id, title, days) VALUES ('hb-old', 'Read', '');"""
+    )
+    store.init_db(conn)
+    assert "estimate_minutes" in {
+        r["name"] for r in conn.execute("PRAGMA table_info(day_plan)")}
+    assert "estimate_minutes" in {
+        r["name"] for r in conn.execute("PRAGMA table_info(habits)")}
+
+    # Both pre-existing rows read through the REAL DTOs, unestimated. NULL is
+    # the honest answer — nobody said how long these take — and it is what keeps
+    # them out of the day's total rather than counting them as zero-length work.
+    row = store.find_day_entry(conn, "2026-08-21", entry_id="legacy")
+    dto = TaskService._day_entry_dto(row)
+    assert dto["estimate_minutes"] is None
+    assert dto["title"] == "Written before estimates"
+
+    habit = next(iter(store.list_habits(conn)))
+    assert TaskService._habit_dto(habit)["estimate_minutes"] is None
+
+    # Idempotent: init_db runs on every start, and the second pass must not try
+    # to add either column again (SQLite has no ADD COLUMN IF NOT EXISTS).
+    store.init_db(conn)
+    conn.close()
+
+
 def test_an_older_database_gains_the_habit_id_column(tmp_path):
     """The hand-written ALTER in `store.init_db`, and why it is not optional.
 
@@ -629,8 +1105,26 @@ def test_routes_round_trip_a_day(client):
                        json={"summary": "write it up", "due": day}).json()
 
     # GET never creates: the day is unplanned even though a task is due on it.
+    #
+    # Whole-dict equality, like the service-level assertion this mirrors and for
+    # the same reason: it is what makes a field ADDED to the plan shape get
+    # looked at once, with its default on an untouched day in front of you. This
+    # is the WIRE contract rather than the service's — the route's job is to
+    # serialise that shape unchanged — so the two are worth having both.
+    #
+    # It has now caught exactly what it exists to catch. The five ritual fields
+    # landed on `_day_plan_dto`, the service-level twin was updated with them,
+    # and this one was not, because it is `radicale`-marked and skips wherever
+    # Docker is unavailable. Nothing but CI was ever going to say so.
     r = client.get(f"/api/day/{day}")
-    assert r.status_code == 200 and r.json() == {"day": day, "planned": False, "entries": []}
+    assert r.status_code == 200 and r.json() == {
+        "day": day, "planned": False, "entries": [],
+        # No capacity INVENTED for a day nobody has spoken about — the one that
+        # matters. An account that never stated one must not be told it has
+        # overcommitted against a number it never gave.
+        "capacity_minutes": None, "capacity": None,
+        "committed_at": None, "shutdown_at": None, "reflection": None,
+    }
 
     opened = client.post(f"/api/day/{day}/open")
     assert opened.status_code == 200
@@ -698,3 +1192,409 @@ def test_settings_accepts_the_today_tab(client):
     assert r.status_code == 200, r.text
     assert r.json()["start_tab"] == "today"
     assert client.get("/api/settings").json()["tab_order"][0] == "today"
+
+
+# ── what the connector says about a day ──────────────────────────────────────
+#
+# `McpApi` over the same in-process service, so these run with no Radicale like
+# the rest of this file. They live HERE rather than in test_mcp.py, whose day
+# tests all need the scratch server and skip without Docker — a rule about how a
+# day is described is worth more in a suite that actually runs.
+#
+# The rule they exist for is `REVIEW_ARM`'s: two surfaces describing one day
+# differently is worse than either being slightly wrong. Everything below is a
+# claim the Today tab also makes, checked on the other side of the wall.
+#
+# THESE USE THE REAL CLOCK, unlike everything above, and have to: half of them
+# are about a PASTNESS rule — a capacity cannot be stated for a day that has
+# run, work cannot be moved backwards — and `DAY` is a fixed Friday that is
+# already in the past. A fixed day cannot exercise a rule about which side of
+# today something falls on. Resolved at call time rather than at import, so a
+# suite that runs across midnight still agrees with the service it is asking.
+
+
+def _live() -> str:
+    """Today, as the service resolves it."""
+    return date.today().isoformat()
+
+
+def _live_plus(n: int) -> str:
+    return (date.today() + timedelta(days=n)).isoformat()
+
+
+@pytest.fixture
+def mcp_api(svc):
+    return McpApi(svc)
+
+
+def _entry_id(plan: dict, uid: str) -> str:
+    return next(e["entry_id"] for e in plan["entries"] if e["uid"] == uid)
+
+
+def test_the_connector_reports_what_the_owner_said_about_a_day(mcp_api, svc):
+    """A model that cannot see the capacity will happily propose an eleventh
+    thing for a day already an hour over — which is the exact failure the number
+    exists to prevent. It reports both `capacity_minutes` (what was stated FOR
+    this day) and `capacity` (what the total should be read against), because a
+    day that merely inherited a weekday default must stay distinguishable from
+    one the owner looked at and set."""
+    day = _live()
+    svc.open_day(day, create=True)
+    svc.set_day_ritual(day, capacity_minutes=300, reflection="  Slow start.  ")
+    out = mcp_api.review_day(day=day)
+
+    assert out["capacity_minutes"] == 300 and out["capacity"] == 300
+    assert out["reflection"] == "Slow start."
+    assert out["shutdown_at"] is None and out["committed_at"] is None
+
+
+def test_a_day_nobody_planned_still_has_every_key(mcp_api):
+    """An answer whose keys come and go teaches a reader a shape that is only
+    sometimes true, and the first unplanned day is where they find out. The
+    residual `other` bucket is always present for the same reason."""
+    out = mcp_api.review_day(day=QUIET_DAY)
+    assert out["planned"] is False
+    for key in ("capacity", "capacity_minutes", "committed_at", "shutdown_at",
+                "reflection"):
+        assert out[key] is None, key
+    assert out["totals"] == {
+        "planned_minutes": 0, "done_minutes": 0, "unestimated": 0}
+    for bucket in ("chosen", "carried", "derived", "habits", "other", "moved",
+                   "dropped"):
+        assert out[bucket] == [], bucket
+
+
+def test_moved_work_is_not_reported_as_abandoned(mcp_api, svc):
+    """THE DISTINCTION `rolled_to` EXISTS FOR. "Happening on Thursday" and "not
+    happening" are different answers, and a look-back that filed both under
+    `dropped` would tell the owner they abandoned something they rescheduled."""
+    day, target = _live(), _live_plus(1)
+    plan = svc.open_day(day, create=True)
+    moved, declined = _entry_id(plan, "due-today"), _entry_id(plan, "late")
+    svc.roll_entry(day, moved, target)
+    svc.patch_day_entry(day, declined, dropped=True)
+
+    out = mcp_api.review_day(day=day)
+    assert [e["entry_id"] for e in out["moved"]] == [moved]
+    assert out["moved"][0]["rolled_to"] == target, "a model has to say WHERE"
+    assert [e["entry_id"] for e in out["dropped"]] == [declined]
+    # And neither is still reported as sitting on the day.
+    everywhere_else = [e["entry_id"] for k in ("chosen", "carried", "derived",
+                                               "habits", "other")
+                       for e in out[k]]
+    assert moved not in everywhere_else and declined not in everywhere_else
+
+
+def test_the_totals_leave_out_what_was_decided_about(mcp_api, svc):
+    """Declining something, or doing it on Thursday, is how a day gets back
+    under its capacity — a total that kept counting it would make the two
+    controls that help useless. And an unestimated row counts as NOTHING, which
+    is why the third number is reported beside the other two: "0m of 1h 20m"
+    with no `unestimated` reads as a day nothing happened on."""
+    day, target = _live(), _live_plus(1)
+    plan = svc.open_day(day, create=True)
+    kept, moved = _entry_id(plan, "due-today"), _entry_id(plan, "late")
+    svc.patch_day_entry(day, kept, estimate_minutes=45)
+    svc.patch_day_entry(day, moved, estimate_minutes=90)
+    before = mcp_api.review_day(day=day)["totals"]
+    assert before["planned_minutes"] == 135
+
+    svc.roll_entry(day, moved, target)
+    after = mcp_api.review_day(day=day)["totals"]
+    assert after["planned_minutes"] == 45, "the moved row still counts"
+    # Everything on the day that is neither of those two carries no estimate.
+    assert after["unestimated"] == len(
+        [e for e in plan["entries"] if e["entry_id"] not in (kept, moved)])
+    # And it travelled with the work rather than being left behind.
+    assert [e["estimate_minutes"] for e in svc.open_day(target, create=False)["entries"]
+            if e["uid"] == "late"] == [90]
+
+
+def test_done_minutes_counts_only_what_was_finished_that_day(mcp_api, svc):
+    """A task planned today and ticked next Thursday is Thursday's work.
+    Counting it as today's is the one way a look-back can flatter a day that did
+    not happen — the same fence the app's `rowDone` draws for a past day.
+
+    This test used to assert `done_minutes == 0` on a day where NOTHING had been
+    completed, which made it unable to tell its own rule from a function that
+    returned zero unconditionally — both figures could be hardcoded to 0 and it
+    stayed green. It now needs a completion ON the day to pass, and a completion
+    on ANOTHER day to stay out of the figure, so only the real rule satisfies it.
+    """
+    day, elsewhere = _live(), _live_plus(-4)
+    # One task finished ON the day, one finished four days earlier. Both are on
+    # the same list and both carry a real COMPLETED stamp, which is the only
+    # thing that gives a completion a day to belong to.
+    _seed_task(svc._conn, LIST_A, "did-today", "Finished today", due=day,
+               status="COMPLETED", completed_at=f"{day.replace('-', '')}T120000Z")
+    _seed_task(svc._conn, LIST_A, "did-before", "Finished earlier", due=day,
+               status="COMPLETED", completed_at=f"{elsewhere.replace('-', '')}T120000Z")
+
+    plan = svc.open_day(day, create=True)
+    svc.patch_day_entry(day, _entry_id(plan, "due-today"), estimate_minutes=45)
+    # Added by hand rather than looked for in the snapshot: a COMPLETED task is
+    # correctly left out of the derived plan, and what is being tested here is a
+    # row that IS on the day and was finished — which is what the owner ticking
+    # something they had planned actually leaves behind.
+    for uid, minutes in (("did-today", 20), ("did-before", 90)):
+        added = svc.add_day_entry(
+            day, entry_id=uuid.uuid4().hex, kind="task", list_id="work", uid=uid)
+        svc.patch_day_entry(day, added["entry_id"], estimate_minutes=minutes)
+
+    totals = mcp_api.review_day(day=day)["totals"]
+    assert totals["planned_minutes"] == 155, "every live row counts toward planned"
+    # 20 and not 110: the row finished four days ago is on today's plan, but it
+    # was not done today, and today does not get to claim it.
+    assert totals["done_minutes"] == 20
+
+
+def test_the_connector_may_not_state_a_capacity_or_write_a_reflection(mcp_api):
+    """The same call that gives habits no tool for creating a rule. A capacity,
+    a start, a shutdown and a reflection are the owner's declarations about
+    their own day; a connector able to make them would be manufacturing the
+    record they exist to keep honest.
+
+    Checked against the SIGNATURES and not just the names. Reading method names
+    alone was the weaker half of this test and nearly all of it: a method called
+    `set_day_facts(capacity_minutes=...)` passes a name check and defeats the
+    rule entirely. What actually matters is whether any reachable entry point
+    ACCEPTS one of these fields, so that is what is inspected.
+
+    `_day_facts` and `_day_totals` are private and excluded: they REPORT the
+    capacity, which is the whole point of the connector seeing a day at all.
+    """
+    import inspect
+
+    FORBIDDEN = ("capacity_minutes", "capacity", "reflection", "committed",
+                 "shutdown")
+    reachable = [n for n in dir(McpApi) if not n.startswith("_")]
+    assert "review_day" in reachable, "the surface is not being enumerated"
+
+    for name in reachable:
+        member = getattr(McpApi, name)
+        if not callable(member):
+            continue
+        # No entry point may be NAMED for the ritual...
+        for word in ("ritual", "capacity", "reflection", "shutdown", "commit"):
+            assert word not in name, f"{name} reaches {word}"
+        # ...and none may TAKE one of its fields, whatever it is called.
+        try:
+            params = inspect.signature(member).parameters
+        except (TypeError, ValueError):  # pragma: no cover - builtins
+            continue
+        taken = sorted(set(params) & set(FORBIDDEN))
+        assert not taken, f"McpApi.{name} accepts {taken}, which only the owner may set"
+
+    # And the positive half: the connector can still SEE all of it, because a
+    # model that cannot read the capacity will propose an eleventh thing for a
+    # day already over. Reporting is the whole reason the fields are exposed.
+    out = mcp_api.review_day(day=_live())
+    for field in ("capacity", "capacity_minutes", "committed_at", "shutdown_at",
+                  "reflection"):
+        assert field in out, field
+
+
+def test_an_estimate_cannot_be_written_onto_a_day_that_has_run(mcp_api, svc):
+    """An estimate is what something was expected to take BEFORE it was
+    attempted. Written afterwards it is a number chosen with the answer in hand,
+    and the day's "2h of 3h planned" stops meaning anything the moment either
+    half can be edited to taste. `dropped` and `position` stay allowed on a past
+    day for the reason they always were: neither manufactures a record."""
+    past = "2020-01-02"
+    svc.open_day(past, create=True)
+    entry = svc.add_day_entry(past, entry_id=uuid.uuid4().hex, kind="note",
+                              title="Last decade")
+    with pytest.raises(ToolError) as caught:
+        mcp_api.update_day_entry(entry["entry_id"], day=past, estimate_minutes=30)
+    assert "already happened" in str(caught.value)
+
+    # Dropping the same row on the same day still works.
+    out = mcp_api.update_day_entry(entry["entry_id"], day=past, dropped=True)
+    assert out["dropped_at"]
+
+    # And on a day that has NOT run, the same call lands.
+    day = _live()
+    live = svc.add_day_entry(day, entry_id=uuid.uuid4().hex, kind="note",
+                             title="Today's")
+    assert mcp_api.update_day_entry(
+        live["entry_id"], day=day, estimate_minutes=30)["estimate_minutes"] == 30
+
+
+def test_the_connector_moves_work_rather_than_dropping_and_re_adding(mcp_api, svc):
+    """Without this the model's only way to say "do it Thursday" is drop + add,
+    which files the row under `dropped` and reports it abandoned — losing the
+    very distinction the bucket above exists to keep."""
+    day, target = _live(), _live_plus(1)
+    plan = svc.open_day(day, create=True)
+    entry_id = _entry_id(plan, "due-today")
+    out = mcp_api.update_day_entry(entry_id, day=day, move_to=target)
+
+    assert out["rolled_to"] == target and out["dropped_at"] is None
+    landed = [e["uid"] for e in svc.open_day(target, create=False)["entries"]]
+    assert landed.count("due-today") == 1
+    # Backwards is refused: an entry appearing on a finished day is the forgery
+    # every other rule here exists to prevent.
+    with pytest.raises(ToolError):
+        mcp_api.update_day_entry(_entry_id(plan, "late"), day=day,
+                                 move_to="2020-01-01")
+
+
+def test_moving_is_an_answer_and_will_not_be_combined_with_another(mcp_api, svc):
+    """Applying both would file one row under two contradictory decisions in the
+    same call, and whichever landed second would be the day's record of it."""
+    day = _live()
+    plan = svc.open_day(day, create=True)
+    with pytest.raises(ToolError) as caught:
+        mcp_api.update_day_entry(_entry_id(plan, "due-today"), day=day,
+                                 move_to=_live_plus(1), dropped=True)
+    assert "on its own" in str(caught.value)
+
+
+def test_every_sidecar_table_schema_names_is_in_the_backup_list():
+    """Two files enumerate the tables a resync cannot rebuild, and they have to
+    agree: schema.sql's header, for whoever is reading the schema, and
+    docs/DEPLOY.md's backup section, for whoever is restoring a machine.
+
+    A table in the first and missing from the second is not a documentation nit
+    — it is a table nobody backs up, discovered on the day someone needs it. That
+    drifted once already: `day_ritual` was added to the schema and to DEPLOY.md
+    and left out of schema.sql's own list.
+
+    One-way containment on purpose. DEPLOY.md legitimately names tables this
+    schema comment does not itemise (the scheduling pair), so requiring equality
+    would fail on a difference that is not a mistake.
+    """
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    schema = (root / "backend/tasksd/db/schema.sql").read_text(encoding="utf-8")
+    deploy = (root / "docs/DEPLOY.md").read_text(encoding="utf-8")
+
+    # The parenthesised list in the "SIDECAR tables (...)" header line, which may
+    # wrap across several comment lines.
+    m = re.search(r"SIDECAR tables \(([^)]*)\)", schema, re.S)
+    assert m, "schema.sql no longer has a 'SIDECAR tables (...)' header to check"
+    named = {t.strip() for t in re.sub(r"--", " ", m.group(1)).split(",") if t.strip()}
+    assert named, "the SIDECAR list parsed empty — the header shape changed"
+
+    missing = sorted(t for t in named if f"`{t}`" not in deploy)
+    assert not missing, (
+        f"{missing} are named as sidecar-class in schema.sql but appear in no "
+        f"backup instruction in docs/DEPLOY.md. A resync rebuilds none of them, "
+        f"so a table missing there is a table nobody backs up."
+    )
+    # And the tables must actually exist, so a rename cannot leave the list
+    # naming something gone while still passing the check above.
+    for table in named:
+        assert f"CREATE TABLE IF NOT EXISTS {table}" in schema, table
+
+
+def test_a_created_habit_cannot_be_given_the_clear_sentinel(svc):
+    """The clear sentinel is a PATCH's, and only a PATCH's.
+
+    `EditHabit.estimate_minutes` takes -1 to mean "un-state this", the same
+    spelling `patch_day_entry` uses. `CreateHabit` advertised the same bound and
+    `create_habit` had no arm to match it — it wrote the -1 STRAIGHT INTO the
+    habits row, and every occurrence the rule minted afterwards was copied from
+    it. A day holding one then reported a NEGATIVE planned total and counted the
+    row as estimated, because -1 is not None.
+
+    Refused at the edge rather than swallowed in the service: there is nothing to
+    clear on a rule that does not exist yet (the same reasoning
+    `CreateDayEntry.estimate_minutes` carries), and a service-side swallow would
+    leave two spellings of "no estimate" in one column.
+    """
+    from tasksd.app import CreateHabit
+    import pydantic
+
+    # 0 is a real estimate and still passes; -1 is not a value, it is a verb.
+    assert CreateHabit(title="Read", estimate_minutes=0).estimate_minutes == 0
+    assert CreateHabit(title="Read").estimate_minutes is None
+    with pytest.raises(pydantic.ValidationError):
+        CreateHabit(title="Read", estimate_minutes=-1)
+
+    # And the clear still works where it belongs — on the edit.
+    habit = svc.create_habit(title="Read", days="", estimate_minutes=30)
+    assert habit["estimate_minutes"] == 30
+    assert svc.update_habit(habit["id"], estimate_minutes=-1)["estimate_minutes"] is None
+
+
+def test_saying_nothing_about_a_day_writes_no_ritual_row(svc):
+    """`service.set_day_ritual` calls a PATCH with an empty body a read, and
+    publishes no event for one. The store has to agree: it used to INSERT the
+    row before checking whether there was anything to put in it, so a read minted
+    the row holding the nulls it had just reported.
+
+    That row is not free. `day_ritual` is sidecar-class — no resync rebuilds it
+    and every backup has to carry it — so a day nobody ever spoke about was
+    taking up space in the one table that cannot be regenerated.
+    """
+    day = _live()
+    assert _count(svc, "day_ritual") == 0
+    dto = svc.set_day_ritual(day)
+    assert _count(svc, "day_ritual") == 0, "an empty PATCH minted a row"
+    # It still ANSWERS, with the nulls that are true of a day nobody has spoken
+    # about — it simply does not write them down.
+    assert dto["capacity"] is None and dto["reflection"] is None
+
+    # A real statement does write, and the row it writes is readable.
+    svc.set_day_ritual(day, capacity_minutes=300)
+    assert _count(svc, "day_ritual") == 1
+    assert svc.open_day(day, create=False)["capacity"] == 300
+
+
+def test_the_day_tools_advertise_bounds_the_validator_actually_enforces(svc):
+    """A schema keyword the validator does not implement is advertised and
+    silently unenforced — and these bounds are not cosmetic. An unbounded int
+    reaches SQLite as an OverflowError, which is outside the taxonomy the routes
+    map and so a 500 rather than a refusal.
+
+    -1 is accepted on a PATCH and refused on a create, and that asymmetry is the
+    point: the sentinel CLEARS an estimate, and there is nothing to clear on a
+    row that does not exist yet. 0 is a real value on both, which is why the
+    clear cannot borrow falsiness.
+
+    test_mcp.py checks the whole registry for unsupported keywords, but it needs
+    the scratch server and skips without Docker. The day tools are checked here,
+    where it runs."""
+    from tasksd.mcp.tools import build_tools
+    from tasksd.mcp.validate import SchemaError, check_arguments, unsupported_keywords
+
+    tools = build_tools(McpApi(svc))
+
+    def takes(name: str, args: dict) -> bool:
+        try:
+            check_arguments(args, tools[name].schema, tool=name)
+            return True
+        except SchemaError:
+            return False
+
+    for name in ("smylte_get_today", "smylte_plan_day", "smylte_update_day_entry",
+                 "smylte_review_day"):
+        assert not unsupported_keywords(tools[name].schema), name
+
+    assert takes("smylte_update_day_entry", {"entry_id": "x", "estimate_minutes": 0})
+    assert takes("smylte_update_day_entry", {"entry_id": "x", "estimate_minutes": -1})
+    assert not takes("smylte_update_day_entry", {"entry_id": "x", "estimate_minutes": -2})
+    assert not takes("smylte_update_day_entry", {"entry_id": "x", "estimate_minutes": 1441})
+    assert takes("smylte_update_day_entry", {"entry_id": "x", "move_to": "2026-08-28"})
+    assert not takes("smylte_update_day_entry", {"entry_id": "x", "move_to": "thursday"})
+
+    assert takes("smylte_plan_day", {"title": "x", "estimate_minutes": 0})
+    assert not takes("smylte_plan_day", {"title": "x", "estimate_minutes": -1}), (
+        "there is nothing to clear on a row that does not exist yet")
+
+
+def test_an_estimate_given_when_planning_survives_a_retry(mcp_api, svc):
+    """The add is idempotent — a task already on the day comes back as the row
+    that is there — so without a second write the estimate the model just stated
+    would be silently dropped on every retry."""
+    day = _live()
+    first = mcp_api.plan_day(day=day, list_id="home", uid="someday",
+                             estimate_minutes=25)
+    assert first["estimate_minutes"] == 25
+    again = mcp_api.plan_day(day=day, list_id="home", uid="someday",
+                             estimate_minutes=40)
+    assert again["entry_id"] == first["entry_id"], "still one row"
+    assert again["estimate_minutes"] == 40, "the stated estimate was dropped"

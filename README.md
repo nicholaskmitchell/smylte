@@ -6,8 +6,11 @@ existing Radicale CalDAV server, live at `radicale.nicholaskmitchell.com`
 Apple's — find it via RFC 6764 discovery at the root). It is one CalDAV client among
 several — Tasks.org (DAVx⁵), jtx Board, and Thunderbird share the same
 collections and have equal rights. **Radicale is the source of truth; SQLite
-is a disposable cache** (except the app-only sidecar — pins and app-only
-metadata that have nowhere to live on the wire; see `docs/phase0-findings.md`).
+is a disposable cache** (except the app-only sidecar — pins, manual order, the
+day plan, habits and what you wrote about each day: things that have nowhere to
+live on the wire, so a resync cannot rebuild them and a backup must include
+them. See
+`docs/phase0-findings.md`, and `docs/DEPLOY.md` for which tables those are).
 
 The stack is a FastAPI backend (`tasksd`) that owns the CalDAV/sync/write path
 and serves a React + Vite single-page app.
@@ -57,6 +60,60 @@ is account-synced. Arranging is desktop-only for now; phones render the same
 modules stacked in the saved order. The mini calendar dots each day in its
 calendars' colors, and a day opens a read-only list of its events.
 
+**Today.** The one surface that holds state of its own. Every other task view
+renders a *query* — "what is due today", recomputed on every paint, so the list
+moves under you all day. This one renders a *snapshot*: the first time you open
+a day the backend freezes what it held — what is due, what is late, what you
+left unfinished on your last planned day — and from then on the day is
+something you arrange rather than something that arranges itself. A task list
+grows without bound and a day does not, and the commitment step is the part
+worth keeping.
+
+A day holds three kinds of row, and the tab says which is which — a filled
+square is a **task** (a real VTODO on a list, so it reaches Tasks.org,
+Thunderbird and your phone), a hollow one is a **note** (text that lives only
+in that day and never leaves Smylte), and `↻` is a **habit**. The add box takes
+a line of prose — "invoice friday", "gym at 7" — and states underneath exactly
+what Enter will create and where it will end up, with a one-press switch
+between the two and a list picker when there is a choice to make. Drag rows
+into the order you will actually work them.
+
+A **habit** is a rule that puts a line on your day, on the weekdays you choose.
+It is not a second system: each occurrence is an ordinary row in the day plan,
+so it ticks and drops like anything else. No VTODO is written, no RRULE, and
+nothing about it reaches the CalDAV collections the other clients share. Its
+weekly count is over the occurrences that *exist*, not over scheduled weekdays,
+so days you never opened the app are not counted against you — and it is never
+coloured as a failure.
+
+**Planning your day** is a three-step ritual rather than a running total: how
+long today is, what goes on it, and how long each thing takes. Say the length
+either way — "until 6pm" or "5h" — and Settings holds a default per weekday for
+the days you do not want to think about it. From then on the day says how full
+it is, and when the plan runs past what you said you would work it says so in
+words, *before* the day starts. It never blocks: it records a decision rather
+than enforcing one. An account that has never stated a capacity is told nothing
+at all, because inventing an eight-hour day for someone is the one thing this
+must not do.
+
+**Shutting it down** is the matching three steps at the other end: what
+happened, what follows you, and a line about how it went. Each unfinished row
+gets three honest answers — tomorrow, a day you name, or off the plan — and
+leaving one alone is the fourth, which the automatic carry still answers.
+Moving work is not the same as dropping it: the day that planned it still shows
+it planned it, and the look-back says *where it went* rather than filing it
+under abandoned. Nothing here scores the day. There is no percentage, no streak
+and no colour on the numbers.
+
+**Review** shows how a day went: split by where each row came from (chosen,
+carried over, derived, habits), what you moved to another day, what you
+dropped, and what you finished that day without ever planning it — opening with
+whatever you wrote about it at shutdown. It works on today while today is still
+running, and the `‹` `›` picker steps back a fortnight. **A past day is a
+finished record** — read-only end to end, because a log you can fill in
+afterwards is a scorecard. Reading a day never creates one: only today can be
+opened, which is what keeps the record honest about what was actually intended.
+
 **Tabs.** Settings → General → Tabs reorders the top strip and picks which tab
 the app opens on — a fixed one, or wherever you left off. Both follow the
 account.
@@ -95,12 +152,21 @@ tools over lists, tasks, subtasks, search, tags, calendars, events including the
 recurrence scopes, free/busy, booking links, and the day plan.
 
 The day tools are read-only about *whether a day exists*: a connector can see
-today, put something on it, tick a note and review how a day went, but only the
-owner can open a day in the app. Asking about a day nobody has opened returns a
-clearly-labelled preview of what opening it would derive, and writes nothing —
-the plan is worth keeping only while it records what was actually intended, so
-nothing here can manufacture one, and a day in the past cannot be planned at
-all.
+today, put something on it, estimate it, send it to another day, tick a note and
+review how a day went, but only the owner can open a day in the app. Asking
+about a day nobody has opened returns a clearly-labelled preview of what opening
+it would derive, and writes nothing — the plan is worth keeping only while it
+records what was actually intended, so nothing here can manufacture one, and a
+day in the past cannot be planned at all.
+
+It **reports** what you said about a day — your capacity, when you started it
+and shut it down, the line you wrote — so a model can see you are already an
+hour over before it proposes an eleventh thing. It cannot **write** any of it.
+Those are your declarations about your own day, and a connector able to make
+them would be manufacturing the record they exist to keep honest: the same call
+that gives habits no tool for creating a rule. An estimate is refused on a past
+day for the same reason a tick is — one written afterwards is a number chosen
+with the answer in hand.
 
 It is an OAuth 2.1 authorization server as well as the resource server, because
 there is one account here and no identity provider to delegate to. Knowing the
@@ -152,12 +218,14 @@ backend/
   dev/          empirical probes (fidelity comparison, normalization, smokes)
 frontend/
   src/
-    components/ TasksView, CalendarView, SchedulingView, HomeView, BookingPage,
-                Sidebar, Login, TaskModal, AppearancePanel, ArchivedCalendarsModal
+    components/ TodayView, TasksView, CalendarView, SchedulingView, HomeView,
+                BookingPage, Sidebar, Login, TaskModal, AppearancePanel,
+                ArchivedCalendarsModal
     api.ts      typed, same-origin API client (+ SSE subscribe)
     App.tsx     shell: tabs, settings, theme, live-refresh
     appearance.ts  token allowlist + validation, apply/reset, theme import/export
     dashboard.ts   Home grid math (pack/move/resize) — pure, unit-tested
+    daytext.ts     reading one typed line ("gym at 7") — pure, unit-tested
     order.ts       the one task sort — total, so array order can't leak through
     time.ts        every clock the app draws, 12- or 24-hour
     styles/     design tokens + app.css

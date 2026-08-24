@@ -54,7 +54,7 @@ const tsk = (o: Partial<Task> = {}): Task => ({
   child_count: 0, completed_child_count: 0, derived_percent: null,
   pinned: false, sort_order: null,
   // Present on every DTO the server sends; see api.ts's Task.
-  completed_at: null, kanban_column: null, has_rrule: false,
+  completed_at: null, kanban_column: null, estimated_minutes: null, has_rrule: false,
   created: null, last_modified: null,
   href: '/tl1/t1.ics', etag: '"1"', ...o,
 })

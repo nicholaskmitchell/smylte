@@ -1,4 +1,5 @@
-// Clock formatting, and the one place that decides 12- or 24-hour.
+// Clock formatting and duration formatting: the one place that decides 12- or
+// 24-hour, and the one place that spells a length of time.
 //
 // Every time the app renders used to call `toLocaleTimeString` with
 // `{ hour: 'numeric', minute: '2-digit' }` and no `hour12`, which means the
@@ -80,4 +81,33 @@ export function fmtWhen(iso: string, f: TimeFormat): string {
  */
 export function inputLang(f: TimeFormat): string {
   return f === '24h' ? 'en-GB' : 'en-US'
+}
+
+/**
+ * A DURATION, in the compactest honest form: `45m`, `2h`, `1h 30m`.
+ *
+ * In this file because it is the app's other reading of a clock face, and a
+ * reader looking for "how does this app render time" should find both here. It
+ * deliberately does NOT consult `TimeFormat`, and that is the distinction worth
+ * keeping: 12- or 24-hour is a choice about how to name an INSTANT — whether
+ * 15:00 is written "3 PM" — and an hour and a half is an hour and a half on
+ * either setting. Threading `tf` in would be a parameter every call site had to
+ * supply and none could act on.
+ *
+ * Whole hours drop the minutes ("2h", not "2h 0m") because the zero says
+ * nothing; sub-hour durations keep only minutes. Zero is "0m" rather than the
+ * empty string, so a row that has been deliberately estimated at nothing still
+ * reads as estimated — the difference between "this takes no time worth
+ * counting" and "nobody has said", which the whole feature turns on.
+ *
+ * Negative input is clamped to 0. -1 is the wire's CLEAR sentinel
+ * (`PatchDayEntryBody.estimate_minutes`) and should never reach a formatter;
+ * rendering it as "-1m" would put the protocol on the screen.
+ */
+export function fmtDuration(minutes: number): string {
+  const m = Math.max(0, Math.round(minutes))
+  const h = Math.floor(m / 60)
+  const rest = m % 60
+  if (!h) return `${rest}m`
+  return rest ? `${h}h ${rest}m` : `${h}h`
 }
