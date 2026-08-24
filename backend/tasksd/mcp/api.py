@@ -252,6 +252,35 @@ def _in_display_order(tasks: list[dict], zone=None) -> list[dict]:
     return sorted(tasks, key=lambda t: (at[_task_key(t)], _intrinsic_order(t, zone)))
 
 
+#: What `_day_facts` reports for a day nobody has planned. Spelled out rather
+#: than omitted, for the reason `review_day`'s residual bucket is always present:
+#: an answer whose keys come and go teaches a reader a shape that is only
+#: sometimes true, and the first day without a plan is where they find out.
+_NO_DAY_FACTS = {
+    "capacity_minutes": None, "capacity": None, "committed_at": None,
+    "shutdown_at": None, "reflection": None,
+}
+
+
+def _task_flag_done(entry: dict) -> bool:
+    """Is this row done, on a day that is still running?
+
+    A task's doneness is its VTODO's STATUS, read off the `task` record
+    `_entries_with_tasks` joined in — never the entry, which stores none for a
+    task. A note's and a habit occurrence's is the entry's own stamp, because
+    those rows exist nowhere else. The app's `rowDone` makes exactly this split
+    and says the same thing.
+
+    Only honest for TODAY. On a finished day it would count a task planned on
+    Monday and ticked on Thursday as Monday's work — which is why `review_day`
+    passes a different predicate built from that day's own completions.
+    """
+    if entry["kind"] != "task":
+        return bool(entry["done_at"])
+    task = entry.get("task")
+    return bool(task and task["completed"])
+
+
 @contextmanager
 def _not_found(message: str):
     """Turn the engine's unknown-uid KeyError into an answer the model can act on.
@@ -823,6 +852,22 @@ class McpApi:
     # open days would fill the log with plans nobody made, and the day plan is
     # only worth keeping while it is an honest record of what the owner actually
     # intended.
+    #
+    # A third rule arrived with the rituals, and it is the same rule that gives
+    # habits no tool for creating a RULE: WHAT THE OWNER SAYS ABOUT A DAY IS
+    # REPORTED AND NEVER WRITTEN. A capacity, a `committed_at`, a `shutdown_at`
+    # and a reflection are their declarations about their own day — how long they
+    # are willing to work, that they have started, that they are done, and how it
+    # went — and a model able to make them would be manufacturing the very record
+    # the day plan exists to keep honest. There is no `set_day_ritual` on this
+    # surface and there must not be one; a test asserts it against the class
+    # rather than against the code, so a method added later without thinking
+    # about it fails rather than shipping.
+    #
+    # Reporting them is not the same thing and is worth real money: a model that
+    # cannot see the capacity will happily propose an eleventh thing for a day
+    # that is already an hour over, which is the exact failure the number was
+    # added to prevent.
 
     def _today(self) -> str:
         """The owner's calendar day, not the server's.
@@ -936,17 +981,86 @@ class McpApi:
         says so — and nothing in this toolset can open the day to change that.
         The tool descriptions say so outright, because the alternative is a model
         discovering it by reporting a habit done that was never recorded.
+
+        WHAT THE OWNER SAID about the day comes back beside what is on it —
+        their capacity, whether they have started or shut down, and the line they
+        wrote at shutdown. All of it is READ-ONLY here, and nothing in this
+        toolset can write any of it: see the section note. It is reported because
+        a model that cannot see the capacity will happily propose an eleventh
+        thing for a day that is already an hour over, which is the exact failure
+        the number exists to prevent.
         """
         day = self._today()
         plan = self._svc.open_day(day, create=False)
         entries = self._entries_with_tasks(plan["entries"])
-        out = {"day": day, "planned": plan["planned"], "entries": entries}
+        out = {
+            "day": day, "planned": plan["planned"],
+            **self._day_facts(plan),
+            # The live doneness rule: a task's is its VTODO's flag, already
+            # joined in above, and a note's or a habit's is the entry's own
+            # stamp. `review_day` asks the same question of a finished day with
+            # that day's completions, because a task planned on Monday and
+            # ticked on Thursday was not done on Monday — see `_day_totals`.
+            "totals": self._day_totals(entries, done=_task_flag_done),
+            "entries": entries,
+        }
         if not plan["planned"]:
             out["preview"] = self._entries_with_tasks(self._svc.preview_day(day))
         return out
 
-    def plan_day(self, *, day=None, list_id=None, uid=None, title=None) -> dict:
-        """Put one task or one note on a day.
+    @staticmethod
+    def _day_facts(plan: dict) -> dict:
+        """What the owner SAID about a day, lifted out of the plan DTO.
+
+        One place, because `today` and `review_day` both report it and two
+        surfaces describing one day differently is the thing this module's
+        review buckets are kept in step to avoid.
+
+        `capacity_minutes` and `capacity` are deliberately both here and are not
+        the same question. The first is what the owner stated FOR THIS DAY and is
+        null until they do; the second is what the day's total should be read
+        against, which may come from a weekday default or from the account's.
+        Reporting only the second would make a day that merely inherited a number
+        indistinguishable from one the owner looked at and set.
+        """
+        return {
+            "capacity_minutes": plan["capacity_minutes"],
+            "capacity": plan["capacity"],
+            "committed_at": plan["committed_at"],
+            "shutdown_at": plan["shutdown_at"],
+            "reflection": plan["reflection"],
+        }
+
+    @staticmethod
+    def _day_totals(entries: list[dict], *, done) -> dict:
+        """How full a day is, in minutes, over its LIVE rows.
+
+        Dropped and MOVED rows are out of both figures, for the reason the app's
+        own strip leaves them out: declining something, or doing it on Thursday,
+        is how a day gets back under its capacity, and a total that kept counting
+        it would make the two controls that help useless.
+
+        An unestimated row contributes NOTHING rather than an assumed default —
+        which leaves both figures honestly low on a half-estimated day, and is
+        why `unestimated` is reported beside them. A model told "0m of 1h 20m"
+        with no third number will report a day nothing happened on.
+
+        `done` is passed in rather than decided here because the honest rule
+        differs by caller and only the caller knows which it has: on today a
+        task's doneness is its VTODO's current flag, and on a finished day it is
+        whether that task was completed ON THAT DAY. Same question, two ways of
+        asking it, exactly as the app's own `rowDone` splits it.
+        """
+        live = [e for e in entries if not e["dropped_at"] and not e["rolled_to"]]
+        return {
+            "planned_minutes": sum(e["estimate_minutes"] or 0 for e in live),
+            "done_minutes": sum(e["estimate_minutes"] or 0 for e in live if done(e)),
+            "unestimated": sum(1 for e in live if e["estimate_minutes"] is None),
+        }
+
+    def plan_day(self, *, day=None, list_id=None, uid=None, title=None,
+                 estimate_minutes=None) -> dict:
+        """Put one task or one note on a day, optionally with an estimate.
 
         Exactly one of (list_id + uid) or title, checked here because the tool
         schemas cannot express it: `mcp/validate.py` implements no oneOf, and a
@@ -979,17 +1093,30 @@ class McpApi:
         if has_task:
             self._href(list_id)          # raises the standard ToolError if unknown
         try:
-            return self._svc.add_day_entry(
+            entry = self._svc.add_day_entry(
                 resolved, entry_id=secrets.token_hex(16),
                 kind="task" if has_task else "note",
                 list_id=list_id, uid=uid, title=title,
+                estimate_minutes=estimate_minutes,
             )
+            # The add is IDEMPOTENT, which is what makes this second write
+            # necessary rather than wasteful: a task already on the day comes
+            # back as the row that is there, with the estimate it already had,
+            # and the one just stated would be silently dropped. Only written
+            # when it actually differs, so the ordinary case is still one write
+            # and no second `day_updated` for every other tab to refetch on.
+            if (estimate_minutes is not None
+                    and entry["estimate_minutes"] != estimate_minutes):
+                entry = self._svc.patch_day_entry(
+                    resolved, entry["entry_id"], estimate_minutes=estimate_minutes)
+            return entry
         except ValueError as exc:
             raise ToolError(str(exc)) from None
 
     def update_day_entry(self, entry_id, *, day=None, done=None, dropped=None,
-                         position=None) -> dict:
-        """Tick a note or a habit occurrence, or drop any entry off a day.
+                         position=None, estimate_minutes=None, move_to=None) -> dict:
+        """Tick a note or a habit occurrence, estimate one, send one to another
+        day, or drop any entry off this one.
 
         `done` on a TASK entry is refused by the service, and the message points
         at smylte_complete_task rather than restating the refusal: a task's
@@ -1001,9 +1128,21 @@ class McpApi:
 
         Which is why `done` is refused on a PAST day; see below.
         """
-        if done is None and dropped is None and position is None:
+        if (done is None and dropped is None and position is None
+                and estimate_minutes is None and move_to is None):
             raise ToolError(
-                "Nothing to change — pass done, dropped or position."
+                "Nothing to change — pass done, dropped, position, "
+                "estimate_minutes or move_to."
+            )
+        if move_to is not None and (done is not None or dropped is not None):
+            # Moving already answers the question the other two answer, and
+            # answers it differently. Applying both would file one row under two
+            # contradictory decisions in the same call, and whichever landed
+            # second would be the day's record of it.
+            raise ToolError(
+                "Pass move_to on its own. Moving an entry to another day is "
+                "already an answer about it — done and dropped are the other "
+                "two, and a row cannot carry more than one."
             )
         resolved = self._day_or_today(day)
         # NOT `_writable_day`, which would refuse the whole call: this tool has
@@ -1037,6 +1176,21 @@ class McpApi:
         # so a day that reads as past IS past, and the message says which day the
         # owner is actually on.
         today = self._today()
+        # `estimate_minutes` joins `done` on the wrong side of that line, and
+        # for the same reason rather than by analogy: an estimate is what the
+        # work was expected to take, stated BEFORE it was attempted. Written
+        # afterwards against a day that has already run, it is not a plan — it is
+        # a number chosen with the answer in hand, and the day's "2h of 3h
+        # planned" stops meaning anything the moment either half can be edited
+        # to taste. `dropped` and `position` stay allowed for the reason above:
+        # neither manufactures a record.
+        if estimate_minutes is not None and resolved < today:
+            raise ToolError(
+                f"{resolved} has already happened, so `estimate_minutes` cannot "
+                f"be set on it — an estimate is what something was expected to "
+                f"take BEFORE it was done, and one written afterwards is chosen "
+                f"with the answer in hand. Today is {today}."
+            )
         if done is not None and resolved < today:
             raise ToolError(
                 f"{resolved} has already happened, so `done` cannot be changed "
@@ -1046,9 +1200,24 @@ class McpApi:
                 f"from {resolved} or reorder it: saying it did not happen, or "
                 f"tidying the order, does not rewrite what did."
             )
+        if move_to is not None:
+            # A CREATE, not a move: `roll_entry` writes a row on the target day
+            # and stamps this one with where it went, so the day that planned the
+            # work is still the day that planned it. Rolling FROM a past day is
+            # allowed (it manufactures no record of that day — the new row lands
+            # on one that has not happened); rolling TO one is refused by the
+            # service, which is the same rule `_writable_day` states.
+            try:
+                moved = self._svc.roll_entry(resolved, entry_id, _day_key(move_to))
+            except ValueError as exc:
+                raise ToolError(str(exc)) from None
+            if moved is None:
+                raise ToolError(self._no_entry(entry_id, resolved))
+            return moved
         try:
             entry = self._svc.patch_day_entry(
                 resolved, entry_id, done=done, dropped=dropped, position=position,
+                estimate_minutes=estimate_minutes,
             )
         except ValueError as exc:
             raise ToolError(
@@ -1056,12 +1225,19 @@ class McpApi:
                 f"list and uid — that writes the VTODO every client reads."
             ) from None
         if entry is None:
-            raise ToolError(
-                f"There is no entry {entry_id!r} on {resolved}. Call "
-                f"smylte_get_today for the entries on today, or smylte_review_day "
-                f"with a day for another one."
-            )
+            raise ToolError(self._no_entry(entry_id, resolved))
         return entry
+
+    @staticmethod
+    def _no_entry(entry_id: str, day: str) -> str:
+        """The message for an entry_id the day does not have. One place, because
+        both arms of `update_day_entry` can reach it and a caller told two
+        different things about the same failure learns neither."""
+        return (
+            f"There is no entry {entry_id!r} on {day}. Call smylte_get_today for "
+            f"the entries on today, or smylte_review_day with a day for another "
+            f"one."
+        )
 
     def review_day(self, *, day=None, from_day=None, to_day=None) -> dict:
         """What was planned against what actually happened.
@@ -1136,19 +1312,39 @@ class McpApi:
             plan = by_day.get(d)
             entries = self._entries_with_tasks(plan["entries"]) if plan else []
             buckets: dict[str, list] = {
-                "chosen": [], "carried": [], "derived": [], "habits": [], "other": [],
+                "chosen": [], "carried": [], "derived": [], "habits": [],
+                "other": [], "moved": [], "dropped": [],
             }
             for e in entries:
-                # Dropped rows are their own arm and are not bucketed by source:
-                # "planned it and did not do it" is one answer whatever put it
-                # there.
-                if not e["dropped_at"]:
-                    buckets[arm_of.get(e["source"], "other")].append(e)
+                # Dropped and MOVED rows are their own arms and are not bucketed
+                # by source: what was DECIDED about a row outranks what put it
+                # there, and "planned it and did not do it" is one answer
+                # whatever that was.
+                #
+                # They are two arms and not one, because they are two different
+                # answers: work that is happening on Thursday and work that is
+                # not happening. Filing a moved row under `dropped` would report
+                # it abandoned, which is the one thing `rolled_to` exists to
+                # stop — it records the decision AND its destination, and the
+                # row carries `rolled_to` so a model can say where it went.
+                arm = ("dropped" if e["dropped_at"]
+                       else "moved" if e["rolled_to"]
+                       else arm_of.get(e["source"], "other"))
+                buckets[arm].append(e)
+            # The day's own completions, keyed the way an entry names a task, so
+            # "done" here means DONE ON THIS DAY. A task planned on Monday and
+            # ticked on Thursday is not Monday's work, and counting it as such
+            # is the one way a look-back can flatter a day that did not happen.
+            finished = {(t["list"], t["uid"]) for t in done_by_day.get(d, [])}
             out.append({
                 "day": d,
                 "planned": bool(plan),
+                **(self._day_facts(plan) if plan else _NO_DAY_FACTS),
+                "totals": self._day_totals(entries, done=lambda e: (
+                    (e["list"], e["uid"]) in finished if e["kind"] == "task"
+                    else bool(e["done_at"])
+                )),
                 **buckets,
-                "dropped": [e for e in entries if e["dropped_at"]],
                 "completed_that_day": done_by_day.get(d, []),
             })
         return {"from": start, "to": end, "days": out} if ranged else out[0]

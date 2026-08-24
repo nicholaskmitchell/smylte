@@ -2043,6 +2043,12 @@ class TaskService:
             to_day, entry_id=uuid.uuid4().hex, kind=row["kind"],
             list_id=_slug(row["collection_href"]) if row["collection_href"] else None,
             uid=row["uid"], title=row["title"],
+            # The estimate travels with the work. A task's would arrive anyway
+            # through the sidecar memory, but a NOTE remembers nothing — so
+            # without this, "ring the bank, 15m" moved to Thursday arrives on
+            # Thursday as an unestimated row, and the day it left is the only one
+            # that ever knew how long it takes.
+            estimate_minutes=row["estimate_minutes"],
         )
         with self._lock:
             moved = store.update_day_entry(
@@ -2108,7 +2114,8 @@ class TaskService:
 
     def add_day_entry(
         self, day: str, *, entry_id: str, kind: str,
-        list_id: str | None = None, uid: str | None = None, title: str | None = None,
+        list_id: str | None = None, uid: str | None = None,
+        title: str | None = None, estimate_minutes: int | None = None,
     ) -> dict[str, Any]:
         """Put a task or a note on a day by hand (source=user).
 
@@ -2216,8 +2223,14 @@ class TaskService:
                 # nothing to remember one, so it starts unestimated and the
                 # ritual asks. Copied at insert time rather than joined — see
                 # `insert_day_entry`.
+                #
+                # An estimate STATED by the caller wins over the remembered
+                # one. It is the fresher statement about this particular day,
+                # and the memory exists to save typing rather than to overrule
+                # somebody who has already typed.
                 estimate_minutes=(
-                    self._remembered_estimate(href, uid)
+                    int(estimate_minutes) if estimate_minutes is not None
+                    else self._remembered_estimate(href, uid)
                     if kind == "task" and href and uid else None
                 ),
             )

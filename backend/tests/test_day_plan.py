@@ -25,6 +25,8 @@ from tasksd.config import Settings
 from tasksd.dav.client import CollectionInfo, Item
 from tasksd.db import store
 from tasksd.ical import extract_from_raw
+from tasksd.mcp.api import McpApi
+from tasksd.mcp.tools import ToolError
 from tasksd.service import TaskService
 
 # A Friday, with the days either side of it. Fixed rather than derived from
@@ -1152,3 +1154,260 @@ def test_settings_accepts_the_today_tab(client):
     assert r.status_code == 200, r.text
     assert r.json()["start_tab"] == "today"
     assert client.get("/api/settings").json()["tab_order"][0] == "today"
+
+
+# ── what the connector says about a day ──────────────────────────────────────
+#
+# `McpApi` over the same in-process service, so these run with no Radicale like
+# the rest of this file. They live HERE rather than in test_mcp.py, whose day
+# tests all need the scratch server and skip without Docker — a rule about how a
+# day is described is worth more in a suite that actually runs.
+#
+# The rule they exist for is `REVIEW_ARM`'s: two surfaces describing one day
+# differently is worse than either being slightly wrong. Everything below is a
+# claim the Today tab also makes, checked on the other side of the wall.
+#
+# THESE USE THE REAL CLOCK, unlike everything above, and have to: half of them
+# are about a PASTNESS rule — a capacity cannot be stated for a day that has
+# run, work cannot be moved backwards — and `DAY` is a fixed Friday that is
+# already in the past. A fixed day cannot exercise a rule about which side of
+# today something falls on. Resolved at call time rather than at import, so a
+# suite that runs across midnight still agrees with the service it is asking.
+
+
+def _live() -> str:
+    """Today, as the service resolves it."""
+    return date.today().isoformat()
+
+
+def _live_plus(n: int) -> str:
+    return (date.today() + timedelta(days=n)).isoformat()
+
+
+@pytest.fixture
+def mcp_api(svc):
+    return McpApi(svc)
+
+
+def _entry_id(plan: dict, uid: str) -> str:
+    return next(e["entry_id"] for e in plan["entries"] if e["uid"] == uid)
+
+
+def test_the_connector_reports_what_the_owner_said_about_a_day(mcp_api, svc):
+    """A model that cannot see the capacity will happily propose an eleventh
+    thing for a day already an hour over — which is the exact failure the number
+    exists to prevent. It reports both `capacity_minutes` (what was stated FOR
+    this day) and `capacity` (what the total should be read against), because a
+    day that merely inherited a weekday default must stay distinguishable from
+    one the owner looked at and set."""
+    day = _live()
+    svc.open_day(day, create=True)
+    svc.set_day_ritual(day, capacity_minutes=300, reflection="  Slow start.  ")
+    out = mcp_api.review_day(day=day)
+
+    assert out["capacity_minutes"] == 300 and out["capacity"] == 300
+    assert out["reflection"] == "Slow start."
+    assert out["shutdown_at"] is None and out["committed_at"] is None
+
+
+def test_a_day_nobody_planned_still_has_every_key(mcp_api):
+    """An answer whose keys come and go teaches a reader a shape that is only
+    sometimes true, and the first unplanned day is where they find out. The
+    residual `other` bucket is always present for the same reason."""
+    out = mcp_api.review_day(day=QUIET_DAY)
+    assert out["planned"] is False
+    for key in ("capacity", "capacity_minutes", "committed_at", "shutdown_at",
+                "reflection"):
+        assert out[key] is None, key
+    assert out["totals"] == {
+        "planned_minutes": 0, "done_minutes": 0, "unestimated": 0}
+    for bucket in ("chosen", "carried", "derived", "habits", "other", "moved",
+                   "dropped"):
+        assert out[bucket] == [], bucket
+
+
+def test_moved_work_is_not_reported_as_abandoned(mcp_api, svc):
+    """THE DISTINCTION `rolled_to` EXISTS FOR. "Happening on Thursday" and "not
+    happening" are different answers, and a look-back that filed both under
+    `dropped` would tell the owner they abandoned something they rescheduled."""
+    day, target = _live(), _live_plus(1)
+    plan = svc.open_day(day, create=True)
+    moved, declined = _entry_id(plan, "due-today"), _entry_id(plan, "late")
+    svc.roll_entry(day, moved, target)
+    svc.patch_day_entry(day, declined, dropped=True)
+
+    out = mcp_api.review_day(day=day)
+    assert [e["entry_id"] for e in out["moved"]] == [moved]
+    assert out["moved"][0]["rolled_to"] == target, "a model has to say WHERE"
+    assert [e["entry_id"] for e in out["dropped"]] == [declined]
+    # And neither is still reported as sitting on the day.
+    everywhere_else = [e["entry_id"] for k in ("chosen", "carried", "derived",
+                                               "habits", "other")
+                       for e in out[k]]
+    assert moved not in everywhere_else and declined not in everywhere_else
+
+
+def test_the_totals_leave_out_what_was_decided_about(mcp_api, svc):
+    """Declining something, or doing it on Thursday, is how a day gets back
+    under its capacity — a total that kept counting it would make the two
+    controls that help useless. And an unestimated row counts as NOTHING, which
+    is why the third number is reported beside the other two: "0m of 1h 20m"
+    with no `unestimated` reads as a day nothing happened on."""
+    day, target = _live(), _live_plus(1)
+    plan = svc.open_day(day, create=True)
+    kept, moved = _entry_id(plan, "due-today"), _entry_id(plan, "late")
+    svc.patch_day_entry(day, kept, estimate_minutes=45)
+    svc.patch_day_entry(day, moved, estimate_minutes=90)
+    before = mcp_api.review_day(day=day)["totals"]
+    assert before["planned_minutes"] == 135
+
+    svc.roll_entry(day, moved, target)
+    after = mcp_api.review_day(day=day)["totals"]
+    assert after["planned_minutes"] == 45, "the moved row still counts"
+    # Everything on the day that is neither of those two carries no estimate.
+    assert after["unestimated"] == len(
+        [e for e in plan["entries"] if e["entry_id"] not in (kept, moved)])
+    # And it travelled with the work rather than being left behind.
+    assert [e["estimate_minutes"] for e in svc.open_day(target, create=False)["entries"]
+            if e["uid"] == "late"] == [90]
+
+
+def test_done_minutes_counts_only_what_was_finished_that_day(mcp_api, svc):
+    """A task planned today and ticked next Thursday is Thursday's work.
+    Counting it as today's is the one way a look-back can flatter a day that did
+    not happen — the same fence the app's `rowDone` draws for a past day. The
+    seeded COMPLETED task carries no COMPLETED stamp, so no day owns it, which
+    is exactly the case `_completions_by_day` drops rather than guessing at."""
+    day = _live()
+    plan = svc.open_day(day, create=True)
+    svc.patch_day_entry(day, _entry_id(plan, "due-today"), estimate_minutes=45)
+    totals = mcp_api.review_day(day=day)["totals"]
+    assert totals["planned_minutes"] == 45 and totals["done_minutes"] == 0
+
+
+def test_the_connector_may_not_state_a_capacity_or_write_a_reflection(mcp_api):
+    """The same call that gives habits no tool for creating a rule. A capacity,
+    a start, a shutdown and a reflection are the owner's declarations about
+    their own day; a connector able to make them would be manufacturing the
+    record they exist to keep honest.
+
+    Asserted against the SURFACE rather than by reading the code, so a method
+    added later without thinking about it fails here. `_day_facts` is the one
+    allowed mention: it REPORTS the capacity, which is the whole point."""
+    reachable = [n for n in dir(McpApi) if not n.startswith("_")]
+    for name in reachable:
+        for forbidden in ("ritual", "capacity", "reflection", "shutdown",
+                          "commit"):
+            assert forbidden not in name, f"{name} reaches {forbidden}"
+
+
+def test_an_estimate_cannot_be_written_onto_a_day_that_has_run(mcp_api, svc):
+    """An estimate is what something was expected to take BEFORE it was
+    attempted. Written afterwards it is a number chosen with the answer in hand,
+    and the day's "2h of 3h planned" stops meaning anything the moment either
+    half can be edited to taste. `dropped` and `position` stay allowed on a past
+    day for the reason they always were: neither manufactures a record."""
+    past = "2020-01-02"
+    svc.open_day(past, create=True)
+    entry = svc.add_day_entry(past, entry_id=uuid.uuid4().hex, kind="note",
+                              title="Last decade")
+    with pytest.raises(ToolError) as caught:
+        mcp_api.update_day_entry(entry["entry_id"], day=past, estimate_minutes=30)
+    assert "already happened" in str(caught.value)
+
+    # Dropping the same row on the same day still works.
+    out = mcp_api.update_day_entry(entry["entry_id"], day=past, dropped=True)
+    assert out["dropped_at"]
+
+    # And on a day that has NOT run, the same call lands.
+    day = _live()
+    live = svc.add_day_entry(day, entry_id=uuid.uuid4().hex, kind="note",
+                             title="Today's")
+    assert mcp_api.update_day_entry(
+        live["entry_id"], day=day, estimate_minutes=30)["estimate_minutes"] == 30
+
+
+def test_the_connector_moves_work_rather_than_dropping_and_re_adding(mcp_api, svc):
+    """Without this the model's only way to say "do it Thursday" is drop + add,
+    which files the row under `dropped` and reports it abandoned — losing the
+    very distinction the bucket above exists to keep."""
+    day, target = _live(), _live_plus(1)
+    plan = svc.open_day(day, create=True)
+    entry_id = _entry_id(plan, "due-today")
+    out = mcp_api.update_day_entry(entry_id, day=day, move_to=target)
+
+    assert out["rolled_to"] == target and out["dropped_at"] is None
+    landed = [e["uid"] for e in svc.open_day(target, create=False)["entries"]]
+    assert landed.count("due-today") == 1
+    # Backwards is refused: an entry appearing on a finished day is the forgery
+    # every other rule here exists to prevent.
+    with pytest.raises(ToolError):
+        mcp_api.update_day_entry(_entry_id(plan, "late"), day=day,
+                                 move_to="2020-01-01")
+
+
+def test_moving_is_an_answer_and_will_not_be_combined_with_another(mcp_api, svc):
+    """Applying both would file one row under two contradictory decisions in the
+    same call, and whichever landed second would be the day's record of it."""
+    day = _live()
+    plan = svc.open_day(day, create=True)
+    with pytest.raises(ToolError) as caught:
+        mcp_api.update_day_entry(_entry_id(plan, "due-today"), day=day,
+                                 move_to=_live_plus(1), dropped=True)
+    assert "on its own" in str(caught.value)
+
+
+def test_the_day_tools_advertise_bounds_the_validator_actually_enforces(svc):
+    """A schema keyword the validator does not implement is advertised and
+    silently unenforced — and these bounds are not cosmetic. An unbounded int
+    reaches SQLite as an OverflowError, which is outside the taxonomy the routes
+    map and so a 500 rather than a refusal.
+
+    -1 is accepted on a PATCH and refused on a create, and that asymmetry is the
+    point: the sentinel CLEARS an estimate, and there is nothing to clear on a
+    row that does not exist yet. 0 is a real value on both, which is why the
+    clear cannot borrow falsiness.
+
+    test_mcp.py checks the whole registry for unsupported keywords, but it needs
+    the scratch server and skips without Docker. The day tools are checked here,
+    where it runs."""
+    from tasksd.mcp.tools import build_tools
+    from tasksd.mcp.validate import SchemaError, check_arguments, unsupported_keywords
+
+    tools = build_tools(McpApi(svc))
+
+    def takes(name: str, args: dict) -> bool:
+        try:
+            check_arguments(args, tools[name].schema, tool=name)
+            return True
+        except SchemaError:
+            return False
+
+    for name in ("smylte_get_today", "smylte_plan_day", "smylte_update_day_entry",
+                 "smylte_review_day"):
+        assert not unsupported_keywords(tools[name].schema), name
+
+    assert takes("smylte_update_day_entry", {"entry_id": "x", "estimate_minutes": 0})
+    assert takes("smylte_update_day_entry", {"entry_id": "x", "estimate_minutes": -1})
+    assert not takes("smylte_update_day_entry", {"entry_id": "x", "estimate_minutes": -2})
+    assert not takes("smylte_update_day_entry", {"entry_id": "x", "estimate_minutes": 1441})
+    assert takes("smylte_update_day_entry", {"entry_id": "x", "move_to": "2026-08-28"})
+    assert not takes("smylte_update_day_entry", {"entry_id": "x", "move_to": "thursday"})
+
+    assert takes("smylte_plan_day", {"title": "x", "estimate_minutes": 0})
+    assert not takes("smylte_plan_day", {"title": "x", "estimate_minutes": -1}), (
+        "there is nothing to clear on a row that does not exist yet")
+
+
+def test_an_estimate_given_when_planning_survives_a_retry(mcp_api, svc):
+    """The add is idempotent — a task already on the day comes back as the row
+    that is there — so without a second write the estimate the model just stated
+    would be silently dropped on every retry."""
+    day = _live()
+    first = mcp_api.plan_day(day=day, list_id="home", uid="someday",
+                             estimate_minutes=25)
+    assert first["estimate_minutes"] == 25
+    again = mcp_api.plan_day(day=day, list_id="home", uid="someday",
+                             estimate_minutes=40)
+    assert again["entry_id"] == first["entry_id"], "still one row"
+    assert again["estimate_minutes"] == 40, "the stated estimate was dropped"
