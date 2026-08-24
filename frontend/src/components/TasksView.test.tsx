@@ -1311,6 +1311,9 @@ describe('<TasksView> drag-to-reorder', () => {
   const dragOnto = (from: string, to: string) => {
     // jsdom builds no DataTransfer; the wrapper's onDragStart calls setData.
     const dataTransfer = { setData: vi.fn(), getData: vi.fn(), effectAllowed: '' }
+    // `mousedown` first, on the title, because that is the order a browser
+    // produces and the wrapper's guard reads it — see the subtask-field test.
+    fireEvent.mouseDown(screen.getByText(from))
     fireEvent.dragStart(wrapFor(from), { dataTransfer })
     fireEvent.drop(wrapFor(to), { dataTransfer })
   }
@@ -1318,6 +1321,59 @@ describe('<TasksView> drag-to-reorder', () => {
   const a = task({ uid: 'a', summary: 'Alpha', due: '2026-08-10', due_is_date: true })
   const b = task({ uid: 'b', summary: 'Bravo', due: '2026-08-11', due_is_date: true })
   const c = task({ uid: 'c', summary: 'Charlie', due: '2026-08-12', due_is_date: true })
+
+  it('leaves a press inside the subtask field to the field', async () => {
+    // `draggable` is on the row WRAPPER and the wrapper contains the inline
+    // "add subtask" input, so a press inside it drags the parent task — and
+    // dragging to select the text you just typed silently reorders the list and
+    // writes it to the server.
+    //
+    // THE EVENTS ARE FIRED IN THE ORDER AND AT THE TARGETS A BROWSER USES, and
+    // that is the point of this test rather than an incidental detail.
+    // `mousedown` lands on the deepest node — the input — and `dragstart` is
+    // fired at the drag SOURCE NODE, the wrapper. Measured in Chromium.
+    //
+    // This is what the old guard could not do. It tested `e.target` inside
+    // `onDragStart`, where the target is always the wrapper, so it never fired
+    // in any browser — and no test here could tell, because they all dispatched
+    // `dragstart` at the wrapper and never opened the field at all.
+    m.tasks.mockResolvedValue([a, b, c])
+    m.reorderTasks.mockResolvedValue({ ok: true })
+    const { user } = setup('list')
+    await screen.findByText('Alpha')
+
+    // Open the inline subtask field on Alpha, so there is a real input inside
+    // that row's draggable wrapper.
+    await user.click(within(wrapFor('Alpha')).getByTitle('Add subtask'))
+    const input = wrapFor('Alpha').querySelector('input')!
+    const dataTransfer = { setData: vi.fn(), getData: vi.fn(), effectAllowed: '' }
+
+    fireEvent.mouseDown(input)
+    fireEvent.dragStart(wrapFor('Alpha'), { dataTransfer })
+    fireEvent.drop(wrapFor('Charlie'), { dataTransfer })
+
+    // Nothing was picked up, so nothing moved and nothing was written.
+    expect(dataTransfer.setData).not.toHaveBeenCalled()
+    expect(dataTransfer.effectAllowed).toBe('')
+    expect(m.reorderTasks).not.toHaveBeenCalled()
+    expect(rowTitles()).toEqual(['Alpha', 'Bravo', 'Charlie'])
+  })
+
+  it('still starts a drag when the row is grabbed by a button', async () => {
+    // The guard is TEXT FIELDS ONLY, and this is the half that says so. A
+    // button has no drag semantics of its own, so a press-drag beginning on the
+    // checkbox may as well take the row with it — guarding those would only
+    // take grab area away, which is why the selector no longer names them.
+    m.tasks.mockResolvedValue([a, b, c])
+    m.reorderTasks.mockResolvedValue({ ok: true })
+    setup('list')
+    await screen.findByText('Alpha')
+
+    const dataTransfer = { setData: vi.fn(), getData: vi.fn(), effectAllowed: '' }
+    fireEvent.mouseDown(within(wrapFor('Alpha')).getByTitle('Toggle complete'))
+    fireEvent.dragStart(wrapFor('Alpha'), { dataTransfer })
+    expect(dataTransfer.effectAllowed).toBe('move')
+  })
 
   it('sends every task on the account, in the new order', async () => {
     // Not just the row that moved: manual position has to be comparable across

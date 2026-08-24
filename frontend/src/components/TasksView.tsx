@@ -1,5 +1,5 @@
 import {
-  useCallback, useEffect, useMemo, useState, type CSSProperties, type KeyboardEvent,
+  useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent,
 } from 'react'
 import { api, uidFor, type CreateTaskBody, type List, type Task, type TaskGroup, type TasksViewMode } from '../api'
 import { useTaskData } from '../data'
@@ -628,6 +628,10 @@ function TaskGroup({ task, childrenOf, dot, progressOf, depth = 0, seen,
   drag?: ReorderDrag
 }) {
   const [adding, setAdding] = useState(false)
+  /** The last press on this row landed in a text field. Written on mousedown and
+   *  read on dragstart — see the wrapper's comment for why the obvious
+   *  `e.target` test cannot do this job. */
+  const grabbedText = useRef(false)
   const kids = childrenOf(task).filter((k) => !seen?.has(taskKey(k)))
   const folded = isCollapsed(task)
   const path = useMemo(
@@ -640,12 +644,30 @@ function TaskGroup({ task, childrenOf, dot, progressOf, depth = 0, seen,
             ? (drag.below ? 'drag-over drag-below' : 'drag-over') : ''}`
         : undefined}
       draggable={!!drag}
+      // WHERE THE GRAB LANDED, recorded on the way down.
+      //
+      // `draggable` is on the row wrapper, so a press inside the nested inline
+      // "add subtask" field starts a drag of the PARENT task — selecting text
+      // there silently reorders the list, and issues a real `reorderTasks`
+      // write. A gesture that begins on a text field belongs to that field.
+      //
+      // This was guarded by testing `e.target` inside `onDragStart`, WHICH DOES
+      // NOTHING. Measured in Chromium: a `dragstart` is fired at the drag SOURCE
+      // NODE — this wrapper — never at the node under the pointer, so
+      // `closest('input, …')` was always null and the arm never ran. The comment
+      // above it described a regression it did not prevent. jsdom does not model
+      // that (it dispatches wherever a test names), so the guard looked fine and
+      // no test could tell: the drag tests here fire `dragStart` at the wrapper,
+      // so nothing failed when it worked and nothing failed when it did not.
+      //
+      // `mousedown` DOES target the deepest node, so the answer is recorded
+      // there and read below. Same fix, same reason, as `TodayView`'s row.
+      onMouseDown={drag && ((e) => {
+        grabbedText.current = !!(e.target as HTMLElement)
+          ?.closest?.('input, textarea, [contenteditable]')
+      })}
       onDragStart={drag && ((e) => {
-        // `draggable` is on the row wrapper, so a press inside the nested inline
-        // "add subtask" field started a drag of the PARENT task — selecting text
-        // there silently reordered the list. A gesture that begins on something
-        // interactive belongs to that control.
-        if ((e.target as HTMLElement)?.closest?.('input, textarea, button, [contenteditable]')) {
+        if (grabbedText.current) {
           e.preventDefault()
           return
         }
