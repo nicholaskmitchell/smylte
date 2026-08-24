@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  DEFAULT_TIME_FORMAT, fmtClock, fmtDue, fmtWhen, inputLang, isTimeFormat,
+  DEFAULT_TIME_FORMAT, fmtClock, fmtDue, fmtDuration, fmtWhen, inputLang, isTimeFormat,
   nextTimeFormat, timeFormatLabel,
 } from './time'
 
@@ -94,5 +94,41 @@ describe('inputLang', () => {
     // en-US is 12-hour, which is the whole trick.
     expect(inputLang('24h')).toBe('en-GB')
     expect(inputLang('12h')).toBe('en-US')
+  })
+})
+
+describe('fmtDuration', () => {
+  it('spells a length of time in the compactest honest form', () => {
+    expect(fmtDuration(45)).toBe('45m')
+    expect(fmtDuration(60)).toBe('1h')
+    expect(fmtDuration(90)).toBe('1h 30m')
+    expect(fmtDuration(150)).toBe('2h 30m')
+    // A whole hour drops the minutes: "2h 0m" says nothing the "2h" did not.
+    expect(fmtDuration(120)).toBe('2h')
+  })
+
+  it('says zero rather than nothing', () => {
+    // "0m" and "" are different facts and the running total turns on the
+    // difference: a row deliberately estimated at nothing has been estimated,
+    // and a row nobody has looked at has not. The empty string here would make
+    // the second look like the first.
+    expect(fmtDuration(0)).toBe('0m')
+  })
+
+  it("never puts the wire's clear sentinel on the screen", () => {
+    // -1 means CLEAR on the wire (PatchDayEntryBody.estimate_minutes). It should
+    // never reach a formatter, and if it does the answer is "0m" rather than
+    // "-1m" — a protocol detail rendered as a duration is worse than a wrong
+    // duration, because it reads as data.
+    expect(fmtDuration(-1)).toBe('0m')
+    expect(fmtDuration(-90)).toBe('0m')
+  })
+
+  it('does not consult the clock setting', () => {
+    // The distinction this file is built on: 12- or 24-hour decides how an
+    // INSTANT is named, and an hour and a half is an hour and a half either
+    // way. `fmtDuration` takes no TimeFormat, which is the assertion — this
+    // case exists so that adding one is a deliberate act with a test to change.
+    expect(fmtDuration.length).toBe(1)
   })
 })

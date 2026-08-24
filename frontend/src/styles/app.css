@@ -1307,7 +1307,38 @@
 }
 .today-row.done .today-title { color: var(--fg-faint); text-decoration: line-through; }
 .today-row.gone .today-title { color: var(--fg-faint); font-style: italic; }
-.today-due { font-size: calc(11px * var(--fs-scale)); color: var(--fg-muted); flex: none; }
+/* How long a row is expected to take. Sits before the due date, and reads a
+   step quieter than it: the estimate is something you set once during the
+   ritual and then glance past, while a due date is a fact about the task that
+   the row is there to surface. */
+.today-est {
+  background: none; border: 0; padding: 2px 4px; cursor: pointer; flex: none;
+  font-family: var(--mono); font-size: calc(11px * var(--fs-scale));
+  color: var(--fg-muted); text-align: right; min-width: 42px;
+}
+/* Unestimated: the affordance is there but says nothing until asked. It is
+   `est` rather than a dash because a dash is a value and this is an invitation
+   — the difference between "takes no time" and "nobody has said", which the
+   whole running total turns on. */
+.today-est.unset { color: var(--fg-faint); }
+@media (hover: hover) { .today-est:hover { color: var(--accent); } }
+/* Sized to the cell it replaces so the row does not jump on the click. The
+   spinner is left to the browser: `SchedulingView` takes its durations exactly
+   this way, and the bounds are re-applied in JS there for the same reason —
+   min/max do not stop a typed value. */
+.today-est-input {
+  flex: none; width: 62px; padding: 2px 4px;
+  font-family: var(--mono); font-size: calc(11px * var(--fs-scale));
+}
+
+/* `min-width` because this cell is now always painted, empty or not: it is what
+   holds the estimate column steady down a list where only some rows are dated.
+   Wide enough for the longest ordinary reading ("Aug 24", or a clock) without
+   reserving space for the outliers, which are free to push wider. */
+.today-due {
+  font-size: calc(11px * var(--fs-scale)); color: var(--fg-muted); flex: none;
+  min-width: 52px; text-align: right;
+}
 .today-due.overdue { color: var(--warn); }
 
 /* Row controls: bare glyph buttons, like .task-actions. */

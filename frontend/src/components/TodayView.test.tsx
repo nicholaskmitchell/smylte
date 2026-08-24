@@ -1105,6 +1105,133 @@ describe('<TodayView> the add box', () => {
   })
 })
 
+// ── estimating a row ────────────────────────────────────────────────────────
+
+describe('<TodayView> estimating a row', () => {
+  const estimateButton = (name: RegExp) => screen.getByRole('button', { name })
+
+  it('offers an estimate on every row, and says nothing until asked', async () => {
+    m.openDay.mockResolvedValue(plan([entry({ title: 'Water the plants' })]))
+    setup()
+    await screen.findByText('Water the plants')
+
+    // `est` rather than a dash or a zero. A dash is a value; this is an
+    // invitation — and "takes no time" versus "nobody has said" is the
+    // distinction the running total is built on.
+    expect(estimateButton(/^Estimate Water the plants$/).textContent).toBe('est')
+  })
+
+  it('takes a number and shows it as a duration', async () => {
+    m.openDay.mockResolvedValue(plan([entry({ title: 'Water the plants' })]))
+    m.patchDayEntry.mockImplementation(async (_d, id, body) =>
+      entry({ entry_id: id, title: 'Water the plants', ...body as object }))
+    const user = setup()
+    await screen.findByText('Water the plants')
+
+    await user.click(estimateButton(/^Estimate Water the plants$/))
+    await user.type(screen.getByLabelText('Minutes for Water the plants'), '90{Enter}')
+
+    await waitFor(() => expect(m.patchDayEntry).toHaveBeenCalledWith(
+      today(), 'e1', { estimate_minutes: 90 }))
+    // Read back through fmtDuration, so the row says what a person would say.
+    await waitFor(() => expect(
+      screen.getByRole('button', { name: /estimated at 1h 30m/ })).toBeInTheDocument())
+  })
+
+  it('keeps a deliberate zero', async () => {
+    // 0 is a real answer — "not worth counting" — and must not be swallowed as
+    // falsy anywhere between the input and the wire. It is the whole reason the
+    // clear needed a sentinel of its own.
+    m.openDay.mockResolvedValue(plan([entry({ title: 'Water the plants' })]))
+    const user = setup()
+    await screen.findByText('Water the plants')
+    await user.click(estimateButton(/^Estimate Water the plants$/))
+    await user.type(screen.getByLabelText('Minutes for Water the plants'), '0{Enter}')
+
+    await waitFor(() => expect(m.patchDayEntry).toHaveBeenCalledWith(
+      today(), 'e1', { estimate_minutes: 0 }))
+  })
+
+  it('clears with an empty field, and spells that -1 on the wire', async () => {
+    m.openDay.mockResolvedValue(plan([entry({ title: 'Water the plants', estimate_minutes: 30 })]))
+    const user = setup()
+    await screen.findByText('Water the plants')
+
+    await user.click(screen.getByRole('button', { name: /estimated at 30m/ }))
+    await user.clear(screen.getByLabelText('Minutes for Water the plants'))
+    await user.keyboard('{Enter}')
+
+    // An int has no spare falsy value to mean "unset", so the sentinel is
+    // explicit — and it is translated at the one call site rather than leaking
+    // into the control that collects the number.
+    await waitFor(() => expect(m.patchDayEntry).toHaveBeenCalledWith(
+      today(), 'e1', { estimate_minutes: -1 }))
+  })
+
+  it('holds the estimate to a day, whatever is typed', async () => {
+    // Bounded in JS as well as by the input's own max, because `max` on a number
+    // input does not stop a typed value — the same belt-and-braces
+    // `SchedulingView` applies to every duration it takes.
+    m.openDay.mockResolvedValue(plan([entry({ title: 'Water the plants' })]))
+    const user = setup()
+    await screen.findByText('Water the plants')
+    await user.click(estimateButton(/^Estimate Water the plants$/))
+    await user.type(screen.getByLabelText('Minutes for Water the plants'), '99999{Enter}')
+
+    await waitFor(() => expect(m.patchDayEntry).toHaveBeenCalledWith(
+      today(), 'e1', { estimate_minutes: 1440 }))
+  })
+
+  it('abandons the edit on Escape without closing anything above it', async () => {
+    // The stopPropagation is load-bearing rather than tidy: `useEscape` is bound
+    // to the window, so without it abandoning an estimate would also close the
+    // habits sheet — or any other dialog standing over this row.
+    m.openDay.mockResolvedValue(plan([entry({ title: 'Water the plants' })]))
+    const user = setup()
+    await screen.findByText('Water the plants')
+    await user.click(screen.getByRole('button', { name: 'Habits' }))
+    await screen.findByRole('dialog', { name: 'Habits' })
+
+    await user.click(estimateButton(/^Estimate Water the plants$/))
+    await user.type(screen.getByLabelText('Minutes for Water the plants'), '45')
+    await user.keyboard('{Escape}')
+
+    expect(m.patchDayEntry).not.toHaveBeenCalled()
+    expect(screen.getByRole('dialog', { name: 'Habits' })).toBeInTheDocument()
+  })
+
+  it('puts the old estimate back when the write does not land', async () => {
+    m.openDay.mockResolvedValue(plan([entry({ title: 'Water the plants', estimate_minutes: 30 })]))
+    m.patchDayEntry.mockRejectedValue(new Error('nope'))
+    const user = setup()
+    await screen.findByText('Water the plants')
+
+    await user.click(screen.getByRole('button', { name: /estimated at 30m/ }))
+    await user.clear(screen.getByLabelText('Minutes for Water the plants'))
+    await user.type(screen.getByLabelText('Minutes for Water the plants'), '90{Enter}')
+
+    await waitFor(() => expect(m.patchDayEntry).toHaveBeenCalled())
+    await waitFor(() => expect(
+      screen.getByRole('button', { name: /estimated at 30m/ })).toBeInTheDocument())
+  })
+
+  it('shows a finished day what was estimated and offers no way to change it', async () => {
+    m.day.mockImplementation(async (d) => plan([
+      entry({ day: d, title: 'Yesterday', estimate_minutes: 45 }),
+      entry({ entry_id: 'e2', day: d, title: 'Unestimated', position: 2 }),
+    ], d))
+    const user = setup()
+    await user.click(await screen.findByRole('button', { name: 'Previous day' }))
+    await screen.findByText('Yesterday')
+
+    expect(screen.getByText('45m')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^Estimate / })).not.toBeInTheDocument()
+    // And NOTHING on the row nobody estimated: a dim "add one" on a day that has
+    // already happened is an invitation to rewrite the record.
+    expect(screen.queryByText('est')).not.toBeInTheDocument()
+  })
+})
+
 // ── arranging the day ───────────────────────────────────────────────────────
 
 describe('<TodayView> arranging the day', () => {
