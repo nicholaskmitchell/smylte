@@ -2563,6 +2563,10 @@ function TodayRow({
   onDragEndRow?: () => void
 }) {
   const tf = useTimeFormat()
+  /** The last press on this row landed on something interactive. Written on
+   *  mousedown and read on dragstart — see the row's own comment for why the
+   *  obvious `e.target` test cannot do this job. */
+  const grabbedControl = useRef(false)
   const isTask = entry.kind === 'task'
   const isHabit = entry.kind === 'habit'
   // The task a row points at can genuinely go away — deleted in another CalDAV
@@ -2653,15 +2657,37 @@ function TodayRow({
       // this screen's, so it is recorded here and in the header rather than
       // papered over with a gesture that behaves differently from the rest.
       draggable={draggable || undefined}
+      // WHERE THE GRAB LANDED, recorded on the way down.
+      //
+      // `draggable` is on the ROW and the row contains an editable control — the
+      // estimate cell becomes a number input in place — so a press inside it
+      // starts a drag of the whole row, and selecting the text of an estimate
+      // silently reorders the day.
+      //
+      // The obvious guard is to test `e.target` inside `onDragStart`, which is
+      // what the Tasks pane does. MEASURED IN CHROMIUM, THAT GUARD IS INERT: a
+      // `dragstart` is fired at the drag SOURCE NODE — the `<li>` — not at the
+      // node under the pointer, so `closest('input, …')` is always null and the
+      // arm never runs. jsdom does not model that (it dispatches at whatever
+      // element the test names), so such a guard passes its test and does
+      // nothing in every real browser.
+      //
+      // `mousedown` DOES target the deepest node, so the answer is recorded
+      // there and read below. Verified end to end in a real browser rather than
+      // reasoned about: grabbing the input fires no drop, grabbing the title
+      // does. (The Tasks pane carries the inert form of this and is still
+      // affected; that is its own change, not this one's.)
+      onMouseDown={draggable
+        ? (e) => {
+          grabbedControl.current = !!(e.target as HTMLElement)
+            ?.closest?.('input, textarea, button, [contenteditable]')
+        }
+        : undefined}
       onDragStart={draggable
         ? (e) => {
-          // `draggable` is on the ROW, and the row contains an editable control
-          // — the estimate cell becomes a number input in place. Without this a
-          // press inside it started a drag of the whole row, so selecting the
-          // text of an estimate silently reordered the day. A gesture that
-          // begins on something interactive belongs to that control. Same guard,
-          // same words, as the Tasks pane, which hit this first.
-          if ((e.target as HTMLElement)?.closest?.('input, textarea, button, [contenteditable]')) {
+          // A gesture that began on something interactive belongs to that
+          // control, not to the row it happens to sit in.
+          if (grabbedControl.current) {
             e.preventDefault()
             return
           }
