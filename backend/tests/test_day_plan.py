@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import time
 import uuid
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 from helpers import foreign_raw
@@ -116,16 +116,33 @@ def test_reading_a_never_opened_day_writes_nothing(svc):
     GET is how the app looks at days it is not visiting — a prefetched week, a
     range read landing on an empty day — so a read that quietly opened them
     would record plans the owner never made and freeze each day's snapshot at
-    whatever happened to be due when the prefetch ran. Both tables must be
+    whatever happened to be due when the prefetch ran. All three tables must be
     untouched afterwards, and the day must report itself unplanned even though
-    there IS work that would qualify for a snapshot."""
+    there IS work that would qualify for a snapshot.
+
+    Spelled as a whole-dict equality rather than a handful of key checks, and
+    kept that way deliberately: it is what makes a field ADDED to the plan shape
+    show up here, where its default on an untouched day gets looked at once."""
     plan = svc.open_day(DAY, create=False)
-    assert plan == {"day": DAY, "planned": False, "entries": []}
+    assert plan == {
+        "day": DAY, "planned": False, "entries": [],
+        # Nothing said about this day, and — the one that matters — no capacity
+        # invented for it. `capacity` is None rather than some assumed working
+        # day, because an account that never stated one must not be told it has
+        # overcommitted against a number it never gave.
+        "capacity_minutes": None, "capacity": None,
+        "committed_at": None, "shutdown_at": None, "reflection": None,
+    }
     assert _count(svc, "day_plan") == 0
     assert _count(svc, "day_plan_opened") == 0
+    # `day_ritual` is written lazily on the first statement about a day, and
+    # reading one is not a statement — reporting its nulls must not mint the row
+    # that holds them.
+    assert _count(svc, "day_ritual") == 0
     # And again — a read is a read however many times it is repeated.
     assert svc.open_day(DAY, create=False)["planned"] is False
     assert _count(svc, "day_plan_opened") == 0
+    assert _count(svc, "day_ritual") == 0
 
 
 def test_opening_a_day_twice_does_not_duplicate_it(svc):
@@ -541,6 +558,124 @@ def test_an_entry_survives_its_task_leaving_the_wire(svc):
 
 
 # ── upgrading a database written before habits ───────────────────────────────
+
+# ── capacity, and what the owner says about a day ────────────────────────────
+
+
+def _today() -> str:
+    return date.today().isoformat()
+
+
+def test_capacity_is_none_until_somebody_says_otherwise(svc):
+    """THE ANSWER THAT MATTERS MOST, because it is the one that keeps the feature
+    from inventing a standard. An account that has never stated a capacity is
+    never told it has overcommitted — there is no assumed working day here."""
+    assert svc.open_day(DAY, create=False)["capacity"] is None
+
+
+def test_capacity_falls_through_the_account_default(svc):
+    svc.update_settings({"day_capacity_minutes": 300})
+    assert svc.open_day(DAY, create=False)["capacity"] == 300
+
+
+def test_a_weekday_default_beats_the_account_one(svc):
+    # DAY is a Friday. The map is keyed by the same weekday names habits use,
+    # resolved through the one place those names meet Python's numbering.
+    svc.update_settings({
+        "day_capacity_minutes": 300,
+        "day_capacity_by_weekday": {"fri": 120},
+    })
+    assert svc.open_day(DAY, create=False)["capacity"] == 120
+    # A day the map says nothing about still gets the account default.
+    assert svc.open_day("2026-08-20", create=False)["capacity"] == 300
+
+
+def test_what_the_owner_said_for_the_day_beats_everything(svc):
+    svc.update_settings({
+        "day_capacity_minutes": 300, "day_capacity_by_weekday": {"fri": 120},
+    })
+    svc.set_day_ritual(_today(), capacity_minutes=90)
+    plan = svc.open_day(_today(), create=False)
+    assert plan["capacity"] == 90
+    # And the two are reported separately on purpose: `capacity_minutes` is what
+    # they SAID, `capacity` is what the total is read against. A day that merely
+    # inherited a default must stay distinguishable from one they looked at.
+    assert plan["capacity_minutes"] == 90
+    assert svc.open_day(DAY, create=False)["capacity_minutes"] is None
+
+
+def test_a_junk_capacity_map_is_ignored_rather_than_guessed_at(svc):
+    # A settings blob is hand-editable, so a key that is not a weekday name, and
+    # a value that is not a sane count of minutes, must not become a capacity.
+    # `true` is the one worth pinning: bool is an int subclass, so an unguarded
+    # read would store JSON true as one minute.
+    svc.update_settings({
+        "day_capacity_minutes": 300,
+        "day_capacity_by_weekday": {"funday": 60, "fri": True},
+    })
+    assert svc.open_day(DAY, create=False)["capacity"] == 300
+
+
+def test_a_capacity_of_zero_is_a_real_answer(svc):
+    # "I am not working today" is a statement, and it has to survive every falsy
+    # check between the wire and the read — which is why the clear needs a
+    # sentinel of its own rather than borrowing zero.
+    svc.set_day_ritual(_today(), capacity_minutes=0)
+    assert svc.open_day(_today(), create=False)["capacity"] == 0
+    # -1 is the clear, and it falls back through to nothing said at all.
+    svc.set_day_ritual(_today(), capacity_minutes=-1)
+    assert svc.open_day(_today(), create=False)["capacity"] is None
+
+
+def test_the_ritual_stamps_and_un_stamps(svc):
+    today = _today()
+    assert svc.set_day_ritual(today, committed=True)["committed_at"] is not None
+    # False CLEARS, which is how a day begun by mistake is re-opened. That is why
+    # these are tri-state rather than flags.
+    assert svc.set_day_ritual(today, committed=False)["committed_at"] is None
+
+    assert svc.set_day_ritual(today, shutdown=True)["shutdown_at"] is not None
+    assert svc.set_day_ritual(today, reflection="  Slow start, fine finish  ")[
+        "reflection"] == "Slow start, fine finish"
+    # An emptied reflection clears rather than storing "", so "nothing written"
+    # has exactly one representation.
+    assert svc.set_day_ritual(today, reflection="   ")["reflection"] is None
+
+
+def test_nothing_may_be_said_about_a_day_that_has_happened(svc):
+    """A capacity is a plan and a shutdown is a boundary; neither can be
+    performed after the fact. The same line `mcp/api.py::update_day_entry` draws
+    for `done`, and the reason the ritual is a ritual rather than a form."""
+    for kwargs in (
+        {"capacity_minutes": 120}, {"committed": True},
+        {"shutdown": True}, {"reflection": "went fine"},
+    ):
+        with pytest.raises(ValueError):
+            svc.set_day_ritual(DAY, **kwargs)
+
+
+def test_yesterday_is_still_writable_so_the_evening_ritual_works(svc):
+    """The grace, and it is not slack. `home_timezone` is unset by default and
+    the server runs UTC, so a browser in New York between 20:00 and midnight
+    sends a key the server already calls yesterday. Without this the shutdown
+    ritual would be refused every evening after dinner — which is when it is for.
+    Shared with habit minting rather than reasoned about twice."""
+    yesterday = (date.today() - timedelta(days=1)).isoformat()
+    assert svc.set_day_ritual(yesterday, shutdown=True)["shutdown_at"] is not None
+    two_days = (date.today() - timedelta(days=2)).isoformat()
+    with pytest.raises(ValueError):
+        svc.set_day_ritual(two_days, shutdown=True)
+
+
+def test_saying_something_about_a_day_does_not_open_it(svc):
+    """Stating a capacity is not planning. The marker means "the automatic
+    snapshot has been built", and setting one here would suppress that snapshot
+    forever — the same trap `add_day_entry` documents for hand-adds."""
+    svc.set_day_ritual(_today(), capacity_minutes=240)
+    assert _count(svc, "day_plan_opened") == 0
+    assert _count(svc, "day_plan") == 0
+    assert svc.open_day(_today(), create=False)["planned"] is False
+
 
 # ── estimates ────────────────────────────────────────────────────────────────
 #

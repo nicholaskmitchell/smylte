@@ -52,7 +52,14 @@ from .ical import EventEdit, TaskEdit, rrule_from_spec
 from .csp import CSPMiddleware, policy_for_index
 from .limits import BodySizeLimitMiddleware
 from .scheduling import SlotTaken
-from .service import TaskService, day_key, priority_from_label
+from .service import (
+    TaskService, day_key, priority_from_label,
+    # The weekday vocabulary, imported rather than restated. `service._WEEKDAYS`
+    # is documented as the ONE place those names and Python's numbering meet, and
+    # a copy of the seven strings at this edge is exactly the second mapping that
+    # comment forbids — it would drift the first time one of them was touched.
+    _WEEKDAYS as _WEEKDAY_NAMES,
+)
 from .sync.engine import ConflictError
 
 log = logging.getLogger("tasksd")
@@ -298,6 +305,25 @@ class CreateDayEntry(BaseModel):
     # defends — it is the cheap bound on what a client may store, applied at the
     # same edge as every other text field so there is one rule to remember.
     title: XmlSafeText | None = Field(default=None, max_length=2000)
+
+
+class PatchDay(BaseModel):
+    """What the owner says about a day. Every field tri-state: None is "not
+    sent", and the falsy values are real — `committed=false` re-opens a day
+    begun by mistake, and `capacity_minutes=-1` un-states a capacity."""
+
+    # Minutes, or -1 to CLEAR. Same sentinel, same bounds and the same reasoning
+    # as PatchDayEntry.estimate_minutes — one spelling for a duration wherever
+    # this app takes one. 0 is a real capacity ("not working today"), which is
+    # why the clear cannot borrow falsiness.
+    capacity_minutes: int | None = Field(default=None, ge=-1, le=1440)
+    committed: bool | None = None
+    shutdown: bool | None = None
+    # Bounded and XML-safe like every other free text a client sends. Longer than
+    # a note because this is prose about a day rather than a line on it, and an
+    # emptied one clears rather than storing "" — so "nothing written" has one
+    # representation.
+    reflection: XmlSafeText | None = Field(default=None, max_length=4000)
 
 
 class PatchDayEntry(BaseModel):
@@ -613,6 +639,49 @@ class SettingsPatch(BaseModel):
     # free. Absent means "assume the link's zone", the old behaviour. An empty
     # string clears it (the store merge only skips None).
     home_timezone: str | None = None
+    # How many minutes the owner expects to work on an ordinary day, and the
+    # per-weekday exceptions. Absent means "never said", which is a real answer
+    # the whole capacity feature turns on: an account that has not stated one is
+    # never told it has overcommitted (see service._effective_capacity).
+    #
+    # The map is SPARSE and keyed by the weekday NAMES habits already use —
+    # {"mon": 300, "fri": 180} — never by index. service._WEEKDAYS is documented
+    # as the one place those names and Python's numbering meet, and a second
+    # mapping is how "wed" comes to mean Wednesday on one path and Thursday on
+    # the other. A weekday absent from the map falls through to the default; a
+    # key that is not a weekday name is ignored rather than guessed at, because
+    # a settings blob is hand-editable.
+    #
+    # Bounded at a day on both, for the reason every int here is bounded: an
+    # unbounded value reaches SQLite as an OverflowError, which is outside the
+    # taxonomy this module maps and so a 500 rather than a 422.
+    day_capacity_minutes: int | None = Field(default=None, ge=0, le=1440)
+    day_capacity_by_weekday: dict[str, int] | None = Field(default=None, max_length=7)
+
+    @field_validator("day_capacity_by_weekday")
+    @classmethod
+    def _check_capacity_map(cls, v: dict[str, int] | None) -> dict[str, int] | None:
+        """Keep only real weekday names carrying a sane number of minutes.
+
+        FILTERS rather than rejects, the same call `_clean_tokens` makes for
+        appearance tokens and for the same reason: a blob written by a newer
+        client that knows something this build does not should still import what
+        it can. The alternative — 422 — would reject the whole settings PUT and
+        take the theme and the dashboard layout down with it.
+        """
+        if v is None:
+            return None
+        out: dict[str, int] = {}
+        for name, minutes in v.items():
+            if name not in _WEEKDAY_NAMES:
+                continue
+            # bool is an int subclass, so JSON `true` would otherwise store as
+            # one minute — the same guard `_check_session_ttl` applies.
+            if isinstance(minutes, bool) or not isinstance(minutes, int):
+                continue
+            if 0 <= minutes <= 1440:
+                out[name] = minutes
+        return out
 
     @field_validator("home_timezone")
     @classmethod
@@ -1238,6 +1307,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @api.get("/day/{day}")
     async def get_day(request: Request, day: str):
         return await _run(_svc(request).open_day, _check_day(day), create=False)
+
+    @api.patch("/day/{day}")
+    async def patch_day(request: Request, day: str, body: PatchDay):
+        """What the owner says about a day, as opposed to what is on it.
+
+        A PATCH on the DAY rather than on an entry, because none of these belong
+        to any row: they are the day's own facts. Refused on a past day by the
+        service, which turns that into the 422 below — a capacity is a plan and a
+        shutdown is a boundary, and neither can be performed after the fact."""
+        try:
+            return await _run(
+                _svc(request).set_day_ritual, _check_day(day),
+                capacity_minutes=body.capacity_minutes, committed=body.committed,
+                shutdown=body.shutdown, reflection=body.reflection,
+            )
+        except ValueError as e:
+            raise HTTPException(422, str(e)) from None
 
     @api.post("/day/{day}/entries", status_code=201)
     async def post_day_entry(request: Request, day: str, body: CreateDayEntry):
