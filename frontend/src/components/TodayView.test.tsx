@@ -1392,6 +1392,27 @@ describe('<TodayView> reviewing today', () => {
     expect(screen.queryByText(/Nothing was planned on this day/)).not.toBeInTheDocument()
   })
 
+  it('treats a row dropped today as the record it is', async () => {
+    // Before today could be reviewed, "past day" and "dropped" were the same
+    // set, so `!isToday` covered both. They came apart here: the Dropped group
+    // on a LIVE day would otherwise hand out a checkbox for ticking something
+    // the owner declined, and a ✕ for dropping what is already dropped.
+    m.openDay.mockResolvedValue(plan([
+      entry({ entry_id: 'live', title: 'Still going', position: 1 }),
+      entry({ entry_id: 'gone', title: 'Bailed on this', position: 2,
+        dropped_at: `${today()}T12:00:00.000Z` }),
+    ]))
+    const user = setup()
+    await screen.findByText('Still going')
+    await user.click(screen.getByRole('button', { name: 'Review' }))
+    await screen.findByText('Bailed on this')
+
+    expect(screen.queryByRole('button', { name: /Bailed on this/ })).not.toBeInTheDocument()
+    // The row beside it is still live, so this is the dropped-ness doing it and
+    // not the mode.
+    expect(screen.getByRole('button', { name: /^Check Still going/ })).toBeInTheDocument()
+  })
+
   it('offers no review toggle on a finished day, because the day is one', async () => {
     m.day.mockImplementation(async (d) => plan([entry({ day: d, title: 'Yesterday' })], d))
     const user = setup()
