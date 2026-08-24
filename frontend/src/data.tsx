@@ -275,7 +275,7 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
     // the user hasn't placed by hand (see order.ts). The list is sorted at
     // render, so this stand-in paints where the real task will be — it does not
     // matter that `create` appends it to the end of the array.
-    pinned: false, sort_order: null, kanban_column: null,
+    pinned: false, sort_order: null, kanban_column: null, estimated_minutes: null,
     // Nothing here is a stand-in for a server value the way `priority_label` is
     // above — these are facts about a task that does not exist on the wire yet.
     // It has no COMPLETED stamp (it is not done), no RRULE (this app authors

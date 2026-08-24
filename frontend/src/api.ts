@@ -74,6 +74,11 @@ export interface Task {
   // returns it, and a field the server sends that the type denies exists is how
   // the four below went missing in the first place.
   kanban_column: string | null
+  /** The estimate this task REMEMBERS — sidecar, so Smylte-only and invisible to
+   *  Tasks.org, jtx Board and Thunderbird. It is not any day's estimate:
+   *  planning the task copies this onto that day's entry, and the entry is what
+   *  that day counts. This only decides where the next plan starts. */
+  estimated_minutes: number | null
   // This task carries an RRULE or RDATE. VTODO recurrence is GATED (see
   // docs/recurrence-findings.md) so nothing in this app advances such a task —
   // but one written by Tasks.org or jtx Board is already in the cache, and a
@@ -295,6 +300,16 @@ export interface DayEntry {
   // title — so its only job is to be an identity the week's occurrences of one
   // habit can be counted under.
   habit_id: string | null
+  // How long this entry is expected to take, on THIS day. Null is "nobody said",
+  // which is a real answer: the day's total is over the rows that carry one, so
+  // an unestimated row costs the day nothing rather than counting as free.
+  //
+  // A COPY, never a join. A task remembers its last estimate in the sidecar, a
+  // habit remembers one on its rule, and a note is remembered by the carry — but
+  // all three only decide what a NEW entry starts at. Once the row exists the
+  // row is what its day counts, which is what stops re-estimating something in
+  // March from rewriting what January's plan said it would take.
+  estimate_minutes: number | null
   created_at: string
 }
 
@@ -338,6 +353,11 @@ export interface PatchDayEntryBody {
   done?: boolean
   dropped?: boolean
   position?: number
+  /** Minutes, or **-1 to clear**. The sentinel is explicit because an int has no
+   *  spare falsy value to borrow: 0 is a legitimate estimate and an omitted key
+   *  already means "not asked about". The backend bounds this at [-1, 1440], so
+   *  -1 is the only negative that can arrive. */
+  estimate_minutes?: number
 }
 
 // ── habits (the repeating spine of a day) ──────────────────────────────────
@@ -370,6 +390,10 @@ export interface Habit {
    *  because those are rows in the day plan and the rule cannot reach them. */
   paused_at: string | null
   position: number | null
+  /** How long one run of this takes. The RULE remembers it and every occurrence
+   *  is minted with a copy, exactly as the title is — so a habit is estimated
+   *  once rather than every morning, and changing it leaves past days alone. */
+  estimate_minutes: number | null
   created_at: string
 }
 
@@ -390,6 +414,7 @@ export interface CreateHabitBody {
   title: string
   days?: string
   position?: number
+  estimate_minutes?: number
 }
 
 /** Everything PATCH /habits/{id} accepts. Every field is optional and an
@@ -401,6 +426,10 @@ export interface PatchHabitBody {
   days?: string
   paused?: boolean
   position?: number
+  /** Minutes, or -1 to clear — the same sentinel and bounds as
+   *  `PatchDayEntryBody.estimate_minutes`, so a duration is spelled one way
+   *  wherever this app takes one. */
+  estimate_minutes?: number
 }
 
 // One application connected through the MCP connector. Identified by its

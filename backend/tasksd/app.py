@@ -309,6 +309,14 @@ class PatchDayEntry(BaseModel):
     # out of JSON but cannot be serialized back into it, so one Infinity here
     # would 500 every later read of the whole day.
     position: float | None = Field(default=None, allow_inf_nan=False)
+    # Minutes, or -1 to CLEAR. Bounded on both sides and neither bound is
+    # cosmetic. The ceiling is a day, because a plan is a plan for one — above
+    # that it is a typo, not an intention, and an unbounded int reaches SQLite
+    # as an OverflowError, which is outside the taxonomy this module maps and so
+    # a 500 rather than a 422 (the rule Sidecar's own ints were given bounds
+    # for). The floor is -1 exactly so the clear sentinel is the only negative
+    # that can arrive; the service turns it into NULL and nothing else may.
+    estimate_minutes: int | None = Field(default=None, ge=-1, le=1440)
 
 
 # A habit's `days`: "" (every day) or a comma list of mon,tue,wed,thu,fri,sat,sun.
@@ -342,6 +350,10 @@ class CreateHabit(BaseModel):
     # out of JSON but cannot be serialized back into it, so one Infinity here
     # would 500 every later read of the habits list.
     position: float | None = Field(default=None, allow_inf_nan=False)
+    # How long one run of this takes. Same bounds and the same clear sentinel as
+    # PatchDayEntry.estimate_minutes — one rule for a duration wherever it is
+    # taken. Copied onto every occurrence at mint time, like the title.
+    estimate_minutes: int | None = Field(default=None, ge=-1, le=1440)
 
 
 class EditHabit(BaseModel):
@@ -351,6 +363,7 @@ class EditHabit(BaseModel):
     # false is a real value — resuming a paused habit.
     paused: bool | None = None
     position: float | None = Field(default=None, allow_inf_nan=False)
+    estimate_minutes: int | None = Field(default=None, ge=-1, le=1440)
 
 
 class CreateBookingLink(BaseModel):
@@ -1248,6 +1261,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             dto = await _run(
                 _svc(request).patch_day_entry, _check_day(day), entry_id,
                 done=body.done, dropped=body.dropped, position=body.position,
+                estimate_minutes=body.estimate_minutes,
             )
         except ValueError as e:
             # `done` on a TASK entry: a task's doneness is its VTODO STATUS, not
@@ -1277,6 +1291,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return await _run(
                 _svc(request).create_habit,
                 title=body.title, days=body.days, position=body.position,
+                estimate_minutes=body.estimate_minutes,
             )
         except ValueError as e:
             # An empty title, or a `days` that is not a weekday list — including
@@ -1302,6 +1317,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 _svc(request).update_habit, habit_id,
                 title=body.title, days=body.days,
                 paused=body.paused, position=body.position,
+                estimate_minutes=body.estimate_minutes,
             )
         except ValueError as e:
             raise HTTPException(422, str(e)) from None

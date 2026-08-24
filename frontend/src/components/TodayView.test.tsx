@@ -49,7 +49,7 @@ const task = (o: Partial<Task> = {}): Task => ({
   percent_complete: null, due: null, due_is_date: true, start: null, start_is_date: true,
   tags: [], parent: null, children: [], child_count: 0, completed_child_count: 0,
   derived_percent: null, pinned: false, sort_order: null,
-  completed_at: null, kanban_column: null, has_rrule: false,
+  completed_at: null, kanban_column: null, estimated_minutes: null, has_rrule: false,
   created: null, last_modified: null,
   href: '/l1/u1.ics', etag: '"1"', ...o,
 })
@@ -57,7 +57,7 @@ const task = (o: Partial<Task> = {}): Task => ({
 const entry = (o: Partial<DayEntry> = {}): DayEntry => ({
   entry_id: 'e1', day: today(), kind: 'note', list: null, uid: null,
   title: 'Water the plants', source: 'user', position: 1,
-  done_at: null, dropped_at: null, habit_id: null,
+  done_at: null, dropped_at: null, habit_id: null, estimate_minutes: null,
   created_at: '2026-08-21T08:00:00.000Z', ...o,
 })
 
@@ -72,7 +72,7 @@ const occurrence = (o: Partial<DayEntry> = {}): DayEntry => entry({
 
 const habit = (o: Partial<Habit> = {}): Habit => ({
   id: 'hb1', title: 'Read', days: '', paused_at: null, position: 1,
-  created_at: '2026-08-01T08:00:00.000Z', ...o,
+  estimate_minutes: null, created_at: '2026-08-01T08:00:00.000Z', ...o,
 })
 
 const plan = (entries: DayEntry[] = [], day = today()): DayPlan =>
