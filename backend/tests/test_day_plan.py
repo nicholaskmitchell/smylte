@@ -1085,8 +1085,26 @@ def test_routes_round_trip_a_day(client):
                        json={"summary": "write it up", "due": day}).json()
 
     # GET never creates: the day is unplanned even though a task is due on it.
+    #
+    # Whole-dict equality, like the service-level assertion this mirrors and for
+    # the same reason: it is what makes a field ADDED to the plan shape get
+    # looked at once, with its default on an untouched day in front of you. This
+    # is the WIRE contract rather than the service's — the route's job is to
+    # serialise that shape unchanged — so the two are worth having both.
+    #
+    # It has now caught exactly what it exists to catch. The five ritual fields
+    # landed on `_day_plan_dto`, the service-level twin was updated with them,
+    # and this one was not, because it is `radicale`-marked and skips wherever
+    # Docker is unavailable. Nothing but CI was ever going to say so.
     r = client.get(f"/api/day/{day}")
-    assert r.status_code == 200 and r.json() == {"day": day, "planned": False, "entries": []}
+    assert r.status_code == 200 and r.json() == {
+        "day": day, "planned": False, "entries": [],
+        # No capacity INVENTED for a day nobody has spoken about — the one that
+        # matters. An account that never stated one must not be told it has
+        # overcommitted against a number it never gave.
+        "capacity_minutes": None, "capacity": None,
+        "committed_at": None, "shutdown_at": None, "reflection": None,
+    }
 
     opened = client.post(f"/api/day/{day}/open")
     assert opened.status_code == 200
