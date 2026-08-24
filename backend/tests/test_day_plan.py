@@ -60,6 +60,7 @@ def _seed_task(
     conn, href: str, uid: str, summary: str, *,
     due: str | None = None, due_utc: str | None = None,
     status: str = "NEEDS-ACTION", parent: str | None = None,
+    completed_at: str | None = None,
 ) -> None:
     """Cache one VTODO as a foreign client would have written it.
 
@@ -74,6 +75,11 @@ def _seed_task(
         extra.append(f"DUE:{due_utc}")
     if parent is not None:
         extra.append(f"RELATED-TO:{parent}")
+    if completed_at is not None:
+        # The property `_completions_by_day` actually reads. STATUS alone says a
+        # task is finished; only COMPLETED says WHEN, and a day can only own a
+        # completion it has a stamp for.
+        extra.append(f"COMPLETED:{completed_at}")
     raw = foreign_raw(uid, summary, extra=tuple(extra))
     # foreign_raw hardcodes NEEDS-ACTION; swapping the whole line keeps one
     # STATUS property on the resource (two would be ambiguous to the parser).
@@ -926,11 +932,25 @@ def test_a_habit_occurrence_copies_the_estimate_off_its_rule(svc):
 
 
 def test_estimating_a_note_teaches_no_task(svc):
+    """A note names no task, so there is nothing to write an estimate through to.
+
+    This used to assert that ONE unrelated task — LIST_A/"due-today", which the
+    test never touches — had no sidecar row. That was true before the code under
+    test ran, so the test could not have failed however the write-through
+    behaved. It now counts the sidecar table across the write, which is the
+    thing actually claimed: estimating a note writes no sidecar row at all.
+    """
     svc.open_day(DAY, create=True)
+    before = _count(svc, "sidecar")
     dto = svc.add_day_entry(DAY, entry_id="jot", kind="note", title="Ring the bank")
     svc.patch_day_entry(DAY, dto["entry_id"], estimate_minutes=10)
-    # Nothing to write through to, and nothing written: a note names no task.
-    assert store.get_sidecar(svc._conn, LIST_A, "due-today") is None
+    assert _count(svc, "sidecar") == before, "a note taught something a duration"
+
+    # And the control, so the count is measuring a real mechanism rather than a
+    # table nothing ever writes to: the same call on a TASK entry does write.
+    task_entry = _entry_id(svc.open_day(DAY, create=False), "due-today")
+    svc.patch_day_entry(DAY, task_entry, estimate_minutes=25)
+    assert store.get_sidecar(svc._conn, LIST_A, "due-today")["estimated_minutes"] == 25
 
 
 def test_an_older_database_gains_the_estimate_columns(tmp_path):
@@ -1293,14 +1313,39 @@ def test_the_totals_leave_out_what_was_decided_about(mcp_api, svc):
 def test_done_minutes_counts_only_what_was_finished_that_day(mcp_api, svc):
     """A task planned today and ticked next Thursday is Thursday's work.
     Counting it as today's is the one way a look-back can flatter a day that did
-    not happen — the same fence the app's `rowDone` draws for a past day. The
-    seeded COMPLETED task carries no COMPLETED stamp, so no day owns it, which
-    is exactly the case `_completions_by_day` drops rather than guessing at."""
-    day = _live()
+    not happen — the same fence the app's `rowDone` draws for a past day.
+
+    This test used to assert `done_minutes == 0` on a day where NOTHING had been
+    completed, which made it unable to tell its own rule from a function that
+    returned zero unconditionally — both figures could be hardcoded to 0 and it
+    stayed green. It now needs a completion ON the day to pass, and a completion
+    on ANOTHER day to stay out of the figure, so only the real rule satisfies it.
+    """
+    day, elsewhere = _live(), _live_plus(-4)
+    # One task finished ON the day, one finished four days earlier. Both are on
+    # the same list and both carry a real COMPLETED stamp, which is the only
+    # thing that gives a completion a day to belong to.
+    _seed_task(svc._conn, LIST_A, "did-today", "Finished today", due=day,
+               status="COMPLETED", completed_at=f"{day.replace('-', '')}T120000Z")
+    _seed_task(svc._conn, LIST_A, "did-before", "Finished earlier", due=day,
+               status="COMPLETED", completed_at=f"{elsewhere.replace('-', '')}T120000Z")
+
     plan = svc.open_day(day, create=True)
     svc.patch_day_entry(day, _entry_id(plan, "due-today"), estimate_minutes=45)
+    # Added by hand rather than looked for in the snapshot: a COMPLETED task is
+    # correctly left out of the derived plan, and what is being tested here is a
+    # row that IS on the day and was finished — which is what the owner ticking
+    # something they had planned actually leaves behind.
+    for uid, minutes in (("did-today", 20), ("did-before", 90)):
+        added = svc.add_day_entry(
+            day, entry_id=uuid.uuid4().hex, kind="task", list_id="work", uid=uid)
+        svc.patch_day_entry(day, added["entry_id"], estimate_minutes=minutes)
+
     totals = mcp_api.review_day(day=day)["totals"]
-    assert totals["planned_minutes"] == 45 and totals["done_minutes"] == 0
+    assert totals["planned_minutes"] == 155, "every live row counts toward planned"
+    # 20 and not 110: the row finished four days ago is on today's plan, but it
+    # was not done today, and today does not get to claim it.
+    assert totals["done_minutes"] == 20
 
 
 def test_the_connector_may_not_state_a_capacity_or_write_a_reflection(mcp_api):
@@ -1309,14 +1354,44 @@ def test_the_connector_may_not_state_a_capacity_or_write_a_reflection(mcp_api):
     their own day; a connector able to make them would be manufacturing the
     record they exist to keep honest.
 
-    Asserted against the SURFACE rather than by reading the code, so a method
-    added later without thinking about it fails here. `_day_facts` is the one
-    allowed mention: it REPORTS the capacity, which is the whole point."""
+    Checked against the SIGNATURES and not just the names. Reading method names
+    alone was the weaker half of this test and nearly all of it: a method called
+    `set_day_facts(capacity_minutes=...)` passes a name check and defeats the
+    rule entirely. What actually matters is whether any reachable entry point
+    ACCEPTS one of these fields, so that is what is inspected.
+
+    `_day_facts` and `_day_totals` are private and excluded: they REPORT the
+    capacity, which is the whole point of the connector seeing a day at all.
+    """
+    import inspect
+
+    FORBIDDEN = ("capacity_minutes", "capacity", "reflection", "committed",
+                 "shutdown")
     reachable = [n for n in dir(McpApi) if not n.startswith("_")]
+    assert "review_day" in reachable, "the surface is not being enumerated"
+
     for name in reachable:
-        for forbidden in ("ritual", "capacity", "reflection", "shutdown",
-                          "commit"):
-            assert forbidden not in name, f"{name} reaches {forbidden}"
+        member = getattr(McpApi, name)
+        if not callable(member):
+            continue
+        # No entry point may be NAMED for the ritual...
+        for word in ("ritual", "capacity", "reflection", "shutdown", "commit"):
+            assert word not in name, f"{name} reaches {word}"
+        # ...and none may TAKE one of its fields, whatever it is called.
+        try:
+            params = inspect.signature(member).parameters
+        except (TypeError, ValueError):  # pragma: no cover - builtins
+            continue
+        taken = sorted(set(params) & set(FORBIDDEN))
+        assert not taken, f"McpApi.{name} accepts {taken}, which only the owner may set"
+
+    # And the positive half: the connector can still SEE all of it, because a
+    # model that cannot read the capacity will propose an eleventh thing for a
+    # day already over. Reporting is the whole reason the fields are exposed.
+    out = mcp_api.review_day(day=_live())
+    for field in ("capacity", "capacity_minutes", "committed_at", "shutdown_at",
+                  "reflection"):
+        assert field in out, field
 
 
 def test_an_estimate_cannot_be_written_onto_a_day_that_has_run(mcp_api, svc):
@@ -1373,6 +1448,100 @@ def test_moving_is_an_answer_and_will_not_be_combined_with_another(mcp_api, svc)
         mcp_api.update_day_entry(_entry_id(plan, "due-today"), day=day,
                                  move_to=_live_plus(1), dropped=True)
     assert "on its own" in str(caught.value)
+
+
+def test_every_sidecar_table_schema_names_is_in_the_backup_list():
+    """Two files enumerate the tables a resync cannot rebuild, and they have to
+    agree: schema.sql's header, for whoever is reading the schema, and
+    docs/DEPLOY.md's backup section, for whoever is restoring a machine.
+
+    A table in the first and missing from the second is not a documentation nit
+    — it is a table nobody backs up, discovered on the day someone needs it. That
+    drifted once already: `day_ritual` was added to the schema and to DEPLOY.md
+    and left out of schema.sql's own list.
+
+    One-way containment on purpose. DEPLOY.md legitimately names tables this
+    schema comment does not itemise (the scheduling pair), so requiring equality
+    would fail on a difference that is not a mistake.
+    """
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    schema = (root / "backend/tasksd/db/schema.sql").read_text(encoding="utf-8")
+    deploy = (root / "docs/DEPLOY.md").read_text(encoding="utf-8")
+
+    # The parenthesised list in the "SIDECAR tables (...)" header line, which may
+    # wrap across several comment lines.
+    m = re.search(r"SIDECAR tables \(([^)]*)\)", schema, re.S)
+    assert m, "schema.sql no longer has a 'SIDECAR tables (...)' header to check"
+    named = {t.strip() for t in re.sub(r"--", " ", m.group(1)).split(",") if t.strip()}
+    assert named, "the SIDECAR list parsed empty — the header shape changed"
+
+    missing = sorted(t for t in named if f"`{t}`" not in deploy)
+    assert not missing, (
+        f"{missing} are named as sidecar-class in schema.sql but appear in no "
+        f"backup instruction in docs/DEPLOY.md. A resync rebuilds none of them, "
+        f"so a table missing there is a table nobody backs up."
+    )
+    # And the tables must actually exist, so a rename cannot leave the list
+    # naming something gone while still passing the check above.
+    for table in named:
+        assert f"CREATE TABLE IF NOT EXISTS {table}" in schema, table
+
+
+def test_a_created_habit_cannot_be_given_the_clear_sentinel(svc):
+    """The clear sentinel is a PATCH's, and only a PATCH's.
+
+    `EditHabit.estimate_minutes` takes -1 to mean "un-state this", the same
+    spelling `patch_day_entry` uses. `CreateHabit` advertised the same bound and
+    `create_habit` had no arm to match it — it wrote the -1 STRAIGHT INTO the
+    habits row, and every occurrence the rule minted afterwards was copied from
+    it. A day holding one then reported a NEGATIVE planned total and counted the
+    row as estimated, because -1 is not None.
+
+    Refused at the edge rather than swallowed in the service: there is nothing to
+    clear on a rule that does not exist yet (the same reasoning
+    `CreateDayEntry.estimate_minutes` carries), and a service-side swallow would
+    leave two spellings of "no estimate" in one column.
+    """
+    from tasksd.app import CreateHabit
+    import pydantic
+
+    # 0 is a real estimate and still passes; -1 is not a value, it is a verb.
+    assert CreateHabit(title="Read", estimate_minutes=0).estimate_minutes == 0
+    assert CreateHabit(title="Read").estimate_minutes is None
+    with pytest.raises(pydantic.ValidationError):
+        CreateHabit(title="Read", estimate_minutes=-1)
+
+    # And the clear still works where it belongs — on the edit.
+    habit = svc.create_habit(title="Read", days="", estimate_minutes=30)
+    assert habit["estimate_minutes"] == 30
+    assert svc.update_habit(habit["id"], estimate_minutes=-1)["estimate_minutes"] is None
+
+
+def test_saying_nothing_about_a_day_writes_no_ritual_row(svc):
+    """`service.set_day_ritual` calls a PATCH with an empty body a read, and
+    publishes no event for one. The store has to agree: it used to INSERT the
+    row before checking whether there was anything to put in it, so a read minted
+    the row holding the nulls it had just reported.
+
+    That row is not free. `day_ritual` is sidecar-class — no resync rebuilds it
+    and every backup has to carry it — so a day nobody ever spoke about was
+    taking up space in the one table that cannot be regenerated.
+    """
+    day = _live()
+    assert _count(svc, "day_ritual") == 0
+    dto = svc.set_day_ritual(day)
+    assert _count(svc, "day_ritual") == 0, "an empty PATCH minted a row"
+    # It still ANSWERS, with the nulls that are true of a day nobody has spoken
+    # about — it simply does not write them down.
+    assert dto["capacity"] is None and dto["reflection"] is None
+
+    # A real statement does write, and the row it writes is readable.
+    svc.set_day_ritual(day, capacity_minutes=300)
+    assert _count(svc, "day_ritual") == 1
+    assert svc.open_day(day, create=False)["capacity"] == 300
 
 
 def test_the_day_tools_advertise_bounds_the_validator_actually_enforces(svc):

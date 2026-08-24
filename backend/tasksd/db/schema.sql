@@ -5,9 +5,14 @@
 --     derived projection of what is on the wire. Delete them, full-resync, and
 --     you get byte-identical application state back (invariant #1).
 --   * SIDECAR tables (sidecar, list_settings, completions, attachments,
---     day_plan, habits) hold app-only state that exists NOWHERE on the wire
---     (kanban column, manual sort, pins, per-list settings, the day's plan, and
---     the habits that put entries on it). These are the one thing in this file
+--     day_plan, day_plan_opened, day_ritual, habits) hold app-only state that
+--     exists NOWHERE on the wire (kanban column, manual sort, pins, per-list
+--     settings, the day's plan, which days were opened at all, what the owner
+--     SAID about each day — its capacity, its stamps and the line they wrote
+--     about how it went — and the habits that put entries on it). This list is
+--     the same one docs/DEPLOY.md's backup section names, and the two have to
+--     stay in step: a table missing from either is a table nobody backs up.
+--     These are the one thing in this file
 --     that a resync cannot rebuild — so they are decoupled from the cache (no
 --     FK to items) and survive an item briefly disappearing
 --     (delete-and-recreate).

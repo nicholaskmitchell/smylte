@@ -1979,7 +1979,10 @@ class TaskService:
             # written" has one representation.
             fields["reflection"] = reflection.strip() or None
         with self._lock:
-            row = store.set_day_ritual(self._conn, day, **fields)
+            # The written row is deliberately not read back here: `_day_plan_dto`
+            # reads the ritual itself, and an empty `fields` writes nothing at
+            # all (see `store.set_day_ritual`) so there may be no row to read.
+            store.set_day_ritual(self._conn, day, **fields)
             entries = store.get_day_entries(self._conn, day)
             opened = store.day_is_opened(self._conn, day)
             dto = self._day_plan_dto(day, entries, opened)

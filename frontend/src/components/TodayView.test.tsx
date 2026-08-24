@@ -843,6 +843,39 @@ describe('<TodayView> suggestions', () => {
         .toHaveLength(1))
   })
 
+  it('does not re-offer work an earlier day MOVED to another day', async () => {
+    // The one reader of `rolled_to` the column did not reach when it was added.
+    // "Still open from a recent plan" is for work that was chosen and never
+    // decided about — and a row with a DESTINATION has been decided about: the
+    // work already has a row on the day it went to. Without this, something the
+    // owner sent to Thursday during Monday's shutdown came back on Tuesday
+    // under "you did not finish these last time", which is the plan offering
+    // back the answer it was given forty seconds earlier.
+    //
+    // The contrast is a row still sitting undecided on that earlier day, which
+    // is precisely what this group is FOR — so the assertion says the group
+    // still works rather than merely that it went quiet.
+    m.tasks.mockResolvedValue([
+      task({ uid: 'a', summary: 'Moved on' }),
+      task({ uid: 'b', summary: 'Still open' }),
+    ])
+    m.days.mockResolvedValue([plan([
+      entry({
+        entry_id: 'p1', day: inDays(-3), kind: 'task', list: 'l1', uid: 'a',
+        title: null, source: 'user', rolled_to: inDays(-1),
+      }),
+      entry({
+        entry_id: 'p2', day: inDays(-3), kind: 'task', list: 'l1', uid: 'b',
+        title: null, source: 'user',
+      }),
+    ], inDays(-3))])
+    setup()
+
+    const add = (name: string) => screen.queryByRole('button', { name: `Add ${name} to today` })
+    await waitFor(() => expect(add('Still open')).toBeInTheDocument())
+    expect(add('Moved on')).not.toBeInTheDocument()
+  })
+
   it('offers what was chosen on an earlier day and never finished', async () => {
     // The gap the carry deliberately leaves. `service._carry_into` moves a
     // source="user" row forward exactly ONCE — "a task the owner chose on
@@ -1993,6 +2026,39 @@ describe('<TodayView> arranging the day', () => {
     fireEvent.drop(row(to), { dataTransfer })
     return dataTransfer
   }
+
+  it('puts a payload on the transfer, like every other drag in this app', async () => {
+    // Consistency rather than a browser bug: the "Firefox will not start an
+    // empty drag" reason the other four sites give was true of old Firefox and
+    // is not of any current one. A gesture carrying nothing is still one no
+    // external drop target can read, and this was the only drag source here
+    // that carried nothing.
+    m.openDay.mockResolvedValue(abc())
+    setup()
+    await screen.findByText('Alpha')
+
+    const dt = dragOnto('Alpha', 'Bravo')
+    expect(dt.setData).toHaveBeenCalledWith('text/plain', expect.any(String))
+  })
+
+  it('leaves a press inside the estimate input to the input', async () => {
+    // `draggable` is on the ROW and the row contains an editable control, so
+    // without a target guard, selecting the text of an estimate reordered the
+    // day. The Tasks pane hit this first and carries the same guard.
+    m.openDay.mockResolvedValue(abc())
+    const user = setup()
+    await screen.findByText('Alpha')
+
+    // Open the estimate cell on Alpha, so there is a real input inside the row.
+    await user.click(screen.getByRole('button', { name: 'Estimate Alpha' }))
+    const input = dayRows()[0].querySelector('input[type="number"]')!
+    const dataTransfer = { setData: vi.fn(), getData: vi.fn(), effectAllowed: '' }
+    fireEvent.dragStart(input, { dataTransfer })
+
+    // Nothing was picked up, so nothing can be dropped.
+    expect(dataTransfer.setData).not.toHaveBeenCalled()
+    expect(dataTransfer.effectAllowed).toBe('')
+  })
 
   it('tells the browser the gesture is a MOVE, not a copy', async () => {
     // The one line of `onDragStart` that no test reached: it threw on an absent

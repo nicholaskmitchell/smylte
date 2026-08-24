@@ -1335,8 +1335,16 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
     const s = new Set<string>()
     for (const p of recentPlans) {
       if (!p || !Array.isArray(p.entries) || p.day >= day) continue
+      // `!e.rolled_to` as well as `!e.dropped_at`, and it is the same rule
+      // `onDay` states one screen down: a row with a DESTINATION has been
+      // decided about, and the work already has a row on the day it went to.
+      // Without this, something moved to Thursday came back on Tuesday under
+      // "you did not finish these last time" — the plan offering back the
+      // answer the owner gave it forty seconds earlier in the shutdown.
+      //
+      // This was the one reader of `rolled_to` the column did not reach.
       const chosen = p.entries.filter(
-        (e) => e.source === 'user' && !e.done_at && !e.dropped_at)
+        (e) => e.source === 'user' && !e.done_at && !e.dropped_at && !e.rolled_to)
       for (const k of keysOf(chosen)) s.add(k)
     }
     return s
@@ -2646,7 +2654,28 @@ function TodayRow({
       // papered over with a gesture that behaves differently from the rest.
       draggable={draggable || undefined}
       onDragStart={draggable
-        ? (e) => { onDragRow?.(entry.entry_id); e.dataTransfer.effectAllowed = 'move' }
+        ? (e) => {
+          // `draggable` is on the ROW, and the row contains an editable control
+          // — the estimate cell becomes a number input in place. Without this a
+          // press inside it started a drag of the whole row, so selecting the
+          // text of an estimate silently reordered the day. A gesture that
+          // begins on something interactive belongs to that control. Same guard,
+          // same words, as the Tasks pane, which hit this first.
+          if ((e.target as HTMLElement)?.closest?.('input, textarea, button, [contenteditable]')) {
+            e.preventDefault()
+            return
+          }
+          onDragRow?.(entry.entry_id)
+          e.dataTransfer.effectAllowed = 'move'
+          // A payload, so this drag carries what every other drag in this app
+          // carries. The reason given at the other four sites is that Firefox
+          // will not start a drag with an empty transfer; that was true of old
+          // Firefox and is not of any current one, so the honest reason to do it
+          // here is consistency — a gesture with nothing on the transfer is one
+          // no external drop target can read, and there is no reason for this
+          // one to be the odd one out.
+          e.dataTransfer.setData('text/plain', entry.entry_id)
+        }
         : undefined}
       // `preventDefault` is what makes this a drop target at all — without it
       // the browser refuses the drop and the gesture silently does nothing.

@@ -728,7 +728,9 @@ def get_day_rituals(
     return {r["day"]: r for r in rows}
 
 
-def set_day_ritual(conn: sqlite3.Connection, day: str, **fields: object) -> sqlite3.Row:
+def set_day_ritual(
+    conn: sqlite3.Connection, day: str, **fields: object,
+) -> sqlite3.Row | None:
     """Write what the owner said about a day, and return the whole row.
 
     An explicit None VALUE clears the column, exactly as `update_day_entry` has
@@ -743,16 +745,24 @@ def set_day_ritual(conn: sqlite3.Connection, day: str, **fields: object) -> sqli
     bad = set(fields) - _DAY_RITUAL_FIELDS
     if bad:
         raise ValueError(f"unknown day ritual fields: {bad}")
+    # NOTHING TO SAY IS NOT A WRITE. `service.set_day_ritual` calls a PATCH with
+    # an empty body "a read" and publishes no event for one — and a read that
+    # minted the row holding the nulls it had just reported would make that
+    # false, and would put a row in a SIDECAR-CLASS table (one no resync
+    # rebuilds and every backup has to carry) for a day nobody ever spoke about.
+    # None here means exactly what `get_day_ritual` means by it: nothing has been
+    # said about this day.
+    if not fields:
+        return get_day_ritual(conn, day)
     conn.execute("INSERT OR IGNORE INTO day_ritual (day) VALUES (?)", (day,))
-    if fields:
-        # The column names are vetted against _DAY_RITUAL_FIELDS above — not
-        # attacker input; the values are bound.
-        assignments = ", ".join(f"{k}=?" for k in fields)
-        conn.execute(
-            f"UPDATE day_ritual SET {assignments}, "  # nosec B608
-            "updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE day=?",
-            (*fields.values(), day),
-        )
+    # The column names are vetted against _DAY_RITUAL_FIELDS above — not
+    # attacker input; the values are bound.
+    assignments = ", ".join(f"{k}=?" for k in fields)
+    conn.execute(
+        f"UPDATE day_ritual SET {assignments}, "  # nosec B608
+        "updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE day=?",
+        (*fields.values(), day),
+    )
     return get_day_ritual(conn, day)
 
 
