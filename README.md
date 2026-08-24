@@ -6,8 +6,10 @@ existing Radicale CalDAV server, live at `radicale.nicholaskmitchell.com`
 Apple's — find it via RFC 6764 discovery at the root). It is one CalDAV client among
 several — Tasks.org (DAVx⁵), jtx Board, and Thunderbird share the same
 collections and have equal rights. **Radicale is the source of truth; SQLite
-is a disposable cache** (except the app-only sidecar — pins and app-only
-metadata that have nowhere to live on the wire; see `docs/phase0-findings.md`).
+is a disposable cache** (except the app-only sidecar — pins, manual order, the
+day plan and habits: things that have nowhere to live on the wire, so a resync
+cannot rebuild them and a backup must include them. See
+`docs/phase0-findings.md`, and `docs/DEPLOY.md` for which tables those are).
 
 The stack is a FastAPI backend (`tasksd`) that owns the CalDAV/sync/write path
 and serves a React + Vite single-page app.
@@ -56,6 +58,40 @@ quick add — that you drag, resize and add/remove in **Arrange** mode. The layo
 is account-synced. Arranging is desktop-only for now; phones render the same
 modules stacked in the saved order. The mini calendar dots each day in its
 calendars' colors, and a day opens a read-only list of its events.
+
+**Today.** The one surface that holds state of its own. Every other task view
+renders a *query* — "what is due today", recomputed on every paint, so the list
+moves under you all day. This one renders a *snapshot*: the first time you open
+a day the backend freezes what it held — what is due, what is late, what you
+left unfinished on your last planned day — and from then on the day is
+something you arrange rather than something that arranges itself. A task list
+grows without bound and a day does not, and the commitment step is the part
+worth keeping.
+
+A day holds three kinds of row, and the tab says which is which — a filled
+square is a **task** (a real VTODO on a list, so it reaches Tasks.org,
+Thunderbird and your phone), a hollow one is a **note** (text that lives only
+in that day and never leaves Smylte), and `↻` is a **habit**. The add box takes
+a line of prose — "invoice friday", "gym at 7" — and states underneath exactly
+what Enter will create and where it will end up, with a one-press switch
+between the two and a list picker when there is a choice to make. Drag rows
+into the order you will actually work them.
+
+A **habit** is a rule that puts a line on your day, on the weekdays you choose.
+It is not a second system: each occurrence is an ordinary row in the day plan,
+so it ticks and drops like anything else. No VTODO is written, no RRULE, and
+nothing about it reaches the CalDAV collections the other clients share. Its
+weekly count is over the occurrences that *exist*, not over scheduled weekdays,
+so days you never opened the app are not counted against you — and it is never
+coloured as a failure.
+
+**Review** shows how a day went: split by where each row came from (chosen,
+carried over, derived, habits), what you dropped, and what you finished that
+day without ever planning it. It works on today while today is still running,
+and the `‹` `›` picker steps back a fortnight. **A past day is a finished
+record** — read-only end to end, because a log you can fill in afterwards is a
+scorecard. Reading a day never creates one: only today can be opened, which is
+what keeps the record honest about what was actually intended.
 
 **Tabs.** Settings → General → Tabs reorders the top strip and picks which tab
 the app opens on — a fixed one, or wherever you left off. Both follow the
@@ -152,12 +188,14 @@ backend/
   dev/          empirical probes (fidelity comparison, normalization, smokes)
 frontend/
   src/
-    components/ TasksView, CalendarView, SchedulingView, HomeView, BookingPage,
-                Sidebar, Login, TaskModal, AppearancePanel, ArchivedCalendarsModal
+    components/ TodayView, TasksView, CalendarView, SchedulingView, HomeView,
+                BookingPage, Sidebar, Login, TaskModal, AppearancePanel,
+                ArchivedCalendarsModal
     api.ts      typed, same-origin API client (+ SSE subscribe)
     App.tsx     shell: tabs, settings, theme, live-refresh
     appearance.ts  token allowlist + validation, apply/reset, theme import/export
     dashboard.ts   Home grid math (pack/move/resize) — pure, unit-tested
+    daytext.ts     reading one typed line ("gym at 7") — pure, unit-tested
     order.ts       the one task sort — total, so array order can't leak through
     time.ts        every clock the app draws, 12- or 24-hour
     styles/     design tokens + app.css
