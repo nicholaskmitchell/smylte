@@ -171,6 +171,11 @@ beforeEach(() => {
   }))
   m.deleteHabit.mockResolvedValue(null)
   m.patchDayEntry.mockImplementation(async (_d, id) => entry({ entry_id: id }))
+  // The roll answers the SOURCE entry stamped with where it went — the target
+  // row is created on another day and never reaches this view. A mock that
+  // answered the target would hide the one local change the writer makes.
+  m.rollDayEntry.mockImplementation(async (_d, id, to) =>
+    entry({ entry_id: id, rolled_to: to }))
   m.addDayEntry.mockImplementation(async (d, body) => entry({
     entry_id: body.entry_id, day: d, kind: body.kind,
     list: body.list ?? null, uid: body.uid ?? null, title: body.title ?? null,
@@ -801,6 +806,29 @@ describe('<TodayView> suggestions', () => {
     expect(add('Someday')).not.toBeInTheDocument()
   })
 
+  it('offers back a task the day recorded as DROPPED, but not one it MOVED', async () => {
+    // The two stamps are different answers and this is the one place the
+    // difference shows. "I decided against this" leaves the task undecided
+    // about, and the server's add is idempotent EXCEPT over dropped rows for
+    // precisely that reason — choosing it again this afternoon has to work.
+    // "This is happening on Thursday" already put a row on another day, so
+    // offering it back under "Due today" would contradict the decision.
+    m.tasks.mockResolvedValue([
+      task({ uid: 'a', summary: 'Declined', due: today() }),
+      task({ uid: 'b', summary: 'Moved on', due: today() }),
+    ])
+    m.openDay.mockResolvedValue(plan([
+      entry({ entry_id: 'x', kind: 'task', list: 'l1', uid: 'a', title: null,
+        dropped_at: `${today()}T10:00:00.000Z` }),
+      entry({ entry_id: 'y', kind: 'task', list: 'l1', uid: 'b', title: null,
+        rolled_to: inDays(1) }),
+    ]))
+    setup()
+    const add = (name: string) => screen.queryByRole('button', { name: `Add ${name} to today` })
+    await waitFor(() => expect(add('Declined')).toBeInTheDocument())
+    expect(add('Moved on')).not.toBeInTheDocument()
+  })
+
   it('never offers one task under two headings', async () => {
     // A task due at 09:00 today is both `dayKey(due) === today` AND overdue
     // from 09:01. Two buttons for one task means the second press is a no-op
@@ -1249,6 +1277,449 @@ describe('<TodayView> the planning ritual', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Start the day' }))
     await waitFor(() => expect(m.patchDay).toHaveBeenCalledWith(
       today(), { committed: true }))
+  })
+})
+
+// ── the shutdown ritual ─────────────────────────────────────────────────────
+
+describe('<TodayView> the shutdown ritual', () => {
+  /** Open the ritual and hand back the dialog. */
+  const open = async (user: ReturnType<typeof setup>) => {
+    await user.click(await screen.findByRole('button', { name: 'Shut down' }))
+    return screen.findByRole('dialog', { name: 'Shut down the day' })
+  }
+
+  /** The day's own rows BEHIND the ritual.
+   *
+   *  `rowTitles()` reads every `.today-row` in the document, and the ritual
+   *  renders the day's rows through the day's OWN renderer — which is the point
+   *  of that renderer being lifted in, and also why an unscoped read counts
+   *  each row twice while a step showing them is open. */
+  const pageRows = () => dayRows()
+    .filter((r) => !r.closest('.overlay'))
+    .map((r) => r.querySelector('.today-title')?.textContent ?? '')
+
+  it('is a button and never a band', async () => {
+    // The planning nudge is a band because the morning is when a plan is worth
+    // prompting for. A band offering to close the day would be on screen from
+    // breakfast onwards, nagging about an evening that has not arrived.
+    m.openDay.mockResolvedValue(plan([entry({ title: 'Water the plants' })]))
+    setup()
+    await screen.findByText('Water the plants')
+
+    expect(screen.queryByRole('dialog', { name: 'Shut down the day' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Shut down' })).toBeInTheDocument()
+  })
+
+  it('is absent on a day that has already happened', async () => {
+    // `set_day_ritual` refuses a shutdown on a past day, so offering one would
+    // be a control that 400s. Absent rather than disabled, like the rest here.
+    m.day.mockImplementation(async (d) => plan([entry({ day: d, title: 'Yesterday' })], d))
+    const user = setup()
+    await user.click(await screen.findByRole('button', { name: 'Previous day' }))
+    await screen.findByText('Yesterday')
+    expect(screen.queryByRole('button', { name: 'Shut down' })).not.toBeInTheDocument()
+  })
+
+  it('walks three steps and can be left at any of them', async () => {
+    m.openDay.mockResolvedValue(plan([entry({ title: 'Water the plants' })]))
+    const user = setup()
+    await screen.findByText('Water the plants')
+    const dialog = await open(user)
+
+    expect(within(dialog).getByText('How today went')).toBeInTheDocument()
+    await user.click(within(dialog).getByRole('button', { name: 'Next' }))
+    expect(within(dialog).getByText('What follows you')).toBeInTheDocument()
+    await user.click(within(dialog).getByRole('button', { name: 'Next' }))
+    expect(within(dialog).getByText('Anything to note?')).toBeInTheDocument()
+
+    await user.click(within(dialog).getByRole('button', { name: 'Close' }))
+    expect(screen.queryByRole('dialog', { name: 'Shut down the day' })).not.toBeInTheDocument()
+  })
+
+  it('closes on an Escape dispatched at the window', async () => {
+    // `useEscape` binds to the WINDOW — there is no focus trap in these dialogs
+    // — so the listener has to answer a key pressed anywhere.
+    const user = setup()
+    await open(user)
+
+    fireEvent.keyDown(window, { key: 'Escape' })
+    await waitFor(() => expect(
+      screen.queryByRole('dialog', { name: 'Shut down the day' })).not.toBeInTheDocument())
+  })
+
+  it('states what happened as a fact and never as a score', async () => {
+    m.openDay.mockResolvedValue(plan([
+      entry({ entry_id: 'a', title: 'Done thing', estimate_minutes: 60,
+        done_at: `${today()}T10:00:00.000Z` }),
+      entry({ entry_id: 'b', title: 'Open thing', estimate_minutes: 60 }),
+    ]))
+    const user = setup()
+    await screen.findByText('Done thing')
+    const dialog = await open(user)
+
+    expect(within(dialog).getByText(/1 of 2 done/)).toBeInTheDocument()
+    expect(within(dialog).getByText(/1h of 2h planned/)).toBeInTheDocument()
+    // NO VERDICT. The same call the habit count makes: a surface that grades
+    // you is a surface you stop opening, and this is the one you would be
+    // opening at the end of a hard day.
+    expect(dialog.textContent).not.toMatch(/%|streak|well done|good job/i)
+  })
+
+  it('counts a task ticked in the Tasks pane as done', async () => {
+    // THE REASON `isDone` IS LIFTED IN rather than re-derived here. A task row's
+    // doneness is its VTODO's, not the entry's stamp — tick it anywhere else in
+    // the app and the entry's `done_at` is still null. Deriving doneness inside
+    // the ritual reads that as unfinished, so the day undercounts itself AND
+    // offers to move work that is already finished.
+    m.tasks.mockResolvedValue([task({ uid: 'u1', summary: 'Ship it', completed: true })])
+    m.openDay.mockResolvedValue(plan([
+      entry({ entry_id: 'a', kind: 'task', list: 'l1', uid: 'u1', title: null,
+        estimate_minutes: 30 }),
+    ]))
+    const user = setup()
+    await screen.findByText('Ship it')
+    const dialog = await open(user)
+
+    expect(within(dialog).getByText(/1 of 1 done/)).toBeInTheDocument()
+    expect(within(dialog).getByText(/30m of 30m planned/)).toBeInTheDocument()
+    await user.click(within(dialog).getByRole('button', { name: 'Next' }))
+    expect(within(dialog).getByText(/Everything on today is done/)).toBeInTheDocument()
+  })
+
+  it('lists what got finished without ever being planned', async () => {
+    // Usually the more interesting half, and the half a plan cannot know.
+    m.tasks.mockResolvedValue([task({
+      uid: 'u9', summary: 'Fixed the printer', completed: true,
+      completed_at: `${today()}T14:00:00.000Z`,
+    })])
+    m.openDay.mockResolvedValue(plan([entry({ title: 'Water the plants' })]))
+    const user = setup()
+    await screen.findByText('Water the plants')
+    const dialog = await open(user)
+
+    expect(within(within(dialog).getByRole('list', { name: 'Done off-plan' }))
+      .getByText('Fixed the printer')).toBeInTheDocument()
+  })
+
+  it('names a task row by its task, never by the entry', async () => {
+    // FOUND BY LOOKING AT IT. A task entry carries no title of its own — the
+    // VTODO's summary is the truth — so a ritual that read `entry.title` printed
+    // "(this task)" against every task on the one screen whose entire job is
+    // deciding about them. 1030 green tests had nothing to say about it.
+    m.tasks.mockResolvedValue([task({ uid: 'u1', summary: 'Send the Q3 invoice' })])
+    m.openDay.mockResolvedValue(plan([
+      entry({ entry_id: 'a', kind: 'task', list: 'l1', uid: 'u1', title: null }),
+    ]))
+    const user = setup()
+    await screen.findByText('Send the Q3 invoice')
+    const dialog = await open(user)
+    await user.click(within(dialog).getByRole('button', { name: 'Next' }))
+
+    expect(within(dialog).getByRole('button',
+      { name: 'Move Send the Q3 invoice to tomorrow' })).toBeInTheDocument()
+    expect(dialog.textContent).not.toMatch(/\(this task\)/)
+  })
+
+  it('says how much of the day the minutes are silent about', async () => {
+    // ALSO FOUND BY LOOKING AT IT. When the rows that got done are the ones
+    // without estimates, the figure alone reads "0m of 1h 20m planned" — which
+    // looks like a day nothing happened on, and a false verdict is exactly what
+    // this step must not deliver.
+    m.openDay.mockResolvedValue(plan([
+      entry({ entry_id: 'a', title: 'Done, unestimated', done_at: `${today()}T10:00:00.000Z` }),
+      entry({ entry_id: 'b', title: 'Open, estimated', estimate_minutes: 80 }),
+    ]))
+    const user = setup()
+    await screen.findByText('Done, unestimated')
+    const dialog = await open(user)
+
+    expect(within(dialog).getByText(/0m of 1h 20m planned/)).toBeInTheDocument()
+    expect(within(dialog).getByText(/1 not estimated/)).toBeInTheDocument()
+  })
+
+  it('sends a row to tomorrow, which takes it off today', async () => {
+    m.openDay.mockResolvedValue(plan([entry({ entry_id: 'a', title: 'Water the plants' })]))
+    const user = setup()
+    await screen.findByText('Water the plants')
+    const dialog = await open(user)
+    await user.click(within(dialog).getByRole('button', { name: 'Next' }))
+
+    await user.click(within(dialog).getByRole('button',
+      { name: 'Move Water the plants to tomorrow' }))
+    await waitFor(() => expect(m.rollDayEntry).toHaveBeenCalledWith(today(), 'a', inDays(1)))
+    // `rolled_to` is what makes it leave: the day filters moved rows out
+    // exactly as it filters dropped ones, so deciding about something takes it
+    // out of the day's total as well as out of this list.
+    await waitFor(() => expect(pageRows()).toEqual([]))
+  })
+
+  it('takes the row off the day at once, and puts it back if the move fails', async () => {
+    // The optimistic half, and its undo. Deferred rather than
+    // `mockRejectedValue` so the row's DISAPPEARANCE can be observed before the
+    // reply lands — with a mock that settles immediately, "it comes back" would
+    // pass even if it had never left.
+    let fail = (_e: Error) => {}
+    m.rollDayEntry.mockImplementation(() => new Promise((_res, rej) => { fail = rej }))
+    m.openDay.mockResolvedValue(plan([entry({ entry_id: 'a', title: 'Water the plants' })]))
+    const user = setup()
+    await screen.findByText('Water the plants')
+    const dialog = await open(user)
+    await user.click(within(dialog).getByRole('button', { name: 'Next' }))
+
+    await user.click(within(dialog).getByRole('button',
+      { name: 'Move Water the plants to tomorrow' }))
+    await waitFor(() => expect(pageRows()).toEqual([]))
+
+    // Back where it was rather than left hidden from a day it is still on.
+    await act(async () => { fail(new Error('nope')) })
+    await waitFor(() => expect(pageRows()).toEqual(['Water the plants']))
+  })
+
+  it('takes a row off the plan without moving it anywhere', async () => {
+    m.openDay.mockResolvedValue(plan([entry({ entry_id: 'a', title: 'Water the plants' })]))
+    const user = setup()
+    await screen.findByText('Water the plants')
+    const dialog = await open(user)
+    await user.click(within(dialog).getByRole('button', { name: 'Next' }))
+
+    await user.click(within(dialog).getByRole('button',
+      { name: 'Take Water the plants off the plan' }))
+    await waitFor(() => expect(m.patchDayEntry).toHaveBeenCalledWith(
+      today(), 'a', { dropped: true }))
+    expect(m.rollDayEntry).not.toHaveBeenCalled()
+  })
+
+  it('offers a habit no way to be moved, and still a way to be declined', async () => {
+    // Tomorrow gets its own occurrence from the rule, so moving one would
+    // either duplicate it or fabricate one on a day the rule does not schedule
+    // — which is what `roll_entry` refuses by name. "I did not do this today"
+    // is still a real answer.
+    m.openDay.mockResolvedValue(plan([occurrence({ entry_id: 'h1', title: 'Read' })]))
+    const user = setup()
+    await screen.findByText('Read')
+    const dialog = await open(user)
+    await user.click(within(dialog).getByRole('button', { name: 'Next' }))
+
+    expect(within(dialog).queryByRole('button', { name: 'Move Read to tomorrow' }))
+      .not.toBeInTheDocument()
+    expect(within(dialog).getByRole('button', { name: 'Take Read off the plan' }))
+      .toBeInTheDocument()
+  })
+
+  it('moves everything at once, and offers that only when there is more than one', async () => {
+    m.openDay.mockResolvedValue(plan([
+      entry({ entry_id: 'a', title: 'One' }),
+      entry({ entry_id: 'b', title: 'Two' }),
+      // A habit is not movable, so it is neither in the count nor in the sweep.
+      occurrence({ entry_id: 'h1', title: 'Read' }),
+    ]))
+    const user = setup()
+    await screen.findByText('One')
+    const dialog = await open(user)
+    await user.click(within(dialog).getByRole('button', { name: 'Next' }))
+
+    await user.click(within(dialog).getByRole('button', { name: 'Move all 2 to tomorrow' }))
+    await waitFor(() => expect(m.rollDayEntry).toHaveBeenCalledTimes(2))
+    expect(m.rollDayEntry).toHaveBeenCalledWith(today(), 'a', inDays(1))
+    expect(m.rollDayEntry).toHaveBeenCalledWith(today(), 'b', inDays(1))
+    expect(m.rollDayEntry).not.toHaveBeenCalledWith(today(), 'h1', inDays(1))
+  })
+
+  it('does not offer a sweep for a single leftover', async () => {
+    // The row's own button already says it, and a "move all 1" is a second
+    // control for one click.
+    m.openDay.mockResolvedValue(plan([entry({ entry_id: 'a', title: 'One' })]))
+    const user = setup()
+    await screen.findByText('One')
+    const dialog = await open(user)
+    await user.click(within(dialog).getByRole('button', { name: 'Next' }))
+    expect(within(dialog).queryByRole('button', { name: /Move all/ })).not.toBeInTheDocument()
+  })
+
+  it('will not offer a day the server would refuse', async () => {
+    // The rule is enforced server-side regardless — `roll_entry` will not move
+    // work backwards — so this is only about the picker not inviting it.
+    m.openDay.mockResolvedValue(plan([entry({ entry_id: 'a', title: 'One' })]))
+    const user = setup()
+    await screen.findByText('One')
+    const dialog = await open(user)
+    await user.click(within(dialog).getByRole('button', { name: 'Next' }))
+
+    const picker = within(dialog).getByLabelText('Move One to a day')
+    expect(picker).toHaveAttribute('min', inDays(1))
+    expect(picker).toHaveAttribute('max', inDays(14))
+  })
+
+  it('sends a row to a day that was named', async () => {
+    m.openDay.mockResolvedValue(plan([entry({ entry_id: 'a', title: 'One' })]))
+    const user = setup()
+    await screen.findByText('One')
+    const dialog = await open(user)
+    await user.click(within(dialog).getByRole('button', { name: 'Next' }))
+
+    fireEvent.change(within(dialog).getByLabelText('Move One to a day'),
+      { target: { value: inDays(4) } })
+    await waitFor(() => expect(m.rollDayEntry).toHaveBeenCalledWith(today(), 'a', inDays(4)))
+  })
+
+  it('writes the reflection on blur, trimmed', async () => {
+    // Prose, and a PATCH per keystroke would be a write storm for a field
+    // nobody is racing on.
+    m.patchDay.mockImplementation(async (d, body) =>
+      plan([], d, { reflection: body.reflection || null }))
+    const user = setup()
+    const dialog = await open(user)
+    await user.click(within(dialog).getByRole('button', { name: 'Next' }))
+    await user.click(within(dialog).getByRole('button', { name: 'Next' }))
+
+    const box = within(dialog).getByLabelText('A note about today')
+    await user.type(box, '  Slow start, good afternoon.  ')
+    expect(m.patchDay).not.toHaveBeenCalled()
+    await user.tab()
+    await waitFor(() => expect(m.patchDay).toHaveBeenCalledWith(
+      today(), { reflection: 'Slow start, good afternoon.' }))
+  })
+
+  it('sends an emptied reflection rather than skipping it as falsy', async () => {
+    // "" CLEARS, which is `set_day_ritual`'s rule and the reason "nothing
+    // written" has one representation. Skipping the empty string as falsy would
+    // make a reflection unremovable.
+    m.openDay.mockResolvedValue(plan([], today(), { reflection: 'It was fine.' }))
+    m.patchDay.mockImplementation(async (d, body) =>
+      plan([], d, { reflection: body.reflection || null }))
+    const user = setup()
+    const dialog = await open(user)
+    await user.click(within(dialog).getByRole('button', { name: 'Next' }))
+    await user.click(within(dialog).getByRole('button', { name: 'Next' }))
+
+    await user.clear(within(dialog).getByLabelText('A note about today'))
+    await user.tab()
+    await waitFor(() => expect(m.patchDay).toHaveBeenCalledWith(today(), { reflection: '' }))
+  })
+
+  it('says nothing to the server when the reflection was not touched', async () => {
+    m.openDay.mockResolvedValue(plan([], today(), { reflection: 'It was fine.' }))
+    const user = setup()
+    const dialog = await open(user)
+    await user.click(within(dialog).getByRole('button', { name: 'Next' }))
+    await user.click(within(dialog).getByRole('button', { name: 'Next' }))
+    await user.click(within(dialog).getByLabelText('A note about today'))
+    await user.tab()
+    expect(m.patchDay).not.toHaveBeenCalled()
+  })
+
+  it('stops offering a task it has just sent to another day', async () => {
+    // FOUND BY DRIVING THE FLOW. "Decided against" and "happening on Thursday"
+    // are different answers: the first leaves the task undecided-about and it is
+    // right to offer it back, the second already has a row on another day. A
+    // suggestion list that offered it under "Due today" would contradict the
+    // answer given ten seconds earlier in the shutdown.
+    m.tasks.mockResolvedValue([task({ uid: 'u1', summary: 'Send the Q3 invoice', due: today() })])
+    m.openDay.mockResolvedValue(plan([
+      entry({ entry_id: 'a', kind: 'task', list: 'l1', uid: 'u1', title: null }),
+    ]))
+    // The route echoes the SOURCE row, stamped — so the reply still names the
+    // task. The shared default cannot know which row it was asked about.
+    m.rollDayEntry.mockImplementation(async (_d, id, to) => entry({
+      entry_id: id, kind: 'task', list: 'l1', uid: 'u1', title: null, rolled_to: to,
+    }))
+    const user = setup()
+    await screen.findByText('Send the Q3 invoice')
+    const dialog = await open(user)
+    await user.click(within(dialog).getByRole('button', { name: 'Next' }))
+    await user.click(within(dialog).getByRole('button',
+      { name: 'Move Send the Q3 invoice to tomorrow' }))
+
+    await waitFor(() => expect(pageRows()).toEqual([]))
+    // Off the day, and NOT back in the list of things to put on it.
+    expect(document.querySelector('.today-sug')).toBeNull()
+  })
+
+  it('files a moved row under its own heading, and says where it went', async () => {
+    // "Happening on Thursday" and "not happening" are DIFFERENT ANSWERS, and
+    // `rolled_to` exists to keep them apart: it records the decision AND its
+    // destination. Filing a moved row under "Chosen" reports it as still on the
+    // day; filing it under "Dropped" reports it abandoned. Both are wrong.
+    m.day.mockImplementation(async (d) => plan([
+      entry({ entry_id: 'a', day: d, title: 'Went to Thursday', rolled_to: inDays(4) }),
+      entry({ entry_id: 'b', day: d, title: 'Declined', dropped_at: `${d}T10:00:00.000Z` }),
+      entry({ entry_id: 'c', day: d, title: 'Stayed put' }),
+    ], d))
+    const user = setup()
+    await user.click(await screen.findByRole('button', { name: 'Previous day' }))
+    await screen.findByText('Stayed put')
+
+    const moved = within(screen.getByRole('list', { name: 'Moved on' }))
+    expect(moved.getByText('Went to Thursday')).toBeInTheDocument()
+    // WHERE it went, in place of when it was wanted by.
+    expect(moved.getByText(/→/)).toBeInTheDocument()
+    expect(within(screen.getByRole('list', { name: 'Dropped' }))
+      .getByText('Declined')).toBeInTheDocument()
+    expect(within(screen.getByRole('list', { name: 'Chosen' }))
+      .getByText('Stayed put')).toBeInTheDocument()
+  })
+
+  it('hands out no controls on a row that has been moved', async () => {
+    // The same call the Dropped group makes, reached from the other direction:
+    // the work is on Thursday now and Thursday's row is the one to tick. A
+    // checkbox here would write today's record for work today is not doing.
+    m.openDay.mockResolvedValue(plan([
+      entry({ entry_id: 'a', title: 'Went to Thursday', rolled_to: inDays(4) }),
+    ]))
+    const user = setup()
+    await user.click(await screen.findByRole('button', { name: 'Review' }))
+    const row = await screen.findByText('Went to Thursday')
+    const li = row.closest('li')!
+    expect(li.querySelector('input[type="checkbox"]')).toBeNull()
+    expect(within(li as HTMLElement)
+      .queryByRole('button', { name: /Remove/ })).not.toBeInTheDocument()
+  })
+
+  it('reads the reflection back on the look-back', async () => {
+    // The step that writes it PROMISES "you will see it whenever you look back
+    // at today", and until the look-back rendered it that promise was false:
+    // the text was stored, prefilled into the box that wrote it, and shown
+    // nowhere else. A field nothing reads is a field nobody fills in twice.
+    m.day.mockImplementation(async (d) => plan([entry({ day: d, title: 'Yesterday' })], d, {
+      reflection: 'Slow start. The invoice went out, which was the one that mattered.',
+    }))
+    const user = setup()
+    await user.click(await screen.findByRole('button', { name: 'Previous day' }))
+    await screen.findByText('Yesterday')
+    expect(screen.getByText(/The invoice went out/)).toBeInTheDocument()
+  })
+
+  it('shows no heading for a day nothing was written about', async () => {
+    m.day.mockImplementation(async (d) => plan([entry({ day: d, title: 'Yesterday' })], d))
+    const user = setup()
+    await user.click(await screen.findByRole('button', { name: 'Previous day' }))
+    await screen.findByText('Yesterday')
+    expect(screen.queryByText('How it went')).not.toBeInTheDocument()
+  })
+
+  it('closes the day, and says so when you come back', async () => {
+    m.patchDay.mockImplementation(async (d) =>
+      plan([], d, { shutdown_at: `${d}T18:04:00.000Z` }))
+    const user = setup()
+    const dialog = await open(user)
+    await user.click(within(dialog).getByRole('button', { name: 'Next' }))
+    await user.click(within(dialog).getByRole('button', { name: 'Next' }))
+    await user.click(within(dialog).getByRole('button', { name: 'Shut down' }))
+
+    await waitFor(() => expect(m.patchDay).toHaveBeenCalledWith(today(), { shutdown: true }))
+    // The ritual gets out of the way once it is walked.
+    await waitFor(() => expect(
+      screen.queryByRole('dialog', { name: 'Shut down the day' })).not.toBeInTheDocument())
+
+    // And it is RE-ENTERABLE — an evening thought belongs in the same
+    // reflection — so it reports the stamp rather than refusing.
+    const again = await open(user)
+    expect(within(again).getByText(/You shut today down at/)).toBeInTheDocument()
+    await user.click(within(again).getByRole('button', { name: 'Next' }))
+    await user.click(within(again).getByRole('button', { name: 'Next' }))
+    // And the last button says so too, rather than offering to do it twice.
+    expect(within(again).getByRole('button', { name: 'Done' })).toBeInTheDocument()
   })
 })
 

@@ -1347,6 +1347,53 @@
 }
 .plan-actions { display: flex; align-items: center; gap: 8px; }
 
+/* ---- the shutdown ritual ------------------------------------------------
+   The same frame as the planning one, on purpose: the two are a pair, and a
+   second dialog vocabulary for the evening half would make them read as
+   unrelated features. Everything below is only the middle step's row, which is
+   the one shape planning has no equivalent of — a title with three answers
+   beside it. */
+.shut-all { display: flex; }
+/* TWO LINES ALWAYS: the title, then the answers under it.
+   This was one line that wrapped when it had to, and looking at it in a browser
+   is what changed it — at the dialog's own width the third control wrapped
+   anyway, to a different indent on each row, so a list built to be scanned had
+   a ragged edge and no two rows the same height. Fixing the shape rather than
+   the widths also takes the fragility out: nothing here now depends on how long
+   "Off the plan" happens to be in the reader's language. */
+.shut-row { flex-wrap: wrap; row-gap: 6px; }
+.shut-row .today-title { flex: 1 1 100%; }
+.shut-arms { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.shut-act {
+  flex: none; padding: 3px 8px; font-size: calc(11px * var(--fs-scale));
+}
+/* A fixed width because a date input sizes itself to its own placeholder, which
+   differs by browser and by locale — left alone, this arm's width would move
+   between Firefox and Chrome. Quieter than its neighbours on purpose: Chrome
+   paints an empty one as `mm/dd/yyyy` with the year filled in from `min`, which
+   at full contrast is the heaviest thing in a row while being the least-reached
+   -for of the three answers. */
+.shut-date {
+  flex: none; width: 132px; padding: 2px 6px; color: var(--fg-muted);
+  font-size: calc(11px * var(--fs-scale));
+}
+/* `resize: vertical` and not both: a horizontal drag would push it past the
+   dialog it lives in. `font: inherit` because a textarea does not take the
+   page's family from `.input` the way an input does — left alone it paints the
+   one piece of prose in this app in the browser's monospace default. */
+.shut-reflect {
+  font: inherit; font-size: calc(14px * var(--fs-scale));
+  resize: vertical; min-height: 76px; line-height: 1.45;
+}
+/* Where the reflection is READ, on the look-back. `pre-wrap` because it is the
+   one field in this app that takes a paragraph break, and collapsing them would
+   hand back something the owner did not write. */
+.today-reflection-text {
+  margin: 0; padding: 0 var(--gutter) 10px;
+  font-size: calc(14px * var(--fs-scale)); color: var(--fg);
+  line-height: 1.5; white-space: pre-wrap;
+}
+
 /* ---- how full the day is -----------------------------------------------
    Present only on a day that HAS a capacity. There is no empty state here on
    purpose: an account that has never stated one gets no strip at all, because
@@ -1398,6 +1445,10 @@
 }
 .today-row.done .today-title { color: var(--fg-faint); text-decoration: line-through; }
 .today-row.gone .today-title { color: var(--fg-faint); font-style: italic; }
+/* A moved row reads as PAST rather than as declined: no line-through and no
+   italic, because the work is still going to happen — it is happening
+   somewhere else, which the `→ Aug 28` in the due cell is what says. */
+.today-row.today-moved .today-title { color: var(--fg-muted); }
 /* How long a row is expected to take. Sits before the due date, and reads a
    step quieter than it: the estimate is something you set once during the
    ritual and then glance past, while a due date is a fact about the task that
