@@ -391,10 +391,20 @@ class CreateHabit(BaseModel):
     # out of JSON but cannot be serialized back into it, so one Infinity here
     # would 500 every later read of the habits list.
     position: float | None = Field(default=None, allow_inf_nan=False)
-    # How long one run of this takes. Same bounds and the same clear sentinel as
-    # PatchDayEntry.estimate_minutes — one rule for a duration wherever it is
-    # taken. Copied onto every occurrence at mint time, like the title.
-    estimate_minutes: int | None = Field(default=None, ge=-1, le=1440)
+    # How long one run of this takes, copied onto every occurrence at mint time
+    # like the title.
+    #
+    # `ge=0` and NOT the -1 clear sentinel `EditHabit` takes, for the reason
+    # `CreateDayEntry.estimate_minutes` gives: there is nothing to clear on a row
+    # that does not exist yet, and omitting the field is already how a habit is
+    # created without an estimate. This said `ge=-1` and `create_habit` had no
+    # sentinel arm to match it — the only path that advertised the clear and did
+    # not implement it — so a -1 was stored VERBATIM and copied onto every
+    # occurrence the rule minted, making the day's planned total negative and
+    # counting the row as estimated. Refusing it at the edge is the fix; a
+    # service-side swallow would leave two spellings of "no estimate" in one
+    # column.
+    estimate_minutes: int | None = Field(default=None, ge=0, le=1440)
 
 
 class EditHabit(BaseModel):
