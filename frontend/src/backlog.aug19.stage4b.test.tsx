@@ -1195,6 +1195,10 @@ describe('aug19 leftovers — every dialog answers Escape at the window', () => 
       // dialog like the rest and answers the key at the window for the same
       // reason: there is no focus trap in any of them.
       'PlanRitual',
+      // The shutdown ritual, driven by TodayView.test.tsx's 'closes on an
+      // Escape dispatched at the window' in the shutdown describe block. Same
+      // shape and same reason as the planning one above.
+      'ShutdownRitual',
     ])
     const missing = users.filter((u) => !covered.has(u))
     expect(missing,
