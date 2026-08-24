@@ -1967,14 +1967,44 @@ describe('<TodayView> arranging the day', () => {
     entry({ entry_id: 'c', title: 'Charlie', position: 3 }),
   ])
 
-  /** Drag the row titled `from` onto the row titled `to`. */
+  /**
+   * Drag the row titled `from` onto the row titled `to`.
+   *
+   * ONE `dataTransfer` for the whole gesture, as a real drag has — and it has to
+   * be supplied at all because jsdom builds a DragEvent WITHOUT one, so
+   * `onDragStart`'s `e.dataTransfer.effectAllowed = 'move'` throws on undefined.
+   * This is the same stand-in every other drag suite in this repo passes
+   * (TasksView, both stage4 backlogs), and this helper was the one
+   * `fireEvent.dragStart` in the codebase that omitted it.
+   *
+   * The failure it caused is worth keeping written down, because nothing about
+   * it looked like a failure: the throw lands AFTER `onDragRow` has already run,
+   * so every assertion below still held and all 1057 tests still passed — while
+   * vitest exited 1 on five unhandled errors and the `effectAllowed` line was
+   * never once executed by any test. `TasksView.test.tsx` says the same thing
+   * over its own stub; this is the second time the lesson has been paid for.
+   */
   const dragOnto = (from: string, to: string) => {
     const row = (t: string) =>
       dayRows().find((r) => r.querySelector('.today-title')?.textContent === t)!
-    fireEvent.dragStart(row(from))
-    fireEvent.dragOver(row(to))
-    fireEvent.drop(row(to))
+    const dataTransfer = { setData: vi.fn(), getData: vi.fn(), effectAllowed: '' }
+    fireEvent.dragStart(row(from), { dataTransfer })
+    fireEvent.dragOver(row(to), { dataTransfer })
+    fireEvent.drop(row(to), { dataTransfer })
+    return dataTransfer
   }
+
+  it('tells the browser the gesture is a MOVE, not a copy', async () => {
+    // The one line of `onDragStart` that no test reached: it threw on an absent
+    // `dataTransfer` every time, and the throw was invisible because it came
+    // after the state had already been set. Without `effectAllowed` the browser
+    // paints a copy cursor over a gesture that moves a row.
+    m.openDay.mockResolvedValue(abc())
+    setup()
+    await screen.findByText('Alpha')
+
+    expect(dragOnto('Alpha', 'Bravo').effectAllowed).toBe('move')
+  })
 
   it('drops a row between its new neighbours with ONE write', async () => {
     // `day_plan.position` is a REAL and the server orders on it, so a move is a
