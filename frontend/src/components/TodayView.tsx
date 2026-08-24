@@ -167,6 +167,22 @@ const LOOKBACK_DAYS = 14
  *  stopped being live, which is the only thing worth interrupting the day for. */
 const STALE_DAYS = 21
 
+/** How many of a suggestion group's tasks are shown before the rest are put
+ *  behind one press.
+ *
+ *  There are FIVE groups, and every one of them rendered every task it matched.
+ *  On an account with a real backlog that is a wall — "Overdue" alone can be
+ *  fifty rows — and it sits directly beneath the day it is offering things to,
+ *  so the day itself scrolls off the top. A surface for planning one day should
+ *  not open onto a list of everything that is wrong.
+ *
+ *  Five is a judgement call in the same shape as the constants above it: enough
+ *  that a group reads as a list rather than a teaser, few enough that all five
+ *  groups plus the day fit on a screen. It bounds what is PAINTED and nothing
+ *  else — see the render, and the comment on `offered` below, which is why the
+ *  cap cannot be applied where the groups are built. */
+const SUGGEST_MAX = 5
+
 /**
  * A day entry's `source` → the arm a look-back files it under.
  *
@@ -691,6 +707,73 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
     if (!dto) setPlan((p) => (p && p.day === e.day ? { ...p, entries: [...p.entries, e] } : p))
   }, [day, guard, dropLocal])
 
+  // ── arranging the day ────────────────────────────────────────────────────
+  //
+  // The verb this file's header has always promised — "the day is something the
+  // owner arranges: adding to it, ticking it off, dropping what is not going to
+  // happen" — and the only one of the four that was never implemented. The
+  // column has been there since the first commit: `day_plan.position` is a REAL,
+  // the server orders on (position IS NULL, position, created_at, entry_id), it
+  // gives every snapshot row a position and every add `max + 1`, and
+  // `PATCH .../entries/{id}` has always taken one.
+  //
+  // Because those positions are FRACTIONAL, a drop is ONE write: the row being
+  // moved takes a value between its new neighbours and nothing else has to
+  // change. A whole-list renumber (which is what the Tasks pane does, for a
+  // different reason — its order is global across lists and lives in the
+  // sidecar) would be N writes for a gesture that moved one row.
+  const [dragId, setDragId] = useState<string | null>(null)
+  const [overId, setOverId] = useState<string | null>(null)
+
+  /**
+   * Move `id` to where `target` currently sits, and write the one position that
+   * changes.
+   *
+   * Both ends are looked up in `dayRows` — the array actually on screen, minus
+   * the row in flight — so "between its new neighbours" means between the rows
+   * the owner can see, not between whatever the unfiltered plan happens to
+   * hold. Habits are not in it (they paint above, in their own group) and
+   * dropped rows are not in it, which is what stops a drop landing a row into a
+   * gap that is invisible.
+   */
+  const moveRow = useCallback(async (id: string, target: string) => {
+    if (id === target) return
+    const rows = dayRows
+    const from = rows.findIndex((r) => r.entry_id === id)
+    const to = rows.findIndex((r) => r.entry_id === target)
+    if (from < 0 || to < 0) return
+    const without = rows.filter((r) => r.entry_id !== id)
+    // Dragging DOWN lands the row AFTER the target; dragging UP lands it
+    // BEFORE. That is what a drop on a row means in every other list in this
+    // app, and downward it is the only reading under which the gesture moves
+    // anything — inserting before the target would put the row back exactly
+    // where it started.
+    //
+    // Both directions come out at the SAME pair of neighbours in `without`,
+    // which is why there is no branch here. Removing the dragged row shifts
+    // every index after it down by one: dragging down, the target lands at
+    // `to - 1` and "after it" is index `to`; dragging up, the target is still
+    // at `to` and "before it" is also index `to`. So the new row goes at index
+    // `to` either way, between `without[to - 1]` and `without[to]`.
+    const before = without[to - 1]
+    const after = without[to]
+    const lo = before?.position ?? null
+    const hi = after?.position ?? null
+    // A fractional index. `lo == null` is the top of the list and `hi == null`
+    // the bottom; both null cannot happen, because a list with one row has
+    // nowhere to drop.
+    const next = lo == null ? (hi ?? 1) - 1
+      : hi == null ? lo + 1
+        : (lo + hi) / 2
+    const old = rows[from].position
+    token.current += 1
+    patchEntry(id, { position: next })
+    const dto = await guard(() => api.patchDayEntry(day, id, { position: next }))
+    // Back to the exact key it had, so a rejected move puts the row where it
+    // was rather than somewhere approximate.
+    patchEntry(id, dto ?? { position: old })
+  }, [dayRows, day, guard, patchEntry])
+
   /**
    * Put a task on `on`. Returns whether it landed.
    *
@@ -1041,7 +1124,14 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
    * there, which is the same call the Python makes.
    */
   const review = useMemo(() => {
-    if (isToday || !allEntries) return null
+    // `allEntries` and nothing else. This used to be `isToday || !allEntries`,
+    // and the `isToday` half was the only thing that made a day's own record
+    // unreadable until the day was over: everything the record is made of is
+    // already in hand for today (these are pure memos over `allEntries` and
+    // `tasks` — no call, no fetch, and above all no `openDay`), so withholding
+    // it meant the one question a daily surface should be able to answer at
+    // 9pm — how did today go? — could only be asked tomorrow.
+    if (!allEntries) return null
     const buckets: Record<string, DayEntry[]> = {
       chosen: [], carried: [], derived: [], habits: [], other: [], dropped: [],
     }
@@ -1078,7 +1168,6 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
    * there is a completion that still stands.
    */
   const offPlan = useMemo(() => {
-    if (isToday) return []
     // Ordered by WHEN, through the helper the app's other two completion lists
     // already share (HomeView's "recently completed" and the Tasks pane's
     // completed view). The clock is the only thing these rows carry besides a
@@ -1189,6 +1278,43 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
   // one is the morning you are looking at it.
   const [sheet, setSheet] = useState(false)
 
+  /**
+   * Which half of today is on screen: the plan you are working, or the record
+   * of how it has gone.
+   *
+   * Only ever consulted while `isToday`. A finished day has no plan half — it
+   * IS the record — so `reviewing` below folds the two cases together and every
+   * gate downstream reads that rather than testing the mode itself.
+   *
+   * NOT reset when the picker steps to a past day and back. Same call, and the
+   * same reason, as `sheet` above: the gate is about what a day may PAINT, and
+   * the owner never left the view they chose.
+   */
+  const [mode, setMode] = useState<'plan' | 'review'>('plan')
+  /** The screen is showing a record rather than a plan — because the day is
+   *  finished, or because the owner asked for today's. */
+  const reviewing = !isToday || mode === 'review'
+
+  /** Rows may be dragged into a new order.
+   *
+   *  A live day being PLANNED, and every row on it carrying a real position.
+   *  The second half is what makes the midpoint arithmetic total: the server
+   *  positions every row it writes, so the only unpositioned rows that ever
+   *  exist are optimistic ones between a click and its reply — and
+   *  `orderEntries` sorts those to the end, so a midpoint taken against one
+   *  would be measured against a neighbour that is about to move somewhere
+   *  else. It resolves itself in a round trip. */
+  const canArrange = isToday && !reviewing
+    && dayRows.length > 1 && dayRows.every((e) => e.position != null)
+
+  /** The suggestion groups the owner has asked to see in full, by group key.
+   *
+   *  Deliberately NOT reset when the day moves. Suggestions are gated on
+   *  `isToday` and paint on no other day, so there is no stale state to clear —
+   *  and a look-back and back would otherwise re-collapse a group the owner
+   *  opened a moment ago. */
+  const [expanded, setExpanded] = useState<string[]>([])
+
   /** One row of the day, whichever group it is painting in. Every list renders
    *  through this — today's two and the look-back's six — so a fix to a row
    *  cannot reach one group and miss the others. */
@@ -1201,7 +1327,35 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
       readOnly={!isToday}
       // `kind` as well as `habit_id`, so "undefined on every other kind" is a
       // fact rather than a consequence of the column being null on them today.
-      count={e.kind === 'habit' && e.habit_id ? habitWeek.get(e.habit_id) : undefined} />
+      count={e.kind === 'habit' && e.habit_id ? habitWeek.get(e.habit_id) : undefined}
+      // ARRANGING. Three conditions, and each rules out a case where the
+      // gesture would be a lie:
+      //
+      //  * `canArrange` — the day is live and being planned, and every row on
+      //    it has a real position. An optimistically added row has none until
+      //    the server answers, and `orderEntries` sorts an unpositioned row to
+      //    the END, so a midpoint taken while one is in flight would be
+      //    computed against a neighbour that is about to move. Off for that
+      //    instant is the honest answer, and it is an instant.
+      //  * not a HABIT. An occurrence's position is minted fresh by its rule
+      //    every morning (`service._habit_entries_for`), so an order dragged
+      //    into today's spine is gone tomorrow. Habits also paint in their own
+      //    group above the day, so the arrangement would not even be visible
+      //    where it was made. A gesture whose effect silently expires is worse
+      //    than no gesture.
+      //  * not DROPPED — those only ever paint in a look-back, which is
+      //    read-only anyway, but the flag says so at the row rather than
+      //    relying on that.
+      draggable={canArrange && e.kind !== 'habit' && !e.dropped_at}
+      dragging={dragId === e.entry_id}
+      dragOver={overId === e.entry_id && dragId !== null && dragId !== e.entry_id}
+      onDragRow={setDragId}
+      onDragOverRow={setOverId}
+      onDropRow={(target) => {
+        if (dragId) void moveRow(dragId, target)
+        setDragId(null); setOverId(null)
+      }}
+      onDragEndRow={() => { setDragId(null); setOverId(null) }} />
   )
 
   return (
@@ -1243,11 +1397,40 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
                 past day's task rows off `completed_at`, so a task ticked this
                 morning cannot add itself to last Tuesday's tally. Both halves
                 are over the LIVE rows, so dropped entries are in neither — they
-                have their own heading below. */}
-            {isToday
+                have their own heading below.
+
+                Keyed on `reviewing` rather than on `isToday`, so today counts
+                itself the same way when it is being read as a record. Note what
+                that does and does not change: only the WORDING moves. The
+                arithmetic still goes through `rowDone(…, isToday)` — the LIVE
+                flag on a live day — because a task ticked a moment ago has to be
+                counted on the click, and its COMPLETED stamp is not in hand
+                until the write comes back. The words describe the mode; the
+                number describes the day. */}
+            {!reviewing
               ? `${openCount} open · ${entries.length} on the day`
               : `${entries.length - openCount} done · ${entries.length} on the day`}
           </span>
+        )}
+        {/* THE WAY IN TO A REVIEW OF TODAY, and the whole of it: this is a
+            render-level switch over data already in hand, so pressing it issues
+            no request of any kind. `mode` is deliberately absent from the read
+            effect's dependency list and cannot go in it — there is nothing to
+            re-read. That matters more than it looks: `api.openDay` is the only
+            call that can CREATE a plan, and the one rule this file is built
+            around is that it is called for today and nothing else. A review
+            reached by any other route — a hidden day, a prefetch — would have
+            had to touch it.
+
+            Absent on a finished day rather than disabled, like every other
+            control here: a past day IS the record, so a button offering to show
+            one would be offering what is already on the screen. */}
+        {isToday && (
+          <button type="button" className="btn ghost today-review"
+            aria-pressed={mode === 'review'}
+            onClick={() => setMode((m) => (m === 'plan' ? 'review' : 'plan'))}>
+            {mode === 'review' ? 'Plan' : 'Review'}
+          </button>
         )}
         {/* The sheet edits RULES, and its whole feedback loop is that the
             change shows up on the day behind it — creating a habit puts an
@@ -1306,7 +1489,17 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
       {/* The one box that writes to the day, and it is absent on a past one
           rather than disabled. A greyed-out field invites the question "why
           can't I?"; nothing at all, under a heading that reads "Look back",
-          says what the surface is. */}
+          says what the surface is.
+
+          Gated on `isToday` and NOT on `reviewing`, which is the one place
+          those two deliberately part company. Reviewing today is not the same
+          act as reading a finished day: today is still running, its rows are
+          still tickable and droppable, and "note down the thing I actually did"
+          is the commonest reason to be looking at this screen in the evening.
+          Hiding the only writer while leaving every other control in place
+          would be inconsistent in the one direction that costs something. The
+          SUGGESTIONS do go — they are the surface offering more work, which is
+          the thing a review is not for. */}
       {isToday && (
         <form className="quickadd today-add"
           onSubmit={(e) => { e.preventDefault(); void commit() }}>
@@ -1407,7 +1600,13 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
       )}
 
       <div className="scroll">
-        {isToday ? (
+        {/* `reviewing`, not `!isToday`. A finished day has always taken the
+            second arm; today now takes it too when the owner asks. `LookBack`
+            is handed exactly what it was before and is reused verbatim — it is
+            purely presentational and owns no state — so the two screens cannot
+            drift into describing one day two different ways, which is the thing
+            `REVIEW_ARM` exists to prevent. */}
+        {!reviewing ? (
           <>
             {/* Habits first, above the day rather than mixed through it. The
                 group is skipped entirely when there are none: a heading over
@@ -1485,14 +1684,28 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
           </>
         ) : (
           <LookBack review={review} offPlan={offPlan} renderRow={renderRow}
-            colorOf={colorOf} />
+            colorOf={colorOf} live={isToday} />
         )}
 
-        {suggestions.map((g) => (
+        {/* Not while reviewing. The `suggestions` memo keeps its own `isToday`
+            gate — it means "what could be added to THIS day", which is still
+            the right meaning — and this is the second, different question:
+            a review is a place to see how the day went, not to be handed more
+            work. The add box stays, though; see the form above. */}
+        {!reviewing && suggestions.map((g) => {
+          // CAPPED HERE, at the render, and never where the groups are built.
+          // `group()` walks every item it matched into the `offered` set, which
+          // is what keeps the five groups disjoint — a task due at 09:00 today
+          // is also overdue from 09:01, and one task offered twice is two "add"
+          // buttons for one row. Capping upstream would leave the sixth
+          // due-today task un-offered, so it would reappear under "Overdue" as
+          // a second chance to add the same thing.
+          const shown = expanded.includes(g.key) ? g.items : g.items.slice(0, SUGGEST_MAX)
+          return (
           <section key={g.key}>
             <div className="label section-label">{g.label}</div>
             <ul className="today-list">
-              {g.items.map((t) => (
+              {shown.map((t) => (
                 <li key={taskKey(t)} className="today-row today-sug">
                   <button type="button" className="today-plus"
                     aria-label={`Add ${t.summary || '(untitled)'} to today`}
@@ -1513,8 +1726,21 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
                 </li>
               ))}
             </ul>
+            {/* The count is IN the label, so a capped group never hides how much
+                it is hiding — "Show all" alone would leave the owner pressing it
+                to find out whether it was worth pressing. One way only: there is
+                no collapse, because having asked to see the group you are
+                reading it, and a control that takes the list back is a control
+                whose only use is undoing a click you meant. */}
+            {g.items.length > shown.length && (
+              <button type="button" className="today-more"
+                onClick={() => setExpanded((s) => [...s, g.key])}>
+                Show all {g.items.length}
+              </button>
+            )}
           </section>
-        ))}
+          )
+        })}
       </div>
     </div>
   )
@@ -1529,7 +1755,7 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
  * arrives with `readOnly` already set by its caller, and nothing else in this
  * subtree is a control. See the header for why that matters.
  */
-function LookBack({ review, offPlan, renderRow, colorOf }: {
+function LookBack({ review, offPlan, renderRow, colorOf, live = false }: {
   /** The day's live rows grouped by origin, plus the dropped ones, in reading
    *  order — or `null` while the read is still in flight. */
   review: Array<{ key: string; label: string; rows: DayEntry[] }> | null
@@ -1537,6 +1763,12 @@ function LookBack({ review, offPlan, renderRow, colorOf }: {
   offPlan: Task[]
   renderRow: (e: DayEntry) => ReactNode
   colorOf: (listId: string | null) => string | null
+  /** The day being read is TODAY, reviewed while it is still running. It
+   *  changes one thing — the tense of the empty state — and deliberately
+   *  nothing else: the buckets, the headings and the rows are the same record
+   *  read the same way, which is the point of reusing this component rather
+   *  than writing a second one that could describe a day differently. */
+  live?: boolean
 }) {
   const tf = useTimeFormat()
   // Nothing at all until the read lands — the same discipline the day's own
@@ -1583,7 +1815,14 @@ function LookBack({ review, offPlan, renderRow, colorOf }: {
         </section>
       )}
       {review.length === 0 && offPlan.length === 0 && (
-        <p className="empty">Nothing was planned on this day, and nothing was finished on it.</p>
+        <p className="empty">
+          {live
+            // Today, and still running: "was planned" would file the day as
+            // over when there are hours of it left, and the add box is sitting
+            // directly above this line ready to take the first thing.
+            ? 'Nothing on today yet, and nothing finished so far.'
+            : 'Nothing was planned on this day, and nothing was finished on it.'}
+        </p>
       )}
     </>
   )
@@ -1624,6 +1863,8 @@ function CalendarStrip({ events, day, loaded, styleOf }: {
 
 function TodayRow({
   entry, task, tasksLoaded, color, count, readOnly, onToggleTask, onToggleEntry, onDrop,
+  draggable = false, dragging = false, dragOver = false,
+  onDragRow, onDragOverRow, onDropRow, onDragEndRow,
 }: {
   entry: DayEntry
   /** The task a task entry points at, once it is in hand. */
@@ -1644,6 +1885,17 @@ function TodayRow({
   onToggleTask: (t: Task) => Promise<void>
   onToggleEntry: (e: DayEntry) => Promise<void>
   onDrop: (e: DayEntry) => Promise<void>
+  /** This row may be picked up and moved. Decided by the caller — see the
+   *  three conditions there; the row only wears the result. */
+  draggable?: boolean
+  /** This row is the one being carried. */
+  dragging?: boolean
+  /** Something else is being carried and is currently over this row. */
+  dragOver?: boolean
+  onDragRow?: (entryId: string) => void
+  onDragOverRow?: (entryId: string) => void
+  onDropRow?: (entryId: string) => void
+  onDragEndRow?: () => void
 }) {
   const tf = useTimeFormat()
   const isTask = entry.kind === 'task'
@@ -1681,7 +1933,8 @@ function TodayRow({
   // Assembled rather than interpolated: with four optional markers the template
   // runs past the line and reads as punctuation.
   const cls = ['today-row', isHabit && 'today-habit', dropped && 'today-dropped',
-    done && 'done', gone && 'gone'].filter(Boolean).join(' ')
+    done && 'done', gone && 'gone', draggable && 'today-draggable',
+    dragging && 'today-dragging', dragOver && 'drag-over'].filter(Boolean).join(' ')
 
   // The leftmost cell, in three states rather than two. Lifted out of the JSX
   // because a three-armed conditional inside it cannot be commented arm by arm,
@@ -1723,7 +1976,31 @@ function TodayRow({
       )
 
   return (
-    <li className={cls}>
+    <li className={cls}
+      // Native HTML5 drag and drop, the same shape the sidebar, the tasks pane,
+      // the dashboard and the calendar all use. Deliberately not a library and
+      // not a bespoke pointer handler: this repo has no animation or gesture
+      // dependency at all, and one invented here would be a fifth answer to a
+      // question the other four already agree on.
+      //
+      // Pointer-only, which every one of those four also is. It is a real gap —
+      // a phone cannot arrange its day — and it is the app's gap rather than
+      // this screen's, so it is recorded here and in the header rather than
+      // papered over with a gesture that behaves differently from the rest.
+      draggable={draggable || undefined}
+      onDragStart={draggable
+        ? (e) => { onDragRow?.(entry.entry_id); e.dataTransfer.effectAllowed = 'move' }
+        : undefined}
+      // `preventDefault` is what makes this a drop target at all — without it
+      // the browser refuses the drop and the gesture silently does nothing.
+      onDragOver={draggable
+        ? (e) => { e.preventDefault(); onDragOverRow?.(entry.entry_id) }
+        : undefined}
+      onDrop={draggable
+        ? (e) => { e.preventDefault(); onDropRow?.(entry.entry_id) }
+        : undefined}
+      // A drag abandoned outside any row still has to put the highlight back.
+      onDragEnd={draggable ? () => onDragEndRow?.() : undefined}>
       {check}
       {/* ONE element, always rendered, whatever the kind — which is the fix as
           much as the marks themselves are. It used to be two conditionals, a
