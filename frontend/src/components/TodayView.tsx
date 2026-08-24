@@ -192,7 +192,7 @@ import {
 import { useCalendarData, useTaskData } from '../data'
 import { useEscape } from '../hooks'
 import { addDays, cssColor, dayKey, isOverdue, makeGuard, textDir, ymd } from '../util'
-import { fmtClock, fmtDue } from '../time'
+import { fmtClock, fmtDue, fmtDuration } from '../time'
 import { useTimeFormat } from '../timeformat'
 import { sortByCompletion, sortTasks, taskKey } from '../order'
 import { bucketByDay, eventKey, monthGrid, type DayEv } from '../calendar'
@@ -780,6 +780,26 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
     // Put the old stamp back on failure rather than leaving the UI claiming a
     // tick that never landed — `guard` has already raised the toast.
     patchEntry(e.entry_id, dto ?? { done_at: e.done_at })
+  }, [day, guard, patchEntry])
+
+  /**
+   * Set or clear how long an entry is expected to take. Every kind takes one:
+   * a task, a note and a habit occurrence are all things that cost time.
+   *
+   * `null` clears, and the wire spells that -1 — an int has no spare falsy value
+   * to mean "unset", because 0 is a real estimate. The translation happens here,
+   * at the one call site, rather than leaking the sentinel into the component
+   * that collects the number.
+   */
+  const setEstimate = useCallback(async (e: DayEntry, minutes: number | null) => {
+    token.current += 1
+    patchEntry(e.entry_id, { estimate_minutes: minutes })
+    const dto = await guard(() => api.patchDayEntry(day, e.entry_id, {
+      estimate_minutes: minutes ?? -1,
+    }))
+    // Back to the old value on failure rather than leaving a number on screen
+    // that the day does not hold — `guard` has already raised the toast.
+    patchEntry(e.entry_id, dto ?? { estimate_minutes: e.estimate_minutes })
   }, [day, guard, patchEntry])
 
   /** Take a row off the day. Every row can be dropped, task or note alike. */
@@ -1417,7 +1437,7 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
   const renderRow = (e: DayEntry) => (
     <TodayRow key={e.entry_id} entry={e} task={taskFor(e)} tasksLoaded={loaded}
       color={colorOf(e.list)} onToggleTask={toggle} onToggleEntry={toggleEntry}
-      onDrop={drop}
+      onDrop={drop} onEstimate={setEstimate}
       // A past day hands out no controls at all: see the header. The flag says
       // "this row is a record", and the row itself decides what that costs it.
       //
@@ -1987,8 +2007,96 @@ function CalendarStrip({ events, day, loaded, styleOf }: {
   )
 }
 
+/** The most minutes an estimate may be, matching the edge model's ceiling.
+ *
+ *  A day, because a plan is a plan for ONE — above that it is a typo rather
+ *  than an intention. Restated here rather than imported because the two are
+ *  guarding different things: the server's bound is what stops a bad request
+ *  reaching SQLite as an unmapped OverflowError, and this one is what stops the
+ *  owner watching a number they typed come back rejected. */
+const MAX_ESTIMATE = 1440
+
+/**
+ * One row's estimate: a quiet reading that becomes an input when pressed.
+ *
+ * A button rather than a permanently-open field, and that is the whole design
+ * question here. Every row on the day would carry one, so a field on each is a
+ * column of boxes down a list that is meant to be glanceable — the estimate is
+ * something you set during the ritual and read for the rest of the day. Reading
+ * is the common case, so reading is what it costs nothing.
+ *
+ * Commits on blur AND on Enter, reverts on Escape. That is `HabitEditRow`'s
+ * rename, deliberately: the two are the same interaction and a second set of
+ * keys for it would be a second thing to learn.
+ */
+function EstimateCell({ minutes, readOnly, label, onChange }: {
+  minutes: number | null
+  /** The day has finished, so this is a record and not a control. */
+  readOnly?: boolean
+  /** What this estimates, for the control's accessible name. */
+  label: string
+  /** Minutes, or null to clear. */
+  onChange: (next: number | null) => void
+}) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState('')
+
+  // A finished day shows what was estimated and offers no way to change it —
+  // the same line every other control on this row draws. Nothing at all when
+  // nothing was estimated: a dim "add one" on a day that has already happened
+  // is an invitation to rewrite the record.
+  if (readOnly) {
+    return minutes == null ? null : (
+      <span className="today-est mono">{fmtDuration(minutes)}</span>
+    )
+  }
+
+  if (!editing) {
+    return (
+      <button type="button" className={`today-est mono ${minutes == null ? 'unset' : ''}`}
+        aria-label={minutes == null
+          ? `Estimate ${label}`
+          : `${label} is estimated at ${fmtDuration(minutes)} — change it`}
+        onClick={() => { setDraft(minutes == null ? '' : String(minutes)); setEditing(true) }}>
+        {minutes == null ? 'est' : fmtDuration(minutes)}
+      </button>
+    )
+  }
+
+  const commit = () => {
+    setEditing(false)
+    const raw = draft.trim()
+    // An emptied field CLEARS, which is the only way back to "nobody said" and
+    // is why the wire needed a sentinel for it at all.
+    if (!raw) { if (minutes != null) onChange(null); return }
+    const n = Number(raw)
+    // Bounded here as well as at the edge, and the same way `SchedulingView`
+    // bounds its durations: `min`/`max` on a number input do not stop a typed
+    // value, so the attributes are for the spinner and this is the rule.
+    if (!Number.isFinite(n)) return
+    const next = Math.max(0, Math.min(MAX_ESTIMATE, Math.round(n)))
+    if (next !== minutes) onChange(next)
+  }
+
+  return (
+    <input className="input today-est-input" type="number" autoFocus
+      min={0} max={MAX_ESTIMATE} step={5} value={draft}
+      aria-label={`Minutes for ${label}`}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') { e.preventDefault(); commit() }
+        // Escape abandons the edit. It does NOT close anything above this —
+        // `useEscape` is bound to the window and would take the habits sheet
+        // with it, so the propagation stop is load-bearing rather than tidy.
+        if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setEditing(false) }
+      }} />
+  )
+}
+
 function TodayRow({
   entry, task, tasksLoaded, color, count, readOnly, onToggleTask, onToggleEntry, onDrop,
+  onEstimate,
   draggable = false, dragging = false, dragOver = false,
   onDragRow, onDragOverRow, onDropRow, onDragEndRow,
 }: {
@@ -2011,6 +2119,8 @@ function TodayRow({
   onToggleTask: (t: Task) => Promise<void>
   onToggleEntry: (e: DayEntry) => Promise<void>
   onDrop: (e: DayEntry) => Promise<void>
+  /** Set or clear how long this is expected to take. Null clears. */
+  onEstimate: (e: DayEntry, minutes: number | null) => Promise<void>
   /** This row may be picked up and moved. Decided by the caller — see the
    *  three conditions there; the row only wears the result. */
   draggable?: boolean
@@ -2194,9 +2304,21 @@ function TodayRow({
           {count.done} of {count.total} {readOnly ? 'that week so far' : 'this week'}
         </span>
       )}
-      {task?.due && (
-        <span className="today-due mono">{fmtDue(task.due, task.due_is_date, tf)}</span>
-      )}
+      {/* Before the due date, because they answer different questions and the
+          nearer one to the title is the one the ritual is about: how long this
+          will take, versus when it is wanted by. */}
+      <EstimateCell minutes={entry.estimate_minutes} readOnly={readOnly}
+        label={title || 'this entry'}
+        onChange={(next) => void onEstimate(entry, next)} />
+      {/* ALWAYS rendered, empty when the row has no due date — the same lesson
+          as the kind column on the left. A cell that appears only sometimes
+          makes every cell BEFORE it move: with this conditional, an estimate on
+          a row with a due date sat fifty pixels left of one without, so the
+          column a person scans during the ritual zigzagged down the list. The
+          empty span costs a fixed strip of space and buys one right edge. */}
+      <span className="today-due mono">
+        {task?.due ? fmtDue(task.due, task.due_is_date, tf) : ''}
+      </span>
       {/* Absent, not disabled, on a finished day. Dropping is the one write the
           backend DOES still allow on a past day — `update_day_entry` permits it
           because saying "this did not happen" subtracts from the record rather
