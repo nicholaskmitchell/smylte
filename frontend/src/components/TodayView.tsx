@@ -5,7 +5,8 @@
 // This one renders a SNAPSHOT. The backend freezes what a day held the first
 // time it was opened (`day_plan`), and from then on the day is something the
 // owner arranges: adding to it, ticking it off, dropping what is not going to
-// happen. That is why the rows here come from `/api/day` and not from `tasks`.
+// happen, and putting it in the order it will actually be worked. That is why
+// the rows here come from `/api/day` and not from `tasks`.
 //
 // Two truths meet on this screen and only one of them lives in the day plan:
 //
@@ -19,6 +20,51 @@
 //   * whether a NOTE is done is the entry's own `done_at`, because a note
 //     exists nowhere but in the day. That one is a PATCH. A HABIT OCCURRENCE is
 //     on this side of the fence too, for exactly the same reason — see below.
+//
+// ── the add box, and saying which of those two you are making ──────────────
+//
+// One input, and a line of prose in it: planning a day has to be cheap or it
+// does not get done, which is why there is no title field plus two pickers.
+// `daytext.parseEntry` reads the line, and a reading plus somewhere to put it
+// authors a REAL TASK (a thing with a due date belongs on a list the whole
+// account can see, and the day entry then points at it); anything else authors
+// a NOTE, which lives only in the day.
+//
+// That rule is unchanged and it is a good rule. What was wrong for a long time
+// is that NOTHING ON THE SCREEN SAID WHICH WAY IT HAD GONE. The preview chip
+// appeared only when a date was recognised, and even then it reported the
+// READING rather than the consequence — so the case it never covered was the
+// one that needed covering most: a plain line quietly becoming a thing that
+// exists nowhere but in this day and reaches no other client on the account.
+// Two very different outcomes, chosen by a parser, announced by neither.
+//
+// So `willBe` is the one expression that answers "what will Enter do", and the
+// line under the box states it in the same three words the rows use for the
+// same three things (KIND_LABEL) — plus where the thing will end up, which is
+// the half that actually differs. The override is two-way, so "make this a
+// task" is as sayable as "make this a note", and it does NOT reset on a
+// keystroke: the boolean it replaced did, correctly, because it declined a
+// PARSE and one more character can withdraw a parse, but a choice of kind is
+// about intent and survives typing the rest of the line.
+//
+// THE FAST PATH IS UNTOUCHED: type, press Enter. The picker appears only when a
+// task is being made and there is more than one list to choose, and it appears
+// BESIDE a line already typed — it is never a field to fill in first.
+//
+// It is also where the target list stopped being a guess. `GET /api/lists`
+// answers CALENDARS alongside task lists and flags which is which, and nothing
+// in this app read that flag outside a test fixture — so `lists[0]` meant
+// "whatever sits first in the sidebar", and on an account whose first
+// collection is a calendar every dated line authored its VTODO into it.
+//
+// One asymmetry worth keeping straight: a task's title is the parser's, because
+// the recognised phrase has been lifted out of it and into the due date; a
+// note's is the LITERAL line, always. The parser deletes what it reads, and a
+// note that quietly lost its "at 7" is the silent loss `daytext.ts`'s own header
+// is written to avoid. And a task pinned onto a line with no date in it gets NO
+// due: `dueFromParse` would fall back to the day being planned, stamping a
+// deadline onto a VTODO every other client then shows as due, off the back of
+// the owner asking only for it to be a task.
 //
 // ── habits ─────────────────────────────────────────────────────────────────
 //
@@ -74,12 +120,12 @@
 // `open_day(create=False)` and writes nothing at all.
 //
 // A PAST DAY IS THEREFORE READ-ONLY END TO END: no add box, no suggestions, no
-// checkbox, no drop control, no habits sheet. That is the same line
-// `mcp/api.py::update_day_entry` draws for the connector, which refuses `done`
-// on a past day because "a tick is a record that something was done AT THE
-// TIME" — a habit occurrence's stamp is the only record of it anywhere, and a
-// log that can be filled in afterwards is a scorecard. The browser must not be
-// the hole in a rule the model is held to.
+// checkbox, no drop control, no habits sheet, no arranging. That is the same
+// line `mcp/api.py::update_day_entry` draws for the connector, which refuses
+// `done` on a past day because "a tick is a record that something was done AT
+// THE TIME" — a habit occurrence's stamp is the only record of it anywhere, and
+// a log that can be filled in afterwards is a scorecard. The browser must not
+// be the hole in a rule the model is held to.
 //
 // What a past day shows instead is the RECORD: the day split by where each row
 // came from (`source`), the rows that were dropped, and what was finished that
@@ -87,6 +133,46 @@
 // `smylte_review_day` answers, and it is bucketed the same way on purpose —
 // two surfaces disagreeing about one day is worse than either being slightly
 // wrong. See REVIEW_ARM.
+//
+// THE RECORD IS NOT ONLY A PAST DAY'S. `mode` shows the same thing for TODAY,
+// and the whole of that feature is a render-level switch: `review` and `offPlan`
+// are pure memos over `allEntries` and `tasks`, both already in hand, so
+// pressing Review issues no request whatsoever. `mode` is deliberately absent
+// from the read effect's dependency list — there is nothing for it to be in it
+// for, and a review that re-read the day would be a second caller of the one
+// call that can create a plan. `LookBack` is reused verbatim rather than
+// reimplemented, for the same reason the buckets match the Python's arm for arm.
+//
+// The two cases stay honestly different, and READ-ONLY-NESS IS KEYED ON
+// `isToday`, NEVER ON `mode`. Today reviewed is today: its rows still tick, its
+// add box stays (noting down what actually happened is the commonest reason to
+// be here at 9pm), and only the suggestions go, because a review is not a place
+// to be handed more work. A finished day hands out nothing whichever mode today
+// was left in.
+//
+// ── arranging ──────────────────────────────────────────────────────────────
+//
+// The fourth verb, and for a long time the only one of the four this file
+// promised and did not deliver. `day_plan.position` is a REAL, the server orders
+// on (position IS NULL, position, created_at, entry_id), and it positions every
+// row it writes — so a drop is ONE write: the moved row takes a midpoint between
+// its new neighbours and nothing else changes. That is the whole reason not to
+// copy the Tasks pane's whole-list renumber, which exists because ITS order is
+// global across lists and lives in the sidecar.
+//
+// Both drag directions land between the same pair, `without[to - 1]` and
+// `without[to]`, because removing the dragged row shifts every later index down
+// by one. Habits are excluded: an occurrence's position is minted fresh by its
+// rule each morning, so an order dragged into the spine would be gone tomorrow,
+// and a gesture whose effect silently expires is worse than none. So is any day
+// holding a row with no position yet — an optimistic add, which `orderEntries`
+// sorts to the end, and which a midpoint would therefore be measured against
+// wrongly for the length of one round trip.
+//
+// Pointer-only, as every other drag in this app is (sidebar, tasks, dashboard,
+// calendar). A phone cannot arrange its day, and that gap is the app's rather
+// than this screen's — written down here rather than closed with a bespoke
+// touch gesture that would behave differently from the other four.
 //
 // One consequence of the fence above falls out here and is worth stating, since
 // the record depends on it: a day entry keeps no done flag for a TASK, so on a
