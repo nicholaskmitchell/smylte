@@ -200,6 +200,7 @@ import { sortByCompletion, sortTasks, taskKey } from '../order'
 import { bucketByDay, eventKey, monthGrid, type DayEv } from '../calendar'
 import { parseEntry, type ParsedEntry } from '../daytext'
 import { AgendaEvent } from './DayPopover'
+import { PlanRitual } from './PlanRitual'
 
 /** How far past the computed midnight the rollover timer aims.
  *
@@ -810,6 +811,29 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
     // that the day does not hold — `guard` has already raised the toast.
     patchEntry(e.entry_id, dto ?? { estimate_minutes: e.estimate_minutes })
   }, [day, guard, patchEntry])
+
+  /** Say how long today is. `null` clears, spelled -1 on the wire — the same
+   *  sentinel an estimate uses, and needed for the same reason: 0 is a real
+   *  capacity ("not working today"). */
+  const setCapacity = useCallback(async (minutes: number | null) => {
+    token.current += 1
+    setPlan((p) => (p && p.day === day
+      ? { ...p, capacity_minutes: minutes, capacity: minutes }
+      : p))
+    const dto = await guard(
+      () => api.patchDay(day, { capacity_minutes: minutes ?? -1 }))
+    if (dto) setPlan((p) => (p && p.day === dto.day ? dto : p))
+  }, [day, guard])
+
+  /** Mark the day begun. The ritual's last act, and the moment the
+   *  overcommitment is stated — it records a decision rather than enforcing
+   *  one, so nothing about the day changes except that it now knows it started. */
+  const commitDay = useCallback(async () => {
+    token.current += 1
+    const dto = await guard(() => api.patchDay(day, { committed: true }))
+    if (dto) setPlan((p) => (p && p.day === dto.day ? dto : p))
+    setRitual(false)
+  }, [day, guard])
 
   /** Take a row off the day. Every row can be dropped, task or note alike. */
   const drop = useCallback(async (e: DayEntry) => {
@@ -1458,6 +1482,14 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
    * the owner never left the view they chose.
    */
   const [mode, setMode] = useState<'plan' | 'review'>('plan')
+  /** The planning ritual is open. */
+  const [ritual, setRitual] = useState(false)
+  /** The band was waved away for this session. Not persisted, and deliberately:
+   *  it is a nudge about TODAY, and a dismissal that outlived the day would
+   *  silently turn the feature off for good on the first impatient morning.
+   *  Keyed by day so stepping the picker and coming back does not resurrect it
+   *  on a day already waved away. */
+  const [bandOff, setBandOff] = useState<string | null>(null)
   /** The screen is showing a record rather than a plan — because the day is
    *  finished, or because the owner asked for today's. */
   const reviewing = !isToday || mode === 'review'
@@ -1788,6 +1820,40 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
             </div>
           )}
         </form>
+      )}
+
+      {/* THE NUDGE, and the whole of the prompting. A band rather than a wizard
+          that opens itself: this tab is also the place you glance at to see
+          what is next, and a flow standing in front of that on every first
+          visit would be the thing people turn off in week two.
+          Only on today, only before the day has been started, and gone for the
+          session once waved away. */}
+      {isToday && mode === 'plan' && plan?.day === day && !plan.committed_at
+        && bandOff !== day && (
+        <div className="today-band">
+          <span className="today-band-text">
+            {capacity == null
+              ? 'Plan your day — say how long it is, then what goes on it.'
+              : `Plan your day — ${fmtDuration(capacity)} to work with.`}
+          </span>
+          <button type="button" className="btn" onClick={() => setRitual(true)}>
+            Plan my day
+          </button>
+          <button type="button" className="icon-btn today-band-x"
+            aria-label="Not now" onClick={() => setBandOff(day)}>✕</button>
+        </div>
+      )}
+
+      {isToday && ritual && entries !== null && (
+        <PlanRitual
+          entries={entries} suggestions={suggestions}
+          capacity={capacity} planned={planned} meetingMinutes={meetingMinutes}
+          unestimated={unestimated} committedAt={plan?.committed_at ?? null}
+          renderRow={renderRow} colorOf={colorOf}
+          onCapacity={(m) => void setCapacity(m)}
+          onAddTask={(t) => void addTask(day, t)}
+          onCommit={() => void commitDay()}
+          onClose={() => setRitual(false)} />
       )}
 
       {/* HOW FULL THE DAY IS. Present whenever the day has a capacity to be read

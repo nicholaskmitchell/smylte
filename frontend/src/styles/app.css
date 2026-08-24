@@ -1292,6 +1292,61 @@
    input, and at full button size it competes with Add for the eye. */
 .today-swap { font-size: calc(11px * var(--fs-scale)); padding: 3px 8px; }
 
+/* ---- the nudge ---------------------------------------------------------
+   A band, not a dialog that opens itself. This tab is also the place you glance
+   at to see what is next, and a flow standing in front of that every morning is
+   the thing people turn off. It recedes into the page rather than sitting on
+   top of it: --bg-elev and a hairline, no shadow, no accent fill. */
+.today-band {
+  display: flex; align-items: center; gap: 10px;
+  margin: 0 var(--gutter) 6px;
+  padding: 9px 12px;
+  background: var(--bg-elev); border: 1px solid var(--rule-faint);
+  border-radius: var(--radius);
+}
+.today-band-text {
+  flex: 1; min-width: 0;
+  font-size: calc(13px * var(--fs-scale)); color: var(--fg-muted);
+}
+.today-band .btn, .today-band .icon-btn { flex: none; }
+.today-band-x { color: var(--fg-faint); }
+
+/* ---- the planning ritual -----------------------------------------------
+   `.modal` supplies the frame, the elevation and the corner radius, and under
+   720px turns it into a bottom sheet with no JS branch. Everything here is only
+   what a stepped flow needs on top. */
+.plan-ritual { gap: 12px; width: min(560px, 100%); }
+.plan-step {
+  font-size: calc(11px * var(--fs-scale)); color: var(--fg-faint);
+  margin-left: auto; padding-right: 8px;
+}
+.plan-body { display: flex; flex-direction: column; gap: 8px; }
+/* The steps that hold a list scroll INSIDE the dialog, so the actions row stays
+   reachable however long the list is — a flow whose only way out has scrolled
+   off the bottom is the wizard this is not. */
+.plan-scroll { max-height: 46vh; overflow-y: auto; }
+.plan-label {
+  font-size: calc(14px * var(--fs-scale)); color: var(--fg);
+}
+.plan-hint {
+  margin: 0; font-size: calc(12px * var(--fs-scale)); color: var(--fg-muted);
+  line-height: 1.4;
+}
+.plan-hint.warn { color: var(--warn); }
+.plan-total {
+  margin: 0; font-size: calc(11px * var(--fs-scale)); color: var(--fg-muted);
+}
+/* --warn here for the reason the day's own strip uses it: this is a forecast
+   about a day that has not happened, from a number the owner chose, which they
+   can change in the next ten seconds. It is never the only carrier — the words
+   below say it too. */
+.plan-total.over { color: var(--warn); }
+.plan-warn {
+  margin: 0; font-size: calc(12px * var(--fs-scale)); color: var(--warn);
+  line-height: 1.4;
+}
+.plan-actions { display: flex; align-items: center; gap: 8px; }
+
 /* ---- how full the day is -----------------------------------------------
    Present only on a day that HAS a capacity. There is no empty state here on
    purpose: an account that has never stated one gets no strip at all, because

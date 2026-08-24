@@ -1127,6 +1127,131 @@ describe('<TodayView> the add box', () => {
   })
 })
 
+// ── the planning ritual ─────────────────────────────────────────────────────
+
+describe('<TodayView> the planning ritual', () => {
+  const unplanned = (entries: DayEntry[] = [], capacity: number | null = 300) =>
+    plan(entries, today(), { capacity, capacity_minutes: capacity, committed_at: null })
+
+  it('nudges with a band rather than opening itself', async () => {
+    // The whole of the prompting. This tab is also the place you glance at to
+    // see what is next, and a flow standing in front of that on every first
+    // visit is the thing people turn off in week two.
+    m.openDay.mockResolvedValue(unplanned([entry({ title: 'Water the plants' })]))
+    setup()
+    await screen.findByText('Water the plants')
+
+    expect(screen.queryByRole('dialog', { name: 'Plan your day' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Plan my day' })).toBeInTheDocument()
+  })
+
+  it('stops nudging once the day has been started', async () => {
+    m.openDay.mockResolvedValue(plan([entry({ title: 'Water the plants' })], today(), {
+      capacity: 300, capacity_minutes: 300, committed_at: `${today()}T08:00:00.000Z`,
+    }))
+    setup()
+    await screen.findByText('Water the plants')
+    expect(screen.queryByRole('button', { name: 'Plan my day' })).not.toBeInTheDocument()
+  })
+
+  it('can be waved away without turning the feature off for good', async () => {
+    // Not persisted, and deliberately: it is a nudge about TODAY, and a
+    // dismissal that outlived the day would silently disable the ritual on the
+    // first impatient morning.
+    m.openDay.mockResolvedValue(unplanned([entry({ title: 'Water the plants' })]))
+    const user = setup()
+    await screen.findByText('Water the plants')
+    await user.click(screen.getByRole('button', { name: 'Not now' }))
+    expect(screen.queryByRole('button', { name: 'Plan my day' })).not.toBeInTheDocument()
+  })
+
+  it('never nudges on a day that has already happened', async () => {
+    m.day.mockImplementation(async (d) => plan([entry({ day: d, title: 'Yesterday' })], d))
+    const user = setup()
+    await user.click(await screen.findByRole('button', { name: 'Previous day' }))
+    await screen.findByText('Yesterday')
+    expect(screen.queryByRole('button', { name: 'Plan my day' })).not.toBeInTheDocument()
+  })
+
+  it('walks three steps and can be left at any of them', async () => {
+    m.openDay.mockResolvedValue(unplanned([entry({ title: 'Water the plants' })]))
+    const user = setup()
+    await screen.findByText('Water the plants')
+    await user.click(screen.getByRole('button', { name: 'Plan my day' }))
+
+    const dialog = await screen.findByRole('dialog', { name: 'Plan your day' })
+    expect(within(dialog).getByText('How long is today?')).toBeInTheDocument()
+    await user.click(within(dialog).getByRole('button', { name: 'Next' }))
+    expect(within(dialog).getByText('What are you doing?')).toBeInTheDocument()
+    await user.click(within(dialog).getByRole('button', { name: 'Next' }))
+    expect(within(dialog).getByText('Shape it')).toBeInTheDocument()
+
+    // Every step is optional and the way out is always there.
+    await user.click(within(dialog).getByRole('button', { name: 'Close' }))
+    expect(screen.queryByRole('dialog', { name: 'Plan your day' })).not.toBeInTheDocument()
+  })
+
+  it('closes on an Escape dispatched at the window', async () => {
+    // `useEscape` binds to the WINDOW — there is no focus trap in these dialogs
+    // — so the listener has to answer a key pressed anywhere, not only inside
+    // the dialog's own subtree.
+    m.openDay.mockResolvedValue(unplanned())
+    const user = setup()
+    await user.click(await screen.findByRole('button', { name: 'Plan my day' }))
+    await screen.findByRole('dialog', { name: 'Plan your day' })
+
+    fireEvent.keyDown(window, { key: 'Escape' })
+    await waitFor(() => expect(
+      screen.queryByRole('dialog', { name: 'Plan your day' })).not.toBeInTheDocument())
+  })
+
+  it('takes a capacity in either spelling and stores minutes', async () => {
+    m.openDay.mockResolvedValue(unplanned([], null))
+    m.patchDay.mockImplementation(async (d, body) =>
+      plan([], d, { capacity: body.capacity_minutes ?? null,
+        capacity_minutes: body.capacity_minutes ?? null }))
+    const user = setup()
+    await user.click(await screen.findByRole('button', { name: 'Plan my day' }))
+
+    await user.type(
+      await screen.findByLabelText('How long you are working today'), '5h{Enter}')
+    await waitFor(() => expect(m.patchDay).toHaveBeenCalledWith(
+      today(), { capacity_minutes: 300 }))
+  })
+
+  it('says what it takes when it cannot read the line', async () => {
+    // The parser refuses rather than guesses, so the useful half of a rejection
+    // is the example — not the word "invalid".
+    m.openDay.mockResolvedValue(unplanned([], null))
+    const user = setup()
+    await user.click(await screen.findByRole('button', { name: 'Plan my day' }))
+    await user.type(
+      await screen.findByLabelText('How long you are working today'), 'soonish{Enter}')
+
+    expect(m.patchDay).not.toHaveBeenCalled()
+    expect(document.querySelector('.plan-hint.warn')).not.toBeNull()
+  })
+
+  it('states the overcommitment at the moment of committing, and commits anyway', async () => {
+    // It records a decision rather than enforcing one. A warning that stopped
+    // you would be a tool arguing with a call it has no standing to make.
+    m.openDay.mockResolvedValue(unplanned(
+      [entry({ title: 'Too much', estimate_minutes: 480 })], 300))
+    m.patchDay.mockImplementation(async (d) => plan([], d, { committed_at: `${d}T08:00:00Z` }))
+    const user = setup()
+    await user.click(await screen.findByRole('button', { name: 'Plan my day' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Plan your day' })
+    await user.click(within(dialog).getByRole('button', { name: 'Next' }))
+    await user.click(within(dialog).getByRole('button', { name: 'Next' }))
+
+    expect(within(dialog).getByText(/3h more than you said you would work/))
+      .toBeInTheDocument()
+    await user.click(within(dialog).getByRole('button', { name: 'Start the day' }))
+    await waitFor(() => expect(m.patchDay).toHaveBeenCalledWith(
+      today(), { committed: true }))
+  })
+})
+
 // ── how full the day is ─────────────────────────────────────────────────────
 
 describe('<TodayView> how full the day is', () => {

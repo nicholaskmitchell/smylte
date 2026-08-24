@@ -20,6 +20,7 @@
 // React-free like time.ts, tabs.ts and daytext.ts, with its tests beside it.
 
 import { HABIT_DAYS } from './api'
+import { fmtDuration } from './time'
 
 /** The most minutes a capacity may be: a day. Matches the server's bound
  *  (`app.py`'s `day_capacity_minutes`), which exists because an unbounded int
@@ -145,11 +146,20 @@ export function sanitizeCapacityByWeekday(v: unknown): Record<string, number> {
 /**
  * What a capacity field should show for `minutes`.
  *
- * Hours where they are whole, because that is how the number was almost
- * certainly said — someone who typed "5h" should not come back to "300".
+ * `fmtDuration`, so the field speaks the same language as everything else that
+ * draws a length of time in this app — and reads back as a person would say it.
+ *
+ * This used to print a bare number for anything that was not a whole hour, and
+ * looking at it caught why that is wrong: typing "until 6pm" at half past four
+ * left the field reading `89`. Correct, and useless — the owner said a time and
+ * got back an integer with no unit, which reads as a different kind of thing
+ * entirely. `1h 29m` is the same fact said back to them.
+ *
+ * Every shape it produces ROUND-TRIPS through `parseCapacity` — "5h", "1h 29m",
+ * "45m", "0m" all read back to the number they came from — which is what lets
+ * this be the field's value rather than a label beside it. A test walks that
+ * loop rather than trusting it.
  */
 export function capacityInput(minutes: number | null): string {
-  if (minutes == null) return ''
-  if (minutes && minutes % 60 === 0) return `${minutes / 60}h`
-  return String(minutes)
+  return minutes == null ? '' : fmtDuration(minutes)
 }

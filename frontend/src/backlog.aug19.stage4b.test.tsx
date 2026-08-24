@@ -1190,6 +1190,11 @@ describe('aug19 leftovers — every dialog answers Escape at the window', () => 
       // TodayView.test.tsx's 'closes on an Escape dispatched at the window' and
       // its companion asserting the listener leaves with the sheet.
       'TodayView',
+      // The planning ritual, driven by TodayView.test.tsx's 'closes on an
+      // Escape dispatched at the window' in its own describe block. It is a
+      // dialog like the rest and answers the key at the window for the same
+      // reason: there is no focus trap in any of them.
+      'PlanRitual',
     ])
     const missing = users.filter((u) => !covered.has(u))
     expect(missing,
