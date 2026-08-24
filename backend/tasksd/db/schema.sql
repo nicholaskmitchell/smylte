@@ -321,6 +321,21 @@ CREATE TABLE IF NOT EXISTS day_plan (
     estimate_minutes INTEGER,
     done_at         TEXT,
     dropped_at      TEXT,                    -- stamped, never DELETEd: the day keeps its record
+    -- The day key this row was deliberately MOVED to, or NULL. Set by the
+    -- shutdown ritual, and distinct from `dropped_at` on purpose: "I decided
+    -- against this" and "I am doing this on Thursday" are different things for a
+    -- day to remember, and a look-back that told them apart is worth more than
+    -- one that files both under abandoned.
+    --
+    -- The row stays HERE. Rolling forward creates a new entry on the target day
+    -- and stamps this one; it never moves or deletes anything, because the day
+    -- that planned the work is still the day that planned it.
+    --
+    -- `_carry_into` skips a stamped row, and that is load-bearing rather than
+    -- tidy: without it a row rolled to Thursday would ALSO be carried into
+    -- tomorrow by the automatic rule, and the owner would find two of it.
+    -- A column added by store.init_db on existing DBs.
+    rolled_to       TEXT,
     created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     PRIMARY KEY (day, entry_id)
 );

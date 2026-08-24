@@ -300,6 +300,17 @@ export interface DayEntry {
   // title — so its only job is to be an identity the week's occurrences of one
   // habit can be counted under.
   habit_id: string | null
+  /** The day key this entry was deliberately MOVED to, or null.
+   *
+   *  Distinct from `dropped_at`, and the distinction is the point: "I am doing
+   *  this on Thursday" and "I decided against this" are different things for a
+   *  day to remember. The row stays on its own day either way — rolling creates
+   *  an entry on the target and stamps this one, so the day that planned the
+   *  work is still the day that planned it.
+   *
+   *  A stamped row is skipped by the automatic carry-over, or the owner would
+   *  find two of it: one from their decision and one from the safety net. */
+  rolled_to: string | null
   // How long this entry is expected to take, on THIS day. Null is "nobody said",
   // which is a real answer: the day's total is over the rows that carry one, so
   // an unestimated row costs the day nothing rather than counting as free.
@@ -655,6 +666,11 @@ export const api = {
     j<DayPlan[]>('GET', `/api/day?from=${from}&to=${to}`),
   addDayEntry: (day: string, body: CreateDayEntryBody) =>
     j<DayEntry>('POST', `/api/day/${day}/entries`, body),
+  // A POST because it CREATES: a new entry lands on the target day and this one
+  // is stamped with where it went. Nothing is moved and nothing is deleted.
+  rollDayEntry: (day: string, entryId: string, to: string) =>
+    j<DayEntry>('POST',
+      `/api/day/${day}/entries/${encodeURIComponent(entryId)}/roll`, { to }),
   patchDayEntry: (day: string, entryId: string, body: PatchDayEntryBody) =>
     j<DayEntry>('PATCH', `/api/day/${day}/entries/${encodeURIComponent(entryId)}`, body),
 
