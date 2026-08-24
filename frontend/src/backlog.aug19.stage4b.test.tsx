@@ -547,7 +547,22 @@ describe('aug19 stage 4b — the tasks pane and one uid in two lists', () => {
     expect(cards.length, 'both copies should be draggable cards').toBe(2)
     const dataTransfer = { setData: vi.fn(), getData: vi.fn(), effectAllowed: '' }
     fireEvent.dragStart(cards[1], { dataTransfer })
-    const col = document.querySelectorAll('.day-col')[1] as HTMLElement
+    // A column that is NOT today, asked of the DOM rather than assumed.
+    //
+    // This was `[1]`, and it made the test fail every Monday. The week view
+    // starts its columns on Sunday (`start.getDate() - start.getDay()`), so
+    // index 1 is Monday — and the fixture's due date is today. Dropping a card
+    // onto the day it is already due is a no-op by design (`dropOnDay` returns
+    // early when `dayKey(t.due) === key`, because rescheduling a task to where
+    // it already is should not write to CalDAV), so on Mondays nothing was
+    // patched and the assertion read as the identity bug this test exists to
+    // catch. It was the calendar, not the code.
+    //
+    // The column carries `today` as a class, so the DOM already knows which one
+    // to avoid — no need to re-derive the week's start or its convention here.
+    const col = [...document.querySelectorAll('.day-col')]
+      .find((c) => !c.classList.contains('today')) as HTMLElement
+    expect(col, 'a week always has a column that is not today').toBeTruthy()
     fireEvent.drop(col, { dataTransfer })
 
     await waitFor(() => expect(m.patchTask).toHaveBeenCalled())
