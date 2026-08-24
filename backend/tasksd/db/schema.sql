@@ -337,6 +337,32 @@ CREATE TABLE IF NOT EXISTS day_plan_opened (
     opened_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
+-- What the owner SAID about a day, as opposed to what is on it.
+--
+-- Sidecar-class in the same strong sense as day_plan: the wire has no vocabulary
+-- for "I am stopping at six", and no resync rebuilds any of this. It belongs in
+-- docs/DEPLOY.md's backup list beside the two tables above.
+--
+-- Deliberately NOT columns on day_plan_opened. That table has exactly one job —
+-- telling "opened but emptied" from "never opened", which is what makes the
+-- snapshot happen once — and its name is that job. A day can also be PLANNED
+-- without being OPENED, because a hand-add leaves the marker alone on purpose,
+-- so a capacity hung there would have nowhere to live on such a day.
+--
+-- Every column is nullable and every one means something by being null:
+-- no capacity stated, the day not begun, the day not closed, nothing written
+-- down. In particular a NULL capacity is not zero — it is "never said", and the
+-- difference decides whether the tab is entitled to tell anyone they have
+-- overcommitted. See service.effective_capacity.
+CREATE TABLE IF NOT EXISTS day_ritual (
+    day              TEXT PRIMARY KEY,   -- YYYY-MM-DD, the local calendar day
+    capacity_minutes INTEGER,            -- what the owner said they would work
+    committed_at     TEXT,               -- the planning ritual was finished
+    shutdown_at      TEXT,               -- the shutdown ritual was finished
+    reflection       TEXT,               -- a sentence or two on how it went
+    updated_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
 -- A habit is a RULE THAT INSERTS ENTRIES, not a second ledger of its own. Its
 -- occurrences are ordinary `day_plan` rows with kind='habit' and source='habit',
 -- carrying a COPY of the title and the id of the rule that minted them — so

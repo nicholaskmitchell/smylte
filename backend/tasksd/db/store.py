@@ -692,6 +692,65 @@ def get_day_entries(conn: sqlite3.Connection, day: str) -> list[sqlite3.Row]:
     )
 
 
+_DAY_RITUAL_FIELDS = {
+    "capacity_minutes", "committed_at", "shutdown_at", "reflection",
+}
+
+
+def get_day_ritual(conn: sqlite3.Connection, day: str) -> sqlite3.Row | None:
+    """What the owner said about this day, or None if they never said anything.
+
+    None and a row of nulls are the same thing to every reader — the table is
+    written lazily on the first statement about a day, so most days have no row
+    at all and that is not a state anything needs to distinguish.
+    """
+    return conn.execute("SELECT * FROM day_ritual WHERE day=?", (day,)).fetchone()
+
+
+def get_day_rituals(
+    conn: sqlite3.Connection, from_day: str, to_day: str
+) -> dict[str, sqlite3.Row]:
+    """Every day in [from_day, to_day) that has a ritual row, keyed by day.
+
+    `to_day` EXCLUSIVE, matching `get_day_range` beside it — a range read of the
+    plan and a range read of what was said about it have to agree about their
+    bounds or a caller zipping them together is off by a day at one end.
+    """
+    rows = conn.execute(
+        "SELECT * FROM day_ritual WHERE day >= ? AND day < ? ORDER BY day",
+        (from_day, to_day),
+    ).fetchall()
+    return {r["day"]: r for r in rows}
+
+
+def set_day_ritual(conn: sqlite3.Connection, day: str, **fields: object) -> sqlite3.Row:
+    """Write what the owner said about a day, and return the whole row.
+
+    An explicit None VALUE clears the column, exactly as `update_day_entry` has
+    it — that is how a capacity is un-stated and how a day is re-opened after a
+    shutdown. So the caller must pass only the fields it means to change, which
+    is what a PATCH's unsent fields already give it.
+
+    Upsert rather than update: most days have no row until the first thing is
+    said about them, so "create it" and "change it" are the same call and there
+    is nothing for a caller to check first.
+    """
+    bad = set(fields) - _DAY_RITUAL_FIELDS
+    if bad:
+        raise ValueError(f"unknown day ritual fields: {bad}")
+    conn.execute("INSERT OR IGNORE INTO day_ritual (day) VALUES (?)", (day,))
+    if fields:
+        # The column names are vetted against _DAY_RITUAL_FIELDS above — not
+        # attacker input; the values are bound.
+        assignments = ", ".join(f"{k}=?" for k in fields)
+        conn.execute(
+            f"UPDATE day_ritual SET {assignments}, "  # nosec B608
+            "updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE day=?",
+            (*fields.values(), day),
+        )
+    return get_day_ritual(conn, day)
+
+
 def day_is_opened(conn: sqlite3.Connection, day: str) -> bool:
     return conn.execute(
         "SELECT 1 FROM day_plan_opened WHERE day=?", (day,)

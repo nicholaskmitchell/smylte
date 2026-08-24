@@ -190,7 +190,20 @@ def habit_runs_on(days: str, day: str) -> bool:
     """
     if not days:
         return True                 # '' is every day
-    return _WEEKDAYS[date.fromisoformat(day).weekday()] in days.split(",")
+    return weekday_name(day) in days.split(",")
+
+
+def weekday_name(day: str) -> str:
+    """The `_WEEKDAYS` name for a day key: "2026-08-21" -> "fri".
+
+    THE SAME DERIVATION `habit_runs_on` makes, factored out rather than copied,
+    because a second reader of a weekday is exactly the second mapping the
+    `_WEEKDAYS` comment forbids. Off the day key's own characters and never off
+    a clock: three ideas of "now" are in play (the browser's, `home_timezone`,
+    the server's), and asking any of them would let Friday's capacity be looked
+    up under Thursday whenever two disagree.
+    """
+    return _WEEKDAYS[date.fromisoformat(day).weekday()]
 
 
 def day_key(value: str) -> str:
@@ -1378,11 +1391,66 @@ class TaskService:
         `add_day_entry`, and the day still owes itself one snapshot), so a day
         holding nothing but hand-added rows has no marker — and calling that day
         unplanned would draw it as untouched with its own entries on screen."""
+        ritual = store.get_day_ritual(self._conn, day)
         return {
             "day": day,
             "planned": opened or bool(entries),
+            # What the owner SAID about this day, alongside what is on it.
+            #
+            # `capacity_minutes` is what they stated FOR THIS DAY and is null
+            # until they do — deliberately not resolved through the settings
+            # default here, because the two answer different questions. This one
+            # is "did they say something about today"; `capacity` below is "what
+            # number should the total be read against". Collapsing them would
+            # make a day that merely inherited a weekday default indistinguishable
+            # from one the owner actually looked at and set.
+            "capacity_minutes": ritual["capacity_minutes"] if ritual else None,
+            "capacity": self._effective_capacity(day, ritual),
+            "committed_at": ritual["committed_at"] if ritual else None,
+            "shutdown_at": ritual["shutdown_at"] if ritual else None,
+            "reflection": ritual["reflection"] if ritual else None,
             "entries": [self._day_entry_dto(r) for r in entries],
         }
+
+    def _effective_capacity(self, day: str, ritual=None) -> int | None:
+        """How many minutes this day should be read against, or None.
+
+        Four answers in order, and the last one is the important one:
+
+          1. what the owner said for THIS day
+          2. the default for this WEEKDAY, from settings
+          3. the account-wide default, from settings
+          4. NONE
+
+        None is a real answer, not a zero. An account that has never stated a
+        capacity must not be told it has overcommitted against a number it never
+        gave — so every reader of this has to handle null rather than falling
+        back to some assumed working day. That is the difference between a tool
+        that helps you notice something and one that invents a standard for you.
+
+        The weekday comes from the day key's own characters through
+        `weekday_name`, so it is zone-free and agrees with habit scheduling by
+        construction. The settings map is keyed by the SAME names habits use;
+        anything else in it is ignored rather than guessed at, because a settings
+        blob is hand-editable and a garbage key must not become a capacity.
+        """
+        if ritual is None:
+            ritual = store.get_day_ritual(self._conn, day)
+        if ritual and ritual["capacity_minutes"] is not None:
+            return ritual["capacity_minutes"]
+        settings = store.get_settings(self._conn)
+        by_weekday = settings.get("day_capacity_by_weekday")
+        if isinstance(by_weekday, dict):
+            value = by_weekday.get(weekday_name(day))
+            # `isinstance(x, bool)` first: bool is an int subclass, so JSON
+            # `true` would otherwise read as one minute. The same guard
+            # `_check_session_ttl` applies for the same reason.
+            if isinstance(value, int) and not isinstance(value, bool):
+                return value
+        default = settings.get("day_capacity_minutes")
+        if isinstance(default, int) and not isinstance(default, bool):
+            return default
+        return None
 
     def open_day(self, day: str, *, create: bool) -> dict[str, Any]:
         """The plan for a day, optionally building it if it has never been built.
@@ -1840,6 +1908,78 @@ class TaskService:
                 "source": "habit",
             })
         return out
+
+    def set_day_ritual(
+        self, day: str, *,
+        capacity_minutes: int | None = None, committed: bool | None = None,
+        shutdown: bool | None = None, reflection: str | None = None,
+    ) -> dict[str, Any]:
+        """Record what the owner says about a day: how long they will work, that
+        they have begun, that they have finished, and how it went.
+
+        REFUSED ON A PAST DAY, all four of them, and that is the same line
+        `mcp/api.py::update_day_entry` draws for `done`. Every one of these is a
+        statement about a day you can still act on: a capacity is a plan, and a
+        shutdown performed on Thursday for Monday is not a record of Monday. A
+        ritual that can be carried out afterwards is a form, not a boundary.
+
+        It carries `_HABIT_MINT_GRACE_DAYS` of grace, and for exactly the reason
+        habit minting does rather than as a softening of the rule: `home_timezone`
+        is unset by default and the server is UTC in the ordinary deployment, so
+        a browser in New York between 20:00 and midnight sends a key the server
+        already calls yesterday. Without the grace the shutdown ritual would be
+        refused every evening after dinner — which is when it is meant to happen.
+
+        `committed` and `shutdown` are tri-state booleans for the reason
+        `patch_day_entry`'s `done` is one: None means "not sent", and False is a
+        real value that clears the stamp, which is how a day is re-opened after
+        being closed too early.
+        """
+        day = day_key(day)
+        if not self._ritual_writable(day):
+            raise ValueError(
+                f"{day} has already happened; a capacity, a start and a shutdown "
+                "are statements about a day you can still act on"
+            )
+        fields: dict[str, object] = {}
+        if capacity_minutes is not None:
+            # -1 clears, the same sentinel and the same reason as an estimate: 0
+            # is a real capacity ("I am not working today") and None already
+            # means "not sent".
+            fields["capacity_minutes"] = (
+                None if capacity_minutes < 0 else int(capacity_minutes)
+            )
+        if committed is not None:
+            fields["committed_at"] = _stamp() if committed else None
+        if shutdown is not None:
+            fields["shutdown_at"] = _stamp() if shutdown else None
+        if reflection is not None:
+            # An emptied reflection clears rather than storing "", so "nothing
+            # written" has one representation.
+            fields["reflection"] = reflection.strip() or None
+        with self._lock:
+            row = store.set_day_ritual(self._conn, day, **fields)
+            entries = store.get_day_entries(self._conn, day)
+            opened = store.day_is_opened(self._conn, day)
+            dto = self._day_plan_dto(day, entries, opened)
+        # Only when something was written — a PATCH with an empty body is a read,
+        # and an event for it would have every other tab refetch for nothing.
+        if fields:
+            self._publish({"type": "day_updated", "day": day})
+        return dto
+
+    def _ritual_writable(self, day: str) -> bool:
+        """May the owner still make a statement about this day?
+
+        Deliberately the same window as habit minting, sharing its constant. Two
+        different pastness rules on one screen — one for what a day may be given
+        and another for what may be said about it — would be two places to get
+        the timezone reasoning right and one place to get it wrong.
+        """
+        return (
+            date.fromisoformat(day)
+            >= date.fromisoformat(self._today()) - timedelta(days=_HABIT_MINT_GRACE_DAYS)
+        )
 
     def _habit_minting_allowed(self, day: str) -> bool:
         """May `day` be given habit occurrences at all?
