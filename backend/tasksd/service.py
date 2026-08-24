@@ -1448,7 +1448,11 @@ class TaskService:
             if isinstance(value, int) and not isinstance(value, bool):
                 return value
         default = settings.get("day_capacity_minutes")
-        if isinstance(default, int) and not isinstance(default, bool):
+        # `>= 0` because a negative stored value is the clear sentinel at rest.
+        # `update_settings` merges shallowly and skips None, so "never said"
+        # after once having said something is spelled as -1 rather than by
+        # removing the key — and it has to read back as no capacity at all.
+        if isinstance(default, int) and not isinstance(default, bool) and default >= 0:
             return default
         return None
 

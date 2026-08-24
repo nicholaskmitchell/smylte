@@ -1149,6 +1149,8 @@ describe('aug19 leftovers — every dialog answers Escape at the window', () => 
       tabOrder={DEFAULT_TAB_ORDER} startTab="home"
       onTabOrderChange={vi.fn()} onStartTabChange={vi.fn()}
       timeFormat="12h" onToggleTimeFormat={vi.fn()}
+      dayCapacity={null} onDayCapacityChange={vi.fn()}
+      dayCapacityByWeekday={{}} onDayCapacityByWeekdayChange={vi.fn()}
       homeTz="" onToggleHomeTz={vi.fn()}
       calFit="dynamic" onToggleCalFit={vi.fn()}
       archivedCals={[]} onArchivedCalsChange={vi.fn()}

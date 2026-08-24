@@ -616,6 +616,21 @@ def test_a_junk_capacity_map_is_ignored_rather_than_guessed_at(svc):
     assert svc.open_day(DAY, create=False)["capacity"] == 300
 
 
+def test_an_account_default_can_be_un_said(svc):
+    """`update_settings` merges shallowly and SKIPS None, so without a sentinel
+    an owner who once set a default could never get back to "never said" — the
+    state that keeps the app from putting a number on screen nobody gave. -1 is
+    that sentinel, the same one this feature uses everywhere else, and 0 cannot
+    be it because "I do not work today" is a real capacity."""
+    svc.update_settings({"day_capacity_minutes": 300})
+    assert svc.open_day(DAY, create=False)["capacity"] == 300
+    svc.update_settings({"day_capacity_minutes": -1})
+    assert svc.open_day(DAY, create=False)["capacity"] is None
+    # And zero still means zero.
+    svc.update_settings({"day_capacity_minutes": 0})
+    assert svc.open_day(DAY, create=False)["capacity"] == 0
+
+
 def test_a_capacity_of_zero_is_a_real_answer(svc):
     # "I am not working today" is a statement, and it has to survive every falsy
     # check between the wire and the read — which is why the clear needs a

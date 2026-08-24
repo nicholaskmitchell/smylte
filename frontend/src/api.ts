@@ -325,7 +325,39 @@ export interface DayPlan {
    *  the owner emptied is planned with nothing in it, and re-opening it must not
    *  snapshot over that. */
   planned: boolean
+  /** What the owner SAID for this day, or null if they never said anything.
+   *  Deliberately separate from `capacity` below: this one answers "did they
+   *  look at this day and set a number", which is what tells a day they
+   *  actually planned from one that merely inherited a weekday default. */
+  capacity_minutes: number | null
+  /** What the day's total should be READ AGAINST, resolved server-side through
+   *  what was said for the day, the weekday default, the account default, and
+   *  then nothing. **Null is a real answer** and every reader has to handle it
+   *  rather than falling back to some assumed working day — see
+   *  `service._effective_capacity`. */
+  capacity: number | null
+  /** The planning ritual was finished. */
+  committed_at: string | null
+  /** The shutdown ritual was finished. */
+  shutdown_at: string | null
+  /** A sentence or two on how the day went, written at shutdown. */
+  reflection: string | null
   entries: DayEntry[]
+}
+
+/** Everything PATCH /day/{day} accepts — what the owner SAYS about a day, as
+ *  opposed to what is on it. Every field tri-state: an omitted key is "not
+ *  asked about", and the falsy values are real (`committed: false` re-opens a
+ *  day begun by mistake). Refused entirely on a past day, with one day of
+ *  grace, because a capacity is a plan and a shutdown is a boundary. */
+export interface PatchDayBody {
+  /** Minutes, or **-1 to clear** — the same sentinel and the same reason as
+   *  `PatchDayEntryBody.estimate_minutes`: 0 is a real capacity ("not working
+   *  today"), so the clear cannot borrow falsiness. */
+  capacity_minutes?: number
+  committed?: boolean
+  shutdown?: boolean
+  reflection?: string
 }
 
 /** Everything POST /day/{day}/entries accepts. `list` + `uid` name a task;
@@ -480,6 +512,17 @@ export interface Settings {
   // without this it assumed the *link's* zone and read every one of the owner's
   // own events at the wrong instant. '' clears it.
   home_timezone?: string
+  /** How many minutes an ordinary day is expected to hold, and the per-weekday
+   *  exceptions. Absent means NEVER SAID — a real answer, and the one the whole
+   *  capacity feature turns on: an account that has not stated a capacity is
+   *  never told it has overcommitted against a number it did not give.
+   *
+   *  The map is sparse and keyed by the `HABIT_DAYS` names, never by index —
+   *  the server's `_WEEKDAYS` is the one place those names meet a weekday
+   *  number, and a second mapping here is how "wed" comes to mean two different
+   *  days on two paths. See `capacity.ts`. */
+  day_capacity_minutes?: number
+  day_capacity_by_weekday?: Record<string, number>
 }
 
 // Creates carry a client-generated id that becomes the CalDAV resource slug,
@@ -601,6 +644,10 @@ export const api = {
   // — and the `planned` flag would stop meaning what it says.
   openDay: (day: string) => j<DayPlan>('POST', `/api/day/${day}/open`),
   day: (day: string) => j<DayPlan>('GET', `/api/day/${day}`),
+  // What the owner says about a day, as opposed to what is on it. A PATCH on
+  // the DAY rather than on an entry, because none of it belongs to any row.
+  patchDay: (day: string, body: PatchDayBody) =>
+    j<DayPlan>('PATCH', `/api/day/${day}`, body),
   // Planned days in [from, to), `to` EXCLUSIVE and the span bounded to 190 days
   // server-side (a wider one answers 422). Days never opened are simply absent,
   // so an empty array means "nothing planned in there".

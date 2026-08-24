@@ -1292,6 +1292,42 @@
    input, and at full button size it competes with Add for the eye. */
 .today-swap { font-size: calc(11px * var(--fs-scale)); padding: 3px 8px; }
 
+/* ---- how full the day is -----------------------------------------------
+   Present only on a day that HAS a capacity. There is no empty state here on
+   purpose: an account that has never stated one gets no strip at all, because
+   the alternative is putting a number on the screen that nobody gave. */
+.today-load {
+  padding: 4px var(--gutter) 10px;
+  display: flex; flex-direction: column; gap: 5px;
+}
+.today-load-line {
+  display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px;
+  font-size: calc(11px * var(--fs-scale));
+}
+.today-load-fig { color: var(--fg); }
+.today-load-cal, .today-load-rest { color: var(--fg-faint); }
+
+/* A 3px rule rather than a chart. The figure above already says it in words;
+   this is only the shape of it, for the glance that does not stop to read. */
+.today-load-bar {
+  height: 3px; background: var(--rule-faint); overflow: hidden;
+}
+.today-load-fill { height: 100%; background: var(--accent); transition: width 0.15s; }
+
+/* OVER CAPACITY IS --warn, and that is not a contradiction of the habit count's
+   "never coloured as failure" three hundred lines below. That figure is a
+   RECORD of a finished week and colouring it red would be scoring the owner on
+   the one screen they open every morning. This is a FORECAST about a day that
+   has not happened yet, made from a number they chose, about a plan they can
+   still change in the next ten seconds — the one moment a warning is useful
+   rather than a verdict. It is also said in words (`.today-load-over`), so the
+   colour is never the only carrier. */
+.today-load.over .today-load-fill { background: var(--warn); }
+.today-load.over .today-load-fig { color: var(--warn); }
+.today-load-over {
+  margin: 0; font-size: calc(11px * var(--fs-scale)); color: var(--warn);
+}
+
 .today-list { list-style: none; margin: 0; padding: 0; }
 .today-row {
   display: flex; align-items: center; gap: 10px;
@@ -1607,4 +1643,29 @@
 .habit-add { display: flex; gap: 8px; align-items: center; }
 .habit-add .input { flex: 1; min-width: 0; }
 .habit-add .btn { flex: none; }
+/* ---- the working day, in Settings --------------------------------------
+   Inside the today-tab fence although it renders in the settings panel, and
+   deliberately: this is the other end of the same feature, and the fence is
+   what holds every rule in it to resolving colour through a token. Being here
+   means the capacity fields are covered by that test too.
+   `.sched-week`'s per-weekday row is the nearest existing shape; this one needs
+   no time pickers, so it is a plain name-and-field pair rather than a copy. */
+.cap-week {
+  display: flex; flex-direction: column; gap: 4px;
+  margin: 6px 0 2px;
+}
+.cap-day { display: flex; align-items: center; gap: 8px; }
+/* A fixed name column, so seven fields line up rather than stepping in and out
+   with the width of "Wed" against "Thu". Matches `.sched-day-name`'s job. */
+.cap-day-name {
+  width: 42px; flex: none;
+  font-family: var(--mono); font-size: calc(11px * var(--fs-scale));
+  color: var(--fg-muted); text-transform: var(--label-case);
+}
+.cap-input { flex: 1; min-width: 0; max-width: 160px; }
+/* The default field sits in a `.menu-row`, whose own rule caps an input at
+   `min(220px, 60%)` and out-specifies the line above — so without this the
+   eight capacity fields are seven of one width and one of another. Matched
+   deliberately: they are one column of the same kind of answer. */
+.set-panel .menu-row .cap-input { max-width: 160px; }
 /* today-tab:css:end */

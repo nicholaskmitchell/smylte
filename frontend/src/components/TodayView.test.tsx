@@ -8,7 +8,8 @@ import { DataProvider } from '../data'
 import { setCacheUser } from '../cache'
 import {
   api,
-  type DayEntry, type DayEntrySource, type DayPlan, type Habit, type List, type Task,
+  type CalEvent, type DayEntry, type DayEntrySource, type DayPlan, type Habit,
+  type List, type Task,
 } from '../api'
 
 // The whole API module, like every other component suite here: each method
@@ -75,8 +76,28 @@ const habit = (o: Partial<Habit> = {}): Habit => ({
   estimate_minutes: null, created_at: '2026-08-01T08:00:00.000Z', ...o,
 })
 
-const plan = (entries: DayEntry[] = [], day = today()): DayPlan =>
-  ({ day, planned: true, entries })
+/** One calendar event, the same shape `CalendarView.test.tsx` builds. Defined
+ *  here rather than imported so this suite stays readable on its own, and kept
+ *  field-for-field with that one so a widened `CalEvent` breaks both together
+ *  rather than only the file someone happened to open. */
+const calEvent = (o: Partial<CalEvent> = {}): CalEvent => ({
+  uid: 'ev1', id: 'ev1', recurrence_id: null, is_recurring: false, calendar: '/c1/',
+  summary: 'Standup', description: null, location: null,
+  start: `${today()}T09:00:00`, start_is_date: false,
+  end: `${today()}T10:30:00`, end_is_date: false, duration: null,
+  all_day: false, status: null, tags: [], has_rrule: false,
+  href: '/c1/ev1.ics', etag: '"1"', ...o,
+})
+
+const plan = (entries: DayEntry[] = [], day = today(), o: Partial<DayPlan> = {}): DayPlan =>
+  // Nothing said about the day by default, and `capacity: null` in particular:
+  // an account that never stated one must be the ordinary case in this suite,
+  // so a test that wants a total has to ask for it.
+  ({
+    day, planned: true, entries,
+    capacity_minutes: null, capacity: null,
+    committed_at: null, shutdown_at: null, reflection: null, ...o,
+  })
 
 /** `opts` reaches `userEvent.setup` untouched. The only caller that passes
  *  anything is a fake-timer suite: userEvent's own delays are `setTimeout`s, so
@@ -1102,6 +1123,113 @@ describe('<TodayView> the add box', () => {
     await user.type(screen.getByLabelText('Add to today'), 'call mum{Enter}')
     await waitFor(() => expect(m.addDayEntry).toHaveBeenCalled())
     await waitFor(() => expect(screen.getByLabelText('Add to today')).toHaveValue('call mum'))
+  })
+})
+
+// ── how full the day is ─────────────────────────────────────────────────────
+
+describe('<TodayView> how full the day is', () => {
+  const withCapacity = (entries: DayEntry[], capacity: number | null) =>
+    plan(entries, today(), { capacity, capacity_minutes: capacity })
+
+  it('says nothing at all when no capacity has ever been given', async () => {
+    // THE CASE THAT MATTERS MOST. An account that has not stated a capacity
+    // gets no strip, no total and no warning — because there is no honest
+    // number to put in one, and inventing an eight-hour day for them is the one
+    // thing this feature must not do.
+    m.openDay.mockResolvedValue(plan([entry({ title: 'Water the plants', estimate_minutes: 30 })]))
+    setup()
+    await screen.findByText('Water the plants')
+    expect(document.querySelector('.today-load')).toBeNull()
+  })
+
+  it('totals only the rows that carry an estimate', async () => {
+    // An unestimated row contributes NOTHING rather than an assumed default.
+    // That leaves the total honestly low, which is the right direction — a
+    // guessed number is one nobody can act on — and the count beside it says
+    // how much of the day the figure is silent about.
+    m.openDay.mockResolvedValue(withCapacity([
+      entry({ entry_id: 'a', title: 'One', estimate_minutes: 45, position: 1 }),
+      entry({ entry_id: 'b', title: 'Two', estimate_minutes: 75, position: 2 }),
+      entry({ entry_id: 'c', title: 'Three', position: 3 }),
+    ], 300))
+    setup()
+    await screen.findByText('One')
+
+    expect(document.querySelector('.today-load-fig')!.textContent).toBe('2h of 5h')
+    expect(document.querySelector('.today-load-rest')!.textContent)
+      .toMatch(/1 not estimated/)
+  })
+
+  it('does not count a row that was dropped', async () => {
+    // Declining something is how you get back under, so a total that kept
+    // counting it would make the one control that helps useless.
+    m.openDay.mockResolvedValue(withCapacity([
+      entry({ entry_id: 'a', title: 'One', estimate_minutes: 60, position: 1 }),
+      entry({ entry_id: 'b', title: 'Gone', estimate_minutes: 600, position: 2,
+        dropped_at: `${today()}T10:00:00.000Z` }),
+    ], 300))
+    setup()
+    await screen.findByText('One')
+    expect(document.querySelector('.today-load-fig')!.textContent).toBe('1h of 5h')
+  })
+
+  it('warns above the capacity and not at it', async () => {
+    // Exactly at capacity is a full day, not an overcommitted one — the
+    // boundary is worth pinning because off-by-one here means the tab tells
+    // somebody off for planning precisely what they said they would do.
+    m.openDay.mockResolvedValue(withCapacity(
+      [entry({ title: 'Exactly', estimate_minutes: 300 })], 300))
+    setup()
+    await screen.findByText('Exactly')
+    expect(document.querySelector('.today-load.over')).toBeNull()
+    // And the figure still reports the day as full, so "not over" is not being
+    // achieved by failing to count it.
+    expect(document.querySelector('.today-load-fig')!.textContent).toBe('5h of 5h')
+  })
+
+  it('warns in words as well as in colour', async () => {
+    // The colour is the half that does not survive a screen reader, a greyscale
+    // screenshot or a custom theme, so it is never the only carrier.
+    m.openDay.mockResolvedValue(withCapacity(
+      [entry({ title: 'Too much', estimate_minutes: 480 })], 300))
+    setup()
+    await screen.findByText('Too much')
+
+    expect(document.querySelector('.today-load.over')).not.toBeNull()
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      /3h more than you said you would work/)
+  })
+
+  it('counts the calendar beside the plan, never inside it', async () => {
+    // An event is committed time, but whether a given one is WORK is a
+    // judgement the app does not get to make — lunch and the dentist are on the
+    // same calendar as the standup. So the collision is shown and the
+    // arithmetic is left alone.
+    m.calendars.mockResolvedValue([cal])
+    m.events.mockResolvedValue([calEvent()])
+    m.openDay.mockResolvedValue(withCapacity(
+      [entry({ title: 'One', estimate_minutes: 60 })], 300))
+    setup()
+    await screen.findByText('One')
+
+    await waitFor(() => expect(
+      document.querySelector('.today-load-cal')?.textContent).toMatch(/1h 30m on the calendar/))
+    // Unchanged by the meeting: it is context, not a deduction.
+    expect(document.querySelector('.today-load-fig')!.textContent).toBe('1h of 5h')
+  })
+
+  it('ignores an all-day event, which is a label rather than eight hours', async () => {
+    m.calendars.mockResolvedValue([cal])
+    m.events.mockResolvedValue([calEvent({
+      summary: "Anna's birthday", all_day: true,
+      start: today(), start_is_date: true, end: today(), end_is_date: true,
+    })])
+    m.openDay.mockResolvedValue(withCapacity(
+      [entry({ title: 'One', estimate_minutes: 60 })], 300))
+    setup()
+    await screen.findByText('One')
+    expect(document.querySelector('.today-load-cal')).toBeNull()
   })
 })
 
