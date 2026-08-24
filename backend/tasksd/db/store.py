@@ -96,6 +96,31 @@ def init_db(conn: sqlite3.Connection) -> None:
         # this block answers 500 to every read of every day, not just the days
         # holding a habit. Upgrading in the other order is merely inert.
         conn.execute("ALTER TABLE day_plan ADD COLUMN habit_id TEXT")
+    if "estimate_minutes" not in day_cols:
+        # Every entry written before estimates existed keeps NULL, which is
+        # exactly what "nobody said how long this would take" means — and the
+        # day's total is over the rows that HAVE one, so an un-upgraded plan
+        # simply totals what it can rather than reading as a day of zero-length
+        # work. Nothing to backfill, and no sensible value to backfill with.
+        #
+        # Same one-change rule as `habit_id` above, for the same mechanical
+        # reason: `service._day_entry_dto` reads `row["estimate_minutes"]`, and
+        # sqlite3.Row answers IndexError for a column the query did not return.
+        # IndexError is outside the taxonomy app.py maps, so the DTO line
+        # without this block is a 500 on every read of every day. The reverse
+        # order is inert.
+        conn.execute("ALTER TABLE day_plan ADD COLUMN estimate_minutes INTEGER")
+    if "rolled_to" not in day_cols:
+        # NULL on every entry written before the shutdown ritual, which is
+        # exactly what "nobody moved this" means — nothing to backfill. Same
+        # one-change rule as the two above: `_day_entry_dto` reads this key.
+        conn.execute("ALTER TABLE day_plan ADD COLUMN rolled_to TEXT")
+    habit_cols = {r["name"] for r in conn.execute("PRAGMA table_info(habits)")}
+    if "estimate_minutes" not in habit_cols:
+        # Habits written before estimates keep NULL, and their occurrences are
+        # minted unestimated — which is what "nobody has said how long this
+        # takes" means. One answer on the rule fixes every future day of it.
+        conn.execute("ALTER TABLE habits ADD COLUMN estimate_minutes INTEGER")
 
 
 # ── collections ──────────────────────────────────────────────────────────────
@@ -672,6 +697,75 @@ def get_day_entries(conn: sqlite3.Connection, day: str) -> list[sqlite3.Row]:
     )
 
 
+_DAY_RITUAL_FIELDS = {
+    "capacity_minutes", "committed_at", "shutdown_at", "reflection",
+}
+
+
+def get_day_ritual(conn: sqlite3.Connection, day: str) -> sqlite3.Row | None:
+    """What the owner said about this day, or None if they never said anything.
+
+    None and a row of nulls are the same thing to every reader — the table is
+    written lazily on the first statement about a day, so most days have no row
+    at all and that is not a state anything needs to distinguish.
+    """
+    return conn.execute("SELECT * FROM day_ritual WHERE day=?", (day,)).fetchone()
+
+
+def get_day_rituals(
+    conn: sqlite3.Connection, from_day: str, to_day: str
+) -> dict[str, sqlite3.Row]:
+    """Every day in [from_day, to_day) that has a ritual row, keyed by day.
+
+    `to_day` EXCLUSIVE, matching `get_day_range` beside it — a range read of the
+    plan and a range read of what was said about it have to agree about their
+    bounds or a caller zipping them together is off by a day at one end.
+    """
+    rows = conn.execute(
+        "SELECT * FROM day_ritual WHERE day >= ? AND day < ? ORDER BY day",
+        (from_day, to_day),
+    ).fetchall()
+    return {r["day"]: r for r in rows}
+
+
+def set_day_ritual(
+    conn: sqlite3.Connection, day: str, **fields: object,
+) -> sqlite3.Row | None:
+    """Write what the owner said about a day, and return the whole row.
+
+    An explicit None VALUE clears the column, exactly as `update_day_entry` has
+    it — that is how a capacity is un-stated and how a day is re-opened after a
+    shutdown. So the caller must pass only the fields it means to change, which
+    is what a PATCH's unsent fields already give it.
+
+    Upsert rather than update: most days have no row until the first thing is
+    said about them, so "create it" and "change it" are the same call and there
+    is nothing for a caller to check first.
+    """
+    bad = set(fields) - _DAY_RITUAL_FIELDS
+    if bad:
+        raise ValueError(f"unknown day ritual fields: {bad}")
+    # NOTHING TO SAY IS NOT A WRITE. `service.set_day_ritual` calls a PATCH with
+    # an empty body "a read" and publishes no event for one — and a read that
+    # minted the row holding the nulls it had just reported would make that
+    # false, and would put a row in a SIDECAR-CLASS table (one no resync
+    # rebuilds and every backup has to carry) for a day nobody ever spoke about.
+    # None here means exactly what `get_day_ritual` means by it: nothing has been
+    # said about this day.
+    if not fields:
+        return get_day_ritual(conn, day)
+    conn.execute("INSERT OR IGNORE INTO day_ritual (day) VALUES (?)", (day,))
+    # The column names are vetted against _DAY_RITUAL_FIELDS above — not
+    # attacker input; the values are bound.
+    assignments = ", ".join(f"{k}=?" for k in fields)
+    conn.execute(
+        f"UPDATE day_ritual SET {assignments}, "  # nosec B608
+        "updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE day=?",
+        (*fields.values(), day),
+    )
+    return get_day_ritual(conn, day)
+
+
 def day_is_opened(conn: sqlite3.Connection, day: str) -> bool:
     return conn.execute(
         "SELECT 1 FROM day_plan_opened WHERE day=?", (day,)
@@ -697,6 +791,7 @@ def insert_day_entry(
     title: str | None = None,
     position: float | None = None,
     habit_id: str | None = None,
+    estimate_minutes: int | None = None,
 ) -> sqlite3.Row:
     """Add one entry to a day and return the stored row.
 
@@ -708,18 +803,27 @@ def insert_day_entry(
     for everything else. The occurrence also gets its own `title` — a copy of the
     habit's, taken at insert time — because the row has to keep reading correctly
     after the rule is renamed or deleted.
+
+    `estimate_minutes` is likewise a COPY taken at insert time, not a join. For a
+    task the caller reads it off `sidecar` (the estimate that task remembers) and
+    hands it in here; from then on it belongs to this day and this row. That is
+    what stops re-estimating a task in March from rewriting what January's plan
+    said it would take — the same reasoning that gives a habit occurrence its own
+    title rather than resolving one.
     """
     conn.execute(
         """INSERT INTO day_plan (day, entry_id, kind, collection_href, uid, title,
-                                 source, position, habit_id)
-           VALUES (?,?,?,?,?,?,?,?,?)""",
+                                 source, position, habit_id, estimate_minutes)
+           VALUES (?,?,?,?,?,?,?,?,?,?)""",
         (day, entry_id, kind, collection_href, uid, title, source, position,
-         habit_id),
+         habit_id, estimate_minutes),
     )
     return find_day_entry(conn, day, entry_id=entry_id)
 
 
-_DAY_ENTRY_FIELDS = {"done_at", "dropped_at", "position"}
+_DAY_ENTRY_FIELDS = {
+    "done_at", "dropped_at", "position", "estimate_minutes", "rolled_to",
+}
 
 
 def update_day_entry(
@@ -860,7 +964,7 @@ def find_day_entry(
 # "orphaned" occurrences to be tempted into writing, because a dangling
 # habit_id beside a copied title is a complete record on its own.
 
-_HABIT_FIELDS = {"title", "days", "paused_at", "position"}
+_HABIT_FIELDS = {"title", "days", "paused_at", "position", "estimate_minutes"}
 
 # Position first, NULLs last, then created_at — the same "unpositioned rows
 # TRAIL" shape as _DAY_ORDER, and for the same reason: a habit that has never

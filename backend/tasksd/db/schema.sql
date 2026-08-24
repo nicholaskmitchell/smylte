@@ -5,9 +5,14 @@
 --     derived projection of what is on the wire. Delete them, full-resync, and
 --     you get byte-identical application state back (invariant #1).
 --   * SIDECAR tables (sidecar, list_settings, completions, attachments,
---     day_plan, habits) hold app-only state that exists NOWHERE on the wire
---     (kanban column, manual sort, pins, per-list settings, the day's plan, and
---     the habits that put entries on it). These are the one thing in this file
+--     day_plan, day_plan_opened, day_ritual, habits) hold app-only state that
+--     exists NOWHERE on the wire (kanban column, manual sort, pins, per-list
+--     settings, the day's plan, which days were opened at all, what the owner
+--     SAID about each day — its capacity, its stamps and the line they wrote
+--     about how it went — and the habits that put entries on it). This list is
+--     the same one docs/DEPLOY.md's backup section names, and the two have to
+--     stay in step: a table missing from either is a table nobody backs up.
+--     These are the one thing in this file
 --     that a resync cannot rebuild — so they are decoupled from the cache (no
 --     FK to items) and survive an item briefly disappearing
 --     (delete-and-recreate).
@@ -307,8 +312,35 @@ CREATE TABLE IF NOT EXISTS day_plan (
     -- see the ALTER there for why it must not be split from the DTO that reads it.
     habit_id        TEXT,
     position        REAL,                    -- manual order within the day
+    -- What this entry is expected to take, in minutes, ON THIS DAY. NULL is
+    -- "not estimated", which is a real and common answer: the day's total is
+    -- over the rows that have one, and a half-estimated plan is still a plan.
+    --
+    -- On the ENTRY rather than on the task, because a note and a habit
+    -- occurrence exist nowhere but here and would otherwise carry none at all.
+    -- A task additionally REMEMBERS its last estimate in `sidecar`, which
+    -- pre-fills this at entry-creation time — copied, never joined, so
+    -- re-estimating a task in March cannot rewrite what January's plan said it
+    -- would take. A column added by store.init_db on existing DBs; see the
+    -- ALTER there for why it must not be split from the DTO that reads it.
+    estimate_minutes INTEGER,
     done_at         TEXT,
     dropped_at      TEXT,                    -- stamped, never DELETEd: the day keeps its record
+    -- The day key this row was deliberately MOVED to, or NULL. Set by the
+    -- shutdown ritual, and distinct from `dropped_at` on purpose: "I decided
+    -- against this" and "I am doing this on Thursday" are different things for a
+    -- day to remember, and a look-back that told them apart is worth more than
+    -- one that files both under abandoned.
+    --
+    -- The row stays HERE. Rolling forward creates a new entry on the target day
+    -- and stamps this one; it never moves or deletes anything, because the day
+    -- that planned the work is still the day that planned it.
+    --
+    -- `_carry_into` skips a stamped row, and that is load-bearing rather than
+    -- tidy: without it a row rolled to Thursday would ALSO be carried into
+    -- tomorrow by the automatic rule, and the owner would find two of it.
+    -- A column added by store.init_db on existing DBs.
+    rolled_to       TEXT,
     created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     PRIMARY KEY (day, entry_id)
 );
@@ -323,6 +355,32 @@ CREATE INDEX IF NOT EXISTS idx_day_plan_day ON day_plan(day);
 CREATE TABLE IF NOT EXISTS day_plan_opened (
     day        TEXT PRIMARY KEY,
     opened_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+-- What the owner SAID about a day, as opposed to what is on it.
+--
+-- Sidecar-class in the same strong sense as day_plan: the wire has no vocabulary
+-- for "I am stopping at six", and no resync rebuilds any of this. It belongs in
+-- docs/DEPLOY.md's backup list beside the two tables above.
+--
+-- Deliberately NOT columns on day_plan_opened. That table has exactly one job —
+-- telling "opened but emptied" from "never opened", which is what makes the
+-- snapshot happen once — and its name is that job. A day can also be PLANNED
+-- without being OPENED, because a hand-add leaves the marker alone on purpose,
+-- so a capacity hung there would have nowhere to live on such a day.
+--
+-- Every column is nullable and every one means something by being null:
+-- no capacity stated, the day not begun, the day not closed, nothing written
+-- down. In particular a NULL capacity is not zero — it is "never said", and the
+-- difference decides whether the tab is entitled to tell anyone they have
+-- overcommitted. See service.effective_capacity.
+CREATE TABLE IF NOT EXISTS day_ritual (
+    day              TEXT PRIMARY KEY,   -- YYYY-MM-DD, the local calendar day
+    capacity_minutes INTEGER,            -- what the owner said they would work
+    committed_at     TEXT,               -- the planning ritual was finished
+    shutdown_at      TEXT,               -- the shutdown ritual was finished
+    reflection       TEXT,               -- a sentence or two on how it went
+    updated_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
 -- A habit is a RULE THAT INSERTS ENTRIES, not a second ledger of its own. Its
@@ -350,5 +408,14 @@ CREATE TABLE IF NOT EXISTS habits (
     -- never "pretend the last three weeks did not happen".
     paused_at  TEXT,
     position   REAL,                      -- manual order in the habits list
+    -- How long an occurrence of this habit is expected to take. The RULE
+    -- remembers it and every occurrence is minted with a COPY, exactly as the
+    -- title is — so a habit is estimated once rather than every morning, and
+    -- changing the rule leaves past days saying what they said. A task
+    -- remembers its estimate in `sidecar` and a note is remembered by the
+    -- carry; this is the third of those three, and habits need their own
+    -- because an occurrence has no wire object and never carries.
+    -- A column added by store.init_db on existing DBs.
+    estimate_minutes INTEGER,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );

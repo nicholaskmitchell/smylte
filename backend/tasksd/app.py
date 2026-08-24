@@ -52,7 +52,14 @@ from .ical import EventEdit, TaskEdit, rrule_from_spec
 from .csp import CSPMiddleware, policy_for_index
 from .limits import BodySizeLimitMiddleware
 from .scheduling import SlotTaken
-from .service import TaskService, day_key, priority_from_label
+from .service import (
+    TaskService, day_key, priority_from_label,
+    # The weekday vocabulary, imported rather than restated. `service._WEEKDAYS`
+    # is documented as the ONE place those names and Python's numbering meet, and
+    # a copy of the seven strings at this edge is exactly the second mapping that
+    # comment forbids — it would drift the first time one of them was touched.
+    _WEEKDAYS as _WEEKDAY_NAMES,
+)
 from .sync.engine import ConflictError
 
 log = logging.getLogger("tasksd")
@@ -298,6 +305,40 @@ class CreateDayEntry(BaseModel):
     # defends — it is the cheap bound on what a client may store, applied at the
     # same edge as every other text field so there is one rule to remember.
     title: XmlSafeText | None = Field(default=None, max_length=2000)
+    # Minutes, and NOT tri-state: there is no clear sentinel here because there
+    # is nothing yet to clear — omitting it is how an entry is created without
+    # one. Bounded on both sides like every other duration this app takes; see
+    # PatchDayEntry.estimate_minutes for why the ceiling is not cosmetic.
+    #
+    # A stated estimate wins over the one the task remembers, which is what
+    # `add_day_entry` does with it.
+    estimate_minutes: int | None = Field(default=None, ge=0, le=1440)
+
+
+class PatchDay(BaseModel):
+    """What the owner says about a day. Every field tri-state: None is "not
+    sent", and the falsy values are real — `committed=false` re-opens a day
+    begun by mistake, and `capacity_minutes=-1` un-states a capacity."""
+
+    # Minutes, or -1 to CLEAR. Same sentinel, same bounds and the same reasoning
+    # as PatchDayEntry.estimate_minutes — one spelling for a duration wherever
+    # this app takes one. 0 is a real capacity ("not working today"), which is
+    # why the clear cannot borrow falsiness.
+    capacity_minutes: int | None = Field(default=None, ge=-1, le=1440)
+    committed: bool | None = None
+    shutdown: bool | None = None
+    # Bounded and XML-safe like every other free text a client sends. Longer than
+    # a note because this is prose about a day rather than a line on it, and an
+    # emptied one clears rather than storing "" — so "nothing written" has one
+    # representation.
+    reflection: XmlSafeText | None = Field(default=None, max_length=4000)
+
+
+class RollEntry(BaseModel):
+    """Where an entry is being moved to. A day key, validated by the route's
+    `_check_day` like every other one in the path."""
+
+    to: str = Field(min_length=1, max_length=10)
 
 
 class PatchDayEntry(BaseModel):
@@ -309,6 +350,14 @@ class PatchDayEntry(BaseModel):
     # out of JSON but cannot be serialized back into it, so one Infinity here
     # would 500 every later read of the whole day.
     position: float | None = Field(default=None, allow_inf_nan=False)
+    # Minutes, or -1 to CLEAR. Bounded on both sides and neither bound is
+    # cosmetic. The ceiling is a day, because a plan is a plan for one — above
+    # that it is a typo, not an intention, and an unbounded int reaches SQLite
+    # as an OverflowError, which is outside the taxonomy this module maps and so
+    # a 500 rather than a 422 (the rule Sidecar's own ints were given bounds
+    # for). The floor is -1 exactly so the clear sentinel is the only negative
+    # that can arrive; the service turns it into NULL and nothing else may.
+    estimate_minutes: int | None = Field(default=None, ge=-1, le=1440)
 
 
 # A habit's `days`: "" (every day) or a comma list of mon,tue,wed,thu,fri,sat,sun.
@@ -342,6 +391,20 @@ class CreateHabit(BaseModel):
     # out of JSON but cannot be serialized back into it, so one Infinity here
     # would 500 every later read of the habits list.
     position: float | None = Field(default=None, allow_inf_nan=False)
+    # How long one run of this takes, copied onto every occurrence at mint time
+    # like the title.
+    #
+    # `ge=0` and NOT the -1 clear sentinel `EditHabit` takes, for the reason
+    # `CreateDayEntry.estimate_minutes` gives: there is nothing to clear on a row
+    # that does not exist yet, and omitting the field is already how a habit is
+    # created without an estimate. This said `ge=-1` and `create_habit` had no
+    # sentinel arm to match it — the only path that advertised the clear and did
+    # not implement it — so a -1 was stored VERBATIM and copied onto every
+    # occurrence the rule minted, making the day's planned total negative and
+    # counting the row as estimated. Refusing it at the edge is the fix; a
+    # service-side swallow would leave two spellings of "no estimate" in one
+    # column.
+    estimate_minutes: int | None = Field(default=None, ge=0, le=1440)
 
 
 class EditHabit(BaseModel):
@@ -351,6 +414,7 @@ class EditHabit(BaseModel):
     # false is a real value — resuming a paused habit.
     paused: bool | None = None
     position: float | None = Field(default=None, allow_inf_nan=False)
+    estimate_minutes: int | None = Field(default=None, ge=-1, le=1440)
 
 
 class CreateBookingLink(BaseModel):
@@ -600,6 +664,55 @@ class SettingsPatch(BaseModel):
     # free. Absent means "assume the link's zone", the old behaviour. An empty
     # string clears it (the store merge only skips None).
     home_timezone: str | None = None
+    # How many minutes the owner expects to work on an ordinary day, and the
+    # per-weekday exceptions. Absent means "never said", which is a real answer
+    # the whole capacity feature turns on: an account that has not stated one is
+    # never told it has overcommitted (see service._effective_capacity).
+    #
+    # The map is SPARSE and keyed by the weekday NAMES habits already use —
+    # {"mon": 300, "fri": 180} — never by index. service._WEEKDAYS is documented
+    # as the one place those names and Python's numbering meet, and a second
+    # mapping is how "wed" comes to mean Wednesday on one path and Thursday on
+    # the other. A weekday absent from the map falls through to the default; a
+    # key that is not a weekday name is ignored rather than guessed at, because
+    # a settings blob is hand-editable.
+    #
+    # Bounded at a day on both, for the reason every int here is bounded: an
+    # unbounded value reaches SQLite as an OverflowError, which is outside the
+    # taxonomy this module maps and so a 500 rather than a 422.
+    # `ge=-1` because -1 is the CLEAR sentinel, the same one this feature uses
+    # on every other surface. It is needed here specifically: `update_settings`
+    # merges shallowly and skips None, so without a sentinel an owner who once
+    # set a default could never get back to "never said". 0 cannot be the clear
+    # — "I do not work today" is a real capacity, and the null case existing at
+    # all is what stops the app inventing a working day for people.
+    day_capacity_minutes: int | None = Field(default=None, ge=-1, le=1440)
+    day_capacity_by_weekday: dict[str, int] | None = Field(default=None, max_length=7)
+
+    @field_validator("day_capacity_by_weekday")
+    @classmethod
+    def _check_capacity_map(cls, v: dict[str, int] | None) -> dict[str, int] | None:
+        """Keep only real weekday names carrying a sane number of minutes.
+
+        FILTERS rather than rejects, the same call `_clean_tokens` makes for
+        appearance tokens and for the same reason: a blob written by a newer
+        client that knows something this build does not should still import what
+        it can. The alternative — 422 — would reject the whole settings PUT and
+        take the theme and the dashboard layout down with it.
+        """
+        if v is None:
+            return None
+        out: dict[str, int] = {}
+        for name, minutes in v.items():
+            if name not in _WEEKDAY_NAMES:
+                continue
+            # bool is an int subclass, so JSON `true` would otherwise store as
+            # one minute — the same guard `_check_session_ttl` applies.
+            if isinstance(minutes, bool) or not isinstance(minutes, int):
+                continue
+            if 0 <= minutes <= 1440:
+                out[name] = minutes
+        return out
 
     @field_validator("home_timezone")
     @classmethod
@@ -1226,6 +1339,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def get_day(request: Request, day: str):
         return await _run(_svc(request).open_day, _check_day(day), create=False)
 
+    @api.patch("/day/{day}")
+    async def patch_day(request: Request, day: str, body: PatchDay):
+        """What the owner says about a day, as opposed to what is on it.
+
+        A PATCH on the DAY rather than on an entry, because none of these belong
+        to any row: they are the day's own facts. Refused on a past day by the
+        service, which turns that into the 422 below — a capacity is a plan and a
+        shutdown is a boundary, and neither can be performed after the fact."""
+        try:
+            return await _run(
+                _svc(request).set_day_ritual, _check_day(day),
+                capacity_minutes=body.capacity_minutes, committed=body.committed,
+                shutdown=body.shutdown, reflection=body.reflection,
+            )
+        except ValueError as e:
+            raise HTTPException(422, str(e)) from None
+
     @api.post("/day/{day}/entries", status_code=201)
     async def post_day_entry(request: Request, day: str, body: CreateDayEntry):
         # 422 rather than the 404 the task routes answer for an unknown list.
@@ -1238,9 +1368,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 _svc(request).add_day_entry, checked,
                 entry_id=body.entry_id, kind=body.kind,
                 list_id=body.list, uid=body.uid, title=body.title,
+                estimate_minutes=body.estimate_minutes,
             )
         except ValueError as e:
             raise HTTPException(422, str(e)) from None
+
+    @api.post("/day/{day}/entries/{entry_id}/roll")
+    async def post_roll_entry(request: Request, day: str, entry_id: str, body: RollEntry):
+        """Move one entry to another day.
+
+        A POST rather than a PATCH because it CREATES: the entry on the target
+        day is new, and this one is stamped with where it went. Nothing moves and
+        nothing is deleted — see `service.roll_entry`."""
+        try:
+            dto = await _run(
+                _svc(request).roll_entry, _check_day(day), entry_id, _check_day(body.to))
+        except ValueError as e:
+            raise HTTPException(422, str(e)) from None
+        if dto is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown day entry {entry_id}")
+        return dto
 
     @api.patch("/day/{day}/entries/{entry_id}")
     async def patch_day_entry(request: Request, day: str, entry_id: str, body: PatchDayEntry):
@@ -1248,6 +1395,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             dto = await _run(
                 _svc(request).patch_day_entry, _check_day(day), entry_id,
                 done=body.done, dropped=body.dropped, position=body.position,
+                estimate_minutes=body.estimate_minutes,
             )
         except ValueError as e:
             # `done` on a TASK entry: a task's doneness is its VTODO STATUS, not
@@ -1277,6 +1425,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return await _run(
                 _svc(request).create_habit,
                 title=body.title, days=body.days, position=body.position,
+                estimate_minutes=body.estimate_minutes,
             )
         except ValueError as e:
             # An empty title, or a `days` that is not a weekday list — including
@@ -1302,6 +1451,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 _svc(request).update_habit, habit_id,
                 title=body.title, days=body.days,
                 paused=body.paused, position=body.position,
+                estimate_minutes=body.estimate_minutes,
             )
         except ValueError as e:
             raise HTTPException(422, str(e)) from None

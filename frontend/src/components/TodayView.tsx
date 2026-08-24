@@ -5,7 +5,8 @@
 // This one renders a SNAPSHOT. The backend freezes what a day held the first
 // time it was opened (`day_plan`), and from then on the day is something the
 // owner arranges: adding to it, ticking it off, dropping what is not going to
-// happen. That is why the rows here come from `/api/day` and not from `tasks`.
+// happen, and putting it in the order it will actually be worked. That is why
+// the rows here come from `/api/day` and not from `tasks`.
 //
 // Two truths meet on this screen and only one of them lives in the day plan:
 //
@@ -19,6 +20,51 @@
 //   * whether a NOTE is done is the entry's own `done_at`, because a note
 //     exists nowhere but in the day. That one is a PATCH. A HABIT OCCURRENCE is
 //     on this side of the fence too, for exactly the same reason — see below.
+//
+// ── the add box, and saying which of those two you are making ──────────────
+//
+// One input, and a line of prose in it: planning a day has to be cheap or it
+// does not get done, which is why there is no title field plus two pickers.
+// `daytext.parseEntry` reads the line, and a reading plus somewhere to put it
+// authors a REAL TASK (a thing with a due date belongs on a list the whole
+// account can see, and the day entry then points at it); anything else authors
+// a NOTE, which lives only in the day.
+//
+// That rule is unchanged and it is a good rule. What was wrong for a long time
+// is that NOTHING ON THE SCREEN SAID WHICH WAY IT HAD GONE. The preview chip
+// appeared only when a date was recognised, and even then it reported the
+// READING rather than the consequence — so the case it never covered was the
+// one that needed covering most: a plain line quietly becoming a thing that
+// exists nowhere but in this day and reaches no other client on the account.
+// Two very different outcomes, chosen by a parser, announced by neither.
+//
+// So `willBe` is the one expression that answers "what will Enter do", and the
+// line under the box states it in the same three words the rows use for the
+// same three things (KIND_LABEL) — plus where the thing will end up, which is
+// the half that actually differs. The override is two-way, so "make this a
+// task" is as sayable as "make this a note", and it does NOT reset on a
+// keystroke: the boolean it replaced did, correctly, because it declined a
+// PARSE and one more character can withdraw a parse, but a choice of kind is
+// about intent and survives typing the rest of the line.
+//
+// THE FAST PATH IS UNTOUCHED: type, press Enter. The picker appears only when a
+// task is being made and there is more than one list to choose, and it appears
+// BESIDE a line already typed — it is never a field to fill in first.
+//
+// It is also where the target list stopped being a guess. `GET /api/lists`
+// answers CALENDARS alongside task lists and flags which is which, and nothing
+// in this app read that flag outside a test fixture — so `lists[0]` meant
+// "whatever sits first in the sidebar", and on an account whose first
+// collection is a calendar every dated line authored its VTODO into it.
+//
+// One asymmetry worth keeping straight: a task's title is the parser's, because
+// the recognised phrase has been lifted out of it and into the due date; a
+// note's is the LITERAL line, always. The parser deletes what it reads, and a
+// note that quietly lost its "at 7" is the silent loss `daytext.ts`'s own header
+// is written to avoid. And a task pinned onto a line with no date in it gets NO
+// due: `dueFromParse` would fall back to the day being planned, stamping a
+// deadline onto a VTODO every other client then shows as due, off the back of
+// the owner asking only for it to be a task.
 //
 // ── habits ─────────────────────────────────────────────────────────────────
 //
@@ -74,12 +120,12 @@
 // `open_day(create=False)` and writes nothing at all.
 //
 // A PAST DAY IS THEREFORE READ-ONLY END TO END: no add box, no suggestions, no
-// checkbox, no drop control, no habits sheet. That is the same line
-// `mcp/api.py::update_day_entry` draws for the connector, which refuses `done`
-// on a past day because "a tick is a record that something was done AT THE
-// TIME" — a habit occurrence's stamp is the only record of it anywhere, and a
-// log that can be filled in afterwards is a scorecard. The browser must not be
-// the hole in a rule the model is held to.
+// checkbox, no drop control, no habits sheet, no arranging. That is the same
+// line `mcp/api.py::update_day_entry` draws for the connector, which refuses
+// `done` on a past day because "a tick is a record that something was done AT
+// THE TIME" — a habit occurrence's stamp is the only record of it anywhere, and
+// a log that can be filled in afterwards is a scorecard. The browser must not
+// be the hole in a rule the model is held to.
 //
 // What a past day shows instead is the RECORD: the day split by where each row
 // came from (`source`), the rows that were dropped, and what was finished that
@@ -87,6 +133,102 @@
 // `smylte_review_day` answers, and it is bucketed the same way on purpose —
 // two surfaces disagreeing about one day is worse than either being slightly
 // wrong. See REVIEW_ARM.
+//
+// THE RECORD IS NOT ONLY A PAST DAY'S. `mode` shows the same thing for TODAY,
+// and the whole of that feature is a render-level switch: `review` and `offPlan`
+// are pure memos over `allEntries` and `tasks`, both already in hand, so
+// pressing Review issues no request whatsoever. `mode` is deliberately absent
+// from the read effect's dependency list — there is nothing for it to be in it
+// for, and a review that re-read the day would be a second caller of the one
+// call that can create a plan. `LookBack` is reused verbatim rather than
+// reimplemented, for the same reason the buckets match the Python's arm for arm.
+//
+// The two cases stay honestly different, and READ-ONLY-NESS IS KEYED ON
+// `isToday`, NEVER ON `mode`. Today reviewed is today: its rows still tick, its
+// add box stays (noting down what actually happened is the commonest reason to
+// be here at 9pm), and only the suggestions go, because a review is not a place
+// to be handed more work. A finished day hands out nothing whichever mode today
+// was left in.
+//
+// ── the two rituals ────────────────────────────────────────────────────────
+//
+// The day now has a SHAPE as well as contents, and the two overlays are where
+// it gets one. `PlanRitual` in the morning — how long today is, what goes on
+// it, how long each thing takes — and `ShutdownRitual` at the end: what
+// happened, what follows you, a line about how it went. Both are three steps,
+// every step skippable, closable at any point, because a ritual you cannot
+// leave is a wizard and this tab is also the place you merely glance at.
+//
+// Neither is opened for you. The morning one is reached from a dismissible
+// band and the evening one from a header button, and that asymmetry is
+// deliberate: the morning is when a plan is worth prompting for, while a band
+// offering to close the day would be on screen from breakfast onwards.
+//
+// WHAT THE OWNER SAYS ABOUT A DAY lives in `day_ritual`, not in `day_plan`:
+// a capacity, a `committed_at`, a `shutdown_at` and a reflection belong to the
+// day rather than to any row on it. `capacity` on the plan DTO is RESOLVED —
+// this day's statement, else the weekday default, else the account's, else
+// NONE — and none is a real answer that means no total and no warning. An
+// account that never stated a capacity must not be told it has overcommitted
+// against a number it never gave, which is the one thing this feature must not
+// do. `capacity_minutes` beside it is what was stated for THIS day, so a day
+// that merely inherited stays distinguishable from one the owner set.
+//
+// THREE RULES ARE LIFTED INTO `ShutdownRitual` RATHER THAN RE-DERIVED THERE,
+// and each of them was a bug before it was a prop: `isDone` (a task's doneness
+// is its VTODO's — see the fence above), `titleOf` (a task entry carries NO
+// title, so reading `entry.title` printed a placeholder against every task on
+// the one screen whose job is deciding about them), and `renderRow` itself.
+// The ritual holds no second opinion about any row.
+//
+// ── moving work, which is not dropping it ──────────────────────────────────
+//
+// `rolled_to` is the second stamp a row can carry and it is emphatically not
+// `dropped_at`. "This is happening on Thursday" and "this is not happening" are
+// different answers, and the whole point of recording the decision WITH its
+// destination is that a look-back can say where the work went instead of
+// filing it under abandoned. `service.roll_entry` MOVES NOTHING: it writes a
+// row on the target day and stamps this one, so the day that planned the work
+// still shows it planned the work.
+//
+// The difference shows in exactly three places here, and all three are load-
+// bearing: `entries` filters both stamps out (so a decided row leaves the list
+// AND the day's total, which is how you get back under a capacity you have
+// overrun); `onDay` filters only `dropped_at` back IN, so a declined task can
+// be chosen again this afternoon while one with a destination is not offered
+// back under "Due today"; and the look-back gives `moved` its own heading with
+// the destination in place of the due date.
+//
+// This deliberately does not touch `service._carry_into`'s carry-once rule.
+// That rule is about work the system moves FOR you — "a task the owner chose on
+// Monday and then ignored on Tuesday has been declined" — and work you CHOSE to
+// move is a different thing. Both survive, and the automatic carry stays the
+// safety net for a day you never shut down: leaving a row alone in the shutdown
+// is a real answer, and it is the one the carry still answers.
+//
+// ── arranging ──────────────────────────────────────────────────────────────
+//
+// The fourth verb, and for a long time the only one of the four this file
+// promised and did not deliver. `day_plan.position` is a REAL, the server orders
+// on (position IS NULL, position, created_at, entry_id), and it positions every
+// row it writes — so a drop is ONE write: the moved row takes a midpoint between
+// its new neighbours and nothing else changes. That is the whole reason not to
+// copy the Tasks pane's whole-list renumber, which exists because ITS order is
+// global across lists and lives in the sidecar.
+//
+// Both drag directions land between the same pair, `without[to - 1]` and
+// `without[to]`, because removing the dragged row shifts every later index down
+// by one. Habits are excluded: an occurrence's position is minted fresh by its
+// rule each morning, so an order dragged into the spine would be gone tomorrow,
+// and a gesture whose effect silently expires is worse than none. So is any day
+// holding a row with no position yet — an optimistic add, which `orderEntries`
+// sorts to the end, and which a midpoint would therefore be measured against
+// wrongly for the length of one round trip.
+//
+// Pointer-only, as every other drag in this app is (sidebar, tasks, dashboard,
+// calendar). A phone cannot arrange its day, and that gap is the app's rather
+// than this screen's — written down here rather than closed with a bespoke
+// touch gesture that would behave differently from the other four.
 //
 // One consequence of the fence above falls out here and is worth stating, since
 // the record depends on it: a day entry keeps no done flag for a TASK, so on a
@@ -105,13 +247,17 @@ import {
 } from '../api'
 import { useCalendarData, useTaskData } from '../data'
 import { useEscape } from '../hooks'
-import { addDays, cssColor, dayKey, isOverdue, makeGuard, textDir, ymd } from '../util'
-import { fmtClock, fmtDue } from '../time'
+import {
+  addDays, cssColor, dayKey, isOverdue, makeGuard, parseDate, textDir, ymd,
+} from '../util'
+import { fmtClock, fmtDue, fmtDuration } from '../time'
 import { useTimeFormat } from '../timeformat'
 import { sortByCompletion, sortTasks, taskKey } from '../order'
 import { bucketByDay, eventKey, monthGrid, type DayEv } from '../calendar'
 import { parseEntry, type ParsedEntry } from '../daytext'
 import { AgendaEvent } from './DayPopover'
+import { PlanRitual } from './PlanRitual'
+import { ShutdownRitual } from './ShutdownRitual'
 
 /** How far past the computed midnight the rollover timer aims.
  *
@@ -167,6 +313,22 @@ const LOOKBACK_DAYS = 14
  *  stopped being live, which is the only thing worth interrupting the day for. */
 const STALE_DAYS = 21
 
+/** How many of a suggestion group's tasks are shown before the rest are put
+ *  behind one press.
+ *
+ *  There are FIVE groups, and every one of them rendered every task it matched.
+ *  On an account with a real backlog that is a wall — "Overdue" alone can be
+ *  fifty rows — and it sits directly beneath the day it is offering things to,
+ *  so the day itself scrolls off the top. A surface for planning one day should
+ *  not open onto a list of everything that is wrong.
+ *
+ *  Five is a judgement call in the same shape as the constants above it: enough
+ *  that a group reads as a list rather than a teaser, few enough that all five
+ *  groups plus the day fit on a screen. It bounds what is PAINTED and nothing
+ *  else — see the render, and the comment on `offered` below, which is why the
+ *  cap cannot be applied where the groups are built. */
+const SUGGEST_MAX = 5
+
 /**
  * A day entry's `source` → the arm a look-back files it under.
  *
@@ -192,19 +354,46 @@ const REVIEW_ARM: Record<string, string> = {
 /** The look-back's groups, in reading order, and the only place their headings
  *  are written.
  *
- *  `dropped` is last and is NOT a source: the day stamps `dropped_at` rather
- *  than deleting the row, and "planned it and decided against it" is one answer
- *  whatever put it there — the same reason `review_day` keeps it out of the
- *  source buckets. Every key here is a key of the bucket record built below, so
- *  a heading cannot name a bucket nothing fills. */
+ *  The last two are NOT sources: the day stamps rather than deleting, and
+ *  "planned it and decided against it" is one answer whatever put the row there
+ *  — the same reason `review_day` keeps it out of the source buckets.
+ *
+ *  `moved` is the other one, and it is separate from `dropped` because they are
+ *  DIFFERENT ANSWERS: work that is happening on Thursday and work that is not
+ *  happening. Filing both under "Dropped" would be the one thing `rolled_to`
+ *  exists to stop — it records a decision AND its destination, so a look-back
+ *  can say where the work went instead of reporting it abandoned.
+ *
+ *  Every key here is a key of the bucket record built below, so a heading cannot
+ *  name a bucket nothing fills. */
 const REVIEW_GROUPS = [
   { key: 'chosen', label: 'Chosen' },
   { key: 'carried', label: 'Carried over' },
   { key: 'derived', label: 'Derived' },
   { key: 'habits', label: 'Habits' },
   { key: 'other', label: 'Other' },
+  { key: 'moved', label: 'Moved on' },
   { key: 'dropped', label: 'Dropped' },
 ] as const
+
+/**
+ * A day entry's `kind` → what that kind is called, for the row's mark.
+ *
+ * Keyed by plain string and read with a fallback, for exactly the reason
+ * `REVIEW_ARM` is: `DayEntryKind` widens SILENTLY — api.ts says so in as many
+ * words, because nothing in this app switches on it exhaustively — and an
+ * unfamiliar kind announcing itself as "Entry" costs a reader nothing, while a
+ * lookup that came back `undefined` would hand assistive tech a nameless
+ * `role="img"` on every row of a kind this build has not heard of.
+ *
+ * The three names are the ones the add box uses for the same three things, on
+ * purpose: what the box promises to create and what the row then calls itself
+ * have to be one vocabulary, or the teaching the box now does is undone by the
+ * list directly beneath it.
+ */
+const KIND_LABEL: Record<string, string> = {
+  task: 'Task', note: 'Note', habit: 'Habit',
+}
 
 /** The smallest denominator the weekly count is willing to be shown at.
  *
@@ -324,6 +513,32 @@ export function dueFromParse(p: ParsedEntry, day: string): string {
  * Keyed on the ENTRY's own day rather than on the view's, so the answer travels
  * with the row into whichever list paints it.
  */
+/**
+ * What a row READS AS, wherever it is painted.
+ *
+ * Module-level and shared for the reason `rowDone` is: the shutdown ritual asks
+ * this question too, and a row whose title is resolved twice is a row that
+ * eventually reads two different ways in two places. It resolves the day's
+ * hardest case — a task entry carries NO title of its own, because the VTODO's
+ * summary is the truth and copying it into the day would freeze a rename.
+ *
+ * A habit occurrence takes the `!isTask` arm and reads its own title, which IS
+ * the copy taken from the rule when the row was minted. Deliberate on both
+ * sides: renaming a habit leaves last Tuesday saying what the owner planned
+ * last Tuesday, and deleting one leaves the row perfectly readable.
+ *
+ * The empty string is a real answer, and is why `tasksLoaded` is a parameter:
+ * before the tasks land, "no longer in your lists" would be a confident claim
+ * about a fetch still in flight, so the row waits rather than lying.
+ */
+export function entryTitle(
+  e: DayEntry, task: Task | undefined, tasksLoaded: boolean,
+): string {
+  if (e.kind !== 'task') return e.title || ''
+  if (task) return task.summary || '(untitled)'
+  return tasksLoaded ? 'This task is no longer in your lists' : ''
+}
+
 function rowDone(e: DayEntry, task: Task | undefined, live: boolean): boolean {
   if (e.kind !== 'task') return !!e.done_at
   if (live) return !!task?.completed
@@ -469,14 +684,21 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
     () => (plan && plan.day === day ? orderEntries(plan.entries) : null),
     [plan, day])
 
-  // The LIVE rows: what the day currently holds. Dropped entries come back on
-  // every read by design (the server stamps rather than deletes, so a day can
-  // still say what was declined) and are filtered out here, the one place with
-  // a reason to — everything that paints the day as a list of things to do
-  // reads this. The look-back is the exception and reads `allEntries`, because
-  // "I decided against this" is the most useful thing a finished day can say.
+  // The LIVE rows: what the day currently holds. Dropped and MOVED entries come
+  // back on every read by design (the server stamps rather than deletes, so a
+  // day can still say what was declined and where work went) and are filtered
+  // out here, the one place with a reason to — everything that paints the day
+  // as a list of things to do reads this. The look-back is the exception and
+  // reads `allEntries`, because "I decided against this" and "I moved this to
+  // Thursday" are two of the most useful things a finished day can say.
+  //
+  // Both leave the day's list and its TOTAL. Moving something forward is how
+  // you get back under a capacity you have overrun, so a total that kept
+  // counting it would make the one control that helps useless — the same
+  // reasoning that takes a dropped row out.
   const entries = useMemo(
-    () => allEntries?.filter((e) => !e.dropped_at) ?? null, [allEntries])
+    () => allEntries?.filter((e) => !e.dropped_at && !e.rolled_to) ?? null,
+    [allEntries])
 
   // A RENDER-LEVEL partition over the array `orderEntries` already ordered —
   // both halves keep the positions the server gave them, and nothing is sorted
@@ -661,6 +883,102 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
     patchEntry(e.entry_id, dto ?? { done_at: e.done_at })
   }, [day, guard, patchEntry])
 
+  /**
+   * Set or clear how long an entry is expected to take. Every kind takes one:
+   * a task, a note and a habit occurrence are all things that cost time.
+   *
+   * `null` clears, and the wire spells that -1 — an int has no spare falsy value
+   * to mean "unset", because 0 is a real estimate. The translation happens here,
+   * at the one call site, rather than leaking the sentinel into the component
+   * that collects the number.
+   */
+  const setEstimate = useCallback(async (e: DayEntry, minutes: number | null) => {
+    token.current += 1
+    patchEntry(e.entry_id, { estimate_minutes: minutes })
+    const dto = await guard(() => api.patchDayEntry(day, e.entry_id, {
+      estimate_minutes: minutes ?? -1,
+    }))
+    // Back to the old value on failure rather than leaving a number on screen
+    // that the day does not hold — `guard` has already raised the toast.
+    patchEntry(e.entry_id, dto ?? { estimate_minutes: e.estimate_minutes })
+  }, [day, guard, patchEntry])
+
+  /** Say how long today is. `null` clears, spelled -1 on the wire — the same
+   *  sentinel an estimate uses, and needed for the same reason: 0 is a real
+   *  capacity ("not working today"). */
+  const setCapacity = useCallback(async (minutes: number | null) => {
+    token.current += 1
+    setPlan((p) => (p && p.day === day
+      ? { ...p, capacity_minutes: minutes, capacity: minutes }
+      : p))
+    const dto = await guard(
+      () => api.patchDay(day, { capacity_minutes: minutes ?? -1 }))
+    if (dto) setPlan((p) => (p && p.day === dto.day ? dto : p))
+  }, [day, guard])
+
+  /** Mark the day begun. The ritual's last act, and the moment the
+   *  overcommitment is stated — it records a decision rather than enforcing
+   *  one, so nothing about the day changes except that it now knows it started. */
+  const commitDay = useCallback(async () => {
+    token.current += 1
+    const dto = await guard(() => api.patchDay(day, { committed: true }))
+    if (dto) setPlan((p) => (p && p.day === dto.day ? dto : p))
+    setRitual(false)
+  }, [day, guard])
+
+  /**
+   * Write the day's reflection.
+   *
+   * Trimmed here as well as server-side, so what the field shows back and what
+   * the day holds are the same string — an untrimmed local copy would leave the
+   * textarea claiming a trailing newline the day does not have.
+   *
+   * NOT optimistic in the way a tick is. It is written on blur, from prose
+   * nobody is racing on, and the round trip is invisible; painting it early
+   * would only buy the chance to paint it wrong.
+   */
+  const setReflection = useCallback(async (text: string) => {
+    token.current += 1
+    // "" CLEARS rather than storing an empty string, which is `set_day_ritual`'s
+    // rule and the reason "nothing written" has one representation. So an
+    // emptied box is a real edit and has to be sent, not skipped as falsy.
+    const dto = await guard(() => api.patchDay(day, { reflection: text.trim() }))
+    if (dto) setPlan((p) => (p && p.day === dto.day ? dto : p))
+  }, [day, guard])
+
+  /** Close the day. The shutdown ritual's last act, and the mirror of
+   *  `commitDay`: it stamps, and nothing else about the day changes. Unfinished
+   *  work has already been decided about by the step before it — or left alone,
+   *  which the automatic carry still answers. */
+  const shutdownDay = useCallback(async () => {
+    token.current += 1
+    const dto = await guard(() => api.patchDay(day, { shutdown: true }))
+    if (dto) setPlan((p) => (p && p.day === dto.day ? dto : p))
+    setShutdown(false)
+  }, [day, guard])
+
+  /**
+   * Send one entry to another day.
+   *
+   * A CREATE, not a move: the server writes a row on the target day and stamps
+   * this one with where it went, because the day that planned the work is still
+   * the day that planned it. Nothing here reaches the target day's state — it
+   * is not the day on screen — so the only local change is the stamp.
+   *
+   * That stamp is what makes the row leave the list: `entries` filters
+   * `rolled_to` out, exactly as it filters a dropped row out, so deciding about
+   * something removes it from the day's total as well as from the shutdown's
+   * list of what still follows you.
+   */
+  const rollEntry = useCallback(async (e: DayEntry, to: string) => {
+    token.current += 1
+    patchEntry(e.entry_id, { rolled_to: to })
+    const dto = await guard(() => api.rollDayEntry(day, e.entry_id, to))
+    // Back to where it was on failure rather than leaving the row hidden from a
+    // day it is still on — `guard` has already raised the toast.
+    patchEntry(e.entry_id, dto ?? { rolled_to: e.rolled_to })
+  }, [day, guard, patchEntry])
+
   /** Take a row off the day. Every row can be dropped, task or note alike. */
   const drop = useCallback(async (e: DayEntry) => {
     token.current += 1
@@ -671,6 +989,73 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
     // unchanged puts it exactly where it was.
     if (!dto) setPlan((p) => (p && p.day === e.day ? { ...p, entries: [...p.entries, e] } : p))
   }, [day, guard, dropLocal])
+
+  // ── arranging the day ────────────────────────────────────────────────────
+  //
+  // The verb this file's header has always promised — "the day is something the
+  // owner arranges: adding to it, ticking it off, dropping what is not going to
+  // happen" — and the only one of the four that was never implemented. The
+  // column has been there since the first commit: `day_plan.position` is a REAL,
+  // the server orders on (position IS NULL, position, created_at, entry_id), it
+  // gives every snapshot row a position and every add `max + 1`, and
+  // `PATCH .../entries/{id}` has always taken one.
+  //
+  // Because those positions are FRACTIONAL, a drop is ONE write: the row being
+  // moved takes a value between its new neighbours and nothing else has to
+  // change. A whole-list renumber (which is what the Tasks pane does, for a
+  // different reason — its order is global across lists and lives in the
+  // sidecar) would be N writes for a gesture that moved one row.
+  const [dragId, setDragId] = useState<string | null>(null)
+  const [overId, setOverId] = useState<string | null>(null)
+
+  /**
+   * Move `id` to where `target` currently sits, and write the one position that
+   * changes.
+   *
+   * Both ends are looked up in `dayRows` — the array actually on screen, minus
+   * the row in flight — so "between its new neighbours" means between the rows
+   * the owner can see, not between whatever the unfiltered plan happens to
+   * hold. Habits are not in it (they paint above, in their own group) and
+   * dropped rows are not in it, which is what stops a drop landing a row into a
+   * gap that is invisible.
+   */
+  const moveRow = useCallback(async (id: string, target: string) => {
+    if (id === target) return
+    const rows = dayRows
+    const from = rows.findIndex((r) => r.entry_id === id)
+    const to = rows.findIndex((r) => r.entry_id === target)
+    if (from < 0 || to < 0) return
+    const without = rows.filter((r) => r.entry_id !== id)
+    // Dragging DOWN lands the row AFTER the target; dragging UP lands it
+    // BEFORE. That is what a drop on a row means in every other list in this
+    // app, and downward it is the only reading under which the gesture moves
+    // anything — inserting before the target would put the row back exactly
+    // where it started.
+    //
+    // Both directions come out at the SAME pair of neighbours in `without`,
+    // which is why there is no branch here. Removing the dragged row shifts
+    // every index after it down by one: dragging down, the target lands at
+    // `to - 1` and "after it" is index `to`; dragging up, the target is still
+    // at `to` and "before it" is also index `to`. So the new row goes at index
+    // `to` either way, between `without[to - 1]` and `without[to]`.
+    const before = without[to - 1]
+    const after = without[to]
+    const lo = before?.position ?? null
+    const hi = after?.position ?? null
+    // A fractional index. `lo == null` is the top of the list and `hi == null`
+    // the bottom; both null cannot happen, because a list with one row has
+    // nowhere to drop.
+    const next = lo == null ? (hi ?? 1) - 1
+      : hi == null ? lo + 1
+        : (lo + hi) / 2
+    const old = rows[from].position
+    token.current += 1
+    patchEntry(id, { position: next })
+    const dto = await guard(() => api.patchDayEntry(day, id, { position: next }))
+    // Back to the exact key it had, so a rejected move puts the row where it
+    // was rather than somewhere approximate.
+    patchEntry(id, dto ?? { position: old })
+  }, [dayRows, day, guard, patchEntry])
 
   /**
    * Put a task on `on`. Returns whether it landed.
@@ -692,6 +1077,15 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
       // `habit_id` is null on everything a client can add: an occurrence is
       // minted by its rule when a day is opened, never posted from here.
       source: 'user', position: null, done_at: null, dropped_at: null, habit_id: null,
+      // Null, even for a task the account has estimated before. The remembered
+      // estimate lives in the sidecar, which only the server has read — so this
+      // row paints unestimated for the length of one round trip and takes the
+      // real answer from the DTO. Guessing here would mean guessing wrong
+      // whenever the sidecar disagreed, and a number that flickers to a
+      // different number is worse than one that arrives a beat late.
+      estimate_minutes: null,
+      // A row that has just been added has not been moved anywhere.
+      rolled_to: null,
       created_at: new Date().toISOString(),
     }
     setPlan((p) => (p && p.day === on
@@ -716,6 +1110,11 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
     const optimistic: DayEntry = {
       entry_id, day: on, kind: 'note', list: null, uid: null, title,
       source: 'user', position: null, done_at: null, dropped_at: null, habit_id: null,
+      // A note has nothing to remember an estimate for it, so this one is not
+      // even provisional — it starts unestimated and the ritual asks.
+      estimate_minutes: null,
+      // A row that has just been added has not been moved anywhere.
+      rolled_to: null,
       created_at: new Date().toISOString(),
     }
     setPlan((p) => (p && p.day === on
@@ -729,11 +1128,29 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
 
   // ── the add box ──────────────────────────────────────────────────────────
   const [text, setText] = useState('')
-  // The reading was declined for the line as it stands. Cleared on the next
-  // keystroke because `parseEntry` reads the WHOLE line — one more character
-  // can change or withdraw the reading, so the thing that was declined no
-  // longer exists to stay declined.
-  const [declined, setDeclined] = useState(false)
+  /**
+   * What the owner has said this line should BECOME, or null to let the reading
+   * decide. This replaces a boolean `declined`, and the widening is the point.
+   *
+   * `declined` could only ever say "not the thing you read", which was enough
+   * when the only two outcomes were "task, because a date was found" and "note,
+   * because one was not". But that made the box a coin the parser tossed: a
+   * line with a time silently authored a REAL VTODO on a real list, and a line
+   * without one silently authored a note that exists nowhere but in this day
+   * and reaches no other client on the account. Those are very different
+   * things to have done by accident, and nothing on the screen named either.
+   *
+   * So the override is now two-way — "make this a task" is as sayable as "make
+   * this a note" — and the chip below states the answer either way.
+   *
+   * IT DOES NOT RESET ON A KEYSTROKE, and that is a deliberate departure from
+   * `declined`, which did. `declined` was about a PARSE, and one more character
+   * can withdraw a parse, so the thing that had been declined stopped existing.
+   * A choice of kind is about INTENT: it survives typing the rest of the line,
+   * and clearing it under the owner's fingers would be a fresh instance of
+   * exactly the silent surprise this whole change removes. It clears on commit.
+   */
+  const [pinned, setPinned] = useState<'task' | 'note' | null>(null)
   // Re-read on every keystroke, which is what makes the chip a live preview
   // rather than something the user has to ask for. `day` is in the deps for the
   // same reason it is in the window's: `parseEntry` resolves "tomorrow" and
@@ -742,7 +1159,44 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
   // day behind the one the entry would actually get.
   const parsed = useMemo(() => parseEntry(text, new Date()), [text, day])
   const reads = !!(parsed.dueDate || parsed.dueTime)
-  const showChip = reads && !declined
+
+  /**
+   * The collections a task can actually be created in.
+   *
+   * `useTaskData().lists` is every collection on the account — `GET /api/lists`
+   * answers calendars alongside task lists and flags which is which — and
+   * NOTHING in this app has ever read that flag outside a test fixture. So the
+   * old `lists[0]` was "whatever happens to sit first in the sidebar", which on
+   * an account whose first collection is a calendar meant the box authored its
+   * tasks into a calendar. Filtering here is what makes the picker below honest
+   * and fixes the automatic path at the same time.
+   */
+  const taskLists = useMemo(() => lists.filter((l) => l.is_task_list), [lists])
+  const [listId, setListId] = useState('')
+  // Keep the target valid as the visible set changes — a list that has been
+  // deleted, hidden or was never a task list must not stay selected. Same shape
+  // and same reason as the Tasks pane's quick add.
+  useEffect(() => {
+    if (!taskLists.some((l) => l.id === listId)) setListId(taskLists[0]?.id ?? '')
+  }, [taskLists, listId])
+
+  /**
+   * What Enter will actually create — the one expression the chip, the swap
+   * control, the submit button's name and `commit` all read.
+   *
+   * The automatic arm is byte-for-byte the rule this box has always followed:
+   * a reading plus somewhere to put it makes a task, everything else makes a
+   * note. What changed is that it is now WRITTEN DOWN in one place instead of
+   * being spelled out again at the branch, and that a pin can override it.
+   *
+   * `listId` is part of it rather than checked later, because "there is nowhere
+   * to put a task" has to resolve to `note` BEFORE anything paints: a chip
+   * promising a task on an account with no task lists would be a promise the
+   * commit could not keep.
+   */
+  const willBe: 'task' | 'note' = listId
+    ? (pinned ?? (reads ? 'task' : 'note'))
+    : 'note'
 
   const commit = async () => {
     const raw = text.trim()
@@ -752,30 +1206,43 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
     // goes back on failure (as the dashboard's quick add does), so a rejected
     // line is never simply lost.
     setText('')
-    setDeclined(false)
+    setPinned(null)
     const on = day
-    // A parsed date or time authors a REAL TASK — something with a due date
-    // belongs on a list where the rest of the account can see it, and the day
-    // entry then points at it. Everything else is a note, which lives only in
-    // the day.
-    //
-    // A line that parsed but has nowhere to go — a brand-new account, or the
-    // lists fetch still in flight — falls back to a note carrying the LITERAL
-    // text, not `parsed.summary`: the parser DELETES the phrase it recognised,
-    // and a note that quietly lost its "at 7" is the silent loss daytext.ts's
-    // own header is written to avoid.
-    const listId = lists[0]?.id
-    const ok = showChip && listId
-      ? await addParsedTask(on, listId, parsed)
+    // A task's title is the parser's — the recognised phrase has been lifted
+    // out of it and into the due date. A NOTE's is the LITERAL line, always:
+    // the parser DELETES what it recognised, and a note that quietly lost its
+    // "at 7" is the silent loss daytext.ts's own header is written to avoid.
+    // That rule held for the old decline path and it has to hold for a pinned
+    // note as well, which is why it is keyed on `willBe` and not on `reads`.
+    const ok = willBe === 'task'
+      ? await addParsedTask(on, listId, parsed, reads)
       : await addNote(on, raw)
     if (!ok) setText(raw)
   }
 
-  const addParsedTask = async (on: string, listId: string, p: ParsedEntry): Promise<boolean> => {
-    // The first list in sidebar order. The box is deliberately ONE input — a
-    // list picker beside it is the friction this surface exists to remove — and
-    // the task is editable in the Tasks pane the moment it exists.
-    const t = await create(listId, { summary: p.summary, due: dueFromParse(p, on) })
+  /**
+   * Author a real task for this line, and point the day at it.
+   *
+   * `dated` is whether the parser actually found something. It decides whether
+   * a DUE is written at all, and the distinction only became reachable when the
+   * box grew a way to say "make this a task" about a line with no date in it.
+   * `dueFromParse` falls back to the day being planned, which is right when a
+   * time was given ("gym at 7" means 07:00 today) and wrong here: it would
+   * stamp a deadline of today onto a VTODO that every other client on the
+   * account will then show as due, off the back of the owner asking only for it
+   * to be a task. Being on today's plan is the day entry's job; a due date is a
+   * claim about the task itself, and this is not the place to invent one.
+   */
+  const addParsedTask = async (
+    on: string, list: string, p: ParsedEntry, dated: boolean,
+  ): Promise<boolean> => {
+    const t = await create(list, {
+      summary: p.summary,
+      // Omitted rather than sent empty — `CreateTaskBody`'s optional keys mean
+      // "leave unset", and the backend only copies non-None fields onto the
+      // VTODO.
+      ...(dated ? { due: dueFromParse(p, on) } : {}),
+    })
     if (!t) return false                 // `create` has already raised the toast
     return addTask(on, t)
   }
@@ -814,11 +1281,20 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
   // What the day already holds, so the suggestion lists cannot offer something
   // that is already on screen above them.
   //
-  // Over the LIVE rows, so dropped entries are already gone, and that is
-  // deliberate: having dropped something this morning, choosing it again this
-  // afternoon has to work — the server's add is idempotent EXCEPT over dropped
-  // rows for exactly that reason.
-  const onDay = useMemo(() => keysOf(entries ?? []), [entries, keysOf])
+  // Dropped rows are NOT in it, and that is deliberate: having dropped
+  // something this morning, choosing it again this afternoon has to work — the
+  // server's add is idempotent EXCEPT over dropped rows for exactly that
+  // reason.
+  //
+  // MOVED rows are, which is why this reads `allEntries` and filters rather
+  // than reading `entries`. The two stamps mean different things and this is the
+  // one place the difference shows: "I decided against this" leaves the task
+  // undecided-about and it is right to offer it back, while "this is happening
+  // on Thursday" is a decision WITH A DESTINATION — the work already has a row
+  // on another day, and re-offering it under "Due today" would contradict the
+  // answer given ten seconds earlier in the shutdown.
+  const onDay = useMemo(
+    () => keysOf((allEntries ?? []).filter((e) => !e.dropped_at)), [allEntries, keysOf])
 
   // What the day held at all, dropped rows included. The look-back's off-plan
   // list is what needs this rather than `onDay`: a task that was planned and
@@ -859,8 +1335,16 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
     const s = new Set<string>()
     for (const p of recentPlans) {
       if (!p || !Array.isArray(p.entries) || p.day >= day) continue
+      // `!e.rolled_to` as well as `!e.dropped_at`, and it is the same rule
+      // `onDay` states one screen down: a row with a DESTINATION has been
+      // decided about, and the work already has a row on the day it went to.
+      // Without this, something moved to Thursday came back on Tuesday under
+      // "you did not finish these last time" — the plan offering back the
+      // answer the owner gave it forty seconds earlier in the shutdown.
+      //
+      // This was the one reader of `rolled_to` the column did not reach.
       const chosen = p.entries.filter(
-        (e) => e.source === 'user' && !e.done_at && !e.dropped_at)
+        (e) => e.source === 'user' && !e.done_at && !e.dropped_at && !e.rolled_to)
       for (const k of keysOf(chosen)) s.add(k)
     }
     return s
@@ -954,12 +1438,27 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
    * there, which is the same call the Python makes.
    */
   const review = useMemo(() => {
-    if (isToday || !allEntries) return null
+    // `allEntries` and nothing else. This used to be `isToday || !allEntries`,
+    // and the `isToday` half was the only thing that made a day's own record
+    // unreadable until the day was over: everything the record is made of is
+    // already in hand for today (these are pure memos over `allEntries` and
+    // `tasks` — no call, no fetch, and above all no `openDay`), so withholding
+    // it meant the one question a daily surface should be able to answer at
+    // 9pm — how did today go? — could only be asked tomorrow.
+    if (!allEntries) return null
     const buckets: Record<string, DayEntry[]> = {
-      chosen: [], carried: [], derived: [], habits: [], other: [], dropped: [],
+      chosen: [], carried: [], derived: [], habits: [], other: [], moved: [],
+      dropped: [],
     }
     for (const e of allEntries) {
-      buckets[e.dropped_at ? 'dropped' : (REVIEW_ARM[e.source] ?? 'other')].push(e)
+      // Dropped first, then moved, then the source. Both stamps outrank where
+      // the row came from, for the same reason: what was decided about a row is
+      // what a look-back is asking. The order between them only matters for a
+      // row that somehow carries both, and "declined" is the later word.
+      const arm = e.dropped_at ? 'dropped'
+        : e.rolled_to ? 'moved'
+          : (REVIEW_ARM[e.source] ?? 'other')
+      buckets[arm].push(e)
     }
     // Empty groups are dropped rather than printed as empty states: five
     // headings over nothing is a form, not a record of a day.
@@ -991,7 +1490,6 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
    * there is a completion that still stands.
    */
   const offPlan = useMemo(() => {
-    if (isToday) return []
     // Ordered by WHEN, through the helper the app's other two completion lists
     // already share (HomeView's "recently completed" and the Tasks pane's
     // completed view). The clock is the only thing these rows carry besides a
@@ -1082,6 +1580,19 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
 
   const heading = new Date(`${day}T00:00`).toLocaleDateString(undefined,
     { weekday: 'long', month: 'long', day: 'numeric' })
+  /** Whether a row counts as finished.
+   *
+   *  `rowDone` with the day's own `isToday`, named once here because three
+   *  surfaces ask it — the header count below, the shutdown ritual, and each
+   *  row's own mark — and a second spelling of it is how they come to describe
+   *  one day two different ways. */
+  const isDone = useCallback(
+    (e: DayEntry) => rowDone(e, taskFor(e), isToday), [taskFor, isToday])
+
+  /** What a row reads as. Same lifting, same reason, as `isDone` — a task entry
+   *  carries no title of its own and only this view can resolve one. */
+  const titleOf = useCallback(
+    (e: DayEntry) => entryTitle(e, taskFor(e), loaded), [taskFor, loaded])
   // Through `rowDone`, the same call each row's own mark makes and with the same
   // `isToday`, which is the whole point of that helper existing: on a finished
   // day this figure counts what was done ON THAT DAY, and a header answering
@@ -1094,7 +1605,56 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
   // needed no branch, only checking. And they belong in the totals: they are on
   // the day, they are on the screen, and a "7 on the day" that disagreed with
   // the number of rows under it would be unreadable.
-  const openCount = (entries ?? []).filter((e) => !rowDone(e, taskFor(e), isToday)).length
+  const openCount = (entries ?? []).filter((e) => !isDone(e)).length
+
+  // ── how full the day is ──────────────────────────────────────────────────
+  //
+  // Over the LIVE rows, so a dropped entry costs the day nothing — declining
+  // something is how you get back under, and a total that kept counting it
+  // would make the one control that helps useless.
+  //
+  // Rows with no estimate contribute NOTHING rather than some assumed default.
+  // That leaves the total honestly low on a half-estimated day, which is the
+  // right direction: a number that guessed would be a number nobody could act
+  // on, and `unestimated` below says how much of the day it is silent about.
+  const planned = useMemo(
+    () => (entries ?? []).reduce((n, e) => n + (e.estimate_minutes ?? 0), 0), [entries])
+  const unestimated = useMemo(
+    () => (entries ?? []).filter((e) => e.estimate_minutes == null).length, [entries])
+
+  /** Minutes of estimate on the rows that got done.
+   *
+   *  Read against `planned` at shutdown and NOTHING ELSE — no percentage, no
+   *  ratio coloured against a target. It is honestly low on a half-estimated
+   *  day, the same direction and for the same reason `planned` is: a figure
+   *  that guessed at the unestimated rows would be a verdict dressed as a fact.
+   */
+  const doneMinutes = useMemo(() => (entries ?? [])
+    .filter(isDone)
+    .reduce((n, e) => n + (e.estimate_minutes ?? 0), 0), [entries, isDone])
+
+  /** Minutes of calendar on this day. Shown BESIDE the capacity and never
+   *  subtracted from it: an event is committed time, but whether a given one is
+   *  work is a judgement the app does not get to make on the owner's behalf —
+   *  lunch and the dentist are on the same calendar as the standup. So the
+   *  collision is made visible and the arithmetic is left alone. */
+  const meetingMinutes = useMemo(() => todaysEvents.reduce((n, ev) => {
+    // An all-day event is a LABEL on the day, not a claim on its hours — "Anna's
+    // birthday" is not eight hours of meeting — so it is skipped rather than
+    // counted as the whole day and swamping the figure.
+    if (ev.all_day || !ev.start || !ev.end) return n
+    // Through `parseDate`, like every other reader of an event's times in this
+    // app: a bare date and a datetime are different shapes, and `new Date()`
+    // reads the first as UTC midnight, which is the previous day for anyone west
+    // of it.
+    const start = parseDate(ev.start).getTime()
+    const end = parseDate(ev.end).getTime()
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return n
+    return n + Math.round((end - start) / 60000)
+  }, 0), [todaysEvents])
+
+  const capacity = plan && plan.day === day ? plan.capacity : null
+  const over = capacity != null && planned > capacity
 
   // The habits sheet edits RULES, so it is not part of any one day and does not
   // live in the day's state. It is opened from the header of the tab the habits
@@ -1102,19 +1662,110 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
   // one is the morning you are looking at it.
   const [sheet, setSheet] = useState(false)
 
+  /**
+   * Which half of today is on screen: the plan you are working, or the record
+   * of how it has gone.
+   *
+   * Only ever consulted while `isToday`. A finished day has no plan half — it
+   * IS the record — so `reviewing` below folds the two cases together and every
+   * gate downstream reads that rather than testing the mode itself.
+   *
+   * NOT reset when the picker steps to a past day and back. Same call, and the
+   * same reason, as `sheet` above: the gate is about what a day may PAINT, and
+   * the owner never left the view they chose.
+   */
+  const [mode, setMode] = useState<'plan' | 'review'>('plan')
+  /** The planning ritual is open. */
+  const [ritual, setRitual] = useState(false)
+  /** The shutdown ritual is open. Its own flag rather than a third value of
+   *  `mode`: `mode` decides what the PAGE paints, and both rituals are overlays
+   *  standing in front of whichever half is already there. */
+  const [shutdown, setShutdown] = useState(false)
+  /** The band was waved away for this session. Not persisted, and deliberately:
+   *  it is a nudge about TODAY, and a dismissal that outlived the day would
+   *  silently turn the feature off for good on the first impatient morning.
+   *  Keyed by day so stepping the picker and coming back does not resurrect it
+   *  on a day already waved away. */
+  const [bandOff, setBandOff] = useState<string | null>(null)
+  /** The screen is showing a record rather than a plan — because the day is
+   *  finished, or because the owner asked for today's. */
+  const reviewing = !isToday || mode === 'review'
+
+  /** Rows may be dragged into a new order.
+   *
+   *  A live day being PLANNED, and every row on it carrying a real position.
+   *  The second half is what makes the midpoint arithmetic total: the server
+   *  positions every row it writes, so the only unpositioned rows that ever
+   *  exist are optimistic ones between a click and its reply — and
+   *  `orderEntries` sorts those to the end, so a midpoint taken against one
+   *  would be measured against a neighbour that is about to move somewhere
+   *  else. It resolves itself in a round trip. */
+  const canArrange = isToday && !reviewing
+    && dayRows.length > 1 && dayRows.every((e) => e.position != null)
+
+  /** The suggestion groups the owner has asked to see in full, by group key.
+   *
+   *  Deliberately NOT reset when the day moves. Suggestions are gated on
+   *  `isToday` and paint on no other day, so there is no stale state to clear —
+   *  and a look-back and back would otherwise re-collapse a group the owner
+   *  opened a moment ago. */
+  const [expanded, setExpanded] = useState<string[]>([])
+
   /** One row of the day, whichever group it is painting in. Every list renders
    *  through this — today's two and the look-back's six — so a fix to a row
    *  cannot reach one group and miss the others. */
   const renderRow = (e: DayEntry) => (
     <TodayRow key={e.entry_id} entry={e} task={taskFor(e)} tasksLoaded={loaded}
       color={colorOf(e.list)} onToggleTask={toggle} onToggleEntry={toggleEntry}
-      onDrop={drop}
+      onDrop={drop} onEstimate={setEstimate}
       // A past day hands out no controls at all: see the header. The flag says
       // "this row is a record", and the row itself decides what that costs it.
-      readOnly={!isToday}
+      //
+      // A DROPPED row is a record too, on whatever day it sits. It only ever
+      // paints in a review — the day's own lists filter it out (`entries`) and
+      // only `review` reads it back — so before today could be reviewed, "past
+      // day" and "dropped" were the same set and `!isToday` covered both. They
+      // came apart the moment a LIVE day could show its dropped rows: without
+      // this, the Dropped group on today would hand out a checkbox for ticking
+      // something the owner declined, and a ✕ for dropping what is already
+      // dropped. "I decided against this" is the most useful thing the day
+      // records, and neither control has anything to say about it.
+      //
+      // A MOVED row is the same case, arrived at from the other direction: the
+      // work is on Thursday now, and Thursday's row is the one to tick. A
+      // checkbox here would write today's record for work today is not doing.
+      readOnly={!isToday || !!e.dropped_at || !!e.rolled_to}
       // `kind` as well as `habit_id`, so "undefined on every other kind" is a
       // fact rather than a consequence of the column being null on them today.
-      count={e.kind === 'habit' && e.habit_id ? habitWeek.get(e.habit_id) : undefined} />
+      count={e.kind === 'habit' && e.habit_id ? habitWeek.get(e.habit_id) : undefined}
+      // ARRANGING. Three conditions, and each rules out a case where the
+      // gesture would be a lie:
+      //
+      //  * `canArrange` — the day is live and being planned, and every row on
+      //    it has a real position. An optimistically added row has none until
+      //    the server answers, and `orderEntries` sorts an unpositioned row to
+      //    the END, so a midpoint taken while one is in flight would be
+      //    computed against a neighbour that is about to move. Off for that
+      //    instant is the honest answer, and it is an instant.
+      //  * not a HABIT. An occurrence's position is minted fresh by its rule
+      //    every morning (`service._habit_entries_for`), so an order dragged
+      //    into today's spine is gone tomorrow. Habits also paint in their own
+      //    group above the day, so the arrangement would not even be visible
+      //    where it was made. A gesture whose effect silently expires is worse
+      //    than no gesture.
+      //  * not DROPPED — those only ever paint in a look-back, which is
+      //    read-only anyway, but the flag says so at the row rather than
+      //    relying on that.
+      draggable={canArrange && e.kind !== 'habit' && !e.dropped_at}
+      dragging={dragId === e.entry_id}
+      dragOver={overId === e.entry_id && dragId !== null && dragId !== e.entry_id}
+      onDragRow={setDragId}
+      onDragOverRow={setOverId}
+      onDropRow={(target) => {
+        if (dragId) void moveRow(dragId, target)
+        setDragId(null); setOverId(null)
+      }}
+      onDragEndRow={() => { setDragId(null); setOverId(null) }} />
   )
 
   return (
@@ -1156,11 +1807,63 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
                 past day's task rows off `completed_at`, so a task ticked this
                 morning cannot add itself to last Tuesday's tally. Both halves
                 are over the LIVE rows, so dropped entries are in neither — they
-                have their own heading below. */}
-            {isToday
+                have their own heading below.
+
+                Keyed on `reviewing` rather than on `isToday`, so today counts
+                itself the same way when it is being read as a record. Note what
+                that does and does not change: only the WORDING moves. The
+                arithmetic still goes through `rowDone(…, isToday)` — the LIVE
+                flag on a live day — because a task ticked a moment ago has to be
+                counted on the click, and its COMPLETED stamp is not in hand
+                until the write comes back. The words describe the mode; the
+                number describes the day. */}
+            {!reviewing
               ? `${openCount} open · ${entries.length} on the day`
               : `${entries.length - openCount} done · ${entries.length} on the day`}
           </span>
+        )}
+        {/* THE WAY IN TO A REVIEW OF TODAY, and the whole of it: this is a
+            render-level switch over data already in hand, so pressing it issues
+            no request of any kind. `mode` is deliberately absent from the read
+            effect's dependency list and cannot go in it — there is nothing to
+            re-read. That matters more than it looks: `api.openDay` is the only
+            call that can CREATE a plan, and the one rule this file is built
+            around is that it is called for today and nothing else. A review
+            reached by any other route — a hidden day, a prefetch — would have
+            had to touch it.
+
+            Absent on a finished day rather than disabled, like every other
+            control here: a past day IS the record, so a button offering to show
+            one would be offering what is already on the screen. */}
+        {isToday && (
+          <button type="button" className="btn ghost today-review"
+            aria-pressed={mode === 'review'}
+            onClick={() => setMode((m) => (m === 'plan' ? 'review' : 'plan'))}>
+            {mode === 'review' ? 'Plan' : 'Review'}
+          </button>
+        )}
+        {/* THE WAY IN TO THE SHUTDOWN, and deliberately not a band. The
+            planning nudge is a band because the morning is when a plan is worth
+            prompting for; a band offering to close the day would be on screen
+            from breakfast onwards, nagging about an evening that has not
+            arrived. A button is available the moment you want it and silent
+            until then.
+
+            `isToday` only, matching what the server will accept: `set_day_ritual`
+            refuses a shutdown on a day that has already happened, because a
+            shutdown performed on Thursday for Monday is not a record of Monday.
+            Absent rather than disabled, like every other control here.
+
+            The label does NOT change once the day is closed. The ritual is
+            re-enterable on purpose — an evening thought belongs in the same
+            reflection — and a header button that reported state would be the
+            third thing on this screen doing so. The ritual says it instead, on
+            the step where someone coming back would look. */}
+        {isToday && (
+          <button type="button" className="btn ghost today-shutdown"
+            aria-haspopup="dialog" onClick={() => setShutdown(true)}>
+            Shut down
+          </button>
         )}
         {/* The sheet edits RULES, and its whole feedback loop is that the
             change shows up on the day behind it — creating a habit puts an
@@ -1169,10 +1872,23 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
             ever show on the day it was opened from: the control would be a
             write surface offered from a screen that says it is a finished
             record. It comes back the moment the owner does. */}
+        {/* A WORD, not a glyph. This was a bare `↻` carrying its name in
+            `aria-label` and `title` — which meant the only thing that ever said
+            "habits" to a sighted user was a tooltip, and a tooltip is a
+            desktop-only affordance: there is no hover on a phone, so on the
+            device a daily surface is most used on, the sole entry point to the
+            feature was an unexplained symbol.
+
+            The glyph stays, `aria-hidden`, beside the word rather than instead
+            of it — so the accessible name is exactly "Habits", which is what it
+            already was and what four suites match on exactly. Letting the ↻
+            into the name would have renamed the control to "↻ Habits" and
+            broken every one of them. */}
         {isToday && (
-          <button type="button" className="icon-btn today-habits-open"
-            aria-haspopup="dialog" aria-label="Habits" title="Habits"
-            onClick={() => setSheet(true)}>↻</button>
+          <button type="button" className="btn ghost today-habits-open"
+            aria-haspopup="dialog" onClick={() => setSheet(true)}>
+            <span className="mono" aria-hidden="true">↻</span> Habits
+          </button>
         )}
       </div>
 
@@ -1206,35 +1922,242 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
       {/* The one box that writes to the day, and it is absent on a past one
           rather than disabled. A greyed-out field invites the question "why
           can't I?"; nothing at all, under a heading that reads "Look back",
-          says what the surface is. */}
+          says what the surface is.
+
+          Gated on `isToday` and NOT on `reviewing`, which is the one place
+          those two deliberately part company. Reviewing today is not the same
+          act as reading a finished day: today is still running, its rows are
+          still tickable and droppable, and "note down the thing I actually did"
+          is the commonest reason to be looking at this screen in the evening.
+          Hiding the only writer while leaving every other control in place
+          would be inconsistent in the one direction that costs something. The
+          SUGGESTIONS do go — they are the surface offering more work, which is
+          the thing a review is not for. */}
       {isToday && (
         <form className="quickadd today-add"
           onSubmit={(e) => { e.preventDefault(); void commit() }}>
           <input className="input" value={text} aria-label="Add to today"
             placeholder="Add to today — “invoice friday”, “gym at 7”…"
-            onChange={(e) => { setText(e.target.value); setDeclined(false) }} />
-          <button className="btn" type="submit" disabled={!text.trim()}>Add</button>
-          {showChip && (
-            // Advisory, never a gate: Enter commits whether or not this has been
-            // looked at, which is the difference between a preview and a
-            // confirmation step. The date and time are rendered through `fmtDue`
-            // with the live 12/24-hour setting, so what the chip promises is
-            // exactly what the row will read once it exists.
-            <p className="today-chip" role="status">
-              <span className="label">{parsed.guessed ? 'reading (guess)' : 'reading'}</span>
-              <span className="today-chip-sum" dir={textDir(parsed.summary)}>{parsed.summary}</span>
-              <span className="mono">
-                {fmtDue(dueFromParse(parsed, day), !parsed.dueTime, tf)}
+            // The chip below DESCRIBES this field rather than announcing at it.
+            // It used to be a `role="status"` live region, which was tolerable
+            // while it appeared only on the rare line that parsed; now that it
+            // is on for every line with a character in it, a live region would
+            // re-announce on every keystroke. Described-by is read on demand,
+            // and the submit button carries the same answer at the moment it is
+            // acted on — see its label.
+            aria-describedby={text.trim() ? 'today-add-fate' : undefined}
+            onChange={(e) => {
+              setText(e.target.value)
+              // Emptying the box abandons the line, and the pin is a statement
+              // about THAT line — so it goes with it. This is the one edit that
+              // clears it, and it is not the keystroke rule the boolean it
+              // replaced had: typing on is still typing the same line, and the
+              // choice survives that.
+              if (!e.target.value.trim()) setPinned(null)
+            }} />
+          {/* The consequence, in the name of the control that causes it. This is
+              what a screen-reader user gets instead of the chip's colour and
+              wording, and it is better placed than the chip was: it is heard
+              when the button is reached, which is the instant before it fires. */}
+          <button className="btn" type="submit" disabled={!text.trim()}
+            aria-label={text.trim()
+              ? (willBe === 'task' ? 'Add as task' : 'Add as note')
+              : undefined}>Add</button>
+
+          {/* THE LINE THAT SAYS WHAT ENTER WILL DO.
+              It is on for any line with a character in it, not only for one
+              that parsed. That is the change: the old chip appeared only when a
+              date was recognised, so the case it never covered was the one that
+              needed covering most — a plain line silently becoming a note that
+              lives nowhere but in this day and reaches no other client on the
+              account. Both outcomes are now stated in the same words the rows
+              below use for the same three things (see KIND_LABEL).
+
+              Advisory, never a gate: Enter commits whether or not this has been
+              looked at, which is the difference between a preview and a
+              confirmation step. */}
+          {text.trim() && (
+            <p className="today-chip" id="today-add-fate">
+              <span className="label">will add</span>
+              <span className="today-chip-kind">{KIND_LABEL[willBe]}</span>
+              {/* A task shows the parser's title, because the recognised phrase
+                  has moved into the date beside it. A note shows the LINE, all
+                  of it — what a note keeps is what was typed. */}
+              <span className="today-chip-sum"
+                dir={textDir(willBe === 'task' ? parsed.summary : text.trim())}>
+                {willBe === 'task' ? parsed.summary : text.trim()}
               </span>
-              <button type="button" className="chip-x" onClick={() => setDeclined(true)}
-                aria-label="Add the line as typed instead">✕</button>
+              {willBe === 'task' && reads && (
+                // Through `fmtDue` with the live 12/24-hour setting, so what the
+                // chip promises is exactly what the row will read once it exists.
+                <span className="mono">
+                  {fmtDue(dueFromParse(parsed, day), !parsed.dueTime, tf)}
+                  {parsed.guessed ? ' (guess)' : ''}
+                </span>
+              )}
+              {/* Where it ends up, which is the half the old chip never said and
+                  the half that actually differs. */}
+              {/* The list is named ONCE. When the picker is showing it is the
+                  thing naming it, and repeating the name a line above it is the
+                  same fact twice in two typefaces; when there is no picker —
+                  one task list, or none — the sentence is the only place it can
+                  be said. */}
+              <span className="today-chip-fate">
+                {willBe !== 'task'
+                  ? 'on this day only — it never leaves Smylte'
+                  : taskLists.length > 1
+                    ? 'it shows up in your other apps too'
+                    : `on ${taskLists.find((l) => l.id === listId)?.name ?? 'your lists'}`
+                      + ' — it shows up in your other apps too'}
+              </span>
             </p>
+          )}
+
+          {/* The CONTROLS, deliberately outside the paragraph above. Two
+              reasons, and they point the same way: a control never belongs
+              inside a region that describes something, and `aria-describedby`
+              would otherwise read the buttons' labels out as part of the
+              description. */}
+          {text.trim() && (
+            <div className="today-add-opts">
+              <button type="button" className="btn ghost today-swap"
+                onClick={() => setPinned(willBe === 'task' ? 'note' : 'task')}
+                // Absent when there is nowhere to put a task: `willBe` has
+                // already resolved to `note` for that reason, and offering a
+                // swap that silently does nothing is worse than offering none.
+                disabled={!listId}>
+                {willBe === 'task' ? 'Make it a note' : 'Make it a task'}
+              </button>
+              {willBe === 'task' && taskLists.length > 1 && (
+                // Only when there is a choice to make, and only when a task is
+                // what is being made. The box is still ONE input on the fast
+                // path — this appears beside a line already typed, it is never
+                // a field to fill in first.
+                <select className="input quickadd-list" value={listId}
+                  aria-label="List for the new task"
+                  onChange={(e) => setListId(e.target.value)}>
+                  {taskLists.map((l) => (
+                    <option key={l.id} value={l.id}>{l.name}</option>
+                  ))}
+                </select>
+              )}
+            </div>
           )}
         </form>
       )}
 
+      {/* THE NUDGE, and the whole of the prompting. A band rather than a wizard
+          that opens itself: this tab is also the place you glance at to see
+          what is next, and a flow standing in front of that on every first
+          visit would be the thing people turn off in week two.
+          Only on today, only before the day has been started, and gone for the
+          session once waved away. */}
+      {isToday && mode === 'plan' && plan?.day === day && !plan.committed_at
+        && bandOff !== day && (
+        <div className="today-band">
+          <span className="today-band-text">
+            {capacity == null
+              ? 'Plan your day — say how long it is, then what goes on it.'
+              : `Plan your day — ${fmtDuration(capacity)} to work with.`}
+          </span>
+          <button type="button" className="btn" onClick={() => setRitual(true)}>
+            Plan my day
+          </button>
+          <button type="button" className="icon-btn today-band-x"
+            aria-label="Not now" onClick={() => setBandOff(day)}>✕</button>
+        </div>
+      )}
+
+      {/* Both rituals are gated on `entries !== null` as well as on the flag —
+          a flow that opened over a day still being read would ask what follows
+          you out of an empty list. */}
+      {isToday && shutdown && entries !== null && (
+        <ShutdownRitual
+          day={day} entries={entries} offPlan={offPlan}
+          planned={planned} done={entries.length - openCount}
+          doneMinutes={doneMinutes} unestimated={unestimated}
+          shutdownAt={plan?.day === day ? plan.shutdown_at : null}
+          reflection={plan?.day === day ? plan.reflection : null}
+          renderRow={renderRow} colorOf={colorOf}
+          isDone={isDone} titleOf={titleOf}
+          onRoll={(e, to) => void rollEntry(e, to)}
+          onDrop={(e) => void drop(e)}
+          onReflect={(text) => void setReflection(text)}
+          onShutdown={() => void shutdownDay()}
+          onClose={() => setShutdown(false)} />
+      )}
+
+      {isToday && ritual && entries !== null && (
+        <PlanRitual
+          entries={entries} suggestions={suggestions}
+          capacity={capacity} planned={planned} meetingMinutes={meetingMinutes}
+          unestimated={unestimated} committedAt={plan?.committed_at ?? null}
+          renderRow={renderRow} colorOf={colorOf}
+          onCapacity={(m) => void setCapacity(m)}
+          onAddTask={(t) => void addTask(day, t)}
+          onCommit={() => void commitDay()}
+          onClose={() => setRitual(false)} />
+      )}
+
+      {/* HOW FULL THE DAY IS. Present whenever the day has a capacity to be read
+          against — which is any day the owner, or their weekday default, has
+          given one — and absent entirely otherwise. An account that has never
+          stated a capacity sees nothing here at all, because there is no honest
+          number to put in it and inventing an eight-hour day for them is the
+          one thing this feature must not do.
+
+          On the day itself rather than only inside the ritual, because the
+          moment it earns its keep is 2pm, when you are deciding whether to take
+          one more thing on — which is exactly when nobody is running a ritual. */}
+      {capacity != null && entries !== null && (
+        <div className={`today-load ${over ? 'over' : ''}`}>
+          <div className="today-load-line">
+            <span className="today-load-fig mono">
+              {fmtDuration(planned)} of {fmtDuration(capacity)}
+            </span>
+            {meetingMinutes > 0 && (
+              // Beside the figure, never inside it. See `meetingMinutes`.
+              <span className="today-load-cal mono">
+                · {fmtDuration(meetingMinutes)} on the calendar
+              </span>
+            )}
+            {unestimated > 0 && (
+              // What the total is silent about. Without this the number reads as
+              // the whole day when it may be a third of it, and quietly under-
+              // reporting is worse than not reporting.
+              <span className="today-load-rest mono">
+                · {unestimated} not estimated
+              </span>
+            )}
+          </div>
+          {/* Decorative: the figure above already says it in words, and a bar
+              that announced itself would say the same thing twice to a screen
+              reader. */}
+          <div className="today-load-bar" aria-hidden="true">
+            <div className="today-load-fill"
+              style={{ width: `${Math.min(100, capacity ? (planned / capacity) * 100 : 0)}%` }} />
+          </div>
+          {over && (
+            // Said in WORDS as well as in colour, because the colour is the half
+            // that does not survive a screen reader, a greyscale screenshot or a
+            // custom theme. `role="status"` and not `alert`: this is a fact about
+            // a day you can still change, not an error.
+            <p className="today-load-over" role="status">
+              That is {fmtDuration(planned - capacity)} more than you said you
+              would work.
+            </p>
+          )}
+        </div>
+      )}
+
       <div className="scroll">
-        {isToday ? (
+        {/* `reviewing`, not `!isToday`. A finished day has always taken the
+            second arm; today now takes it too when the owner asks. `LookBack`
+            is handed exactly what it was before and is reused verbatim — it is
+            purely presentational and owns no state — so the two screens cannot
+            drift into describing one day two different ways, which is the thing
+            `REVIEW_ARM` exists to prevent. */}
+        {!reviewing ? (
           <>
             {/* Habits first, above the day rather than mixed through it. The
                 group is skipped entirely when there are none: a heading over
@@ -1259,13 +2182,42 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
                 contradict the screen it is printed on. */}
             {entries !== null && entries.length === 0 && (
               <p className="empty">
-                Nothing on today yet. Type a line above, or add one of the tasks below.
+                Nothing on today yet. Type a line above, add one of the tasks
+                below, or{' '}
+                {/* The third way in to habits, and the one that reaches the
+                    account most likely to need it: a brand-new day on a
+                    brand-new account, where the Habits GROUP is (rightly)
+                    absent because there is nothing to put in it. Without this
+                    the feature was invisible until you already had one. */}
+                <button type="button" className="today-linkish"
+                  onClick={() => setSheet(true)}>set up a habit</button>.
               </p>
             )}
             {dayRows.length > 0 && (
               <ul className="today-list">
                 {dayRows.map(renderRow)}
               </ul>
+            )}
+
+            {/* The other half of the habits trace: a day that HAS rows but no
+                habit occurrences. The empty state above covers the empty day
+                and this covers the worked one, and the two are mutually
+                exclusive by construction (`entries.length > 0` here, `=== 0`
+                there) — so the screen never says the same thing twice.
+
+                It is a line of prose rather than an empty "Habits" section, and
+                that is the same call the group above makes for the same reason:
+                a heading over nothing advertises a feature as a permanent empty
+                state on every account that does not want one. A sentence that
+                explains what the feature IS costs a line and teaches something;
+                a blank section costs a line and teaches nothing. */}
+            {habitRows.length === 0 && entries !== null && entries.length > 0 && (
+              <p className="empty today-quiet today-habits-hint">
+                A habit is a rule that puts a line on your day, on the days you
+                choose. It never becomes a task, and it never leaves this app.{' '}
+                <button type="button" className="today-linkish"
+                  onClick={() => setSheet(true)}>Set one up</button>.
+              </p>
             )}
 
             {/* Today's only. The events in hand are HomeView's window — the six
@@ -1283,20 +2235,41 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
           </>
         ) : (
           <LookBack review={review} offPlan={offPlan} renderRow={renderRow}
-            colorOf={colorOf} />
+            reflection={plan?.day === day ? plan.reflection : null}
+            colorOf={colorOf} live={isToday} />
         )}
 
-        {suggestions.map((g) => (
+        {/* Not while reviewing. The `suggestions` memo keeps its own `isToday`
+            gate — it means "what could be added to THIS day", which is still
+            the right meaning — and this is the second, different question:
+            a review is a place to see how the day went, not to be handed more
+            work. The add box stays, though; see the form above. */}
+        {!reviewing && suggestions.map((g) => {
+          // CAPPED HERE, at the render, and never where the groups are built.
+          // `group()` walks every item it matched into the `offered` set, which
+          // is what keeps the five groups disjoint — a task due at 09:00 today
+          // is also overdue from 09:01, and one task offered twice is two "add"
+          // buttons for one row. Capping upstream would leave the sixth
+          // due-today task un-offered, so it would reappear under "Overdue" as
+          // a second chance to add the same thing.
+          const shown = expanded.includes(g.key) ? g.items : g.items.slice(0, SUGGEST_MAX)
+          return (
           <section key={g.key}>
             <div className="label section-label">{g.label}</div>
             <ul className="today-list">
-              {g.items.map((t) => (
+              {shown.map((t) => (
                 <li key={taskKey(t)} className="today-row today-sug">
                   <button type="button" className="today-plus"
                     aria-label={`Add ${t.summary || '(untitled)'} to today`}
                     onClick={() => void addTask(day, t)}>+</button>
-                  <span className="list-dot" style={colorOf(t.list)
-                    ? { background: colorOf(t.list)! } : undefined} />
+                  {/* The same column the day's rows keep, in its task face:
+                      a suggestion is a task, and one left edge has to run down
+                      the whole screen or the groups stop reading as one list. */}
+                  <span className="today-kind-mark" data-kind="task" role="img"
+                    aria-label="Task">
+                    <span className="today-kind-box" style={colorOf(t.list)
+                      ? { background: colorOf(t.list)! } : undefined} />
+                  </span>
                   <span className="today-title" dir={textDir(t.summary)}>
                     {t.summary || '(untitled)'}
                   </span>
@@ -1308,8 +2281,21 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
                 </li>
               ))}
             </ul>
+            {/* The count is IN the label, so a capped group never hides how much
+                it is hiding — "Show all" alone would leave the owner pressing it
+                to find out whether it was worth pressing. One way only: there is
+                no collapse, because having asked to see the group you are
+                reading it, and a control that takes the list back is a control
+                whose only use is undoing a click you meant. */}
+            {g.items.length > shown.length && (
+              <button type="button" className="today-more"
+                onClick={() => setExpanded((s) => [...s, g.key])}>
+                Show all {g.items.length}
+              </button>
+            )}
           </section>
-        ))}
+          )
+        })}
       </div>
     </div>
   )
@@ -1324,14 +2310,22 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
  * arrives with `readOnly` already set by its caller, and nothing else in this
  * subtree is a control. See the header for why that matters.
  */
-function LookBack({ review, offPlan, renderRow, colorOf }: {
+function LookBack({ review, offPlan, reflection, renderRow, colorOf, live = false }: {
   /** The day's live rows grouped by origin, plus the dropped ones, in reading
    *  order — or `null` while the read is still in flight. */
   review: Array<{ key: string; label: string; rows: DayEntry[] }> | null
   /** Tasks finished on the day that the plan never held. */
   offPlan: Task[]
+  /** What the owner wrote about the day at shutdown, or null. */
+  reflection: string | null
   renderRow: (e: DayEntry) => ReactNode
   colorOf: (listId: string | null) => string | null
+  /** The day being read is TODAY, reviewed while it is still running. It
+   *  changes one thing — the tense of the empty state — and deliberately
+   *  nothing else: the buckets, the headings and the rows are the same record
+   *  read the same way, which is the point of reusing this component rather
+   *  than writing a second one that could describe a day differently. */
+  live?: boolean
 }) {
   const tf = useTimeFormat()
   // Nothing at all until the read lands — the same discipline the day's own
@@ -1341,6 +2335,21 @@ function LookBack({ review, offPlan, renderRow, colorOf }: {
   if (review === null) return null
   return (
     <>
+      {/* WHERE THE REFLECTION IS READ BACK, and the reason it is worth writing.
+          The shutdown's last step promises "you will see it whenever you look
+          back at today", and until this existed that promise was false: the
+          text was stored, prefilled into the box that wrote it, and shown
+          nowhere else.
+
+          First, above the rows, because it is the only thing on this screen in
+          the owner's own words — everything under it is the machine's record of
+          the same day. */}
+      {reflection && (
+        <section className="today-reflection">
+          <div className="label section-label">How it went</div>
+          <p className="today-reflection-text" dir={textDir(reflection)}>{reflection}</p>
+        </section>
+      )}
       {review.map((g) => (
         <section key={g.key}>
           <div className="label section-label">{g.label}</div>
@@ -1362,8 +2371,11 @@ function LookBack({ review, offPlan, renderRow, colorOf }: {
               <li key={taskKey(t)} className="today-row">
                 <span className="today-check-gap today-mark mono" role="img"
                   aria-label="Done">✓</span>
-                <span className="list-dot" style={colorOf(t.list)
-                  ? { background: colorOf(t.list)! } : undefined} />
+                <span className="today-kind-mark" data-kind="task" role="img"
+                  aria-label="Task">
+                  <span className="today-kind-box" style={colorOf(t.list)
+                    ? { background: colorOf(t.list)! } : undefined} />
+                </span>
                 <span className="today-title" dir={textDir(t.summary)}>
                   {t.summary || '(untitled)'}
                 </span>
@@ -1378,7 +2390,14 @@ function LookBack({ review, offPlan, renderRow, colorOf }: {
         </section>
       )}
       {review.length === 0 && offPlan.length === 0 && (
-        <p className="empty">Nothing was planned on this day, and nothing was finished on it.</p>
+        <p className="empty">
+          {live
+            // Today, and still running: "was planned" would file the day as
+            // over when there are hours of it left, and the add box is sitting
+            // directly above this line ready to take the first thing.
+            ? 'Nothing on today yet, and nothing finished so far.'
+            : 'Nothing was planned on this day, and nothing was finished on it.'}
+        </p>
       )}
     </>
   )
@@ -1417,8 +2436,98 @@ function CalendarStrip({ events, day, loaded, styleOf }: {
   )
 }
 
+/** The most minutes an estimate may be, matching the edge model's ceiling.
+ *
+ *  A day, because a plan is a plan for ONE — above that it is a typo rather
+ *  than an intention. Restated here rather than imported because the two are
+ *  guarding different things: the server's bound is what stops a bad request
+ *  reaching SQLite as an unmapped OverflowError, and this one is what stops the
+ *  owner watching a number they typed come back rejected. */
+const MAX_ESTIMATE = 1440
+
+/**
+ * One row's estimate: a quiet reading that becomes an input when pressed.
+ *
+ * A button rather than a permanently-open field, and that is the whole design
+ * question here. Every row on the day would carry one, so a field on each is a
+ * column of boxes down a list that is meant to be glanceable — the estimate is
+ * something you set during the ritual and read for the rest of the day. Reading
+ * is the common case, so reading is what it costs nothing.
+ *
+ * Commits on blur AND on Enter, reverts on Escape. That is `HabitEditRow`'s
+ * rename, deliberately: the two are the same interaction and a second set of
+ * keys for it would be a second thing to learn.
+ */
+function EstimateCell({ minutes, readOnly, label, onChange }: {
+  minutes: number | null
+  /** The day has finished, so this is a record and not a control. */
+  readOnly?: boolean
+  /** What this estimates, for the control's accessible name. */
+  label: string
+  /** Minutes, or null to clear. */
+  onChange: (next: number | null) => void
+}) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState('')
+
+  // A finished day shows what was estimated and offers no way to change it —
+  // the same line every other control on this row draws. Nothing at all when
+  // nothing was estimated: a dim "add one" on a day that has already happened
+  // is an invitation to rewrite the record.
+  if (readOnly) {
+    return minutes == null ? null : (
+      <span className="today-est mono">{fmtDuration(minutes)}</span>
+    )
+  }
+
+  if (!editing) {
+    return (
+      <button type="button" className={`today-est mono ${minutes == null ? 'unset' : ''}`}
+        aria-label={minutes == null
+          ? `Estimate ${label}`
+          : `${label} is estimated at ${fmtDuration(minutes)} — change it`}
+        onClick={() => { setDraft(minutes == null ? '' : String(minutes)); setEditing(true) }}>
+        {minutes == null ? 'est' : fmtDuration(minutes)}
+      </button>
+    )
+  }
+
+  const commit = () => {
+    setEditing(false)
+    const raw = draft.trim()
+    // An emptied field CLEARS, which is the only way back to "nobody said" and
+    // is why the wire needed a sentinel for it at all.
+    if (!raw) { if (minutes != null) onChange(null); return }
+    const n = Number(raw)
+    // Bounded here as well as at the edge, and the same way `SchedulingView`
+    // bounds its durations: `min`/`max` on a number input do not stop a typed
+    // value, so the attributes are for the spinner and this is the rule.
+    if (!Number.isFinite(n)) return
+    const next = Math.max(0, Math.min(MAX_ESTIMATE, Math.round(n)))
+    if (next !== minutes) onChange(next)
+  }
+
+  return (
+    <input className="input today-est-input" type="number" autoFocus
+      min={0} max={MAX_ESTIMATE} step={5} value={draft}
+      aria-label={`Minutes for ${label}`}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') { e.preventDefault(); commit() }
+        // Escape abandons the edit. It does NOT close anything above this —
+        // `useEscape` is bound to the window and would take the habits sheet
+        // with it, so the propagation stop is load-bearing rather than tidy.
+        if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setEditing(false) }
+      }} />
+  )
+}
+
 function TodayRow({
   entry, task, tasksLoaded, color, count, readOnly, onToggleTask, onToggleEntry, onDrop,
+  onEstimate,
+  draggable = false, dragging = false, dragOver = false,
+  onDragRow, onDragOverRow, onDropRow, onDragEndRow,
 }: {
   entry: DayEntry
   /** The task a task entry points at, once it is in hand. */
@@ -1439,8 +2548,25 @@ function TodayRow({
   onToggleTask: (t: Task) => Promise<void>
   onToggleEntry: (e: DayEntry) => Promise<void>
   onDrop: (e: DayEntry) => Promise<void>
+  /** Set or clear how long this is expected to take. Null clears. */
+  onEstimate: (e: DayEntry, minutes: number | null) => Promise<void>
+  /** This row may be picked up and moved. Decided by the caller — see the
+   *  three conditions there; the row only wears the result. */
+  draggable?: boolean
+  /** This row is the one being carried. */
+  dragging?: boolean
+  /** Something else is being carried and is currently over this row. */
+  dragOver?: boolean
+  onDragRow?: (entryId: string) => void
+  onDragOverRow?: (entryId: string) => void
+  onDropRow?: (entryId: string) => void
+  onDragEndRow?: () => void
 }) {
   const tf = useTimeFormat()
+  /** The last press on this row landed on something interactive. Written on
+   *  mousedown and read on dragstart — see the row's own comment for why the
+   *  obvious `e.target` test cannot do this job. */
+  const grabbedControl = useRef(false)
   const isTask = entry.kind === 'task'
   const isHabit = entry.kind === 'habit'
   // The task a row points at can genuinely go away — deleted in another CalDAV
@@ -1452,15 +2578,9 @@ function TodayRow({
   // instead. `tasksLoaded` is `useTaskData().loaded`, the same gate the
   // dashboard's TaskList uses.
   const gone = isTask && !task && tasksLoaded
-  // A habit occurrence takes the `!isTask` arm and reads its OWN title, which is
-  // the copy taken from the rule when the row was minted. That is deliberate on
-  // both sides: renaming a habit leaves last Tuesday saying what the owner
-  // planned last Tuesday, and deleting one leaves the row perfectly readable
-  // with nothing left to resolve.
-  const title = !isTask
-    ? entry.title || ''
-    : task ? (task.summary || '(untitled)')
-      : gone ? 'This task is no longer in your lists' : ''
+  // Through the shared rule, so this row and the shutdown ritual's list cannot
+  // come to read one entry two different ways — see `entryTitle`.
+  const title = entryTitle(entry, task, tasksLoaded)
   // Same fence as the header describes, through the same call the day's own
   // "N done" figure makes, so the row and the count over it cannot answer the
   // question differently. `!readOnly` is exactly "this day is still live" — see
@@ -1473,10 +2593,17 @@ function TodayRow({
   // of that heading's context — in a screenshot, or under the ⌘F of someone
   // scrolling.
   const dropped = !!entry.dropped_at
-  // Assembled rather than interpolated: with four optional markers the template
+  // The other stamp that only ever paints in a look-back, and the counterpart to
+  // the one above: this row is not gone, it is somewhere else. It gets its own
+  // class rather than sharing `today-dropped` because the two say opposite
+  // things about whether the work is still going to happen.
+  const moved = !!entry.rolled_to
+  // Assembled rather than interpolated: with five optional markers the template
   // runs past the line and reads as punctuation.
   const cls = ['today-row', isHabit && 'today-habit', dropped && 'today-dropped',
-    done && 'done', gone && 'gone'].filter(Boolean).join(' ')
+    moved && 'today-moved',
+    done && 'done', gone && 'gone', draggable && 'today-draggable',
+    dragging && 'today-dragging', dragOver && 'drag-over'].filter(Boolean).join(' ')
 
   // The leftmost cell, in three states rather than two. Lifted out of the JSX
   // because a three-armed conditional inside it cannot be commented arm by arm,
@@ -1518,17 +2645,119 @@ function TodayRow({
       )
 
   return (
-    <li className={cls}>
+    <li className={cls}
+      // Native HTML5 drag and drop, the same shape the sidebar, the tasks pane,
+      // the dashboard and the calendar all use. Deliberately not a library and
+      // not a bespoke pointer handler: this repo has no animation or gesture
+      // dependency at all, and one invented here would be a fifth answer to a
+      // question the other four already agree on.
+      //
+      // Pointer-only, which every one of those four also is. It is a real gap —
+      // a phone cannot arrange its day — and it is the app's gap rather than
+      // this screen's, so it is recorded here and in the header rather than
+      // papered over with a gesture that behaves differently from the rest.
+      draggable={draggable || undefined}
+      // WHERE THE GRAB LANDED, recorded on the way down.
+      //
+      // `draggable` is on the ROW and the row contains an editable control — the
+      // estimate cell becomes a number input in place — so a press inside it
+      // starts a drag of the whole row, and selecting the text of an estimate
+      // silently reorders the day.
+      //
+      // The obvious guard is to test `e.target` inside `onDragStart`, which is
+      // what the Tasks pane does. MEASURED IN CHROMIUM, THAT GUARD IS INERT: a
+      // `dragstart` is fired at the drag SOURCE NODE — the `<li>` — not at the
+      // node under the pointer, so `closest('input, …')` is always null and the
+      // arm never runs. jsdom does not model that (it dispatches at whatever
+      // element the test names), so such a guard passes its test and does
+      // nothing in every real browser.
+      //
+      // `mousedown` DOES target the deepest node, so the answer is recorded
+      // there and read below. Verified end to end in a real browser rather than
+      // reasoned about: grabbing the input fires no drop, grabbing the title
+      // does. (The Tasks pane carries the inert form of this and is still
+      // affected; that is its own change, not this one's.)
+      onMouseDown={draggable
+        ? (e) => {
+          grabbedControl.current = !!(e.target as HTMLElement)
+            ?.closest?.('input, textarea, button, [contenteditable]')
+        }
+        : undefined}
+      onDragStart={draggable
+        ? (e) => {
+          // A gesture that began on something interactive belongs to that
+          // control, not to the row it happens to sit in.
+          if (grabbedControl.current) {
+            e.preventDefault()
+            return
+          }
+          onDragRow?.(entry.entry_id)
+          e.dataTransfer.effectAllowed = 'move'
+          // A payload, so this drag carries what every other drag in this app
+          // carries. The reason given at the other four sites is that Firefox
+          // will not start a drag with an empty transfer; that was true of old
+          // Firefox and is not of any current one, so the honest reason to do it
+          // here is consistency — a gesture with nothing on the transfer is one
+          // no external drop target can read, and there is no reason for this
+          // one to be the odd one out.
+          e.dataTransfer.setData('text/plain', entry.entry_id)
+        }
+        : undefined}
+      // `preventDefault` is what makes this a drop target at all — without it
+      // the browser refuses the drop and the gesture silently does nothing.
+      onDragOver={draggable
+        ? (e) => { e.preventDefault(); onDragOverRow?.(entry.entry_id) }
+        : undefined}
+      onDrop={draggable
+        ? (e) => { e.preventDefault(); onDropRow?.(entry.entry_id) }
+        : undefined}
+      // A drag abandoned outside any row still has to put the highlight back.
+      onDragEnd={draggable ? () => onDragEndRow?.() : undefined}>
       {check}
-      {isTask && (
-        <span className="list-dot" style={color ? { background: color } : undefined} />
-      )}
-      {/* The habit's mark, in the slot a task's list dot occupies, so the two
-          kinds of row keep one left edge. Decorative and hidden from assistive
-          tech: the list it sits in is already named "Habits", and a screen
-          reader announcing "clockwise open circle arrow" before every title is
-          noise, not information. */}
-      {isHabit && <span className="today-habit-mark mono" aria-hidden="true">↻</span>}
+      {/* ONE element, always rendered, whatever the kind — which is the fix as
+          much as the marks themselves are. It used to be two conditionals, a
+          `.list-dot` for a task and a `↻` for a habit, and a NOTE matched
+          neither: it rendered nothing at all, so every note's title sat 13px
+          left of every other row's. A single cell of a fixed width cannot
+          reintroduce that, and it cannot be reintroduced by a fourth `kind`
+          either — `DayEntryKind` widens silently (see api.ts) and the arm that
+          would have been forgotten is now the one that no longer exists.
+
+          The three faces say the thing the day never said out loud: a FILLED
+          square is a task, which lives on a list and reaches every other CalDAV
+          client on the account; a HOLLOW one is a note, which exists nowhere
+          but in this day; `↻` is a habit. Fill against outline is deliberately
+          the same geometry — the left edge is free — and it survives a
+          colourless list, a custom theme and a greyscale screenshot, none of
+          which "a coloured dot versus nothing" does. */}
+      <span className="today-kind-mark" data-kind={entry.kind} role="img"
+        aria-label={KIND_LABEL[entry.kind] ?? 'Entry'}>
+        {/* The kind goes in a DATA ATTRIBUTE, not in the class list, and that is
+            a scar rather than a preference: the first cut wrote
+            `today-kind-mark ${entry.kind}`, which put a bare `task` class on
+            every task row — and `.task` is the Tasks pane's ROW rule, three
+            hundred lines up this same global stylesheet. It brought
+            `display: flex`, `align-items: flex-start` and `padding: var(--row-y)
+            var(--gutter)` with it, so the 7px square painted as a 52×19 slab.
+            The classes here are one global namespace; `[data-kind]` cannot
+            collide with one.
+
+            The SHAPE is a child rather than this element, so the column and the
+            mark can be sized independently: the outer span is the 13px column
+            that holds the left edge, the inner box is the 7px square that says
+            which kind it is. A glyph kind (a habit) puts its character in the
+            same centred box, and a kind this build has never heard of paints an
+            empty column — no mark, but the edge holds, which is the half that
+            must not depend on knowing every kind. */}
+        {isHabit ? '↻' : (isTask || entry.kind === 'note') ? (
+          <span className="today-kind-box"
+            // The list's colour, when it has one, exactly as `.list-dot` took
+            // it. The CSS default underneath is --fg rather than --fg-faint: a
+            // task on a colourless list was previously a faint dot against a
+            // faint rule, which is the case this whole change is about.
+            style={isTask && color ? { background: color } : undefined} />
+        ) : null}
+      </span>
       <span className="today-title" dir={textDir(title)}>{title}</span>
       {/* Omitted ENTIRELY below two occurrences — see MIN_WEEK_COUNT. Rendered
           in --fg-faint whatever the ratio says, and never in --warn: "1 of 5
@@ -1551,9 +2780,28 @@ function TodayRow({
           {count.done} of {count.total} {readOnly ? 'that week so far' : 'this week'}
         </span>
       )}
-      {task?.due && (
-        <span className="today-due mono">{fmtDue(task.due, task.due_is_date, tf)}</span>
-      )}
+      {/* Before the due date, because they answer different questions and the
+          nearer one to the title is the one the ritual is about: how long this
+          will take, versus when it is wanted by. */}
+      <EstimateCell minutes={entry.estimate_minutes} readOnly={readOnly}
+        label={title || 'this entry'}
+        onChange={(next) => void onEstimate(entry, next)} />
+      {/* ALWAYS rendered, empty when the row has no due date — the same lesson
+          as the kind column on the left. A cell that appears only sometimes
+          makes every cell BEFORE it move: with this conditional, an estimate on
+          a row with a due date sat fifty pixels left of one without, so the
+          column a person scans during the ritual zigzagged down the list. The
+          empty span costs a fixed strip of space and buys one right edge. */}
+      <span className="today-due mono">
+        {/* WHERE IT WENT, in place of when it was wanted by. A moved row only
+            ever paints in a look-back, and on that screen its destination is the
+            whole reason it is still on the list — the due date it kept is the
+            less interesting of the two facts, and the target day's own row
+            carries it anyway. */}
+        {entry.rolled_to
+          ? `→ ${fmtDue(entry.rolled_to, true, tf)}`
+          : task?.due ? fmtDue(task.due, task.due_is_date, tf) : ''}
+      </span>
       {/* Absent, not disabled, on a finished day. Dropping is the one write the
           backend DOES still allow on a past day — `update_day_entry` permits it
           because saying "this did not happen" subtracts from the record rather

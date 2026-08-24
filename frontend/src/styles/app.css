@@ -331,6 +331,18 @@
    leaving the bug exactly where it was. Inherited from the root, the override is
    the last word for both. */
 :root { --check-size: 17px; }
+/* The width of the Today tab's kind-mark column — the cell that holds a task's
+   filled square, a note's hollow one and a habit's ↻, and that gives all three
+   one left edge. Declared here beside `--check-size` and for the same cascade
+   reason: it is read by one rule today, but it is the second structural width
+   this screen's left edge depends on, and the two belong together where anyone
+   changing one will see the other.
+   Structural, NOT themeable: like `--check-size` it is deliberately absent from
+   `tokens.css` and from `appearance.ts`'s allowlist, because the appearance
+   editor reaches colours, radii, families and scales — not the geometry that
+   keeps a mixed list aligned. Adding it there would let a saved theme break the
+   left edge this exists to hold. */
+:root { --today-mark-w: 13px; }
 .check {
   width: var(--check-size); height: var(--check-size);
   flex: none; margin-top: 2px; border: 1px solid var(--fg-faint);
@@ -1254,6 +1266,169 @@
 /* A summary is user text of any length and any script: let it wrap inside the
    chip rather than pushing the parsed due date off the line. */
 .today-chip-sum { color: var(--fg); min-width: 0; overflow-wrap: anywhere; }
+/* WHAT it will be — the word the row below will call itself by, so the box and
+   the list share one vocabulary (see KIND_LABEL). --fg, because this is the
+   answer the line exists to give and the rest of it is context. */
+.today-chip-kind {
+  color: var(--fg); font-family: var(--mono);
+  text-transform: var(--label-case); letter-spacing: calc(0.04em * var(--tracking));
+}
+/* WHERE it will end up, which is the half that actually differs between the
+   two and the half the old chip never said. Quieter than the kind: it is the
+   consequence, read once and then known. */
+.today-chip-fate { color: var(--fg-faint); min-width: 0; overflow-wrap: anywhere; }
+
+/* The controls under the chip — the kind swap and, when a task is being made
+   and there is more than one list, the target picker. A row of its own rather
+   than inside the chip: `aria-describedby` points at the chip, and a control
+   inside a description gets read out as part of it.
+   `flex-basis: 100%` puts it on its own line inside `.today-add`'s wrap, the
+   same way the chip does. */
+.today-add-opts {
+  flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+}
+.today-add-opts .btn, .today-add-opts .input { flex: none; }
+/* Sized down from `.btn.ghost`: this sits under a caption, not beside the
+   input, and at full button size it competes with Add for the eye. */
+.today-swap { font-size: calc(11px * var(--fs-scale)); padding: 3px 8px; }
+
+/* ---- the nudge ---------------------------------------------------------
+   A band, not a dialog that opens itself. This tab is also the place you glance
+   at to see what is next, and a flow standing in front of that every morning is
+   the thing people turn off. It recedes into the page rather than sitting on
+   top of it: --bg-elev and a hairline, no shadow, no accent fill. */
+.today-band {
+  display: flex; align-items: center; gap: 10px;
+  margin: 0 var(--gutter) 6px;
+  padding: 9px 12px;
+  background: var(--bg-elev); border: 1px solid var(--rule-faint);
+  border-radius: var(--radius);
+}
+.today-band-text {
+  flex: 1; min-width: 0;
+  font-size: calc(13px * var(--fs-scale)); color: var(--fg-muted);
+}
+.today-band .btn, .today-band .icon-btn { flex: none; }
+.today-band-x { color: var(--fg-faint); }
+
+/* ---- the planning ritual -----------------------------------------------
+   `.modal` supplies the frame, the elevation and the corner radius, and under
+   720px turns it into a bottom sheet with no JS branch. Everything here is only
+   what a stepped flow needs on top. */
+.plan-ritual { gap: 12px; width: min(560px, 100%); }
+.plan-step {
+  font-size: calc(11px * var(--fs-scale)); color: var(--fg-faint);
+  margin-left: auto; padding-right: 8px;
+}
+.plan-body { display: flex; flex-direction: column; gap: 8px; }
+/* The steps that hold a list scroll INSIDE the dialog, so the actions row stays
+   reachable however long the list is — a flow whose only way out has scrolled
+   off the bottom is the wizard this is not. */
+.plan-scroll { max-height: 46vh; overflow-y: auto; }
+.plan-label {
+  font-size: calc(14px * var(--fs-scale)); color: var(--fg);
+}
+.plan-hint {
+  margin: 0; font-size: calc(12px * var(--fs-scale)); color: var(--fg-muted);
+  line-height: 1.4;
+}
+.plan-hint.warn { color: var(--warn); }
+.plan-total {
+  margin: 0; font-size: calc(11px * var(--fs-scale)); color: var(--fg-muted);
+}
+/* --warn here for the reason the day's own strip uses it: this is a forecast
+   about a day that has not happened, from a number the owner chose, which they
+   can change in the next ten seconds. It is never the only carrier — the words
+   below say it too. */
+.plan-total.over { color: var(--warn); }
+.plan-warn {
+  margin: 0; font-size: calc(12px * var(--fs-scale)); color: var(--warn);
+  line-height: 1.4;
+}
+.plan-actions { display: flex; align-items: center; gap: 8px; }
+
+/* ---- the shutdown ritual ------------------------------------------------
+   The same frame as the planning one, on purpose: the two are a pair, and a
+   second dialog vocabulary for the evening half would make them read as
+   unrelated features. Everything below is only the middle step's row, which is
+   the one shape planning has no equivalent of — a title with three answers
+   beside it. */
+.shut-all { display: flex; }
+/* TWO LINES ALWAYS: the title, then the answers under it.
+   This was one line that wrapped when it had to, and looking at it in a browser
+   is what changed it — at the dialog's own width the third control wrapped
+   anyway, to a different indent on each row, so a list built to be scanned had
+   a ragged edge and no two rows the same height. Fixing the shape rather than
+   the widths also takes the fragility out: nothing here now depends on how long
+   "Off the plan" happens to be in the reader's language. */
+.shut-row { flex-wrap: wrap; row-gap: 6px; }
+.shut-row .today-title { flex: 1 1 100%; }
+.shut-arms { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.shut-act {
+  flex: none; padding: 3px 8px; font-size: calc(11px * var(--fs-scale));
+}
+/* A fixed width because a date input sizes itself to its own placeholder, which
+   differs by browser and by locale — left alone, this arm's width would move
+   between Firefox and Chrome. Quieter than its neighbours on purpose: Chrome
+   paints an empty one as `mm/dd/yyyy` with the year filled in from `min`, which
+   at full contrast is the heaviest thing in a row while being the least-reached
+   -for of the three answers. */
+.shut-date {
+  flex: none; width: 132px; padding: 2px 6px; color: var(--fg-muted);
+  font-size: calc(11px * var(--fs-scale));
+}
+/* `resize: vertical` and not both: a horizontal drag would push it past the
+   dialog it lives in. `font: inherit` because a textarea does not take the
+   page's family from `.input` the way an input does — left alone it paints the
+   one piece of prose in this app in the browser's monospace default. */
+.shut-reflect {
+  font: inherit; font-size: calc(14px * var(--fs-scale));
+  resize: vertical; min-height: 76px; line-height: 1.45;
+}
+/* Where the reflection is READ, on the look-back. `pre-wrap` because it is the
+   one field in this app that takes a paragraph break, and collapsing them would
+   hand back something the owner did not write. */
+.today-reflection-text {
+  margin: 0; padding: 0 var(--gutter) 10px;
+  font-size: calc(14px * var(--fs-scale)); color: var(--fg);
+  line-height: 1.5; white-space: pre-wrap;
+}
+
+/* ---- how full the day is -----------------------------------------------
+   Present only on a day that HAS a capacity. There is no empty state here on
+   purpose: an account that has never stated one gets no strip at all, because
+   the alternative is putting a number on the screen that nobody gave. */
+.today-load {
+  padding: 4px var(--gutter) 10px;
+  display: flex; flex-direction: column; gap: 5px;
+}
+.today-load-line {
+  display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px;
+  font-size: calc(11px * var(--fs-scale));
+}
+.today-load-fig { color: var(--fg); }
+.today-load-cal, .today-load-rest { color: var(--fg-faint); }
+
+/* A 3px rule rather than a chart. The figure above already says it in words;
+   this is only the shape of it, for the glance that does not stop to read. */
+.today-load-bar {
+  height: 3px; background: var(--rule-faint); overflow: hidden;
+}
+.today-load-fill { height: 100%; background: var(--accent); transition: width 0.15s; }
+
+/* OVER CAPACITY IS --warn, and that is not a contradiction of the habit count's
+   "never coloured as failure" three hundred lines below. That figure is a
+   RECORD of a finished week and colouring it red would be scoring the owner on
+   the one screen they open every morning. This is a FORECAST about a day that
+   has not happened yet, made from a number they chose, about a plan they can
+   still change in the next ten seconds — the one moment a warning is useful
+   rather than a verdict. It is also said in words (`.today-load-over`), so the
+   colour is never the only carrier. */
+.today-load.over .today-load-fill { background: var(--warn); }
+.today-load.over .today-load-fig { color: var(--warn); }
+.today-load-over {
+  margin: 0; font-size: calc(11px * var(--fs-scale)); color: var(--warn);
+}
 
 .today-list { list-style: none; margin: 0; padding: 0; }
 .today-row {
@@ -1270,7 +1445,42 @@
 }
 .today-row.done .today-title { color: var(--fg-faint); text-decoration: line-through; }
 .today-row.gone .today-title { color: var(--fg-faint); font-style: italic; }
-.today-due { font-size: calc(11px * var(--fs-scale)); color: var(--fg-muted); flex: none; }
+/* A moved row reads as PAST rather than as declined: no line-through and no
+   italic, because the work is still going to happen — it is happening
+   somewhere else, which the `→ Aug 28` in the due cell is what says. */
+.today-row.today-moved .today-title { color: var(--fg-muted); }
+/* How long a row is expected to take. Sits before the due date, and reads a
+   step quieter than it: the estimate is something you set once during the
+   ritual and then glance past, while a due date is a fact about the task that
+   the row is there to surface. */
+.today-est {
+  background: none; border: 0; padding: 2px 4px; cursor: pointer; flex: none;
+  font-family: var(--mono); font-size: calc(11px * var(--fs-scale));
+  color: var(--fg-muted); text-align: right; min-width: 42px;
+}
+/* Unestimated: the affordance is there but says nothing until asked. It is
+   `est` rather than a dash because a dash is a value and this is an invitation
+   — the difference between "takes no time" and "nobody has said", which the
+   whole running total turns on. */
+.today-est.unset { color: var(--fg-faint); }
+@media (hover: hover) { .today-est:hover { color: var(--accent); } }
+/* Sized to the cell it replaces so the row does not jump on the click. The
+   spinner is left to the browser: `SchedulingView` takes its durations exactly
+   this way, and the bounds are re-applied in JS there for the same reason —
+   min/max do not stop a typed value. */
+.today-est-input {
+  flex: none; width: 62px; padding: 2px 4px;
+  font-family: var(--mono); font-size: calc(11px * var(--fs-scale));
+}
+
+/* `min-width` because this cell is now always painted, empty or not: it is what
+   holds the estimate column steady down a list where only some rows are dated.
+   Wide enough for the longest ordinary reading ("Aug 24", or a clock) without
+   reserving space for the outliers, which are free to push wider. */
+.today-due {
+  font-size: calc(11px * var(--fs-scale)); color: var(--fg-muted); flex: none;
+  min-width: 52px; text-align: right;
+}
 .today-due.overdue { color: var(--warn); }
 
 /* Row controls: bare glyph buttons, like .task-actions. */
@@ -1293,6 +1503,39 @@
 /* A suggestion is something that is NOT on the day yet, so it reads a step
    quieter than the rows above it. */
 .today-sug .today-title { color: var(--fg-muted); }
+
+/* ---- arranging the day -------------------------------------------------
+   `.drag-over` is NOT a shared class in this stylesheet — every user of it
+   scopes it to its own row type (`.side-item.drag-over`, `.task-drag.drag-over
+   > .task`, `.day-col.drag-over`, `.cal-cell.drag-over`) — so this is the
+   Today tab's own, drawn with the same 2px accent rule they all use, which is
+   what makes a drop target on this screen read as the same idea it does on
+   every other. */
+.today-row.drag-over { box-shadow: inset 0 2px 0 var(--accent); }
+/* The row in hand recedes rather than disappearing: the gap it leaves is what
+   tells you where it is coming FROM while you look for where it is going to. */
+.today-dragging { opacity: 0.45; }
+/* Only where there is a pointer to grab with. On a touchscreen the row is not
+   draggable at all (HTML5 DnD does not fire there — see TodayRow), and a grab
+   cursor advertising a gesture that cannot happen is worse than no cursor. */
+@media (hover: hover) {
+  .today-draggable { cursor: grab; }
+  .today-draggable:active { cursor: grabbing; }
+}
+
+/* The way past a capped group. Shaped like `.cal-more`, the calendar's "+N
+   more", because it is the same idea in the same voice — a quiet way past a
+   deliberate bound, not a control competing with the rows above it. It takes
+   the page gutter so it lines up under the titles rather than under the row's
+   left edge, which would read as a sixth row. */
+.today-more {
+  display: block; background: none; border: 0; cursor: pointer; text-align: left;
+  padding: 6px var(--gutter);
+  font-family: var(--mono); font-size: calc(11px * var(--fs-scale));
+  color: var(--fg-faint); text-transform: var(--label-case);
+  letter-spacing: calc(0.06em * var(--tracking));
+}
+@media (hover: hover) { .today-more:hover { color: var(--accent); } }
 
 /* ---- the look-back -----------------------------------------------------
    Stepping back through recent days. The day picker is chrome; everything
@@ -1351,13 +1594,47 @@
    visual statement that the spine is above the day and not part of it. */
 .today-habits .today-row:last-child { border-bottom-color: var(--rule); }
 
-/* Sits in the slot a task's `.list-dot` occupies (7px wide + its 6px margin),
-   so a habit title, a task title and a note title share one left edge. Without
-   the fixed width the glyph's own advance would set it, and the column would
-   move with the font the theme happens to choose. */
-.today-habit-mark {
-  width: 13px; flex: none; text-align: center;
-  font-size: calc(11px * var(--fs-scale)); color: var(--fg-faint);
+/* ---- the kind column --------------------------------------------------
+   One cell, one width, on every row this screen paints — the day's rows, the
+   habits group, the suggestions and the look-back's off-plan list.
+
+   The width is fixed rather than left to the content because the content is
+   three different things: a 7px box, a 7px box with a border, and a glyph whose
+   own advance moves with whichever font the theme picks. Left to itself the
+   column would be a different width per row and per theme.
+
+   This comment used to claim that a habit title, a task title and a note title
+   shared one left edge. They did not. A task rendered `.list-dot` and a habit
+   rendered this glyph, both 13px — and a note rendered NEITHER, so its title
+   started 13px to the left on every row. There is one element now, always
+   present, so the claim is true by construction rather than by three call sites
+   agreeing. */
+/* The COLUMN: a fixed width that holds the left edge, centring whatever mark
+   the kind puts in it. It carries no mark of its own, so a kind this build has
+   never heard of still lines up. */
+.today-kind-mark {
+  width: var(--today-mark-w); flex: none; line-height: 1;
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--mono); font-size: calc(11px * var(--fs-scale));
+  color: var(--fg-faint);
+}
+/* The MARK: one 7px box, filled or hollow. Selected through `[data-kind]` and
+   never through a bare `.task` / `.note` class — see the note in TodayRow.
+   `.task` is the Tasks pane's row rule in this same global stylesheet, and a
+   mark wearing it inherited that row's padding and grew into a 52px slab. */
+.today-kind-box { width: 7px; height: 7px; flex: none; box-sizing: border-box; }
+/* FILLED — a task, which lives on a list and reaches every other CalDAV client
+   on the account. `--fg`, not `--fg-faint`: the inline style carries the list's
+   own colour when it has one, and this is what shows when it does not. The old
+   `.list-dot` default was --fg-faint, which put a faint dot against a faint
+   rule and made the one distinction that matters on this screen — does this
+   leave the app? — almost invisible on any list nobody had coloured. */
+.today-kind-mark[data-kind="task"] .today-kind-box { background: var(--fg); }
+/* HOLLOW — a note, which exists nowhere but in this day. The same 7px box, so
+   the column cannot shift, with the border growing inward (`box-sizing` above)
+   rather than making this one 2px wider than that one. */
+.today-kind-mark[data-kind="note"] .today-kind-box {
+  background: none; border: 1px solid var(--fg-faint);
 }
 /* A habit that is done is still a habit: the title greys and strikes through
    like any other done row (`.today-row.done`), but the mark keeps its weight so
@@ -1373,10 +1650,41 @@
   font-size: calc(11px * var(--fs-scale)); color: var(--fg-faint); flex: none;
 }
 
+/* Plan / Review, on today only. `align-self` for the reason `.today-nav` and
+   `.today-habits-open` have it — `.content-head` aligns on the baseline, and a
+   word-bearing button left to that sits proud of everything beside it.
+   `.btn.ghost` already carries the pressed look through `:active`; what says
+   which half you are on is the LABEL, which names the destination rather than
+   the current state, plus `aria-pressed` for anyone who cannot see it. */
+.today-review { flex: none; align-self: center; }
+
 /* The way in to the sheet, in the tab header. Deliberately in the Today header
    rather than in Settings: the moment you want to change a habit is the morning
-   you are looking at it. */
-.today-habits-open { flex: none; margin-left: 10px; }
+   you are looking at it.
+   `align-self` for the same reason `.today-nav` has it — `.content-head` aligns
+   on the BASELINE, and a button left to that hangs off the title's baseline and
+   sits proud of everything beside it. It was an `.icon-btn` holding a single
+   glyph, which is square enough not to show it; a `.btn` holding a word is not. */
+.today-habits-open { flex: none; align-self: center; margin-left: 10px; }
+
+/* A button that reads as a link, for the two places habits are offered in the
+   middle of a sentence. It has to be a BUTTON — it opens a dialog, it goes
+   nowhere, and an <a href="#"> would promise navigation and be announced as a
+   link — but inside running prose it has to look like the words around it, so
+   it inherits size and family and takes only the accent and the underline.
+   Underline always, not on hover: this sits in a paragraph, and a control that
+   is only discoverable by sweeping a pointer over the text is no control at all
+   on a touchscreen. Hover just deepens it, guarded like every other control
+   here (see tokens.css) so a tap does not leave it stuck. */
+.today-linkish {
+  background: none; border: 0; padding: 0; cursor: pointer;
+  font: inherit; color: var(--accent); text-decoration: underline;
+}
+@media (hover: hover) { .today-linkish:hover { color: var(--fg); } }
+
+/* The habits hint: `.today-quiet` supplies the inside-the-page padding and
+   size, and this only lets a sentence breathe on the line above the calendar. */
+.today-habits-hint { max-width: 62ch; line-height: 1.45; }
 
 /* ---- the habits sheet --------------------------------------------------
    `.modal` supplies the frame, the elevation and the corner radius (it is in
@@ -1441,4 +1749,29 @@
 .habit-add { display: flex; gap: 8px; align-items: center; }
 .habit-add .input { flex: 1; min-width: 0; }
 .habit-add .btn { flex: none; }
+/* ---- the working day, in Settings --------------------------------------
+   Inside the today-tab fence although it renders in the settings panel, and
+   deliberately: this is the other end of the same feature, and the fence is
+   what holds every rule in it to resolving colour through a token. Being here
+   means the capacity fields are covered by that test too.
+   `.sched-week`'s per-weekday row is the nearest existing shape; this one needs
+   no time pickers, so it is a plain name-and-field pair rather than a copy. */
+.cap-week {
+  display: flex; flex-direction: column; gap: 4px;
+  margin: 6px 0 2px;
+}
+.cap-day { display: flex; align-items: center; gap: 8px; }
+/* A fixed name column, so seven fields line up rather than stepping in and out
+   with the width of "Wed" against "Thu". Matches `.sched-day-name`'s job. */
+.cap-day-name {
+  width: 42px; flex: none;
+  font-family: var(--mono); font-size: calc(11px * var(--fs-scale));
+  color: var(--fg-muted); text-transform: var(--label-case);
+}
+.cap-input { flex: 1; min-width: 0; max-width: 160px; }
+/* The default field sits in a `.menu-row`, whose own rule caps an input at
+   `min(220px, 60%)` and out-specifies the line above — so without this the
+   eight capacity fields are seven of one width and one of another. Matched
+   deliberately: they are one column of the same kind of answer. */
+.set-panel .menu-row .cap-input { max-width: 160px; }
 /* today-tab:css:end */

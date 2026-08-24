@@ -74,7 +74,7 @@ const task = (o: Partial<Task> = {}): Task => ({
   tags: [], parent: null, children: [], child_count: 0, completed_child_count: 0,
   derived_percent: null, pinned: false, sort_order: null,
   // Present on every DTO the server sends; see api.ts's Task.
-  completed_at: null, kanban_column: null, has_rrule: false,
+  completed_at: null, kanban_column: null, estimated_minutes: null, has_rrule: false,
   created: null, last_modified: null,
  
   href: '/l1/u1.ics', etag: '"1"', ...o,
@@ -547,7 +547,22 @@ describe('aug19 stage 4b — the tasks pane and one uid in two lists', () => {
     expect(cards.length, 'both copies should be draggable cards').toBe(2)
     const dataTransfer = { setData: vi.fn(), getData: vi.fn(), effectAllowed: '' }
     fireEvent.dragStart(cards[1], { dataTransfer })
-    const col = document.querySelectorAll('.day-col')[1] as HTMLElement
+    // A column that is NOT today, asked of the DOM rather than assumed.
+    //
+    // This was `[1]`, and it made the test fail every Monday. The week view
+    // starts its columns on Sunday (`start.getDate() - start.getDay()`), so
+    // index 1 is Monday — and the fixture's due date is today. Dropping a card
+    // onto the day it is already due is a no-op by design (`dropOnDay` returns
+    // early when `dayKey(t.due) === key`, because rescheduling a task to where
+    // it already is should not write to CalDAV), so on Mondays nothing was
+    // patched and the assertion read as the identity bug this test exists to
+    // catch. It was the calendar, not the code.
+    //
+    // The column carries `today` as a class, so the DOM already knows which one
+    // to avoid — no need to re-derive the week's start or its convention here.
+    const col = [...document.querySelectorAll('.day-col')]
+      .find((c) => !c.classList.contains('today')) as HTMLElement
+    expect(col, 'a week always has a column that is not today').toBeTruthy()
     fireEvent.drop(col, { dataTransfer })
 
     await waitFor(() => expect(m.patchTask).toHaveBeenCalled())
@@ -1134,6 +1149,8 @@ describe('aug19 leftovers — every dialog answers Escape at the window', () => 
       tabOrder={DEFAULT_TAB_ORDER} startTab="home"
       onTabOrderChange={vi.fn()} onStartTabChange={vi.fn()}
       timeFormat="12h" onToggleTimeFormat={vi.fn()}
+      dayCapacity={null} onDayCapacityChange={vi.fn()}
+      dayCapacityByWeekday={{}} onDayCapacityByWeekdayChange={vi.fn()}
       homeTz="" onToggleHomeTz={vi.fn()}
       calFit="dynamic" onToggleCalFit={vi.fn()}
       archivedCals={[]} onArchivedCalsChange={vi.fn()}
@@ -1173,6 +1190,15 @@ describe('aug19 leftovers — every dialog answers Escape at the window', () => 
       // TodayView.test.tsx's 'closes on an Escape dispatched at the window' and
       // its companion asserting the listener leaves with the sheet.
       'TodayView',
+      // The planning ritual, driven by TodayView.test.tsx's 'closes on an
+      // Escape dispatched at the window' in its own describe block. It is a
+      // dialog like the rest and answers the key at the window for the same
+      // reason: there is no focus trap in any of them.
+      'PlanRitual',
+      // The shutdown ritual, driven by TodayView.test.tsx's 'closes on an
+      // Escape dispatched at the window' in the shutdown describe block. Same
+      // shape and same reason as the planning one above.
+      'ShutdownRitual',
     ])
     const missing = users.filter((u) => !covered.has(u))
     expect(missing,

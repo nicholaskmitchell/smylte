@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeEach, vi, afterEach } from 'vitest'
 import {
-  CACHE_PREFIX, CACHE_VERSION,
+  CACHE_PREFIX, CACHE_VERSION, MAX_BYTES, MAX_ROWS,
   cacheCalendars, cacheEvents, cacheLists, cacheTasks, clearCache,
   readCachedCalendars, readCachedEvents, readCachedLists, readCachedTasks,
   sanitizeEvent, sanitizeList, sanitizeTask, setCacheUser, sweepOldVersions,
@@ -15,7 +15,7 @@ const task = (o: Partial<Task> = {}): Task => ({
   parent: null, children: [], child_count: 0, completed_child_count: 0,
   derived_percent: null, pinned: false, sort_order: null,
   // Present on every DTO the server sends; see api.ts's Task.
-  completed_at: null, kanban_column: null, has_rrule: false,
+  completed_at: null, kanban_column: null, estimated_minutes: null, has_rrule: false,
   created: null, last_modified: null,
   href: '/l1/u1.ics', etag: '"1"', ...o,
 })
@@ -147,6 +147,26 @@ describe('cache reads defensively', () => {
 })
 
 describe('cache writes stay bounded', () => {
+  it('leaves the byte ceiling something to do', () => {
+    // THE TWO BOUNDS ARE MEANT TO BE INDEPENDENT: the row cap is the ordinary
+    // one and the byte ceiling catches the outliers above it. That only holds
+    // while a full row-capped payload of ORDINARY rows fits under the ceiling
+    // with room to spare — and it had silently stopped holding. 2000 plain
+    // tasks came to ~1.02 MB against a 1 MiB ceiling, three per cent under, so
+    // adding ONE nullable field to `Task` pushed every row-capped write over it
+    // and disabled the task cache outright. Silently, because an over-ceiling
+    // payload is refused whole: the symptom is a mirror that stops painting.
+    //
+    // Asserted as a RATIO against the real constants rather than as a byte
+    // count, so this keeps testing the relationship the design depends on
+    // rather than a number that ages out the moment either cap moves.
+    const full = JSON.stringify({
+      at: Date.now(),
+      rows: Array.from({ length: MAX_ROWS }, (_, i) => task({ uid: `u${i}` })),
+    })
+    expect(full.length).toBeLessThan(MAX_BYTES * 0.75)
+  })
+
   it('caps the row count', () => {
     cacheTasks(Array.from({ length: 2500 }, (_, i) => task({ uid: `u${i}` })))
     expect(readCachedTasks()).toHaveLength(2000)
@@ -157,7 +177,11 @@ describe('cache writes stay bounded', () => {
     // rows can; the entry has to go rather than outlive the data it lost to.
     cacheTasks([task({ uid: 'small' })])
     expect(readCachedTasks()).toHaveLength(1)
-    cacheTasks([task({ uid: 'huge', notes: 'x'.repeat(1100 * 1024) })])
+    // Sized FROM the ceiling, not tuned to whatever it happened to be. This
+    // line used to read `1100 * 1024`, chosen against a 1 MiB cap — so raising
+    // the cap turned a test about refusing oversized payloads into a test that
+    // wrote one successfully and asserted the opposite.
+    cacheTasks([task({ uid: 'huge', notes: 'x'.repeat(MAX_BYTES + 1024) })])
     expect(localStorage.getItem(keyOf('tasks'))).toBeNull()
     expect(readCachedTasks()).toBeNull()
   })
