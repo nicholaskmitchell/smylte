@@ -98,6 +98,15 @@ const dayRows = () =>
 const rowTitles = () =>
   dayRows().map((r) => r.querySelector('.today-title')?.textContent ?? '')
 
+/** The add box's consequence line — "will add Task/Note …".
+ *
+ *  Read by the id `aria-describedby` points at, not by a role: it is
+ *  deliberately NOT a live region (it is on for every keystroke now, so it
+ *  would announce on every keystroke), and the id is the contract that ties it
+ *  to the input it describes. Querying it this way fails if that tie is broken.
+ */
+const fateChip = () => document.getElementById('today-add-fate')
+
 /** The habits group's rows, read through the list's accessible name rather than
  *  through the row class, so this fails if the group stops being a named group
  *  and not merely if a class is renamed. */
@@ -1027,7 +1036,13 @@ describe('<TodayView> the add box', () => {
     await screen.findByLabelText('Add to today')
     await user.type(screen.getByLabelText('Add to today'), 'gym at 7')
 
-    const chip = await screen.findByRole('status')
+    // Read by id rather than by role. The chip is no longer a `role="status"`
+    // live region: it used to appear only on the rare line that parsed, and now
+    // it is on for every line with a character in it, so announcing itself
+    // would mean announcing on every keystroke. It describes the input instead
+    // (`aria-describedby`), and the outcome is in the submit button's name.
+    await waitFor(() => expect(fateChip()).not.toBeNull())
+    const chip = fateChip()!
     expect(within(chip).getByText('gym')).toBeInTheDocument()
     // Rendered through fmtDue with the live 12/24-hour setting, so the chip
     // promises exactly what the row will read.
@@ -1059,11 +1074,18 @@ describe('<TodayView> the add box', () => {
     expect(m.createTask).not.toHaveBeenCalled()
   })
 
-  it('dismissing the reading commits the literal line instead', async () => {
+  it('declining the reading commits the literal line instead', async () => {
     const user = setup()
     await user.type(screen.getByLabelText('Add to today'), 'gym at 7')
-    await user.click(await screen.findByRole('button', { name: /as typed/i }))
-    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+    // The control says what it does now, rather than being a ✕ on a preview.
+    await user.click(await screen.findByRole('button', { name: 'Make it a note' }))
+
+    // The chip STAYS, and changes its answer. That is the difference from the
+    // old ✕, which simply took the preview away and left the box saying nothing
+    // at all about what Enter would do — the silence this whole change removes.
+    const chip = fateChip()!
+    expect(chip.textContent).toMatch(/Note/)
+    expect(chip.textContent).toMatch(/never leaves Smylte/)
 
     await user.type(screen.getByLabelText('Add to today'), '{Enter}')
 
@@ -1080,6 +1102,352 @@ describe('<TodayView> the add box', () => {
     await user.type(screen.getByLabelText('Add to today'), 'call mum{Enter}')
     await waitFor(() => expect(m.addDayEntry).toHaveBeenCalled())
     await waitFor(() => expect(screen.getByLabelText('Add to today')).toHaveValue('call mum'))
+  })
+})
+
+// ── what the add box promises ───────────────────────────────────────────────
+
+describe('<TodayView> what the add box promises', () => {
+  const otherList: List = {
+    id: 'l2', href: '/l2/', name: 'Errands', is_task_list: true, is_calendar: false,
+    open_count: 0, task_count: 0, event_count: 0, total: 0, color: null,
+  }
+
+  it('says a plain line will become a note, and where it will live', async () => {
+    // THE CASE THE OLD CHIP NEVER COVERED, and the one that needed it most: a
+    // line with no date silently became a note that exists nowhere but in this
+    // day and reaches no other client on the account. Nothing said so.
+    const user = setup()
+    await user.type(screen.getByLabelText('Add to today'), 'call mum')
+
+    await waitFor(() => expect(fateChip()).not.toBeNull())
+    expect(fateChip()!.textContent).toMatch(/Note/)
+    expect(fateChip()!.textContent).toMatch(/this day only/)
+    expect(fateChip()!.textContent).toMatch(/never leaves Smylte/)
+  })
+
+  it('says a dated line will become a task, and names the list it lands on', async () => {
+    const user = setup()
+    await user.type(screen.getByLabelText('Add to today'), 'gym at 7')
+
+    await waitFor(() => expect(fateChip()).not.toBeNull())
+    expect(fateChip()!.textContent).toMatch(/Task/)
+    // The list was never named anywhere before — the box just picked one.
+    expect(fateChip()!.textContent).toMatch(/Work/)
+    expect(fateChip()!.textContent).toMatch(/other apps/)
+  })
+
+  it('carries the outcome in the submit button, not in a live region', async () => {
+    // What a screen reader gets instead of the chip's wording, and it is better
+    // placed: heard when the button is reached, an instant before it fires. A
+    // live region would have re-announced on every keystroke.
+    const user = setup()
+    const box = screen.getByLabelText('Add to today')
+    await user.type(box, 'call mum')
+    expect(await screen.findByRole('button', { name: 'Add as note' })).toBeInTheDocument()
+
+    await user.clear(box)
+    await user.type(box, 'gym at 7')
+    expect(await screen.findByRole('button', { name: 'Add as task' })).toBeInTheDocument()
+  })
+
+  it('ties the line to the box it describes', async () => {
+    const user = setup()
+    await user.type(screen.getByLabelText('Add to today'), 'call mum')
+    await waitFor(() => expect(fateChip()).not.toBeNull())
+    expect(screen.getByLabelText('Add to today'))
+      .toHaveAttribute('aria-describedby', 'today-add-fate')
+  })
+
+  it('says nothing at all about an empty box', async () => {
+    // The line answers "what will Enter do"; with nothing typed there is no
+    // question, and a permanent caption under the field would be noise.
+    setup()
+    await screen.findByLabelText('Add to today')
+    expect(fateChip()).toBeNull()
+    expect(screen.getByRole('button', { name: 'Add' })).toBeDisabled()
+  })
+
+  it('makes a task out of a plain line, with NO due date', async () => {
+    // The reachable-only-now case: "make it a task" about a line with no date
+    // in it. `dueFromParse` falls back to the day being planned, which would
+    // stamp a deadline of today onto a VTODO every other client then shows as
+    // due — off the back of the owner asking only for it to be a task. Being on
+    // today's plan is the day entry's job.
+    m.createTask.mockResolvedValue(task({ uid: 'new@tasksd', summary: 'call mum' }))
+    const user = setup()
+    await user.type(screen.getByLabelText('Add to today'), 'call mum')
+    await user.click(await screen.findByRole('button', { name: 'Make it a task' }))
+    await user.type(screen.getByLabelText('Add to today'), '{Enter}')
+
+    await waitFor(() => expect(m.createTask).toHaveBeenCalled())
+    expect(m.createTask.mock.calls[0][1]).not.toHaveProperty('due')
+    expect(m.createTask.mock.calls[0][1]).toMatchObject({ summary: 'call mum' })
+  })
+
+  it('keeps the chosen kind while the rest of the line is typed', async () => {
+    // The departure from the old `declined`, which reset on every keystroke.
+    // That was right for a decision about a PARSE — one more character can
+    // withdraw a parse — and wrong for a decision about intent. Clearing it
+    // under the owner's fingers would be a fresh instance of exactly the silent
+    // surprise this change removes.
+    const user = setup()
+    await user.type(screen.getByLabelText('Add to today'), 'gym at 7')
+    await user.click(await screen.findByRole('button', { name: 'Make it a note' }))
+    await user.type(screen.getByLabelText('Add to today'), ' sharp')
+
+    expect(fateChip()!.textContent).toMatch(/Note/)
+    expect(screen.getByRole('button', { name: 'Add as note' })).toBeInTheDocument()
+  })
+
+  it('forgets the chosen kind once the line is committed', async () => {
+    const user = setup()
+    await user.type(screen.getByLabelText('Add to today'), 'gym at 7')
+    await user.click(await screen.findByRole('button', { name: 'Make it a note' }))
+    await user.type(screen.getByLabelText('Add to today'), '{Enter}')
+    await waitFor(() => expect(m.addDayEntry).toHaveBeenCalled())
+
+    // A fresh dated line reads as a task again: the pin was about that line.
+    await user.type(screen.getByLabelText('Add to today'), 'gym at 8')
+    await waitFor(() => expect(fateChip()?.textContent).toMatch(/Task/))
+  })
+
+  it('puts the task on the list the picker names', async () => {
+    m.lists.mockResolvedValue([list, otherList])
+    m.createTask.mockResolvedValue(task({ uid: 'new@tasksd', summary: 'gym', list: 'l2' }))
+    const user = setup()
+    await user.type(screen.getByLabelText('Add to today'), 'gym at 7')
+
+    const picker = await screen.findByLabelText('List for the new task')
+    await user.selectOptions(picker, 'l2')
+    await user.type(screen.getByLabelText('Add to today'), '{Enter}')
+
+    await waitFor(() => expect(m.createTask).toHaveBeenCalledWith('l2', expect.anything()))
+  })
+
+  it('offers no picker when there is only one list to pick', async () => {
+    // The box is still ONE input on the fast path. A picker that can only ever
+    // answer one way is the friction this surface exists to remove.
+    m.createTask.mockResolvedValue(task({ uid: 'new@tasksd', summary: 'gym' }))
+    const user = setup()
+    await user.type(screen.getByLabelText('Add to today'), 'gym at 7')
+    await waitFor(() => expect(fateChip()).not.toBeNull())
+
+    expect(screen.queryByLabelText('List for the new task')).not.toBeInTheDocument()
+    await user.type(screen.getByLabelText('Add to today'), '{Enter}')
+    await waitFor(() => expect(m.createTask).toHaveBeenCalledWith('l1', expect.anything()))
+  })
+
+  it('never authors a task into a calendar', async () => {
+    // `GET /api/lists` answers calendars alongside task lists, and nothing in
+    // this app read `is_task_list` outside a test fixture — so the old
+    // `lists[0]` was "whatever sits first in the sidebar". On an account whose
+    // first collection is a calendar, a dated line authored its VTODO there.
+    m.lists.mockResolvedValue([cal, list])
+    m.createTask.mockResolvedValue(task({ uid: 'new@tasksd', summary: 'gym' }))
+    const user = setup()
+    await user.type(screen.getByLabelText('Add to today'), 'gym at 7{Enter}')
+
+    await waitFor(() => expect(m.createTask).toHaveBeenCalled())
+    expect(m.createTask).toHaveBeenCalledWith('l1', expect.anything())
+    expect(m.createTask).not.toHaveBeenCalledWith('c1', expect.anything())
+  })
+
+  it('falls back to a note when the account has no task list at all', async () => {
+    // A calendar-only account has nowhere to put a task, so the chip must not
+    // promise one — and the swap that would ask for one is offered disabled
+    // rather than as a control that silently does nothing.
+    m.lists.mockResolvedValue([cal])
+    const user = setup()
+    await user.type(screen.getByLabelText('Add to today'), 'gym at 7')
+
+    await waitFor(() => expect(fateChip()).not.toBeNull())
+    expect(fateChip()!.textContent).toMatch(/Note/)
+    expect(screen.getByRole('button', { name: 'Make it a task' })).toBeDisabled()
+
+    await user.type(screen.getByLabelText('Add to today'), '{Enter}')
+    // The LITERAL line, "at 7" included — the parser deletes what it reads.
+    await waitFor(() => expect(m.addDayEntry).toHaveBeenCalledWith(
+      today(), expect.objectContaining({ kind: 'note', title: 'gym at 7' })))
+    expect(m.createTask).not.toHaveBeenCalled()
+  })
+
+  it('promises nothing on a finished day, because it is not there', async () => {
+    m.day.mockImplementation(async (d) => plan([entry({ day: d, title: 'Yesterday' })], d))
+    const user = setup()
+    await user.click(await screen.findByRole('button', { name: 'Previous day' }))
+    await screen.findByText('Yesterday')
+
+    expect(screen.queryByLabelText('Add to today')).not.toBeInTheDocument()
+    expect(fateChip()).toBeNull()
+    expect(screen.queryByRole('button', { name: /^Make it a/ })).not.toBeInTheDocument()
+  })
+})
+
+// ── finding habits at all ───────────────────────────────────────────────────
+
+describe('<TodayView> finding habits', () => {
+  it('offers them as a word, not only as a glyph', async () => {
+    // The control was a bare ↻ whose only human-readable name lived in `title`
+    // — a tooltip, which does not exist on a touchscreen. So on a phone the one
+    // entry point to the feature was an unexplained symbol.
+    setup()
+    const btn = await screen.findByRole('button', { name: 'Habits' })
+    expect(btn.textContent).toContain('Habits')
+    // The glyph is decorative and must stay OUT of the accessible name — this
+    // is what keeps the name exactly "Habits" for the four suites that match it
+    // exactly, and `getByRole(name:)` above is already asserting it.
+    expect(btn.querySelector('[aria-hidden="true"]')?.textContent).toBe('↻')
+  })
+
+  it('points at habits from a day with nothing on it', async () => {
+    // The account most likely to need the hint is the one where the Habits
+    // group is (rightly) absent because there is nothing to put in it.
+    const user = setup()
+    const link = await screen.findByRole('button', { name: 'set up a habit' })
+    await user.click(link)
+    expect(await screen.findByRole('dialog', { name: 'Habits' })).toBeInTheDocument()
+  })
+
+  it('explains habits on a worked day that has none', async () => {
+    m.openDay.mockResolvedValue(plan([entry({ title: 'Water the plants' })]))
+    const user = setup()
+    await screen.findByText('Water the plants')
+
+    // The empty-day copy is gone — the two traces are mutually exclusive, so
+    // the screen never says the same thing twice.
+    expect(screen.queryByRole('button', { name: 'set up a habit' })).not.toBeInTheDocument()
+    await user.click(await screen.findByRole('button', { name: 'Set one up' }))
+    expect(await screen.findByRole('dialog', { name: 'Habits' })).toBeInTheDocument()
+  })
+
+  it('says nothing about habits on a day that already has some', async () => {
+    // The hint is a way IN, not a permanent banner: once the spine is on the
+    // screen it is explaining itself.
+    m.openDay.mockResolvedValue(plan([
+      occurrence({ title: 'Read' }),
+      entry({ entry_id: 'e-note', title: 'Water the plants', position: 2 }),
+    ]))
+    setup()
+    await screen.findByText('Water the plants')
+
+    expect(screen.queryByRole('button', { name: 'Set one up' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'set up a habit' })).not.toBeInTheDocument()
+  })
+
+  it('offers no way in to habits from a finished day', async () => {
+    // The whole sheet is gated on `isToday`, and so are both new traces —
+    // nothing done in there could ever show on a day that is a finished record.
+    m.day.mockImplementation(async (d) => plan([entry({ day: d, title: 'Yesterday' })], d))
+    const user = setup()
+    await user.click(await screen.findByRole('button', { name: 'Previous day' }))
+    await screen.findByText('Yesterday')
+
+    expect(screen.queryByRole('button', { name: 'Habits' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Set one up' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'set up a habit' })).not.toBeInTheDocument()
+  })
+})
+
+// ── telling the three kinds apart ───────────────────────────────────────────
+
+describe('<TodayView> telling the three kinds apart', () => {
+  it('gives a note the same left edge as a task and a habit', async () => {
+    // THE REGRESSION THIS SUITE EXISTS FOR. A task rendered `.list-dot` and a
+    // habit rendered its glyph, both 13px; a note matched neither condition and
+    // rendered NOTHING, so its title began 13px left of every neighbour. The
+    // assertion is deliberately "every row has exactly one", not "a note has
+    // one": one element per row is the property that makes the edge hold, and
+    // it is the only spelling a future `kind` cannot quietly fall out of.
+    m.tasks.mockResolvedValue([task()])
+    m.openDay.mockResolvedValue(plan([
+      entry({ entry_id: 'e-task', kind: 'task', list: 'l1', uid: 'u1', title: null, position: 1 }),
+      entry({ entry_id: 'e-note', kind: 'note', title: 'Water the plants', position: 2 }),
+      occurrence({ entry_id: 'e-hab', title: 'Read', position: 3 }),
+    ]))
+    setup()
+    await screen.findByText('Water the plants')
+
+    const rows = [...document.querySelectorAll('.today-row')]
+    expect(rows).toHaveLength(3)
+    for (const r of rows) {
+      expect(r.querySelectorAll('.today-kind-mark')).toHaveLength(1)
+    }
+  })
+
+  it('marks a task on a colourless list without leaving it faint', async () => {
+    // `.list-dot`'s default background was --fg-faint, so a list nobody had
+    // coloured drew a faint dot against a faint rule — and the one distinction
+    // that matters here (does this leave the app?) was carried by it. The mark
+    // now takes --fg from the stylesheet, so what has to hold is that NO inline
+    // background is written when there is no colour to write.
+    m.lists.mockResolvedValue([{ ...list, color: null }])
+    m.tasks.mockResolvedValue([task()])
+    m.openDay.mockResolvedValue(plan([
+      entry({ entry_id: 'e-task', kind: 'task', list: 'l1', uid: 'u1', title: null }),
+    ]))
+    setup()
+    await screen.findByText('Ship it')
+
+    const mark = document.querySelector('.today-kind-mark')
+    expect(mark).toHaveClass('task')
+    expect((mark as HTMLElement).style.background).toBe('')
+  })
+
+  it('wears the list colour when there is one', async () => {
+    m.tasks.mockResolvedValue([task()])
+    m.openDay.mockResolvedValue(plan([
+      entry({ entry_id: 'e-task', kind: 'task', list: 'l1', uid: 'u1', title: null }),
+    ]))
+    setup()
+    await screen.findByText('Ship it')
+
+    expect((document.querySelector('.today-kind-mark') as HTMLElement).style.background)
+      .toBeTruthy()
+  })
+
+  it('names each kind for assistive tech', async () => {
+    // The kind is the one thing a row carries that its title, checkbox and due
+    // date do not, and a mixed list is where it matters: a screen reader had no
+    // way at all to tell a note from a task.
+    m.tasks.mockResolvedValue([task()])
+    m.openDay.mockResolvedValue(plan([
+      entry({ entry_id: 'e-task', kind: 'task', list: 'l1', uid: 'u1', title: null, position: 1 }),
+      entry({ entry_id: 'e-note', kind: 'note', title: 'Water the plants', position: 2 }),
+      occurrence({ entry_id: 'e-hab', title: 'Read', position: 3 }),
+    ]))
+    setup()
+    await screen.findByText('Water the plants')
+
+    expect(screen.getByRole('img', { name: 'Task' })).toBeInTheDocument()
+    expect(screen.getByRole('img', { name: 'Note' })).toBeInTheDocument()
+    expect(screen.getByRole('img', { name: 'Habit' })).toBeInTheDocument()
+  })
+
+  it('names a kind it has never heard of rather than leaving it nameless', async () => {
+    // `DayEntryKind` widens silently — api.ts says so, because nothing switches
+    // on it exhaustively. A bare lookup would hand assistive tech a nameless
+    // role="img" on every row of the new kind, and the old two-conditional
+    // markup would have given it no mark and no left edge either.
+    m.openDay.mockResolvedValue(plan([
+      entry({ entry_id: 'e-x', kind: 'ritual' as never, title: 'Something new' }),
+    ]))
+    setup()
+    await screen.findByText('Something new')
+
+    expect(screen.getByRole('img', { name: 'Entry' })).toBeInTheDocument()
+    expect(document.querySelectorAll('.today-row .today-kind-mark')).toHaveLength(1)
+  })
+
+  it('runs the same column down the suggestions', async () => {
+    // One left edge for the whole screen: a suggestion is a task, and a group
+    // whose rows start somewhere else stops reading as part of the same list.
+    m.tasks.mockResolvedValue([task({ due: today(), due_is_date: true })])
+    setup()
+    await screen.findByRole('button', { name: /Add Ship it to today/ })
+
+    const sug = document.querySelector('.today-sug')!
+    expect(sug.querySelectorAll('.today-kind-mark.task')).toHaveLength(1)
   })
 })
 
@@ -1602,6 +1970,28 @@ describe('the Today tab stylesheet', () => {
     // Nothing may set it on a selector of its own — only :root.
     const setters = css.match(/--check-size:/g) ?? []
     expect(setters).toHaveLength(2)
+  })
+
+  it('sizes the kind column from one custom property, set only on :root', () => {
+    // The same discipline as `--check-size` above, for the second structural
+    // width this screen's left edge depends on. `.today-kind-mark` is the one
+    // cell every row paints — a task's filled square, a note's hollow one, a
+    // habit's glyph — and the whole point of it being one element of a FIXED
+    // width is that a mixed list keeps a single left edge. A rule that set the
+    // width on a per-kind selector instead would let one of the three drift and
+    // reintroduce, kind by kind, exactly the misalignment this replaced.
+    expect(css).toMatch(/:root\s*\{\s*--today-mark-w:\s*13px/)
+    const body = css.slice(css.indexOf('\n.today-kind-mark {') + 1)
+    expect(body.slice(0, body.indexOf('}'))).toContain('var(--today-mark-w)')
+    // Only :root may set it.
+    expect((css.match(/--today-mark-w:/g) ?? [])).toHaveLength(1)
+    // And it is deliberately NOT a themeable token: `appearance.ts`'s allowlist
+    // reaches colours, radii, families and scales, not the geometry that holds
+    // a list together, so a saved theme cannot break this edge. Same reason
+    // `--check-size` is absent from it too.
+    const appearance = readFileSync(resolve(process.cwd(), 'src/appearance.ts'), 'utf8')
+    expect(appearance).not.toContain('today-mark-w')
+    expect(appearance).not.toContain('check-size')
   })
 
   it('contains no literal colour', () => {
