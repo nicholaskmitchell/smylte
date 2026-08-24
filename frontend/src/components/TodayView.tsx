@@ -1609,7 +1609,15 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
             // and the submit button carries the same answer at the moment it is
             // acted on — see its label.
             aria-describedby={text.trim() ? 'today-add-fate' : undefined}
-            onChange={(e) => setText(e.target.value)} />
+            onChange={(e) => {
+              setText(e.target.value)
+              // Emptying the box abandons the line, and the pin is a statement
+              // about THAT line — so it goes with it. This is the one edit that
+              // clears it, and it is not the keystroke rule the boolean it
+              // replaced had: typing on is still typing the same line, and the
+              // choice survives that.
+              if (!e.target.value.trim()) setPinned(null)
+            }} />
           {/* The consequence, in the name of the control that causes it. This is
               what a screen-reader user gets instead of the chip's colour and
               wording, and it is better placed than the chip was: it is heard
@@ -1652,12 +1660,18 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
               )}
               {/* Where it ends up, which is the half the old chip never said and
                   the half that actually differs. */}
+              {/* The list is named ONCE. When the picker is showing it is the
+                  thing naming it, and repeating the name a line above it is the
+                  same fact twice in two typefaces; when there is no picker —
+                  one task list, or none — the sentence is the only place it can
+                  be said. */}
               <span className="today-chip-fate">
-                {willBe === 'task'
-                  ? (taskLists.find((l) => l.id === listId)?.name
-                    ? `on ${taskLists.find((l) => l.id === listId)!.name} — it shows up in your other apps too`
-                    : 'on your lists — it shows up in your other apps too')
-                  : 'on this day only — it never leaves Smylte'}
+                {willBe !== 'task'
+                  ? 'on this day only — it never leaves Smylte'
+                  : taskLists.length > 1
+                    ? 'it shows up in your other apps too'
+                    : `on ${taskLists.find((l) => l.id === listId)?.name ?? 'your lists'}`
+                      + ' — it shows up in your other apps too'}
               </span>
             </p>
           )}
@@ -1809,8 +1823,11 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
                   {/* The same column the day's rows keep, in its task face:
                       a suggestion is a task, and one left edge has to run down
                       the whole screen or the groups stop reading as one list. */}
-                  <span className="today-kind-mark task" role="img" aria-label="Task"
-                    style={colorOf(t.list) ? { background: colorOf(t.list)! } : undefined} />
+                  <span className="today-kind-mark" data-kind="task" role="img"
+                    aria-label="Task">
+                    <span className="today-kind-box" style={colorOf(t.list)
+                      ? { background: colorOf(t.list)! } : undefined} />
+                  </span>
                   <span className="today-title" dir={textDir(t.summary)}>
                     {t.summary || '(untitled)'}
                   </span>
@@ -1895,8 +1912,11 @@ function LookBack({ review, offPlan, renderRow, colorOf, live = false }: {
               <li key={taskKey(t)} className="today-row">
                 <span className="today-check-gap today-mark mono" role="img"
                   aria-label="Done">✓</span>
-                <span className="today-kind-mark task" role="img" aria-label="Task"
-                  style={colorOf(t.list) ? { background: colorOf(t.list)! } : undefined} />
+                <span className="today-kind-mark" data-kind="task" role="img"
+                  aria-label="Task">
+                  <span className="today-kind-box" style={colorOf(t.list)
+                    ? { background: colorOf(t.list)! } : undefined} />
+                </span>
                 <span className="today-title" dir={textDir(t.summary)}>
                   {t.summary || '(untitled)'}
                 </span>
@@ -2114,14 +2134,33 @@ function TodayRow({
           the same geometry — the left edge is free — and it survives a
           colourless list, a custom theme and a greyscale screenshot, none of
           which "a coloured dot versus nothing" does. */}
-      <span className={`today-kind-mark ${entry.kind}`} role="img"
-        aria-label={KIND_LABEL[entry.kind] ?? 'Entry'}
-        // The list's colour, when it has one, exactly as `.list-dot` took it.
-        // The CSS default underneath is --fg rather than --fg-faint: a task on
-        // a colourless list was previously a faint dot against a faint rule,
-        // which is the case this whole change is about.
-        style={isTask && color ? { background: color } : undefined}>
-        {isHabit ? '↻' : null}
+      <span className="today-kind-mark" data-kind={entry.kind} role="img"
+        aria-label={KIND_LABEL[entry.kind] ?? 'Entry'}>
+        {/* The kind goes in a DATA ATTRIBUTE, not in the class list, and that is
+            a scar rather than a preference: the first cut wrote
+            `today-kind-mark ${entry.kind}`, which put a bare `task` class on
+            every task row — and `.task` is the Tasks pane's ROW rule, three
+            hundred lines up this same global stylesheet. It brought
+            `display: flex`, `align-items: flex-start` and `padding: var(--row-y)
+            var(--gutter)` with it, so the 7px square painted as a 52×19 slab.
+            The classes here are one global namespace; `[data-kind]` cannot
+            collide with one.
+
+            The SHAPE is a child rather than this element, so the column and the
+            mark can be sized independently: the outer span is the 13px column
+            that holds the left edge, the inner box is the 7px square that says
+            which kind it is. A glyph kind (a habit) puts its character in the
+            same centred box, and a kind this build has never heard of paints an
+            empty column — no mark, but the edge holds, which is the half that
+            must not depend on knowing every kind. */}
+        {isHabit ? '↻' : (isTask || entry.kind === 'note') ? (
+          <span className="today-kind-box"
+            // The list's colour, when it has one, exactly as `.list-dot` took
+            // it. The CSS default underneath is --fg rather than --fg-faint: a
+            // task on a colourless list was previously a faint dot against a
+            // faint rule, which is the case this whole change is about.
+            style={isTask && color ? { background: color } : undefined} />
+        ) : null}
       </span>
       <span className="today-title" dir={textDir(title)}>{title}</span>
       {/* Omitted ENTIRELY below two occurrences — see MIN_WEEK_COUNT. Rendered

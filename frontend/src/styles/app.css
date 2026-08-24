@@ -1436,26 +1436,32 @@
    started 13px to the left on every row. There is one element now, always
    present, so the claim is true by construction rather than by three call sites
    agreeing. */
+/* The COLUMN: a fixed width that holds the left edge, centring whatever mark
+   the kind puts in it. It carries no mark of its own, so a kind this build has
+   never heard of still lines up. */
 .today-kind-mark {
-  width: var(--today-mark-w); flex: none; text-align: center; line-height: 1;
+  width: var(--today-mark-w); flex: none; line-height: 1;
+  display: flex; align-items: center; justify-content: center;
   font-family: var(--mono); font-size: calc(11px * var(--fs-scale));
   color: var(--fg-faint);
 }
+/* The MARK: one 7px box, filled or hollow. Selected through `[data-kind]` and
+   never through a bare `.task` / `.note` class — see the note in TodayRow.
+   `.task` is the Tasks pane's row rule in this same global stylesheet, and a
+   mark wearing it inherited that row's padding and grew into a 52px slab. */
+.today-kind-box { width: 7px; height: 7px; flex: none; box-sizing: border-box; }
 /* FILLED — a task, which lives on a list and reaches every other CalDAV client
    on the account. `--fg`, not `--fg-faint`: the inline style carries the list's
    own colour when it has one, and this is what shows when it does not. The old
    `.list-dot` default was --fg-faint, which put a faint dot against a faint
    rule and made the one distinction that matters on this screen — does this
    leave the app? — almost invisible on any list nobody had coloured. */
-.today-kind-mark.task {
-  height: 7px; align-self: center; background: var(--fg);
-}
-/* HOLLOW — a note, which exists nowhere but in this day. Same box as the task's
-   so the column cannot shift, and `box-sizing` so the border grows inward
+.today-kind-mark[data-kind="task"] .today-kind-box { background: var(--fg); }
+/* HOLLOW — a note, which exists nowhere but in this day. The same 7px box, so
+   the column cannot shift, with the border growing inward (`box-sizing` above)
    rather than making this one 2px wider than that one. */
-.today-kind-mark.note {
-  height: 7px; align-self: center;
-  background: none; border: 1px solid var(--fg-faint); box-sizing: border-box;
+.today-kind-mark[data-kind="note"] .today-kind-box {
+  background: none; border: 1px solid var(--fg-faint);
 }
 /* A habit that is done is still a habit: the title greys and strikes through
    like any other done row (`.today-row.done`), but the mark keeps its weight so
