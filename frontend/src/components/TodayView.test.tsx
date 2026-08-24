@@ -2021,6 +2021,9 @@ describe('<TodayView> arranging the day', () => {
     const row = (t: string) =>
       dayRows().find((r) => r.querySelector('.today-title')?.textContent === t)!
     const dataTransfer = { setData: vi.fn(), getData: vi.fn(), effectAllowed: '' }
+    // `mousedown` first, on the title, because that is the order a browser
+    // produces and the row's guard reads it — see the estimate-input test.
+    fireEvent.mouseDown(row(from).querySelector('.today-title')!)
     fireEvent.dragStart(row(from), { dataTransfer })
     fireEvent.dragOver(row(to), { dataTransfer })
     fireEvent.drop(row(to), { dataTransfer })
@@ -2043,21 +2046,52 @@ describe('<TodayView> arranging the day', () => {
 
   it('leaves a press inside the estimate input to the input', async () => {
     // `draggable` is on the ROW and the row contains an editable control, so
-    // without a target guard, selecting the text of an estimate reordered the
-    // day. The Tasks pane hit this first and carries the same guard.
+    // without a guard, selecting the text of an estimate reorders the day.
+    //
+    // THE EVENTS HERE ARE FIRED IN THE ORDER AND AT THE TARGETS A BROWSER USES,
+    // and that is the whole point of this test rather than an incidental
+    // detail. `mousedown` lands on the deepest node — the input — and
+    // `dragstart` is fired at the drag SOURCE NODE, the row. Measured in
+    // Chromium, not assumed.
+    //
+    // The first version of this test fired `dragstart` AT THE INPUT, which no
+    // browser does, and so it passed against a guard that was inert everywhere
+    // it mattered. Firing it at the row is what makes the assertion mean
+    // something: with the flag removed, the drag starts and the row moves.
     m.openDay.mockResolvedValue(abc())
     const user = setup()
     await screen.findByText('Alpha')
 
     // Open the estimate cell on Alpha, so there is a real input inside the row.
     await user.click(screen.getByRole('button', { name: 'Estimate Alpha' }))
-    const input = dayRows()[0].querySelector('input[type="number"]')!
+    const row = dayRows()[0]
+    const input = row.querySelector('input[type="number"]')!
     const dataTransfer = { setData: vi.fn(), getData: vi.fn(), effectAllowed: '' }
-    fireEvent.dragStart(input, { dataTransfer })
 
-    // Nothing was picked up, so nothing can be dropped.
+    fireEvent.mouseDown(input)
+    fireEvent.dragStart(row, { dataTransfer })
+    fireEvent.dragOver(dayRows()[1], { dataTransfer })
+    fireEvent.drop(dayRows()[1], { dataTransfer })
+
+    // Nothing was picked up, so nothing moved and nothing was written.
     expect(dataTransfer.setData).not.toHaveBeenCalled()
     expect(dataTransfer.effectAllowed).toBe('')
+    expect(m.patchDayEntry).not.toHaveBeenCalled()
+    expect(rowTitles()).toEqual(['Alpha', 'Bravo', 'Charlie'])
+  })
+
+  it('still starts a drag when the row is grabbed anywhere else', async () => {
+    // The other half, and the one that stops the guard being a way to disable
+    // arranging altogether: a press on the title is not a press on a control.
+    m.openDay.mockResolvedValue(abc())
+    setup()
+    await screen.findByText('Alpha')
+
+    const row = dayRows()[0]
+    const dataTransfer = { setData: vi.fn(), getData: vi.fn(), effectAllowed: '' }
+    fireEvent.mouseDown(row.querySelector('.today-title')!)
+    fireEvent.dragStart(row, { dataTransfer })
+    expect(dataTransfer.effectAllowed).toBe('move')
   })
 
   it('tells the browser the gesture is a MOVE, not a copy', async () => {
