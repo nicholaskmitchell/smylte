@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
-import { act, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { App } from './App'
 import { api, AuthError, HttpError, subscribe } from './api'
@@ -462,6 +462,151 @@ describe('<App> calendar window setting', () => {
 })
 
 // ── a settings write that fails must not be swallowed ───────────────────────
+
+describe('<App> day capacity', () => {
+  // The wiring the Today tab's whole capacity feature rests on, and none of it
+  // was asserted: `grep -rn 'day_capacity' src --include=*.test.tsx` returned
+  // nothing. Three separable rules — how a stored value is READ, how a clear is
+  // WRITTEN, and which of the two settings is merged.
+
+  const capacityField = () =>
+    screen.getByLabelText('Working time for the default working day')
+
+  it('reads a stored capacity back into the field', async () => {
+    m.getSettings.mockResolvedValue({ day_capacity_minutes: 300 })
+    render(<App />)
+    await screen.findByRole('button', { name: 'Tasks' })
+    await openSettings('General')
+    expect(capacityField()).toHaveValue('5h')
+  })
+
+  it('reads junk as "never said" rather than as a number nobody gave', async () => {
+    // Every settings value is treated as hand-edited. A capacity read out of
+    // junk would be a number the owner never stated, which is the one thing
+    // this feature must not produce — so anything unusable falls back to unset,
+    // and the tab simply says nothing about how full the day is.
+    //
+    // Note for anyone mutation-testing the guard: `typeof x === 'number'` is
+    // REDUNDANT with `Number.isFinite(x)`, which already returns false for
+    // every non-number (it does not coerce). Removing the typeof arm is an
+    // equivalent mutant, not a hole in this test — the `>= 0` and `isFinite`
+    // arms are the two that carry weight, and both fail here when dropped.
+    // Cast at the boundary on purpose: these are values a hand-edited settings
+    // blob can really hold, and the type says they cannot — which is exactly
+    // why the runtime guard exists and has to be tested.
+    for (const bad of ['300', null, NaN, Infinity, {}, [], true] as unknown[]) {
+      cleanup()
+      vi.clearAllMocks()
+      m.me.mockResolvedValue({ authenticated: true, user: 'admin' })
+      m.putSettings.mockResolvedValue({})
+      m.getSettings.mockResolvedValue({ day_capacity_minutes: bad } as never)
+      render(<App />)
+      await screen.findByRole('button', { name: 'Tasks' })
+      await openSettings('General')
+      expect(capacityField(), JSON.stringify(bad)).toHaveValue('')
+    }
+  })
+
+  it('reads a NEGATIVE stored value as "never said"', async () => {
+    // -1 is the clear sentinel at rest: it is what a clear WRITES, so it is
+    // what a later read has to find, and it has to come back as unset rather
+    // than as a capacity of minus one minute.
+    m.getSettings.mockResolvedValue({ day_capacity_minutes: -1 })
+    render(<App />)
+    await screen.findByRole('button', { name: 'Tasks' })
+    await openSettings('General')
+    expect(capacityField()).toHaveValue('')
+  })
+
+  it('keeps a deliberate zero, which is a real capacity', async () => {
+    // "I am not working today" is a statement, and it has to survive every
+    // falsy check between the settings blob and the field.
+    m.getSettings.mockResolvedValue({ day_capacity_minutes: 0 })
+    render(<App />)
+    await screen.findByRole('button', { name: 'Tasks' })
+    await openSettings('General')
+    expect(capacityField()).toHaveValue('0m')
+  })
+
+  it('writes a typed capacity as minutes', async () => {
+    m.getSettings.mockResolvedValue({})
+    render(<App />)
+    await screen.findByRole('button', { name: 'Tasks' })
+    await openSettings('General')
+    await userEvent.type(capacityField(), '5h')
+    await userEvent.tab()
+    expect(m.putSettings).toHaveBeenCalledWith({ day_capacity_minutes: 300 })
+  })
+
+  it('spells a CLEAR as -1, because the server merge skips null', async () => {
+    // `store.update_settings` merges shallowly and SKIPS None, so sending null
+    // would leave the old value in place and the owner could never get back to
+    // "never said" once they had said something. 0 cannot be the sentinel —
+    // it is a real capacity.
+    m.getSettings.mockResolvedValue({ day_capacity_minutes: 300 })
+    render(<App />)
+    await screen.findByRole('button', { name: 'Tasks' })
+    await openSettings('General')
+    await userEvent.clear(capacityField())
+    await userEvent.tab()
+    expect(m.putSettings).toHaveBeenCalledWith({ day_capacity_minutes: -1 })
+  })
+
+  it('sends the WHOLE weekday map, so one change cannot drop the rest', async () => {
+    // The map is read-modify-write: the section rebuilds the entire object to
+    // change one weekday. That is why `day_capacity_by_weekday` is on
+    // MERGED_SETTINGS and `day_capacity_minutes` deliberately is not.
+    m.getSettings.mockResolvedValue({ day_capacity_by_weekday: { mon: 240, fri: 180 } })
+    render(<App />)
+    await screen.findByRole('button', { name: 'Tasks' })
+    await openSettings('General')
+    await userEvent.type(screen.getByLabelText('Working time for Sun'), '2h')
+    await userEvent.tab()
+    expect(m.putSettings).toHaveBeenCalledWith({
+      day_capacity_by_weekday: { mon: 240, fri: 180, sun: 120 },
+    })
+  })
+
+  it('HOLDS a weekday write when the settings read failed, but not the default', async () => {
+    // The reason `day_capacity_by_weekday` is on MERGED_SETTINGS and
+    // `day_capacity_minutes` deliberately is not, and the only thing that makes
+    // the distinction observable.
+    //
+    // When the read failed, local state is the empty default rather than the
+    // account's real map — so writing the map back would send `{sun: 120}` and
+    // silently delete every other weekday the account had. The scalar has no
+    // such problem: it carries the value just typed, like `start_tab`, and
+    // holding it would lose a change for nothing.
+    m.getSettings.mockRejectedValue(new HttpError(500, 'nope'))
+    render(<App />)
+    await screen.findByRole('button', { name: 'Tasks' })
+    await screen.findByText(/Couldn't load your preferences/i)
+    await openSettings('General')
+
+    await userEvent.type(screen.getByLabelText('Working time for Sun'), '2h')
+    await userEvent.tab()
+    expect(m.putSettings).not.toHaveBeenCalled()
+    expect(await screen.findByText(/this change wasn't saved/i)).toBeInTheDocument()
+
+    // The default still goes, because there is nothing of the account's to lose.
+    await userEvent.type(capacityField(), '5h')
+    await userEvent.tab()
+    expect(m.putSettings).toHaveBeenCalledWith({ day_capacity_minutes: 300 })
+  })
+
+  it('drops a hand-edited weekday map to what it can actually use', async () => {
+    m.getSettings.mockResolvedValue({
+      day_capacity_by_weekday: { mon: 240, funday: 60, tue: '90', wed: -5 },
+    } as never)
+    render(<App />)
+    await screen.findByRole('button', { name: 'Tasks' })
+    await openSettings('General')
+    expect(screen.getByLabelText('Working time for Mon')).toHaveValue('4h')
+    for (const day of ['Tue', 'Wed']) {
+      expect(screen.getByLabelText(`Working time for ${day}`), day).toHaveValue('')
+    }
+  })
+})
 
 describe('<App> settings writes', () => {
   it('returns to the login form when the session has expired', async () => {

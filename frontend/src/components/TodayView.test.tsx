@@ -1266,6 +1266,155 @@ describe('<TodayView> the planning ritual', () => {
       screen.queryByRole('dialog', { name: 'Plan your day' })).not.toBeInTheDocument())
   })
 
+  // ── the picking step ────────────────────────────────────────────────────
+  //
+  // Nothing below this heading was asserted before. The ritual's tests covered
+  // the band, the three-step walk, Escape, the capacity field and the commit —
+  // but never opened step two's contents, so the whole reason it is step two
+  // (promoting the work you did not finish) was pinned by nothing.
+
+  /** Open the ritual and step to "What are you doing?". */
+  const pick = async (user: ReturnType<typeof setup>) => {
+    await user.click(screen.getByRole('button', { name: 'Plan my day' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Plan your day' })
+    await user.click(within(dialog).getByRole('button', { name: 'Next' }))
+    return dialog
+  }
+
+  /** A day three days back that chose `uid` and never finished it, which is what
+   *  puts a task in the "open" suggestion group. */
+  const leftUnfinished = (uid: string) => [plan([
+    entry({
+      entry_id: `p-${uid}`, day: inDays(-3), kind: 'task', list: 'l1', uid,
+      title: null, source: 'user',
+    }),
+  ], inDays(-3))]
+
+  it('puts what you did not finish at the TOP of the picking step, reworded', async () => {
+    // The group the day itself calls "Still open from a recent plan" is written
+    // for a quiet list under the day. On the one screen whose whole job is to
+    // make you look at it, it says so plainly — and it goes first, above the
+    // dated groups that otherwise outrank it.
+    m.tasks.mockResolvedValue([
+      task({ uid: 'a', summary: 'Slipped last time' }),
+      task({ uid: 'b', summary: 'Due today', due: today(), due_is_date: true }),
+    ])
+    m.days.mockResolvedValue(leftUnfinished('a'))
+    m.openDay.mockResolvedValue(unplanned([]))
+    const user = setup()
+    await screen.findByRole('button', { name: 'Plan my day' })
+    const dialog = await pick(user)
+
+    const headings = [...dialog.querySelectorAll('.section-label')].map((n) => n.textContent)
+    expect(headings[0]).toBe('You did not finish these last time')
+    // Reworded HERE only — the day behind the dialog keeps its own wording.
+    expect(headings).not.toContain('Still open from a recent plan')
+    // The rest keep the labels and the order the day gives them: this screen is
+    // not a second opinion about what matters, only about what to look at first.
+    expect(headings).toContain('Due today')
+  })
+
+  it('adds a task to the day from the picking step', async () => {
+    m.tasks.mockResolvedValue([task({ uid: 'a', summary: 'Slipped last time' })])
+    m.days.mockResolvedValue(leftUnfinished('a'))
+    m.openDay.mockResolvedValue(unplanned([]))
+    m.addDayEntry.mockResolvedValue(entry({ entry_id: 'new', title: 'Slipped last time' }))
+    const user = setup()
+    await screen.findByRole('button', { name: 'Plan my day' })
+    const dialog = await pick(user)
+
+    await user.click(within(dialog)
+      .getByRole('button', { name: 'Add Slipped last time to today' }))
+    await waitFor(() => expect(m.addDayEntry).toHaveBeenCalledWith(today(),
+      expect.objectContaining({ kind: 'task', uid: 'a' })))
+  })
+
+  it('says so plainly when there is nothing waiting to be picked', async () => {
+    m.tasks.mockResolvedValue([])
+    m.openDay.mockResolvedValue(unplanned([]))
+    const user = setup()
+    await screen.findByRole('button', { name: 'Plan my day' })
+    const dialog = await pick(user)
+    expect(within(dialog).getByText(/Nothing waiting/)).toBeInTheDocument()
+  })
+
+  // ── the running total ───────────────────────────────────────────────────
+  //
+  // The line that makes the ritual worth walking: the consequence of adding
+  // something, in the same breath as the adding. Also asserted by nothing until
+  // now — the two `not estimated` assertions elsewhere in this file belong to
+  // the shutdown dialog and the day's own load strip.
+
+  const total = (dialog: HTMLElement) => dialog.querySelector('.plan-total')
+
+  it('carries the running total from the second step on', async () => {
+    m.openDay.mockResolvedValue(unplanned([
+      entry({ entry_id: 'a', title: 'Alpha', estimate_minutes: 90 }),
+      entry({ entry_id: 'b', title: 'Bravo', estimate_minutes: 30 }),
+    ], 300))
+    const user = setup()
+    await screen.findByRole('button', { name: 'Plan my day' })
+    await user.click(screen.getByRole('button', { name: 'Plan my day' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Plan your day' })
+
+    // Absent on step one: the question there is how long today IS, and a total
+    // measured against a number still being typed would be answering itself.
+    expect(total(dialog)).toBeNull()
+
+    await user.click(within(dialog).getByRole('button', { name: 'Next' }))
+    expect(total(dialog)).toHaveTextContent('2h of 5h')
+    expect(total(dialog)).not.toHaveClass('over')
+  })
+
+  it('says how much of the day the total is SILENT about', async () => {
+    // Without this the number reads as the whole day when it may be a third of
+    // it, and quietly under-reporting is worse than not reporting.
+    m.openDay.mockResolvedValue(unplanned([
+      entry({ entry_id: 'a', title: 'Alpha', estimate_minutes: 90 }),
+      entry({ entry_id: 'b', title: 'Bravo', estimate_minutes: null }),
+    ], 300))
+    const user = setup()
+    await screen.findByRole('button', { name: 'Plan my day' })
+    await user.click(screen.getByRole('button', { name: 'Plan my day' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Plan your day' })
+    await user.click(within(dialog).getByRole('button', { name: 'Next' }))
+
+    expect(total(dialog)).toHaveTextContent('1h 30m of 5h')
+    expect(total(dialog)).toHaveTextContent('1 not estimated')
+  })
+
+  it('colours the total and names the overage once it is over', async () => {
+    m.openDay.mockResolvedValue(unplanned([
+      entry({ entry_id: 'a', title: 'Alpha', estimate_minutes: 400 }),
+    ], 300))
+    const user = setup()
+    await screen.findByRole('button', { name: 'Plan my day' })
+    await user.click(screen.getByRole('button', { name: 'Plan my day' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Plan your day' })
+    await user.click(within(dialog).getByRole('button', { name: 'Next' }))
+
+    expect(total(dialog)).toHaveTextContent('6h 40m of 5h')
+    expect(total(dialog)).toHaveTextContent('1h 40m over')
+    // --warn, and the words beside it. The colour is the half that does not
+    // survive a screen reader, a greyscale screenshot or a custom theme.
+    expect(total(dialog)).toHaveClass('over')
+  })
+
+  it('shows no total at all on a day nobody has given a length', async () => {
+    // The rule the whole feature turns on: an account that never stated a
+    // capacity must not be told it has overcommitted against a number it never
+    // gave. There is no honest figure to print, so nothing is printed.
+    m.openDay.mockResolvedValue(unplanned([
+      entry({ entry_id: 'a', title: 'Alpha', estimate_minutes: 400 }),
+    ], null))
+    const user = setup()
+    await screen.findByRole('button', { name: 'Plan my day' })
+    await user.click(screen.getByRole('button', { name: 'Plan my day' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Plan your day' })
+    await user.click(within(dialog).getByRole('button', { name: 'Next' }))
+    expect(total(dialog)).toBeNull()
+  })
+
   it('takes a capacity in either spelling and stores minutes', async () => {
     m.openDay.mockResolvedValue(unplanned([], null))
     m.patchDay.mockImplementation(async (d, body) =>
@@ -2092,6 +2241,29 @@ describe('<TodayView> arranging the day', () => {
     fireEvent.mouseDown(row.querySelector('.today-title')!)
     fireEvent.dragStart(row, { dataTransfer })
     expect(dataTransfer.effectAllowed).toBe('move')
+  })
+
+  it('still starts a drag when the row is grabbed by a button', async () => {
+    // The guard is TEXT FIELDS ONLY, and this says so. It once matched `button`
+    // too, which is a wider net than the problem: the failure is that dragging
+    // to SELECT TEXT reorders instead, and a button has no drag semantics of
+    // its own — so a press-drag beginning on the checkbox or the estimate's
+    // collapsed cell may as well take the row with it. Guarding those would
+    // only take grab area away.
+    m.openDay.mockResolvedValue(abc())
+    setup()
+    await screen.findByText('Alpha')
+
+    const row = dayRows()[0]
+    for (const control of [
+      row.querySelector('.check')!,
+      screen.getByRole('button', { name: 'Estimate Alpha' }),
+    ]) {
+      const dataTransfer = { setData: vi.fn(), getData: vi.fn(), effectAllowed: '' }
+      fireEvent.mouseDown(control)
+      fireEvent.dragStart(row, { dataTransfer })
+      expect(dataTransfer.effectAllowed).toBe('move')
+    }
   })
 
   it('tells the browser the gesture is a MOVE, not a copy', async () => {
