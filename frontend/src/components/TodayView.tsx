@@ -1410,7 +1410,17 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
       onDrop={drop}
       // A past day hands out no controls at all: see the header. The flag says
       // "this row is a record", and the row itself decides what that costs it.
-      readOnly={!isToday}
+      //
+      // A DROPPED row is a record too, on whatever day it sits. It only ever
+      // paints in a review — the day's own lists filter it out (`entries`) and
+      // only `review` reads it back — so before today could be reviewed, "past
+      // day" and "dropped" were the same set and `!isToday` covered both. They
+      // came apart the moment a LIVE day could show its dropped rows: without
+      // this, the Dropped group on today would hand out a checkbox for ticking
+      // something the owner declined, and a ✕ for dropping what is already
+      // dropped. "I decided against this" is the most useful thing the day
+      // records, and neither control has anything to say about it.
+      readOnly={!isToday || !!e.dropped_at}
       // `kind` as well as `habit_id`, so "undefined on every other kind" is a
       // fact rather than a consequence of the column being null on them today.
       count={e.kind === 'habit' && e.habit_id ? habitWeek.get(e.habit_id) : undefined}
