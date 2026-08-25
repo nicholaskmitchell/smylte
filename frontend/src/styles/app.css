@@ -451,8 +451,21 @@
 .cal-head { display: flex; align-items: center; gap: 12px; padding: 14px var(--gutter); }
 .cal-title { font-family: var(--serif); font-size: calc(22px * var(--fs-scale)); font-weight: 500; min-width: 220px; }
 .cal-scroll { flex: 1; min-height: 0; overflow-y: auto; }
-.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); border-top: 1px solid var(--rule);
-  border-left: 1px solid var(--rule); }
+/* `minmax(0, 1fr)` and not a bare `1fr`. This is the rule `.cal-scroll.fixed`
+   below already carried, and the reasoning written above it there applies to
+   every month grid, not only a fitted one: a `1fr` track is `minmax(auto, 1fr)`,
+   `auto` will not shrink below the track's min-content, and a chip is
+   `white-space: nowrap` — so one long title widened its weekday for the whole
+   month and squeezed the rest.
+
+   It lived only under `.fixed`, which needs `fit === 'fixed'`, and the shipped
+   default is `dynamic` (calendar.ts) — so the fix was one setting away from
+   everybody. Measured on the default: at 721px the seven columns ran 37.4 to
+   157.7 and the grid scrolled 208px sideways; with this they are 68.6 each and
+   it fits. It squares up the desktop too, where they were quietly unequal
+   (146.9 against 157.7 at 1280px). */
+.cal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr));
+  border-top: 1px solid var(--rule); border-left: 1px solid var(--rule); }
 .cal-dow { font-family: var(--mono); font-size: calc(10px * var(--fs-scale)); text-transform: var(--label-case);
   letter-spacing: calc(0.08em * var(--tracking)); color: var(--fg-faint); padding: 6px 8px; text-align: right;
   border-right: 1px solid var(--rule); border-bottom: 1px solid var(--rule); background: var(--paper); }
@@ -475,15 +488,9 @@
 .cal-scroll.fixed { display: flex; flex-direction: column; }
 .cal-scroll.fixed .cal-grid {
   flex: 1;
+  /* Rows only. The column floor this used to restate now lives on `.cal-grid`
+     itself, because it was never specific to a fitted grid — see there. */
   grid-template-rows: auto repeat(6, minmax(64px, 1fr));
-  /* Both axes, not just the rows. A `1fr` track floors at its content's
-     min-width, and a chip is `white-space: nowrap`, so one long title used to
-     widen its weekday for the whole month — Thursday twice the width of Sunday
-     because of a single event on the 20th. The explicit 0 floor is what makes
-     the ellipsis on that chip the thing that gives way instead of the column.
-     (`overflow: hidden` on the cell below already zeroes that floor as a side
-     effect; this says it rather than relying on it.) */
-  grid-template-columns: repeat(7, minmax(0, 1fr));
 }
 .cal-scroll.fixed .cal-cell { min-height: 0; overflow: hidden; }
 .cal-cell:hover { background: var(--bg-elev); }
