@@ -995,3 +995,61 @@ def test_a_year_one_busy_interval_cannot_take_down_the_public_page():
     assert "09:00" not in starts and "10:00" not in starts, (
         f"the meeting stopped blocking its own hour: {starts}")
     assert "10:30" in starts, f"real availability was lost: {starts}"
+
+
+# ── an availability window may shrink into a DST gap, never grow past it ────
+
+NUUK = ZoneInfo("America/Nuuk")          # -02 -> -01 at 01:00 UTC on 2026-03-28,
+                                         # so local 23:00:00-23:59:59 never happens
+
+
+def test_a_window_ending_inside_the_spring_forward_gap_does_not_overrun():
+    """`datetime.combine(day, w_end, tzinfo=tz)` resolves a wall time that does
+    not exist with PEP 495 fold=0 — the PRE-transition offset — which for an END
+    is the instant of `w_end + gap` in post-transition local time. So the window
+    GREW by the gap rather than shrinking, and slots were emitted past the hours
+    the owner declared. The comment that sat here claimed the opposite; that is
+    only true when the START falls in the gap.
+
+    In the Greenland zones the gap sits in the last hour of the local day, so the
+    over-run slot's local date is the NEXT day — and `book_slot` re-validates
+    with `only_day=req.date()`, a different weekday with no availability at all.
+    The public page advertised a slot and the booking was then refused with "that
+    time is not available". Deterministic, not a race: an owner offering Saturday
+    evenings ending 23:30 had 00:00 Sunday offered on their behalf."""
+    av = scheduling.parse_availability({"4": ["18:00-23:30"], "5": ["18:00-23:30"]})
+    slots = scheduling.generate_slots(
+        availability=av, duration_minutes=30, busy=[], buffer_minutes=0, tz=NUUK,
+        now=datetime(2026, 3, 20, 12, tzinfo=timezone.utc),
+        min_notice_hours=0, horizon_days=20,
+    )
+    sunday = [s for s in slots if s.start.date() == date(2026, 3, 29)]
+    assert not sunday, (
+        f"advertised {len(sunday)} slot(s) on a weekday with no availability: "
+        f"{[s.start.isoformat() for s in sunday]}")
+
+    # ...and the shrink is exact: every real minute the owner offered is kept.
+    # The last slot ends at 23:00 local, which is the transition instant itself.
+    saturday = sorted(s.start.strftime("%H:%M") for s in slots
+                      if s.start.date() == date(2026, 3, 28))
+    assert saturday[0] == "18:00"
+    assert saturday[-1] == "22:30", (
+        f"the clamp threw away availability that genuinely exists: {saturday}")
+
+
+def test_an_ordinary_window_and_a_fall_back_window_are_unaffected():
+    """The gap handling must not touch a day with no transition, nor change which
+    pass of a repeated hour a fall-back window ends in."""
+    plain = _slots(availability=scheduling.parse_availability({"0": ["09:00-12:00"]}))
+    assert [s.start.strftime("%H:%M") for s in plain] == [
+        "09:00", "09:30", "10:00", "10:30", "11:00", "11:30"]
+
+    av = scheduling.parse_availability({str(FALL_BACK.weekday()): ["00:00-05:00"]})
+    fall = scheduling.generate_slots(
+        availability=av, duration_minutes=30, busy=[], buffer_minutes=0, tz=TZ,
+        now=datetime(2026, 10, 31, 12, tzinfo=timezone.utc),
+        min_notice_hours=0, horizon_days=1, only_day=FALL_BACK,
+    )
+    # Six wall-clock hours of real time in a five-hour window, because 01:00-02:00
+    # happens twice. That is the pre-existing behaviour and must not change.
+    assert len(fall) == 12, [s.start.isoformat() for s in fall]
