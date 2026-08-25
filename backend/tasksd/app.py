@@ -1087,7 +1087,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.exception_handler(DavNotFound)
     async def _dav_not_found(request: Request, exc: DavNotFound):
-        return JSONResponse(status_code=404, content={"detail": str(exc)})
+        # Logged in full, answered in general terms. `_raise_for` builds every
+        # DavError message from `resp.request.url` — the fully resolved INTERNAL
+        # URL, carrying the Radicale origin, the account name, the collection
+        # UUID and the resource slug — and this was the one DAV handler that put
+        # the raw message in the response body.
+        #
+        # That reaches the unauthenticated booking surface: any DAV round-trip
+        # inside `book_slot` that 404s (the target calendar removed by another
+        # client inside the sync interval, or the just-written resource deleted
+        # between the PUT and the read-back) answered an anonymous visitor with
+        # the owner's internal href. It is the sibling of the already-closed
+        # "409 with the owner's internal CalDAV href", which was fixed by
+        # rewording one ConflictError while this route kept shipping it.
+        #
+        # It was a poor answer for the owner too: deleting a task on a phone and
+        # then ticking it complete in a still-open tab produced a toast reading
+        # `GET http://127.0.0.1:5232/testuser/9f3e…/ab12cd.ics -> 404`.
+        log.info("Radicale reported a missing resource: %s", exc)
+        return JSONResponse(
+            status_code=404,
+            content={"detail": "that item no longer exists on the calendar server"},
+        )
 
     @app.exception_handler(DavAuthError)
     async def _dav_auth(request: Request, exc: DavAuthError):
