@@ -1,21 +1,23 @@
 # Audit backlog
 
-**0 open.** Every finding below is closed.
+**36 open**, all from the 2026-08-25 sweep at the top of this file; every finding
+from every earlier sweep is closed.
 
 Findings from the adversarial audit sweeps — one deep finder per subsystem, then
 two independent verifiers per finding whose job is to *refute* it. Everything
 here **survived verification**: a verifier tried to knock it down and could not.
 Nothing here is a style nit — each one carries a concrete trigger.
 
-This file is now a record rather than a worklist. The evidence stays: a ticked
-box says what the bug was, why it mattered, and what a reader should not
-reintroduce, and the issues that link into these sections still resolve. Its
-counts and its prose had drifted badly — the header claimed 36 open findings
-against a file with no unticked box in it — because the commit that closed the
-last one never came back to the top of the page. Anything here that reads as
-open is stale text, not an open finding; `grep -c '\[ \]' docs/AUDIT.md` is the
-answer, and `cd backend && python -m pytest -m backlog -rxX` is the executable
-one.
+Everything below the newest sweep is a record rather than a worklist. The
+evidence stays: a ticked box says what the bug was, why it mattered, and what a
+reader should not reintroduce, and the issues that link into these sections still
+resolve.
+
+**Trust the boxes, not the prose.** These counts had drifted badly once already —
+the header claimed 36 open findings against a file with no unticked box in it,
+because the commit that closed the last one never came back to the top of the
+page. `grep -c '\[ \]' docs/AUDIT.md` is the answer, and
+`cd backend && python -m pytest -m backlog -rxX` is the executable one.
 
 Severity is the verifiers' rating. `minor` marks a fix that was a few
 obviously-correct lines needing no design decision.
@@ -60,8 +62,3842 @@ seven crash paths, the five abuse/exhaustion findings, the seven silent-corrupti
 ones, the twelve user-visible ones and the nine delivery/test-gap ones, all ticked
 below. Those pins are now ordinary regression tests that must stay green.
 
-<!-- Newest first: the 2026-08-17 remediation finding, then the 2026-08-16
-     sweep, then 2026-08-07, then the 2026-07 sweep, fully ticked. -->
+<!-- Newest first: the 2026-08-25 sweep, then the 2026-08-17 remediation
+     finding, then the 2026-08-16 sweep, then 2026-08-07, then the 2026-07 sweep,
+     fully ticked. -->
+
+## Sweep — 2026-08-25
+
+A fifth adversarial sweep, and the widest so far: **28 subsystem finders across
+five parallel runs, two independent verifiers per finding, 299 agents**. 138 raw
+findings, **110 survived verification**, 28 were refuted — a 20% refutation rate.
+Every finder ran read-only against a separate copy of the tree with the test
+suites installed, so nothing here could touch the working tree, and every claim
+below was made against code the agent had actually executed.
+
+Grounded against every section of this file, so nothing here repeats an earlier
+sweep. A separate **documentation** run of the same shape read every checkable
+assertion in the docs and went to the source to falsify it; its 24 confirmed
+drifts are all fixed and are not listed as findings — see the commit
+"Correct 24 documentation claims the code no longer supports".
+
+**50 closed, 36 open.** The eight HIGHs are all closed; each was reproduced by
+hand with a runnable probe before it was touched, and each carries a regression
+test confirmed to fail against the pre-fix tree.
+
+Two things this sweep is honest about rather than quiet about:
+
+* **13 findings were capped off before verification** — 10 from the frontend
+  subsystems and 3 from the documentation run — because each finder is bounded to
+  its most severe results. They were never adversarially checked and are not
+  recorded here. A re-run with a higher cap would surface them.
+* **No finding came back unverified.** Every one got a verdict from both
+  skeptics, so nothing below is sitting in the ambiguous middle.
+
+One pattern accounts for a disproportionate share, and it is the same one the
+2026-08-19 sweep named: **a guard that exists, is documented, and does not cover
+the case beside it.** `--fg-faint` had a contrast rationale and failed the bar.
+The mobile block grows the Tasks pane's touch targets and not the Today tab's.
+The 16px iOS floor carries two restoring rules explaining why later declarations
+beat it, and three later declarations beat it. `ArchivedCalendarsSection`'s
+`failed` flag has a comment saying an empty state over a failed fetch is a
+confident lie about the account, and three sibling screens tell that lie. And the
+test written to stop dialogs forgetting the modal contract enumerates dialogs
+that already keep it — so the three that never adopted it were invisible to it.
+A guard is only as wide as the set it enumerates.
+
+
+### Backend core
+
+#### [x] _overlaps_any re-derives every busy interval's UTC bounds for every candidate slot — quadratic CPU on the unauthenticated booking page, under the global service lock
+`backend/tasksd/scheduling.py:334` · **high** · security
+
+`generate_slots` calls `_overlaps_any(slot, blocked)` once per candidate slot, and
+`_overlaps_any` walks `blocked` from index 0 converting BOTH ends of every interval it
+touches with `_u()` (i.e. `datetime.astimezone`) on every call. Nothing is hoisted and
+nothing is indexed, so the work is O(slots x busy-intervals-before-that-slot) with two
+ZoneInfo conversions per inner step. `public_link_info` runs this inside
+`TaskService._lock` (an RLock held by every other API call, /healthz included) on `GET
+/api/public/booking/{token}`, which requires no session; `public_get_limiter` allows 120
+requests per 300 s per client /64, so one source can keep the lock occupied
+continuously.
+
+<details><summary>Evidence</summary>
+
+```
+scheduling.py:332-338:
+
+    s_start, s_end = _u(slot.start), _u(slot.end)
+    for b in blocked:
+        b_start, b_end = _u(b.start), _u(b.end)
+        if b_start >= s_end:
+            return False
+        if s_start < b_end and s_end > b_start:
+            return True
+
+Measured with the real module (America/Chicago, busy = 30-minute meetings synthesised from the owner's calendar, buffer 0):
+
+  link 15 min / horizon 90 d / availability 07:00-22:00 every day, 10 meetings a day
+    -> 910 merged busy intervals, 3 640 slots, 2.61 s per request
+  link 15 min / horizon 180 d / 00:00-23:59, 12 meetings a day
+    -> 2 172 busy intervals, 12 855 slots, 19.49 s per request
+  link 5 min / horizon 180 d / 00:00-23:59, 14 meetings a day (all inside the schema bounds the MAX_SLOTS comment cites)
+    -> 2 534 busy intervals, 36 755 slots, 67.6 s per request
+
+cProfile on the first case: 5 024 239 `datetime.astimezone` calls, 4.9 s total, 2.73 s of it inside astimezone and 3.79 s cumulative inside `_u`.
+
+Failure scenario: owner publishes a 15-minute link with a 90-day horizon and evening-inclusive availability, and has an ordinary busy calendar. An anonymous client that has the published URL issues GET /api/public/booking/<token> once every 2 s. Each request holds the service RLock for ~2.6 s of pure CPU, so the lock is never free: every authenticated API call, the SSE loop, the background sync and /healthz block behind it for as long as the requests continue. No auth, no rate-limit relief (120/300 s is 0.4 req/s, far more than needed).
+```
+
+</details>
+
+**Suggested fix.** Hoist the conversion out of the loop and use the ordering that already exists. `blocked`
+is merged, hence disjoint and sorted, and slots are produced in ascending order, so:
+compute `bs = [_u(b.start) for b in blocked]` / `be = [_u(b.end) for b in blocked]` once
+in `generate_slots` after `pad`, then per slot `i = bisect_left(bs, s_end); overlap = i
+> 0 and be[i-1] > s_start`. I verified this against the current implementation on the
+three configurations above: identical slot lists, 2.61 s -> 0.012 s, 19.49 s -> 0.040 s,
+67.6 s -> 0.097 s.
+
+#### [x] day_range reads SQLite outside the global service lock — two concurrent GET /api/day requests crash the endpoint (and can silently return another day's capacity)
+`backend/tasksd/service.py:2350` · **high** · bug
+
+`TaskService` is built on one sqlite3 connection opened with `check_same_thread=False`,
+whose entire safety argument is the module docstring's "serializes every access behind a
+re-entrant lock" and `store.connect`'s "the service owns ONE connection and serializes
+all access behind a lock, so it is safe to touch from FastAPI's threadpool". `day_range`
+is the only method in the class that breaks that rule. It closes the `with self._lock:`
+block after `store.get_day_range`, then builds the response *outside* the lock:
+```python with self._lock: planned = store.get_day_range(self._conn, start, end) # Every
+day the map holds is planned by definition ... return [self._day_plan_dto(d, rows, True)
+for d, rows in planned.items()] ``` `_day_plan_dto` is not a pure formatter — it runs
+`store.get_day_ritual(self._conn, day)` (service.py:1399) and, through
+`_effective_capacity`, `store.get_settings(self._conn)` (service.py:1446). So one
+request issues **two unserialized queries per planned day** on the shared connection: I
+measured 118 unlocked `conn.execute` calls for a 59-day range, and `DAY_RANGE_MAX_DAYS =
+190` allows up to 380. Every other `_day_plan_dto` call site (`open_day` at
+1519/1531/1569, `set_day_ritual` at 1988) is correctly inside the lock; only 2350 is
+not. The route `GET /api/day` dispatches through `_run` (`asyncio.to_thread`), so two
+concurrent requests really are two threadpool threads on one connection, and any writer
+holding the lock (the background `sync_all` sweep, `open_day`'s `store.tx` BEGIN
+IMMEDIATE, a day-entry PATCH) races with them too. It is also an N+1 that the store
+already has a batched fix for: `store.get_day_rituals(conn, from_day, to_day)` exists at
+store.py:715, is documented as the range twin of `get_day_range` ("a range read of the
+plan and a range read of what was said about it have to agree about their bounds"), and
+is referenced by **no caller anywhere in the tree** — it was written for this function
+and never wired up. `get_settings` is re-read and re-`json.loads`ed once per day for a
+value that cannot change during the request. There is no test anywhere that exercises
+any service read path under concurrency (`tests/test_concurrency.py` is about two CalDAV
+writers; `tests/test_loop_blocking.py` uses a stub service), which is why this shipped.
+
+<details><summary>Evidence</summary>
+
+```
+Reproduced against the audit copy, both at the service level and through the real ASGI app.
+
+(1) Instrumented `svc._conn` to record every `execute` where `svc._lock._is_owned()` is false, then called `svc.day_range("2026-01-01", "2026-03-01")` on a DB with 59 planned days each carrying a ritual row:
+
+```
+days returned: 59
+queries executed WITHOUT holding the service lock: 118
+    59 x SELECT * FROM day_ritual WHERE day=?
+    59 x SELECT value FROM meta WHERE key=?
+```
+
+(2) Four threads calling `svc.day_range("2026-01-01", "2026-06-01")` in a loop on a 150-day DB, no writers at all — fails within seconds, every run:
+
+```
+Traceback (most recent call last):
+  File ".../tasksd/service.py", line 2350, in day_range
+    return [self._day_plan_dto(d, rows, True) for d, rows in planned.items()]
+  File ".../tasksd/service.py", line 1399, in _day_plan_dto
+    ritual = store.get_day_ritual(self._conn, day)
+  File ".../tasksd/db/store.py", line 712, in get_day_ritual
+    return conn.execute("SELECT * FROM day_ritual WHERE day=?", (day,)).fetchone()
+sqlite3.InterfaceError: bad parameter or other API misuse
+```
+A second run failed the same way inside `_effective_capacity` -> `store.get_settings`, and a third produced `IndexError('tuple index out of range')` from `_day_plan_dto` reading `ritual["capacity_minutes"]` — i.e. a row built against *another query's* cursor description reached the reader.
+
+CONTROL: the identical script with `with svc._lock:` wrapped around the `day_range` call ran 8 s clean — `errors: [] count: 0`. The lock is the only variable.
+
+(3) Through the real app (`create_app(settings)`, `app.state.service = TaskService(...)`, httpx ASGITransport), six concurrent `GET /api/day?from=2026-01-01&to=2026-06-01` failed on the FIRST round:
+
+```
+EXC IndexError('tuple index out of range')
+EXC InterfaceError('bad parameter or other API misuse')
+failed on round 0
+```
+The exceptions escape the endpoint entirely (uvicorn -> 500 / torn-down connection).
+
+Concrete failure scenario: owner has the Today tab open in two browser tabs, or the SPA prefetches a week while the month view loads. Both issue `GET /api/day`. Thread A is inside `get_day_ritual`, thread B enters the same cached statement -> one request 500s. The non-crashing variant is worse and silent: a `day_ritual` row fetched for day X can be handed to the reader for day Y, so the Today/week view reports a capacity, `committed_at` or `reflection` belonging to a different day, with no error at all.
+
+The same unlocked loop also races `close()`: `svc.close()` (called on the event loop from the lifespan `finally`)
+```
+
+</details>
+
+**Suggested fix.** Move the response construction inside the lock — `with self._lock: planned = ...; return
+[self._day_plan_dto(d, rows, True) for d, rows in planned.items()]` — which alone fixes
+the crash. While there, kill the N+1 the batch helper was written for: hoist
+`store.get_settings` out of the loop (pass it into `_effective_capacity`) and fetch the
+rituals once with the already-present `store.get_day_rituals(conn, start, end)`, passing
+each day's row into `_day_plan_dto` the way `open_day`/`set_day_ritual` already can. Add
+a regression test that runs several `day_range` calls concurrently against one service
+(the shape above fails deterministically today), since nothing in the suite currently
+asserts the lock discipline for any read path.
+
+#### [x] PATCH event with only `start` (or only `end`) writes a mismatched DTSTART/DTEND value-type pair, silently flips the event to all-day and drops it out of the booking busy set
+`backend/tasksd/app.py:886` · **medium** · bug
+
+`EditEvent` has no `all_day` field, and `_event_edit_from_patch` decides each of DTSTART
+and DTEND independently by feeding the raw string to `_parse_datelike`, which returns a
+`date` for a bare `YYYY-MM-DD` and a `datetime` for anything containing `T`.
+`CreateEvent` at least carries an `all_day` flag that `_event_dt` uses to force the DATE
+branch; the PATCH model has no equivalent, and nothing downstream re-pairs the two.
+`ical.apply_event_changes` writes exactly what it is handed, and `engine._edit` has no
+guard (only `ical.shift_series` refuses an all-day<->timed switch, and that is reached
+only for `scope="all"` WITH a `recurrence_id`). So a PATCH that names only one of the
+two ends leaves the resource with `DTSTART;VALUE=DATE` next to a `DTEND` datetime — an
+RFC 5545 §3.6.1 violation ("the value type of DTEND MUST match DTSTART") that other
+CalDAV clients writing to the same collection have to cope with, and whose DTEND can now
+precede its own DTSTART. The app's own read path then reports `all_day =
+bool(dtstart_is_date)` (`service._event_dto`), and `scheduling.busy_intervals` skips
+every event with `start_is_date`/`all_day` set — so the event stops contributing any
+busy interval and the anonymous booking page will advertise the hour it occupies as
+free. The same edge exists on create: `_event_dt(s, all_day=False)` only pins the DATE
+branch when `all_day` is true, so `POST .../events
+{"start":"2026-04-01","end":"2026-04-01T10:00:00","all_day":false}` is accepted (201)
+and writes the same mismatched pair. The SPA does not trigger this (`dragBody` preserves
+the shape via `shiftIso`, and EventModal sends both ends together), but the MCP twin
+`smylte_update_event` exposes `start`/`end` as independent optional strings with no
+`all_day` (tasksd/mcp/tools.py ~line 718, tasksd/mcp/api.py update_event lines 632-635),
+so an LLM issuing `smylte_update_event(uid, start="2026-03-12")` on a timed meeting
+corrupts it, and any hand-rolled HTTP client hits the route directly. No test in
+tests/test_api.py or tests/test_recur.py asserts that DTSTART and DTEND keep matching
+value types.
+
+<details><summary>Evidence</summary>
+
+```
+backend/tasksd/app.py:876-890
+
+    def _event_edit_from_patch(req: EditEvent) -> EventEdit:
+        fs = req.model_fields_set
+        ...
+        if "start" in fs:
+            kw["dtstart"] = _parse_datelike(req.start)   # date OR datetime, per-field
+        if "end" in fs:
+            kw["dtend"] = _parse_datelike(req.end)
+
+Reproduced end-to-end through the real FastAPI app (TestClient + a stub DAV client, cache seeded with one ordinary timed event `DTSTART:20260310T090000 / DTEND:20260310T100000`):
+
+  busy BEFORE: [Interval(2026-03-10 09:00 America/New_York, 2026-03-10 10:00 America/New_York)]
+
+  PATCH /api/calendars/cal/events/ev1@tasksd  {"start": "2026-03-12"}
+  -> 200   all_day: True   end: "2026-03-10T10:00:00"
+
+  resource now on the wire:
+    DTSTART;VALUE=DATE:20260312
+    DTEND:20260310T100000        <-- different value type, and two days BEFORE the start
+
+  busy AFTER : []               <-- the meeting no longer blocks any booking slot
+
+Create path, same app:
+  POST /api/calendars/cal/events {"summary":"Mixed","start":"2026-04-01",
+                                  "end":"2026-04-01T10:00:00","all_day":false}
+  -> 201  {"start":"2026-04-01","start_is_date":true,
+           "end":"2026-04-01T10:00:00","end_is_date":false,"all_day":true}
+  wire:  ['DTSTART;VALUE=DATE:20260401', 'DTEND:20260401T100000']
+
+The skip that hides it from the busy set is tasksd/scheduling.py busy_intervals:
+    if not ev.get("start") or ev.get("start_is_date") or ev.get("all_day"):
+        continue
+```
+
+</details>
+
+**Suggested fix.** Pin the pair rather than each field. In `_event_edit_from_patch`, when only one of
+`start`/`end` is sent, read the stored event's current `dtstart_is_date` and parse the
+sent value in that value type (or refuse a value type that disagrees with the resource,
+the way `ical.shift_series` already refuses an all-day<->timed switch with a ValueError
+the route maps to 422). When both are sent they must agree with each other. On the
+create side, make `_event_dt(..., all_day=False)` reject a bare `YYYY-MM-DD` for either
+end (or require `all_day=true` for it), so `all_day` pins both directions instead of
+one. Add a regression test asserting that `PATCH {"start": "<bare date>"}` on a timed
+event is a 422 and that the event still appears in `busy_intervals` afterwards.
+
+#### [x] pad() overflows on a busy interval near datetime.min — one far-past DURATION-only VEVENT from any CalDAV client permanently 500s the public booking page
+`backend/tasksd/scheduling.py:219` · **medium** · security · minor
+
+`pad` widens each busy interval by subtracting the buffer from the UTC instant and then
+converting back into the interval's own zone. For an interval at year 1 that conversion
+lands before `datetime.min` and raises OverflowError, which nothing on the read path
+catches: `busy_intervals`' per-event `try/except` has already returned, `generate_slots`
+does not guard, and `app.py` has no OverflowError handler for `GET
+/api/public/booking/{token}` (its handlers are RequestValidationError, ConflictError,
+SlotTaken, KeyError, DavNotFound, DavAuthError, DavError). Such an event survives
+`busy_intervals` only when the link zone's year-1 offset is <= 0 (UTC and every zone in
+the Americas — elsewhere `_u()` in the `end > start` guard overflows first and the event
+is dropped), and it reaches `_link_busy` for EVERY window because
+`store.get_events_in_range` admits a DURATION-only row on `duration IS NOT NULL` alone,
+with no lower date bound at all.
+
+<details><summary>Evidence</summary>
+
+```
+scheduling.py:214-222:
+
+    b = timedelta(minutes=buffer_minutes)
+    return merge([
+        Interval((_u(iv.start) - b).astimezone(iv.start.tzinfo),
+                 (_u(iv.end) + b).astimezone(iv.end.tzinfo))
+        for iv in intervals
+    ])
+
+store.py get_events_in_range: "... ELSE dtstart <= ? AND (duration IS NOT NULL OR COALESCE(dtend, dtstart) >= ?) END" — the DURATION branch has no lower bound.
+
+Reproduced end-to-end against the real app (TestClient, seeded TaskService, no Radicale needed). Any other CalDAV client PUTs into one of the owner's event collections:
+
+  BEGIN:VEVENT\r\nUID:ancient\r\nDTSTART:00010101T000000\r\nDURATION:PT1H\r\nEND:VEVENT
+
+cached as dtstart='0001-01-01T00:00:00', duration='PT1H'. Link: timezone America/Chicago, buffer_minutes=15.
+
+  store.get_events_in_range(... '2026-07-12T00:00:00', '2026-07-21T00:00:00') -> ['ancient']
+  busy_intervals -> [Interval(0001-01-01 00:00 America/Chicago, 0001-01-01 01:00)]   (_u = 05:50Z, LMT -5:50, so the guard passes)
+  GET  /api/public/booking/<tok>       -> 500 Internal Server Error
+  POST /api/public/booking/<tok>/book  -> 422 {"detail":"start is out of range"}
+
+Zone matrix (buffer 15): America/Chicago FAIL, UTC FAIL, Europe/Berlin ok, Asia/Tokyo ok. With buffer_minutes=0 `pad` short-circuits to `merge`, which only converts to UTC, so nothing raises — the buffer is the trigger.
+
+Failure scenario: a phone client (or a corrupted sync) writes one year-0001 DURATION event onto any of the owner's calendars. Every visitor to the published booking link gets a 500 from then on, and every booking attempt is refused with "start is out of range" about a start that was perfectly valid. The owner sees nothing wrong in the app and there is no message pointing at the offending event.
+```
+
+</details>
+
+**Suggested fix.** Clamp inside `pad` before converting back: compute the padded bounds in UTC and bound
+them into a representable range, e.g. `lo = max(_u(iv.start) - b,
+datetime.min.replace(tzinfo=timezone.utc) + timedelta(days=2))` and the symmetric
+`min(...)` for the end, before `.astimezone(...)`. (Bounding what `busy_intervals` will
+accept as a plausible event date would also work, but is a bigger call — clamping keeps
+'assume busy' intact.) Worth a regression test: a DURATION-only year-1 event plus a non-
+zero buffer must yield slots, not a 500.
+
+#### [x] An availability window whose end falls in a DST spring-forward gap is resolved forward, emitting slots past the owner's declared hours — and in Greenland zones the extra slot lands on the next date and is advertised but unbookable
+`backend/tasksd/scheduling.py:291` · **medium** · bug
+
+`generate_slots` builds each day's window with `datetime.combine(day, w_end,
+tzinfo=tz)`. When that wall-clock time does not exist (spring-forward gap) PEP 495
+fold=0 resolves it with the PRE-transition offset, which is the UTC instant of `w_end +
+gap` in post-transition local time. The window therefore GROWS by the gap length rather
+than shrinking, and slots are emitted after the owner's stated end. The code comment on
+line 288 asserts the opposite ("a spring-forward window shrinks rather than crashing") —
+that is true only when the START is in the gap. Where the gap sits in the last hour of
+the local day (America/Nuuk, America/Godthab, America/Scoresbysund: on 2026-03-28 the
+zone moves -02 -> -01 at 01:00 UTC, so local 23:00:00-23:59:59 never occurs) the over-
+run slot's local date is the NEXT day, and `book_slot` re-validates with
+`only_day=req.date()` — a different weekday whose availability does not contain it — so
+the slot the page just showed is refused. This is deterministic, not a race.
+
+<details><summary>Evidence</summary>
+
+```
+scheduling.py:286-292:
+
+        for w_start, w_end in availability.get(day.weekday(), []):
+            win = Interval(
+                datetime.combine(day, w_start, tzinfo=tz),
+                datetime.combine(day, w_end, tzinfo=tz),
+            )
+
+service.py book_slot: `slots = scheduling.generate_slots(..., only_day=req.date())` then `raise scheduling.SlotTaken("that time is not available")`.
+
+(a) Advertised-but-unbookable, reproduced through the real service (TaskService + create_booking_link + public_link_info + book_slot, in-memory DB):
+  link: timezone America/Nuuk, duration 30, availability {"4": ["18:00-23:30"], "5": ["18:00-23:30"]}, horizon 20, now = 2026-03-20T12:00Z
+  public_link_info slots contain {'start': '2026-03-29T00:00:00-01:00', 'end': '2026-03-29T00:30:00-01:00'}
+  book_slot(start_iso='2026-03-29T00:00:00-01:00') -> SlotTaken "that time is not available"  (HTTP 409)
+  The owner offered Saturday evenings ending 23:30; the page offers 00:00 Sunday, and Sunday has no availability at all.
+
+(b) Same root cause, booked rather than refused (America/Chicago, spring-forward 2026-03-08, availability {"6": ["01:00-02:30"]}, duration 30):
+  01:00-06:00 -> 01:00-01:30 -05:00... actual generated slots:
+    2026-03-08T01:00:00-06:00 -> 01:30-06:00
+    2026-03-08T01:30:00-06:00 -> 2026-03-08T03:00:00-05:00   (renders as a 90-minute slot for a 30-minute link)
+    2026-03-08T03:00:00-05:00 -> 2026-03-08T03:30:00-05:00   (entirely outside the declared 01:00-02:30 window)
+  Here `req.date()` is still 2026-03-08, so `book_slot` accepts it and an anonymous visitor writes a 03:00 event onto the owner's calendar half an hour past the hours they published.
+
+A brute force over every zone in the tzdata and every day of 2026 finds exactly the three Greenland zones for case (a); case (b) reaches any zone whose gap overlaps a window end.
+```
+
+</details>
+
+**Suggested fix.** Resolve the window end explicitly instead of relying on fold=0. After building
+`win.end`, detect the gap — `end_utc.astimezone(tz).replace(tzinfo=None) !=
+datetime.combine(day, w_end)` — and clamp `end_utc` to the transition instant (the
+largest UTC instant whose local value is still <= w_end on `day`). The same treatment
+makes the start side explicit rather than incidental. Add a regression test asserting
+that (i) no emitted slot's `start.astimezone(tz).date()` differs from the day it was
+generated for, and (ii) every slot ends at or before `datetime.combine(day, w_end,
+tzinfo=tz)` as an instant — both fail today for America/Nuuk 2026-03-28 with an
+18:00-23:30 window.
+
+#### [ ] Test gap: no test exercises buffer_minutes across a DST transition — reverting pad() to wall-clock arithmetic passes the entire backend suite
+`backend/tests/test_scheduling.py:229` · **medium** · test-gap
+
+`pad` carries an explicit comment that it widens the INSTANT rather than the wall clock,
+on the one unauthenticated write path into the owner's calendar — but nothing tests it
+under a transition. The DST battery (`_dst_slots`, `_fall_back_slots`) hardcodes
+`buffer_minutes=0`, and the only non-zero-buffer test (`test_buffer_widens_exclusion`,
+line 203) runs on an ordinary July Monday. This is the same shape as the already-closed
+'the DST slot battery never supplies busy intervals or a `now` inside the transition'
+gap, one field over — and that gap is the reason two slot-math defects survived three
+sweeps.
+
+<details><summary>Evidence</summary>
+
+```
+tests/test_scheduling.py:226-232 (`_dst_slots`) and 292-297 (`_fall_back_slots`) both pass `buffer_minutes=0`; tests/test_scheduling.py:203-209 is the only non-zero buffer and uses `_slots()` whose default `now` is 2026-07-13.
+
+Mutation proof: with a pytest plugin that replaces `scheduling.pad` with the pre-fix wall-clock version
+
+    Interval(iv.start - b, iv.end + b)
+
+the FULL backend suite passes (`.venv/bin/python -m pytest -q -p no:cacheprovider -p mutate_pad` -> 0 failures). The equivalent mutation of the DURATION path (`advance` -> `start + total`) is caught by two tests, so the gap is specific to `pad`.
+
+What the missing test would catch — America/Chicago, spring-forward 2026-03-08 (02:00 CST -> 03:00 CDT), busy 01:00-01:30 CST, buffer_minutes=120:
+  current pad   -> blocked 05:00Z .. 09:30Z
+  wall-clock pad-> blocked 05:00Z .. 08:30Z
+and with availability Sunday 00:00-06:00, duration 30:
+  current slots  -> 09:30Z, 10:00Z, 10:30Z
+  regressed slots-> 08:30Z, 09:00Z, 09:30Z, 10:00Z, 10:30Z
+The two extra slots sit inside the owner's declared 2-hour buffer and `book_slot` re-validates with the same function, so an anonymous POST would write them onto the calendar.
+```
+
+</details>
+
+**Suggested fix.** Parametrize the existing DST batteries over `buffer_minutes` (0 and a non-zero value)
+with at least one busy interval supplied, and add a direct `pad` assertion on both
+transitions: assert the padded bounds equal `_u(iv.start) - buffer` / `_u(iv.end) +
+buffer` compared as instants, not as local values. The spring-forward case above (busy
+01:00-01:30 CST, buffer 120, expected block ending 09:30Z) fails against the wall-clock
+implementation and passes against the current one.
+
+#### [x] A non-finite `position` from the MCP door is persisted into day_plan.position and makes every later read of that day unrenderable
+`backend/tasksd/service.py:2275` · **medium** · bug · minor
+
+`patch_day_entry` does `fields["position"] = float(position)` with no finiteness check,
+and `store.update_day_entry` writes it straight into the `day_plan.position REAL`
+column. Every HTTP door that carries a float is guarded against exactly this —
+`Sidecar.sort_order` (app.py:237), `PatchDayEntry.position` (app.py:352, whose comment
+reads "a non-finite float parses out of JSON but cannot be serialized back into it, so
+one Infinity here would 500 every later read of the whole day"), `CreateHabit.position`
+(app.py:393) and `EditHabit.position` (app.py:415) all carry `allow_inf_nan=False`. The
+MCP door does not: `smylte_update_day_entry`'s schema declares `"position": {"type":
+"number"}` (tools.py:536-537), `mcp/validate.py` implements only
+type/enum/min/max/length/pattern, and `McpApi.update_day_entry` (mcp/api.py:1116-1230)
+adds no check. `mcp/server.parse_body` rejects the bare `Infinity`/`NaN` literals via
+`parse_constant`, but its own comment (server.py:268-270) notes it "does NOT catch 1e400
+— that is an ordinary number literal parsed by `parse_float`, which overflows to inf".
+That guard was only ever applied to the JSON-RPC `id`, not to tool arguments. SQLite
+stores the inf and hands it back, and Starlette/FastAPI's JSONResponse renders with
+`allow_nan=False`, so the ValueError is raised during response rendering — outside every
+exception handler (the trap server.py:110-118 documents for the `id`). The poison is
+persistent: every subsequent GET /api/day/{day}, every GET of a day RANGE containing it,
+and every `smylte_get_today` / `smylte_review_day` covering it dies the same way. The
+owner cannot repair it from the app, because the HTTP PATCH model refuses the finite→inf
+field's replacement path only after the day read has already failed.
+
+<details><summary>Evidence</summary>
+
+```
+tools.py:536:  "position": {"type": "number", "description": "Sort key within the day; lower comes first."}
+service.py:2274-2275:
+        if position is not None:
+            fields["position"] = float(position)
+
+Reproduced (backend/.venv/bin/python):
+  body = b'{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"x","arguments":{"position":1e400}}}'
+  mcp.server.parse_body(body) -> position = inf          (transport accepts it)
+  mcp.validate.check_value(inf, {"type":"number"})       -> accepted
+  McpApi(svc).update_day_entry("n1", day=TODAY, position=float("inf"))
+    tool returned position: inf
+  svc.open_day(TODAY, create=False) -> [('n1', inf)]      (persisted in day_plan.position)
+  json.dumps(plan, allow_nan=False)
+    -> ValueError: Out of range float values are not JSON compliant: inf   # GET /api/day/{day}
+  json.dumps(McpApi(svc).today(), allow_nan=False)
+    -> ValueError: Out of range float values are not JSON compliant: inf   # smylte_get_today
+
+The write commits before the tool's own response is rendered, so the first call also
+answers 500 while having succeeded — and every later read of that day 500s too.
+```
+
+</details>
+
+**Suggested fix.** Reject non-finite floats at the one chokepoint every door passes: in
+`service.patch_day_entry` (and the twin at service.py:2453 for habits), `if position is
+not None: p = float(position); if not math.isfinite(p): raise ValueError("position must
+be a finite number")`. Belt-and-braces: have `mcp/server.parse_body` pass a
+`parse_float` that rejects non-finite results, so `1e400` cannot enter any tool
+argument. A regression test should drive `smylte_update_day_entry` with `1e400` and
+assert the day still reads.
+
+#### [ ] Cloudflare Access verification does a blocking JWKS fetch on the event loop, and an unknown `kid` forces one per request
+`backend/tasksd/access.py:31` · **low** · bug
+
+`AccessVerifier.verify` is a synchronous function that performs outbound HTTPS I/O
+(`PyJWKClient.get_signing_key_from_jwt` -> `urllib.request.urlopen`, PyJWT's default
+`timeout=30`), and it is called directly from `async def require_auth`
+(backend/tasksd/app.py:1112) rather than through `asyncio.to_thread` like every other
+blocking call in the app. Worse, PyJWT's `get_signing_key` bypasses its own 300 s JWK-
+set cache whenever the token's `kid` does not match a cached key: it retries with
+`refresh=True`, so every request carrying an unrecognised `kid` performs a fresh network
+round-trip. This is the same defect class the repo already fixed for `_href()`
+("resolves the list id on the event loop while holding the global service lock"),
+reintroduced on the Access path.
+
+<details><summary>Evidence</summary>
+
+```
+backend/tasksd/access.py:30-38
+```python
+try:
+    key = self._jwks.get_signing_key_from_jwt(token).key  # type: ignore[union-attr]
+    jwt.decode(token, key, algorithms=["RS256"], audience=..., issuer=...)
+```
+and backend/tasksd/app.py:1106-1112
+```python
+async def require_auth(session=Cookie(...), cf_token=Header(...)) -> None:
+    if authenticator is not None and not authenticator.verify_session(session):
+        raise HTTPException(401, "authentication required")
+    verifier.verify(cf_token)   # <-- blocking urlopen, inline on the loop
+```
+Reproduced (scratchpad/agent-scratch/probe_access.py, run against the audit copy): with `access_required=True` and `PyJWKClient.fetch_data` patched to sleep 1.5 s, a 50 ms asyncio ticker recorded `max gap between 50ms event-loop ticks: 1.55s` while a single `verify()` ran — i.e. the whole process stopped, /healthz, SSE keepalives and /api/login included.
+
+Reproduced (scratchpad/agent-scratch/probe_kid.py): five `verify()` calls with a token whose header is `{"alg":"RS256","kid":"nope"}` produced `network fetches for 5 unknown-kid requests: 6` — the cache does not absorb a kid miss.
+
+Failure scenario: deployment sets `TASKS_ACCESS_REQUIRED=true`. Every 300 s the JWK-set cache lapses and the next /api request synchronously fetches `https://<team>.cloudflareaccess.com/cdn-cgi/access/certs`; if that endpoint or DNS stalls, the entire app is frozen for up to 30 s. Separately, any caller past the session check (or any caller at all, when `TASKS_AUTH_ENABLED=false` leaves Access as the only gate, since `authenticator is None` short-circuits the first check) can send `Cf-Access-Jwt-Assertion` with a random `kid` and make every one of its requests do a blocking outbound fetch, serialising the whole server behind them.
+```
+
+</details>
+
+**Suggested fix.** Make `verify` awaitable (or call it via `asyncio.to_thread` from `require_auth`) so the
+JWKS fetch never runs on the event loop, and bound the kid-miss refresh (e.g. cache
+negative kids for a short interval, or pre-warm the JWK set on a background task) so an
+attacker-chosen `kid` cannot force a network round-trip per request.
+
+#### [ ] Nothing bounds the total anonymous scrypt work: the login limiter is keyed only on the client /64, so a single routed /48 lifts "5 guesses / 15 min" to ~6 M/day
+`backend/tasksd/app.py:1711` · **low** · security
+
+The only gate in front of `/api/login`'s scrypt call is
+`authenticator.limiter.attempt(key)` where `key = limiter_key(_client_ip(request))`,
+i.e. a per-source-/64 counter. `login_hashes = asyncio.Semaphore(4)` bounds
+*concurrency* (memory), never *rate*. There is no global failure counter and no global
+budget on hash work, so the real ceiling on password guesses is the box's CPU, not the
+advertised 5-per-15-minutes. auth.py's module docstring ("the slow hash + rate limit
+make online brute force impractical") and `limiter_key`'s docstring ("an attacker
+rotating through their own 2^64 addresses shares one counter") are both true per address
+and false in aggregate: the /64 collapse only defeats rotation *inside* one allocation,
+and an attacker with a routed /48 has 65 536 independent counters.
+
+<details><summary>Evidence</summary>
+
+```
+backend/tasksd/app.py:1701-1727
+```python
+login_hashes = asyncio.Semaphore(4)
+...
+key = limiter_key(_client_ip(request))   # IPv6 collapses to its /64
+if not authenticator.limiter.attempt(key):
+    raise HTTPException(429, ...)
+async with login_hashes:
+    ok = await asyncio.to_thread(authenticator.check_credentials, body.username, body.password)
+```
+with `RateLimiter(max_fails=5, window_s=900, lockout_s=900)` (backend/tasksd/auth.py:90) and `limiter_key` collapsing IPv6 to /64 (backend/tasksd/auth.py:61-76). Grep confirms no other limiter, middleware or edge config gates this route: `tasksd/limits.py` only caps body size, and `deploy/Caddyfile.snippet` sets `request_body max_size 1MB` and no rate limit.
+
+Measured in the audit copy: `verify_password` costs 56.4 ms per call (scrypt N=2^14, r=8, p=1). With the semaphore at 4, the process will evaluate ~4/0.0564 = 71 guesses/second forever = ~6.1 million/day. Sustaining that needs only ~860 distinct source /64s held in rotation (71 req/s x 900 s window / 5 per key) — one Hurricane-Electric-style free /48 supplies 65 536.
+
+Failure scenario: attacker with one routed /48 opens 4 concurrent POST /api/login, cycling a fresh /64 every 5 guesses. Every request passes `attempt()` (fresh key), so ~6.1 M passwords/day are actually evaluated against a limit advertised as 5 per 15 minutes, and the box permanently runs 4 memory-hard scrypt threads (16 MiB each) out of the shared default executor — sustained 100% CPU on a Pi/small VPS, with the owner's own requests competing for what is left.
+```
+
+</details>
+
+**Suggested fix.** Add a second, key-independent counter in front of the hash: a global token bucket (or a
+global failure counter with its own lockout) on `/api/login` and `/oauth/authorize`,
+sized to what a real single-owner deployment needs (a few attempts a minute). Keep the
+per-/64 limiter as the per-client layer; the global one is what makes address rotation
+useless.
+
+#### [ ] Test gap: AccessVerifier and the whole access_required posture have zero coverage, including the third fail-closed startup refusal
+`backend/tests/test_security.py:418` · **low** · test-gap
+
+`backend/tasksd/access.py` is a security control with no test of any kind. Grepping the
+entire suite, `access_required` appears only as `False` inside settings fixtures;
+nothing constructs an `AccessVerifier`, nothing drives `require_auth` with Access on,
+and nothing asserts the JWKS failure mode. test_security.py has a dedicated "fail-closed
+at startup" section that explicitly exists because "a refactor that reordered the
+password fallback, or dropped the well-known-default comparison, would have left the
+whole suite green with the gate gone" — and it covers two of the three refusals in
+`create_app`. The Access one (app.py:920, `TASKS_ACCESS_REQUIRED is set but
+TASKS_ACCESS_TEAM_DOMAIN / TASKS_ACCESS_AUD are not configured — refusing to start
+unprotected`) is the third, and it is not tested.
+
+<details><summary>Evidence</summary>
+
+```
+```
+$ grep -rn "AccessVerifier|access_required=True|Cf-Access|unprotected" backend/tests/
+(no matches; access_required appears only as `access_required=False` in six settings fixtures)
+```
+Uncovered behaviours, all of which currently work and all of which fail open or brick the app if broken:
+  * `verify(None)` -> 401, `verify("garbage")` -> 403, `verify(<alg=none token>)` -> 403 (confirmed by hand: 401 "missing Cf-Access-Jwt-Assertion"; 403 "invalid Access token: Not enough segments"; 403 "Unable to find a signing key that matches").
+  * A JWKS fetch failure must fail CLOSED. It does today (`except Exception -> 403`), but nothing pins it: widening that handler, or adding a `return` for the connection-error case to "avoid locking people out during an outage", would silently turn Access into a no-op and leave the suite green.
+  * `access_required=False` must make `verify` a total no-op even with a garbage header.
+  * `create_app(access_required=True, access_team_domain="", access_aud="")` must raise RuntimeError.
+
+Failure scenario the gap permits: someone "fixes" the 403-on-outage behaviour by returning early when `PyJWKClientConnectionError` is raised. Every /api request then passes the Access gate with any token at all, or none, and `pytest -q` is still green.
+```
+
+</details>
+
+**Suggested fix.** Add unit tests for `AccessVerifier` with `access_required` both off and on, using a
+monkeypatched `PyJWKClient.fetch_data` that serves a locally generated RSA JWK set:
+assert the no-op path, the 401 on a missing header, the 403 on a bad signature / wrong
+aud / wrong iss / expired token, the 403 (not a pass) when `fetch_data` raises, and a
+plain `pytest.raises(RuntimeError, match="refusing to start unprotected")` for the third
+startup invariant alongside the two already there.
+
+#### [ ] PATCH /api/day/{day}/entries/{id} mints an unreclaimable sidecar row when the entry's task no longer exists — the same permanent leak the PUT-sidecar and reorder doors were both hardened against
+`backend/tasksd/service.py:2321` · **low** · bug · minor
+
+`patch_day_entry` write-throughs an estimate onto the task's sidecar: ```python if
+("estimate_minutes" in fields and row["kind"] == "task" and row["collection_href"] and
+row["uid"]): store.set_sidecar( self._conn, row["collection_href"], row["uid"],
+estimated_minutes=fields["estimate_minutes"], ) ``` `row` is a `day_plan` entry, and day
+entries are *designed* to outlive the task they name — `_carry_into`'s docstring says so
+explicitly ("a task entry whose task is no longer an open VTODO stays behind too —
+completed elsewhere, cancelled, or gone from the wire entirely. The ENTRY on its own day
+survives all of that (no FK, by design)"). So `row["uid"]` routinely names a UID that
+`items` no longer holds, and there is no existence check on this path.
+`store.set_sidecar` (store.py:506) does a bare `INSERT OR IGNORE INTO sidecar
+(collection_href, uid)` with no referential check, so it creates a fresh row with
+`orphaned_at IS NULL`. `orphan_sidecar` (store.py:445) only ever UPDATEs rows that
+already exist at the moment a *known* item is removed, and `gc_orphans` (store.py:477)
+deletes only `orphaned_at IS NOT NULL`. The row is therefore permanent, in the one table
+the codebase repeatedly calls "the one part of the DB no resync can rebuild". This is
+exactly the leak two other doors were already fixed for. `PUT
+/api/lists/{id}/tasks/{uid}/sidecar` got a `has_task` guard and a nine-line comment
+about it (app.py:1294-1305), and `store.set_sort_orders` got an `INSERT ... SELECT ...
+WHERE EXISTS (SELECT 1 FROM items ...)` guard whose docstring says "The guard belongs
+here, where every door passes" (store.py:536-546). The guard was put in
+`set_sort_orders`, not in `set_sidecar`, so this third door — added later with the day-
+plan/estimate feature — still passes unguarded.
+
+<details><summary>Evidence</summary>
+
+```
+Reproduced against the audit copy:
+
+```python
+store.upsert_item(conn, "/u/work/", Item("/u/work/gone@x.ics", '"1"', raw), extract_from_raw(raw))
+svc.add_day_entry(TOMORROW, entry_id="e1", kind="task", list_id="work", uid="gone@x")
+# another CalDAV client deletes the task; sync removes the item and orphans any sidecar
+store.delete_item_by_href(conn, "/u/work/", "/u/work/gone@x.ics")
+store.orphan_sidecar(conn, "/u/work/", "gone@x")
+svc.patch_day_entry(TOMORROW, "e1", estimate_minutes=45)
+```
+
+Output:
+```
+sidecar rows after delete: 0
+sidecar rows after estimating the entry: [('/u/work/', 'gone@x', 45, None)]   # orphaned_at = None
+item exists? False
+gc_orphans reclaims: 0
+still there: 1
+```
+
+Concrete scenario: the owner plans "Buy milk" onto tomorrow from the Today tab; later that evening they tick it off in Tasks.org (or DAVx5 deletes it), so the VTODO leaves the wire and `items`. The day entry survives by design and is still on tomorrow's plan. The owner opens Today, types an estimate on that row -> PATCH with `estimate_minutes` -> a sidecar row for `gone@x` is created with `orphaned_at IS NULL`. `orphan_sidecar` will never fire for it (the item is already gone, so no future removal names it) and `gc_orphans` skips it forever. Repeat over months of planning and the sidecar table accumulates rows that no resync, no GC and no UI can reach.
+```
+
+</details>
+
+**Suggested fix.** Give `store.set_sidecar` the same `WHERE EXISTS (SELECT 1 FROM items WHERE
+collection_href=? AND uid=?)` guard that `set_sort_orders` already carries — that closes
+every current and future door at once, and is what that function's own docstring argues
+for. Failing that, guard at this call site: only teach the sidecar when
+`store.get_item(self._conn, row["collection_href"], row["uid"]) is not None`, leaving
+the day entry's own `estimate_minutes` write unconditional (the entry is what the day
+counts; the sidecar is only where the *next* entry starts). A test that estimates a day
+entry whose task has been removed and then asserts `SELECT COUNT(*) FROM sidecar == 0`
+would pin it.
+
+#### [ ] store.set_sidecar has no live-item guard, so the day-plan estimate write-through mints sidecar rows gc_orphans can never reclaim
+`backend/tasksd/db/store.py:511` · **low** · bug · minor
+
+`set_sidecar` unconditionally does `INSERT OR IGNORE INTO sidecar (collection_href, uid)
+VALUES (?, ?)` for any uid at all. The project has already closed this exact hole at the
+other two doors into that table — `PUT /api/lists/{id}/tasks/{uid}/sidecar` got a
+`has_task` check (app.py:1296-1305, with a nine-line comment about it) and `POST
+/api/tasks/reorder` got an `EXISTS (SELECT 1 FROM items …)` guard inside
+`store.set_sort_orders` (store.py:558-566, whose docstring says "The guard belongs here,
+where every door passes"). A third door passes and has no guard:
+`service.patch_day_entry` (service.py:2319-2323) writes the estimate through to the
+sidecar for any day_plan TASK entry. day_plan deliberately has NO foreign key to `items`
+— schema.sql:293-297 says the entry "must stay true even after the task it names is
+completed-and-deleted, moved between lists by another client, or delete-and-recreated by
+a sync" — and `service.add_day_entry` validates only that the LIST resolves, never that
+the uid names a live item (`CreateDayEntry.uid` is free text, max 512; the MCP
+`smylte_plan_day` `uid` is `{"type": "string"}` with no constraints at all). So the
+(collection_href, uid) pair reaching `set_sidecar` routinely names nothing.
+`orphan_sidecar` only stamps `orphaned_at` at the moment a KNOWN item leaves the wire,
+and `gc_orphans` deletes only `WHERE orphaned_at IS NOT NULL`. A row minted after that
+moment (or for a uid that never existed) has `orphaned_at IS NULL` forever and is
+unreclaimable, in the one table a resync cannot rebuild.
+
+<details><summary>Evidence</summary>
+
+```
+store.py:511-521:
+    conn.execute(
+        "INSERT OR IGNORE INTO sidecar (collection_href, uid) VALUES (?, ?)",
+        (collection_href, uid),
+    )
+    for k, v in fields.items():
+        conn.execute(f"UPDATE sidecar SET {k}=?, …")
+
+service.py:2319-2323:
+    if ("estimate_minutes" in fields and row["kind"] == "task"
+            and row["collection_href"] and row["uid"]):
+        store.set_sidecar(self._conn, row["collection_href"], row["uid"],
+                          estimated_minutes=fields["estimate_minutes"])
+
+Reproduced (backend/.venv/bin/python, TaskService with db_path=':memory:'):
+  seed VTODO 'due-today' in /u/work/; svc.open_day(DAY, create=True)
+  -> the phone deletes the task: store.delete_item_by_href(...); store.orphan_sidecar(...)
+     item gone: None ; sidecar after delete: None   (nothing to orphan)
+  -> the owner estimates the still-visible day entry:
+     svc.patch_day_entry(DAY, entry_id, estimate_minutes=25)
+     sidecar after patch: {'collection_href': '/u/work/', 'uid': 'due-today', …,
+                           'estimated_minutes': 25, 'orphaned_at': None}
+  -> store.gc_orphans(conn, '/u/work/', keep_days=-3650) deleted: 0
+     still present: True
+
+Second, cheaper trigger needing no deletion at all: POST /api/day/{day}/entries
+{"entry_id":"x","kind":"task","list":"<real list>","uid":"anything-at-all"} then
+PATCH /api/day/{day}/entries/x {"estimate_minutes":30} — one permanent row per
+call. The same pair of MCP tools (smylte_plan_day + smylte_update_day_entry) reaches it from an LLM.
+```
+
+</details>
+
+**Suggested fix.** Move the guard into `store.set_sidecar`, exactly as `set_sort_orders` did, so every door
+passes it: replace the `INSERT OR IGNORE … VALUES (?, ?)` with `INSERT INTO sidecar
+(collection_href, uid) SELECT ?, ? WHERE EXISTS (SELECT 1 FROM items WHERE
+collection_href=? AND uid=?) ON CONFLICT(collection_href, uid) DO NOTHING`, and skip the
+UPDATE loop when no row exists. (A caller-side `has_task` check in
+`service.patch_day_entry` closes this one door but leaves the store primitive open for
+the next caller.) Add a unit test beside
+`test_a_reorder_naming_an_unknown_uid_writes_no_sidecar_row` asserting that estimating a
+day entry whose task is gone leaves the sidecar count unchanged.
+
+#### [x] tx() replaces the real exception with "cannot rollback - no transaction is active" whenever SQLite has already auto-rolled back (disk full / I/O error)
+`backend/tasksd/db/store.py:43` · **low** · bug · minor
+
+`tx`'s failure arm issues an unconditional `conn.execute("ROLLBACK")`. For error classes
+where SQLite performs an automatic rollback — SQLITE_FULL and SQLITE_IOERR being the
+realistic ones on a self-hosted box whose disk fills up — the transaction is already
+gone by the time the handler runs, so the ROLLBACK itself raises
+`sqlite3.OperationalError: cannot rollback - no transaction is active`. That exception
+propagates in place of the original; the `raise` on the next line never executes. The
+data is safe (SQLite really did roll back), but the diagnosis is destroyed at exactly
+the moment it is needed. `SyncEngine._apply_incremental` / `full_resync` / `discover`
+all run inside `tx`, and `service.sync_all` catches the escaping exception and does
+`log.warning("sync failed for %s: %s", href, e)` plus `store.set_sync_error(self._conn,
+href, str(e))` — so both the log line and the persisted `sync_state.last_error` the
+operator reads say "cannot rollback - no transaction is active" when the actual
+condition is "database or disk is full". There is also no unit test of `tx` at all; the
+only test of its all-or-nothing behaviour (test_backlog_aug19_stage1.py:262) is
+`@pytest.mark.radicale` and skips without Docker.
+
+<details><summary>Evidence</summary>
+
+```
+store.py:39-47:
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        yield
+    except BaseException:
+        conn.execute("ROLLBACK")      # <- raises when SQLite already rolled back
+        raise
+    else:
+        conn.execute("COMMIT")
+
+Reproduced (backend/.venv/bin/python, file-backed DB via store.connect, WAL):
+    conn.execute("PRAGMA max_page_count=%d" % (page_count + 5))   # simulates SQLITE_FULL
+    with store.tx(conn):
+        for i in range(500):
+            conn.execute("INSERT INTO blobs (b) VALUES (?)", (os.urandom(4000),))
+  ->  failure point: ('statement', 'OperationalError', 'database or disk is full')
+  ->  tx raised:     OperationalError cannot rollback - no transaction is active
+  ->  conn.in_transaction after tx(): False   (SQLite had already rolled back)
+
+So the caller — and sync_state.last_error, and the log — are told about a rollback
+bookkeeping detail instead of the full disk.
+```
+
+</details>
+
+**Suggested fix.** Swallow a failed ROLLBACK so the original exception survives: except BaseException: try:
+conn.execute("ROLLBACK") except sqlite3.Error: pass # SQLite already rolled this back
+(SQLITE_FULL/IOERR) raise While there, consider guarding the COMMIT the same way (a
+COMMIT that raises currently leaves the connection inside a transaction it never
+closes). Add a plain unit test for `tx`: one asserting an ordinary exception rolls the
+batch back, and one under `PRAGMA max_page_count` asserting the disk-full message is
+what reaches the caller.
+
+### iCalendar, DAV, MCP
+
+#### [x] split_series replaces a bounded rule's own end with `anchor - 1s`, so "this and following" on an RDATE past the rule's end resurrects every slot in between
+`backend/tasksd/ical/edit.py:1572` · **high** · bug
+
+The head of a split is rebounded unconditionally: ```python rule = _rrule_dict(hmaster)
+_require_occurrence(hmaster, rule, anchor) if rule is not None: rule.pop("COUNT", None)
+rule["UNTIL"] = [_until_before(anchor)] _set_rrule(hmaster, rule) ``` This assumes the
+anchor is a slot the RRULE itself generates, so that `UNTIL = anchor - 1s` can only
+narrow it. But `_require_occurrence` deliberately accepts an anchor named by an
+**RDATE** (`if any(_same_instant(_period_start(r), anchor) for r in rdates): return`),
+and an RDATE routinely sits *after* where the rule stopped — that is the normal reason
+to add one ("the weekly run ended in January, plus one extra session in March"). When it
+does, dropping COUNT and writing a later UNTIL **extends** the rule instead of cutting
+it, and every day/week between the rule's real end and the anchor becomes a live
+occurrence. A split can only ever narrow a series; the bound has to be clamped
+(`min(existing, anchor-1s)`), never replaced. Note the same block leaves the tail
+carrying the original `UNTIL`, which now precedes the tail's own `DTSTART` — the
+"undeletable husk" shape `_head_is_empty` exists to prevent, on the other side of the
+split.
+
+<details><summary>Evidence</summary>
+
+```
+Reproduced against the audit copy with `expand_occurrences` as the judge.
+
+Resource (any client can write it; the SPA renders 4 occurrences):
+```
+DTSTART:20260105T090000Z
+DTEND:20260105T093000Z
+RRULE:FREQ=DAILY;COUNT=3
+RDATE:20260210T090000Z
+```
+Occurrences before: 2026-01-05, 01-06, 01-07, 02-10 (4).
+
+`split_series(raw, "2026-02-10T09:00:00+00:00", EventEdit())` →
+```
+head RRULE: RRULE:FREQ=DAILY;UNTIL=20260210T085959Z
+head occurrences: 36  (2026-01-05 ... 2026-02-09, daily)
+tail occurrences: 1   (2026-02-10)
+```
+
+Identical with an UNTIL-bounded rule: `RRULE:FREQ=DAILY;UNTIL=20260107T090000Z` + the same RDATE also yields a 36-occurrence head.
+
+Reachable in two clicks. `app.py:delete_event` with `scope="thisandfuture"` → `service.delete_event` line 937 → `engine.split_event(..., delete_tail=True)`, which PUTs **only the head**: the owner asks to delete one occurrence and 33 events they never created are written to the shared Radicale collection permanently (and start blocking the public booking page). The tail also comes out as `DTSTART:20260210T090000Z` beside `RRULE:FREQ=DAILY;UNTIL=20260107T090000Z` — an UNTIL before its own DTSTART.
+```
+
+</details>
+
+**Suggested fix.** Clamp instead of replacing. Keep the rule's existing bound when it already ends before
+the anchor: compute the head's UNTIL as the earlier of the current UNTIL and
+`_until_before(anchor)`, and only `pop("COUNT")` when the anchor is a slot the RRULE
+generates (`_require_occurrence` already distinguishes the RDATE-named case — have it
+report which branch matched). When the anchor came from an RDATE beyond the rule's
+reach, leave RRULE untouched and let the RDATE partition alone do the split. Apply the
+same clamp to the tail's rule so it cannot keep an UNTIL earlier than its new DTSTART.
+
+#### [x] `_detach_thisandfuture` subtracts `nxt - anchor` with none of the mixed-type/awareness tolerance every other datetime helper in the file has — unhandled TypeError (500)
+`backend/tasksd/ical/edit.py:904` · **high** · bug
+
+```python nxt = _next_generated(master, anchor, blocked=_claimed_anchors(cal,
+exclude=governing)) ... step = nxt - anchor ``` `_next_generated` normalizes only the
+values dateutil produced (lines 828-830 re-attach `after.tzinfo` and downcast to
+`.date()` when the anchor is a date). The `extra` list — the master's RDATEs, added at
+line 831 — is passed straight through, so `nxt` can be a floating datetime beside a
+zone-aware anchor, or a datetime beside a date anchor. `nxt - anchor` then raises
+TypeError. TypeError is neither ValueError nor OverflowError, so `patch_event`
+(app.py:1523/1526) does not map it and there is no generic exception handler on the app
+— it escapes as a **500**. Every other datetime site in this file was given exactly this
+guard for exactly this reason: `_same_instant` (line 622), `_at_or_after` (line 646),
+`_comparable` (line 439), `_tf_shift` (line 1397), `_event_duration` (line 671),
+`_wall_delta` (line 1018). This is the one arithmetic left raw, and it sits on the "edit
+this occurrence" path.
+
+<details><summary>Evidence</summary>
+
+```
+Two shapes, both hitting line 904, found by sweeping the five write entry points over foreign-ICS shapes:
+
+**A — floating RDATE beside a zoned master** (the file's own `_rebuild_datelist` docstring calls mixed zones "ordinary in a shared collection"):
+```
+DTSTART;TZID=Europe/Berlin:20260105T090000
+DTEND;TZID=Europe/Berlin:20260105T100000
+RRULE:FREQ=DAILY;COUNT=3
+RDATE:20260210T090000
+---
+RECURRENCE-ID;RANGE=THISANDFUTURE:20260107T090000Z
+DTSTART:20260107T110000Z
+DTEND:20260107T120000Z
+```
+`apply_occurrence_override(raw, "2026-01-07T09:00:00+00:00", EventEdit(summary="x"))` →
+`TypeError: can't subtract offset-naive and offset-aware datetimes` at `edit.py:904`.
+The rule's COUNT is exhausted at the anchor, so `_next_generated` falls through to the floating RDATE.
+
+**B — DATE-valued RANGE=THISANDFUTURE override on a series whose RDATEs are DATE-TIME:**
+```
+DTSTART:20260105T090000Z
+DTEND:20260105T100000Z
+RDATE:20260107T090000Z,20260109T090000Z
+---
+RECURRENCE-ID;RANGE=THISANDFUTURE;VALUE=DATE:20260107
+DTSTART;VALUE=DATE:20260108
+```
+`apply_occurrence_override(raw, "2026-01-07", ...)` →
+`TypeError: unsupported operand type(s) for -: 'datetime.datetime' and 'datetime.date'`.
+
+Both are Apple/Thunderbird "this and all future events" shapes the repo explicitly supports. The occurrence is then permanently uneditable via "this event" (the bytes live on the server), and the owner gets a 500 with no message. Via MCP the same crash surfaces as `smylte_update_event rejected those arguments: can't subtract offset-naive and offset-aware datetimes`.
+```
+
+</details>
+
+**Suggested fix.** Normalize the RDATE-sourced candidates in `_next_generated` the way the rrule candidates
+already are — coerce each `extra` entry to the anchor's dateness and awareness before it
+enters `slots` — and/or compute the step in `_detach_thisandfuture` through the existing
+tolerant helpers (`_comparable(nxt, anchor)` then subtract, mirroring `_wall_delta`).
+Add a regression case for each of the two shapes above.
+
+#### [x] An out-of-range SEQUENCE from any CalDAV client permanently stalls that collection's sync
+`backend/tasksd/ical/read.py:301` · **high** · bug
+
+`_int` converts a property icalendar has already flagged as broken into an unbounded
+Python int, and `extract` puts it in `ItemFields.sequence` (read.py:341).
+`store.upsert_item` binds that to a SQLite INTEGER column, which is 64-bit, so a
+SEQUENCE above 2**63 raises OverflowError. That bind sits OUTSIDE the `try/except
+Exception` in `sync/engine.py:243-251`, which only guards `ical.extract_from_raw` —
+`store.upsert_item` is at engine.py:256, after the guard closes. The OverflowError
+therefore aborts the whole `_tx` in `_apply_incremental`/`full_resync`, so the sync
+token is never advanced and every item in the same batch is rolled back. `sync_all`
+(service.py:402) catches it, records a sync error and moves on — and the next pass re-
+fetches the identical poison href with the identical old token and fails identically,
+forever. The collection stops receiving ANY change from ANY client. This is the same
+class as the already-fixed calendar-order overflow, but at a different site: that one
+was closed by clamping at the wire boundary in `dav/client.py:163-166` ("Python ints are
+unbounded but SQLite's INTEGER is not"); the item-level twin was never bounded. PRIORITY
+and PERCENT-COMPLETE are safe only by accident — icalendar range-checks those and raises
+ValueError inside `extract`, which the guard does catch; SEQUENCE comes back as a
+`vBroken` whose `int()` succeeds.
+
+<details><summary>Evidence</summary>
+
+```
+read.py:299-301  `def _int(comp, key): v = comp.get(key); return None if v is None else int(v)` and read.py:341 `f.sequence = _int(comp, "SEQUENCE")`.
+
+One resource on the wire (vobject — Radicale's own parser — parses and round-trips it unchanged, verified):
+
+    BEGIN:VEVENT\r\nUID:seq@x\r\nDTSTAMP:20260101T000000Z\r\n
+    DTSTART:20260107T090000Z\r\nDTEND:20260107T093000Z\r\n
+    SEQUENCE:99999999999999999999\r\nSUMMARY:Poison\r\nEND:VEVENT
+
+Driven through the real SyncEngine against an in-memory DB with a stub DAV client serving that resource plus one ordinary event:
+
+    pass 1: RAISED OverflowError: Python int too large to convert to SQLite INTEGER
+       token now: tok-1
+       cached items: []
+    pass 2: RAISED OverflowError: Python int too large to convert to SQLite INTEGER
+       token now: tok-1
+       cached items: []
+
+The token is stuck at tok-1 and the *good* event that arrived in the same batch is never cached either. Traceback bottom: `store.py:290 conn.execute(...) -> OverflowError`, raised from `sync/engine.py:256 store.upsert_item(...)`, i.e. after the `except Exception` at engine.py:244 has already closed.
+```
+
+</details>
+
+**Suggested fix.** Bound the value where it enters, mirroring the precedent at dav/client.py:163-166: in
+`_int`, return None when the parsed int falls outside SQLite's signed 64-bit range (or
+the RFC 5545 INTEGER range -2147483648..2147483647). Separately, move
+`store.upsert_item` inside `_upsert_body`'s `try/except Exception` so any other bind
+failure on a foreign body is counted as a skipped resource rather than aborting the pass
+and freezing the sync token.
+
+#### [x] A large RDATE list bypasses every up-front expansion guard: 3.3 s and ~70 MB under the global lock per unauthenticated booking request
+`backend/tasksd/ical/recur.py:274` · **high** · security
+
+`_pathological_rule` judges only RRULE shapes — it iterates VEVENTs, does `rrules =
+comp.get("RRULE")`, and `continue`s when there is none. A recurrence set built from
+RDATE alone (or an RRULE plus a huge RDATE) is therefore never priced. Its own docstring
+states the reason that matters here: "The occurrence cap bounds how many results are
+*kept*, not the work done to find them" and "`query.between` materializes the whole
+expansion before the cap is consulted." That is exactly what happens for RDATE —
+`expand_occurrences` builds every component, then raises at recur.py:534 only after the
+cap is exceeded, so the CPU and RSS are spent in full first. The path is `GET
+/api/public/booking/{token}` -> `public_link_info` -> `_link_busy` -> `events_in_range`,
+and `_link_busy` (service.py:1064) holds `self._lock` across every collection, so the
+cost is paid inside the global service lock on an unauthenticated request. The public
+GET limiter is 120 requests / 300 s per IP (app.py:1767), so one IP can hold the lock
+for ~400 s out of every 300 s window with a single planted resource.
+
+<details><summary>Evidence</summary>
+
+```
+recur.py:273-277
+    for comp in cal.walk("VEVENT"):
+        rrules = comp.get("RRULE")
+        if rrules is None:
+            continue
+
+Measured on the audit copy, one VEVENT whose RDATE lists N instants one second apart inside the query window (DTSTART/DTEND ordinary, 5 minutes):
+
+    n= 10000    166 KiB   0.75s  rss 21->44 MB   ValueError (cap)
+    n= 40000    664 KiB   3.18s  rss 44->117 MB  ValueError (cap)
+    n=100000   1660 KiB   7.82s  rss 117->263 MB ValueError (cap)
+
+End to end through the service, with the resource cached exactly as sync would cache it (`has_rrule=True`, `min_instant=2026-08-01T00:00:00+00:00`):
+
+    events_in_range(cal, "2026-08-01T00:00:00", "2026-08-03T00:00:00", blocking=True)
+    -> "recurrence expansion failed for flood@x; showing master"
+    -> took 3.35s -> 1 dto (opaque busy span over the whole window)
+
+A 664 KiB .ics is nothing for a CalDAV PUT. Test gap that let this through: the pathology battery in tests/test_recur.py (lines 201-292 and 1335-1391) prices only RRULE shapes — density, INTERVAL, ancient DTSTART, never-matching rules. Nothing in the suite asserts any time or memory bound for an RDATE-driven recurrence set.
+```
+
+</details>
+
+**Suggested fix.** Give `_pathological_rule` an RDATE arm: count the RDATE values on every VEVENT (via the
+raw content lines, or `sum(len(getattr(e, 'dts', []) or []) for e in rdate_props)`) and
+refuse the resource when the total exceeds the window's occurrence cap, before
+`recurring_ical_events.of(...)` is ever built — the same up-front, shape-only decision
+the RRULE arms already make. Add a timing test alongside
+`test_dense_rule_with_ancient_dtstart_is_refused_promptly`.
+
+#### [x] smylte_update_day_entry accepts a non-finite position, which persists as Infinity and 500s every later read of that day
+`backend/tasksd/mcp/tools.py:536` · **high** · bug
+
+The MCP schema for smylte_update_day_entry declares `"position": {"type": "number"}`
+with no bounds, and mcp/validate.py has no notion of finiteness — it only checks `type`,
+`enum`, `minimum/maximum`, `minLength/maxLength`, `pattern` and `items`. The HTTP twin
+of the exact same write, `PatchDayEntry.position` (backend/tasksd/app.py:352), carries
+`Field(default=None, allow_inf_nan=False)` with a comment naming this precise failure
+("one Infinity here would 500 every later read of the whole day"), and
+test_api.py::test_required_window_bounds_and_non_finite_sidecar_are_422 pins it for the
+sibling `Sidecar.sort_order`. server.parse_body's `parse_constant=_reject_constant`
+blocks only the bare `NaN`/`Infinity` literals; `1e400` is an ordinary number literal
+that `json.loads` overflows to `inf`, and server.py's own comment says so. The inf
+reaches service.patch_day_entry, which does `fields["position"] = float(position)` and
+stores it in the app-only day_plan table — the one part of SQLite a resync cannot
+rebuild.
+
+<details><summary>Evidence</summary>
+
+```
+Reproduced against a real TaskService (no Radicale needed; day plan is SQLite-only). Raw body posted through the real parse path:
+
+  {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"smylte_update_day_entry","arguments":{"entry_id":"<id>","position":1e400}}}
+
+parse_body -> position == inf; check_value passes (`_type_ok(inf, "number")` is True, no minimum/maximum); api.update_day_entry -> svc.patch_day_entry -> `fields["position"] = float(inf)` -> stored.
+
+Rendering the reply the way routes.py does (`JSONResponse(out)`, i.e. `json.dumps(..., allow_nan=False)` at starlette/responses.py:198) raises:
+  RENDER FAILED: Out of range float values are not JSON compliant: inf
+
+And every subsequent read is now unrenderable too:
+  GET_TODAY RENDER FAILED: Out of range float values are not JSON compliant: inf
+
+So POST /mcp 500s *after* the write committed, and from then on both smylte_get_today and GET /api/day/{day} 500 for that day — the owner cannot even read the entry_id back out of the app to repair it. The HTTP route rejects the identical value with a 422.
+```
+
+</details>
+
+**Suggested fix.** Give the MCP `position` schema real bounds the validator can enforce (e.g. `"minimum":
+-1e9, "maximum": 1e9`), and/or teach validate.check_value to reject non-finite floats
+for `type: number` — the same rule `allow_inf_nan=False` states on the HTTP model. A
+guard in McpApi.update_day_entry (`if position is not None and not
+math.isfinite(position): raise ToolError(...)`) is the minimal fix.
+
+#### [x] Every DavError message carries the absolute internal Radicale URL, and app.py returns it verbatim as the 404 body
+`backend/tasksd/dav/client.py:323` · **medium** · security · minor
+
+`_raise_for` builds its message from `resp.request.url` — the fully-resolved internal
+URL, i.e. the Radicale origin, the Radicale account name, the collection UUID and the
+resource slug. For `AuthError`, `Conflict` and the `DavError` catch-all this is harmless
+because app.py replaces the body with a fixed sentence, but `DavNotFound` is handled at
+app.py:1088-1090 as `JSONResponse(status_code=404, content={"detail": str(exc)})` — the
+raw message goes straight out to the client. This is the sibling of the already-fixed
+"anonymous booking POST answers 409 with the owner's internal CalDAV href" finding: that
+one was closed by rewording the `ConflictError` in `_put_new`, but the 404 route still
+ships the href. On the unauthenticated surface it is reachable whenever any DAV round-
+trip inside `book_slot` 404s — the target calendar removed by another CalDAV client
+inside the ≤ `sync_interval_s` (30 s default) window during which `_link_is_live`'s
+cache-backed `has_collection` still says the link is live, or the just-written resource
+deleted between `_put_new`'s PUT and `_refresh_from_wire`'s read-back (engine.py:641).
+It is also a plain UX defect for the owner: deleting a task on the phone and then
+ticking it complete in the still-open tab drives `_edit`'s 412 branch into
+`self.dav.get(href)` (engine.py:594), and the toast reads `GET
+http://127.0.0.1:5232/testuser/9f3e…/ab12cd.ics -> 404`.
+
+<details><summary>Evidence</summary>
+
+```
+client.py:321-328
+
+    def _raise_for(resp: httpx.Response) -> None:
+        status = resp.status_code
+        msg = f"{resp.request.method} {resp.request.url} -> {status}"   # <-- absolute internal URL
+        body = resp.text[:500]
+        ...
+        if status == 404:
+            raise NotFound(msg, status=status, body=body)
+
+app.py:1088-1090
+
+    @app.exception_handler(DavNotFound)
+    async def _dav_not_found(request: Request, exc: DavNotFound):
+        return JSONResponse(status_code=404, content={"detail": str(exc)})
+
+Reproduced through the real app (script at /tmp/claude-0/-home-user-smylte/e3078780-8be9-5e55-813c-5e8f796288f0/scratchpad/agent-scratch/poc_leak.py — TestClient + an httpx MockTransport that 404s):
+
+    login 200
+    POST /api/lists -> 404 {"detail":"MKCALENDAR http://radicale.internal:5232/testuser/e155740bf9474ab8ab3fcf165e0d78a1/ -> 404"}
+
+The body discloses the CalDAV origin, the Radicale username and a collection id — exactly the material `test_public_page_requires_no_auth_and_leaks_nothing` was written to keep off the public route. (The MCP surface is unaffected: mcp/server.py:222 collapses every non-ToolError to a generic sentence naming only the exception class.)
+```
+
+</details>
+
+**Suggested fix.** Return a fixed detail from the `DavNotFound` handler (e.g. "that item is no longer on
+the calendar server") and log `str(exc)` instead, matching what `_dav_auth`/`_dav_error`
+already do. Optionally also drop the absolute URL from `_raise_for`'s message in favour
+of the method plus the href the caller passed, so no future handler can leak it by
+echoing `str(exc)`.
+
+#### [ ] A time-only drag skips the desynchronization check entirely, so a BYHOUR/BYMINUTE rule moves only the dragged occurrence and silently gains an extra one
+`backend/tasksd/ical/edit.py:1162` · **medium** · bug
+
+```python _DAY_SELECTING = ("BYMONTHDAY", "BYYEARDAY", "BYWEEKNO", "BYMONTH",
+"BYSETPOS") def _desynchronizing(rule, day_delta, new_weekday=None): if not day_delta:
+return None # a time-only drag moves nothing else ``` `_shift_rrule`'s own docstring
+spells out the failure this guard exists to prevent:
+"`FREQ=MONTHLY;BYMONTHDAY=6;COUNT=4` by a day turned Jan 6/Feb 6/Mar 6/Apr 6 into Jan
+7/Feb 6/Mar 6/Apr 6/**May 6** — five occurrences instead of four, only the dragged one
+moved, and a May the user never asked for, because COUNT is now consumed from a later
+start." The identical failure exists for the TIME-selecting parts, and the guard cannot
+see it twice over: `_DAY_SELECTING` contains no `BYHOUR`/`BYMINUTE`/`BYSECOND`, and the
+early return above bails out before the loop whenever the drag changed only the time of
+day — which is precisely when a BYHOUR rule desynchronizes. `shift_series` moves DTSTART
+(and every EXDATE, RDATE and RECURRENCE-ID) while the rule keeps naming the old hour.
+
+<details><summary>Evidence</summary>
+
+```
+Reproduced against the audit copy, judged by `expand_occurrences`:
+
+```
+DTSTART:20260105T090000Z
+DTEND:20260105T100000Z
+RRULE:FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;COUNT=4
+```
+Before: `2026-01-05T09:00`, `01-12T09:00`, `01-19T09:00`, `01-26T09:00` (4).
+
+Drag the Jan 5 chip 09:00 → 11:00, scope "all events" →
+`shift_series(raw, "2026-01-05T09:00:00+00:00", EventEdit(dtstart=2026-01-05T11:00+00:00))`
+
+After: `2026-01-05T11:00`, `01-12T09:00`, `01-19T09:00`, `01-26T09:00`, **`2026-02-02T09:00`** (5).
+Only the dragged occurrence moved, and a fifth occurrence the user never asked for appeared, because COUNT is now consumed from a later start. `day_delta == 0`, so `_desynchronizing` returned None and `_shift_rrule` wrote the rule back unchanged.
+
+Same with `RRULE:FREQ=DAILY;BYMINUTE=0;COUNT=4` dragged +30 min: `01-05T09:30`, `01-06T09:00`, `01-07T09:00`, `01-08T09:00`, **`01-09T09:00`**.
+
+`split_series` calls `_shift_rrule` too (edit.py:1685), so "this and following" with a time change corrupts the tail the same way. The bytes go to Radicale, so the loss is permanent and visible in every other client.
+```
+
+</details>
+
+**Suggested fix.** Give `_desynchronizing` the time half of the delta as well as `day_delta`, and refuse
+when the time-of-day changed while the rule carries `BYHOUR`/`BYMINUTE`/`BYSECOND` — the
+same refusal (and the same 422 wording) the day-selecting parts already get: "cannot
+move a series whose repeat rule pins it to a particular time (BYHOUR); edit the
+occurrence instead, or change the repeat". Keep the `day_delta == 0` early return only
+for rules with no time-selecting part.
+
+#### [x] RDATE;VALUE=PERIOD writes a Python tuple repr into min_instant, so the resource becomes a candidate for every window forever
+`backend/tasksd/ical/read.py:424` · **medium** · bug · minor
+
+`_min_instant` folds every DTSTART and every RDATE entry through `_iso`, whose fallback
+branch (read.py:91) is `return str(dt), False` for anything that is not a
+`date`/`datetime`. A `VALUE=PERIOD` RDATE has a tuple `.dt`, so `_iso` returns its
+Python repr — `"(datetime.datetime(2026, 2, 10, 9, 0,
+tzinfo=zoneinfo.ZoneInfo(key='UTC')), datetime.timedelta(seconds=7200))"`.
+`_min_instant` then compares it as a string (read.py:425), and `(` (0x28) sorts below
+every digit, so that repr always wins and lands in the `min_instant` column.
+`store.get_events_in_range` gates recurring rows on `COALESCE(min_instant, dtstart) <=
+?` (store.py:1136-1137), and that repr is `<=` every possible bound — so the resource is
+admitted as a candidate for EVERY window, including windows centuries away. That is
+precisely the state store.py's own docstring says is unaffordable: "Admitting them
+unconditionally instead was the first attempt and it is not affordable ... Measured, 50
+far-future never-matching series ... went from 0 candidate rows to 50, and a two-day
+booking window from ~0 s to 9.13 s" — and `_link_busy` runs one expansion per candidate
+row while holding the global lock, on the unauthenticated booking routes. The same
+fallback also leaks the repr into the `dtstart` column (and thus into the API's `start`
+field) for a `DTSTART;VALUE=PERIOD`.
+
+<details><summary>Evidence</summary>
+
+```
+read.py:83-91 (`_iso` ... `return str(dt), False`) and read.py:423-426:
+    for c in candidates:
+        if c is None: continue
+        value = _iso(c)[0]
+        if isinstance(value, str) and (best is None or value < best):
+            best = value
+
+Reproduced against the real schema and the real store query. Two identical weekly series, one carrying `RDATE;VALUE=PERIOD:20260210T090000Z/PT2H`:
+
+    per@x:   min_instant="(datetime.datetime(2026, 2, 10, 9, 0, tzinfo=zoneinfo.ZoneInfo(key='UTC')), datetime.timedelta(seconds=7200))"
+    plain@x: min_instant='2026-01-06T09:00:00+00:00'
+
+    store.get_events_in_range(conn, "/cal/", "1820-01-01", "1820-02-01")
+    -> candidates for 1820 window: ['per@x']
+
+RDATE;VALUE=PERIOD is treated everywhere else in this repo as ordinary foreign-client output (tests/test_recur.py:858-893, tests/test_backlog_aug19_stage3_ical.py:1147-1165). Test gap: `grep -rn min_instant tests/` returns nothing — the column that decides which recurring resources reach the unauthenticated booking conflict check is asserted nowhere in the suite.
+```
+
+</details>
+
+**Suggested fix.** In `_min_instant`, resolve each candidate to a real instant before comparing: take `dt =
+getattr(c, 'dt', c)`, use `dt[0]` when it is a tuple (a PERIOD's start is its earliest
+instant — skipping the entry instead would push `min_instant` too HIGH and could drop a
+resource whose only early instant is that period), and ignore anything that is still not
+a `date`/`datetime`. Add a test asserting `min_instant` for a PERIOD RDATE and for an
+override moved before the master DTSTART.
+
+#### [x] A JSON-RPC id (or method name, or unknown argument name) containing a lone surrogate 500s POST /mcp after the tool has already run
+`backend/tasksd/mcp/server.py:69` · **medium** · bug
+
+`_usable_id` exists precisely because "the id is a REPLY ADDRESS, and it is echoed into
+every envelope this returns" — but it accepts *any* `str` unconditionally: ```python def
+_usable_id(rid) -> bool: if rid is None or isinstance(rid, str): return True ``` The
+guard was written for non-finite floats and stops there. A string id containing an
+unpaired surrogate (`"\ud800"`, which `json.loads` accepts and returns verbatim)
+survives `handle`, is echoed into `_result`/`_error`, and dies in `JSONResponse(out)` at
+routes.py:506, whose `render` does `json.dumps(..., ensure_ascii=False).encode("utf-8")`
+-> `UnicodeEncodeError`. That happens after the whole dispatch has completed, so the
+failure mode is exactly the one the NaN-id fix documents in the comment at
+server.py:110-118: "For tools/call that lands AFTER the tool has run, so a real write
+committed while its caller was told the call failed; in a batch, one poisoned id
+discarded all 50 replies." Two more strings on the same path are interpolated raw rather
+than repr'd, so they crash the same way even with a clean id: * `_error(rid,
+METHOD_NOT_FOUND, f"unknown method: {method}")` (server.py:155) and `f"{method} failed:
+{type(exc).__name__}"` (server.py:166) * `validate.check_arguments`'s `f"{tool} has no
+argument(s) {', '.join(unknown)}"`, whose `unknown` are caller-supplied JSON object
+keys, reaching the wire via `_error(rid, INVALID_PARAMS, str(exc))` (server.py:160)
+Unlike the `/oauth/register` twin, this surface is only reachable with a valid bearer
+token — but the trust model puts the LLM driving these tools in the adversary set, and
+models do emit broken surrogate pairs around emoji, so an accidental trigger is
+realistic, not just a deliberate one.
+
+<details><summary>Evidence</summary>
+
+```
+Reproduced against the audit copy after a full connector flow (register -> consent -> PKCE exchange), `TestClient(..., raise_server_exceptions=False)`:
+
+```
+POST /mcp  Authorization: Bearer <token>
+{"jsonrpc":"2.0","id":"\ud800","method":"tools/call",
+ "params":{"name":"smylte_list_lists","arguments":{}}}
+->  500 'Internal Server Error'
+
+# the identical call with a clean id proves the tool ran to completion:
+{"jsonrpc":"2.0","id":1,"method":"tools/call",
+ "params":{"name":"smylte_list_lists","arguments":{}}}
+->  200 {"jsonrpc":"2.0","id":1,"result":{..."structuredContent":{"lists":[]}...}}
+
+# one poisoned id sinks a whole batch:
+[{"jsonrpc":"2.0","id":1,"method":"ping"},
+ {"jsonrpc":"2.0","id":"\ud800","method":"ping"}]
+->  500 'Internal Server Error'   (the well-formed ping's reply is lost too)
+
+# unknown argument name, clean id:
+{"jsonrpc":"2.0","id":1,"method":"tools/call",
+ "params":{"name":"smylte_list_lists","arguments":{"\ud800bad":1}}}
+->  500  (UnicodeEncodeError out of JSONResponse.render)
+
+# unknown method, clean id:
+{"jsonrpc":"2.0","id":4,"method":"\ud800nope"}   ->  500
+```
+
+Inputs -> wrong result: substitute `smylte_create_task` for `smylte_list_lists` in the first case and the task is created in CalDAV while the client receives a 500 and, on retry, creates it a second time — the duplicate-write scenario the NaN-id fix was written to prevent, still open for string ids.
+```
+
+</details>
+
+**Suggested fix.** Fix at the renderer so all three vectors close at once: render `/mcp` (routes.py:506)
+with `json.dumps(content, ensure_ascii=True, allow_nan=False, separators=(",",
+":")).encode()` instead of Starlette's default `JSONResponse`. Additionally tighten
+`_usable_id` to reject an id that cannot round-trip (`isinstance(rid, str)` and
+`rid.encode("utf-8", "strict")` succeeding), so a client that sends an unaddressable id
+gets the existing `-32600 "id must be a string, a finite number, or null"` answer rather
+than a 500. A regression test should send a lone surrogate as (a) an id, (b) a method
+name and (c) an argument key — none of the JSON-RPC framing tests at
+tests/test_mcp.py:819-934 covers non-UTF-8-encodable text.
+
+#### [x] One VTODO another CalDAV client wrote with a PERIOD- or DURATION-valued DUE kills smylte_list_tasks for the whole account
+`backend/tasksd/mcp/api.py:142` · **medium** · bug
+
+`_due_instant` (called from `_intrinsic_order`, which `_in_display_order` applies to
+EVERY row on every smylte_list_tasks call) hands the CACHED due value to `_parse_dt`,
+and `_parse_dt` raises ToolError on anything it cannot read. The cached value is not
+app-written: ical/read.py:83 `_iso()` falls back to `str(dt)` for any DUE whose parsed
+value is neither a date nor a datetime, and icalendar happily parses
+`DUE;VALUE=PERIOD:...` into a tuple and `DUE;VALUE=DURATION:PT1H` into a timedelta.
+Neither `"(datetime.datetime(...), datetime.datetime(...))"` nor `"1:00:00"` survives
+`date.fromisoformat`/`datetime.fromisoformat`, so the sort key function raises inside
+`sorted()` and the whole tool fails. The same raise also fires in the filter loop at
+api.py:416. The trust model names VALUE=PERIOD explicitly as hostile-shaped input from
+adversary (b), and service._completions_by_day already applies the correct fail-soft
+rule (`except ValueError: continue`) to `completed_at` two hundred lines away.
+
+<details><summary>Evidence</summary>
+
+```
+Seeded through the real cache path (store.upsert_item + extract_from_raw), one foreign VTODO:
+
+  BEGIN:VTODO\r\nUID:bad\r\n...DUE;VALUE=PERIOD:20260101T000000Z/20260102T000000Z\r\nEND:VTODO
+
+Before: smylte_list_tasks -> {"total": 2, "count": 2, ... [ok1, ok2]}
+After seeding `bad`:
+  svc.list_tasks(LIST_A)            -> ['bad','ok1','ok2']   (HTTP route and SPA unaffected)
+  smylte_list_tasks {}              -> isError:true, "due=\"(datetime.datetime(2026, 1, 1, 0, 0, tzinfo=zoneinfo.ZoneInfo(key='UTC')), datetime.datetime(2026, 1, 2, 0, 0, tzinfo=zoneinfo.ZoneInfo(key='UTC')))\" is not a date I can read. Use 'YYYY-MM-DD' ..."
+  smylte_list_tasks {overdue_only}  -> same failure
+
+`DUE;VALUE=DURATION:PT1H` caches as "1:00:00" and fails identically. Because list_tasks with no list_id spans every list, one poisoned task blinds the tool for the entire account, and the message tells the model to fix a `due` argument it never sent.
+```
+
+</details>
+
+**Suggested fix.** Make the cached-value parse fail-soft: in `_due_instant`, wrap the `_parse_dt` call (or
+use a `_parse_dt_or_none` variant) so an unreadable stored DUE is treated as "no due
+date" — sorting last — exactly as `_completions_by_day` already does for `completed_at`.
+Do the same for the `due` read in the filter loop at api.py:416. Keep the raising form
+only for values the CALLER supplied (due_before/due_after/create/update).
+
+#### [ ] smylte_list_tasks' due filters resolve in the server's timezone while its ordering was fixed to the owner's, so a Friday-evening deadline is filtered as Saturday's
+`backend/tasksd/mcp/api.py:403` · **medium** · bug
+
+`_due_instant` was deliberately changed to resolve a deadline in `home_timezone` (its
+docstring: "`_as_dt` resolved both against the SERVER's ... and the two only agree when
+the two zones do. With the browser in America/Chicago and the server in UTC, which is
+the ordinary Docker deployment ..."). The FILTERS in the same function were left on
+`_as_dt`, which converts a zone-aware due to the SERVER's local wall clock
+(`value.astimezone().replace(tzinfo=None)`), and `overdue_only` compares against
+`datetime.now()` — also the server's clock. So the same tool call sorts a task by one
+zone and filters it by another, and it disagrees with service._due_day (which converts
+to home_timezone before taking the calendar day) about which day a task is due.
+
+<details><summary>Evidence</summary>
+
+```
+Reproduced with TZ=UTC (the ordinary Docker deployment) and home_timezone="America/Chicago", one foreign VTODO carrying an instant:
+
+  DUE:20260822T030000Z        # = 2026-08-21 22:00 in the owner's own zone
+  DUE;VALUE=DATE:20260821     # control
+
+  api.list_tasks(None, due_before="2026-08-22") -> ['anchor']    # the 22:00 Friday task is MISSING
+  api.list_tasks(None, due_after="2026-08-22")  -> ['evening']   # and is reported as Saturday's
+
+The SPA, service._due_day and `_intrinsic_order`/`_due_instant` all file that task on the 21st. A model asked "what is due before Saturday" is told the Friday-evening deadline does not exist. `overdue_only` has the same skew against `datetime.now()`: for the first five hours of every UTC day, a date-only task due today in Chicago is reported overdue.
+```
+
+</details>
+
+**Suggested fix.** Resolve the filter bounds and the deadline in the same zone the ordering uses: compute
+`zone = self._home_zone()` once in `list_tasks` and compare instants via
+`_due_instant`-style resolution (or an `_as_dt(value, zone)` that attaches `zone` to
+naive values and converts aware ones into it) for `due_before`, `due_after` and the
+`now` used by `overdue_only`.
+
+#### [ ] smylte_review_day over a range re-reads every task of every named list once per day — 6.6 s under the service lock where the HTTP twin takes 3 ms
+`backend/tasksd/mcp/api.py:1313` · **medium** · bug
+
+`review_day`'s range arm calls `self._entries_with_tasks(plan["entries"])` inside the
+per-day loop. Each call resolves the lists named on that day and calls
+`self._svc.list_tasks(href, include_done=True)` for each — a full `store.get_items` of
+the collection (raw_ics included, under `self._lock`) plus a `_task_dto` for every row —
+and then throws the map away. `day_range` is bounded at DAY_RANGE_MAX_DAYS = 190, so the
+cost is O(days x lists x tasks) for a single read-scoped tool call whose arguments the
+model chooses. The HTTP route that answers the same question, `GET /api/day?from=&to=`
+(app.py:1319), does no task join at all.
+
+<details><summary>Evidence</summary>
+
+```
+Real TaskService, 2000 VTODOs in one list, one task entry per day, measured:
+
+  days=  1 returned=  1 elapsed=0.06s
+  days= 30 returned= 30 elapsed=1.01s
+  days=180 returned=180 elapsed=6.63s
+  HTTP twin svc.day_range(180d): 0.003s
+
+Exactly linear in days x tasks. With entries spanning three lists it is three times that. `smylte_review_day {"from":"2026-01-01","to":"2026-06-30"}` is a single tool call, and the MAX_RESULT_CHARS backstop only fires after the work is already spent.
+```
+
+</details>
+
+**Suggested fix.** Hoist the join out of the loop: collect `{e["list"] for p in plans for e in p["entries"]
+if e["kind"]=="task"}` once for the whole range, build `by_key` once, and have
+`_entries_with_tasks` accept a prebuilt map (the same shape `service.search` was already
+fixed into — "built ONCE per collection").
+
+#### [x] smylte_list_events orders by raw ISO string, so zone-anchored events come back in the wrong order and `limit` returns the wrong page
+`backend/tasksd/mcp/api.py:554` · **medium** · bug
+
+`list_events` merges every calendar's rows and sorts with `key=lambda r: (r.get("start")
+or "", r.get("summary") or "")` — a lexical compare over `items.dtstart`, which is
+`dt.isoformat()` and therefore carries whatever offset the writing client used.
+`_intrinsic_order`'s own docstring in this same file says why that is wrong ("lexical
+comparison happens to agree for ISO values of equal shape and stops agreeing the moment
+a date-only and a timed value meet, or an offset appears") and the tasks path was fixed
+for it; the events path was not. tools.py then slices this list with `page(...)`, so the
+order decides which occurrences a `limit` keeps. There is also no uid/recurrence_id tie-
+break, unlike `_intrinsic_order`.
+
+<details><summary>Evidence</summary>
+
+```
+Two foreign events in one calendar:
+  berlin: DTSTART;TZID=Europe/Berlin:20260821T090000   (= 07:00Z, genuinely FIRST)
+  utcone: DTSTART:20260821T080000Z                     (= 08:00Z, genuinely second)
+
+  api.list_events("2026-08-20","2026-08-23")
+    -> [('utcone','2026-08-21T08:00:00+00:00'), ('berlin','2026-08-21T09:00:00+02:00')]
+
+  smylte_list_events {"start":"2026-08-20","end":"2026-08-23","limit":1}
+    -> events[0].uid == 'utcone'
+
+The model asking for the next meeting, or reading only page one, is handed the later event and never sees the earlier one. The same happens between a floating time and a UTC one.
+```
+
+</details>
+
+**Suggested fix.** Sort on the parsed instant, the way `_intrinsic_order` does: key on
+`(_as_dt(_parse_dt(r.get("start"))) or datetime.min, r.get("summary") or "", r.get("id")
+or "")`, with an unreadable start degrading to a sentinel rather than raising, and keep
+the `id` tie-break so paging is a total order.
+
+#### [ ] move_event has no replay tolerance: a failure between the destination PUT and the source DELETE duplicates the event and makes every retry a permanent 409
+`backend/tasksd/sync/engine.py:406` · **low** · bug
+
+`move_event` is copy-then-delete. The destination PUT is `if_none_match="*"`, and ANY
+412/409 on it is turned into a terminal `ConflictError`. But the destination href is
+deterministic (`new_href = f"{dst_href}{basename}"` where `basename` comes from the
+unchanged source cache row), so once the copy has landed, every subsequent attempt at
+the same move hits its own copy and answers 409 forever. Meanwhile the source delete on
+line 419 is only rolled back for `PreconditionFailed` — any other failure (transport
+error / lost response, 403, 423) leaves the copy in place and propagates, so the event
+now exists in BOTH calendars with no way to complete the move. `_put_new` (line 341-364)
+solves exactly this problem for creates: on a 412 it GETs the occupant and treats it as
+success when the UID is ours ("a replay finds the resource already on the server — that
+is the create succeeding, not a conflict, as long as the occupant is ours").
+`move_event` never got that treatment, even though this same `except` clause was edited
+to add `Conflict` (the no-uid-conflict fix). The message the caller gets is actively
+misleading. Over HTTP the retry is 409 "event {uid} already exists in the target
+calendar", which reads as "the move is already done" while the source copy is still
+there. Over MCP it is worse: `mcp/server.py:222-229` has no `ConflictError` branch, so
+`smylte_move_event` reports "could not be completed (ConflictError). The calendar server
+may be unreachable; try again shortly" — an explicit invitation for the LLM to retry a
+call that can never succeed, while the event silently sits in two calendars.
+
+<details><summary>Evidence</summary>
+
+```
+engine.py:404-419
+
+    current = self.dav.get(row["href"])
+    try:
+        self.dav.put(new_href, current.data, if_none_match="*")
+    except (PreconditionFailed, Conflict) as e:
+        ...
+        raise ConflictError(f"event {uid} already exists in the target calendar") from e
+    try:
+        self.dav.delete(row["href"], if_match=current.etag)
+    except PreconditionFailed as e:      # <-- only this one rolls the copy back
+
+Reproduced with a fake DAV whose DELETE reply is lost once (script at /tmp/claude-0/-home-user-smylte/e3078780-8be9-5e55-813c-5e8f796288f0/scratchpad/agent-scratch/poc_move.py):
+
+    attempt 1:
+      -> DavError transport error on DELETE /u/a/e-1.ics: connection reset
+      server hrefs: ['/u/a/e-1.ics', '/u/b/e-1.ics']      <-- event now in BOTH calendars
+    attempt 2 (retry):
+      -> ConflictError event e-1 already exists in the target calendar
+      server hrefs: ['/u/a/e-1.ics', '/u/b/e-1.ics']      <-- and it stays that way, forever
+      cache src row: True | cache dst row: False
+
+After the next 30 s sync sweep the SPA renders the same event in both the source and the destination calendar, and the booking-conflict/busy set counts it twice.
+
+No test covers this: test_backlog_aug19_stage3_core.py:781 states in its own docstring "No test covers any move failure path — test_api.py:262 covers the happy path and an unknown destination id", and it only added the pre-existing-foreign-copy case.
+```
+
+</details>
+
+**Suggested fix.** Give the destination PUT the same replay tolerance `_put_new` has: on
+`PreconditionFailed`/`Conflict`, GET `new_href` (and, for the 409 spelling, look the UID
+up in the destination) and, if the occupant carries the UID being moved, treat the copy
+as already done and fall through to the source delete instead of raising. Only a
+genuinely foreign occupant is a real ConflictError. Additionally, roll the copy back for
+any exception from the source DELETE where the delete provably did not happen, or at
+minimum log it so the duplicate is discoverable.
+
+#### [x] A lone surrogate in a dynamic-client-registration body is echoed into the error response and 500s the unauthenticated /oauth/register endpoint
+`backend/tasksd/mcp/oauth.py:257` · **low** · bug · minor
+
+`OAuthServer.register` interpolates two wholly attacker-chosen JSON values straight into
+the `error_description` it raises: ```python unknown = requested - set(SUPPORTED_SCOPES)
+if unknown: raise OAuthError("invalid_client_metadata", f"unsupported scope: {'
+'.join(sorted(unknown))}") # oauth.py:250 ... auth_method =
+body.get("token_endpoint_auth_method") or "none" if auth_method not in ("none",
+"client_secret_post", "client_secret_basic"): raise
+OAuthError("invalid_client_metadata", f"unsupported token_endpoint_auth_method:
+{auth_method}") # oauth.py:257 ``` `routes._oauth_error` then renders that string with
+Starlette's `JSONResponse` (routes.py:62), whose `render` is `json.dumps(content,
+ensure_ascii=False, allow_nan=False, ...).encode("utf-8")`. `json.loads` happily
+produces a lone surrogate from a `\udXXX` escape, `json.dumps(..., ensure_ascii=False)`
+passes it through unescaped, and `.encode("utf-8")` then raises `UnicodeEncodeError` —
+inside the route handler, outside every handler in this module. The caller gets a bare
+500 and the log gets a full traceback. This is exactly the failure class the comment
+three lines above (oauth.py:239-242, "registration is open and its body is wholly
+attacker-chosen ... a JSON list or number was an AttributeError escaping as a 500 rather
+than the 400 the sibling fields below already produce") was written to close; the type
+guard was added for `scope` but the *content* of these two fields still reaches the
+renderer raw. Note this can only arrive through a JSON body: query strings are decoded
+with `errors='replace'`, so `parse_authorize`'s identical `f"unsupported scope: ..."` is
+safe. The two JSON-bodied endpoints in this subsystem — `/oauth/register` and `/mcp` —
+are the reachable ones.
+
+<details><summary>Evidence</summary>
+
+```
+Reproduced against the audit copy with a `TestClient(app, raise_server_exceptions=False)` on an app built with `mcp_enabled=True`:
+
+```
+POST /oauth/register  Content-Type: application/json
+{"redirect_uris":["https://x.test/cb"],"scope":"\ud800"}
+->  500 'Internal Server Error'
+
+POST /oauth/register  Content-Type: application/json
+{"redirect_uris":["https://x.test/cb"],"token_endpoint_auth_method":"\ud800"}
+->  500 'Internal Server Error'
+```
+
+With `raise_server_exceptions=True` the underlying exception is visible:
+`UnicodeEncodeError: 'utf-8' codec can't encode character '\ud800' in position 75: surrogates not allowed`
+
+Inputs -> wrong result: an anonymous internet caller sends one ~60-byte JSON body to the open registration endpoint and gets a 500 plus a logged traceback, where the code's own contract (and every sibling metadata check) is a 400 `invalid_client_metadata`.
+```
+
+</details>
+
+**Suggested fix.** Render these responses with a JSON encoder that cannot fail on unpaired surrogates —
+e.g. a local `JSONResponse` subclass whose `render` uses `json.dumps(content,
+ensure_ascii=True, allow_nan=False, separators=(",", ":")).encode()` — and use it in
+`_oauth_error` (routes.py:62) and at routes.py:506. Belt-and-braces: reject non-
+encodable metadata up front in `register`, or interpolate with `!r` (as `token()`
+already does for `grant_type`) so the value is escaped to ASCII before it reaches the
+response.
+
+#### [x] smylte_review_day on the last representable day raises an unhandled OverflowError reported as "the calendar server may be unreachable"
+`backend/tasksd/mcp/api.py:1279` · **low** · bug · minor
+
+`span_end = end if ranged else (date.fromisoformat(start) +
+timedelta(days=1)).isoformat()` does unguarded date arithmetic on a day the caller
+supplies. `_day_or_today` accepts "9999-12-31" (it is a real calendar date), and adding
+a day overflows. OverflowError is not a ValueError and nothing on this path catches it,
+so McpServer._call's catch-all turns it into the misleading sentence the codebase has
+already fixed twice — once for `find_free_time` on the same boundary ("MAX_RANGE_DAYS
+bounds how LONG the range is, not where it ends ... raised OverflowError — outside every
+handler, from an argument the calling model chooses", api.py:807) and once for PATCH
+/api/calendars/{id}/events/{uid}, which maps OverflowError to a 422.
+
+<details><summary>Evidence</summary>
+
+```
+smylte_review_day {"day":"9999-12-31"} ->
+  {"content":[{"type":"text","text":"smylte_review_day could not be completed (OverflowError). The calendar server may be unreachable; try again shortly."}],"isError":true}
+
+Traceback: api.py:1280 `date.fromisoformat(start) + timedelta(days=1)` -> OverflowError: date value out of range.
+{"day":"9999-12-30"} answers normally. GET /api/day/9999-12-31 is unaffected — this is MCP-only.
+```
+
+</details>
+
+**Suggested fix.** Saturate instead of overflowing, the same way find_free_time's `if day >= date.max:
+break` does: d = date.fromisoformat(start) span_end = (d +
+timedelta(days=1)).isoformat() if d < date.max else d.isoformat() (or clamp
+`_day_or_today` to a sane horizon).
+
+### Frontend & mobile
+
+#### [x] The `settings_updated` SSE event is dropped entirely, so a second tab/device silently destroys the other's preference change
+`frontend/src/App.tsx:561` · **high** · bug
+
+`service.update_settings` publishes `{"type": "settings_updated"}` with the comment
+"Notify other open tabs/devices so the change syncs live", but App's SSE handler returns
+early on that type and nothing else in the app ever re-reads `/api/settings` — the
+settings effect's deps are `[auth, applyTheme, showToast]`, so it runs only on an auth
+transition. A tab that has been open since this morning therefore holds a snapshot of
+the settings blob from this morning. Because `store.update_settings` does a shallow
+`current.update(patch)` (db/store.py:1210-1211), every one of the read-modify-write
+preferences listed in `MERGED_SETTINGS` — `task_groups`, `hidden_lists`,
+`hidden_calendars`, `archived_calendars`, `collapsed_tasks`, `collapsed_groups`,
+`dashboard`, `calendar_task_lists`, `tab_order`, `appearance` — is written back WHOLE
+from that stale snapshot, replacing whatever the other device stored. This is the same
+data-loss class `MERGED_SETTINGS`/`settingsFailed` was built for (a failed read), but
+through a successful-then-stale read, which that machinery does not cover.
+
+<details><summary>Evidence</summary>
+
+```
+App.tsx:558-566:
+```
+const unsubscribe = subscribe((type) => {
+  if (type === 'settings_updated') return
+  clearTimeout(timer)
+  timer = setTimeout(() => setRev((r) => r + 1), 250)
+}, onExpire)
+```
+and App.tsx:190-192 — the only `api.getSettings()` call, in an effect keyed on `[auth, applyTheme, showToast]`.
+
+Failure scenario: desktop tab open all day holding `task_groups: [G1]`. On the phone the owner creates group G2 -> PUT `{task_groups:[G1,G2]}`; the server stores both and publishes `settings_updated`; the desktop tab ignores it. That evening the owner renames G1 in the desktop tab -> `changeTaskGroups([G1'])` -> PUT `{task_groups:[G1']}` -> shallow merge -> **G2 is gone from the account**, on both devices, with no error. Same shape destroys a saved custom theme: create a theme on the phone, then pick a preset on the stale desktop tab and `{appearance: <stale>}` wipes the `themes` collection.
+```
+
+</details>
+
+**Suggested fix.** On `settings_updated`, re-run the settings read (a separate `settingsRev` state that
+only the `api.getSettings()` effect depends on) instead of dropping the event — it must
+NOT bump `rev`, which is what the early return was protecting. Re-applying the server
+blob is exactly what the publisher intends, and it costs one request per genuine
+preference change rather than the 1+N task refetch storm the early return was added to
+stop.
+
+#### [x] A failed scheduling fetch renders the owner's Scheduling tab as "you have no booking links"
+`frontend/src/components/SchedulingView.tsx:31` · **medium** · bug
+
+The one load effect wraps `Promise.all([schedulingLinks, calendars,
+schedulingBookings])` in `guard(...)`. `makeGuard` swallows every non-401 failure and
+returns undefined, so none of the three `setState` calls run and `links`/`bookings` stay
+at their initial `[]`. The view has no loading or error state, so `links.length === 0`
+and `upcoming.length === 0` both render their EMPTY copy. A 502/429/timeout on GET
+/api/scheduling/links therefore tells the owner, in prose, that they have never created
+a booking link and that nothing is booked. There is no retry path either — `rev` only
+changes on an unrelated SSE event.
+
+<details><summary>Evidence</summary>
+
+```
+```
+useEffect(() => {
+  guard(async () => {
+    const [ls, cs, bs] = await Promise.all([
+      api.schedulingLinks(), api.calendars(), api.schedulingBookings(),
+    ])
+    setLinks(ls); setCals(cs); setBookings(bs)
+  })
+}, [rev])
+...
+{links.length === 0 && (
+  <div className="empty" ...>Create a booking link, share it with a client, and their pick lands on your calendar.</div>
+)}
+...
+{upcoming.length === 0 && (<div className="empty" ...>Nothing booked yet.</div>)}
+```
+Reproduced (vitest, jsdom): `m.schedulingLinks.mockRejectedValue(new HttpError(502,'calendar server unavailable'))`, render `<SchedulingView rev={0} onExpire={vi.fn()} />`. Rendered body text is exactly:
+`"SchedulingNew linkCreate a booking link, share it with a client, and their pick lands on your calendar.Upcoming bookingsNothing booked yet."`
+The owner's live, published booking links are on screen as "you have none", with only a transient toast to say otherwise.
+```
+
+</details>
+
+**Suggested fix.** Track a load phase (`loading` / `ready` / `failed`) alongside the data. Render the two
+empty-state strings only when the fetch actually succeeded and returned nothing; on
+failure render an error card with a "Try again" button that re-runs the effect. This is
+the same repair already applied to ArchivedCalendarsSection and the calendar month
+fetch.
+
+#### [ ] A failed booking-link toggle rolls back a whole-array snapshot, reverting a concurrent toggle the server accepted
+`frontend/src/components/SchedulingView.tsx:56` · **medium** · bug · minor
+
+`toggleEnabled` (and `remove`, line 63) captures `const prev = links` — the entire array
+as of that render — and on failure does `setLinks(prev)`. Any write that landed while
+the first request was in flight is inside that snapshot in its OLD state, so a failure
+on one link silently un-does a successful change to a different link. The screen then
+disagrees with the server about which public URLs are live, and nothing refetches to
+correct it.
+
+<details><summary>Evidence</summary>
+
+```
+```
+const toggleEnabled = async (l: BookingLink) => {
+  const prev = links                                        // whole-array snapshot
+  setLinks(links.map((x) => (x.token === l.token ? { ...x, enabled: !l.enabled } : x)))
+  const updated = await guard(() => api.patchSchedulingLink(l.token, { enabled: !l.enabled }))
+  if (!updated) setLinks(prev)                              // clobbers B's accepted write
+}
+```
+Reproduced: two links A and B, both enabled. Tap A's toggle (PATCH hangs), then tap B's toggle (PATCH resolves, server now has B disabled). Both checkboxes read off. A's PATCH then rejects with 502 -> `setLinks(prev)` restores `[A(on), B(on)]`. Measured checkbox state after: `[true, true]`; correct is `[true, false]`. The owner is now looking at a link labelled "Live" that the server has switched off — and if they "fix" it by toggling it, they turn it back ON.
+```
+
+</details>
+
+**Suggested fix.** Roll back only the row that failed, with a functional update: `if (!updated)
+setLinks((ls) => ls.map((x) => (x.token === l.token ? l : x)))`. For `remove`, re-insert
+only `l` (at its recorded index) rather than restoring `prev`.
+
+#### [x] The booking-link editor's scrim is still a bare onClick, so a drag-select releasing outside discards the whole form
+`frontend/src/components/SchedulingView.tsx:307` · **medium** · bug · minor
+
+AUDIT.md records this as fixed ("The booking-link editor breaks the modal contract every
+other modal keeps: no Escape, no dialog role, and an onClick scrim over the app's
+longest form"). Escape and `role="dialog"` did land; the scrim did not. `LinkModal`'s
+overlay is `onClick={onClose}` while every other dialog in the app — TaskModal,
+PlanRitual, ShutdownRitual, AddMultipleModal, AppearancePanel — carries the two-event
+mousedown/click guard, with TaskModal's comment spelling out exactly why. A `click`
+whose mousedown was inside the modal and whose mouseup was on the scrim is dispatched at
+their nearest common ancestor, which IS the overlay, so `.modal`'s `stopPropagation`
+never sees it.
+
+<details><summary>Evidence</summary>
+
+```
+SchedulingView.tsx:307
+```
+<div className="overlay" onClick={onClose}>
+  <div className="modal sched-modal" role="dialog" aria-modal="true" ... onClick={(e) => e.stopPropagation()}>
+```
+vs TaskModal.tsx:128
+```
+<div className="overlay"
+  onMouseDown={(e) => { scrimPress.current = e.target === e.currentTarget }}
+  onClick={(e) => { if (e.target === e.currentTarget && scrimPress.current) onClose(); scrimPress.current = false }}>
+```
+Reproduced: open New link, type "Quarterly review", then press inside the Timezone field, drag left out of the sheet and release on the scrim (`mouseDown(tzInput); mouseUp(overlay); click(overlay)` — the exact event sequence a browser emits). `queryByRole('dialog')` is null: title, description, timezone, buffer, min-notice, horizon and the whole seven-day availability grid are gone, with no confirmation and no way back.
+```
+
+</details>
+
+**Suggested fix.** Copy the guard the other five dialogs use: a `scrimPress` ref set in `onMouseDown` when
+`e.target === e.currentTarget`, and close in `onClick` only when both the press and the
+release landed on the scrim.
+
+#### [x] The Duration field clamps on every keystroke, so most durations cannot be typed at all
+`frontend/src/components/SchedulingView.tsx:337` · **medium** · bug
+
+`onChange` clamps to `min=5` on each keystroke and rewrites the controlled value, so the
+first digit of any two-digit duration below 50 is destroyed before the second digit is
+typed. `Number('') || 30` also makes the field unclearable. `<input type="number">` has
+no spinner buttons in iOS Safari or Chrome on Android, so on a phone the owner has no
+way at all to set a 15-, 20-, 30- or 45-minute link — the four most common values this
+feature exists for.
+
+<details><summary>Evidence</summary>
+
+```
+```
+<input className="input" type="number" min={5} max={480} step={5} value={duration}
+  onChange={(e) => setDuration(Math.max(5, Math.min(480, Number(e.target.value) || 30)))} />
+```
+Reproduced: open New link (field shows 30), select-all and type `4` -> `Number('4')=4`, `Math.max(5,4)=5`, field re-renders as "5". Measured: `dur.value === '5'` after the first keystroke. The next keystroke appends to "5", so typing "45" yields 55 and typing "15" yields 55. Separately, clearing the field (`value: ''`) gives `Number('')||30 = 30` — measured `dur.value === '30'`, i.e. the field snaps back and cannot be emptied to retype. The same `|| <default>` shape makes "Days ahead" jump to 30 the moment a leading `0` is typed.
+```
+
+</details>
+
+**Suggested fix.** Hold the raw string in state and clamp on blur/submit rather than on change (or clamp
+only the max on change and the min on blur), and allow the empty string as a transient
+value. `type="number"`'s own `min`/`max` attributes already give the browser-level
+guard.
+
+#### [x] The public booking page renders literally nothing while it loads — and forever on a 401
+`frontend/src/components/BookingPage.tsx:159` · **medium** · rendering
+
+`phase` starts at `'loading'` and that branch returns `null`. main.tsx mounts
+`<BookingPage>` directly with no shell or spinner, so the one page an anonymous stranger
+opens is a blank white document for the whole round trip — and `public_link_info` runs
+slot generation and busy expansion under the global service lock, so that is seconds,
+not milliseconds, on a loaded server. There is no AbortController or timeout, so a
+request that never settles (phone entering a tunnel, captive portal black-holing the
+socket) leaves the page blank indefinitely with no error and no retry. The "Try again"
+button on the `unavailable` card calls `setPhase('loading')`, so a retry on a flaky
+connection replaces a readable error card with the same blank page. Finally, `load`'s
+`if (e instanceof AuthError) return null` returns without touching `phase`, so any 401
+reaching this endpoint (a reverse proxy or CDN auth layer in front of /api, an Access
+policy that covers /api/public/*) pins the page blank permanently.
+
+<details><summary>Evidence</summary>
+
+```
+```
+if (phase === 'loading') return null
+...
+catch (e) {
+  if (e instanceof AuthError) return null      // phase stays 'loading' -> blank forever
+  if (!opts.keepPhase) setPhase(e instanceof HttpError && e.status === 404 ? 'notfound' : 'unavailable')
+  return null
+}
+...
+<button className="btn" onClick={() => { setPhase('loading'); load() }}>Try again</button>
+```
+Reproduced: with `publicBookingInfo` returning a never-settling promise, `container.innerHTML === ''` — no brand, no card, no spinner. With `publicBookingInfo` rejecting `new AuthError('authentication required')`, `container.innerHTML` is still `''` after the microtask queue drains: no not-found card, no unavailable card, no retry button.
+```
+
+</details>
+
+**Suggested fix.** Render the brand/skeleton card in the `loading` phase instead of `null` (the
+`notfound`/`unavailable` cards already have the markup), give `api.publicBookingInfo` an
+AbortController timeout that surfaces as `unavailable`, and drop the `AuthError` special
+case here — a public page has no session, so a 401 is just another transport failure and
+belongs in `unavailable`.
+
+#### [x] The public booking form's three fields are unlabelled — the only form in the app a stranger fills in
+`frontend/src/components/BookingPage.tsx:284` · **medium** · rendering · minor
+
+"Your name", "Email" and "Notes (optional)" are `<label>` elements that neither wrap
+their control nor carry `htmlFor`, so none of the three inputs has an accessible name.
+Every other form in the app uses the htmlFor/id pair explicitly — Login (whose comment
+calls it "the pair every other form in the app uses"), TaskModal, CalendarView's event
+editor, TabsSection, CapacitySection, AppearancePanel, PlanRitual, ShutdownRitual.
+BookingPage and SchedulingView's LinkModal are the two that do not, and BookingPage is
+the page an anonymous visitor loads on a phone with a screen reader. LinkModal has the
+same defect across eight controls (Title, Description, Calendar, Duration, Timezone,
+Buffer, Min notice, Days ahead — SchedulingView.tsx:316, 323, 329, 335, 341, 402, 407,
+412), where three unnamed bare number inputs sit side by side.
+
+<details><summary>Evidence</summary>
+
+```
+```
+<div className="field">
+  <label className="label">Your name</label>
+  <input className="input" autoFocus value={name} maxLength={200} onChange={...} />
+</div>
+<div className="field">
+  <label className="label">Email</label>
+  <input className="input" type="email" value={email} maxLength={320} onChange={...} />
+</div>
+```
+Reproduced: render BookingPage, click a slot, then `screen.queryByLabelText(/your name/i)` -> null and `screen.queryByLabelText(/^email$/i)` -> null. VoiceOver/TalkBack announce three unnamed "edit text" fields on the booking form; the Confirm button stays disabled until both are filled and the user cannot tell which is which.
+```
+
+</details>
+
+**Suggested fix.** Add `htmlFor`/`id` pairs (`book-name`, `book-email`, `book-notes`) exactly as Login.tsx
+and TaskModal.tsx do, and the same for LinkModal's eight controls.
+
+#### [x] Three Today/Shutdown inputs override the mobile 16px floor, re-arming iOS Safari's zoom-on-focus
+`frontend/src/styles/app.css:1573` · **medium** · rendering · minor
+
+The @media (max-width: 720px) block sets `.input { font-size: max(16px, calc(16px *
+var(--fs-scale))) }` at line 872 to stop iOS Safari auto-zooming when a form control
+under 16px takes focus. Three later rules — `.shut-date` (1478), `.shut-reflect` (1485)
+and `.today-est-input` (1573) — declare font-size at the same (0,1,0) specificity but
+LATER in the same stylesheet, so they win in every viewport. All three elements carry
+`className="input …"`. This is the third time this exact regression has shipped: lines
+1281-1294 restore the floor for `.bulk-row .input`, `.sched-range .input` and `.appear-
+text` and spell out the source-order reason verbatim — the whole Today-tab CSS fence
+(1355-1884), added after that fix, was never checked against it.
+
+<details><summary>Evidence</summary>
+
+```
+app.css:872 (inside @media max-width:720px)
+  .input { font-size: max(16px, calc(16px * var(--fs-scale))); }
+app.css:1476  .shut-date { flex: none; width: 132px; padding: 2px 6px; color: var(--fg-muted);
+                font-size: calc(11px * var(--fs-scale)); }
+app.css:1484  .shut-reflect { font: inherit; font-size: calc(14px * var(--fs-scale)); … }
+app.css:1571  .today-est-input { flex: none; width: 62px; padding: 2px 4px;
+                font-family: var(--mono); font-size: calc(11px * var(--fs-scale)); }
+
+Consumers (all carry `.input`, so all are governed by the floor rule and all beat it):
+  ShutdownRitual.tsx:281  <input type="date" className="input shut-date" …>
+  ShutdownRitual.tsx:310  <textarea id="shut-reflect" className="input shut-reflect" rows={4} autoFocus …>
+  TodayView.tsx:2511      <input className="input today-est-input" type="number" autoFocus …>
+
+Failure scenario (iPhone, Safari, 390x844, shipped default --fs-scale: 1):
+  Today tab -> tap the `est` cell on any row. TodayView swaps the button for
+  `.today-est-input`, which is autoFocus, and it renders at calc(11px * 1) = 11px.
+  Safari zooms the page to bring the sub-16px field up to size, and it does NOT
+  zoom back out on blur — the layout viewport stays scaled, so every subsequent
+  tap on the Today list lands offset from what is drawn. At the Appearance
+  editor's MAXIMUM --fs-scale of 1.4 (appearance.ts:96) this is still
+  11 * 1.4 = 15.4px, i.e. there is no setting that avoids it.
+  Same on Shutdown: `.today-shutdown` -> the reflection step focuses
+  `.shut-reflect` automatically at 14px, and the middle step's date arm is 11px.
+```
+
+</details>
+
+**Suggested fix.** Extend the existing restoration rule inside the mobile block (app.css:1288) to name
+these three as well, e.g. `.bulk-row .input, .sched-range .input, .shut-date, .shut-
+reflect, .today-est-input { font-size: max(16px, calc(16px * var(--fs-scale))); }` — or,
+better, move the floor to a rule that cannot be beaten by source order (e.g. `@media
+(max-width: 720px) { input.input, select.input, textarea.input { font-size: max(16px, …)
+} }`, specificity (0,1,1)) so the next dense-row rule added below cannot silently undo
+it again.
+
+#### [x] A foreign event/task title with no spaces makes the whole calendar or tasks pane scroll sideways on a phone
+`frontend/src/styles/app.css:601` · **medium** · rendering · minor
+
+`.agenda-ev`, `.task-title` and `.today-title` render summaries authored by other CalDAV
+clients and carry no `overflow-wrap`/`word-break`. A summary that is one long token — a
+pasted URL is the everyday case — has no soft wrap opportunity, so the text overflows
+its box. Both scroll containers it lands in (`.cal-scroll` and `.scroll`) declare only
+`overflow-y: auto`, which per CSS Overflow computes `overflow-x` to `auto` as well, so
+the overflow turns into horizontal scrolling of the entire pane — dragging the month
+grid off screen with it. The stylesheet already applies this guard elsewhere for the
+same reason (`.day-card-title` 462, `.sched-card-title` 920, `.sched-card-meta` 928,
+`.toast span` 908, `.today-chip-sum`/`-fate` 1368/1379); these three were missed.
+
+<details><summary>Evidence</summary>
+
+```
+app.css:601
+  .agenda-ev { display: flex; align-items: baseline; gap: 10px; width: 100%; … padding: 12px 14px;
+               font-size: calc(15px * var(--fs-scale)); … }
+  .agenda-ev .t { … min-width: 58px; flex: none; }
+app.css:359  .task-title { font-size: calc(15px * var(--fs-scale)); color: var(--fg); }
+app.css:1543 .today-title { flex: 1; min-width: 0; font-size: calc(15px * var(--fs-scale)); color: var(--fg); }
+app.css:474  .cal-scroll { flex: 1; min-height: 0; overflow-y: auto; }      /* -> overflow-x: auto */
+app.css:286  .scroll { flex: 1; overflow-y: auto; padding: 6px 0 40px; }     /* -> overflow-x: auto */
+
+DayPopover.tsx:36-41 (AgendaEvent) puts the summary in an UNCLASSED <span>, a flex
+item whose default min-width:auto resolves to min-content = the longest word:
+  <span className="t">{label(ev, day, tf)}</span>
+  <span>{ev.is_recurring && …}{ev.summary || '(untitled)'}</span>
+
+Failure scenario (iPhone 390x844, Calendar tab):
+  Tasks.org/DAVx5 writes an event whose SUMMARY is a 150-character URL with no
+  spaces. Tap that day -> CalendarView.tsx:696 renders the mobile `.day-agenda`
+  below the grid. Row width available to the summary is 390 - 28 (padding)
+  - 58 (.t) - 10 (gap) = 294px; the token needs roughly 1200px at 15px.
+  `.cal-scroll` gains ~900px of scrollable width, so a horizontal swipe anywhere
+  in the calendar pane drags the month grid off the left edge. The same input as
+  a TASK SUMMARY does it to `.scroll` on the Tasks and Today tabs.
+  Note this defeats the `.cal-grid { grid-template-columns: repeat(7, minmax(0,1fr)) }`
+  fix (app.css:488) that mobile-layout.test.ts pins: the grid itself no longer
+  overflows, but its scroll parent does.
+```
+
+</details>
+
+**Suggested fix.** Add `overflow-wrap: anywhere` (and `min-width: 0` on the agenda's summary span, e.g.
+give it a class or use `.agenda-ev > span:last-child`) to `.agenda-ev`, `.task-title`
+and `.today-title`, matching what `.day-card-title` and `.today-chip-sum` already do.
+Belt-and-braces: state `overflow-x: hidden` explicitly on `.scroll` and `.cal-scroll` so
+no future unwrapped child can turn either into a horizontal scroller.
+
+#### [x] --fg-faint is 2.30:1 against the shipped light background — below WCAG AA for text and below 3:1 for the controls that use it
+`frontend/src/styles/tokens.css:13` · **medium** · rendering
+
+`--fg-faint: rgba(20, 19, 26, 0.36)` composited over `--bg: #FBFAF7` is
+rgb(168,167,167), a contrast ratio of 2.30:1 (2.32 on --bg-elev, 2.28 on --paper). It
+fails AA for normal text (4.5:1) and also fails the 3:1 minimum for large text and for
+non-text UI components — and it is used not only for captions but for interactive
+controls. The dark theme is 2.75:1, also failing. The sibling token --fg-muted is fine
+(4.76 light / 6.27 dark), so this is specifically --fg-faint.
+
+<details><summary>Evidence</summary>
+
+```
+tokens.css:13   --fg-faint: rgba(20, 19, 26, 0.36);   /* over --bg #FBFAF7 */
+tokens.css:73   --fg-faint: rgba(236, 234, 242, 0.34); /* dark, over --bg #0C0C10 */
+
+Computed (sRGB compositing + WCAG 2.x relative luminance):
+  light  --fg-faint on --bg      = 2.30:1   (rgb 168,167,167 on 251,250,247)
+  light  --fg-faint on --bg-elev = 2.32:1
+  light  --fg-faint on --paper   = 2.28:1
+  dark   --fg-faint on --bg      = 2.75:1
+  workspace-light                = 2.33:1 ; workspace-dark = 3.16:1
+
+Text at body size wearing it: .empty (14px, "Nothing here yet."),
+.agenda-empty (14px, "Nothing this day."), .arch-empty (14px), .col-empty (13px),
+.hintline (12px — the settings explanations), .dash-empty (13px).
+INTERACTIVE controls wearing it (3:1 minimum, and their only affordance is the
+colour): .cal-more ("+N more", app.css:574), .today-more (1635),
+.side-item .side-edit (126), .group-btn (214), .group-eye (205),
+.chip-x (tokens.css:243), .today-drop / .today-plus (1590),
+.today-est.unset (1565), .cal-tasks-done (233).
+Also .cal-dow (490) — the seven weekday headers of the month grid.
+
+Failure scenario: on a phone outdoors, or on any screen at less than full
+brightness, "Nothing this day." under the mobile calendar agenda and the
+"+N more" control on a busy cell are not legible; a low-vision user cannot read
+the settings hintlines at all.
+```
+
+</details>
+
+**Suggested fix.** Raise the alpha so the composited value clears 4.5:1 for the text uses (light needs
+roughly rgba(20,19,26,0.58); dark roughly rgba(236,234,242,0.55)), or split the token:
+keep a very light --fg-faint strictly for hairline decoration and move every
+text/control use onto --fg-muted, which already passes. Mirror the change in the preset
+blocks (tokens.css:105, 134) and in appearance.ts's PRESETS copies, which
+appearance.test.ts asserts must not drift.
+
+#### [x] The Home tab's module stack silently drops the mobile safe-area bottom padding, so the last module sits under the home indicator
+`frontend/src/styles/app.css:1158` · **medium** · rendering · minor
+
+The mobile block gives the app's scroller a home-indicator inset: `.scroll { padding-
+bottom: calc(40px + env(safe-area-inset-bottom)) }` (line 867). HomeView's phone branch
+renders `<div className="scroll dash-stack">`, and `.dash-stack` (line 1158) sets the
+`padding` SHORTHAND at the same (0,1,0) specificity but 291 lines later, so it wins and
+resets all four sides: bottom becomes a flat 12px with no env() term. Home is the only
+tab whose scroller loses the inset — Tasks, Today and Scheduling use a bare `.scroll`,
+and the Calendar tab has its own `.day-agenda { padding-bottom: calc(24px + env(safe-
+area-inset-bottom)) }`.
+
+<details><summary>Evidence</summary>
+
+```
+app.css:867  (inside @media (max-width: 720px))
+  .scroll { padding-bottom: calc(40px + env(safe-area-inset-bottom)); }
+app.css:1158 (outside any media query, later in the file)
+  .dash-stack { display: flex; flex-direction: column; gap: 12px; padding: 12px 14px; }
+
+HomeView.tsx:214
+  <div className="scroll dash-stack">
+    {ordered.map((m) => ( <section className="dash-mod"> … ))}
+
+index.html:5 opts the page into the unsafe area:
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+
+Failure scenario (iPhone 14, 390x844, safe-area-inset-bottom = 34px):
+  `.shell` is height:100dvh, so `.scroll.dash-stack`'s bottom edge is the physical
+  screen bottom. Home tab, scroll to the end: the last module's final 22px sit
+  under the home-indicator pill, and there is no further scroll available to lift
+  them clear. If that module is "Upcoming" or "Quick add", its last row/its input
+  is the thing under the indicator, where a tap competes with the system
+  home-swipe gesture.
+```
+
+</details>
+
+**Suggested fix.** Either drop the shorthand (`.dash-stack { … padding: 12px 14px; }` -> set `padding: 12px
+14px` on top/sides and leave bottom to `.scroll`), or add the inset back inside the
+mobile block: `@media (max-width: 720px) { .dash-stack { padding-bottom: calc(12px +
+env(safe-area-inset-bottom)); } }`.
+
+#### [ ] One failing task list blanks the whole account's tasks — every pane then says "Nothing to do here." with no retry
+`frontend/src/data.tsx:217` · **medium** · bug
+
+TaskProvider fans the task fetch out with `Promise.all`, so a single list that answers
+500/502/429/404 rejects the whole batch. `setTasks` is never called, `loaded` is still
+flipped to true in the `.finally`, and the guard raises one generic toast that does not
+name the list. Every task surface in the app (TasksView, HomeView, TodayView, the
+calendar's task overlay) reads this one array, so all of them go empty — or, worse, keep
+painting the stale rows seeded from the disk mirror as if they were live. The calendar
+path immediately below (data.tsx:711) was explicitly rewritten to `Promise.allSettled` +
+per-calendar `windowErrors` for exactly this failure shape; the task path was never
+given the same treatment, and there is no `reload`/retry affordance on the tasks side at
+all. The effect only re-runs on `loadKey` / `rev` / `enabled` / `listsLoaded`, and `rev`
+only moves when the server publishes a data change — so on an idle account the empty
+pane is permanent until a full page reload.
+
+<details><summary>Evidence</summary>
+
+```
+data.tsx:214-222:
+```
+const token = ++fetchToken.current
+const key = loadKey
+guard(async () => {
+  const per = await Promise.all(lists.map((l) => api.tasks(l.id)))
+  const ts = per.filter(Array.isArray).flat()
+  if (token === fetchToken.current && key === keyRef.current) setTasks(ts)
+}).finally(() => setLoaded(true))
+```
+Reproduced against the real provider (vitest, jsdom): `api.lists` -> [{id:'good'},{id:'poison'}]; `api.tasks('good')` -> two tasks; `api.tasks('poison')` -> `HttpError(500,'internal error')`. Result: `loaded === 'true'`, rendered tasks === `NONE`, one toast `'internal error'`. Both of the healthy list's tasks are gone. TasksView.tsx:519-520 then renders `{loaded ? 'Nothing to do here.' : 'Loading…'}` for every list — the owner is told their account is empty. A poison VTODO written by jtx Board/Tasks.org that 500s the DTO builder for one collection (a documented failure class in this repo) is enough to trigger it.
+```
+
+</details>
+
+**Suggested fix.** Use `Promise.allSettled` like `fetchWindow` does: keep the lists that answered, flatten
+those, and expose the failed list NAMES on the context (a `taskListErrors` analogue of
+`windowErrors`) so TasksView can render "Couldn't load Shared" with a retry instead of
+"Nothing to do here.". Only leave the data untouched when every list failed, and expose
+a `reloadTasks()` so the retry is reachable without a page reload.
+
+#### [ ] The calendar's disk mirror is wiped on every cold boot: the logout-clear effect also fires on mount while auth is still 'loading'
+`frontend/src/data.tsx:775` · **medium** · rendering · minor
+
+`CalendarProvider` seeds `cals` from `readCachedCalendars()` so the first frame has
+content, then an effect clears everything whenever `enabled` is false. `enabled` is
+`auth === 'in'`, and `auth` starts at `'loading'` — so the effect runs on MOUNT, before
+`/api/me` has answered, and `setCals([])` throws the seed away along with
+`seeded.current` and `latest.current`. The effect was added to fix logout leakage (the
+`enabled` true->false transition); it does not distinguish that from the initial false.
+The result is that the entire calendar half of cache.ts is dead code in practice: on
+every cold load the Calendar tab mounts with zero calendars, `requestWindow(from, to,
+[])` returns early because `!forCals.length`, and the events request is serialised
+behind `/api/me` -> `/api/calendars` -> `/api/calendars/{id}/events`. On a phone over a
+slow link that is a blank month and an empty calendar sidebar for two full round trips,
+which is precisely the waterfall cache.ts's header says it exists to remove.
+TaskProvider has no such effect, so lists/tasks DO paint from cache — the two halves of
+the same provider now behave differently.
+
+<details><summary>Evidence</summary>
+
+```
+data.tsx:775-786:
+```
+useEffect(() => {
+  if (enabled) return
+  setCals([])
+  setWindows(new Map())
+  ...
+  seeded.current = null
+  latest.current = ''
+}, [enabled])
+```
+against data.tsx:651 `const [cals, setCals] = useState<List[]>(() => readCachedCalendars() ?? [])` and App.tsx:626 `<DataProvider ... enabled={auth === 'in'}>` with `auth` initialised to `'loading'` (App.tsx:37).
+
+Reproduced (vitest, jsdom): write one calendar and one list to the mirror, render `<DataProvider rev={0} enabled={false}>` (exactly what App renders while `/api/me` is in flight). After mount the probe reads `lists === 'Inbox'` (cached list survives) but `cals === 'NONE'` — the cached calendar has been cleared. Flipping `enabled` to true with `api.calendars` still pending leaves it `NONE`.
+```
+
+</details>
+
+**Suggested fix.** Only clear on the true->false TRANSITION, e.g. keep a `wasEnabled` ref (or run the clear
+from a `useRef<boolean>` initialised to `enabled`) and skip the first invocation, so a
+mount with `enabled === false` leaves the seeded cache alone.
+
+#### [ ] Boot treats "can't reach the server" as "signed out": a network drop or a 502 on /api/me hands the owner a login card and hides their cached data
+`frontend/src/App.tsx:160` · **medium** · bug
+
+The boot handler is `api.me().then(...).catch(() => setAuth('out'))`. `j()` only
+produces `AuthError` for a 401 — a dropped connection rejects with a `TypeError` and a
+5xx with `HttpError` — and all three land in the same catch, so any transport failure
+renders `<Login>`. This is the exact inversion of the rule the SSE loop in the same
+codebase states and enforces ("A server that is down is not a session that is gone, and
+signing a live session out on one 502 from the tunnel would be a worse bug than the one
+this fixes", api.ts:791-796) and of the write path's own policy (App.tsx:354-357
+deliberately stays quiet for a request that never reached a server). Setting
+`auth='out'` also flips `enabled` to false, which makes `CalendarProvider` clear its
+state, so the last-known-good data the disk mirror was built to show is unreachable from
+the login card. There is also no timeout on this request: if the socket is half-open
+(very common when a phone resumes from background across a wifi/cellular switch) the app
+sits on a topbar over a completely empty `<div className="content" aria-busy>` — no
+spinner, no text, no retry — for as long as the browser's network timeout, because every
+view is gated on `!booting`.
+
+<details><summary>Evidence</summary>
+
+```
+App.tsx:152-161:
+```
+sweepOldVersions()
+api.me()
+  .then((m) => { setCacheUser(m.user); setUser(m.user); setAuth('in') })
+  .catch(() => setAuth('out'))
+```
+against api.ts:604-608, where only `res.status === 401` throws `AuthError`.
+
+Scenario: owner opens the PWA on a phone with a flaky connection. `fetch('/api/me')` rejects with `TypeError: Failed to fetch`. The app shows the sign-in card; the owner types their password; `POST /api/login` also fails and the card shows a raw transport message. Their session cookie is still perfectly valid and their tasks are sitting in localStorage — neither is reachable until the network returns AND they reload. App.test.tsx:56 currently pins this behaviour with `m.me.mockRejectedValue(new Error('unauthenticated'))`, i.e. the test cannot tell the two cases apart either.
+```
+
+</details>
+
+**Suggested fix.** Branch on the error: `AuthError` -> `setAuth('out')`; anything else -> stay in a third
+state that keeps the shell and the cached data on screen with an "offline / can't reach
+the server" banner and a retry button (and re-probe `api.me()` on
+`online`/`visibilitychange`). Add an AbortController timeout so a half-open socket
+surfaces as that state instead of an indefinitely blank pane.
+
+#### [ ] A slow GET /api/settings lands after the user has already changed a preference and silently reverts it, leaving the UI disagreeing with the account
+`frontend/src/App.tsx:193` · **medium** · bug
+
+The settings read applies its whole payload unconditionally when it resolves. The gear
+button becomes clickable the instant `/api/me` returns (`booting` is `auth ===
+'loading'`), which is the same commit that issues `api.getSettings()`, so the entire
+read RTT is a window in which the user can change a preference. The author was aware of
+this class and guarded exactly one field — `tabTouched` for the tab — leaving roughly
+twenty other setters (`setTimeFormat`, `setTheme`/`applyTheme`, `setSessionTtl`,
+`setHiddenLists`, `setTaskGroups`, `setDashboard`, `setCalFit`, `setShowCompleted`,
+`setHomeTz`, …) to clobber whatever the user just chose. The window is not theoretical:
+`get_settings` takes the backend's single global service lock, which is also held across
+CalDAV round trips during a sync sweep, so `/api/settings` can block for seconds while
+the shell is fully interactive.
+
+<details><summary>Evidence</summary>
+
+```
+App.tsx:190-234 (abridged):
+```
+api.getSettings().then((s) => {
+  if (s.theme === 'dark' || s.theme === 'light') applyTheme(s.theme)
+  ...
+  if (!tabTouched.current) { ... }          // <- the one field that is guarded
+  ...
+  if (isTimeFormat(s.time_format)) setTimeFormat(s.time_format)
+```
+Reproduced (vitest, jsdom, real `<App>` with only ./api mocked): hold `api.getSettings()` unresolved, open Settings > General, click "12- or 24-hour clock". UI shows `24-hour` and `putSettings` is called with `{time_format:'24h'}` (the write lands). Then resolve the read with `{time_format:'12h'}` — the account's value from before the click. After a flush the row reads `12-hour`. The server holds 24h, the screen says 12h, and nothing tells the user; the next click cycles from the wrong value. With a 4-value cycle (`session_ttl_s`) or an array preference (`hidden_lists`, `task_groups`) the follow-up gesture then writes the merged-wrong array back.
+```
+
+</details>
+
+**Suggested fix.** Give the read the same staleness discipline the task/event fetches already have: stamp
+it with a token bumped by every `saveSettings`/`saveSettingsSoon` call and skip the
+whole apply when the stamp is stale, or (cheaper) apply only the keys not present in a
+`touched` set built by the change callbacks — the generalisation of `tabTouched`.
+
+#### [x] A failed GET /api/mcp/connections renders "Nothing is connected." — the account's only view of live OAuth grants lies
+`frontend/src/components/ConnectionsSection.tsx:27` · **medium** · bug · minor
+
+ConnectionsSection sets `loaded` in a `.finally()` but has no `failed` state, so a
+rejected fetch lands in the exact same render as a genuinely empty account: "Nothing is
+connected. Applications you connect through the MCP endpoint appear here." This is the
+only place in the app that shows which applications hold a live MCP OAuth grant (read or
+read+write on the whole account), and the only place a grant can be revoked. The sibling
+section ten lines away in the settings panel — ArchivedCalendarsSection — carries an
+explicit `failed` flag for precisely this reason, with the comment "'No archived
+calendars.' over a failed fetch is a confident lie about the account." This one never
+got it.
+
+<details><summary>Evidence</summary>
+
+```
+const [loaded, setLoaded] = useState(false)
+useEffect(() => {
+  guard(async () => { setRows(await api.mcpConnections()); setLoaded(true) })
+    .finally(() => setLoaded(true))
+}, [])
+...
+{!loaded ? (<div className="empty">Loading…</div>)
+ : rows.length === 0 ? (<div className="empty">Nothing is connected. …</div>)
+
+`makeGuard` swallows the rejection and returns undefined, so `setRows` never runs and `rows` stays []. Reproduced (vitest, jsdom): mcpConnections rejects with HttpError(502) -> `.empty` textContent === "Nothing is connected. Applications you connect through the MCP endpoint appear here."
+
+Scenario: the owner opens Settings → Account to check what still has access after rotating a password. Radicale/tasksd is mid-restart, the request 502s, and the panel states that nothing is connected — while a Claude/DAVx5 grant with mcp:write on every task and calendar is still live for the rest of its 30-day window. The transient error toast is the only contradiction, and it disappears.
+```
+
+</details>
+
+**Suggested fix.** Mirror ArchivedCalendarsSection exactly: add `const [failed, setFailed] =
+useState(false)`, set it in a `.catch(() => setFailed(true))` (and when the payload is
+not an array), and render a third branch — "Couldn't load your connected applications."
+— between the loading and empty branches.
+
+#### [x] The sidebar's list/calendar edit modal is the last dialog with no Escape, no dialog role, and a click-to-close scrim over a form
+`frontend/src/components/Sidebar.tsx:686` · **medium** · bug
+
+`EditModal` — the only place a list or calendar is renamed, recoloured, regrouped,
+archived or deleted, and the ONLY route to any of those on a phone — never adopted
+`useEscape`, has no `role="dialog"`/`aria-modal`, and closes on a bare `onClick` on the
+scrim. All three are defects the codebase has already fixed elsewhere (TaskModal,
+AddMultipleModal, AppearancePanel, DayPopover, PlanRitual, ShutdownRitual,
+SchedulingView, SettingsMenu all call `useEscape`; AppearancePanel uses `onMouseDown`
+with a target check precisely so a text drag-select released outside does not dismiss).
+The modal-contract test in backlog.aug19.stage4b.test.tsx enumerates dialogs by grepping
+components for `useEscape(`, so a dialog that never adopted the hook is invisible to the
+very test written to stop this being forgotten.
+
+<details><summary>Evidence</summary>
+
+```
+return (
+  <div className="overlay" onClick={onClose}>
+    <div className="modal" onClick={(e) => e.stopPropagation()}>
+      <div className="modal-head">…
+
+No useEscape, no role="dialog". Reproduced (vitest, jsdom): render <Sidebar items={[list]} …>, click "Edit Work", dispatch keydown {key:'Escape'} at window -> `.modal` is still in the DOM; `document.querySelector('[role="dialog"]')` is null.
+
+Scenario A (keyboard): open the edit modal, press Escape — nothing happens; the only way out is the ✕ or a scrim click.
+Scenario B (drag-select): select the list name text in the Name field and release the mouse a few pixels outside the 520px modal. The `click` event targets `.overlay`, so `onClose` fires and the half-typed rename is discarded — the identical defect already fixed for TaskModal's scrim.
+Scenario C (AT): the dialog is announced as a plain group; nothing tells a screen-reader user a modal opened.
+```
+
+</details>
+
+**Suggested fix.** Add `useEscape(onClose)` to EditModal, give the inner div `role="dialog" aria-
+modal="true" aria-label={placeholder}`, and swap the scrim's `onClick` for
+`onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}` as
+AppearancePanel does. Do the same for the mobile `.drawer-overlay` at Sidebar.tsx:398.
+Then widen the stage4b contract test so its membership comes from components rendering
+`.overlay`/`role="dialog"`, not from callers of `useEscape`.
+
+#### [x] A double Enter in the sidebar's add form creates two identical lists/calendars on Radicale
+`frontend/src/components/Sidebar.tsx:107` · **medium** · bug · minor
+
+`create` awaits `api.create` before calling `setAdding(false)`, and `AddForm` keeps its
+input mounted, focused and holding the typed name for the whole round trip with no in-
+flight guard. A second Enter while the first POST is still open fires a second
+`api.create` with the same name. Each one is a real MKCALENDAR/MKCOL against Radicale,
+so the account ends up with two indistinguishable collections that every other CalDAV
+client (Tasks.org, jtx, Thunderbird) also sees, and deleting the wrong one is a separate
+destructive step. This is the same class as the already-fixed booking-link double-submit
+("a double-click (or a second Enter) on 'Create link' publishes two live booking links")
+— it just was never applied here.
+
+<details><summary>Evidence</summary>
+
+```
+const create = async (name: string, color: string | null) => {
+  const l = await api.create(name, color)      // no guard, no disable
+  setAdding(false)
+  if (l) { onItems([...items, l]); if (canSelect) onSelect?.(l.id) }
+}
+
+// AddForm — fires on every Enter, value never cleared
+onKeyDown={(e) => { if (e.key === 'Enter' && name.trim()) onCreate(name.trim(), color) …}}
+
+Reproduced (vitest, jsdom): click the sidebar '+', type "Groceries", fire two keyDown Enter events -> `api.create` called 2 times with ("Groceries", null).
+
+Scenario: on a slow or cold self-hosted server the first Enter changes nothing on screen (the form stays open with the text still in it), so pressing Enter again is the natural response — and produces two "Groceries" lists.
+```
+
+</details>
+
+**Suggested fix.** Add a busy ref/state in `create` (`if (busy.current) return; busy.current = true` …
+`finally { busy.current = false }`) and pass it to AddForm so the input is disabled
+while the request is open, matching the in-flight guard the booking-link editor now
+carries.
+
+#### [ ] A cancelled pointer gesture COMMITS the half-finished dashboard drag instead of discarding it
+`frontend/src/components/HomeView.tsx:265` · **medium** · bug
+
+`onPointerCancel={endDrag}` and `endDrag` commits: `if (preview) commit(preview)`. A
+`pointercancel` means the gesture was aborted by the platform, not completed, so the
+module is written to wherever the pointer happened to be when the browser took over —
+and `commit` calls `onLayoutChange`, which App persists with
+`saveSettingsSoon({dashboard})`. The comment above the sibling effect says a cancelled
+gesture "must not leave the layout stuck in preview", which is what the author intended;
+committing satisfies the letter and inverts the meaning. This is not theoretical on
+touch: nothing in app.css sets `touch-action` anywhere (`grep -n touch-action
+src/styles/app.css` -> no matches), and `e.preventDefault()` on pointerdown does not
+suppress a browser pan. Arrange mode is gated on `useIsMobile` (max-width: 720px), so
+every touch device wider than that — an iPad in landscape at 1180px, a Surface, a
+touchscreen laptop — gets Arrange mode with drags the browser will steal for a scroll of
+the enclosing `.scroll` container, firing pointercancel every time.
+
+<details><summary>Evidence</summary>
+
+```
+const endDrag = () => {
+  if (!drag.current) return
+  drag.current = null
+  if (preview) commit(preview)      // <-- commits an ABORTED gesture
+  else setPreview(null)
+}
+…
+<div ref={gridRef} className={`dash-grid …`}
+  onPointerMove={onPointerMove} onPointerUp={endDrag} onPointerCancel={endDrag}>
+
+Reproduced (vitest, jsdom), layout [{id:'a',x:0,y:0,w:4,h:6},{id:'b',kind:'overdue',x:4,y:0,w:4,h:5}], grid clientWidth 1200: pointerDown on b's header at (500,20), pointerMove to (700,200), then pointerCancel ->
+onLayoutChange called once with [{id:'a',…x:0},{id:'b',…,"x":6,"y":0,"w":4,"h":5}] — b moved from column 4 to column 6 and was saved.
+
+Scenario: iPad landscape, Home tab, tap Arrange, press a module header and drag downward to reorder. The browser pans `.scroll` instead, fires pointercancel, and the module is committed two columns over from where it started — an arrangement the user never released the finger on, written to /api/settings.
+```
+
+</details>
+
+**Suggested fix.** Split the handlers: `onPointerUp={endDrag}` commits; `onPointerCancel={() => {
+drag.current = null; setPreview(null) }}` discards. Additionally add `touch-action:
+none` to `.dash-grid.arranging .dash-mod-head` and `.dash-grip` so the drag is not
+stolen on a touch device wide enough to get the desktop canvas.
+
+#### [x] Primary touch targets across Settings and the Home mini calendar are half the 44px minimum, with no mobile override
+`frontend/src/styles/app.css:89` · **medium** · rendering · minor
+
+Three of the most-used controls in this subsystem are sized for a mouse and have no rule
+inside the `@media (max-width: 720px)` block that enlarges them, even though the app is
+described as used heavily on a phone. (1) `.menu-toggle` is every settings control on
+the phone sheet — Clock, Theme, Home timezone, Calendar window, Completed tasks, Stay
+signed in. `font-size: calc(11px * var(--fs-scale)); padding: 6px 11px` plus a 1px
+border ≈ 27px tall. Nothing in the mobile block touches it. (2) `.mini-day`
+(app.css:1138) is the Home mini calendar's day cell — a real button that opens the day
+popover. `padding: 4px 0; font-size: calc(11px * …)` ≈ 21px tall; in the mobile stack
+the grid width is 390 − 28 (`.dash-stack` padding) − 20 (`.mini-cal` padding) ≈ 340px
+over 7 columns ≈ 48px wide. 48x21. (3) `.side.drawer .group-btn { padding: 6px 7px;
+font-size: 15px }` ≈ 23x30, with `.group-actions { gap: 1px }` — the rename and delete-
+group controls, one pixel apart.
+
+<details><summary>Evidence</summary>
+
+```
+.menu-toggle {
+  font-family: var(--mono); font-size: calc(11px * var(--fs-scale)); …
+  background: none; color: var(--fg-muted); border: 1px solid var(--rule);
+  padding: 6px 11px; cursor: pointer; …
+}
+.mini-day {
+  text-align: center; padding: 4px 0; font-family: var(--mono);
+  font-size: calc(11px * var(--fs-scale)); …
+}
+
+`grep -n "menu-toggle\|mini-day" src/styles/app.css` shows no occurrence inside any `@media (max-width: 720px)` block — the mobile block styles `.set-nav-item` to a comfortable `padding: 14px 4px` but leaves the controls the nav leads to at desktop size.
+
+Scenario: iPhone 390x844, Settings → General. "12-hour / 24-hour" is a 27px-tall strip in a row whose label is 11px mono; tapping it reliably takes two attempts. Home tab, mini calendar module: tapping the 24th to see its events lands on the 17th or the 31st because the cells are 21px tall.
+```
+
+</details>
+
+**Suggested fix.** Inside the existing `@media (max-width: 720px)` block add `min-height: 44px` (or
+padding) for `.menu-toggle`, `.mini-day { padding: 11px 0 }`, and a 44px minimum for
+`.side.drawer .group-btn` / `.group-caret`, widening `.group-actions` gap to at least
+6px on touch.
+
+#### [x] --fg-faint carries real text at 2.3:1 (light) and 2.8:1 (dark), and dimmed mini-calendar dates land near 1.5:1
+`frontend/src/styles/app.css:1144` · **medium** · rendering
+
+`--fg-faint` is the sole colour on text that carries information, and it fails WCAG AA
+in both shipped themes. Light: `rgba(20,19,26,0.36)` over `--bg #FBFAF7` composites to
+rgb(168,167,168); relative luminance 0.3915 vs 0.9563 -> contrast 2.28:1. Dark:
+`rgba(236,234,242,0.34)` over `#0C0C10` composites to rgb(88,88,93); 0.0985 vs 0.0037 ->
+2.76:1. AA needs 4.5:1 for the sizes involved (11-13px). It is used for `.hintline`
+(app.css:95) — every explanatory paragraph in Settings, Appearance and Connections;
+`.dash-empty` (1114) — the entire content of an empty Home module; `.side-item .count`;
+and `.mb-summary`, the mobile sidebar bar's "3 of 5 shown", which on a phone is the only
+indication that any collection is hidden. Worse, `.mini-day.dim` stacks `opacity: .5` on
+top of it. Effective alpha 0.36 x 0.5 = 0.18 -> rgb(209,209,210) on #FBFAF7 -> luminance
+0.6376 vs 0.9563 -> 1.46:1. Those are the adjacent-month day numbers in the Home mini
+calendar's six-week grid, i.e. up to 11 of the 42 dates rendered.
+
+<details><summary>Evidence</summary>
+
+```
+.mini-day.dim { color: var(--fg-faint); opacity: 0.5; }
+.hintline { font-size: calc(12px * var(--fs-scale)); color: var(--fg-faint); line-height: 1.4; }
+.dash-empty { padding: 14px 12px; color: var(--fg-faint); font-size: calc(13px * var(--fs-scale)); margin: 0; }
+
+// tokens mirrored in appearance.ts DEFAULTS
+light['--fg-faint'] = 'rgba(20, 19, 26, 0.36)'   over '--bg': '#FBFAF7'
+dark ['--fg-faint'] = 'rgba(236, 234, 242, 0.34)' over '--bg': '#0C0C10'
+
+Contrast computed by sRGB compositing + WCAG relative luminance (values above).
+
+Scenario: light theme, outdoors on a phone. The Home mini calendar's leading and trailing dates are at 1.46:1 — effectively invisible, so the grid reads as starting mid-week. In Settings, the hintline that explains what "Fixed" vs "Dynamic" calendar window means, and the one warning that "a shorter sign-in applies at once, on this device and any other", are at 2.28:1.
+```
+
+</details>
+
+**Suggested fix.** Raise `--fg-faint` to at least 0.55 alpha in light (rgba(20,19,26,0.55) ≈ 4.6:1) and
+0.55 in dark, and drop the extra `opacity: .5` on `.mini-day.dim` in favour of using
+`--fg-muted` there. appearance.test.ts already parses tokens.css and pins DEFAULTS
+against it, so both copies move together; consider adding a contrast assertion to that
+same test so the token cannot drift back.
+
+#### [x] Test gap: ConnectionsSection — the only UI that revokes an MCP OAuth grant — has no behavioural test at all
+`frontend/src/components/ConnectionsSection.tsx:34` · **medium** · test-gap
+
+There is no ConnectionsSection.test.tsx, and grepping the suite shows the component is
+only ever reached incidentally: three files call
+`m.mcpConnections.mockResolvedValue([])` purely to keep the settings panel from
+throwing. Nothing asserts on the disconnect flow, the two-tap confirm, the optimistic
+removal and its rollback, the scope-to-words mapping, the granted-at formatting, or the
+loading/error states. `grep -rn "mcpDisconnect|Nothing is connected|Disconnect" src
+--include=*.test.tsx` returns nothing. This is the surface that ends an OAuth grant with
+`mcp:write` over every task and calendar on the account — exactly the kind of security-
+critical write the brief calls out — and it is the reason the false-empty state above
+(finding 1) survived while its sibling ArchivedCalendarsSection got both the fix and
+three regression tests in backlog.aug19.stage4b.test.tsx.
+
+<details><summary>Evidence</summary>
+
+```
+$ ls frontend/src/components/*.test.tsx | grep -i connection    # no output
+$ grep -rn "mcpConnections" frontend/src --include=*.test.tsx
+src/App.test.tsx:51:  m.mcpConnections.mockResolvedValue([])
+src/backlog.aug19.stage3.test.tsx:93:  m.mcpConnections.mockResolvedValue([])
+src/components/SettingsMenu.test.tsx:28:  m.mcpConnections.mockResolvedValue([])
+$ grep -rn "mcpDisconnect\|Nothing is connected\|conn-actions" frontend/src --include=*.test.tsx   # no output
+
+Untested behaviour that is easy to break: `disconnect` restores the previous rows when `guard(() => api.mcpDisconnect(id))` returns undefined — but `mcpDisconnect` is a DELETE and `j()` returns `null` for a 204, so the success/failure discrimination hangs on `null !== undefined`. One change to the endpoint's status code (204 -> 200 with a body, or vice versa) silently inverts the rollback, and nothing would fail.
+```
+
+</details>
+
+**Suggested fix.** Add frontend/src/components/ConnectionsSection.test.tsx covering: a rejected list fetch
+shows an error rather than "Nothing is connected"; a non-array payload likewise; the
+two-tap confirm (Keep restores, Disconnect calls api.mcpDisconnect with the family_id);
+a 204 disconnect removes the row and does NOT restore it; a rejected disconnect puts the
+row back; and `what()` mapping mcp:write / mcp:read / '' to the three labels.
+
+#### [x] The calendar's event editor breaks the modal contract: no Escape, and a bare onClick scrim discards the whole form
+`frontend/src/components/CalendarView.tsx:932` · **medium** · rendering
+
+`EventModal` — the calendar tab's only editor for creating/editing/deleting events — is
+the one dialog left in the app that neither imports `useEscape` nor uses the two-event
+scrim guard every other dialog adopted. Its scrim is `<div className="overlay"
+onClick={onClose}>`, so a mouse-up anywhere on the backdrop closes it and throws away
+everything typed, and Escape does nothing at all despite `role="dialog" aria-
+modal="true"` and no focus trap. The `moveAsk` scope prompt at line 756 has the same
+bare scrim plus no role/aria-label at all. The existing guard test
+(`backlog.aug19.stage4b.test.tsx:1177`, 'every component using useEscape is covered by
+this file') greps for components that ALREADY import the hook, so it is structurally
+incapable of catching a dialog that never adopted it.
+
+<details><summary>Evidence</summary>
+
+```
+CalendarView.tsx:932 `<div className="overlay" onClick={onClose}>` and no `useEscape` import anywhere in the file (`grep useEscape src/components/CalendarView.tsx` -> nothing). Compare TaskModal.tsx:122/128-133, which does `useEscape(onClose)` plus `onMouseDown` recording `scrimPress` and only closing when both press and release land on the scrim.
+
+Reproduced against the real component (vitest, jsdom):
+  1. open an event chip -> dialog 'Event'; fireEvent.keyDown(window, {key:'Escape'})
+     -> logged: `after Escape, dialog still open? true`
+  2. open the dialog, type into Notes, then mouseDown on the Notes textarea and
+     mouseUp+click on the scrim (exactly what a text drag-select that overshoots
+     the modal edge produces)
+     -> logged: `after drag-select, dialog still open? false` — title, times,
+        location, notes, tags and the calendar pick are all gone, silently.
+```
+
+</details>
+
+**Suggested fix.** Copy TaskModal's pattern verbatim into EventModal: `useEscape(onClose)` plus the
+`scrimPress` ref with `onMouseDown`/`onClick` on the overlay. Give the `moveAsk` overlay
+the same treatment plus `role="dialog" aria-modal="true" aria-label="Repeating event"`.
+Then strengthen the stage4b enumeration test so it walks every `className="overlay"` /
+`role="dialog"` site rather than only the components that already import the hook.
+
+#### [ ] Drag-to-reorder resolves the dragged row by bare uid, so with one UID in two lists the wrong row moves — and that order is POSTed for the whole account
+`frontend/src/data.tsx:591` · **medium** · bug
+
+`TasksView`'s drop handler carefully resolves both `taskKey`s back to real rows and then
+throws the disambiguation away, passing bare uids to `reorder`, which re-finds them with
+`placed.findIndex((t) => t.uid === uid)` — first-wins across the merged multi-list
+array. The trust model treats a VTODO copied between lists in
+Tasks.org/DAVx5/Thunderbird as ordinary (the UID is preserved; the backend keys on
+`(collection_href, uid)`), so the copy that sorts first is the one that moves. The
+comment at TasksView.tsx:158-160 claims the rows are 'resolved back before the wire
+call', but `reorder`'s signature only takes uids, so nothing is actually resolved.
+`reorder` renumbers `sort_order` for every task on the account and POSTs it, so the
+wrong order is persisted permanently.
+
+<details><summary>Evidence</summary>
+
+```
+data.tsx:588-596
+```ts
+const reorder = async (uid: string, target: string) => {
+  if (uid === target) return
+  const placed = sortTasks(tasks)
+  const from = placed.findIndex((t) => t.uid === uid)
+  const to = placed.findIndex((t) => t.uid === target)
+```
+TasksView.tsx:161-163 `const a = ... find(taskKey(t) === dragged); ... if (a && b) void reorder(a.uid, b.uid)`
+
+Reproduced against the real components (vitest, jsdom). Lists: Home(l1) holds uid X titled 'A home copy' and uid b titled 'B second'; Work(l2) holds a COPY of uid X titled 'C work copy'.
+  before: ['A home copy', 'B second', 'C work copy']
+  gesture: drag 'C work copy' (uid X, list l2) and drop it on 'B second' (uid b)
+  POSTed order: [{"list":"l1","uid":"b"},{"list":"l1","uid":"X"},{"list":"l2","uid":"X"}]
+  after:  ['B second', 'A home copy', 'C work copy']
+The row the user dragged never moved; an unrelated row in a different list did, and that sequence was written to POST /api/tasks/reorder.
+
+Second manifestation, same cause: dropping the Work copy onto the Home copy calls `reorder('X','X')`, hits the `uid === target` early return, and the drag silently does nothing.
+
+TasksView.test.tsx's whole 'drag-to-reorder' block uses distinct uids, so nothing fails.
+```
+
+</details>
+
+**Suggested fix.** Widen `TaskData.reorder` to take the rows (or `taskKey`s) rather than uids — `reorder:
+(from: Task, target: Task)` — and inside it use `placed.findIndex((t) => taskKey(t) ===
+taskKey(from))`. Add a TasksView test with the same uid in two lists asserting that the
+dragged row is the one that moves and that the POSTed sequence matches the on-screen
+order.
+
+#### [ ] Any save from the event editor splits a CATEGORIES value containing a comma into two tags
+`frontend/src/components/CalendarView.tsx:889` · **medium** · bug
+
+`EventModal` holds tags as one comma-joined string and re-splits it on every commit, and
+`commit()` sends `tags: tagList()` unconditionally — even for a save that only changed
+the title. `CATEGORIES:Home\,Garden` is a single category per RFC 5545 (the backend
+reads it correctly via icalendar's `.cats` and writes it back escaped via
+`todo.add("CATEGORIES", list(cats))`), so a category another CalDAV client authored with
+a comma in it is silently destroyed by an edit that never touched the tags field. This
+is exactly the defect the task side was fixed for — AddMultipleModal's `TagInput`
+docstring spells it out ('any delimiter-joined text field corrupts it') and TasksView
+has a regression test ('keeps a category containing a comma whole') — but the event
+editor was never converted.
+
+<details><summary>Evidence</summary>
+
+```
+CalendarView.tsx:821 `const [tags, setTags] = useState((e?.tags || []).join(', '))`
+CalendarView.tsx:889 `const tagList = () => tags.split(',').map((s) => s.trim()).filter(Boolean)`
+CalendarView.tsx:903 `const details = { summary, location, description, tags: tagList() }` — sent on every save path.
+app.py:889 `if "tags" in fs: kw["categories"] = req.tags`, so the split really reaches the VEVENT.
+
+Reproduced against the real component (vitest, jsdom). Event with `tags: ['Home,Garden', 'Errands']`:
+  tags field shows: `Home,Garden, Errands`
+  change only the Title to 'Renamed' and press Save
+  PATCH body tags: ["Home","Garden","Errands"]
+One category has become two, permanently, on a pure rename.
+```
+
+</details>
+
+**Suggested fix.** Reuse `TagInput` from AddMultipleModal for the event editor's Tags field (it already
+holds each category whole and is exported), and — like TaskModal — only include `tags`
+in the PATCH body when it differs from `e.tags` by value (`sameValue` in util.ts). Add a
+CalendarView test that renames an event whose tags contain a comma and asserts the PATCH
+omits `tags` entirely.
+
+#### [ ] endFromDuration treats P1D/P1W as exact milliseconds, so a DAVx5 DURATION-only event silently gains (or loses) an hour across a DST edge on any save
+`frontend/src/calendar.ts:72` · **medium** · bug
+
+RFC 5545 §3.3.6 makes the weeks/days part of a DURATION *nominal* (P1D means the same
+wall-clock time the next day, i.e. 23 or 25 real hours across a transition) and only the
+time part exact. The backend implements exactly this split —
+`ical/read.py:split_duration` + `advance()`, with an explicit comment — but `durationMs`
+folds weeks and days into fixed `86400000` ms and `endFromDuration` adds the whole thing
+to the instant. `EventModal` seeds its End picker from `endFromDuration` for the
+DURATION-only events DAVx5/jtx Board write, and `commit()` sends `end: endOut` on every
+save; `_apply_event_fields` deletes DURATION whenever a dtend is supplied. So the
+fabricated end is written and the original span is gone — the precise outcome the
+`endUnknown`/`derivedEnd` machinery was added to prevent.
+
+<details><summary>Evidence</summary>
+
+```
+calendar.ts:72
+```ts
+const ms = (Number(w || 0) * 7 + Number(dd || 0)) * 86400000
+  + Number(hh || 0) * 3600000 + ...
+```
+calendar.ts:88 `const out = new Date(d.getTime() + ms)` — instant arithmetic, no wall-clock half.
+
+Reproduced against the real component (vitest, TZ=America/New_York, spring-forward 2026-03-08 02:00). Event: DTSTART 2026-03-07T09:00:00, DURATION:P1D, DTEND absent.
+  End picker shows: 2026-03-08T10:00   (RFC says 2026-03-08T09:00)
+  change only the Title, press Save ->
+  PATCH start/end: 2026-03-07T09:00  2026-03-08T10:00
+The event is now an hour longer than its author wrote it, its DURATION is deleted, and the frontend and backend now disagree about the same event's end. `DURATION:P1W` from the same start shows 2026-03-14T10:00 instead of ...T09:00. Across a fall-back the same code shortens the event by an hour instead.
+backlog.aug19.stage4a.test.tsx:560-577 drives `durationMs`/`endFromDuration` only with PT-style exact durations and one overflow case — no nominal duration, and none crossing a transition.
+```
+
+</details>
+
+**Suggested fix.** Split the duration the way the backend does: return `{nominalDays, exactMs}` from
+`durationMs`, and in `endFromDuration` apply the nominal half with `addDays(d,
+nominalDays)` (wall clock, DST-safe, same helper `shiftYmd` already uses) before adding
+`exactMs` to the resulting instant. Add table tests for P1D/P1W/P1DT2H spanning both
+2026-03-08 and 2026-11-01.
+
+#### [ ] Retrying the add box after a failed day-entry POST creates a second real task on the CalDAV list
+`frontend/src/components/TodayView.tsx:1236` · **medium** · bug
+
+`addParsedTask` is a two-step compound write with no idempotency across the pair and no
+compensation: it first authors a real VTODO with `create(...)`, then points the day at
+it with `addTask(on, t)` (POST /api/day/{day}/entries). If only the second call fails,
+the VTODO is already on the list, `commit` puts the typed line back in the box (its own
+comment: "so a rejected line is never simply lost"), and the obvious retry mints a
+brand-new `client_id` in `data.tsx::create` — authoring a SECOND identical VTODO that
+syncs to Tasks.org / Thunderbird / DAVx5. This is a different trigger from the already-
+fixed bulk-composer finding: there the create's response was lost; here the create was
+acknowledged and only the day write failed, so no client_id reuse could have helped.
+
+<details><summary>Evidence</summary>
+
+```
+TodayView.tsx:1236-1248
+```
+const addParsedTask = async (
+  on: string, list: string, p: ParsedEntry, dated: boolean,
+): Promise<boolean> => {
+  const t = await create(list, {
+    summary: p.summary,
+    ...(dated ? { due: dueFromParse(p, on) } : {}),
+  })
+  if (!t) return false                 // `create` has already raised the toast
+  return addTask(on, t)
+}
+```
+and TodayView.tsx:1201-1234 `commit()` → `if (!ok) setText(raw)`; data.tsx:320-323 `const create = async (listId, body, after) => { ... const cid = clientId() ... }` — a fresh id on every call.
+
+Reproduced against the repo's own harness (vitest/jsdom, api module mocked as the suite does): `m.addDayEntry.mockRejectedValueOnce(new Error('nope'))`, type `invoice friday` + Enter, wait for the line to reappear in the box, press Enter again. `createTask` mock calls:
+  ["l1", {"summary":"invoice","due":"2026-08-28","client_id":"b9bbbba6672e4fbabe4abbd07af85b88"}]
+  ["l1", {"summary":"invoice","due":"2026-08-28","client_id":"e1953a6d5406468989432b8ede3c3a97"}]
+Two distinct client_ids → two real tasks "invoice" due 2026-08-28 on list l1, one of which is on no day at all.
+```
+
+</details>
+
+**Suggested fix.** Mint the create's `client_id` once per typed line (hold it in a ref keyed by the
+restored text, or accept an explicit `client_id` in `create`) so the retry is answered
+by the resource already written; and/or, when the day-entry POST fails after the task
+landed, keep the created task in hand and retry only `addDayEntry` rather than replaying
+the whole line.
+
+#### [ ] The Today tab's drop indicator draws above the target on a downward drag, but the row lands below it
+`frontend/src/components/TodayView.tsx:1761` · **medium** · rendering
+
+`dragOver` is a single boolean and `.today-row.drag-over` always paints the accent rule
+on the row's TOP edge, while `moveRow` deliberately lands a downward drag AFTER the
+target. So during every downward drag the line the owner is aiming at is one gap above
+where the row will actually go — the exact defect the Tasks pane already fixed with
+`drag.below` + `.task-drag.drag-over.drag-below > .task { box-shadow: inset 0 -2px 0 }`
+(TasksView.tsx:149, app.css:307). The Today tab's drag is a separate, newer code path
+that never got the fix.
+
+<details><summary>Evidence</summary>
+
+```
+TodayView.tsx:1761 `dragOver={overId === e.entry_id && dragId !== null && dragId !== e.entry_id}` — no direction. app.css:1614 `.today-row.drag-over { box-shadow: inset 0 2px 0 var(--accent); }` — top edge only, unconditionally. TodayView.tsx:1012-1050 `moveRow`: "Dragging DOWN lands the row AFTER the target", `const before = without[to - 1]; const after = without[to]`.
+
+Measured in the repo's harness with rows Alpha(pos 1) / Bravo(2) / Charlie(3):
+  DOWN  (mouseDown+dragStart on Alpha, dragOver+drop on Bravo)
+    hovered class: "today-row today-draggable drag-over"   → rule painted at Bravo's TOP
+    write: patchDayEntry("2026-08-25","a",{"position":2.5}) → order becomes Bravo, Alpha, Charlie
+  UP    (Charlie onto Bravo)
+    hovered class: "today-row today-draggable drag-over"
+    write: patchDayEntry("2026-08-25","c",{"position":1.5}) → order becomes Alpha, Charlie, Bravo (correct)
+The indicator is identical in both directions; only the upward reading matches it.
+```
+
+</details>
+
+**Suggested fix.** Compute the direction where `dragOver` is computed — `dayRows.findIndex(dragId) <
+dayRows.findIndex(e.entry_id)` — pass it to `TodayRow` as e.g. `dragBelow`, add `today-
+below` to the row's class list, and add `.today-row.drag-over.today-below { box-shadow:
+inset 0 -2px 0 var(--accent); }` beside the existing rule.
+
+#### [ ] Escape discards an unsaved reflection (and an unsaved capacity) because both commit only on blur
+`frontend/src/components/ShutdownRitual.tsx:316` · **medium** · bug
+
+`ReflectStep` writes the day's reflection only from `onBlur`. Both rituals bind
+`useEscape(onClose)` to the window, and `onClose` unmounts the whole overlay. Browsers
+do not fire `blur`/`focusout` for a focused element that is removed from the DOM (Chrome
+and Safari, i.e. every iOS install), so pressing Escape with the cursor still in the
+textarea silently throws the typed prose away — on the one field in the app that holds
+free text and whose own hint promises "Kept with the day. You will see it whenever you
+look back at today." The ✕ and the scrim are safe (their mousedown blurs the field
+first); Escape is the one closer that is not. `PlanRitual`'s `CapacityStep` has the
+identical shape at PlanRitual.tsx:192, so "until 6pm" typed and then Escaped is never
+stored either.
+
+<details><summary>Evidence</summary>
+
+```
+ShutdownRitual.tsx:310-316
+```
+<textarea id="shut-reflect" ... autoFocus
+  value={draft} ...
+  onChange={(e) => setDraft(e.target.value)}
+  onBlur={() => { if (draft !== (reflection ?? '')) onReflect(draft) }} />
+```
+ShutdownRitual.tsx:80 `useEscape(onClose)`; TodayView.tsx:2089 `onClose={() => setShutdown(false)}` unmounts the subtree.
+
+Reproduced in the repo's harness: open Shut down → Next → Next, type "shipped the thing" into the field labelled "A note about today", `fireEvent.keyDown(window, { key: 'Escape' })`, wait for the dialog to unmount. `api.patchDay` mock calls: `[]` — nothing was ever sent. Re-opening the ritual shows an empty box and the look-back shows no "How it went" section.
+```
+
+</details>
+
+**Suggested fix.** Commit the draft from a cleanup effect as well as from blur (`useEffect(() => () => { if
+(draftRef.current !== (reflection ?? '')) onReflect(draftRef.current) }, [])`), or have
+`ShutdownRitual`/`PlanRitual` flush their step before calling `onClose`. Same change is
+needed for `CapacityStep`.
+
+#### [ ] A failed day read leaves the Today tab blank with no error, no empty state and no retry — and every add then paints nothing
+`frontend/src/components/TodayView.tsx:646` · **medium** · rendering
+
+`plan` only ever becomes non-null on a successful 200; a rejection is swallowed by
+`guard` into a transient toast. `allEntries`/`entries` therefore stay `null` forever,
+and every render of the day is gated on `entries !== null` — including the empty state —
+so the tab shows the heading, the add box, the calendar strip and the suggestions over a
+blank space that says nothing at all, with no way to retry short of navigating away and
+back. `POST /api/day/{day}/open` is the expensive call on this screen (it derives a
+snapshot from CalDAV), so a Radicale hiccup that 502s/times out that one call while
+every other endpoint is healthy is the realistic trigger. In that state every optimistic
+writer is a no-op, because they all read `setPlan((p) => (p && …) : p)`: the owner types
+a line, presses Add, the POST succeeds server-side, the box clears — and no row appears.
+
+<details><summary>Evidence</summary>
+
+```
+TodayView.tsx:621 `const [plan, setPlan] = useState<DayPlan | null>(null)`; :646 `if (p && Array.isArray(p.entries)) setPlan(p)` (nothing on the failure arm); :683 `allEntries = plan && plan.day === day ? … : null`; :2183 the empty state is `{entries !== null && entries.length === 0 && (<p className="empty">Nothing on today yet…`; :1091 and :1120 `setPlan((p) => (p && p.day === on ? {…} : p))`.
+
+Reproduced in the repo's harness with `m.openDay.mockRejectedValue(new Error('boom'))`:
+  document.querySelectorAll('.empty') → [ 'Nothing on the calendar today.' ]   (nothing about the day)
+  no `N open · N on the day` count, no error region (only `.cal-partial`, which is calendars-only)
+  then: type "call the bank", press Add → `api.addDayEntry` IS called, input value becomes '' , and
+  document.querySelectorAll('.today-row') → []  — the note is on the server and invisible.
+Only a later `day_updated` SSE bump repaints it; a read-only failure with no subsequent event leaves the day blank indefinitely.
+```
+
+</details>
+
+**Suggested fix.** Give the read a third state: set an error flag on the failure arm of the effect (`const
+p = await …; if (mine !== token.current) return; if (p && Array.isArray(p.entries))
+setPlan(p); else setDayError(true)`), render a short "Couldn't load today" line with a
+retry button that bumps a local nonce in the effect's deps, and disable/flag the add box
+and the suggestion "+" while the day is unknown so a write cannot land invisibly.
+
+#### [ ] "That time was just taken" stays on screen after the visitor does what it told them to do
+`frontend/src/components/BookingPage.tsx:265` · **low** · rendering · minor
+
+The 409 recovery path sets `error`, clears the slot and returns to `pick`. Nothing
+clears `error` when a new slot is chosen, so the warn-bordered `role="alert"` banner
+"That time was just taken — please pick another." is still rendered above the confirm
+bar for the NEW slot, and stays there while the visitor types their name and email and
+presses Confirm. It only disappears if the second booking also fails (replaced) or
+succeeds (the `done` branch renders instead). An anonymous visitor is being told their
+currently-selected slot is gone at the exact moment they are asked to confirm it.
+
+<details><summary>Evidence</summary>
+
+```
+```
+// submit() 409 path
+setError('That time was just taken — please pick another.')
+setSlot(null); setPhase('pick'); await load({ keepPhase: true })
+...
+// slot button — sets slot/cid/phase, never clears error
+<button key={s.start} className="slot-btn"
+  onClick={() => { setSlot(s); setCid(clientId()); setPhase('confirm') }}>
+```
+Reproduced: `publicBook` rejects with `HttpError(409, 'that time is not available')`; book slot 1, see "just taken", click slot 2. `document.querySelector('.booking-picked')` is present (confirm phase) AND `document.querySelector('.booking-err').textContent === 'That time was just taken — please pick another.'`
+```
+
+</details>
+
+**Suggested fix.** Clear it where the intent changes: `onClick={() => { setError(null); setSlot(s);
+setCid(clientId()); setPhase('confirm') }}` (and in the "Change" handler).
+
+#### [x] The Today row's drop / add / estimate controls are ~18x16px tap targets, though the same media block enlarges the Tasks pane's equivalents
+`frontend/src/styles/app.css:1588` · **low** · rendering · minor
+
+`.today-drop`, `.today-plus` and `.today-est` are the per-row controls on the Today tab
+and have no rule anywhere inside @media (max-width: 720px) — the whole Today-tab fence
+(1355-1884) is outside every media block. They render at their desktop size on a phone:
+2px vertical padding on a `line-height: 1` glyph. The mobile block explicitly grows the
+Tasks pane's identical controls (`.task-actions button { font-size: calc(12px * …);
+padding: 5px 6px }`, line 866) and the drawer's group buttons (line 841), so the
+standard exists and Today was left out. `.today-drop` is additionally revealed on touch
+by its own `@media (hover: none)` rule at 1601, i.e. it is deliberately meant to be
+tapped.
+
+<details><summary>Evidence</summary>
+
+```
+app.css:1587
+  .today-drop, .today-plus {
+    background: none; border: 0; cursor: pointer; flex: none; line-height: 1;
+    font-family: var(--mono); font-size: calc(12px * var(--fs-scale));
+    color: var(--fg-faint); padding: 2px 4px;
+  }
+app.css:1596  .today-plus { color: var(--accent); font-size: calc(15px * var(--fs-scale)); }
+app.css:1556  .today-est { … padding: 2px 4px; … font-size: calc(11px * var(--fs-scale)); min-width: 42px; }
+app.css:1601  @media (hover: none) { .today-drop { opacity: 1; } }
+
+Compare, in the SAME stylesheet's mobile block:
+app.css:865-866  .task-actions { gap: 8px; }
+                 .task-actions button { font-size: calc(12px * var(--fs-scale)); padding: 5px 6px; }
+
+Consumers: TodayView.tsx:2819 (<button className="today-drop" aria-label={`Remove … from today`}>✕),
+TodayView.tsx:2262 (<button className="today-plus">, the only way to accept a suggestion),
+TodayView.tsx:2485 (<button className="today-est">).
+
+Failure scenario (iPhone 390x844, default --fs-scale: 1):
+  .today-drop computes to 2 + 12 + 2 = 16px tall and 4 + ~10 + 4 = 18px wide —
+  about a sixth of the 44x44 minimum — and it is the DESTRUCTIVE control,
+  sitting flush against the right edge of a row whose body opens an editor on
+  tap. A miss either opens the task or drops it from the day. `.today-plus`
+  computes to ~17x19 and `.today-est` to ~42x20.
+```
+
+</details>
+
+**Suggested fix.** Add a Today block to the mobile media query mirroring line 866, e.g. `@media (max-width:
+720px) { .today-drop, .today-plus { padding: 10px 12px; } .today-est { padding: 10px
+6px; } }`, or give the three a shared `min-height: 44px; min-width: 44px` there. The
+row's `align-items: center` already absorbs the extra height.
+
+#### [ ] The archived-calendar agenda's negative margins are sized for a .modal but it renders inside the settings panel, clipping its colour rules and giving the settings sheet a sideways scroll
+`frontend/src/styles/app.css:662` · **low** · rendering · minor
+
+`.arch-events { margin: 0 -18px -18px }` cancels a `.modal`'s 18px padding so its rows
+can run edge to edge. But the component that renders `.arch-events` is
+`ArchivedCalendarsSection`, which SettingsMenu mounts inside `.set-panels` — and the
+settings container (`.menu` on desktop, `.settings-menu.set-sheet` on a phone) is padded
+14px, not 18px. The block therefore ends up 36px wider than its parent's content box:
+18px past the right edge, which turns into scrollable overflow because the ancestor
+scroller declares only `overflow-y: auto` (so `overflow-x` computes to `auto`), and 18px
+past the left edge, which is unreachable in LTR and simply clipped — taking each row's
+calendar-colour rule with it.
+
+<details><summary>Evidence</summary>
+
+```
+app.css:662
+  .arch-events { max-height: 55vh; overflow-y: auto; margin: 0 -18px -18px; }
+app.css:669
+  .arch-events .agenda-ev { cursor: default; padding: 9px 18px; font-size: calc(14px * var(--fs-scale)); }
+app.css:604 (base)
+  .agenda-ev { … border-left: 2px solid var(--ev-c, var(--accent)); … }
+
+Containers it actually lands in (both 14px, not 18px):
+app.css:35   .menu { … padding: 14px; … }
+app.css:732  .settings-menu.set-sheet { … padding: 14px 14px calc(14px + env(safe-area-inset-bottom)); }
+app.css:67   .set-panels { flex: 1 1 auto; min-width: 0; overflow-y: auto; padding-right: 2px; }  /* -> overflow-x: auto */
+app.css:755  .set-sheet .set-body { display: block; flex: 1 1 auto; min-height: 0; overflow-y: auto; } /* -> overflow-x: auto */
+
+Mount point — a settings panel, never a modal:
+  SettingsMenu.tsx:235  <ArchivedCalendarsSection archived={archivedCals} … viewing={viewingCal} onViewing={setViewingCal} />
+  ArchivedCalendarsSection.tsx:143  <div className="arch-events"> … <div className="agenda-ev" style={{'--ev-c': cssColor(cal.color)}}>
+
+Failure scenario (iPhone 390x844): Settings -> Calendar -> tap an archived
+calendar. The sheet's content box is 390 - 28 = 362px; `.arch-events` becomes
+362 + 36 = 398px and starts at x = -18 relative to it, i.e. 4px OUTSIDE the
+sheet's own border box. Result: (a) every agenda row's 2px --ev-c colour rule,
+which sits at that -18px edge, is clipped away entirely, so the one visual cue
+saying which calendar the preview belongs to never renders; (b) `.set-body`
+gains 18px of horizontal scroll, so the settings sheet slides sideways under a
+thumb; (c) the -18px bottom margin pulls the list under the sheet's padding.
+```
+
+</details>
+
+**Suggested fix.** Make the bleed match the container it is in: `.arch-events { margin: 0 -14px -14px; }`
+with `.arch-events .agenda-ev, .arch-day-head { padding-left: 14px; padding-right: 14px;
+}` — or express it against the padding token instead of a literal so the two cannot
+drift again. Either way add `overflow-x: hidden` (or `clip`) to `.set-panels`/`.set-
+sheet .set-body` so no child can make settings scroll sideways.
+
+#### [ ] The mobile-only hover rules on the sidebar bar leave the "View completed" toggle stuck in its active colour after a tap
+`frontend/src/styles/app.css:809` · **low** · rendering · minor
+
+`.side-mobile-completed` and `.side-mobile-add` are declared INSIDE the @media (max-
+width: 720px) block — they exist only on a phone — yet their `:hover` rule is not
+wrapped in `@media (hover: hover)` and has no `:active` twin. tokens.css:196-210 states
+this rule explicitly and applies it to `.btn`/`.icon-btn`; app.css repeats the reasoning
+at 634 and 1840. On a touchscreen `:hover` latches on tap and persists until something
+else is tapped, and here the hover colour is byte-identical to the toggle's only active-
+state marker, so the control reports the wrong pane.
+
+<details><summary>Evidence</summary>
+
+```
+app.css:804-809 (all inside @media (max-width: 720px))
+  .side-mobile-completed, .side-mobile-add {
+    flex: none; background: none; border: 0; border-left: 1px solid var(--rule);
+    color: var(--fg-muted); cursor: pointer; padding: 0 16px; font-size: calc(18px * var(--fs-scale)); line-height: 1;
+  }
+  .side-mobile-completed.active { color: var(--accent); }
+  .side-mobile-add:hover, .side-mobile-completed:hover { color: var(--accent); }
+
+Sidebar.tsx:388
+  <button className={`side-mobile-completed ${completedActive ? 'active' : ''}`}
+    title={completedActive ? 'Back to tasks' : 'View completed'}
+    aria-pressed={completedActive} onClick={onToggleCompleted}>✓</button>
+
+Failure scenario (iPhone, Tasks tab, 390px):
+  Tap ✓ -> completedActive true, glyph turns --accent (correct). Tap ✓ again to
+  return -> completedActive false, `.active` is removed, but `:hover` is still
+  latched from the tap and paints the identical --accent. The glyph is the
+  button's ONLY visible state (aria-pressed is not visual), so the bar says you
+  are still in the completed pane while the list behind it shows open tasks.
+  The colour only clears when some other element is tapped.
+  Same latch on the `+` button beside it, where it advertises a New-collection
+  form that is not open.
+  (43 unguarded `:hover` rules exist in app.css against 8 `@media (hover: …)`
+  blocks; these two are the ones that live inside the phone-only block and whose
+  hover colour collides with a state colour.)
+```
+
+</details>
+
+**Suggested fix.** Move the rule under a guard and add the touch equivalent, matching tokens.css:203-210:
+`@media (hover: hover) { .side-mobile-add:hover, .side-mobile-completed:hover { color:
+var(--accent); } }` plus `.side-mobile-add:active, .side-mobile-completed:active {
+color: var(--accent); }`. Worth sweeping the other 41 unguarded `:hover` rules at the
+same time — `.side-item:hover { background: var(--bg-elev) }` (line 114) collides with
+`.side-item.active`'s identical background inside the mobile drawer for the same reason.
+
+#### [ ] Removing the last Home module puts the five stock modules back on the board
+`frontend/src/components/HomeView.tsx:52` · **low** · rendering
+
+`committed` treats an empty saved layout as "never arranged" and substitutes
+DEFAULT_LAYOUT. `removeModule` on the final module produces `[]`, `commit` passes that
+to `onLayoutChange`, App persists `dashboard: []`, and the component immediately re-
+renders with all five default modules — Today, Upcoming, Mini calendar, Overdue,
+Recently completed. Pressing "Remove" therefore ADDS five modules, including a mini
+calendar that starts fetching a six-week window of events the user just removed. It also
+makes an empty (or nearly-empty) dashboard unrepresentable, and it is not reversible
+from the UI: the state survives a reload because `[]` is what was stored.
+
+<details><summary>Evidence</summary>
+
+```
+const committed = layout.length ? layout : DEFAULT_LAYOUT
+…
+onClick={() => commit(removeModule(committed, m.id))}
+const commit = (next) => { setPreview(null); onLayoutChange(sanitizeLayout(next)) }
+
+Reproduced (vitest, jsdom): render HomeView with layout=[{id:'a',kind:'quick_add',x:0,y:0,w:4,h:3}], click Arrange, click "Remove Quick add" -> onLayoutChange called with []; re-render with layout=[] ->
+`.dash-mod .label` = ["Today","Upcoming","Mini calendar","Overdue","Recently completed"].
+
+Scenario: a user who wants only "Quick add" and "Today" enters Arrange and clears the board to start fresh. On the last removal the full stock arrangement reappears, and because five of the eight kinds are now placed, "Add module" offers only the remaining three.
+```
+
+</details>
+
+**Suggested fix.** Either disable the remove button when `mods.length === 1` (with a title explaining the
+board cannot be empty), or stop overloading `[]`: keep a separate "never arranged"
+signal (e.g. `layout === null` from App when the settings key is absent) so a
+deliberately empty board is representable and Remove never adds modules.
+
+#### [ ] The whole month grid is keyboard-inoperable: day cells and event chips are unfocusable divs, so no event can be opened or created without a pointer
+`frontend/src/components/CalendarView.tsx:623` · **low** · rendering
+
+Every interactive surface in the month grid is a plain `<div onClick>` with no `role`,
+no `tabIndex` and no `onKeyDown`: the day cell (which is the only way to create an event
+on that day) at line 571, the event chip (the only way to open an event) at line 623,
+and the task chip at line 672. Tabbing from the header's 'Today' button skips the entire
+grid. The same component gets this right elsewhere — `+N more` is a real `<button>`, the
+mobile agenda rows are `<button>`s, and the sidebar's task-list rows carry
+`role="checkbox" tabIndex={0}` with a Space/Enter handler — so the omission is
+inconsistent within one file. TasksView has the same shape for its primary open
+affordances (`.task-body` at TasksView.tsx:853 and `.day-card-body` at :795).
+
+<details><summary>Evidence</summary>
+
+```
+Measured against the real component (vitest, jsdom), a March 2026 grid holding one event:
+  focusable nodes inside .cal-grid: 0
+  chip tag/role/tabindex: DIV null null
+  cell tag/role/tabindex: DIV null null
+The query used was `a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"])`.
+
+Failure scenario: a keyboard or screen-reader user on the Calendar tab presses Tab from the month header. Focus goes ‹ / Today / › / New event and then straight out of the grid into the next pane — there is no key sequence that opens 'Standup' or creates an event on the 12th. A screen reader also announces the chips as static text, with the recurrence marker and the clock read as part of the label.
+
+Contrast CalendarView.tsx:134-139 (`role="checkbox" tabIndex={0}` + Space/Enter) and :684 (`<button className="cal-more">`) in the same file.
+```
+
+</details>
+
+**Suggested fix.** Give the chips `role="button" tabIndex={0}` with an `onKeyDown` for Enter/Space that
+calls the same handler as `onClick` (the sidebar row above is the in-file precedent),
+and either make the day cell a real button or add `role="gridcell" tabIndex` with a
+roving-tabindex arrow-key walk over the 42 cells. Add a test asserting `.cal-grid`
+exposes at least one focusable node per rendered chip.
+
+#### [ ] Changing a repeating event's cadence and then picking "This event" silently discards the change and reports success
+`frontend/src/components/CalendarView.tsx:917` · **low** · bug
+
+`commit()` folds `repeatFields()` into the body only on the `recurring && scope ===
+'all'` branch and on the non-recurring branch. For `scope === 'this'` and `scope ===
+'thisandfuture'` the repeat select's value never reaches the wire, so a user who
+deliberately changes Repeat from 'Keep current schedule' to 'Weekly' (or to 'Does not
+repeat') and then answers the scope prompt with either of the two per-occurrence options
+gets no rule change, no error and no warning — the modal closes and the grid repaints as
+if it worked. The scope prompt itself gives no hint that two of its three buttons cannot
+carry the edit the user just made.
+
+<details><summary>Evidence</summary>
+
+```
+CalendarView.tsx:909-920
+```ts
+if (recurring && scope === 'all') {
+  const shift = timeChanged ? { ...times, recurrence_id: e.recurrence_id } : {}
+  onSave({ ...details, ...shift, ...repeatFields(), scope: 'all' }, calPick, e.uid)
+} else if (recurring) {
+  onSave({ ...details, ...times, recurrence_id: e.recurrence_id, scope }, calPick, e.uid)
+}
+```
+Reproduced against the real component (vitest, jsdom) on a recurring occurrence, selecting Repeat=weekly and then the scope button:
+  scope=this body: {"summary":"Standup","location":"","description":"","tags":[],"start":"2026-03-09T09:00","end":"2026-03-09T09:30","recurrence_id":"2026-03-09T09:00:00","scope":"this"}   <- no `repeat`
+  scope=all  body: {"summary":"Standup",...,"repeat":"weekly","scope":"all"}
+The same holds for 'This & following'.
+```
+
+</details>
+
+**Suggested fix.** Either carry `repeatFields()` on the `thisandfuture` branch (the backend's split-series
+path can legitimately re-rule the tail) and disable/hide the Repeat select once the user
+is about to pick 'This event', or — minimally — when `repeat !== 'keep'` on a recurring
+event, grey out the two per-occurrence buttons in the scope chooser with a one-line note
+that a schedule change applies to the series. Add a test asserting a cadence change is
+either sent or refused, never silently dropped.
+
+#### [ ] Shutdown step 2 reports "Everything on today is done" after the owner MOVED everything to tomorrow
+`frontend/src/components/ShutdownRitual.tsx:232` · **low** · rendering · minor
+
+`unfinished` is derived from `entries`, and `TodayView.entries` filters out rows
+carrying `rolled_to` as well as `dropped_at` — by design, so a decided row leaves the
+day's total. The consequence is that the "Move all N to tomorrow" sweep, or dropping the
+last leftover, empties `unfinished` and the step falls through to an empty state that
+states the opposite of what happened: nothing was done, everything was postponed. On the
+one screen whose whole job is an honest record of the day, that is a lie the owner has
+just personally disproved.
+
+<details><summary>Evidence</summary>
+
+```
+ShutdownRitual.tsx:82 `const unfinished = entries.filter((e) => !isDone(e))`; :229-234
+```
+if (!unfinished.length) {
+  return (
+    <div className="plan-body">
+      <p className="empty">Everything on today is done. Nothing to carry.</p>
+```
+TodayView.tsx:699 `entries = allEntries?.filter((e) => !e.dropped_at && !e.rolled_to)`.
+
+Reproduced in the repo's harness: day holds two undone rows Alpha and Bravo; open Shut down → Next → click "Move all 2 to tomorrow"; `rollDayEntry` called twice, then `document.querySelector('.plan-body').textContent` === "Everything on today is done. Nothing to carry."
+```
+
+</details>
+
+**Suggested fix.** Distinguish the two exits — keep a count of rows decided about during this session (or
+compare `entries.filter(isDone).length` against `entries.length`) and render "Everything
+on today is decided." / "Nothing left to decide about." when the list was emptied by
+rolls and drops rather than by ticks.
+
+#### [ ] On a phone every Today row sits 12px right of its own heading, add box and empty state
+`frontend/src/styles/app.css:845` · **low** · rendering · minor
+
+The `max-width: 720px` block pulls the page's horizontal padding in to 14px for `.task,
+.quickadd, .content-head, .cal-head, .empty, .banner` and `.section-label`, but nothing
+in that block touches the Today tab's own rules, which all keep `var(--gutter)` (26px
+default, 24px in the workspace presets). So on every phone the Today tab renders as a
+staircase: header/add box/section labels/`.empty` at 14px, and `.today-row`, `.today-
+quiet`, `.today-more`, `.today-load`, `.today-agenda .agenda-ev` and `.today-reflection-
+text` at 26px. The two empty states even disagree with each other — "Nothing on today
+yet…" is a bare `.empty` (14px) while the habits hint and "Nothing on the calendar
+today." carry `.today-quiet`, whose later `padding` shorthand wins over the media rule
+(26px). The tab's own comments treat one left edge as an invariant (`--today-mark-w`,
+`.today-check-gap`, and `.today-more`'s "takes the page gutter so it lines up under the
+titles"), which is exactly what breaks here.
+
+<details><summary>Evidence</summary>
+
+```
+app.css:845 `.task, .quickadd, .content-head, .cal-head, .empty, .banner { padding-left: 14px; padding-right: 14px; }` and :846 `.section-label { padding: 14px 14px 4px; }` — inside `@media (max-width: 720px)` (:696-892). `sed -n '696,892p' styles/app.css | grep today` matches only a comment. Meanwhile app.css:1536 `.today-row { … padding: var(--row-y) var(--gutter); }`, :1633 `.today-more { padding: 6px var(--gutter); }`, :1680 `.today-agenda .agenda-ev { padding: 8px var(--gutter); }`, :1685 `.today-quiet { padding: 8px var(--gutter); … }` (declared after the media block at equal specificity, so it wins), :1502 `.today-load`, :1492 `.today-reflection-text`. tokens.css:46 `--gutter: 26px`. At 390px: "Habits" label left edge 14px, the habit rows' checkboxes 26px.
+```
+
+</details>
+
+**Suggested fix.** Either add `--gutter: 14px` to the `max-width: 720px` block (it is the density lever the
+tokens file describes) or extend the existing 14px rule to `.today-row, .today-quiet,
+.today-more, .today-load, .today-agenda .agenda-ev, .today-reflection-text`.
+
+#### [ ] The Today row's ✕, estimate and + are ~16–19px tap targets on the phone-primary surface
+`frontend/src/styles/app.css:1587` · **low** · rendering · minor
+
+`.today-drop` (the only way to take a row off the day), `.today-plus` (the only way to
+accept a suggestion) and `.today-est` are bare glyph buttons at 11–12px with 2px/4px
+padding and `line-height: 1`, giving roughly 16×16 to 19×23 CSS px. That is well under
+the ~44px touch guideline and about half of the app's own `.btn`/`.icon-btn` norm
+(~31px). The block directly above already reasons about touch for this control — `@media
+(hover: none) { .today-drop { opacity: 1 } }` exists precisely because a hover-revealed
+✕ is unreachable on a phone — but only its visibility was fixed, not its size, and there
+is no swipe or long-press alternative anywhere on this screen.
+
+<details><summary>Evidence</summary>
+
+```
+app.css:1587-1601
+```
+.today-drop, .today-plus {
+  background: none; border: 0; cursor: pointer; flex: none; line-height: 1;
+  font-family: var(--mono); font-size: calc(12px * var(--fs-scale));
+  color: var(--fg-faint); padding: 2px 4px;
+}
+...
+.today-plus { color: var(--accent); font-size: calc(15px * var(--fs-scale)); }
+@media (hover: none) { .today-drop { opacity: 1 } }
+```
+and app.css:1556-1564 `.today-est { … padding: 2px 4px; font-size: calc(11px * var(--fs-scale)); min-width: 42px; }`. Nothing in the `max-width: 720px` block enlarges them (`sed -n '696,892p' styles/app.css | grep today` → comment only), unlike `.side.drawer .side-item .side-edit { padding: 6px 8px; font-size: 17px }` which the same block does enlarge for the drawer. At 390×844 with `--fs-scale: 1`, `.today-drop`'s box is ~16px tall inside a ~37px row: aiming at it from a thumb lands on inert row area.
+```
+
+</details>
+
+**Suggested fix.** Inside the existing `@media (max-width: 720px)` block (or under `@media (hover: none)`),
+give these three a touch box: e.g. `.today-drop, .today-plus, .today-est { min-height:
+40px; min-width: 40px; padding: 10px 8px; display: inline-flex; align-items: center;
+justify-content: center; }` — the glyph size can stay as it is.
+
+#### [ ] A line pinned to "task" that the parser read nothing in writes its untrimmed text as the VTODO SUMMARY
+`frontend/src/components/TodayView.tsx:1240` · **low** · bug · minor
+
+`parseEntry` returns `summary: text` byte for byte when it recognises nothing (its
+documented "'' in, '' out" rule), so on the pinned-task path `create(list, { summary:
+p.summary })` sends the raw input including leading and trailing whitespace. The note
+path right beside it sends `raw = text.trim()`, and the parsed-task path sends
+`without()`'s trimmed remnant, so this one branch is the odd one out. A leading space is
+invisible in the chip preview but is real in the VTODO the whole account then sees:
+`sortTasks` orders by summary, so the task sorts ahead of everything, and it goes out
+over CalDAV to Tasks.org/Thunderbird that way. A trailing space is the common case on a
+phone, where the space bar is pressed before Enter or autocorrect appends one.
+
+<details><summary>Evidence</summary>
+
+```
+TodayView.tsx:1236-1244
+```
+const t = await create(list, {
+  summary: p.summary,
+  ...(dated ? { due: dueFromParse(p, on) } : {}),
+})
+```
+daytext.ts:461 `const verbatim: ParsedEntry = { summary: text, dueDate: '', dueTime: '', guessed: false }`; TodayView.tsx:1229-1232 the note arm uses `raw` (`text.trim()`). Backend `CreateTask.summary` is `XmlSafeText` (app.py:161) with no strip and no min_length, so nothing downstream trims it.
+
+Measured: `parseEntry('  buy milk  ', now)` → `{"summary":"  buy milk  ","dueDate":"","dueTime":"","guessed":false}`. Type `  buy milk  ` into the add box, press "Make it a task", press Enter → POST /api/lists/l1/tasks with `summary: "  buy milk  "`.
+```
+
+</details>
+
+**Suggested fix.** Trim at the one call site: `const t = await create(list, { summary: p.summary.trim() ||
+raw, ... })`, or have `parseEntry` return the trimmed input as `summary` in the verbatim
+arm (its own `without()` already trims on every other arm).
+
+### Desktop, CI/deploy, test suite
+
+#### [x] desktop-release.yml publishes Smylte.exe without ever running the C# test suite
+`.github/workflows/desktop-release.yml:82` · **medium** · test-gap · minor
+
+The `client` job builds and uploads the Windows client with `dotnet publish` only. It
+never runs `desktop/Smylte.Desktop.Tests`, which is the suite that covers the two places
+in the client where a mistake is a security bug (LocalServer's path-traversal guard and
+the cookie rewriter) plus the updater's directory-swap recovery. `release: needs: [web,
+client]`, so nothing else gates it either, and desktop-release.yml has no dependency on
+ci.yml — the two workflows run in parallel on the same push, so a red `desktop` job in
+ci.yml does not stop the release. The asymmetry is clearly unintended: the workflow
+header says the `web` job repeats ci.yml's frontend gates on purpose because "a release
+that skipped the tests would be a release nobody could trust", and `web` does run `npm
+run typecheck` and `npm test`. `client` does neither. The stage-5 backlog meta-test
+(backend/tests/test_backlog_stage5.py:71) only asserts `dotnet test` appears in ci.yml,
+so nothing guards the release path at all.
+
+<details><summary>Evidence</summary>
+
+```
+desktop-release.yml:70-92 —
+  client:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Publish
+        run: >
+          dotnet publish desktop/Smylte.Desktop/Smylte.Desktop.csproj
+          -c Release
+          -o publish
+      - uses: actions/upload-artifact@v4
+        with:
+          name: client
+          path: publish/Smylte.exe
+
+ci.yml:93-99 is where the tests actually run, in a different workflow:
+      - name: Client unit tests
+        run: dotnet test desktop/Smylte.Desktop.Tests/Smylte.Desktop.Tests.csproj
+
+Failure scenario: a commit regresses `LocalServer.Resolve` so that `/%2e%2e/secret.txt` resolves outside the web root (exactly the case pinned at desktop/Smylte.Desktop.Tests/LocalServerTests.cs:44-51). It is pushed to main. ci.yml's `desktop` job goes red. desktop-release.yml runs concurrently, `client` compiles cleanly because the regression is behavioural not syntactic, `release` uploads the new Smylte.exe onto `desktop-latest` with `--clobber`, and every installed desktop client picks it up on next launch. A `workflow_dispatch` run is worse still: it can publish from any ref, where the C# tests may never have run at all.
+```
+
+</details>
+
+**Suggested fix.** Add `- run: dotnet test desktop/Smylte.Desktop.Tests/Smylte.Desktop.Tests.csproj` to the
+`client` job before the Publish step (release already `needs: client`, so that is
+sufficient to gate the publish). Extend the meta-test in
+backend/tests/test_backlog_stage5.py::test_the_windows_client_has_tests_and_ci_runs_them
+to require `dotnet test` in desktop-release.yml as well as ci.yml, so this cannot
+silently regress again.
+
+#### [x] CI's "full backend suite against a real scratch Radicale" gate is unenforced — a healthy-but-unauthenticated container turns ~230 tests into skips and the job still passes
+`backend/tests/conftest.py:36` · **medium** · test-gap
+
+ci.yml's header states the autopull gate as "main only ever receives commits that passed
+the full backend suite (against a real scratch Radicale)". Nothing enforces that the
+Radicale-backed half of the suite actually ran. `_scratch_up` converts any failure of
+`DavClient.options()` into `pytest.skip`, and `options()` requests the principal path
+with `expected={200, 204}` — so an HTTP 401 from a broken htpasswd file or `[auth]`
+config is a skip, not a failure. The docker healthcheck cannot catch that either: it
+fetches `http://127.0.0.1:5232/` with no credentials, and Radicale 3.7.4 dispatches
+anonymous requests (`radicale/app/__init__.py`: `if not login or user:`), with `do_GET`
+302-redirecting `/` to `.web`, so the healthcheck returns a success status regardless of
+whether any account is usable. `docker compose --wait` is therefore satisfied by a
+container whose auth is completely broken. Secondary defect in the same healthcheck:
+`401` is listed in the accepted-status tuple but `urllib.request.urlopen` *raises*
+`HTTPError` on 401 rather than returning a response, so `.status in (...)` can never see
+it — that branch is dead.
+
+<details><summary>Evidence</summary>
+
+```
+backend/tests/conftest.py:29-36 —
+@pytest.fixture(scope="session")
+def _scratch_up():
+    try:
+        c = _make_dav()
+        c.options()
+        c.close()
+    except Exception as e:  # noqa: BLE001
+        pytest.skip(f"scratch Radicale unreachable on {SCRATCH_URL}: {e}")
+
+backend/tasksd/dav/client.py:128-130 —
+    def options(self) -> set[str]:
+        resp = self._request("OPTIONS", self.principal_path, expected={200, 204})
+
+scratch/docker-compose.yml:26 —
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:5232/', timeout=3).status in (200,301,302,401,207) else 1)"]
+
+Verified locally: `.venv/bin/python -m pytest -q` with no scratch server reports ~230 of 663 tests skipped and EXIT=0.
+
+Failure scenario: a PR flips `htpasswd_encryption = plain` to `bcrypt` in scratch/radicale/config (or renames scratch/radicale/users so docker creates a directory at the bind-mount target). The container starts, the anonymous `/` healthcheck 302s, `docker compose ... --wait` succeeds, `_scratch_up` gets a 401 from OPTIONS /testuser/ and skips the session fixture, so every DAV round-trip, sync, concurrency and MCP test in the suite is skipped. `python -m pytest` exits 0, all five CI jobs go green, and ~/tasks-autopull.sh deploys the commit within a minute — with the entire integration suite having asserted nothing.
+```
+
+</details>
+
+**Suggested fix.** Make the skip conditional on an explicit opt-out: in `_scratch_up`, if an env var such
+as `SCRATCH_REQUIRED=1` (set in ci.yml's `Run tests` step alongside `SCRATCH_STORAGE`)
+is present, `pytest.fail` instead of `pytest.skip`, so local runs stay convenient while
+CI cannot pass with the integration half skipped. Separately, give the healthcheck
+credentials (fetch `/testuser/` with a Basic header) so a broken htpasswd file makes the
+container unhealthy, and drop the unreachable `401` from the accepted-status tuple.
+
+#### [x] Re-running deploy/setup.sh installs a new tasks.service but never restarts the service, so unit changes silently do not take effect
+`deploy/setup.sh:99` · **medium** · bug · minor
+
+setup.sh is explicitly designed to be re-run (line 20 short-circuits on an existing env
+file and says "delete it to regenerate"), and DEPLOY.md §A names `sudo
+~/tasks/deploy/setup.sh` as the way to install the app. On every run it reinstalls
+/etc/systemd/system/tasks.service and calls `systemctl daemon-reload` followed by
+`systemctl enable --now tasks.service`. `--now` maps to `start`, and `start` on an
+already-active unit is a no-op — it does not re-exec the service with the new unit file.
+The final `systemctl status` then prints an active, green unit, so the operator has
+positive confirmation that looks like success while the running process is still under
+the *old* unit. This is not theoretical: deploy/tasks.service was rewritten once already
+(commit 7a83c8a) to add 14 hardening directives — PrivateDevices, ProtectKernelLogs,
+ProtectHostname, ProtectClock, ProtectProc=invisible, RestrictNamespaces,
+RestrictRealtime, RestrictSUIDSGID, SystemCallArchitectures, CapabilityBoundingSet=,
+UMask=0077, IPAddressAllow/IPAddressDeny.
+
+<details><summary>Evidence</summary>
+
+```
+deploy/setup.sh:96-100 —
+echo "== systemd unit =="
+install -m 0644 "$DEPLOY/tasks.service" /etc/systemd/system/tasks.service
+systemctl daemon-reload
+systemctl enable --now tasks.service
+systemctl --no-pager --lines=6 status tasks.service || true
+
+Failure scenario: the Pi is already running tasks.service from an earlier install. The owner pulls the commit that hardens the unit and re-runs `sudo ~/tasks/deploy/setup.sh` as DEPLOY.md instructs. The new file lands in /etc/systemd/system, daemon-reload picks it up for *future* starts, `enable --now` does nothing because the unit is already active, and `systemctl status` prints `active (running)`. The live process keeps CAP_* from the old unit, keeps a writable /proc, and — for the inverse case flagged in the unit's own comment — an operator who deletes the IPAddressAllow/IPAddressDeny lines to enable TASKS_ACCESS_REQUIRED and re-runs setup.sh still has outbound traffic blocked, so the Cloudflare Access JWKS fetch keeps failing with no indication why.
+```
+
+</details>
+
+**Suggested fix.** Replace `systemctl enable --now tasks.service` with `systemctl enable tasks.service`
+followed by `systemctl restart tasks.service`. `restart` starts a stopped unit and re-
+execs a running one, so both first install and re-run converge on the unit that was just
+written.
+
+#### [x] The whole scratch-Radicale tier fails OPEN: 240 tests, including every app-level auth/authz test, skip silently and CI stays green
+`backend/tests/conftest.py:35` · **medium** · test-gap
+
+`_scratch_up` swallows ANY exception from the probe and turns it into `pytest.skip`.
+That is right for a laptop with no Docker, but it is the only gate in front of the
+integration tier, and nothing anywhere — pyproject, conftest, or ci.yml — asserts that
+the tier actually ran. So a scratch Radicale that comes up but is not usable (wrong host
+port mapping, a changed `scratch/radicale/users` htpasswd, a Radicale version whose
+OPTIONS answer falls outside `expected={200,204}`, a probe that lands before the mapped
+port is accepting) makes 240 tests vanish and `python -m pytest` exit 0. The compose
+healthcheck does not cover this: it probes 127.0.0.1:5232 *inside* the container and
+never authenticates, so it passes in exactly the cases the fixture fails on.
+
+<details><summary>Evidence</summary>
+
+```
+tests/conftest.py:29-36:
+
+    @pytest.fixture(scope="session")
+    def _scratch_up():
+        try:
+            c = _make_dav(); c.options(); c.close()
+        except Exception as e:  # noqa: BLE001
+            pytest.skip(f"scratch Radicale unreachable on {SCRATCH_URL}: {e}")
+
+Measured in the audit copy with Radicale down: `583 passed, 240 skipped`, exit code 0. Per-file skip counts: test_mcp 85, test_api 55, test_security 27, test_scheduling 17, test_backlog_aug19_stage1 16, test_sync 10, test_backlog_aug19_stage2 8, test_backlog_aug19_stage3_core 7, plus 12 more.
+
+Failure scenario: someone rotates the scratch password in `scratch/radicale/users` (or bumps the Radicale image and the OPTIONS status changes). `docker compose up -d --wait` still succeeds because the healthcheck is unauthenticated and container-internal; `c.options()` gets a 401 -> DavError -> session-wide skip. The `backend` CI job passes green while `test_every_api_route_requires_auth`, `test_login_lockout_and_spoofed_ip_header`, `test_logout_withdraws_the_token_not_just_the_cookie`, `test_changing_the_password_invalidates_existing_sessions`, `test_a_foreign_origin_is_refused`, `test_static_mount_does_not_traverse` and the entire OAuth/MCP suite have not executed. A commit that removed the router-level auth dependency would merge.
+```
+
+</details>
+
+**Suggested fix.** Make the tier fail closed in CI: have `_scratch_up` read an env flag (e.g.
+`SCRATCH_REQUIRED=1`, set in ci.yml) and `pytest.fail(...)` instead of
+`pytest.skip(...)` when it is set. As a cheap backstop, add a CI step that asserts a
+floor on the radicale-marked tests actually collected and run (e.g. `python -m pytest -m
+radicale -q` and check the passed count, or a session-finish hook that fails when
+`SCRATCH_REQUIRED` is set and any `_scratch_up` skip occurred).
+
+#### [x] The two CI supply-chain permission pins silently skip on an undeclared transitive PyYAML
+`backend/tests/test_backlog_aug19_stage45.py:712` · **medium** · test-gap · minor
+
+`test_the_build_jobs_hold_no_write_token` is the regression test for the closed finding
+"desktop-release.yml grants `contents: write` at workflow scope, so `npm ci` and NuGet
+restore in the build jobs run with the release-publishing token on disk" — adversary (a)
+in the threat model. It, and its companion `test_the_release_job_can_still_publish`,
+begin with `pytest.importorskip("yaml")`. PyYAML is not in backend/requirements.txt; it
+arrives only as an extra of `uvicorn[standard]`. `importorskip` turns its absence into a
+silent skip, so the pin evaporates without a single line of red.
+
+<details><summary>Evidence</summary>
+
+```
+tests/test_backlog_aug19_stage45.py:710-712:
+
+    # PyYAML rides in with uvicorn[standard]; skip rather than fake a pin if
+    # it ever stops doing so — an ImportError is not this finding's failure.
+    yaml = pytest.importorskip("yaml")
+
+(same at line 773 for `test_the_release_job_can_still_publish`)
+
+backend/requirements.txt names no yaml package. In the audit venv:
+    pip show pyyaml -> Required-by: (empty)
+    importlib.metadata.requires('uvicorn') -> "pyyaml>=5.1; extra == 'standard'"
+CI's `backend` job installs only `pip install -r requirements.txt`; the separate `workflows` job does `pip install --quiet pyyaml`, which does not help the backend job.
+
+Failure scenario: someone changes `uvicorn[standard]>=0.30` to `uvicorn>=0.30` in requirements.txt (a reasonable trim — the deploy runs plain uvicorn), or a future uvicorn drops pyyaml from the `standard` extra. Both tests skip; `pytest` exits 0 with no marker or message a reviewer would notice among the 240 other skips. A later edit that re-adds `permissions: { contents: write }` at workflow scope in ci.yml or desktop-release.yml — or that adds a new `npm ci` job under an existing write grant — then merges, restoring the exact hole in which a compromised npm postinstall script reads the release-publishing token out of `.git/config`.
+```
+
+</details>
+
+**Suggested fix.** Add `pyyaml` to backend/requirements.txt (it is already installed in every environment
+today, so this changes nothing at runtime) and replace `pytest.importorskip("yaml")`
+with a plain `import yaml` at module scope, so a missing parser is a hard error rather
+than a silent hole in a supply-chain guard.
+
+#### [x] The golden-file fidelity suite ("the load-bearing suite") has no VEVENT corpus at all, so no event edit is checked for foreign-data preservation
+`backend/tests/test_fidelity.py:41` · **medium** · test-gap
+
+test_fidelity.py is the only place invariant #2 ("an edit must leave every foreign
+property, parameter and subcomponent intact") is checked with the independent
+canonicalizer rather than by hand-picked substring assertions. It is driven entirely off
+`tests/corpus/*.ics`, which contains four files (icloud, jtx_board, tasks_org,
+thunderbird) — all VTODO-only; `grep -l VEVENT tests/corpus/*.ics` returns nothing.
+Every event-side write path (`apply_event_changes`, `apply_occurrence_override`,
+`exclude_occurrence`, `shift_series`, `split_series`, `_detach_thisandfuture`) — the
+surface with by far the most closed findings in AUDIT.md, several of which were exactly
+"an edit merged/relabelled/dropped property lines" — is therefore never graded by the
+canonicalizer. The only substitute is two ad-hoc `assert b"X-FOREIGN-KEEP" in …` lines
+(test_recur.py:319 for `apply_occurrence_override`, test_recur.py:444 for
+`shift_series`); `split_series`, which mints a brand-new resource under a fresh UID and
+is the most invasive of the six, has no foreign-data assertion anywhere in the suite.
+
+<details><summary>Evidence</summary>
+
+```
+tests/test_fidelity.py:16,40-50:
+
+    CORPUS = sorted((Path(__file__).parent / "corpus").glob("*.ics"))
+    ...
+    @pytest.mark.parametrize("path", CORPUS, ids=CORPUS_IDS)
+    def test_edit_preserves_foreign_data(path: Path):
+        edited = apply_changes(original, TaskEdit(summary=..., status="COMPLETED"))
+        assert C.signature(C.parse(original), drop=TOUCHED) == C.signature(C.parse(edited), drop=TOUCHED)
+
+`apply_changes`/`TaskEdit` is the VTODO path only. `grep -rn "C.signature" tests/` matches nothing outside test_fidelity.py. `grep -rn "X-FOREIGN-KEEP" tests/` matches only test_concurrency.py:49,89, test_recur.py:319,444 and test_sync.py:30 — no split_series test.
+
+The split tests that do exist (test_recur.py:329-337 `test_split_this_and_following`, :340 `test_split_delete_truncates_head`, :360 `test_an_rdate_before_the_anchor_still_leaves_a_head`, and test_backlog_aug19_stage3_ical.py's THISANDFUTURE pin) assert only occurrence starts, summaries and one LOCATION.
+
+Failure scenario: a refactor of `split_series`' head/tail construction rebuilds the VEVENT from the properties it knows about instead of copying the component. Confirmed against the current code that head and tail today carry VALARM, ATTENDEE;CN=… and X-FOREIGN-KEEP through, so the loss would be a pure regression — and the whole backend suite stays green, because nothing asserts any of the three. The user-visible result is that "this and following" silently strips every attendee and alarm off the tail of a shared meeting series, permanently (the tail is a new UID, so no resync restores it).
+```
+
+</details>
+
+**Suggested fix.** Add at least one VEVENT golden file to tests/corpus/ (a recurring series with VTIMEZONE,
+VALARM, ATTENDEE/ORGANIZER with parameters, EXDATE and a RECURRENCE-ID override) and a
+canonicalizer-graded test per event write path: for `split_series`, compare
+`C.signature(C.parse(original),
+drop=TOUCHED|{'RRULE','UID','DTSTART','DTEND','RECURRENCE-ID','EXDATE','RDATE'})`
+against the same signature of head and of tail. Also add `assert not CORPUS_IDS == []`
+(or a fixed expected filename set) so an emptied corpus fails instead of collecting zero
+parametrized cases.
+
+#### [ ] tasks.service grants the app write access to its own interpreter and source tree, contradicting the sandbox's stated invariant
+`deploy/tasks.service:29` · **low** · security
+
+The hardening comment says ProtectHome=read-only "keeps the app from writing anywhere
+under /home except the one path it needs (the SQLite cache)", and justifies the tight
+sandbox with "The app parses attacker-influenced iCalendar/HTTP and is internet-
+reachable through the tunnel". But ReadWritePaths names the whole backend directory,
+which contains `.venv/` — the very interpreter ExecStart runs — and `tasksd/`, the
+application source. The only thing the process actually needs to write there is tasks.db
+plus its -wal/-shm sidecars (there is no on-disk attachment store; `grep -rn attachments
+tasksd` returns nothing). Every other directive in the unit (NoNewPrivileges,
+CapabilityBoundingSet=, RestrictNamespaces, ProtectSystem=strict, IPAddressDeny=any) is
+aimed at containing a compromise of this process, and all of them are moot against an
+attacker who can simply rewrite the code that the next restart executes as the same
+user.
+
+<details><summary>Evidence</summary>
+
+```
+deploy/tasks.service:19-29 —
+# Hardening. ProtectHome=read-only keeps the app from writing anywhere under
+# /home except the one path it needs (the SQLite cache). The app parses
+# attacker-influenced iCalendar/HTTP and is internet-reachable through the
+# tunnel, so the sandbox is tight: ...
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/nicholaskmitchell/tasks/backend
+...
+ExecStart=/home/nicholaskmitchell/tasks/backend/.venv/bin/python -m tasksd
+
+Failure scenario: any file-write or code-exec primitive in the internet-reachable parse path (the threat the unit itself names) lets the process drop a one-line `.pth` file into /home/nicholaskmitchell/tasks/backend/.venv/lib/python3.12/site-packages/, or overwrite tasksd/app.py directly. Both are inside ReadWritePaths, so ProtectHome/ProtectSystem do not stop them. `Restart=on-failure`, a `systemctl restart tasks`, or the next reboot then executes the attacker's code — the compromise survives every restart, and nothing in the sandbox notices, because the write was to a path the unit deliberately opened.
+```
+
+</details>
+
+**Suggested fix.** Move the database out of the source tree: add `StateDirectory=tasks` to the unit, set
+`TASKS_DB=/var/lib/tasks/tasks.db` in /etc/tasks/tasks.env (and in deploy/setup.sh's
+heredoc and tasks.env.example), and replace
+`ReadWritePaths=/home/nicholaskmitchell/tasks/backend` with nothing — StateDirectory
+grants exactly /var/lib/tasks and leaves the venv and source read-only. If moving the DB
+is not wanted, at minimum narrow the grant to a dedicated subdirectory (e.g.
+`backend/var/`) that holds only tasks.db.
+
+#### [x] The published Windows client is built against a floating NuGet version with no lock file, so the shipped exe is not reproducible and its dependency set is never reviewed
+`desktop/Smylte.Desktop/Smylte.Desktop.csproj:46` · **low** · security · minor
+
+Microsoft.Web.WebView2 is referenced as `1.0.*`, and the project has no
+packages.lock.json and no `RestorePackagesWithLockFile` (there is no lock file anywhere
+under desktop/). Every `dotnet publish` therefore resolves whatever the newest 1.0.x is
+at that instant and links it into a self-contained, unsigned Smylte.exe that is
+published to the rolling `desktop-latest` release and auto-fetched by the installed
+client. NuGet restore runs the resolved package's build/targets logic on the runner,
+which the repo's own threat model names as a supply-chain surface (ci.yml's header:
+"NuGet restore and `pip install` do the equivalent"). Two concrete consequences: (1) the
+artifact ci.yml compiled and tested and the artifact desktop-release.yml published can
+be built from different package sets, because they resolve independently at different
+times; (2) there is no way to reproduce or bisect a previously shipped exe, because
+nothing records which 1.0.x it contained.
+
+<details><summary>Evidence</summary>
+
+```
+desktop/Smylte.Desktop/Smylte.Desktop.csproj:42-46 —
+  <ItemGroup>
+    <!-- The WebView2 *runtime* ships with Windows 10/11; this is only the
+         managed wrapper. Floating on 1.0.* because the SDK revs constantly and
+         nothing here depends on a specific build. -->
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.*" />
+
+Contrast the sibling reference two lines down, which is pinned: `System.Security.Cryptography.ProtectedData` Version="8.0.0". `find desktop -name packages.lock.json` returns nothing.
+
+Failure scenario: nuget.org serves a new Microsoft.Web.WebView2 1.0.x (a bad build, or a hijacked publish). The next push to main runs desktop-release.yml, `dotnet publish` silently picks it up — no diff, no review, no CI signal, since the version is not written down anywhere in the repo — and the resulting Smylte.exe is clobbered onto `desktop-latest`, which every installed client downloads and executes on next launch. Rolling back means guessing which package version the previous good exe contained, because nothing recorded it.
+```
+
+</details>
+
+**Suggested fix.** Pin the version explicitly (e.g. `Version="1.0.3124.44"`) or, better, add
+`<RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>` to both csproj files,
+commit the generated packages.lock.json, and pass `--locked-mode` to the `dotnet
+publish`/`dotnet build`/`dotnet test` invocations in ci.yml and desktop-release.yml so a
+drifted lock file fails the build instead of silently resolving something new.
+
+#### [ ] The desktop client serves the SPA with no Content-Security-Policy — the whole policy is a response header the local server never emits
+`desktop/Smylte.Desktop/LocalServer.cs:230` · **low** · security
+
+The app's CSP exists only as an HTTP response header attached by the backend
+(`tasksd/csp.py::CSPMiddleware`), derived at startup from the served index.html so it
+can carry the sha256 of the inline pre-paint script. `frontend/index.html` contains no
+`<meta http-equiv="Content-Security-Policy">` (verified: zero `http-equiv` occurrences).
+In the desktop client, index.html and every asset are served by
+`LocalServer.ServeStatic`, which sets exactly two headers — Content-Type and Cache-
+Control — so the document that runs in WebView2 has NO policy at all. `default-src
+'self'`, `connect-src 'self'`, `img-src 'self'`, `object-src 'none'`, `base-uri 'none'`,
+`frame-ancestors 'none'` and the script-hash allowlist are all silently absent on the
+one surface that also holds a live session cookie for the real server. (The proxied /api
+responses do carry the header copied from upstream, but a CSP on a JSON response governs
+nothing; only the document's policy matters.)
+
+<details><summary>Evidence</summary>
+
+```
+ServeStatic, LocalServer.cs:229-243 — the complete header set:
+    var ext = Path.GetExtension(file);
+    ctx.Response.ContentType = Mime.TryGetValue(ext, out var mime) ? mime : "application/octet-stream";
+    ctx.Response.AddHeader("Cache-Control", ext.Equals(".html", ...) ? "no-cache" : "public, max-age=31536000, immutable");
+    var bytes = File.ReadAllBytes(file);
+No Content-Security-Policy, no X-Content-Type-Options.
+
+csp.py's own docstring states what is being lost: "Those are allowlists over *named fields*. This is the bound over the rest: the next value that reaches a style declaration, an `img` src or a script tag is otherwise undefended in exactly the same way."
+
+Concrete scenario: a foreign CalDAV client writes a collection property or an appearance/theme value that slips past `clean_color`/`cssColor`/the appearance allowlist (the exact class of bug the audit already recorded twice as a `url()` beacon). In the browser deployment the request is blocked by `img-src 'self'` / `default-src 'self'` and never leaves the machine. In the desktop window the identical value fetches `https://evil.example/x` — and because there is also no `connect-src 'self'` and no script-hash restriction, any script injection in the desktop window can exfiltrate to an arbitrary host, from an origin whose cookie jar holds the owner's `tasks_session`.
+```
+
+</details>
+
+**Suggested fix.** Emit the same policy from ServeStatic on the HTML document (and ideally on every static
+response, as CSPMiddleware does). Compute it the same way the backend does — read the
+served index.html once at LocalServer construction, sha256 each inline `<script>` body,
+base64 it, and build the identical directive string — so the two cannot drift into a
+blank window. Add `X-Content-Type-Options: nosniff` at the same time. A regression test
+should assert the desktop response carries a policy containing the served file's script
+hash.
+
+#### [x] `Smylte.exe --setup`, the documented way to change server or credentials, silently does nothing whenever the app is running
+`desktop/Smylte.Desktop/Program.cs:239` · **low** · bug · minor
+
+Main takes the single-instance mutex and returns before it ever looks at argv, so a
+second launch — including the one carrying `--setup` — exits with no window, no message
+and no exit code the user sees. MainForm offers the setup dialog only from its `Fail`
+path (an app that could not start), and the window has no menu or settings affordance of
+any kind, so with the app running there is no way at all to reach the dialog. The README
+presents `Smylte.exe --setup` as the supported route ("## Changing settings later"), and
+Settings.cs:124-128 tells the user to put a GitHub token there.
+
+<details><summary>Evidence</summary>
+
+```
+Program.cs:238-251, in order:
+    using var mutex = new Mutex(initiallyOwned: true, InstanceMutex, out var isFirst);
+    if (!isFirst) return;   // already running; the existing window is the app
+    ...
+    var wantsSetup = args.Any(a => a.Equals("--setup", ...) || a.Equals("/setup", ...));
+    if (wantsSetup || !settings.IsConfigured) { using var setup = new SetupForm(settings); ... }
+`wantsSetup` is computed nine lines after the `return` that makes it unreachable.
+
+Concrete scenario: the owner rotates the app password, has Smylte open, and runs `Smylte.exe --setup` from a shortcut or the Run box. Nothing happens — no dialog, no error, no focus change. Repeating it does nothing. The client keeps trying the old password on every launch (SeedSessionAsync silently swallows the 401) and the owner has no signal that they must close the window first. The same code also means double-clicking the icon while the window is minimised does nothing, where a single-instance app is expected to activate the existing window.
+```
+
+</details>
+
+**Suggested fix.** Move the `wantsSetup` computation above the mutex check. When `!isFirst && wantsSetup`,
+show a MessageBox saying Smylte is already running and must be closed first (or signal
+the running instance to open the dialog); when `!isFirst` without `--setup`, at minimum
+bring the existing window to the front instead of exiting silently.
+
+#### [x] A syntactically invalid server address is offered as "could not be reached — save anyway?", and saying yes guarantees the client cannot start
+`desktop/Smylte.Desktop/SetupForm.cs:142` · **low** · bug · minor
+
+`Session.ProbeAsync` distinguishes an unparseable URL from an unreachable server — its
+first branch returns "That is not a valid http:// or https:// address." — but
+`SaveAsync` collapses both into one boolean and offers the same override prompt for
+each. Overriding an unreachable host is deliberate and correct (the client works
+offline). Overriding a malformed URL is never correct: `LocalServer`'s constructor calls
+`new Uri(serverUrl.TrimEnd('/') + "/")`, which throws UriFormatException for a relative
+string, so the settings the user just saved make startup impossible.
+
+<details><summary>Evidence</summary>
+
+```
+SetupForm.cs:142-148:
+    if (!await TestAsync().ConfigureAwait(true))
+    {
+        var proceed = MessageBox.Show(this,
+            "That server could not be reached. Save these settings anyway?", ...);
+        if (proceed != DialogResult.Yes) return;
+    }
+versus Session.cs:29-31, which already knows the difference:
+    if (!Uri.TryCreate(serverUrl.TrimEnd('/'), UriKind.Absolute, out var parsed)
+        || (parsed.Scheme != "http" && parsed.Scheme != "https"))
+        return (false, "That is not a valid http:// or https:// address.");
+
+Concrete scenario: the user types the bare hostname `radicale.nicholaskmitchell.com` (the README's own example, minus the scheme — the single most likely input error). The status line says the address is invalid, but the confirmation dialog says the server "could not be reached", so the user reasonably answers Yes assuming their box is down. Settings are written. MainForm then throws out of `new LocalServer(...)` and shows "Invalid URI: The format of the URI could not be determined.\n\nOpen settings?" — and the loop repeats every launch until the user works out that the scheme was missing.
+```
+
+</details>
+
+**Suggested fix.** Have SaveAsync re-run the same `Uri.TryCreate` check (or have ProbeAsync return a tri-
+state) and treat an unparseable address as a hard validation failure with the same
+wording the status line already uses, offering no override. Optionally normalise a bare
+hostname to https:// before validating.
+
+#### [ ] The update notice is docked at the wrong end of the z-order, so it covers the top 36 px of the app instead of pushing it down
+`desktop/Smylte.Desktop/MainForm.cs:46` · **low** · rendering · minor
+
+WinForms lays docked children out in reverse child-index order: the highest index is
+laid out first and takes the outer edge, index 0 is laid out last, and a
+`DockStyle.Fill` child claims the whole remaining rectangle without shrinking it for the
+children laid out after it. MainForm sets the opposite arrangement — the Fill web view
+at the highest index (2) and the Top-docked notice strip at index 0 — so `_web` is sized
+to the full client rectangle first and `_notice` is then placed in the top 36 px on top
+of it. The strip is visible only because it is in front; the web content underneath is
+never displaced.
+
+<details><summary>Evidence</summary>
+
+```
+MainForm.cs:46-51:
+    Controls.Add(_web);      // Dock = Fill
+    Controls.Add(_splash);   // Dock = Fill
+    Controls.Add(_notice);   // Dock = Top, Height = 36
+    Controls.SetChildIndex(_notice, 0);
+    Controls.SetChildIndex(_splash, 1);
+    Controls.SetChildIndex(_web, 2);
+with the comment above it asserting the opposite outcome: "the notice strip claims the top, and whichever of splash / web is visible fills what is left."
+
+Concrete scenario: CI publishes a new Smylte.exe, so `update.ClientOutdated` is true and line 142 shows the strip. The yellow bar paints over the top 36 px of the SPA — the header row with the view tabs and date navigation — hiding those controls and swallowing clicks in that band (the Panel and its Labels are in front of the WebView2 HWND). The app looks broken until "Not now" is pressed, and the hidden region reappears only then. The same inversion is inside the strip (BuildNotice adds the Fill label last, i.e. at the highest index, so it is sized across the full strip and the two Right-docked buttons paint over its right end rather than the label ellipsising before them; it also puts "Not now" left of "Download", not "on the outside" as the comment says).
+```
+
+</details>
+
+**Suggested fix.** Invert the indices: `SetChildIndex(_notice, 2); SetChildIndex(_splash, 1);
+SetChildIndex(_web, 0);` so the Top-docked strip is laid out first and consumes its 36
+px, and the Fill children receive what is left. In BuildNotice, add the Fill label first
+(`message`, then `download`, then `dismiss`) for the same reason.
+
+#### [x] test_sync_unit.py permanently rewrites DavClient.principal_path for the whole pytest process
+`backend/tests/test_sync_unit.py:411` · **low** · bug · minor
+
+Two tests build a bare DavClient with `DavClient.__new__` and then patch the property
+with `type(c).principal_path = property(lambda self: "/u/")`. `type(c)` is the DavClient
+CLASS, not the instance, so this rebinds the property on the class itself and nothing
+ever restores it. Every DavClient constructed later in the same pytest process —
+including the `dav`, `new_dav`, `collection` and `engine` fixtures and the real service
+inside `create_app` — reports its principal path as `/u/` instead of `/{username}/`. The
+file currently sorts last alphabetically (test_sync_unit.py), which is the only reason
+the suite is green; it is a pure ordering accident, and the fix is a one-liner
+(`monkeypatch.setattr(DavClient, "principal_path", property(...))`, or set
+`c.__dict__`-free via a subclass).
+
+<details><summary>Evidence</summary>
+
+```
+tests/test_sync_unit.py:410-411 and 540-541:
+
+    c = DavClient.__new__(DavClient)
+    type(c).principal_path = property(lambda self: "/u/")
+
+Proved against the audit copy (backend/.venv):
+
+    c0 = DavClient("http://127.0.0.1:5233", "testuser", "testpass")
+    print(c0.principal_path)                       # -> /testuser/
+    test_an_unparseable_calendar_order_is_dropped_at_the_parser()
+    c1 = DavClient("http://127.0.0.1:5233", "testuser", "testpass")
+    print(c1.principal_path)                       # -> /u/
+
+Failure scenario: run `pytest tests/test_sync_unit.py tests/test_sync.py tests/test_api.py` (or add any test file that sorts after `test_sync_unit.py`, e.g. `test_tasks.py`/`test_zones.py`, or enable pytest-randomly). `_scratch_up` then calls `c.options()` against `/u/` on the scratch Radicale, which 404s, so `_make_dav().options()` raises DavError and the entire 240-test integration tier SKIPS with the message "scratch Radicale unreachable" — a false, silently-green result that looks like a Docker problem rather than a test bug. `create_task_collection` (dav/client.py:179 `f"{self.principal_path}{uuid…}/"`) would likewise write collections under the wrong principal.
+```
+
+</details>
+
+**Suggested fix.** Use the function-scoped `monkeypatch` fixture: `monkeypatch.setattr(DavClient,
+"principal_path", property(lambda self: "/u/"))` in both tests, so pytest restores the
+class attribute at teardown. (Alternatively give the fake client a real `username`
+attribute and drop the property patch entirely.)
+
+#### [x] The stage-5 pin closing the "no test sends a JSON-RPC batch" gap is satisfied by a comment, not by a test
+`backend/tests/test_backlog_stage5.py:146` · **low** · test-gap
+
+`_suite_text()` concatenates the raw text of every non-backlog test file, comments and
+docstrings included, and the pin is a substring search. The literal `run_batch` occurs
+exactly once in that concatenation — inside a section comment in test_mcp.py — because
+the batch tests drive the endpoint over HTTP and never name the function. So the pin
+tracks the presence of a comment rather than the presence of a test, and it is wrong in
+both directions: deleting every batch test while leaving the comment keeps it green, and
+tidying the comment while keeping every test turns it red.
+
+<details><summary>Evidence</summary>
+
+```
+tests/test_backlog_stage5.py:146:
+
+    assert "run_batch" in _suite_text(), (
+        "no test sends a JSON-RPC batch; the batch-framing path is uncovered")
+
+The only occurrence outside the backlog files (`grep -rn run_batch tests/*.py | grep -v backlog`):
+
+    tests/test_mcp.py:821:# AUDIT: `run_batch`'s list branch decides what a client gets back when it sends
+
+The actual batch tests are test_mcp.py:834-935 (`test_a_batch_answers_each_request_and_keeps_its_ids`, `test_a_batch_of_only_notifications_gets_202_and_no_body`, `test_a_mixed_batch_replies_only_to_the_requests`, `test_one_bad_message_does_not_sink_the_rest_of_the_batch`, `test_an_empty_batch_is_an_invalid_request`, `test_an_oversized_batch_is_refused_whole`, `test_a_batch_is_bounded_by_the_same_scopes_as_a_single_call`) — none of which contains the string `run_batch`.
+
+Failure scenario: a future cleanup deletes test_mcp.py lines 834-935 (say, because "batching left the 2025-06-18 revision") but leaves the `# ── JSON-RPC batch framing ──` comment block above them. `pytest -m backlog` still reports the gap as closed, and the batch-framing path — empty-batch rejection, the MAX_BATCH refusal, the all-notifications 202, per-message scope enforcement — is uncovered again on the endpoint an unauthenticated caller reaches. Compounding it: those tests carry test_mcp.py's module-level `pytest.mark.radicale` and skip without Docker, while this pin lives in a file with no such gate and reports "covered" on every Docker-less run.
+```
+
+</details>
+
+**Suggested fix.** Make the pin depend on something a deletion removes. Either name the tests (`for t in
+('test_a_batch_answers_each_request_and_keeps_its_ids',
+'test_an_empty_batch_is_an_invalid_request'): assert f'def {t}' in _suite_text()`), or
+strip comments from each file before concatenating in `_suite_text()` so a bare mention
+cannot satisfy any of the four grep-based gap pins in this file.
+
+#### [x] No frontend test ever renders a clock under the 24-hour setting, so the TimeFormatProvider wiring in ten components is uncovered
+`frontend/src/App.test.tsx:413` · **low** · test-gap
+
+`timeformat.tsx` says it outright: "a component rendered outside the provider (every
+existing test) formats exactly as it did before", i.e. always the 12h default.
+`TimeFormatProvider` is mounted only by App.tsx:629, and the two App-level clock tests
+assert nothing but the settings BUTTON's own label text. Ten components call
+`useTimeFormat()` (CalendarView, TasksView, TodayView, HomeView, DayPopover, TaskModal,
+AddMultipleModal, SchedulingView, ConnectionsSection, ArchivedCalendarsSection) and feed
+the result to `fmtClock`/`fmtDue`/`fmtWhen`. The formatters themselves are thoroughly
+unit-tested in time.test.ts for both formats, but the wiring between the stored setting
+and any rendered time is asserted nowhere: `grep -rn "'24h'" src --include=*.test.ts*`
+outside time.test.ts returns only the two App.test.tsx lines below, and
+`TimeFormatProvider` appears in no test file.
+
+<details><summary>Evidence</summary>
+
+```
+frontend/src/timeformat.tsx:10-12: "The default is the app's historical behaviour, so a component rendered outside the provider (every existing test) formats exactly as it did before."
+
+frontend/src/App.test.tsx:412-418 — the only test that loads a 24h setting:
+
+    it('restores a stored 24-hour choice', async () => {
+      m.getSettings.mockResolvedValue({ time_format: '24h' })
+      render(<App />)
+      await screen.findByRole('button', { name: 'Tasks' })
+      await openSettings('General')
+      await waitFor(() =>
+        expect(screen.getByRole('button', { name: '12- or 24-hour clock' })).toHaveTextContent('24-hour'))
+    })
+
+It asserts the label on the toggle, never a rendered time.
+
+Failure scenario: an edit to CalendarView.tsx (or any of the other nine) replaces `const tf = useTimeFormat()` / `fmtClock(iso, tf)` with `fmtClock(iso, DEFAULT_TIME_FORMAT)` — an easy result of untangling a prop-drilling refactor, and one `tsc --noEmit` accepts because both are `TimeFormat`. All 1115 frontend tests still pass, the backend `test_settings_time_format_sync` still passes (it only checks the round-trip), and an account set to 24-hour silently sees `2:05 PM` on every calendar chip while the Settings screen keeps reading "24-hour".
+```
+
+</details>
+
+**Suggested fix.** Add one App-level test that mocks `getSettings` to `{ time_format: '24h' }`, seeds an
+event/task with a known afternoon time, and asserts the rendered chip matches `/14:05/`
+and `not.toMatch(/PM/i)` — plus the 12h control. Better still, a small helper that
+renders each `useTimeFormat` consumer inside `<TimeFormatProvider value="24h">` and
+asserts no rendered time contains AM/PM, so a new component that forgets the hook fails
+immediately.
+
+#### [x] The _at_or_after regression pin asserts only that a bool comes back, so a wrong comparison passes
+`backend/tests/test_backlog_stage1.py:143` · **low** · test-gap · minor
+
+The closed finding was a TypeError, and `assert isinstance(_at_or_after(a, anchor),
+bool)` does catch that. But it accepts any boolean, and both parametrized cases happen
+to be equal instants, so a mixed-awareness branch that returned a constant would satisfy
+it. The value under test decides where a series is cut: `_at_or_after` gates
+`_drop_overrides` (ical/edit.py:744) and the slot walk at edit.py:769, i.e. which
+EXDATE/RDATE/override entries stay with the head and which go to the tail of a 'this and
+following' split.
+
+<details><summary>Evidence</summary>
+
+```
+tests/test_backlog_stage1.py:133-143:
+
+    @pytest.mark.parametrize("a, anchor", [
+        (datetime(2026, 1, 1, 9, 0), datetime(2026, 1, 1, 9, 0, tzinfo=timezone.utc)),
+        (datetime(2026, 1, 1, 9, 0, tzinfo=timezone.utc), datetime(2026, 1, 1, 9, 0)),
+    ])
+    def test_splitting_a_series_survives_a_floating_date_list_entry(a, anchor):
+        assert isinstance(_at_or_after(a, anchor), bool)
+
+The implementation it pins (tasksd/ical/edit.py:642-657) falls back to a wall-clock comparison when awareness differs:
+
+    if (a.tzinfo is None) != (anchor.tzinfo is None):
+        return a.replace(tzinfo=None) >= anchor.replace(tzinfo=None)
+
+Failure scenario: a later 'tidy-up' decides the mixed-awareness case is unanswerable and returns `False` unconditionally (a plausible reading of 'we cannot compare these'). The test still passes — `False` is a bool, and both of its cases are the equal-instant case where the current answer is `True`, so it does not even notice the flip. In production, a series carrying one floating EXDATE that sits AFTER the split anchor is then classified as 'before', so `_drop_overrides(tail, anchor, keep_before=False)` leaves it on the head and strips it from the tail: the excluded occurrence reappears in every occurrence of the new tail series, silently resurrecting a deleted instance.
+```
+
+</details>
+
+**Suggested fix.** Assert the answer, not the type, and include a case where the two orderings differ: e.g.
+`assert _at_or_after(naive_0900, aware_0900_utc) is True`, `assert
+_at_or_after(naive_0800, aware_0900_utc) is False`, and the mirrored pair — so a
+constant-returning or inverted branch fails.
 
 ## Sweep — 2026-08-19
 
