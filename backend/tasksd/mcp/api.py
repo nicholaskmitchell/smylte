@@ -139,7 +139,19 @@ def _due_instant(t: dict, zone) -> float | None:
     raw = t.get("due")
     if not raw:
         return None
-    value = _parse_dt(raw, field="due")
+    try:
+        value = _parse_dt(raw, field="due")
+    except ToolError:
+        # Fail SOFT, and only here. `_parse_dt` refusing a value the CALLER sent
+        # is a correct, actionable error; refusing a value the CACHE holds is a
+        # different thing entirely, because that value came off the wire from
+        # another CalDAV client. This is a sort key applied to every row, so one
+        # unreadable due made the whole of `smylte_list_tasks` fail for the whole
+        # account — a single foreign VTODO taking the tool down. `_iso` no longer
+        # writes a repr into the column, but the rule stands regardless of how a
+        # row got that way, and `service._completions_by_day` already applies it
+        # to `completed_at`. An unreadable deadline sorts as no deadline.
+        return None
     if value is None:
         return None
     if not isinstance(value, datetime):
@@ -413,7 +425,10 @@ class McpApi:
             if tag and tag not in (t.get("tags") or []):
                 continue
             if before or after or overdue_only:
-                due = _as_dt(_parse_dt(t.get("due"), field="due"))
+                try:
+                    due = _as_dt(_parse_dt(t.get("due"), field="due"))
+                except ToolError:
+                    continue          # unreadable, same as undated — see `_due_instant`
                 if due is None:
                     continue          # a filter on the deadline excludes undated work
                 if before and due >= before:
