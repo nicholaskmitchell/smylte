@@ -873,3 +873,89 @@ def test_the_per_link_ceiling_still_bounds_real_bookings(client, many_ips):
         codes.append(many_ips(url, json=_book_body(slot)).status_code)
     assert 429 in codes, "the per-link ceiling never engaged"
     assert codes.count(201) <= 30, codes
+
+
+# ── the public page's cost is bounded, not quadratic ────────────────────────
+
+def test_slot_generation_scales_with_the_calendar_rather_than_squaring_it():
+    """`GET /api/public/booking/{token}` needs no session and runs this inside
+    the global service lock, so its CPU cost is an availability property, not a
+    performance nicety.
+
+    `_overlaps_any` used to walk the busy list from index 0 for every candidate
+    slot, calling `_u()` — i.e. `astimezone` — on BOTH ends of every interval it
+    touched, with nothing hoisted. That is O(slots x intervals): a 15-minute link
+    over a 90-day horizon with ten meetings a day measured 2.7 s of pure CPU per
+    anonymous request, and the public limiter's 120 requests / 300 s is far more
+    than enough to keep the lock permanently held. It is a binary search over
+    bounds converted once now.
+
+    Asserted as a RATIO between two problem sizes, not as wall-clock seconds: a
+    shared runner has no absolute budget worth pinning, but doubling both the
+    slot count and the busy count must not quadruple the work."""
+    import time as _time
+
+    def _run(days: int) -> tuple[int, float]:
+        av = scheduling.parse_availability({str(d): ["07:00-22:00"] for d in range(7)})
+        busy = []
+        for d in range(days):
+            base = NOW.replace(hour=0, minute=0) + timedelta(days=d)
+            for k in range(10):
+                s = base.replace(hour=8) + timedelta(minutes=75 * k)
+                busy.append(Interval(s, s + timedelta(minutes=30)))
+        best = None
+        for _ in range(3):        # least-of-three: the floor is the signal
+            t0 = _time.perf_counter()
+            slots = scheduling.generate_slots(
+                availability=av, duration_minutes=15, busy=busy, buffer_minutes=0,
+                tz=TZ, now=NOW, min_notice_hours=1, horizon_days=days,
+                max_slots=10_000_000,
+            )
+            el = _time.perf_counter() - t0
+            best = el if best is None else min(best, el)
+        return len(slots), best
+
+    n_small, t_small = _run(45)
+    n_big, t_big = _run(90)
+    assert n_big > n_small > 0
+
+    # Quadratic would be ~4x for a 2x problem. Linear-ish is ~2x. 3x leaves room
+    # for a loaded runner and the log factor while still failing the shape that
+    # made this an unauthenticated DoS lever.
+    growth = t_big / max(t_small, 1e-6)
+    assert growth < 3.0, (
+        f"slot generation grew {growth:.1f}x for a 2x problem "
+        f"({n_small} slots in {t_small * 1000:.0f} ms -> {n_big} in {t_big * 1000:.0f} ms); "
+        f"the per-slot busy scan is back"
+    )
+
+
+def test_overlap_matches_a_brute_force_scan_including_across_a_transition():
+    """The binary search replaced a linear scan, so it has to answer the same
+    question — including the adjacency edges (a slot that starts exactly when a
+    block ends is free) and the fall-back day, where two different instants share
+    one wall clock."""
+    for day, window in ((date(2026, 7, 13), "00:00-23:30"), (FALL_BACK, "00:00-05:00")):
+        av = scheduling.parse_availability({str(day.weekday()): [window]})
+        base = datetime(day.year, day.month, day.day, tzinfo=TZ)
+        busy = [
+            Interval(base + timedelta(minutes=m), base + timedelta(minutes=m + n))
+            for m, n in ((0, 30), (30, 15), (120, 90), (300, 30), (301, 5), (1200, 60))
+        ]
+        got = scheduling.generate_slots(
+            availability=av, duration_minutes=30, busy=busy, buffer_minutes=0,
+            tz=TZ, now=base - timedelta(hours=1), min_notice_hours=0,
+            horizon_days=1, only_day=day,
+        )
+        blocked = scheduling.pad(busy, 0)
+
+        def hits(slot):
+            s0, s1 = slot.start.astimezone(timezone.utc), slot.end.astimezone(timezone.utc)
+            return any(
+                s0 < b.end.astimezone(timezone.utc) and s1 > b.start.astimezone(timezone.utc)
+                for b in blocked
+            )
+
+        assert got, f"no slots generated for {day}"
+        assert not any(hits(s) for s in got), (
+            f"a slot overlapping a busy block was advertised on {day}")

@@ -250,7 +250,24 @@ def _instances_before(rule, dtstart, window_end: date | datetime | None) -> floa
     return max(0.0, days) * _per_day(rule)
 
 
-def _pathological_rule(cal: Calendar, window_end: date | datetime | None = None) -> str | None:
+def _rdate_count(comp) -> int:
+    """How many instants this component's RDATE properties name."""
+    rdates = comp.get("RDATE")
+    if rdates is None:
+        return 0
+    total = 0
+    for prop in (rdates if isinstance(rdates, list) else [rdates]):
+        # `dts` is icalendar's parsed list for one RDATE line; a property it
+        # could not parse has none, and counts as the single line it is.
+        total += len(getattr(prop, "dts", None) or [None])
+    return total
+
+
+def _pathological_rule(
+    cal: Calendar,
+    window_end: date | datetime | None = None,
+    occurrence_cap: int | None = None,
+) -> str | None:
     """Why this resource must not be expanded, or None if it is safe.
 
     Both shapes below are writable through Radicale by any client sharing the
@@ -271,6 +288,27 @@ def _pathological_rule(cal: Calendar, window_end: date | datetime | None = None)
     already applies to a resource it cannot parse.
     """
     for comp in cal.walk("VEVENT"):
+        # RDATE first, and OUTSIDE the RRULE arm below. This function used to
+        # judge RRULE shapes only — `continue` when there was none — so a
+        # recurrence set built from RDATE alone, or an ordinary rule beside a
+        # huge RDATE, was never priced at all. The occurrence cap does not save
+        # it, for the reason stated above: `query.between` materializes the whole
+        # expansion before the cap is consulted, so the CPU and the memory are
+        # spent in full and only then is the answer thrown away. Measured on one
+        # 664 KiB resource: 3.2 s and ~70 MB, inside the service lock, on an
+        # unauthenticated `GET /api/public/booking/{token}` — and the public
+        # limiter's 120 requests / 300 s is far more than enough to keep the lock
+        # held continuously with a single planted resource.
+        #
+        # An RDATE list is its own occurrence count, so unlike a rule it needs no
+        # estimate: it is refused when it alone cannot fit the window's cap.
+        if occurrence_cap is not None:
+            count = _rdate_count(comp)
+            if count > occurrence_cap:
+                return (
+                    f"RDATE names {count} instants, more than the "
+                    f"{occurrence_cap} occurrences this window can hold"
+                )
         rrules = comp.get("RRULE")
         if rrules is None:
             continue
@@ -494,7 +532,7 @@ def expand_occurrences(
     cap = (max_occurrences if max_occurrences is not None
            else _occurrence_cap(window_start, window_end))
     cal = Calendar.from_ical(raw_ics)
-    why = _pathological_rule(cal, window_end)
+    why = _pathological_rule(cal, window_end, occurrence_cap=cap)
     if why is not None:
         raise ValueError(f"refusing to expand recurrence: {why}")
     override_anchors = _override_anchors(cal)

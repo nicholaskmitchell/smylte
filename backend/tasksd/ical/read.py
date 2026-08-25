@@ -297,8 +297,33 @@ def _text(comp, key: str) -> str | None:
 
 
 def _int(comp, key: str) -> int | None:
+    """An integer property, or None — and None for anything SQLite cannot hold.
+
+    Python's ints are unbounded; SQLite's INTEGER is signed 64-bit. Every value
+    here is bound into a column by `store.upsert_item`, so `SEQUENCE:1e20`
+    (which any CalDAV client can PUT, and which Radicale's own parser
+    round-trips happily) raised OverflowError at the bind — not ValueError, so
+    the sync engine's malformed-resource guard did not catch it, and not
+    something `patch_event` maps either.
+
+    The blast radius was the whole collection: the bind aborted the transaction,
+    the sync token was never advanced, and the next pass re-fetched the same
+    poison href with the same old token and failed identically. One resource
+    from one client froze every change from every client, permanently.
+
+    Same rule and the same reason as the `calendar-order` clamp in
+    `dav/client.py`. RFC 5545 gives SEQUENCE no upper bound in practice, but a
+    value this large is not a sequence number anyone meant — no hint at all
+    beats a hint that stops the sync.
+    """
     v = comp.get(key)
-    return None if v is None else int(v)
+    if v is None:
+        return None
+    try:
+        n = int(v)
+    except (TypeError, ValueError):
+        return None
+    return n if -(2**63) <= n < 2**63 else None
 
 
 def _categories(cats) -> list[str]:

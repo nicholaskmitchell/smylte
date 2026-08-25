@@ -776,6 +776,28 @@ def _first_free(slots, after, blocked, excluded):
     return None
 
 
+def _like_anchor(value, anchor):
+    """`value` coerced to the anchor's dateness and awareness.
+
+    Every value this normalizes is about to be compared with the anchor, written
+    back as a RECURRENCE-ID, and subtracted from the anchor — so a mixed list is
+    not an inconsistency, it is a TypeError waiting for the one resource that
+    carries the other shape. Mixed-awareness drops to wall clock, which is the
+    same call `_comparable` makes for the same reason.
+    """
+    if not isinstance(value, date):          # datetime is a date subclass
+        return value                         # a shape we do not recognise; leave it
+    if isinstance(anchor, datetime):
+        if not isinstance(value, datetime):
+            value = datetime.combine(value, time())
+        if anchor.tzinfo is not None and value.tzinfo is None:
+            return value.replace(tzinfo=anchor.tzinfo)
+        if anchor.tzinfo is None and value.tzinfo is not None:
+            return value.replace(tzinfo=None)
+        return value
+    return value.date() if isinstance(value, datetime) else value
+
+
 def _next_generated(master: Event, after, *, blocked=()) -> date | datetime | None:
     """The series' next occurrence strictly after `after` that is FREE.
 
@@ -791,7 +813,11 @@ def _next_generated(master: Event, after, *, blocked=()) -> date | datetime | No
     """
     rule = _rrule_dict(master)
     dtstart = master.get("DTSTART")
-    rdates = [_period_start(r) for r in _datelist_values(master, "RDATE")]
+    # Normalised HERE, not at the point of use, because both branches below
+    # return from this list: the rule-less one answers straight out of it, and
+    # the rule one merges it with the generated candidates.
+    rdates = [_like_anchor(_period_start(r), after)
+              for r in _datelist_values(master, "RDATE")]
     if dtstart is None:
         return _UNKNOWN
     if rule is None:
@@ -821,14 +847,23 @@ def _next_generated(master: Event, after, *, blocked=()) -> date | datetime | No
     except (SearchBudgetExceeded, ValueError, TypeError):
         return _UNKNOWN
 
+    # Back into the anchor's own dateness and awareness before comparing or
+    # returning — `_comparable` may have stripped both ends to wall clock, and
+    # the value is about to become a RECURRENCE-ID and to be SUBTRACTED from the
+    # anchor by `_detach_thisandfuture`.
+    #
+    # `extra` goes through this too, which it did not before. Only the
+    # dateutil-produced candidates were normalized; the master's RDATEs were
+    # appended raw, so `_first_free` could hand back a floating datetime beside a
+    # zoned anchor, or a datetime beside a DATE anchor, and `nxt - anchor` raised
+    # TypeError — neither ValueError nor OverflowError, so nothing mapped it and
+    # it escaped as a 500 with the occurrence left permanently uneditable. Both
+    # shapes are ordinary in a shared collection: mixed zones are what
+    # `_rebuild_datelist` already calls out, and a DATE-valued
+    # RANGE=THISANDFUTURE override is what Apple and Thunderbird write for "this
+    # and all future events".
     slots = sorted(
-        # Back into the anchor's own awareness before comparing or returning —
-        # `_comparable` may have stripped both ends to wall clock, and the value
-        # is about to become a RECURRENCE-ID.
-        [(nxt.replace(tzinfo=after.tzinfo)
-          if isinstance(after, datetime) and after.tzinfo and not nxt.tzinfo
-          else (nxt if isinstance(after, datetime) else nxt.date()))
-         for nxt in candidates] + extra,
+        [_like_anchor(nxt, after) for nxt in candidates] + extra,
         key=_as_sortable,
     )
     free = _first_free(slots, after, blocked, excluded)
@@ -1334,6 +1369,56 @@ def _until_before(anchor) -> date | datetime:
     return anchor - timedelta(days=1)
 
 
+def _bound_head_rule(master: Event, rule: dict, anchor) -> None:
+    """Bound the head's rule at the split. **Narrowing only, never widening.**
+
+    A split cuts a series in two; it cannot conjure occurrences. But the head
+    used to be rebounded unconditionally — `rule.pop("COUNT"); rule["UNTIL"] =
+    anchor - 1s` — on the assumption that the anchor is always a slot the RRULE
+    itself generates, where that can only narrow.
+
+    It is not always. `_require_occurrence` deliberately accepts an anchor named
+    by an **RDATE**, and an RDATE routinely sits *after* where the rule stopped —
+    that is the ordinary reason to add one ("the weekly run ended in January,
+    plus one extra session in March"). For those, dropping COUNT and writing a
+    later UNTIL EXTENDED the rule, and every slot between the rule's real end and
+    the anchor became a live occurrence.
+
+    Measured: `RRULE:FREQ=DAILY;COUNT=3` + `RDATE:20260210T090000Z` is four
+    occurrences; "this and following" on the RDATE produced a 36-occurrence head.
+    Reachable in two clicks — the SPA offers the scope picker on an RDATE row
+    like any other — and `delete_event(scope="thisandfuture")` PUTs the head, so
+    33 events the owner never created were written permanently into the shared
+    Radicale collection, where they also start blocking the public booking page.
+
+    So each bound is compared before it is replaced, and a rule that already ends
+    before the anchor is left exactly as it is — the RDATE partition alone is
+    then the whole split, which is correct.
+    """
+    cut = _until_before(anchor)
+    existing = rule.get("UNTIL")
+    if existing:
+        current, new = _comparable(existing[0], cut)
+        if current <= new:
+            return                          # already ends before the anchor
+    elif rule.get("COUNT"):
+        dtstart = master.get("DTSTART")
+        try:
+            original = int(rule["COUNT"][0])
+        except (TypeError, ValueError):
+            original = 0
+        # `_count_consumed` under-counts rather than over-counts when its search
+        # budget runs out, so this can only fail towards the old behaviour — and
+        # the old behaviour is exactly right whenever the anchor IS a rule slot.
+        if original and dtstart is not None and (
+            _count_consumed(rule, dtstart.dt, anchor) >= original
+        ):
+            return                          # every slot it makes is already before
+    rule.pop("COUNT", None)
+    rule["UNTIL"] = [cut]
+    _set_rrule(master, rule)
+
+
 def _rrule_dict(master: Event) -> dict | None:
     rrule = master.get("RRULE")
     if rrule is None:
@@ -1569,9 +1654,7 @@ def split_series(
     rule = _rrule_dict(hmaster)
     _require_occurrence(hmaster, rule, anchor)
     if rule is not None:
-        rule.pop("COUNT", None)
-        rule["UNTIL"] = [_until_before(anchor)]
-        _set_rrule(hmaster, rule)
+        _bound_head_rule(hmaster, rule, anchor)
     _drop_overrides(head, anchor, keep_before=True)
     _partition_datelist(hmaster, "RDATE", anchor, keep_before=True)
     _partition_datelist(hmaster, "EXDATE", anchor, keep_before=True)
@@ -1619,6 +1702,18 @@ def split_series(
             # The anchor is an occurrence, so ≥1 remains for any sane split;
             # clamp defensively so a bad anchor can't emit COUNT=0 (invalid).
             tail_rule["COUNT"] = [max(remaining, 1)]
+        elif tail_rule.get("UNTIL"):
+            # The other half of `_bound_head_rule`'s problem. When the anchor is
+            # an RDATE past the rule's own end, the tail inherits an UNTIL that
+            # now precedes its own DTSTART — a rule that generates nothing, sat
+            # next to a DTSTART that does, which is not a series at all. The
+            # anchor is a one-off; say so by dropping the rule rather than
+            # shipping a self-contradicting one.
+            until, start_at = _comparable(tail_rule["UNTIL"][0], start)
+            if until < start_at:
+                tail_rule = None
+                _replace(tmaster, "RRULE")
+    if tail_rule is not None:
         _set_rrule(tmaster, tail_rule)
     _drop_overrides(tail, anchor, keep_before=False)
     _partition_datelist(tmaster, "RDATE", anchor, keep_before=False)

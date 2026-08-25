@@ -23,8 +23,10 @@ See test_backlog_stage1.py for how the xfail(strict=True) harness works.
 """
 from __future__ import annotations
 
+import io
 import pathlib
 import re
+import tokenize
 from datetime import datetime, timezone
 
 import pytest
@@ -39,11 +41,36 @@ def _read(rel: str) -> str:
     return (REPO / rel).read_text(encoding="utf-8")
 
 
+def _strip_comments(source: str) -> str:
+    """`source` with every `#` comment removed, string literals untouched.
+
+    The gap pins below are substring searches, and a comment is not coverage.
+    `run_batch` appeared in this concatenation exactly once — inside a section
+    comment in test_mcp.py, because the batch tests drive the endpoint over HTTP
+    and never name the function — so the pin tracked the presence of a COMMENT.
+    It was wrong in both directions: deleting every batch test while leaving the
+    comment kept it green, and tidying the comment while keeping every test
+    turned it red. Tokenising is what makes `# ... run_batch ...` invisible here
+    while leaving a `"run_batch"` inside a real call alone.
+    """
+    try:
+        return tokenize.untokenize(
+            tok for tok in tokenize.generate_tokens(io.StringIO(source).readline)
+            if tok.type != tokenize.COMMENT
+        )
+    except (tokenize.TokenError, IndentationError, SyntaxError):
+        # A file that will not tokenise is a broken test file, which the rest of
+        # the suite reports far better than this helper can. Fall back to the raw
+        # text rather than turning a syntax error into a confusing coverage gap.
+        return source
+
+
 def _suite_text() -> str:
-    """Every test in the backend suite except the backlog pins themselves — a
-    pin must never be able to satisfy the gap it is pinning."""
+    """Every test in the backend suite except the backlog pins themselves, with
+    comments stripped — a pin must never be able to satisfy the gap it is
+    pinning, and neither must a sentence about it."""
     return "\n".join(
-        p.read_text(encoding="utf-8")
+        _strip_comments(p.read_text(encoding="utf-8"))
         for p in sorted(TESTS.glob("test_*.py"))
         if not p.name.startswith("test_backlog_")
     )
@@ -69,10 +96,13 @@ def test_the_windows_client_has_tests_and_ci_runs_them():
         f"the client is compiled by CI but never exercised"
     )
 
-    ci = _read(".github/workflows/ci.yml")
-    assert re.search(r"dotnet test\s+\S*desktop/", ci), (
-        "the client test project exists but no CI step runs `dotnet test` on it"
-    )
+    # Both workflows, not just ci.yml. They are independent — nothing makes the
+    # release wait on ci.yml, and `workflow_dispatch` can publish from a ref
+    # ci.yml never saw — so the gate has to sit on the job that feeds `release`.
+    for wf in (".github/workflows/ci.yml", ".github/workflows/desktop-release.yml"):
+        assert re.search(r"dotnet test\s+\S*desktop/", _read(wf)), (
+            f"the client test project exists but {wf} runs no `dotnet test` on it"
+        )
 
     # It has to be buildable off Windows or the ubuntu-side story is a promise:
     # a ProjectReference to the net8.0-windows app would drag in a runtime pack
@@ -111,8 +141,8 @@ def test_the_desktop_release_workflow_serialises_its_runs():
     no concurrency group, two pushes in quick succession race, and the slower —
     older — build can land last and become what everyone downloads. ci.yml can
     race harmlessly; this one publishes."""
-    # Read as text, not yaml: PyYAML is not in requirements.txt, and a test that
-    # ERRORS on a missing import in CI is worse than no test at all.
+    # Read as text rather than parsed: this asserts the presence of two literal
+    # keys, and a regex says that without caring how the YAML is shaped.
     src = _read(".github/workflows/desktop-release.yml")
     assert re.search(r"^concurrency:", src, re.M), (
         "desktop-release.yml has no top-level concurrency group, so an older "
@@ -143,9 +173,26 @@ def test_the_json_rpc_batch_path_has_coverage():
     202 with no body — was entirely uncovered, on the endpoint a hostile client
     talks to. Covered in test_mcp.py, which is radicale-marked: those tests run
     in CI against the scratch server and skip without one."""
-    assert "run_batch" in _suite_text(), (
-        "no test sends a JSON-RPC batch; the batch-framing path is uncovered"
-    )
+    # Named tests, not the symbol. The batch tests drive the endpoint over HTTP
+    # and never mention `run_batch`, so searching for the function name only ever
+    # matched a section COMMENT in test_mcp.py — the pin was wrong in both
+    # directions: deleting every batch test but keeping the comment kept it
+    # green, and tidying the comment turned it red. These seven are what closes
+    # the gap, so deleting any one of them has to turn this red.
+    suite = _suite_text()
+    for name in (
+        "test_a_batch_answers_each_request_and_keeps_its_ids",
+        "test_a_batch_of_only_notifications_gets_202_and_no_body",
+        "test_a_mixed_batch_replies_only_to_the_requests",
+        "test_one_bad_message_does_not_sink_the_rest_of_the_batch",
+        "test_an_empty_batch_is_an_invalid_request",
+        "test_an_oversized_batch_is_refused_whole",
+        "test_a_batch_is_bounded_by_the_same_scopes_as_a_single_call",
+    ):
+        assert f"def {name}" in suite, (
+            f"{name} is gone; the JSON-RPC batch-framing path is uncovered again "
+            f"on the endpoint an unauthenticated caller reaches"
+        )
 
 
 @pytest.mark.parametrize("tool", [

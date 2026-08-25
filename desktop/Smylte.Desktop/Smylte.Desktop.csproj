@@ -41,9 +41,22 @@
 
   <ItemGroup>
     <!-- The WebView2 *runtime* ships with Windows 10/11; this is only the
-         managed wrapper. Floating on 1.0.* because the SDK revs constantly and
-         nothing here depends on a specific build. -->
-    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.*" />
+         managed wrapper.
+
+         PINNED, where this used to float on `1.0.*`. Nothing here depends on a
+         specific build, but the exe this links into is self-contained, unsigned,
+         and published to the rolling `desktop-latest` release — and `1.0.*`
+         meant nothing in the repo recorded which package was in any shipped
+         binary. Two consequences, both real: ci.yml and desktop-release.yml
+         resolve independently at different instants, so the artifact that was
+         tested and the artifact that ships could contain different packages;
+         and rolling back a bad release meant guessing which 1.0.x the last good
+         exe held. NuGet restore also executes the resolved package's build
+         targets on the runner, which is the supply-chain surface ci.yml's own
+         header names. This value is what `1.0.*` resolved to when it was
+         written, so pinning changed nothing about the build — bump it
+         deliberately, in a commit a reviewer can see. -->
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4129.50" />
     <!-- DPAPI. Not in the base framework on .NET 8 — it is its own package. -->
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
   </ItemGroup>

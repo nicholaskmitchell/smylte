@@ -1,6 +1,10 @@
 namespace Smylte.Desktop;
 
-/// First-run configuration, and the same dialog later from the window menu.
+/// First-run configuration, and the same dialog later via `Smylte.exe --setup`.
+///
+/// Not "from the window menu", as this said: the main window has no menu, and
+/// never had one. The only other way in is MainForm's `Fail` path, which offers
+/// it when the client could not start at all.
 ///
 /// Laid out in code rather than with a designer: it is a handful of rows, and a
 /// .Designer.cs adds a second file to keep in step for no benefit at this size.
@@ -134,6 +138,25 @@ public sealed class SetupForm : Form
         {
             _status.ForeColor = Color.FromArgb(170, 30, 20);
             _status.Text = "A server address and a data folder are both required.";
+            return;
+        }
+
+        // An address that will not PARSE is a different failure from one that
+        // will not answer, and only the second is worth overriding. `LocalServer`
+        // constructs `new Uri(serverUrl.TrimEnd('/') + "/")`, which throws for a
+        // relative string — so saving an unparseable address guarantees the
+        // client cannot start, and the override prompt was actively steering the
+        // user into it: type the README's own example without the scheme
+        // ("radicale.nicholaskmitchell.com", the likeliest slip there is) and the
+        // dialog said the server "could not be reached", so answering Yes was
+        // the reasonable read. Then every launch failed with "Invalid URI" until
+        // they worked out the scheme was missing.
+        var typed = _server.Text.Trim();
+        if (!Uri.TryCreate(typed.TrimEnd('/'), UriKind.Absolute, out var parsed)
+            || (parsed.Scheme != "http" && parsed.Scheme != "https"))
+        {
+            _status.ForeColor = Color.FromArgb(170, 30, 20);
+            _status.Text = "That is not a valid http:// or https:// address.";
             return;
         }
 

@@ -255,7 +255,28 @@ class SyncEngine:
             # gc_orphans is still allowed to run at the end of the pass.
             self._drop_uncacheable(collection_href, item.href, stats)
             return False
-        store.upsert_item(self.conn, collection_href, item, fields)
+        try:
+            store.upsert_item(self.conn, collection_href, item, fields)
+        except Exception as e:  # noqa: BLE001 — a bad bind is a bad resource
+            # Inside the guard, not after it. `extract_from_raw` succeeding does
+            # not mean every field it produced can be STORED: a SEQUENCE past
+            # SQLite's 64-bit INTEGER raised OverflowError right here, outside
+            # the try above, which aborted the enclosing `_tx`. The sync token
+            # was then never advanced, so the next pass re-fetched the same
+            # resource and failed the same way — one foreign resource freezing
+            # the entire collection's sync, permanently, for every client.
+            #
+            # `_int` now clamps that particular value at the boundary, but the
+            # general rule is what matters: a resource we cannot cache is a
+            # SKIPPED RESOURCE, exactly like one we cannot parse, and never a
+            # reason to abandon the pass and lose the batch beside it.
+            log.warning("skipping uncacheable resource %s: %s", item.href, e)
+            stats.skipped += 1
+            stats.last_error = f"uncacheable resource {item.href}: {e}"
+            if skipped_uids is not None:
+                skipped_uids |= _uids_in(item.data)
+            self._drop_uncacheable(collection_href, item.href, stats)
+            return False
         return True
 
     def _multiget(self, collection_href: str, hrefs: list[str]) -> list:

@@ -390,7 +390,7 @@ class _DiscoveryDav:
 HUGE_ORDER = 10 ** 25          # past 2**63-1; any value out of range does it
 
 
-def test_an_unparseable_calendar_order_is_dropped_at_the_parser():
+def test_an_unparseable_calendar_order_is_dropped_at_the_parser(monkeypatch):
     """The wire value is clamped where it enters, so it never reaches the bind."""
     import types
 
@@ -408,7 +408,12 @@ def test_an_unparseable_calendar_order_is_dropped_at_the_parser():
 </D:multistatus>"""
 
     c = DavClient.__new__(DavClient)
-    type(c).principal_path = property(lambda self: "/u/")
+    # monkeypatch, NOT a bare rebind: `type(c)` is the DavClient CLASS, so
+    # assigning to it leaked "/u/" into every DavClient built later in the same
+    # pytest process — including conftest's `_scratch_up` probe, which would then
+    # 404 and skip the whole 240-test integration tier with a message blaming
+    # Docker. The suite was green only because this file happens to sort last.
+    monkeypatch.setattr(DavClient, "principal_path", property(lambda self: "/u/"))
     c._request = lambda *a, **kw: types.SimpleNamespace(
         content=wire, status_code=207, headers={})
 
@@ -514,7 +519,7 @@ def test_a_real_color_still_comes_through(ok, expected):
     assert X.clean_color(ok) == expected
 
 
-def test_the_read_path_drops_a_hostile_color_before_it_is_cached():
+def test_the_read_path_drops_a_hostile_color_before_it_is_cached(monkeypatch):
     """End to end through the multistatus parser, the way `order` is pinned."""
     import types
 
@@ -538,7 +543,12 @@ def test_the_read_path_drops_a_hostile_color_before_it_is_cached():
 </D:multistatus>"""
 
     c = DavClient.__new__(DavClient)
-    type(c).principal_path = property(lambda self: "/u/")
+    # monkeypatch, NOT a bare rebind: `type(c)` is the DavClient CLASS, so
+    # assigning to it leaked "/u/" into every DavClient built later in the same
+    # pytest process — including conftest's `_scratch_up` probe, which would then
+    # 404 and skip the whole 240-test integration tier with a message blaming
+    # Docker. The suite was green only because this file happens to sort last.
+    monkeypatch.setattr(DavClient, "principal_path", property(lambda self: "/u/"))
     c._request = lambda *a, **kw: types.SimpleNamespace(
         content=wire, status_code=207, headers={})
 
