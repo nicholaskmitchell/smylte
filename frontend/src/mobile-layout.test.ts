@@ -108,6 +108,73 @@ describe("Home's module stack on a phone", () => {
   })
 })
 
+describe('the Settings sheet on a phone', () => {
+  const block = mediaBlock(0)
+
+  it('scrolls at the level that actually has a constrained height', () => {
+    // `.set-panels` carried `height: 100%; overflow-y: auto`, which looks like
+    // it should do this and does not: `.set-body` has no SPECIFIED height — its
+    // 500px comes out of flex layout — so the percentage had nothing definite to
+    // resolve against and fell back to `auto`, the content height. The panel
+    // sized itself to 1084px inside a 500px `overflow: hidden` parent and 584
+    // PIXELS OF SETTINGS WERE UNREACHABLE: "Working day" (the whole day-capacity
+    // section) and "Time zone" sat below the fold with nothing to scroll them.
+    const body = ruleFor('.set-sheet .set-body', block)
+    expect(body, '.set-sheet .set-body has no mobile rule').not.toBe('')
+    expect(body, 'the sheet body clips its content again').toMatch(/overflow-y:\s*auto/)
+    expect(body, 'overflow:hidden is exactly what made the sections unreachable')
+      .not.toMatch(/overflow:\s*hidden/)
+  })
+
+  it('does not nest a second scroller inside that one', () => {
+    // A scroller inside a scroller traps the gesture at the inner one and leaves
+    // the same sections unreachable by a different route.
+    const panels = ruleFor('.set-sheet .set-panels', block)
+    expect(panels).not.toMatch(/overflow-y:\s*auto/)
+    expect(panels, 'the percentage height that never resolved is back')
+      .not.toMatch(/height:\s*100%/)
+  })
+
+  it('leaves the desktop sheet scrolling where it always did', () => {
+    // The base rule is untouched: on a wide screen `.set-body` is a flex row of
+    // nav + panels and the PANEL is the scroller. Only the phone sheet moves it.
+    expect(ruleFor('.set-panels')).toMatch(/overflow-y:\s*auto/)
+  })
+})
+
+describe('the word-bearing buttons in the Today header', () => {
+  // `.content-head` aligns its children on the BASELINE, so a button holding a
+  // word hangs off the title's baseline and sits proud of everything beside it
+  // unless it opts out — which is why two of these three carry a rule saying so
+  // in as many words. The third, `.today-shutdown`, shipped with no rule at all
+  // and sat 2.5px low (top 77 against 74.5) with a shrinkable flex.
+  //
+  // Pinned as a SET rather than one by one: the failure mode is adding a fourth
+  // button and not knowing this rule exists, and a test naming only the three
+  // that exist today would not catch that either — but it does catch a rule
+  // being dropped, and it puts the reason somewhere a grep will find it.
+  const HEADER_BUTTONS = ['.today-review', '.today-habits-open', '.today-shutdown']
+
+  it('all opt out of baseline alignment and of shrinking', () => {
+    for (const sel of HEADER_BUTTONS) {
+      const body = ruleFor(sel)
+      expect(body, `${sel} has no rule in app.css`).not.toBe('')
+      expect(body, `${sel} would sit proud of its siblings`).toMatch(/align-self:\s*center/)
+      expect(body, `${sel} can be shrunk by its neighbours`).toMatch(/flex:\s*none/)
+    }
+  })
+
+  it('is the full set of them that TodayView renders', () => {
+    // The vacuity guard: if a button is renamed the loop above still passes
+    // against two stale selectors. This checks the header actually renders each
+    // one, so a rename fails here instead of quietly narrowing the test.
+    const src = read('src/components/TodayView.tsx')
+    for (const sel of HEADER_BUTTONS) {
+      expect(src, `${sel} is no longer rendered`).toContain(sel.slice(1))
+    }
+  })
+})
+
 describe('the calendar day-dot does not wear the tasks pane\'s row rule', () => {
   // `.task` is a GLOBAL rule — the Tasks pane's row: `display: flex`, a border,
   // and `padding: var(--row-y) var(--gutter)`. A 5px dot given `task` as a

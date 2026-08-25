@@ -707,7 +707,18 @@
   /* Nav and panel take turns rather than sharing the width: an index of
      sections, then the one you tapped. A 124px column beside a phone-width
      panel would leave neither enough room. */
-  .set-sheet .set-body { display: block; flex: 1 1 auto; min-height: 0; overflow: hidden; }
+  /* THE SHEET SCROLLS HERE, not one level down. `.set-panels` carries
+     `height: 100%; overflow-y: auto`, which looks like it should do this job and
+     does not: `.set-body` has no SPECIFIED height — its 500px comes out of flex
+     layout — so the percentage has nothing definite to resolve against and falls
+     back to `auto`, which is the content height. The panel then sized itself to
+     1084px of content inside a 500px parent that was `overflow: hidden`, and 584
+     PIXELS OF SETTINGS WERE SIMPLY UNREACHABLE on a phone: "Working day" and
+     "Time zone" are both below the fold on the General panel, and nothing
+     anywhere would scroll to them.
+     Measured at 390x844 before the fix: .set-body clientHeight 500,
+     scrollHeight 1084, overflow-y hidden. */
+  .set-sheet .set-body { display: block; flex: 1 1 auto; min-height: 0; overflow-y: auto; }
   .set-sheet .set-nav {
     width: auto; border-right: 0; padding-right: 0; gap: 0;
     height: 100%; overflow-y: auto;
@@ -721,7 +732,9 @@
   }
   .set-sheet .set-nav-item::after { content: "›"; color: var(--fg-faint); font-size: calc(15px * var(--fs-scale)); }
   .set-sheet .set-nav-item.active { border-left: 0; }
-  .set-sheet .set-panels { height: 100%; overflow-y: auto; padding-right: 0; }
+  /* The panel is now just content inside that scroller; a second nested
+     scroller would trap the gesture and leave the same sections unreachable. */
+  .set-sheet .set-panels { height: auto; overflow-y: visible; padding-right: 0; }
   .set-sheet[data-view="index"] .set-panels { display: none; }
   .set-sheet[data-view="panel"] .set-nav { display: none; }
 
@@ -1692,6 +1705,13 @@
    which half you are on is the LABEL, which names the destination rather than
    the current state, plus `aria-pressed` for anyone who cannot see it. */
 .today-review { flex: none; align-self: center; }
+
+/* The way in to the shutdown ritual, beside Review. Same rule as its two
+   siblings and for the same reason — it had NEITHER half, being the one
+   word-bearing button in this header that shipped without a rule of its own, so
+   it sat 2.5px below Review and Habits (measured: top 77 against their 74.5)
+   and kept a shrinkable `flex: 0 1 auto` where they are `none`. */
+.today-shutdown { flex: none; align-self: center; }
 
 /* The way in to the sheet, in the tab header. Deliberately in the Today header
    rather than in Settings: the moment you want to change a habit is the morning
