@@ -1291,8 +1291,19 @@ class McpApi:
             start, end, days = resolved, resolved, [resolved]
         # `end` is exclusive everywhere in this service, so a single day is the
         # half-open span [day, day+1) rather than a second code path.
-        span_end = end if ranged else (
-            date.fromisoformat(start) + timedelta(days=1)).isoformat()
+        if ranged:
+            span_end = end
+        else:
+            # Saturate rather than overflow, exactly as `find_free_time` does on
+            # the same boundary. `_day_or_today` accepts "9999-12-31" because it
+            # is a real calendar date, and adding a day to it raises OverflowError
+            # — not a ValueError, so nothing here catches it, and the catch-all
+            # reported the misleading "the calendar server may be unreachable" for
+            # an argument the calling model chose. The HTTP twin is unaffected;
+            # this was MCP-only.
+            day_obj = date.fromisoformat(start)
+            span_end = (day_obj + timedelta(days=1)).isoformat() if day_obj < date.max \
+                else day_obj.isoformat()
         done_by_day = self._completions_by_day(start, span_end)
         by_day = {p["day"]: p for p in plans}
         # A day with completions but no plan still belongs in a range review:
