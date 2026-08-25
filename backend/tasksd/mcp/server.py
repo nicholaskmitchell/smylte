@@ -26,7 +26,7 @@ import json
 import logging
 import math
 
-from .oauth import OAuthError, SCOPE_WRITE, scope_set
+from .oauth import OAuthError, SCOPE_WRITE, scope_set, wire_safe
 from .tools import ToolError, build_tools
 from .validate import SchemaError, check_arguments
 
@@ -64,10 +64,14 @@ MAX_BATCH = 50
 
 def _usable_id(rid) -> bool:
     """Whether an id can be echoed back. JSON-RPC 2.0 §4 allows a String, a
-    Number or Null; `bool` is excluded because it is not a Number, and a float
-    has to be finite or the response cannot be serialized at all."""
-    if rid is None or isinstance(rid, str):
+    Number or Null; `bool` is excluded because it is not a Number, a float has
+    to be finite, and a string has to be encodable — the id is echoed into every
+    envelope, so an unpaired surrogate in it kills the reply exactly the way a
+    NaN does, after the tool has already run."""
+    if rid is None:
         return True
+    if isinstance(rid, str):
+        return wire_safe(rid) == rid
     if isinstance(rid, bool):
         return False
     if isinstance(rid, int):
@@ -117,7 +121,8 @@ class McpServer:
             # cannot address the caller. (app.py's _invalid_request documents
             # this same trap on the 422 path.)
             return _error(None, INVALID_REQUEST,
-                          "id must be a string, a finite number, or null")
+                          "id must be a null, a finite number, or a string that "
+                          "is valid UTF-8")
         if not isinstance(method, str):
             return _error(rid, INVALID_REQUEST, "missing method")
         # No id means a notification. The only ones that matter here are
@@ -152,18 +157,22 @@ class McpServer:
                 return None if is_notification else _result(rid, {})
             else:
                 return None if is_notification else _error(
-                    rid, METHOD_NOT_FOUND, f"unknown method: {method}"
+                    rid, METHOD_NOT_FOUND, f"unknown method: {wire_safe(method)}"
                 )
         except OAuthError:
             raise                                  # authorization is the transport's business
         except ToolError as exc:
-            return None if is_notification else _error(rid, INVALID_PARAMS, str(exc))
+            # `wire_safe`: a ToolError's text can quote the caller's own
+            # arguments back at them — `check_arguments` names every unknown key,
+            # and those keys are attacker-chosen JSON.
+            return None if is_notification else _error(
+                rid, INVALID_PARAMS, wire_safe(str(exc)))
         except Exception as exc:                   # noqa: BLE001
             # Logged in full, reported in outline: the message may carry a
             # CalDAV URL or a backend detail the client has no business seeing.
             log.exception("mcp: %s failed", method)
             return None if is_notification else _error(
-                rid, INTERNAL_ERROR, f"{method} failed: {type(exc).__name__}"
+                rid, INTERNAL_ERROR, f"{wire_safe(method)} failed: {type(exc).__name__}"
             )
         return None if is_notification else _result(rid, payload)
 

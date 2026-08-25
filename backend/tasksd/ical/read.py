@@ -81,6 +81,31 @@ def find_vtodo(cal: Calendar):
 
 
 def _iso(value) -> tuple[str | None, bool]:
+    """The property as an ISO instant, or None when it does not name one.
+
+    The fallback here used to be `str(dt)`, which is a Python repr for anything
+    icalendar parses into something that is not a date or a datetime — and it
+    parses `VALUE=PERIOD` into a tuple and `VALUE=DURATION` into a timedelta,
+    both of which any CalDAV client sharing the collection can write. Two
+    consequences, in different subsystems, from that one line:
+
+    * `"(datetime.datetime(2026, 2, 10, 9, 0, tzinfo=...), datetime.timedelta(...))"`
+      landed in the `min_instant` column, where the candidate query compares it
+      as a STRING against a window bound. `(` sorts below every digit, so the
+      repr is `<=` every bound that will ever exist and the resource became a
+      candidate for EVERY window, forever. That is exactly the state store.py's
+      own docstring calls unaffordable — it measured 50 such rows taking a
+      two-day booking window from ~0 s to 9.13 s, one expansion per candidate,
+      under the global lock, on the unauthenticated booking routes.
+    * The same repr reached `DUE`, where the MCP layer's sort key parses every
+      row's due value and raises on anything it cannot read — so one foreign
+      VTODO made `smylte_list_tasks` fail for the whole account.
+
+    A value that does not name an instant now reads as absent, which every
+    consumer already handles: an undated task, a row with no lower bound. The
+    raw bytes are untouched on the server either way — this is only what the
+    cache records about them.
+    """
     if value is None:
         return None, False
     dt = value.dt if hasattr(value, "dt") else value
@@ -88,7 +113,7 @@ def _iso(value) -> tuple[str | None, bool]:
         return dt.isoformat(), False
     if isinstance(dt, date):
         return dt.isoformat(), True
-    return str(dt), False
+    return None, False
 
 
 # RFC 5545 §3.3.6 splits a DURATION into two kinds of quantity, and the

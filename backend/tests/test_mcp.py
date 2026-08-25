@@ -1646,3 +1646,34 @@ def test_a_habit_on_an_unopened_day_is_visible_but_cannot_be_ticked(mcp, tmp_pat
     assert "no entry" in r["content"][0]["text"]
     # And the attempt did not open the day on its way past.
     assert _day_rows(tmp_path) == (0, 0)
+
+
+def test_a_lone_surrogate_anywhere_on_the_reply_path_cannot_kill_the_response():
+    """`json.loads` accepts an unpaired surrogate and hands it back verbatim;
+    Starlette renders with `ensure_ascii=False` and then `.encode("utf-8")`,
+    which raises. That happens WHILE RENDERING — outside every exception handler
+    — so it is a 500, and for `tools/call` it lands after the tool has already
+    run: a real write committed while its caller was told the call failed, and in
+    a batch one poisoned id discarded all 50 replies.
+
+    Exactly the failure the non-finite-id guard was written for, which is why
+    `_usable_id` now checks a string is encodable as well, and why every place
+    that echoes caller-supplied text into a reply goes through `wire_safe`."""
+    import json as _json
+
+    from tasksd.mcp.oauth import wire_safe
+    from tasksd.mcp.server import _usable_id
+
+    def render(obj):                      # what starlette's JSONResponse does
+        return _json.dumps(obj, ensure_ascii=False, allow_nan=False).encode("utf-8")
+
+    assert _usable_id("\ud800") is False, "an unencodable id is not a reply address"
+    assert _usable_id("req-1") and _usable_id(7) and _usable_id(None)
+
+    assert wire_safe("a\ud800b") == "a?b"
+    render({"jsonrpc": "2.0", "id": None, "error": {"message": wire_safe("\ud800")}})
+
+    # The three other places caller-controlled text reaches a reply: an unknown
+    # method name, an unknown argument name, and an unknown OAuth scope.
+    for hostile in ("bad\ud800method", "\udfff", "ok"):
+        render({"m": wire_safe(hostile)})

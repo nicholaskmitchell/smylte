@@ -1618,3 +1618,47 @@ def test_the_span_guard_lets_every_ordinary_edit_through(edit):
     """A rename, a move that stays timed, a genuine switch to all-day with both
     ends sent, and a one-end move inside the existing span."""
     assert apply_event_changes(_timed_event(), edit)
+
+
+def test_a_period_valued_property_never_becomes_a_python_repr_in_the_cache():
+    """`_iso`'s fallback used to be `str(dt)`, and icalendar parses
+    `VALUE=PERIOD` into a tuple and `VALUE=DURATION` into a timedelta — both
+    writable by any client sharing the collection.
+
+    The repr landed in `min_instant`, which the candidate query compares as a
+    STRING against a window bound. `(` sorts below every digit, so it is `<=`
+    every bound that will ever exist and the resource became a candidate for
+    EVERY window, forever — the exact state store.py's docstring measures at 50
+    rows taking a two-day booking window from ~0 s to 9.13 s, one expansion per
+    candidate, under the global lock, on the unauthenticated routes.
+
+    A value that does not name an instant now reads as absent, which every
+    consumer already handles."""
+    raw = foreign_event_raw("per", rrule="FREQ=WEEKLY;COUNT=2",
+                            rdate="20260210T090000Z/PT2H;VALUE=PERIOD")
+    # `rdate=` renders as `RDATE:<value>`, so build the parameterised form by hand.
+    raw = raw.replace(b"RDATE:20260210T090000Z/PT2H;VALUE=PERIOD",
+                      b"RDATE;VALUE=PERIOD:20260210T090000Z/PT2H")
+    fields = extract_from_raw(raw)
+    assert fields.min_instant == "2026-01-06T09:00:00+00:00", fields.min_instant
+    assert not fields.min_instant.startswith("("), (
+        "a Python repr in min_instant is <= every window bound there will ever be")
+
+
+def test_an_unreadable_due_reads_as_absent_rather_than_as_a_repr():
+    """The same fallback reached DUE, where the MCP layer parses every row's
+    value to build a sort key — so one foreign VTODO made `smylte_list_tasks`
+    fail for the whole account."""
+    raw = (b"BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//foreign//EN\r\n"
+           b"BEGIN:VTODO\r\nUID:bad@x\r\nDTSTAMP:20260101T000000Z\r\nSUMMARY:T\r\n"
+           b"DUE;VALUE=PERIOD:20260101T000000Z/20260102T000000Z\r\n"
+           b"END:VTODO\r\nEND:VCALENDAR\r\n")
+    assert extract_from_raw(raw).due is None
+
+    # And the MCP sort key fails soft even if a row reaches it unreadable anyway.
+    from tasksd.mcp.api import _intrinsic_order
+    rows = [{"due": "(datetime.datetime(2026, 1, 1, 0, 0),)", "uid": "bad",
+             "summary": "T", "priority": None},
+            {"due": "2026-01-05", "uid": "ok", "summary": "O", "priority": None}]
+    assert [r["uid"] for r in sorted(rows, key=_intrinsic_order)] == ["ok", "bad"], (
+        "an unreadable deadline must sort as no deadline, not raise")
