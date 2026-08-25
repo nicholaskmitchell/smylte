@@ -5,6 +5,8 @@ purging a deleted collection's projection, and the FTS query escaping.
 """
 from __future__ import annotations
 
+import sqlite3
+
 import pytest
 
 from tasksd.dav.client import CollectionInfo, Item
@@ -266,3 +268,45 @@ def test_a_row_cached_before_the_fts_rowid_column_still_replaces_cleanly(db):
     assert store.search(db, "Legacy") == []
     assert db.execute(
         "SELECT fts_rowid FROM items WHERE uid='t2'").fetchone()["fts_rowid"] is not None
+
+
+def test_tx_reports_the_real_failure_when_sqlite_has_already_rolled_back(tmp_path):
+    """`tx`'s failure arm issued an unconditional ROLLBACK. SQLite rolls back by
+    itself for some error classes — SQLITE_FULL and SQLITE_IOERR being the
+    realistic ones on a self-hosted box whose disk fills — so by the time the
+    handler ran there was no transaction and the ROLLBACK ITSELF raised "cannot
+    rollback - no transaction is active", propagating in place of the real
+    exception.
+
+    The data was safe; the diagnosis was destroyed at the moment it was needed.
+    `sync_all` logs whatever escapes and persists it as `sync_state.last_error`,
+    so the log line and the operator-facing error both read "cannot rollback"
+    when the condition was a full disk.
+
+    SQLITE_FULL is simulated with `PRAGMA max_page_count`, which produces the
+    same "database or disk is full" and the same automatic rollback."""
+    conn = store.connect(str(tmp_path / "t.db"))
+    conn.execute("CREATE TABLE t (v BLOB)")
+    pages = conn.execute("PRAGMA page_count").fetchone()[0]
+    conn.execute(f"PRAGMA max_page_count={pages + 5}")
+
+    with pytest.raises(sqlite3.OperationalError) as caught:
+        with store.tx(conn):
+            for _ in range(10_000):
+                conn.execute("INSERT INTO t VALUES (?)", (b"x" * 4000,))
+
+    assert "disk is full" in str(caught.value), str(caught.value)
+    assert "cannot rollback" not in str(caught.value)
+
+    # And the ordinary paths still behave: a clean block commits, and a failure
+    # SQLite has NOT already handled still rolls back.
+    conn.execute(f"PRAGMA max_page_count={pages + 5000}")
+    with store.tx(conn):
+        conn.execute("INSERT INTO t VALUES (?)", (b"kept",))
+    with pytest.raises(RuntimeError):
+        with store.tx(conn):
+            conn.execute("INSERT INTO t VALUES (?)", (b"dropped",))
+            raise RuntimeError("boom")
+    rows = [r[0] for r in conn.execute("SELECT v FROM t WHERE v IN (?, ?)",
+                                       (b"kept", b"dropped"))]
+    assert rows == [b"kept"]

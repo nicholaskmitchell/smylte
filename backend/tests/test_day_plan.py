@@ -1647,3 +1647,19 @@ def test_an_estimate_given_when_planning_survives_a_retry(mcp_api, svc):
                              estimate_minutes=40)
     assert again["entry_id"] == first["entry_id"], "still one row"
     assert again["estimate_minutes"] == 40, "the stated estimate was dropped"
+
+
+def test_review_day_saturates_at_the_last_representable_day(mcp_api):
+    """`_day_or_today` accepts "9999-12-31" because it is a real calendar date,
+    and the span computation added a day to it — OverflowError, which is not a
+    ValueError, so nothing on this path caught it and the catch-all reported "the
+    calendar server may be unreachable" for an argument the calling model chose.
+
+    The same boundary was already fixed twice elsewhere: `find_free_time` breaks
+    at `date.max`, and the HTTP event PATCH maps OverflowError to a 422. The HTTP
+    twin of this route is unaffected — it was MCP-only."""
+    out = mcp_api.review_day(day="9999-12-31")
+    assert out is not None
+    # The day before still answers the same way, so the clamp did not change the
+    # ordinary case into the boundary one.
+    assert mcp_api.review_day(day="9999-12-30") is not None

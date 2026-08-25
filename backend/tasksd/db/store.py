@@ -40,7 +40,21 @@ def tx(conn: sqlite3.Connection):
     try:
         yield
     except BaseException:
-        conn.execute("ROLLBACK")
+        try:
+            conn.execute("ROLLBACK")
+        except sqlite3.Error:
+            # SQLite rolls back by itself for some error classes — SQLITE_FULL
+            # and SQLITE_IOERR being the realistic ones on a box whose disk
+            # fills up — so by the time this runs there is no transaction left
+            # and the ROLLBACK itself raises "cannot rollback - no transaction
+            # is active". Unguarded, THAT exception propagated in place of the
+            # real one and the `raise` below never ran. The data was safe, but
+            # the diagnosis was destroyed at the moment it was needed: sync_all
+            # logs the escaping exception and persists it as
+            # `sync_state.last_error`, so both the log and the operator-facing
+            # error read "cannot rollback" when the condition was "database or
+            # disk is full".
+            pass
         raise
     else:
         conn.execute("COMMIT")
