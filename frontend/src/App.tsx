@@ -84,6 +84,12 @@ export function App() {
   // which is what this used to be the only way to set.
   const [sessionTtl, setSessionTtl] = useState<number | null>(null)
   const [rev, setRev] = useState(0)
+  // A SECOND revision counter, for settings alone. `rev` drives the task and
+  // event refetch, and bumping it on a preference change is the request storm
+  // the SSE handler's early return was added to stop — but dropping the event
+  // outright left this tab holding whatever the settings blob said when it
+  // loaded. See the SSE effect and `store.update_settings`' shallow merge.
+  const [settingsRev, setSettingsRev] = useState(0)
   const [settingsOpen, setSettingsOpen] = useState(false)
   // Appearance is the one editor still opened over the app: it is a full token
   // workbench, not a row of settings. Tabs, connected apps and archived
@@ -281,7 +287,7 @@ export function App() {
         settingsFailed.current = true
         showToast("Couldn't load your preferences — changes won't be saved until this reloads")
       })
-  }, [auth, applyTheme, showToast])
+  }, [auth, settingsRev, applyTheme, showToast])
 
   // Every UI preference is written the same way, so the failure handling lives
   // in one place. These used to be `.catch(() => {})` — which swallowed an
@@ -557,12 +563,42 @@ export function App() {
   useEffect(() => {
     if (auth !== 'in') return
     let timer: ReturnType<typeof setTimeout> | undefined
+    let settingsTimer: ReturnType<typeof setTimeout> | undefined
     const unsubscribe = subscribe((type) => {
-      if (type === 'settings_updated') return
+      if (type === 'settings_updated') {
+        // Re-read the SETTINGS — but never bump `rev`, which is what the bare
+        // early return here was protecting: one appearance-slider drag would
+        // otherwise fire a full lists+tasks refetch per step.
+        //
+        // Dropping the event entirely was the other half of the problem. This is
+        // the only place `api.getSettings` is reached from, and its effect keys
+        // on an auth transition, so a tab open since this morning held this
+        // morning's blob for the rest of the day. `store.update_settings` merges
+        // SHALLOWLY, and every list-shaped preference — task_groups,
+        // hidden_lists, archived_calendars, dashboard, tab_order, appearance —
+        // is written back WHOLE from local state. So creating a group on the
+        // phone and then renaming a different one in the stale desktop tab sent
+        // `{task_groups: [<this morning's array>]}` and the new group was gone
+        // from the account, silently, on both devices. Same shape wipes a theme
+        // saved on another device.
+        //
+        // Skipped while this tab has a write of its own pending: the debounced
+        // PUT has not landed yet, so re-reading now would paint the value it is
+        // about to replace. The trailing write wins either way; this only stops
+        // a visible flicker.
+        if (Object.keys(pendingPatch.current).length) return
+        clearTimeout(settingsTimer)
+        settingsTimer = setTimeout(() => setSettingsRev((r) => r + 1), 250)
+        return
+      }
       clearTimeout(timer)
       timer = setTimeout(() => setRev((r) => r + 1), 250)
     }, onExpire)
-    return () => { clearTimeout(timer); unsubscribe() }
+    return () => {
+      clearTimeout(timer)
+      clearTimeout(settingsTimer)
+      unsubscribe()
+    }
   }, [auth, onExpire])
 
   // Dismiss the settings menu on an outside click (like Søren's). Escape is

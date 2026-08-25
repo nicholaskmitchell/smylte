@@ -393,6 +393,36 @@ describe('<App> live updates', () => {
     })
     expect(m.lists.mock.calls.length).toBe(before)
   })
+
+  it('DOES re-read the settings for a settings write, so another device cannot be overwritten', async () => {
+    // The other half of the same event. Dropping it outright left this tab
+    // holding whatever the blob said when it loaded — and `getSettings` is
+    // reached from exactly one effect, keyed on an auth transition, so that was
+    // for the life of the tab.
+    //
+    // `store.update_settings` merges SHALLOWLY, and every list-shaped preference
+    // is written back WHOLE from local state. So: create a group on the phone,
+    // then rename a different one in the desktop tab that has been open since
+    // morning, and the PUT carries the morning array — the new group is gone
+    // from the account, on both devices, with no error. Same shape wipes a theme
+    // saved on another device.
+    render(<App />)
+    await screen.findByRole('button', { name: 'Tasks' })
+    await waitFor(() => expect(subscribe).toHaveBeenCalled())
+    await waitFor(() => expect(m.getSettings).toHaveBeenCalledTimes(1))
+    const listsBefore = m.lists.mock.calls.length
+
+    // The other device changed something.
+    m.getSettings.mockResolvedValue({ task_groups: [{ id: 'g2', name: 'From the phone', lists: [] }] })
+    await act(async () => {
+      emit()('settings_updated')
+      await new Promise((r) => setTimeout(r, 400))
+    })
+
+    await waitFor(() => expect(m.getSettings).toHaveBeenCalledTimes(2))
+    // ...and still no task/event refetch, which is what the early return was for.
+    expect(m.lists.mock.calls.length).toBe(listsBefore)
+  })
 })
 
 describe('<App> clock setting', () => {

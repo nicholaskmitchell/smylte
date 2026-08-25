@@ -322,3 +322,84 @@ describe('the calendar day-dot does not wear the tasks pane\'s row rule', () => 
     }
   })
 })
+
+// ── the four phone defects the 2026-08-25 sweep found ──────────────────────
+
+/** EVERY `@media (max-width: 720px)` body, joined. The stylesheet has four and
+ *  the rules below live in more than one of them, so pinning against a single
+ *  index would pass or fail on where a rule happens to sit rather than on
+ *  whether it exists. */
+const allMobile = (() => {
+  const parts: string[] = []
+  for (let i = 0; ; i++) {
+    try { parts.push(mediaBlock(i)) } catch { break }
+    if (parts.length > 12) break
+  }
+  return parts.join('\n')
+})()
+
+describe('the iOS 16px floor covers every control that carries .input', () => {
+  it('no later rule sets a sub-16px font-size on an .input consumer', () => {
+    // `.input`'s mobile floor exists to stop Safari zooming when a control under
+    // 16px takes focus — and once it zooms it does not zoom back, so every later
+    // tap lands offset from what the user sees. Three later rules beat it on
+    // source order at equal specificity, which is the THIRD time this exact
+    // regression has shipped: `.bulk-row .input`, `.sched-range .input` and
+    // `.appear-text` each carry a restoring rule and a comment saying why.
+    //
+    // `.today-est-input` was the worst of the three: it is `autoFocus`, so
+    // tapping a row's `est` cell zoomed the page with no tap on the field.
+    for (const sel of ['.shut-date', '.shut-reflect', '.today-est-input']) {
+      // Matched inside the joined mobile bodies rather than by exact selector,
+      // because the restoring rule groups all three.
+      const re = new RegExp(`${sel.replace('.', '\\.')}[^{}]*\\{[^{}]*max\\(\\s*16px`)
+      expect(allMobile, `${sel} has no mobile font-size floor`).toMatch(re)
+    }
+  })
+})
+
+describe('a foreign-authored title cannot scroll the pane sideways', () => {
+  it('every title that renders a foreign SUMMARY can break a long token', () => {
+    // A pasted URL is one token with no soft wrap opportunity. Both scrollers
+    // these land in declare only `overflow-y: auto`, and per CSS Overflow that
+    // computes `overflow-x` to `auto` too — so the overflow becomes sideways
+    // scrolling of the whole pane, dragging the month grid off screen with it.
+    for (const sel of ['.task-title', '.today-title', '.agenda-ev']) {
+      expect(ruleFor(sel), `${sel} has no wrap guard`).toMatch(/overflow-wrap:\s*(anywhere|break-word)/)
+    }
+  })
+})
+
+describe('the Home stack keeps its home-indicator inset', () => {
+  it('.dash-stack carries safe-area-inset-bottom itself', () => {
+    // It is phone-only, and its `padding` shorthand outranks the mobile
+    // `.scroll` rule on source order — so it has to carry the inset rather than
+    // defer to a rule it beats. Home was the one tab whose last module sat under
+    // the pill with no further scroll to lift it.
+    expect(ruleFor('.dash-stack')).toMatch(/padding:[^;]*env\(safe-area-inset-bottom\)/)
+  })
+})
+
+describe('the phone-primary controls meet the touch standard this file set', () => {
+  it('Today rows, the settings toggles and the mini calendar are grown on mobile', () => {
+    // The mobile block already grows `.task-actions button` and the drawer's
+    // group buttons for exactly this reason. These were left at mouse sizes:
+    // the Today row controls at ~18x16 (and `.today-drop` has its own
+    // `@media (hover: none)` rule making it permanently visible on touch, i.e.
+    // it is meant to be tapped), `.menu-toggle` — every settings control on the
+    // phone sheet — at ~27px tall, and the mini calendar's day button at ~21px.
+    const padY = (body: string) => {
+      const m = /padding:\s*(\d+)px/.exec(body)
+      return m ? Number(m[1]) : 0
+    }
+    for (const sel of ['.today-drop, .today-plus', '.today-est', '.menu-toggle', '.mini-day']) {
+      const body = ruleFor(sel, allMobile)
+      expect(body, `${sel} has no mobile touch rule`).not.toBe('')
+      expect(padY(body), `${sel} is still mouse-sized on a phone`).toBeGreaterThanOrEqual(8)
+    }
+    // The rename and delete-group controls were one pixel apart.
+    // Two rules share this selector inside the mobile bodies (one restores
+    // opacity on touch), so match the declaration rather than the first rule.
+    expect(allMobile).toMatch(/\.side\.drawer \.group-actions\s*\{[^{}]*gap:\s*(?:[4-9]|\d\d)px/)
+  })
+})
