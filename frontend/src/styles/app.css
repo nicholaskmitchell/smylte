@@ -356,7 +356,15 @@
 .pri-med { background: var(--pri-med); }
 .pri-low { background: var(--pri-low); }
 .task-body { flex: 1; min-width: 0; }
-.task-title { font-size: calc(15px * var(--fs-scale)); color: var(--fg); }
+/* `overflow-wrap` because this renders a SUMMARY another CalDAV client wrote,
+   and a pasted URL is one long token with no soft wrap opportunity. Both
+   scrollers these titles live in declare only `overflow-y: auto`, and per CSS
+   Overflow that computes `overflow-x` to `auto` too — so the overflow becomes
+   sideways scrolling of the whole pane, dragging the month grid off screen with
+   it. The stylesheet already applies this guard to `.day-card-title`,
+   `.sched-card-title`, `.toast span` and the Today chips for the same reason. */
+.task-title { font-size: calc(15px * var(--fs-scale)); color: var(--fg);
+  min-width: 0; overflow-wrap: anywhere; }
 .task-meta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 3px; align-items: center; }
 .task-meta .due { font-family: var(--mono); font-size: calc(11px * var(--fs-scale)); color: var(--fg-muted); }
 .task-meta .due.overdue { color: var(--warn); }
@@ -603,6 +611,10 @@
   background: none; border: 0; border-bottom: 1px solid var(--rule-faint);
   border-left: 2px solid var(--ev-c, var(--accent));
   padding: 12px 14px; font-size: calc(15px * var(--fs-scale)); color: var(--fg); cursor: pointer;
+  /* see `.task-title` — the summary here is foreign-authored too, and the
+     unclassed span holding it is a flex item whose default `min-width: auto`
+     resolves to min-content, i.e. the longest word. */
+  overflow-wrap: anywhere; min-width: 0;
 }
 .agenda-ev:hover { background: var(--bg-elev); }
 /* A task agenda row: same frame as an event, marked by its checkbox. */
@@ -1155,7 +1167,16 @@
 .mini-day.today .mini-dot { box-shadow: 0 0 0 0.5px var(--bg); }
 
 /* mobile: modules stack full-width, read-only (arranging is desktop-only) */
-.dash-stack { display: flex; flex-direction: column; gap: 12px; padding: 12px 14px; }
+/* The `padding` shorthand here sits at the same (0,1,0) specificity as the
+   mobile `.scroll` rule but 291 lines later, so it reset all four sides and Home
+   became the one tab whose scroller lost its home-indicator inset — the last
+   module's final rows sat under the pill with no further scroll to lift them.
+   (`.shell` is `height: 100dvh` and index.html opts into `viewport-fit=cover`,
+   so this scroller's bottom edge IS the physical screen bottom.)
+   `.dash-stack` is phone-only, so it carries the inset itself rather than
+   deferring to a rule it outranks; `env()` is 0 everywhere else. */
+.dash-stack { display: flex; flex-direction: column; gap: 12px;
+  padding: 12px 14px calc(12px + env(safe-area-inset-bottom)); }
 /* `flex: none` — that is `flex-shrink: 0` — and it is the whole fix.
    `.dash-stack` is a flex column inside `.scroll`, which is a FIXED-HEIGHT
    scroller (`flex: 1; overflow-y: auto`). A flex child defaults to
@@ -1292,6 +1313,16 @@
      therefore rendered at 12px on a phone — 9.6px at the minimum --fs-scale of
      0.8 — which is exactly the condition the floor exists to prevent. */
   .appear-text { font-size: max(16px, calc(12px * var(--fs-scale))); }
+  /* And the same again for the Today/Shutdown fence added after that fix — the
+     third time this exact regression has shipped. `.shut-date`, `.shut-reflect`
+     and `.today-est-input` all carry `.input`, all declare font-size at the same
+     (0,1,0) specificity, and all sit LATER in this file, so all three win in
+     every viewport. `.today-est-input` is the worst of them: it is `autoFocus`,
+     so tapping a row's `est` cell focuses an 11px field and Safari zooms
+     immediately, with no tap on the field itself. */
+  .shut-date, .shut-reflect, .today-est-input {
+    font-size: max(16px, calc(16px * var(--fs-scale)));
+  }
   /* the modal is already a scrolling bottom sheet — a nested scroller inside
      one is miserable on touch, so let the rows flow into it instead */
   .bulk-rows { max-height: none; overflow: visible; gap: 10px; }
@@ -1307,6 +1338,35 @@
   .bulk-x { order: -1; margin-left: auto; }
   .bulk-f-title { flex: 1 1 100%; }
   .bulk-cell-label { display: block; flex: 1 0 100%; }
+
+  /* ---- touch targets this block had already set a standard for ----------
+     Two lines above, `.task-actions button` is grown to `padding: 5px 6px` and
+     the drawer's group buttons to `6px 7px`, because the phone is the primary
+     surface. Three groups were left at their mouse sizes, and each is a
+     first-class control rather than an ornament. */
+
+  /* The Today tab's per-row controls: drop-to-tomorrow, add-a-child, and the
+     estimate cell. All three render at 2px vertical padding on a `line-height:
+     1` glyph — roughly 18x16 — and `.today-drop` has its OWN
+     `@media (hover: none)` rule making it permanently visible on touch, i.e. it
+     is explicitly meant to be tapped. The whole Today fence sits outside every
+     media block, which is how they were missed. */
+  .today-drop, .today-plus { padding: 8px 10px; }
+  .today-est { padding: 8px 6px; min-height: 34px; }
+  .today-est-input { padding: 6px 8px; }
+
+  /* `.menu-toggle` is EVERY settings control on the phone sheet — Clock, Theme,
+     Home timezone, Calendar window, Completed tasks, Stay signed in — at about
+     27px tall. */
+  .menu-toggle { padding: 10px 13px; }
+
+  /* The Home mini calendar's day cell is a real button that opens the day
+     popover, at roughly 48x21 in the phone stack. Vertical padding only: the
+     column width is set by the 7-column grid and must not change. */
+  .mini-day { padding: 11px 0; }
+
+  /* One pixel apart, at 23x30, next to each other in the drawer. */
+  .side.drawer .group-actions { gap: 6px; }
 }
 
 /* ---- corner radius ----------------------------------------------------
@@ -1542,6 +1602,7 @@
 .today-check-gap { width: var(--check-size); flex: none; }
 .today-title {
   flex: 1; min-width: 0; font-size: calc(15px * var(--fs-scale)); color: var(--fg);
+  overflow-wrap: anywhere;                  /* see `.task-title` */
 }
 .today-row.done .today-title { color: var(--fg-faint); text-decoration: line-through; }
 .today-row.gone .today-title { color: var(--fg-faint); font-style: italic; }
