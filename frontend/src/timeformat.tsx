@@ -1,7 +1,7 @@
 // The 12/24-hour choice, handed to the leaves that render a clock.
 //
 // A context rather than a prop: seven call sites sit in six components, two of
-// them (DayPopover, ArchivedCalendarsModal) reachable only through an
+// them (DayPopover, ArchivedCalendarsSection) reachable only through an
 // intermediary that has no other use for the value. Threading a display-only
 // preference through five parents to reach them would be noise in every
 // signature it passed through. Everything else App owns is genuinely the

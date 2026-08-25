@@ -17,10 +17,10 @@ export function useIsMobile(): boolean {
 /**
  * Close on Escape, from wherever focus happens to be.
  *
- * Bound to `window`, which is the widest of the three spellings already in the
- * tree (DayPopover and SchedulingView use `window`, AppearancePanel uses
- * `document`) and subsumes them: a keydown on the document bubbles to the
- * window. A listener on the modal element does NOT subsume either — it only
+ * Bound to `window`, the widest of the three spellings this REPLACED — DayPopover
+ * and SchedulingView used `window`, AppearancePanel `document` — and the one that
+ * subsumes them: a keydown on the document bubbles to the window. All three call
+ * this hook now, and it holds the only keydown registration left in the app. A listener on the modal element does NOT subsume either — it only
  * fires while focus is inside the dialog, and with no focus trap that is exactly
  * the state a keyboard user needs the escape hatch from.
  *

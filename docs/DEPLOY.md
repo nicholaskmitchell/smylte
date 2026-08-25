@@ -237,15 +237,20 @@ logged at startup: `journalctl -u tasks | grep csp:`.
 
 ## If the password leaks — signing out everywhere
 
-Sessions are JWTs, so they are valid until they expire (`TASKS_SESSION_TTL`, 7
-days by default) whether or not the browser still holds the cookie. Logging out
+Sessions are JWTs, so they are valid until they expire whether or not the
+browser still holds the cookie. How long that is comes from the **Stay signed
+in** setting under Settings → Account (1 day / 7 days / 30 days / Never), NOT
+from the env file: `TASKS_SESSION_TTL` is only the fallback used until the
+account has chosen, so editing it does nothing once a choice has been stored. Logging out
 withdraws one session *by name*; it cannot reach a session minted on someone
 else's machine, whose id you have never seen.
 
 Two levers, in the order to reach for them:
 
-1. **Change the password.** Regenerate with `python -m tasksd hash-password`,
-   set `TASKS_AUTH_PASSWORD_HASH` in `/etc/tasks/tasks.env`, `sudo systemctl
+1. **Change the password.** Regenerate with `cd ~/tasks/backend && .venv/bin/python
+   -m tasksd hash-password` — `tasksd` is not installed anywhere, so it resolves
+   only from the backend directory and run from elsewhere this aborts on "No
+   module named tasksd" — set `TASKS_AUTH_PASSWORD_HASH` in `/etc/tasks/tasks.env`, `sudo systemctl
    restart tasks`. Every existing session is refused from that moment: a token
    carries a fingerprint of the credentials it was minted under, so changing
    the password (or `TASKS_AUTH_USER`) invalidates all of them. This is the
