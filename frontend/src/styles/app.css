@@ -534,7 +534,12 @@
 .cal-task .tick { color: var(--ev-c, var(--accent)); margin-inline-end: 3px; }
 .cal-task .t { font-family: var(--mono); color: var(--fg-muted); margin-inline-end: 4px; }
 .cal-task.done { color: var(--fg-faint); text-decoration: line-through; }
-.ev-dot.task { border-radius: 0; }
+/* Square, so a task mark is distinguishable from an event's at 5px without
+   relying on colour. Selected on the DATA ATTRIBUTE and not on a `.task` class:
+   `.task` is a global rule (the Tasks pane's row, line ~293) carrying padding,
+   display and a border, and a 5px dot given that class as a modifier inherits
+   all of it and renders as a 28x23 slab. */
+.ev-dot[data-kind="task"] { border-radius: 0; }
 
 .cal-more {
   background: none; border: 0; padding: 0 5px; text-align: left; cursor: pointer;
@@ -656,6 +661,26 @@
 /* ---- mobile ---- */
 @media (max-width: 720px) {
   .topbar { gap: 14px; padding: 10px 14px; }
+  /* THE TAB STRIP SCROLLS rather than running off the edge of the bar.
+     Five tabs plus the brand and the settings button come to 497px against a
+     390px phone, and nothing here scrolled sideways — so the last tab was
+     simply clipped and Scheduling could not be reached on a phone at all.
+
+     `min-width: 0` is the load-bearing half: a flex child will not shrink below
+     its content without it, so the strip refused to narrow and pushed the
+     overflow onto the bar instead. `.spacer` gives up its stretch here so the
+     slack goes to the tabs rather than to empty space beside them.
+
+     Scrolled rather than wrapped, because a wrapped strip changes the bar's
+     height as tabs are reordered, and rather than shrunk to fit, because
+     `--fs-scale` can be turned up and any fixed budget would break again. */
+  .tabs {
+    flex: 1 1 auto; min-width: 0;
+    overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch;
+  }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tab { flex: none; padding: 6px 8px 8px; }
+  .topbar .spacer { flex: none; }
   .brand { font-size: calc(19px * var(--fs-scale)); }
   .menu { right: 14px; }
 
@@ -1066,7 +1091,17 @@
 
 /* mobile: modules stack full-width, read-only (arranging is desktop-only) */
 .dash-stack { display: flex; flex-direction: column; gap: 12px; padding: 12px 14px; }
-.dash-stack .dash-mod { position: static; height: auto; max-height: 60vh; }
+/* `flex: none` — that is `flex-shrink: 0` — and it is the whole fix.
+   `.dash-stack` is a flex column inside `.scroll`, which is a FIXED-HEIGHT
+   scroller (`flex: 1; overflow-y: auto`). A flex child defaults to
+   `flex-shrink: 1`, so five modules taller than the viewport were squashed to
+   fit it instead of overflowing and letting the container scroll — and because
+   `.dash-mod` is `overflow: hidden` with a `overflow-y: auto` body, the
+   squashing showed up as every module's content being quietly cut off partway
+   through. Measured at 390x844: the mini calendar rendered 138px of a 175px
+   body, "Upcoming" 53 of 72.
+   `height: auto` was already here and was never the problem; it was winning. */
+.dash-stack .dash-mod { position: static; height: auto; flex: none; max-height: 60vh; }
 
 /* ---- tabs editor -------------------------------------------------------- */
 .tab-order { display: flex; flex-direction: column; }

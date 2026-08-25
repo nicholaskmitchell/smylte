@@ -192,7 +192,13 @@ describe('aug19 stage 4b — chip, dot, agenda and popover identity', () => {
     stubMatchMedia(true)
     try {
       const mobile = render(<CalendarHarness taskLists={['l1', 'l2']} />)
-      await waitFor(() => expect(document.querySelectorAll('.ev-dot.task')).toHaveLength(2))
+      // `[data-kind="task"]`, not `.ev-dot.task`: the kind moved out of the
+      // class list because a bare `task` class collides with the Tasks pane's
+      // global row rule and rendered the 5px dot as a 28x23 slab. What this
+      // line asserts — both copies render, and React raised no duplicate-key
+      // warning — is unchanged.
+      await waitFor(() =>
+        expect(document.querySelectorAll('.ev-dot[data-kind="task"]')).toHaveLength(2))
       expect(document.querySelectorAll('.day-agenda .agenda-task')).toHaveLength(2)
       expect(keyWarnings(), 'mobile dots and day agenda').toBe(0)
       mobile.unmount()
