@@ -12,15 +12,47 @@ import pytest
 
 from tasksd.ical import TaskEdit, apply_changes, build_new, extract_from_raw, parse_calendar
 from tasksd.ical import canonical as C
+from tasksd.ical.edit import (
+    EventEdit,
+    apply_event_changes,
+    apply_occurrence_override,
+    exclude_occurrence,
+    shift_series,
+    split_series,
+)
 
 CORPUS = sorted((Path(__file__).parent / "corpus").glob("*.ics"))
 CORPUS_IDS = [p.name for p in CORPUS]
+
+# Split by component, because the two write paths are different code. Judged from
+# the bytes rather than the filename so dropping a real capture in here is all it
+# takes to widen the suite — which is what corpus/README.md promises.
+TODO_CORPUS = [p for p in CORPUS if "BEGIN:VTODO" in p.read_text(encoding="utf-8")]
+EVENT_CORPUS = [p for p in CORPUS if "BEGIN:VEVENT" in p.read_text(encoding="utf-8")]
+TODO_IDS = [p.name for p in TODO_CORPUS]
+EVENT_IDS = [p.name for p in EVENT_CORPUS]
+
+
+def test_the_corpus_is_not_empty():
+    """A parametrize over an empty list collects ZERO cases and reports green.
+    This is the load-bearing suite; an emptied or renamed-away corpus has to fail
+    rather than pass vacuously."""
+    assert TODO_CORPUS, "no VTODO golden files — the fidelity suite asserts nothing"
+    assert EVENT_CORPUS, "no VEVENT golden files — every event write path is ungraded"
+
 
 # Properties apply_changes() deliberately writes; excluded when asserting that
 # everything ELSE survived (invariant #2).
 TOUCHED = frozenset(
     {"SUMMARY", "STATUS", "COMPLETED", "PERCENT-COMPLETE", "LAST-MODIFIED", "DTSTAMP", "SEQUENCE"}
 )
+
+# The event write paths reshape the recurrence set by design, so a signature
+# comparison has to exclude the properties that ARE the edit. Everything else —
+# ATTENDEE and its parameters, ORGANIZER's quoted CN, VALARM, CATEGORIES, URL,
+# CLASS, TRANSP, the X-properties, the VTIMEZONE — must survive untouched.
+SPAN = frozenset({"DTSTART", "DTEND", "DURATION"})
+RECURRENCE = frozenset({"RRULE", "RDATE", "EXDATE", "RECURRENCE-ID", "UID"})
 
 
 def _read(path: Path) -> str:
@@ -37,7 +69,7 @@ def test_icalendar_read_write_preserves_everything(path: Path):
     )
 
 
-@pytest.mark.parametrize("path", CORPUS, ids=CORPUS_IDS)
+@pytest.mark.parametrize("path", TODO_CORPUS, ids=TODO_IDS)
 def test_edit_preserves_foreign_data(path: Path):
     """Editing only SUMMARY+STATUS must leave every foreign property, parameter,
     and subcomponent intact (invariant #2)."""
@@ -50,7 +82,7 @@ def test_edit_preserves_foreign_data(path: Path):
     assert sig_before == sig_after, f"{path.name}: an edit dropped/altered foreign data"
 
 
-@pytest.mark.parametrize("path", CORPUS, ids=CORPUS_IDS)
+@pytest.mark.parametrize("path", TODO_CORPUS, ids=TODO_IDS)
 def test_edit_actually_applied(path: Path):
     original = _read(path)
     edited = apply_changes(
@@ -253,3 +285,137 @@ def test_a_zoned_dtstart_keeps_its_tzid_too():
     assert [ln for ln in edited.decode().split("\r\n") if ln.startswith("DTSTART")] == [
         "DTSTART;TZID=Europe/Berlin:20260810T103000"
     ]
+
+
+# ── VEVENT: the event write paths, graded by the canonicalizer ──────────────
+#
+# The gap this closes: test_fidelity was driven entirely off `corpus/*.ics`, and
+# every file in it was VTODO-only. So invariant #2 ("an edit must leave every
+# foreign property, parameter and subcomponent intact") was checked with the
+# independent canonicalizer for the TASK path and for nothing else — while the
+# event write surface is the one with by far the most closed findings in
+# docs/AUDIT.md, several of which were exactly "an edit merged, relabelled or
+# dropped property lines". The only substitute was two ad-hoc
+# `assert b"X-FOREIGN-KEEP" in …` lines, and `split_series` — which mints a
+# brand-new resource under a fresh UID, and is the most invasive of the six — had
+# no foreign-data assertion anywhere in the suite.
+#
+# `signature` is order-independent and counts parameters, so it catches a
+# reordered ATTENDEE list, a dropped `;CN="Doe, Jane"`, a VALARM that lost its
+# X-WR-ALARMUID, and a VTIMEZONE the writer forgot to carry.
+
+ANCHOR = "2026-07-20T14:00:00-05:00"          # the third occurrence; also the override
+LATER = "2026-07-27T14:00:00-05:00"           # the fourth, with no override on it
+
+
+def _events(text: str):
+    """Every VEVENT in the tree, as canonical components."""
+    out = []
+    for cal in C.parse(text).children:
+        out.extend(c for c in cal.children if c.name == "VEVENT")
+    return out
+
+
+def _foreign_bag(text: str, drop: frozenset[str]):
+    """What the resource carries, minus the properties an edit is allowed to
+    change. Compared as a multiset so nothing can hide by moving."""
+    return C.flatten(C.parse(text), drop=drop)
+
+
+@pytest.mark.parametrize("path", EVENT_CORPUS, ids=EVENT_IDS)
+def test_event_read_write_preserves_everything(path: Path):
+    """Parse -> re-serialize with no changes, for the event path."""
+    original = _read(path)
+    reserialized = parse_calendar(original).to_ical().decode("utf-8")
+    assert C.signature(C.parse(original)) == C.signature(C.parse(reserialized)), (
+        f"{path.name}: icalendar altered the component on a no-op round-trip")
+
+
+@pytest.mark.parametrize("path", EVENT_CORPUS, ids=EVENT_IDS)
+def test_editing_the_whole_series_preserves_foreign_data(path: Path):
+    """`apply_event_changes` — the "all events" path."""
+    original = _read(path)
+    edited = apply_event_changes(
+        original, EventEdit(summary="edited by test")).decode("utf-8")
+    drop = TOUCHED | {"LAST-MODIFIED", "DTSTAMP", "SEQUENCE"}
+    assert C.signature(C.parse(original), drop=drop) == C.signature(C.parse(edited), drop=drop), (
+        f"{path.name}: editing the series dropped or altered foreign data")
+
+
+@pytest.mark.parametrize("path", EVENT_CORPUS, ids=EVENT_IDS)
+def test_overriding_one_occurrence_preserves_the_rest(path: Path):
+    """`apply_occurrence_override` — "this event". It ADDS a component, so the
+    master and every pre-existing override must come through unchanged."""
+    original = _read(path)
+    edited = apply_occurrence_override(
+        original, LATER, EventEdit(summary="just this one")).decode("utf-8")
+    drop = TOUCHED | {"LAST-MODIFIED", "DTSTAMP", "SEQUENCE"}
+    before, after = _foreign_bag(original, drop), _foreign_bag(edited, drop)
+    missing = before - after
+    assert not missing, f"{path.name}: overriding one occurrence lost {sorted(missing)[:6]}"
+    assert len(_events(edited)) == len(_events(original)) + 1
+
+
+@pytest.mark.parametrize("path", EVENT_CORPUS, ids=EVENT_IDS)
+def test_excluding_one_occurrence_preserves_everything_else(path: Path):
+    """`exclude_occurrence` — "delete this event". Only EXDATE may change."""
+    original = _read(path)
+    edited = exclude_occurrence(original, LATER).decode("utf-8")
+    drop = frozenset({"EXDATE", "LAST-MODIFIED", "DTSTAMP", "SEQUENCE"})
+    before, after = _foreign_bag(original, drop), _foreign_bag(edited, drop)
+    assert not (before - after), (
+        f"{path.name}: excluding one occurrence lost {sorted(before - after)[:6]}")
+
+
+@pytest.mark.parametrize("path", EVENT_CORPUS, ids=EVENT_IDS)
+def test_shifting_a_series_preserves_foreign_data(path: Path):
+    """`shift_series` — dragging the whole series. Times move; nothing else may."""
+    original = _read(path)
+    # Anchored on an occurrence, as the SPA does: the offset applied to one
+    # instance moves the whole series by it.
+    edited = shift_series(
+        original, LATER,
+        EventEdit(dtstart=datetime(2026, 7, 27, 16, 0))).decode("utf-8")
+    drop = SPAN | RECURRENCE | {"LAST-MODIFIED", "DTSTAMP", "SEQUENCE"}
+    before, after = _foreign_bag(original, drop), _foreign_bag(edited, drop)
+    assert not (before - after), (
+        f"{path.name}: shifting the series lost {sorted(before - after)[:6]}")
+
+
+@pytest.mark.parametrize("path", EVENT_CORPUS, ids=EVENT_IDS)
+def test_splitting_a_series_carries_foreign_data_into_both_halves(path: Path):
+    """`split_series` — "this and following", and the one that most needed this.
+
+    It mints a brand-new resource under a fresh UID, so anything it drops from
+    the tail is gone permanently: no resync restores a UID the server has never
+    seen. Nothing in the suite asserted any of it. Both halves are checked,
+    because a fix that carried the head and rebuilt the tail would pass a
+    one-sided test."""
+    original = _read(path)
+    head, tail = split_series(original, ANCHOR, EventEdit())
+    drop = SPAN | RECURRENCE | {"LAST-MODIFIED", "DTSTAMP", "SEQUENCE", "CREATED"}
+    before = _foreign_bag(original, drop)
+
+    # The master's own foreign properties, which BOTH halves must still carry.
+    master_only = C.Counter({
+        k: v for k, v in before.items()
+        if k[0] == "VEVENT" and k[1][0] in {
+            "ORGANIZER", "ATTENDEE", "CATEGORIES", "URL", "CLASS", "TRANSP",
+            "X-MOZ-GENERATION", "X-MOZ-LASTACK", "X-FOREIGN-KEEP", "LOCATION",
+        }
+    })
+    assert master_only, "the corpus file carries no foreign properties to check"
+
+    for label, half in (("head", head), ("tail", tail)):
+        assert half is not None, f"{path.name}: no {label}"
+        got = _foreign_bag(half.decode("utf-8"), drop)
+        # Every foreign KIND the original carried is still present somewhere in
+        # this half. Counts are not compared: a split legitimately changes how
+        # many override components each half holds.
+        kinds_before = {k[1][0] for k in master_only}
+        kinds_after = {k[1][0] for k in got if k[0] == "VEVENT"}
+        assert kinds_before <= kinds_after, (
+            f"{path.name}: the {label} lost {sorted(kinds_before - kinds_after)}")
+        assert any(k[0] == "VALARM" for k in got), f"{path.name}: the {label} lost its VALARM"
+        assert any(k[0] == "VTIMEZONE" for k in got), (
+            f"{path.name}: the {label} lost its VTIMEZONE, so its TZID no longer resolves")
