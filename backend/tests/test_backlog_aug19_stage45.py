@@ -51,6 +51,7 @@ from urllib.parse import parse_qs, quote, urlsplit
 from zoneinfo import ZoneInfo
 
 import pytest
+import yaml
 from fastapi.testclient import TestClient
 
 from tasksd import scheduling
@@ -707,10 +708,6 @@ def test_the_build_jobs_hold_no_write_token():
       worth asserting at all. Without this the whole `ci.yml` half is vacuous,
       since `None != "write"` is true today.
     """
-    # PyYAML rides in with uvicorn[standard]; skip rather than fake a pin if
-    # it ever stops doing so — an ImportError is not this finding's failure.
-    yaml = pytest.importorskip("yaml")
-
     checked: list[str] = []
     for filename in _WORKFLOWS:
         wf = yaml.safe_load(_read(f".github/workflows/{filename}"))
@@ -770,7 +767,6 @@ def test_the_release_job_can_still_publish():
     Asserted through the same effective-permission rule, so it holds however the
     grant is spelled.
     """
-    yaml = pytest.importorskip("yaml")
     wf = yaml.safe_load(_read(".github/workflows/desktop-release.yml"))
     release = (wf.get("jobs") or {}).get("release")
     assert release is not None, "the release job is gone"

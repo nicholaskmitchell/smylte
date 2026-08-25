@@ -20,6 +20,7 @@ grows a keyword this cannot enforce, so the gap cannot open silently.
 """
 from __future__ import annotations
 
+import math
 import re
 
 # Keywords this validator understands. A schema using anything else would be
@@ -51,7 +52,25 @@ def _type_ok(value, kind: str) -> bool:
         # integer field — the same trap the settings TTL check calls out.
         return isinstance(value, int) and not isinstance(value, bool)
     if kind == "number":
-        return isinstance(value, (int, float)) and not isinstance(value, bool)
+        # Finite, not merely numeric. `NaN` and `Infinity` as bare literals are
+        # already refused by `server.parse_body`'s `parse_constant`, but that
+        # does NOT catch `1e400` — an ordinary number literal that `json.loads`
+        # overflows to `inf`, as server.py's own comment says. One of those
+        # reaching `day_plan.position` was written to the app-only sidecar (the
+        # one part of SQLite a resync cannot rebuild) and then made every later
+        # read of that day unrenderable: `JSONResponse` serializes with
+        # `allow_nan=False`, so the tool call 500s AFTER committing and both
+        # `smylte_get_today` and `GET /api/day/{day}` 500 from then on — the
+        # owner cannot even read the entry back out to repair it.
+        #
+        # Enforced here rather than per-tool so it holds for every `type: number`
+        # the table declares, which is the same rule the HTTP models state with
+        # `Field(allow_inf_nan=False)`. The two doors onto one write must agree.
+        return (
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and math.isfinite(value)
+        )
     expected = _TYPES.get(kind)
     return expected is None or isinstance(value, expected)
 
@@ -59,6 +78,10 @@ def _type_ok(value, kind: str) -> bool:
 def check_value(value, schema: dict, *, where: str) -> None:
     kind = schema.get("type")
     if kind and not _type_ok(value, kind):
+        if isinstance(value, float) and not math.isfinite(value):
+            # "must be a number" would be a puzzling thing to tell a client that
+            # sent one. Name the actual rule.
+            raise SchemaError(f"{where} must be a finite number, got {value}")
         raise SchemaError(f"{where} must be {'an' if kind[0] in 'aio' else 'a'} {kind}")
 
     choices = schema.get("enum")

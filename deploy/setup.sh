@@ -96,7 +96,14 @@ install -m 0755 "$DEPLOY/tasks-notify" /usr/local/bin/tasks-notify
 echo "== systemd unit =="
 install -m 0644 "$DEPLOY/tasks.service" /etc/systemd/system/tasks.service
 systemctl daemon-reload
-systemctl enable --now tasks.service
+# `enable --now` is `enable` + `start`, and `start` on an already-active unit is
+# a no-op — so on a re-run (which this script is designed for) the new unit file
+# landed on disk and the running process kept executing the OLD one, while the
+# `systemctl status` below printed a reassuring `active (running)`. `restart`
+# starts a stopped unit and re-execs a running one, so first install and re-run
+# both converge on the unit that was just written.
+systemctl enable tasks.service
+systemctl restart tasks.service
 systemctl --no-pager --lines=6 status tasks.service || true
 
 echo

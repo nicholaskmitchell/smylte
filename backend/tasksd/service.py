@@ -1388,15 +1388,23 @@ class TaskService:
             "created_at": row["created_at"],
         }
 
-    def _day_plan_dto(self, day: str, entries, opened: bool) -> dict[str, Any]:
+    def _day_plan_dto(
+        self, day: str, entries, opened: bool, *, ritual=UNSET, settings=None,
+    ) -> dict[str, Any]:
         """One day's plan. `planned` is the marker OR the presence of entries,
         because the two record different things: the marker says the automatic
         snapshot has been BUILT, an entry says the owner has put something on
         the day. A hand-add deliberately leaves the marker alone (see
         `add_day_entry`, and the day still owes itself one snapshot), so a day
         holding nothing but hand-added rows has no marker — and calling that day
-        unplanned would draw it as untouched with its own entries on screen."""
-        ritual = store.get_day_ritual(self._conn, day)
+        unplanned would draw it as untouched with its own entries on screen.
+
+        `ritual` and `settings` let a RANGE caller hand in what it already read
+        for the whole window, instead of this doing two queries per day. A day
+        with no ritual row is a legitimate `None`, which is why the default is a
+        sentinel rather than None — see `day_range`."""
+        if ritual is UNSET:
+            ritual = store.get_day_ritual(self._conn, day)
         return {
             "day": day,
             "planned": opened or bool(entries),
@@ -1410,14 +1418,14 @@ class TaskService:
             # make a day that merely inherited a weekday default indistinguishable
             # from one the owner actually looked at and set.
             "capacity_minutes": ritual["capacity_minutes"] if ritual else None,
-            "capacity": self._effective_capacity(day, ritual),
+            "capacity": self._effective_capacity(day, ritual, settings=settings),
             "committed_at": ritual["committed_at"] if ritual else None,
             "shutdown_at": ritual["shutdown_at"] if ritual else None,
             "reflection": ritual["reflection"] if ritual else None,
             "entries": [self._day_entry_dto(r) for r in entries],
         }
 
-    def _effective_capacity(self, day: str, ritual=None) -> int | None:
+    def _effective_capacity(self, day: str, ritual=None, *, settings=None) -> int | None:
         """How many minutes this day should be read against, or None.
 
         Four answers in order, and the last one is the important one:
@@ -1443,7 +1451,11 @@ class TaskService:
             ritual = store.get_day_ritual(self._conn, day)
         if ritual and ritual["capacity_minutes"] is not None:
             return ritual["capacity_minutes"]
-        settings = store.get_settings(self._conn)
+        # A range caller passes the settings blob it already read; the account
+        # cannot change it mid-request, and re-reading and re-parsing it once
+        # per day is the other half of the N+1 `day_range` used to run.
+        if settings is None:
+            settings = store.get_settings(self._conn)
         by_weekday = settings.get("day_capacity_by_weekday")
         if isinstance(by_weekday, dict):
             value = by_weekday.get(weekday_name(day))
@@ -2343,11 +2355,36 @@ class TaskService:
         span = (date.fromisoformat(end) - date.fromisoformat(start)).days
         if span > DAY_RANGE_MAX_DAYS:
             raise ValueError(f"range is bounded to {DAY_RANGE_MAX_DAYS} days, asked for {span}")
+        # The DTOs are built INSIDE the lock, and this is the whole point of the
+        # shape below. `_day_plan_dto` is not a pure formatter — it reads
+        # `day_ritual`, and through `_effective_capacity` the settings blob — so
+        # building the list after the `with` block released two queries per day
+        # onto the one shared sqlite3 connection with nothing serializing them.
+        # `store.connect` opens it `check_same_thread=False` on the explicit
+        # promise that this class serializes every access, and the route reaches
+        # here through `asyncio.to_thread`, so two concurrent GET /api/day calls
+        # really were two threads inside one connection: measured 59 unlocked
+        # reads for a 59-day window (DAY_RANGE_MAX_DAYS allows 190), and four
+        # concurrent callers raised `sqlite3.InterfaceError: bad parameter or
+        # other API misuse` within seconds. The quieter failure was worse — a
+        # row fetched for one day handed to the reader for another, so a day
+        # reported someone else's capacity, commit time or reflection with no
+        # error at all.
+        #
+        # Holding the lock over the whole build is only affordable because the
+        # per-day queries are gone: `get_day_rituals` is the range twin of
+        # `get_day_range` (it was written for this and had no caller), and the
+        # settings blob is read once instead of once per day.
         with self._lock:
             planned = store.get_day_range(self._conn, start, end)
-        # Every day the map holds is planned by definition: it is there because
-        # it has a marker, entries, or both.
-        return [self._day_plan_dto(d, rows, True) for d, rows in planned.items()]
+            rituals = store.get_day_rituals(self._conn, start, end)
+            settings = store.get_settings(self._conn)
+            # Every day the map holds is planned by definition: it is there
+            # because it has a marker, entries, or both.
+            return [
+                self._day_plan_dto(d, rows, True, ritual=rituals.get(d), settings=settings)
+                for d, rows in planned.items()
+            ]
 
     # ── habits (the rules that put entries on a day) ─────────────────────────
     #

@@ -17,3 +17,10 @@ uvicorn[standard]>=0.30
 pyjwt[crypto]>=2.9          # validate the Cloudflare Access JWT (spec §9)
 pytest>=8.0
 pytest-asyncio>=0.23
+# Declared, not inherited. It arrives anyway as an extra of `uvicorn[standard]`,
+# but the two CI supply-chain permission pins in tests/test_backlog_aug19_stage45.py
+# PARSE the workflow YAML — so trimming that extra (or uvicorn dropping it) used
+# to turn both guards into silent skips among 240 other skips, quietly reopening
+# the hole where a compromised npm/NuGet install script sits on a write-scoped
+# release token. A supply-chain guard must not depend on a transitive dependency.
+pyyaml>=6.0

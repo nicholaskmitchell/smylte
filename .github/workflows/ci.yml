@@ -47,6 +47,14 @@ jobs:
         working-directory: backend
         env:
           SCRATCH_STORAGE: ${{ github.workspace }}/scratch/data/collections
+          # Without this the gate this job advertises is unenforceable: conftest's
+          # `_scratch_up` turns ANY probe failure into a skip, so a container that
+          # starts and answers the anonymous healthcheck but rejects the test
+          # credentials silently converts ~240 tests — every DAV round-trip, sync,
+          # concurrency and MCP test — into skips, and pytest still exits 0.
+          # SCRATCH_REQUIRED makes that a failure here while leaving a laptop with
+          # no Docker free to skip.
+          SCRATCH_REQUIRED: '1'
       - name: Audit backlog status
         # The backlog pins (docs/STAGES.md) already ran above — an xfail is not
         # a failure and an XPASS already failed the step. This re-runs just them
@@ -57,6 +65,7 @@ jobs:
         working-directory: backend
         env:
           SCRATCH_STORAGE: ${{ github.workspace }}/scratch/data/collections
+          SCRATCH_REQUIRED: '1'
 
   frontend:
     runs-on: ubuntu-latest

@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from bisect import bisect_left
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Iterable
@@ -275,6 +276,11 @@ def generate_slots(
     open_from = open_from_utc.astimezone(tz)
     last_day = local_now.date() + timedelta(days=horizon_days)
     blocked = pad(busy, buffer_minutes)
+    # Converted ONCE, here, rather than per slot inside the overlap test — see
+    # `_overlaps_any`. `pad` returns a merged list, so these are ascending and
+    # searchable.
+    blocked_starts = [_u(b.start) for b in blocked]
+    blocked_ends = [_u(b.end) for b in blocked]
     duration = timedelta(minutes=duration_minutes)
 
     slots: list[Interval] = []
@@ -301,13 +307,17 @@ def generate_slots(
             s_utc = win.start.astimezone(timezone.utc)
             end_utc = win.end.astimezone(timezone.utc)
             while s_utc + duration <= end_utc:
-                slot = Interval(s_utc.astimezone(tz), (s_utc + duration).astimezone(tz))
-                # Filter on the INSTANT (`s_utc`), never on `slot.start`. Both
-                # passes of a repeated fall-back hour carry the same wall clock,
-                # so comparing local values admitted slots already in the past
-                # and hid genuinely free ones.
-                if s_utc >= open_from_utc and not _overlaps_any(slot, blocked):
-                    slots.append(slot)
+                e_utc = s_utc + duration
+                # Filter on the INSTANTS, never on local values. Both passes of a
+                # repeated fall-back hour carry the same wall clock, so comparing
+                # local values admitted slots already in the past and hid
+                # genuinely free ones. The local Interval is derived only for a
+                # slot that survives, so a rejected candidate costs no
+                # conversions at all.
+                if s_utc >= open_from_utc and not _overlaps_any(
+                    s_utc, e_utc, blocked_starts, blocked_ends
+                ):
+                    slots.append(Interval(s_utc.astimezone(tz), e_utc.astimezone(tz)))
                     if len(slots) >= max_slots:
                         # Reaching the backstop means the answer is INCOMPLETE:
                         # every day after this one will read as fully booked. Say
@@ -324,16 +334,30 @@ def generate_slots(
     return slots
 
 
-def _overlaps_any(slot: Interval, blocked: list[Interval]) -> bool:
-    # `blocked` is merged/sorted; a linear scan with early exit is plenty for
-    # the bounded horizon this runs over. Compared as instants: on a fall-back
-    # day a busy block in the first pass of the repeated hour shares its wall
-    # clock with the second, so local comparison blocked both.
-    s_start, s_end = _u(slot.start), _u(slot.end)
-    for b in blocked:
-        b_start, b_end = _u(b.start), _u(b.end)
-        if b_start >= s_end:
-            return False
-        if s_start < b_end and s_end > b_start:
-            return True
-    return False
+def _overlaps_any(
+    s_start: datetime, s_end: datetime,
+    blocked_starts: list[datetime], blocked_ends: list[datetime],
+) -> bool:
+    """Does the slot [s_start, s_end) hit any blocked interval?
+
+    Every argument is already a UTC INSTANT, and that is deliberate rather than
+    incidental: on a fall-back day a busy block in the first pass of the repeated
+    hour shares its wall clock with the second, so comparing local values blocked
+    both. Taking instants in the signature is what stops a caller reintroducing
+    that by passing `slot.start`.
+
+    `blocked` comes from `merge`, so it is disjoint and sorted by start — which
+    makes it sorted by end too — and the answer is a binary search rather than a
+    scan. This used to take an `Interval` list and call `_u()` on both ends of
+    every interval it walked, on every slot, with nothing hoisted: O(slots x
+    intervals) `astimezone` calls on the ONE unauthenticated path into the
+    owner's calendar, run inside the global service lock. A 15-minute link over a
+    90-day horizon with an ordinary calendar measured 2.9 s of pure CPU per
+    anonymous GET; the public limiter's 120 requests / 300 s is far more than
+    enough to keep the lock permanently occupied.
+    """
+    # First index whose interval starts at or after the slot ends; everything
+    # before it starts early enough to matter, and of those only the last can
+    # still be running when the slot opens.
+    i = bisect_left(blocked_starts, s_end)
+    return i > 0 and blocked_ends[i - 1] > s_start

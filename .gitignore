@@ -26,6 +26,11 @@ __pycache__/
 # here, which `/frontend/node_modules/` does not match — a vitest cache file from
 # it was committed before this line existed.
 node_modules/
+# And once more WITHOUT the trailing slash. A pattern ending in `/` matches only
+# a directory, and git does not consider a symlink one — so a node_modules
+# symlinked in (what you do to share one install between checkouts) showed up as
+# untracked and could be committed.
+node_modules
 /frontend/dist/
 
 # ── .NET / Windows client build artifacts (built by CI, never committed) ─────

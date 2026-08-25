@@ -1,6 +1,18 @@
 """Fixtures for the Radicale-integration tests. Everything runs against the
 SCRATCH server on :5233 (spec §8) — never production. Tests are skipped if it is
-not reachable, so the pure-Python suites (fidelity) still run anywhere."""
+not reachable, so the pure-Python suites (fidelity) still run anywhere.
+
+That skip is a convenience for a laptop with no Docker, and it used to be the
+whole story — which made the gate CI advertises ("the full backend suite against
+a real scratch Radicale") unenforceable. Any failure of the reachability probe
+turned ~240 tests, including every app-level auth and authz test, into skips and
+still exited 0. A 401 from a mistyped `htpasswd_encryption` was indistinguishable
+from "you are on a laptop": the container is healthy, `docker compose --wait`
+succeeds, and the suite silently asserts nothing.
+
+So the skip is now opt-out rather than default. `SCRATCH_REQUIRED=1` — set by
+ci.yml — turns an unreachable scratch server into a hard failure. Local runs are
+unchanged."""
 from __future__ import annotations
 
 import os
@@ -26,6 +38,13 @@ def _make_dav():
     return DavClient(SCRATCH_URL, USER, PASSWORD)
 
 
+# Set by CI. When it is on, an unreachable scratch server fails the run instead
+# of skipping it, so a green backend job means the integration tier actually ran.
+SCRATCH_REQUIRED = os.environ.get("SCRATCH_REQUIRED", "").strip().lower() not in (
+    "", "0", "false", "no",
+)
+
+
 @pytest.fixture(scope="session")
 def _scratch_up():
     try:
@@ -33,7 +52,17 @@ def _scratch_up():
         c.options()
         c.close()
     except Exception as e:  # noqa: BLE001
-        pytest.skip(f"scratch Radicale unreachable on {SCRATCH_URL}: {e}")
+        message = f"scratch Radicale unreachable on {SCRATCH_URL}: {e}"
+        if SCRATCH_REQUIRED:
+            pytest.fail(
+                f"{message}\n"
+                "SCRATCH_REQUIRED is set, so this is a failure rather than a skip: "
+                "the integration tier must actually run. Check that the container is "
+                "up AND that its credentials work — a healthy container with a broken "
+                "htpasswd answers the compose healthcheck and 401s this probe.",
+                pytrace=False,
+            )
+        pytest.skip(message)
 
 
 @pytest.fixture

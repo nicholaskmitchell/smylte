@@ -705,6 +705,35 @@ def test_tool_arguments_are_checked_against_the_advertised_schema(mcp):
                                      {"list_id": "x", "summary": "y", "tags": [1]})
 
 
+def test_a_non_finite_number_is_refused_at_the_mcp_door_like_the_http_one():
+    """`allow_inf_nan=False` on the HTTP models had no counterpart here, and the
+    two doors write the same rows.
+
+    `server.parse_body`'s `parse_constant` blocks the bare `NaN`/`Infinity`
+    literals, and its own comment says it does NOT catch `1e400` — an ordinary
+    number literal `json.loads` overflows to `inf`. One of those reaching
+    `day_plan.position` was stored in the app-only sidecar, the part of SQLite
+    no resync can rebuild, and then made every later read of that day
+    unrenderable: `JSONResponse` serializes with `allow_nan=False`, so the tool
+    call 500s AFTER committing and both `smylte_get_today` and
+    `GET /api/day/{day}` 500 from then on. The owner could not even read the
+    entry back out to repair it.
+
+    Enforced in the validator rather than per tool, so it holds for every
+    `type: number` in the table."""
+    from tasksd.mcp.validate import SchemaError, check_value
+
+    for bad in (float("inf"), float("-inf"), float("nan"), 1e400):
+        with pytest.raises(SchemaError, match="finite"):
+            check_value(bad, {"type": "number"}, where="t.position")
+        with pytest.raises(SchemaError):
+            check_value(bad, {"type": "integer"}, where="t.n")
+
+    # Ordinary values, including a very large finite one, still pass.
+    for ok in (0, -3, 1.5, 1e300):
+        check_value(ok, {"type": "number"}, where="t.position")
+
+
 def test_every_tool_schema_stays_inside_what_the_validator_enforces(mcp):
     """A schema keyword the validator does not implement would be advertised and
     silently unenforced — which is the exact shape of the bug above."""

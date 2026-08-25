@@ -265,6 +265,72 @@ def test_dense_rule_with_ancient_dtstart_is_refused_promptly():
     assert time.monotonic() - t < 2.0
 
 
+def test_a_flooded_rdate_list_is_refused_before_it_is_expanded():
+    """The pathology guard used to judge RRULE shapes only — it `continue`d on a
+    component with no rule — so a recurrence set built from RDATE alone, or an
+    ordinary rule beside a huge RDATE, was never priced at all.
+
+    The occurrence cap does not cover it: `query.between` materializes the whole
+    expansion before the cap is consulted, so the work is done in full and only
+    then thrown away. Measured on one 664 KiB resource: 3.0 s and ~95 MB of RSS,
+    inside the service lock, on an unauthenticated GET
+    /api/public/booking/{token} — and 120 requests per 300 s per IP is far more
+    than enough to hold that lock continuously with a single planted resource.
+
+    Timed, because the refusal is the point and an answer is not: the old code
+    raised ValueError too, just after paying for it."""
+    base = datetime(2026, 8, 1, tzinfo=timezone.utc)
+    rdate = ",".join(
+        (base + timedelta(seconds=i)).strftime("%Y%m%dT%H%M%SZ") for i in range(20_000))
+    raw = foreign_event_raw("flood", dtstart="20260801T000000Z",
+                            dtend="20260801T000500Z", rdate=rdate)
+    t = time.monotonic()
+    with pytest.raises(ValueError, match="RDATE names 20000 instants"):
+        recur.expand_occurrences(raw, date(2026, 8, 1), date(2026, 8, 3))
+    # Parsing 300 KiB of ICS is the floor here and is bounded by the body limit;
+    # what must not happen is the expansion on top of it.
+    assert time.monotonic() - t < 2.0
+
+
+def test_an_ordinary_rdate_list_still_expands():
+    """The guard must not swallow the shape it exists beside: a handful of extra
+    instants is what RDATE is for."""
+    raw = foreign_event_raw("few", rrule="FREQ=WEEKLY;COUNT=2",
+                            rdate="20260220T090000Z,20260221T090000Z")
+    got = sorted(_starts(recur.expand_occurrences(raw, date(2026, 1, 1), date(2026, 12, 1))))
+    assert got == [
+        "2026-01-06T09:00:00+00:00", "2026-01-13T09:00:00+00:00",
+        "2026-02-20T09:00:00+00:00", "2026-02-21T09:00:00+00:00",
+    ]
+
+
+def test_an_out_of_range_sequence_cannot_stall_the_collection():
+    """`SEQUENCE` is bound straight into a SQLite INTEGER column, which is
+    64-bit while Python's ints are not. A value past that raised OverflowError at
+    the bind — not ValueError, so the sync engine's malformed-resource guard did
+    not catch it — which aborted the transaction, left the sync token
+    un-advanced, and made the next pass re-fetch the same resource and fail
+    identically. One resource from one CalDAV client froze every change from
+    every client on that collection, permanently.
+
+    Clamped at the boundary, exactly as `calendar-order` already is in
+    dav/client.py. Radicale's own parser round-trips this value happily, so it
+    really does reach us."""
+    import sqlite3
+
+    raw = foreign_event_raw("seq", extra=("SEQUENCE:99999999999999999999",))
+    fields = extract_from_raw(raw)
+    assert fields.sequence is None, "an unstorable SEQUENCE must read as absent"
+
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE t (s INTEGER)")
+    conn.execute("INSERT INTO t VALUES (?)", (fields.sequence,))   # must not raise
+
+    # An ordinary one still round-trips.
+    ok = extract_from_raw(foreign_event_raw("seq2", extra=("SEQUENCE:7",)))
+    assert ok.sequence == 7
+
+
 def test_dense_rule_from_a_recent_dtstart_still_expands():
     """The total-walk bound must not swallow ordinary series: an hourly rule
     running for a couple of years is well inside budget and still expands."""
@@ -626,6 +692,61 @@ def test_split_count_series_tail_is_bounded():
         "2026-01-20T09:00:00+00:00", "2026-01-27T09:00:00+00:00",
         "2026-02-03T09:00:00+00:00",
     ]
+
+
+@pytest.mark.parametrize("rrule, rule_end", [
+    ("FREQ=WEEKLY;COUNT=2", "FREQ=WEEKLY;COUNT=2"),
+    ("FREQ=WEEKLY;UNTIL=20260113T090000Z", "FREQ=WEEKLY;UNTIL=20260113T090000Z"),
+])
+def test_splitting_at_an_rdate_past_the_rule_never_widens_the_head(rrule, rule_end):
+    """A split cuts a series in two; it cannot conjure occurrences.
+
+    The head used to be rebounded unconditionally — drop COUNT, set
+    `UNTIL = anchor - 1s` — which only narrows when the anchor is a slot the
+    RRULE itself generates. `_require_occurrence` deliberately accepts an anchor
+    named by an RDATE, and an RDATE routinely sits AFTER where the rule stopped:
+    that is the ordinary reason to add one. For those the rebind EXTENDED the
+    rule, and every slot between the rule's real end and the anchor became live.
+
+    Two clicks from the SPA, which offers the scope picker on an RDATE row like
+    any other — and `delete_event(scope="thisandfuture")` PUTs the head, so the
+    invented occurrences are written permanently into the shared collection,
+    where they also start blocking the public booking page."""
+    raw = foreign_event_raw("late", rrule=rrule, rdate="20260220T090000Z")
+    wide = (date(2026, 1, 1), date(2026, 12, 1))
+    before = _starts(recur.expand_occurrences(raw, *wide))
+    assert sorted(before) == [
+        "2026-01-06T09:00:00+00:00", "2026-01-13T09:00:00+00:00",
+        "2026-02-20T09:00:00+00:00",
+    ]
+
+    head, tail = split_series(raw, "2026-02-20T09:00:00+00:00", EventEdit())
+    head_occ = _starts(recur.expand_occurrences(head, *wide)) if head else []
+    tail_occ = _starts(recur.expand_occurrences(tail, *wide))
+
+    # The head keeps exactly the two the rule already made — and its rule is
+    # untouched, because the RDATE partition alone is the whole split here.
+    assert sorted(head_occ) == [
+        "2026-01-06T09:00:00+00:00", "2026-01-13T09:00:00+00:00",
+    ]
+    assert rule_end.encode() in head
+    assert tail_occ == ["2026-02-20T09:00:00+00:00"]
+    # Nothing invented, nothing lost.
+    assert sorted(head_occ + tail_occ) == sorted(before)
+
+
+def test_a_tail_split_off_past_the_rules_end_carries_no_dead_rule():
+    """The mirror of the above on the other side of the cut: the tail inherited
+    the original UNTIL, which now precedes its own DTSTART — a rule that
+    generates nothing sitting beside a DTSTART that does. The anchor is a
+    one-off, so the tail says so rather than shipping a self-contradicting
+    rule."""
+    raw = foreign_event_raw(
+        "late2", rrule="FREQ=WEEKLY;UNTIL=20260113T090000Z", rdate="20260220T090000Z")
+    _, tail = split_series(raw, "2026-02-20T09:00:00+00:00", EventEdit())
+    assert b"RRULE" not in tail
+    assert _starts(recur.expand_occurrences(
+        tail, date(2026, 1, 1), date(2026, 12, 1))) == ["2026-02-20T09:00:00+00:00"]
 
 
 def test_split_partitions_rdate_and_exdate():
@@ -1388,3 +1509,54 @@ def test_the_search_budget_actually_fires():
     # module cannot affect any other dateutil user in the process.
     assert rrulestr("FREQ=DAILY", dtstart=datetime(2026, 1, 1, 9, 0)).between(
         datetime(2026, 8, 1), datetime(2026, 9, 12))
+
+
+# ── detaching one instance from a THISANDFUTURE override ────────────────────
+
+@pytest.mark.parametrize("label, raw, recurrence_id", [
+    (
+        # Mixed zones in one resource — what `_rebuild_datelist`'s own docstring
+        # calls "ordinary in a shared collection". The rule's COUNT is exhausted
+        # at the anchor, so re-homing falls through to the floating RDATE.
+        "a floating RDATE beside a zoned master",
+        b"BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//foreign//EN\r\n"
+        b"BEGIN:VEVENT\r\nUID:mix@x\r\nDTSTAMP:20260101T000000Z\r\n"
+        b"DTSTART;TZID=Europe/Berlin:20260105T090000\r\n"
+        b"DTEND;TZID=Europe/Berlin:20260105T100000\r\n"
+        b"RRULE:FREQ=DAILY;COUNT=3\r\nRDATE:20260210T090000\r\nSUMMARY:S\r\n"
+        b"END:VEVENT\r\n"
+        b"BEGIN:VEVENT\r\nUID:mix@x\r\nDTSTAMP:20260101T000000Z\r\n"
+        b"RECURRENCE-ID;RANGE=THISANDFUTURE:20260107T090000Z\r\n"
+        b"DTSTART:20260107T110000Z\r\nDTEND:20260107T120000Z\r\nSUMMARY:Moved\r\n"
+        b"END:VEVENT\r\nEND:VCALENDAR\r\n",
+        "2026-01-07T09:00:00+00:00",
+    ),
+    (
+        # A DATE-valued RANGE=THISANDFUTURE override on a DATE-TIME series —
+        # the shape Apple and Thunderbird write for "this and all future
+        # events", which this repo explicitly supports.
+        "a DATE-valued THISANDFUTURE override on a timed series",
+        b"BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//foreign//EN\r\n"
+        b"BEGIN:VEVENT\r\nUID:dv@x\r\nDTSTAMP:20260101T000000Z\r\n"
+        b"DTSTART:20260105T090000Z\r\nDTEND:20260105T100000Z\r\n"
+        b"RDATE:20260107T090000Z,20260109T090000Z\r\nSUMMARY:S\r\nEND:VEVENT\r\n"
+        b"BEGIN:VEVENT\r\nUID:dv@x\r\nDTSTAMP:20260101T000000Z\r\n"
+        b"RECURRENCE-ID;RANGE=THISANDFUTURE;VALUE=DATE:20260107\r\n"
+        b"DTSTART;VALUE=DATE:20260108\r\nSUMMARY:Moved\r\nEND:VEVENT\r\n"
+        b"END:VCALENDAR\r\n",
+        "2026-01-07",
+    ),
+])
+def test_detaching_one_instance_survives_a_mixed_shape_date_list(label, raw, recurrence_id):
+    """`_detach_thisandfuture` computes `nxt - anchor` to re-home the range
+    override onto the next slot. `_next_generated` normalized only the values
+    dateutil produced and appended the master's RDATEs raw, so `nxt` could come
+    back floating beside a zoned anchor, or a datetime beside a DATE anchor.
+
+    TypeError is neither ValueError nor OverflowError, so `patch_event` did not
+    map it and there is no catch-all handler — it escaped as a 500, with the
+    occurrence then permanently uneditable via "this event" because the bytes
+    live on the server. Every other datetime site in edit.py already carried
+    this tolerance; this was the one arithmetic left raw."""
+    out = apply_occurrence_override(raw, recurrence_id, EventEdit(summary="edited"))
+    assert b"SUMMARY:edited" in out, label
