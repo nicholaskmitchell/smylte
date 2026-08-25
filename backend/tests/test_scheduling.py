@@ -959,3 +959,39 @@ def test_overlap_matches_a_brute_force_scan_including_across_a_transition():
         assert got, f"no slots generated for {day}"
         assert not any(hits(s) for s in got), (
             f"a slot overlapping a busy block was advertised on {day}")
+
+
+def test_a_year_one_busy_interval_cannot_take_down_the_public_page():
+    """`pad` widens each interval by moving the INSTANT and converting back, and
+    at the edges of representable time that conversion raises OverflowError —
+    which nothing on this path catches. `busy_intervals`' per-event guard has
+    already returned, `generate_slots` does not guard, and app.py's handler
+    taxonomy has no OverflowError entry.
+
+    One VEVENT with `DTSTART:00010101T000000` and a DURATION does it. Any client
+    sharing the collection can PUT that, and `store.get_events_in_range` admits
+    it for EVERY window because its DURATION branch carries no lower date bound
+    — so `GET /api/public/booking/{token}` 500'd permanently, for everyone,
+    until someone found and deleted the resource.
+
+    Clamped rather than dropped: a busy block at the edge of time still blocks,
+    and on a booking path continuing to block is the safe direction."""
+    ancient = Interval(datetime(1, 1, 1, 0, 0, tzinfo=timezone.utc),
+                       datetime(1, 1, 1, 1, 0, tzinfo=timezone.utc))
+    far_future = Interval(datetime(9999, 12, 31, 22, 0, tzinfo=timezone.utc),
+                          datetime(9999, 12, 31, 23, 0, tzinfo=timezone.utc))
+    meeting = _iv(9, 0, 10, 0)
+
+    assert len(scheduling.pad([ancient], 15)) == 1
+    assert len(scheduling.pad([far_future], 15)) == 1
+
+    # And end to end, with a real meeting beside the poison: the page still
+    # answers, and the meeting still takes its hour off the board.
+    slots = _slots(availability=scheduling.parse_availability({"0": ["09:00-17:00"]}),
+                   busy=[ancient, far_future, meeting], buffer_minutes=15,
+                   horizon_days=0)
+    starts = sorted(s.start.strftime("%H:%M") for s in slots)
+    assert starts, "the page returned nothing at all"
+    assert "09:00" not in starts and "10:00" not in starts, (
+        f"the meeting stopped blocking its own hour: {starts}")
+    assert "10:30" in starts, f"real availability was lost: {starts}"

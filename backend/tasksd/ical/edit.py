@@ -524,8 +524,71 @@ def _stamp(event: Event, now: datetime) -> None:
     _set_int(event, "SEQUENCE", int(event.get("SEQUENCE", 0)) + 1)
 
 
+def _check_event_span(event: Event, edit: EventEdit) -> None:
+    """Refuse an edit that would leave DTSTART and DTEND disagreeing.
+
+    RFC 5545 §3.6.1: DTEND's value type MUST match DTSTART's. Nothing enforced
+    that, and the HTTP PATCH model decides each end independently by feeding the
+    raw string to `_parse_datelike` — a bare `YYYY-MM-DD` becomes a `date`,
+    anything with a `T` a `datetime` — with no `all_day` flag to pair them and no
+    downstream re-pairing.
+
+    So `PATCH {"start": "2026-03-12"}` on a timed meeting wrote
+    `DTSTART;VALUE=DATE:20260312` beside the untouched `DTEND:20260310T100000`.
+    Every other client sharing the collection then has to cope with an invalid
+    resource — and this app's own read path reports `all_day` from DTSTART alone,
+    while `scheduling.busy_intervals` skips all-day events, so the meeting
+    stopped blocking anything and the anonymous booking page offered its hour as
+    free. (The same PATCH also left DTEND two days before its own DTSTART.)
+
+    The SPA always sends both ends, but `smylte_update_event` exposes them as
+    independent optional strings, so an LLM moving a meeting to a date is enough.
+
+    Refusing rather than guessing: coercing a bare date onto a timed event means
+    inventing a time. ValueError, which `patch_event` maps to 422 and the MCP
+    tools to a ToolError, so the caller reads the sentence below.
+    """
+    def kind(v) -> str:
+        return "timed" if isinstance(v, datetime) else "all-day"
+
+    start = edit.dtstart if (edit.dtstart is not UNSET and edit.dtstart is not None) else None
+    end = edit.dtend if (edit.dtend is not UNSET and edit.dtend is not None) else None
+    if start is None and end is None:
+        return
+
+    if start is not None and end is not None:
+        if kind(start) != kind(end):
+            raise ValueError(
+                f"start is {kind(start)} and end is {kind(end)} — an event's two "
+                f"ends must be the same kind; send both as dates or both as times"
+            )
+        lo, hi = start, end
+    else:
+        incoming, other_key = (start, "DTEND") if start is not None else (end, "DTSTART")
+        other = event.get(other_key)
+        if other is None:
+            return
+        if kind(other.dt) != kind(incoming):
+            raise ValueError(
+                f"this event is {kind(other.dt)} and the new "
+                f"{'start' if start is not None else 'end'} is {kind(incoming)} — "
+                f"send both ends together to change which kind it is"
+            )
+        lo, hi = (incoming, other.dt) if start is not None else (other.dt, incoming)
+
+    # Same guard, one layer up: the pair now agrees on kind, so it can be
+    # ordered. Only checked when the edit touches an end, so a resource another
+    # client already wrote backwards stays editable in every other respect.
+    try:
+        if _as_sortable(hi) < _as_sortable(lo):
+            raise ValueError("an event cannot end before it starts")
+    except TypeError:
+        return                              # unorderable shapes are not this guard's
+
+
 def _apply_event_fields(event: Event, edit: EventEdit, now: datetime) -> None:
     """Apply an EventEdit's field intent to a single VEVENT (master or override)."""
+    _check_event_span(event, edit)
     if edit.summary is not UNSET:
         _set_text(event, "SUMMARY", edit.summary)
     if edit.description is not UNSET:

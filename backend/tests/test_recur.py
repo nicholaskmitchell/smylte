@@ -1560,3 +1560,61 @@ def test_detaching_one_instance_survives_a_mixed_shape_date_list(label, raw, rec
     this tolerance; this was the one arithmetic left raw."""
     out = apply_occurrence_override(raw, recurrence_id, EventEdit(summary="edited"))
     assert b"SUMMARY:edited" in out, label
+
+
+# ── an event's two ends must stay the same kind ─────────────────────────────
+
+def _timed_event() -> bytes:
+    return foreign_event_raw("span", dtstart="20260310T090000Z", dtend="20260310T100000Z")
+
+
+def test_moving_one_end_cannot_silently_flip_an_event_to_all_day():
+    """RFC 5545 §3.6.1: DTEND's value type MUST match DTSTART's. Nothing enforced
+    it, and the PATCH model decides each end independently from the raw string —
+    a bare `YYYY-MM-DD` becomes a date, anything with a `T` a datetime — with no
+    `all_day` flag pairing them.
+
+    `PATCH {"start": "2026-03-12"}` on a timed meeting therefore wrote
+    `DTSTART;VALUE=DATE:20260312` beside the untouched `DTEND:20260310T100000`:
+    an invalid resource every other client on the collection has to cope with,
+    with DTEND two days before its own start. Worse, this app then reports
+    `all_day` from DTSTART alone and `busy_intervals` skips all-day events — so
+    the meeting stopped blocking anything and the anonymous booking page
+    advertised its hour as free.
+
+    The SPA sends both ends, but `smylte_update_event` takes them as independent
+    optional strings, so an LLM moving a meeting to a date is enough."""
+    with pytest.raises(ValueError, match="send both ends together"):
+        apply_event_changes(_timed_event(), EventEdit(dtstart=date(2026, 3, 12)))
+    with pytest.raises(ValueError, match="send both ends together"):
+        apply_event_changes(_timed_event(), EventEdit(dtend=date(2026, 3, 12)))
+
+
+def test_two_ends_of_different_kinds_are_refused_even_when_both_are_sent():
+    """The same mismatch reachable through create, where `all_day=false` beside a
+    bare date parses one end to a `date` and the other to a `datetime`."""
+    with pytest.raises(ValueError, match="both as dates or both as times"):
+        apply_event_changes(_timed_event(), EventEdit(
+            dtstart=date(2026, 3, 12),
+            dtend=datetime(2026, 3, 12, 10, tzinfo=timezone.utc)))
+
+
+def test_an_edit_cannot_leave_an_event_ending_before_it_starts():
+    """Only checked when the edit touches an end, so a resource another client
+    already wrote backwards stays editable in every other respect."""
+    with pytest.raises(ValueError, match="cannot end before it starts"):
+        apply_event_changes(_timed_event(), EventEdit(
+            dtstart=datetime(2026, 3, 10, 11, tzinfo=timezone.utc)))
+
+
+@pytest.mark.parametrize("edit", [
+    EventEdit(summary="Renamed"),
+    EventEdit(dtstart=datetime(2026, 3, 12, 9, tzinfo=timezone.utc),
+              dtend=datetime(2026, 3, 12, 10, tzinfo=timezone.utc)),
+    EventEdit(dtstart=date(2026, 3, 12), dtend=date(2026, 3, 13)),
+    EventEdit(dtstart=datetime(2026, 3, 10, 9, 30, tzinfo=timezone.utc)),
+])
+def test_the_span_guard_lets_every_ordinary_edit_through(edit):
+    """A rename, a move that stays timed, a genuine switch to all-day with both
+    ends sent, and a one-end move inside the existing span."""
+    assert apply_event_changes(_timed_event(), edit)

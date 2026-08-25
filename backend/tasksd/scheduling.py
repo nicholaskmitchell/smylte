@@ -208,6 +208,34 @@ def merge(intervals: list[Interval]) -> list[Interval]:
     return out
 
 
+def _widen(value: datetime, by: timedelta, tz) -> datetime:
+    """`value` moved by `by` as an instant, back in `tz` — clamped, not raising.
+
+    An interval near `datetime.min` or `datetime.max` runs out of representable
+    range here, and OverflowError is caught by nothing on this path:
+    `busy_intervals`' per-event guard has already returned, `generate_slots` does
+    not guard, and app.py's handler taxonomy has no entry for it. One VEVENT with
+    `DTSTART:00010101T000000` and a DURATION — which any client sharing the
+    collection can PUT, and which `store.get_events_in_range` admits for EVERY
+    window because its DURATION branch has no lower date bound — therefore 500'd
+    `GET /api/public/booking/{token}` permanently, for everyone, until someone
+    found and deleted the resource.
+
+    Clamping is the right answer rather than dropping the interval: a busy block
+    at the edge of representable time still blocks, and the buffer around it
+    cannot extend past the edge anyway. The safe direction on a booking path is
+    to keep blocking.
+    """
+    try:
+        return (_u(value) + by).astimezone(tz)
+    except (OverflowError, ValueError):
+        edge = datetime.max if by > timedelta(0) else datetime.min
+        try:
+            return edge.replace(tzinfo=timezone.utc).astimezone(tz)
+        except (OverflowError, ValueError):
+            return value            # cannot even be re-expressed; leave it as it was
+
+
 def pad(intervals: list[Interval], buffer_minutes: int) -> list[Interval]:
     """Each interval widened by the buffer on both sides, re-coalesced."""
     if not buffer_minutes:
@@ -217,8 +245,8 @@ def pad(intervals: list[Interval], buffer_minutes: int) -> list[Interval]:
     # aware datetime adds to its naive fields and re-derives the offset, so a
     # buffer straddling a transition would otherwise be an hour out.
     return merge([
-        Interval((_u(iv.start) - b).astimezone(iv.start.tzinfo),
-                 (_u(iv.end) + b).astimezone(iv.end.tzinfo))
+        Interval(_widen(iv.start, -b, iv.start.tzinfo),
+                 _widen(iv.end, b, iv.end.tzinfo))
         for iv in intervals
     ])
 
