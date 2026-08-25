@@ -404,8 +404,29 @@
   flex: 1; min-height: 0; display: grid; margin-top: 8px;
   border-top: 1px solid var(--rule);
 }
-.day-cols.cols-3 { grid-template-columns: repeat(3, 1fr); }
-.day-cols.cols-7 { grid-template-columns: repeat(7, 1fr); }
+/* A FLOOR UNDER A DAY COLUMN, and the row scrolls when seven of them do not
+   fit. `1fr` alone let the columns divide whatever was there, however little
+   that was: at 721px a Week column came to 69px, and after the body's padding,
+   the card's padding, the priority bar and the checkbox, `.day-card-title` was
+   left 2px — so `overflow-wrap: break-word` did exactly what it is told and
+   broke the title one CHARACTER per line, 16 lines tall. It was still four
+   lines at 1000px.
+
+   140px is where a title has ~73px to wrap in, which is two or three normal
+   lines. Seven of them plus the sidebar need roughly 1000px, so the scroll only
+   engages below that and the rule is inert on a desktop — measured: unchanged
+   at 1280 and 1600, floored at 140 from 1000 down.
+
+   The phone already answers this the same way one block down (`width: 76vw`
+   with scroll-snap); this is that idea at the widths between.
+
+   `overflow-y: hidden` because the vertical scroller is `.day-col-body`, one
+   level in. Setting only `overflow-x` computes `overflow-y` to `auto` as well,
+   which would put a second vertical scroller around the seven that already
+   have one. */
+.day-cols.cols-3 { grid-template-columns: repeat(3, minmax(140px, 1fr)); }
+.day-cols.cols-7 { grid-template-columns: repeat(7, minmax(140px, 1fr)); }
+.day-cols.cols-3, .day-cols.cols-7 { overflow-x: auto; overflow-y: hidden; }
 .day-col {
   display: flex; flex-direction: column; min-width: 0; overflow: hidden;
   border-right: 1px solid var(--rule-faint);
@@ -663,6 +684,12 @@
 @media (hover: none) {
   .task-actions { opacity: 1; }
   .side-item .side-edit { opacity: 1; }
+  /* The third of the three hover-revealed clusters, and it was missing here.
+     `.group-actions` is `opacity: 0` until `.group-head:hover` — which never
+     arrives on a finger — so renaming or deleting a list group was unreachable
+     on any touch device WIDE ENOUGH not to get the sidebar drawer, where line
+     ~834 restores it. A touch laptop or a tablet in landscape is exactly that. */
+  .group-actions { opacity: 1; }
 }
 
 /* ---- mobile ---- */
@@ -932,8 +959,26 @@
 }
 .sched-day.off .sched-day-name { color: var(--fg-faint); }
 .sched-ranges { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
-.sched-range { display: inline-flex; align-items: center; gap: 4px; color: var(--fg-faint); }
-.sched-range .input { width: auto; padding: 5px 6px; font-size: calc(13px * var(--fs-scale)); }
+/* The availability error, beside the day it belongs to. It had NO RULE AT ALL —
+   a class written into the JSX (`SchedulingView`) that the one stylesheet never
+   answered — so an error rendered as ordinary 15px body prose, indistinguishable
+   from a label. Same shape as `.login-err`, which is the app's other inline
+   field-level error. */
+.sched-err {
+  font-family: var(--mono); font-size: calc(11px * var(--fs-scale)); color: var(--warn);
+}
+
+/* `min-width: 0` on both, so a range can give way instead of pushing the sheet
+   sideways. A flex item defaults to `min-width: auto` and will not shrink below
+   its content, and these hold two `input[type=time]` that the mobile block
+   deliberately floors at 16px to stop iOS zooming on focus — so at 360px the
+   pair came to 275px inside a 248px row and the whole modal scrolled sideways.
+   Measured: 49px of overflow at 320px and 9px at 360px, both to 0, with the
+   inputs shrinking 130 -> 96 / 116 and the 16px floor untouched. */
+.sched-range { display: inline-flex; align-items: center; gap: 4px; color: var(--fg-faint);
+  min-width: 0; }
+.sched-range .input { width: auto; min-width: 0; padding: 5px 6px;
+  font-size: calc(13px * var(--fs-scale)); }
 .sched-range .icon-btn { padding: 4px 6px; font-size: calc(10px * var(--fs-scale)); }
 /* The app's "add another one of these" control: a dashed outline is the
    signature. Shared with the bulk composer's row-adder. */

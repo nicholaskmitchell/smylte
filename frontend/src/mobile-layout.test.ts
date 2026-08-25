@@ -23,14 +23,15 @@ const css = read('src/styles/app.css')
  *  mistaken for the rule. Every assertion below runs against this. */
 const rules = css.replace(/\/\*[\s\S]*?\*\//g, '')
 
-/** One `@media (max-width: 720px) { ... }` block's body, by index. The
- *  stylesheet has several; the tab strip lives in the first. */
-function mediaBlock(n: number): string {
-  const marker = '@media (max-width: 720px)'
+/** The body of the nth block introduced by `marker`, brace-matched.
+ *
+ *  Brace-matching and not "up to the next `}`" — an at-rule's body is full of
+ *  rules with braces of their own, so the naive version returns the first rule
+ *  inside the block and every assertion after it is a false negative. */
+function blockAfter(marker: string, n = 0): string {
   let from = -1
   for (let i = 0; i <= n; i++) from = rules.indexOf(marker, from + 1)
-  expect(from, `there is no ${n + 1}th max-width:720px block`).toBeGreaterThan(-1)
-  // Brace-match from the block's opening `{`.
+  expect(from, `there is no block ${n + 1} for \`${marker}\``).toBeGreaterThan(-1)
   let depth = 0
   const start = rules.indexOf('{', from)
   for (let i = start; i < rules.length; i++) {
@@ -39,6 +40,10 @@ function mediaBlock(n: number): string {
   }
   throw new Error('unbalanced braces in app.css')
 }
+
+/** One `@media (max-width: 720px)` block's body, by index. The stylesheet has
+ *  four; the tab strip lives in the first. */
+const mediaBlock = (n: number) => blockAfter('@media (max-width: 720px)', n)
 
 /** The body of the first rule whose selector matches, or ''. */
 function ruleFor(selector: string, hay: string = rules): string {
@@ -135,6 +140,74 @@ describe('the calendar month grid', () => {
     expect(fixed, '.cal-scroll.fixed .cal-grid is gone').not.toBe('')
     expect(fixed, 'the column floor drifted back onto the fitted variant only')
       .not.toMatch(/grid-template-columns:/)
+  })
+})
+
+describe('the multi-day task columns', () => {
+  it('floors a day column at a width a title can wrap in', () => {
+    // `1fr` alone let seven columns divide whatever was there: at 721px a Week
+    // column was 69px, and after the body's padding, the card's padding, the
+    // priority bar and the checkbox, `.day-card-title` was left 2px — so
+    // `overflow-wrap: break-word` broke the title ONE CHARACTER PER LINE, 16
+    // lines tall. It was still four lines at 1000px.
+    for (const sel of ['.day-cols.cols-3', '.day-cols.cols-7']) {
+      const body = ruleFor(sel)
+      expect(body, `${sel} is gone from app.css`).not.toBe('')
+      expect(body, `${sel} lets a column shrink to nothing`)
+        .toMatch(/grid-template-columns:\s*repeat\(\d,\s*minmax\(\d+px,\s*1fr\)\)/)
+    }
+  })
+
+  it('scrolls the row rather than squeezing past the floor', () => {
+    // A floor without a scroller just moves the overflow somewhere else. The
+    // phone rule one block down already answers this the same way.
+    expect(ruleFor('.day-cols.cols-3, .day-cols.cols-7')).toMatch(/overflow-x:\s*auto/)
+  })
+
+  it('does not wrap a second vertical scroller around the seven that have one', () => {
+    // `.day-col-body` is the vertical scroller. Setting only `overflow-x`
+    // computes `overflow-y` to `auto` as well, which would nest one.
+    expect(ruleFor('.day-cols.cols-3, .day-cols.cols-7')).toMatch(/overflow-y:\s*hidden/)
+  })
+})
+
+describe('classes the JSX writes that the stylesheet must answer', () => {
+  // The defect family `.today-shutdown` belonged to: a class name invented in a
+  // component that `app.css` never defines, so the element silently renders
+  // with no styling at all. There is exactly one stylesheet, so this is always
+  // a silent failure rather than a build error.
+
+  it('styles the scheduling availability error as an error', () => {
+    // It had no rule, so an inline error rendered as ordinary 15px body prose —
+    // indistinguishable from the label beside it.
+    const err = ruleFor('.sched-err')
+    expect(err, '.sched-err is written into SchedulingView but has no rule').not.toBe('')
+    expect(err, 'an error that is not warn-coloured does not read as one')
+      .toMatch(/color:\s*var\(--warn\)/)
+    expect(read('src/components/SchedulingView.tsx')).toContain('sched-err')
+  })
+
+  it('lets a time range give way instead of pushing the sheet sideways', () => {
+    // A flex item defaults to `min-width: auto` and will not shrink below its
+    // content. These hold two `input[type=time]` floored at 16px on mobile to
+    // stop iOS zooming on focus, so at 360px the pair came to 275px inside a
+    // 248px row and the whole modal scrolled sideways.
+    expect(ruleFor('.sched-range')).toMatch(/min-width:\s*0/)
+    expect(ruleFor('.sched-range .input')).toMatch(/min-width:\s*0/)
+  })
+})
+
+describe('hover-revealed controls on a touch device', () => {
+  it('restores all three clusters, not two of them', () => {
+    // `.group-actions` is `opacity: 0` until `.group-head:hover`, which never
+    // arrives on a finger — so renaming or deleting a list group was unreachable
+    // on any touch device wide enough not to get the sidebar drawer. Its two
+    // siblings were already restored here; it was not.
+    const block = blockAfter('@media (hover: none)')
+    expect(block, 'the hover:none block parsed empty').not.toBe('')
+    for (const sel of ['.task-actions', '.side-item .side-edit', '.group-actions']) {
+      expect(block, `${sel} is not restored on touch`).toContain(sel)
+    }
   })
 })
 
