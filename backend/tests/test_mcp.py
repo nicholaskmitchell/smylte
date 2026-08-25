@@ -1677,3 +1677,35 @@ def test_a_lone_surrogate_anywhere_on_the_reply_path_cannot_kill_the_response():
     # method name, an unknown argument name, and an unknown OAuth scope.
     for hostile in ("bad\ud800method", "\udfff", "ok"):
         render({"m": wire_safe(hostile)})
+
+
+def test_merged_events_are_ordered_by_instant_not_by_iso_string():
+    """`list_events` merged every calendar's rows and sorted lexically over
+    `dt.isoformat()`, which carries whatever offset the WRITING client used.
+
+    `_intrinsic_order`'s docstring in the same file already says why that is
+    wrong — "lexical comparison happens to agree for ISO values of equal shape
+    and stops agreeing the moment a date-only and a timed value meet, or an
+    offset appears" — and the tasks path was fixed for it while the events path
+    was not. So a Berlin-anchored 09:00 (07:00Z, genuinely FIRST) sorted after a
+    plain 08:00Z, because "…T09:00" is lexically greater. tools.py pages this
+    list, so `limit: 1` handed the model the LATER meeting and it never saw the
+    earlier one.
+
+    Undated and unreadable rows sort LAST now rather than first — they came off
+    the wire from another client — and uid/recurrence_id make the order total."""
+    from tasksd.mcp.api import _event_order
+
+    rows = [
+        {"uid": "utcone", "start": "2026-08-21T08:00:00+00:00", "summary": "B"},
+        {"uid": "berlin", "start": "2026-08-21T09:00:00+02:00", "summary": "A"},
+        {"uid": "nostart", "start": None, "summary": "C"},
+        {"uid": "junk", "start": "(datetime.datetime(2026, 1, 1, 0, 0),)", "summary": "D"},
+    ]
+    assert [r["uid"] for r in sorted(rows, key=_event_order)] == [
+        "berlin", "utcone", "nostart", "junk"]
+
+    # Total: two rows sharing an instant and a summary still order stably.
+    same = [{"uid": "b", "start": "2026-08-21T08:00:00+00:00", "summary": "x"},
+            {"uid": "a", "start": "2026-08-21T10:00:00+02:00", "summary": "x"}]
+    assert [r["uid"] for r in sorted(same, key=_event_order)] == ["a", "b"]

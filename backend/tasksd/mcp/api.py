@@ -314,6 +314,44 @@ def _not_found(message: str):
         raise ToolError(message) from None
 
 
+def _event_order(row: dict) -> tuple:
+    """Sort key for a merged event list: INSTANT first, then a total tie-break.
+
+    This used to be `(row["start"] or "", row["summary"] or "")` — a lexical
+    compare over `dt.isoformat()`, which carries whatever offset the writing
+    client used. `_intrinsic_order`'s docstring in this same file already says
+    why that is wrong ("lexical comparison happens to agree for ISO values of
+    equal shape and stops agreeing the moment a date-only and a timed value meet,
+    or an offset appears"); the tasks path was fixed for it and the events path
+    was not.
+
+    So `DTSTART;TZID=Europe/Berlin:20260821T090000` (07:00Z, genuinely first)
+    sorted AFTER `DTSTART:20260821T080000Z` (08:00Z), because "2026-08-21T09:00"
+    is lexically greater. `tools.py` then pages this list, so `limit: 1` handed
+    the model the LATER meeting and it never saw the earlier one.
+
+    An unreadable or absent start sorts last rather than raising — these rows
+    come off the wire from other clients. uid and recurrence_id complete the
+    order so it is total, the way `_intrinsic_order` is.
+    """
+    raw = row.get("start")
+    when = None
+    if raw:
+        try:
+            parsed = _parse_dt(raw, field="start")
+        except ToolError:
+            parsed = None
+        if parsed is not None:
+            when = _as_dt(parsed)
+    return (
+        when is None,                       # undated / unreadable last
+        when or datetime.min,   # naive, matching `_as_dt`'s output
+        row.get("summary") or "",
+        row.get("uid") or "",
+        row.get("recurrence_id") or "",
+    )
+
+
 class McpApi:
     """Everything the tools can reach, and nothing else.
 
@@ -566,7 +604,7 @@ class McpApi:
         rows: list[dict] = []
         for href in self._event_calendars(calendar_id):
             rows.extend(self._svc.events_in_range(href, s.isoformat(), e.isoformat()))
-        rows.sort(key=lambda r: (r.get("start") or "", r.get("summary") or ""))
+        rows.sort(key=_event_order)
         return rows
 
     def get_event(self, calendar_id, uid):
