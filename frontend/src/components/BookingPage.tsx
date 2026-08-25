@@ -68,7 +68,15 @@ export function BookingPage({ token }: { token: string }) {
       if (!opts.keepPhase) setPhase('pick')
       return i
     } catch (e) {
-      if (e instanceof AuthError) return null
+      if (e instanceof AuthError) {
+        // NOT a bare `return`. This endpoint needs no session, so a 401 here
+        // means something in front of it is asking for one — an Access policy or
+        // a proxy auth layer that swept /api/public/* in with the rest. Leaving
+        // `phase` on 'loading' rendered a permanently blank white document to a
+        // stranger, with nothing to read and nothing to click.
+        if (!opts.keepPhase) setPhase('unavailable')
+        return null
+      }
       // Only a 404 means the link is gone. The backend rate-limits this exact
       // endpoint and counts every request, not just failures, so 121 loads in
       // five minutes from one address — a shared office NAT, or one visitor
@@ -156,7 +164,23 @@ export function BookingPage({ token }: { token: string }) {
     }
   }
 
-  if (phase === 'loading') return null
+  if (phase === 'loading') {
+    // Not `null`. This is the one page an anonymous stranger opens, mounted by
+    // main.tsx with no shell or spinner around it — so returning nothing was a
+    // blank white document for the whole round trip. That is not a fast round
+    // trip either: `public_link_info` runs slot generation and busy expansion
+    // inside the global service lock. A visitor on a slow connection saw a page
+    // that looked broken, and "Try again" on the error card sets `phase` back to
+    // 'loading', so a retry replaced a readable error with the same blank.
+    return (
+      <div className="booking-wrap">
+        <div className="booking-card">
+          <div className="login-brand">Smylte<span className="dot">.</span></div>
+          <p className="booking-lead" role="status" aria-live="polite">Loading the available times…</p>
+        </div>
+      </div>
+    )
+  }
 
   if (phase === 'notfound') {
     return (
@@ -280,19 +304,27 @@ export function BookingPage({ token }: { token: string }) {
                 Change
               </button>
             </div>
+            {/* htmlFor/id, the pair every other form in the app uses — Login's
+                own comment calls it that. These three labels neither wrapped
+                their control nor carried htmlFor, so none of the inputs had an
+                accessible name, on the one form in the app an anonymous visitor
+                fills in, often on a phone with a screen reader. */}
             <div className="field">
-              <label className="label">Your name</label>
-              <input className="input" autoFocus value={name} maxLength={200}
+              <label className="label" htmlFor="booking-name">Your name</label>
+              <input className="input" id="booking-name" name="name" autoComplete="name"
+                autoFocus value={name} maxLength={200}
                 onChange={(e) => setName(e.target.value)} />
             </div>
             <div className="field">
-              <label className="label">Email</label>
-              <input className="input" type="email" value={email} maxLength={320}
+              <label className="label" htmlFor="booking-email">Email</label>
+              <input className="input" id="booking-email" name="email" type="email"
+                autoComplete="email" value={email} maxLength={320}
                 onChange={(e) => setEmail(e.target.value)} />
             </div>
             <div className="field">
-              <label className="label">Notes (optional)</label>
-              <textarea className="input" rows={3} value={notes} maxLength={2000}
+              <label className="label" htmlFor="booking-notes">Notes (optional)</label>
+              <textarea className="input" id="booking-notes" name="notes" rows={3}
+                value={notes} maxLength={2000}
                 placeholder="Anything the host should know?"
                 onChange={(e) => setNotes(e.target.value)} />
             </div>

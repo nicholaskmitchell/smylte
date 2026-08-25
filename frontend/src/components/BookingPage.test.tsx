@@ -1,8 +1,8 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { BookingPage } from './BookingPage'
-import { api, HttpError, type PublicBookingInfo } from '../api'
+import { api, AuthError, HttpError, type PublicBookingInfo } from '../api'
 
 vi.mock('../api', async (importOriginal) => {
   const mod = await importOriginal<typeof import('../api')>()
@@ -276,5 +276,35 @@ describe('<BookingPage> load failures', () => {
     expect(await screen.findByText(/just taken/i)).toBeInTheDocument()
     expect(screen.queryByText(/no longer available/i)).not.toBeInTheDocument()
     expect(screen.queryByText(/couldn’t load this page/i)).not.toBeInTheDocument()
+  })
+})
+
+
+describe('the public page never renders as a blank document', () => {
+  it('says it is loading instead of returning null', async () => {
+    // main.tsx mounts this directly with no shell or spinner, so returning null
+    // was a blank white page for the whole round trip — and that round trip runs
+    // slot generation and busy expansion inside the global service lock, so it
+    // is seconds on a loaded server, not milliseconds.
+    let settle: (v: PublicBookingInfo) => void = () => {}
+    infoMock.mockReturnValue(new Promise<PublicBookingInfo>((r) => { settle = r }))
+    render(<BookingPage token="tok" />)
+    expect(await screen.findByRole('status')).toHaveTextContent(/loading/i)
+    settle(INFO)
+    expect(await screen.findByText('Intro call')).toBeInTheDocument()
+  })
+
+  it('shows the unavailable card on a 401 rather than staying blank forever', async () => {
+    // This endpoint needs no session, so a 401 means something in FRONT of it
+    // wants one — an Access policy or proxy auth layer that swept /api/public/*
+    // in with the rest. The AuthError branch returned without touching `phase`,
+    // pinning the page on 'loading' permanently.
+    infoMock.mockRejectedValue(new AuthError('unauthenticated'))
+    render(<BookingPage token="tok" />)
+    await waitFor(() => expect(screen.queryByRole('status')).toBeNull())
+    expect(screen.getByText(/Couldn.t load this page just now/i)).toBeInTheDocument()
+    // ...and "Try again" now shows the loading card rather than the blank page
+    // that used to replace a readable error.
+    expect(screen.getByRole('button', { name: /try again/i })).toBeInTheDocument()
   })
 })
