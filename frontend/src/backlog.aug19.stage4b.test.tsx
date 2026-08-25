@@ -1205,6 +1205,17 @@ describe('aug19 leftovers — every dialog answers Escape at the window', () => 
       // Escape dispatched at the window' in the shutdown describe block. Same
       // shape and same reason as the planning one above.
       'ShutdownRitual',
+      // The last two dialogs to adopt the hook, both found by the 2026-08-25
+      // sweep. This enumeration derives its membership from components that
+      // ALREADY import `useEscape`, which is a guard pointed one way only: it
+      // cannot see a dialog that never adopted it at all, and these two never
+      // had. `modal-contract.test.tsx` is the other direction — it sweeps every
+      // component rendering an `.overlay` and asserts all three halves of the
+      // contract — and it drives Sidebar's edit modal behaviourally.
+      'Sidebar',
+      // CalendarView's EventModal and its move-scope prompt. Escape is driven by
+      // modal-contract.test.tsx's source sweep; the scrim guard likewise.
+      'CalendarView',
     ])
     const missing = users.filter((u) => !covered.has(u))
     expect(missing,

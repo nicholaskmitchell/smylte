@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type KeyboardEvent } from 'react'
+import { useEffect, useMemo, useState, type KeyboardEvent, useRef } from 'react'
 import { api, type Availability, type Booking, type BookingLink, type BookingLinkInput,
   type List } from '../api'
 import { makeGuard } from '../util'
@@ -302,6 +302,8 @@ function LinkModal({ link, cals, onClose, onSave, onDelete }: {
         (k === r ? (pos === 0 ? [v, x[1]] : [x[0], v]) : x) as [string, string]),
     })
 
+  const scrimPress = useRef(false)          // see the overlay below
+
   const dayErrors = availErrors(days)
   const valid = title.trim() && calendar && tz.trim()
     && Object.keys(daysToAvail(days)).length > 0
@@ -341,7 +343,15 @@ function LinkModal({ link, cals, onClose, onSave, onDelete }: {
   useEscape(onClose)
 
   return (
-    <div className="overlay" onClick={onClose}>
+    /* Escape and role="dialog" landed when this was last fixed; the SCRIM did
+       not, so the app's longest form still discarded itself when a drag-select
+       released outside it. See TaskModal for why a bare onClick is not enough. */
+    <div className="overlay"
+      onMouseDown={(e) => { scrimPress.current = e.target === e.currentTarget }}
+      onClick={(e) => {
+        if (e.target === e.currentTarget && scrimPress.current) onClose()
+        scrimPress.current = false
+      }}>
       <div className="modal sched-modal" role="dialog" aria-modal="true"
         aria-label={link ? 'Edit booking link' : 'New booking link'}
         onClick={(e) => e.stopPropagation()}>
