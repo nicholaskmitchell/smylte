@@ -1,7 +1,10 @@
-# Gate for the autopull deploy: main only ever receives commits that passed the
-# full backend suite (against a real scratch Radicale), the frontend unit +
-# rendering tests, a typecheck + build, and the security checks (dependency
-# audits on both stacks and bandit static analysis on the backend).
+# Gate for the autopull deploy: main only ever receives commits that passed all
+# five jobs below — the full backend suite (against a real scratch Radicale, and
+# `SCRATCH_REQUIRED` is what makes that clause enforceable rather than
+# aspirational); the frontend unit + rendering tests, a typecheck and a build;
+# the Windows client's build and unit tests; the release workflow's publish step
+# against a stubbed `gh`; and the security checks (dependency audits on both
+# stacks and bandit static analysis on the backend).
 name: CI
 
 on:

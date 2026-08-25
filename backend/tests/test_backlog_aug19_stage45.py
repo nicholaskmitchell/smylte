@@ -1,20 +1,18 @@
 """The 2026-08-19 sweep: user-visible backend correctness (stage 4) and
 delivery infrastructure / test gaps (stage 5).
 
-This file is now MIXED, and which is which is readable off the markers. A test
-still carrying `xfail(strict=True)` pins an OPEN finding: it drives the real
-code, asserts the behaviour that code SHOULD have, and fails against what it
-does today — the marker is what keeps CI green while the finding is open, and
-what turns the build red the moment it is fixed without being ticked off. A test
-with no marker is a closed finding's regression test and must stay green.
+**Stages 4 and 5 are CLOSED.** Every test here began as an `xfail(strict=True)`
+pin — driving the real code, asserting the behaviour that code SHOULD have, and
+failing against what it did that day. The markers are gone: these are ordinary
+regression tests and must stay green.
 
-**Both stage-4 findings here are closed** (the consent form's default button,
-and `/book/<token>/`). Each was widened before it was fixed and then run against
-a plausible half-fix to confirm the widened pin still caught one — for the
-consent form that half-fix was "autofocus Connect but leave Cancel first in tree
-order", which does not change the default button and which the pin refuses. What
-remains open is stage 5: the release workflow's token scope, and setup.sh's
-password escaping.
+Both stage-4 findings (the consent form's default button, and `/book/<token>/`)
+were widened before they were fixed and then run against a plausible half-fix to
+confirm the widened pin still caught one — for the consent form that half-fix was
+"autofocus Connect but leave Cancel first in tree order", which does not change
+the default button and which the pin refuses. The two stage-5 findings, the
+release workflow's token scope and setup.sh's password escaping, closed the same
+way.
 
 The test-gap findings are the exception, and they split two ways, exactly as
 test_backlog_stage5.py describes: a gap is closed by a test EXISTING, so the

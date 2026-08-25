@@ -1,18 +1,24 @@
 # Audit backlog
 
-Open findings from the adversarial audit sweeps — one deep finder per subsystem,
-then two independent verifiers per finding whose job is to *refute* it. Everything
+**0 open.** Every finding below is closed.
+
+Findings from the adversarial audit sweeps — one deep finder per subsystem, then
+two independent verifiers per finding whose job is to *refute* it. Everything
 here **survived verification**: a verifier tried to knock it down and could not.
-Nothing here is a style nit — each one carries a concrete trigger. Each sweep's own
-counts are in its section heading below.
+Nothing here is a style nit — each one carries a concrete trigger.
 
-What is *not* in this file: the issues already fixed on this branch (all six HIGHs
-plus nine others), and the four the owner has scheduled for the current pass
-(logout invalidation, booking links outliving their calendar, the Start-time slot,
-and task-edit dirty-tracking).
+This file is now a record rather than a worklist. The evidence stays: a ticked
+box says what the bug was, why it mattered, and what a reader should not
+reintroduce, and the issues that link into these sections still resolve. Its
+counts and its prose had drifted badly — the header claimed 36 open findings
+against a file with no unticked box in it — because the commit that closed the
+last one never came back to the top of the page. Anything here that reads as
+open is stale text, not an open finding; `grep -c '\[ \]' docs/AUDIT.md` is the
+answer, and `cd backend && python -m pytest -m backlog -rxX` is the executable
+one.
 
-Severity is the verifiers' rating. `minor` marks a fix that is a few
-obviously-correct lines needing no design decision — a reasonable place to start.
+Severity is the verifiers' rating. `minor` marks a fix that was a few
+obviously-correct lines needing no design decision.
 
 ### Reading a reference
 
@@ -24,23 +30,16 @@ against that day's tree, then the 2026-08-14 merge moved most of them, and the
 was re-derived against this commit by locating the symbol it describes, not by
 diff arithmetic. If a line drifts again, search the symbol.
 
-Two findings were partly overtaken by that same drift and carry a note saying so
-in place of a clean anchor. They are deliberately left open rather than ticked:
-nobody re-verified them, and "the code moved" is not the same as "the bug is
-gone". Re-scope them before working them.
+Two findings were partly overtaken by that same drift and carried a note saying
+so in place of a clean anchor. Both were subsequently re-scoped and closed.
 
-The 2026-08-19 references were written against this commit and have not drifted yet.
+Every reference in the file points into the tree as it was when the finding was
+filed. They are history, not navigation — search the symbol, not the line.
 
-Ticked findings keep their original references, which point into the tree as it
-was when they were filed. They are history, not navigation.
-
-**28 open** from the 2026-08-19 sweep, plus **7** still open of the 10 filed by
-the Stage 3 adversarial review and **1** from its follow-up (both below), immediately below; every older
-finding is closed. The 2026-08-07 backlog is closed, and so are both findings the
-remediation filed against itself (the missing CSP — issue #57 — and the unbounded
-`_count_consumed` walk, below). The
-evidence stays here — a ticked box records what the bug was and why it mattered,
-and the issues that link into these sections still resolve.
+Everything is closed: the 2026-08-19 sweep's 66, the 10 filed by the Stage 3
+adversarial review and the 4 from its follow-up, the 2026-08-07 backlog, and the
+findings the remediation filed against itself (the missing CSP — issue #57 — and
+the unbounded `_count_consumed` walk, below).
 
 The 2026-08-07 backlog was closed cluster by cluster, in severity order, against
 the seven issues that group it (#42–#48). Each cluster landed as one commit:
@@ -75,17 +74,18 @@ Three of the 69 are the same defect seen at a different layer, so they are filed
 once and the backlog counts **66**. Every one of the ten HIGHs was reproduced by
 hand with a runnable probe against a live Radicale 3.7.4 before being written down.
 
-**36 open, 44 closed** — the seven crash paths went first, as **Stage 1**
-(`docs/STAGES.md`), and **Stage 2** is closing on top of them; their pins are
-ordinary regression tests now and must stay green. The rest are still pinned by a test that asserts the corrected behaviour
-and fails today — see `docs/STAGES.md` for the stage plan and the
-finding-to-pin map. Run `pytest -m backlog -rxX` and `npx vitest run backlog` for
-the itemised state.
+**0 open, 66 closed.** All five stages are done (`docs/STAGES.md`) — the seven
+crash paths went first as **Stage 1**, and the rest followed. Every pin that
+once asserted a corrected behaviour and failed is now an ordinary regression test
+that must stay green; no `xfail(strict=True)` marker remains anywhere in the
+suite. Run `pytest -m backlog -rxX` and `npx vitest run backlog` for the
+itemised state.
 
 One pattern is worth naming because it accounts for five of them and is why three
 prior sweeps missed them: **the code's own comment asserts a safety property the
 code does not deliver.** `_u()` in `scheduling.py` documents "Every comparison in
-this module must go through here" and the guard ten lines above it does not.
+this module must go through here" and the guard ten lines above it did not
+(fixed in Stage 3; that line now reads `if _u(end) > _u(start):`).
 `sync_all` says a sync failure is recorded "where /api/sync and future tooling can
 see it" and nothing reads it. A comment is evidence of intent, not of behaviour.
 
@@ -3134,7 +3134,7 @@ fastapi/routing.py:466-472 is the interceptor:
 
 A design review of the three fixes above, run before they were committed, found
 four more. Three were defects in those fixes and are closed with them; the fourth
-is a pre-existing bug of the same family and is open.
+is a pre-existing bug of the same family, closed separately.
 
 #### [x] The exact-duration repair truncated an RDATE;VALUE=PERIOD block to the master's DURATION
 
@@ -3249,10 +3249,12 @@ confirm it catches one. That last step earned its keep: pin A passed against a
 fix that skipped claimed slots but not EXDATE'd ones, so it was widened before
 the marker came off.
 
-The seven below are **open**. They are filed rather than fixed because each is its
-own change with its own risk, and the lesson of that same review is that a fix
-written in a hurry to close a review comment is how three of the four regressions
-above got in. Nothing here is pinned yet.
+**All ten are now closed.** They were filed rather than fixed on the day because
+each was its own change with its own risk, and the lesson of that same review is
+that a fix written in a hurry to close a review comment is how three of the four
+regressions above got in. The three that were consequences of Stage 3 itself went
+with it; the other seven were closed by Stage 4, each pinned before it was fixed
+— see `docs/STAGES.md`.
 
 One theme is worth stating up front, because it is about the harness rather than
 the code: **every backend pin in Stage 3 was widened with controls, and not one

@@ -52,7 +52,8 @@ jobs:
       - run: npm run build
 
       - name: Stamp the build
-        # Read by the client to tell one build from another, and by anyone
+        # Not read by anything automatically — the client tells builds apart by
+        # the release asset's id and updated_at (Updater.cs). This is for a human
         # wondering which commit a running desktop app is actually on.
         run: |
           printf '{"sha":"%s","built":"%s"}\n' \

@@ -30,13 +30,29 @@ Verified by `tests/test_recur.py` (pure) and the recurring cases in
 `tests/test_api.py` (round-tripped through real Radicale).
 
 ### Known limitations (VEVENT)
-- "This & following" drops a `COUNT` bound on the split-off tail (keeps
-  FREQ/INTERVAL/BY*/UNTIL). Rare; unbounded/UNTIL series split exactly.
 - The edit modal doesn't surface a recurring event's exact current FREQ, so
   editing it shows "Keep current schedule" (leaving the rule untouched) rather
   than pre-selecting the frequency.
-- Sub-daily rules (FREQ=SECONDLY/MINUTELY) are capped to a bounded prefix so a
-  pathological rule can't hang a request.
+
+Two entries that used to sit here no longer describe the code:
+
+- **COUNT across a split.** A COUNT-bounded series now keeps its overall length
+  through "this & following": the tail's COUNT is the original minus what the
+  head consumed (`edit.py::split_series`), and RDATE/EXDATE entries are
+  partitioned by the anchor. Pinned by
+  `test_split_count_series_tail_is_bounded`.
+- **Pathological rules.** Nothing is truncated to a bounded prefix. A resource is
+  **refused up front** and the caller degrades to the master row — the calendar
+  draws one row, and the booking page's busy set treats the series as covering
+  the whole window, which withholds availability rather than handing it out. The
+  test is `test_subdaily_rule_is_refused_not_expanded`. The judgement is on the
+  rule's shape, not its FREQ name, and there are four guards, not one: more than
+  24 instances a day (so `FREQ=SECONDLY`/`MINUTELY`, but equally any FREQ
+  expanded past that by BYHOUR/BYMINUTE/BYSECOND); `INTERVAL < 1`, which Radicale
+  accepts and which never terminates; a walk from DTSTART to the window over
+  200k instances; and a dateutil search running past 5000 periods without
+  yielding an occurrence. An RDATE list too long to fit the window's occurrence
+  cap is refused on the same terms.
 
 ## Still GATED — VTODO (task) recurrence
 

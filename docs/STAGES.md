@@ -3,12 +3,16 @@
 `docs/AUDIT.md` is the evidence. This file is the plan for closing those
 findings, and the map from a finding to the test that pins it.
 
-Two sweeps have been staged this way. The **2026-08-19** backlog is open and is
-the live plan; the **2026-08-16** one below it is closed and kept as the record
-of how the harness behaved in practice — its "Two strengths of pin" and
-"Ordering" notes are the reason the new pins are shaped the way they are.
+Two sweeps have been staged this way, and **both are now closed**. The
+**2026-08-19** backlog is below; the **2026-08-16** one under it is kept as the
+record of how the harness behaved in practice — its "Two strengths of pin" and
+"Ordering" notes are the reason the later pins are shaped the way they are.
 
-# Sweep — 2026-08-19 · the open backlog
+Read this as history. Nothing here is a live worklist: no `xfail(strict=True)`
+marker and no `it.fails` remains in either suite, and every pin named below is an
+ordinary test that must stay green.
+
+# Sweep — 2026-08-19 · closed
 
 `docs/AUDIT.md` is the evidence. This is the plan for closing it.
 
@@ -70,9 +74,10 @@ OUTCOME any future fix must satisfy.
 The sweep opened at 36/44. Stage 4 closed 28 — its own 21 plus the 7 the Stage 3
 adversarial review had left open — remediation FILED 5 more along the way, and
 the closing review REOPENED one (D5, `_desynchronizing`), so the open count fell
-by 22 rather than 28. Of the 14 still open:
+by 22 rather than 28. Those 14 were then closed in turn, taking the sweep to 0.
+Where they had come from:
 
-| where it came from | open |
+| where it came from | count |
 |---|---|
 | the sweep itself (all stage 5) | 7 |
 | filed by the adversarial review of Stage 3 | 0 |
@@ -87,11 +92,12 @@ worked), `TasksView`'s uid-keyed maps, the `useEscape` consolidation, one failin
 calendar blanking a whole month, and `find_free_time`'s DST-unsafe end
 arithmetic. Closing a finding properly is itself a way of finding the next one.
 
-6 of the 7 remaining sweep findings are pinned — 2 as `xfail(strict=True)` /
-`it.fails` and 4 as ordinary passing tests (see "Test gaps that were only gaps" below); the
-unpinned one is finding 62. **All 7 of the review's open findings are now closed**, each pinned first. The 8th — from that review's own follow-up — is still open and unpinned. The review's
-other 3, the ones Stage 3 itself caused, are closed — along with 3 more the
-follow-up found in those very fixes. See `## Filed during the Stage 3 adversarial review` in
+All 7 of those remaining sweep findings are closed, and their pins — which
+included 2 written as `xfail(strict=True)` / `it.fails` — are ordinary passing
+tests now (see "Test gaps that were only gaps" below). **All 7 of the review's
+findings are closed**, each pinned first, as is the 8th from that review's own
+follow-up. The review's other 3, the ones Stage 3 itself caused, are closed —
+along with 3 more the follow-up found in those very fixes. See `## Filed during the Stage 3 adversarial review` in
 `docs/AUDIT.md`. One is deliberately **not** pinned; see
 "The one that is not pinned" below. The harness
 described under *Stage 0* further down still applies unchanged; these pins live in
