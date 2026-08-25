@@ -262,6 +262,58 @@ def clip(intervals: list[Interval], window: Interval) -> list[Interval]:
     return out
 
 
+def _window_end_utc(day: date, w_end: time, tz: ZoneInfo) -> datetime:
+    """The instant an availability window ends, never LATER than the owner said.
+
+    `datetime.combine(day, w_end, tzinfo=tz)` resolves a wall-clock time that does
+    not exist — the spring-forward gap — with PEP 495 fold=0, i.e. the
+    PRE-transition offset. For an end time that is the instant of `w_end + gap`
+    in post-transition local time, so the window GREW by the gap instead of
+    shrinking, and slots were emitted after the owner's stated hours. The comment
+    that used to sit here asserted the opposite; that is true only when the
+    START falls in the gap.
+
+    Where the gap sits in the last hour of the local day — America/Nuuk,
+    America/Godthab and America/Scoresbysund move -02 to -01 at 01:00 UTC, so
+    local 23:00:00-23:59:59 never happens — the over-run slot's local date is the
+    NEXT day, and `book_slot` re-validates with `only_day=req.date()`, a
+    different weekday whose availability does not contain it. So the public page
+    advertised a slot and the booking was then refused with "that time is not
+    available". Deterministic, not a race: an owner offering Saturday evenings
+    ending 23:30 had 00:00 Sunday offered on their behalf.
+
+    For a nonexistent wall time, fold=1 resolves with the POST-transition offset,
+    which lands strictly BEFORE the transition — inside the real window. Taking
+    it shrinks the window, which is the documented intent and the safe direction
+    on the one unauthenticated path into the owner's calendar. An ordinary time
+    is unaffected, and an ambiguous one (fall-back) keeps fold=0, the earlier
+    pass, exactly as before.
+    """
+    local = datetime.combine(day, w_end, tzinfo=tz)
+    as_instant = local.astimezone(timezone.utc)
+    # A wall time exists iff it survives a round trip through UTC.
+    if as_instant.astimezone(tz).replace(tzinfo=None) == local.replace(tzinfo=None):
+        return as_instant
+
+    # It does not, so the window really ends where the clock jumps: the
+    # transition instant. The two folds bracket it exactly — fold=0 resolves with
+    # the pre-transition offset and lands AT or AFTER the transition, fold=1 with
+    # the post-transition offset and lands BEFORE it — so bisect between them for
+    # the first instant carrying the new offset. Clamping to fold=1 alone would
+    # be a whole gap too conservative and would throw away real availability the
+    # owner offered (Nuuk 18:00-23:30 would stop at 22:00 instead of 23:00).
+    lo = local.replace(fold=1).astimezone(timezone.utc)
+    hi = as_instant
+    after = hi.astimezone(tz).utcoffset()
+    while hi - lo > timedelta(seconds=1):
+        mid = lo + (hi - lo) / 2
+        if mid.astimezone(tz).utcoffset() == after:
+            hi = mid
+        else:
+            lo = mid
+    return hi
+
+
 def generate_slots(
     *,
     availability: dict[int, list[tuple[time, time]]],
@@ -333,7 +385,9 @@ def generate_slots(
             # no such discontinuity; the local values are derived back from it
             # for display and for matching a booking request.
             s_utc = win.start.astimezone(timezone.utc)
-            end_utc = win.end.astimezone(timezone.utc)
+            # Not `win.end.astimezone(...)` — see `_window_end_utc` for the
+            # spring-forward gap that made this window grow instead of shrink.
+            end_utc = _window_end_utc(day, w_end, tz)
             while s_utc + duration <= end_utc:
                 e_utc = s_utc + duration
                 # Filter on the INSTANTS, never on local values. Both passes of a
