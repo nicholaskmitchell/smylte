@@ -5,6 +5,7 @@ import {
   api, clientId, uidFor, type CalEvent, type EventScope, type List, type Task,
 } from '../api'
 import { useCalendarData, useTaskData } from '../data'
+import { useEscape } from '../hooks'
 import { cssColor, dayKey, makeGuard, pad, textDir, toLocalInput, ymd } from '../util'
 import { fmtClock, inputLang } from '../time'
 import { useTimeFormat } from '../timeformat'
@@ -417,6 +418,7 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
   const [drag, setDrag] = useState<{ ev: DayEv; fromDay: string; mode: 'move' | 'resize' } | null>(null)
   const [overDay, setOverDay] = useState<string | null>(null)
   const [moveAsk, setMoveAsk] = useState<{ ev: CalEvent; body: Record<string, unknown> } | null>(null)
+  const movePress = useRef(false)          // see the scope prompt's overlay
 
   const dropOnDay = (key: string) => {
     const d = drag
@@ -753,11 +755,17 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
       )}
 
       {moveAsk && (
-        <div className="overlay" onClick={() => setMoveAsk(null)}>
-          <div className="modal" onClick={(ev) => ev.stopPropagation()}>
+        <div className="overlay"
+          onMouseDown={(ev) => { movePress.current = ev.target === ev.currentTarget }}
+          onClick={(ev) => {
+            if (ev.target === ev.currentTarget && movePress.current) setMoveAsk(null)
+            movePress.current = false
+          }}>
+          <div className="modal" role="dialog" aria-modal="true" aria-label="Repeating event"
+            onClick={(ev) => ev.stopPropagation()}>
             <div className="modal-head">
               <span className="modal-title">Repeating event</span>
-              <button className="icon-btn" onClick={() => setMoveAsk(null)}>✕</button>
+              <button className="icon-btn" onClick={() => setMoveAsk(null)} aria-label="Close">✕</button>
             </div>
             <div className="scope-choose">
               <p className="scope-q">Apply the change to which events?</p>
@@ -922,14 +930,31 @@ function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete }: {
 
   const onSaveClick = () => { if (recurring) setScopeAsk('save'); else commit('all') }
   const onDeleteClick = () => { if (!e) return; recurring ? setScopeAsk('delete') : onDelete(e.uid) }
+  // See the overlay below.
+  const scrimPress = useRef(false)
+
   const pickScope = (scope: EventScope) => {
     if (scopeAsk === 'delete' && e) onDelete(e.uid, { recurrence_id: e.recurrence_id, scope })
     else commit(scope)
     setScopeAsk(null)
   }
 
+  // The modal contract every other dialog keeps. This one — the calendar tab's
+  // only editor for creating, editing and deleting events — declared
+  // `aria-modal="true"` with no focus trap and no keydown listener at all, so a
+  // keyboard or screen-reader user had no way out of it but the mouse.
+  //
+  // The existing guard test greps components that ALREADY import `useEscape`,
+  // which is structurally incapable of catching a dialog that never adopted it.
+  useEscape(onClose)
+
   return (
-    <div className="overlay" onClick={onClose}>
+    <div className="overlay"
+      onMouseDown={(ev) => { scrimPress.current = ev.target === ev.currentTarget }}
+      onClick={(ev) => {
+        if (ev.target === ev.currentTarget && scrimPress.current) onClose()
+        scrimPress.current = false
+      }}>
       <div className="modal" role="dialog" aria-modal="true"
         aria-label={e ? (recurring ? 'Repeating event' : 'Event') : 'New event'}
         onClick={(ev) => ev.stopPropagation()}>

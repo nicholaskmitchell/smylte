@@ -1,9 +1,9 @@
 import {
-  useState, type CSSProperties, type DragEvent, type KeyboardEvent, type ReactNode,
+  useRef, useState, type CSSProperties, type DragEvent, type KeyboardEvent, type ReactNode,
 } from 'react'
 import { clientId, type List, type TaskGroup } from '../api'
 import { cssColor } from '../util'
-import { useIsMobile } from '../hooks'
+import { useEscape, useIsMobile } from '../hooks'
 
 // Preset collection colors — muted, editorial, distinct from the accent.
 export const SWATCHES = [
@@ -104,8 +104,23 @@ export function Sidebar({ title, placeholder, items, sel = '', countOf, onSelect
   // desktop rail can do (rename, recolor, delete, group) is reachable on touch.
   const [drawerOpen, setDrawerOpen] = useState(false)
 
+  // An in-flight guard, the way the booking-link editor already has one. The
+  // form keeps its input mounted, focused and holding the typed name for the
+  // whole round trip, so a second Enter fired a second `api.create` with the
+  // same name — and each one is a real MKCALENDAR/MKCOL against Radicale. The
+  // account ended up with two indistinguishable collections that Tasks.org, jtx
+  // and Thunderbird all see too, and deleting the right one is its own
+  // destructive step.
+  const creating = useRef(false)
   const create = async (name: string, color: string | null) => {
-    const l = await api.create(name, color)
+    if (creating.current) return
+    creating.current = true
+    let l
+    try {
+      l = await api.create(name, color)
+    } finally {
+      creating.current = false
+    }
     setAdding(false)
     // A new item is simply not hidden, so it shows by default. In select mode we
     // also focus it; in pure-visibility mode there is no selection to move.
@@ -682,12 +697,25 @@ function EditModal({ item, placeholder, groups, groupId, onSetGroup, onClose, on
     onSave(item.id, body)
   }
 
+  // The only place a list or calendar is renamed, recoloured, regrouped,
+  // archived or deleted — and on a phone the only route to any of it. It was the
+  // last dialog in the app with no Escape, no dialog role and a bare
+  // click-to-close scrim over a form.
+  useEscape(onClose)
+  const scrimPress = useRef(false)
+
   return (
-    <div className="overlay" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+    <div className="overlay"
+      onMouseDown={(e) => { scrimPress.current = e.target === e.currentTarget }}
+      onClick={(e) => {
+        if (e.target === e.currentTarget && scrimPress.current) onClose()
+        scrimPress.current = false
+      }}>
+      <div className="modal" role="dialog" aria-modal="true" aria-label={placeholder}
+        onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
           <span className="modal-title">{placeholder}</span>
-          <button className="icon-btn" onClick={onClose}>✕</button>
+          <button className="icon-btn" onClick={onClose} aria-label="Close">✕</button>
         </div>
         <div className="field">
           <label className="label">Name</label>
