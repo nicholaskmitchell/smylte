@@ -115,12 +115,33 @@ export function App() {
   const toastTimer = useRef<ReturnType<typeof setTimeout>>()
   const settingsRef = useRef<HTMLDivElement>(null)
   const gearRef = useRef<HTMLButtonElement>(null)
+  /** The tab strip and whichever tab is current. Only the second is read; the
+   *  strip's ref is what makes the guard below cheap — no scrolling is attempted
+   *  before the bar exists. */
+  const tabsRef = useRef<HTMLDivElement>(null)
+  const activeTabRef = useRef<HTMLButtonElement>(null)
 
   const showToast = useCallback((msg: string) => {
     setToast(msg)
     clearTimeout(toastTimer.current)
     toastTimer.current = setTimeout(() => setToast(null), 6000)
   }, [])
+
+  // Keep the current tab visible in a strip that scrolls (phones — see the
+  // markup below). Runs on every tab change AND on first paint, which is the
+  // one that matters: a reload lands on the remembered tab, and if that tab
+  // sits past the right edge the bar opens looking like Today is selected.
+  //
+  // Guarded on the strip actually overflowing, so this is inert on a desktop
+  // where nothing scrolls — `scrollIntoView` on a non-scrolling parent can
+  // still nudge an ancestor, and the bar has no business moving anything there.
+  useEffect(() => {
+    const strip = tabsRef.current
+    const active = activeTabRef.current
+    if (!strip || !active) return
+    if (strip.scrollWidth <= strip.clientWidth) return
+    active.scrollIntoView({ inline: 'nearest', block: 'nearest' })
+  }, [tab, tabOrder])
 
   // Failed saves/deletes anywhere in the app surface here (see makeGuard).
   useEffect(() => {
@@ -616,9 +637,21 @@ export function App() {
     <div className="shell">
       <div className="topbar">
         <span className="brand">Smylte<span className="dot">.</span></span>
-        <div className="tabs">
+        {/* The strip SCROLLS on a phone (see app.css), which means the tab you
+            are actually on can start out beyond the right edge — five tabs come
+            to more than a 390px bar holds. Nothing else brings it back, so the
+            active one is scrolled into view whenever it changes and on the
+            first paint, which is the reload case: land on Scheduling, reload,
+            and without this the bar opens showing Today with no indication of
+            where you are.
+
+            `inline: 'nearest'` so a tab already visible does not jog the strip,
+            and `block: 'nearest'` so this never scrolls the PAGE vertically —
+            the default is 'start', which would drag the whole view. */}
+        <div className="tabs" ref={tabsRef}>
           {tabOrder.map((t) => (
             <button key={t} className={`tab ${tab === t ? 'active' : ''}`}
+              ref={t === tab ? activeTabRef : undefined}
               onClick={() => changeTab(t)}>
               {TAB_LABELS[t]}
             </button>

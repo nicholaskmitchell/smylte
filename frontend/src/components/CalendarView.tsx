@@ -586,8 +586,24 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
                           {dayEvents.slice(0, 6).map((e) => (
                             <i key={eventKey(e)} className={`ev-dot ${e.all_day ? 'allday' : ''}`} style={evStyle(e)} />
                           ))}
+                          {/* The kind goes in a DATA ATTRIBUTE, not the class
+                              list. `.task` is a GLOBAL rule — the Tasks pane's
+                              row: `display:flex`, a border and
+                              `padding: var(--row-y) var(--gutter)` — so a dot
+                              wearing the bare class inherited 11px/14px of
+                              padding and rendered as a 28x23 SLAB instead of a
+                              5x5 mark, swamping the day number beside it.
+                              Measured in Chromium, phone width only, because
+                              this branch is the phone's.
+
+                              That is the second time this exact collision has
+                              shipped (see `TodayView`'s kind mark, fixed the
+                              same way): `.task` is the one bare class in
+                              app.css carrying layout, and any element given it
+                              as a modifier picks the whole row rule up. */}
                           {dayTasks.slice(0, Math.max(0, 6 - dayEvents.length)).map((t) => (
-                            <i key={taskKey(t)} className="ev-dot task" style={taskStyle(t)} />
+                            <i key={taskKey(t)} className="ev-dot" data-kind="task"
+                              style={taskStyle(t)} />
                           ))}
                         </span>
                       )
