@@ -404,8 +404,29 @@
   flex: 1; min-height: 0; display: grid; margin-top: 8px;
   border-top: 1px solid var(--rule);
 }
-.day-cols.cols-3 { grid-template-columns: repeat(3, 1fr); }
-.day-cols.cols-7 { grid-template-columns: repeat(7, 1fr); }
+/* A FLOOR UNDER A DAY COLUMN, and the row scrolls when seven of them do not
+   fit. `1fr` alone let the columns divide whatever was there, however little
+   that was: at 721px a Week column came to 69px, and after the body's padding,
+   the card's padding, the priority bar and the checkbox, `.day-card-title` was
+   left 2px — so `overflow-wrap: break-word` did exactly what it is told and
+   broke the title one CHARACTER per line, 16 lines tall. It was still four
+   lines at 1000px.
+
+   140px is where a title has ~73px to wrap in, which is two or three normal
+   lines. Seven of them plus the sidebar need roughly 1000px, so the scroll only
+   engages below that and the rule is inert on a desktop — measured: unchanged
+   at 1280 and 1600, floored at 140 from 1000 down.
+
+   The phone already answers this the same way one block down (`width: 76vw`
+   with scroll-snap); this is that idea at the widths between.
+
+   `overflow-y: hidden` because the vertical scroller is `.day-col-body`, one
+   level in. Setting only `overflow-x` computes `overflow-y` to `auto` as well,
+   which would put a second vertical scroller around the seven that already
+   have one. */
+.day-cols.cols-3 { grid-template-columns: repeat(3, minmax(140px, 1fr)); }
+.day-cols.cols-7 { grid-template-columns: repeat(7, minmax(140px, 1fr)); }
+.day-cols.cols-3, .day-cols.cols-7 { overflow-x: auto; overflow-y: hidden; }
 .day-col {
   display: flex; flex-direction: column; min-width: 0; overflow: hidden;
   border-right: 1px solid var(--rule-faint);
@@ -451,8 +472,21 @@
 .cal-head { display: flex; align-items: center; gap: 12px; padding: 14px var(--gutter); }
 .cal-title { font-family: var(--serif); font-size: calc(22px * var(--fs-scale)); font-weight: 500; min-width: 220px; }
 .cal-scroll { flex: 1; min-height: 0; overflow-y: auto; }
-.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); border-top: 1px solid var(--rule);
-  border-left: 1px solid var(--rule); }
+/* `minmax(0, 1fr)` and not a bare `1fr`. This is the rule `.cal-scroll.fixed`
+   below already carried, and the reasoning written above it there applies to
+   every month grid, not only a fitted one: a `1fr` track is `minmax(auto, 1fr)`,
+   `auto` will not shrink below the track's min-content, and a chip is
+   `white-space: nowrap` — so one long title widened its weekday for the whole
+   month and squeezed the rest.
+
+   It lived only under `.fixed`, which needs `fit === 'fixed'`, and the shipped
+   default is `dynamic` (calendar.ts) — so the fix was one setting away from
+   everybody. Measured on the default: at 721px the seven columns ran 37.4 to
+   157.7 and the grid scrolled 208px sideways; with this they are 68.6 each and
+   it fits. It squares up the desktop too, where they were quietly unequal
+   (146.9 against 157.7 at 1280px). */
+.cal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr));
+  border-top: 1px solid var(--rule); border-left: 1px solid var(--rule); }
 .cal-dow { font-family: var(--mono); font-size: calc(10px * var(--fs-scale)); text-transform: var(--label-case);
   letter-spacing: calc(0.08em * var(--tracking)); color: var(--fg-faint); padding: 6px 8px; text-align: right;
   border-right: 1px solid var(--rule); border-bottom: 1px solid var(--rule); background: var(--paper); }
@@ -475,15 +509,9 @@
 .cal-scroll.fixed { display: flex; flex-direction: column; }
 .cal-scroll.fixed .cal-grid {
   flex: 1;
+  /* Rows only. The column floor this used to restate now lives on `.cal-grid`
+     itself, because it was never specific to a fitted grid — see there. */
   grid-template-rows: auto repeat(6, minmax(64px, 1fr));
-  /* Both axes, not just the rows. A `1fr` track floors at its content's
-     min-width, and a chip is `white-space: nowrap`, so one long title used to
-     widen its weekday for the whole month — Thursday twice the width of Sunday
-     because of a single event on the 20th. The explicit 0 floor is what makes
-     the ellipsis on that chip the thing that gives way instead of the column.
-     (`overflow: hidden` on the cell below already zeroes that floor as a side
-     effect; this says it rather than relying on it.) */
-  grid-template-columns: repeat(7, minmax(0, 1fr));
 }
 .cal-scroll.fixed .cal-cell { min-height: 0; overflow: hidden; }
 .cal-cell:hover { background: var(--bg-elev); }
@@ -534,7 +562,12 @@
 .cal-task .tick { color: var(--ev-c, var(--accent)); margin-inline-end: 3px; }
 .cal-task .t { font-family: var(--mono); color: var(--fg-muted); margin-inline-end: 4px; }
 .cal-task.done { color: var(--fg-faint); text-decoration: line-through; }
-.ev-dot.task { border-radius: 0; }
+/* Square, so a task mark is distinguishable from an event's at 5px without
+   relying on colour. Selected on the DATA ATTRIBUTE and not on a `.task` class:
+   `.task` is a global rule (the Tasks pane's row, line ~293) carrying padding,
+   display and a border, and a 5px dot given that class as a modifier inherits
+   all of it and renders as a 28x23 slab. */
+.ev-dot[data-kind="task"] { border-radius: 0; }
 
 .cal-more {
   background: none; border: 0; padding: 0 5px; text-align: left; cursor: pointer;
@@ -651,11 +684,37 @@
 @media (hover: none) {
   .task-actions { opacity: 1; }
   .side-item .side-edit { opacity: 1; }
+  /* The third of the three hover-revealed clusters, and it was missing here.
+     `.group-actions` is `opacity: 0` until `.group-head:hover` — which never
+     arrives on a finger — so renaming or deleting a list group was unreachable
+     on any touch device WIDE ENOUGH not to get the sidebar drawer, where line
+     ~834 restores it. A touch laptop or a tablet in landscape is exactly that. */
+  .group-actions { opacity: 1; }
 }
 
 /* ---- mobile ---- */
 @media (max-width: 720px) {
   .topbar { gap: 14px; padding: 10px 14px; }
+  /* THE TAB STRIP SCROLLS rather than running off the edge of the bar.
+     Five tabs plus the brand and the settings button come to 497px against a
+     390px phone, and nothing here scrolled sideways — so the last tab was
+     simply clipped and Scheduling could not be reached on a phone at all.
+
+     `min-width: 0` is the load-bearing half: a flex child will not shrink below
+     its content without it, so the strip refused to narrow and pushed the
+     overflow onto the bar instead. `.spacer` gives up its stretch here so the
+     slack goes to the tabs rather than to empty space beside them.
+
+     Scrolled rather than wrapped, because a wrapped strip changes the bar's
+     height as tabs are reordered, and rather than shrunk to fit, because
+     `--fs-scale` can be turned up and any fixed budget would break again. */
+  .tabs {
+    flex: 1 1 auto; min-width: 0;
+    overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch;
+  }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tab { flex: none; padding: 6px 8px 8px; }
+  .topbar .spacer { flex: none; }
   .brand { font-size: calc(19px * var(--fs-scale)); }
   .menu { right: 14px; }
 
@@ -682,7 +741,18 @@
   /* Nav and panel take turns rather than sharing the width: an index of
      sections, then the one you tapped. A 124px column beside a phone-width
      panel would leave neither enough room. */
-  .set-sheet .set-body { display: block; flex: 1 1 auto; min-height: 0; overflow: hidden; }
+  /* THE SHEET SCROLLS HERE, not one level down. `.set-panels` carries
+     `height: 100%; overflow-y: auto`, which looks like it should do this job and
+     does not: `.set-body` has no SPECIFIED height — its 500px comes out of flex
+     layout — so the percentage has nothing definite to resolve against and falls
+     back to `auto`, which is the content height. The panel then sized itself to
+     1084px of content inside a 500px parent that was `overflow: hidden`, and 584
+     PIXELS OF SETTINGS WERE SIMPLY UNREACHABLE on a phone: "Working day" and
+     "Time zone" are both below the fold on the General panel, and nothing
+     anywhere would scroll to them.
+     Measured at 390x844 before the fix: .set-body clientHeight 500,
+     scrollHeight 1084, overflow-y hidden. */
+  .set-sheet .set-body { display: block; flex: 1 1 auto; min-height: 0; overflow-y: auto; }
   .set-sheet .set-nav {
     width: auto; border-right: 0; padding-right: 0; gap: 0;
     height: 100%; overflow-y: auto;
@@ -696,7 +766,9 @@
   }
   .set-sheet .set-nav-item::after { content: "›"; color: var(--fg-faint); font-size: calc(15px * var(--fs-scale)); }
   .set-sheet .set-nav-item.active { border-left: 0; }
-  .set-sheet .set-panels { height: 100%; overflow-y: auto; padding-right: 0; }
+  /* The panel is now just content inside that scroller; a second nested
+     scroller would trap the gesture and leave the same sections unreachable. */
+  .set-sheet .set-panels { height: auto; overflow-y: visible; padding-right: 0; }
   .set-sheet[data-view="index"] .set-panels { display: none; }
   .set-sheet[data-view="panel"] .set-nav { display: none; }
 
@@ -887,8 +959,26 @@
 }
 .sched-day.off .sched-day-name { color: var(--fg-faint); }
 .sched-ranges { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
-.sched-range { display: inline-flex; align-items: center; gap: 4px; color: var(--fg-faint); }
-.sched-range .input { width: auto; padding: 5px 6px; font-size: calc(13px * var(--fs-scale)); }
+/* The availability error, beside the day it belongs to. It had NO RULE AT ALL —
+   a class written into the JSX (`SchedulingView`) that the one stylesheet never
+   answered — so an error rendered as ordinary 15px body prose, indistinguishable
+   from a label. Same shape as `.login-err`, which is the app's other inline
+   field-level error. */
+.sched-err {
+  font-family: var(--mono); font-size: calc(11px * var(--fs-scale)); color: var(--warn);
+}
+
+/* `min-width: 0` on both, so a range can give way instead of pushing the sheet
+   sideways. A flex item defaults to `min-width: auto` and will not shrink below
+   its content, and these hold two `input[type=time]` that the mobile block
+   deliberately floors at 16px to stop iOS zooming on focus — so at 360px the
+   pair came to 275px inside a 248px row and the whole modal scrolled sideways.
+   Measured: 49px of overflow at 320px and 9px at 360px, both to 0, with the
+   inputs shrinking 130 -> 96 / 116 and the 16px floor untouched. */
+.sched-range { display: inline-flex; align-items: center; gap: 4px; color: var(--fg-faint);
+  min-width: 0; }
+.sched-range .input { width: auto; min-width: 0; padding: 5px 6px;
+  font-size: calc(13px * var(--fs-scale)); }
 .sched-range .icon-btn { padding: 4px 6px; font-size: calc(10px * var(--fs-scale)); }
 /* The app's "add another one of these" control: a dashed outline is the
    signature. Shared with the bulk composer's row-adder. */
@@ -1066,7 +1156,17 @@
 
 /* mobile: modules stack full-width, read-only (arranging is desktop-only) */
 .dash-stack { display: flex; flex-direction: column; gap: 12px; padding: 12px 14px; }
-.dash-stack .dash-mod { position: static; height: auto; max-height: 60vh; }
+/* `flex: none` — that is `flex-shrink: 0` — and it is the whole fix.
+   `.dash-stack` is a flex column inside `.scroll`, which is a FIXED-HEIGHT
+   scroller (`flex: 1; overflow-y: auto`). A flex child defaults to
+   `flex-shrink: 1`, so five modules taller than the viewport were squashed to
+   fit it instead of overflowing and letting the container scroll — and because
+   `.dash-mod` is `overflow: hidden` with a `overflow-y: auto` body, the
+   squashing showed up as every module's content being quietly cut off partway
+   through. Measured at 390x844: the mini calendar rendered 138px of a 175px
+   body, "Upcoming" 53 of 72.
+   `height: auto` was already here and was never the problem; it was winning. */
+.dash-stack .dash-mod { position: static; height: auto; flex: none; max-height: 60vh; }
 
 /* ---- tabs editor -------------------------------------------------------- */
 .tab-order { display: flex; flex-direction: column; }
@@ -1657,6 +1757,13 @@
    which half you are on is the LABEL, which names the destination rather than
    the current state, plus `aria-pressed` for anyone who cannot see it. */
 .today-review { flex: none; align-self: center; }
+
+/* The way in to the shutdown ritual, beside Review. Same rule as its two
+   siblings and for the same reason — it had NEITHER half, being the one
+   word-bearing button in this header that shipped without a rule of its own, so
+   it sat 2.5px below Review and Habits (measured: top 77 against their 74.5)
+   and kept a shrinkable `flex: 0 1 auto` where they are `none`. */
+.today-shutdown { flex: none; align-self: center; }
 
 /* The way in to the sheet, in the tab header. Deliberately in the Today header
    rather than in Settings: the moment you want to change a habit is the morning

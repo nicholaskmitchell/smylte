@@ -2563,10 +2563,10 @@ function TodayRow({
   onDragEndRow?: () => void
 }) {
   const tf = useTimeFormat()
-  /** The last press on this row landed on something interactive. Written on
-   *  mousedown and read on dragstart — see the row's own comment for why the
-   *  obvious `e.target` test cannot do this job. */
-  const grabbedControl = useRef(false)
+  /** The last press on this row landed in a TEXT FIELD. Written on mousedown and
+   *  read on dragstart — see the row's own comment for why the obvious
+   *  `e.target` test cannot do this job. */
+  const grabbedText = useRef(false)
   const isTask = entry.kind === 'task'
   const isHabit = entry.kind === 'habit'
   // The task a row points at can genuinely go away — deleted in another CalDAV
@@ -2675,19 +2675,25 @@ function TodayRow({
       // `mousedown` DOES target the deepest node, so the answer is recorded
       // there and read below. Verified end to end in a real browser rather than
       // reasoned about: grabbing the input fires no drop, grabbing the title
-      // does. (The Tasks pane carries the inert form of this and is still
-      // affected; that is its own change, not this one's.)
+      // does.
+      //
+      // TEXT FIELDS ONLY, deliberately. This once matched `button` as well,
+      // which is a wider net than the problem: the failure is that dragging to
+      // SELECT TEXT reorders instead, and a button has no drag semantics of its
+      // own, so a press-drag starting on the checkbox or the estimate's
+      // collapsed cell may as well grab the row. Guarding those would only take
+      // grab area away.
       onMouseDown={draggable
         ? (e) => {
-          grabbedControl.current = !!(e.target as HTMLElement)
-            ?.closest?.('input, textarea, button, [contenteditable]')
+          grabbedText.current = !!(e.target as HTMLElement)
+            ?.closest?.('input, textarea, [contenteditable]')
         }
         : undefined}
       onDragStart={draggable
         ? (e) => {
-          // A gesture that began on something interactive belongs to that
-          // control, not to the row it happens to sit in.
-          if (grabbedControl.current) {
+          // A gesture that began in a text field belongs to that field, not to
+          // the row it happens to sit in.
+          if (grabbedText.current) {
             e.preventDefault()
             return
           }
