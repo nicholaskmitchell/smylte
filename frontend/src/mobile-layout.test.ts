@@ -108,6 +108,36 @@ describe("Home's module stack on a phone", () => {
   })
 })
 
+describe('the calendar month grid', () => {
+  it('floors its columns at zero so one long chip cannot widen a weekday', () => {
+    // `1fr` is `minmax(auto, 1fr)`, and `auto` will not shrink a track below its
+    // content's min-content width. A chip is `white-space: nowrap`, so a single
+    // long title widened its weekday for the whole month and squeezed the rest:
+    // measured on the shipped default at 721px, the seven columns ran 37.4 to
+    // 157.7 and the grid scrolled 208px sideways.
+    //
+    // The rule existed already — under `.cal-scroll.fixed`, which needs
+    // `fit === 'fixed'` while the shipped default is `dynamic`, so it reached
+    // almost nobody. This pins it on the BASE rule, where every month grid gets
+    // it.
+    const grid = ruleFor('.cal-grid')
+    expect(grid, '.cal-grid is gone from app.css').not.toBe('')
+    expect(grid, 'a bare 1fr track floors at min-content and overflows')
+      .toMatch(/grid-template-columns:\s*repeat\(7,\s*minmax\(0,\s*1fr\)\)/)
+  })
+
+  it('does not leave the floor only on the fitted variant', () => {
+    // The vacuity guard for the test above: if the declaration moved back under
+    // `.cal-scroll.fixed` the base rule would fail, but a copy left in both
+    // would pass while the base one was deleted. This says the base rule is the
+    // one carrying it.
+    const fixed = ruleFor('.cal-scroll.fixed .cal-grid')
+    expect(fixed, '.cal-scroll.fixed .cal-grid is gone').not.toBe('')
+    expect(fixed, 'the column floor drifted back onto the fitted variant only')
+      .not.toMatch(/grid-template-columns:/)
+  })
+})
+
 describe('the Settings sheet on a phone', () => {
   const block = mediaBlock(0)
 
