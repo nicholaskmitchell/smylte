@@ -1,6 +1,6 @@
 # Audit backlog
 
-**12 open**, all from the 2026-08-25 sweep at the top of this file; every finding
+**11 open**, all from the 2026-08-25 sweep at the top of this file; every finding
 from every earlier sweep is closed, as is the one this sweep's own remediation
 turned up (marked `· found in remediation`).
 
@@ -3078,7 +3078,7 @@ the whole line.
 
 **The ref's SCOPE needed two more tests, and mutations found both.** It must not outlive the line — fail, retry successfully, retype the same text, and that is a new task, not a second attempt at the finished one (only reachable in three steps, so "never clear on success" passed everything until then) — and it must not cross to another line, or the user who gives up on one line and types a different one gets the day pointed at the abandoned task.
 
-#### [ ] The Today tab's drop indicator draws above the target on a downward drag, but the row lands below it
+#### [x] The Today tab's drop indicator draws above the target on a downward drag, but the row lands below it
 `frontend/src/components/TodayView.tsx:1761` · **medium** · rendering · stage 4
 
 `dragOver` is a single boolean and `.today-row.drag-over` always paints the accent rule
@@ -3112,6 +3112,12 @@ below` to the row's class list, and add `.today-row.drag-over.today-below { box-
 inset 0 -2px 0 var(--accent); }` beside the existing rule.
 
 **Pinned by** `2026-08-25 — the Today tab > points at the gap the row will actually land in` in `frontend/src/backlog.aug25.stage4.test.tsx`.
+
+**Fixed** with the suggested fix, which is the pair the Tasks pane already carries: a `dragBelow` prop on `TodayRow`, a `today-below` class, and `.today-row.drag-over.today-below { box-shadow: inset 0 -2px 0 var(--accent) }` beside the existing top-edge rule.
+
+**Computed off `dayRows`, not off a map index.** `renderRow` is shared by eight groups — "today's two and the look-back's six", as its own docstring says — so the index within a group is not the index in the day. `dragIndex` is memoized from `dayRows` and each row compares against its own position there, which is also the form the suggested fix names.
+
+**The pin is deliberately repair-agnostic and therefore cannot check the DIRECTION.** It asserts only that the two drags render differently, so that any honest fix satisfies it — and an INVERTED rule differs just as well, as does one applied to every row at once. Both passed it. A landed fix may name its own shape, so a second test does: `today-below` on the hovered row, on a downward drag only, matching `moveRow`'s documented "dragging DOWN lands the row AFTER the target". A third asserts the CSS rule exists and is on the opposite edge from the plain one — jsdom applies no stylesheet, so a class threaded correctly with no rule behind it is otherwise invisible.
 
 #### [x] Escape discards an unsaved reflection (and an unsaved capacity) because both commit only on blur
 `frontend/src/components/ShutdownRitual.tsx:316` · **medium** · bug · stage 3

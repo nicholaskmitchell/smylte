@@ -25,6 +25,7 @@
  * DIFFER" or "this exact sentence must no longer appear", because the repair
  * chooses a class name or a wording and a pin has no business doing that.
  */
+import { readFileSync } from 'node:fs'
 import { useState } from 'react'
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
@@ -541,7 +542,7 @@ describe('2026-08-25 — the Today tab', () => {
 
   // ── AUDIT (open): TodayView.tsx:1761 — the drop indicator draws above the
   //    target on a downward drag, but the row lands below it ────────────────
-  it.fails('points at the gap the row will actually land in', async () => {
+  it('points at the gap the row will actually land in', async () => {
     // EVIDENCE. `dragOver` is a single BOOLEAN —
     // `dragOver={overId === e.entry_id && dragId !== null && dragId !== e.entry_id}`
     // — and `.today-row.drag-over { box-shadow: inset 0 2px 0 var(--accent) }`
@@ -578,6 +579,41 @@ describe('2026-08-25 — the Today tab', () => {
     expect(down, 'the drop indicator renders identically for an upward and a '
       + 'downward drag, but the row lands on opposite sides of the target')
       .not.toBe(up)
+  })
+
+  // WHICH edge, which the pin above deliberately does not say. It asserts only
+  // that the two drags differ, so that any honest repair satisfies it — and an
+  // INVERTED rule differs just as well, as does one applied to every row at
+  // once. Both passed it. A landed fix is allowed to name its own shape, so this
+  // one does: `today-below` on the hovered row, on a downward drag only.
+  //
+  // The direction that matters is the one `moveRow` implements: "Dragging DOWN
+  // lands the row AFTER the target", so a downward drag draws on the BOTTOM
+  // edge. jsdom applies no stylesheet, so the class is what is observable here;
+  // `.today-row.drag-over.today-below` is asserted to exist in app.css below.
+  it('draws below the target on a downward drag and above it on an upward one', async () => {
+    m.openDay.mockResolvedValue(plan(THREE))
+    setup()
+    await screen.findByText('Alpha')
+
+    hoverDuringDrag('Alpha', 'Bravo')                    // downward
+    expect(rowFor('Bravo').className).toContain('today-below')
+    // …and only the row actually hovered.
+    expect(rowFor('Charlie').className).not.toContain('today-below')
+    fireEvent.dragEnd(rowFor('Alpha'))
+
+    hoverDuringDrag('Charlie', 'Bravo')                  // upward
+    expect(rowFor('Bravo').className).not.toContain('today-below')
+  })
+
+  it('has a rule for that class, on the opposite edge from the plain one', () => {
+    const css = readFileSync('src/styles/app.css', 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
+    const rule = css.match(/\.today-row\.drag-over\.today-below\s*\{([^}]*)\}/)?.[1]
+    expect(rule, 'no rule for .today-row.drag-over.today-below').toBeTruthy()
+    expect(rule).toMatch(/inset\s+0\s+-2px\s+0/)
+    // The plain rule stays on the TOP edge, which is the upward-drag case.
+    expect(css.match(/\.today-row\.drag-over\s*\{([^}]*)\}/)?.[1])
+      .toMatch(/inset\s+0\s+2px\s+0/)
   })
 
   // ── AUDIT (open): TodayView.tsx:646 — a failed day read leaves the Today tab
