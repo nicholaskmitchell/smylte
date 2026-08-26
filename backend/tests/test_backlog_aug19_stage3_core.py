@@ -8,10 +8,11 @@ becomes two, an occurrence that is invisible to the grid *and* to the
 double-booking check, a task written into a calendar where no reader will ever
 find it again, a connections screen naming a capability the grant no longer has.
 
-**These findings are OPEN.** Unlike test_backlog_stage1.py … stage5.py — which
-are closed and carry no markers — every test here is an `xfail(strict=True)`
-pin: it asserts the CORRECTED behaviour and fails against the code as it stands.
-CI stays green while the bug is open and goes red the moment it is fixed. See
+**Stage 3 is CLOSED.** Every test here began as an `xfail(strict=True)` pin —
+asserting the CORRECTED behaviour and failing against the code as it stood, so
+CI stayed green while the bug was open and went red the moment it was fixed. The
+markers are gone: these are ordinary regression tests that must stay green, and
+`grep -c "@pytest.mark.xfail"` over this file returns 0. See
 docs/STAGES.md for the harness and why that second half is the point.
 
 Every pin is behavioural. Each drives the real service, the real store query,

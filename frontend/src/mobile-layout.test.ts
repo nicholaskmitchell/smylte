@@ -403,3 +403,54 @@ describe('the phone-primary controls meet the touch standard this file set', () 
     expect(allMobile).toMatch(/\.side\.drawer \.group-actions\s*\{[^{}]*gap:\s*(?:[4-9]|\d\d)px/)
   })
 })
+
+describe('every custom property a rule reads is actually defined', () => {
+  it('no rule references a var() no token file declares', () => {
+    // `.cal-partial` said `border-bottom: 1px solid var(--line)`, and `--line` is
+    // declared in no theme, no token file, and not in appearance.ts's token
+    // table — so the declaration was invalid at computed-value time, the
+    // shorthand's longhands fell back to `unset`, `border-bottom-style` became
+    // `none`, and the partial-month banner had no bottom rule at all. Nothing
+    // could ever have supplied it.
+    const tokens = read('src/styles/tokens.css')
+    const declared = new Set<string>()
+    for (const m of (tokens + css).matchAll(/(--[a-z0-9-]+)\s*:/gi)) declared.add(m[1])
+    // Locally-scoped fallbacks a rule sets on itself count as declared above.
+    const missing = new Set<string>()
+    for (const m of rules.matchAll(/var\(\s*(--[a-z0-9-]+)\s*([,)])/gi)) {
+      // `var(--x, fallback)` is fine undeclared — the fallback is the value.
+      if (m[2] === ')' && !declared.has(m[1])) missing.add(m[1])
+    }
+    expect([...missing].sort(),
+      'these custom properties are read but never declared').toEqual([])
+  })
+})
+
+describe('the phone gets the whole unsafe area accounted for', () => {
+  it('the horizontal safe-area insets are read somewhere', () => {
+    // index.html opts into `viewport-fit=cover`, and the VERTICAL insets are
+    // honoured in several places — but the horizontal ones were read nowhere.
+    // In landscape on a notched iPhone the notch is on the left or the right,
+    // so the sidebar rail, the tab strip and every row's first column sat under
+    // it. `env()` is 0 without an inset, so honouring it costs nothing else.
+    expect(read('../frontend/index.html') || read('index.html')).toMatch(/viewport-fit=cover/)
+    expect(rules).toMatch(/env\(safe-area-inset-left\)/)
+    expect(rules).toMatch(/env\(safe-area-inset-right\)/)
+  })
+
+  it('the toast clears the home indicator', () => {
+    // `.shell` is 100dvh under viewport-fit=cover, so a flat `bottom: 24px` put
+    // the app's only error channel inside the home-indicator band.
+    expect(ruleFor('.toast')).toMatch(/bottom:\s*calc\([^)]*env\(safe-area-inset-bottom\)/)
+  })
+
+  it('the content gutter is a token the mobile block re-declares', () => {
+    // The mobile block used to narrow the gutter by naming selectors one at a
+    // time, so the Today-tab fence — added later, and resolving var(--gutter)
+    // everywhere — kept the 26px desktop value on a phone. The result was a 12px
+    // stair-step between every section label and the rows under it. The token is
+    // re-declared now, the way `--check-size` in this same block already is, so
+    // a tab added tomorrow inherits it.
+    expect(allMobile).toMatch(/:root\s*\{[^{}]*--gutter:\s*14px/)
+  })
+})

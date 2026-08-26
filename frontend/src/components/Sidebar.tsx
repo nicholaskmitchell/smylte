@@ -1,5 +1,5 @@
 import {
-  useRef, useState, type CSSProperties, type DragEvent, type KeyboardEvent, type ReactNode,
+  useEffect, useRef, useState, type CSSProperties, type DragEvent, type KeyboardEvent, type ReactNode,
 } from 'react'
 import { clientId, type List, type TaskGroup } from '../api'
 import { cssColor } from '../util'
@@ -506,7 +506,11 @@ export function Sidebar({ title, placeholder, items, sel = '', countOf, onSelect
               </svg>
             </button>
           )}
+          {/* aria-label as well as title, matching the drawer's copy of this
+              button. Its text content is "+", and `title` is only the
+              last-resort step of the accessible-name algorithm. */}
           <button className="icon-btn" title={`New ${placeholder.toLowerCase()}`}
+            aria-label={`New ${placeholder.toLowerCase()}`}
             onClick={() => setAdding(true)}>+</button>
           {onToggle && (
             <button className="icon-btn side-toggle" title="Collapse sidebar"
@@ -534,6 +538,11 @@ function GroupHeader({ group, count, collapsed, canToggle, anyVisible,
   const [renaming, setRenaming] = useState(false)
   const [confirming, setConfirming] = useState(false)
   const [name, setName] = useState(group.name)
+
+  // Disarm on Escape, and whenever the header changes shape underneath the armed
+  // state — collapsing, renaming, or the group itself changing.
+  useEscape(() => setConfirming(false))
+  useEffect(() => { setConfirming(false) }, [group.id, collapsed, renaming])
 
   if (renaming) {
     return (
@@ -564,13 +573,28 @@ function GroupHeader({ group, count, collapsed, canToggle, anyVisible,
         </button>
       )}
       {confirming ? (
-        <button className="group-btn danger" title="Delete group (lists are kept)"
-          onClick={onDelete}>delete?</button>
+        // A way BACK OUT. `confirming` was set to true by the ✕ and set back to
+        // false by nothing — no Escape, no blur, no cancel — so arming the
+        // delete replaced the whole action cluster (the rename ✎ included) with
+        // a red button that deletes on the next click, permanently, with the
+        // only escape being to unmount the sidebar by switching tabs or closing
+        // the drawer. Neither is discoverable, and the two controls that arm it
+        // sit one pixel apart in the drawer.
+        <span className="group-actions">
+          {/* The visible word stays IN the accessible name — it is what the
+              button says and what a sighted user reads back; the group is
+              appended because ✎ / ✕ / delete? repeat once per group. */}
+          <button className="group-btn danger" title="Delete group (lists are kept)"
+            aria-label={`delete? — group ${group.name}, lists are kept`}
+            onClick={onDelete}>delete?</button>
+          <button className="group-btn" title="Keep the group"
+            aria-label="Cancel" onClick={() => setConfirming(false)}>✕</button>
+        </span>
       ) : (
         <span className="group-actions">
-          <button className="group-btn" title="Rename group"
+          <button className="group-btn" title="Rename group" aria-label={`Rename group ${group.name}`}
             onClick={() => { setName(group.name); setRenaming(true) }}>✎</button>
-          <button className="group-btn" title="Delete group"
+          <button className="group-btn" title="Delete group" aria-label={`Delete group ${group.name}`}
             onClick={() => setConfirming(true)}>✕</button>
         </span>
       )}

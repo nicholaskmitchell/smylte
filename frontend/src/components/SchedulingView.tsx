@@ -305,9 +305,21 @@ function LinkModal({ link, cals, onClose, onSave, onDelete }: {
   const scrimPress = useRef(false)          // see the overlay below
 
   const dayErrors = availErrors(days)
-  const valid = title.trim() && calendar && tz.trim()
-    && Object.keys(daysToAvail(days)).length > 0
-    && dayErrors.size === 0
+  const noDays = Object.keys(daysToAvail(days)).length === 0
+  const valid = title.trim() && calendar && tz.trim() && !noDays && dayErrors.size === 0
+
+  // Why the button is dead, when it is dead for a reason nothing on screen shows.
+  // `dayErrors` renders a message per malformed RANGE, so a bad time gets an
+  // explanation — but turning every day off produced no error at all: Create/Save
+  // simply stayed disabled forever with the form looking complete. It is easy to
+  // arrive at, because clearing the shipped Mon-Fri defaults is the first thing
+  // someone does when their week is not Mon-Fri.
+  const blockedBecause = !title.trim() ? 'Give the link a title.'
+    : !calendar ? 'Pick a calendar for bookings to land on.'
+    : !tz.trim() ? 'Set the timezone your availability is in.'
+    : noDays ? 'Turn on at least one day, or nobody can book anything.'
+    : dayErrors.size ? 'Fix the highlighted time ranges.'
+    : null
 
   // `valid` bounds validity, not flight. Without this a double-click — or a
   // second Enter in any field, which also calls save() — published TWO live
@@ -485,6 +497,9 @@ function LinkModal({ link, cals, onClose, onSave, onDelete }: {
               onClick={() => (confirming ? onDelete(link) : setConfirming(true))}>
               {confirming ? 'Really delete?' : 'Delete'}
             </button>
+          )}
+          {blockedBecause && (
+            <span className="sched-err" role="status">{blockedBecause}</span>
           )}
           <span className="spacer" />
           <button className="btn" disabled={!valid || saving} onClick={save}>

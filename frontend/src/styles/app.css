@@ -1,6 +1,17 @@
 /* Layout — a dense two-pane utility on the Søren design system. */
 
-.shell { height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
+/* `viewport-fit=cover` in index.html opts the page into the unsafe area, and the
+   vertical insets are read in several places — but the HORIZONTAL ones were read
+   nowhere. In landscape on a notched iPhone the notch is on the left or the
+   right, so the sidebar rail, the tab strip and every row's first column sat
+   underneath it. Applied once at the shell rather than per-surface: everything
+   inside is laid out within it, and `env()` is 0 on every device without an
+   inset, so this changes nothing anywhere else. */
+.shell {
+  height: 100dvh; display: flex; flex-direction: column; overflow: hidden;
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+}
 
 /* ---- top bar ---- */
 .topbar {
@@ -386,7 +397,13 @@
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
   padding: 8px var(--gutter);
   color: var(--fg-faint); font-size: calc(13px * var(--fs-scale));
-  border-bottom: 1px solid var(--line);
+  /* `--rule`, like every other rule line in this file. This said `var(--line)`,
+     which is defined in no theme and in no token file — so the declaration was
+     invalid at computed-value time, the shorthand's longhands fell back to
+     `unset`, `border-bottom-style` became `none`, and the partial-month banner
+     had no bottom rule at all. `--line` is not in the appearance token table
+     either, so no theme could ever have supplied it. */
+  border-bottom: 1px solid var(--rule);
 }
 .section-label { padding: 14px var(--gutter) 4px; }
 
@@ -871,6 +888,16 @@
   .day-col-body { padding-bottom: calc(24px + env(safe-area-inset-bottom)); }
   .task { padding-top: 11px; padding-bottom: 11px; }
   .task.sub { padding-left: calc(var(--gutter) + var(--task-depth, 1) * 18px); }
+  /* The density token, re-declared rather than narrowed selector by selector.
+     The list below it (`.task, .quickadd, .content-head, …`) is hand-maintained,
+     and the Today-tab fence added later resolves `var(--gutter)` everywhere —
+     which stayed at its :root 26px on a phone. So on the one tab a phone user
+     opens every morning, the section labels and the add box were inset 14px and
+     the rows beneath them 26px: a 12px stair-step repeated down the screen, and
+     24px of a 390px row spent on margin. Re-declaring the token makes the
+     reduction apply to any tab added later instead of to a list someone has to
+     remember. */
+  :root { --gutter: 14px; }
   /* On :root, so `.check` and `.today-check-gap` move together — see the note
      beside the base value. */
   :root { --check-size: 21px; }
@@ -909,7 +936,13 @@
      modal that can fail a save is rendered inside an overlay. Below 90 it
      painted under the scrim, and a click aimed at its dismiss button hit the
      backdrop and closed the modal instead. */
-  position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 120;
+  /* The inset as well as the offset. `.shell` is 100dvh under
+     `viewport-fit=cover`, so `bottom: 24px` put the app's ONLY error channel
+     inside the home-indicator band on a notched phone — under the pill, and
+     under the bottom sheets it is deliberately painted above. */
+  position: fixed; left: 50%; z-index: 120;
+  bottom: calc(24px + env(safe-area-inset-bottom));
+  transform: translateX(-50%);
   display: flex; align-items: center; gap: 10px;
   max-width: min(480px, calc(100vw - 32px));
   padding: 10px 12px;
