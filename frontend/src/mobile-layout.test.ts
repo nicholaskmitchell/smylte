@@ -392,7 +392,16 @@ describe('the phone-primary controls meet the touch standard this file set', () 
       const m = /padding:\s*(\d+)px/.exec(body)
       return m ? Number(m[1]) : 0
     }
-    for (const sel of ['.today-drop, .today-plus', '.today-est', '.menu-toggle', '.mini-day']) {
+    //
+    // The Today three are QUALIFIED — `button.today-drop`, `.today-est.mono` —
+    // and that is not incidental: at a bare `.today-drop` this test passed while
+    // the rule it checks never applied, because the Today fence re-declares the
+    // same property 250 lines later at the same specificity. Measured in
+    // Chromium at 390px, the box was 15x16 with this test green. The cascade
+    // describe block at the end of this file is what closes that gap; these
+    // selectors are written the way they are so it stays closed.
+    for (const sel of ['button.today-drop, button.today-plus', '.today-est.mono',
+      '.menu-toggle', '.mini-day']) {
       const body = ruleFor(sel, allMobile)
       expect(body, `${sel} has no mobile touch rule`).not.toBe('')
       expect(padY(body), `${sel} is still mouse-sized on a phone`).toBeGreaterThanOrEqual(8)
@@ -482,5 +491,108 @@ describe('the phone gets the whole unsafe area accounted for', () => {
     // the row above it.
     expect(allMobile, 'the hand-maintained gutter list is back beside the token')
       .not.toMatch(/\.task,\s*\.quickadd[^{}]*\{[^{}]*padding-left:\s*14px/)
+  })
+})
+
+// ── the cascade, which is how three of these fixes died ────────────────────
+//
+// Every assertion above this point checks that a DECLARATION EXISTS in a mobile
+// block. None of them checks that it WINS, and four times now it has not: the
+// iOS 16px floor (twice), the Appearance editor's colour field, and — measured
+// in Chromium at 390px on the commit before this one — the Today tab's touch
+// targets AND the floor's own third attempt. `.shut-date` computed to 11px,
+// `.today-est-input` to 11px, `.shut-reflect` to 14px and `.today-drop` to a
+// 15x16 box, each with the rule meant to fix it sitting in the sheet.
+//
+// The mechanism is always the same. A mobile block declares `.x { p: v }` at
+// (0,1,0); a fence added later in the file declares `.x { p: w }` at the same
+// specificity; later wins at equal specificity regardless of the media query.
+// The comment above the floor says exactly this, about the rules it was written
+// to beat, and then loses to them in the same way.
+//
+// So this is the check that generalises: nothing declared inside a
+// `max-width: 720px` block may be shadowed by a later unconditional rule for the
+// same selector at the same-or-higher specificity.
+
+/** Every declaration in the sheet as {selector, property, offset, media}. */
+function declarations(src: string) {
+  const out: { sel: string; prop: string; at: number; media: string | null }[] = []
+  let i = 0, media: string | null = null, mediaEnd = -1
+  while (i < src.length) {
+    const at = src.indexOf('@media', i)
+    const brace = src.indexOf('{', i)
+    if (brace === -1) break
+    if (at !== -1 && at < brace) {
+      // Descend into the at-rule rather than treating its body as one rule.
+      const open = src.indexOf('{', at)
+      let d = 0, j = open
+      for (; j < src.length; j++) {
+        if (src[j] === '{') d++
+        else if (src[j] === '}' && --d === 0) break
+      }
+      media = src.slice(at, open).trim()
+      mediaEnd = j
+      i = open + 1
+      continue
+    }
+    if (media && brace > mediaEnd) media = null
+    const sel = src.slice(i, brace).split('}').pop()!.trim()
+    const close = src.indexOf('}', brace)
+    if (close === -1) break
+    if (sel && !sel.startsWith('@')) {
+      for (const one of sel.split(',').map((x) => x.trim()).filter(Boolean)) {
+        for (const d of src.slice(brace + 1, close).split(';')) {
+          const prop = d.split(':')[0].trim()
+          if (prop) out.push({ sel: one, prop, at: brace, media: brace < mediaEnd ? media : null })
+        }
+      }
+    }
+    i = close + 1
+  }
+  return out
+}
+
+/** Specificity as a single comparable number. Good enough for this sheet, which
+ *  uses no ids and no `:where()`. */
+function specificity(sel: string): number {
+  const cls = (sel.match(/\.[\w-]+|\[[^\]]+\]|:[a-z-]+(\([^)]*\))?/g) || []).length
+  const el = (sel.replace(/[.#:[][^\s>+~]*/g, '').match(/\b[a-z]+\b/g) || []).length
+  return cls * 100 + el
+}
+
+/** Does a declaration of `a` get overwritten by one of `b`? Shorthands count. */
+const SHORTHAND: Record<string, string[]> = {
+  padding: ['padding-left', 'padding-right', 'padding-top', 'padding-bottom'],
+  margin: ['margin-left', 'margin-right', 'margin-top', 'margin-bottom'],
+  font: ['font-size', 'font-family', 'font-weight', 'line-height'],
+  inset: ['top', 'right', 'bottom', 'left'],
+}
+const overwrites = (a: string, b: string) =>
+  a === b || (SHORTHAND[a] || []).includes(b) || (SHORTHAND[b] || []).includes(a)
+
+describe('a mobile rule that loses the cascade is the same as no rule', () => {
+  const decls = declarations(rules)
+
+  it('finds the declarations it is about to judge', () => {
+    // The vacuity guard. A parser that returns nothing passes the next test
+    // whatever the stylesheet says.
+    const mobile = decls.filter((d) => d.media && /max-width:\s*720px/.test(d.media))
+    expect(mobile.length, 'no declarations found inside a mobile block').toBeGreaterThan(60)
+    expect(decls.length).toBeGreaterThan(400)
+  })
+
+  it('nothing in a mobile block is overwritten by a later unconditional rule', () => {
+    const dead: string[] = []
+    for (const m of decls.filter((d) => d.media && /max-width:\s*720px/.test(d.media))) {
+      const killer = decls.find((l) =>
+        !l.media && l.at > m.at && l.sel === m.sel
+        && overwrites(m.prop, l.prop) && specificity(l.sel) >= specificity(m.sel))
+      if (killer) dead.push(`${m.sel} { ${m.prop} } — beaten by the later \`${killer.prop}\``)
+    }
+    expect(dead, `these mobile declarations never apply:\n  ${dead.join('\n  ')}\n`
+      + 'A later rule at the same specificity wins whatever the media query says. '
+      + 'Qualify the mobile selector (`.input.shut-date`, `button.today-drop`) so it '
+      + 'outranks the fence, rather than relying on which block comes last.')
+      .toEqual([])
   })
 })

@@ -1368,8 +1368,17 @@
      (0,1,0) specificity, and all sit LATER in this file, so all three win in
      every viewport. `.today-est-input` is the worst of them: it is `autoFocus`,
      so tapping a row's `est` cell focuses an 11px field and Safari zooms
-     immediately, with no tap on the field itself. */
-  .shut-date, .shut-reflect, .today-est-input {
+     immediately, with no tap on the field itself.
+
+     And the fix has to OUTRANK them, not merely follow the rule it is written
+     under: declaring these three at a bare (0,1,0) here is the same declaration
+     the comment above just explained loses, so it lost — measured in Chromium at
+     390px, `.shut-date` and `.today-est-input` computed to 11px and
+     `.shut-reflect` to 14px with this rule in the sheet. Every one of the three
+     carries `.input`, which the comment already notes, so qualifying by it takes
+     them to (0,2,0) and settles the question by specificity rather than by which
+     block someone appends the next fence to. */
+  .input.shut-date, .input.shut-reflect, .input.today-est-input {
     font-size: max(16px, calc(16px * var(--fs-scale)));
   }
   /* the modal is already a scrolling bottom sheet — a nested scroller inside
@@ -1399,10 +1408,19 @@
      1` glyph — roughly 18x16 — and `.today-drop` has its OWN
      `@media (hover: none)` rule making it permanently visible on touch, i.e. it
      is explicitly meant to be tapped. The whole Today fence sits outside every
-     media block, which is how they were missed. */
-  .today-drop, .today-plus { padding: 8px 10px; }
-  .today-est { padding: 8px 6px; min-height: 34px; }
-  .today-est-input { padding: 6px 8px; }
+     media block, which is how they were missed.
+
+     Qualified for the reason the font-size floor above is: the fence declares
+     `padding: 2px 4px` on all three at (0,1,0) and sits ~250 lines below this
+     block, so the bare form of these rules never applied. Measured in Chromium
+     at 390px with them in the sheet, `.today-drop` computed to 2px/4px — a
+     15x16 box, which is the finding's own number, unchanged by its fix.
+     `.today-est` kept only the `min-height`, because the fence has nothing to
+     say about that one. Buttons here, so an element qualifier is enough; the
+     estimate cell renders as both a button and a span, and both carry `mono`. */
+  button.today-drop, button.today-plus { padding: 8px 10px; }
+  .today-est.mono { padding: 8px 6px; min-height: 34px; }
+  .input.today-est-input { padding: 6px 8px; }
 
   /* `.menu-toggle` is EVERY settings control on the phone sheet — Clock, Theme,
      Home timezone, Calendar window, Completed tasks, Stay signed in — at about

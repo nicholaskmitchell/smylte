@@ -1,6 +1,6 @@
 # Audit backlog
 
-**35 open**, all from the 2026-08-25 sweep at the top of this file; every finding
+**34 open**, all from the 2026-08-25 sweep at the top of this file; every finding
 from every earlier sweep is closed.
 
 Findings from the adversarial audit sweeps — one deep finder per subsystem, then
@@ -81,7 +81,7 @@ assertion in the docs and went to the source to falsify it; its 24 confirmed
 drifts are all fixed and are not listed as findings — see the commit
 "Correct 24 documentation claims the code no longer supports".
 
-**51 closed, 35 open.** The eight HIGHs are all closed; each was reproduced by
+**52 closed, 34 open.** The eight HIGHs are all closed; each was reproduced by
 hand with a runnable probe before it was touched, and each carries a regression
 test confirmed to fail against the pre-fix tree.
 
@@ -147,6 +147,27 @@ The verifiers earned their keep beyond the verdicts, too: one of them, while
 confirming the `--gutter` finding, pointed out that the fix the finding proposed
 is defeated by `:root[data-preset="workspace"]` being more specific than a bare
 `:root`. It was — the shipped fix reaches the presets because of that note.
+
+And then the fixes themselves were measured, in Chromium at 390x844, because
+`docs/AUDIT.md` had already said four times that a mobile rule can be written,
+committed and dead. **Two of this sweep's own fixes were dead in the shipped
+stylesheet**: the iOS 16px zoom-on-focus floor (`.shut-date` computed to 11px,
+`.today-est-input` to 11px, `.shut-reflect` to 14px) and the Today tab's touch
+targets (`.today-drop` at 15x16 — the finding's own number, unchanged by its
+fix). Both were declared inside `@media (max-width: 720px)` at (0,1,0) and beaten
+by a fence ~250 lines below at the same specificity. The comment above the
+font-size floor explains that exact mechanism, about the rules it was written to
+beat, and then loses to them the same way — the fourth instance of a regression
+its own comment calls "the third time this exact regression has shipped".
+
+Both are qualified now (`.input.shut-date`, `button.today-drop`, `.today-est.mono`)
+so specificity settles it rather than which block someone appends the next fence
+to. `mobile-layout.test.ts` gained the check that generalises: **nothing declared
+in a mobile block may be overwritten by a later unconditional rule for the same
+selector at the same-or-higher specificity.** It reports all seven dead
+declarations against the commit before the fix. Every assertion in that file
+before it checked that a declaration EXISTS; none checked that it WINS, which is
+why the touch-target test was green while the box it guards measured 15x16.
 
 Everything in this section is fixed, and each fix carries a regression test
 confirmed to fail against the commit before it.
@@ -3212,7 +3233,7 @@ compare `entries.filter(isDone).length` against `entries.length`) and render "Ev
 on today is decided." / "Nothing left to decide about." when the list was emptied by
 rolls and drops rather than by ticks.
 
-#### [ ] On a phone every Today row sits 12px right of its own heading, add box and empty state
+#### [x] On a phone every Today row sits 12px right of its own heading, add box and empty state
 `frontend/src/styles/app.css:845` · **low** · rendering · minor
 
 The `max-width: 720px` block pulls the page's horizontal padding in to 14px for `.task,
@@ -3239,6 +3260,22 @@ app.css:845 `.task, .quickadd, .content-head, .cal-head, .empty, .banner { paddi
 **Suggested fix.** Either add `--gutter: 14px` to the `max-width: 720px` block (it is the density lever the
 tokens file describes) or extend the existing 14px rule to `.today-row, .today-quiet,
 .today-more, .today-load, .today-agenda .agenda-ev, .today-reflection-text`.
+
+**Fixed** by the first option — and the hand-maintained list it replaced is gone rather
+than kept beside it, because keeping both is the stair-step pointing the other way: a
+user who sets a 40px gutter in the Appearance editor writes it as an inline property on
+`<html>`, which beats every stylesheet rule, so `.today-row` would honour their 40px
+while a literal `.task { padding-left: 14px }` forced 14px on the row above it.
+
+The declaration is `:root, :root[data-preset]`, not a bare `:root`. A preset declares its
+own gutter as `:root[data-preset="workspace"]` — (0,2,0) against (0,1,0) — so the bare
+form loses to it and every preset user keeps the desktop gutter, which is this finding
+again for them. One of this sweep's verifiers caught that while confirming the capped
+twin of this finding; the shipped rule reaches the presets because of it.
+
+Measured in Chromium at 390x844, shipped default and `data-preset="workspace"`:
+`.content-head`, `.quickadd`, `.section-label`, `.today-row`, `.empty`, `.today-quiet`
+and `.today-more` all resolve a 14px left edge. The two empty states agree now.
 
 #### [ ] The Today row's ✕, estimate and + are ~16–19px tap targets on the phone-primary surface
 `frontend/src/styles/app.css:1587` · **low** · rendering · minor
