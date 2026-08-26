@@ -629,8 +629,27 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
   // over — the rollover re-runs this effect, which bumps the stamp.
   const token = useRef(0)
 
+  // The day read has a THIRD outcome, and it used to have two. `plan` only ever
+  // became non-null on a successful 200, a rejection was swallowed by `guard`
+  // into a transient toast, and every render of the day is gated on
+  // `entries !== null` — INCLUDING the empty state. So a failed read showed the
+  // heading, the add box, the calendar strip and the suggestions over a blank
+  // space that said nothing, with no retry short of navigating away and back.
+  //
+  // Worse than blank: every optimistic writer reads `setPlan((p) => (p && …))`,
+  // so with `plan` null they are all no-ops. The owner typed a line, pressed
+  // Add, the POST SUCCEEDED server-side, the box cleared — and no row appeared.
+  // `POST /api/day/{day}/open` derives its snapshot from CalDAV, so a Radicale
+  // hiccup that times out that one call while every other endpoint is healthy is
+  // the realistic trigger.
+  const [dayError, setDayError] = useState(false)
+  // The retry's own signal, for the same reason `reloadTasks` needed one: `rev`
+  // moves only when the SERVER publishes a change.
+  const [dayTry, setDayTry] = useState(0)
+
   useEffect(() => {
     const mine = ++token.current
+    setDayError(false)
     void guard(async () => {
       // THE load-bearing line of this file. `openDay` may be called for TODAY
       // and for no other day, because it is the only call that can create a
@@ -639,11 +658,22 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
       // `api.day` is `open_day(create=False)` and writes nothing whatsoever,
       // not even the opened marker, which is what makes stepping back safe.
       // Read the header before touching this.
-      const p = await (day === today ? api.openDay(day) : api.day(day))
+      let p: DayPlan | undefined
+      try {
+        p = await (day === today ? api.openDay(day) : api.day(day))
+      } catch (e) {
+        // Recorded here and RE-THROWN, so `guard` still raises its toast and
+        // still routes an AuthError to the login card. The flag is what the
+        // screen needs; the toast is what a transient blip needs.
+        if (mine === token.current) setDayError(true)
+        throw e
+      }
       if (mine !== token.current) return
       // A malformed body must not become the array every render maps over —
       // `guard` shields us from a rejection, not from a 200 with junk in it.
+      // A 200 with junk in it is a failed read too, and said so nowhere.
       if (p && Array.isArray(p.entries)) setPlan(p)
+      else setDayError(true)
     })
     // `today` alongside `day` because the effect READS it: the ternary above is
     // the load-bearing line of this file, and an effect that reads a key it has
@@ -656,7 +686,7 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
     // and whose rows came from `api.day` — and all it does is read that same
     // past day again through that same `api.day`. Harmless, and cheaper than a
     // dep array that lies about what the effect looks at.
-  }, [day, today, rev, guard])
+  }, [day, today, rev, guard, dayTry])
 
   // ── the picker's bounds ──────────────────────────────────────────────────
   //
@@ -1986,7 +2016,13 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
       {isToday && (
         <form className="quickadd today-add"
           onSubmit={(e) => { e.preventDefault(); void commit() }}>
+          {/* DISABLED while the day is unknown. Not cosmetic: with `plan` null
+              every optimistic writer here is a no-op, so an add would reach the
+              server, succeed, and paint nothing — a write that landed
+              invisibly, which is the worse half of this finding. Refusing is
+              the honest answer until the read comes back. */}
           <input className="input" value={text} aria-label="Add to today"
+            disabled={dayError}
             placeholder="Add to today — “invoice friday”, “gym at 7”…"
             // The chip below DESCRIBES this field rather than announcing at it.
             // It used to be a `role="status"` live region, which was tolerable
@@ -2230,6 +2266,18 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
                 holding three habits and nothing else is not a day with nothing
                 on it, and saying so under a visible list of habits would
                 contradict the screen it is printed on. */}
+            {/* The day is UNKNOWN, which is neither "empty" nor "loading". Every
+                other render of the day is gated on `entries !== null`, so
+                without this the tab showed its furniture over a blank space and
+                said nothing about why. Retry re-runs the read; `rev` cannot,
+                because it only moves when the server publishes a change. */}
+            {dayError && (
+              <p className="empty" role="status">
+                Couldn&rsquo;t read today.{' '}
+                <button type="button" className="today-linkish"
+                  onClick={() => setDayTry((n) => n + 1)}>Try again</button>
+              </p>
+            )}
             {entries !== null && entries.length === 0 && (
               <p className="empty">
                 Nothing on today yet. Type a line above, add one of the tasks

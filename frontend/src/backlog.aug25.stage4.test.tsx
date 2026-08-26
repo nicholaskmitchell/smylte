@@ -619,7 +619,7 @@ describe('2026-08-25 — the Today tab', () => {
   // ── AUDIT (open): TodayView.tsx:646 — a failed day read leaves the Today tab
   //    blank with no error, no empty state and no retry, and every add then
   //    paints nothing ────────────────────────────────────────────────────────
-  it.fails('says the day could not be read, and does not swallow the next add', async () => {
+  it('says the day could not be read, and does not swallow the next add', async () => {
     // EVIDENCE. `plan` only ever becomes non-null on a successful 200
     // (`if (p && Array.isArray(p.entries)) setPlan(p)` — nothing on the failure
     // arm); a rejection is swallowed by `guard` into a transient toast.
@@ -669,6 +669,38 @@ describe('2026-08-25 — the Today tab', () => {
       + `note ${landed ? 'reached the server' : 'was refused'} and is `
       + `${visible ? 'on screen' : 'nowhere'}`)
       .toEqual({ surfaced: true, wroteInvisibly: false })
+  })
+
+  // The pin is deliberately structural — "an error line, a retry, any
+  // empty/alert/banner of its own; the pin does not name the copy" — so it
+  // cannot check that the retry WORKS, only that something is on screen. This
+  // does, and it is the half that decides whether the state is recoverable at
+  // all: `rev` moves only when the server publishes a change, so on a day with
+  // nothing happening the blank tab was permanent.
+  it('recovers when the retry succeeds', async () => {
+    m.openDay.mockRejectedValueOnce(new Error('boom'))
+    const user = setup()
+    await screen.findByLabelText('Add to today')
+    const said = await screen.findByRole('status')
+    expect(said).toHaveTextContent(/Couldn’t read today/)
+
+    await user.click(within(said).getByRole('button', { name: 'Try again' }))
+
+    await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument())
+    expect(await screen.findByLabelText('Add to today')).toBeEnabled()
+  })
+
+  // A 200 carrying junk is a failed read too, and the old guard treated it as a
+  // non-event: `if (p && Array.isArray(p.entries)) setPlan(p)` with no else, so
+  // a malformed body left `plan` null and the tab blank in exactly the same way
+  // as a rejection — while `guard`, which shields against a rejection and not
+  // against a bad 200, raised no toast either. That path said nothing at all.
+  it('treats a 200 with a malformed body as a failed read', async () => {
+    m.openDay.mockResolvedValue({ day: '2026-08-26' } as never)
+    setup()
+    await screen.findByLabelText('Add to today')
+
+    expect(await screen.findByRole('status')).toHaveTextContent(/Couldn’t read today/)
   })
 
   // CONTROL (passes today, must keep passing). A day that reads successfully but
