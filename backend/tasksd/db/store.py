@@ -518,20 +518,53 @@ def get_sidecar(conn: sqlite3.Connection, collection_href: str, uid: str) -> sql
 
 
 def set_sidecar(conn: sqlite3.Connection, collection_href: str, uid: str, **fields: object) -> None:
+    """Write app-only fields for a task — but only for a uid that actually names a
+    live item in that collection.
+
+    The guard is the same one `set_sort_orders` carries below, moved here for the
+    reason its docstring gives: *the guard belongs where every door passes.* This
+    was a bare ``INSERT OR IGNORE``, and three doors reach it. Two were hardened
+    one at a time — `PUT …/tasks/{uid}/sidecar` got a `has_task` check, and the
+    reorder path got the `EXISTS` clause written into `set_sort_orders` — and the
+    third, the day-plan estimate write-through added later
+    (`service.patch_day_entry`), passed unguarded.
+
+    That third door is not an edge case: a day entry is a POINTER with no foreign
+    key, *designed* to outlive the task it names (schema.sql, and `_carry_into`'s
+    docstring says so in as many words), so `row["uid"]` routinely names a uid
+    `items` no longer holds. Plan "Buy milk" onto tomorrow, tick it off in
+    Tasks.org that evening so the VTODO leaves the wire, then type an estimate on
+    the row that is still there — and a sidecar row appears for a task that does
+    not exist. `orphan_sidecar` only ever stamps rows that exist at the moment a
+    KNOWN item is removed, and `gc_orphans` deletes only `orphaned_at IS NOT
+    NULL`, so a row minted after that moment has `orphaned_at IS NULL` forever.
+    Permanent, in the one table a resync cannot rebuild.
+
+    The UPDATEs carry the guard too, not just the INSERT. `set_sort_orders`'
+    `ON CONFLICT … DO UPDATE` never fires when its `WHERE EXISTS` produced no
+    row, so mirroring it means an absent item writes NOTHING — including to a row
+    that is already there and already orphaned. Quietly doing nothing rather than
+    raising: refusing loudly is defensible too, but no caller here is in a
+    position to do anything about it, and a 500 on an estimate the user typed is
+    worse than the estimate not being remembered for next time.
+    """
     allowed = {"kanban_column", "sort_order", "pinned", "estimated_minutes", "repeat_from_completion"}
     bad = set(fields) - allowed
     if bad:
         raise ValueError(f"unknown sidecar fields: {bad}")
     conn.execute(
-        "INSERT OR IGNORE INTO sidecar (collection_href, uid) VALUES (?, ?)",
-        (collection_href, uid),
+        "INSERT INTO sidecar (collection_href, uid) SELECT ?, ? WHERE EXISTS "
+        "(SELECT 1 FROM items WHERE collection_href=? AND uid=?) "
+        "ON CONFLICT(collection_href, uid) DO NOTHING",
+        (collection_href, uid, collection_href, uid),
     )
     for k, v in fields.items():
         conn.execute(
             # {k} is vetted against the `allowed` set above — not attacker input.
             f"UPDATE sidecar SET {k}=?, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') "  # nosec B608
-            "WHERE collection_href=? AND uid=?",
-            (v, collection_href, uid),
+            "WHERE collection_href=? AND uid=? AND EXISTS "
+            "(SELECT 1 FROM items WHERE collection_href=? AND uid=?)",
+            (v, collection_href, uid, collection_href, uid),
         )
 
 

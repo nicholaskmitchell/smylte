@@ -1,6 +1,6 @@
 # Audit backlog
 
-**34 open**, all from the 2026-08-25 sweep at the top of this file; every finding
+**32 open**, all from the 2026-08-25 sweep at the top of this file; every finding
 from every earlier sweep is closed.
 
 Findings from the adversarial audit sweeps — one deep finder per subsystem, then
@@ -742,7 +742,7 @@ startup invariant alongside the two already there.
 
 **NOT a pin**, for the same reason: every one of these behaviours already works. Each was confirmed against the regression it guards — `except PyJWKClientConnectionError: return` (the sympathetic outage "fix" this entry names) makes the outage test the only failure in the suite; disabling the `access_required` guard in `create_app` fails all three startup cases; and `options={"verify_aud": False, "verify_iss": False}` fails exactly the two cases that tie an assertion to this app and this tenant.
 
-#### [ ] PATCH /api/day/{day}/entries/{id} mints an unreclaimable sidecar row when the entry's task no longer exists — the same permanent leak the PUT-sidecar and reorder doors were both hardened against
+#### [x] PATCH /api/day/{day}/entries/{id} mints an unreclaimable sidecar row when the entry's task no longer exists — the same permanent leak the PUT-sidecar and reorder doors were both hardened against
 `backend/tasksd/service.py:2321` · **low** · bug · minor · stage 2
 
 `patch_day_entry` write-throughs an estimate onto the task's sidecar: ```python if
@@ -808,7 +808,9 @@ would pin it.
 
 **Pinned by** `test_estimating_a_day_entry_whose_task_is_gone_leaves_nothing_behind` in `backend/tests/test_backlog_aug25_stage2.py`.
 
-#### [ ] store.set_sidecar has no live-item guard, so the day-plan estimate write-through mints sidecar rows gc_orphans can never reclaim
+**Fixed** in `store.set_sidecar` rather than here, which is the half of the suggested fix this entry and its twin agreed on. The call site is unchanged: `patch_day_entry` still write-throughs the estimate, and the write is now a no-op when `items` does not hold the uid. The entry's OWN `estimate_minutes` still lands — that is `update_day_entry`, a different table with no FK either way — so the row the owner is looking at shows the number they typed and only the teach-the-task half is skipped, which is the correct outcome for a task that no longer exists.
+
+#### [x] store.set_sidecar has no live-item guard, so the day-plan estimate write-through mints sidecar rows gc_orphans can never reclaim
 `backend/tasksd/db/store.py:511` · **low** · bug · minor · stage 2
 
 `set_sidecar` unconditionally does `INSERT OR IGNORE INTO sidecar (collection_href, uid)
@@ -878,6 +880,12 @@ the next caller.) Add a unit test beside
 day entry whose task is gone leaves the sidecar count unchanged.
 
 **Pinned by** `test_a_sidecar_is_not_minted_for_an_item_the_cache_does_not_hold` in `backend/tests/test_backlog_aug25_stage2.py`.
+
+**Fixed** with the suggested fix, taken verbatim from `set_sort_orders`: `INSERT INTO sidecar (collection_href, uid) SELECT ?, ? WHERE EXISTS (SELECT 1 FROM items WHERE collection_href=? AND uid=?) ON CONFLICT(collection_href, uid) DO NOTHING`. One deliberate addition — **the per-field UPDATEs carry the same `EXISTS` clause**, not just the INSERT. `set_sort_orders`' `ON CONFLICT … DO UPDATE` never fires when its `WHERE EXISTS` produced no row, so mirroring it properly means an absent item writes nothing at all, including to a row that is already there and already orphaned; without that, estimating a dead task would still stamp `updated_at` and `estimated_minutes` onto a row on its way out.
+
+The route-level `has_task` guard at `app.py` STAYS, and its comment now says why: the store closed the row half, but the guard is still what makes `PUT …/sidecar` answer 404 for an unknown uid instead of 200 with a body of `null`, which `test_api.py` asserts alongside the row count.
+
+Four `test_sync_unit.py` tests minted a sidecar row for a uid that was never in `items` — `_orphan_aged` and `test_gc_orphans_never_touches_a_live_row`. They are gc_orphans tests and the shortcut was never their point, so they now seed the item first; `_orphan_aged` additionally DELETES it before stamping, which is the sequence a real orphan actually follows.
 
 #### [x] tx() replaces the real exception with "cannot rollback - no transaction is active" whenever SQLite has already auto-rolled back (disk full / I/O error)
 `backend/tasksd/db/store.py:43` · **low** · bug · minor

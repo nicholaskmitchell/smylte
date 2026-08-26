@@ -306,6 +306,14 @@ def test_a_bad_request_on_a_readable_resource_is_still_a_ValueError():
 # It permanently drops sidecar rows — pins, kanban column, manual sort,
 # estimated minutes — none of which a resync can rebuild, and nothing called it.
 
+def _seed_item(conn, uid: str, summary: str = "A task") -> str:
+    """Cache one VTODO and hand back its href."""
+    raw = _vtodo(uid, summary)
+    href = f"{COL}{uid}.ics"
+    store.upsert_item(conn, COL, Item(href, '"e1"', raw), ical.extract_from_raw(raw))
+    return href
+
+
 def _orphan_aged(conn, uid: str, days: int) -> None:
     """Orphan `uid` and backdate it by `days`, as a real ISO string.
 
@@ -313,8 +321,19 @@ def _orphan_aged(conn, uid: str, days: int) -> None:
     number, leaving something like '-689174' in the column. That compares older
     than any timestamp only because INTEGER sorts below TEXT, so the ISO
     comparison gc_orphans actually performs is never exercised — which is the
-    exact format drift the retention test needs to be able to catch."""
+    exact format drift the retention test needs to be able to catch.
+
+    The item is SEEDED and then removed, rather than the sidecar row being
+    conjured from nothing. That is the sequence a real orphan follows — the row
+    is written while the task is live, the task leaves the wire, and
+    `orphan_sidecar` stamps what is already there — and it is now the only
+    sequence that works: `set_sidecar` writes nothing for a uid `items` does not
+    hold. These are gc_orphans tests, so the shortcut was never the point; it
+    just happened to be shorter.
+    """
+    href = _seed_item(conn, uid)
     store.set_sidecar(conn, COL, uid, kanban_column="doing")
+    store.delete_item_by_href(conn, COL, href)
     conn.execute(
         "UPDATE sidecar SET orphaned_at=strftime('%Y-%m-%dT%H:%M:%fZ','now',?) "
         "WHERE collection_href=? AND uid=?",
@@ -346,6 +365,7 @@ def test_gc_orphans_honours_a_custom_retention_window():
 
 def test_gc_orphans_never_touches_a_live_row():
     conn = _db()
+    _seed_item(conn, "live-1")          # `set_sidecar` writes nothing without it
     store.set_sidecar(conn, COL, "live-1", kanban_column="doing", pinned=1)
     conn.execute(
         "UPDATE sidecar SET updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now','-400 days')")

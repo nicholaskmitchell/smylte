@@ -1314,13 +1314,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @api.put("/lists/{list_id}/tasks/{uid}/sidecar")
     async def put_sidecar(request: Request, list_id: str, uid: str, body: Sidecar):
         href = await _href(request, list_id, component="VTODO")
-        # Check before writing, like every sibling route. store.set_sidecar does
-        # INSERT OR IGNORE with no referential check, so an unknown uid used to
-        # answer 200 with a body of `null` AND leave a row behind with
-        # orphaned_at IS NULL — which orphan_sidecar never sets (it only fires
-        # when a *known* item is deleted) and gc_orphans therefore never
-        # reclaims. The sidecar table is the one part of SQLite a resync cannot
-        # rebuild, so those rows were permanent.
+        # Check before writing, like every sibling route. This closed two things
+        # and now closes one: `store.set_sidecar` used to do INSERT OR IGNORE
+        # with no referential check, so an unknown uid answered 200 with a body
+        # of `null` AND left a row behind with orphaned_at IS NULL — which
+        # orphan_sidecar never sets (it only fires when a *known* item is
+        # deleted) and gc_orphans therefore never reclaims.
+        #
+        # The ROW half now belongs to the store, which carries the same EXISTS
+        # guard `set_sort_orders` does — a third door (the day-plan estimate
+        # write-through) passed here unguarded and that is where the guard
+        # belongs. This stays for the STATUS: without it the route returns
+        # `get_task`'s None as a 200 with a `null` body, where every sibling
+        # 404s the same uid. test_api.py asserts both halves.
         if not await _run(_svc(request).has_task, href, uid):
             raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown task {uid}")
         fields = {k: v for k, v in body.model_dump().items() if v is not None}
