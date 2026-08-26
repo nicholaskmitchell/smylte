@@ -2168,7 +2168,7 @@ mobile block: `@media (max-width: 720px) { .dash-stack { padding-bottom: calc(12
 env(safe-area-inset-bottom)); } }`.
 
 #### [ ] One failing task list blanks the whole account's tasks — every pane then says "Nothing to do here." with no retry
-`frontend/src/data.tsx:217` · **medium** · bug
+`frontend/src/data.tsx:217` · **medium** · bug · stage 4
 
 TaskProvider fans the task fetch out with `Promise.all`, so a single list that answers
 500/502/429/404 rejects the whole batch. `setTasks` is never called, `loaded` is still
@@ -2207,8 +2207,10 @@ those, and expose the failed list NAMES on the context (a `taskListErrors` analo
 "Nothing to do here.". Only leave the data untouched when every list failed, and expose
 a `reloadTasks()` so the retry is reachable without a page reload.
 
+**Pinned by** `2026-08-25 — one task list that will not load > still shows the lists that answered` in `frontend/src/backlog.aug25.stage4.test.tsx`.
+
 #### [ ] The calendar's disk mirror is wiped on every cold boot: the logout-clear effect also fires on mount while auth is still 'loading'
-`frontend/src/data.tsx:775` · **medium** · rendering · minor
+`frontend/src/data.tsx:775` · **medium** · rendering · minor · stage 4
 
 `CalendarProvider` seeds `cals` from `readCachedCalendars()` so the first frame has
 content, then an effect clears everything whenever `enabled` is false. `enabled` is
@@ -2250,8 +2252,10 @@ Reproduced (vitest, jsdom): write one calendar and one list to the mirror, rende
 from a `useRef<boolean>` initialised to `enabled`) and skip the first invocation, so a
 mount with `enabled === false` leaves the seeded cache alone.
 
+**Pinned by** `2026-08-25 — the disk mirror on a cold boot > survives a mount that happens before /api/me has answered` in `frontend/src/backlog.aug25.stage4.test.tsx`.
+
 #### [ ] Boot treats "can't reach the server" as "signed out": a network drop or a 502 on /api/me hands the owner a login card and hides their cached data
-`frontend/src/App.tsx:160` · **medium** · bug
+`frontend/src/App.tsx:160` · **medium** · bug · stage 4
 
 The boot handler is `api.me().then(...).catch(() => setAuth('out'))`. `j()` only
 produces `AuthError` for a 401 — a dropped connection rejects with a `TypeError` and a
@@ -2291,6 +2295,8 @@ state that keeps the shell and the cached data on screen with an "offline / can'
 the server" banner and a retry button (and re-probe `api.me()` on
 `online`/`visibilitychange`). Add an AbortController timeout so a half-open socket
 surfaces as that state instead of an indefinitely blank pane.
+
+**Pinned by** `2026-08-25 — booting with the server unreachable > does not hand the owner a sign-in card` in `frontend/src/backlog.aug25.stage4.test.tsx`.
 
 #### [x] A slow GET /api/settings lands after the user has already changed a preference and silently reverts it, leaving the UI disagreeing with the account
 `frontend/src/App.tsx:193` · **medium** · bug
@@ -2837,7 +2843,7 @@ the whole line.
 **Pinned by** `2026-08-25 — the Today add box > does not author a second task when the retry follows a failed day write` in `frontend/src/backlog.aug25.stage3.test.tsx`.
 
 #### [ ] The Today tab's drop indicator draws above the target on a downward drag, but the row lands below it
-`frontend/src/components/TodayView.tsx:1761` · **medium** · rendering
+`frontend/src/components/TodayView.tsx:1761` · **medium** · rendering · stage 4
 
 `dragOver` is a single boolean and `.today-row.drag-over` always paints the accent rule
 on the row's TOP edge, while `moveRow` deliberately lands a downward drag AFTER the
@@ -2868,6 +2874,8 @@ The indicator is identical in both directions; only the upward reading matches i
 dayRows.findIndex(e.entry_id)` — pass it to `TodayRow` as e.g. `dragBelow`, add `today-
 below` to the row's class list, and add `.today-row.drag-over.today-below { box-shadow:
 inset 0 -2px 0 var(--accent); }` beside the existing rule.
+
+**Pinned by** `2026-08-25 — the Today tab > points at the gap the row will actually land in` in `frontend/src/backlog.aug25.stage4.test.tsx`.
 
 #### [ ] Escape discards an unsaved reflection (and an unsaved capacity) because both commit only on blur
 `frontend/src/components/ShutdownRitual.tsx:316` · **medium** · bug · stage 3
@@ -2908,7 +2916,7 @@ needed for `CapacityStep`.
 **Pinned by** `2026-08-25 — the shutdown ritual > keeps a reflection the owner closed with Escape` in `frontend/src/backlog.aug25.stage3.test.tsx`.
 
 #### [ ] A failed day read leaves the Today tab blank with no error, no empty state and no retry — and every add then paints nothing
-`frontend/src/components/TodayView.tsx:646` · **medium** · rendering
+`frontend/src/components/TodayView.tsx:646` · **medium** · rendering · stage 4
 
 `plan` only ever becomes non-null on a successful 200; a rejection is swallowed by
 `guard` into a transient toast. `allEntries`/`entries` therefore stay `null` forever,
@@ -2942,8 +2950,10 @@ setPlan(p); else setDayError(true)`), render a short "Couldn't load today" line 
 retry button that bumps a local nonce in the effect's deps, and disable/flag the add box
 and the suggestion "+" while the day is unknown so a write cannot land invisibly.
 
+**Pinned by** `2026-08-25 — the Today tab > says the day could not be read, and does not swallow the next add` in `frontend/src/backlog.aug25.stage4.test.tsx`.
+
 #### [ ] "That time was just taken" stays on screen after the visitor does what it told them to do
-`frontend/src/components/BookingPage.tsx:265` · **low** · rendering · minor
+`frontend/src/components/BookingPage.tsx:265` · **low** · rendering · minor · stage 4
 
 The 409 recovery path sets `error`, clears the slot and returns to `pick`. Nothing
 clears `error` when a new slot is chosen, so the warn-bordered `role="alert"` banner
@@ -2972,6 +2982,8 @@ Reproduced: `publicBook` rejects with `HttpError(409, 'that time is not availabl
 
 **Suggested fix.** Clear it where the intent changes: `onClick={() => { setError(null); setSlot(s);
 setCid(clientId()); setPhase('confirm') }}` (and in the "Change" handler).
+
+**Pinned by** `2026-08-25 — the booking page after a taken slot > clears the warning once the visitor picks another slot` in `frontend/src/backlog.aug25.stage4.test.tsx`.
 
 #### [x] The Today row's drop / add / estimate controls are ~18x16px tap targets, though the same media block enlarges the Tasks pane's equivalents
 `frontend/src/styles/app.css:1588` · **low** · rendering · minor
@@ -3023,7 +3035,7 @@ Failure scenario (iPhone 390x844, default --fs-scale: 1):
 row's `align-items: center` already absorbs the extra height.
 
 #### [ ] The archived-calendar agenda's negative margins are sized for a .modal but it renders inside the settings panel, clipping its colour rules and giving the settings sheet a sideways scroll
-`frontend/src/styles/app.css:662` · **low** · rendering · minor
+`frontend/src/styles/app.css:662` · **low** · rendering · minor · stage 4
 
 `.arch-events { margin: 0 -18px -18px }` cancels a `.modal`'s 18px padding so its rows
 can run edge to edge. But the component that renders `.arch-events` is
@@ -3073,8 +3085,10 @@ with `.arch-events .agenda-ev, .arch-day-head { padding-left: 14px; padding-righ
 drift again. Either way add `overflow-x: hidden` (or `clip`) to `.set-panels`/`.set-
 sheet .set-body` so no child can make settings scroll sideways.
 
+**Pinned by** `2026-08-25 — the archived-calendar agenda on a phone > stays inside the sheet that actually contains it` in `frontend/src/backlog.aug25.stage4.browser.test.tsx` — the browser tier, because nothing that reads app.css as text can see an 18px overflow.
+
 #### [ ] The mobile-only hover rules on the sidebar bar leave the "View completed" toggle stuck in its active colour after a tap
-`frontend/src/styles/app.css:809` · **low** · rendering · minor
+`frontend/src/styles/app.css:809` · **low** · rendering · minor · stage 4
 
 `.side-mobile-completed` and `.side-mobile-add` are declared INSIDE the @media (max-
 width: 720px) block — they exist only on a phone — yet their `:hover` rule is not
@@ -3123,8 +3137,10 @@ color: var(--accent); }`. Worth sweeping the other 41 unguarded `:hover` rules a
 same time — `.side-item:hover { background: var(--bg-elev) }` (line 114) collides with
 `.side-item.active`'s identical background inside the mobile drawer for the same reason.
 
+**Pinned by** `2026-08-25 — the phone-only hover rules > are all guarded by a hover-capability query` in `frontend/src/backlog.aug25.stage4.browser.test.tsx`, swept over the CSSOM rather than over the two selectors named here.
+
 #### [ ] Removing the last Home module puts the five stock modules back on the board
-`frontend/src/components/HomeView.tsx:52` · **low** · rendering
+`frontend/src/components/HomeView.tsx:52` · **low** · rendering · stage 4
 
 `committed` treats an empty saved layout as "never arranged" and substitutes
 DEFAULT_LAYOUT. `removeModule` on the final module produces `[]`, `commit` passes that
@@ -3156,8 +3172,10 @@ board cannot be empty), or stop overloading `[]`: keep a separate "never arrange
 signal (e.g. `layout === null` from App when the settings key is absent) so a
 deliberately empty board is representable and Remove never adds modules.
 
+**Pinned by** `2026-08-25 — clearing the dashboard > does not put five modules back when the last one is removed` in `frontend/src/backlog.aug25.stage4.test.tsx`.
+
 #### [ ] The whole month grid is keyboard-inoperable: day cells and event chips are unfocusable divs, so no event can be opened or created without a pointer
-`frontend/src/components/CalendarView.tsx:623` · **low** · rendering
+`frontend/src/components/CalendarView.tsx:623` · **low** · rendering · stage 4
 
 Every interactive surface in the month grid is a plain `<div onClick>` with no `role`,
 no `tabIndex` and no `onKeyDown`: the day cell (which is the only way to create an event
@@ -3190,6 +3208,8 @@ calls the same handler as `onClick` (the sidebar row above is the in-file preced
 and either make the day cell a real button or add `role="gridcell" tabIndex` with a
 roving-tabindex arrow-key walk over the 42 cells. Add a test asserting `.cal-grid`
 exposes at least one focusable node per rendered chip.
+
+**Pinned by** `2026-08-25 — reaching the month grid from a keyboard > exposes the event chip and the day cell as operable controls` in `frontend/src/backlog.aug25.stage4.test.tsx`.
 
 #### [ ] Changing a repeating event's cadence and then picking "This event" silently discards the change and reports success
 `frontend/src/components/CalendarView.tsx:917` · **low** · bug · stage 3
@@ -3233,7 +3253,7 @@ either sent or refused, never silently dropped.
 **Pinned by** `2026-08-25 — the event editor > never drops a cadence change on the floor` in `frontend/src/backlog.aug25.stage3.test.tsx`.
 
 #### [ ] Shutdown step 2 reports "Everything on today is done" after the owner MOVED everything to tomorrow
-`frontend/src/components/ShutdownRitual.tsx:232` · **low** · rendering · minor
+`frontend/src/components/ShutdownRitual.tsx:232` · **low** · rendering · minor · stage 4
 
 `unfinished` is derived from `entries`, and `TodayView.entries` filters out rows
 carrying `rolled_to` as well as `dropped_at` — by design, so a decided row leaves the
@@ -3264,6 +3284,8 @@ Reproduced in the repo's harness: day holds two undone rows Alpha and Bravo; ope
 compare `entries.filter(isDone).length` against `entries.length`) and render "Everything
 on today is decided." / "Nothing left to decide about." when the list was emptied by
 rolls and drops rather than by ticks.
+
+**Pinned by** `2026-08-25 — the shutdown ritual, step two > does not call a day that was postponed a day that was finished` in `frontend/src/backlog.aug25.stage4.test.tsx`.
 
 #### [x] On a phone every Today row sits 12px right of its own heading, add box and empty state
 `frontend/src/styles/app.css:845` · **low** · rendering · minor
@@ -3310,7 +3332,7 @@ Measured in Chromium at 390x844, shipped default and `data-preset="workspace"`:
 and `.today-more` all resolve a 14px left edge. The two empty states agree now.
 
 #### [ ] The Today row's ✕, estimate and + are ~16–19px tap targets on the phone-primary surface
-`frontend/src/styles/app.css:1587` · **low** · rendering · minor
+`frontend/src/styles/app.css:1587` · **low** · rendering · minor · stage 4
 
 `.today-drop` (the only way to take a row off the day), `.today-plus` (the only way to
 accept a suggestion) and `.today-est` are bare glyph buttons at 11–12px with 2px/4px
@@ -3344,6 +3366,8 @@ and app.css:1556-1564 `.today-est { … padding: 2px 4px; font-size: calc(11px *
 give these three a touch box: e.g. `.today-drop, .today-plus, .today-est { min-height:
 40px; min-width: 40px; padding: 10px 8px; display: inline-flex; align-items: center;
 justify-content: center; }` — the glyph size can stay as it is.
+
+**Pinned by** `2026-08-25 — the Today row on a phone > gives every control a 44px tap box` in `frontend/src/backlog.aug25.stage4.browser.test.tsx`, swept over `.today-row button` and asserting the 44px accessibility guideline rather than this entry's 40px.
 
 #### [ ] A line pinned to "task" that the parser read nothing in writes its untrimmed text as the VTODO SUMMARY
 `frontend/src/components/TodayView.tsx:1240` · **low** · bug · minor · stage 3
@@ -3846,7 +3870,7 @@ wording the status line already uses, offering no override. Optionally normalise
 hostname to https:// before validating.
 
 #### [ ] The update notice is docked at the wrong end of the z-order, so it covers the top 36 px of the app instead of pushing it down
-`desktop/Smylte.Desktop/MainForm.cs:46` · **low** · rendering · minor
+`desktop/Smylte.Desktop/MainForm.cs:46` · **low** · rendering · minor · stage 4
 
 WinForms lays docked children out in reverse child-index order: the highest index is
 laid out first and takes the outer edge, index 0 is laid out last, and a
@@ -3878,6 +3902,8 @@ Concrete scenario: CI publishes a new Smylte.exe, so `update.ClientOutdated` is 
 SetChildIndex(_web, 0);` so the Top-docked strip is laid out first and consumes its 36
 px, and the Fill children receive what is left. In BuildNotice, add the Fill label first
 (`message`, then `download`, then `dismiss`) for the same reason.
+
+**Not pinned**, and docs/STAGES.md records why: WinForms lays docked children out in reverse child-index order, so asserting `_web`'s client rect needs a Windows host with a realised control tree and a message loop. The only CI-reachable pin would be a `SetChildIndex` source-shape assertion, which `test_backlog_stage5.py`'s own header explicitly disowns as a substitute for a behavioural one — it would go green on the day the indices were written in the right order and say nothing about whether the strip displaces the web view. Whoever fixes this must verify it by hand on Windows: publish a newer version so `ClientOutdated` is true, and check the SPA header row is pushed down rather than covered.
 
 #### [x] test_sync_unit.py permanently rewrites DavClient.principal_path for the whole pytest process
 `backend/tests/test_sync_unit.py:411` · **low** · bug · minor

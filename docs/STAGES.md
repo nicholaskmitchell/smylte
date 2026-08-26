@@ -33,7 +33,7 @@ unhandled exception. The remaining 34 are 16 medium and 18 low.
 | 1 | 0 | — |
 | 2 | 7 | `backend/tests/test_backlog_aug25_stage2.py`, `desktop/Smylte.Desktop.Tests/LocalServerTests.cs` |
 | 3 | 12 | `backend/tests/test_backlog_aug25_stage3.py`, `frontend/src/backlog.aug25.stage3.test.tsx` |
-| 4 | 13 | *not yet written* |
+| 4 | 13 | `frontend/src/backlog.aug25.stage4.test.tsx`, `frontend/src/backlog.aug25.stage4.browser.test.tsx` |
 | 5 | 2 | *not yet written* |
 
 ## Stage 2 — Abuse & resource exhaustion
@@ -209,6 +209,134 @@ has passed. So the fix does not necessarily change the answer, and any pin would
 be pinning one design decision. Driving it at all also needs a frozen wall clock
 this suite has no library for. Whoever fixes the filters should settle the
 question explicitly and write the test that follows from the decision.
+
+## Stage 4 — User-visible correctness & rendering
+
+13 findings · 5 medium, 8 low · **OPEN** · `frontend/src/backlog.aug25.stage4.test.tsx`,
+`frontend/src/backlog.aug25.stage4.browser.test.tsx`
+
+Something on screen is wrong, missing, or unreachable — and unlike stage 3 the
+user can SEE it, which is the only reason it sorts lower.
+
+Two shapes recur, and both are about a failure the app cannot tell from an
+absence. **Three turn a fetch failure into a confident lie**: one bad list
+empties every task pane and each one then says "Nothing to do here.", a 502 on
+`/api/me` hands the owner a sign-in card, a failed day read shows a blank day
+that swallows the next write. The disk mirror, which exists exactly so those
+cases still have something to show, is itself cleared on mount. **Three are an
+affordance that is not there**: an indicator pointing at the wrong gap, a month
+grid no keyboard can reach, a stale alert standing over a fresh choice.
+
+| # | Finding | Where | Sev | Pin |
+|---|---|---|---|---|
+| 1 | One failing task list blanks the whole account's tasks — every pane then says "Nothing to do here."… | `frontend/src/data.tsx:217` | medium | `one task list that will not load > still shows the lists that answered` |
+| 2 | The calendar's disk mirror is wiped on every cold boot: the logout-clear effect also fires on mount… | `frontend/src/data.tsx:776` | medium | `the disk mirror on a cold boot > survives a mount that happens before /api/me has answered` |
+| 3 | Boot treats "can't reach the server" as "signed out": a network drop or a 502 on /api/me hands the… | `frontend/src/App.tsx:179` | medium | `booting with the server unreachable > does not hand the owner a sign-in card` |
+| 4 | The Today tab's drop indicator draws above the target on a downward drag, but the row lands below it | `frontend/src/components/TodayView.tsx:1761` | medium | `the Today tab > points at the gap the row will actually land in` |
+| 5 | A failed day read leaves the Today tab blank with no error, no empty state and no retry | `frontend/src/components/TodayView.tsx:646` | medium | `the Today tab > says the day could not be read, and does not swallow the next add` |
+| 6 | "That time was just taken" stays on screen after the visitor does what it told them to do | `frontend/src/components/BookingPage.tsx:288` | low | `the booking page after a taken slot > clears the warning once the visitor picks another slot` |
+| 7 | The archived-calendar agenda's negative margins are sized for a .modal but it renders inside the… | `frontend/src/styles/app.css:691` | low | **browser** · `the archived-calendar agenda on a phone > stays inside the sheet that actually contains it` |
+| 8 | The mobile-only hover rules on the sidebar bar leave the "View completed" toggle stuck in its… | `frontend/src/styles/app.css:838` | low | **browser** · `the phone-only hover rules > are all guarded by a hover-capability query` |
+| 9 | Removing the last Home module puts the five stock modules back on the board | `frontend/src/components/HomeView.tsx:52` | low | `clearing the dashboard > does not put five modules back when the last one is removed` |
+| 10 | The whole month grid is keyboard-inoperable: day cells and event chips are unfocusable divs | `frontend/src/components/CalendarView.tsx:636` | low | `reaching the month grid from a keyboard > exposes the event chip and the day cell as operable controls` |
+| 11 | Shutdown step 2 reports "Everything on today is done" after the owner MOVED everything to tomorrow | `frontend/src/components/ShutdownRitual.tsx:82` | low | `the shutdown ritual, step two > does not call a day that was postponed a day that was finished` |
+| 12 | The Today row's ✕, estimate and + are ~16–19px tap targets on the phone-primary surface | `frontend/src/styles/app.css:1715` | low | **browser** · `the Today row on a phone > gives every control a 44px tap box` |
+| 13 | The update notice is docked at the wrong end of the z-order, so it covers the top 36 px of the app | `desktop/Smylte.Desktop/MainForm.cs:49` | low | *none — see below* |
+
+SPA pin names are abbreviated: each is prefixed `2026-08-25 — ` in its file. The
+`Where` column carries the line as it stands now, which for several of these is a
+few lines off AUDIT.md's own anchor.
+
+**Eight of the twenty-two tests are CONTROLS.** Every pin here has an
+over-correction that would satisfy it by deleting the feature: stop signing out
+on any failure and a genuinely lapsed session stares at an empty shell; delete
+the clear-on-logout effect and the next account sees the last one's calendars;
+drop the negative margins and the agenda stops bleeding in the one parent it is
+supposed to.
+
+### Three findings on the browser tier, and one of them is not a measurement
+
+The tier from `bcf38cf` earns its keep here. The archived-agenda overflow is
+exactly the class of defect its header describes: measured at 390×844, the
+settings sheet's `.set-body` has `clientWidth` 362 against `scrollWidth` 380 —
+eighteen pixels of sideways scroll — and `.agenda-ev` starts at x = −4 against a
+sheet edge at x = 0, so the 2px `--ev-c` rule that says which calendar the
+preview belongs to is painted outside the sheet and clipped. Nothing that reads
+app.css as text can see any of that. The tap targets are the same story with
+numbers: `.check` 21×21, `.today-est` 42×34, `.today-drop` 27.2×28,
+`.today-plus` 29×31.
+
+**The hover-latch pin is the exception, and it says so in its own docstring.**
+Headless Chromium reports `hover: hover` and `pointer: fine`, so `:hover`
+behaves correctly there and no amount of hovering reproduces a touch latch. What
+the browser CAN answer — and what the fix actually changes — is whether the
+declaration is fenced off from devices that have no hover, so the pin walks the
+CSSOM (the rules a browser really built, not a regex over source text) for any
+`:hover` nested under a `max-width` query and not under a hover query. Swept
+rather than enumerated, and measured: today it finds exactly one, and it is the
+finding's own `.side-mobile-add:hover, .side-mobile-completed:hover`.
+
+**44px, not 40.** The tap-target pin asserts the accessibility guideline rather
+than the finding's own suggested `min-height: 40px`, and sweeps `.today-row
+button` rather than the three selectors the finding names — this stylesheet's
+recurring failure is a guard only as wide as the set it enumerates, and the
+closed sibling finding above this one was itself a rule that named three classes
+and reached none of them. Accepted cost, decided rather than discovered: a Today
+row goes from ~53px to ~62px, so roughly 13 rows fit an 844px phone instead of
+16.
+
+The harness those two files share (`viewport`, `mount`, `box`) moved to
+`src/test/browser-measure.ts` when the second one arrived. The two lines worth
+not duplicating are the order of `mount` and `document.fonts.ready`, and the
+`requestAnimationFrame` after it.
+
+### The one with no pin
+
+Finding 13 — the update notice docked at the wrong end of the z-order — ships
+**unpinned**, following finding 62's precedent rather than quietly dropping it.
+
+WinForms lays docked children out in reverse child-index order: the highest index
+is laid out first and takes the outer edge, and a `DockStyle.Fill` child claims
+the whole remaining rectangle without shrinking it for children laid out after
+it. `MainForm` sets the opposite arrangement, so `_web` is sized to the full
+client rectangle and `_notice` is then placed in the top 36px ON TOP of it —
+covering the SPA's header row and swallowing clicks in that band.
+
+Asserting the outcome needs a Windows host with a realised control tree and a
+message loop, which CI does not have. The only CI-reachable pin is a
+`SetChildIndex` source-shape assertion, and `test_backlog_stage5.py`'s own header
+explicitly disowns that shape as a substitute: it would go green the day the
+indices were written in the right order and say nothing about whether the strip
+displaces the web view. A pin that cannot fail for the right reason is worse than
+none, because it reads as coverage.
+
+So: verify by hand on Windows. Publish a newer version so `ClientOutdated` is
+true, and check the SPA's header row is pushed DOWN rather than covered. The same
+inversion is inside the strip — `BuildNotice` adds the Fill label last, so the
+two Right-docked buttons paint over its right end — and one fix should carry
+both.
+
+### What the `it.fails` flip caught this time
+
+Stage 3's note says the flip is not optional. This stage it caught a pin that was
+**vacuous for a reason that had nothing to do with its finding**.
+
+The disk-mirror pin writes a calendar to the mirror and asserts the provider
+still holds it after a mount with `enabled: false`. But `cache.ts` keys every
+entry on the account name and `write` NO-OPS without one — and the shared
+`beforeEach` calls `setCacheUser('')` to keep every other suite cold. So nothing
+was ever mirrored, the probe read `NONE` for the ordinary reason, and it would
+have gone on reading `NONE` after the fix. Green, it was indistinguishable from a
+real pin. It now names a user and carries an anti-vacuity guard —
+`readCachedCalendars()` must come back non-empty — before the render it is
+actually about.
+
+Two smaller ones from the same pass. `.dash-mod .label` also matches labels
+inside a module BODY, so the dashboard pin reported twelve modules where there
+were five; the selector is now the header's own label. And the failed-day-read
+pin asserted its two halves in sequence, so the second never ran while the first
+was red — a fix to only one of them would have read as complete. Both halves are
+now one object assertion, which is the shape the month-grid pin already used.
 
 # Sweep — 2026-08-19 · closed
 
