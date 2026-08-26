@@ -606,7 +606,7 @@ argument. A regression test should drive `smylte_update_day_entry` with `1e400` 
 assert the day still reads.
 
 #### [ ] Cloudflare Access verification does a blocking JWKS fetch on the event loop, and an unknown `kid` forces one per request
-`backend/tasksd/access.py:31` · **low** · bug
+`backend/tasksd/access.py:31` · **low** · bug · stage 2
 
 `AccessVerifier.verify` is a synchronous function that performs outbound HTTPS I/O
 (`PyJWKClient.get_signing_key_from_jwt` -> `urllib.request.urlopen`, PyJWT's default
@@ -649,8 +649,10 @@ JWKS fetch never runs on the event loop, and bound the kid-miss refresh (e.g. ca
 negative kids for a short interval, or pre-warm the JWK set on a background task) so an
 attacker-chosen `kid` cannot force a network round-trip per request.
 
+**Pinned by** `test_an_unknown_kid_does_not_buy_a_jwks_fetch_per_request` + `test_verifying_an_access_token_does_not_freeze_the_event_loop` in `backend/tests/test_backlog_aug25_stage2.py`.
+
 #### [ ] Nothing bounds the total anonymous scrypt work: the login limiter is keyed only on the client /64, so a single routed /48 lifts "5 guesses / 15 min" to ~6 M/day
-`backend/tasksd/app.py:1711` · **low** · security
+`backend/tasksd/app.py:1711` · **low** · security · stage 2
 
 The only gate in front of `/api/login`'s scrypt call is
 `authenticator.limiter.attempt(key)` where `key = limiter_key(_client_ip(request))`,
@@ -690,6 +692,8 @@ global failure counter with its own lockout) on `/api/login` and `/oauth/authori
 sized to what a real single-owner deployment needs (a few attempts a minute). Keep the
 per-/64 limiter as the per-client layer; the global one is what makes address rotation
 useless.
+
+**Pinned by** `test_the_anonymous_guess_budget_is_bounded_across_client_addresses` in `backend/tests/test_backlog_aug25_stage2.py`.
 
 #### [ ] Test gap: AccessVerifier and the whole access_required posture have zero coverage, including the third fail-closed startup refusal
 `backend/tests/test_security.py:418` · **low** · test-gap
@@ -731,7 +735,7 @@ plain `pytest.raises(RuntimeError, match="refusing to start unprotected")` for t
 startup invariant alongside the two already there.
 
 #### [ ] PATCH /api/day/{day}/entries/{id} mints an unreclaimable sidecar row when the entry's task no longer exists — the same permanent leak the PUT-sidecar and reorder doors were both hardened against
-`backend/tasksd/service.py:2321` · **low** · bug · minor
+`backend/tasksd/service.py:2321` · **low** · bug · minor · stage 2
 
 `patch_day_entry` write-throughs an estimate onto the task's sidecar: ```python if
 ("estimate_minutes" in fields and row["kind"] == "task" and row["collection_href"] and
@@ -794,8 +798,10 @@ counts; the sidecar is only where the *next* entry starts). A test that estimate
 entry whose task has been removed and then asserts `SELECT COUNT(*) FROM sidecar == 0`
 would pin it.
 
+**Pinned by** `test_estimating_a_day_entry_whose_task_is_gone_leaves_nothing_behind` in `backend/tests/test_backlog_aug25_stage2.py`.
+
 #### [ ] store.set_sidecar has no live-item guard, so the day-plan estimate write-through mints sidecar rows gc_orphans can never reclaim
-`backend/tasksd/db/store.py:511` · **low** · bug · minor
+`backend/tasksd/db/store.py:511` · **low** · bug · minor · stage 2
 
 `set_sidecar` unconditionally does `INSERT OR IGNORE INTO sidecar (collection_href, uid)
 VALUES (?, ?)` for any uid at all. The project has already closed this exact hole at the
@@ -862,6 +868,8 @@ UPDATE loop when no row exists. (A caller-side `has_task` check in
 the next caller.) Add a unit test beside
 `test_a_reorder_naming_an_unknown_uid_writes_no_sidecar_row` asserting that estimating a
 day entry whose task is gone leaves the sidecar count unchanged.
+
+**Pinned by** `test_a_sidecar_is_not_minted_for_an_item_the_cache_does_not_hold` in `backend/tests/test_backlog_aug25_stage2.py`.
 
 #### [x] tx() replaces the real exception with "cannot rollback - no transaction is active" whenever SQLite has already auto-rolled back (disk full / I/O error)
 `backend/tasksd/db/store.py:43` · **low** · bug · minor
@@ -1482,7 +1490,7 @@ naive values and converts aware ones into it) for `due_before`, `due_after` and 
 `now` used by `overdue_only`.
 
 #### [ ] smylte_review_day over a range re-reads every task of every named list once per day — 6.6 s under the service lock where the HTTP twin takes 3 ms
-`backend/tasksd/mcp/api.py:1313` · **medium** · bug
+`backend/tasksd/mcp/api.py:1313` · **medium** · bug · stage 2
 
 `review_day`'s range arm calls `self._entries_with_tasks(plan["entries"])` inside the
 per-day loop. Each call resolves the lists named on that day and calls
@@ -1512,6 +1520,8 @@ Exactly linear in days x tasks. With entries spanning three lists it is three ti
 if e["kind"]=="task"}` once for the whole range, build `by_key` once, and have
 `_entries_with_tasks` accept a prebuilt map (the same shape `service.search` was already
 fixed into — "built ONCE per collection").
+
+**Pinned by** `test_a_range_review_reads_each_list_once_not_once_per_day` in `backend/tests/test_backlog_aug25_stage2.py`.
 
 #### [x] smylte_list_events orders by raw ISO string, so zone-anchored events come back in the wrong order and `limit` returns the wrong page
 `backend/tasksd/mcp/api.py:554` · **medium** · bug
@@ -3617,7 +3627,7 @@ against the same signature of head and of tail. Also add `assert not CORPUS_IDS 
 parametrized cases.
 
 #### [ ] tasks.service grants the app write access to its own interpreter and source tree, contradicting the sandbox's stated invariant
-`deploy/tasks.service:29` · **low** · security
+`deploy/tasks.service:29` · **low** · security · stage 2
 
 The hardening comment says ProtectHome=read-only "keeps the app from writing anywhere
 under /home except the one path it needs (the SQLite cache)", and justifies the tight
@@ -3659,6 +3669,8 @@ grants exactly /var/lib/tasks and leaves the venv and source read-only. If movin
 is not wanted, at minimum narrow the grant to a dedicated subdirectory (e.g.
 `backend/var/`) that holds only tasks.db.
 
+**Pinned by** `test_the_unit_does_not_open_its_own_interpreter_and_source_to_writes` in `backend/tests/test_backlog_aug25_stage2.py`.
+
 #### [x] The published Windows client is built against a floating NuGet version with no lock file, so the shipped exe is not reproducible and its dependency set is never reviewed
 `desktop/Smylte.Desktop/Smylte.Desktop.csproj:46` · **low** · security · minor
 
@@ -3699,7 +3711,7 @@ publish`/`dotnet build`/`dotnet test` invocations in ci.yml and desktop-release.
 drifted lock file fails the build instead of silently resolving something new.
 
 #### [ ] The desktop client serves the SPA with no Content-Security-Policy — the whole policy is a response header the local server never emits
-`desktop/Smylte.Desktop/LocalServer.cs:230` · **low** · security
+`desktop/Smylte.Desktop/LocalServer.cs:230` · **low** · security · stage 2
 
 The app's CSP exists only as an HTTP response header attached by the backend
 (`tasksd/csp.py::CSPMiddleware`), derived at startup from the served index.html so it
@@ -3738,6 +3750,8 @@ base64 it, and build the identical directive string — so the two cannot drift 
 blank window. Add `X-Content-Type-Options: nosniff` at the same time. A regression test
 should assert the desktop response carries a policy containing the served file's script
 hash.
+
+**Pinned by** `LocalServerCspTests.TheDocumentStillCarriesNoPolicy` (live; it goes red when the policy lands) paired with the skipped `…CarriesAPolicy` in `desktop/Smylte.Desktop.Tests/LocalServerTests.cs` — xunit has no xfail.
 
 #### [x] `Smylte.exe --setup`, the documented way to change server or credentials, silently does nothing whenever the app is running
 `desktop/Smylte.Desktop/Program.cs:239` · **low** · bug · minor

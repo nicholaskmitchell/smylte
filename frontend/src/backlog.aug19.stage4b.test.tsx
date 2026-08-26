@@ -2,12 +2,16 @@
  * The 2026-08-19 sweep, stage 4b: rendering, keys, focus/a11y, dashboard bounds
  * and the test-harness gap.
  *
- * **These eleven findings are OPEN.** Ten of the tests below assert the
- * behaviour the app SHOULD have and fail against the code as it stands, so each
- * is marked `it.fails` — the file passes while the finding is open, and the
- * moment one is fixed its pin XPASSes, the file goes red, and somebody has to
- * tick the finding off and drop the marker. Same contract as
- * `backlog.stage4.test.tsx`, whose api-mocking preamble this copies.
+ * **All eleven are CLOSED.** Ten began as `it.fails` pins asserting the
+ * behaviour the app SHOULD have while failing against the code as it stood, and
+ * the eleventh was always an ordinary test (see the test gap below). The findings
+ * are fixed and ticked in docs/AUDIT.md, the markers are gone, and every test
+ * here must stay green. Same contract as `backlog.stage4.test.tsx`, whose
+ * api-mocking preamble this copies.
+ *
+ * The `AUDIT open:` banners below are kept in the past tense they were written
+ * in: a closed finding's value is the record of what the bug was, which is what
+ * stops it being reintroduced.
  *
  * The eleventh is a **test gap**, not a bug: the global `matchMedia` stub in
  * `src/test/setup.ts` answers `matches: false` for every query, so

@@ -3,14 +3,110 @@
 `docs/AUDIT.md` is the evidence. This file is the plan for closing those
 findings, and the map from a finding to the test that pins it.
 
-Two sweeps have been staged this way, and **both are now closed**. The
-**2026-08-19** backlog is below; the **2026-08-16** one under it is kept as the
-record of how the harness behaved in practice — its "Two strengths of pin" and
-"Ordering" notes are the reason the later pins are shaped the way they are.
+Three sweeps have been staged this way. The **2026-08-25** one is at the top and
+is OPEN. The **2026-08-19** and **2026-08-16** backlogs under it are both closed
+and kept as the record of how the harness behaved in practice — the latter's "Two
+strengths of pin" and "Ordering" notes are the reason the later pins are shaped
+the way they are.
 
-Read this as history. Nothing here is a live worklist: no `xfail(strict=True)`
-marker and no `it.fails` remains in either suite, and every pin named below is an
-ordinary test that must stay green.
+The **2026-08-25** sweep at the top IS a live worklist: its pins are
+`xfail(strict=True)` / `it.fails` and its findings are open. Everything from
+`# Sweep — 2026-08-19` down is history — no marker remains in either of those, and
+every pin named there is an ordinary test that must stay green.
+
+# Sweep — 2026-08-25 · OPEN
+
+34 findings survived verification and none is fixed. This section is the live
+worklist — the only one in this file — and everything below it is history.
+
+Same five buckets and the same sorting criteria as the two closed sweeps: a
+finding lands in a stage by what its failure *does*, lower stage winning a tie,
+severity ordering within. Restated under "The sorting criteria" further down; it
+has not changed.
+
+**Stage 1 is empty**, and that is a result rather than an omission. The sweep's
+eight HIGHs are all closed already, and nothing left puts untrusted input into an
+unhandled exception. The remaining 34 are 16 medium and 18 low.
+
+| stage | findings | pins |
+|---|---|---|
+| 1 | 0 | — |
+| 2 | 7 | `backend/tests/test_backlog_aug25_stage2.py`, `desktop/Smylte.Desktop.Tests/LocalServerTests.cs` |
+| 3 | 12 | *not yet written* |
+| 4 | 13 | *not yet written* |
+| 5 | 2 | *not yet written* |
+
+## Stage 2 — Abuse & resource exhaustion
+
+7 findings · 1 medium, 6 low · **OPEN** · `backend/tests/test_backlog_aug25_stage2.py`,
+`desktop/Smylte.Desktop.Tests/LocalServerTests.cs`
+
+Work or storage an adversary — or, twice here, ordinary use — can make unbounded,
+and controls that do not cover what they say they cover.
+
+Two shapes recur. Three are **a guard in the wrong place**: `set_sidecar` lacks
+the live-item check `set_sort_orders` carries, whose own docstring argues "the
+guard belongs here, where every door passes"; `tasks.service` opens the very tree
+its hardening block exists to close; `RateLimiter` bounds a client and is treated
+as bounding the guess budget. The other three are **work that scales with an
+argument the caller chooses** — a `kid`, a day range, an address.
+
+| # | Finding | Where | Sev | Pin |
+|---|---|---|---|---|
+| 1 | smylte_review_day over a range re-reads every task of every named list once per day — 6.6 s under the service… | `backend/tasksd/mcp/api.py:1313` | medium | `test_a_range_review_reads_each_list_once_not_once_per_day` |
+| 2 | Cloudflare Access verification does a blocking JWKS fetch on the event loop, and an unknown `kid` forces one… | `backend/tasksd/access.py:31` | low | `test_an_unknown_kid_does_not_buy_a_jwks_fetch_per_request` + `…_does_not_freeze_the_event_loop` |
+| 3 | Nothing bounds the total anonymous scrypt work: the login limiter is keyed only on the client /64, so a single… | `backend/tasksd/app.py:1711` | low | `test_the_anonymous_guess_budget_is_bounded_across_client_addresses` |
+| 4 | PATCH /api/day/{day}/entries/{id} mints an unreclaimable sidecar row when the entry's task no longer exists… | `backend/tasksd/service.py:2321` | low | `test_estimating_a_day_entry_whose_task_is_gone_leaves_nothing_behind` |
+| 5 | store.set_sidecar has no live-item guard, so the day-plan estimate write-through mints sidecar rows gc_orphans… | `backend/tasksd/db/store.py:511` | low | `test_a_sidecar_is_not_minted_for_an_item_the_cache_does_not_hold` |
+| 6 | tasks.service grants the app write access to its own interpreter and source tree, contradicting the sandbox's… | `deploy/tasks.service:29` | low | `test_the_unit_does_not_open_its_own_interpreter_and_source_to_writes` |
+| 7 | The desktop client serves the SPA with no Content-Security-Policy — the whole policy is a response header the… | `desktop/Smylte.Desktop/LocalServer.cs:230` | low | `LocalServerCspTests.TheDocumentStillCarriesNoPolicy` (see below) |
+
+Findings 4 and 5 are one defect at two depths and one fix in `set_sidecar` closes
+both, so they are pinned together and should be reviewed together. Each carries a
+CONTROL beside it — an ordinary passing test that the live case still works —
+because the obvious over-correction here is a guard that refuses everything, and
+that would satisfy both pins by deleting the feature.
+
+### What `--runxfail` caught, and why the step is not optional
+
+`strict=True` catches a pin that unexpectedly PASSES. Nothing catches a pin that
+fails for the WRONG reason, and in a green run the two are indistinguishable.
+Every pin in this stage was therefore re-run under `--runxfail` and every
+traceback read. **Four of the seven were wrong on the first pass:**
+
+* two xfailed on a `TypeError` from an incomplete `Settings(...)` — the fixture
+  never built, so the finding was never exercised and the marker reported success;
+* the two Access pins xfailed on `FrozenInstanceError`, because `Settings` is a
+  frozen dataclass and the fixture assigned to it;
+* and once those were fixed, two pins *passed against unfixed code*: the
+  loop-blocking one cancelled its ticker before the ticker could observe the gap
+  it had just sat through, and the scrypt one sent `x-forwarded-for` where
+  `_client_ip` reads `X-Real-IP`, so all 200 requests keyed on one address and the
+  limiter stopped them at five.
+
+Only after that do the numbers match the findings: 31 joins over 30 days, 10 JWKS
+fetches for 10 requests, a 1.01 s loop freeze, and **200 password hashes spent by
+one /48 rotating 40 of its own /64s** — the multiplication the finding describes,
+observed rather than argued.
+
+### The one that could not be an xfail
+
+xunit has no `xfail`, and a `Skip` is the wrong shape: it stays skipped after the
+fix lands, green and silent, which is precisely the half of the harness this file
+exists to defend. So finding 7 is pinned as two paired methods —
+`TheDocumentStillCarriesNoPolicy`, live, asserting the DEFECT and going red the
+moment a policy is emitted, and `TheDocumentCarriesAPolicy`, skipped, holding the
+assertion actually worth keeping. Un-skipping the second and deleting the first is
+the whole of the ritual, and the first one's failure message says so.
+
+Verified both ways: the live test fails for the right reason when un-skipped
+(a real HTTP round trip against a started `LocalServer`, missing header — not a
+connection error), and the alarm was confirmed by adding a CSP header to
+`ServeStatic` and watching it go red.
+
+Unlike every other test in `LocalServerTests.cs`, this one has to `Start()` the
+server. The rest are pure path arithmetic over `Resolve`; the header set is only
+observable on a response.
 
 # Sweep — 2026-08-19 · closed
 

@@ -2,12 +2,16 @@
  * The 2026-08-19 sweep, stage 4a: user-visible correctness in the calendar,
  * the scheduling editor and the appearance layer.
  *
- * **These nine findings are OPEN.** Every test below asserts the behaviour the
- * app SHOULD have and fails against the code as it stands, so each is marked
- * `it.fails` — the file passes while a finding is open, and the moment one is
- * fixed its pin XPASSes, the file goes red, and somebody has to tick the
- * finding off in docs/AUDIT.md and drop the marker. Same contract as
- * `backlog.stage4.test.tsx`, whose api-mocking preamble this copies.
+ * **All nine are CLOSED.** Each began as an `it.fails` pin asserting the
+ * behaviour the app SHOULD have while failing against the code as it stood; the
+ * findings are fixed and ticked in docs/AUDIT.md, the markers are gone, and these
+ * are ordinary regression tests that must stay green. `grep -c 'it.fails('` over
+ * this file returns 0. Same contract as `backlog.stage4.test.tsx`, whose
+ * api-mocking preamble this copies.
+ *
+ * The `AUDIT (open):` banners below are kept in the past tense they were written
+ * in: a closed finding's value is the record of what the bug was, which is what
+ * stops it being reintroduced.
  *
  * The theme is one class of defect: the screen and the wire disagree with what
  * the user did. A month that failed to load once is recorded as loaded and

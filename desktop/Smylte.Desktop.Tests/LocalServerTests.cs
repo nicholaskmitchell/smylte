@@ -119,3 +119,110 @@ public sealed class LocalServerTests : IDisposable
         Assert.Equal(strict, LocalServer.LocaliseCookie(strict));
     }
 }
+
+/// The 2026-08-25 sweep, stage 2: the document WebView2 runs carries no
+/// Content-Security-Policy.
+///
+/// **This finding is OPEN**, and this is its `xfail` — there is no xunit
+/// equivalent, so it is written as the assertion it will be and marked with the
+/// Skip below. Delete the Skip when the policy lands; the body does not change.
+/// Same contract as the `xfail(strict=True)` pins in
+/// `backend/tests/test_backlog_aug25_stage2.py` and the `it.fails` ones in the
+/// SPA suites, except that a Skip cannot go red on its own the way an XPASS does
+/// — so `docs/STAGES.md` records that this one has to be un-skipped by hand.
+///
+/// The app's CSP exists only as a response header the BACKEND attaches
+/// (`tasksd/csp.py::CSPMiddleware`), derived at startup from the served
+/// index.html so it can carry the sha256 of the inline pre-paint script.
+/// `frontend/index.html` has no `http-equiv` meta — verified, zero occurrences —
+/// so in the desktop client, where `ServeStatic` sets exactly Content-Type and
+/// Cache-Control, the document has no policy at all: no `default-src 'self'`, no
+/// `connect-src 'self'`, no `object-src 'none'`, no script-hash allowlist. On the
+/// one surface that also holds a live session cookie for the real server.
+///
+/// Unlike the tests above this one, it has to START the server: the header set is
+/// what is under test, and `Resolve` is pure path arithmetic that never sees a
+/// response. A free port is chosen by `ChoosePort`, as the app does.
+public sealed class LocalServerCspTests : IDisposable
+{
+    private readonly string _dir = Directory.CreateTempSubdirectory("smylte-csp").FullName;
+    private readonly LocalServer _server;
+
+    // The shape frontend/index.html actually has: a pre-paint script inline in
+    // the document, which is why the backend's policy carries a hash rather than
+    // just 'self'.
+    private const string InlineScript = "document.documentElement.dataset.theme='dark'";
+
+    public LocalServerCspTests()
+    {
+        var root = Path.Combine(_dir, "web");
+        Directory.CreateDirectory(root);
+        File.WriteAllText(Path.Combine(root, "index.html"),
+            $"<!doctype html><html><head><script>{InlineScript}</script></head><body></body></html>");
+
+        _server = new LocalServer(root, "https://tasks.example.test", 48311);
+        _server.Start();
+    }
+
+    public void Dispose()
+    {
+        _server.Dispose();
+        try { Directory.Delete(_dir, recursive: true); } catch (IOException) { }
+    }
+
+    // xunit has no `xfail`, and that matters more than it looks. A `Skip` would
+    // stay skipped forever after the fix landed — green, silent, and exactly the
+    // half of the harness `docs/STAGES.md` says is the point ("a green build no
+    // longer means 'no known bugs', it means 'every known bug is exactly as
+    // known'"). So the pin is written in two halves:
+    //
+    //   * this one is LIVE and asserts the DEFECT. It passes today and goes RED
+    //     the moment a policy is emitted — which is the alarm an XPASS gives on
+    //     the Python side, arrived at from the other direction.
+    //   * the one below carries the corrected assertions and is skipped until
+    //     then. Un-skipping it and deleting this one is the whole of the ritual.
+
+    [Fact]
+    public async Task TheDocumentStillCarriesNoPolicy()
+    {
+        using var http = new HttpClient();
+        using var res = await http.GetAsync($"{_server.Origin}/");
+        res.EnsureSuccessStatusCode();
+
+        Assert.False(
+            res.Headers.Contains("Content-Security-Policy"),
+            "GOOD NEWS, AND AN ACTION: the desktop document now carries a "
+            + "Content-Security-Policy, so this finding is fixed. Tick it off in "
+            + "docs/AUDIT.md, flip its row in docs/STAGES.md, delete THIS test, and "
+            + "un-skip TheDocumentCarriesAPolicy below — which is the assertion you "
+            + "actually want kept.");
+    }
+
+    [Fact(Skip = "OPEN: ServeStatic sets only Content-Type and Cache-Control, so the "
+               + "document WebView2 runs has no Content-Security-Policy at all. "
+               + "Un-skip this and delete TheDocumentStillCarriesNoPolicy when it does.")]
+    public async Task TheDocumentCarriesAPolicy()
+    {
+        using var http = new HttpClient();
+        using var res = await http.GetAsync($"{_server.Origin}/");
+        res.EnsureSuccessStatusCode();
+
+        Assert.True(res.Headers.TryGetValues("Content-Security-Policy", out var csp),
+            "the desktop document is served with no Content-Security-Policy; every "
+            + "directive the browser deployment relies on is silently absent here");
+
+        var policy = string.Join(" ", csp!);
+        // The CLASS of the corrected answer, not a particular directive string:
+        // any real policy bounds the default fetch directive. What must not pass
+        // is an empty header, or one naming only a field already allowlisted
+        // elsewhere.
+        Assert.Contains("default-src", policy);
+        Assert.Contains("'self'", policy);
+
+        // Asked for in the same breath by the finding, and free once a header is
+        // being written at all.
+        Assert.True(res.Headers.TryGetValues("X-Content-Type-Options", out var nosniff)
+            && string.Join(" ", nosniff!).Contains("nosniff"),
+            "no X-Content-Type-Options: nosniff on the static response");
+    }
+}
