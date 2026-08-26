@@ -1006,7 +1006,7 @@ describe('2026-08-25 — the Today add box', () => {
 
   // ── AUDIT (open): TodayView.tsx:1236 — retrying the add box after a failed
   //    day-entry POST creates a second real task on the CalDAV list ──────────
-  it.fails('does not author a second task when the retry follows a failed day write', async () => {
+  it('does not author a second task when the retry follows a failed day write', async () => {
     // EVIDENCE. `addParsedTask` is a two-step compound write with no idempotency
     // across the pair and no compensation: it first authors a real VTODO with
     // `create(...)`, then points the day at it with `addTask(on, t)`
@@ -1040,6 +1040,104 @@ describe('2026-08-25 — the Today add box', () => {
     expect(new Set(authored()).size).toBe(1)
   })
 
+  // Which of the two repairs actually landed, and the reason for choosing both:
+  // the retry re-sends ONLY the half that failed. The pin takes either — "the
+  // first leaves two calls with one id, the second leaves one call" — but they
+  // are not equally good. Replaying the create makes the retry depend on the
+  // backend resolving the client_id to the resource already written; skipping it
+  // does not, so a working day write finishes the line even if that resolution
+  // ever regresses.
+  it('re-sends only the day write when the task itself already landed', async () => {
+    m.addDayEntry.mockRejectedValueOnce(new Error('nope'))
+    const user = setup()
+    const box = await screen.findByLabelText('Add to today')
+
+    await user.type(box, 'invoice friday{Enter}')
+    await waitFor(() => expect(box).toHaveValue('invoice friday'))
+    await user.type(box, '{Enter}')
+    await waitFor(() => expect(m.addDayEntry).toHaveBeenCalledTimes(2))
+
+    expect(m.createTask).toHaveBeenCalledTimes(1)
+    // Both attempts pointed the day at the SAME task, not at a second one.
+    const uids = m.addDayEntry.mock.calls.map(([, b]) => b.uid)
+    expect(new Set(uids).size).toBe(1)
+  })
+
+  // The other half of the id fix, which the test above hides by never reaching
+  // the create twice: when the CREATE is what failed, the retry must reuse the
+  // id rather than mint a new one — that is the case where the response was
+  // lost and the VTODO may exist on the server unseen.
+  it('retries a failed create under the same client_id', async () => {
+    m.createTask.mockRejectedValueOnce(new Error('nope'))
+    const user = setup()
+    const box = await screen.findByLabelText('Add to today')
+
+    await user.type(box, 'invoice friday{Enter}')
+    await waitFor(() => expect(box).toHaveValue('invoice friday'))
+    await user.type(box, '{Enter}')
+    await waitFor(() => expect(m.createTask).toHaveBeenCalledTimes(2))
+
+    expect(new Set(authored()).size).toBe(1)
+  })
+
+  // The ref belongs to ONE line, and both halves of that need saying. A failure
+  // must not make the NEXT line inherit the failed one's id or its task — the
+  // user gives up on "invoice friday" and types something else, and that
+  // something else would be pointed at the invoice task. A mutation that reused
+  // the ref for any line passed everything else here.
+  it('does not carry a failed line\'s task onto the next line typed', async () => {
+    m.addDayEntry.mockRejectedValueOnce(new Error('nope'))
+    const user = setup()
+    const box = await screen.findByLabelText('Add to today')
+
+    await user.type(box, 'invoice friday{Enter}')
+    await waitFor(() => expect(box).toHaveValue('invoice friday'))
+    await user.clear(box)
+    await user.type(box, 'call the vet monday{Enter}')
+    await waitFor(() => expect(m.createTask).toHaveBeenCalledTimes(2))
+
+    expect(new Set(authored()).size).toBe(2)
+    expect(m.createTask.mock.calls.map(([, b]) => (b as { summary?: string }).summary))
+      .toEqual(['invoice', 'call the vet'])
+  })
+
+  // And the ref must not outlive the line either: fail, retry successfully, then
+  // type the same text again — a repeated errand, a second "invoice friday" —
+  // and that is a NEW task, not a second attempt at the finished one. Only
+  // reachable in three steps, which is why clearing on success survived a
+  // mutation until this test.
+  it('starts fresh when a line is retyped after its retry succeeded', async () => {
+    m.addDayEntry.mockRejectedValueOnce(new Error('nope'))
+    const user = setup()
+    const box = await screen.findByLabelText('Add to today')
+
+    await user.type(box, 'invoice friday{Enter}')
+    await waitFor(() => expect(box).toHaveValue('invoice friday'))
+    await user.type(box, '{Enter}')                       // the retry, accepted
+    await waitFor(() => expect(m.addDayEntry).toHaveBeenCalledTimes(2))
+
+    await user.type(box, 'invoice friday{Enter}')
+    await waitFor(() => expect(m.createTask).toHaveBeenCalledTimes(2))
+    expect(new Set(authored()).size).toBe(2)
+  })
+
+  // CONTROL for the ref that remembers all this: a line that SUCCEEDS must not
+  // leave anything behind, or typing the same text a second time — "gym friday",
+  // twice, because the first one was for a different thing — would re-point the
+  // day at the task already authored instead of authoring another.
+  it('authors a fresh task when the same line is typed again after it succeeded',
+    async () => {
+      const user = setup()
+      const box = await screen.findByLabelText('Add to today')
+
+      await user.type(box, 'gym friday{Enter}')
+      await waitFor(() => expect(m.createTask).toHaveBeenCalledTimes(1))
+      await user.type(box, 'gym friday{Enter}')
+      await waitFor(() => expect(m.createTask).toHaveBeenCalledTimes(2))
+
+      expect(new Set(authored()).size).toBe(2)
+    })
+
   // CONTROL (passes today, must keep passing). Two DIFFERENT lines still author
   // two tasks. The cheap over-correction is a global "one create per session"
   // latch, which would satisfy the pin by breaking the box.
@@ -1057,7 +1155,7 @@ describe('2026-08-25 — the Today add box', () => {
 
   // ── AUDIT (open): TodayView.tsx:1240 — a line pinned to "task" that the
   //    parser read nothing in writes its untrimmed text as the VTODO SUMMARY ─
-  it.fails('trims the summary of a line the parser read nothing in', async () => {
+  it('trims the summary of a line the parser read nothing in', async () => {
     // EVIDENCE. `parseEntry` returns `summary: text` byte for byte when it
     // recognises nothing (its documented "'' in, '' out" rule —
     // `daytext.ts:454`, `const verbatim: ParsedEntry = { summary: text, ... }`),

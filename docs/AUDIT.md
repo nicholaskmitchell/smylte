@@ -1,6 +1,6 @@
 # Audit backlog
 
-**19 open** — 18 from the 2026-08-25 sweep at the top of this file, plus one found
+**17 open** — 16 from the 2026-08-25 sweep at the top of this file, plus one found
 during its remediation and marked `· found in remediation`; every finding from
 every earlier sweep is closed.
 
@@ -2952,7 +2952,7 @@ nominalDays)` (wall clock, DST-safe, same helper `shiftYmd` already uses) before
 
 **The overflow guard is checked on the MILLISECONDS, not on the day count.** aug19's control uses a 400-digit day count, which `Number` turns straight into `Infinity`, so a guard reading only the days passes it — a mutation proved that too. The threshold that matters starts around 304 digits, where the days are finite and their milliseconds are not, and that boundary now has a test.
 
-#### [ ] Retrying the add box after a failed day-entry POST creates a second real task on the CalDAV list
+#### [x] Retrying the add box after a failed day-entry POST creates a second real task on the CalDAV list
 `frontend/src/components/TodayView.tsx:1236` · **medium** · bug · stage 3
 
 `addParsedTask` is a two-step compound write with no idempotency across the pair and no
@@ -2998,6 +2998,12 @@ landed, keep the created task in hand and retry only `addDayEntry` rather than r
 the whole line.
 
 **Pinned by** `2026-08-25 — the Today add box > does not author a second task when the retry follows a failed day write` in `frontend/src/backlog.aug25.stage3.test.tsx`.
+
+**Fixed** with BOTH halves the suggested fix offers, as decided at the top of the stage, because they defend different failures. `data.tsx::create` now takes an optional `cid` — the shape `createMany` has had all along — and `TodayView` holds a `retry` ref keyed on the typed LINE carrying `{ line, cid, task? }`. A retry of the same line reuses its client_id, so a create whose RESPONSE was lost is answered by the resource already written; and when the task itself landed and only the day write failed, the task is held and the create is SKIPPED, so the retry re-sends only the half that failed.
+
+**The pin takes either repair, and they are not equally good.** Replaying the create makes the retry depend on the backend resolving the client_id to the existing resource; skipping it does not. Both now have their own test, because the "only the day write" test hides the id reuse (the create never runs twice) and the "failed create" test hides the holding.
+
+**The ref's SCOPE needed two more tests, and mutations found both.** It must not outlive the line — fail, retry successfully, retype the same text, and that is a new task, not a second attempt at the finished one (only reachable in three steps, so "never clear on success" passed everything until then) — and it must not cross to another line, or the user who gives up on one line and types a different one gets the day pointed at the abandoned task.
 
 #### [ ] The Today tab's drop indicator draws above the target on a downward drag, but the row lands below it
 `frontend/src/components/TodayView.tsx:1761` · **medium** · rendering · stage 4
@@ -3534,7 +3540,7 @@ justify-content: center; }` — the glyph size can stay as it is.
 
 **Pinned by** `2026-08-25 — the Today row on a phone > gives every control a 44px tap box` in `frontend/src/backlog.aug25.stage4.browser.test.tsx`, swept over `.today-row button` and asserting the 44px accessibility guideline rather than this entry's 40px.
 
-#### [ ] A line pinned to "task" that the parser read nothing in writes its untrimmed text as the VTODO SUMMARY
+#### [x] A line pinned to "task" that the parser read nothing in writes its untrimmed text as the VTODO SUMMARY
 `frontend/src/components/TodayView.tsx:1240` · **low** · bug · minor · stage 3
 
 `parseEntry` returns `summary: text` byte for byte when it recognises nothing (its
@@ -3569,6 +3575,8 @@ raw, ... })`, or have `parseEntry` return the trimmed input as `summary` in the 
 arm (its own `without()` already trims on every other arm).
 
 **Pinned by** `2026-08-25 — the Today add box > trims the summary of a line the parser read nothing in` in `frontend/src/backlog.aug25.stage3.test.tsx`.
+
+**Fixed** with the suggested fix's FIRST form, deliberately: `summary: p.summary.trim() || raw` at the one call site in `addParsedTask`. NOT in `parseEntry` — its verbatim arm returning its input byte for byte is the parser's documented contract ("'' in, '' out"), and `daytext.test.ts`'s "the empty line" pins it. The note path beside this one already sends `text.trim()` and the parsed path sends `without()`'s trimmed remnant, so this makes the third branch agree with the other two rather than changing what any of them mean.
 
 ### Desktop, CI/deploy, test suite
 

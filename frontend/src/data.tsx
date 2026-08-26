@@ -64,8 +64,13 @@ export interface TaskData {
    *  just as wrong as saying the account has no lists. */
   loaded: boolean
   setLists: (next: List[]) => void
+  /** `cid` is the create's idempotency key, minted here when not supplied. Pass
+   *  one to make a RETRY of the same logical create idempotent: the backend
+   *  derives the VTODO's uid from it, so a replay is answered by the resource
+   *  already written instead of authoring a second task. `createMany` has taken
+   *  an explicit cid per item all along, for the same reason. */
   create: (listId: string, body: CreateTaskBody,
-    after?: Promise<Task | undefined>) => Promise<Task | undefined>
+    after?: Promise<Task | undefined>, cid?: string) => Promise<Task | undefined>
   createMany: (items: Array<{ listId: string; body: CreateTaskBody; cid: string }>,
     onProgress: (done: number) => void) => Promise<number[]>
   addSub: (parent: string, summary: string) => void
@@ -324,9 +329,9 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
   const pending = useRef(new Map<string, Promise<Task | undefined>>())
 
   const create = async (listId: string, body: CreateTaskBody,
-    after?: Promise<Task | undefined>): Promise<Task | undefined> => {
+    after?: Promise<Task | undefined>, explicitCid?: string): Promise<Task | undefined> => {
     if (!listId) return undefined
-    const cid = clientId()
+    const cid = explicitCid ?? clientId()
     const uid = uidFor(cid)
     const key = loadKey
     invalidateFetches()
