@@ -1060,6 +1060,9 @@ def apply_occurrence_override(
     if master is None:
         raise NotEditable("resource has no VEVENT to edit")
     anchor = _anchor_from_iso(recurrence_id, master)
+    # Before anything is created: an orphan RECURRENCE-ID is not an inert record,
+    # it reads back as a live occurrence. See `_require_addressable`.
+    _require_addressable(cal, master, anchor)
     override = _find_override(cal, anchor)
     if override is None:
         # Seeded from whatever GOVERNS this slot, which is not always the
@@ -1128,6 +1131,10 @@ def exclude_occurrence(
     if master is None:
         raise NotEditable("resource has no VEVENT to edit")
     anchor = _anchor_from_iso(recurrence_id, master)
+    # An EXDATE matching no occurrence is a write that answers 204 and deletes
+    # nothing, while the SPA optimistically removes the row. See
+    # `_require_addressable`.
+    _require_addressable(cal, master, anchor)
     master.add("EXDATE", anchor)
     cal.subcomponents = [
         c for c in cal.subcomponents
@@ -1419,29 +1426,10 @@ def shift_series(
     # from, and that delta moves EVERY occurrence, the RRULE's UNTIL, both date
     # lists and every override's RECURRENCE-ID. So an anchor naming no
     # occurrence does not fail — it silently reschedules the whole series by an
-    # amount nobody asked for.
-    #
-    # `_require_occurrence` records the two ways a stale anchor arrives, and both
-    # reach this path exactly as they reach the split: a second tab holding an
-    # older expansion, and `engine.shift_event` re-applying the caller's
-    # `recurrence_id` against a fresh copy after a 412. The MCP tools and the
-    # HTTP route both take `recurrence_id` straight from the caller. Measured on
-    # a monthly series: an anchor from an unrelated resource moved every
-    # occurrence back four hours and left the series otherwise intact, so
-    # nothing about the result says it happened.
-    #
-    # The blast radius is larger than the split's — that mis-bounds a head, this
-    # moves the entire series — and refusing is the recoverable direction: the
-    # caller re-reads and drags again. `_require_occurrence` keeps its own
-    # allow-when-unprobeable policy, which is the same trade it already makes.
-    if override is None and not _same_instant(master.get("DTSTART").dt, anchor):
-        rule = _rrule_dict(master)
-        if rule is None and not _datelist_values(master, "RDATE"):
-            # `_require_occurrence`'s wording for this case tells the caller to
-            # use scope='all' — which is the scope that got them here.
-            raise ValueError(
-                "recurrence_id does not name an occurrence of this event")
-        _require_occurrence(master, rule, anchor)
+    # amount nobody asked for. Measured: an anchor from an unrelated resource
+    # moved every occurrence back four hours and left the series otherwise
+    # intact, so nothing about the result said it had happened.
+    _require_addressable(cal, master, anchor)
 
     base = override.get("DTSTART").dt if override is not None and override.get("DTSTART") else anchor
     # A foreign client may have given this occurrence's override a different
@@ -1652,6 +1640,54 @@ def _partition_datelist(event: Event, key: str, anchor, *, keep_before: bool) ->
     _rebuild_datelist(
         event, key, lambda v: v if _at_or_after(v, anchor) != keep_before else None
     )
+
+
+def _require_addressable(cal: Calendar, master: Event, anchor) -> None:
+    """Refuse an anchor that names no occurrence of this resource.
+
+    `split_series` has demanded this since the stale-anchor finding recorded on
+    `_require_occurrence`; the other three anchored write paths did not, and a
+    stale anchor reaches all four the same two ways — a second tab holding an
+    older expansion, and `engine`'s retry re-applying the caller's
+    `recurrence_id` against a fresh copy after a 412. The MCP tools and the HTTP
+    route take `recurrence_id` straight from the caller, so an invented one is a
+    third.
+
+    What each path did with an anchor naming nothing, measured on
+    `FREQ=WEEKLY;COUNT=3` with a Friday anchor against a Tuesday series:
+
+      * `apply_occurrence_override` ADDED AN EVENT. The orphan RECURRENCE-ID is
+        not inert — `expand_occurrences` takes it for an instance, so the set
+        went from three occurrences to four and "edit this one" put a meeting on
+        the calendar that nothing generates. `_link_busy` builds the public
+        booking page's conflict set from that same expansion, so it also removes
+        an hour the owner never blocked.
+      * `shift_series` rescheduled the WHOLE series by a delta measured from the
+        slot that does not exist.
+      * `exclude_occurrence` wrote an EXDATE matching nothing: the write returns
+        204, the SPA optimistically drops the row, and the occurrence is still
+        there on the next read.
+
+    Three shapes are addressable without probing anything, and all three are
+    checked first so the guard cannot refuse work that already succeeds: an
+    instant an override component already claims (the resource itself vouches
+    for it, however it got there), the master's own DTSTART, and — via
+    `_require_occurrence` — an RDATE. Everything else is priced by the rule, on
+    that function's terms, including its allow-when-unprobeable policy.
+    """
+    if _find_override(cal, anchor) is not None:
+        return
+    dtstart = master.get("DTSTART")
+    if dtstart is not None and hasattr(dtstart, "dt") and _same_instant(dtstart.dt, anchor):
+        return
+    rule = _rrule_dict(master)
+    if rule is None and not _datelist_values(master, "RDATE"):
+        # `_require_occurrence`'s wording for a non-repeating event tells the
+        # caller to use scope='all'. Two of the three callers here ARE a
+        # per-occurrence scope, and the third IS scope='all' — so that sentence
+        # is either irrelevant or actively wrong. Name the real problem.
+        raise ValueError("recurrence_id does not name an occurrence of this event")
+    _require_occurrence(master, rule, anchor)
 
 
 def _require_occurrence(master: Event, rule: dict | None, anchor) -> None:
