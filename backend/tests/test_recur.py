@@ -1758,6 +1758,42 @@ def test_an_ordinary_rdate_list_outside_the_window_is_not_refused():
 # the whole series by an amount nobody asked for, silently, and the result looks
 # like an ordinary drag.
 
+def test_an_override_on_a_slot_the_series_never_produces_is_refused():
+    """The worst of the three, because it is not a no-op: an orphan
+    RECURRENCE-ID reads back as a LIVE OCCURRENCE. "Edit this one" against a
+    stale anchor put a fourth meeting on a three-occurrence series — and
+    `_link_busy` builds the booking page's conflict set from the same expansion,
+    so it also blocked an hour the owner never blocked."""
+    raw = foreign_event_raw("ovbad", rrule="FREQ=WEEKLY;COUNT=3")   # Tuesdays
+    with pytest.raises(ValueError, match="does not name an occurrence"):
+        apply_occurrence_override(raw, "2026-01-09T09:00:00+00:00",   # a Friday
+                                  EventEdit(summary="I edited a ghost"))
+    assert len(recur.expand_occurrences(raw, *_WIN)) == 3
+
+
+def test_deleting_an_occurrence_that_does_not_exist_is_refused():
+    """An EXDATE matching nothing answers 204 and deletes nothing, while the SPA
+    optimistically drops the row — the same "PUT succeeded, nothing happened"
+    shape `_require_occurrence` was written for on the split path."""
+    raw = foreign_event_raw("exbad", rrule="FREQ=WEEKLY;COUNT=3")
+    with pytest.raises(ValueError, match="does not name an occurrence"):
+        exclude_occurrence(raw, "2026-01-09T09:00:00+00:00")
+
+
+def test_every_real_slot_is_still_addressable_per_occurrence():
+    """The guard must not cost the shapes that legitimately reach these paths."""
+    raw = foreign_event_raw(
+        "okslots", rrule="FREQ=WEEKLY;COUNT=4", rdate="20260210T090000Z",
+        overrides=(("RECURRENCE-ID:20260120T090000Z", "DTSTART:20260120T110000Z"),),
+    )
+    for anchor in ("2026-01-06T09:00:00+00:00",     # the master's own DTSTART
+                   "2026-01-20T09:00:00+00:00",     # carries an override
+                   "2026-01-27T09:00:00+00:00",     # an ordinary later slot
+                   "2026-02-10T09:00:00+00:00"):    # named by RDATE, not the rule
+        apply_occurrence_override(raw, anchor, EventEdit(summary="fine"))
+        exclude_occurrence(raw, anchor)
+
+
 def test_a_series_reschedule_refuses_an_anchor_that_names_no_occurrence():
     raw = foreign_event_raw("shbad", rrule="FREQ=WEEKLY;COUNT=3")   # 1/6, 1/13, 1/20
     with pytest.raises(ValueError, match="does not name an occurrence"):
