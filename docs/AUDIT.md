@@ -1,6 +1,6 @@
 # Audit backlog
 
-**14 open**, all from the 2026-08-25 sweep at the top of this file; every finding
+**13 open**, all from the 2026-08-25 sweep at the top of this file; every finding
 from every earlier sweep is closed, as is the one this sweep's own remediation
 turned up (marked `· found in remediation`).
 
@@ -2393,7 +2393,7 @@ a `reloadTasks()` so the retry is reachable without a page reload.
 
 **`reloadTasks` needed a signal of its own.** The effect keys on `loadKey`/`rev`/`enabled`/`listsLoaded`, and `rev` only moves when the SERVER publishes a change — so on an idle account a failed fetch had no way back at all. A `taskNonce` in the deps is what makes the button do anything; without it a mutation leaves a Retry that re-runs nothing and still passes every other assertion.
 
-#### [ ] The calendar's disk mirror is wiped on every cold boot: the logout-clear effect also fires on mount while auth is still 'loading'
+#### [x] The calendar's disk mirror is wiped on every cold boot: the logout-clear effect also fires on mount while auth is still 'loading'
 `frontend/src/data.tsx:775` · **medium** · rendering · minor · stage 4
 
 `CalendarProvider` seeds `cals` from `readCachedCalendars()` so the first frame has
@@ -2437,6 +2437,12 @@ from a `useRef<boolean>` initialised to `enabled`) and skip the first invocation
 mount with `enabled === false` leaves the seeded cache alone.
 
 **Pinned by** `2026-08-25 — the disk mirror on a cold boot > survives a mount that happens before /api/me has answered` in `frontend/src/backlog.aug25.stage4.test.tsx`.
+
+**Fixed** with the suggested fix: a `wasEnabled` ref, and the clear runs only on the true→false STEP. `enabled` is `auth === 'in'` and `auth` starts at `'loading'`, so the effect fired on mount — before `/api/me` had answered — and threw away the `readCachedCalendars()` seed set two lines above it in the same constructor. The effect was written for logout leakage, which is a transition, and it did not distinguish that from the initial false.
+
+**One mutation turned out to be an EQUIVALENT implementation, not a wrong one**, and the comment was corrected rather than a test invented for it. Seeding the ref with `false` instead of with `enabled` behaves identically, because the guard is the STEP (`was && !now`) and no first invocation can be a fall either way. The original comment claimed the seed was load-bearing; it is not, and saying so would have misled the next reader into preserving something that does not matter. Seeding with `enabled` stays because it states the intent.
+
+The two that ARE wrong are both caught: clearing on any false is the defect itself, and never clearing at all leaks the previous session's calendars into the next login — which is what this effect was added for, and what its control asserts.
 
 #### [ ] Boot treats "can't reach the server" as "signed out": a network drop or a 502 on /api/me hands the owner a login card and hides their cached data
 `frontend/src/App.tsx:160` · **medium** · bug · stage 4
