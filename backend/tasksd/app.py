@@ -41,7 +41,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
 from .access import AccessVerifier
-from .auth import Authenticator, RateLimiter, hash_password, limiter_key
+from .auth import Authenticator, HashBudget, RateLimiter, hash_password, limiter_key
 from .config import Settings, normalize_dav_url
 from .dav.errors import AuthError as DavAuthError
 from .dav.errors import DavError
@@ -1729,6 +1729,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # Caps concurrent password hashes. Per-app (not a module global) so tests
     # don't share it, matching the limiter instances below.
     login_hashes = asyncio.Semaphore(4)
+    # ...and caps the RATE, which the semaphore never did. `login_hashes` bounds
+    # memory; `authenticator.limiter` bounds one client. Neither bounds the
+    # guess budget, because the limiter's key is the caller's own address and a
+    # routed /48 supplies 65 536 of them. Shared with the consent screen, which
+    # runs the same hash on the same unauthenticated surface — see the semaphore
+    # beside it and `HashBudget` for the sizing.
+    hash_budget = HashBudget()
     @app.post("/api/login")
     async def login(request: Request, body: Login):
         if authenticator is None:
@@ -1744,6 +1751,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "too many attempts, try later",
                 headers={"Retry-After": str(authenticator.limiter.retry_after(key))},
             )
+        # ...and the global budget, AFTER the per-client one. The order is
+        # load-bearing: a client already over its own allowance must be turned
+        # away by its own counter rather than spending from the shared pool, or
+        # one address could empty the budget for everyone.
+        if not hash_budget.take():
+            raise HTTPException(
+                status.HTTP_429_TOO_MANY_REQUESTS,
+                "too many attempts, try later",
+                headers={"Retry-After": str(hash_budget.retry_after())},
+            )
         # scrypt is memory-hard by design (~16 MiB a call), so unbounded
         # concurrency is an unauthenticated memory amplifier — and every other
         # endpoint shares this thread pool.
@@ -1755,6 +1772,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             # The attempt is already recorded by attempt() above.
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid credentials")
         authenticator.limiter.record_success(key)
+        # The right answer costs nothing: the budget is a GUESS budget, and the
+        # owner logging in must not spend from the same pool their attacker is
+        # draining. One token back, not a reset — see HashBudget.give_back.
+        hash_budget.give_back()
         resp = JSONResponse({"authenticated": True, "user": authenticator.user})
         resp.set_cookie(
             "tasks_session", authenticator.issue_session(),
@@ -2018,7 +2039,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # same memory-hard scrypt as /api/login, and what the bound protects is
         # this process's memory rather than either endpoint's throughput.
         _register_mcp(app, settings=settings, authenticator=authenticator,
-                      client_ip=_client_ip, run=_run, login_hashes=login_hashes)
+                      client_ip=_client_ip, run=_run, login_hashes=login_hashes,
+                      hash_budget=hash_budget)
         log.info("mcp: remote connector enabled at %s/mcp", settings.public_url)
 
     # -- static SPA (built frontend), mounted last so /api wins --

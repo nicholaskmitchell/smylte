@@ -1,6 +1,6 @@
 # Audit backlog
 
-**30 open**, all from the 2026-08-25 sweep at the top of this file; every finding
+**29 open**, all from the 2026-08-25 sweep at the top of this file; every finding
 from every earlier sweep is closed.
 
 Findings from the adversarial audit sweeps — one deep finder per subsystem, then
@@ -665,7 +665,7 @@ Two consequences worth writing down. The clock is stamped on every ATTEMPT rathe
 
 A CONTROL was added: a good token must still verify while the cooldown is running, without costing another fetch. The over-correction here is a verifier that refuses everything for a minute after any miss, which would satisfy the pin by turning Access into a wall — confirmed by mutation that this control is the only thing that catches it.
 
-#### [ ] Nothing bounds the total anonymous scrypt work: the login limiter is keyed only on the client /64, so a single routed /48 lifts "5 guesses / 15 min" to ~6 M/day
+#### [x] Nothing bounds the total anonymous scrypt work: the login limiter is keyed only on the client /64, so a single routed /48 lifts "5 guesses / 15 min" to ~6 M/day
 `backend/tasksd/app.py:1711` · **low** · security · stage 2
 
 The only gate in front of `/api/login`'s scrypt call is
@@ -708,6 +708,16 @@ per-/64 limiter as the per-client layer; the global one is what makes address ro
 useless.
 
 **Pinned by** `test_the_anonymous_guess_budget_is_bounded_across_client_addresses` in `backend/tests/test_backlog_aug25_stage2.py`.
+
+**Fixed** with the suggested fix's shape — a second, key-independent bound in front of the hash, on `/api/login` and `/oauth/authorize` both — as a TOKEN BUCKET rather than the global failure counter the entry offers as an alternative, and the difference is the point.
+
+A global counter with a lockout is itself a denial of service: it has no key to exempt the owner by, so an attacker who burns it locks the account holder out for the whole window. `HashBudget` throttles instead — capacity 10, one token per 10 s, so ~6 sustained guesses a minute against the ~71/s the CPU allowed — and the worst an attacker can do to the owner is a few seconds' wait.
+
+**A verified password hands its token back**, which is what makes this a GUESS budget rather than a login budget: the owner signing in from three devices, or restarting a client, costs nothing. One token, not a reset — `RateLimiter.record_success` clears its counter outright and `release`'s docstring already records what that cost when it was used to undo a single reservation; handing back the whole budget here would let an attacker alternate a known-good password with guesses and never run out.
+
+The bucket is charged AFTER the per-client limiter, and the order is load-bearing: a client already over its own allowance must be turned away by its own counter rather than spending from the shared pool.
+
+Measured after: **200 requests from 40 addresses spend 10 hashes**, where they spent 200. The two existing lockout tests are `@pytest.mark.radicale` and could not run here, so their contracts were driven in-process against the real app instead — five wrong passwords still 401 then 429 with a Retry-After, 60 concurrent guesses still evaluate exactly five, three fumbles then the right password still gets in. A control was added for the one thing nothing covered: 25 correct logins in a row must all succeed.
 
 #### [ ] Test gap: AccessVerifier and the whole access_required posture have zero coverage, including the third fail-closed startup refusal
 `backend/tests/test_security.py:418` · **low** · test-gap · stage 5

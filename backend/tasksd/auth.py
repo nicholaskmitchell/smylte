@@ -19,6 +19,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import ipaddress
+import math
 import secrets
 import time
 from collections.abc import Callable
@@ -207,6 +208,75 @@ class RateLimiter:
     def record_success(self, key: str) -> None:
         self._fails.pop(key, None)
         self._locked.pop(key, None)
+
+
+class HashBudget:
+    """A global token bucket in front of the password hash.
+
+    `RateLimiter` bounds a CLIENT and was being read as bounding the guess
+    budget. It is keyed on `limiter_key(_client_ip(...))`, i.e. per source /64 —
+    the right unit for one customer and the wrong one for a budget, because a
+    routed /48 is 65 536 of them, each with its own fresh counter. Nothing else
+    stood in front of `check_credentials`: `login_hashes` bounds CONCURRENCY
+    (memory), never rate, so the real ceiling on guesses was the box's CPU.
+    Measured: 56.4 ms a hash, four in flight, ~71/s, ~6.1 M/day against a limit
+    advertised as five per fifteen minutes. Sustaining it needs ~860 source /64s
+    in rotation, and one free /48 supplies 65 536.
+
+    A bucket rather than a counter with a lockout, deliberately. A global
+    counter is itself a denial of service: an attacker who burns it locks the
+    OWNER out of their own account for the lockout window, and there is no key to
+    exempt them by. A bucket throttles instead — the owner may meet a 429 and
+    retry a few seconds later, and never a fifteen-minute wall.
+
+    A verified password gives its token BACK. That is what makes the budget a
+    guess budget rather than a login budget: logging in correctly costs nothing,
+    and only wrong answers spend it. One token back, not a reset —
+    `RateLimiter.record_success` clears its counter outright, and `release`'s
+    docstring already records what that cost when it was used to undo a single
+    reservation. Handing back the whole budget here would let an attacker
+    alternate a known-good password with guesses and never run out.
+
+    Per app, never a module global: every test in the suite builds a fresh app
+    and expects a fresh budget, and `make_app`'s docstring says so.
+    """
+
+    def __init__(self, capacity: int = 10, refill_s: float = 10.0):
+        self.capacity = capacity
+        self.refill_s = refill_s
+        self._tokens = float(capacity)
+        self._at = time.monotonic()
+
+    def _fill(self, now: float) -> None:
+        if now > self._at:
+            self._tokens = min(self.capacity, self._tokens + (now - self._at) / self.refill_s)
+            self._at = now
+
+    def take(self) -> bool:
+        """Spend one token. False when the budget is empty.
+
+        Called BEFORE the hash, like `RateLimiter.attempt` and for the same
+        reason: the hash is awaited, so a check that reserved nothing would let
+        every request arriving during it through on one credit.
+        """
+        now = time.monotonic()
+        self._fill(now)
+        if self._tokens < 1.0:
+            return False
+        self._tokens -= 1.0
+        return True
+
+    def give_back(self) -> None:
+        """Return the token a correct password spent."""
+        self._fill(time.monotonic())
+        self._tokens = min(self.capacity, self._tokens + 1.0)
+
+    def retry_after(self) -> int:
+        """Whole seconds until one token is available, for the `Retry-After`."""
+        self._fill(time.monotonic())
+        if self._tokens >= 1.0:
+            return 0
+        return max(1, math.ceil((1.0 - self._tokens) * self.refill_s))
 
 
 class Authenticator:
