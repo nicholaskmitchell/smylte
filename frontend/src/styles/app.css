@@ -871,8 +871,6 @@
   .side.drawer .group-caret { padding: 4px 2px; }
 
   /* content spacing + touch targets */
-  .task, .quickadd, .content-head, .cal-head, .empty, .banner { padding-left: 14px; padding-right: 14px; }
-  .section-label { padding: 14px 14px 4px; }
   .content-head { flex-wrap: wrap; row-gap: 8px; }
   .undated-hint { padding: 8px 14px 0; }
 
@@ -889,15 +887,33 @@
   .task { padding-top: 11px; padding-bottom: 11px; }
   .task.sub { padding-left: calc(var(--gutter) + var(--task-depth, 1) * 18px); }
   /* The density token, re-declared rather than narrowed selector by selector.
-     The list below it (`.task, .quickadd, .content-head, …`) is hand-maintained,
-     and the Today-tab fence added later resolves `var(--gutter)` everywhere —
-     which stayed at its :root 26px on a phone. So on the one tab a phone user
-     opens every morning, the section labels and the add box were inset 14px and
-     the rows beneath them 26px: a 12px stair-step repeated down the screen, and
-     24px of a 390px row spent on margin. Re-declaring the token makes the
-     reduction apply to any tab added later instead of to a list someone has to
-     remember. */
-  :root { --gutter: 14px; }
+     What this replaced was a hand-maintained list — `.task, .quickadd,
+     .content-head, .cal-head, .empty, .banner` plus `.section-label` — and the
+     Today-tab fence added ~500 lines below it resolves `var(--gutter)`
+     everywhere, so it stayed at its :root 26px on a phone. On the one tab a
+     phone user opens every morning, the section labels and the add box were
+     inset 14px and the rows beneath them 26px: a 12px stair-step repeated down
+     the screen, and 24px of a 390px row spent on margin. Every one of those
+     seven selectors takes its horizontal padding from `var(--gutter)` in its
+     base rule, so the token does the same work and does it for any tab added
+     later.
+
+     `:root[data-preset]` is not decoration. A preset is a whole alternative
+     design and lives in tokens.css as `:root[data-preset="workspace"]`, which
+     is (0,2,0) — MORE specific than a bare `:root`, so a plain re-declaration
+     here would have lost to it and left every preset user on 24px. Matching its
+     specificity and winning on source order (app.css is imported after
+     tokens.css) is what makes this cover them.
+
+     A gutter the user set THEMSELVES still wins, and deliberately: `applyTokens`
+     writes a saved theme's tokens as inline properties on <html>, which beat any
+     stylesheet rule. That is the same deference every other themeable density
+     token gets, and it is now consistent — under the old list a user who chose a
+     40px gutter got 40px on `.today-row` and a forced 14px on `.task`, which is
+     the stair-step again, pointing the other way. (`--check-size` is re-declared
+     just below with a bare `:root` because it is deliberately NOT themeable — see
+     its note beside the base value.) */
+  :root, :root[data-preset] { --gutter: 14px; }
   /* On :root, so `.check` and `.today-check-gap` move together — see the note
      beside the base value. */
   :root { --check-size: 21px; }

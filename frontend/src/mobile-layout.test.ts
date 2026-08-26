@@ -451,6 +451,36 @@ describe('the phone gets the whole unsafe area accounted for', () => {
     // stair-step between every section label and the rows under it. The token is
     // re-declared now, the way `--check-size` in this same block already is, so
     // a tab added tomorrow inherits it.
-    expect(allMobile).toMatch(/:root\s*\{[^{}]*--gutter:\s*14px/)
+    expect(allMobile).toMatch(/:root[^{}]*\{[^{}]*--gutter:\s*14px/)
+  })
+
+  it('and the re-declaration outranks a preset, which is more specific than :root', () => {
+    // The half a bare `:root { --gutter: 14px }` gets wrong. A preset is a whole
+    // alternative design and declares its own gutter as
+    // `:root[data-preset="workspace"]` — (0,2,0), against a bare `:root`'s
+    // (0,1,0) — so the mobile re-declaration LOSES to it and every preset user
+    // stays on the desktop gutter, which is the whole finding again for them.
+    // Matching the attribute selector ties the specificity, and app.css is
+    // imported after tokens.css, so source order settles it.
+    const decl = allMobile.match(/([^{}]*)\{[^{}]*--gutter:\s*14px/)
+    expect(decl, 'the mobile gutter re-declaration is gone').not.toBeNull()
+    expect(decl![1], 'a preset declares --gutter with an attribute selector, so a '
+      + 'bare :root here is outranked and every preset user keeps the desktop gutter')
+      .toMatch(/:root\[data-preset\]/)
+    expect(read('src/styles/tokens.css'),
+      'no preset declares --gutter any more — if that is deliberate, this test '
+      + 'and the selector it guards can both be simplified')
+      .toMatch(/:root\[data-preset[^\]]*\][^{}]*\{[\s\S]*?--gutter:/)
+  })
+
+  it('no longer narrows the gutter selector by selector as well', () => {
+    // Keeping the old hand-maintained list beside the token is not belt and
+    // braces, it is the stair-step pointing the other way: a user who sets a
+    // 40px gutter in the Appearance editor writes it as an INLINE property on
+    // <html>, which beats every stylesheet rule — so `.today-row` would honour
+    // their 40px while a literal `.task { padding-left: 14px }` forced 14px on
+    // the row above it.
+    expect(allMobile, 'the hand-maintained gutter list is back beside the token')
+      .not.toMatch(/\.task,\s*\.quickadd[^{}]*\{[^{}]*padding-left:\s*14px/)
   })
 })

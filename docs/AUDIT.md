@@ -1,6 +1,6 @@
 # Audit backlog
 
-**36 open**, all from the 2026-08-25 sweep at the top of this file; every finding
+**35 open**, all from the 2026-08-25 sweep at the top of this file; every finding
 from every earlier sweep is closed.
 
 Findings from the adversarial audit sweeps — one deep finder per subsystem, then
@@ -81,16 +81,22 @@ assertion in the docs and went to the source to falsify it; its 24 confirmed
 drifts are all fixed and are not listed as findings — see the commit
 "Correct 24 documentation claims the code no longer supports".
 
-**50 closed, 36 open.** The eight HIGHs are all closed; each was reproduced by
+**51 closed, 35 open.** The eight HIGHs are all closed; each was reproduced by
 hand with a runnable probe before it was touched, and each carries a regression
 test confirmed to fail against the pre-fix tree.
 
 Two things this sweep is honest about rather than quiet about:
 
-* **13 findings were capped off before verification** — 10 from the frontend
-  subsystems and 3 from the documentation run — because each finder is bounded to
-  its most severe results. They were never adversarially checked and are not
-  recorded here. A re-run with a higher cap would surface them.
+* **14 findings were capped off before verification** — from the frontend
+  subsystems and the documentation run — because each finder is bounded to its
+  most severe results, so these are the ones their own finder ranked LEAST
+  severe. They were recovered from the run journal afterwards (the count was
+  first reported as 13; the fourteenth was a cross-subsystem duplicate the
+  reconciliation surfaced), hand-verified by execution, then put through a
+  second adversarial pass of **three skeptics each — 42 agents, none of which
+  refuted anything**. All 14 are fixed; see "Follow-up" below. Being ranked low
+  was not evidence of being wrong: one of them was the duplicate-key React
+  warning that had been printing in the passing test suite the whole time.
 * **No finding came back unverified.** Every one got a verdict from both
   skeptics, so nothing below is sitting in the ambiguous middle.
 
@@ -105,6 +111,45 @@ confident lie about the account, and three sibling screens tell that lie. And th
 test written to stop dialogs forgetting the modal contract enumerates dialogs
 that already keep it — so the three that never adopted it were invisible to it.
 A guard is only as wide as the set it enumerates.
+
+
+### Follow-up — the remediation reviewed as a diff
+
+The fixes above were then read as a diff by a review pass, on the argument that a
+remediation branch is code like any other and had been graded by nobody. It
+found **fourteen defects in the sweep's own work**, of which two were outright
+regressions the remediation introduced:
+
+* the `settingsRev` refetch re-ran the whole settings effect, and that effect
+  restores the opening tab — so switching tabs on a phone yanked the open desktop
+  view to follow it;
+* the RDATE flood guard counted a resource's LIFETIME instant list against a
+  per-WINDOW cap, so "every weekday for three years" was refused for every
+  window, and on the booking path that marks the owner busy for the whole
+  query — worse than the flood it was added to stop.
+
+The rest were gaps rather than regressions: a span guard that raised
+`AttributeError` on a duplicated DTEND, an `except Exception` broad enough to
+evict a cached row on `database is locked`, a modal-contract test that greps a
+FILE and so could not see the second dialog in it, an N+1 the batch read was
+supposed to have removed still firing for every day with no capacity set.
+
+Two further defects were found by widening the fidelity corpus, which turned out
+to be graded against **hard-coded instants**: adding a second event capture made
+one test fail and three pass VACUOUSLY, and chasing the third of those found that
+`apply_occurrence_override`, `exclude_occurrence` and `shift_series` never
+checked that their anchor names an occurrence. `apply_occurrence_override` was
+the sharp one — an orphan RECURRENCE-ID is not an inert record, it reads back as
+a live occurrence, so "edit this one" against a stale anchor ADDED a meeting and
+blocked an hour on the public booking page.
+
+The verifiers earned their keep beyond the verdicts, too: one of them, while
+confirming the `--gutter` finding, pointed out that the fix the finding proposed
+is defeated by `:root[data-preset="workspace"]` being more specific than a bare
+`:root`. It was — the shipped fix reaches the presets because of that note.
+
+Everything in this section is fixed, and each fix carries a regression test
+confirmed to fail against the commit before it.
 
 
 ### Backend core
@@ -2208,7 +2253,7 @@ the server" banner and a retry button (and re-probe `api.me()` on
 `online`/`visibilitychange`). Add an AbortController timeout so a half-open socket
 surfaces as that state instead of an indefinitely blank pane.
 
-#### [ ] A slow GET /api/settings lands after the user has already changed a preference and silently reverts it, leaving the UI disagreeing with the account
+#### [x] A slow GET /api/settings lands after the user has already changed a preference and silently reverts it, leaving the UI disagreeing with the account
 `frontend/src/App.tsx:193` · **medium** · bug
 
 The settings read applies its whole payload unconditionally when it resolves. The gear
@@ -2244,6 +2289,25 @@ Reproduced (vitest, jsdom, real `<App>` with only ./api mocked): hold `api.getSe
 it with a token bumped by every `saveSettings`/`saveSettingsSoon` call and skip the
 whole apply when the stamp is stale, or (cheaper) apply only the keys not present in a
 `touched` set built by the change callbacks — the generalisation of `tabTouched`.
+
+**Fixed** by the second option, keyed on WHEN rather than on whether. `saveSettings`
+and `saveSettingsSoon` append their patch's keys to a `writeLog` ref at the GESTURE (not
+400ms later when the debounced PUT goes out — a slider drag that starts inside a slow
+read's flight has already changed what the user is looking at). The read snapshots the
+log's length as it is ISSUED and reads the tail when it answers, so `keep(k)` holds back
+exactly the keys changed during that request's flight. A read issued afterwards — every
+`settings_updated` refetch, which now also waits for this tab's own PUT to land — carries
+the newer truth and is applied in full, so another device's change still reaches a tab
+that has touched the same preference.
+
+All 23 keys the read applies are guarded, `day_capacity_minutes` and
+`day_capacity_by_weekday` explicitly because they are the only setters here that run
+unconditionally — stripping those keys from the payload would have applied `undefined`
+rather than skipping them. Three tests: the finding's own reproduction, a control
+asserting an untouched preference still lands (a `keep` that held back the whole payload
+would lose the account's settings on every boot), and a structural one asserting every
+`s.<key>` in the effect is inside a `keep(` — because `tabTouched` guarded one field out
+of twenty-three for exactly the reason a per-field guard always does.
 
 #### [x] A failed GET /api/mcp/connections renders "Nothing is connected." — the account's only view of live OAuth grants lies
 `frontend/src/components/ConnectionsSection.tsx:27` · **medium** · bug · minor
