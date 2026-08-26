@@ -196,8 +196,27 @@ input, select, textarea { font-family: inherit; }
 .mono { font-family: var(--mono); }
 .serif { font-family: var(--serif); }
 
+/* `border: 1px solid transparent` and NOT `border: 0`, which is what this was.
+   `.btn.ghost` adds `border: 1px solid var(--rule)` and nothing takes a pixel
+   back out of the padding, so a ghost button was 2px taller and 2px wider than
+   a solid one — and in a row of both, `align-items` centred them, putting the
+   solid one 1px lower with a cap-height 1px off its neighbour's. Measured in
+   Chromium: Back 57.1x33 at y=4, Shut down 91.5x31 at y=5, side by side in the
+   shutdown ritual's action row. Every modal in the app pairs them that way.
+
+   `box-sizing: border-box` two rules up does not help: it governs elements with
+   a specified width or height, and neither of these has one, so an auto height
+   is content + padding + border either way.
+
+   Transparent rather than a padding adjustment, so the background — which paints
+   under the border by default — keeps the solid button pixel-identical while the
+   two boxes become the same size. It also gives `.btn.danger` a border to
+   colour: that rule sets `border-color` alone, which over `border: 0` coloured
+   nothing, so Settings -> Account's Disconnect — the only control that revokes a
+   live MCP OAuth grant — rendered as bare red text with no outline and no
+   background in a row of bordered controls. */
 .btn {
-  background: var(--fg); color: var(--bg); border: 0; border-radius: var(--radius);
+  background: var(--fg); color: var(--bg); border: 1px solid transparent; border-radius: var(--radius);
   font-family: var(--mono); font-size: calc(11px * var(--fs-scale)); font-weight: 500; text-transform: var(--label-case);
   letter-spacing: calc(0.06em * var(--tracking)); padding: 9px 13px; cursor: pointer;
 }

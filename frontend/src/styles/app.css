@@ -1900,7 +1900,16 @@
    on the BASELINE, and a button left to that hangs off the title's baseline and
    sits proud of everything beside it. It was an `.icon-btn` holding a single
    glyph, which is square enough not to show it; a `.btn` holding a word is not. */
-.today-habits-open { flex: none; align-self: center; margin-left: 10px; }
+/* No `margin-left`. It carried 10px from the commit that added habits, where
+   this was an `.icon-btn` holding a bare glyph and the ONLY button in the
+   header — the margin separated it from the counts text beside it. Review and
+   Shut down were added in front of it later and were never given one, so the
+   row read 12px, 12px, 22px: two buttons at the container's `gap` and the third
+   pushed out past both. Below 720px `.content-head` wraps, and there the same
+   10px indented Habits' whole row 10px right of every other left edge in the
+   header. The container's `gap` is the only spacing now, which is what makes
+   the three read as one group. */
+.today-habits-open { flex: none; align-self: center; }
 
 /* A button that reads as a link, for the two places habits are offered in the
    middle of a sentence. It has to be a BUTTON — it opens a dialog, it goes
