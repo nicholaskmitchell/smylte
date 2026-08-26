@@ -805,7 +805,7 @@ describe('2026-08-25 — the booking page after a taken slot', () => {
 
   // ── AUDIT (open): BookingPage.tsx:265 — "That time was just taken" stays on
   //    screen after the visitor does what it told them to do ────────────────
-  it.fails('clears the warning once the visitor picks another slot', async () => {
+  it('clears the warning once the visitor picks another slot', async () => {
     // EVIDENCE. The 409 recovery path sets `error`, clears the slot and returns
     // to `pick`. Nothing clears `error` when a NEW slot is chosen — the slot
     // button's handler is `() => { setSlot(s); setCid(clientId()); setPhase(…) }`
@@ -841,6 +841,34 @@ describe('2026-08-25 — the booking page after a taken slot', () => {
     expect(screen.queryByText(/just taken/i),
       'the visitor did exactly what the alert asked and it is still there, over '
       + 'the slot they have just chosen').not.toBeInTheDocument()
+  })
+
+  // "Change" is the OTHER way back to the picker, and the finding names it too:
+  // "Clear it where the intent changes … (and in the 'Change' handler)".
+  //
+  // Reached by a failure that is NOT the taken-slot race, which is the only way
+  // the button and an error are on screen together: the 409 path already sends
+  // the visitor back to the picker itself (`setSlot(null); setPhase('pick')`),
+  // so there is no Change button to press. Any other failure — a 502 from the
+  // tunnel, a validation refusal — leaves them on the confirm step with the
+  // message standing, and Change is the way out. Clearing on the slot buttons
+  // alone closes the pin and leaves that message over an untouched grid.
+  it('clears the message when the visitor presses Change', async () => {
+    m.publicBookingInfo.mockResolvedValue(INFO)
+    m.publicBook.mockRejectedValue(new HttpError(502, 'calendar server unavailable'))
+    const user = userEvent.setup()
+    render(<BookingPage token="tok" />)
+    await screen.findByText('Intro call')
+
+    await user.click(document.querySelectorAll('.slot-btn')[0] as HTMLElement)
+    await user.type(screen.getAllByRole('textbox')[0], 'Ada')
+    await user.type(document.querySelector('input[type="email"]') as HTMLElement, 'ada@example.com')
+    await user.click(screen.getByRole('button', { name: /confirm booking/i }))
+    await screen.findByText(/calendar server unavailable/i)
+
+    await user.click(screen.getByRole('button', { name: 'Change' }))
+
+    expect(screen.queryByText(/calendar server unavailable/i)).not.toBeInTheDocument()
   })
 
   // CONTROL (passes today, must keep passing). The warning IS shown when the
