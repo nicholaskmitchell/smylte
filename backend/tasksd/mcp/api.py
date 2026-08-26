@@ -962,25 +962,31 @@ class McpApi:
             )
         return resolved
 
-    def _entries_with_tasks(self, entries: list[dict]) -> list[dict]:
-        """Day entries with the task each one names folded in.
+    @staticmethod
+    def _lists_named(*groups: list[dict]) -> set[str]:
+        """The task lists named across any number of entry groups."""
+        return {e["list"] for g in groups for e in g
+                if e["kind"] == "task" and e["list"]}
 
-        A day entry is a POINTER: the wire stores no title and no done flag for a
-        task entry, deliberately, because the VTODO is the single truth for both.
-        Handing a model bare (list, uid) pairs would make it call
-        smylte_get_task once per row to learn what any of them say, so the join
-        happens once here instead.
+    def _task_index(self, list_ids: set[str]) -> dict[tuple[str, str], dict]:
+        """Every task in `list_ids`, keyed the way an entry names one.
 
-        Tasks are read a LIST at a time rather than one call per entry: each
-        `get_task` takes the global service lock, and a twelve-row day would take
-        it twelve times behind whatever CalDAV I/O happens to be in flight.
+        Read a LIST at a time rather than one call per entry: each `get_task`
+        takes the global service lock, and a twelve-row day would take it twelve
+        times behind whatever CalDAV I/O happens to be in flight.
 
-        Every record that comes back carries `task`, whatever its kind — see the
-        loop for why the alternative was a trap.
+        Lifted out of `_entries_with_tasks` so a caller answering about MANY days
+        can build it once. It was inline, which made `review_day`'s range arm
+        O(days x lists): every day re-resolved its lists and re-read every task
+        in them — a full `store.get_items` with raw_ics, plus a `_task_dto` per
+        row — and then threw the map away. `day_range` allows 190 days, and the
+        range is an argument the calling model chooses: measured 0.06 s for one
+        day and 6.63 s for 180, against 0.003 s for the HTTP route that answers
+        the same question with no join at all. Same shape `service.search` was
+        fixed into, and its comment says the same thing: built ONCE.
         """
-        wanted = {e["list"] for e in entries if e["kind"] == "task" and e["list"]}
         by_key: dict[tuple[str, str], dict] = {}
-        for list_id in sorted(wanted):
+        for list_id in sorted(list_ids):
             href = self._svc.resolve_list(list_id, component="VTODO")
             if href is None:
                 # The list has left the wire. The ENTRY still stands — that is
@@ -989,6 +995,29 @@ class McpApi:
                 continue
             for t in self._svc.list_tasks(href, include_done=True):
                 by_key[(t["list"], t["uid"])] = t
+        return by_key
+
+    def _entries_with_tasks(
+        self, entries: list[dict], index: dict[tuple[str, str], dict] | None = None
+    ) -> list[dict]:
+        """Day entries with the task each one names folded in.
+
+        A day entry is a POINTER: the wire stores no title and no done flag for a
+        task entry, deliberately, because the VTODO is the single truth for both.
+        Handing a model bare (list, uid) pairs would make it call
+        smylte_get_task once per row to learn what any of them say, so the join
+        happens once here instead.
+
+        `index` is a prebuilt `_task_index` for a caller that is answering about
+        more than one day — or, in `today`'s case, asking twice about one. It is
+        OPTIONAL rather than required because the map a single day needs is
+        exactly the map this function would build, so a caller with one day to
+        answer about should not have to know that.
+
+        Every record that comes back carries `task`, whatever its kind — see the
+        loop for why the alternative was a trap.
+        """
+        by_key = self._task_index(self._lists_named(entries)) if index is None else index
         out = []
         for e in entries:
             row = dict(e)
@@ -1045,7 +1074,14 @@ class McpApi:
         """
         day = self._today()
         plan = self._svc.open_day(day, create=False)
-        entries = self._entries_with_tasks(plan["entries"])
+        # The preview is resolved before the join rather than after, so the two
+        # answers share ONE index. They name much the same lists — a preview is
+        # this day's plan as it would be — and building the map twice read every
+        # task of every one of them twice for a single tool call.
+        preview = None if plan["planned"] else self._svc.preview_day(day)
+        index = self._task_index(self._lists_named(
+            plan["entries"], *([preview] if preview is not None else [])))
+        entries = self._entries_with_tasks(plan["entries"], index)
         out = {
             "day": day, "planned": plan["planned"],
             **self._day_facts(plan),
@@ -1057,8 +1093,8 @@ class McpApi:
             "totals": self._day_totals(entries, done=_task_flag_done),
             "entries": entries,
         }
-        if not plan["planned"]:
-            out["preview"] = self._entries_with_tasks(self._svc.preview_day(day))
+        if preview is not None:
+            out["preview"] = self._entries_with_tasks(preview, index)
         return out
 
     @staticmethod
@@ -1371,10 +1407,24 @@ class McpApi:
         # the inconsistent shape `_entries_with_tasks` was just fixed for.
         arm_of = {"user": "chosen", "carried": "carried", "auto": "derived",
                   "habit": "habits"}
+        # ONE index for the whole range, built before the loop.
+        #
+        # This call used to be inside it, so the join ran once per PLANNED DAY:
+        # each day re-resolved the lists it named and re-read every task in them
+        # — a full `store.get_items` with raw_ics, under the global service lock,
+        # plus a `_task_dto` per row — and then threw the map away. `day_range`
+        # allows 190 days and the range is an argument the calling model chooses,
+        # so the cost was O(days x lists x tasks) for one read-scoped tool call:
+        # measured 1.01 s at 30 days and 6.63 s at 180, against 0.003 s for the
+        # HTTP route answering the same question. The lists named across the
+        # whole range are the same handful the first day already needed.
+        index = self._task_index(self._lists_named(*(p["entries"] for p in plans)))
         out = []
         for d in wanted:
             plan = by_day.get(d)
-            entries = self._entries_with_tasks(plan["entries"]) if plan else []
+            # Still `if plan else []`: a day with completions but no plan belongs
+            # in a range review and has no entries to join.
+            entries = self._entries_with_tasks(plan["entries"], index) if plan else []
             buckets: dict[str, list] = {
                 "chosen": [], "carried": [], "derived": [], "habits": [],
                 "other": [], "moved": [], "dropped": [],

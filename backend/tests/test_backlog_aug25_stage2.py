@@ -65,6 +65,7 @@ from tests.conftest import api_settings
 pytestmark = [pytest.mark.backlog, pytest.mark.stage2]
 
 LIST_A = "/u/work/"
+LIST_B = "/u/home/"
 DAY = "2026-08-21"
 
 
@@ -205,12 +206,10 @@ def test_estimating_an_entry_whose_task_is_still_there_teaches_the_sidecar(svc):
 # ── AUDIT: smylte_review_day over a range re-reads every task of every named ───
 # ── list once per day ─────────────────────────────────────────────────────────
 
-@pytest.mark.xfail(strict=True, reason="review_day's range arm calls "
-                                       "_entries_with_tasks inside the per-day loop, so "
-                                       "the task join is O(days x lists) on a "
-                                       "read-scoped tool whose range the model chooses")
 def test_a_range_review_reads_each_list_once_not_once_per_day(svc):
     """Counted, never timed.
+
+    **CLOSED.** The marker is gone and this is an ordinary regression test now.
 
     The finding's evidence is a clock — 0.06 s for one day, 6.63 s for 180, against
     0.003 s for the HTTP twin that answers the same question — but a wall-clock
@@ -248,6 +247,66 @@ def test_a_range_review_reads_each_list_once_not_once_per_day(svc):
         f"({len(set(calls))} distinct list(s)) — it scales with the range, and "
         "the range is an argument the calling model chooses"
     )
+
+
+def test_a_range_review_says_the_same_thing_the_single_day_review_does(svc):
+    """CONTROL, and the one that matters for this repair.
+
+    The pin above counts CALLS, so a hoist that built the wrong map — or built it
+    over the wrong set of lists — would satisfy it while quietly answering
+    `task: null` for every row. This asserts the answers instead: the same day,
+    read through the range arm and through the single-day arm, must agree bucket
+    for bucket.
+
+    The two lists are on DIFFERENT DAYS, and that is the whole design of this
+    test rather than an incidental detail. The obvious wrong hoist is to build
+    the index from the first day's lists and reuse it for the rest, and a
+    single-day fixture cannot tell that apart from a correct one — measured: an
+    earlier draft of this control, one day wide, passed against exactly that
+    mutation. Day one names Work, day two names Home, so a first-day index leaves
+    every row on day two joined to `task: None`.
+
+    Every kind is here for the same reason, and so is the ghost row: a uid
+    `items` does not hold must still join to `task: None` rather than raising or
+    being dropped, which is the no-FK guarantee `_entries_with_tasks` keeps.
+    """
+    _seed(svc._conn, LIST_A, "t1", "A work task")
+    store.upsert_collection(svc._conn, CollectionInfo(
+        href=LIST_B, displayname="Home", components={"VTODO"}))
+    _seed(svc._conn, LIST_B, "t2", "A home task")
+
+    day_two = (date.fromisoformat(DAY) + timedelta(days=1)).isoformat()
+    svc.add_day_entry(DAY, entry_id="e-task-a", kind="task", list_id="work", uid="t1")
+    svc.add_day_entry(DAY, entry_id="e-note", kind="note", title="Water the plants")
+    svc.add_day_entry(DAY, entry_id="e-ghost", kind="task", list_id="work", uid="never-existed")
+    svc.add_day_entry(day_two, entry_id="e-task-b", kind="task", list_id="home", uid="t2")
+
+    api = McpApi(svc)
+    arms = ("chosen", "carried", "derived", "habits", "other", "moved", "dropped")
+
+    ranged = {d["day"]: d for d in api.review_day(
+        from_day=DAY,
+        to_day=(date.fromisoformat(day_two) + timedelta(days=1)).isoformat())["days"]}
+    assert sorted(ranged) == [DAY, day_two], sorted(ranged)
+
+    # Each day read on its own is the answer the range must reproduce.
+    for day in (DAY, day_two):
+        one = api.review_day(day=day)
+        for arm in arms:
+            assert ranged[day][arm] == one[arm], (
+                f"the range arm disagrees with the single-day arm about `{arm}` "
+                f"on {day}")
+        assert ranged[day]["totals"] == one["totals"], day
+
+    joined = {e["entry_id"]: (e["kind"], e["task"] is not None)
+              for day in ranged for arm in arms for e in ranged[day][arm]}
+    assert joined == {
+        "e-task-a": ("task", True),
+        "e-note": ("note", False),
+        "e-ghost": ("task", False),
+        # The one a first-day-only index loses.
+        "e-task-b": ("task", True),
+    }, joined
 
 
 # ── AUDIT: Cloudflare Access verification does a blocking JWKS fetch on the ────

@@ -1,6 +1,6 @@
 # Audit backlog
 
-**32 open**, all from the 2026-08-25 sweep at the top of this file; every finding
+**31 open**, all from the 2026-08-25 sweep at the top of this file; every finding
 from every earlier sweep is closed.
 
 Findings from the adversarial audit sweeps — one deep finder per subsystem, then
@@ -1509,7 +1509,7 @@ naive values and converts aware ones into it) for `due_before`, `due_after` and 
 
 **Pinned by** `test_the_due_filters_file_a_deadline_on_the_day_the_owner_sees` in `backend/tests/test_backlog_aug25_stage3.py`.
 
-#### [ ] smylte_review_day over a range re-reads every task of every named list once per day — 6.6 s under the service lock where the HTTP twin takes 3 ms
+#### [x] smylte_review_day over a range re-reads every task of every named list once per day — 6.6 s under the service lock where the HTTP twin takes 3 ms
 `backend/tasksd/mcp/api.py:1313` · **medium** · bug · stage 2
 
 `review_day`'s range arm calls `self._entries_with_tasks(plan["entries"])` inside the
@@ -1542,6 +1542,12 @@ if e["kind"]=="task"}` once for the whole range, build `by_key` once, and have
 fixed into — "built ONCE per collection").
 
 **Pinned by** `test_a_range_review_reads_each_list_once_not_once_per_day` in `backend/tests/test_backlog_aug25_stage2.py`.
+
+**Fixed** as suggested — the join is hoisted out of the per-day loop — with the map lifted into a named `_task_index(list_ids)` and `_entries_with_tasks` given an OPTIONAL prebuilt index. Optional rather than required because the map a single day needs is exactly the map that function would build for itself, so a caller with one day to answer about should not have to know the parameter exists.
+
+`today()` got the same treatment, which the finding does not mention: it calls `_entries_with_tasks` TWICE on an unplanned day — once for the plan, once for the preview — so it read every task of every named list twice for one tool call. The preview is now resolved before the join and both share one index.
+
+The pin counts CALLS, and a hoist that builds the wrong map satisfies it while answering `task: null` for every row — so a CONTROL was added beside it asserting that the range arm and the single-day arm give the same answer, bucket for bucket. Its first draft spanned one day and passed a deliberately wrong hoist (first-day lists only); it now spans two days that name DIFFERENT lists, and catches that mutation, an empty index, and a per-day rebuild.
 
 #### [x] smylte_list_events orders by raw ISO string, so zone-anchored events come back in the wrong order and `limit` returns the wrong page
 `backend/tasksd/mcp/api.py:554` · **medium** · bug
