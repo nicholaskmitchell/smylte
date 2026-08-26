@@ -78,7 +78,11 @@ def _type_ok(value, kind: str) -> bool:
 def check_value(value, schema: dict, *, where: str) -> None:
     kind = schema.get("type")
     if kind and not _type_ok(value, kind):
-        if isinstance(value, float) and not math.isfinite(value):
+        # Keyed on the DECLARED TYPE as well as the value: `1e400` against a
+        # `type: string` field is a type error, and telling the caller it "must
+        # be a finite number" for a field that must be a string is a worse
+        # message than the one it replaced.
+        if kind in ("number", "integer") and isinstance(value, float) and not math.isfinite(value):
             # "must be a number" would be a puzzling thing to tell a client that
             # sent one. Name the actual rule.
             raise SchemaError(f"{where} must be a finite number, got {value}")

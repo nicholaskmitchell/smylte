@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import re
+import sqlite3
 import uuid
 from dataclasses import dataclass
 
@@ -257,7 +258,8 @@ class SyncEngine:
             return False
         try:
             store.upsert_item(self.conn, collection_href, item, fields)
-        except Exception as e:  # noqa: BLE001 — a bad bind is a bad resource
+        except (OverflowError, ValueError, TypeError, sqlite3.InterfaceError,
+                sqlite3.IntegrityError, sqlite3.ProgrammingError) as e:
             # Inside the guard, not after it. `extract_from_raw` succeeding does
             # not mean every field it produced can be STORED: a SEQUENCE past
             # SQLite's 64-bit INTEGER raised OverflowError right here, outside
@@ -270,6 +272,18 @@ class SyncEngine:
             # general rule is what matters: a resource we cannot cache is a
             # SKIPPED RESOURCE, exactly like one we cannot parse, and never a
             # reason to abandon the pass and lose the batch beside it.
+            #
+            # NARROW on purpose. A bare `except Exception` here would also
+            # swallow `OperationalError: database is locked`, `disk I/O error`
+            # and `database or disk is full` — transient conditions where the
+            # RESOURCE is fine — and dropping the cached row and letting the pass
+            # complete would advance the sync token past a change that was never
+            # stored. The item would then not be re-fetched until its etag next
+            # moved, so a real meeting would stop contributing a busy interval
+            # and the public page would offer its hour. Those must abort the
+            # transaction and be retried, which is what letting them propagate
+            # does. Listed here are the errors that mean "these bytes cannot be
+            # represented", which re-running cannot fix.
             log.warning("skipping uncacheable resource %s: %s", item.href, e)
             stats.skipped += 1
             stats.last_error = f"uncacheable resource {item.href}: {e}"

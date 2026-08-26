@@ -250,16 +250,48 @@ def _instances_before(rule, dtstart, window_end: date | datetime | None) -> floa
     return max(0.0, days) * _per_day(rule)
 
 
-def _rdate_count(comp) -> int:
-    """How many instants this component's RDATE properties name."""
+def _rdate_count(comp, window_start, window_end) -> int:
+    """How many instants this component's RDATE properties name INSIDE the window.
+
+    Restricted to the window, and that restriction is the whole correctness of
+    the guard below. Counting the LIFETIME list and pricing it against
+    `_occurrence_cap` — which is a per-WINDOW bound — refuses an ordinary
+    resource: "every weekday for three years" is 780 RDATE instants, which any
+    client can write, and it was refused for every window including ones holding
+    none of them. On the calendar that collapses the resource to its master row;
+    on the booking path `blocking=True` marks the owner busy for the entire query
+    window, so one such resource zeroes out their public availability. That is a
+    worse outcome than the flood this guard exists to stop.
+
+    Counting is cheap and expansion is not — the values are already parsed by
+    `Calendar.from_ical`, so this is comparisons, while `query.between`
+    materialises every component. A value that cannot be read is COUNTED rather
+    than skipped: the guard must not be silently disarmed by input it cannot
+    price.
+    """
     rdates = comp.get("RDATE")
     if rdates is None:
         return 0
+    lo, hi = _as_datetime(window_start), _as_datetime(window_end)
     total = 0
     for prop in (rdates if isinstance(rdates, list) else [rdates]):
         # `dts` is icalendar's parsed list for one RDATE line; a property it
         # could not parse has none, and counts as the single line it is.
-        total += len(getattr(prop, "dts", None) or [None])
+        dts = getattr(prop, "dts", None)
+        if not dts:
+            total += 1
+            continue
+        for entry in dts:
+            value = getattr(entry, "dt", entry)
+            if isinstance(value, tuple):        # VALUE=PERIOD -> (start, end|dur)
+                value = value[0]
+            try:
+                when = _as_datetime(value)
+            except (TypeError, ValueError):
+                total += 1
+                continue
+            if lo <= when < hi:
+                total += 1
     return total
 
 
@@ -267,6 +299,7 @@ def _pathological_rule(
     cal: Calendar,
     window_end: date | datetime | None = None,
     occurrence_cap: int | None = None,
+    window_start: date | datetime | None = None,
 ) -> str | None:
     """Why this resource must not be expanded, or None if it is safe.
 
@@ -302,12 +335,12 @@ def _pathological_rule(
         #
         # An RDATE list is its own occurrence count, so unlike a rule it needs no
         # estimate: it is refused when it alone cannot fit the window's cap.
-        if occurrence_cap is not None:
-            count = _rdate_count(comp)
+        if occurrence_cap is not None and window_start is not None and window_end is not None:
+            count = _rdate_count(comp, window_start, window_end)
             if count > occurrence_cap:
                 return (
-                    f"RDATE names {count} instants, more than the "
-                    f"{occurrence_cap} occurrences this window can hold"
+                    f"RDATE names {count} instants inside this window, more than "
+                    f"the {occurrence_cap} occurrences it can hold"
                 )
         rrules = comp.get("RRULE")
         if rrules is None:
@@ -532,7 +565,8 @@ def expand_occurrences(
     cap = (max_occurrences if max_occurrences is not None
            else _occurrence_cap(window_start, window_end))
     cal = Calendar.from_ical(raw_ics)
-    why = _pathological_rule(cal, window_end, occurrence_cap=cap)
+    why = _pathological_rule(cal, window_end, occurrence_cap=cap,
+                             window_start=window_start)
     if why is not None:
         raise ValueError(f"refusing to expand recurrence: {why}")
     override_anchors = _override_anchors(cal)

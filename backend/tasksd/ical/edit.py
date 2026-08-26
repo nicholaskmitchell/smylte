@@ -556,6 +556,33 @@ def _check_event_span(event: Event, edit: EventEdit) -> None:
     if start is None and end is None:
         return
 
+    # An edit that CLEARS the end is not an edit that omits one. `EditEvent.end`
+    # is `str | None` and `_parse_datelike(None)` is None, so `{"start": …,
+    # "end": null}` arrives here with `dtend` SUPPLIED-as-None — and validating
+    # it against the DTEND it is about to remove refused an edit that is
+    # internally consistent. `_apply_event_fields` drops the property two lines
+    # later; there is nothing left to disagree with.
+    clearing_end = edit.dtend is not UNSET and edit.dtend is None
+    if clearing_end and start is None:
+        return
+
+    # BEFORE the pair logic below, because that returns early when there is no
+    # DTEND to compare against — and this is exactly the shape where there is
+    # none. An event's length can be expressed as a DURATION instead, which is
+    # what phone clients write, and RFC 5545 §3.6.1 asks the same of it: a DATE
+    # start takes a NOMINAL, day-valued duration. Switching such an event to
+    # all-day used to leave `DTSTART;VALUE=DATE` beside `DURATION:PT1H`, which
+    # the read path then reports as all-day from DTSTART alone — so
+    # `busy_intervals` skipped it and the booking page offered its hour.
+    if start is not None and not isinstance(start, datetime) and event.get("DTEND") is None:
+        dur = event.get("DURATION")
+        if dur is not None and hasattr(dur, "dt") and isinstance(dur.dt, timedelta):
+            if dur.dt.total_seconds() % 86400:
+                raise ValueError(
+                    "this event's length is measured in hours, so it cannot become "
+                    "an all-day event without a new end; send both ends together"
+                )
+
     if start is not None and end is not None:
         if kind(start) != kind(end):
             raise ValueError(
@@ -566,7 +593,16 @@ def _check_event_span(event: Event, edit: EventEdit) -> None:
     else:
         incoming, other_key = (start, "DTEND") if start is not None else (end, "DTSTART")
         other = event.get(other_key)
-        if other is None:
+        # `hasattr(…, "dt")`, because a resource can carry the property TWICE and
+        # icalendar then hands back a list. Every other datelike reader in this
+        # file guards for it; without it this raised AttributeError, which is
+        # neither ValueError nor OverflowError, so `patch_event` did not map it
+        # and the event became permanently uneditable through the app.
+        if other is None or not hasattr(other, "dt"):
+            return
+        if start is not None and clearing_end:
+            # Moving the start while removing the end: nothing to compare, and
+            # the old DTEND is on its way out.
             return
         if kind(other.dt) != kind(incoming):
             raise ValueError(
