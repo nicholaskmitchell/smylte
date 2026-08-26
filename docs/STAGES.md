@@ -99,7 +99,7 @@ findings are closed**, each pinned first, as is the 8th from that review's own
 follow-up. The review's other 3, the ones Stage 3 itself caused, are closed —
 along with 3 more the follow-up found in those very fixes. See `## Filed during the Stage 3 adversarial review` in
 `docs/AUDIT.md`. One is deliberately **not** pinned; see
-"The one that is not pinned" below. The harness
+"The one that was not pinned" below. The harness
 described under *Stage 0* further down still applies unchanged; these pins live in
 their own files so the closed 2026-08-16 stages stay closed:
 
