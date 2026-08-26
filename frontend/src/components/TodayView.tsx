@@ -1747,6 +1747,14 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
   /** One row of the day, whichever group it is painting in. Every list renders
    *  through this — today's two and the look-back's six — so a fix to a row
    *  cannot reach one group and miss the others. */
+  // Where the dragged row STARTED, so each row can tell whether the drop lands
+  // above it or below. Read off `dayRows` rather than a map index, because
+  // `renderRow` is shared by eight groups and the index within a group is not
+  // the index in the day.
+  const dragIndex = useMemo(
+    () => (dragId ? dayRows.findIndex((r) => r.entry_id === dragId) : -1),
+    [dragId, dayRows])
+
   const renderRow = (e: DayEntry) => (
     <TodayRow key={e.entry_id} entry={e} task={taskFor(e)} tasksLoaded={loaded}
       color={colorOf(e.list)} onToggleTask={toggle} onToggleEntry={toggleEntry}
@@ -1792,6 +1800,15 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
       draggable={canArrange && e.kind !== 'habit' && !e.dropped_at}
       dragging={dragId === e.entry_id}
       dragOver={overId === e.entry_id && dragId !== null && dragId !== e.entry_id}
+      // Which EDGE the rule is drawn on. `moveRow` lands a downward drag AFTER
+      // the target — deliberately, and its comment says why — while
+      // `.today-row.drag-over` always painted the top edge, so on every downward
+      // drag the line the owner was aiming at sat one gap above where the row
+      // would actually go. The Tasks pane already carries this exact pair
+      // (`drag.below` + `.task-drag.drag-over.drag-below`); the Today tab is a
+      // separate, newer drag that never got it.
+      dragBelow={dragIndex >= 0
+        && dragIndex < dayRows.findIndex((r) => r.entry_id === e.entry_id)}
       onDragRow={setDragId}
       onDragOverRow={setOverId}
       onDropRow={(target) => {
@@ -2559,7 +2576,7 @@ function EstimateCell({ minutes, readOnly, label, onChange }: {
 function TodayRow({
   entry, task, tasksLoaded, color, count, readOnly, onToggleTask, onToggleEntry, onDrop,
   onEstimate,
-  draggable = false, dragging = false, dragOver = false,
+  draggable = false, dragging = false, dragOver = false, dragBelow = false,
   onDragRow, onDragOverRow, onDropRow, onDragEndRow,
 }: {
   entry: DayEntry
@@ -2590,6 +2607,9 @@ function TodayRow({
   dragging?: boolean
   /** Something else is being carried and is currently over this row. */
   dragOver?: boolean
+  /** The dragged row started ABOVE this one, so the drop lands below it and the
+   *  rule belongs on the bottom edge. Only consulted while `dragOver`. */
+  dragBelow?: boolean
   onDragRow?: (entryId: string) => void
   onDragOverRow?: (entryId: string) => void
   onDropRow?: (entryId: string) => void
@@ -2636,7 +2656,8 @@ function TodayRow({
   const cls = ['today-row', isHabit && 'today-habit', dropped && 'today-dropped',
     moved && 'today-moved',
     done && 'done', gone && 'gone', draggable && 'today-draggable',
-    dragging && 'today-dragging', dragOver && 'drag-over'].filter(Boolean).join(' ')
+    dragging && 'today-dragging', dragOver && 'drag-over',
+    dragOver && dragBelow && 'today-below'].filter(Boolean).join(' ')
 
   // The leftmost cell, in three states rather than two. Lifted out of the JSX
   // because a three-armed conditional inside it cannot be commented arm by arm,
