@@ -1063,8 +1063,15 @@ Run a stage on its own:
 ```
 cd backend  && python -m pytest -m stage3          # one stage
 cd backend  && python -m pytest -m backlog -rxX    # the whole backlog, itemised
-cd frontend && npx vitest run backlog              # the SPA pins
+cd frontend && npx vitest run backlog              # the SPA pins, BOTH projects
+cd frontend && npm run test:browser                # the layout tier on its own
 ```
+
+That third line now spans two vitest projects and launches Chromium for the
+second of them: since `bcf38cf` the SPA has a `browser` project alongside `unit`,
+and the 2026-08-25 stage 4 put three pins in it. `npm test` is the unit project
+alone (`vitest run --project unit`), so a backlog pin in a `*.browser.test.tsx`
+file is NOT covered by it — CI runs both, in separate steps.
 
 ### Two strengths of pin
 
