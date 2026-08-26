@@ -492,12 +492,10 @@ def test_a_good_token_still_verifies_while_the_refresh_is_cooling_down(
 # ── AUDIT: nothing bounds the total anonymous scrypt work — the login limiter ──
 # ── is keyed only on the client /64 ──────────────────────────────────────────
 
-@pytest.mark.xfail(strict=True, reason="the login limiter is keyed per client /64 and "
-                                       "nothing bounds the total, so one routed /48 has "
-                                       "65536 independent counters and the real ceiling "
-                                       "on guesses is CPU")
 def test_the_anonymous_guess_budget_is_bounded_across_client_addresses(tmp_path, monkeypatch):
     """Five guesses per fifteen minutes, per key — and the key is the caller's.
+
+    **CLOSED.** The marker is gone and this is an ordinary regression test now.
 
     `limiter_key` collapses IPv6 to its /64, which is the right unit for one
     customer and the wrong unit for a budget: a routed /48 is 65 536 of them, each
@@ -549,6 +547,41 @@ def test_the_anonymous_guess_budget_is_bounded_across_client_addresses(tmp_path,
         f"{hashed['n']} password hashes were spent by one /48 rotating 40 of its "
         "own /64s — the per-key allowance is 5, so the budget multiplied by the "
         "number of addresses the caller chose to use"
+    )
+
+
+def test_logging_in_correctly_never_runs_the_owner_out_of_budget(tmp_path):
+    """CONTROL, and nothing else in the suite covers it.
+
+    The bound above is global, so it has no key to exempt the owner by: whatever
+    it refuses, it refuses to everyone. That makes the obvious over-correction a
+    budget the owner can exhaust by USING the app — sign in from the phone, the
+    laptop and the desktop, restart a client a few times, and the eleventh login
+    of the day meets a 429 on a correct password.
+
+    The repair is that a verified password hands its token back, which is what
+    makes this a GUESS budget rather than a login budget. Asserted as more
+    correct logins in a row than the bucket holds: with a capacity of ten, an
+    eleventh 200 is only possible if the first ten cost nothing.
+
+    One token back and not a reset, which this cannot see but
+    `HashBudget.give_back` and `RateLimiter.release`'s docstring both record:
+    handing back the whole budget would let an attacker alternate a known-good
+    password with guesses and never run out.
+    """
+    app = create_app(api_settings(str(tmp_path / "refund.db")))
+    transport = httpx.ASGITransport(app=app)
+
+    async def sign_in_repeatedly() -> list[int]:
+        async with httpx.AsyncClient(transport=transport, base_url="http://t") as c:
+            return [(await c.post("/api/login", json={
+                "username": "admin", "password": "testpass123"})).status_code
+                for _ in range(25)]
+
+    codes = asyncio.run(sign_in_repeatedly())
+    assert codes == [200] * 25, (
+        f"a correct password stopped working after {codes.index(429) if 429 in codes else '?'} "
+        "logins — the global budget is charging the owner for getting it right"
     )
 
 

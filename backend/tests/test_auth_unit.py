@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from tasksd.app import _EVENT_STATUS, _TASK_STATUS, _check_status
-from tasksd.auth import Authenticator, hash_password, limiter_key
+from tasksd.auth import Authenticator, HashBudget, hash_password, limiter_key
 
 
 def test_limiter_key_collapses_ipv6_to_its_64():
@@ -45,3 +45,52 @@ def test_check_status_validates_the_rfc_vocabulary():
         with pytest.raises(Exception) as e:
             _check_status(bad, allowed)
         assert getattr(e.value, "status_code", None) == 422
+
+
+# ── HashBudget: the global bound on anonymous hash work ─────────────────────
+# The route tests cover it end to end but all of them run in well under a
+# second, so the REFILL — the half that decides the sustained rate an attacker
+# actually gets — is never exercised by them. These drive the clock directly.
+
+def test_the_hash_budget_refills_at_its_stated_rate():
+    b = HashBudget(capacity=3, refill_s=10.0)
+    assert [b.take() for _ in range(4)] == [True, True, True, False]
+
+    # Two refill periods later, two tokens are back — and only two.
+    b._at -= 20.0                       # the monotonic clock, moved by hand
+    assert [b.take() for _ in range(3)] == [True, True, False]
+
+
+def test_the_hash_budget_never_banks_more_than_its_capacity():
+    """An idle week must not buy a week's worth of guesses in one burst — the
+    capacity is the whole point of a bucket over a counter."""
+    b = HashBudget(capacity=3, refill_s=10.0)
+    b._at -= 86400.0
+    assert [b.take() for _ in range(4)] == [True, True, True, False]
+
+
+def test_giving_a_token_back_returns_one_not_the_budget():
+    """`RateLimiter.record_success` clears its counter outright, and `release`'s
+    docstring records what that cost when it was used to undo one reservation.
+    A correct password hands back the token IT spent, so an attacker alternating
+    a known-good password with guesses gains one guess, not a reset."""
+    b = HashBudget(capacity=3, refill_s=10.0)
+    for _ in range(3):
+        b.take()
+    assert b.take() is False
+    b.give_back()
+    assert b.take() is True
+    assert b.take() is False
+
+    # And it cannot be used to mint budget out of nothing.
+    for _ in range(10):
+        b.give_back()
+    assert [b.take() for _ in range(4)] == [True, True, True, False]
+
+
+def test_the_hash_budget_says_how_long_to_wait():
+    b = HashBudget(capacity=1, refill_s=10.0)
+    assert b.retry_after() == 0
+    assert b.take() is True
+    assert 1 <= b.retry_after() <= 10
+

@@ -133,7 +133,7 @@ def _bearer(request: Request) -> str | None:
     return None
 
 
-def register(app, *, settings, authenticator, client_ip, run, login_hashes):
+def register(app, *, settings, authenticator, client_ip, run, login_hashes, hash_budget):
     """Mount the MCP endpoint and its authorization server onto `app`.
 
     Called from create_app before the static mount — that mount is a full-match
@@ -307,6 +307,16 @@ def register(app, *, settings, authenticator, client_ip, run, login_hashes):
         # verified — and reserved before the await, which is the property
         # RateLimiter.attempt exists to provide.
         _throttle(request, consent_limiter)
+        # ...and the GLOBAL hash budget, shared with /api/login. `consent_limiter`
+        # is per client, like the login limiter, so it bounds one caller and not
+        # the guess budget: an attacker rotating addresses gets a fresh counter
+        # each time. Charged at the same point for the same reason — a decline
+        # never reaches here, so declining still costs nothing.
+        if not hash_budget.take():
+            raise HTTPException(
+                status.HTTP_429_TOO_MANY_REQUESTS, "too many attempts, try later",
+                headers={"Retry-After": str(hash_budget.retry_after())},
+            )
         async with login_hashes:
             # scrypt is memory-hard (~16 MiB a call). /api/login bounds its
             # concurrency for exactly that reason and this runs the same hash on
@@ -338,6 +348,8 @@ def register(app, *, settings, authenticator, client_ip, run, login_hashes):
                 headers={"Cache-Control": "no-store", "X-Frame-Options": "DENY"},
             )
         consent_limiter.record_success(limiter_key(client_ip(request)))
+        # A verified password costs nothing globally — see HashBudget.
+        hash_budget.give_back()
 
         code = await run(request.app.state.service.oauth, oauth.issue_code, req,
                          scope=scope_str(granted))
