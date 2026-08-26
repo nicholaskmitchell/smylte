@@ -502,7 +502,7 @@ describe('2026-08-25 — reordering with one uid in two lists', () => {
 
   // ── AUDIT (open): data.tsx:588 — drag-to-reorder resolves the dragged row by
   //    bare uid, so with one UID in two lists the wrong row moves ────────────
-  it.fails('moves the row the user dragged, not the first one sharing its uid', async () => {
+  it('moves the row the user dragged, not the first one sharing its uid', async () => {
     // EVIDENCE. `TasksView`'s drop handler carefully resolves both `taskKey`s
     // back to real rows and then throws the disambiguation away, passing bare
     // uids to `reorder`, which re-finds them with
@@ -558,6 +558,72 @@ describe('2026-08-25 — reordering with one uid in two lists', () => {
     expect(m.reorderTasks.mock.calls[0][0]).toEqual([
       { list: 'l1', uid: 'X' }, { list: 'l2', uid: 'X' }, { list: 'l1', uid: 'b' },
     ])
+  })
+
+  // The SECOND MANIFESTATION the pin names in passing and does not assert:
+  // dropping one copy onto the other called `reorder('X','X')`, hit the
+  // `uid === target` early return and did nothing at all. Keying the lookups on
+  // `taskKey` while leaving that guard on the bare uid closes the pin and leaves
+  // this exactly as it was, so it gets its own test rather than an inference.
+  it('moves one copy onto the other, which share a uid', async () => {
+    m.lists.mockResolvedValue([home, work])
+    seedTasks([
+      task({ uid: 'X', list: 'l1', summary: 'A home copy', href: '/l1/X.ics', sort_order: 1 }),
+      task({ uid: 'b', list: 'l1', summary: 'B second', href: '/l1/b.ics', sort_order: 2 }),
+      task({ uid: 'X', list: 'l2', summary: 'C work copy', href: '/l2/X.ics', sort_order: 3 }),
+    ])
+    m.reorderTasks.mockResolvedValue({ ok: true } as never)
+    setup()
+    await screen.findByText('A home copy')
+
+    dragOnto('C work copy', 'A home copy')
+
+    await waitFor(() => expect(m.reorderTasks).toHaveBeenCalled())
+    expect(rowTitles()).toEqual(['C work copy', 'A home copy', 'B second'])
+    expect(m.reorderTasks.mock.calls[0][0]).toEqual([
+      { list: 'l2', uid: 'X' }, { list: 'l1', uid: 'X' }, { list: 'l1', uid: 'b' },
+    ])
+  })
+
+  // The TARGET is ambiguous too, and neither test above shows it: in both, the
+  // duplicated uid's first occurrence IS the row being dropped on, so a uid
+  // lookup lands on the right index by luck. Here the target is the SECOND copy
+  // — dropping onto it must put the row after it, not before the first copy.
+  it('drops onto the second copy sharing a uid, not the first', async () => {
+    m.lists.mockResolvedValue([home, work])
+    seedTasks([
+      task({ uid: 'X', list: 'l1', summary: 'A home copy', href: '/l1/X.ics', sort_order: 1 }),
+      task({ uid: 'b', list: 'l1', summary: 'B second', href: '/l1/b.ics', sort_order: 2 }),
+      task({ uid: 'X', list: 'l2', summary: 'C work copy', href: '/l2/X.ics', sort_order: 3 }),
+    ])
+    m.reorderTasks.mockResolvedValue({ ok: true } as never)
+    setup()
+    await screen.findByText('A home copy')
+
+    dragOnto('B second', 'C work copy')
+
+    await waitFor(() => expect(m.reorderTasks).toHaveBeenCalled())
+    expect(rowTitles()).toEqual(['A home copy', 'C work copy', 'B second'])
+  })
+
+  // CONTROL for the guard that moved: dropping a row on ITSELF is still a no-op,
+  // and must not renumber the account. `taskKey` equality is the whole
+  // difference between this and the test above.
+  it('writes nothing when a row is dropped on itself', async () => {
+    m.lists.mockResolvedValue([home])
+    seedTasks([
+      task({ uid: 'p', list: 'l1', summary: 'Alpha', href: '/l1/p.ics', sort_order: 1 }),
+      task({ uid: 'q', list: 'l1', summary: 'Bravo', href: '/l1/q.ics', sort_order: 2 }),
+    ])
+    m.reorderTasks.mockResolvedValue({ ok: true } as never)
+    setup()
+    await screen.findByText('Alpha')
+
+    dragOnto('Bravo', 'Bravo')
+
+    await new Promise((r) => setTimeout(r, 0))
+    expect(m.reorderTasks).not.toHaveBeenCalled()
+    expect(rowTitles()).toEqual(['Alpha', 'Bravo'])
   })
 
   // CONTROL (passes today, must keep passing). Ordinary reordering — distinct

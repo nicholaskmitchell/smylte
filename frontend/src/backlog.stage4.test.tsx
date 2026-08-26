@@ -157,7 +157,12 @@ describe('stage 4 — task data provider', () => {
     )
     await waitFor(() => expect(screen.getByTestId('order').textContent).toContain('a:1'))
 
-    const moving = d.reorder('b', 'a')            // in flight, will reject
+    // `reorder` takes the ROWS as of the 2026-08-25 stage 3 fix — a uid alone is
+    // ambiguous once one is copied into a second list. Only the ARGUMENT SHAPE
+    // changes here; the tasks named, the gesture and every assertion below are
+    // untouched.
+    const moving = d.reorder(task({ uid: 'b', sort_order: 2, summary: 'B' }),
+                             task({ uid: 'a', sort_order: 1, summary: 'A' }))
     // A concurrent write lands mid-flight — an ordinary edit, which the provider
     // applies to the same array the rollback was about to overwrite.
     m.patchTask.mockResolvedValue(
