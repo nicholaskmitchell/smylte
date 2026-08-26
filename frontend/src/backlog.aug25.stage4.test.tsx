@@ -7,10 +7,23 @@
  * `backlog.aug25.stage4.browser.test.tsx` on the tier from `bcf38cf`, and one
  * gets no pin at all (see docs/STAGES.md).
  *
- * **These findings are OPEN.** Every pin below is `it.fails`: it asserts the
- * CORRECTED behaviour and fails against the code as it stands, so the suite
- * stays green while the bug is open and goes red the moment it is fixed and the
- * pin needs reclassifying. Tests NOT marked `it.fails` are CONTROLS.
+ * **These findings are CLOSED**, and every test here is now an ordinary
+ * regression test that must stay green. Each pin was written first as
+ * `it.fails` — asserting the CORRECTED behaviour, green while the bug was open
+ * and red the moment it was fixed — and its marker was dropped in the commit
+ * that fixed it. The CONTROLS beside them were always ordinary passing tests.
+ *
+ * Tests added DURING remediation sit beside the originals and say so in their
+ * own comments. Most exist because a MUTATION escaped the pin: several pins here
+ * are deliberately repair-agnostic ("the pin does not name the copy", "asserted
+ * as operability, not as a repair"), which is right for a pin and leaves the
+ * shape that actually shipped unasserted — an inverted drop indicator, a retry
+ * button that re-runs nothing, an offline state with no banner.
+ *
+ * ONE pin's assertion was edited, and it is recorded in AUDIT.md: the month-grid
+ * pin's docstring says a roving tabindex passes, and its assertion took the
+ * first cell, which under a roving tabindex is at `-1`. It rejected the repair
+ * it named.
  *
  * Two shapes recur here, and both are about a failure the app cannot tell from
  * an absence. **Three findings turn a fetch failure into a confident lie** — one

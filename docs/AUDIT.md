@@ -1,8 +1,15 @@
 # Audit backlog
 
-**2 open**, all from the 2026-08-25 sweep at the top of this file; every finding
-from every earlier sweep is closed, as is the one this sweep's own remediation
-turned up (marked `· found in remediation`).
+**0 open.** Every finding in this file is closed — all five stages of the
+2026-08-25 sweep, the one its own remediation turned up (marked
+`· found in remediation`), and every finding from every earlier sweep.
+
+Two of them close on REVIEW rather than on a fix, and say so: the stage 5
+test-gap entries had correct subjects and missing coverage, so what landed is
+eighteen tests confirmed against four mutations. One ships **verified by hand on
+Windows only** — the WinForms dock order — because asserting it needs a realised
+control tree and a message loop, and a source-shape pin would read as coverage
+without being any.
 
 Findings from the adversarial audit sweeps — one deep finder per subsystem, then
 two independent verifiers per finding whose job is to *refute* it. Everything
@@ -506,7 +513,7 @@ generated for, and (ii) every slot ends at or before `datetime.combine(day, w_en
 tzinfo=tz)` as an instant — both fail today for America/Nuuk 2026-03-28 with an
 18:00-23:30 window.
 
-#### [ ] Test gap: no test exercises buffer_minutes across a DST transition — reverting pad() to wall-clock arithmetic passes the entire backend suite
+#### [x] Test gap: no test exercises buffer_minutes across a DST transition — reverting pad() to wall-clock arithmetic passes the entire backend suite
 `backend/tests/test_scheduling.py:229` · **medium** · test-gap · stage 5
 
 `pad` carries an explicit comment that it widens the INSTANT rather than the wall clock,
@@ -548,6 +555,10 @@ buffer` compared as instants, not as local values. The spring-forward case above
 implementation and passes against the current one.
 
 **Covered by** `test_a_buffer_is_real_time_on_both_sides_of_a_transition` (three cases) and `test_the_buffer_a_spring_forward_slot_list_actually_honours` in `backend/tests/test_backlog_aug25_stage5.py`.
+
+**Closed on REVIEW, not on a fix**, which is what a test-gap finding closes on when its subject turns out to be correct. `pad` already widened the instant rather than the wall clock; the gap was that nothing said so. The tests named above were written, confirmed to fail against the mutation this entry itself proposes (`pad` → `Interval(iv.start - b, iv.end + b)`, which passes the entire rest of the backend suite), and left as ordinary passing tests with no marker — an `xfail(strict=True)` over correct code XPASSes and reds the build the moment it runs.
+
+The assertions compare INSTANTS, not local values: every datetime in the scheduling tests shares one `ZoneInfo` object, and CPython short-circuits `==` to a naive field comparison when `self.tzinfo is other.tzinfo`, so a local comparison would agree with a wall-clock `pad` across the very transition it is written to catch.
 
 **NOT a pin.** `pad` is already correct, so these are ORDINARY PASSING TESTS: an `xfail(strict=True)` over correct code XPASSes and reds the build. Both were confirmed against the audit's own mutation — with `pad`'s body replaced by `Interval(iv.start - b, iv.end + b)`, spring-forward answers 08:30Z instead of 09:30Z, fall-back 09:30Z instead of 08:30Z, and the slot list offers five starts instead of three. The gap is filled; the entry stays open until the sweep is reviewed, like the other 33.
 
@@ -720,7 +731,7 @@ The bucket is charged AFTER the per-client limiter, and the order is load-bearin
 
 Measured after: **200 requests from 40 addresses spend 10 hashes**, where they spent 200. The two existing lockout tests are `@pytest.mark.radicale` and could not run here, so their contracts were driven in-process against the real app instead — five wrong passwords still 401 then 429 with a Retry-After, 60 concurrent guesses still evaluate exactly five, three fumbles then the right password still gets in. A control was added for the one thing nothing covered: 25 correct logins in a row must all succeed.
 
-#### [ ] Test gap: AccessVerifier and the whole access_required posture have zero coverage, including the third fail-closed startup refusal
+#### [x] Test gap: AccessVerifier and the whole access_required posture have zero coverage, including the third fail-closed startup refusal
 `backend/tests/test_security.py:418` · **low** · test-gap · stage 5
 
 `backend/tasksd/access.py` is a security control with no test of any kind. Grepping the
@@ -760,6 +771,10 @@ plain `pytest.raises(RuntimeError, match="refusing to start unprotected")` for t
 startup invariant alongside the two already there.
 
 **Covered by** twelve tests in `backend/tests/test_backlog_aug25_stage5.py`: the off-path no-op, the 401 on a missing header, a valid assertion passing, 403 for a wrong `aud`/`iss`/expiry, 403 for an unparseable or `alg=none` token, `test_a_jwks_outage_fails_closed`, and `test_access_required_without_its_configuration_refuses_to_start` for the third startup refusal beside the two `test_security.py` already covers.
+
+**Closed on REVIEW, same as its sibling.** The posture was correct; nothing tested it. The twelve tests were confirmed against three mutations — the sympathetic `except PyJWKClientConnectionError: return` (an outage turning the edge gate into a no-op), the `access_required` startup guard removed, and `decode(..., options={"verify_aud": False, "verify_iss": False})`. Each fails exactly the tests it should and nothing else.
+
+The first is the one worth reading twice: Access fails closed today only because `except Exception` happens to catch `PyJWKClientConnectionError` along with everything else, and before this file `pytest -q` had nothing to say about it. `verify` has since become `async` (stage 2's loop-blocking fix) and these tests moved with it; the fail-closed assertion is unchanged.
 
 **NOT a pin**, for the same reason: every one of these behaviours already works. Each was confirmed against the regression it guards — `except PyJWKClientConnectionError: return` (the sympathetic outage "fix" this entry names) makes the outage test the only failure in the suite; disabling the `access_required` guard in `create_app` fails all three startup cases; and `options={"verify_aud": False, "verify_iss": False}` fails exactly the two cases that tie an assertion to this app and this tenant.
 
