@@ -901,8 +901,8 @@ describe('2026-08-25 — clearing the dashboard', () => {
   /** Controlled the way App holds it — the finding is entirely about what
    *  happens on the render AFTER the change is fed back, so a harness that
    *  dropped the write would not see it. */
-  function Board({ initial }: { initial: DashboardModule[] }) {
-    const [layout, setLayout] = useState(initial)
+  function Board({ initial }: { initial: DashboardModule[] | null }) {
+    const [layout, setLayout] = useState<DashboardModule[] | null>(initial)
     return (
       <DataProvider rev={0} onExpire={vi.fn()}>
         <HomeView rev={0} onExpire={vi.fn()} layout={layout} onLayoutChange={setLayout} />
@@ -912,7 +912,7 @@ describe('2026-08-25 — clearing the dashboard', () => {
 
   // ── AUDIT (open): HomeView.tsx:52 — removing the last Home module puts the
   //    five stock modules back on the board ─────────────────────────────────
-  it.fails('does not put five modules back when the last one is removed', async () => {
+  it('does not put five modules back when the last one is removed', async () => {
     // EVIDENCE. `const committed = layout.length ? layout : DEFAULT_LAYOUT`
     // treats an empty saved layout as "never arranged". `removeModule` on the
     // final module produces `[]`, `commit` passes that to `onLayoutChange`, App
@@ -945,6 +945,27 @@ describe('2026-08-25 — clearing the dashboard', () => {
       expect(labels(), 'removing the last module put the stock arrangement back')
         .toEqual([])
     }
+  })
+
+  // The OTHER half of separating the two values, which the pin cannot see because
+  // it starts from a board that already has modules on it: an account that has
+  // NEVER arranged anything must still get the stock five. Collapsing them the
+  // other way — treating null as empty — closes the pin by handing every new
+  // account a blank page.
+  it('still gives a never-arranged account the stock modules', async () => {
+    render(<Board initial={null} />)
+
+    await waitFor(() => expect(labels().length).toBeGreaterThan(1))
+  })
+
+  // …and the two are genuinely distinct at the boundary: an EMPTY array is a
+  // board the owner cleared and it stays cleared, where before it was
+  // indistinguishable from never having arranged one.
+  it('keeps a deliberately emptied board empty', async () => {
+    render(<Board initial={[]} />)
+
+    await screen.findByRole('button', { name: 'Arrange' })
+    expect(labels()).toEqual([])
   })
 
   // CONTROL (passes today, must keep passing). Removing one of several still
