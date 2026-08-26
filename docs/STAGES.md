@@ -16,12 +16,12 @@ every pin named there is an ordinary test that must stay green.
 
 # Sweep — 2026-08-25 · OPEN
 
-34 findings survived verification and none is fixed. **All five stages are now
-staged**: 31 carry an executable pin (7 + 12 + 12), one is deliberately unpinned
-with its reason written down (stage 4, the WinForms dock order), and stage 5's
-two test gaps came out as ordinary passing tests because their subjects were
-correct. This section is the live worklist — the only one in this file — and
-everything below it is history.
+34 findings survived verification. **All five stages are staged, and STAGE 2 IS
+CLOSED** — 7 fixed, 27 open. The rest carry an executable pin (12 + 12), one is
+deliberately unpinned with its reason written down (stage 4, the WinForms dock
+order), and stage 5's two test gaps came out as ordinary passing tests because
+their subjects were correct. This section is the live worklist — the only one in
+this file — and everything below it is history.
 
 Same five buckets and the same sorting criteria as the two closed sweeps: a
 finding lands in a stage by what its failure *does*, lower stage winning a tie,
@@ -30,20 +30,26 @@ has not changed.
 
 **Stage 1 is empty**, and that is a result rather than an omission. The sweep's
 eight HIGHs are all closed already, and nothing left puts untrusted input into an
-unhandled exception. The remaining 34 are 16 medium and 18 low.
+unhandled exception. The 34 were 16 medium and 18 low; the 27 still open are 15
+medium and 12 low.
 
 | stage | findings | pins |
 |---|---|---|
 | 1 | 0 | — |
-| 2 | 7 | `backend/tests/test_backlog_aug25_stage2.py`, `desktop/Smylte.Desktop.Tests/LocalServerTests.cs` |
+| 2 ✅ | 7 · **closed** | `backend/tests/test_backlog_aug25_stage2.py`, `desktop/Smylte.Desktop.Tests/LocalServerTests.cs` |
 | 3 | 12 | `backend/tests/test_backlog_aug25_stage3.py`, `frontend/src/backlog.aug25.stage3.test.tsx` |
 | 4 | 13 | `frontend/src/backlog.aug25.stage4.test.tsx`, `frontend/src/backlog.aug25.stage4.browser.test.tsx` |
 | 5 | 2 | `backend/tests/test_backlog_aug25_stage5.py` (no markers — see below) |
 
-## Stage 2 — Abuse & resource exhaustion
+## Stage 2 — Abuse & resource exhaustion ✅ DONE
 
-7 findings · 1 medium, 6 low · **OPEN** · `backend/tests/test_backlog_aug25_stage2.py`,
+7 findings · 1 medium, 6 low · **closed** · `backend/tests/test_backlog_aug25_stage2.py`,
 `desktop/Smylte.Desktop.Tests/LocalServerTests.cs`
+
+All seven are fixed and ticked in `docs/AUDIT.md`; every marker is gone and those
+tests are ordinary regression tests that must stay green. Six commits, one per
+fix, except findings 4 and 5 which were always one fix in two places. **One needs
+a hand on the server** — see "The one that does not land by merging" below.
 
 Work or storage an adversary — or, twice here, ordinary use — can make unbounded,
 and controls that do not cover what they say they cover.
@@ -111,6 +117,90 @@ connection error), and the alarm was confirmed by adding a CSP header to
 Unlike every other test in `LocalServerTests.cs`, this one has to `Start()` the
 server. The rest are pure path arithmetic over `Resolve`; the header set is only
 observable on a response.
+
+### What remediation taught, and what it cost
+
+**A pin that counts is not a pin that checks.** The `review_day` pin counts calls
+to `list_tasks`, which is the right assertion for the finding — the defect is
+`O(days × lists)` — and it is satisfied by a hoist that builds the WRONG map and
+answers `task: null` for every row. So a control went in beside it asserting that
+the range arm and the single-day arm give the same answer, bucket for bucket.
+**Its first draft spanned one day and passed a deliberately wrong hoist**
+(index built from the first day's lists), because with one plan there is nothing
+to get wrong. It now spans two days naming DIFFERENT lists. Every fix in this
+stage was subsequently run against two or three hand-written wrong versions of
+itself; two of the seven controls were widened as a result.
+
+**The obvious reading of a suggested fix was wrong twice, in opposite ways.**
+
+* For the Access `kid`, the audit says "cache negative kids for a short
+  interval". A per-kid cache is exactly what that describes and it buys *nothing*
+  — `kid` is a header field the caller writes, so the attacker never repeats one.
+  Measured with the cache in place: still one fetch per request across ten
+  distinct kids, and the pin stayed red. The bound had to go on the FETCH, not on
+  the kid.
+* For the login budget, the audit offers "a global token bucket **or** a global
+  failure counter with its own lockout". The second is a denial of service in its
+  own right: a global counter has no key to exempt the owner by, so an attacker
+  who burns it locks the account holder out for the window. The bucket also had
+  to REFUND a verified password, or the owner exhausts it by using the app —
+  which is what the new control asserts, and what nothing in the suite covered.
+
+**Two tests were edited as part of a fix, and both are on the record.**
+
+* `AccessVerifier.verify` became `async def`, so eight synchronous call sites
+  across two files were wrapped in `asyncio.run(...)`. Every assertion is
+  unchanged; only the call is. That is an API-shape change rather than a pin
+  edit, and the loop-blocking pin anticipated it in as many words ("offloading to
+  a thread and going async are both correct repairs").
+* The systemd pin's ANTI-VACUITY GUARD was widened. It read `assert rw` — "the
+  unit declares no ReadWritePaths at all, has it been renamed?" — a fair question
+  while the answer was a `ReadWritePaths` line, and the wrong one the moment the
+  correct fix removed it: `StateDirectory=tasks` makes the directive unnecessary,
+  so a unit with none was about to be indistinguishable from a unit that had lost
+  its writable path entirely. It now accepts either. **The assertion that detects
+  the finding was not touched**, and the distinction is the one worth keeping:
+  weakening the assertion is pin-fixing, correcting a guard that mis-modelled the
+  fix space is not.
+
+**Docker was unavailable, and 240 tests skip without it.** Seven of the nine
+`review_day` tests and both login-lockout tests are `@pytest.mark.radicale`, so
+the two changes with the widest blast radius had almost no local coverage. Rather
+than defer to CI, their contracts were driven in-process against a real
+`TaskService` and a real `create_app` before each landed — the uniform `task` key
+on every kind, an unplanned day in a range carrying no entries, read-only-ness,
+five wrong passwords still locking out, sixty concurrent guesses still evaluating
+exactly five. Two probes, thrown away after. Worth repeating in stages 3-5, which
+touch the same suites.
+
+**One duplication was closed that no behavioural test could reach.** The desktop
+client cannot borrow the backend's policy at runtime, so it builds its own — and
+each suite only ever compared its own side. `test_the_desktop_client_builds_the_
+same_policy` reads `LocalServer.cs` and compares the directive sets. It is a
+source-shape assertion, which `test_backlog_stage5.py`'s header disowns as a
+SUBSTITUTE for a behavioural one; it is not a substitute here, it is the only
+reader that sees both sides.
+
+### The one that does not land by merging
+
+Finding 6 moves the SQLite cache to `/var/lib/tasks/tasks.db`, granted by
+`StateDirectory=tasks`. `setup.sh` will not rewrite an `/etc/tasks/tasks.env`
+that already exists, so **an install made before this change still points
+`TASKS_DB` at a path the narrowed sandbox no longer grants, and the service will
+fail to open its cache.** `docs/DEPLOY.md` carries the one-time migration: stop,
+move `tasks.db` and its `-wal`/`-shm` sidecars, rewrite `TASKS_DB`, start. Move
+the file rather than letting a fresh one appear — it holds the sidecar-class
+tables a resync cannot rebuild.
+
+`setup.sh` deliberately gained no `install -d` for the new directory. systemd
+creates it, and a new absolute path in that script would escape the four literals
+`test_backlog_aug19_stage45.py`'s harness redirects and really create
+`/var/lib/tasks` on whatever machine ran the suite. Checked after the change that
+it does not.
+
+And what the file assertion still cannot say: that systemd then REFUSES the
+write. That needs a real host, and it stays recorded here as verifiable only
+there — as does the WinForms dock order in stage 4, for the same class of reason.
 
 ## Stage 3 — Silent data corruption
 
