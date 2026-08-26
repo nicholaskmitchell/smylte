@@ -80,17 +80,46 @@ export function SchedulingView({ rev, onExpire }: { rev: number; onExpire: () =>
     }
   }
 
+  // Both writes below roll back ONLY the row that failed, functionally — never a
+  // whole-array snapshot. `data.tsx` carries this lesson twice, at `patchLocal`
+  // and at the reorder: "restore only the affected task — never a whole-array
+  // snapshot, which would clobber interleaved changes to other tasks". Here the
+  // interleaved change is another link's toggle, and the array captured at
+  // render holds it in its OLD state. Rolling that back left the owner looking
+  // at a link marked Live that the server had switched off — and "fixing" it by
+  // tapping the toggle turns it back on, publishing a URL they had disabled.
+  //
+  // Functional, not just narrow: `links` inside these closures is the value from
+  // the render the tap came from, so two writes in flight would each compute
+  // their `map` over a stale array and the later setState would win outright.
+
   const toggleEnabled = async (l: BookingLink) => {
-    const prev = links
-    setLinks(links.map((x) => (x.token === l.token ? { ...x, enabled: !l.enabled } : x)))
+    setLinks((ls) => ls.map((x) => (x.token === l.token ? { ...x, enabled: !l.enabled } : x)))
     const updated = await guard(() => api.patchSchedulingLink(l.token, { enabled: !l.enabled }))
-    if (!updated) setLinks(prev)
+    // Only the FIELD this write touched is restored, not the whole row `l`: an
+    // edit to the same link can land while the toggle is in flight (the editor
+    // replaces the row with the server's DTO), and putting `l` back wholesale
+    // reverts that title the same way the array snapshot reverted the other
+    // link. `l.enabled` is the value from before the tap, not a negation of
+    // whatever is there now, so a second failure cannot leave it flipped.
+    if (!updated) {
+      setLinks((ls) => ls.map((x) => (x.token === l.token ? { ...x, enabled: l.enabled } : x)))
+    }
   }
 
   const remove = async (l: BookingLink) => {
-    const prev = links
-    setLinks(links.filter((x) => x.token !== l.token))
-    if ((await guard(() => api.deleteSchedulingLink(l.token))) === undefined) setLinks(prev)
+    // Its position is remembered rather than the array, so a failed delete puts
+    // one link back where it was instead of resurrecting links deleted since.
+    const at = links.findIndex((x) => x.token === l.token)
+    setLinks((ls) => ls.filter((x) => x.token !== l.token))
+    if ((await guard(() => api.deleteSchedulingLink(l.token))) === undefined) {
+      setLinks((ls) => {
+        if (ls.some((x) => x.token === l.token)) return ls   // a refetch beat us to it
+        const back = [...ls]
+        back.splice(Math.min(at < 0 ? back.length : at, back.length), 0, l)
+        return back
+      })
+    }
   }
 
   /** Whether the write landed — the modal needs it to clear its in-flight guard.

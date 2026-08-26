@@ -1,6 +1,6 @@
 # Audit backlog
 
-**24 open**, all from the 2026-08-25 sweep at the top of this file; every finding
+**23 open**, all from the 2026-08-25 sweep at the top of this file; every finding
 from every earlier sweep is closed.
 
 Findings from the adversarial audit sweeps — one deep finder per subsystem, then
@@ -1869,7 +1869,7 @@ failure render an error card with a "Try again" button that re-runs the effect. 
 the same repair already applied to ArchivedCalendarsSection and the calendar month
 fetch.
 
-#### [ ] A failed booking-link toggle rolls back a whole-array snapshot, reverting a concurrent toggle the server accepted
+#### [x] A failed booking-link toggle rolls back a whole-array snapshot, reverting a concurrent toggle the server accepted
 `frontend/src/components/SchedulingView.tsx:56` · **medium** · bug · minor · stage 3
 
 `toggleEnabled` (and `remove`, line 63) captures `const prev = links` — the entire array
@@ -1900,6 +1900,12 @@ setLinks((ls) => ls.map((x) => (x.token === l.token ? l : x)))`. For `remove`, r
 only `l` (at its recorded index) rather than restoring `prev`.
 
 **Pinned by** `2026-08-25 — a failed booking-link toggle > rolls back only the link that failed` in `frontend/src/backlog.aug25.stage3.test.tsx`.
+
+**Fixed** with the suggested fix in both methods, and then one level finer than it asks. `toggleEnabled` rolls back functionally and per row — but restores only the FIELD it wrote (`{ ...x, enabled: l.enabled }`), not the row `l`. The same link can be EDITED while its toggle is in flight: the editor's save replaces that row with the server's DTO, and putting the pre-tap row back wholesale reverts the new title — which is this finding's own defect, one level down. `l.enabled` rather than a negation of whatever is there now, so a second failure cannot leave it flipped. `test ... keeps an edit that landed while the same link's toggle was in flight` pins it; restoring `l` wholesale passes the pin and the control and fails there.
+
+**`remove` remembers the POSITION, not the array**, which is what `data.tsx`'s reorder does with `sort_order` for the same reason. A failed delete re-inserts one link at the index it was removed from, and only if it is not already back (a refetch may have beaten it). Appending instead passes the pin and the control — the finding's own repro deletes the last link, where "at its index" and "at the end" are the same place — so the test deletes the FIRST of three and asserts the order.
+
+**The optimistic paints were made functional too**, though nothing pins that: `setLinks(links.map(...))` reads the array from the render the tap came from, so two writes started before either repaints would each map a stale array and the later setState would win outright. React batches inside a render, so this is not reachable through jsdom user events and is recorded as defensive rather than claimed as tested.
 
 #### [x] The booking-link editor's scrim is still a bare onClick, so a drag-select releasing outside discards the whole form
 `frontend/src/components/SchedulingView.tsx:307` · **medium** · bug · minor
