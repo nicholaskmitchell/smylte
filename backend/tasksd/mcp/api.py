@@ -20,7 +20,7 @@ from __future__ import annotations
 import re
 import secrets
 from contextlib import contextmanager
-from datetime import date, datetime, time as time_of_day, timedelta
+from datetime import date, datetime, time as time_of_day, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from ..ical import EventEdit, TaskEdit, rrule_from_spec
@@ -119,6 +119,64 @@ def _hhmm(value: str, *, field: str) -> time_of_day:
         raise ToolError(f"{field}={value!r} is not a time. Use 'HH:MM'.") from None
 
 
+def _instant_in(value: date | datetime, zone) -> float:
+    """A date-or-datetime as an absolute instant, resolved in `zone`.
+
+    THE one resolution rule in this module, and it is one rule on purpose: this
+    file already had two, and their drifting apart was the whole of a finding.
+    `_due_instant` resolved a deadline in the owner's zone while the `due_before`
+    / `due_after` filters four lines from it went through `_as_dt`, which
+    flattens to the SERVER's wall clock — so `smylte_list_tasks` sorted a task by
+    one zone and filtered it by another, and disagreed with `service._due_day`
+    and with the SPA about which day a deadline falls on.
+
+    An all-day value becomes midnight; a naive time is read as the owner's; an
+    aware one keeps the instant it already names.
+    """
+    if not isinstance(value, datetime):
+        value = datetime.combine(value, time_of_day.min)
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=zone) if zone is not None else value.astimezone()
+    return value.timestamp()
+
+
+def _bound_instant(value, zone, *, field: str) -> float | None:
+    """A caller-supplied `due_before`/`due_after` bound, as an instant.
+
+    Parsed STRICTLY, unlike a deadline off the wire: `_parse_dt` refusing a value
+    the caller sent is a correct, actionable error, and the soft-fail in
+    `_due_parts` exists only because a cached value came from another CalDAV
+    client. See that function's note.
+    """
+    parsed = _parse_dt(value, field=field)
+    return None if parsed is None else _instant_in(parsed, zone)
+
+
+def _due_parts(raw, zone) -> tuple[float, float] | None:
+    """A deadline as `(due_at, overdue_at)`, both instants in `zone`.
+
+    Two numbers because a deadline expires later than it is due, and only for
+    an all-day one: `util.ts::isOverdue` is the app's own rule — "an all-day item
+    isn't overdue until its whole day has passed" — and `service._due_day`
+    resolves the day in `home_timezone`. Both are honoured here rather than a
+    third answer being invented. The day is added as WALL CLOCK, so a deadline
+    whose day contains a DST transition expires 23 or 25 hours later, not 24.
+    """
+    if not raw:
+        return None
+    try:
+        value = _parse_dt(raw, field="due")
+    except ToolError:
+        # Fail SOFT, and only here — see `_due_instant`.
+        return None
+    if value is None:
+        return None
+    due_at = _instant_in(value, zone)
+    if isinstance(value, datetime):
+        return due_at, due_at
+    return due_at, _instant_in(value + timedelta(days=1), zone)
+
+
 def _due_instant(t: dict, zone) -> float | None:
     """A task's deadline as an absolute instant, the way `dueAt` computes it.
 
@@ -136,29 +194,8 @@ def _due_instant(t: dict, zone) -> float | None:
     uses for floating times. None keeps the previous behaviour (the server's
     local zone), which is what a caller with no service handle gets.
     """
-    raw = t.get("due")
-    if not raw:
-        return None
-    try:
-        value = _parse_dt(raw, field="due")
-    except ToolError:
-        # Fail SOFT, and only here. `_parse_dt` refusing a value the CALLER sent
-        # is a correct, actionable error; refusing a value the CACHE holds is a
-        # different thing entirely, because that value came off the wire from
-        # another CalDAV client. This is a sort key applied to every row, so one
-        # unreadable due made the whole of `smylte_list_tasks` fail for the whole
-        # account — a single foreign VTODO taking the tool down. `_iso` no longer
-        # writes a repr into the column, but the rule stands regardless of how a
-        # row got that way, and `service._completions_by_day` already applies it
-        # to `completed_at`. An unreadable deadline sorts as no deadline.
-        return None
-    if value is None:
-        return None
-    if not isinstance(value, datetime):
-        value = datetime.combine(value, time_of_day.min)
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=zone) if zone is not None else value.astimezone()
-    return value.timestamp()
+    parts = _due_parts(t.get("due"), zone)
+    return None if parts is None else parts[0]
 
 
 def _intrinsic_order(t: dict, zone=None):
@@ -450,9 +487,16 @@ class McpApi:
 
     def list_tasks(self, list_id=None, *, include_done=False, due_before=None,
                    due_after=None, overdue_only=False, tag=None):
-        before = _as_dt(_parse_dt(due_before, field="due_before"))
-        after = _as_dt(_parse_dt(due_after, field="due_after"))
-        now = datetime.now()
+        # The OWNER's zone, the same one `_in_display_order` sorts by at the foot
+        # of this method. These two used to go through `_as_dt` — the server's
+        # wall clock — so the same call sorted a task by one zone and filtered it
+        # by another: with the process in UTC and the owner in America/Chicago,
+        # a deadline of 22:00 on Friday was excluded from "due before Saturday"
+        # and reported under Saturday instead.
+        zone = self._home_zone()
+        before = _bound_instant(due_before, zone, field="due_before")
+        after = _bound_instant(due_after, zone, field="due_after")
+        now = datetime.now(timezone.utc).timestamp()
         rows: list[dict] = []
         for href in self._task_lists(list_id):
             rows.extend(self._svc.list_tasks(href, include_done=True))
@@ -463,17 +507,20 @@ class McpApi:
             if tag and tag not in (t.get("tags") or []):
                 continue
             if before or after or overdue_only:
-                try:
-                    due = _as_dt(_parse_dt(t.get("due"), field="due"))
-                except ToolError:
-                    continue          # unreadable, same as undated — see `_due_instant`
-                if due is None:
-                    continue          # a filter on the deadline excludes undated work
-                if before and due >= before:
+                parts = _due_parts(t.get("due"), zone)
+                if parts is None:
+                    # Undated, or unreadable — which sorts and filters the same
+                    # way. A filter on the deadline excludes work that has none.
                     continue
-                if after and due < after:
+                due, overdue_at = parts
+                if before is not None and due >= before:
                     continue
-                if overdue_only and (due >= now or t["completed"] or t["cancelled"]):
+                if after is not None and due < after:
+                    continue
+                # `overdue_at`, not `due`: an all-day deadline is not overdue
+                # until its whole day has passed, which is `isOverdue`'s rule on
+                # the client and the one this now shares.
+                if overdue_only and (overdue_at > now or t["completed"] or t["cancelled"]):
                     continue
             out.append(t)
         return _in_display_order(out, self._home_zone())
