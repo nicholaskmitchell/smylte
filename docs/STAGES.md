@@ -16,8 +16,12 @@ every pin named there is an ordinary test that must stay green.
 
 # Sweep — 2026-08-25 · OPEN
 
-34 findings survived verification and none is fixed. This section is the live
-worklist — the only one in this file — and everything below it is history.
+34 findings survived verification and none is fixed. **All five stages are now
+staged**: 31 carry an executable pin (7 + 12 + 12), one is deliberately unpinned
+with its reason written down (stage 4, the WinForms dock order), and stage 5's
+two test gaps came out as ordinary passing tests because their subjects were
+correct. This section is the live worklist — the only one in this file — and
+everything below it is history.
 
 Same five buckets and the same sorting criteria as the two closed sweeps: a
 finding lands in a stage by what its failure *does*, lower stage winning a tie,
@@ -34,7 +38,7 @@ unhandled exception. The remaining 34 are 16 medium and 18 low.
 | 2 | 7 | `backend/tests/test_backlog_aug25_stage2.py`, `desktop/Smylte.Desktop.Tests/LocalServerTests.cs` |
 | 3 | 12 | `backend/tests/test_backlog_aug25_stage3.py`, `frontend/src/backlog.aug25.stage3.test.tsx` |
 | 4 | 13 | `frontend/src/backlog.aug25.stage4.test.tsx`, `frontend/src/backlog.aug25.stage4.browser.test.tsx` |
-| 5 | 2 | *not yet written* |
+| 5 | 2 | `backend/tests/test_backlog_aug25_stage5.py` (no markers — see below) |
 
 ## Stage 2 — Abuse & resource exhaustion
 
@@ -337,6 +341,63 @@ were five; the selector is now the header's own label. And the failed-day-read
 pin asserted its two halves in sequence, so the second never ran while the first
 was red — a fix to only one of them would have read as complete. Both halves are
 now one object assertion, which is the shape the month-grid pin already used.
+
+## Stage 5 — Delivery infrastructure & test gaps
+
+2 findings · 1 medium, 1 low · **OPEN** · `backend/tests/test_backlog_aug25_stage5.py`
+
+Both are the same shape: a control that exists, works, and has nothing holding it
+in place.
+
+| # | Finding | Where | Sev | Test |
+|---|---|---|---|---|
+| 1 | Test gap: no test exercises `buffer_minutes` across a DST transition — reverting `pad()` to wall-clock arithmetic passes the entire backend suite | `backend/tasksd/scheduling.py:239` | medium | `test_a_buffer_is_real_time_on_both_sides_of_a_transition`, `test_the_buffer_a_spring_forward_slot_list_actually_honours` |
+| 2 | Test gap: `AccessVerifier` and the whole `access_required` posture have zero coverage, including the third fail-closed startup refusal | `backend/tasksd/access.py:32` | low | twelve tests, from the off-path no-op to `test_a_jwks_outage_fails_closed` |
+
+### Neither is a pin, and that is the result rather than an omission
+
+**Both subjects turned out CORRECT**, so both are ordinary passing tests with no
+marker — `xfail(strict=True)` over correct code XPASSes and reds the build the
+moment it runs. This is the rule the aug19 sweep established the hard way (three
+of its four gaps came out ordinary; the fourth found two live defects), and it is
+why the plan for this stage was *write both, run both, THEN classify* rather than
+deciding in advance.
+
+So `test_backlog_aug25_stage5.py` is the one file in this sweep with no markers,
+sitting beside three that carry them. Its findings stay OPEN in AUDIT.md with a
+`**Covered by**` note rather than a `**Pinned by**` one: the gap itself is
+filled, and the entry is ticked when the sweep is reviewed like the other 32.
+
+### Every one confirmed against the regression it exists to catch
+
+A test written over correct code and never seen red is a claim, not evidence —
+which is precisely the criticism finding 1 makes of the existing DST battery. So
+all eighteen were run against four mutations, each applied alone and reverted:
+
+| mutation | what it stands for | what fails |
+|---|---|---|
+| `pad` → `Interval(iv.start - b, iv.end + b)` | the audit's own mutation, which passes the entire rest of the suite | both transition cases and the slot list |
+| `verify` → `except PyJWKClientConnectionError: return` | the sympathetic "don't lock people out during a Cloudflare outage" change | `test_a_jwks_outage_fails_closed`, and nothing else |
+| the `access_required` guard in `create_app` disabled | the third fail-closed startup refusal being dropped in a refactor | all three startup cases |
+| `decode(…, options={"verify_aud": False, "verify_iss": False})` | a verifier that checks the signature alone | the wrong-audience and wrong-issuer cases |
+
+The second row is the one worth reading twice. Access fails closed today only
+because `except Exception` happens to catch `PyJWKClientConnectionError` along
+with everything else; one sympathetic early `return` turns the edge gate into a
+no-op for the duration of an outage, and before this file `pytest -q` had nothing
+to say about it.
+
+Two implementation notes, both about comparing times:
+
+* The `pad` assertions compare **instants**, not local values. Every datetime in
+  the scheduling tests shares one `ZoneInfo` object and CPython short-circuits
+  `==` to a naive field comparison when `self.tzinfo is other.tzinfo`, so a local
+  comparison cannot tell the two versions of `pad` apart at all. That is the same
+  trap the closed fall-back findings were about, one function over.
+* The ordinary-day case in the same battery is not padding: it is what makes a
+  failure on the two transition days attributable to the transition rather than
+  to the shape of the test. A week after the spring forward the zone is CDT all
+  day and the two versions of `pad` agree, which is the point.
 
 # Sweep — 2026-08-19 · closed
 
