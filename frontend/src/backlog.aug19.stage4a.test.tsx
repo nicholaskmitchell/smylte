@@ -81,6 +81,16 @@ const theme = (o: Partial<CustomTheme> = {}): CustomTheme => ({
 /** userEvent has to be told about the fake clock or every await hangs. */
 const setupUser = () => userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
 
+/** What `POST /api/scheduling/links` actually answers with: the stored row,
+ *  including the minted token the list keys and links on. */
+const CREATED = {
+  token: 'tok-new', title: 'Intro call', description: null, calendar: 'c1',
+  calendar_name: 'Work', duration_minutes: 30, timezone: 'UTC',
+  availability: { '0': ['09:00-17:00'] }, show_busy: false, buffer_minutes: 0,
+  min_notice_hours: 24, horizon_days: 30, enabled: true, booking_count: 0,
+  calendar_missing: false, url: 'https://x/book/tok-new',
+}
+
 beforeEach(() => {
   // The calendar grid opens on today's month, so the clock decides which
   // fixtures render. March 2026 begins on a Sunday, which makes the six-week
@@ -112,7 +122,13 @@ beforeEach(() => {
   m.schedulingBookings.mockResolvedValue([])
   // Implementations survive clearAllMocks, so a rejection set inside one test
   // would leak into the next and make this file order-dependent.
-  m.createSchedulingLink.mockResolvedValue({} as never)
+  // A REAL link, not `{}`. The empty object resolved truthily, so `save()`
+  // appended it and the list rendered a card with `key={undefined}` and a
+  // `/book/undefined` URL — which is where the React key warning this suite
+  // prints comes from. Nothing asserted the created link renders, so the
+  // stand-in was never wrong enough to notice; see
+  // `a published link appears in the list` below.
+  m.createSchedulingLink.mockResolvedValue(CREATED as never)
 })
 
 afterEach(() => { vi.useRealTimers() })
