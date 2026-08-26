@@ -6,10 +6,16 @@ reschedule that rewrites a series into one the user never asked for, a filter
 that files a deadline on the wrong day, and a move that leaves the event in two
 calendars with no way to finish.
 
-**These findings are OPEN.** Every test here is an `xfail(strict=True)` pin: it
-asserts the CORRECTED behaviour and fails against the code as it stands, so CI
-stays green while the bug is open and goes red the moment it is fixed and the pin
-needs reclassifying. See docs/STAGES.md for the harness.
+**These findings are CLOSED**, and every test here is now an ordinary regression
+test that must stay green. Each was written first as an `xfail(strict=True)` pin
+asserting the CORRECTED behaviour — green while the bug was open, red (XPASS) the
+moment it was fixed — and the marker was dropped as part of the commit that fixed
+it. See docs/STAGES.md for the harness and for what remediation taught.
+
+Tests added DURING remediation sit beside the originals and say so in their own
+docstrings. They exist because a mutation escaped the pin: each fix was run
+against two to four deliberately wrong versions of itself, and anything that
+survived got a test rather than a comment.
 
 Three of the stage's twelve findings are here; the other nine are in the SPA and
 live in `frontend/src/backlog.aug25.stage3.test.tsx`.
@@ -20,19 +26,23 @@ runs through the real `McpApi` over a stub service, and the move drives the real
 `SyncEngine` against a fake DAV whose DELETE reply is lost once. Nothing here
 needs the scratch Radicale, so none of it carries `@pytest.mark.radicale`.
 
-Each asserts the *class* of the corrected answer rather than a particular repair.
-That matters most on the first pin, where a clean refusal and a correct rotation
-are both right and the audit's suggested fix picks the refusal; and it is why the
-`overdue_only` half of the second finding is deliberately NOT pinned — see that
-test's docstring.
+Each pin asserts the *class* of the corrected answer rather than a particular
+repair. That matters most on the first, where a clean refusal and a correct
+rotation are both right and the audit's suggested fix picks the refusal; and it
+is why the `overdue_only` half of the second finding was deliberately NOT pinned.
+The stage decided that one — the MCP filter follows `util.ts::isOverdue` and
+`service._due_day` rather than inventing a third answer — and it has tests now.
 
 Two of the three carry CONTROLS: ordinary passing tests that the feature still
 works, because the cheap over-correction in both cases is a guard that refuses
-everything, and refusing everything would satisfy the pin by deleting the
-feature.
+everything, and refusing everything would satisfy the pin by deleting it.
 
-Run just this file with `pytest tests/test_backlog_aug25_stage3.py -rxX`, and
-read the tracebacks with `--runxfail` before trusting any of it green.
+The move pin takes either of two repairs and says so. Only one of them is
+actually safe, which its neighbouring test explains: rolling the copy back on any
+delete failure reaches the same end state when the delete provably did not
+happen, and destroys the last copy when it did.
+
+Run just this file with `pytest tests/test_backlog_aug25_stage3.py`.
 """
 from __future__ import annotations
 

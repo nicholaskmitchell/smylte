@@ -8,12 +8,21 @@
  * the other three are backend and live in
  * `backend/tests/test_backlog_aug25_stage3.py`.
  *
- * **These findings are OPEN.** Every pin below is `it.fails`: it asserts the
- * CORRECTED behaviour and fails against the code as it stands, so the suite
- * stays green while the bug is open and goes red the moment it is fixed and the
- * pin needs reclassifying. Tests NOT marked `it.fails` are CONTROLS — ordinary
- * passing tests that the feature still works, beside every pin whose cheap
- * over-correction would satisfy it by deleting the feature.
+ * **These findings are CLOSED**, and every test here is now an ordinary
+ * regression test that must stay green. Each pin was written first as
+ * `it.fails` — asserting the CORRECTED behaviour, green while the bug was open
+ * and red the moment it was fixed — and its marker was dropped in the commit
+ * that fixed it. The CONTROLS beside them were always ordinary passing tests:
+ * the feature still works, beside every pin whose cheap over-correction would
+ * satisfy it by deleting the feature.
+ *
+ * Tests added DURING remediation sit beside the originals and say so in their
+ * own comments. Each exists because a MUTATION escaped: every fix was run
+ * against two to five deliberately wrong versions of itself, and whatever
+ * survived got a test rather than a comment. Several of the findings turned out
+ * to have a second manifestation, or a second half, that no pin could see —
+ * reorder's target lookup, `CapacityStep`, the ORDER of a DURATION's two halves,
+ * the scope of the add box's retry ref.
  *
  * Every pin is BEHAVIOURAL: each drives the real component (or the real exported
  * function) and asserts what the user or the API would see. None reads source
