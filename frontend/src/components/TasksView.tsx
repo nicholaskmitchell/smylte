@@ -70,6 +70,7 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
   const {
     lists, serverOrderedLists, tasks, listsLoaded, listsOk, loaded, setLists,
     create, createMany, addSub, toggle, remove, saveDetail, reorder,
+    taskListErrors, reloadTasks,
   } = useTaskData()
   const [detail, setDetail] = useState<Task | null>(null)
   // The two create surfaces, both null when closed. `adding` is the single-task
@@ -510,6 +511,20 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
                 onExpand={(listId, summary) => setAdding({ listId, summary })}
                 defaultList={defaultList} lists={visibleLists} />
             )}
+            {/* A pane that is short and does not say so is a confident lie about
+                the account, which is the whole reason the fan-out below became
+                `allSettled`. Named, and retryable: the effect keys on `rev`,
+                which only moves when the SERVER publishes a change, so an idle
+                account had no way back short of reloading the page. Modelled on
+                `.cal-partial` next door, which answers the same question for a
+                month that is missing one collection. */}
+            {taskListErrors.length > 0 && (
+              <div className="cal-partial" role="status">
+                Couldn&rsquo;t load {taskListErrors.join(', ')} — some tasks may
+                be missing.{' '}
+                <button className="btn ghost" onClick={reloadTasks}>Retry</button>
+              </div>
+            )}
             <div className="scroll">
               {active.map((t) => (
                 <TaskGroup key={taskKey(t)} task={t} childrenOf={childrenOf} dot={dotFor(t)}
@@ -517,7 +532,7 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
                   onToggle={toggle} onRemove={remove} onOpen={setDetail} onAddSub={addSub}
                   drag={reorderDrag} />
               ))}
-              {active.length === 0 && (
+              {active.length === 0 && taskListErrors.length === 0 && (
                 <div className="empty" aria-busy={!loaded || undefined}>
                   {loaded ? 'Nothing to do here.' : 'Loading…'}
                 </div>

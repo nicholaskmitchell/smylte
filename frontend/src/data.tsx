@@ -88,6 +88,15 @@ export interface TaskData {
    *  preserving the UID) gave `findIndex` two candidates and it moved whichever
    *  sorted first. `taskKey` is the identity everywhere else in this file. */
   reorder: (from: Task, target: Task) => Promise<void>
+  /** The NAMES of the lists whose last fetch failed, empty when all answered.
+   *  The `windowErrors` analogue on the task side, and for the same reason its
+   *  comment gives: a pane that is short and does not say so is a confident lie
+   *  about the account. */
+  taskListErrors: string[]
+  /** Re-run the task fan-out. The effect keys on `loadKey`/`rev`, and `rev`
+   *  only moves when the SERVER publishes a change — so on an idle account a
+   *  failed fetch had no way back short of reloading the page. */
+  reloadTasks: () => void
 }
 
 export interface CalendarData {
@@ -210,6 +219,12 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
   keyRef.current = loadKey
   const fetchToken = useRef(0)
   const invalidateFetches = () => { fetchToken.current += 1 }
+  const [listErrors, setListErrors] = useState<string[]>([])
+  // The retry's own signal. `rev` cannot serve: it moves only when the server
+  // publishes a change, so on an idle account a failed fan-out had nothing to
+  // re-issue it.
+  const [taskNonce, setTaskNonce] = useState(0)
+  const reloadTasks = useCallback(() => setTaskNonce((n) => n + 1), [])
 
   // Waits for the real lists rather than fanning out over the cached ones: a
   // seeded id may name a list deleted in another client, and a 404 per stale
@@ -219,18 +234,45 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
     if (!enabled || !listsLoaded) return
     if (lists.length === 0) {
       setTasks([])
+      setListErrors([])
       setLoaded(true)
       return
     }
     const token = ++fetchToken.current
     const key = loadKey
     guard(async () => {
-      const per = await Promise.all(lists.map((l) => api.tasks(l.id)))
-      const ts = per.filter(Array.isArray).flat()
-      if (token === fetchToken.current && key === keyRef.current) setTasks(ts)
+      // `allSettled`, not `all`, exactly as the calendar window below does and
+      // for the same reason its comment gives. One list answering 500 — one
+      // poison VTODO from jtx Board or Tasks.org that 500s the DTO builder for
+      // its collection, a documented failure class here — rejected the whole
+      // batch, so `setTasks` never ran, `loaded` flipped true anyway, and EVERY
+      // task surface in the app (TasksView, HomeView, TodayView, the calendar's
+      // task overlay) reads that one array. TasksView then rendered "Nothing to
+      // do here.": the owner was told their account was empty.
+      const per = await Promise.allSettled(lists.map((l) => api.tasks(l.id)))
+      const ts = per.flatMap((r) =>
+        r.status === 'fulfilled' && Array.isArray(r.value) ? r.value : [])
+      const failed = lists
+        .filter((l, i) => per[i].status === 'rejected'
+          || !Array.isArray((per[i] as PromiseFulfilledResult<Task[]>).value))
+        .map((l) => l.name)
+      // An AuthError anywhere is the SESSION, not one list: let it out to
+      // `guard` so the app routes to the login card rather than reporting the
+      // whole account as a set of broken lists.
+      const auth = per.find((r) => r.status === 'rejected'
+        && (r as PromiseRejectedResult).reason instanceof AuthError)
+      if (auth) throw (auth as PromiseRejectedResult).reason
+      if (token !== fetchToken.current || key !== keyRef.current) return
+      // Only when SOMETHING landed, the lesson the calendar path already
+      // carries: writing `[]` for a fan-out where every list failed replaces
+      // rows that are still on screen with a blank pane, which is a worse blank
+      // than the one this fixes. A total failure leaves the previous rows up
+      // and says so through `taskListErrors`.
+      if (failed.length < lists.length) setTasks(ts)
+      setListErrors(failed)
     }).finally(() => setLoaded(true))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loadKey, rev, enabled, listsLoaded])
+  }, [loadKey, rev, enabled, listsLoaded, taskNonce])
 
   // Mirror to disk on the trailing edge, so a burst of optimistic paints costs
   // one write rather than one per keystroke. Writing on the optimistic paint
@@ -646,6 +688,7 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
   const value: TaskData = {
     lists: ordered, serverOrderedLists: lists, tasks, listsLoaded, listsOk, loaded, setLists,
     create, createMany, addSub, toggle, remove, saveDetail, reorder,
+    taskListErrors: listErrors, reloadTasks,
   }
   return <TaskCtx.Provider value={value}>{children}</TaskCtx.Provider>
 }
