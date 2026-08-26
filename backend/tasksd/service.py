@@ -1425,7 +1425,7 @@ class TaskService:
             "entries": [self._day_entry_dto(r) for r in entries],
         }
 
-    def _effective_capacity(self, day: str, ritual=None, *, settings=None) -> int | None:
+    def _effective_capacity(self, day: str, ritual=UNSET, *, settings=None) -> int | None:
         """How many minutes this day should be read against, or None.
 
         Four answers in order, and the last one is the important one:
@@ -1447,7 +1447,12 @@ class TaskService:
         anything else in it is ignored rather than guessed at, because a settings
         blob is hand-editable and a garbage key must not become a capacity.
         """
-        if ritual is None:
+        # The SENTINEL, not None — a day with no ritual row is a legitimate None,
+        # and treating it as "not supplied" re-queried exactly the days the batch
+        # read was written to cover. `day_range` passes `rituals.get(d)`, which is
+        # None for every planned day the owner never set a capacity on, so the
+        # N+1 survived for all of them: up to 190 extra SELECTs under the lock.
+        if ritual is UNSET:
             ritual = store.get_day_ritual(self._conn, day)
         if ritual and ritual["capacity_minutes"] is not None:
             return ritual["capacity_minutes"]

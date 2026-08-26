@@ -266,8 +266,13 @@ class OAuthServer:
             # Starlette's render then dies on `.encode("utf-8")` — while
             # rendering, outside every handler, so a 500 rather than the 400 the
             # request has coming.
-            raise OAuthError("invalid_client_metadata",
-                             f"unsupported scope: {wire_safe(' '.join(sorted(unknown)))}")
+            # Truncated as well as made encodable, matching the sibling check
+            # two branches down. This endpoint needs no session, so `unknown` is
+            # every token an anonymous caller chose to send — a megabyte of them
+            # would otherwise be joined into the response body AND the log.
+            raise OAuthError(
+                "invalid_client_metadata",
+                f"unsupported scope: {wire_safe(' '.join(sorted(unknown)))[:200]}")
 
         # "none" means a public client, which is what DCR clients are. Anything
         # else gets a secret; we only ever store its hash.

@@ -372,10 +372,13 @@ def generate_slots(
         for w_start, w_end in availability.get(day.weekday(), []):
             # Constructing with tzinfo= resolves DST gaps forward (PEP 495) —
             # a spring-forward window shrinks rather than crashing.
-            win = Interval(
-                datetime.combine(day, w_start, tzinfo=tz),
-                datetime.combine(day, w_end, tzinfo=tz),
-            )
+            # Only the START is taken from here now; the end goes through
+            # `_window_end_utc`, which does its own `datetime.combine`. Keeping
+            # an `Interval` whose `.end` no longer described what the loop used
+            # was the exact trap the comment it replaced warned about — and it
+            # cost a second tz-aware construction per window per day on the
+            # unauthenticated path.
+            win_start = datetime.combine(day, w_start, tzinfo=tz)
             # Step in UTC, not wall clock. `aware_dt + timedelta` adds to the
             # naive fields and re-derives the offset, so across a transition a
             # "30-minute" slot is not 30 minutes: spring-forward produced one
@@ -384,7 +387,7 @@ def generate_slots(
             # only unauthenticated write path into the owner's calendar. UTC has
             # no such discontinuity; the local values are derived back from it
             # for display and for matching a booking request.
-            s_utc = win.start.astimezone(timezone.utc)
+            s_utc = win_start.astimezone(timezone.utc)
             # Not `win.end.astimezone(...)` — see `_window_end_utc` for the
             # spring-forward gap that made this window grow instead of shrink.
             end_utc = _window_end_utc(day, w_end, tz)

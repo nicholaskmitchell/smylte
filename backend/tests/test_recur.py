@@ -1662,3 +1662,88 @@ def test_an_unreadable_due_reads_as_absent_rather_than_as_a_repr():
             {"due": "2026-01-05", "uid": "ok", "summary": "O", "priority": None}]
     assert [r["uid"] for r in sorted(rows, key=_intrinsic_order)] == ["ok", "bad"], (
         "an unreadable deadline must sort as no deadline, not raise")
+
+
+# ── the span guard's own edges, found by reviewing the guard ────────────────
+
+def test_the_span_guard_survives_a_duplicated_end_property():
+    """A resource can carry DTEND twice, and icalendar then hands back a LIST.
+    The guard read `.dt` off it unguarded — AttributeError, which is neither
+    ValueError nor OverflowError, so `patch_event` did not map it and the event
+    became permanently uneditable through every door: the HTTP PATCH, the MCP
+    tool, and the occurrence override. Every other datelike reader in edit.py
+    carries this guard."""
+    raw = (b"BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//foreign//EN\r\n"
+           b"BEGIN:VEVENT\r\nUID:dup@x\r\nDTSTAMP:20260101T000000Z\r\n"
+           b"DTSTART:20260310T090000Z\r\nDTEND:20260310T100000Z\r\n"
+           b"DTEND:20260310T110000Z\r\nSUMMARY:Meeting\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n")
+    out = apply_event_changes(raw, EventEdit(
+        dtstart=datetime(2026, 3, 12, 9, tzinfo=timezone.utc)))
+    assert b"DTSTART:20260312T090000Z" in out
+
+
+def test_clearing_the_end_is_not_an_edit_that_omits_one():
+    """`EditEvent.end` is `str | None`, and `_parse_datelike(None)` is None — so
+    `{"start": …, "end": null}` arrives with dtend SUPPLIED-as-None. Validating
+    that against the DTEND it is about to remove refused an edit that is
+    internally consistent: `_apply_event_fields` drops the property two lines
+    later, leaving nothing to disagree with."""
+    raw = foreign_event_raw("clear", dtstart="20260310T090000Z", dtend="20260310T100000Z")
+    out = apply_event_changes(raw, EventEdit(
+        dtstart=datetime(2026, 6, 1, 9, tzinfo=timezone.utc), dtend=None))
+    assert b"DTSTART:20260601T090000Z" in out
+    assert b"DTEND" not in out
+    # ...and clearing it on its own still works.
+    assert b"DTEND" not in apply_event_changes(raw, EventEdit(dtend=None))
+
+
+def test_a_length_expressed_as_a_duration_is_held_to_the_same_rule():
+    """The other half of the pair can be a DURATION rather than a DTEND — the
+    shape phone clients write — and the guard returned before seeing it, because
+    there was no DTEND to compare against. So `DTSTART;VALUE=DATE` beside
+    `DURATION:PT1H` still reached the wire: §3.6.1 asks a DATE start to take a
+    NOMINAL, day-valued duration, and the read path reports all-day from DTSTART
+    alone, so `busy_intervals` skipped the event and the booking page offered its
+    hour."""
+    hourly = (b"BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//foreign//EN\r\n"
+              b"BEGIN:VEVENT\r\nUID:dur@x\r\nDTSTAMP:20260101T000000Z\r\n"
+              b"DTSTART:20260310T100000Z\r\nDURATION:PT1H\r\nSUMMARY:M\r\n"
+              b"END:VEVENT\r\nEND:VCALENDAR\r\n")
+    with pytest.raises(ValueError, match="measured in hours"):
+        apply_event_changes(hourly, EventEdit(dtstart=date(2026, 3, 12)))
+
+    # A timed move on the same event is untouched...
+    assert apply_event_changes(hourly, EventEdit(
+        dtstart=datetime(2026, 3, 12, 10, tzinfo=timezone.utc)))
+
+    # ...and a NOMINAL duration is exactly what an all-day event should have, so
+    # it must not be refused.
+    daily = (b"BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//foreign//EN\r\n"
+             b"BEGIN:VEVENT\r\nUID:nom@x\r\nDTSTAMP:20260101T000000Z\r\n"
+             b"DTSTART;VALUE=DATE:20260310\r\nDURATION:P1D\r\nSUMMARY:M\r\n"
+             b"END:VEVENT\r\nEND:VCALENDAR\r\n")
+    assert apply_event_changes(daily, EventEdit(dtstart=date(2026, 3, 12)))
+
+
+def test_an_ordinary_rdate_list_outside_the_window_is_not_refused():
+    """The RDATE guard prices the list against `_occurrence_cap`, which is a
+    per-WINDOW bound — so counting the LIFETIME list refused an ordinary
+    resource. "Every weekday for three years" is ~780 instants, which any client
+    can write, and it was refused for every window including ones holding none of
+    them: the calendar collapsed it to its master row, and on the booking path
+    `blocking=True` marked the owner busy for the ENTIRE query window, zeroing
+    out their public availability. A worse outcome than the flood being guarded
+    against."""
+    base = datetime(2024, 1, 1, 9, 0, tzinfo=timezone.utc)
+    day, vals = base, []
+    while len(vals) < 780:
+        if day.weekday() < 5:
+            vals.append(day.strftime("%Y%m%dT%H%M%SZ"))
+        day += timedelta(days=1)
+    raw = foreign_event_raw("pay", dtstart="20240101T090000Z", dtend="20240101T093000Z",
+                            rdate=",".join(vals))
+    # A two-day window in 2026 holds none of them.
+    assert recur.expand_occurrences(raw, date(2026, 8, 1), date(2026, 8, 3)) == []
+    # ...and a window that DOES hold some still expands them.
+    got = recur.expand_occurrences(raw, date(2024, 1, 1), date(2024, 1, 4))
+    assert len(got) >= 3
