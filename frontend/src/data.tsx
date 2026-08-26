@@ -72,11 +72,17 @@ export interface TaskData {
   toggle: (t: Task) => Promise<void>
   remove: (t: Task) => Promise<void>
   saveDetail: (t: Task, patch: Record<string, unknown>) => Promise<void>
-  /** Move the task `uid` to where `target` currently sits. Same gesture as the
+  /** Move the task `from` to where `target` currently sits. Same gesture as the
    *  sidebar's list drag: dropping on a row below lands after it, above lands
    *  before it. Positions are assigned across every task on the account, not
-   *  just the visible ones — see `reorder` below. */
-  reorder: (uid: string, target: string) => Promise<void>
+   *  just the visible ones — see `reorder` below.
+   *
+   *  Takes the ROWS, not their uids. A uid is unique within a collection but not
+   *  across the account, and the local array is every list merged — so a VTODO
+   *  copied between lists (which Tasks.org, DAVx5 and Thunderbird all do,
+   *  preserving the UID) gave `findIndex` two candidates and it moved whichever
+   *  sorted first. `taskKey` is the identity everywhere else in this file. */
+  reorder: (from: Task, target: Task) => Promise<void>
 }
 
 export interface CalendarData {
@@ -585,14 +591,23 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
   // every list unconditionally), so "the whole sequence" costs nothing to
   // build: sort by the comparator that is already deciding what is on screen,
   // splice the dragged row in, and hand that over.
-  const reorder = async (uid: string, target: string) => {
-    if (uid === target) return
+  // Keyed on `taskKey`, not on the bare uid — including the no-op check. The
+  // backend keys items on (collection_href, uid), so a uid copied into a second
+  // list is two distinct tasks, and this array is every list merged. Matching on
+  // the uid gave `findIndex` two candidates and moved whichever sorted first, so
+  // dragging the Work copy moved the Home copy; `reorder` then renumbers
+  // `sort_order` for EVERY task on the account and POSTs it, making that
+  // permanent. And `uid === target` was true for a drop of one copy onto the
+  // other, so that gesture silently did nothing at all — the same cause, and the
+  // reason the early return had to move to keys with the rest.
+  const reorder = async (from_: Task, target_: Task) => {
+    if (taskKey(from_) === taskKey(target_)) return
     const placed = sortTasks(tasks)
-    const from = placed.findIndex((t) => t.uid === uid)
+    const from = placed.findIndex((t) => taskKey(t) === taskKey(from_))
     // Read before the removal, like Sidebar's list drag: dropping on a row
     // further down lands after it, further up lands before it, which is what
     // the gesture looks like it is doing.
-    const to = placed.findIndex((t) => t.uid === target)
+    const to = placed.findIndex((t) => taskKey(t) === taskKey(target_))
     if (from < 0 || to < 0) return
     const [moved] = placed.splice(from, 1)
     placed.splice(to, 0, moved)

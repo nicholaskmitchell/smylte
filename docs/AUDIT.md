@@ -1,6 +1,6 @@
 # Audit backlog
 
-**22 open**, all from the 2026-08-25 sweep at the top of this file; every finding
+**21 open**, all from the 2026-08-25 sweep at the top of this file; every finding
 from every earlier sweep is closed.
 
 Findings from the adversarial audit sweeps — one deep finder per subsystem, then
@@ -2745,7 +2745,7 @@ the same treatment plus `role="dialog" aria-modal="true" aria-label="Repeating e
 Then strengthen the stage4b enumeration test so it walks every `className="overlay"` /
 `role="dialog"` site rather than only the components that already import the hook.
 
-#### [ ] Drag-to-reorder resolves the dragged row by bare uid, so with one UID in two lists the wrong row moves — and that order is POSTed for the whole account
+#### [x] Drag-to-reorder resolves the dragged row by bare uid, so with one UID in two lists the wrong row moves — and that order is POSTed for the whole account
 `frontend/src/data.tsx:591` · **medium** · bug · stage 3
 
 `TasksView`'s drop handler carefully resolves both `taskKey`s back to real rows and then
@@ -2793,6 +2793,14 @@ dragged row is the one that moves and that the POSTed sequence matches the on-sc
 order.
 
 **Pinned by** `2026-08-25 — reordering with one uid in two lists > moves the row the user dragged, not the first one sharing its uid` in `frontend/src/backlog.aug25.stage3.test.tsx`.
+
+**Fixed** with the suggested fix: `TaskData.reorder` now takes the ROWS (`(from: Task, target: Task)`) and matches with `taskKey`, so `TasksView` hands over the disambiguation it had already done instead of discarding it. `taskKey` is the identity `patchLocal`, `settle`, `sortTasks` and this function's own rollback snapshot already use, for the reason all four comments give: the backend keys items on `(collection_href, uid)`, so a uid copied into a second list is two tasks.
+
+**The `uid === target` early return moved to keys with the rest**, which is the entry's second manifestation and had no pin. Leaving it on the bare uid closes the finding and leaves a drop of one copy onto the other silently doing nothing; `moves one copy onto the other, which share a uid` now asserts it, with a control that a row dropped on ITSELF still writes nothing.
+
+**The TARGET lookup needed a test of its own.** In both the pin's scenario and the second manifestation, the duplicated uid's first occurrence IS the row being dropped on, so keying only the DRAGGED lookup passes everything — a mutation proved it. `drops onto the second copy sharing a uid, not the first` drops onto the later copy, where the two answers differ.
+
+**One deliberate test edit**, recorded here as Stage 2's were: `backlog.stage4.test.tsx:160` calls `d.reorder` directly and now passes two `task({…})` rows instead of `'b', 'a'`. Only the argument shape changed — the tasks named, the gesture, and every assertion in that test are untouched.
 
 #### [ ] Any save from the event editor splits a CATEGORIES value containing a comma into two tags
 `frontend/src/components/CalendarView.tsx:889` · **medium** · bug · stage 3

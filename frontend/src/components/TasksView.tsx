@@ -155,12 +155,14 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
       const dragged = orderUid
       setOrderUid(null)
       setOrderOver(null)
-      // Resolved back to the rows they name before the wire call: `reorder`
-      // splices `sortTasks(tasks)` by uid, which is right ON THE WIRE (a uid is
-      // unique within a collection) but ambiguous locally.
+      // Resolved back to the rows they name, and the ROWS are what goes on:
+      // `reorder` splices `sortTasks(tasks)` by `taskKey`, because a uid is
+      // unique on the wire (within one collection) but ambiguous in this merged
+      // array. Handing over `a.uid` threw the disambiguation this line had just
+      // done away again, which is what the finding was.
       const a = dragged && orderedAll.find((t) => taskKey(t) === dragged)
       const b = orderedAll.find((t) => taskKey(t) === target)
-      if (a && b) void reorder(a.uid, b.uid)
+      if (a && b) void reorder(a, b)
     },
   }
   // Day-column drag: dropping a card on a column reschedules it to that day.
