@@ -1,6 +1,6 @@
 # Audit backlog
 
-**3 open**, all from the 2026-08-25 sweep at the top of this file; every finding
+**2 open**, all from the 2026-08-25 sweep at the top of this file; every finding
 from every earlier sweep is closed, as is the one this sweep's own remediation
 turned up (marked `· found in remediation`).
 
@@ -4195,7 +4195,7 @@ state) and treat an unparseable address as a hard validation failure with the sa
 wording the status line already uses, offering no override. Optionally normalise a bare
 hostname to https:// before validating.
 
-#### [ ] The update notice is docked at the wrong end of the z-order, so it covers the top 36 px of the app instead of pushing it down
+#### [x] The update notice is docked at the wrong end of the z-order, so it covers the top 36 px of the app instead of pushing it down
 `desktop/Smylte.Desktop/MainForm.cs:46` · **low** · rendering · minor · stage 4
 
 WinForms lays docked children out in reverse child-index order: the highest index is
@@ -4229,6 +4229,13 @@ SetChildIndex(_web, 0);` so the Top-docked strip is laid out first and consumes 
 px, and the Fill children receive what is left. In BuildNotice, add the Fill label first
 (`message`, then `download`, then `dismiss`) for the same reason.
 
+**Fixed** with the suggested fix in both places: `SetChildIndex(_notice, 2); _splash 1; _web 0`, and `BuildNotice` adds `message` first, then `download`, then `dismiss`.
+
+**Both sites carried a comment stating the mechanism BACKWARDS**, which is why this survived. `MainForm`'s said the indices were set "explicitly rather than relying on the order things were added: the notice strip claims the top" — the arrangement it describes is the one it prevented. `BuildNotice`'s said "the Fill has to be added last or it claims the whole strip", when adding it last is precisely what makes it claim the whole strip. WinForms lays docked children out from the HIGHEST child index down, so the control at the back is laid out first and takes the outer edge.
+
+**UNVERIFIED IN CI, and that is the whole reason this finding ships unpinned.** Asserting the outcome needs a Windows host with a realised control tree and a message loop. The only CI-reachable check is a `SetChildIndex` source-shape assertion, and `test_backlog_stage5.py`'s header explicitly disowns that shape: it would go green the day the indices were written in the right order and say nothing about whether the strip displaces the web view. What IS confirmed here is that the project still builds and the 23 desktop tests still pass.
+
+**Verify by hand on Windows**, as STAGES.md records: publish a newer version so `ClientOutdated` is true, and check the SPA's header row is pushed DOWN rather than covered, and that "Download" and "Not now" sit beside the message rather than over it.
 **Not pinned**, and docs/STAGES.md records why: WinForms lays docked children out in reverse child-index order, so asserting `_web`'s client rect needs a Windows host with a realised control tree and a message loop. The only CI-reachable pin would be a `SetChildIndex` source-shape assertion, which `test_backlog_stage5.py`'s own header explicitly disowns as a substitute for a behavioural one — it would go green on the day the indices were written in the right order and say nothing about whether the strip displaces the web view. Whoever fixes this must verify it by hand on Windows: publish a newer version so `ClientOutdated` is true, and check the SPA header row is pushed down rather than covered.
 
 #### [x] test_sync_unit.py permanently rewrites DavClient.principal_path for the whole pytest process
