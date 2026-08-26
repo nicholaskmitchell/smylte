@@ -449,7 +449,16 @@ class SyncEngine:
             # already has the right words for. `Conflict`'s own docstring in
             # dav/errors.py lists MKCALENDAR cases and not this one, which is
             # what made the omission look deliberate.
-            raise ConflictError(f"event {uid} already exists in the target calendar") from e
+            #
+            # But the occupant is USUALLY OUR OWN COPY. `new_href` is
+            # deterministic, so a retry after a lost DELETE reply lands on the
+            # resource the previous attempt wrote — and answering that with a
+            # terminal conflict left the event in both calendars with no way to
+            # finish the move, while telling the caller (409 over HTTP, "try
+            # again shortly" over MCP) something close to the opposite. This is
+            # `_put_new`'s replay tolerance, applied to the same problem: read
+            # the occupant, and only a resource that is NOT ours is a conflict.
+            self._adopt_moved_copy(new_href, uid, current, e)
         try:
             self.dav.delete(row["href"], if_match=current.etag)
         except PreconditionFailed as e:
@@ -460,10 +469,55 @@ class SyncEngine:
             except DavError:
                 log.warning("move_event: could not roll back the copy at %s", new_href)
             raise ConflictError(f"event {uid} changed during the move; retry") from e
+        except DavError:
+            # A lost reply, a 403, a 423. The copy is NOT rolled back: unlike the
+            # 412 above, this is precisely the case where the delete cannot be
+            # proved not to have happened, and undoing it would risk destroying
+            # the only remaining copy. The retry now completes the move (the
+            # branch above adopts our own copy), so the duplicate is transient —
+            # but only if someone retries, so say so loudly rather than letting a
+            # silent second copy reach the calendar, the busy set and the
+            # booking-conflict check.
+            log.error(
+                "move_event: %s was copied to %s but the source delete at %s failed; "
+                "the event is in BOTH calendars until the move is retried",
+                uid, new_href, row["href"], exc_info=True)
+            raise
         with _tx(self.conn):
             store.delete_item_by_href(self.conn, src_href, row["href"])
             store.orphan_sidecar(self.conn, src_href, uid)
         return self._refresh_from_wire(dst_href, new_href)
+
+    def _adopt_moved_copy(self, new_href: str, uid: str, current, cause: DavError) -> None:
+        """The destination href is occupied. Treat it as the move's own earlier
+        copy when it carries `uid`; raise `ConflictError` when it is a stranger's.
+
+        The occupant is REFRESHED from `current` rather than merely accepted. The
+        source can be edited by another client between the attempt that landed
+        the copy and the retry that finds it, and the source is about to be
+        deleted — so adopting the older bytes unchanged would discard that
+        revision exactly as copying from the cache used to (see the docstring
+        above). `if_match` keeps that write from clobbering a destination that
+        moved underneath us in turn.
+
+        A `Conflict` whose occupant is NOT at `new_href` (Radicale's
+        `no-uid-conflict`: the same UID under a different filename) reads as a
+        404 here and stays a conflict. That is the right answer either way — the
+        UID is already in the destination and this engine did not put it there.
+        """
+        try:
+            stored = self.dav.get(new_href)
+            fields = ical.extract_from_raw(stored.data)
+        except NotFound:
+            fields = None
+        if fields is None or fields.uid != uid:
+            log.warning("move_event: %s is occupied by another resource", new_href)
+            raise ConflictError(
+                f"event {uid} already exists in the target calendar") from cause
+        try:
+            self.dav.put(new_href, current.data, if_match=stored.etag)
+        except PreconditionFailed as e:
+            raise ConflictError(f"event {uid} changed during the move; retry") from e
 
     def shift_event(
         self, collection_href: str, uid: str, recurrence_id: str, edit: ical.EventEdit

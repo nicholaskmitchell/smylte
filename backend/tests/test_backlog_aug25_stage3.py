@@ -395,6 +395,7 @@ class _FakeDav:
         self.store: dict[str, tuple[str, bytes]] = {
             h: ('"1"', b) for h, b in initial.items()}
         self.fail_delete = False
+        self.lose_delete_reply = False
 
     def get(self, href):
         if href not in self.store:
@@ -412,6 +413,14 @@ class _FakeDav:
         if self.fail_delete:
             self.fail_delete = False     # the network recovers after one loss
             raise DavError(f"transport error on DELETE {href}: connection reset")
+        if self.lose_delete_reply:
+            # The OTHER half of the same blip, and the one that decides whether
+            # rolling the copy back is safe: the server performed the delete and
+            # the caller never heard so. Indistinguishable, from here, from the
+            # `fail_delete` case above.
+            self.lose_delete_reply = False
+            self.store.pop(href, None)
+            raise DavError(f"transport error on DELETE {href}: connection reset")
         self.store.pop(href, None)
 
 
@@ -428,11 +437,6 @@ def _engine(initial: dict[str, bytes]) -> tuple[SyncEngine, _FakeDav, object]:
     return engine, dav, conn
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "sync/engine.py:442 — the destination PUT turns ANY 412/409 into a terminal "
-    "ConflictError, and only PreconditionFailed on the source DELETE rolls the "
-    "copy back. A lost DELETE reply leaves the event in both calendars and every "
-    "retry hits its own copy, so the move can never be completed"))
 def test_a_move_whose_delete_reply_was_lost_can_still_be_completed():
     """`move_event` is copy-then-delete, and the destination href is
     DETERMINISTIC (`new_href = f"{dst_href}{basename}"`, with `basename` taken
@@ -492,6 +496,64 @@ def test_a_move_whose_delete_reply_was_lost_can_still_be_completed():
         + (f"; the retry raised {retry}" if retry else ""))
     assert store.get_item(conn, DST, "e-1") is not None, "the cache lost the moved event"
     assert store.get_item(conn, SRC, "e-1") is None, "the cache still holds the source row"
+
+
+def test_the_retry_carries_the_revision_the_source_holds_NOW():
+    """The adopted copy is REFRESHED, not merely accepted.
+
+    Not pinned by the finding, and deliberately covered anyway: the whole reason
+    `move_event` reads the bytes off the wire instead of the cache is that
+    another client may edit the event inside the window, and "the source delete
+    could not save it either ... here destroyed the only copy of the newer
+    revision" (its own docstring). A retry after a lost DELETE reply reopens that
+    window — the destination holds the bytes of the FIRST attempt, and the source
+    that holds the newer ones is about to be deleted. Accepting the occupant
+    unchanged, which is all the finding asks for, would silently discard the edit
+    in exactly the way the docstring says it must not.
+    """
+    engine, dav, _ = _engine({SRC + "e-1.ics": MOVED})
+    dav.fail_delete = True
+
+    with pytest.raises(DavError):
+        engine.move_event(SRC, DST, "e-1")
+
+    # Another CalDAV client edits the source between the two attempts.
+    edited = MOVED.replace(b"SUMMARY:Standup", b"SUMMARY:Standup (moved to 11)")
+    dav.store[SRC + "e-1.ics"] = ('"9"', edited)
+
+    engine.move_event(SRC, DST, "e-1")
+
+    assert sorted(dav.store) == [DST + "e-1.ics"]
+    assert dav.store[DST + "e-1.ics"][1] == edited, (
+        "the retry adopted the first attempt's stale copy and the source, which "
+        "held the newer revision, was deleted on top of it")
+
+
+def test_a_delete_that_happened_but_was_not_heard_does_not_destroy_the_event():
+    """The copy is NOT rolled back when the source delete fails for anything but
+    a 412, and this is why.
+
+    The finding offers a rollback "for any exception from the source DELETE" as
+    an alternative to replay tolerance, and the pin above accepts either, because
+    both reach the same end state when the delete provably did not happen. This
+    is the case where it did. A transport error is a lost REPLY as often as a
+    lost request, and the two are indistinguishable from this side — so a
+    rollback here deletes the one remaining copy, and the event is gone from both
+    calendars. A duplicate is recoverable; this is not.
+
+    The 412 branch keeps its rollback: there the server ANSWERED, so the delete
+    provably did not happen, which is exactly the distinction the finding draws.
+    """
+    engine, dav, _ = _engine({SRC + "e-1.ics": MOVED})
+    dav.lose_delete_reply = True
+
+    with pytest.raises(DavError):
+        engine.move_event(SRC, DST, "e-1")
+
+    assert DST + "e-1.ics" in dav.store, (
+        "the copy was rolled back over a delete that had already succeeded; the "
+        f"event now exists nowhere: {sorted(dav.store)}")
+    assert dav.store[DST + "e-1.ics"][1] == MOVED
 
 
 def test_a_move_onto_a_stranger_is_still_a_conflict():
