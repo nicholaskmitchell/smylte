@@ -6,13 +6,14 @@ import {
 } from '../api'
 import { useCalendarData, useTaskData } from '../data'
 import { useEscape } from '../hooks'
-import { cssColor, dayKey, makeGuard, pad, textDir, toLocalInput, ymd } from '../util'
+import { cssColor, dayKey, makeGuard, pad, sameValue, textDir, toLocalInput, ymd } from '../util'
 import { fmtClock, inputLang } from '../time'
 import { useTimeFormat } from '../timeformat'
 import {
   bucketByDay, bucketTasksByDay, cellCapacity, chipsShown, dragBody, daysBetween,
   endFromDuration, eventKey, lastDayOf, monthGrid, shiftYmd, type CalendarFit, type DayEv,
 } from '../calendar'
+import { TagInput } from './AddMultipleModal'
 import { taskKey } from '../order'
 import { useIsMobile } from '../hooks'
 import { AgendaEvent, AgendaTask, DayPopover } from './DayPopover'
@@ -836,7 +837,13 @@ function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete }: {
   const endUnknown = !!e && !e.end && !derivedEnd
   const [location, setLocation] = useState(e?.location || '')
   const [description, setDescription] = useState(e?.description || '')
-  const [tags, setTags] = useState((e?.tags || []).join(', '))
+  // Held as a LIST, not as a comma-joined string that is re-split on save.
+  // `CATEGORIES:Home\,Garden` is ONE category per RFC 5545 — the backend reads
+  // it with icalendar's `.cats` and writes it back escaped — so any
+  // delimiter-joined text field destroys a category another CalDAV client
+  // authored with a comma in it. That is `TagInput`'s whole reason for existing
+  // on the task side; the event editor was simply never converted.
+  const [tags, setTags] = useState<string[]>(e?.tags || [])
   // A new/non-recurring event picks a concrete cadence; an existing recurring one
   // defaults to "keep" — we don't surface its exact FREQ, so leaving it untouched
   // preserves the rule.
@@ -904,7 +911,12 @@ function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete }: {
   const startOut = startVal
   const endOut = allDay ? shiftYmd(clampedEnd, 1) : clampedEnd
 
-  const tagList = () => tags.split(',').map((s) => s.trim()).filter(Boolean)
+  // Sent only when they actually differ from what the event holds. `commit`
+  // used to include `tags` on EVERY save, so an edit that only changed the title
+  // rewrote CATEGORIES too — which is how the re-split above reached events the
+  // user never touched the tags of. `sameValue` is TaskModal's precedent.
+  const tagFields = (): Record<string, unknown> =>
+    (e && sameValue(tags, e.tags || [])) ? {} : { tags }
   const repeatFields = (): Record<string, unknown> => {
     if (repeat === 'keep') return {}          // leave the existing rule untouched
     const b: Record<string, unknown> = { repeat }
@@ -915,10 +927,10 @@ function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete }: {
   const commit = (scope: EventScope) => {
     if (!e) {
       onSave({ summary, all_day: allDay, start: startOut, end: endOut,
-               location, description, tags: tagList(), ...repeatFields() }, calPick)
+               location, description, tags, ...repeatFields() }, calPick)
       return
     }
-    const details = { summary, location, description, tags: tagList() }
+    const details = { summary, location, description, ...tagFields() }
     // An event whose span we could not reconstruct sends no end at all, so the
     // stored DTEND/DURATION is left exactly as its author wrote it.
     const times = endUnknown
@@ -932,7 +944,22 @@ function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete }: {
       const shift = timeChanged ? { ...times, recurrence_id: e.recurrence_id } : {}
       onSave({ ...details, ...shift, ...repeatFields(), scope: 'all' }, calPick, e.uid)
     } else if (recurring) {
-      onSave({ ...details, ...times, recurrence_id: e.recurrence_id, scope }, calPick, e.uid)
+      // "This & following" carries the repeat too. The backend splits the series
+      // at the anchor and re-rules the TAIL from `edit.rrule` — verified against
+      // `ical.split_series` directly: a tail asked for weekly comes back
+      // `RRULE:FREQ=WEEKLY`, and one asked for "does not repeat" comes back with
+      // no RRULE at all. Dropping `repeatFields()` here meant a user who changed
+      // Repeat and then answered the scope prompt with this button got no rule
+      // change, no error and no warning — the modal closed and the grid
+      // repainted as if it had worked.
+      //
+      // "This event" still cannot: it writes a RECURRENCE-ID override for one
+      // occurrence, and a rule on an override means nothing. That combination is
+      // REFUSED in `pickScope` rather than sent-and-dropped — the one thing that
+      // is not an answer is closing as if it had worked.
+      const cadence = scope === 'thisandfuture' ? repeatFields() : {}
+      onSave({ ...details, ...times, ...cadence, recurrence_id: e.recurrence_id, scope },
+             calPick, e.uid)
     } else {
       onSave({ ...details, ...times, ...repeatFields() }, calPick, e.uid)
     }
@@ -943,7 +970,25 @@ function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete }: {
   // See the overlay below.
   const scrimPress = useRef(false)
 
+  // A cadence change cannot ride on "This event": that writes a RECURRENCE-ID
+  // override for one occurrence, and an RRULE on an override is meaningless. The
+  // other two scopes carry it — "All events" always did, and "This & following"
+  // now does, because the backend's `split_series` re-rules the tail.
+  const cadenceBlocked = scopeAsk === 'save' && repeat !== 'keep'
+  const [scopeErr, setScopeErr] = useState<string | null>(null)
+
   const pickScope = (scope: EventScope) => {
+    if (scopeAsk === 'save' && scope === 'this' && repeat !== 'keep') {
+      // Sent back to the form with the change still in it, rather than closed as
+      // if it had worked. The user can pick another scope, or set Repeat back to
+      // "Keep current schedule" and save this occurrence alone.
+      setScopeAsk(null)
+      setScopeErr('A repeat change cannot apply to a single occurrence. '
+        + 'Use “This & following” or “All events”, or set Repeat back to '
+        + '“Keep current schedule”.')
+      return
+    }
+    setScopeErr(null)
     if (scopeAsk === 'delete' && e) onDelete(e.uid, { recurrence_id: e.recurrence_id, scope })
     else commit(scope)
     setScopeAsk(null)
@@ -986,6 +1031,12 @@ function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete }: {
             <p className="scope-q">
               {scopeAsk === 'delete' ? 'Delete which events?' : 'Apply changes to which events?'}
             </p>
+            {cadenceBlocked && (
+              <p className="scope-hint" role="status">
+                The repeat change needs “This &amp; following” or “All events” — a single
+                occurrence has no schedule of its own.
+              </p>
+            )}
             <button className="btn" onClick={() => pickScope('this')}>This event</button>
             <button className="btn" onClick={() => pickScope('thisandfuture')}>This &amp; following</button>
             <button className="btn" onClick={() => pickScope('all')}>All events</button>
@@ -993,6 +1044,7 @@ function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete }: {
           </div>
         ) : (
           <>
+            {scopeErr && <p className="scope-hint" role="alert">{scopeErr}</p>}
             <div className="field">
               <label className="label" htmlFor="ev-title">Title</label>
               <input className="input" id="ev-title" autoFocus value={summary} onChange={(ev) => setSummary(ev.target.value)} />
@@ -1043,8 +1095,8 @@ function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete }: {
               <textarea className="input" id="ev-notes" rows={2} value={description} onChange={(ev) => setDescription(ev.target.value)} />
             </div>
             <div className="field">
-              <label className="label" htmlFor="ev-tags">Tags (comma-separated)</label>
-              <input className="input" id="ev-tags" value={tags} onChange={(ev) => setTags(ev.target.value)} />
+              <label className="label">Tags</label>
+              <TagInput label="Tags" value={tags} onChange={setTags} />
             </div>
             {recurring && (
               <p className="scope-hint">
