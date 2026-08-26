@@ -156,7 +156,7 @@ describe('2026-08-25 — a failed booking-link toggle', () => {
   // ── AUDIT (open): SchedulingView.tsx:83 — a failed booking-link toggle rolls
   //    back a whole-array snapshot, reverting a concurrent toggle the server
   //    accepted ──────────────────────────────────────────────────────────────
-  it.fails('rolls back only the link that failed', async () => {
+  it('rolls back only the link that failed', async () => {
     // EVIDENCE. `toggleEnabled` captures `const prev = links` — the ENTIRE array
     // as of that render — and on failure does `setLinks(prev)`. Any write that
     // landed while the first request was in flight is inside that snapshot in
@@ -201,6 +201,91 @@ describe('2026-08-25 — a failed booking-link toggle', () => {
     await waitFor(() => expect(boxes()[0].checked).toBe(true))
 
     expect(boxes().map((b) => b.checked)).toEqual([true, false])
+  })
+
+  // The finding names `remove` too — "line 89 has the identical shape" — and it
+  // is not pinned, so it gets a test rather than an inference. A delete that
+  // fails must put back ONE link, at its place, without resurrecting a link
+  // deleted while it was in flight. Deleting goes through the editor: Edit,
+  // Delete, "Really delete?".
+  it('puts back only the link whose delete failed, where it was', async () => {
+    m.schedulingLinks.mockResolvedValue([
+      link({ token: 'tok-a', title: 'A' }),
+      link({ token: 'tok-b', title: 'B' }),
+      link({ token: 'tok-c', title: 'C' }),
+    ])
+    let rejectA: (e: Error) => void = () => {}
+    m.deleteSchedulingLink.mockImplementation(async (token: string) => {
+      if (token === 'tok-a') return new Promise((_r, rej) => { rejectA = rej }) as Promise<never>
+      return null as never
+    })
+
+    const user = userEvent.setup()
+    render(<SchedulingView rev={0} onExpire={vi.fn()} />)
+    await waitFor(() => expect(cards()).toHaveLength(3))
+
+    const titles = () =>
+      cards().map((c) => c.querySelector('.sched-card-title')?.textContent)
+    const deleteCard = async (title: string) => {
+      const card = cards().find((c) =>
+        c.querySelector('.sched-card-title')?.textContent === title)!
+      await user.click([...card.querySelectorAll('button')]
+        .find((b) => b.textContent === 'Edit')!)
+      await user.click(await screen.findByRole('button', { name: 'Delete' }))
+      await user.click(await screen.findByRole('button', { name: 'Really delete?' }))
+    }
+
+    await deleteCard('A')                          // hangs
+    await waitFor(() => expect(titles()).toEqual(['B', 'C']))
+    await deleteCard('B')                          // accepted
+    await waitFor(() => expect(titles()).toEqual(['C']))
+
+    await act(async () => {
+      rejectA(new HttpError(502, 'bad gateway'))
+      await Promise.resolve()
+    })
+
+    // Not ['A', 'B', 'C']: B's delete was accepted and must stay gone. And A
+    // comes back FIRST — appending it would put the owner's link somewhere they
+    // did not leave it, which is the same "close enough" the snapshot was.
+    await waitFor(() => expect(titles()).toEqual(['A', 'C']))
+  })
+
+  // Not pinned either, and the reason the rollback restores one FIELD rather
+  // than the row: the same link can be EDITED while its toggle is in flight, and
+  // the editor replaces the row with the server's DTO. Putting the pre-tap row
+  // back wholesale reverts that edit — the finding's own defect, one level down.
+  it('keeps an edit that landed while the same link\'s toggle was in flight', async () => {
+    m.schedulingLinks.mockResolvedValue([link({ token: 'tok-a', title: 'A' })])
+    let rejectToggle: (e: Error) => void = () => {}
+    m.patchSchedulingLink.mockImplementation(async (token: string, body: any) => {
+      if (Object.keys(body).length === 1 && 'enabled' in body) {
+        return new Promise((_r, rej) => { rejectToggle = rej }) as Promise<never>
+      }
+      return link({ token, ...body }) as never
+    })
+
+    const user = userEvent.setup()
+    render(<SchedulingView rev={0} onExpire={vi.fn()} />)
+    await waitFor(() => expect(cards()).toHaveLength(1))
+
+    await user.click(boxes()[0])                   // the toggle hangs
+    await user.click([...cards()[0].querySelectorAll('button')]
+      .find((b) => b.textContent === 'Edit')!)
+    const title = await screen.findByLabelText('Title')
+    await user.clear(title)
+    await user.type(title, 'A renamed')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(
+      cards()[0].querySelector('.sched-card-title')?.textContent).toBe('A renamed'))
+
+    await act(async () => {
+      rejectToggle(new HttpError(502, 'bad gateway'))
+      await Promise.resolve()
+    })
+
+    await waitFor(() => expect(boxes()[0].checked).toBe(true))
+    expect(cards()[0].querySelector('.sched-card-title')?.textContent).toBe('A renamed')
   })
 
   // CONTROL (passes today, must keep passing). A toggle the server ACCEPTS
