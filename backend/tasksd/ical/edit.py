@@ -695,21 +695,48 @@ def build_new_event(
 
 def _anchor_from_iso(recurrence_id: str, master: Event | None = None) -> date | datetime:
     """Parse an occurrence anchor (the ISO the read path emitted) back to a
-    date (all-day) or datetime (timed).
+    date (all-day) or datetime (timed), IN THE SERIES' OWN ZONE.
 
-    An aware ISO carries only a numeric offset, so ``fromisoformat`` yields a
-    fixed-offset tzinfo — which icalendar would serialize as a fabricated
-    ``TZID="UTC-06:00"``: unparseable by other clients and unmatchable against
-    the series. Re-express the anchor in the master DTSTART's real zone so
-    RECURRENCE-ID / EXDATE / DTSTART values written from it stay in the
-    series' own TZID (the instant is unchanged)."""
+    Everything written from an anchor — a split tail's DTSTART, an override's
+    RECURRENCE-ID, an EXDATE — inherits its awareness, so an anchor with no zone
+    produces a form-1 DATE-TIME: a FLOATING time (RFC 5545 §3.3.5), meaning
+    "09:00 wherever the reader is" rather than 09:00 in the series' zone. Each
+    of the three fails differently in another client: a floating tail drifts away
+    from its own head across a DST boundary, a floating RECURRENCE-ID stops
+    matching the instance the rule generates so the override renders as a
+    DUPLICATE, and a floating EXDATE excludes nothing so a deleted occurrence
+    comes back.
+
+    Two arms, and only the first was here:
+
+    * An AWARE ISO carries only a numeric offset, so ``fromisoformat`` yields a
+      fixed-offset tzinfo — which icalendar would serialize as a fabricated
+      ``TZID="UTC-06:00"``: unparseable by other clients and unmatchable against
+      the series. Converted into the master's real zone; the instant is
+      unchanged.
+    * A NAIVE ISO is what the read path actually emits and the SPA actually sends
+      back — a local wall time in the series' own zone with no offset on it — so
+      this is the arm that runs in production, and it did not exist. The zone is
+      ATTACHED rather than converted, because the value already IS a reading in
+      that zone.
+
+    A wall time inside a fall-back repeat is ambiguous in this format however it
+    is parsed; ``replace`` takes the first of the two (``fold=0``). That
+    ambiguity is in the ISO the SPA sends, not in what is done with it here, and
+    naming one of the two instants is strictly better than naming neither.
+
+    A master whose own DTSTART is floating, or an all-day series (whose anchor is
+    a ``date``), has no zone to keep and is left exactly as it was — the control
+    for that is that ``VALUE=DATE`` is what makes an event all-day.
+    """
     s = recurrence_id.strip()
     anchor = datetime.fromisoformat(s) if "T" in s else date.fromisoformat(s)
-    if isinstance(anchor, datetime) and anchor.tzinfo is not None and master is not None:
+    if isinstance(anchor, datetime) and master is not None:
         ds = master.get("DTSTART")
         mdt = ds.dt if ds is not None else None
         if isinstance(mdt, datetime) and mdt.tzinfo is not None:
-            anchor = anchor.astimezone(mdt.tzinfo)
+            anchor = (anchor.astimezone(mdt.tzinfo) if anchor.tzinfo is not None
+                      else anchor.replace(tzinfo=mdt.tzinfo))
     return anchor
 
 

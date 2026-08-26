@@ -364,14 +364,22 @@ error is a lost REPLY as often as a lost request, so rolling back there deletes
 the one remaining copy and the event is gone from BOTH calendars. That mutation
 passed the pin AND its control. A duplicate is recoverable; a deletion is not.
 
-**Verifying a fix's premise found a new bug.** The cadence fix is only correct if
-the backend's `split_series` really re-rules the tail, so that was driven
-in-process before relying on it. It does — and it also writes the tail's DTSTART
-as a FLOATING time, dropping the TZID even with a `VTIMEZONE` present, so "this
-and following" quietly strips a zoned series of its timezone from the split point
-on. It is recorded in `AUDIT.md` as an open finding marked
-`· found in remediation` rather than fixed in the same commit: it belongs in the
-ical edit path with a pin and a mutation pass of its own.
+**Verifying a fix's premise found a new bug, and it was three bugs.** The cadence
+fix is only correct if the backend's `split_series` really re-rules the tail, so
+that was driven in-process before relying on it. It does — and it also writes the
+tail's DTSTART as a FLOATING time, dropping the TZID even with a `VTIMEZONE`
+present. Recorded as an open finding first and fixed next, in its own commit
+after this stage closed; driving the other two anchor consumers before fixing it
+showed the same defect in both, each failing differently:
+`apply_occurrence_override` wrote a floating RECURRENCE-ID, which stops matching
+the instance the rule generates so "edit this one" renders as a DUPLICATE, and
+`exclude_occurrence` wrote a floating EXDATE, which excludes nothing so a deleted
+occurrence comes back. A UTC series lost its zone too.
+
+All three read their anchor from `_anchor_from_iso`, which had an arm for an
+AWARE ISO and none for the naive one the read path actually emits — **a guard as
+wide as the set it enumerates**, which is the pattern this whole sweep's header
+names. Its own docstring explained the arm that was there.
 
 **Two decisions where the shape of the fix mattered more than the fix.**
 

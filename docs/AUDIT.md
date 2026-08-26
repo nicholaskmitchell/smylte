@@ -1,8 +1,8 @@
 # Audit backlog
 
-**16 open** — 15 from the 2026-08-25 sweep at the top of this file, plus one found
-during its remediation and marked `· found in remediation`; every finding from
-every earlier sweep is closed.
+**15 open**, all from the 2026-08-25 sweep at the top of this file; every finding
+from every earlier sweep is closed, as is the one this sweep's own remediation
+turned up (marked `· found in remediation`).
 
 Findings from the adversarial audit sweeps — one deep finder per subsystem, then
 two independent verifiers per finding whose job is to *refute* it. Everything
@@ -1782,8 +1782,8 @@ break` does: d = date.fromisoformat(start) span_end = (d +
 timedelta(days=1)).isoformat() if d < date.max else d.isoformat() (or clamp
 `_day_or_today` to a sane horizon).
 
-#### [ ] split_series writes the tail's DTSTART as a FLOATING time, so "this and following" strips a zoned series of its timezone
-`backend/tasksd/ical/edit.py:1858` · **medium** · bug · stage 3 · found in remediation
+#### [x] Every write derived from an occurrence anchor is a FLOATING time, so "this and following", "this event" and "delete this event" all strip a series of its timezone
+`backend/tasksd/ical/edit.py:696` · **medium** · bug · stage 3 · found in remediation
 
 Found while verifying, for Stage 3's cadence fix, that `split_series` really re-rules
 the tail. It does — and it also drops the TZID. The tail is written with a new UID and
@@ -1829,10 +1829,59 @@ round trip on all three shapes (TZID+VTIMEZONE, `Z`, `VALUE=DATE`), not just tha
 occurrences expand — an expansion computed on the same host cannot tell a floating time
 from a correctly zoned one.
 
-**Not pinned.** Found by a probe during Stage 3's remediation rather than by a sweep, and
-recorded here rather than fixed in the same commit: the fix belongs in the ical edit path
-with a pin and a mutation pass of its own, alongside the rest of that file's Stage 3
-work.
+**WIDER THAN FIRST RECORDED, and the widening is the finding.** The entry above was
+written against `split_series` alone, because that is the path the cadence fix had made
+it look at. Driving the other two anchor consumers found the same defect in both, each
+failing differently:
+
+```
+Same zoned series, anchor "2026-01-07T09:00:00" (the form the read path emits):
+
+  split_series      -> DTSTART:20260107T090000          the tail drifts from its own head
+  apply_occurrence_override
+                    -> RECURRENCE-ID:20260107T090000    stops matching the generated
+                       DTSTART:20260107T090000          instance: the override renders as
+                                                        a DUPLICATE beside the original
+  exclude_occurrence -> EXDATE:20260107T090000          excludes nothing: the deleted
+                                                        occurrence comes back
+
+A UTC series loses its zone too: DTSTART:20260107T150000, not ...150000Z.
+```
+
+The RECURRENCE-ID case is the sharp one, and this repo already knows why: `split_series`'
+own comments describe an override whose anchor stopped matching as rendering "as a
+duplicate alongside the generated instance", and aug19 closed a HIGH on an orphan
+RECURRENCE-ID reading back as a live occurrence and blocking an hour on the public
+booking page.
+
+**Fixed** in `_anchor_from_iso`, which is the one place all three read their anchor from.
+It already had an arm re-expressing an AWARE ISO in the master's real zone, with a
+docstring explaining that a numeric offset would otherwise serialize as a fabricated
+`TZID="UTC-06:00"`. The arm that was missing is the one that runs in production: the read
+path emits, and the SPA sends back, a NAIVE local ISO in the series' own zone. The zone
+is now ATTACHED to it — not converted, because the value already IS a reading in that
+zone.
+
+**A guard as wide as the set it enumerates, again** — the pattern this sweep's own header
+names. The aware arm was correct, documented, and covered one of the two ways an anchor
+arrives.
+
+**Attached, not converted, and the test says so exactly.** Reading the naive anchor as UTC
+and converting produces a value that carries a zone and names a DIFFERENT INSTANT: 09:00
+Chicago is not 09:00 UTC. Both that and a hard-coded UTC attach were caught only by
+accident at first — through `_require_occurrence` rejecting an anchor that had stopped
+naming an occurrence — so the assertion is now the exact serialized line,
+`DTSTART;TZID=America/Chicago:20260107T090000`.
+
+**Two controls.** An all-day anchor is a `date` and keeps no zone, because `VALUE=DATE` is
+the whole of what makes an event all-day — a mutation attaching a zone to every anchor
+turned an all-day series timed and broke four tests in `test_recur.py` besides. And a
+series already in UTC stays in UTC rather than acquiring a TZID from anywhere.
+
+**Covered by** `test_a_value_written_from_an_anchor_keeps_the_series_timezone` (3 cases),
+`test_an_all_day_anchor_is_still_written_as_a_date` and
+`test_a_series_that_is_already_in_utc_stays_in_utc` in
+`backend/tests/test_backlog_aug25_stage3.py`.
 
 ### Frontend & mobile
 

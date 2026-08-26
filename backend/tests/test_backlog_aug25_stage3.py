@@ -580,3 +580,119 @@ def test_a_move_onto_a_stranger_is_still_a_conflict():
 
     assert dav.store[DST + "e-1.ics"][1] == FOREIGN, "the stranger's event was overwritten"
     assert SRC + "e-1.ics" in dav.store, "the source was deleted despite the conflict"
+
+
+# ── AUDIT (found in remediation): every write derived from an occurrence anchor
+#    loses the series' timezone ────────────────────────────────────────────────
+
+_CHICAGO_VTZ = (
+    "BEGIN:VTIMEZONE\r\nTZID:America/Chicago\r\n"
+    "BEGIN:STANDARD\r\nDTSTART:19701101T020000\r\n"
+    "TZOFFSETFROM:-0500\r\nTZOFFSETTO:-0600\r\n"
+    "RRULE:FREQ=YEARLY;BYMONTH=11;BYDAY=1SU\r\nEND:STANDARD\r\n"
+    "BEGIN:DAYLIGHT\r\nDTSTART:19700308T020000\r\n"
+    "TZOFFSETFROM:-0600\r\nTZOFFSETTO:-0500\r\n"
+    "RRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=2SU\r\nEND:DAYLIGHT\r\nEND:VTIMEZONE\r\n"
+)
+
+ZONED = (
+    "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//x//EN\r\n" + _CHICAGO_VTZ +
+    "BEGIN:VEVENT\r\nUID:z-1\r\n"
+    "DTSTART;TZID=America/Chicago:20260105T090000\r\n"
+    "DTEND;TZID=America/Chicago:20260105T093000\r\n"
+    "RRULE:FREQ=DAILY;COUNT=6\r\nSUMMARY:Standup\r\n"
+    "END:VEVENT\r\nEND:VCALENDAR\r\n"
+)
+# The third occurrence, in the form the READ path emits and the SPA sends back:
+# a naive local ISO in the series' own zone, with no offset on it.
+ANCHOR = "2026-01-07T09:00:00"
+
+
+def _props(doc: bytes, *names: str) -> list[str]:
+    """The named properties as they were SERIALIZED, VEVENTs only.
+
+    Read off the bytes rather than off a re-parsed object on purpose: the defect
+    is what goes on the wire for other clients to read, and a value that lost its
+    TZID re-parses locally into something that still looks reasonable.
+    """
+    body = doc.decode().split("BEGIN:VEVENT", 1)[1]
+    return [
+        line for line in body.replace("\r\n ", "").split("\r\n")
+        if line.split(":", 1)[0].split(";", 1)[0] in names
+    ]
+
+
+@pytest.mark.parametrize("label, produce, prop", [
+    ("this and following",
+     lambda: split_series(ZONED, ANCHOR, EventEdit())[1], "DTSTART"),
+    ("this event (override)",
+     lambda: ical.apply_occurrence_override(ZONED, ANCHOR, EventEdit(summary="X")),
+     "RECURRENCE-ID"),
+    ("delete this event",
+     lambda: ical.exclude_occurrence(ZONED, ANCHOR), "EXDATE"),
+])
+def test_a_value_written_from_an_anchor_keeps_the_series_timezone(label, produce, prop):
+    """An anchor arrives NAIVE and everything written from it goes out floating.
+
+    `_anchor_from_iso` re-expresses an *aware* ISO in the master's real zone, and
+    its docstring explains why: a numeric offset would otherwise serialize as a
+    fabricated `TZID="UTC-06:00"`. But the read path emits — and the SPA sends
+    back — a NAIVE local ISO, and that branch never runs, so the anchor stays
+    naive and icalendar writes a form-1 DATE-TIME with no TZID and no `Z`.
+
+    RFC 5545 §3.3.5 makes that a FLOATING time: "09:00 wherever the reader is",
+    not "09:00 in Chicago". Three different writes are affected and each fails
+    differently in another client:
+
+    * the split tail's DTSTART — every occurrence from the split point on stops
+      being an instant, so the tail drifts away from the head across a DST
+      boundary and the two halves of one series disagree about what time it is;
+    * an override's RECURRENCE-ID — it no longer matches the instance the rule
+      generates, so "edit this one" renders as a DUPLICATE beside the original,
+      the exact failure `split_series`' own comments describe;
+    * an EXDATE — the excluded occurrence is not excluded, so a deleted
+      occurrence comes back.
+
+    Asserted on the SERIALIZED property, because that is what other clients read,
+    and asserted EXACTLY rather than as "carries some zone". The zone has to be
+    ATTACHED to the wall time the anchor names, not the anchor read as UTC and
+    converted: both of those mutations produce a value that has a zone and names
+    a different instant — 09:00 Chicago is not 09:00 UTC — and a looser assertion
+    caught them only by accident, through `_require_occurrence` rejecting an
+    anchor that had stopped naming an occurrence at all.
+    """
+    assert _props(produce(), prop) == [f"{prop};TZID=America/Chicago:20260107T090000"]
+
+
+def test_an_all_day_anchor_is_still_written_as_a_date():
+    """CONTROL. The over-correction is to attach a zone to every anchor, which
+    would turn an all-day series' anchor into a midnight DATE-TIME — a different
+    value type, and `VALUE=DATE` is the whole of what makes an event all-day.
+    """
+    allday = (
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//x//EN\r\nBEGIN:VEVENT\r\n"
+        "UID:z-2\r\nDTSTART;VALUE=DATE:20260105\r\nDTEND;VALUE=DATE:20260106\r\n"
+        "RRULE:FREQ=DAILY;COUNT=6\r\nSUMMARY:Away\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+    )
+    _head, tail = split_series(allday, "2026-01-07", EventEdit())
+    for line in _props(tail, "DTSTART", "DTEND"):
+        assert "VALUE=DATE:" in line and "T" not in line.split(":", 1)[1], (
+            f"an all-day series came back timed: {line!r}")
+
+    excluded = ical.exclude_occurrence(allday, "2026-01-07")
+    assert _props(excluded, "EXDATE") == ["EXDATE;VALUE=DATE:20260107"], (
+        _props(excluded, "EXDATE"))
+
+
+def test_a_series_that_is_already_in_utc_stays_in_utc():
+    """CONTROL. A `Z` series must not acquire a TZID from anywhere: the anchor
+    has no zone of its own to keep, and inventing one would rewrite a value that
+    was already unambiguous.
+    """
+    utc = (
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//x//EN\r\nBEGIN:VEVENT\r\n"
+        "UID:z-3\r\nDTSTART:20260105T150000Z\r\nDTEND:20260105T153000Z\r\n"
+        "RRULE:FREQ=DAILY;COUNT=6\r\nSUMMARY:Standup\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+    )
+    _head, tail = split_series(utc, "2026-01-07T15:00:00", EventEdit())
+    assert _props(tail, "DTSTART") == ["DTSTART:20260107T150000Z"], _props(tail, "DTSTART")
