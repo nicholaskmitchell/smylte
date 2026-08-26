@@ -1,6 +1,6 @@
 # Audit backlog
 
-**28 open**, all from the 2026-08-25 sweep at the top of this file; every finding
+**27 open**, all from the 2026-08-25 sweep at the top of this file; every finding
 from every earlier sweep is closed.
 
 Findings from the adversarial audit sweeps — one deep finder per subsystem, then
@@ -3808,7 +3808,7 @@ commit the generated packages.lock.json, and pass `--locked-mode` to the `dotnet
 publish`/`dotnet build`/`dotnet test` invocations in ci.yml and desktop-release.yml so a
 drifted lock file fails the build instead of silently resolving something new.
 
-#### [ ] The desktop client serves the SPA with no Content-Security-Policy — the whole policy is a response header the local server never emits
+#### [x] The desktop client serves the SPA with no Content-Security-Policy — the whole policy is a response header the local server never emits
 `desktop/Smylte.Desktop/LocalServer.cs:230` · **low** · security · stage 2
 
 The app's CSP exists only as an HTTP response header attached by the backend
@@ -3850,6 +3850,14 @@ should assert the desktop response carries a policy containing the served file's
 hash.
 
 **Pinned by** `LocalServerCspTests.TheDocumentStillCarriesNoPolicy` (live; it goes red when the policy lands) paired with the skipped `…CarriesAPolicy` in `desktop/Smylte.Desktop.Tests/LocalServerTests.cs` — xunit has no xfail.
+
+**Fixed** as suggested: `LocalServer` reads the served index.html once at construction, sha256s each inline `<script>` body, and emits the identical directive string from `ServeStatic` — on EVERY static response, as CSPMiddleware does, plus `X-Content-Type-Options: nosniff`. `AddHeader` and not `AppendHeader`, because browsers enforce the intersection of every policy present and a duplicate is indistinguishable from a deliberate tightening.
+
+The builder lives IN `LocalServer.cs` rather than a new file: the test project links sources by name (`<Compile Include="../Smylte.Desktop/LocalServer.cs" />`), so a new file would have to be added there too, and forgetting is silent.
+
+The pin was a PAIR — xunit has no xfail — and the ritual `docs/STAGES.md` describes was performed: the live `TheDocumentStillCarriesNoPolicy` fired with its own instructions ("GOOD NEWS, AND AN ACTION") the moment the policy landed, and was deleted; `TheDocumentCarriesAPolicy` was un-skipped. Two assertions were added beside it, because "a policy exists" is not the corrected answer: one that the policy carries the sha256 of the script ACTUALLY SERVED (a `script-src 'self'` with no hash BLOCKS the pre-paint script, which is a blank window), computed independently of `PolicyFor` so it cannot agree with a hashing bug; and one that the SPA fallback route `/book/<token>` gets the same single header, since that path serves the document through `Resolve(...) ?? index.html`.
+
+**One duplication no behavioural test can reach**, and it now has a reader: the two directive LISTS. Each suite only ever compares its own side, so a directive added or tightened in `csp.py` and not in the C# would go unnoticed — and the desktop window is exactly the surface nobody is looking at when they edit `build_policy`. `test_csp.py::test_the_desktop_client_builds_the_same_policy` reads `LocalServer.cs` and compares the sets. It is a source-shape assertion, which `test_backlog_stage5.py`'s header rightly disowns as a SUBSTITUTE for a behavioural one; it is not a substitute here, it is the only reader that sees both sides. Confirmed by mutation on three shapes: a directive tightened only in Python, one dropped only in the C#, and `PolicyFor` renamed away.
 
 #### [x] `Smylte.exe --setup`, the documented way to change server or credentials, silently does nothing whenever the app is running
 `desktop/Smylte.Desktop/Program.cs:239` · **low** · bug · minor
