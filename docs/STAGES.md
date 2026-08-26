@@ -9,19 +9,24 @@ and kept as the record of how the harness behaved in practice — the latter's "
 strengths of pin" and "Ordering" notes are the reason the later pins are shaped
 the way they are.
 
-The **2026-08-25** sweep at the top IS a live worklist: its pins are
-`xfail(strict=True)` / `it.fails` and its findings are open. Everything from
-`# Sweep — 2026-08-19` down is history — no marker remains in either of those, and
-every pin named there is an ordinary test that must stay green.
+The **2026-08-25** sweep at the top IS a live worklist: stages 4 and 5 still carry
+`xfail(strict=True)` / `it.fails` pins against open findings. Stages 2 and 3 are
+closed within it — their markers are gone and their tests are ordinary regression
+tests — and their sections are kept in place, with what remediation taught
+appended to each. Everything from `# Sweep — 2026-08-19` down is history: no
+marker remains in either of those, and every pin named there is an ordinary test
+that must stay green.
 
 # Sweep — 2026-08-25 · OPEN
 
-34 findings survived verification. **All five stages are staged, and STAGE 2 IS
-CLOSED** — 7 fixed, 27 open. The rest carry an executable pin (12 + 12), one is
-deliberately unpinned with its reason written down (stage 4, the WinForms dock
-order), and stage 5's two test gaps came out as ordinary passing tests because
-their subjects were correct. This section is the live worklist — the only one in
-this file — and everything below it is history.
+34 findings survived verification. **All five stages are staged; STAGES 2 AND 3
+ARE CLOSED** — 19 fixed, 15 of the sweep's own still open, plus one NEW finding
+opened by stage 3's remediation (`AUDIT.md`, marked `· found in remediation`).
+The rest carry an executable pin, one is deliberately unpinned with its reason
+written down (stage 4, the WinForms dock order), and stage 5's two test gaps came
+out as ordinary passing tests because their subjects were correct. This section
+is the live worklist — the only one in this file — and everything below it is
+history.
 
 Same five buckets and the same sorting criteria as the two closed sweeps: a
 finding lands in a stage by what its failure *does*, lower stage winning a tie,
@@ -30,14 +35,14 @@ has not changed.
 
 **Stage 1 is empty**, and that is a result rather than an omission. The sweep's
 eight HIGHs are all closed already, and nothing left puts untrusted input into an
-unhandled exception. The 34 were 16 medium and 18 low; the 27 still open are 15
-medium and 12 low.
+unhandled exception. The 34 were 16 medium and 18 low; the 15 of them still open
+are 6 medium and 9 low.
 
 | stage | findings | pins |
 |---|---|---|
 | 1 | 0 | — |
 | 2 ✅ | 7 · **closed** | `backend/tests/test_backlog_aug25_stage2.py`, `desktop/Smylte.Desktop.Tests/LocalServerTests.cs` |
-| 3 | 12 | `backend/tests/test_backlog_aug25_stage3.py`, `frontend/src/backlog.aug25.stage3.test.tsx` |
+| 3 ✅ | 12 · **closed** | `backend/tests/test_backlog_aug25_stage3.py`, `frontend/src/backlog.aug25.stage3.test.tsx` |
 | 4 | 13 | `frontend/src/backlog.aug25.stage4.test.tsx`, `frontend/src/backlog.aug25.stage4.browser.test.tsx` |
 | 5 | 2 | `backend/tests/test_backlog_aug25_stage5.py` (no markers — see below) |
 
@@ -202,10 +207,17 @@ And what the file assertion still cannot say: that systemd then REFUSES the
 write. That needs a real host, and it stays recorded here as verifiable only
 there — as does the WinForms dock order in stage 4, for the same class of reason.
 
-## Stage 3 — Silent data corruption
+## Stage 3 — Silent data corruption ✅ DONE
 
-12 findings · 9 medium, 3 low · **OPEN** · `backend/tests/test_backlog_aug25_stage3.py`,
+12 findings · 9 medium, 3 low · **closed** · `backend/tests/test_backlog_aug25_stage3.py`,
 `frontend/src/backlog.aug25.stage3.test.tsx`
+
+All twelve are fixed and ticked in `docs/AUDIT.md`; every `xfail`/`it.fails`
+marker is gone and those tests are ordinary regression tests that must stay
+green. Ten commits, grouped by file, each carrying the pin it closes, the control
+that stops the obvious over-correction, and the extra tests its mutation pass
+demanded. **One NEW finding was opened by this stage's own verification** and is
+recorded rather than fixed — see "What remediation taught" below.
 
 Nothing raises, nothing is logged, and the answer is quietly wrong. Both closed
 sweeps call this the dangerous stage, and `backlog.aug19.stage3.test.tsx`'s header
@@ -303,6 +315,84 @@ has passed. So the fix does not necessarily change the answer, and any pin would
 be pinning one design decision. Driving it at all also needs a frozen wall clock
 this suite has no library for. Whoever fixes the filters should settle the
 question explicitly and write the test that follows from the decision.
+
+**Settled during remediation, as that last sentence asks.** The MCP filter now
+follows the app's OWN rule rather than inventing a third: `util.ts::isOverdue`
+says an all-day item is not overdue until its whole day has passed, and
+`service._due_day` resolves a deadline in `home_timezone`. `_due_parts` returns a
+deadline as `(due_at, overdue_at)`, and for a date-only value `overdue_at` is the
+start of the NEXT calendar day in that zone — both rules at once.
+
+Adopting the day rule is what made it testable, which is the part worth keeping.
+Under the "midnight" reading, whether today's date-only task is overdue depends on
+what hour the test runs, so there was nothing to assert and the "frozen wall
+clock" problem above was real. Under this one, today's is never overdue and
+yesterday's always is, at any hour — so the test needs no clock at all.
+
+### What remediation taught, and what it cost
+
+**A mutation pass found something in nine of the twelve.** Every fix was run
+against two to five hand-written wrong versions of itself before its commit. What
+survived was not usually a wrong fix — it was a *second manifestation the pin
+could not see*, and each one became a test:
+
+* **`reorder`'s TARGET lookup.** Keying only the DRAGGED row on `taskKey` passes
+  the pin and the second manifestation both, because in each the duplicated uid's
+  first occurrence IS the row being dropped on. The test now drops onto the LATER
+  copy.
+* **A DURATION's two halves have an ORDER.** Nominal-then-exact and
+  exact-then-nominal agree everywhere except one shape: `P1DT2H` starting an hour
+  before spring-forward is 03:00 the next day one way and 04:00 the other. Five of
+  six table rows passed the swapped version.
+* **`CapacityStep`.** The reflection is pinned; the capacity is named in the
+  finding's prose and is not. Fixing only the pinned one closes the finding and
+  leaves "until 6pm" typed and Escaped exactly as lost.
+* **The retry ref's SCOPE.** Remembering a failed line's client_id is the fix;
+  remembering it for the NEXT line, or past the retry that succeeded, are two new
+  bugs, and both survived until they had tests.
+* **A CSS assertion that was reading its own comment.** The `touch-action` test
+  matched the raw stylesheet, and the comment above the rule names both selectors
+  and says "scoped to `.arranging`" — so a mutation that dropped the scoping
+  passed. It strips comments first now. This is the same shape as stage 2's
+  vacuous pin, in a different disguise: **a test that greps source text can be
+  satisfied by prose.**
+
+**The pin's accepted alternative was the unsafe one, once.** The move-replay pin
+says a rollback on any delete failure and replay tolerance "both reach the same
+place", and for the case it drives they do. They do not in general: a transport
+error is a lost REPLY as often as a lost request, so rolling back there deletes
+the one remaining copy and the event is gone from BOTH calendars. That mutation
+passed the pin AND its control. A duplicate is recoverable; a deletion is not.
+
+**Verifying a fix's premise found a new bug.** The cadence fix is only correct if
+the backend's `split_series` really re-rules the tail, so that was driven
+in-process before relying on it. It does — and it also writes the tail's DTSTART
+as a FLOATING time, dropping the TZID even with a `VTIMEZONE` present, so "this
+and following" quietly strips a zoned series of its timezone from the split point
+on. It is recorded in `AUDIT.md` as an open finding marked
+`· found in remediation` rather than fixed in the same commit: it belongs in the
+ical edit path with a pin and a mutation pass of its own.
+
+**Two decisions where the shape of the fix mattered more than the fix.**
+
+* `durationMs`'s return shape was the open question, and the answer was neither
+  option the plan listed. `splitDuration` is now the one parser and returns
+  `{nominalDays, exactMs}`; `durationMs` is a thin wrapper over it. One parser, so
+  the overflow and refusal behaviour its own tests pin cannot drift — and no edit
+  to a closed finding's control.
+* "This event" cannot carry a cadence change, and the plan said to DISABLE the
+  Repeat select while that button is on screen. It cannot: the scope prompt
+  REPLACES the form, so a disabled control is not visible to disable, and the
+  pin's own refusal branch — dialog still open, Repeat still reading "weekly" —
+  would be unsatisfiable. The refusal sends the user back to the form with the
+  change still in it instead, and the prompt warns before they choose.
+
+**One deliberate test edit**, recorded in AUDIT.md beside its finding:
+`backlog.stage4.test.tsx` calls `d.reorder` directly and now passes two rows
+instead of two uid strings, because the signature widened. Only the argument
+shape changed. The `TagInput` conversion needed one more — the control types into
+a chip control rather than rewriting a comma-joined string — which is the
+affordance the finding's own suggested fix asks for.
 
 ## Stage 4 — User-visible correctness & rendering
 
