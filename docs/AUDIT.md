@@ -1,6 +1,6 @@
 # Audit backlog
 
-**25 open**, all from the 2026-08-25 sweep at the top of this file; every finding
+**24 open**, all from the 2026-08-25 sweep at the top of this file; every finding
 from every earlier sweep is closed.
 
 Findings from the adversarial audit sweeps — one deep finder per subsystem, then
@@ -1621,7 +1621,7 @@ The model asking for the next meeting, or reading only page one, is handed the l
 or "")`, with an unreadable start degrading to a sentinel rather than raising, and keep
 the `id` tie-break so paging is a total order.
 
-#### [ ] move_event has no replay tolerance: a failure between the destination PUT and the source DELETE duplicates the event and makes every retry a permanent 409
+#### [x] move_event has no replay tolerance: a failure between the destination PUT and the source DELETE duplicates the event and makes every retry a permanent 409
 `backend/tasksd/sync/engine.py:406` · **low** · bug · stage 3
 
 `move_event` is copy-then-delete. The destination PUT is `if_none_match="*"`, and ANY
@@ -1685,6 +1685,14 @@ any exception from the source DELETE where the delete provably did not happen, o
 minimum log it so the duplicate is discoverable.
 
 **Pinned by** `test_a_move_whose_delete_reply_was_lost_can_still_be_completed` in `backend/tests/test_backlog_aug25_stage3.py`.
+
+**Fixed** with the suggested fix's first half and NOT its second. A new `_adopt_moved_copy` gives the destination PUT the replay tolerance `_put_new` already has: on `PreconditionFailed`/`Conflict` it reads the occupant of `new_href`, and a resource carrying the UID being moved is this move's own earlier copy — the move falls through to the source delete and completes. Only a stranger, or a `no-uid-conflict` 409 whose occupant is not at `new_href` at all, is still a `ConflictError`, which is what the control asserts and what `_put_new`'s own comment draws the line at.
+
+**The adopted copy is REFRESHED from the wire, not merely accepted** — a deliberate addition the finding does not ask for. `move_event` reads the bytes off the wire precisely because another client may edit the event inside the window, and a retry reopens that window: the destination holds the first attempt's bytes while the source, about to be deleted, holds the newer ones. Accepting the occupant unchanged discards that revision in exactly the way this method's docstring says it must not, so the adopt path re-PUTs `current.data` under `if_match=stored.etag`. `test_the_retry_carries_the_revision_the_source_holds_NOW` pins it, and a mutation that only accepts fails there.
+
+**The rollback was deliberately NOT widened, and that is a decision the entry should record.** The finding offers "roll the copy back for any exception from the source DELETE" as an alternative, and the pin accepts either because both reach the same end state *when the delete provably did not happen*. A transport error is a lost REPLY as often as a lost request, and the two are indistinguishable from this side — so rolling back there deletes the one remaining copy and the event is gone from BOTH calendars. That mutation passed the pin and the control; `test_a_delete_that_happened_but_was_not_heard_does_not_destroy_the_event` now catches it. A duplicate is recoverable, a deletion is not. The 412 branch keeps its rollback: there the server ANSWERED, which is the "provably did not happen" the entry means.
+
+**The other exceptions take the entry's minimum instead**: `log.error(..., exc_info=True)` naming the uid, both hrefs and the fact that the event is in two calendars until the move is retried — discoverable rather than silent, and now actually retryable.
 
 #### [x] A lone surrogate in a dynamic-client-registration body is echoed into the error response and 500s the unauthenticated /oauth/register endpoint
 `backend/tasksd/mcp/oauth.py:257` · **low** · bug · minor
