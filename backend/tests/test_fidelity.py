@@ -5,13 +5,16 @@ own output. If any of these fail, no UI work should proceed.
 """
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
+from functools import lru_cache
 from pathlib import Path
 
 import pytest
+from icalendar import Calendar
 
 from tasksd.ical import TaskEdit, apply_changes, build_new, extract_from_raw, parse_calendar
 from tasksd.ical import canonical as C
+from tasksd.ical import recur
 from tasksd.ical.edit import (
     EventEdit,
     apply_event_changes,
@@ -304,8 +307,60 @@ def test_a_zoned_dtstart_keeps_its_tzid_too():
 # reordered ATTENDEE list, a dropped `;CN="Doe, Jane"`, a VALARM that lost its
 # X-WR-ALARMUID, and a VTIMEZONE the writer forgot to carry.
 
-ANCHOR = "2026-07-20T14:00:00-05:00"          # the third occurrence; also the override
-LATER = "2026-07-27T14:00:00-05:00"           # the fourth, with no override on it
+# The two occurrences every event test below addresses. DERIVED per capture, not
+# written down: `corpus/README.md` promises that dropping a real capture into the
+# directory is all it takes to widen this suite, and hard-coding one file's
+# instants broke that promise — four of the six tests here would have failed on
+# the second capture, for the file's dates rather than for anything the writer
+# did. Derived through the app's own expander, so a capture whose series this
+# codebase cannot read fails loudly instead of being silently unaddressed.
+def _master(raw: str):
+    """The series master: the VEVENT with no RECURRENCE-ID."""
+    for comp in Calendar.from_ical(raw).walk("VEVENT"):
+        if comp.get("RECURRENCE-ID") is None:
+            return comp
+    return None
+
+
+@lru_cache(maxsize=None)
+def _anchors(path: Path) -> tuple[str, str]:
+    """`(anchor, later)` for one capture, as the ISO anchors the read path emits.
+
+    `anchor` is an occurrence that already carries an override and is not the
+    first — `split_series` needs a non-empty head, and the override is the part
+    of the series most likely to be lost by a write. `later` is a LATER
+    occurrence with NO override, because `apply_occurrence_override` is asserted
+    to ADD a component and `exclude_occurrence` to remove a live one.
+    """
+    raw = _read(path)
+    master = _master(raw)
+    assert master is not None, f"{path.name}: no master VEVENT"
+    ds = master["DTSTART"].dt
+    begin = ds.date() if isinstance(ds, datetime) else ds
+    occ = sorted(
+        recur.expand_occurrences(raw, begin, begin + timedelta(days=365 * 5),
+                                 max_occurrences=2000),
+        key=lambda o: o.recurrence_id)
+    assert len(occ) >= 3, (
+        f"{path.name}: only {len(occ)} occurrence(s) — a capture has to carry a "
+        "series for these tests to address one")
+
+    overridden = [o for o in occ[1:] if o.is_override]
+    anchor = overridden[0] if overridden else occ[len(occ) // 2]
+    later = next((o for o in occ if o.recurrence_id > anchor.recurrence_id
+                  and not o.is_override), None)
+    assert later is not None, (
+        f"{path.name}: no un-overridden occurrence after {anchor.recurrence_id}")
+    return anchor.recurrence_id, later.recurrence_id
+
+
+def _shifted(later: str):
+    """Where a drag of `later` should land it: two hours on, or two days for an
+    all-day series. Naive, which is what the SPA sends — the writer re-anchors it
+    into the series' own zone."""
+    if "T" in later:
+        return datetime.fromisoformat(later).replace(tzinfo=None) + timedelta(hours=2)
+    return date.fromisoformat(later) + timedelta(days=2)
 
 
 def _events(text: str):
@@ -347,8 +402,9 @@ def test_overriding_one_occurrence_preserves_the_rest(path: Path):
     """`apply_occurrence_override` — "this event". It ADDS a component, so the
     master and every pre-existing override must come through unchanged."""
     original = _read(path)
+    _, later = _anchors(path)
     edited = apply_occurrence_override(
-        original, LATER, EventEdit(summary="just this one")).decode("utf-8")
+        original, later, EventEdit(summary="just this one")).decode("utf-8")
     drop = TOUCHED | {"LAST-MODIFIED", "DTSTAMP", "SEQUENCE"}
     before, after = _foreign_bag(original, drop), _foreign_bag(edited, drop)
     missing = before - after
@@ -360,7 +416,8 @@ def test_overriding_one_occurrence_preserves_the_rest(path: Path):
 def test_excluding_one_occurrence_preserves_everything_else(path: Path):
     """`exclude_occurrence` — "delete this event". Only EXDATE may change."""
     original = _read(path)
-    edited = exclude_occurrence(original, LATER).decode("utf-8")
+    _, later = _anchors(path)
+    edited = exclude_occurrence(original, later).decode("utf-8")
     drop = frozenset({"EXDATE", "LAST-MODIFIED", "DTSTAMP", "SEQUENCE"})
     before, after = _foreign_bag(original, drop), _foreign_bag(edited, drop)
     assert not (before - after), (
@@ -371,11 +428,11 @@ def test_excluding_one_occurrence_preserves_everything_else(path: Path):
 def test_shifting_a_series_preserves_foreign_data(path: Path):
     """`shift_series` — dragging the whole series. Times move; nothing else may."""
     original = _read(path)
+    _, later = _anchors(path)
     # Anchored on an occurrence, as the SPA does: the offset applied to one
     # instance moves the whole series by it.
     edited = shift_series(
-        original, LATER,
-        EventEdit(dtstart=datetime(2026, 7, 27, 16, 0))).decode("utf-8")
+        original, later, EventEdit(dtstart=_shifted(later))).decode("utf-8")
     drop = SPAN | RECURRENCE | {"LAST-MODIFIED", "DTSTAMP", "SEQUENCE"}
     before, after = _foreign_bag(original, drop), _foreign_bag(edited, drop)
     assert not (before - after), (
@@ -392,7 +449,8 @@ def test_splitting_a_series_carries_foreign_data_into_both_halves(path: Path):
     because a fix that carried the head and rebuilt the tail would pass a
     one-sided test."""
     original = _read(path)
-    head, tail = split_series(original, ANCHOR, EventEdit())
+    anchor, _ = _anchors(path)
+    head, tail = split_series(original, anchor, EventEdit())
     drop = SPAN | RECURRENCE | {"LAST-MODIFIED", "DTSTAMP", "SEQUENCE", "CREATED"}
     before = _foreign_bag(original, drop)
 
