@@ -1030,7 +1030,7 @@ describe('2026-08-25 — reaching the month grid from a keyboard', () => {
 
   // ── AUDIT (open): CalendarView.tsx:623 — the whole month grid is
   //    keyboard-inoperable: day cells and event chips are unfocusable divs ──
-  it.fails('exposes the event chip and the day cell as operable controls', async () => {
+  it('exposes the event chip and the day cell as operable controls', async () => {
     // EVIDENCE. Every interactive surface in the month grid is a plain
     // `<div onClick>` with no `role`, no `tabIndex` and no `onKeyDown`: the day
     // cell (line 584 — the only way to create an event on that day), the event
@@ -1065,7 +1065,17 @@ describe('2026-08-25 — reaching the month grid from a keyboard', () => {
     })
 
     const chip = grid.querySelector('.cal-ev')
-    const cell = grid.querySelector('.cal-cell')
+    // DELIBERATE EDIT to this line, recorded in AUDIT.md, and it makes the
+    // assertion agree with the docstring above it. That docstring says "a roving
+    // tabindex over the 42 cells (the suggested fix for the grid) passes too,
+    // since at least one cell carries tabindex=\"0\" at any time" — but the
+    // assertion took the FIRST cell, which under a roving tabindex is a leading
+    // blank from the previous month at `-1`. So the pin as written rejected the
+    // repair it names, which is the one that shipped. It now takes the cell that
+    // actually holds the tab stop, falling back to the first so a grid of real
+    // `<button>`s (no tabindex attribute at all) still passes exactly as before.
+    const cell = grid.querySelector('.cal-cell[tabindex]:not([tabindex="-1"])')
+      ?? grid.querySelector('.cal-cell')
     const reachable = grid.querySelectorAll(FOCUSABLE).length
 
     expect({
@@ -1074,6 +1084,92 @@ describe('2026-08-25 — reaching the month grid from a keyboard', () => {
       + `${describeNode(chip)}, cell is ${describeNode(cell)}, and the grid holds `
       + `${reachable} focusable nodes`)
       .toEqual({ chip: true, cell: true, reachable: true })
+  })
+
+  // The pin asks only that SOMETHING is focusable; a roving tabindex is only
+  // worth having if the arrows actually move it, and it cannot see that. These
+  // are the walk.
+  const cells = () => [...document.querySelectorAll<HTMLElement>('.cal-cell')]
+  const tabStop = () =>
+    cells().find((c) => c.getAttribute('tabindex') === '0')?.dataset.day
+
+  /** Focused on a cell in the MIDDLE of the six-week grid, so no single arrow
+   *  runs off an edge and pages the month — which is correct behaviour and not
+   *  what the step tests are about. `.focus()` works on a `tabindex="-1"` cell,
+   *  and the cell's own `onFocus` makes it the tab stop, which is the same path
+   *  a click takes. */
+  const openGrid = async (at = 21) => {
+    render(<CalHarness />)
+    await waitFor(() => expect(document.querySelector('.cal-ev')).toBeTruthy())
+    cells()[at].focus()
+    await waitFor(() => expect(cells()[at].getAttribute('tabindex')).toBe('0'))
+    return cells()[at]
+  }
+
+  it('has exactly one tab stop for the whole month', async () => {
+    await openGrid()
+
+    expect(cells().length).toBe(42)
+    expect(cells().filter((c) => c.getAttribute('tabindex') === '0')).toHaveLength(1)
+  })
+
+  it.each([
+    ['ArrowRight', 1],
+    ['ArrowLeft', -1],
+    ['ArrowDown', 7],
+    ['ArrowUp', -7],
+  ])('moves the tab stop %s day(s)', async (key, by) => {
+    await openGrid()
+    const before = cells().findIndex((c) => c.getAttribute('tabindex') === '0')
+
+    fireEvent.keyDown(cells()[before], { key })
+
+    const after = cells().findIndex((c) => c.getAttribute('tabindex') === '0')
+    expect(after - before).toBe(by)
+    // …and focus FOLLOWS it, or the tab stop is somewhere the reader is not.
+    expect(document.activeElement).toBe(cells()[after])
+  })
+
+  it('opens the new-event draft on Enter', async () => {
+    const cell = await openGrid()
+    const day = cell.dataset.day
+
+    fireEvent.keyDown(cell, { key: 'Enter' })
+
+    const dialog = await screen.findByRole('dialog')
+    // `startsWith`, because a timed draft's Start is a `datetime-local` and
+    // carries a time after the date. The DAY is what Enter chose.
+    expect((within(dialog).getByLabelText('Start') as HTMLInputElement).value)
+      .toMatch(new RegExp(`^${day}`))
+  })
+
+  // Off either end pages the month rather than fencing the walk inside one
+  // six-week window, and the tab stop has to survive that: `keyDay` is a DAY,
+  // and the grid that replaces it starts on a different weekday, so an
+  // index-based tab stop would wander — and a `keyDay` no longer on screen would
+  // leave the grid with no tab stop at all, i.e. out of the tab order.
+  it('keeps a tab stop after paging the month', async () => {
+    const cell = await openGrid()
+    const heading = document.querySelector('.cal-title')?.textContent
+    expect(heading, 'the harness rendered no month heading').toBeTruthy()
+
+    fireEvent.keyDown(cell, { key: 'PageUp' })
+
+    await waitFor(() =>
+      expect(document.querySelector('.cal-title')?.textContent).not.toBe(heading))
+    expect(cells().filter((c) => c.getAttribute('tabindex') === '0')).toHaveLength(1)
+  })
+
+  // CONTROL: the arrows belong to the CELL. A chip is a control of its own and
+  // stops propagation, so typing in one — or pressing Enter on it — must not
+  // also walk the grid underneath.
+  it('does not walk the grid when a chip handles the key', async () => {
+    await openGrid()
+    const before = tabStop()
+
+    fireEvent.keyDown(document.querySelector('.cal-ev')!, { key: 'ArrowRight' })
+
+    expect(tabStop()).toBe(before)
   })
 
   // CONTROL (passes today, must keep passing). The chip still OPENS the editor
