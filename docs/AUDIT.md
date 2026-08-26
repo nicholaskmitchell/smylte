@@ -1,7 +1,8 @@
 # Audit backlog
 
-**21 open**, all from the 2026-08-25 sweep at the top of this file; every finding
-from every earlier sweep is closed.
+**20 open** — 19 from the 2026-08-25 sweep at the top of this file, plus one found
+during its remediation and marked `· found in remediation`; every finding from
+every earlier sweep is closed.
 
 Findings from the adversarial audit sweeps — one deep finder per subsystem, then
 two independent verifiers per finding whose job is to *refute* it. Everything
@@ -1781,6 +1782,58 @@ break` does: d = date.fromisoformat(start) span_end = (d +
 timedelta(days=1)).isoformat() if d < date.max else d.isoformat() (or clamp
 `_day_or_today` to a sane horizon).
 
+#### [ ] split_series writes the tail's DTSTART as a FLOATING time, so "this and following" strips a zoned series of its timezone
+`backend/tasksd/ical/edit.py:1858` · **medium** · bug · stage 3 · found in remediation
+
+Found while verifying, for Stage 3's cadence fix, that `split_series` really re-rules
+the tail. It does — and it also drops the TZID. The tail is written with a new UID and
+`DTSTART` set to the anchor, and the serialized property comes out as bare
+`DTSTART:20260107T090000` with no `TZID` parameter and no trailing `Z`, even when the
+source resource carries `DTSTART;TZID=America/Chicago` AND a matching `VTIMEZONE`
+component (which survives into the tail unused). RFC 5545 §3.3.5 makes a form-1
+DATE-TIME a FLOATING time: it means "09:00 wherever the reader is", not "09:00 in
+Chicago". So every occurrence from the split point on stops being an instant and becomes
+a wall clock — it reads at 09:00 UTC on a UTC host, moves relative to the rest of the
+owner's calendar, and stops shifting with DST while the head (which keeps its TZID)
+keeps shifting. The head and the tail of one series now disagree about what time the
+event is.
+
+<details><summary>Evidence</summary>
+
+```
+In-process against ical.split_series, source resource carrying a full VTIMEZONE:
+
+  source VEVENT:  DTSTART;TZID=America/Chicago:20260105T090000
+                  RRULE:FREQ=DAILY;COUNT=6
+
+  split_series(raw, "2026-01-07T09:00:00", EventEdit())
+
+  head VEVENT DTSTART: 'DTSTART;TZID=America/Chicago:20260105T090000'   <- kept
+  tail VEVENT DTSTART: 'DTSTART:20260107T090000'                        <- FLOATING
+  tail parsed tzinfo:  None
+  tail still contains a VTIMEZONE component: True
+
+Reached from the SPA in two clicks: open any occurrence of a zoned repeating event,
+change anything, press Save, answer "This & following". The same path is taken by
+"delete this and following" (service.delete_event -> split_event(..., delete_tail=True)),
+which discards the tail — so that half is unaffected.
+```
+
+</details>
+
+**Suggested fix.** Carry the master's DTSTART/DTEND value type and TZID onto the tail
+rather than writing the anchor bare — the anchor is already resolved in the master's own
+zone by `_anchor_from_iso`, so the zone is in hand at the point the tail is built. An
+all-day series must stay `VALUE=DATE`, and a UTC series should stay UTC. Assert the
+round trip on all three shapes (TZID+VTIMEZONE, `Z`, `VALUE=DATE`), not just that the
+occurrences expand — an expansion computed on the same host cannot tell a floating time
+from a correctly zoned one.
+
+**Not pinned.** Found by a probe during Stage 3's remediation rather than by a sweep, and
+recorded here rather than fixed in the same commit: the fix belongs in the ical edit path
+with a pin and a mutation pass of its own, alongside the rest of that file's Stage 3
+work.
+
 ### Frontend & mobile
 
 #### [x] The `settings_updated` SSE event is dropped entirely, so a second tab/device silently destroys the other's preference change
@@ -2802,7 +2855,7 @@ order.
 
 **One deliberate test edit**, recorded here as Stage 2's were: `backlog.stage4.test.tsx:160` calls `d.reorder` directly and now passes two `task({…})` rows instead of `'b', 'a'`. Only the argument shape changed — the tasks named, the gesture, and every assertion in that test are untouched.
 
-#### [ ] Any save from the event editor splits a CATEGORIES value containing a comma into two tags
+#### [x] Any save from the event editor splits a CATEGORIES value containing a comma into two tags
 `frontend/src/components/CalendarView.tsx:889` · **medium** · bug · stage 3
 
 `EventModal` holds tags as one comma-joined string and re-splits it on every commit, and
@@ -2840,6 +2893,12 @@ CalendarView test that renames an event whose tags contain a comma and asserts t
 omits `tags` entirely.
 
 **Pinned by** `2026-08-25 — the event editor > keeps a category containing a comma whole across an unrelated save` in `frontend/src/backlog.aug25.stage3.test.tsx`.
+
+**Fixed** in BOTH halves, as decided at the top of the stage. `tags` is held as a `string[]` and the comma-joined text field is replaced by the shared `TagInput` from AddMultipleModal — the same chip control the task side was converted to, whose docstring says why ("any delimiter-joined text field corrupts it"). And `commit` sends `tags` only when they differ from `e.tags` by value (`sameValue`, TaskModal's precedent).
+
+**The two halves defend different things, and a mutation showed the second is not redundant.** Once tags are held whole, sending them on every save is harmless to the VALUE — the array is identical either way — so dropping `sameValue` passes the pin, which explicitly accepts either repair. What it is not harmless to is the WIRE: a pure rename that carries `tags` rewrites CATEGORIES on the server and overwrites a tag edit another CalDAV client made since the modal opened. `sends no tags at all on a save that did not touch them` pins that, and `keeps a comma-bearing category whole while the owner adds another tag` pins the other direction — omitting unchanged tags alone still splits the category the moment the user adds one beside it.
+
+**One deliberate test edit**: the control `still sends the tags when the user edits them` types `Admin{Enter}` into the chip control instead of rewriting a comma-joined string, which is the affordance the suggested fix asks for and how `TasksView.test.tsx` drives the same control. What it asserts is unchanged.
 
 #### [ ] endFromDuration treats P1D/P1W as exact milliseconds, so a DAVx5 DURATION-only event silently gains (or loses) an hour across a DST edge on any save
 `frontend/src/calendar.ts:72` · **medium** · bug · stage 3
@@ -3299,7 +3358,7 @@ exposes at least one focusable node per rendered chip.
 
 **Pinned by** `2026-08-25 — reaching the month grid from a keyboard > exposes the event chip and the day cell as operable controls` in `frontend/src/backlog.aug25.stage4.test.tsx`.
 
-#### [ ] Changing a repeating event's cadence and then picking "This event" silently discards the change and reports success
+#### [x] Changing a repeating event's cadence and then picking "This event" silently discards the change and reports success
 `frontend/src/components/CalendarView.tsx:917` · **low** · bug · stage 3
 
 `commit()` folds `repeatFields()` into the body only on the `recurring && scope ===
@@ -3339,6 +3398,14 @@ that a schedule change applies to the series. Add a test asserting a cadence cha
 either sent or refused, never silently dropped.
 
 **Pinned by** `2026-08-25 — the event editor > never drops a cadence change on the floor` in `frontend/src/backlog.aug25.stage3.test.tsx`.
+
+**Fixed** by giving the two per-occurrence scopes the two different answers they actually have, neither of which is "close as if it worked".
+
+**"This & following" CARRIES the change**, because the backend really re-rules the tail. That was verified against `ical.split_series` directly before relying on it, as the stage plan required: a tail asked for weekly comes back `RRULE:FREQ=WEEKLY`, a tail asked for "does not repeat" comes back with no RRULE, and the head keeps its own bounded rule. `commit` folds `repeatFields()` into the `thisandfuture` branch.
+
+**"This event" REFUSES it.** That scope writes a RECURRENCE-ID override for one occurrence, and an RRULE on an override means nothing — so `pickScope` sends the user back to the form with the change still in it and an inline `role="alert"` saying which scopes can carry it, and the scope prompt itself warns before they choose. Disabling the button instead was the first design and does not work here: the prompt REPLACES the form (a ternary), so a disabled button leaves the user staring at a prompt with no way to see or amend the change, and the pin's own refusal branch — dialog still open, Repeat still reading "weekly" — cannot be satisfied.
+
+**The pin cannot see either half on its own**, so both got tests. It clicks one button and takes "sent or refused", so refusing ALL THREE scopes passes it — and that would leave re-scheduling a series from a point in time impossible except by re-scheduling the whole thing. `carries a cadence change on "This & following"` and `still saves one occurrence when the repeat was not touched` close that off; the second is the control against refusing "This event" for every repeating edit rather than only for a cadence change.
 
 #### [ ] Shutdown step 2 reports "Everything on today is done" after the owner MOVED everything to tomorrow
 `frontend/src/components/ShutdownRitual.tsx:232` · **low** · rendering · minor · stage 4

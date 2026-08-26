@@ -695,7 +695,7 @@ describe('2026-08-25 — the event editor', () => {
 
   // ── AUDIT (open): CalendarView.tsx:907 — any save from the event editor
   //    splits a CATEGORIES value containing a comma into two tags ────────────
-  it.fails('keeps a category containing a comma whole across an unrelated save', async () => {
+  it('keeps a category containing a comma whole across an unrelated save', async () => {
     // EVIDENCE. `EventModal` holds tags as one comma-JOINED string
     // (`useState((e?.tags || []).join(', '))`) and re-SPLITS it on every commit
     // (`tags.split(',').map(s => s.trim())`), and `commit()` sends
@@ -739,22 +739,100 @@ describe('2026-08-25 — the event editor', () => {
   // CONTROL (passes today, must keep passing). An ordinary tag edit still
   // reaches the wire. The cheap over-correction for the pin above is to stop
   // sending `tags` at all, which would satisfy it by making the field inert.
+  //
+  // DELIBERATE TEST EDIT, recorded in AUDIT.md: the field is now the shared
+  // `TagInput` chip control, so a tag is added by typing it and pressing Enter
+  // rather than by rewriting a comma-joined string. This is the affordance the
+  // finding's own suggested fix asks for, and it is how `TasksView.test.tsx`
+  // drives the same control. What is asserted — an edited tag list reaches the
+  // wire — is unchanged.
   it('still sends the tags when the user edits them', async () => {
     const user = setup([ev({ tags: ['Errands'] })])
     const dialog = await openEvent(user)
 
-    const tags = within(dialog).getByLabelText('Tags (comma-separated)')
-    await user.clear(tags)
-    await user.type(tags, 'Errands, Admin')
+    await user.type(within(dialog).getByLabelText('Tags'), 'Admin{Enter}')
     await user.click(within(dialog).getByText('Save'))
 
     await waitFor(() => expect(m.patchEvent).toHaveBeenCalled())
     expect(patchBody().tags).toEqual(['Errands', 'Admin'])
   })
 
+  // `sameValue` on top of the chip control, and what it is actually for. Once
+  // tags are held whole, ALWAYS sending them is harmless to the VALUE — it is
+  // the same array either way, which is why the pin above accepts both and a
+  // mutation dropping this guard passes it. What it is not harmless to is the
+  // WIRE: a pure rename that carries `tags` rewrites CATEGORIES on the server,
+  // overwriting a tag edit another CalDAV client made since this modal opened.
+  // TaskModal omits unchanged fields for exactly that reason.
+  it('sends no tags at all on a save that did not touch them', async () => {
+    const user = setup([ev({ tags: ['Home,Garden', 'Errands'] })])
+    const dialog = await openEvent(user)
+
+    const title = within(dialog).getByLabelText('Title')
+    await user.clear(title)
+    await user.type(title, 'Renamed')
+    await user.click(within(dialog).getByText('Save'))
+
+    await waitFor(() => expect(m.patchEvent).toHaveBeenCalled())
+    expect(patchBody()).not.toHaveProperty('tags')
+  })
+
+  // The other half of the tags fix, and not pinned: a category with a comma in
+  // it must survive an edit to the tag list, not only a save that leaves it
+  // alone. Omitting `tags` when unchanged — which is all the pin requires —
+  // still splits the category the moment the user adds one tag beside it,
+  // because the old field re-read its own comma-joined text. The chip control
+  // holds each category as its own value, so adding one does not touch the rest.
+  it('keeps a comma-bearing category whole while the owner adds another tag',
+    async () => {
+      const user = setup([ev({ tags: ['Home,Garden'] })])
+      const dialog = await openEvent(user)
+
+      await user.type(within(dialog).getByLabelText('Tags'), 'Admin{Enter}')
+      await user.click(within(dialog).getByText('Save'))
+
+      await waitFor(() => expect(m.patchEvent).toHaveBeenCalled())
+      expect(patchBody().tags).toEqual(['Home,Garden', 'Admin'])
+    })
+
+  // CONTROL for the cadence refusal: "This event" with the repeat LEFT ALONE is
+  // an ordinary per-occurrence edit and must still go through. The cheap
+  // over-correction is to refuse "This event" whenever the event repeats.
+  it('still saves one occurrence when the repeat was not touched', async () => {
+    const user = setup([occurrence()])
+    const dialog = await openEvent(user)
+
+    const title = within(dialog).getByLabelText('Title')
+    await user.clear(title)
+    await user.type(title, 'Renamed once')
+    await user.click(within(dialog).getByText('Save'))
+    await user.click(await screen.findByText('This event'))
+
+    await waitFor(() => expect(m.patchEvent).toHaveBeenCalled())
+    expect(patchBody()).toMatchObject({ summary: 'Renamed once', scope: 'this' })
+    expect(patchBody()).not.toHaveProperty('repeat')
+  })
+
+  // The half of the cadence fix the pin cannot see: "This & following" must
+  // CARRY the change, not refuse it. The pin takes "sent or refused" for
+  // whichever button it clicks, so refusing all three passes it — and that
+  // would leave the only way to re-schedule a series from a point in time
+  // being to re-schedule the whole thing.
+  it('carries a cadence change on “This & following”', async () => {
+    const user = setup([occurrence()])
+    const dialog = await openEvent(user)
+
+    await user.selectOptions(within(dialog).getByLabelText('Repeat'), 'weekly')
+    await user.click(within(dialog).getByText('Save'))
+    await user.click(await screen.findByText('This & following'))
+
+    await waitFor(() => expect(m.patchEvent).toHaveBeenCalled())
+    expect(patchBody()).toMatchObject({ repeat: 'weekly', scope: 'thisandfuture' })
+  })
+
   // ── AUDIT (open): CalendarView.tsx:934 — changing a repeating event's cadence
   //    and then picking "This event" silently discards it and reports success ─
-  it.fails('never drops a cadence change on the floor', async () => {
+  it('never drops a cadence change on the floor', async () => {
     // EVIDENCE. `commit()` folds `repeatFields()` into the body only on the
     // `recurring && scope === 'all'` branch and on the non-recurring branch. For
     // `scope === 'this'` and `scope === 'thisandfuture'` the repeat select's
