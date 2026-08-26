@@ -47,7 +47,7 @@ describe('2026-08-25 — the archived-calendar agenda on a phone', () => {
   // ── AUDIT (open): app.css:662 — the archived-calendar agenda's negative
   //    margins are sized for a .modal but it renders inside the settings panel,
   //    clipping its colour rules and giving the sheet a sideways scroll ──────
-  it.fails('stays inside the sheet that actually contains it', async () => {
+  it('stays inside the sheet that actually contains it', async () => {
     // EVIDENCE. `.arch-events { margin: 0 -18px -18px }` cancels a `.modal`'s
     // 18px padding so its rows can run edge to edge. But the component that
     // renders `.arch-events` is `ArchivedCalendarsSection`, which SettingsMenu
@@ -156,7 +156,7 @@ describe('2026-08-25 — the phone-only hover rules', () => {
   // ── AUDIT (open): app.css:809 — the mobile-only hover rules on the sidebar
   //    bar leave the "View completed" toggle stuck in its active colour after a
   //    tap ────────────────────────────────────────────────────────────────────
-  it.fails('are all guarded by a hover-capability query', async () => {
+  it('are all guarded by a hover-capability query', async () => {
     // EVIDENCE. `.side-mobile-completed` and `.side-mobile-add` are declared
     // INSIDE `@media (max-width: 720px)` — they exist ONLY on a phone — yet
     // their `:hover` rule is not wrapped in `@media (hover: hover)` and has no
@@ -230,7 +230,7 @@ describe('2026-08-25 — the Today row on a phone', () => {
 
   // ── AUDIT (open): app.css:1587 — the Today row's ✕, estimate and + are
   //    ~16–19px tap targets on the phone-primary surface ────────────────────
-  it.fails(`gives every control a ${TARGET}px tap box`, async () => {
+  it(`gives every control a ${TARGET}px tap box`, async () => {
     // EVIDENCE. `.today-drop` (the only way to take a row off the day),
     // `.today-plus` (the only way to accept a suggestion) and `.today-est` are
     // bare glyph buttons at 11–12px with 2px/4px padding and `line-height: 1`.
