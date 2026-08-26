@@ -67,12 +67,17 @@ else
   RADPW_Q=$(q "$RADPW")
   AUSER_Q=$(q "$AUSER")
 
+  # /var/lib/tasks is NOT created here: `StateDirectory=tasks` in the unit
+  # makes systemd create it, owned by the service user, on every start —
+  # which also means it survives a `systemd-tmpfiles` sweep and needs no
+  # chown of its own. The DB deliberately does not live in the source tree:
+  # ReadWritePaths over ~/tasks/backend opened .venv and tasksd to writes.
   umask 077
   cat > "$ENVFILE" <<EOF
 RADICALE_URL=http://127.0.0.1:5232
 RADICALE_USER=$USER_NAME
 RADICALE_PASSWORD=$RADPW_Q
-TASKS_DB=$BACKEND/tasks.db
+TASKS_DB=/var/lib/tasks/tasks.db
 TASKS_STATIC=/home/$USER_NAME/tasks/frontend/dist
 TASKS_SYNC_INTERVAL=30
 TASKS_AUTH_ENABLED=true

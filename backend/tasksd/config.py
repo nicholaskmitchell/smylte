@@ -122,6 +122,11 @@ class Settings:
             radicale_url=os.environ.get("RADICALE_URL", "http://127.0.0.1:5233").rstrip("/"),
             radicale_user=os.environ.get("RADICALE_USER", "testuser"),
             radicale_password=os.environ.get("RADICALE_PASSWORD", "testpass"),
+            # The fallback is a DEV path, and deliberately still under ~: a
+            # developer running `python -m tasksd` has no /var/lib/tasks and no
+            # systemd to create one. Production sets TASKS_DB explicitly, to
+            # /var/lib/tasks/tasks.db, because the unit grants that and nothing
+            # under /home — see deploy/tasks.service.
             db_path=os.environ.get("TASKS_DB", os.path.expanduser("~/tasks/backend/tasks.db")),
             sync_interval_s=float(os.environ.get("TASKS_SYNC_INTERVAL", "30")),
             request_timeout_s=float(os.environ.get("TASKS_HTTP_TIMEOUT", "30")),

@@ -44,6 +44,31 @@ generates the session + hook secrets, writes `/etc/tasks/tasks.env` and
 `/etc/tasks/hook-secret` (both 0600), installs `/usr/local/bin/tasks-notify` and
 `tasks.service`, and starts it on `127.0.0.1:8080`. Check: `curl -s localhost:8080/healthz`.
 
+The SQLite cache lives at `/var/lib/tasks/tasks.db`, which `StateDirectory=tasks`
+in the unit creates and owns. It is deliberately outside the source tree: the
+unit used to grant `ReadWritePaths=~/tasks/backend`, which is where `.venv` and
+`tasksd` live, so a write primitive in the internet-reachable parse path could
+drop a `.pth` into site-packages and survive every restart.
+
+### Moving an existing install to /var/lib/tasks  **[PROD — one time]**
+`setup.sh` leaves an existing `/etc/tasks/tasks.env` untouched, so an install
+made before this change still points `TASKS_DB` at the old path — which the
+narrowed sandbox no longer grants, and the service will fail to open its cache.
+Move it by hand, once:
+```bash
+sudo systemctl stop tasks
+sudo install -d -o nicholaskmitchell -g nicholaskmitchell -m 0700 /var/lib/tasks
+sudo mv ~/tasks/backend/tasks.db     /var/lib/tasks/tasks.db
+sudo mv ~/tasks/backend/tasks.db-wal /var/lib/tasks/ 2>/dev/null || true
+sudo mv ~/tasks/backend/tasks.db-shm /var/lib/tasks/ 2>/dev/null || true
+sudo chown nicholaskmitchell:nicholaskmitchell /var/lib/tasks/tasks.db*
+sudo sed -i 's#^TASKS_DB=.*#TASKS_DB=/var/lib/tasks/tasks.db#' /etc/tasks/tasks.env
+sudo systemctl start tasks && curl -s localhost:8080/healthz
+```
+Move the file rather than letting a fresh one be created: `tasks.db` holds the
+sidecar-class tables under **Backups** below, and those are the one part of it a
+resync cannot rebuild. Take the backup first.
+
 ## B. Public Caddy site (path split)  **[PROD — reload Caddy]**
 Append `~/tasks/deploy/Caddyfile.snippet` to `/etc/caddy/Caddyfile`, then:
 ```bash
@@ -274,7 +299,7 @@ consent screen, which is the point. (This has not always been true: before the
 ## Backups (spec §9 — important)
 Back up **both**:
 - `~/radicale/collections` — the source of truth (all `.ics`).
-- the app's **sidecar-class tables** from `~/tasks/backend/tasks.db`:
+- the app's **sidecar-class tables** from `/var/lib/tasks/tasks.db`:
   `sidecar`, `list_settings`, `completions`, `attachments`, **`booking_links`**
   and **`bookings`** (every scheduling-link config plus client names/emails/
   notes — this exists nowhere on the wire), **`day_plan`** plus
