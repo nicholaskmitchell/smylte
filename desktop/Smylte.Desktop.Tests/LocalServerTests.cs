@@ -120,29 +120,30 @@ public sealed class LocalServerTests : IDisposable
     }
 }
 
-/// The 2026-08-25 sweep, stage 2: the document WebView2 runs carries no
-/// Content-Security-Policy.
+/// The document WebView2 runs carries the same Content-Security-Policy the
+/// browser deployment gets.
 ///
-/// **This finding is OPEN**, and this is its `xfail` — there is no xunit
-/// equivalent, so it is written as the assertion it will be and marked with the
-/// Skip below. Delete the Skip when the policy lands; the body does not change.
-/// Same contract as the `xfail(strict=True)` pins in
-/// `backend/tests/test_backlog_aug25_stage2.py` and the `it.fails` ones in the
-/// SPA suites, except that a Skip cannot go red on its own the way an XPASS does
-/// — so `docs/STAGES.md` records that this one has to be un-skipped by hand.
+/// **CLOSED** (2026-08-25 sweep, stage 2). This shipped as a PAIR, because xunit
+/// has no `xfail` and a `Skip` stays skipped after the fix lands — green, silent,
+/// and exactly the half of the harness `docs/STAGES.md` exists to defend. So a
+/// live test asserted the DEFECT and went red the moment a policy was emitted,
+/// and these carry the assertions actually worth keeping. Un-skipping them and
+/// deleting that one was the whole of the ritual, and it has been performed —
+/// the alarm fired with its own instructions, which is what it was for.
 ///
-/// The app's CSP exists only as a response header the BACKEND attaches
+/// What was wrong: the app's CSP existed only as a response header the BACKEND
+/// attaches
 /// (`tasksd/csp.py::CSPMiddleware`), derived at startup from the served
 /// index.html so it can carry the sha256 of the inline pre-paint script.
 /// `frontend/index.html` has no `http-equiv` meta — verified, zero occurrences —
-/// so in the desktop client, where `ServeStatic` sets exactly Content-Type and
-/// Cache-Control, the document has no policy at all: no `default-src 'self'`, no
+/// so in the desktop client, where `ServeStatic` set exactly Content-Type and
+/// Cache-Control, the document had no policy at all: no `default-src 'self'`, no
 /// `connect-src 'self'`, no `object-src 'none'`, no script-hash allowlist. On the
 /// one surface that also holds a live session cookie for the real server.
 ///
-/// Unlike the tests above this one, it has to START the server: the header set is
-/// what is under test, and `Resolve` is pure path arithmetic that never sees a
-/// response. A free port is chosen by `ChoosePort`, as the app does.
+/// Unlike the tests above this one, these have to START the server: the header
+/// set is what is under test, and `Resolve` is pure path arithmetic that never
+/// sees a response. A free port is chosen by `ChoosePort`, as the app does.
 public sealed class LocalServerCspTests : IDisposable
 {
     private readonly string _dir = Directory.CreateTempSubdirectory("smylte-csp").FullName;
@@ -170,37 +171,7 @@ public sealed class LocalServerCspTests : IDisposable
         try { Directory.Delete(_dir, recursive: true); } catch (IOException) { }
     }
 
-    // xunit has no `xfail`, and that matters more than it looks. A `Skip` would
-    // stay skipped forever after the fix landed — green, silent, and exactly the
-    // half of the harness `docs/STAGES.md` says is the point ("a green build no
-    // longer means 'no known bugs', it means 'every known bug is exactly as
-    // known'"). So the pin is written in two halves:
-    //
-    //   * this one is LIVE and asserts the DEFECT. It passes today and goes RED
-    //     the moment a policy is emitted — which is the alarm an XPASS gives on
-    //     the Python side, arrived at from the other direction.
-    //   * the one below carries the corrected assertions and is skipped until
-    //     then. Un-skipping it and deleting this one is the whole of the ritual.
-
     [Fact]
-    public async Task TheDocumentStillCarriesNoPolicy()
-    {
-        using var http = new HttpClient();
-        using var res = await http.GetAsync($"{_server.Origin}/");
-        res.EnsureSuccessStatusCode();
-
-        Assert.False(
-            res.Headers.Contains("Content-Security-Policy"),
-            "GOOD NEWS, AND AN ACTION: the desktop document now carries a "
-            + "Content-Security-Policy, so this finding is fixed. Tick it off in "
-            + "docs/AUDIT.md, flip its row in docs/STAGES.md, delete THIS test, and "
-            + "un-skip TheDocumentCarriesAPolicy below — which is the assertion you "
-            + "actually want kept.");
-    }
-
-    [Fact(Skip = "OPEN: ServeStatic sets only Content-Type and Cache-Control, so the "
-               + "document WebView2 runs has no Content-Security-Policy at all. "
-               + "Un-skip this and delete TheDocumentStillCarriesNoPolicy when it does.")]
     public async Task TheDocumentCarriesAPolicy()
     {
         using var http = new HttpClient();
@@ -224,5 +195,59 @@ public sealed class LocalServerCspTests : IDisposable
         Assert.True(res.Headers.TryGetValues("X-Content-Type-Options", out var nosniff)
             && string.Join(" ", nosniff!).Contains("nosniff"),
             "no X-Content-Type-Options: nosniff on the static response");
+    }
+
+    [Fact]
+    public async Task ThePolicyCarriesTheHashOfTheScriptActuallyServed()
+    {
+        // The half that makes the policy real rather than decorative, and the
+        // desktop twin of test_csp.py's
+        // `test_the_header_carries_the_hash_of_the_index_that_is_actually_served`.
+        //
+        // A `script-src 'self'` with no hash BLOCKS the inline pre-paint script,
+        // which is a blank window — so a policy that merely exists is not the
+        // corrected answer. The hash has to come from the file on disk: Vite
+        // rewrites that script on build, so anything written down in the C#
+        // would already disagree with what is shipped.
+        //
+        // Computed here rather than by calling `PolicyFor`, deliberately: a test
+        // that asked the production code would agree with any hashing bug it has.
+        var expected = "'sha256-" + Convert.ToBase64String(
+            System.Security.Cryptography.SHA256.HashData(
+                System.Text.Encoding.UTF8.GetBytes(InlineScript))) + "'";
+
+        using var http = new HttpClient();
+        using var res = await http.GetAsync($"{_server.Origin}/");
+        res.EnsureSuccessStatusCode();
+        var policy = string.Join(" ", res.Headers.GetValues("Content-Security-Policy"));
+
+        Assert.Contains(expected, policy);
+        // `script-src` must never gain 'unsafe-inline': CSP3 ignores it while a
+        // hash is present and honours it the moment the hash goes away, silently
+        // turning a real policy into a decorative one. csp.py asserts the same
+        // thing on the backend side.
+        Assert.DoesNotContain("unsafe-inline", policy.Split("script-src")[1].Split(';')[0]);
+    }
+
+    [Fact]
+    public async Task EveryStaticResponseCarriesExactlyOnePolicy()
+    {
+        // CSPMiddleware attaches the header to every response and says why: it
+        // costs one header on an asset and means there is no path, present or
+        // future, that quietly escapes the policy. The SPA fallback is the case
+        // that matters — /book/<token> and every tab route serve the document
+        // through `Resolve(...) ?? index.html`, so a policy hung off the URL
+        // rather than off the response would miss all of them.
+        using var http = new HttpClient();
+        using var document = await http.GetAsync($"{_server.Origin}/");
+        using var route = await http.GetAsync($"{_server.Origin}/book/abc123");
+
+        var first = string.Join(" ", document.Headers.GetValues("Content-Security-Policy"));
+        Assert.Contains("default-src 'self'", first);
+        Assert.Equal(first, string.Join(" ", route.Headers.GetValues("Content-Security-Policy")));
+        // Exactly one, never two: browsers enforce the INTERSECTION of every
+        // policy present, so a duplicate is indistinguishable from a deliberate
+        // tightening.
+        Assert.Single(document.Headers.GetValues("Content-Security-Policy"));
     }
 }
