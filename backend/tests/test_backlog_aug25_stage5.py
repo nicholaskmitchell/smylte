@@ -52,6 +52,7 @@ so nothing here leaves the machine.
 """
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import json
 import time
@@ -241,7 +242,10 @@ def test_access_off_is_a_total_no_op_even_for_a_hostile_header(tmp_path):
 
     assert verifier._jwks is None, "a JWKS client was built with Access turned off"
     for token in (None, "", "garbage", "a.b.c"):
-        verifier.verify(token)          # must not raise, must not fetch anything
+        # `asyncio.run` because `verify` is awaitable — it does its JWKS work in
+        # a thread so a slow endpoint cannot stall the event loop every /api
+        # request arrives on. The assertions are unchanged; only the call is.
+        asyncio.run(verifier.verify(token))   # must not raise, must not fetch
 
 
 def test_a_missing_assertion_header_is_a_401(tmp_path):
@@ -251,7 +255,7 @@ def test_a_missing_assertion_header_is_a_401(tmp_path):
     verifier = AccessVerifier(_settings(tmp_path))
     for token in (None, ""):
         with pytest.raises(HTTPException) as e:
-            verifier.verify(token)
+            asyncio.run(verifier.verify(token))
         assert e.value.status_code == 401, token
         assert "Cf-Access-Jwt-Assertion" in str(e.value.detail)
 
@@ -261,7 +265,7 @@ def test_a_valid_assertion_passes(tmp_path, signing_key, monkeypatch):
     something: a suite where the verifier rejected EVERYTHING would satisfy all
     of them and brick the app."""
     _serve_jwks(monkeypatch, signing_key)
-    AccessVerifier(_settings(tmp_path)).verify(_token(signing_key))
+    asyncio.run(AccessVerifier(_settings(tmp_path)).verify(_token(signing_key)))
 
 
 @pytest.mark.parametrize("label, kw", [
@@ -278,7 +282,7 @@ def test_a_token_that_is_not_ours_is_a_403(label, kw, tmp_path, signing_key, mon
     verifier = AccessVerifier(_settings(tmp_path))
 
     with pytest.raises(HTTPException) as e:
-        verifier.verify(_token(signing_key, **kw))
+        asyncio.run(verifier.verify(_token(signing_key, **kw)))
     assert e.value.status_code == 403, label
 
 
@@ -298,7 +302,7 @@ def test_an_unsigned_or_unparseable_token_is_a_403(
     verifier = AccessVerifier(_settings(tmp_path))
 
     with pytest.raises(HTTPException) as e:
-        verifier.verify(token)
+        asyncio.run(verifier.verify(token))
     assert e.value.status_code == 403, label
 
 
@@ -318,7 +322,7 @@ def test_a_jwks_outage_fails_closed(tmp_path, signing_key, monkeypatch):
     """
     good = _token(signing_key)
     _serve_jwks(monkeypatch, signing_key)
-    AccessVerifier(_settings(tmp_path)).verify(good)     # the same token passes when JWKS is up
+    asyncio.run(AccessVerifier(_settings(tmp_path)).verify(good))   # passes when JWKS is up
 
     def _boom(self):                        # noqa: ANN001 — patching PyJWT's own signature
         raise jwt.exceptions.PyJWKClientConnectionError("cannot reach the JWKS endpoint")
@@ -326,7 +330,7 @@ def test_a_jwks_outage_fails_closed(tmp_path, signing_key, monkeypatch):
     monkeypatch.setattr(jwt.PyJWKClient, "fetch_data", _boom, raising=True)
 
     with pytest.raises(HTTPException) as e:
-        AccessVerifier(_settings(tmp_path)).verify(good)
+        asyncio.run(AccessVerifier(_settings(tmp_path)).verify(good))
     assert e.value.status_code == 403, (
         "the JWKS endpoint was unreachable and the request was let through — "
         "Access is a no-op for as long as the outage lasts"

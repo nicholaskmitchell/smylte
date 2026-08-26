@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import json
 import pathlib
 import time
 from datetime import date, timedelta
@@ -340,12 +341,10 @@ def _token(key, *, kid: str, aud: str = "aud-under-test") -> str:
     )
 
 
-@pytest.mark.xfail(strict=True, reason="PyJWT retries the JWKS fetch with refresh=True "
-                                       "on a kid it does not know, so an attacker-chosen "
-                                       "kid buys one outbound HTTPS round trip per "
-                                       "request")
 def test_an_unknown_kid_does_not_buy_a_jwks_fetch_per_request(tmp_path, signing_key, monkeypatch):
     """The amplifier: the `kid` is a header field the caller writes.
+
+    **CLOSED.** The marker is gone and this is an ordinary regression test now.
 
     `PyJWKClient.get_signing_key_from_jwt` re-fetches when the key set does not
     contain the token's `kid`, and `AccessVerifier` constructs its client with
@@ -369,7 +368,10 @@ def test_an_unknown_kid_does_not_buy_a_jwks_fetch_per_request(tmp_path, signing_
 
     for i in range(10):
         with pytest.raises(Exception):      # noqa: B017 — a 401/403 either way; the cost is the point
-            verifier.verify(_token(signing_key, kid=f"rotating-{i}"))
+            # `asyncio.run` because the repair made `verify` awaitable, so the
+            # JWKS fetch happens in a thread rather than on the request's loop.
+            # The count below is what this test is about and is unchanged.
+            asyncio.run(verifier.verify(_token(signing_key, kid=f"rotating-{i}")))
 
     assert fetches["n"] <= 2, (
         f"10 requests with an unknown kid cost {fetches['n']} JWKS fetches — the "
@@ -377,11 +379,10 @@ def test_an_unknown_kid_does_not_buy_a_jwks_fetch_per_request(tmp_path, signing_
     )
 
 
-@pytest.mark.xfail(strict=True, reason="AccessVerifier.verify calls PyJWT's synchronous "
-                                       "urlopen from inside async require_auth, so a slow "
-                                       "JWKS endpoint freezes the whole event loop")
 def test_verifying_an_access_token_does_not_freeze_the_event_loop(tmp_path, signing_key, monkeypatch):
     """The same call, costed against the process rather than the network.
+
+    **CLOSED.** The marker is gone and this is an ordinary regression test now.
 
     `require_auth` is `async def` and calls `verify()` directly. PyJWT's default
     JWKS client is `urllib.request.urlopen` with `timeout=30`, so one slow or
@@ -442,6 +443,49 @@ def test_verifying_an_access_token_does_not_freeze_the_event_loop(tmp_path, sign
         f"the loop went {worst:.2f}s without a tick while one Access token was "
         f"verified against a {hold:.0f}s JWKS fetch — every other request, "
         "/healthz included, waited with it"
+    )
+
+
+def test_a_good_token_still_verifies_while_the_refresh_is_cooling_down(
+    tmp_path, signing_key, monkeypatch
+):
+    """CONTROL, and the one the fetch bound could most easily break.
+
+    The repair is a cooldown on fetching the key set at all, so the obvious
+    over-correction is a verifier that refuses everything for a minute after any
+    miss — which would satisfy the pin above by turning Access into a wall. The
+    owner's own token arrives on the same server as the attacker's, and it must
+    keep working while their rotating `kid`s are being refused.
+
+    Driven in that order deliberately: warm the key set with a real token, spend
+    the budget on ten strangers, then present the SAME good token again. It must
+    pass, and it must not have cost another fetch — the cached set already holds
+    its key, and a hit has nothing to ask about.
+    """
+    jwk = json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(signing_key.public_key()))
+    jwk.update(kid="the-real-key", alg="RS256", use="sig")
+    fetches = {"n": 0}
+
+    def _fetch(self):                       # noqa: ANN001 — patching PyJWT's own signature
+        fetches["n"] += 1
+        return {"keys": [jwk]}
+
+    monkeypatch.setattr(jwt.PyJWKClient, "fetch_data", _fetch, raising=True)
+    verifier = AccessVerifier(_access_settings(tmp_path))
+    good = _token(signing_key, kid="the-real-key")
+
+    asyncio.run(verifier.verify(good))
+    warm = fetches["n"]
+    assert warm >= 1, "the key set was never fetched, so this proves nothing"
+
+    for i in range(10):
+        with pytest.raises(Exception):      # noqa: B017 — refused is the point, not how
+            asyncio.run(verifier.verify(_token(signing_key, kid=f"rotating-{i}")))
+
+    asyncio.run(verifier.verify(good))      # must not raise
+    assert fetches["n"] <= warm + 1, (
+        f"a token whose key is already cached cost {fetches['n'] - warm} further "
+        "fetches after the cooldown started"
     )
 
 
