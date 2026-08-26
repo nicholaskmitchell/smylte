@@ -738,3 +738,89 @@ describe('<App> settings refetch', () => {
     await waitFor(() => expect(m.getSettings).toHaveBeenCalledTimes(2))
   })
 })
+
+// ── the settings read must not undo a gesture it raced ──────────────────────
+// The gear is clickable the instant `/api/me` returns — the same commit that
+// ISSUES `api.getSettings()` — so the whole read RTT is a window in which the
+// user can change a preference. `get_settings` takes the backend's single global
+// service lock, which is also held across CalDAV round trips during a sync
+// sweep, so that window is seconds. The read applied its payload
+// unconditionally; the author had guarded exactly one field (`tabTouched`, for
+// the tab) and every other setter clobbered whatever had just been chosen.
+
+describe('<App> a slow settings read', () => {
+  /** Render with `getSettings` held open; returns the resolver. */
+  const holdSettings = (answer: object) => {
+    let release!: () => void
+    m.getSettings.mockImplementation(() => new Promise((res) => {
+      release = () => res(answer as never)
+    }))
+    render(<App />)
+    return () => release()
+  }
+
+  it('does not revert a preference the user changed while it was in flight', async () => {
+    // The finding's own reproduction. The account holds 12h; the user cycles the
+    // clock to 24h during the read; the read then answers with the pre-click
+    // value. The write landed, so the account holds 24h — and the row used to
+    // snap back to "12-hour", after which the next click cycled from a value
+    // nobody had.
+    const release = holdSettings({ time_format: '12h' })
+    await screen.findByRole('button', { name: 'Tasks' })
+    await openSettings('General')
+    const clock = screen.getByRole('button', { name: '12- or 24-hour clock' })
+    await userEvent.click(clock)
+    expect(clock).toHaveTextContent('24-hour')
+    await waitFor(() => expect(m.putSettings).toHaveBeenCalledWith({ time_format: '24h' }))
+
+    await act(async () => { release(); await Promise.resolve() })
+
+    expect(clock, 'the stale read reverted a preference the account already holds')
+      .toHaveTextContent('24-hour')
+  })
+
+  it('still applies every preference the user did NOT touch', async () => {
+    // The control. A guard that held back the whole payload would satisfy the
+    // case above and lose the account's settings on every boot.
+    const release = holdSettings({ time_format: '12h', session_ttl_s: 30 * 24 * 3600 })
+    await screen.findByRole('button', { name: 'Tasks' })
+    await openSettings('General')
+    await userEvent.click(screen.getByRole('button', { name: '12- or 24-hour clock' }))
+
+    await act(async () => { release(); await Promise.resolve() })
+
+    // Only the UNTOUCHED preference is asserted here — that is what makes this a
+    // control. It passes against the pre-fix tree too, so a `keep` that held
+    // back the whole payload would show up as this test failing and the one
+    // above passing, rather than as both going green.
+    // The menu is already open — `openSettings` would toggle it shut.
+    await userEvent.click(screen.getByRole('tab', { name: 'Account' }))
+    expect(screen.getByRole('button', { name: 'How long to stay signed in' }),
+      'a preference the user never touched was held back too')
+      .toHaveTextContent('30 days')
+  })
+
+  it('guards every key it reads, so the next preference cannot be forgotten', async () => {
+    // The pattern this sweep kept finding: a guard is only as wide as the set it
+    // enumerates. `tabTouched` guarded one field out of twenty-three because it
+    // was written per-field. `keep` is per-field too — so this is the check that
+    // adding a preference and forgetting it is a failure rather than a silent
+    // revert.
+    const load = (import.meta as unknown as {
+      glob: (p: string, o: object) => Record<string, () => Promise<string>>
+    }).glob('./App.tsx', { query: '?raw', import: 'default' })['./App.tsx']
+    const src = await load()
+    const from = src.indexOf('const writesBefore')
+    const to = src.indexOf('.catch((e) =>', from)
+    expect(from, 'could not locate the settings read — rename the markers here too')
+      .toBeGreaterThan(-1)
+    const body = src.slice(from, to)
+    const read = new Set([...body.matchAll(/\bs\.([a-z_]+)/g)].map((mm) => mm[1]))
+    const kept = new Set([...body.matchAll(/keep\('([a-z_]+)'\)/g)].map((mm) => mm[1]))
+    expect(read.size, 'no payload keys found — the markers have drifted').toBeGreaterThan(15)
+    expect([...read].filter((k) => !kept.has(k)),
+      'these settings keys are applied with no `keep` guard, so a read that '
+      + 'lands after the user changed them silently reverts the gesture')
+      .toEqual([])
+  })
+})

@@ -62,6 +62,12 @@ export function App() {
   // PUTs issued and not yet settled. `pendingPatch` empties when the request is
   // ISSUED, so it alone cannot tell whether our own write has landed.
   const writesInFlight = useRef(0)
+  // Every settings key this tab has written, in order, appended at the GESTURE.
+  // The settings read snapshots its length before issuing and reads the tail
+  // when it answers, so it knows which of the values it is holding the user has
+  // since changed. An append-only list rather than a set because the question is
+  // "since when", not "ever".
+  const writeLog = useRef<string[]>([])
   const [theme, setTheme] = useState(() => document.documentElement.dataset.theme || 'light')
   const [tasksView, setTasksView] = useState<TasksViewMode>('list')
   const [sideCollapsed, setSideCollapsed] = useState(false)
@@ -205,39 +211,71 @@ export function App() {
     // remounts this component) opens where the account says again.
     if (auth !== 'in') { tabRestored.current = false; return }
     settingsFailed.current = false
+    // Where the write log stands as this read is ISSUED. Anything appended
+    // after this point is a preference the user changed while the read was in
+    // flight, and applying the payload's value for it would revert their
+    // gesture. See `keep` below.
+    const writesBefore = writeLog.current.length
     api.getSettings()
       .then((s) => {
-        if (s.theme === 'dark' || s.theme === 'light') applyTheme(s.theme)
+        // The generalisation of `tabTouched`. The read applied its whole
+        // payload unconditionally, and the gear is clickable the instant
+        // `/api/me` returns — the same commit that ISSUES this request — so the
+        // entire read RTT was a window in which a gesture could be silently
+        // undone. `get_settings` takes the backend's single global service lock,
+        // which is also held across CalDAV round trips during a sync sweep, so
+        // that window is seconds, not milliseconds.
+        //
+        // The author guarded exactly one field, `tabTouched` for the tab, and
+        // left every other setter to clobber whatever the user had just chosen:
+        // the row showed the account's old value, the account held the new one,
+        // and nothing said so — after which the next gesture cycled from the
+        // wrong value and, for an array preference, wrote the merged-wrong array
+        // back.
+        //
+        // Keyed on WHEN, not on whether: only keys written between this
+        // request being issued and its answer arriving are held back. A read
+        // issued afterwards — every `settings_updated` refetch, which already
+        // waits for our own PUT to land — carries the newer truth and is applied
+        // in full, so another device's change still reaches a tab that has
+        // touched the same preference.
+        const touched = new Set(writeLog.current.slice(writesBefore))
+        const keep = (k: keyof Settings) => !touched.has(k as string)
+
+        if (keep('theme') && (s.theme === 'dark' || s.theme === 'light')) applyTheme(s.theme)
         const order = sanitizeTabOrder(s.tab_order)
         const start = sanitizeTabStart(s.start_tab)
-        setTabOrder(order)
-        setStartTab(start)
+        if (keep('tab_order')) setTabOrder(order)
+        if (keep('start_tab')) setStartTab(start)
         // Restoring the opening tab is a FIRST-LOAD action, not something to
         // redo on every read. This effect now re-runs on `settingsRev` too —
         // any settings write on any device — and `tabTouched` is false for a
         // tab the user simply has not switched, so without this latch a theme
         // change on the phone yanked the open desktop view to whatever tab the
         // account last recorded and `cacheTab` persisted the yank.
-        if (!tabTouched.current && !tabRestored.current) {
+        if (!tabTouched.current && !tabRestored.current && keep('last_tab')) {
           tabRestored.current = true
           const opening = resolveStartTab(start, isTab(s.last_tab) ? s.last_tab : undefined, order)
           setTab(opening)
           cacheTab(opening)
         }
-        if (s.tasks_view === 'list' || s.tasks_view === 'day3' || s.tasks_view === 'week') {
+        if (keep('tasks_view')
+          && (s.tasks_view === 'list' || s.tasks_view === 'day3' || s.tasks_view === 'week')) {
           setTasksView(s.tasks_view)
         }
-        if (typeof s.sidebar_collapsed === 'boolean') setSideCollapsed(s.sidebar_collapsed)
-        if (Array.isArray(s.hidden_calendars)) {
+        if (keep('sidebar_collapsed') && typeof s.sidebar_collapsed === 'boolean') {
+          setSideCollapsed(s.sidebar_collapsed)
+        }
+        if (keep('hidden_calendars') && Array.isArray(s.hidden_calendars)) {
           setHiddenCals(s.hidden_calendars.filter((x) => typeof x === 'string'))
         }
-        if (Array.isArray(s.archived_calendars)) {
+        if (keep('archived_calendars') && Array.isArray(s.archived_calendars)) {
           setArchivedCals(s.archived_calendars.filter((x) => typeof x === 'string'))
         }
-        if (Array.isArray(s.hidden_lists)) {
+        if (keep('hidden_lists') && Array.isArray(s.hidden_lists)) {
           setHiddenLists(s.hidden_lists.filter((x) => typeof x === 'string'))
         }
-        if (Array.isArray(s.task_groups)) {
+        if (keep('task_groups') && Array.isArray(s.task_groups)) {
           // Defend against a malformed blob (hand-edited settings, an old
           // schema): keep only well-formed groups with a real id and name.
           setTaskGroups(s.task_groups.filter((g): g is TaskGroup =>
@@ -246,46 +284,56 @@ export function App() {
               id: g.id, name: g.name, lists: g.lists.filter((x) => typeof x === 'string'),
             })))
         }
-        if (Array.isArray(s.collapsed_groups)) {
+        if (keep('collapsed_groups') && Array.isArray(s.collapsed_groups)) {
           setCollapsedGroups(s.collapsed_groups.filter((x) => typeof x === 'string'))
         }
-        if (Array.isArray(s.collapsed_tasks)) {
+        if (keep('collapsed_tasks') && Array.isArray(s.collapsed_tasks)) {
           setCollapsedTasks(s.collapsed_tasks.filter((x) => typeof x === 'string'))
         }
-        if (typeof s.show_completed_tasks === 'boolean') setShowCompleted(s.show_completed_tasks)
-        if (isTimeFormat(s.time_format)) setTimeFormat(s.time_format)
+        if (keep('show_completed_tasks') && typeof s.show_completed_tasks === 'boolean') {
+          setShowCompleted(s.show_completed_tasks)
+        }
+        if (keep('time_format') && isTimeFormat(s.time_format)) setTimeFormat(s.time_format)
         // Treated as hand-edited, like every other settings value here. A
         // non-number default is dropped to null rather than coerced: a capacity
         // read out of junk would be a number nobody gave, which is the one
         // thing this feature must not produce.
         // A negative stored value is the CLEAR sentinel at rest, and reads back
         // as "never said" — the same answer the server's resolution gives it.
-        setDayCapacity(
-          typeof s.day_capacity_minutes === 'number'
-            && Number.isFinite(s.day_capacity_minutes)
-            && s.day_capacity_minutes >= 0
-            ? s.day_capacity_minutes
-            : null)
-        setDayCapacityByWeekday(sanitizeCapacityByWeekday(s.day_capacity_by_weekday))
-        if (typeof s.home_timezone === 'string') setHomeTz(s.home_timezone)
-        if (Array.isArray(s.calendar_task_lists)) {
+        // These two are the reason `keep` is a predicate rather than a filter
+        // over the payload: they are the only setters here that run
+        // UNCONDITIONALLY, so a stripped key would not be skipped — it would be
+        // applied as `undefined` and read back as "never said".
+        if (keep('day_capacity_minutes')) {
+          setDayCapacity(
+            typeof s.day_capacity_minutes === 'number'
+              && Number.isFinite(s.day_capacity_minutes)
+              && s.day_capacity_minutes >= 0
+              ? s.day_capacity_minutes
+              : null)
+        }
+        if (keep('day_capacity_by_weekday')) {
+          setDayCapacityByWeekday(sanitizeCapacityByWeekday(s.day_capacity_by_weekday))
+        }
+        if (keep('home_timezone') && typeof s.home_timezone === 'string') setHomeTz(s.home_timezone)
+        if (keep('calendar_task_lists') && Array.isArray(s.calendar_task_lists)) {
           setCalTaskLists(s.calendar_task_lists.filter((x) => typeof x === 'string'))
         }
-        if (typeof s.calendar_show_done_tasks === 'boolean') {
+        if (keep('calendar_show_done_tasks') && typeof s.calendar_show_done_tasks === 'boolean') {
           setCalShowDone(s.calendar_show_done_tasks)
         }
-        if (isCalendarFit(s.calendar_fit)) setCalFit(s.calendar_fit)
-        if (isSessionTtl(s.session_ttl_s)) setSessionTtl(s.session_ttl_s)
+        if (keep('calendar_fit') && isCalendarFit(s.calendar_fit)) setCalFit(s.calendar_fit)
+        if (keep('session_ttl_s') && isSessionTtl(s.session_ttl_s)) setSessionTtl(s.session_ttl_s)
         // Both blobs are re-validated here rather than trusted: they are the
         // two settings a user can hand-edit or import a file into, and an
         // unknown token or a garbage grid cell should degrade to the default
         // instead of reaching the CSSOM or the layout engine.
-        if (s.appearance) {
+        if (keep('appearance') && s.appearance) {
           const clean = sanitizeAppearance(s.appearance)
           setAppearance(clean)
           cacheAppearance(clean)
         }
-        if (Array.isArray(s.dashboard)) setDashboard(sanitizeLayout(s.dashboard))
+        if (keep('dashboard') && Array.isArray(s.dashboard)) setDashboard(sanitizeLayout(s.dashboard))
       })
       .catch((e) => {
         // The old handler was a bare `.catch(() => {})` with a comment saying it
@@ -361,6 +409,7 @@ export function App() {
   ] as const
 
   const saveSettings = useCallback((patch: Settings) => {
+    writeLog.current.push(...Object.keys(patch))
     if (settingsFailed.current) {
       const held = MERGED_SETTINGS.filter((k) => k in patch)
       if (held.length) {
@@ -395,6 +444,12 @@ export function App() {
   const saveTimer = useRef<ReturnType<typeof setTimeout>>()
   const pendingPatch = useRef<Settings>({})
   const saveSettingsSoon = useCallback((patch: Settings) => {
+    // Noted HERE, at the gesture, not 400ms later when the PUT goes out: a
+    // slider drag that starts inside a slow read's flight has already changed
+    // what the user is looking at. (The eventual `saveSettings` notes the same
+    // keys again; by then any refetch is already held off by `writesInFlight`,
+    // so the repeat cannot suppress another device's value.)
+    writeLog.current.push(...Object.keys(patch))
     pendingPatch.current = { ...pendingPatch.current, ...patch }
     clearTimeout(saveTimer.current)
     saveTimer.current = setTimeout(() => {
