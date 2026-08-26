@@ -267,6 +267,23 @@ describe('the word-bearing buttons in the Today header', () => {
     }
   })
 
+  it('and none of them adds its own margin, so the row spaces them evenly', () => {
+    // `.content-head` sets `gap: 12px`. `.today-habits-open` also carried
+    // `margin-left: 10px` — correct when it was added, where it was an
+    // `.icon-btn` holding a bare glyph and the ONLY button in this header, and
+    // the margin held it off the counts text. Review and Shut down were added in
+    // front of it later without one, so the row read 12px, 12px, 22px: two
+    // buttons at the container's gap and the third pushed out past both.
+    //
+    // Below 720px `.content-head` wraps, and there the same 10px indented the
+    // Habits row 10px right of every other left edge in the header — measured in
+    // Chromium at 390px, its wrapped row started at x=24 against a 14px gutter.
+    for (const sel of HEADER_BUTTONS) {
+      expect(ruleFor(sel), `${sel} adds its own margin; the container's gap is `
+        + 'what makes these three read as one group').not.toMatch(/margin(-left|-right|-inline[a-z-]*)?:/)
+    }
+  })
+
   it('is the full set of them that TodayView renders', () => {
     // The vacuity guard: if a button is renamed the loop above still passes
     // against two stale selectors. This checks the header actually renders each
@@ -594,5 +611,51 @@ describe('a mobile rule that loses the cascade is the same as no rule', () => {
       + 'Qualify the mobile selector (`.input.shut-date`, `button.today-drop`) so it '
       + 'outranks the fence, rather than relying on which block comes last.')
       .toEqual([])
+  })
+})
+
+// ── a bordered variant and an unbordered base are two different boxes ───────
+
+describe('a solid button boxes the same as the ghost beside it', () => {
+  const tokens = read('src/styles/tokens.css').replace(/\/\*[\s\S]*?\*\//g, '')
+  const btn = ruleFor('.btn', tokens)
+  const ghost = ruleFor('.btn.ghost', tokens)
+
+  it('reads both rules', () => {
+    expect(btn, '.btn is gone from tokens.css').not.toBe('')
+    expect(ghost, '.btn.ghost is gone from tokens.css').not.toBe('')
+    expect(ghost).toMatch(/border:\s*1px/)
+  })
+
+  it('.btn reserves the border width its variants add', () => {
+    // `.btn { border: 0 }` with `.btn.ghost { border: 1px solid … }` and the same
+    // padding on both makes the ghost 2px taller and 2px wider. In a row of one
+    // of each — every modal in this app: Cancel/Save, Back/Shut down — the flex
+    // centring then put the SOLID one 1px lower with its cap-height 1px off its
+    // neighbour. Measured in Chromium before the fix: Back 57.1x33 at y=4,
+    // Shut down 91.5x31 at y=5, adjacent in the shutdown ritual's action row.
+    //
+    // `box-sizing: border-box` in this same file does not cover it — that
+    // governs elements with a specified width or height, and a button has
+    // neither, so auto height is content + padding + border either way. The
+    // border has to be RESERVED, transparent, so both boxes agree.
+    expect(btn, '.btn declares `border: 0`, so every .btn.ghost beside it is 2px '
+      + 'taller and 2px wider and the solid one sits 1px low')
+      .not.toMatch(/border:\s*0/)
+    expect(btn, '.btn must reserve a 1px border for .ghost and .danger to colour')
+      .toMatch(/border:\s*1px solid transparent/)
+  })
+
+  it('and .btn.danger therefore has a border to colour', () => {
+    // `.btn.danger { border-color: var(--warn) }` sets a colour for a border
+    // that, over `border: 0`, had no width — so Settings → Account's Disconnect,
+    // the only control that revokes a live MCP OAuth grant, rendered as bare red
+    // text with no outline and no background in a row of bordered controls.
+    const danger = ruleFor('.btn.danger', rules)
+    expect(danger, '.btn.danger is gone from app.css').not.toBe('')
+    expect(danger, 'this rule sets border-color only, so it depends on .btn '
+      + 'supplying the width').toMatch(/border-color:/)
+    expect(danger, 'if .btn.danger declares its own border-width this test is '
+      + 'no longer the thing keeping it visible').not.toMatch(/border(-width)?:\s*\d/)
   })
 })
