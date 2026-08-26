@@ -1,6 +1,6 @@
 # Audit backlog
 
-**11 open**, all from the 2026-08-25 sweep at the top of this file; every finding
+**10 open**, all from the 2026-08-25 sweep at the top of this file; every finding
 from every earlier sweep is closed, as is the one this sweep's own remediation
 turned up (marked `· found in remediation`).
 
@@ -3163,7 +3163,7 @@ needed for `CapacityStep`.
 
 **The flush must not DOUBLE-write**, which the pin cannot see: it never blurs. `ReflectStep` compares against a `saved` ref, so the ordinary path — type, tab away, close — sends one PATCH, not two of identical prose against the one field this design deliberately keeps out of a write storm.
 
-#### [ ] A failed day read leaves the Today tab blank with no error, no empty state and no retry — and every add then paints nothing
+#### [x] A failed day read leaves the Today tab blank with no error, no empty state and no retry — and every add then paints nothing
 `frontend/src/components/TodayView.tsx:646` · **medium** · rendering · stage 4
 
 `plan` only ever becomes non-null on a successful 200; a rejection is swallowed by
@@ -3199,6 +3199,14 @@ retry button that bumps a local nonce in the effect's deps, and disable/flag the
 and the suggestion "+" while the day is unknown so a write cannot land invisibly.
 
 **Pinned by** `2026-08-25 — the Today tab > says the day could not be read, and does not swallow the next add` in `frontend/src/backlog.aug25.stage4.test.tsx`.
+
+**Fixed** with the suggested fix: a `dayError` flag set on the failure arm, a "Couldn't read today." line with a Try again button, and the add box disabled while the day is unknown. The catch RE-THROWS after setting the flag, so `guard` still raises its toast and still routes an AuthError to the login card — the flag is what the screen needs, the toast is what a transient blip needs, and they are not alternatives.
+
+**Disabling the add box is not cosmetic.** With `plan` null every optimistic writer here is a no-op (`setPlan((p) => (p && …))`), so an add reached the server, succeeded, and painted nothing. That is the worse half of the finding, and the pin asserts it as `wroteInvisibly`.
+
+**A 200 carrying junk is a failed read too, and said so nowhere.** `if (p && Array.isArray(p.entries)) setPlan(p)` had no `else`, so a malformed body left `plan` null exactly as a rejection did — while `guard`, which shields against a rejection and not against a bad 200, raised no toast either. It now sets the same flag, and has its own test.
+
+**The retry needed a signal of its own**, the same lesson as `reloadTasks` one commit earlier: the effect keys on `day`/`today`/`rev`/`guard`, and `rev` only moves when the SERVER publishes a change — so on a quiet day the blank tab was permanent. The pin is deliberately structural ("the pin does not name the copy") and so cannot check that the retry WORKS; a mutation leaving `dayTry` out of the deps passes it, and fails the recovery test.
 
 #### [ ] "That time was just taken" stays on screen after the visitor does what it told them to do
 `frontend/src/components/BookingPage.tsx:265` · **low** · rendering · minor · stage 4
