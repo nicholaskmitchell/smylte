@@ -212,6 +212,90 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
 
   const days = useMemo(() => monthGrid(cursor), [cursor])
 
+  // ── the grid's keyboard walk ──────────────────────────────────────────────
+  //
+  // ONE tab stop for 42 cells, moved by the arrows — the roving-tabindex
+  // pattern a date grid is expected to have. Forty-two real tab stops would be
+  // reachable and unusable: crossing the month to get to whatever follows it is
+  // not an improvement on not reaching it at all.
+  //
+  // Held as a DAY KEY rather than an index, so the tab stop survives a month
+  // change: the grid always starts on a different weekday, so index 8 is a
+  // different date every month, and paging with the arrows would wander.
+  const [keyDay, setKeyDay] = useState(() => ymd(new Date()))
+  const keyCellRef = useRef<HTMLDivElement>(null)
+  // Set when the walk itself moved the focus, so focus follows the arrows —
+  // and NOT on an ordinary render, which would steal focus from whatever the
+  // owner was actually using.
+  const walking = useRef(false)
+
+  useEffect(() => {
+    if (!walking.current) return
+    walking.current = false
+    keyCellRef.current?.focus()
+  }, [keyDay, cursor])
+
+  // The focused day must always be ONE of the 42 on screen, or the tab stop
+  // disappears and the grid drops out of the tab order entirely. Paging the
+  // month is the case: `keyDay` stays where it was and is no longer rendered.
+  useEffect(() => {
+    const keys = days.map(ymd)
+    if (keys.includes(keyDay)) return
+    // The same day-of-month where it exists, else the nearest end of the month
+    // being shown — which is what a reader who paged here expects to land on.
+    const wanted = keyDay.slice(8)
+    const inMonth = days.filter((d) => d.getMonth() === cursor.getMonth())
+    const match = inMonth.find((d) => ymd(d).slice(8) === wanted)
+    setKeyDay(ymd(match ?? inMonth[inMonth.length - 1] ?? days[0]))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [days])
+
+  // What a screen reader announces on landing in a cell. The visible text is a
+  // bare day NUMBER, which out of its column is not a date at all.
+  const fmtCellLabel = (d: Date) =>
+    d.toLocaleDateString(undefined, {
+      weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
+    })
+
+  const stepMonth = (by: number) =>
+    setCursor(new Date(cursor.getFullYear(), cursor.getMonth() + by, 1))
+
+  const onGridKey = (ev: React.KeyboardEvent) => {
+    // Only the CELL's own keys. A chip inside it is a separate control with its
+    // own Enter/Space handler, and it stops propagation; anything else in here
+    // (a `+N more` button) keeps its native behaviour.
+    const step: Record<string, number> = {
+      ArrowLeft: -1, ArrowRight: 1, ArrowUp: -7, ArrowDown: 7,
+    }
+    const target = ev.target as HTMLElement
+    if (!target.classList.contains('cal-cell')) return
+    if (ev.key === 'Enter' || ev.key === ' ') {
+      ev.preventDefault()
+      setDraft({ date: keyDay })
+      return
+    }
+    const keys = days.map(ymd)
+    const at = keys.indexOf(keyDay)
+    if (at < 0) return
+    let next = at
+    if (ev.key in step) next = at + step[ev.key]
+    else if (ev.key === 'Home') next = at - (at % 7)
+    else if (ev.key === 'End') next = at - (at % 7) + 6
+    else if (ev.key === 'PageUp') { ev.preventDefault(); walking.current = true; stepMonth(-1); return }
+    else if (ev.key === 'PageDown') { ev.preventDefault(); walking.current = true; stepMonth(1); return }
+    else return
+    ev.preventDefault()
+    // Off either end pages the month, so the walk is not fenced inside one
+    // six-week window — the effect above then picks the landing cell.
+    if (next < 0 || next > 41) {
+      walking.current = true
+      stepMonth(next < 0 ? -1 : 1)
+      return
+    }
+    walking.current = true
+    setKeyDay(keys[next])
+  }
+
   // The window the grid shows, as the API wants it: the six-week span plus one
   // exclusive day. Both halves of the pair are derived once so the fetch and
   // the cache lookup can never disagree about which window is on screen.
@@ -565,8 +649,20 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
                 </button>
               </div>
             )}
-            <div className="cal-grid">
-              {DOW.map((d) => <div key={d} className="cal-dow">{d}</div>)}
+            {/* A GRID, and the day cells take a roving tabindex — the pattern a
+                date grid is expected to have, and the one screen readers
+                announce as a grid rather than as 42 anonymous divs. One tab
+                stop for the whole month; the arrows walk it. Every interactive
+                surface in here used to be a plain `<div>` with an `onClick`,
+                so there was no key sequence that opened an event or created one
+                on a given day — while `+N more` two lines down is a real
+                `<button>` and the mobile agenda rows are buttons too, which is
+                what made the omission look deliberate rather than uniform. */}
+            <div className="cal-grid" role="grid" aria-label="Month"
+              onKeyDown={onGridKey}>
+              {DOW.map((d) => (
+                <div key={d} className="cal-dow" role="columnheader">{d}</div>
+              ))}
               {days.map((d) => {
                 const key = ymd(d)
                 const inMonth = d.getMonth() === cursor.getMonth()
@@ -583,6 +679,16 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
                 return (
                   <div key={key}
                     className={`cal-cell ${inMonth ? '' : 'dim'} ${key === todayKey ? 'today' : ''} ${isMobile && key === focusDay ? 'focus' : ''} ${drag && overDay === key ? 'drag-over' : ''}`}
+                    role="gridcell"
+                    aria-label={fmtCellLabel(d)}
+                    // THE roving tabindex: exactly one cell is in the tab order
+                    // at a time, and the arrows move which. `key === keyDay`
+                    // rather than an index so the tab stop survives a month
+                    // change landing on a different number of leading blanks.
+                    tabIndex={key === keyDay ? 0 : -1}
+                    data-day={key}
+                    ref={key === keyDay ? keyCellRef : undefined}
+                    onFocus={() => setKeyDay(key)}
                     onDragOver={(ev) => { if (!drag) return; ev.preventDefault(); setOverDay(key) }}
                     onDragLeave={() => setOverDay((o) => (o === key ? null : o))}
                     onDrop={(ev) => { ev.preventDefault(); dropOnDay(key) }}
@@ -638,6 +744,19 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
                               style={evStyle(e)}
                               dir={textDir(e.summary)}
                               title={e.is_recurring ? `${e.summary || ''} (repeating)` : (e.summary || '')}
+                              // Operable, and OUT of the roving walk: a chip is
+                              // reached by tabbing on from the focused cell, so
+                              // the arrows stay the grid's. The sidebar row in
+                              // this same file is the in-file precedent for the
+                              // role/tabIndex/keydown trio.
+                              role="button"
+                              tabIndex={0}
+                              onKeyDown={(ev) => {
+                                if (ev.key !== 'Enter' && ev.key !== ' ') return
+                                ev.preventDefault()
+                                ev.stopPropagation()
+                                setDraft({ event: e })
+                              }}
                               draggable
                               onDragStart={(ev) => {
                                 ev.stopPropagation()
@@ -684,6 +803,18 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
                           return (
                             <div key={taskKey(t)} className={`cal-task ${done ? 'done' : ''}`}
                               style={taskStyle(t)} dir={textDir(t.summary)} title={t.summary || ''}
+                              // Same treatment as the event chip beside it. The
+                              // finding names the event chip; a task chip in the
+                              // same cell that stayed unreachable would be the
+                              // same bug with a different selector.
+                              role="button"
+                              tabIndex={0}
+                              onKeyDown={(ev) => {
+                                if (ev.key !== 'Enter' && ev.key !== ' ') return
+                                ev.preventDefault()
+                                ev.stopPropagation()
+                                setTaskDetail(t)
+                              }}
                               onClick={(ev) => { ev.stopPropagation(); setTaskDetail(t) }}>
                               <span className="tick" aria-hidden="true">{done ? '☑' : '☐'}</span>
                               {timed && <span className="t">{fmtClock(t.due!, tf)}</span>}

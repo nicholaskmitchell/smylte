@@ -1,6 +1,6 @@
 # Audit backlog
 
-**5 open**, all from the 2026-08-25 sweep at the top of this file; every finding
+**4 open**, all from the 2026-08-25 sweep at the top of this file; every finding
 from every earlier sweep is closed, as is the one this sweep's own remediation
 turned up (marked `· found in remediation`).
 
@@ -3452,7 +3452,7 @@ deliberately empty board is representable and Remove never adds modules.
 
 **Two deliberate test edits, and they are the fix in miniature.** `HomeView.test.tsx`'s "falls back to the stock arrangement when nothing is saved" and "does not persist the stock arrangement until something is changed" both passed `[]` to mean "nothing is saved" — which is precisely the conflation this finding is about, written into the tests that were supposed to hold the behaviour. They pass `null` now; both assertions are unchanged.
 
-#### [ ] The whole month grid is keyboard-inoperable: day cells and event chips are unfocusable divs, so no event can be opened or created without a pointer
+#### [x] The whole month grid is keyboard-inoperable: day cells and event chips are unfocusable divs, so no event can be opened or created without a pointer
 `frontend/src/components/CalendarView.tsx:623` · **low** · rendering · stage 4
 
 Every interactive surface in the month grid is a plain `<div onClick>` with no `role`,
@@ -3488,6 +3488,16 @@ roving-tabindex arrow-key walk over the 42 cells. Add a test asserting `.cal-gri
 exposes at least one focusable node per rendered chip.
 
 **Pinned by** `2026-08-25 — reaching the month grid from a keyboard > exposes the event chip and the day cell as operable controls` in `frontend/src/backlog.aug25.stage4.test.tsx`.
+
+**Fixed** with the suggested fix's SECOND option for the cells, chosen deliberately: `role="grid"` with a roving tabindex over the 42 cells, arrows walking it, Home/End for the week, PageUp/PageDown for the month, and Enter/Space opening a draft on the focused day. Forty-two real buttons — the first option — would be reachable and unusable: crossing a month to get to whatever follows the grid is not an improvement on not reaching it at all.
+
+The chips take the first option: `role="button"`, `tabIndex={0}` and an Enter/Space handler, the trio the sidebar row in this same file already uses. **The TASK chip got it too**, though the entry names only the event chip — a task chip in the same cell left unreachable is the same bug with a different selector.
+
+**The tab stop is a DAY, not an index.** Each month's grid starts on a different weekday, so index 8 is a different date every month and an index-based stop would wander as the reader pages; worse, a `keyDay` no longer on screen leaves the grid with NO tab stop, i.e. out of the tab order entirely. An effect re-homes it onto the same day-of-month in the new grid, and a mutation removing that leaves zero tab stops after a page.
+
+**One deliberate test edit, and it corrects the pin against its own docstring.** The pin says "a roving tabindex over the 42 cells (the suggested fix for the grid) passes too, since at least one cell carries `tabindex="0"` at any time" — but it asserted on `grid.querySelector('.cal-cell')`, the FIRST cell, which under a roving tabindex is a leading blank from the previous month at `-1`. As written it rejected the repair it names. It now takes the cell that actually holds the tab stop, falling back to the first so a grid of real `<button>`s still passes exactly as before.
+
+**The pin asks only that something is focusable**, which a roving tabindex is only worth having if the arrows move it — and it cannot see that. Six tests cover the walk: one tab stop for the month, each of the four arrows moving it by the right step WITH focus following, Enter opening the right day's draft, a tab stop surviving a page, and the arrows staying the cell's when a chip handles the key.
 
 #### [x] Changing a repeating event's cadence and then picking "This event" silently discards the change and reports success
 `frontend/src/components/CalendarView.tsx:917` · **low** · bug · stage 3
