@@ -40,15 +40,23 @@ public sealed class MainForm : Form
 
         BuildNotice();
 
-        // Docking follows z-order, so set it explicitly rather than relying on the
-        // order things were added: the notice strip claims the top, and whichever
-        // of splash / web is visible fills what is left.
+        // Docking follows z-order, and it goes from the HIGHEST child index down:
+        // the control at the back is laid out first and takes the outer edge,
+        // and a DockStyle.Fill claims the whole remaining rectangle without
+        // leaving anything for a control laid out after it.
+        //
+        // The indices used to be the other way round — notice 0, splash 1, web 2
+        // — under a comment claiming the same intent. That gave `_web` the whole
+        // client rectangle and then placed `_notice` in the top 36px ON TOP of
+        // it, covering the SPA's header row and swallowing every click in that
+        // band. The strip has to be laid out FIRST to consume its own height, so
+        // it takes the highest index and the two Fill children take what is left.
         Controls.Add(_web);
         Controls.Add(_splash);
         Controls.Add(_notice);
-        Controls.SetChildIndex(_notice, 0);
+        Controls.SetChildIndex(_notice, 2);
         Controls.SetChildIndex(_splash, 1);
-        Controls.SetChildIndex(_web, 2);
+        Controls.SetChildIndex(_web, 0);
 
         Load += async (_, _) => await InitialiseAsync().ConfigureAwait(true);
     }
@@ -99,12 +107,20 @@ public sealed class MainForm : Form
             }
         };
 
-        // Docking consumes space in z-order, so the Fill has to be added last or
-        // it claims the whole strip and the buttons never appear. Index 0 docks
-        // furthest right, which puts "Not now" on the outside.
-        _notice.Controls.Add(dismiss);
-        _notice.Controls.Add(download);
+        // The same inversion, inside the strip, and the comment here used to state
+        // the mechanism backwards: `Controls.Add` appends, so the LAST control
+        // added has the highest index and is docked FIRST — which is exactly what
+        // makes a Fill claim the whole strip. The label went last, took all of
+        // it, and the two Right-docked buttons were then painted over its right
+        // end rather than beside it.
+        //
+        // Fill FIRST, so the buttons consume their widths from the right before
+        // the label is given the remainder. `download` before `dismiss` keeps
+        // "Not now" on the outside, which is the layout the old comment
+        // described and did not produce.
         _notice.Controls.Add(message);
+        _notice.Controls.Add(download);
+        _notice.Controls.Add(dismiss);
     }
 
     private async Task InitialiseAsync()
