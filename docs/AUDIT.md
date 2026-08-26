@@ -1,6 +1,6 @@
 # Audit backlog
 
-**6 open**, all from the 2026-08-25 sweep at the top of this file; every finding
+**5 open**, all from the 2026-08-25 sweep at the top of this file; every finding
 from every earlier sweep is closed, as is the one this sweep's own remediation
 turned up (marked `· found in remediation`).
 
@@ -3411,7 +3411,7 @@ same time — `.side-item:hover { background: var(--bg-elev) }` (line 114) colli
 
 **The other 41 unguarded `:hover` rules were left alone, deliberately.** None has been shown to misreport a STATE, which is what makes these three different: a latched hover that merely looks warm is cosmetic; a latched hover indistinguishable from "selected" or "on" is a lie about the data. Sweeping the rest would be a large diff across rules no finding has exercised, on a surface where a mistake is only visible by looking.
 
-#### [ ] Removing the last Home module puts the five stock modules back on the board
+#### [x] Removing the last Home module puts the five stock modules back on the board
 `frontend/src/components/HomeView.tsx:52` · **low** · rendering · stage 4
 
 `committed` treats an empty saved layout as "never arranged" and substitutes
@@ -3445,6 +3445,12 @@ signal (e.g. `layout === null` from App when the settings key is absent) so a
 deliberately empty board is representable and Remove never adds modules.
 
 **Pinned by** `2026-08-25 — clearing the dashboard > does not put five modules back when the last one is removed` in `frontend/src/backlog.aug25.stage4.test.tsx`.
+
+**Fixed** with the entry's SECOND option, chosen over disabling the button: `[]` is no longer overloaded. `App` holds `dashboard` as `DashboardModule[] | null`, initialised to `null` and set only when the settings key is actually present, and `HomeView` reads `layout ?? DEFAULT_LAYOUT`. So "never arranged" and "deliberately empty" are two values, and Remove is never a control that ADDS five modules. Disabling Remove at the last module would have closed the finding by making a product decision — the board can never be empty — out of a workaround.
+
+**The pin cannot see the other half**, because it starts from a board that already has modules on it: collapsing the two values the OTHER way (null read as empty) closes the pin by handing every new account a blank page. That has its own test, as does the boundary itself — an emptied board stays empty.
+
+**Two deliberate test edits, and they are the fix in miniature.** `HomeView.test.tsx`'s "falls back to the stock arrangement when nothing is saved" and "does not persist the stock arrangement until something is changed" both passed `[]` to mean "nothing is saved" — which is precisely the conflation this finding is about, written into the tests that were supposed to hold the behaviour. They pass `null` now; both assertions are unchanged.
 
 #### [ ] The whole month grid is keyboard-inoperable: day cells and event chips are unfocusable divs, so no event can be opened or created without a pointer
 `frontend/src/components/CalendarView.tsx:623` · **low** · rendering · stage 4

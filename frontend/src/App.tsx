@@ -137,7 +137,12 @@ export function App() {
   // Seeded from the pre-paint cache so the editor opens showing what is already
   // on screen; the server overwrites it a moment later like every other setting.
   const [appearance, setAppearance] = useState<Appearance>(() => readCachedAppearance() ?? {})
-  const [dashboard, setDashboard] = useState<DashboardModule[]>([])
+  // NULL means "never arranged", `[]` means "deliberately empty", and they used
+  // to be the same value. `HomeView` reads an empty array as "show the stock
+  // five", which is right for a new account and wrong the moment the owner
+  // removes their last module — Remove put five modules back on the board. One
+  // value cannot answer both questions, so there are two.
+  const [dashboard, setDashboard] = useState<DashboardModule[] | null>(null)
   // The calendar month, held here so returning to the Calendar tab lands where
   // you left it rather than snapping back to today.
   const [cursor, setCursor] = useState(() => {
@@ -382,6 +387,10 @@ export function App() {
           setAppearance(clean)
           cacheAppearance(clean)
         }
+        // Only when the KEY is present. An account that has never arranged
+        // anything has no `dashboard` in its settings at all, and that absence
+        // is what `null` records — so a settings read must not turn it into an
+        // empty array on its way past.
         if (keep('dashboard') && Array.isArray(s.dashboard)) setDashboard(sanitizeLayout(s.dashboard))
       })
       .catch((e) => {

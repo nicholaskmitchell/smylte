@@ -29,7 +29,10 @@ export function HomeView({ rev, onExpire, layout, onLayoutChange,
   hiddenCalendars = [], archivedCalendars = [] }: {
   rev: number
   onExpire: () => void
-  layout: DashboardModule[]
+  /** The owner's arrangement, or NULL when they have never made one. The two
+   *  are different: `null` takes the stock five, `[]` is a board deliberately
+   *  cleared. Collapsing them meant removing the last module put five back. */
+  layout: DashboardModule[] | null
   onLayoutChange: (next: DashboardModule[]) => void
   // Read-only here: the mini calendar honours the Calendar tab's visibility
   // choices so an archived calendar doesn't keep dotting the dashboard. That
@@ -49,7 +52,12 @@ export function HomeView({ rev, onExpire, layout, onLayoutChange,
   // An account that has never arranged anything gets the stock arrangement
   // rather than an empty page. It is not written back until the user actually
   // changes something — an untouched dashboard stays "unset" server-side.
-  const committed = layout.length ? layout : DEFAULT_LAYOUT
+  //
+  // Keyed on NULL, not on emptiness. `layout.length ? … : DEFAULT_LAYOUT` made
+  // "never arranged" and "deliberately empty" the same board, so removing the
+  // last module handed back the stock five — a Remove that ADDS five modules,
+  // and no way to reach an empty dashboard at all.
+  const committed = layout ?? DEFAULT_LAYOUT
   const mods = preview ?? committed
   const rows = layoutRows(mods)
 
