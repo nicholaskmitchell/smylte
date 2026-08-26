@@ -1747,3 +1747,57 @@ def test_an_ordinary_rdate_list_outside_the_window_is_not_refused():
     # ...and a window that DOES hold some still expands them.
     got = recur.expand_occurrences(raw, date(2024, 1, 1), date(2024, 1, 4))
     assert len(got) >= 3
+
+
+# ── the anchor a whole-series reschedule measures its delta from ──────────────
+# `split_series` has refused an anchor naming no occurrence since the stale-tab
+# finding; `shift_series` did not, and it is the one with the larger blast
+# radius. The anchor is not a label there — it is the BASE the delta is taken
+# from, and that delta moves every occurrence, the rule's UNTIL, both date lists
+# and every override's RECURRENCE-ID. So a stale or invented anchor rescheduled
+# the whole series by an amount nobody asked for, silently, and the result looks
+# like an ordinary drag.
+
+def test_a_series_reschedule_refuses_an_anchor_that_names_no_occurrence():
+    raw = foreign_event_raw("shbad", rrule="FREQ=WEEKLY;COUNT=3")   # 1/6, 1/13, 1/20
+    with pytest.raises(ValueError, match="does not name an occurrence"):
+        shift_series(raw, "2026-01-09T09:00:00+00:00",
+                     EventEdit(dtstart=datetime(2026, 1, 9, 11, 0)))
+    # ...and the series is untouched, which is the point: the old behaviour
+    # moved all three by the two hours asked of a Friday that never existed.
+    assert _starts(recur.expand_occurrences(raw, *_WIN)) == [
+        "2026-01-06T09:00:00+00:00", "2026-01-13T09:00:00+00:00",
+        "2026-01-20T09:00:00+00:00",
+    ]
+
+
+def test_a_series_reschedule_still_takes_every_real_slot():
+    """The guard must not cost the shapes that legitimately reach this path: the
+    series' own first slot, an RDATE addition, an occurrence carrying an override
+    (which the resource itself asserts is part of the set), and an EXDATE'd slot
+    — the rule still generates that one, and a tab holding an older expansion can
+    hand it back."""
+    raw = foreign_event_raw(
+        "shok", rrule="FREQ=WEEKLY;COUNT=4", exdate="20260113T090000Z",
+        overrides=(("RECURRENCE-ID:20260120T090000Z", "DTSTART:20260120T110000Z"),),
+    )
+    for anchor in ("2026-01-06T09:00:00+00:00",     # the master's own DTSTART
+                   "2026-01-13T09:00:00+00:00",     # generated, then EXDATE'd
+                   "2026-01-20T09:00:00+00:00",     # carries an override
+                   "2026-01-27T09:00:00+00:00"):    # an ordinary later slot
+        shift_series(raw, anchor, EventEdit(dtstart=datetime(2026, 1, 6, 9, 0)))
+
+
+def test_a_non_repeating_event_is_told_what_is_actually_wrong():
+    """`scope='all'` with a `recurrence_id` on a one-off reaches this path from
+    the MCP tools and the HTTP route. `_require_occurrence`'s wording for a
+    non-repeating event tells the caller to use scope='all' — the scope that got
+    them here — so this path says what it means instead."""
+    raw = foreign_event_raw("shone")                              # no RRULE, no RDATE
+    with pytest.raises(ValueError, match="does not name an occurrence of this event"):
+        shift_series(raw, "2026-02-02T09:00:00+00:00",
+                     EventEdit(dtstart=datetime(2026, 2, 2, 11, 0)))
+    # Its own start is still a legitimate anchor for a plain reschedule.
+    moved = shift_series(raw, "2026-01-06T09:00:00+00:00",
+                         EventEdit(dtstart=datetime(2026, 1, 6, 11, 0)))
+    assert _starts(recur.expand_occurrences(moved, *_WIN)) == ["2026-01-06T11:00:00+00:00"]

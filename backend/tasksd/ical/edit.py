@@ -1414,6 +1414,35 @@ def shift_series(
 
     repeat_changed = edit.rrule is not UNSET and _rule_changed(master, edit.rrule)
     override = _find_override(cal, anchor)
+
+    # The anchor is not just a label here: it is the BASE the delta is measured
+    # from, and that delta moves EVERY occurrence, the RRULE's UNTIL, both date
+    # lists and every override's RECURRENCE-ID. So an anchor naming no
+    # occurrence does not fail — it silently reschedules the whole series by an
+    # amount nobody asked for.
+    #
+    # `_require_occurrence` records the two ways a stale anchor arrives, and both
+    # reach this path exactly as they reach the split: a second tab holding an
+    # older expansion, and `engine.shift_event` re-applying the caller's
+    # `recurrence_id` against a fresh copy after a 412. The MCP tools and the
+    # HTTP route both take `recurrence_id` straight from the caller. Measured on
+    # a monthly series: an anchor from an unrelated resource moved every
+    # occurrence back four hours and left the series otherwise intact, so
+    # nothing about the result says it happened.
+    #
+    # The blast radius is larger than the split's — that mis-bounds a head, this
+    # moves the entire series — and refusing is the recoverable direction: the
+    # caller re-reads and drags again. `_require_occurrence` keeps its own
+    # allow-when-unprobeable policy, which is the same trade it already makes.
+    if override is None and not _same_instant(master.get("DTSTART").dt, anchor):
+        rule = _rrule_dict(master)
+        if rule is None and not _datelist_values(master, "RDATE"):
+            # `_require_occurrence`'s wording for this case tells the caller to
+            # use scope='all' — which is the scope that got them here.
+            raise ValueError(
+                "recurrence_id does not name an occurrence of this event")
+        _require_occurrence(master, rule, anchor)
+
     base = override.get("DTSTART").dt if override is not None and override.get("DTSTART") else anchor
     # A foreign client may have given this occurrence's override a different
     # dateness than the series (a timed override on an all-day series, say);
