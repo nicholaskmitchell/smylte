@@ -82,6 +82,22 @@ export function ShutdownRitual({
   const unfinished = entries.filter((e) => !isDone(e))
   const last = step === STEPS.length - 1
 
+  // How many rows the owner DECIDED about in this ritual — rolled to another
+  // day, or dropped. `unfinished` empties either way: a rolled row leaves the
+  // day entirely, so "nothing is unfinished" is true after moving everything to
+  // tomorrow exactly as it is after ticking everything off, and step two said
+  // "Everything on today is done. Nothing to carry." to a day where nothing had
+  // been done and everything was being carried. The two exits are
+  // indistinguishable from the list alone; this is what tells them apart.
+  //
+  // Held HERE rather than in `FollowsStep`, which unmounts when the owner steps
+  // forward: a counter inside it would reset on Back and tell the lie again.
+  const [decided, setDecided] = useState(0)
+  const decide = <T extends unknown[]>(fn: (...a: T) => void) => (...a: T) => {
+    setDecided((n) => n + 1)
+    fn(...a)
+  }
+
   return (
     <div className="overlay"
       onMouseDown={(e) => { scrimPress.current = e.target === e.currentTarget }}
@@ -103,8 +119,8 @@ export function ShutdownRitual({
             shutdownAt={shutdownAt} renderRow={renderRow} colorOf={colorOf} />
         )}
         {step === 1 && (
-          <FollowsStep day={day} unfinished={unfinished} titleOf={titleOf}
-            onRoll={onRoll} onDrop={onDrop} />
+          <FollowsStep day={day} unfinished={unfinished} titleOf={titleOf} decided={decided}
+            onRoll={decide(onRoll)} onDrop={decide(onDrop)} />
         )}
         {step === 2 && (
           <ReflectStep reflection={reflection} onReflect={onReflect} />
@@ -207,10 +223,13 @@ function DoneStep({ entries, offPlan, planned, done, doneMinutes, unestimated,
 }
 
 /** Step two: what follows you into tomorrow. */
-function FollowsStep({ day, unfinished, titleOf, onRoll, onDrop }: {
+function FollowsStep({ day, unfinished, titleOf, decided, onRoll, onDrop }: {
   day: string
   unfinished: DayEntry[]
   titleOf: (e: DayEntry) => string
+  /** Rows moved or dropped in this ritual — see the parent. Nonzero means the
+   *  list emptied because the owner DECIDED about it, not because it was done. */
+  decided: number
   onRoll: (e: DayEntry, to: string) => void
   onDrop: (e: DayEntry) => void
 }) {
@@ -229,7 +248,14 @@ function FollowsStep({ day, unfinished, titleOf, onRoll, onDrop }: {
   if (!unfinished.length) {
     return (
       <div className="plan-body">
-        <p className="empty">Everything on today is done. Nothing to carry.</p>
+        {/* Two exits, two sentences. "Done" is the one thing this step exists to
+            be able to say, and it has to stay true: an owner who moved every row
+            to tomorrow decided about their day, they did not finish it. */}
+        <p className="empty">
+          {decided > 0
+            ? 'Everything on today is decided. Nothing left to carry.'
+            : 'Everything on today is done. Nothing to carry.'}
+        </p>
       </div>
     )
   }
