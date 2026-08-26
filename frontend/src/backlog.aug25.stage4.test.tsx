@@ -162,7 +162,7 @@ describe('2026-08-25 — one task list that will not load', () => {
 
   // ── AUDIT (open): data.tsx:217 — one failing task list blanks the whole
   //    account's tasks; every pane then says "Nothing to do here." ──────────
-  it.fails('still shows the lists that answered', async () => {
+  it('still shows the lists that answered', async () => {
     // EVIDENCE. `TaskProvider` fans the fetch out with
     // `await Promise.all(lists.map((l) => api.tasks(l.id)))`, so a single list
     // that answers 500/502/429/404 rejects the whole batch. `setTasks` is never
@@ -199,6 +199,106 @@ describe('2026-08-25 — one task list that will not load', () => {
     await waitFor(() => expect(m.tasks).toHaveBeenCalledTimes(2))
 
     await waitFor(() => expect(rows()).toEqual(['Alpha', 'Bravo']))
+  })
+
+  // The half the pin deliberately does not require — "the pin does not require a
+  // particular error surface, because a fix that only made the failure visible
+  // would still have thrown the healthy list's rows away". Keeping the rows is
+  // necessary and not sufficient: a pane that is short and does not say so is
+  // the confident lie the calendar path next door was rewritten to stop telling.
+  it('names the list that failed and offers a retry', async () => {
+    m.lists.mockResolvedValue([good, poison])
+    let fail = true
+    m.tasks.mockImplementation(async (listId: string) => {
+      if (listId === 'poison' && fail) throw new HttpError(500, 'internal error')
+      return listId === 'good' ? HEALTHY
+        : [task({ uid: 'c', list: 'poison', summary: 'Charlie', href: '/poison/c.ics' })]
+    })
+    const user = userEvent.setup()
+    setup()
+
+    const banner = await screen.findByRole('status')
+    expect(banner).toHaveTextContent(/Couldn’t load Shared/)
+    // …and the empty state is NOT also on screen saying the opposite.
+    expect(screen.queryByText('Nothing to do here.')).not.toBeInTheDocument()
+
+    fail = false
+    await user.click(within(banner).getByRole('button', { name: 'Retry' }))
+    await waitFor(() => expect(rows()).toEqual(['Alpha', 'Bravo', 'Charlie']))
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+  })
+
+  // When EVERY list fails there is nothing to keep, and the answer is still not
+  // "Nothing to do here." — writing `[]` in that case would replace rows already
+  // on screen with a blank pane, which the calendar path's own comment calls a
+  // worse blank than the one this finding is about.
+  it('does not claim the account is empty when every list failed', async () => {
+    m.lists.mockResolvedValue([good, poison])
+    m.tasks.mockRejectedValue(new HttpError(502, 'bad gateway'))
+    setup()
+
+    await waitFor(() => expect(m.tasks).toHaveBeenCalledTimes(2))
+    expect(await screen.findByRole('status')).toHaveTextContent(/Couldn’t load/)
+    expect(screen.queryByText('Nothing to do here.')).not.toBeInTheDocument()
+  })
+
+  // …and the rows ALREADY ON SCREEN are what a total failure must not take. The
+  // test above cannot see this: with nothing loaded yet there is nothing to
+  // lose, so writing `[]` for an all-failed fan-out passes it. This is the
+  // calendar path's own lesson — "a worse blank than the one this finding is
+  // about, because the rows to draw were sitting on disk" — and it needs rows on
+  // screen before the failure to show at all.
+  it('keeps the rows on screen when a later fetch loses every list', async () => {
+    m.lists.mockResolvedValue([good])
+    m.tasks.mockResolvedValue(HEALTHY)
+    // Rendered directly rather than through `setup`, because the refetch is
+    // driven by bumping `rev` — the SSE signal, which is how a refetch happens
+    // on a screen the owner is already looking at.
+    const pane = (rev: number) => (
+      <DataProvider rev={rev} onExpire={vi.fn()}>
+        <TasksView onExpire={vi.fn()} view="list" onView={vi.fn()}
+          sideCollapsed={false} onToggleSide={vi.fn()}
+          hiddenLists={[]} onHiddenListsChange={vi.fn()}
+          groups={[]} onGroupsChange={vi.fn()}
+          collapsedGroups={[]} onCollapsedGroupsChange={vi.fn()}
+          collapsedTasks={[]} onCollapsedTasksChange={vi.fn()}
+          showCompleted={false} />
+      </DataProvider>
+    )
+    const { rerender } = render(pane(0))
+    await waitFor(() => expect(rows()).toEqual(['Alpha', 'Bravo']))
+
+    m.tasks.mockRejectedValue(new HttpError(502, 'bad gateway'))
+    rerender(pane(1))
+
+    expect(await screen.findByRole('status')).toHaveTextContent(/Couldn’t load/)
+    expect(rows()).toEqual(['Alpha', 'Bravo'])
+  })
+
+  // CONTROL: an AuthError is the SESSION, not one list. `allSettled` swallows
+  // every rejection by construction, so without re-throwing it the expired
+  // session would be reported as a set of broken lists and the app would never
+  // route to the login card.
+  it('still expires the session when a list answers 401', async () => {
+    const onExpire = vi.fn()
+    m.lists.mockResolvedValue([good, poison])
+    m.tasks.mockImplementation(async (listId: string) => {
+      if (listId === 'poison') throw new AuthError('session expired')
+      return HEALTHY
+    })
+    render(
+      <DataProvider rev={0} onExpire={onExpire}>
+        <TasksView onExpire={vi.fn()} view="list" onView={vi.fn()}
+          sideCollapsed={false} onToggleSide={vi.fn()}
+          hiddenLists={[]} onHiddenListsChange={vi.fn()}
+          groups={[]} onGroupsChange={vi.fn()}
+          collapsedGroups={[]} onCollapsedGroupsChange={vi.fn()}
+          collapsedTasks={[]} onCollapsedTasksChange={vi.fn()}
+          showCompleted={false} />
+      </DataProvider>,
+    )
+
+    await waitFor(() => expect(onExpire).toHaveBeenCalled())
   })
 
   // CONTROL (passes today, must keep passing). With every list healthy the pane

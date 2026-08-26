@@ -1,6 +1,6 @@
 # Audit backlog
 
-**15 open**, all from the 2026-08-25 sweep at the top of this file; every finding
+**14 open**, all from the 2026-08-25 sweep at the top of this file; every finding
 from every earlier sweep is closed, as is the one this sweep's own remediation
 turned up (marked `· found in remediation`).
 
@@ -2341,7 +2341,7 @@ Failure scenario (iPhone 14, 390x844, safe-area-inset-bottom = 34px):
 mobile block: `@media (max-width: 720px) { .dash-stack { padding-bottom: calc(12px +
 env(safe-area-inset-bottom)); } }`.
 
-#### [ ] One failing task list blanks the whole account's tasks — every pane then says "Nothing to do here." with no retry
+#### [x] One failing task list blanks the whole account's tasks — every pane then says "Nothing to do here." with no retry
 `frontend/src/data.tsx:217` · **medium** · bug · stage 4
 
 TaskProvider fans the task fetch out with `Promise.all`, so a single list that answers
@@ -2382,6 +2382,16 @@ those, and expose the failed list NAMES on the context (a `taskListErrors` analo
 a `reloadTasks()` so the retry is reachable without a page reload.
 
 **Pinned by** `2026-08-25 — one task list that will not load > still shows the lists that answered` in `frontend/src/backlog.aug25.stage4.test.tsx`.
+
+**Fixed** with the suggested fix, taken from the calendar path next door rather than invented: `Promise.allSettled`, keep what answered, record the failed list NAMES on the context as `taskListErrors` (the `windowErrors` analogue), and expose `reloadTasks()` so the retry is reachable without a page reload. `TasksView` renders the same `.cal-partial` banner the month grid uses, and the empty state is suppressed while it is up — otherwise the pane says "Couldn't load Shared" and "Nothing to do here." at the same time, which is worse than either alone.
+
+**Three things the pin explicitly does not require, and all three needed tests.** The pin takes "a list that answered still shows its tasks" and says so — "a fix that only made the failure visible would still have thrown the healthy list's rows away". The converse also holds: keeping the rows is necessary and not sufficient.
+
+* **The failure is NAMED and retryable.** A mutation that kept the rows and never set `taskListErrors` passes the pin.
+* **A TOTAL failure keeps what is on screen.** `setTasks` runs only when something landed, which is the calendar path's own lesson ("a worse blank than the one this finding is about, because the rows to draw were sitting on disk"). This is invisible on a cold load — there is nothing to lose yet — so the test loads healthy rows first and then fails a refetch driven by `rev`.
+* **An AuthError is the SESSION, not one list.** `allSettled` swallows every rejection by construction, so without re-throwing it an expired session reads as a set of broken lists and the app never routes to the login card. Same guard, same comment, as the calendar fan-out.
+
+**`reloadTasks` needed a signal of its own.** The effect keys on `loadKey`/`rev`/`enabled`/`listsLoaded`, and `rev` only moves when the SERVER publishes a change — so on an idle account a failed fetch had no way back at all. A `taskNonce` in the deps is what makes the button do anything; without it a mutation leaves a Retry that re-runs nothing and still passes every other assertion.
 
 #### [ ] The calendar's disk mirror is wiped on every cold boot: the logout-clear effect also fires on mount while auth is still 'loading'
 `frontend/src/data.tsx:775` · **medium** · rendering · minor · stage 4
