@@ -18,7 +18,7 @@
 // on the numbers — the same call the habit count makes, for the same reason: a
 // surface that grades you is a surface you stop opening.
 
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { DayEntry, Task } from '../api'
 import { useEscape } from '../hooks'
@@ -302,6 +302,28 @@ function ReflectStep({ reflection, onReflect }: {
   onReflect: (text: string) => void
 }) {
   const [draft, setDraft] = useState(reflection ?? '')
+
+  // Committed on UNMOUNT as well as on blur, and the effect ADDS a path rather
+  // than replacing one. Browsers fire no `blur`/`focusout` for a focused element
+  // removed from the DOM (Chrome and Safari, so every iOS install), and Escape —
+  // `useEscape(onClose)` on the window — unmounts this whole overlay. So the one
+  // field in the app that holds free prose, under a hint promising "Kept with
+  // the day", threw it away for the one closer that does not blur first. The ✕
+  // and the scrim were always safe: their mousedown blurs the field.
+  //
+  // Read through refs so the cleanup can run once, on unmount, and still see the
+  // LAST draft — a cleanup depending on `draft` would fire on every keystroke,
+  // which is the write storm the blur handler exists to avoid.
+  const latest = useRef(draft)
+  latest.current = draft
+  const saved = useRef(reflection ?? '')
+  saved.current = reflection ?? ''
+  const commit = useRef(onReflect)
+  commit.current = onReflect
+  useEffect(() => () => {
+    if (latest.current !== saved.current) commit.current(latest.current)
+  }, [])
+
   return (
     <div className="plan-body">
       <label className="plan-label" htmlFor="shut-reflect">
@@ -313,6 +335,8 @@ function ReflectStep({ reflection, onReflect }: {
         onChange={(e) => setDraft(e.target.value)}
         // On blur rather than per keystroke: this is prose, and a PATCH per
         // character would be a write storm for a field nobody is racing on.
+        // `saved` is updated by the render that follows, so the unmount effect
+        // above does not send it a second time.
         onBlur={() => { if (draft !== (reflection ?? '')) onReflect(draft) }} />
       <p className="plan-hint">
         Kept with the day. You will see it whenever you look back at today.
