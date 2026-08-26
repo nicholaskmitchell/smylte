@@ -1,6 +1,6 @@
 # Audit backlog
 
-**29 open**, all from the 2026-08-25 sweep at the top of this file; every finding
+**28 open**, all from the 2026-08-25 sweep at the top of this file; every finding
 from every earlier sweep is closed.
 
 Findings from the adversarial audit sweeps — one deep finder per subsystem, then
@@ -3716,7 +3716,7 @@ against the same signature of head and of tail. Also add `assert not CORPUS_IDS 
 (or a fixed expected filename set) so an emptied corpus fails instead of collecting zero
 parametrized cases.
 
-#### [ ] tasks.service grants the app write access to its own interpreter and source tree, contradicting the sandbox's stated invariant
+#### [x] tasks.service grants the app write access to its own interpreter and source tree, contradicting the sandbox's stated invariant
 `deploy/tasks.service:29` · **low** · security · stage 2
 
 The hardening comment says ProtectHome=read-only "keeps the app from writing anywhere
@@ -3760,6 +3760,14 @@ is not wanted, at minimum narrow the grant to a dedicated subdirectory (e.g.
 `backend/var/`) that holds only tasks.db.
 
 **Pinned by** `test_the_unit_does_not_open_its_own_interpreter_and_source_to_writes` in `backend/tests/test_backlog_aug25_stage2.py`.
+
+**Fixed** with the suggested fix's first option: `StateDirectory=tasks` in the unit, `TASKS_DB=/var/lib/tasks/tasks.db` in setup.sh and tasks.env.example, and `ReadWritePaths` gone entirely — so nothing under /home is writable and the venv and source are read-only like the rest of it. systemd creates and owns /var/lib/tasks itself, which is also why setup.sh gained no `install -d`: a new absolute path there would escape the four literals that `test_backlog_aug19_stage45.py`'s setup.sh harness redirects, and really create the directory on whatever machine ran the suite.
+
+`config.py`'s fallback deliberately stays under `~`: a developer running `python -m tasksd` has no /var/lib/tasks and no systemd to make one. Production sets TASKS_DB explicitly.
+
+**This one needs a hand on the server.** setup.sh leaves an existing `/etc/tasks/tasks.env` untouched, so an install made before this change still points TASKS_DB at a path the narrowed sandbox no longer grants, and the service will fail to open its cache. docs/DEPLOY.md gained a one-time migration block — stop, move `tasks.db` and its -wal/-shm sidecars, rewrite TASKS_DB, start — with the reminder that moving the file matters because it holds the sidecar-class tables a resync cannot rebuild.
+
+**The pin's anti-vacuity guard was widened, deliberately and on the record.** It read `assert rw` — "the unit declares no ReadWritePaths at all, has it been renamed?" — which was a fair question while the answer was a ReadWritePaths line and the wrong one the moment the correct fix removed it: a unit with none would have been indistinguishable from a unit that had lost its writable path entirely. It now accepts `ReadWritePaths` OR `StateDirectory`, guarding the same thing (a unit that can write nowhere would not start), and the assertion that detects the finding — `opened == []` — was not touched. Confirmed by mutation: the old grant, a grant naming `.venv` directly, and no grant at all all fail.
 
 #### [x] The published Windows client is built against a floating NuGet version with no lock file, so the shipped exe is not reproducible and its dependency set is never reviewed
 `desktop/Smylte.Desktop/Smylte.Desktop.csproj:46` · **low** · security · minor

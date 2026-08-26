@@ -591,12 +591,10 @@ def test_logging_in_correctly_never_runs_the_owner_out_of_budget(tmp_path):
 REPO = pathlib.Path(__file__).resolve().parents[2]
 
 
-@pytest.mark.xfail(strict=True, reason="ReadWritePaths covers the backend directory, "
-                                       "which holds both .venv (the interpreter "
-                                       "ExecStart runs) and tasksd (the source), so a "
-                                       "write primitive survives every restart")
 def test_the_unit_does_not_open_its_own_interpreter_and_source_to_writes():
     """A file assertion, and honest about being one.
+
+    **CLOSED.** The marker is gone and this is an ordinary regression test now.
 
     What this can pin is that the unit no longer *names* the tree it runs from.
     What it cannot pin is that systemd then refuses the write — that needs a real
@@ -608,11 +606,26 @@ def test_the_unit_does_not_open_its_own_interpreter_and_source_to_writes():
     the interpreter `ExecStart` invokes and the package it imports. A `.pth`
     dropped into site-packages by any write primitive in the internet-reachable
     parse path is executed on the next start, and every line above it is moot.
+
+    THE ANTI-VACUITY GUARD WAS WIDENED WHEN THE FIX LANDED, and that is worth
+    saying plainly rather than burying. It read `assert rw` — "the unit declares
+    no ReadWritePaths at all, has it been renamed?" — which is a fair question
+    while the answer is a `ReadWritePaths` line, and became the wrong one the
+    moment the correct fix removed it: `StateDirectory=tasks` grants exactly
+    /var/lib/tasks and makes the directive unnecessary, so a unit with no
+    `ReadWritePaths` was about to be indistinguishable from a unit that had lost
+    its writable path entirely. The guard now accepts either. What it guards
+    against is unchanged — a unit that can write NOWHERE would not start — and
+    the assertion that detects the finding, `opened == []`, was not touched.
     """
     unit = (REPO / "deploy" / "tasks.service").read_text(encoding="utf-8")
     rw = [ln.split("=", 1)[1].strip() for ln in unit.splitlines()
           if ln.strip().startswith("ReadWritePaths=")]
-    assert rw, "the unit declares no ReadWritePaths at all — has it been renamed?"
+    state = [ln for ln in unit.splitlines() if ln.strip().startswith("StateDirectory=")]
+    assert rw or state, (
+        "the unit grants no writable path at all — neither ReadWritePaths nor "
+        "StateDirectory. It cannot open its SQLite cache and will not start."
+    )
 
     opened = [p for line in rw for p in line.split()
               if pathlib.PurePosixPath(p).name in {"backend", "tasksd", ".venv"}
