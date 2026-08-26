@@ -1,6 +1,6 @@
 # Audit backlog
 
-**26 open**, all from the 2026-08-25 sweep at the top of this file; every finding
+**25 open**, all from the 2026-08-25 sweep at the top of this file; every finding
 from every earlier sweep is closed.
 
 Findings from the adversarial audit sweeps — one deep finder per subsystem, then
@@ -1502,7 +1502,7 @@ date" — sorting last — exactly as `_completions_by_day` already does for `co
 Do the same for the `due` read in the filter loop at api.py:416. Keep the raising form
 only for values the CALLER supplied (due_before/due_after/create/update).
 
-#### [ ] smylte_list_tasks' due filters resolve in the server's timezone while its ordering was fixed to the owner's, so a Friday-evening deadline is filtered as Saturday's
+#### [x] smylte_list_tasks' due filters resolve in the server's timezone while its ordering was fixed to the owner's, so a Friday-evening deadline is filtered as Saturday's
 `backend/tasksd/mcp/api.py:403` · **medium** · bug · stage 3
 
 `_due_instant` was deliberately changed to resolve a deadline in `home_timezone` (its
@@ -1538,6 +1538,12 @@ naive values and converts aware ones into it) for `due_before`, `due_after` and 
 `now` used by `overdue_only`.
 
 **Pinned by** `test_the_due_filters_file_a_deadline_on_the_day_the_owner_sees` in `backend/tests/test_backlog_aug25_stage3.py`.
+
+**Fixed** with the suggested fix's second shape — a zone-carrying resolution, not a second `_as_dt`. Three helpers in front of `_due_instant` collapse the two drifting answers into one: `_instant_in(value, zone)` attaches `zone` to a naive value and returns a POSIX instant, `_bound_instant` parses a filter bound through it, and `_due_parts(raw, zone)` returns a deadline as `(due_at, overdue_at)`. `_due_instant` now delegates to `_due_parts`, so the ordering and the filters cannot drift apart again by construction — there is one resolution and both read it. `list_tasks` computes `zone = self._home_zone()` once and compares instants, never wall clocks.
+
+**`overdue_only` was brought into scope and follows the app's own rule rather than a third one.** `util.ts::isOverdue` says an all-day item is not overdue until its whole day has passed, and `service._due_day` takes the calendar day in `home_timezone`; `_due_parts` gives a date-only deadline an `overdue_at` of the START OF THE NEXT DAY IN THAT ZONE, which is both rules at once. The pin deliberately left this half unpinned because the answer depended on a decision; adopting the day rule is what made it deterministic enough to test, and that is the point worth recording — under the old "midnight UTC" reading, whether today's date-only task is overdue depends on what hour the test runs, so there was nothing to assert. Under this one, today's is never overdue and yesterday's always is, at any hour, and `test_overdue_only_waits_for_the_owners_day_to_end` says so.
+
+**The day is as long as the owner's day actually is.** `overdue_at` is `_instant_in(value + timedelta(days=1), zone)` — a CALENDAR day, resolved in the zone — not `due_at + 86400`. A mutation to the flat-86400 form passed the whole suite, because nothing in it ran across a DST boundary; `test_a_deadlines_day_is_as_long_as_the_owners_day_actually_is` now pins 23 h on 2026-03-08, 25 h on 2026-11-01 and 24 h on an ordinary day, and catches it. The other two mutations — bounds resolved on the server's wall clock, and a date-only deadline overdue from midnight — are caught by the pin and by the `overdue_only` test respectively.
 
 #### [x] smylte_review_day over a range re-reads every task of every named list once per day — 6.6 s under the service lock where the HTTP twin takes 3 ms
 `backend/tasksd/mcp/api.py:1313` · **medium** · bug · stage 2

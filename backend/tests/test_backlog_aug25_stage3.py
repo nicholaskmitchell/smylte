@@ -38,10 +38,11 @@ from __future__ import annotations
 
 import os
 import time
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 from helpers import foreign_event_raw
+from zoneinfo import ZoneInfo
 
 from tasksd import ical
 from tasksd.dav.client import CollectionInfo, Item
@@ -255,12 +256,6 @@ def _server_in_utc(monkeypatch):
     time.tzset()
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "mcp/api.py:453 — `due_before`/`due_after` go through `_as_dt`, which "
-    "resolves an aware deadline against the SERVER's wall clock, while the "
-    "ordering three lines below goes through `_in_display_order(out, "
-    "self._home_zone())`. The same call sorts a task by one zone and filters it "
-    "by another"))
 def test_the_due_filters_file_a_deadline_on_the_day_the_owner_sees(_server_in_utc):
     """`_due_instant` was deliberately changed to resolve a deadline in
     `home_timezone`; its docstring says why. The FILTERS in the same function
@@ -281,16 +276,12 @@ def test_the_due_filters_file_a_deadline_on_the_day_the_owner_sees(_server_in_ut
     A model asked "what is due before Saturday" is told the Friday-evening
     deadline does not exist, and then finds it under Saturday.
 
-    NOT PINNED HERE: `overdue_only`, which the finding names as the same skew
-    against `datetime.now()`. It is left out deliberately rather than
-    overlooked. Its answer depends on how a DATE-ONLY due resolves to an instant
-    — midnight or end-of-day — and under the audit's own suggested fix (resolve
-    the bound in `home_timezone`) a date-only task due today in Chicago is still
-    `due < now` once Chicago's midnight has passed, so the fix does not
-    necessarily change the answer. Pinning it would be pinning one repair rather
-    than a class of them, and driving it at all needs a frozen wall clock this
-    suite has no library for. Whoever fixes the filters should decide that
-    question explicitly and write the test that follows from the decision.
+    `overdue_only` was deliberately left out of this pin, because its answer
+    depended on a question the finding did not settle — whether a DATE-ONLY
+    deadline resolves to midnight or to the end of its day — and pinning it
+    would have been pinning one repair rather than a class of them. That
+    question is now answered, by precedent rather than invention, and the test
+    below it is the one that follows.
     """
     api = McpApi(_ZonedStub({"/u/inbox/": [
         _task("evening", due="2026-08-22T03:00:00+00:00"),
@@ -305,6 +296,76 @@ def test_the_due_filters_file_a_deadline_on_the_day_the_owner_sees(_server_in_ut
         f"from 'due before 2026-08-22': {before}")
     assert "evening" not in after, (
         f"the same deadline was reported as Saturday's or later: {after}")
+
+
+def test_overdue_only_waits_for_the_owners_day_to_end(_server_in_utc):
+    """The half the pin above left open, and the decision it was waiting on.
+
+    Two precedents already existed and they agree, so no third answer was
+    invented: `util.ts::isOverdue` says "an all-day item isn't overdue until its
+    whole day has passed", and `service._due_day` resolves a deadline's day in
+    `home_timezone`. `overdue_only` now honours both.
+
+    That decision is also what makes this DETERMINISTIC, which is why it could
+    not be written before. Under the old rule — a date-only due flattened to
+    midnight and compared against the server's `datetime.now()` — a task due
+    today was reported overdue for part of every day and not for the rest, so
+    any assertion about it passed or failed depending on the hour it ran. Under
+    the day rule the answer does not depend on the clock at all: today's work is
+    never overdue, yesterday's always is.
+
+    The two timed rows are the control on the other side: an instant-valued
+    deadline is overdue the moment it passes, with no day of grace, because it
+    named a moment rather than a day.
+    """
+    chicago_today = datetime.now(ZoneInfo("America/Chicago")).date()
+    now = datetime.now(timezone.utc)
+    api = McpApi(_ZonedStub({"/u/inbox/": [
+        _task("today", due=chicago_today.isoformat()),
+        _task("yesterday", due=(chicago_today - timedelta(days=1)).isoformat()),
+        _task("an-hour-ago", due=(now - timedelta(hours=1)).isoformat()),
+        _task("in-an-hour", due=(now + timedelta(hours=1)).isoformat()),
+    ]}, home_timezone="America/Chicago"))
+
+    overdue = {t["uid"] for t in api.list_tasks(None, overdue_only=True)}
+    assert overdue == {"yesterday", "an-hour-ago"}, (
+        f"overdue_only answered {sorted(overdue)}; work due TODAY in the owner's "
+        f"zone ({chicago_today}) still has the rest of the day to happen in, and "
+        f"a deadline that named an instant is overdue the moment it passes"
+    )
+
+
+@pytest.mark.parametrize("label, day, hours", [
+    # Chicago springs forward on 2026-03-08, so that day is 23 hours long...
+    ("spring forward", "2026-03-08", 23),
+    # ...and falls back on 2026-11-01, which is 25.
+    ("fall back", "2026-11-01", 25),
+    ("an ordinary day", "2026-03-15", 24),
+])
+def test_a_deadlines_day_is_as_long_as_the_owners_day_actually_is(label, day, hours):
+    """The unit test behind `_due_parts`' wall-clock claim, because nothing else
+    can reach it.
+
+    `overdue_only` is asserted above against the real clock, so it only ever
+    exercises whatever today happens to be — and a mutation that added the day as
+    a flat 86400 seconds instead of as a calendar day passed the whole suite. The
+    difference is one hour, twice a year, on the one path that decides whether a
+    deadline has expired.
+
+    Compared as INSTANTS, deliberately: every datetime here shares one ZoneInfo
+    object and CPython short-circuits `==` to a naive field comparison when
+    `self.tzinfo is other.tzinfo`, so a local comparison cannot tell the two
+    versions apart at all — the same trap the closed scheduling findings were
+    about, one module over.
+    """
+    from tasksd.mcp.api import _due_parts
+
+    zone = ZoneInfo("America/Chicago")
+    due_at, overdue_at = _due_parts(day, zone)
+    assert (overdue_at - due_at) / 3600 == hours, (
+        f"{label}: a deadline of {day} expired {(overdue_at - due_at) / 3600}h "
+        f"after it fell due, but that day is {hours} hours long in the owner's zone"
+    )
 
 
 # ── AUDIT: move_event has no replay tolerance ──────────────────────────────
