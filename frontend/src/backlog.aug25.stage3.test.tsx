@@ -25,6 +25,7 @@
  * `backlog.stage4.test.tsx`'s. The suite runs pinned to America/New_York
  * (vite.config.ts), which is what makes the DURATION pin's spring-forward real.
  */
+import { readFileSync } from 'node:fs'
 import { useState } from 'react'
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
@@ -375,7 +376,7 @@ describe('2026-08-25 — an aborted dashboard drag', () => {
 
   // ── AUDIT (open): HomeView.tsx:265 — a cancelled pointer gesture COMMITS the
   //    half-finished dashboard drag instead of discarding it ─────────────────
-  it.fails('discards a gesture the platform cancelled', async () => {
+  it('discards a gesture the platform cancelled', async () => {
     // EVIDENCE. `onPointerCancel={endDrag}` and `endDrag` commits:
     // `if (preview) commit(preview)`. A `pointercancel` means the gesture was
     // ABORTED by the platform, not completed, so the module is written to
@@ -404,6 +405,57 @@ describe('2026-08-25 — an aborted dashboard drag', () => {
     fireEvent.pointerCancel(grid, { pointerId: 1, clientX: 700, clientY: 200 })
 
     expect(onLayoutChange).not.toHaveBeenCalled()
+  })
+
+  // Not pinned, and the other thing a cancel has to do: the sibling effect's
+  // comment says an aborted gesture "must not leave the layout stuck in
+  // preview", and clearing `drag.current` alone satisfies the pin (nothing is
+  // persisted) while leaving the module PAINTED two columns over until the user
+  // leaves Arrange mode. On screen that is indistinguishable from a move that
+  // took, and the next thing they do is drag it back.
+  it('un-paints a gesture the platform cancelled', async () => {
+    const { grid, head } = await arrange()
+    const box = () => (grid.querySelectorAll('.dash-mod')[1] as HTMLElement).style.left
+    const before = box()
+    dragTwoColumns(grid, head)
+    expect(box(), 'the drag never previewed').not.toBe(before)
+
+    fireEvent.pointerCancel(grid, { pointerId: 1, clientX: 700, clientY: 200 })
+    expect(box()).toBe(before)
+  })
+
+  // The other half of the fix, and not pinned: the cancel should not be reached
+  // in the first place. `touch-action: none` on the drag handles is the only
+  // thing that stops a browser claiming a downward drag as a pan of the
+  // enclosing `.scroll` — `preventDefault()` on pointerdown does not, which the
+  // finding says in as many words. jsdom applies no stylesheet, so this is read
+  // off app.css rather than off a computed style: the assertion is that the rule
+  // EXISTS and is scoped to arrange mode, which is what a reviewer would check.
+  it('opts the drag handles out of browser touch gestures while arranging',
+    async () => {
+      // Comments STRIPPED first. The prose above the rule names the selectors
+      // and says "scoped to `.arranging`", so matching against the raw file made
+      // every assertion below true of the comment rather than of the CSS — a
+      // mutation that dropped the scoping passed until this line was added.
+      const css = readFileSync('src/styles/app.css', 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
+      const rule = css.match(
+        /([^}]*)\{[^}]*touch-action:\s*none[^}]*\}/)?.[1] ?? ''
+      expect(rule, 'no touch-action: none anywhere in app.css').not.toBe('')
+      for (const sel of ['.dash-mod-head', '.dash-grip']) {
+        expect(rule, `${sel} can still be stolen for a pan`).toContain(sel)
+      }
+      expect(rule, 'touch-action is not scoped to arrange mode, so reading a '
+        + 'module with a finger no longer scrolls').toContain('.arranging')
+    })
+
+  // CONTROL for the rule above: ordinary (non-arranging) module bodies must NOT
+  // be covered, or a finger can no longer scroll the dashboard at all.
+  it('leaves an unarranged dashboard scrollable with a finger', async () => {
+    const css = readFileSync('src/styles/app.css', 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
+    for (const m of css.matchAll(/([^{}]*)\{[^}]*touch-action:\s*none[^}]*\}/g)) {
+      expect(m[1], 'touch-action: none on a selector that is not a drag handle')
+        .toMatch(/\.dash-mod-head|\.dash-grip/)
+    }
   })
 })
 

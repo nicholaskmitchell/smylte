@@ -1143,6 +1143,18 @@
 }
 .dash-grid.arranging .dash-mod-head { cursor: grab; background: var(--paper); }
 .dash-grid.arranging .dash-mod-head:active { cursor: grabbing; }
+/* The drag handles opt out of browser touch gestures WHILE ARRANGING. Arrange
+   mode is gated on `useIsMobile` (max-width: 720px), so it is offered on every
+   touch device wider than that — an iPad in landscape, a Surface, a touchscreen
+   laptop — and there a downward drag on a header is a pan of the enclosing
+   `.scroll` as far as the browser is concerned. `e.preventDefault()` on
+   pointerdown does not suppress it; only this does. Without it the gesture is
+   stolen and pointercancel fires, which HomeView now discards rather than
+   commits — but a drag the user cannot perform at all is not much better, so
+   both halves are the fix. Scoped to `.arranging` so ordinary reading of a
+   module still scrolls the page with a finger. */
+.dash-grid.arranging .dash-mod-head,
+.dash-grid.arranging .dash-grip { touch-action: none; }
 .dash-mod-body { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 0; }
 .dash-remove {
   margin-left: auto; background: none; border: 0; cursor: pointer;
