@@ -506,7 +506,7 @@ tzinfo=tz)` as an instant — both fail today for America/Nuuk 2026-03-28 with a
 18:00-23:30 window.
 
 #### [ ] Test gap: no test exercises buffer_minutes across a DST transition — reverting pad() to wall-clock arithmetic passes the entire backend suite
-`backend/tests/test_scheduling.py:229` · **medium** · test-gap
+`backend/tests/test_scheduling.py:229` · **medium** · test-gap · stage 5
 
 `pad` carries an explicit comment that it widens the INSTANT rather than the wall clock,
 on the one unauthenticated write path into the owner's calendar — but nothing tests it
@@ -545,6 +545,10 @@ transitions: assert the padded bounds equal `_u(iv.start) - buffer` / `_u(iv.end
 buffer` compared as instants, not as local values. The spring-forward case above (busy
 01:00-01:30 CST, buffer 120, expected block ending 09:30Z) fails against the wall-clock
 implementation and passes against the current one.
+
+**Covered by** `test_a_buffer_is_real_time_on_both_sides_of_a_transition` (three cases) and `test_the_buffer_a_spring_forward_slot_list_actually_honours` in `backend/tests/test_backlog_aug25_stage5.py`.
+
+**NOT a pin.** `pad` is already correct, so these are ORDINARY PASSING TESTS: an `xfail(strict=True)` over correct code XPASSes and reds the build. Both were confirmed against the audit's own mutation — with `pad`'s body replaced by `Interval(iv.start - b, iv.end + b)`, spring-forward answers 08:30Z instead of 09:30Z, fall-back 09:30Z instead of 08:30Z, and the slot list offers five starts instead of three. The gap is filled; the entry stays open until the sweep is reviewed, like the other 33.
 
 #### [x] A non-finite `position` from the MCP door is persisted into day_plan.position and makes every later read of that day unrenderable
 `backend/tasksd/service.py:2275` · **medium** · bug · minor
@@ -696,7 +700,7 @@ useless.
 **Pinned by** `test_the_anonymous_guess_budget_is_bounded_across_client_addresses` in `backend/tests/test_backlog_aug25_stage2.py`.
 
 #### [ ] Test gap: AccessVerifier and the whole access_required posture have zero coverage, including the third fail-closed startup refusal
-`backend/tests/test_security.py:418` · **low** · test-gap
+`backend/tests/test_security.py:418` · **low** · test-gap · stage 5
 
 `backend/tasksd/access.py` is a security control with no test of any kind. Grepping the
 entire suite, `access_required` appears only as `False` inside settings fixtures;
@@ -733,6 +737,10 @@ assert the no-op path, the 401 on a missing header, the 403 on a bad signature /
 aud / wrong iss / expired token, the 403 (not a pass) when `fetch_data` raises, and a
 plain `pytest.raises(RuntimeError, match="refusing to start unprotected")` for the third
 startup invariant alongside the two already there.
+
+**Covered by** twelve tests in `backend/tests/test_backlog_aug25_stage5.py`: the off-path no-op, the 401 on a missing header, a valid assertion passing, 403 for a wrong `aud`/`iss`/expiry, 403 for an unparseable or `alg=none` token, `test_a_jwks_outage_fails_closed`, and `test_access_required_without_its_configuration_refuses_to_start` for the third startup refusal beside the two `test_security.py` already covers.
+
+**NOT a pin**, for the same reason: every one of these behaviours already works. Each was confirmed against the regression it guards — `except PyJWKClientConnectionError: return` (the sympathetic outage "fix" this entry names) makes the outage test the only failure in the suite; disabling the `access_required` guard in `create_app` fails all three startup cases; and `options={"verify_aud": False, "verify_iss": False}` fails exactly the two cases that tie an assertion to this app and this tenant.
 
 #### [ ] PATCH /api/day/{day}/entries/{id} mints an unreclaimable sidecar row when the entry's task no longer exists — the same permanent leak the PUT-sidecar and reorder doors were both hardened against
 `backend/tasksd/service.py:2321` · **low** · bug · minor · stage 2
