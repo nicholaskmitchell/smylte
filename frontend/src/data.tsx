@@ -835,8 +835,26 @@ function CalendarProvider({ rev, guard, enabled, children }: {
   // back in in the morning" shows a frozen snapshot missing everything DAVx5 or
   // Apple wrote overnight. `TaskProvider` already refetches — its effects list
   // `enabled` as a dep — which made this an inconsistency rather than a design.
+  //
+  // On the TRUE->FALSE TRANSITION only, which is the whole of what "the session
+  // went away" means. `enabled` is `auth === 'in'` and `auth` starts at
+  // `'loading'`, so this effect also ran ON MOUNT — before `/api/me` had
+  // answered — and threw away the `readCachedCalendars()` seed two lines of
+  // constructor above it, along with `seeded.current` and `latest.current`. The
+  // calendar half of `cache.ts` was therefore dead in practice: written on every
+  // change, read once, and cleared before the first paint that could use it. A
+  // cold boot on a slow connection showed an empty calendar for the whole
+  // round trip, which is exactly what the mirror exists to prevent.
+  //
+  // `wasEnabled` holds the value this effect last saw. The guard is the STEP,
+  // not the level, so no first invocation can be a fall whatever the ref is
+  // seeded with — seeding it with `enabled` says what it means rather than
+  // relying on that.
+  const wasEnabled = useRef(enabled)
   useEffect(() => {
-    if (enabled) return
+    const fell = wasEnabled.current && !enabled
+    wasEnabled.current = enabled
+    if (!fell) return
     setCals([])
     setWindows(new Map())
     setWindowFails(new Map())

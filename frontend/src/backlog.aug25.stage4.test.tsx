@@ -327,7 +327,7 @@ describe('2026-08-25 — the disk mirror on a cold boot', () => {
   // ── AUDIT (open): data.tsx:775 — the calendar's disk mirror is wiped on every
   //    cold boot; the logout-clear effect also fires on mount while auth is
   //    still 'loading' ───────────────────────────────────────────────────────
-  it.fails('survives a mount that happens before /api/me has answered', async () => {
+  it('survives a mount that happens before /api/me has answered', async () => {
     // EVIDENCE. `CalendarProvider` seeds `cals` from `readCachedCalendars()` so
     // the first frame has content, then an effect clears everything whenever
     // `enabled` is false. `enabled` is `auth === 'in'` and `auth` starts at
