@@ -103,12 +103,10 @@ def _sidecar_rows(conn) -> list[tuple]:
 # ── AUDIT: store.set_sidecar has no live-item guard, so the day-plan estimate ──
 # ── write-through mints sidecar rows gc_orphans can never reclaim ─────────────
 
-@pytest.mark.xfail(strict=True, reason="set_sidecar does a bare INSERT OR IGNORE for "
-                                       "any (href, uid), so a uid `items` never held "
-                                       "gets a row with orphaned_at NULL that nothing "
-                                       "can reclaim")
 def test_a_sidecar_is_not_minted_for_an_item_the_cache_does_not_hold(svc):
     """The store-level half, and the one fix that closes every door at once.
+
+    **CLOSED.** The marker is gone and this is an ordinary regression test now.
 
     `set_sidecar` (store.py:511) is `INSERT OR IGNORE INTO sidecar
     (collection_href, uid)` with no referential check. `orphan_sidecar` only ever
@@ -151,12 +149,11 @@ def test_a_sidecar_for_a_live_item_still_lands(svc):
 # ── AUDIT: PATCH /api/day/{day}/entries/{id} mints an unreclaimable sidecar ────
 # ── row when the entry's task no longer exists ────────────────────────────────
 
-@pytest.mark.xfail(strict=True, reason="patch_day_entry write-throughs the estimate to "
-                                       "store.set_sidecar for a day_plan row whose uid "
-                                       "may already be gone from items, and day entries "
-                                       "are designed to outlive their task")
 def test_estimating_a_day_entry_whose_task_is_gone_leaves_nothing_behind(svc):
     """The call site, driven through the service the way the route does.
+
+    **CLOSED** by the same one-line guard as the pin above — which is why the two
+    were written together.
 
     A day entry is a POINTER and is *designed* to outlive the task it names —
     `_carry_into`'s docstring says so in as many words ("the ENTRY on its own day
