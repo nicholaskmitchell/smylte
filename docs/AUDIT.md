@@ -1,6 +1,6 @@
 # Audit backlog
 
-**31 open**, all from the 2026-08-25 sweep at the top of this file; every finding
+**30 open**, all from the 2026-08-25 sweep at the top of this file; every finding
 from every earlier sweep is closed.
 
 Findings from the adversarial audit sweeps — one deep finder per subsystem, then
@@ -609,7 +609,7 @@ be a finite number")`. Belt-and-braces: have `mcp/server.parse_body` pass a
 argument. A regression test should drive `smylte_update_day_entry` with `1e400` and
 assert the day still reads.
 
-#### [ ] Cloudflare Access verification does a blocking JWKS fetch on the event loop, and an unknown `kid` forces one per request
+#### [x] Cloudflare Access verification does a blocking JWKS fetch on the event loop, and an unknown `kid` forces one per request
 `backend/tasksd/access.py:31` · **low** · bug · stage 2
 
 `AccessVerifier.verify` is a synchronous function that performs outbound HTTPS I/O
@@ -654,6 +654,16 @@ negative kids for a short interval, or pre-warm the JWK set on a background task
 attacker-chosen `kid` cannot force a network round-trip per request.
 
 **Pinned by** `test_an_unknown_kid_does_not_buy_a_jwks_fetch_per_request` + `test_verifying_an_access_token_does_not_freeze_the_event_loop` in `backend/tests/test_backlog_aug25_stage2.py`.
+
+**Fixed** in both halves, and the second is NOT the shape the suggested fix leads with.
+
+`verify` is now `async def` and does its work through `asyncio.to_thread`, so the JWKS fetch never runs on the loop; `require_auth` awaits it. Eight synchronous call sites in the test suite were wrapped in `asyncio.run(...)` with every assertion unchanged — an API-shape change, which the loop-blocking pin's own docstring anticipated ("offloading to a thread and going async are both correct repairs").
+
+**The kid bound had to go on the FETCH, not on the kid**, and the first attempt at this fix got that wrong. A per-`kid` negative cache is the obvious reading of "cache negative kids for a short interval" and it buys exactly nothing: `kid` is a header field the caller writes, so the attacker never repeats one — measured, still one fetch per request across ten distinct kids. What is bounded instead is how often the key set may be fetched at all: `AccessVerifier` keeps its own key set with a 300 s TTL and refuses to go to the wire more than once per 60 s, and PyJWT's two-tier lookup is reimplemented over its own primitives (`get_signing_keys`, `match_kid`) so that both tiers answer to that clock and nothing about how the set is fetched changes.
+
+Two consequences worth writing down. The clock is stamped on every ATTEMPT rather than every success, because an unreachable endpoint is otherwise its own amplifier — no set is ever cached, so every request tries again; the cost is that for up to a minute after an outage clears a legitimate token is still refused, which fails CLOSED on a layer whose fallback is the session cookie. And a token with no readable `kid` is refused before any fetch, since no refresh could produce a match for it.
+
+A CONTROL was added: a good token must still verify while the cooldown is running, without costing another fetch. The over-correction here is a verifier that refuses everything for a minute after any miss, which would satisfy the pin by turning Access into a wall — confirmed by mutation that this control is the only thing that catches it.
 
 #### [ ] Nothing bounds the total anonymous scrypt work: the login limiter is keyed only on the client /64, so a single routed /48 lifts "5 guesses / 15 min" to ~6 M/day
 `backend/tasksd/app.py:1711` · **low** · security · stage 2

@@ -1130,7 +1130,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ) -> None:
         if authenticator is not None and not authenticator.verify_session(session):
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "authentication required")
-        verifier.verify(cf_token)  # optional extra layer; no-op unless access_required
+        # Awaited: `verify` does its JWKS work in a thread, because PyJWT's client
+        # is a synchronous urlopen with a 30 s default timeout and this is the
+        # first thing every /api request touches. No-op unless access_required.
+        await verifier.verify(cf_token)
 
     def _client_ip(request: Request) -> str:
         # The app binds 127.0.0.1 only (uvicorn host + host firewall), so the sole
