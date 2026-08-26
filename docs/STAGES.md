@@ -32,7 +32,7 @@ unhandled exception. The remaining 34 are 16 medium and 18 low.
 |---|---|---|
 | 1 | 0 | — |
 | 2 | 7 | `backend/tests/test_backlog_aug25_stage2.py`, `desktop/Smylte.Desktop.Tests/LocalServerTests.cs` |
-| 3 | 12 | *not yet written* |
+| 3 | 12 | `backend/tests/test_backlog_aug25_stage3.py`, `frontend/src/backlog.aug25.stage3.test.tsx` |
 | 4 | 13 | *not yet written* |
 | 5 | 2 | *not yet written* |
 
@@ -107,6 +107,108 @@ connection error), and the alarm was confirmed by adding a CSP header to
 Unlike every other test in `LocalServerTests.cs`, this one has to `Start()` the
 server. The rest are pure path arithmetic over `Resolve`; the header set is only
 observable on a response.
+
+## Stage 3 — Silent data corruption
+
+12 findings · 9 medium, 3 low · **OPEN** · `backend/tests/test_backlog_aug25_stage3.py`,
+`frontend/src/backlog.aug25.stage3.test.tsx`
+
+Nothing raises, nothing is logged, and the answer is quietly wrong. Both closed
+sweeps call this the dangerous stage, and `backlog.aug19.stage3.test.tsx`'s header
+names the theme these twelve keep: *state that overwrites or discards the user's
+real data without saying so*.
+
+Two shapes recur. Six are **a whole-array or first-match answer to a question
+about one row**: a booking-link rollback that restores a snapshot of every link,
+a reorder that re-finds the dragged row by bare uid across the merged
+multi-list array, a tag field that re-splits a joined string on every save. The
+other six are **a write that half-happened**: a pointer gesture the platform
+aborted committed as if released, a task authored and then re-authored when only
+the day write failed, a move whose copy landed and whose delete did not.
+
+| # | Finding | Where | Sev | Pin |
+|---|---|---|---|---|
+| 1 | A time-only drag skips the desynchronization check entirely, so a BYHOUR/BYMINUTE rule moves only… | `backend/tasksd/ical/edit.py:1294` | medium | `test_a_time_only_drag_of_a_time_pinned_series_neither_desynchronizes_it_nor_gains_an_occurrence` |
+| 2 | smylte_list_tasks' due filters resolve in the server's timezone while its ordering was fixed to… | `backend/tasksd/mcp/api.py:453` | medium | `test_the_due_filters_file_a_deadline_on_the_day_the_owner_sees` |
+| 3 | A failed booking-link toggle rolls back a whole-array snapshot, reverting a concurrent toggle… | `frontend/src/components/SchedulingView.tsx:83` | medium | `a failed booking-link toggle > rolls back only the link that failed` |
+| 4 | A cancelled pointer gesture COMMITS the half-finished dashboard drag instead of discarding it | `frontend/src/components/HomeView.tsx:265` | medium | `an aborted dashboard drag > discards a gesture the platform cancelled` |
+| 5 | Drag-to-reorder resolves the dragged row by bare uid, so with one UID in two lists the wrong row… | `frontend/src/data.tsx:588` | medium | `reordering with one uid in two lists > moves the row the user dragged, …` |
+| 6 | Any save from the event editor splits a CATEGORIES value containing a comma into two tags | `frontend/src/components/CalendarView.tsx:907` | medium | `the event editor > keeps a category containing a comma whole across an unrelated save` |
+| 7 | endFromDuration treats P1D/P1W as exact milliseconds, so a DAVx5 DURATION-only event gains an hour… | `frontend/src/calendar.ts:72` | medium | `the event editor > seeds and saves a nominal DURATION at the same wall clock` |
+| 8 | Retrying the add box after a failed day-entry POST creates a second real task on the CalDAV list | `frontend/src/components/TodayView.tsx:1236` | medium | `the Today add box > does not author a second task when the retry follows a failed day write` |
+| 9 | Escape discards an unsaved reflection (and an unsaved capacity) because both commit only on blur | `frontend/src/components/ShutdownRitual.tsx:316` | medium | `the shutdown ritual > keeps a reflection the owner closed with Escape` |
+| 10 | move_event has no replay tolerance: a failure between the destination PUT and the source DELETE… | `backend/tasksd/sync/engine.py:442` | low | `test_a_move_whose_delete_reply_was_lost_can_still_be_completed` |
+| 11 | Changing a repeating event's cadence and then picking "This event" silently discards it and… | `frontend/src/components/CalendarView.tsx:934` | low | `the event editor > never drops a cadence change on the floor` |
+| 12 | A line pinned to "task" that the parser read nothing in writes its untrimmed text as the VTODO… | `frontend/src/components/TodayView.tsx:1240` | low | `the Today add box > trims the summary of a line the parser read nothing in` |
+
+SPA pin names are abbreviated: each is prefixed `2026-08-25 — ` in the file.
+The `Where` column carries the line as it stands NOW; several of AUDIT.md's own
+anchors are a few lines off, having been taken against the audit copy, and each
+pin's `reason` string names the current one.
+
+**Placement note.** Finding 9 (Escape discards the reflection) is stage 3 rather
+than stage 4 even though it looks like a dialog bug, because aug19's stage-3 SPA
+theme is exactly the sentence above: the user typed prose into the app's one
+free-text field, whose own hint promises "Kept with the day", and it is gone.
+
+**Seven of the sixteen tests are CONTROLS**, and one of them earned its place
+during this stage rather than in principle — see below. Every pin here has an
+over-correction that would satisfy it by deleting the feature: refuse every
+reschedule, stop sending `tags`, stop rolling anything back, latch the create.
+The controls are the half that says the feature still works.
+
+### What `--runxfail` and the `it.fails` flip caught this time
+
+The step is not optional and stage 2's note says why. This stage it caught two
+things, one in each half.
+
+**The control caught an over-correction, in a fix simulation rather than in
+review.** Each backend pin was re-run against a *simulated* fix to confirm it
+goes `XPASS(strict)` — red — when the bug is closed. The obvious simulation for
+finding 1 was "refuse whenever the rule carries `BYHOUR`/`BYMINUTE`/`BYSECOND`",
+which flips the pin correctly **and fails the control**: a DAY-only drag of
+`FREQ=WEEKLY;BYDAY=MO;BYHOUR=9` desynchronizes nothing and must still rotate. The
+refusal has to be conditional on the TIME OF DAY having changed, which is what the
+audit's suggested fix says and what a pin alone would not have held anyone to.
+
+**One SPA pin was failing on a harness fault that looked exactly like the
+defect.** `data.tsx` fans out with `lists.map((l) => api.tasks(l.id))` and
+concatenates, so `m.tasks.mockResolvedValue([...])` answers EVERY list with the
+same rows and the pane renders each task twice. Finding 5 is the only test in the
+tree with two lists, so no other suite has ever met this; flipped from `it.fails`
+to `it`, it read *"Found multiple elements with the text: A home copy"* — a query
+error, three assertions before the one that matters. Green, it was
+indistinguishable from a real pin. The fixture now answers per list.
+
+Two smaller notes from the same pass:
+
+* **jsdom does not fire `blur` on unmount**, which the plan had flagged as the
+  one thing that might force finding 9 onto the browser tier. It agrees with
+  Chrome and Safari here, so the pin stays in the jsdom file. Decided by running
+  it, not by reasoning about jsdom.
+* **jsdom implements no pointer capture at all.** `HomeView.onPointerDown` calls
+  `setPointerCapture` unconditionally, so without a stub the handler throws
+  before any drag starts and BOTH dashboard tests report "nothing was committed"
+  — which is finding 4's own passing condition. vitest reports the `TypeError` as
+  an unhandled error rather than a failure, so the pin would have been green and
+  worthless. The `clientWidth` stub has the same shape and the same danger, which
+  is why the control beside that pin is written FIRST and is load-bearing: it is
+  the only thing that proves the harness can produce a drag preview at all.
+
+### One half of a finding deliberately left unpinned
+
+Finding 2 names two skews: the `due_before`/`due_after` bounds, and `overdue_only`
+against `datetime.now()`. Only the first is pinned.
+
+The second is left out on purpose, and the reason is the rule this file keeps
+about naming a class rather than a repair. Whether a date-only deadline is
+"overdue" depends on how it resolves to an instant — midnight or end of day — and
+under the audit's own suggested fix (resolve the bound in `home_timezone`) a
+date-only task due today in Chicago is still `due < now` once Chicago's midnight
+has passed. So the fix does not necessarily change the answer, and any pin would
+be pinning one design decision. Driving it at all also needs a frozen wall clock
+this suite has no library for. Whoever fixes the filters should settle the
+question explicitly and write the test that follows from the decision.
 
 # Sweep — 2026-08-19 · closed
 

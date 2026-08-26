@@ -1246,7 +1246,7 @@ of the method plus the href the caller passed, so no future handler can leak it 
 echoing `str(exc)`.
 
 #### [ ] A time-only drag skips the desynchronization check entirely, so a BYHOUR/BYMINUTE rule moves only the dragged occurrence and silently gains an extra one
-`backend/tasksd/ical/edit.py:1162` · **medium** · bug
+`backend/tasksd/ical/edit.py:1162` · **medium** · bug · stage 3
 
 ```python _DAY_SELECTING = ("BYMONTHDAY", "BYYEARDAY", "BYWEEKNO", "BYMONTH",
 "BYSETPOS") def _desynchronizing(rule, day_delta, new_weekday=None): if not day_delta:
@@ -1292,6 +1292,8 @@ same refusal (and the same 422 wording) the day-selecting parts already get: "ca
 move a series whose repeat rule pins it to a particular time (BYHOUR); edit the
 occurrence instead, or change the repeat". Keep the `day_delta == 0` early return only
 for rules with no time-selecting part.
+
+**Pinned by** `test_a_time_only_drag_of_a_time_pinned_series_neither_desynchronizes_it_nor_gains_an_occurrence` in `backend/tests/test_backlog_aug25_stage3.py`.
 
 #### [x] RDATE;VALUE=PERIOD writes a Python tuple repr into min_instant, so the resource becomes a candidate for every window forever
 `backend/tasksd/ical/read.py:424` · **medium** · bug · minor
@@ -1455,7 +1457,7 @@ Do the same for the `due` read in the filter loop at api.py:416. Keep the raisin
 only for values the CALLER supplied (due_before/due_after/create/update).
 
 #### [ ] smylte_list_tasks' due filters resolve in the server's timezone while its ordering was fixed to the owner's, so a Friday-evening deadline is filtered as Saturday's
-`backend/tasksd/mcp/api.py:403` · **medium** · bug
+`backend/tasksd/mcp/api.py:403` · **medium** · bug · stage 3
 
 `_due_instant` was deliberately changed to resolve a deadline in `home_timezone` (its
 docstring: "`_as_dt` resolved both against the SERVER's ... and the two only agree when
@@ -1488,6 +1490,8 @@ The SPA, service._due_day and `_intrinsic_order`/`_due_instant` all file that ta
 `_due_instant`-style resolution (or an `_as_dt(value, zone)` that attaches `zone` to
 naive values and converts aware ones into it) for `due_before`, `due_after` and the
 `now` used by `overdue_only`.
+
+**Pinned by** `test_the_due_filters_file_a_deadline_on_the_day_the_owner_sees` in `backend/tests/test_backlog_aug25_stage3.py`.
 
 #### [ ] smylte_review_day over a range re-reads every task of every named list once per day — 6.6 s under the service lock where the HTTP twin takes 3 ms
 `backend/tasksd/mcp/api.py:1313` · **medium** · bug · stage 2
@@ -1560,7 +1564,7 @@ or "")`, with an unreadable start degrading to a sentinel rather than raising, a
 the `id` tie-break so paging is a total order.
 
 #### [ ] move_event has no replay tolerance: a failure between the destination PUT and the source DELETE duplicates the event and makes every retry a permanent 409
-`backend/tasksd/sync/engine.py:406` · **low** · bug
+`backend/tasksd/sync/engine.py:406` · **low** · bug · stage 3
 
 `move_event` is copy-then-delete. The destination PUT is `if_none_match="*"`, and ANY
 412/409 on it is turned into a terminal `ConflictError`. But the destination href is
@@ -1621,6 +1625,8 @@ as already done and fall through to the source delete instead of raising. Only a
 genuinely foreign occupant is a real ConflictError. Additionally, roll the copy back for
 any exception from the source DELETE where the delete provably did not happen, or at
 minimum log it so the duplicate is discoverable.
+
+**Pinned by** `test_a_move_whose_delete_reply_was_lost_can_still_be_completed` in `backend/tests/test_backlog_aug25_stage3.py`.
 
 #### [x] A lone surrogate in a dynamic-client-registration body is echoed into the error response and 500s the unauthenticated /oauth/register endpoint
 `backend/tasksd/mcp/oauth.py:257` · **low** · bug · minor
@@ -1798,7 +1804,7 @@ the same repair already applied to ArchivedCalendarsSection and the calendar mon
 fetch.
 
 #### [ ] A failed booking-link toggle rolls back a whole-array snapshot, reverting a concurrent toggle the server accepted
-`frontend/src/components/SchedulingView.tsx:56` · **medium** · bug · minor
+`frontend/src/components/SchedulingView.tsx:56` · **medium** · bug · minor · stage 3
 
 `toggleEnabled` (and `remove`, line 63) captures `const prev = links` — the entire array
 as of that render — and on failure does `setLinks(prev)`. Any write that landed while
@@ -1826,6 +1832,8 @@ Reproduced: two links A and B, both enabled. Tap A's toggle (PATCH hangs), then 
 **Suggested fix.** Roll back only the row that failed, with a functional update: `if (!updated)
 setLinks((ls) => ls.map((x) => (x.token === l.token ? l : x)))`. For `remove`, re-insert
 only `l` (at its recorded index) rather than restoring `prev`.
+
+**Pinned by** `2026-08-25 — a failed booking-link toggle > rolls back only the link that failed` in `frontend/src/backlog.aug25.stage3.test.tsx`.
 
 #### [x] The booking-link editor's scrim is still a bare onClick, so a drag-select releasing outside discards the whole form
 `frontend/src/components/SchedulingView.tsx:307` · **medium** · bug · minor
@@ -2453,7 +2461,7 @@ while the request is open, matching the in-flight guard the booking-link editor 
 carries.
 
 #### [ ] A cancelled pointer gesture COMMITS the half-finished dashboard drag instead of discarding it
-`frontend/src/components/HomeView.tsx:265` · **medium** · bug
+`frontend/src/components/HomeView.tsx:265` · **medium** · bug · stage 3
 
 `onPointerCancel={endDrag}` and `endDrag` commits: `if (preview) commit(preview)`. A
 `pointercancel` means the gesture was aborted by the platform, not completed, so the
@@ -2494,6 +2502,8 @@ Scenario: iPad landscape, Home tab, tap Arrange, press a module header and drag 
 drag.current = null; setPreview(null) }}` discards. Additionally add `touch-action:
 none` to `.dash-grid.arranging .dash-mod-head` and `.dash-grip` so the drag is not
 stolen on a touch device wide enough to get the desktop canvas.
+
+**Pinned by** `2026-08-25 — an aborted dashboard drag > discards a gesture the platform cancelled` in `frontend/src/backlog.aug25.stage3.test.tsx`.
 
 #### [x] Primary touch targets across Settings and the Home mini calendar are half the 44px minimum, with no mobile override
 `frontend/src/styles/app.css:89` · **medium** · rendering · minor
@@ -2650,7 +2660,7 @@ Then strengthen the stage4b enumeration test so it walks every `className="overl
 `role="dialog"` site rather than only the components that already import the hook.
 
 #### [ ] Drag-to-reorder resolves the dragged row by bare uid, so with one UID in two lists the wrong row moves — and that order is POSTed for the whole account
-`frontend/src/data.tsx:591` · **medium** · bug
+`frontend/src/data.tsx:591` · **medium** · bug · stage 3
 
 `TasksView`'s drop handler carefully resolves both `taskKey`s back to real rows and then
 throws the disambiguation away, passing bare uids to `reorder`, which re-finds them with
@@ -2696,8 +2706,10 @@ taskKey(from))`. Add a TasksView test with the same uid in two lists asserting t
 dragged row is the one that moves and that the POSTed sequence matches the on-screen
 order.
 
+**Pinned by** `2026-08-25 — reordering with one uid in two lists > moves the row the user dragged, not the first one sharing its uid` in `frontend/src/backlog.aug25.stage3.test.tsx`.
+
 #### [ ] Any save from the event editor splits a CATEGORIES value containing a comma into two tags
-`frontend/src/components/CalendarView.tsx:889` · **medium** · bug
+`frontend/src/components/CalendarView.tsx:889` · **medium** · bug · stage 3
 
 `EventModal` holds tags as one comma-joined string and re-splits it on every commit, and
 `commit()` sends `tags: tagList()` unconditionally — even for a save that only changed
@@ -2733,8 +2745,10 @@ in the PATCH body when it differs from `e.tags` by value (`sameValue` in util.ts
 CalendarView test that renames an event whose tags contain a comma and asserts the PATCH
 omits `tags` entirely.
 
+**Pinned by** `2026-08-25 — the event editor > keeps a category containing a comma whole across an unrelated save` in `frontend/src/backlog.aug25.stage3.test.tsx`.
+
 #### [ ] endFromDuration treats P1D/P1W as exact milliseconds, so a DAVx5 DURATION-only event silently gains (or loses) an hour across a DST edge on any save
-`frontend/src/calendar.ts:72` · **medium** · bug
+`frontend/src/calendar.ts:72` · **medium** · bug · stage 3
 
 RFC 5545 §3.3.6 makes the weeks/days part of a DURATION *nominal* (P1D means the same
 wall-clock time the next day, i.e. 23 or 25 real hours across a transition) and only the
@@ -2773,8 +2787,10 @@ nominalDays)` (wall clock, DST-safe, same helper `shiftYmd` already uses) before
 `exactMs` to the resulting instant. Add table tests for P1D/P1W/P1DT2H spanning both
 2026-03-08 and 2026-11-01.
 
+**Pinned by** `2026-08-25 — the event editor > seeds and saves a nominal DURATION at the same wall clock` in `frontend/src/backlog.aug25.stage3.test.tsx`.
+
 #### [ ] Retrying the add box after a failed day-entry POST creates a second real task on the CalDAV list
-`frontend/src/components/TodayView.tsx:1236` · **medium** · bug
+`frontend/src/components/TodayView.tsx:1236` · **medium** · bug · stage 3
 
 `addParsedTask` is a two-step compound write with no idempotency across the pair and no
 compensation: it first authors a real VTODO with `create(...)`, then points the day at
@@ -2818,6 +2834,8 @@ by the resource already written; and/or, when the day-entry POST fails after the
 landed, keep the created task in hand and retry only `addDayEntry` rather than replaying
 the whole line.
 
+**Pinned by** `2026-08-25 — the Today add box > does not author a second task when the retry follows a failed day write` in `frontend/src/backlog.aug25.stage3.test.tsx`.
+
 #### [ ] The Today tab's drop indicator draws above the target on a downward drag, but the row lands below it
 `frontend/src/components/TodayView.tsx:1761` · **medium** · rendering
 
@@ -2852,7 +2870,7 @@ below` to the row's class list, and add `.today-row.drag-over.today-below { box-
 inset 0 -2px 0 var(--accent); }` beside the existing rule.
 
 #### [ ] Escape discards an unsaved reflection (and an unsaved capacity) because both commit only on blur
-`frontend/src/components/ShutdownRitual.tsx:316` · **medium** · bug
+`frontend/src/components/ShutdownRitual.tsx:316` · **medium** · bug · stage 3
 
 `ReflectStep` writes the day's reflection only from `onBlur`. Both rituals bind
 `useEscape(onClose)` to the window, and `onClose` unmounts the whole overlay. Browsers
@@ -2886,6 +2904,8 @@ Reproduced in the repo's harness: open Shut down → Next → Next, type "shippe
 (draftRef.current !== (reflection ?? '')) onReflect(draftRef.current) }, [])`), or have
 `ShutdownRitual`/`PlanRitual` flush their step before calling `onClose`. Same change is
 needed for `CapacityStep`.
+
+**Pinned by** `2026-08-25 — the shutdown ritual > keeps a reflection the owner closed with Escape` in `frontend/src/backlog.aug25.stage3.test.tsx`.
 
 #### [ ] A failed day read leaves the Today tab blank with no error, no empty state and no retry — and every add then paints nothing
 `frontend/src/components/TodayView.tsx:646` · **medium** · rendering
@@ -3172,7 +3192,7 @@ roving-tabindex arrow-key walk over the 42 cells. Add a test asserting `.cal-gri
 exposes at least one focusable node per rendered chip.
 
 #### [ ] Changing a repeating event's cadence and then picking "This event" silently discards the change and reports success
-`frontend/src/components/CalendarView.tsx:917` · **low** · bug
+`frontend/src/components/CalendarView.tsx:917` · **low** · bug · stage 3
 
 `commit()` folds `repeatFields()` into the body only on the `recurring && scope ===
 'all'` branch and on the non-recurring branch. For `scope === 'this'` and `scope ===
@@ -3209,6 +3229,8 @@ is about to pick 'This event', or — minimally — when `repeat !== 'keep'` on 
 event, grey out the two per-occurrence buttons in the scope chooser with a one-line note
 that a schedule change applies to the series. Add a test asserting a cadence change is
 either sent or refused, never silently dropped.
+
+**Pinned by** `2026-08-25 — the event editor > never drops a cadence change on the floor` in `frontend/src/backlog.aug25.stage3.test.tsx`.
 
 #### [ ] Shutdown step 2 reports "Everything on today is done" after the owner MOVED everything to tomorrow
 `frontend/src/components/ShutdownRitual.tsx:232` · **low** · rendering · minor
@@ -3324,7 +3346,7 @@ give these three a touch box: e.g. `.today-drop, .today-plus, .today-est { min-h
 justify-content: center; }` — the glyph size can stay as it is.
 
 #### [ ] A line pinned to "task" that the parser read nothing in writes its untrimmed text as the VTODO SUMMARY
-`frontend/src/components/TodayView.tsx:1240` · **low** · bug · minor
+`frontend/src/components/TodayView.tsx:1240` · **low** · bug · minor · stage 3
 
 `parseEntry` returns `summary: text` byte for byte when it recognises nothing (its
 documented "'' in, '' out" rule), so on the pinned-task path `create(list, { summary:
@@ -3356,6 +3378,8 @@ Measured: `parseEntry('  buy milk  ', now)` → `{"summary":"  buy milk  ","dueD
 **Suggested fix.** Trim at the one call site: `const t = await create(list, { summary: p.summary.trim() ||
 raw, ... })`, or have `parseEntry` return the trimmed input as `summary` in the verbatim
 arm (its own `without()` already trims on every other arm).
+
+**Pinned by** `2026-08-25 — the Today add box > trims the summary of a line the parser read nothing in` in `frontend/src/backlog.aug25.stage3.test.tsx`.
 
 ### Desktop, CI/deploy, test suite
 
