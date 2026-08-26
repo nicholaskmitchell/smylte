@@ -33,7 +33,7 @@ import userEvent from '@testing-library/user-event'
 
 import { DataProvider } from './data'
 import { setCacheUser } from './cache'
-import { endFromDuration } from './calendar'
+import { durationMs, endFromDuration } from './calendar'
 import { CalendarView } from './components/CalendarView'
 import { HomeView } from './components/HomeView'
 import { SchedulingView } from './components/SchedulingView'
@@ -874,7 +874,7 @@ describe('2026-08-25 — the event editor', () => {
 
   // ── AUDIT (open): calendar.ts:72 — endFromDuration treats P1D/P1W as exact
   //    milliseconds, so a DURATION-only event gains an hour across a DST edge ─
-  it.fails('seeds and saves a nominal DURATION at the same wall clock', async () => {
+  it('seeds and saves a nominal DURATION at the same wall clock', async () => {
     // EVIDENCE. RFC 5545 §3.3.6 makes the WEEKS/DAYS part of a DURATION
     // *nominal* — P1D means the same wall-clock time the next day, i.e. 23 or 25
     // real hours across a transition — and only the TIME part exact. The backend
@@ -918,6 +918,47 @@ describe('2026-08-25 — the event editor', () => {
 
     await waitFor(() => expect(m.patchEvent).toHaveBeenCalled())
     expect(patchBody().end).toBe('2026-03-08T09:00')
+  })
+
+  // The table the suggested fix asks for, and the half neither the pin nor the
+  // control below reaches: FALL-BACK, and a duration carrying BOTH halves. The
+  // pin only spans spring-forward, where a nominal day is 23h — so an
+  // implementation that hard-coded 23 would pass it. And P1DT2H is where the
+  // ORDER of the two halves shows: stepping the day first and then adding two
+  // elapsed hours is not the same as adding 26 hours, nor the same as adding two
+  // hours and then stepping the day from the far side of the transition.
+  it.each([
+    // label                        start                  dur       end
+    ['spring-forward, nominal day', '2026-03-07T09:00:00', 'P1D',    '2026-03-08T09:00'],
+    ['fall-back, nominal day',      '2026-10-31T09:00:00', 'P1D',    '2026-11-01T09:00'],
+    ['fall-back, nominal week',     '2026-10-28T09:00:00', 'P1W',    '2026-11-04T09:00'],
+    ['spring-forward, both halves', '2026-03-07T09:00:00', 'P1DT2H', '2026-03-08T11:00'],
+    ['fall-back, both halves',      '2026-10-31T09:00:00', 'P1DT2H', '2026-11-01T11:00'],
+    ['no transition, both halves',  '2026-06-01T09:00:00', 'P1DT2H', '2026-06-02T11:00'],
+    // THE ORDER CASE. Starting an hour before spring-forward, the two halves
+    // give different answers depending on which is applied first, and only here:
+    // day-then-exact steps to 03-09T01:00 and adds two elapsed hours -> 03:00.
+    // Exact-then-day adds two elapsed hours across the SKIPPED one first
+    // (01:00 -> 04:00) and lands 04:00. Every other row above agrees either way,
+    // and a mutation swapping the order passed all of them. This is also the
+    // order `read.py::advance` uses — "wall clock, then…" — and matching the
+    // backend is the whole point of the split.
+    ['spring-forward, order matters', '2026-03-08T01:00:00', 'P1DT2H', '2026-03-09T03:00'],
+  ])('resolves %s', (_label, start, dur, end) => {
+    expect(endFromDuration(start, dur)).toBe(end)
+  })
+
+  // The overflow refusal, at the boundary the guard actually sits on.
+  // `backlog.aug19.stage4a` pins a 400-digit day count, which `Number` turns
+  // straight into Infinity — so a guard checking only the DAY COUNT passes it.
+  // The threshold that matters is the one where the days are finite and their
+  // MILLISECONDS are not, which starts around 304 digits.
+  it('refuses a day count whose milliseconds overflow, not just an infinite one', () => {
+    const digits304 = '9'.repeat(304)
+    expect(Number(digits304)).toBeLessThan(Number.MAX_VALUE)        // days: finite
+    expect(Number(digits304) * 86400000).toBe(Infinity)             // ms: not
+    expect(durationMs(`P${digits304}D`)).toBeNull()
+    expect(endFromDuration('2026-03-07T09:00:00', `P${digits304}D`)).toBeNull()
   })
 
   // CONTROL (passes today, must keep passing). The EXACT half of a DURATION is

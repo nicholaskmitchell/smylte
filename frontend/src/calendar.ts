@@ -57,35 +57,65 @@ export function eventKey(e: Pick<CalEvent, 'calendar' | 'id'>): string {
   return `${e.calendar}\u0000${e.id}`
 }
 
-/** Milliseconds in an iCalendar DURATION (RFC 5545 §3.3.6), or null.
+/** An iCalendar DURATION (RFC 5545 §3.3.6) split into its NOMINAL and EXACT
+ * halves, or null.
+ *
+ * §3.3.6 makes the weeks/days part nominal and only the time part exact: P1D
+ * means "the same wall-clock time the next day", which is 23 or 25 real hours
+ * across a DST transition, while PT24H is always 24 elapsed hours. The backend
+ * draws the same line in `ical/read.py` (`split_duration` + `advance`), and
+ * collapsing the two — as this file did, at a flat 86400000 ms per day — makes
+ * a DURATION-only event gain or lose an hour every time one is re-derived.
  *
  * Weeks are exclusive of the other parts in the grammar, and a leading `-` is
- * legal. Anything that does not parse cleanly returns null rather than a guess:
- * the caller's fallback is to leave the stored span alone, which is always
- * safer than writing a made-up one. */
-export function durationMs(d: string | null | undefined): number | null {
+ * legal (it negates both halves). Anything that does not parse cleanly returns
+ * null rather than a guess: the caller's fallback is to leave the stored span
+ * alone, which is always safer than writing a made-up one. */
+export function splitDuration(
+  d: string | null | undefined,
+): { nominalDays: number; exactMs: number } | null {
   if (!d) return null
   const m = /^([+-])?P(?:(\d+)W|(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?)$/.exec(d.trim())
   if (!m) return null
   const [, sign, w, dd, hh, mm, ss] = m
   if (!w && !dd && !hh && !mm && !ss) return null      // bare "P" / "PT"
-  const ms = (Number(w || 0) * 7 + Number(dd || 0)) * 86400000
-    + Number(hh || 0) * 3600000 + Number(mm || 0) * 60000 + Number(ss || 0) * 1000
+  const days = Number(w || 0) * 7 + Number(dd || 0)
+  const exactMs = Number(hh || 0) * 3600000 + Number(mm || 0) * 60000 + Number(ss || 0) * 1000
   // `\d+` has no upper bound, so a day count of a few hundred digits makes
-  // `Number` overflow to Infinity long before any Date is involved.
-  if (!Number.isFinite(ms)) return null
-  return sign === '-' ? -ms : ms
+  // `Number` overflow to Infinity long before any Date is involved. Checked on
+  // the MILLISECONDS the days come to, not on the day count, so the threshold
+  // is the same one `durationMs` refused at before the split.
+  if (!Number.isFinite(days * 86400000 + exactMs)) return null
+  const neg = sign === '-' ? -1 : 1
+  return { nominalDays: neg * days, exactMs: neg * exactMs }
+}
+
+/** Milliseconds in an iCalendar DURATION, counting every day as exactly 24h.
+ *
+ * Kept as a thin wrapper over `splitDuration` — one parser, so the overflow and
+ * refusal behaviour its own tests pin cannot drift from the shape
+ * `endFromDuration` actually uses. It is only correct where a nominal day and an
+ * exact day are the same thing, so prefer `splitDuration` for anything landing
+ * on a wall clock. */
+export function durationMs(d: string | null | undefined): number | null {
+  const split = splitDuration(d)
+  return split === null ? null : split.nominalDays * 86400000 + split.exactMs
 }
 
 /** The datetime-local value `start + duration` names, or null if it cannot be
  * derived. Used to seed the edit modal for a VEVENT that carries DURATION
  * instead of DTEND. */
 export function endFromDuration(start: string, duration: string | null | undefined): string | null {
-  const ms = durationMs(duration)
-  if (ms === null) return null
+  const split = splitDuration(duration)
+  if (split === null) return null
   const d = parseDate(start)
   if (isNaN(d.getTime())) return null
-  const out = new Date(d.getTime() + ms)
+  // The nominal half moves the WALL CLOCK (`addDays` is `setDate`, so 09:00
+  // stays 09:00 across a transition); the exact half is then added to the
+  // resulting instant, because two elapsed hours really do span a skipped one.
+  // Order matters: adding the exact part first would make a P1DT2H that starts
+  // just before a transition land the day-step from the wrong side of it.
+  const out = new Date(addDays(d, split.nominalDays).getTime() + split.exactMs)
   // The START was guarded and the RESULT was not, so a duration large enough to
   // push it outside Date's +/-8.64e15 ms range formatted as the literal string
   // "NaN-NaN-NaNTNaN:NaN" — truthy, where this function's contract is null. That
