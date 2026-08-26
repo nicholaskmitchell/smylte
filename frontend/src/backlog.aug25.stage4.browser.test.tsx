@@ -12,7 +12,9 @@
  * this whole project. Same harness, same rule: raw markup, real stylesheets in
  * `main.tsx`'s order, real media queries, real `getBoundingClientRect()`.
  *
- * **These findings are OPEN.** Every pin below is `it.fails`. Each carries the
+ * **These findings are CLOSED**, and every test here is now an ordinary
+ * regression test that must stay green. Each pin was written first as
+ * `it.fails` and its marker was dropped in the commit that fixed it. Each carries the
  * number it measures TODAY, taken in this harness rather than reasoned about —
  * a layout assertion nobody has seen red proves nothing, and this repo has four
  * dead mobile rules in its history that shipped green.

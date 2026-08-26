@@ -3,48 +3,46 @@
 `docs/AUDIT.md` is the evidence. This file is the plan for closing those
 findings, and the map from a finding to the test that pins it.
 
-Three sweeps have been staged this way. The **2026-08-25** one is at the top and
-is OPEN. The **2026-08-19** and **2026-08-16** backlogs under it are both closed
+Three sweeps have been staged this way, and all three are CLOSED. The
+**2026-08-25** one is at the top. The **2026-08-19** and **2026-08-16** backlogs under it are both closed
 and kept as the record of how the harness behaved in practice — the latter's "Two
 strengths of pin" and "Ordering" notes are the reason the later pins are shaped
 the way they are.
 
-The **2026-08-25** sweep at the top IS a live worklist: stages 4 and 5 still carry
-`xfail(strict=True)` / `it.fails` pins against open findings. Stages 2 and 3 are
-closed within it — their markers are gone and their tests are ordinary regression
-tests — and their sections are kept in place, with what remediation taught
-appended to each. Everything from `# Sweep — 2026-08-19` down is history: no
-marker remains in either of those, and every pin named there is an ordinary test
-that must stay green.
+**Nothing in this file is a worklist any more.** All three sweeps are closed: no
+`xfail(strict=True)` or `it.fails` marker remains anywhere, every pin named here
+is an ordinary regression test that must stay green, and `docs/AUDIT.md` reads 0
+open. Each stage section is kept in place with what remediation taught appended
+to it, which is the part worth reading — the pins are in the repo, the reasoning
+is only here.
 
-# Sweep — 2026-08-25 · OPEN
+# Sweep — 2026-08-25 · ✅ CLOSED
 
-34 findings survived verification. **All five stages are staged; STAGES 2 AND 3
-ARE CLOSED** — 19 fixed, 15 of the sweep's own still open, plus one NEW finding
-opened by stage 3's remediation (`AUDIT.md`, marked `· found in remediation`).
-The rest carry an executable pin, one is deliberately unpinned with its reason
-written down (stage 4, the WinForms dock order), and stage 5's two test gaps came
-out as ordinary passing tests because their subjects were correct. This section
-is the live worklist — the only one in this file — and everything below it is
-history.
+34 findings survived verification, and **all 34 are fixed**, along with one more
+that this remediation turned up (`AUDIT.md`, marked `· found in remediation`).
+
+Two closed on REVIEW rather than on a fix — the stage 5 test gaps, whose subjects
+were correct and whose coverage was not — and one is **verified by hand on
+Windows only**, the WinForms dock order, because asserting it needs a realised
+control tree and a message loop. Everything else carries a regression test
+confirmed to fail against the tree before its fix.
 
 Same five buckets and the same sorting criteria as the two closed sweeps: a
 finding lands in a stage by what its failure *does*, lower stage winning a tie,
 severity ordering within. Restated under "The sorting criteria" further down; it
 has not changed.
 
-**Stage 1 is empty**, and that is a result rather than an omission. The sweep's
-eight HIGHs are all closed already, and nothing left puts untrusted input into an
-unhandled exception. The 34 were 16 medium and 18 low; the 15 of them still open
-are 6 medium and 9 low.
+**Stage 1 was empty**, and that is a result rather than an omission. The sweep's
+eight HIGHs were already closed when it was staged, and nothing left put
+untrusted input into an unhandled exception. The 34 were 16 medium and 18 low.
 
 | stage | findings | pins |
 |---|---|---|
 | 1 | 0 | — |
 | 2 ✅ | 7 · **closed** | `backend/tests/test_backlog_aug25_stage2.py`, `desktop/Smylte.Desktop.Tests/LocalServerTests.cs` |
 | 3 ✅ | 12 · **closed** | `backend/tests/test_backlog_aug25_stage3.py`, `frontend/src/backlog.aug25.stage3.test.tsx` |
-| 4 | 13 | `frontend/src/backlog.aug25.stage4.test.tsx`, `frontend/src/backlog.aug25.stage4.browser.test.tsx` |
-| 5 | 2 | `backend/tests/test_backlog_aug25_stage5.py` (no markers — see below) |
+| 4 ✅ | 13 · **closed** | `frontend/src/backlog.aug25.stage4.test.tsx`, `frontend/src/backlog.aug25.stage4.browser.test.tsx` |
+| 5 ✅ | 2 · **closed** | `backend/tests/test_backlog_aug25_stage5.py` (no markers — see below) |
 
 ## Stage 2 — Abuse & resource exhaustion ✅ DONE
 
@@ -402,9 +400,9 @@ shape changed. The `TagInput` conversion needed one more — the control types i
 a chip control rather than rewriting a comma-joined string — which is the
 affordance the finding's own suggested fix asks for.
 
-## Stage 4 — User-visible correctness & rendering
+## Stage 4 — User-visible correctness & rendering ✅ DONE
 
-13 findings · 5 medium, 8 low · **OPEN** · `frontend/src/backlog.aug25.stage4.test.tsx`,
+13 findings · 5 medium, 8 low · **closed** · `frontend/src/backlog.aug25.stage4.test.tsx`,
 `frontend/src/backlog.aug25.stage4.browser.test.tsx`
 
 Something on screen is wrong, missing, or unreachable — and unlike stage 3 the
@@ -530,9 +528,60 @@ pin asserted its two halves in sequence, so the second never ran while the first
 was red — a fix to only one of them would have read as complete. Both halves are
 now one object assertion, which is the shape the month-grid pin already used.
 
-## Stage 5 — Delivery infrastructure & test gaps
+### What remediation taught, and what it cost
 
-2 findings · 1 medium, 1 low · **OPEN** · `backend/tests/test_backlog_aug25_stage5.py`
+**The repair-agnostic pin is the right pin and it leaves the shipped shape
+untested.** Three pins in this stage say so in their own words — "the pin does
+not name the copy", "asserted as operability, not as a repair", "any honest fix
+changes it" — which is correct: a pin that names one repair rejects the others.
+The cost is that whatever actually lands is unasserted, and mutations found it
+every time: an INVERTED drop indicator differs from the plain one just as well as
+the right one; a state with no banner is silently short; a Retry button not in the
+effect's deps re-runs nothing; a `dayError` set and never cleared cannot recover.
+A landed fix may name its own shape, so each of those got a second test that does.
+
+**`rev` is not a retry, and three findings in a row needed one.** `taskListErrors`,
+`dayError` and the offline state each key their effect on `rev`, which only moves
+when the SERVER publishes a change — so on a quiet account every one of those
+error states was permanent. Each needed a nonce of its own in the deps, and in
+each case the mutation that drops it leaves a button that does nothing and passes
+every other assertion.
+
+**One pin was wrong, and the way it was wrong is the lesson.** The month-grid
+pin's docstring says a roving tabindex passes "since at least one cell carries
+`tabindex="0"` at any time", and its assertion took `querySelector('.cal-cell')`
+— the FIRST cell, which under a roving tabindex is a leading blank at `-1`. It
+rejected the repair it named. Edited, and recorded in AUDIT.md. A pin's prose and
+its assertion can disagree, and the prose is what a reader trusts.
+
+**Two comments stated their own mechanism backwards**, both in `MainForm.cs`, and
+that is why the dock-order bug survived a reader: one described the arrangement it
+prevented, the other said "the Fill has to be added last or it claims the whole
+strip" when adding it last is exactly what makes it claim the strip. A comment
+that is confidently wrong is worse than none — it answers the question a reader
+came to ask.
+
+**Two findings were closed by separating one value into two**, and both were the
+same bug wearing different clothes: `[]` meaning "never arranged" AND
+"deliberately cleared" on the dashboard, and `auth === 'out'` meaning "signed out"
+AND "cannot reach the server" at boot. In each case the "fix" that keeps one value
+just moves the lie somewhere else.
+
+**A measured fix is not the fix you reasoned to.** The agenda-bleed entry offers
+two shapes; one was measured and does NOT work (a child reaching the sheet's edge
+still overflows the box inside that padding), and its `overflow-x` clause was
+measured not to help either. What landed splits the bleed from the inset instead.
+Nothing that reads app.css as text could have told anyone that.
+
+**Six deliberate test edits**, each recorded beside its finding in AUDIT.md.
+Notably `App.test.tsx` and `HomeView.test.tsx` had *written the conflation into
+the tests*: one simulated a lapsed session with a bare `Error` that is neither an
+`AuthError` nor a 401, the other passed `[]` to mean "nothing is saved". The tests
+meant to hold the behaviour encoded the same confusion as the code.
+
+## Stage 5 — Delivery infrastructure & test gaps ✅ DONE
+
+2 findings · 1 medium, 1 low · **closed** · `backend/tests/test_backlog_aug25_stage5.py`
 
 Both are the same shape: a control that exists, works, and has nothing holding it
 in place.
@@ -552,9 +601,11 @@ why the plan for this stage was *write both, run both, THEN classify* rather tha
 deciding in advance.
 
 So `test_backlog_aug25_stage5.py` is the one file in this sweep with no markers,
-sitting beside three that carry them. Its findings stay OPEN in AUDIT.md with a
-`**Covered by**` note rather than a `**Pinned by**` one: the gap itself is
-filled, and the entry is ticked when the sweep is reviewed like the other 32.
+and it never needed any. Its findings carry a `**Covered by**` note rather than a
+`**Pinned by**` one, and they were **ticked on REVIEW** when the rest of the
+sweep closed — which is the only thing a test-gap finding with a correct subject
+can be closed on. There was nothing to fix; there was something to know, and now
+`pytest -q` knows it.
 
 ### Every one confirmed against the regression it exists to catch
 
