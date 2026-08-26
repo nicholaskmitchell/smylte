@@ -585,12 +585,14 @@ function detailText(detail: unknown): string {
   return ''
 }
 
-async function j<T>(method: string, path: string, body?: unknown): Promise<T> {
+async function j<T>(method: string, path: string, body?: unknown,
+  signal?: AbortSignal): Promise<T> {
   const res = await fetch(path, {
     method,
     headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
     body: body !== undefined ? JSON.stringify(body) : undefined,
     credentials: 'same-origin',
+    signal,
   })
   if (!res.ok) {
     let msg = res.statusText
@@ -613,7 +615,14 @@ async function j<T>(method: string, path: string, body?: unknown): Promise<T> {
 
 export const api = {
   // auth
-  me: () => j<{ authenticated: boolean; user: string }>('GET', '/api/me'),
+  /** `signal` so BOOT can time out. A half-open socket — a captive portal, a
+   *  tunnel that accepted the connection and went away — never rejects and never
+   *  resolves, and this one call decides whether the app renders at all, so
+   *  without a deadline the owner gets an indefinitely blank pane rather than
+   *  the offline shell. Nothing else needs one; every other call is behind a
+   *  screen that is already painted. */
+  me: (signal?: AbortSignal) =>
+    j<{ authenticated: boolean; user: string }>('GET', '/api/me', undefined, signal),
   login: (username: string, password: string) =>
     j<{ authenticated: boolean; user: string }>('POST', '/api/login', { username, password }),
   logout: () => j<unknown>('POST', '/api/logout'),

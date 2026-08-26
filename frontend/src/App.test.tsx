@@ -53,7 +53,14 @@ beforeEach(() => {
 
 describe('<App> auth gate', () => {
   it('shows only the login form when the session is invalid', async () => {
-    m.me.mockRejectedValue(new Error('unauthenticated'))
+    // A REAL `AuthError`, not a bare Error. Boot now branches on the error —
+    // only a 401 is a sign-out, everything else is "can't reach the server" —
+    // and a bare Error is neither an AuthError nor a 401, so this pinned the old
+    // conflation and could not tell the two cases apart. The 2026-08-25 stage 4
+    // pin that closed that finding says so in its own docstring and names this
+    // line. What the test asserts is unchanged; only the failure it simulates
+    // is now the one it always claimed to be.
+    m.me.mockRejectedValue(new AuthError('unauthenticated'))
     render(<App />)
     expect(await screen.findByRole('button', { name: /sign in/i })).toBeInTheDocument()
     // Nothing from the authed shell leaks out to a logged-out visitor.

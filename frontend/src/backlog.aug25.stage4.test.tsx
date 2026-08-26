@@ -27,7 +27,7 @@
  */
 import { useState } from 'react'
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 import { App } from './App'
@@ -398,7 +398,7 @@ describe('2026-08-25 — booting with the server unreachable', () => {
   // ── AUDIT (open): App.tsx:160 — boot treats "can't reach the server" as
   //    "signed out": a network drop or a 502 on /api/me hands the owner a login
   //    card and hides their cached data ──────────────────────────────────────
-  it.fails('does not hand the owner a sign-in card', async () => {
+  it('does not hand the owner a sign-in card', async () => {
     // EVIDENCE. The boot handler is
     // `api.me().then(...).catch(() => setAuth('out'))`. `j()` produces
     // `AuthError` only for a 401 — a dropped connection rejects with a
@@ -439,6 +439,56 @@ describe('2026-08-25 — booting with the server unreachable', () => {
 
     expect(screen.queryByLabelText('Password'),
       'a 502 from the tunnel rendered the sign-in card').not.toBeInTheDocument()
+  })
+
+  // The pin takes any of "a third state, a retry, a banner over the cached
+  // shell" and requires none of them. These are the ones that actually shipped,
+  // and each is a mutation the pin alone cannot see.
+
+  it('says why the app is short, and offers a retry that works', async () => {
+    m.me.mockRejectedValueOnce(new HttpError(502, 'bad gateway'))
+      .mockResolvedValue({ authenticated: true, user: 'nick' })
+    const user = userEvent.setup()
+    render(<App />)
+
+    const bar = await screen.findByRole('status')
+    expect(bar).toHaveTextContent(/Can’t reach the server/)
+    // Still signed in is the claim, so it must not also be offering a login.
+    expect(screen.queryByLabelText('Password')).not.toBeInTheDocument()
+
+    await user.click(within(bar).getByRole('button', { name: 'Retry' }))
+    await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument())
+  })
+
+  it('re-probes when the machine comes back online', async () => {
+    m.me.mockRejectedValueOnce(new HttpError(502, 'bad gateway'))
+      .mockResolvedValue({ authenticated: true, user: 'nick' })
+    render(<App />)
+    await screen.findByRole('status')
+
+    fireEvent(window, new Event('online'))
+
+    await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument())
+  })
+
+  // A half-open socket — a captive portal, a tunnel that accepted the connection
+  // and went away — never resolves and never rejects. Without a deadline on the
+  // one call that decides whether the app renders at all, the owner gets an
+  // indefinitely blank pane, which is the shape this finding is about wearing a
+  // different hat.
+  it('gives up on a socket that never answers', async () => {
+    vi.useFakeTimers()
+    try {
+      m.me.mockImplementation((signal?: AbortSignal) => new Promise((_res, rej) => {
+        signal?.addEventListener('abort', () => rej(new Error('aborted')))
+      }))
+      render(<App />)
+      await act(async () => { await vi.advanceTimersByTimeAsync(20_000) })
+
+      expect(screen.getByRole('status')).toHaveTextContent(/Can’t reach the server/)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   // CONTROL (passes today, must keep passing). A real 401 still signs out. The
