@@ -1,6 +1,6 @@
 # Audit backlog
 
-**27 open**, all from the 2026-08-25 sweep at the top of this file; every finding
+**26 open**, all from the 2026-08-25 sweep at the top of this file; every finding
 from every earlier sweep is closed.
 
 Findings from the adversarial audit sweeps — one deep finder per subsystem, then
@@ -1281,7 +1281,7 @@ already do. Optionally also drop the absolute URL from `_raise_for`'s message in
 of the method plus the href the caller passed, so no future handler can leak it by
 echoing `str(exc)`.
 
-#### [ ] A time-only drag skips the desynchronization check entirely, so a BYHOUR/BYMINUTE rule moves only the dragged occurrence and silently gains an extra one
+#### [x] A time-only drag skips the desynchronization check entirely, so a BYHOUR/BYMINUTE rule moves only the dragged occurrence and silently gains an extra one
 `backend/tasksd/ical/edit.py:1162` · **medium** · bug · stage 3
 
 ```python _DAY_SELECTING = ("BYMONTHDAY", "BYYEARDAY", "BYWEEKNO", "BYMONTH",
@@ -1330,6 +1330,16 @@ occurrence instead, or change the repeat". Keep the `day_delta == 0` early retur
 for rules with no time-selecting part.
 
 **Pinned by** `test_a_time_only_drag_of_a_time_pinned_series_neither_desynchronizes_it_nor_gains_an_occurrence` in `backend/tests/test_backlog_aug25_stage3.py`.
+
+**Fixed** as suggested: `_desynchronizing` now takes the TIME half of the delta as well as `day_delta`, refuses on `BYHOUR`/`BYMINUTE`/`BYSECOND` when the wall-clock time of day moved, and keeps the `day_delta == 0` early return only after those have had their say. The refusal reuses the day-selecting wording with the axis swapped — "pins it to a particular time (BYHOUR)" — and `patch_event` maps it to 422 like the other.
+
+`time_changed` is `bool(delta.seconds or delta.microseconds)`, which reads correctly for a backwards drag: `timedelta` normalises to non-negative sub-day parts, so -2h is `timedelta(days=-1, seconds=79200)`.
+
+**The CONDITION is the fix, and a mutation proves it.** Refusing on the mere PRESENCE of a time-selecting part flips the pin and fails the control: a DAY-only drag of `FREQ=WEEKLY;BYDAY=MO;BYHOUR=9` desynchronizes nothing — the hour the rule names is still the hour DTSTART lands on — and must still rotate. Deriving `time_changed` from `delta.days` instead fails the pin, the control and the split test together.
+
+**The `split_series` half named at the foot of this entry is closed by the same change and now has its own test.** "This and following" with a time change went through `_shift_rrule` too and corrupted the tail — the part the user keeps — identically. One guard covers both because both call it, and the new parametrized test says so rather than leaving it to be inferred, with an ordinary rule beside it that must still split.
+
+Also checked by hand, none of it reachable from the pin: an all-day series carrying `BYHOUR` dragged a whole day is NOT refused; a drag that changes both day and time is refused on the time axis; `BYMINUTE` and `BYSECOND` behave like `BYHOUR`. The change is purely additive — a new refusal branch — so every path it does not refuse is byte-identical to before.
 
 #### [x] RDATE;VALUE=PERIOD writes a Python tuple repr into min_instant, so the resource becomes a candidate for every window forever
 `backend/tasksd/ical/read.py:424` · **medium** · bug · minor

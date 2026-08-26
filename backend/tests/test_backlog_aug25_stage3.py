@@ -47,7 +47,7 @@ from tasksd import ical
 from tasksd.dav.client import CollectionInfo, Item
 from tasksd.dav.errors import Conflict, DavError, NotFound, PreconditionFailed
 from tasksd.db import store
-from tasksd.ical.edit import EventEdit, shift_series
+from tasksd.ical.edit import EventEdit, shift_series, split_series
 from tasksd.ical.recur import expand_occurrences
 from tasksd.mcp.api import McpApi
 from tasksd.sync import SyncEngine
@@ -82,11 +82,6 @@ def _drag(rrule: str, anchor: str, new_start: str, *, minutes: int = 60):
 
 # ── AUDIT: a time-only drag skips the desynchronization check entirely ──────
 
-@pytest.mark.xfail(strict=True, reason=(
-    "ical/edit.py:1294 — `_desynchronizing` returns None whenever day_delta is "
-    "0, and `_DAY_SELECTING` names no BYHOUR/BYMINUTE/BYSECOND, so a time-only "
-    "drag of a time-pinned rule moves DTSTART while the rule keeps naming the "
-    "old hour: only the dragged occurrence moves and COUNT mints an extra one"))
 def test_a_time_only_drag_of_a_time_pinned_series_neither_desynchronizes_it_nor_gains_an_occurrence():
     """`_shift_rrule`'s own docstring spells out this exact failure for the DAY
     half — "`FREQ=MONTHLY;BYMONTHDAY=6;COUNT=4` by a day turned Jan 6/Feb 6/Mar
@@ -148,6 +143,36 @@ def test_a_time_only_drag_of_a_time_pinned_series_neither_desynchronizes_it_nor_
         "a time-only drag of a series whose rule pins the time of day neither "
         "moved the series nor refused the change:\n  " + "\n  ".join(broken)
     )
+
+
+@pytest.mark.parametrize("label, rrule, expect_refusal", [
+    # The finding's second half, which the pin above cannot reach: `split_series`
+    # calls `_shift_rrule` too, so "this and following" with a time change
+    # corrupted the TAIL exactly the same way — and the tail is the part the user
+    # keeps. One guard covers both because both go through `_shift_rrule`, and
+    # this is what says so rather than leaving it to be inferred.
+    ("time-pinned", "FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;COUNT=4", True),
+    # ...and the control beside it: an ordinary rule still splits.
+    ("ordinary", "FREQ=WEEKLY;COUNT=4", False),
+])
+def test_this_and_following_answers_a_time_change_the_same_way(label, rrule, expect_refusal):
+    raw = foreign_event_raw("split@x", "Standup", dtstart="20260105T090000Z",
+                            dtend="20260105T100000Z", rrule=rrule)
+    anchor = "2026-01-12T09:00:00+00:00"
+    ns = datetime.fromisoformat("2026-01-12T11:00:00+00:00")
+    edit = EventEdit(dtstart=ns, dtend=ns + timedelta(minutes=60))
+
+    if expect_refusal:
+        with pytest.raises(ValueError, match="pins it to a particular time"):
+            split_series(raw, anchor, edit)
+        return
+
+    head, tail = split_series(raw, anchor, edit)[:2]
+    kept = [o.start for o in expand_occurrences(head, *WINDOW)]
+    moved = [o.start for o in expand_occurrences(tail, *WINDOW)]
+    assert kept == ["2026-01-05T09:00:00+00:00"], kept
+    assert moved == ["2026-01-12T11:00:00+00:00", "2026-01-19T11:00:00+00:00",
+                     "2026-01-26T11:00:00+00:00"], moved
 
 
 @pytest.mark.parametrize("rrule, anchor, new_start, expected_days", [
