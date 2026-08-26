@@ -1,0 +1,424 @@
+"""The 2026-08-25 sweep, stage 3: silent data corruption.
+
+Nothing raises, nothing is logged, and the answer is quietly wrong. Both earlier
+backlogs call this the dangerous stage, and these three keep the theme: a
+reschedule that rewrites a series into one the user never asked for, a filter
+that files a deadline on the wrong day, and a move that leaves the event in two
+calendars with no way to finish.
+
+**These findings are OPEN.** Every test here is an `xfail(strict=True)` pin: it
+asserts the CORRECTED behaviour and fails against the code as it stands, so CI
+stays green while the bug is open and goes red the moment it is fixed and the pin
+needs reclassifying. See docs/STAGES.md for the harness.
+
+Three of the stage's twelve findings are here; the other nine are in the SPA and
+live in `frontend/src/backlog.aug25.stage3.test.tsx`.
+
+Every pin is behavioural and in-process. The reschedule is judged by
+`expand_occurrences` over the bytes `shift_series` actually produces, the filter
+runs through the real `McpApi` over a stub service, and the move drives the real
+`SyncEngine` against a fake DAV whose DELETE reply is lost once. Nothing here
+needs the scratch Radicale, so none of it carries `@pytest.mark.radicale`.
+
+Each asserts the *class* of the corrected answer rather than a particular repair.
+That matters most on the first pin, where a clean refusal and a correct rotation
+are both right and the audit's suggested fix picks the refusal; and it is why the
+`overdue_only` half of the second finding is deliberately NOT pinned — see that
+test's docstring.
+
+Two of the three carry CONTROLS: ordinary passing tests that the feature still
+works, because the cheap over-correction in both cases is a guard that refuses
+everything, and refusing everything would satisfy the pin by deleting the
+feature.
+
+Run just this file with `pytest tests/test_backlog_aug25_stage3.py -rxX`, and
+read the tracebacks with `--runxfail` before trusting any of it green.
+"""
+from __future__ import annotations
+
+import os
+import time
+from datetime import date, datetime, timedelta
+
+import pytest
+from helpers import foreign_event_raw
+
+from tasksd import ical
+from tasksd.dav.client import CollectionInfo, Item
+from tasksd.dav.errors import Conflict, DavError, NotFound, PreconditionFailed
+from tasksd.db import store
+from tasksd.ical.edit import EventEdit, shift_series
+from tasksd.ical.recur import expand_occurrences
+from tasksd.mcp.api import McpApi
+from tasksd.sync import SyncEngine
+from tasksd.sync.engine import ConflictError
+
+pytestmark = [pytest.mark.backlog, pytest.mark.stage3]
+
+# A window wide enough to hold the fifth occurrence the defect mints, which is
+# the whole point: a window that stopped at the fourth would count four either
+# way and the pin would pass against unfixed code.
+WINDOW = (date(2026, 1, 1), date(2026, 4, 1))
+
+
+def _drag(rrule: str, anchor: str, new_start: str, *, minutes: int = 60):
+    """Drag one occurrence of `rrule` with scope "all events".
+
+    Returns `(before, after)` as lists of ISO starts, or `(before, None)` when
+    the edit was REFUSED — which is a correct outcome and the one the audit's
+    suggested fix produces, so the caller must accept it.
+    """
+    raw = foreign_event_raw("series@x", "Standup", dtstart="20260105T090000Z",
+                            dtend="20260105T100000Z", rrule=rrule)
+    before = [o.start for o in expand_occurrences(raw, *WINDOW)]
+    ns = datetime.fromisoformat(new_start)
+    try:
+        out = shift_series(raw, anchor,
+                           EventEdit(dtstart=ns, dtend=ns + timedelta(minutes=minutes)))
+    except ValueError:
+        return before, None
+    return before, [o.start for o in expand_occurrences(out, *WINDOW)]
+
+
+# ── AUDIT: a time-only drag skips the desynchronization check entirely ──────
+
+@pytest.mark.xfail(strict=True, reason=(
+    "ical/edit.py:1294 — `_desynchronizing` returns None whenever day_delta is "
+    "0, and `_DAY_SELECTING` names no BYHOUR/BYMINUTE/BYSECOND, so a time-only "
+    "drag of a time-pinned rule moves DTSTART while the rule keeps naming the "
+    "old hour: only the dragged occurrence moves and COUNT mints an extra one"))
+def test_a_time_only_drag_of_a_time_pinned_series_neither_desynchronizes_it_nor_gains_an_occurrence():
+    """`_shift_rrule`'s own docstring spells out this exact failure for the DAY
+    half — "`FREQ=MONTHLY;BYMONTHDAY=6;COUNT=4` by a day turned Jan 6/Feb 6/Mar
+    6/Apr 6 into Jan 7/Feb 6/Mar 6/Apr 6/**May 6** — five occurrences instead of
+    four, only the dragged one moved, and a May the user never asked for,
+    because COUNT is now consumed from a later start."
+
+    The guard cannot see the TIME half, and it misses twice over:
+
+      * `_DAY_SELECTING = ("BYMONTHDAY", "BYYEARDAY", "BYWEEKNO", "BYMONTH",
+        "BYSETPOS")` contains no `BYHOUR`/`BYMINUTE`/`BYSECOND`; and
+      * `if not day_delta: return None` bails out before that loop is reached
+        whenever the drag changed only the time of day — which is precisely when
+        a BYHOUR rule desynchronizes.
+
+    Measured against the tree as it stands, judged by `expand_occurrences`:
+
+        DTSTART:20260105T090000Z
+        RRULE:FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;COUNT=4
+        before: 01-05T09:00, 01-12T09:00, 01-19T09:00, 01-26T09:00        (4)
+
+        drag the Jan 5 chip 09:00 -> 11:00, scope "all events"
+        after:  01-05T11:00, 01-12T09:00, 01-19T09:00, 01-26T09:00,
+                02-02T09:00                                               (5)
+
+    and the written-back rule is `FREQ=WEEKLY;COUNT=4;BYHOUR=9;BYDAY=MO` beside
+    `DTSTART:20260105T110000Z` — unchanged, because `_shift_rrule` decided there
+    was nothing to change. `FREQ=DAILY;BYMINUTE=0;COUNT=4` dragged +30 min does
+    the same: 01-05T09:30 and then four 09:00s, the last of them a day past the
+    end of the series.
+
+    `split_series` calls `_shift_rrule` too (edit.py:1685), so "this and
+    following" with a time change corrupts the tail the same way. The bytes go to
+    Radicale, so the loss is permanent and visible in every other client.
+
+    ASSERTED AS A CLASS, not as a repair. Two answers are correct here and the
+    pin takes either: REFUSE the reschedule (`ValueError`, which `patch_event`
+    maps to 422 — the audit's suggested fix, and the same shape the day-selecting
+    parts already get), or MOVE THE WHOLE SERIES coherently, which means the
+    occurrence count is unchanged and no occurrence stayed behind at the old
+    time. What is not correct is the third thing, which is what happens today.
+    """
+    broken = []
+    for rrule, anchor, new_start in (
+        ("FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;COUNT=4",
+         "2026-01-05T09:00:00+00:00", "2026-01-05T11:00:00+00:00"),
+        ("FREQ=DAILY;BYMINUTE=0;COUNT=4",
+         "2026-01-05T09:00:00+00:00", "2026-01-05T09:30:00+00:00"),
+    ):
+        before, after = _drag(rrule, anchor, new_start)
+        if after is None:
+            continue                     # a clean refusal is a correct outcome
+        if len(after) != len(before):
+            broken.append(f"{rrule}: {len(before)} occurrences {before} became "
+                          f"{len(after)} {after}")
+        elif before[1] in after:
+            broken.append(f"{rrule}: {before[1]} did not move with the series: {after}")
+    assert not broken, (
+        "a time-only drag of a series whose rule pins the time of day neither "
+        "moved the series nor refused the change:\n  " + "\n  ".join(broken)
+    )
+
+
+@pytest.mark.parametrize("rrule, anchor, new_start, expected_days", [
+    # A DAY-only drag of a time-pinned rule desynchronizes nothing — the hour the
+    # rule names is still the hour DTSTART lands on — and the WEEKLY BYDAY
+    # rotation must still happen. A guard that refused on the mere PRESENCE of
+    # BYHOUR would break this.
+    ("FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;COUNT=4", "2026-01-05T09:00:00+00:00",
+     "2026-01-06T09:00:00+00:00",
+     [date(2026, 1, 6), date(2026, 1, 13), date(2026, 1, 20), date(2026, 1, 27)]),
+    # And the ordinary time-only drag — no BY* part at all — must still move the
+    # whole series, which is the gesture the pin above must not cost.
+    ("FREQ=WEEKLY;COUNT=4", "2026-01-05T09:00:00+00:00",
+     "2026-01-05T11:00:00+00:00",
+     [date(2026, 1, 5), date(2026, 1, 12), date(2026, 1, 19), date(2026, 1, 26)]),
+])
+def test_a_series_that_can_still_be_moved_is_still_moved(
+    rrule, anchor, new_start, expected_days
+):
+    """CONTROL — passes today and must keep passing. A refusal satisfies the pin
+    above, so a fix that refused every reschedule touching a rule with a BY* part
+    would pass it while breaking the ordinary gesture.
+
+    `test_backlog_aug19_stage3_ical.py::test_a_series_that_can_be_moved_is_still_
+    moved` is the twin of this and covers the day-selecting parts (including a
+    time-only drag of `BYMONTHDAY`, which must still succeed). These two are the
+    cases that twin does not have: a time-PINNED rule dragged by days, and a
+    plain rule dragged by time.
+    """
+    before, after = _drag(rrule, anchor, new_start)
+    assert after is not None, f"{rrule} dragged to {new_start} was refused outright"
+    got = [datetime.fromisoformat(o).date() for o in after]
+    assert got == expected_days, f"{rrule} dragged to {new_start} produced {got}"
+
+
+# ── AUDIT: list_tasks' due filters resolve in the server's zone ─────────────
+
+class _ZonedStub:
+    """The narrowest stand-in for `TaskService` that `McpApi.list_tasks` needs,
+    plus the one thing `_home_zone` reads.
+
+    Same shape as `test_backlog_aug19_stage3_core.py::_ZonedService`, kept local
+    rather than imported: that file is CLOSED history and importing across sweep
+    files would tie a live pin's fixture to a finished one.
+    """
+
+    def __init__(self, tasks: dict[str, list[dict]], *, home_timezone: str):
+        self._tasks = tasks
+        self._home_timezone = home_timezone
+
+    def list_lists(self):
+        return [{"href": h} for h in self._tasks]
+
+    def list_tasks(self, href, *, include_done=True):
+        return list(self._tasks[href])
+
+    def get_settings(self):
+        return {"home_timezone": self._home_timezone}
+
+    def resolve_list(self, list_id, component=None):
+        return f"/u/{list_id}/"
+
+
+def _task(uid: str, *, due: str | None) -> dict:
+    return {"uid": uid, "summary": uid, "due": due, "sort_order": None,
+            "priority": None, "tags": [], "completed": False, "cancelled": False}
+
+
+@pytest.fixture
+def _server_in_utc(monkeypatch):
+    """The ordinary Docker deployment: the process in UTC, the owner somewhere
+    else. `_as_dt` flattens an aware value to the SERVER's wall clock, so the
+    skew this pin is about only exists when the two zones differ — a test run on
+    a developer's machine in America/Chicago would pass vacuously."""
+    monkeypatch.setenv("TZ", "UTC")
+    time.tzset()
+    yield
+    # `monkeypatch` restores the variable; `tzset` has to be re-run by hand or
+    # every later test in the session keeps this process's zone.
+    time.tzset()
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "mcp/api.py:453 — `due_before`/`due_after` go through `_as_dt`, which "
+    "resolves an aware deadline against the SERVER's wall clock, while the "
+    "ordering three lines below goes through `_in_display_order(out, "
+    "self._home_zone())`. The same call sorts a task by one zone and filters it "
+    "by another"))
+def test_the_due_filters_file_a_deadline_on_the_day_the_owner_sees(_server_in_utc):
+    """`_due_instant` was deliberately changed to resolve a deadline in
+    `home_timezone`; its docstring says why. The FILTERS in the same function
+    were left on `_as_dt`
+    (`value.astimezone().replace(tzinfo=None)` — the server's local wall clock),
+    so `smylte_list_tasks` disagrees with its own ordering, with
+    `service._due_day`, and with the SPA about which day a task is due.
+
+    Measured with the process in UTC and `home_timezone="America/Chicago"`, one
+    foreign VTODO carrying an instant:
+
+        DUE:20260822T030000Z        # = 2026-08-21 22:00 in the owner's own zone
+        DUE;VALUE=DATE:20260821     # control, files on the 21st in both zones
+
+        list_tasks(due_before="2026-08-22") -> ['anchor']    # Friday 22:00 MISSING
+        list_tasks(due_after="2026-08-22")  -> ['evening']   # reported as Saturday's
+
+    A model asked "what is due before Saturday" is told the Friday-evening
+    deadline does not exist, and then finds it under Saturday.
+
+    NOT PINNED HERE: `overdue_only`, which the finding names as the same skew
+    against `datetime.now()`. It is left out deliberately rather than
+    overlooked. Its answer depends on how a DATE-ONLY due resolves to an instant
+    — midnight or end-of-day — and under the audit's own suggested fix (resolve
+    the bound in `home_timezone`) a date-only task due today in Chicago is still
+    `due < now` once Chicago's midnight has passed, so the fix does not
+    necessarily change the answer. Pinning it would be pinning one repair rather
+    than a class of them, and driving it at all needs a frozen wall clock this
+    suite has no library for. Whoever fixes the filters should decide that
+    question explicitly and write the test that follows from the decision.
+    """
+    api = McpApi(_ZonedStub({"/u/inbox/": [
+        _task("evening", due="2026-08-22T03:00:00+00:00"),
+        _task("anchor", due="2026-08-21"),
+    ]}, home_timezone="America/Chicago"))
+
+    before = [t["uid"] for t in api.list_tasks(None, due_before="2026-08-22")]
+    after = [t["uid"] for t in api.list_tasks(None, due_after="2026-08-22")]
+
+    assert "evening" in before, (
+        f"a deadline the owner reads as 22:00 on Friday the 21st was excluded "
+        f"from 'due before 2026-08-22': {before}")
+    assert "evening" not in after, (
+        f"the same deadline was reported as Saturday's or later: {after}")
+
+
+# ── AUDIT: move_event has no replay tolerance ──────────────────────────────
+
+SRC = "/u/a/"
+DST = "/u/b/"
+MOVED = (
+    b"BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//x//EN\r\nBEGIN:VEVENT\r\nUID:e-1\r\n"
+    b"DTSTART:20260101T100000Z\r\nDTEND:20260101T110000Z\r\nSUMMARY:Standup\r\n"
+    b"END:VEVENT\r\nEND:VCALENDAR\r\n"
+)
+FOREIGN = MOVED.replace(b"UID:e-1", b"UID:someone-elses")
+
+
+class _FakeDav:
+    """A write-capable DAV double: `{href: (etag, bytes)}`.
+
+    There is no such double in the suite — the DAV fakes that exist are
+    read-only PROPFIND/REPORT stubs for the sync sweep — and this finding cannot
+    be driven without one, because the whole defect is what the SERVER is left
+    holding after a write fails halfway. `fail_delete` drops the DELETE reply
+    once, which is the ordinary trigger: a lost response, a reset connection, a
+    tunnel blip between the copy and the delete.
+    """
+
+    def __init__(self, initial: dict[str, bytes]):
+        self.store: dict[str, tuple[str, bytes]] = {
+            h: ('"1"', b) for h, b in initial.items()}
+        self.fail_delete = False
+
+    def get(self, href):
+        if href not in self.store:
+            raise NotFound(f"GET {href} -> 404")
+        etag, data = self.store[href]
+        return Item(href=href, etag=etag, data=data)
+
+    def put(self, href, data, *, if_match=None, if_none_match=None):
+        if if_none_match == "*" and href in self.store:
+            raise PreconditionFailed(f"PUT {href} -> 412")
+        self.store[href] = ('"2"', data if isinstance(data, bytes) else data.encode())
+        return '"2"'
+
+    def delete(self, href, *, if_match=None):
+        if self.fail_delete:
+            self.fail_delete = False     # the network recovers after one loss
+            raise DavError(f"transport error on DELETE {href}: connection reset")
+        self.store.pop(href, None)
+
+
+def _engine(initial: dict[str, bytes]) -> tuple[SyncEngine, _FakeDav, object]:
+    conn = store.connect(":memory:")
+    store.init_db(conn)
+    for href in (SRC, DST):
+        store.upsert_collection(conn, CollectionInfo(
+            href=href, displayname=href, components={"VEVENT"}))
+    dav = _FakeDav(initial)
+    engine = SyncEngine(dav, conn)
+    store.upsert_item(conn, SRC, Item(SRC + "e-1.ics", '"1"', MOVED),
+                      ical.extract_from_raw(MOVED))
+    return engine, dav, conn
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "sync/engine.py:442 — the destination PUT turns ANY 412/409 into a terminal "
+    "ConflictError, and only PreconditionFailed on the source DELETE rolls the "
+    "copy back. A lost DELETE reply leaves the event in both calendars and every "
+    "retry hits its own copy, so the move can never be completed"))
+def test_a_move_whose_delete_reply_was_lost_can_still_be_completed():
+    """`move_event` is copy-then-delete, and the destination href is
+    DETERMINISTIC (`new_href = f"{dst_href}{basename}"`, with `basename` taken
+    from the unchanged source cache row). So once the copy has landed, every
+    subsequent attempt at the same move hits its own copy and answers 409
+    forever. Meanwhile the source delete is rolled back only for
+    `PreconditionFailed` — a transport error, a 403, a 423 propagates with the
+    copy still in place.
+
+    `_put_new` (engine.py:376) solves exactly this for creates: on a 412 it GETs
+    the occupant and treats it as success when the UID is ours — "a replay finds
+    the resource already on the server — that is the create succeeding, not a
+    conflict, as long as the occupant is ours". `move_event` never got that
+    treatment, even though this same `except` clause was edited once already to
+    add `Conflict`.
+
+    Measured against the tree as it stands, with the DELETE reply lost once:
+
+        attempt 1 -> DavError transport error on DELETE /u/a/e-1.ics
+                     server hrefs: ['/u/a/e-1.ics', '/u/b/e-1.ics']
+        attempt 2 -> ConflictError event e-1 already exists in the target calendar
+                     server hrefs: ['/u/a/e-1.ics', '/u/b/e-1.ics']
+                     cache src row: True | cache dst row: False
+
+    After the next 30 s sweep the SPA renders the event in both calendars and
+    the booking-conflict set counts it twice. The message the caller gets is
+    actively misleading: over HTTP it reads as "the move is already done" while
+    the source copy is still there, and over MCP `mcp/server.py:222` has no
+    `ConflictError` branch at all, so `smylte_move_event` says "try again
+    shortly" about a call that can never succeed.
+
+    ASSERTED AS THE END STATE, not as a repair. Rolling the copy back on any
+    delete failure and giving the PUT `_put_new`'s replay tolerance are both
+    correct and reach the same place: after the caller has retried, the event is
+    in the destination and nowhere else. The first attempt is allowed to fail
+    however it likes — that half is the network, not the engine.
+    """
+    engine, dav, conn = _engine({SRC + "e-1.ics": MOVED})
+    dav.fail_delete = True
+
+    with pytest.raises(DavError):
+        engine.move_event(SRC, DST, "e-1")     # the network eats the DELETE reply
+
+    # The retry the caller is invited to make. Its exception, if any, is folded
+    # into the assertion rather than allowed to be the failure: a pin that dies
+    # on a raise reports "ConflictError" where the finding is about what the
+    # SERVER is left holding, and a partial fix that changed only the exception
+    # would then look like progress.
+    retry = None
+    try:
+        engine.move_event(SRC, DST, "e-1")
+    except Exception as e:                     # noqa: BLE001 — reported, not handled
+        retry = f"{type(e).__name__}: {e}"
+
+    assert sorted(dav.store) == [DST + "e-1.ics"], (
+        f"after a retry the event is still in both calendars: {sorted(dav.store)}"
+        + (f"; the retry raised {retry}" if retry else ""))
+    assert store.get_item(conn, DST, "e-1") is not None, "the cache lost the moved event"
+    assert store.get_item(conn, SRC, "e-1") is None, "the cache still holds the source row"
+
+
+def test_a_move_onto_a_stranger_is_still_a_conflict():
+    """CONTROL — passes today and must keep passing. The cheap over-correction
+    for the pin above is "treat a 412 on the destination PUT as success", which
+    would satisfy it by CLOBBERING whatever already occupies that href. The
+    occupant here carries a different UID: it is somebody else's resource, the
+    one true conflict, and `_put_new`'s own comment draws exactly this line.
+    """
+    engine, dav, _ = _engine({SRC + "e-1.ics": MOVED, DST + "e-1.ics": FOREIGN})
+
+    with pytest.raises(ConflictError):
+        engine.move_event(SRC, DST, "e-1")
+
+    assert dav.store[DST + "e-1.ics"][1] == FOREIGN, "the stranger's event was overwritten"
+    assert SRC + "e-1.ics" in dav.store, "the source was deleted despite the conflict"
