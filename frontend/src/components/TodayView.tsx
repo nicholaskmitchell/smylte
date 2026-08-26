@@ -1198,6 +1198,16 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
     ? (pinned ?? (reads ? 'task' : 'note'))
     : 'note'
 
+  // What a FAILED line left behind, so pressing Enter again finishes the write
+  // instead of starting a second one. `addParsedTask` is a compound write —
+  // author the task, then point the day at it — with no idempotency across the
+  // pair, so a failure of the second half replayed the first and authored a
+  // duplicate VTODO on the CalDAV list, one of which was on no day at all.
+  //
+  // Keyed on the LINE, because that is what the box puts back and therefore what
+  // the user retries. A different line is a different task and mints its own id.
+  const retry = useRef<{ line: string; cid: string; task?: Task } | null>(null)
+
   const commit = async () => {
     const raw = text.trim()
     if (!raw) return
@@ -1215,9 +1225,10 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
     // That rule held for the old decline path and it has to hold for a pinned
     // note as well, which is why it is keyed on `willBe` and not on `reads`.
     const ok = willBe === 'task'
-      ? await addParsedTask(on, listId, parsed, reads)
+      ? await addParsedTask(on, listId, parsed, reads, raw)
       : await addNote(on, raw)
     if (!ok) setText(raw)
+    else retry.current = null
   }
 
   /**
@@ -1234,17 +1245,39 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
    * claim about the task itself, and this is not the place to invent one.
    */
   const addParsedTask = async (
-    on: string, list: string, p: ParsedEntry, dated: boolean,
+    on: string, list: string, p: ParsedEntry, dated: boolean, raw: string,
   ): Promise<boolean> => {
-    const t = await create(list, {
-      summary: p.summary,
+    // The SAME line retried keeps its client_id, so the create is idempotent:
+    // the backend derives the VTODO's uid from it and answers a replay with the
+    // resource already written. And if the task itself landed last time, it is
+    // held here and the create is skipped outright — the retry re-sends only the
+    // half that failed.
+    const prior = retry.current?.line === raw ? retry.current : null
+    const cid = prior?.cid ?? clientId()
+    const t = prior?.task ?? await create(list, {
+      // TRIMMED at the call site, not in `parseEntry`. When the parser
+      // recognises nothing it returns `summary: text` byte for byte — its
+      // documented "'' in, '' out" rule, which `daytext.test.ts` pins — so the
+      // pinned-task path was the one branch sending raw input, while the note
+      // path beside it sends `text.trim()` and the parsed path sends `without()`'s
+      // trimmed remnant. A leading space is invisible in the chip preview and
+      // real in the VTODO: `sortTasks` orders by summary, so the task sorts ahead
+      // of everything, on every client on the account.
+      summary: p.summary.trim() || raw,
       // Omitted rather than sent empty — `CreateTaskBody`'s optional keys mean
       // "leave unset", and the backend only copies non-None fields onto the
       // VTODO.
       ...(dated ? { due: dueFromParse(p, on) } : {}),
-    })
-    if (!t) return false                 // `create` has already raised the toast
-    return addTask(on, t)
+    }, undefined, cid)
+    if (!t) {
+      // `create` has already raised the toast. The id is remembered so the
+      // retry is the same create rather than a new one.
+      retry.current = { line: raw, cid }
+      return false
+    }
+    if (await addTask(on, t)) return true
+    retry.current = { line: raw, cid, task: t }
+    return false
   }
 
   // ── suggestions: tasks ───────────────────────────────────────────────────
