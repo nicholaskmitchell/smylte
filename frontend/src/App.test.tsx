@@ -3,7 +3,7 @@ import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { App } from './App'
 import { api, AuthError, HttpError, subscribe } from './api'
-import { DEFAULT_TAB_ORDER, TAB_LABELS } from './tabs'
+import { DEFAULT_TAB_ORDER, TAB_LABELS, TAB_KEY } from './tabs'
 
 /** The shipped strip, as the top bar spells it. Derived rather than written out
  *  so adding a tab does not silently need this file edited in four places —
@@ -670,5 +670,71 @@ describe('<App> settings writes', () => {
     await waitFor(() => expect(m.putSettings).toHaveBeenCalled())
     expect(screen.queryByText(/couldn't save/i)).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /sign in/i })).not.toBeInTheDocument()
+  })
+})
+
+// ── the settings refetch, and the two things it must not disturb ────────────
+// `settings_updated` re-runs the settings effect. That effect does more than
+// load values: it also RESTORES THE OPENING TAB. Both cases below are about the
+// difference between "read the account again" and "boot again".
+
+describe('<App> settings refetch', () => {
+  const emit = () => vi.mocked(subscribe).mock.calls[0][0]
+  const active = () => document.querySelector('.tabs .tab.active')?.textContent ?? null
+
+  it('does not follow another device onto its tab', async () => {
+    // Switching tabs on the phone writes `last_tab` and publishes to every
+    // subscriber. On the desktop tab the restore is guarded by `tabTouched`,
+    // which is false for a tab the user simply has not switched — so the guard
+    // did not hold and the open desktop view jumped to whatever the phone was
+    // showing, with `cacheTab` persisting the jump for the next reload.
+    m.getSettings.mockResolvedValue({ start_tab: 'last', last_tab: 'calendar' })
+    render(<App />)
+    await screen.findByRole('button', { name: 'Tasks' })
+    await waitFor(() => expect(active()).toBe('Calendar'))
+    await waitFor(() => expect(subscribe).toHaveBeenCalled())
+
+    m.getSettings.mockResolvedValue({ start_tab: 'last', last_tab: 'tasks' })
+    await act(async () => {
+      emit()('settings_updated')
+      await new Promise((r) => setTimeout(r, 400))
+    })
+
+    await waitFor(() => expect(m.getSettings).toHaveBeenCalledTimes(2))
+    expect(active()).toBe('Calendar')
+    expect(localStorage.getItem(TAB_KEY)).toBe('calendar')
+  })
+
+  it('holds the re-read until its own write has landed', async () => {
+    // The server publishes to the writer too, so the event that arrives right
+    // after a preference change is usually this tab's own — and re-reading
+    // mid-flight paints the value the write is about to replace. The guard was
+    // `pendingPatch`, which is emptied when the PUT is ISSUED, so the whole
+    // flight of the request looked idle.
+    let land: (() => void) | undefined
+    m.putSettings.mockImplementation(() => new Promise((res) => { land = () => res({}) }))
+    render(<App />)
+    await screen.findByRole('button', { name: 'Tasks' })
+    await waitFor(() => expect(subscribe).toHaveBeenCalled())
+    await waitFor(() => expect(m.getSettings).toHaveBeenCalledTimes(1))
+
+    await openSettings('General')
+    await userEvent.click(screen.getByRole('button', { name: '12- or 24-hour clock' }))
+    await waitFor(() => expect(m.putSettings).toHaveBeenCalled())
+
+    await act(async () => {
+      emit()('settings_updated')
+      await new Promise((r) => setTimeout(r, 400))
+    })
+    expect(m.getSettings).toHaveBeenCalledTimes(1)
+
+    // ...and the moment it lands, the re-read goes ahead. Waiting must not mean
+    // dropping: this is the only path that re-reads settings, and the event may
+    // have been another device's.
+    await act(async () => {
+      land!()
+      await new Promise((r) => setTimeout(r, 500))
+    })
+    await waitFor(() => expect(m.getSettings).toHaveBeenCalledTimes(2))
   })
 })

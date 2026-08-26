@@ -55,6 +55,13 @@ export function App() {
   // A tab picked while settings were still loading wins over the stored choice —
   // nothing is more jarring than the view changing under a deliberate click.
   const tabTouched = useRef(false)
+  // Whether the opening tab has been restored for this signed-in session. The
+  // settings read re-runs on every `settings_updated`; the tab restore inside
+  // it must not.
+  const tabRestored = useRef(false)
+  // PUTs issued and not yet settled. `pendingPatch` empties when the request is
+  // ISSUED, so it alone cannot tell whether our own write has landed.
+  const writesInFlight = useRef(0)
   const [theme, setTheme] = useState(() => document.documentElement.dataset.theme || 'light')
   const [tasksView, setTasksView] = useState<TasksViewMode>('list')
   const [sideCollapsed, setSideCollapsed] = useState(false)
@@ -194,7 +201,9 @@ export function App() {
   // Settings are account-synced: once authenticated, the server is the source of
   // truth (localStorage is only the pre-paint cache to avoid a flash).
   useEffect(() => {
-    if (auth !== 'in') return
+    // A sign-out clears the restore latch, so signing back in (which never
+    // remounts this component) opens where the account says again.
+    if (auth !== 'in') { tabRestored.current = false; return }
     settingsFailed.current = false
     api.getSettings()
       .then((s) => {
@@ -203,7 +212,14 @@ export function App() {
         const start = sanitizeTabStart(s.start_tab)
         setTabOrder(order)
         setStartTab(start)
-        if (!tabTouched.current) {
+        // Restoring the opening tab is a FIRST-LOAD action, not something to
+        // redo on every read. This effect now re-runs on `settingsRev` too —
+        // any settings write on any device — and `tabTouched` is false for a
+        // tab the user simply has not switched, so without this latch a theme
+        // change on the phone yanked the open desktop view to whatever tab the
+        // account last recorded and `cacheTab` persisted the yank.
+        if (!tabTouched.current && !tabRestored.current) {
+          tabRestored.current = true
           const opening = resolveStartTab(start, isTab(s.last_tab) ? s.last_tab : undefined, order)
           setTab(opening)
           cacheTab(opening)
@@ -354,12 +370,16 @@ export function App() {
       }
       if (!Object.keys(patch).length) return
     }
+    // Counted, not flagged: two gestures can be in flight at once (an
+    // immediate `saveSettings` alongside a debounced one), and the refetch
+    // guard below must wait for the LAST of them.
+    writesInFlight.current += 1
     api.putSettings(patch).catch((e) => {
       if (e instanceof AuthError) { setAuth('out'); return }
       // Offline is the ordinary case and the local state stands in fine; a
       // rejection from a server we *did* reach is what the user needs to know.
       if (e instanceof HttpError) showToast(`Couldn't save your preferences: ${e.message}`)
-    })
+    }).finally(() => { writesInFlight.current -= 1 })
   }, [showToast])
 
   // The settings a repeated gesture writes: an appearance slider fires onChange
@@ -564,6 +584,7 @@ export function App() {
     if (auth !== 'in') return
     let timer: ReturnType<typeof setTimeout> | undefined
     let settingsTimer: ReturnType<typeof setTimeout> | undefined
+    let settingsWaits = 0
     const unsubscribe = subscribe((type) => {
       if (type === 'settings_updated') {
         // Re-read the SETTINGS — but never bump `rev`, which is what the bare
@@ -582,13 +603,35 @@ export function App() {
         // from the account, silently, on both devices. Same shape wipes a theme
         // saved on another device.
         //
-        // Skipped while this tab has a write of its own pending: the debounced
-        // PUT has not landed yet, so re-reading now would paint the value it is
-        // about to replace. The trailing write wins either way; this only stops
-        // a visible flicker.
-        if (Object.keys(pendingPatch.current).length) return
+        // Held off while this tab has a write of its own outstanding: re-reading
+        // now would paint the value the write is about to replace.
+        //
+        // Two things that check gets wrong if it is a bare `pendingPatch` test
+        // at the moment the event ARRIVES. `pendingPatch` is emptied when the
+        // debounced PUT is ISSUED, not when it lands, so the whole flight of the
+        // request looked idle — and the server publishes `settings_updated` to
+        // every subscriber INCLUDING the tab that wrote it, so the event racing
+        // that window is exactly the common case. And a gesture that starts
+        // inside the 250ms debounce was never seen at all.
+        //
+        // So: check on the trailing edge, count in-flight requests too, and WAIT
+        // rather than drop. Dropping is not safe here — the event may be another
+        // device's, and this is the only path that re-reads settings, so a
+        // dropped one leaves the tab holding a stale blob that the next
+        // list-shaped write sends back whole. Capped at ~5s so a hung request
+        // cannot silence the refetch for good; a refetch that does race a write
+        // is a flicker, and the trailing write still wins.
         clearTimeout(settingsTimer)
-        settingsTimer = setTimeout(() => setSettingsRev((r) => r + 1), 250)
+        const armSettingsRefetch = () => {
+          settingsTimer = setTimeout(() => {
+            const busy = Object.keys(pendingPatch.current).length > 0
+              || writesInFlight.current > 0
+            if (busy && settingsWaits < 20) { settingsWaits += 1; armSettingsRefetch(); return }
+            settingsWaits = 0
+            setSettingsRev((r) => r + 1)
+          }, 250)
+        }
+        armSettingsRefetch()
         return
       }
       clearTimeout(timer)

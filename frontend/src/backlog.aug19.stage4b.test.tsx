@@ -1183,6 +1183,12 @@ describe('aug19 leftovers — every dialog answers Escape at the window', () => 
     }).glob('./components/*.tsx', { query: '?raw', import: 'default' })
     const users: string[] = []
     for (const [path, load] of Object.entries(files)) {
+      // The glob is a DIRECTORY sweep, and the tests for these components live
+      // in that directory too. A test file is not a dialog: one that names the
+      // hook — in prose, in a mock, in an assertion about it — was enumerated
+      // as a component owing an Escape case, which is a failure that says
+      // nothing about the app and can only be answered by editing the table.
+      if (/\.test\.tsx$/.test(path)) continue
       const src = await load()
       if (/\buseEscape\s*\(/.test(src)) users.push(path.split('/').pop()!.replace('.tsx', ''))
     }

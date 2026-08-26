@@ -1,5 +1,5 @@
 import {
-  useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties,
+  useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties,
 } from 'react'
 import {
   api, clientId, uidFor, type CalEvent, type EventScope, type List, type Task,
@@ -433,6 +433,16 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
     if (d.ev.is_recurring) setMoveAsk({ ev: d.ev, body })
     else save(body, calIdOf(d.ev), d.ev.uid)
   }
+  // The scope prompt is a `role="dialog" aria-modal="true"` in its own right —
+  // a second one in this file, which is why the modal-contract guard test never
+  // saw it: that test greps a FILE for `useEscape(`, and `EventModal` below
+  // already satisfied it. Declared modal, it owes the same key.
+  //
+  // Written as a functional update so the handler identity never changes and the
+  // listener is not re-bound on every drag: when nothing is asking, Escape here
+  // returns the same state and React re-renders nothing.
+  useEscape(useCallback(() => setMoveAsk((a) => (a ? null : a)), []))
+
   const pickMoveScope = (scope: EventScope) => {
     if (!moveAsk) return
     save({ ...moveAsk.body, recurrence_id: moveAsk.ev.recurrence_id, scope },
@@ -946,7 +956,15 @@ function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete }: {
   //
   // The existing guard test greps components that ALREADY import `useEscape`,
   // which is structurally incapable of catching a dialog that never adopted it.
-  useEscape(onClose)
+  //
+  // Escape unwinds ONE step. The scope prompt renders in place of the form, with
+  // the form's state still held behind it; a bare `onClose` there threw away a
+  // filled-in event because the user pressed Escape at a prompt they only meant
+  // to back out of — and the prompt's own Cancel button does exactly this.
+  useEscape(useCallback(() => {
+    if (scopeAsk) { setScopeAsk(null); return }
+    onClose()
+  }, [scopeAsk, onClose]))
 
   return (
     <div className="overlay"
