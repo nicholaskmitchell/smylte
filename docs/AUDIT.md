@@ -1,6 +1,6 @@
 # Audit backlog
 
-**10 open**, all from the 2026-08-25 sweep at the top of this file; every finding
+**9 open**, all from the 2026-08-25 sweep at the top of this file; every finding
 from every earlier sweep is closed, as is the one this sweep's own remediation
 turned up (marked `· found in remediation`).
 
@@ -3208,7 +3208,7 @@ and the suggestion "+" while the day is unknown so a write cannot land invisibly
 
 **The retry needed a signal of its own**, the same lesson as `reloadTasks` one commit earlier: the effect keys on `day`/`today`/`rev`/`guard`, and `rev` only moves when the SERVER publishes a change — so on a quiet day the blank tab was permanent. The pin is deliberately structural ("the pin does not name the copy") and so cannot check that the retry WORKS; a mutation leaving `dayTry` out of the deps passes it, and fails the recovery test.
 
-#### [ ] "That time was just taken" stays on screen after the visitor does what it told them to do
+#### [x] "That time was just taken" stays on screen after the visitor does what it told them to do
 `frontend/src/components/BookingPage.tsx:265` · **low** · rendering · minor · stage 4
 
 The 409 recovery path sets `error`, clears the slot and returns to `pick`. Nothing
@@ -3240,6 +3240,10 @@ Reproduced: `publicBook` rejects with `HttpError(409, 'that time is not availabl
 setCid(clientId()); setPhase('confirm') }}` (and in the "Change" handler).
 
 **Pinned by** `2026-08-25 — the booking page after a taken slot > clears the warning once the visitor picks another slot` in `frontend/src/backlog.aug25.stage4.test.tsx`.
+
+**Fixed** with the suggested fix verbatim: `setError(null)` on the slot button and in the `Change` handler — the two places the visitor's INTENT changes.
+
+**The `Change` half is reachable only through a DIFFERENT failure, which the test had to be re-aimed at.** The taken-slot 409 already sends the visitor back to the picker itself (`setSlot(null); setPhase('pick')`), so there is no Change button on screen in that state at all. Any other failure — a 502 from the tunnel, a validation refusal — leaves them on the confirm step with the message standing, and Change is the way out. A first draft of the test used the 409 and failed to find the button, which is the finding's own wording (`and in the "Change" handler`) being right about the code and imprecise about the path.
 
 #### [x] The Today row's drop / add / estimate controls are ~18x16px tap targets, though the same media block enlarges the Tasks pane's equivalents
 `frontend/src/styles/app.css:1588` · **low** · rendering · minor

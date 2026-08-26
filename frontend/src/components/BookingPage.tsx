@@ -285,8 +285,15 @@ export function BookingPage({ token }: { token: string }) {
             )}
             <div className="booking-slots">
               {(slotsByDay.get(selDay) ?? []).map((s) => (
+                // The warning is cleared where the INTENT changes. "That time
+                // was just taken — pick another" stood over the visitor's next
+                // pick, so the page told them off for doing exactly what it had
+                // asked, and on a link whose whole audience is people the owner
+                // does not get to explain the UI to.
                 <button key={s.start} className="slot-btn"
-                  onClick={() => { setSlot(s); setCid(clientId()); setPhase('confirm') }}>
+                  onClick={() => {
+                    setError(null); setSlot(s); setCid(clientId()); setPhase('confirm')
+                  }}>
                   {fmtSlot(s.start)}
                 </button>
               ))}
@@ -300,7 +307,8 @@ export function BookingPage({ token }: { token: string }) {
               <span>
                 {fmtDay(localDay(slot.start))} · {fmtSlot(slot.start)}–{fmtSlot(slot.end)}
               </span>
-              <button className="btn ghost" onClick={() => { setSlot(null); setPhase('pick') }}>
+              <button className="btn ghost"
+                onClick={() => { setError(null); setSlot(null); setPhase('pick') }}>
                 Change
               </button>
             </div>
