@@ -1,6 +1,6 @@
 # Audit backlog
 
-**20 open** — 19 from the 2026-08-25 sweep at the top of this file, plus one found
+**19 open** — 18 from the 2026-08-25 sweep at the top of this file, plus one found
 during its remediation and marked `· found in remediation`; every finding from
 every earlier sweep is closed.
 
@@ -2900,7 +2900,7 @@ omits `tags` entirely.
 
 **One deliberate test edit**: the control `still sends the tags when the user edits them` types `Admin{Enter}` into the chip control instead of rewriting a comma-joined string, which is the affordance the suggested fix asks for and how `TasksView.test.tsx` drives the same control. What it asserts is unchanged.
 
-#### [ ] endFromDuration treats P1D/P1W as exact milliseconds, so a DAVx5 DURATION-only event silently gains (or loses) an hour across a DST edge on any save
+#### [x] endFromDuration treats P1D/P1W as exact milliseconds, so a DAVx5 DURATION-only event silently gains (or loses) an hour across a DST edge on any save
 `frontend/src/calendar.ts:72` · **medium** · bug · stage 3
 
 RFC 5545 §3.3.6 makes the weeks/days part of a DURATION *nominal* (P1D means the same
@@ -2941,6 +2941,16 @@ nominalDays)` (wall clock, DST-safe, same helper `shiftYmd` already uses) before
 2026-03-08 and 2026-11-01.
 
 **Pinned by** `2026-08-25 — the event editor > seeds and saves a nominal DURATION at the same wall clock` in `frontend/src/backlog.aug25.stage3.test.tsx`.
+
+**Fixed** with the suggested fix's split, placed so that `durationMs` keeps both its name and its tests. A new `splitDuration` is the ONE parser and returns `{nominalDays, exactMs}`; `durationMs` is a thin wrapper over it (`nominalDays * 86400000 + exactMs`), so its exact-milliseconds contract, its overflow refusal and the aug19 stage4a control asserting `durationMs('P1D') === 86400000` are all untouched — no test edit was needed. `endFromDuration` uses `splitDuration`: `addDays` for the nominal half (wall clock), then `+ exactMs` on the resulting instant.
+
+**The stage plan asked for the caller list to decide this, and it did.** `endFromDuration` is `durationMs`'s only production caller — everything else importing it is a test — so changing the shape outright was open. Wrapping instead avoids two parsers that can drift, and keeps a function whose name promises milliseconds from returning something else.
+
+**Order, not just arithmetic.** Nominal first, then exact — the same order `read.py::advance` uses ("wall clock, then…"), and the reason the two cannot be added together. It is only observable in one shape, and a mutation swapping them passed the pin, the control and five of the six table rows: `P1DT2H` starting an hour BEFORE spring-forward is 03:00 the next day when the day-step comes first, and 04:00 when the two elapsed hours cross the skipped hour first. That row is now in the table with the reasoning above it.
+
+**The table covers fall-back too**, which the pin does not: it spans only spring-forward, where a nominal day is 23 h, so hard-coding 23 would pass it. `P1D` and `P1W` across 2026-11-01 assert the 25 h side.
+
+**The overflow guard is checked on the MILLISECONDS, not on the day count.** aug19's control uses a 400-digit day count, which `Number` turns straight into `Infinity`, so a guard reading only the days passes it — a mutation proved that too. The threshold that matters starts around 304 digits, where the days are finite and their milliseconds are not, and that boundary now has a test.
 
 #### [ ] Retrying the add box after a failed day-entry POST creates a second real task on the CalDAV list
 `frontend/src/components/TodayView.tsx:1236` · **medium** · bug · stage 3
