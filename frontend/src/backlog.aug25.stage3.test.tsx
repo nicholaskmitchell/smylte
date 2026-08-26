@@ -1209,7 +1209,7 @@ describe('2026-08-25 — the shutdown ritual', () => {
 
   // ── AUDIT (open): ShutdownRitual.tsx:316 — Escape discards an unsaved
   //    reflection (and an unsaved capacity) because both commit only on blur ─
-  it.fails('keeps a reflection the owner closed with Escape', async () => {
+  it('keeps a reflection the owner closed with Escape', async () => {
     // EVIDENCE. `ReflectStep` writes the day's reflection only from `onBlur`.
     // Both rituals bind `useEscape(onClose)` to the window, and `onClose`
     // unmounts the whole overlay. Browsers do not fire `blur`/`focusout` for a
@@ -1242,6 +1242,65 @@ describe('2026-08-25 — the shutdown ritual', () => {
       screen.queryByRole('dialog', { name: 'Shut down the day' })).not.toBeInTheDocument())
 
     expect(m.patchDay).toHaveBeenCalledWith(today(), { reflection: 'shipped the thing' })
+  })
+
+  // The unmount flush must not DOUBLE-write. The blur handler and the cleanup
+  // both send, so a fix that fired the cleanup unconditionally would PATCH the
+  // same reflection twice for the ordinary path — blur, then close — which is a
+  // second write of identical prose against a field the whole design keeps out
+  // of a write storm.
+  it('writes once when the reflection was already saved on blur', async () => {
+    const user = setup()
+    const dialog = await openReflect(user)
+
+    await user.type(within(dialog).getByLabelText('A note about today'), 'shipped it')
+    await user.tab()
+    await waitFor(() => expect(m.patchDay).toHaveBeenCalledTimes(1))
+
+    fireEvent.keyDown(window, { key: 'Escape' })
+    await waitFor(() => expect(
+      screen.queryByRole('dialog', { name: 'Shut down the day' })).not.toBeInTheDocument())
+
+    expect(m.patchDay).toHaveBeenCalledTimes(1)
+  })
+
+  // `CapacityStep` — the OTHER half the finding names ("the identical shape at
+  // PlanRitual.tsx:191, so 'until 6pm' typed and then Escaped is never stored
+  // either"), and not pinned. Fixing only `ReflectStep` closes the pin and
+  // leaves this exactly as it was.
+  it('keeps a capacity the owner closed with Escape', async () => {
+    const user = setup()
+    await user.click(await screen.findByRole('button', { name: 'Plan my day' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Plan your day' })
+
+    await user.type(
+      within(dialog).getByLabelText('How long you are working today'), '5h')
+    expect(m.patchDay).not.toHaveBeenCalled()
+
+    fireEvent.keyDown(window, { key: 'Escape' })
+    await waitFor(() => expect(
+      screen.queryByRole('dialog', { name: 'Plan your day' })).not.toBeInTheDocument())
+
+    expect(m.patchDay).toHaveBeenCalledWith(today(), { capacity_minutes: 300 })
+  })
+
+  // CONTROL for the capacity flush: a draft the PARSER REFUSES writes nothing on
+  // unmount. Blur gives that same answer and shows the hint instead; storing a
+  // guessed number from text the app has already said it cannot read would be
+  // worse than losing it.
+  it('writes no capacity from a draft the parser refused', async () => {
+    const user = setup()
+    await user.click(await screen.findByRole('button', { name: 'Plan my day' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Plan your day' })
+
+    await user.type(
+      within(dialog).getByLabelText('How long you are working today'), 'whenever')
+
+    fireEvent.keyDown(window, { key: 'Escape' })
+    await waitFor(() => expect(
+      screen.queryByRole('dialog', { name: 'Plan your day' })).not.toBeInTheDocument())
+
+    expect(m.patchDay).not.toHaveBeenCalled()
   })
 
   // CONTROL (passes today, must keep passing). The blur commit still saves, and

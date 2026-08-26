@@ -1,6 +1,6 @@
 # Audit backlog
 
-**17 open** — 16 from the 2026-08-25 sweep at the top of this file, plus one found
+**16 open** — 15 from the 2026-08-25 sweep at the top of this file, plus one found
 during its remediation and marked `· found in remediation`; every finding from
 every earlier sweep is closed.
 
@@ -3040,7 +3040,7 @@ inset 0 -2px 0 var(--accent); }` beside the existing rule.
 
 **Pinned by** `2026-08-25 — the Today tab > points at the gap the row will actually land in` in `frontend/src/backlog.aug25.stage4.test.tsx`.
 
-#### [ ] Escape discards an unsaved reflection (and an unsaved capacity) because both commit only on blur
+#### [x] Escape discards an unsaved reflection (and an unsaved capacity) because both commit only on blur
 `frontend/src/components/ShutdownRitual.tsx:316` · **medium** · bug · stage 3
 
 `ReflectStep` writes the day's reflection only from `onBlur`. Both rituals bind
@@ -3077,6 +3077,12 @@ Reproduced in the repo's harness: open Shut down → Next → Next, type "shippe
 needed for `CapacityStep`.
 
 **Pinned by** `2026-08-25 — the shutdown ritual > keeps a reflection the owner closed with Escape` in `frontend/src/backlog.aug25.stage3.test.tsx`.
+
+**Fixed** with the suggested fix's first form, in BOTH steps the entry names. `ReflectStep` and `PlanRitual`'s `CapacityStep` each gained a cleanup effect that commits on unmount, reading the draft through a ref so it fires once with the LAST value rather than on every keystroke. The effect ADDS a path: blur still commits, which is what the control requires and what keeps the capacity parser's error visible while the ritual is still open.
+
+**`CapacityStep` had no pin**, so fixing only `ReflectStep` closed the finding and left "until 6pm" typed and Escaped exactly as lost as before. It has a test now, and so does the case its `commit` decides differently from the reflection's: the cleanup runs `commit` ITSELF rather than sending the raw draft, so an unmount resolves "until 6pm" against the clock the way a blur would — and a draft the parser REFUSES writes nothing, which is blur's answer too. A mutation flushing a guessed number instead was caught by that control.
+
+**The flush must not DOUBLE-write**, which the pin cannot see: it never blurs. `ReflectStep` compares against a `saved` ref, so the ordinary path — type, tab away, close — sends one PATCH, not two of identical prose against the one field this design deliberately keeps out of a write storm.
 
 #### [ ] A failed day read leaves the Today tab blank with no error, no empty state and no retry — and every add then paints nothing
 `frontend/src/components/TodayView.tsx:646` · **medium** · rendering · stage 4
