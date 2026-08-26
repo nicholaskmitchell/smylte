@@ -1,6 +1,6 @@
 # Audit backlog
 
-**9 open**, all from the 2026-08-25 sweep at the top of this file; every finding
+**6 open**, all from the 2026-08-25 sweep at the top of this file; every finding
 from every earlier sweep is closed, as is the one this sweep's own remediation
 turned up (marked `· found in remediation`).
 
@@ -3294,7 +3294,7 @@ Failure scenario (iPhone 390x844, default --fs-scale: 1):
 6px; } }`, or give the three a shared `min-height: 44px; min-width: 44px` there. The
 row's `align-items: center` already absorbs the extra height.
 
-#### [ ] The archived-calendar agenda's negative margins are sized for a .modal but it renders inside the settings panel, clipping its colour rules and giving the settings sheet a sideways scroll
+#### [x] The archived-calendar agenda's negative margins are sized for a .modal but it renders inside the settings panel, clipping its colour rules and giving the settings sheet a sideways scroll
 `frontend/src/styles/app.css:662` · **low** · rendering · minor · stage 4
 
 `.arch-events { margin: 0 -18px -18px }` cancels a `.modal`'s 18px padding so its rows
@@ -3347,7 +3347,15 @@ sheet .set-body` so no child can make settings scroll sideways.
 
 **Pinned by** `2026-08-25 — the archived-calendar agenda on a phone > stays inside the sheet that actually contains it` in `frontend/src/backlog.aug25.stage4.browser.test.tsx` — the browser tier, because nothing that reads app.css as text can see an 18px overflow.
 
-#### [ ] The mobile-only hover rules on the sidebar bar leave the "View completed" toggle stuck in its active colour after a tap
+**Fixed**, and NOT with either shape the entry suggests. The hard `-18px` conflated two questions — how much of the CONTAINER's padding to cancel, and how far in the row's own content sits — so the fix separates them: `--arch-bleed` and `--arch-inset`, one pair per container, inherited down to `.arch-day-head` and `.agenda-ev` so the bleed and the inset cannot drift apart again. Which is exactly how they drifted: both were written for one parent, and then the section moved to another.
+
+**In SETTINGS there is nothing to bleed.** `.set-panels` has no padding of its own, so `--arch-bleed: 0` is the whole answer and the rows take the 2px inset `.arch-row` uses directly above them in the same panel. Re-sizing the bleed to 14px — the entry's first suggestion — does NOT work, and was measured before this was chosen: it cancels the sheet's padding correctly and still overflows `.set-body`'s content box by 14px on the right, because a child that reaches the sheet's edge necessarily reaches past the box sitting inside that padding.
+
+**`overflow-x: clip` on the container was deliberately NOT added**, though the entry asks for it "either way". Once the bleed is right there is nothing to clip, and it was measured not to help while the bleed was wrong — Chromium still reported the overflow through `scrollWidth`. A clip that swallows a future child's overflow is a worse thing to leave behind than the check that catches it.
+
+The `.modal` case keeps 18px for both, which is what the original was written for and the only place it was ever right — and that is what the control asserts.
+
+#### [x] The mobile-only hover rules on the sidebar bar leave the "View completed" toggle stuck in its active colour after a tap
 `frontend/src/styles/app.css:809` · **low** · rendering · minor · stage 4
 
 `.side-mobile-completed` and `.side-mobile-add` are declared INSIDE the @media (max-
@@ -3398,6 +3406,10 @@ same time — `.side-item:hover { background: var(--bg-elev) }` (line 114) colli
 `.side-item.active`'s identical background inside the mobile drawer for the same reason.
 
 **Pinned by** `2026-08-25 — the phone-only hover rules > are all guarded by a hover-capability query` in `frontend/src/backlog.aug25.stage4.browser.test.tsx`, swept over the CSSOM rather than over the two selectors named here.
+
+**Fixed** with the suggested fix: the two rules move under `@media (hover: hover)` and gain `:active` equivalents, which is the shape `tokens.css` uses for every other button state. `.side-item:hover` is fixed too — the entry names it specifically, and its background is IDENTICAL to `.side-item.active`'s, so inside the mobile drawer a tapped row stayed lit and read as the selected list.
+
+**The other 41 unguarded `:hover` rules were left alone, deliberately.** None has been shown to misreport a STATE, which is what makes these three different: a latched hover that merely looks warm is cosmetic; a latched hover indistinguishable from "selected" or "on" is a lie about the data. Sweeping the rest would be a large diff across rules no finding has exercised, on a surface where a mistake is only visible by looking.
 
 #### [ ] Removing the last Home module puts the five stock modules back on the board
 `frontend/src/components/HomeView.tsx:52` · **low** · rendering · stage 4
@@ -3599,7 +3611,7 @@ Measured in Chromium at 390x844, shipped default and `data-preset="workspace"`:
 `.content-head`, `.quickadd`, `.section-label`, `.today-row`, `.empty`, `.today-quiet`
 and `.today-more` all resolve a 14px left edge. The two empty states agree now.
 
-#### [ ] The Today row's ✕, estimate and + are ~16–19px tap targets on the phone-primary surface
+#### [x] The Today row's ✕, estimate and + are ~16–19px tap targets on the phone-primary surface
 `frontend/src/styles/app.css:1587` · **low** · rendering · minor · stage 4
 
 `.today-drop` (the only way to take a row off the day), `.today-plus` (the only way to
@@ -3636,6 +3648,12 @@ give these three a touch box: e.g. `.today-drop, .today-plus, .today-est { min-h
 justify-content: center; }` — the glyph size can stay as it is.
 
 **Pinned by** `2026-08-25 — the Today row on a phone > gives every control a 44px tap box` in `frontend/src/backlog.aug25.stage4.browser.test.tsx`, swept over `.today-row button` and asserting the 44px accessibility guideline rather than this entry's 40px.
+
+**Fixed** at the pin's 44px rather than this entry's 40px, and SWEPT over `.today-row button` rather than the three selectors named here. The recurring failure in this stylesheet is a guard only as wide as the set it enumerates — the sibling finding was itself a rule that named three classes and reached none of them — so the tick (`.check`, which this entry does not mention, and the worst of them at 21×21) is covered, and so is a button added to this row later. A mutation naming only the three passes everything except the tick.
+
+`min-height`/`min-width` with a flex centre, so the tap BOX grows and no glyph does — which is what the control asserts and what a naive `font-size` bump would break.
+
+**Accepted cost, decided rather than discovered**: a Today row goes from ~53px to ~62px, so roughly 13 rows fit an 844px phone instead of 16. Recorded in STAGES.md.
 
 #### [x] A line pinned to "task" that the parser read nothing in writes its untrimmed text as the VTODO SUMMARY
 `frontend/src/components/TodayView.tsx:1240` · **low** · bug · minor · stage 3

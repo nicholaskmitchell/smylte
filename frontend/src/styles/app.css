@@ -122,7 +122,16 @@
   display: flex; align-items: center; gap: 8px; padding: 8px 16px;
   cursor: pointer; border-left: 2px solid transparent; color: var(--fg);
 }
-.side-item:hover { background: var(--bg-elev); }
+/* Guarded for the same reason as `.side-mobile-*` in the phone block: this
+   background is IDENTICAL to `.side-item.active`'s, so inside the mobile drawer
+   a tapped row stayed lit and read as the selected list until something else
+   was touched. The finding names this one specifically as the same latent bug;
+   the other unguarded `:hover` rules in this file are cosmetic-only and are
+   left alone rather than swept, since none has been shown to misreport a
+   state. */
+@media (hover: hover) {
+  .side-item:hover { background: var(--bg-elev); }
+}
 .side-item.active { border-left-color: var(--accent); background: var(--bg-elev); }
 .side-item .swatch { width: 8px; height: 8px; flex: none; background: var(--fg-faint); }
 /* the pinned "All" row's swatch — a ring of the preset collection colors. The
@@ -688,14 +697,41 @@
   font-size: calc(12px * var(--fs-scale)); color: var(--fg-muted);
   padding-bottom: 8px; border-bottom: 1px solid var(--rule);
 }
-.arch-events { max-height: 55vh; overflow-y: auto; margin: 0 -18px -18px; }
+/* The agenda BLEEDS to its container's edge, and it has TWO containers with
+   different padding. The bleed was a hard -18px, written for the `.modal` this
+   section used to live in; `SettingsMenu` mounts it inside `.set-panels`, and
+   the settings container is padded 14px. The block came out 36px wider than its
+   parent's content box — 18px past the right, which became scrollable overflow
+   because the ancestor scroller declares only `overflow-y: auto` (so
+   `overflow-x` computes to `auto`), and 18px past the left, unreachable in LTR
+   and simply clipped, taking each row's 2px `--ev-c` calendar-colour rule with
+   it. Measured at 390px: `.agenda-ev` started at x = -4 against a sheet edge at
+   x = 0.
+
+   One number per container, inherited down to the row padding so the bleed and
+   the inset cannot drift apart again — which is how they drifted in the first
+   place, the margin being changed in one place and the padding in another. */
+.arch-events {
+  /* Two numbers, because they answer two questions the old single -18px
+     conflated: how much of the CONTAINER's padding to cancel, and how far in
+     the row's own content sits. Default is the SETTINGS case, where the panel
+     has no padding of its own to cancel and the rows take the same 2px inset as
+     `.arch-row` directly above them in the same panel. */
+  --arch-bleed: 0px;
+  --arch-inset: 2px;
+  max-height: 55vh; overflow-y: auto;
+  margin: 0 calc(-1 * var(--arch-bleed)) calc(-1 * var(--arch-bleed));
+}
+/* …and the MODAL case, which is what the hard -18px was written for and the
+   only place it was ever right. */
+.modal .arch-events { --arch-bleed: 18px; --arch-inset: 18px; }
 .arch-day-head {
   font-family: var(--mono); font-size: calc(10px * var(--fs-scale)); text-transform: var(--label-case);
   letter-spacing: calc(0.08em * var(--tracking)); color: var(--fg-faint);
-  padding: 12px 18px 4px; position: sticky; top: 0; background: var(--bg-elev);
+  padding: 12px var(--arch-inset) 4px; position: sticky; top: 0; background: var(--bg-elev);
 }
 /* the previews are read-only, so drop the interactive affordances */
-.arch-events .agenda-ev { cursor: default; padding: 9px 18px; font-size: calc(14px * var(--fs-scale)); }
+.arch-events .agenda-ev { cursor: default; padding: 9px var(--arch-inset); font-size: calc(14px * var(--fs-scale)); }
 .arch-events .agenda-ev:hover { background: none; }
 
 /* ---- login ---- */
@@ -835,7 +871,16 @@
     color: var(--fg-muted); cursor: pointer; padding: 0 16px; font-size: calc(18px * var(--fs-scale)); line-height: 1;
   }
   .side-mobile-completed.active { color: var(--accent); }
-  .side-mobile-add:hover, .side-mobile-completed:hover { color: var(--accent); }
+  /* GUARDED, and paired with `:active` — the shape `tokens.css` uses for every
+     other button state, and for the reason this rule proves. A tap on a touch
+     device leaves `:hover` stuck on the element until something else is
+     touched, so "View completed" sat in its ACTIVE colour after being tapped
+     OFF: the one control whose whole job is to report a binary state reported
+     the wrong one, on the surface it exists for. */
+  @media (hover: hover) {
+    .side-mobile-add:hover, .side-mobile-completed:hover { color: var(--accent); }
+  }
+  .side-mobile-add:active, .side-mobile-completed:active { color: var(--accent); }
 
   /* the drawer itself: a bottom sheet that reuses .side / .side-item / .group-* */
   .drawer-overlay { align-items: flex-end; padding: 0; }
@@ -1446,6 +1491,25 @@
   button.today-drop, button.today-plus { padding: 8px 10px; }
   .today-est.mono { padding: 8px 6px; min-height: 34px; }
   .input.today-est-input { padding: 6px 8px; }
+
+  /* …and the rest of the way to the 44px guideline, SWEPT over every button in
+     the row rather than over the three the finding names. The recurring failure
+     in this stylesheet is a guard only as wide as the set it enumerates — the
+     sibling finding above was itself a rule that named three classes and reached
+     none of them — so the tick (`.check`, which the finding does not mention)
+     is covered, and so is a button added to this row later.
+
+     A tap BOX, not bigger type: `min-height`/`min-width` with a flex centre
+     leaves every glyph and the row's own text at its designed size. The rules
+     above stay because they set the padding this builds on.
+
+     Accepted cost, decided rather than discovered: a Today row goes from ~53px
+     to ~62px, so roughly 13 rows fit an 844px phone instead of 16. STAGES.md
+     records the decision. */
+  .today-row button, .today-row .today-est {
+    min-height: 44px; min-width: 44px;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
 
   /* `.menu-toggle` is EVERY settings control on the phone sheet — Clock, Theme,
      Home timezone, Calendar window, Completed tasks, Stay signed in — at about
