@@ -1,6 +1,6 @@
 # Audit backlog
 
-**23 open**, all from the 2026-08-25 sweep at the top of this file; every finding
+**22 open**, all from the 2026-08-25 sweep at the top of this file; every finding
 from every earlier sweep is closed.
 
 Findings from the adversarial audit sweeps — one deep finder per subsystem, then
@@ -2538,7 +2538,7 @@ Scenario: on a slow or cold self-hosted server the first Enter changes nothing o
 while the request is open, matching the in-flight guard the booking-link editor now
 carries.
 
-#### [ ] A cancelled pointer gesture COMMITS the half-finished dashboard drag instead of discarding it
+#### [x] A cancelled pointer gesture COMMITS the half-finished dashboard drag instead of discarding it
 `frontend/src/components/HomeView.tsx:265` · **medium** · bug · stage 3
 
 `onPointerCancel={endDrag}` and `endDrag` commits: `if (preview) commit(preview)`. A
@@ -2582,6 +2582,14 @@ none` to `.dash-grid.arranging .dash-mod-head` and `.dash-grip` so the drag is n
 stolen on a touch device wide enough to get the desktop canvas.
 
 **Pinned by** `2026-08-25 — an aborted dashboard drag > discards a gesture the platform cancelled` in `frontend/src/backlog.aug25.stage3.test.tsx`.
+
+**Fixed** in both halves the entry names. `onPointerCancel` now runs its own `cancelDrag` — clear the drag, drop the preview, persist nothing — and `onPointerUp` keeps `endDrag`. A release is an instruction; a cancel is the platform taking the gesture over, and there is no position the user chose.
+
+**`cancelDrag` also un-paints, and that needed its own test.** Clearing `drag.current` alone satisfies the pin — nothing reaches `onLayoutChange` — while leaving the module drawn two columns over until Arrange mode is left, which on screen is indistinguishable from a move that took. That is exactly what the sibling effect's comment ("must not leave the layout stuck in preview") forbids, and it was a mutation that passed the pin until `un-paints a gesture the platform cancelled` was added.
+
+**`touch-action: none` on the handles is the other half**, scoped to `.dash-grid.arranging` so a finger still scrolls a module the owner is only reading. There was no `touch-action` anywhere in `app.css` before this.
+
+**The CSS assertions strip comments first, and did not at first.** The prose above the new rule names both selectors and says "scoped to `.arranging`", so matching against the raw file made every assertion true of the COMMENT: a mutation that dropped the scoping and covered `.dash-mod` entirely passed. Stripping `/* … */` before matching catches it, and the control — every `touch-action: none` in the file must be on a drag handle — catches the opposite over-correction.
 
 #### [x] Primary touch targets across Settings and the Home mini calendar are half the 44px minimum, with no mobile override
 `frontend/src/styles/app.css:89` · **medium** · rendering · minor
