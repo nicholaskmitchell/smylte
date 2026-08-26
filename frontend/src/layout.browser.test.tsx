@@ -18,40 +18,12 @@
 // one.
 
 import { describe, expect, it, beforeEach } from 'vitest'
-import { page } from '@vitest/browser/context'
 
-/** Put the page at a viewport. */
-const viewport = (width: number, height = 844) => page.viewport(width, height)
-
-/** Mount raw markup, wait for it to be measurable, and hand it back.
- *
- *  The await is not politeness. Fonts are self-hosted (`public/fonts/*.woff2`,
- *  wired in fonts.css) and a face loads LAZILY, when a rule that uses it first
- *  matches something in the document — so `document.fonts.ready` resolves
- *  immediately on an empty page and flips back to `loading` the moment text is
- *  mounted. Measuring in that window gives fallback-font metrics: every text box
- *  off by a few px, silently, and differently depending on how fast the run is.
- *  Hence: mount, THEN wait, then measure. (Found by this file's own vacuity
- *  guard, which failed on `status === 'loading'` the first time it ran.)
- *
- *  Raw markup rather than a component wherever the thing under test is a
- *  stylesheet rule. The class names are held to the real JSX by the guards in
- *  `mobile-layout.test.ts` and by the component suites, so this stays a
- *  measurement harness rather than a second source of truth about what the app
- *  renders. */
-async function mount(html: string): Promise<HTMLElement> {
-  const host = document.createElement('div')
-  host.innerHTML = html
-  document.body.appendChild(host)
-  await document.fonts.ready
-  await new Promise(requestAnimationFrame)
-  return host
-}
-
-const box = (el: Element) => {
-  const r = el.getBoundingClientRect()
-  return { w: +r.width.toFixed(1), h: +r.height.toFixed(1), top: +r.top.toFixed(1), left: +r.left.toFixed(1), right: +r.right.toFixed(1) }
-}
+// The harness — `viewport`, `mount`, `box` — is shared with
+// `backlog.aug25.stage4.browser.test.tsx`. It moved out of this file when that
+// one arrived, and the reasoning that used to live here (why `document.fonts.
+// ready` is awaited AFTER the mount, in particular) moved with it.
+import { box, mount, viewport } from './test/browser-measure'
 
 beforeEach(() => { document.body.innerHTML = '' })
 
