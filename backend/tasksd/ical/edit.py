@@ -1293,15 +1293,39 @@ def _shift_until(until, delta: timedelta, master: Event):
 # rotates cleanly, an ordinal one ("1TU") does not.
 _DAY_SELECTING = ("BYMONTHDAY", "BYYEARDAY", "BYWEEKNO", "BYMONTH", "BYSETPOS")
 
+# ...and the parts that name WHICH TIME OF DAY it fires at. Exactly the same
+# failure, one axis over, and the guard used to miss it twice: these were not in
+# the tuple above, and the `if not day_delta` early return bailed out before the
+# loop precisely when a time-only drag was in progress — which is the only time
+# they matter. `FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;COUNT=4` dragged 09:00 -> 11:00
+# moved DTSTART and left BYHOUR naming 9, so the series produced Jan 5 at 11:00
+# and then three unmoved 09:00s and a FIFTH occurrence, because COUNT is
+# consumed from a later start. The bytes go to Radicale, so the loss is
+# permanent and visible in every other client.
+_TIME_SELECTING = ("BYHOUR", "BYMINUTE", "BYSECOND")
 
-def _desynchronizing(rule: dict, day_delta: int, new_weekday: int | None = None) -> str | None:
-    """The BY* part a day-shift would leave naming the old day, if any.
+
+def _desynchronizing(rule: dict, day_delta: int, new_weekday: int | None = None,
+                     *, time_changed: bool = False) -> str | None:
+    """The BY* part a shift would leave naming the old slot, if any.
+
+    Two axes, and a shift can move along either or both. `day_delta` is the
+    change in CALENDAR DAY and `time_changed` is whether the wall-clock time of
+    day moved — derived by the caller from the same delta, so a drag inside one
+    day has `day_delta == 0` and a whole-day drag has `time_changed` false.
 
     `new_weekday` is the weekday (Mon=0) DTSTART has AFTER the shift — the
     caller has already applied it — and is needed only for the BYDAY case below.
     None means "unknown", which keeps the old conservative answer."""
+    if time_changed:
+        for key in _TIME_SELECTING:
+            if rule.get(key):
+                return key
     if not day_delta:
-        return None                         # a time-only drag moves nothing else
+        # A time-only drag moves nothing else — but only once the time-selecting
+        # parts above have had their say. This return is where they used to be
+        # missed.
+        return None
     for key in _DAY_SELECTING:
         if rule.get(key):
             return key
@@ -1370,10 +1394,16 @@ def _shift_rrule(master: Event, delta: timedelta, day_delta: int) -> None:
     dtstart = master.get("DTSTART")
     start_value = getattr(dtstart, "dt", None)
     new_weekday = start_value.weekday() if start_value is not None else None
-    blocker = _desynchronizing(rule, day_delta, new_weekday)
+    # The wall-clock time of day moved iff the delta is not a whole number of
+    # days. `timedelta` normalises to (days, seconds, microseconds) with the
+    # sub-day parts always non-negative, so this reads correctly for a backwards
+    # drag too: -2h is `timedelta(days=-1, seconds=79200)`.
+    time_changed = bool(delta.seconds or delta.microseconds)
+    blocker = _desynchronizing(rule, day_delta, new_weekday, time_changed=time_changed)
     if blocker is not None:
+        axis = "time" if blocker in _TIME_SELECTING else "day"
         raise ValueError(
-            f"cannot move a series whose repeat rule pins it to a particular day "
+            f"cannot move a series whose repeat rule pins it to a particular {axis} "
             f"({blocker}); edit the occurrence instead, or change the repeat"
         )
     changed = False
