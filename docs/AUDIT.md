@@ -1,6 +1,6 @@
 # Audit backlog
 
-**4 open**, all from the 2026-08-25 sweep at the top of this file; every finding
+**3 open**, all from the 2026-08-25 sweep at the top of this file; every finding
 from every earlier sweep is closed, as is the one this sweep's own remediation
 turned up (marked `· found in remediation`).
 
@@ -3548,7 +3548,7 @@ either sent or refused, never silently dropped.
 
 **The pin cannot see either half on its own**, so both got tests. It clicks one button and takes "sent or refused", so refusing ALL THREE scopes passes it — and that would leave re-scheduling a series from a point in time impossible except by re-scheduling the whole thing. `carries a cadence change on "This & following"` and `still saves one occurrence when the repeat was not touched` close that off; the second is the control against refusing "This event" for every repeating edit rather than only for a cadence change.
 
-#### [ ] Shutdown step 2 reports "Everything on today is done" after the owner MOVED everything to tomorrow
+#### [x] Shutdown step 2 reports "Everything on today is done" after the owner MOVED everything to tomorrow
 `frontend/src/components/ShutdownRitual.tsx:232` · **low** · rendering · minor · stage 4
 
 `unfinished` is derived from `entries`, and `TodayView.entries` filters out rows
@@ -3582,6 +3582,12 @@ on today is decided." / "Nothing left to decide about." when the list was emptie
 rolls and drops rather than by ticks.
 
 **Pinned by** `2026-08-25 — the shutdown ritual, step two > does not call a day that was postponed a day that was finished` in `frontend/src/backlog.aug25.stage4.test.tsx`.
+
+**Fixed** with the suggested fix's FIRST form — a count of rows decided about during the ritual — rather than the `entries.filter(isDone).length` comparison it offers as an alternative. The comparison cannot separate the mixed case: one row ticked and one rolled away leaves an `entries` array whose every member is done, and the honest sentence there is still not "everything is done". A decision counter answers all three cases with one number.
+
+**Held in `ShutdownRitual`, not in `FollowsStep`**, and that placement is the fix's other half. The step unmounts when the owner presses Next, so a counter inside it resets on Back and tells the same lie again — with the rows now gone from the list, which is when the sentence is most convincing. It has its own test.
+
+Two sentences, because "done" is the one thing this step exists to be able to say and it has to stay true. A mutation that always says "decided" closes the pin and loses it, which is what the control catches; one that counts drops but not rolls closes nothing.
 
 #### [x] On a phone every Today row sits 12px right of its own heading, add box and empty state
 `frontend/src/styles/app.css:845` · **low** · rendering · minor

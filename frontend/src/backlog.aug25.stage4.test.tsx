@@ -739,7 +739,7 @@ describe('2026-08-25 — the shutdown ritual, step two', () => {
 
   // ── AUDIT (open): ShutdownRitual.tsx:232 — step 2 reports "Everything on
   //    today is done" after the owner MOVED everything to tomorrow ──────────
-  it.fails('does not call a day that was postponed a day that was finished', async () => {
+  it('does not call a day that was postponed a day that was finished', async () => {
     // EVIDENCE. `unfinished = entries.filter((e) => !isDone(e))`, and
     // `TodayView.entries` filters out rows carrying `rolled_to` as well as
     // `dropped_at` — by design, so a decided row leaves the day's total. The
@@ -771,6 +771,28 @@ describe('2026-08-25 — the shutdown ritual, step two', () => {
     expect(dialog.querySelector('.plan-body')?.textContent?.trim(),
       'the owner moved every row to tomorrow and was told they were done')
       .not.toBe(DONE_SENTENCE)
+  })
+
+  // The counter lives in the RITUAL, not in the step, and that is the difference
+  // between a fix and a fix that lasts one keypress: `FollowsStep` unmounts when
+  // the owner steps forward, so a counter inside it resets on Back and tells the
+  // same lie again — with the rows now gone, which is when the sentence is most
+  // convincing.
+  it('still knows the day was postponed after stepping forward and back', async () => {
+    m.openDay.mockResolvedValue(plan([
+      dayEntry({ entry_id: 'a', title: 'Alpha', position: 1 }),
+      dayEntry({ entry_id: 'b', title: 'Bravo', position: 2 }),
+    ]))
+    const user = setup()
+    const dialog = await openCarry(user)
+
+    await user.click(within(dialog).getByRole('button', { name: /Move all 2 to tomorrow/ }))
+    await waitFor(() => expect(m.rollDayEntry).toHaveBeenCalledTimes(2))
+
+    await user.click(within(dialog).getByRole('button', { name: 'Next' }))
+    await user.click(within(dialog).getByRole('button', { name: 'Back' }))
+
+    expect(dialog.querySelector('.plan-body')?.textContent?.trim()).not.toBe(DONE_SENTENCE)
   })
 
   // CONTROL (passes today, must keep passing). A day whose rows really were
