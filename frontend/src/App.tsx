@@ -33,7 +33,20 @@ import { TodayView } from './components/TodayView'
 import { AppearancePanel } from './components/AppearancePanel'
 import { SettingsMenu } from './components/SettingsMenu'
 
-type Auth = 'loading' | 'in' | 'out'
+// 'offline' is NOT 'out'. A server that cannot be reached is not a session that
+// has gone away — the rule `api.ts`'s SSE loop already states and enforces ("a
+// server that is down is not a session that is gone, and signing a live session
+// out on one 502 from the tunnel would be a worse bug than the one this fixes").
+// Boot used to collapse the two, so any transport failure rendered the sign-in
+// card over a perfectly valid cookie AND flipped `enabled` false, which put the
+// disk mirror's last-known-good data out of reach from the very screen that had
+// nothing else to show.
+type Auth = 'loading' | 'in' | 'out' | 'offline'
+
+// How long boot waits for `/api/me` before calling it unreachable. A half-open
+// socket neither resolves nor rejects, and this one call decides whether the app
+// renders at all.
+const BOOT_TIMEOUT_MS = 15_000
 
 export function App() {
   const [auth, setAuth] = useState<Auth>('loading')
@@ -168,16 +181,52 @@ export function App() {
     return () => { setErrorNotifier(null); clearTimeout(toastTimer.current) }
   }, [showToast])
 
+  // Bumped by the Retry button and by a recovery signal, to re-run boot.
+  const [bootTry, setBootTry] = useState(0)
+  const retryBoot = useCallback(() => setBootTry((n) => n + 1), [])
+
   useEffect(() => {
     // The cache is per-account and keyed by name, so a different user simply
     // misses rather than reading someone else's rows; clearing on a change is
     // quota hygiene. `setCacheUser` runs before `setAuth('in')` so the views —
     // which seed from the cache as they mount — never race it.
     sweepOldVersions()
-    api.me()
-      .then((m) => { setCacheUser(m.user); setUser(m.user); setAuth('in') })
-      .catch(() => setAuth('out'))
-  }, [])
+    const ctl = new AbortController()
+    const timer = setTimeout(() => ctl.abort(), BOOT_TIMEOUT_MS)
+    let alive = true
+    api.me(ctl.signal)
+      .then((m) => {
+        if (!alive) return
+        setCacheUser(m.user); setUser(m.user); setAuth('in')
+      })
+      // BRANCHED on the error. `j()` produces `AuthError` only for a 401 — a
+      // dropped connection rejects with a TypeError, a 5xx with HttpError, an
+      // abort with AbortError — and all of them used to land in one
+      // `catch(() => setAuth('out'))`.
+      .catch((e) => {
+        if (!alive) return
+        setAuth(e instanceof AuthError ? 'out' : 'offline')
+      })
+      .finally(() => clearTimeout(timer))
+    return () => { alive = false; ctl.abort(); clearTimeout(timer) }
+  }, [bootTry])
+
+  // Re-probe when the machine says it might work now, so a laptop that was shut
+  // while offline is signed in by the time its owner looks at it rather than
+  // waiting on a tap. Only while offline: `visibilitychange` fires constantly in
+  // ordinary use and there is nothing to re-probe in any other state.
+  useEffect(() => {
+    if (auth !== 'offline') return
+    const wake = () => {
+      if (document.visibilityState === 'visible') retryBoot()
+    }
+    window.addEventListener('online', retryBoot)
+    document.addEventListener('visibilitychange', wake)
+    return () => {
+      window.removeEventListener('online', retryBoot)
+      document.removeEventListener('visibilitychange', wake)
+    }
+  }, [auth, retryBoot])
 
   const applyTheme = useCallback((next: string) => {
     document.documentElement.dataset.theme = next
@@ -862,6 +911,18 @@ export function App() {
         <AppearancePanel appearance={appearance} onChange={changeAppearance}
           mode={theme === 'dark' ? 'dark' : 'light'} onMode={changeTheme}
           onClose={() => setAppearanceOpen(false)} />
+      )}
+      {/* The shell stays, and says why it is short. `auth === 'offline'` means
+          `/api/me` could not be reached, NOT that the session ended — so the
+          cached rows the views seed from are still on screen underneath this,
+          which is the whole point of the disk mirror. Retry re-runs boot; so
+          does coming back online or returning to the tab. */}
+      {auth === 'offline' && (
+        <div className="offline-bar" role="status">
+          <span>Can&rsquo;t reach the server — showing what was last saved on this
+            device. You are still signed in.</span>
+          <button className="btn ghost" onClick={retryBoot}>Retry</button>
+        </div>
       )}
       {toast && (
         <div className="toast" role="alert">

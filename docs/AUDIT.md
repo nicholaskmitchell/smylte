@@ -1,6 +1,6 @@
 # Audit backlog
 
-**13 open**, all from the 2026-08-25 sweep at the top of this file; every finding
+**12 open**, all from the 2026-08-25 sweep at the top of this file; every finding
 from every earlier sweep is closed, as is the one this sweep's own remediation
 turned up (marked `· found in remediation`).
 
@@ -2444,7 +2444,7 @@ mount with `enabled === false` leaves the seeded cache alone.
 
 The two that ARE wrong are both caught: clearing on any false is the defect itself, and never clearing at all leaks the previous session's calendars into the next login — which is what this effect was added for, and what its control asserts.
 
-#### [ ] Boot treats "can't reach the server" as "signed out": a network drop or a 502 on /api/me hands the owner a login card and hides their cached data
+#### [x] Boot treats "can't reach the server" as "signed out": a network drop or a 502 on /api/me hands the owner a login card and hides their cached data
 `frontend/src/App.tsx:160` · **medium** · bug · stage 4
 
 The boot handler is `api.me().then(...).catch(() => setAuth('out'))`. `j()` only
@@ -2487,6 +2487,14 @@ the server" banner and a retry button (and re-probe `api.me()` on
 surfaces as that state instead of an indefinitely blank pane.
 
 **Pinned by** `2026-08-25 — booting with the server unreachable > does not hand the owner a sign-in card` in `frontend/src/backlog.aug25.stage4.test.tsx`.
+
+**Fixed** with the suggested fix, whole. `Auth` gains a fourth value, `'offline'`; boot branches (`e instanceof AuthError ? 'out' : 'offline'`); the shell stays up with an `.offline-bar` saying it is showing what was last saved on this device and that the session is still valid, plus a Retry; and `online` / `visibilitychange` re-probe while offline so a laptop that wakes up is signed in before its owner looks at it. `api.me` gained an `AbortSignal` and boot a 15 s deadline.
+
+**The pin requires none of that** — it takes "a third state, a retry, a banner over the cached shell" and asserts only that a 502 is not a sign-out. Each part is therefore a mutation it cannot see, and all four have tests: a state with no banner is silently short; a Retry not in the effect's deps re-runs nothing; no `online` listener leaves a woken laptop stuck; and no timeout leaves a half-open socket — a captive portal, a tunnel that accepted the connection and went away — as an indefinitely blank pane, which is this finding wearing a different hat.
+
+**`'offline'` composes with the two fixes above it.** `enabled` stays `auth === 'in'`, so nothing fetches while offline — and the disk-mirror fix in the same stage is what makes that survivable, since the clear now runs only on a true→false STEP and a boot that never reached `'in'` is not one. Without that fix this state would show an empty shell, which is the thing it exists to avoid.
+
+**One deliberate test edit, which the pin itself predicted and named.** `App.test.tsx:56` pinned the OLD conflation with `m.me.mockRejectedValue(new Error('unauthenticated'))` — a bare Error, neither an `AuthError` nor a 401 — so it could not tell the two cases apart either. It now rejects with a real `AuthError`. What it asserts is unchanged; only the failure it simulates is now the one it always claimed to be.
 
 #### [x] A slow GET /api/settings lands after the user has already changed a preference and silently reverts it, leaving the UI disagreeing with the account
 `frontend/src/App.tsx:193` · **medium** · bug

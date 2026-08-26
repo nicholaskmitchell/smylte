@@ -969,6 +969,19 @@
 .toast span { min-width: 0; overflow-wrap: break-word; }
 .toast .icon-btn { flex: none; }
 
+/* The offline bar. A STRIP under the top bar rather than a toast: this is a
+   standing condition the owner needs to keep seeing (everything under it is
+   last-known-good), not an event they dismiss. `--fg-faint` on `--bg-elev`
+   rather than the toast's `--warn`, because being offline with your data still
+   on screen is a state, not an error. */
+.offline-bar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 8px var(--gutter);
+  background: var(--bg-elev); border-bottom: 1px solid var(--rule);
+  color: var(--fg-faint); font-size: calc(13px * var(--fs-scale));
+}
+.offline-bar span { min-width: 0; overflow-wrap: break-word; }
+
 /* ---- client scheduling: owner view ---- */
 .sched-list { display: flex; flex-wrap: wrap; gap: 12px; padding: 6px var(--gutter); }
 .sched-card {
