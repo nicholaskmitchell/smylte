@@ -1,11 +1,27 @@
-// The layout facts no rendering test in this repo can see.
+// The stylesheet, read as text — the half of the layout story that is cheap.
 //
-// vitest runs with `css: false` and jsdom applies no layout at all, so a broken
-// stylesheet is invisible to all 1000-odd tests beside this file — three
-// separate phone-only defects shipped green, and the only thing that found them
-// was opening the app in Chromium at 390px and measuring. These are the
-// structural halves of those fixes: not a substitute for looking, but enough
-// that reverting one fails something.
+// The `unit` project runs with `css: false` and jsdom applies no layout at all,
+// so a broken stylesheet is invisible to all 1100-odd tests beside this file.
+// Several phone-only defects shipped green, and the only thing that ever found
+// one was opening the app in Chromium at 390px and measuring.
+//
+// **That measuring is automated now**, in `src/layout.browser.test.tsx` — a
+// second vitest project running real Chromium with the real stylesheets in the
+// cascade. This file is not obsolete and is not a substitute for it; they answer
+// different questions and both are needed:
+//
+//   * THIS file sweeps the WHOLE sheet cheaply and structurally. Its
+//     cascade-shadow check at the foot — nothing declared in a mobile block may
+//     be overwritten by a later unconditional rule at the same-or-higher
+//     specificity — names all seven dead declarations in one pass, over every
+//     selector in 2000 lines, in 50ms and with no browser.
+//   * THAT file measures a HANDFUL of load-bearing boxes and is the only thing
+//     that can tell you a rule actually won. A model of the cascade is not the
+//     cascade: the `.set-panels` percentage-height bug applied the whole time
+//     and no amount of reading found it.
+//
+// So: structural breadth here, measured depth there. Anything asserted here that
+// could be measured instead is the weaker of the two — prefer moving it.
 //
 // Asserted against the FILES on disk rather than through a render, for the
 // reason `TodayView.test.tsx`'s stylesheet block gives: jsdom evaluates no

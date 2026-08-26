@@ -32,6 +32,10 @@ node_modules/
 # untracked and could be committed.
 node_modules
 /frontend/dist/
+# Failure screenshots from the browser test project. vitest writes one beside the
+# failing spec, so this lands INSIDE src/ rather than in a build directory —
+# unanchored for the same reason node_modules is above.
+__screenshots__/
 
 # ── .NET / Windows client build artifacts (built by CI, never committed) ─────
 /desktop/**/bin/
