@@ -23,7 +23,7 @@ subtasks, due dates (all-day or timed), priority, tags, and notes. List /
 Every list is merged into one pane, dotted by list color; the sidebar works
 just like the calendar's — each list is a row you click anywhere to show or hide
 it individually, no separate "all" toggle — plus collapsible **groups** to
-organize lists without widening the sidebar. Full-text search and tags.
+organize lists without widening the sidebar. Tags on every task, shown as chips on the row and edited in the task editor. Full-text search ships on the API (`GET /api/search`) and on the MCP connector (`smylte_search_tasks`) — there is no search field in the web UI yet.
 
 Rows sort by one rule everywhere (`order.ts`): manual position, then due date
 (undated last), priority, title, and finally uid — which is what makes it a
@@ -213,14 +213,15 @@ backend/
     mcp/        remote MCP server: OAuth 2.1 AS + resource server (oauth.py),
                 Streamable-HTTP JSON-RPC transport (server.py), the tool table
                 (tools.py) and its adapter onto the service (api.py)
-    scheduling.py, auth.py, access.py, config.py
+    scheduling.py, auth.py, access.py, config.py,
+                csp.py (Content-Security-Policy), limits.py (request-body cap)
   tests/        api + security + sync + concurrency + fidelity + scheduling (pytest)
   dev/          empirical probes (fidelity comparison, normalization, smokes)
 frontend/
   src/
     components/ TodayView, TasksView, CalendarView, SchedulingView, HomeView,
                 BookingPage, Sidebar, Login, TaskModal, AppearancePanel,
-                ArchivedCalendarsModal
+                ArchivedCalendarsSection
     api.ts      typed, same-origin API client (+ SSE subscribe)
     App.tsx     shell: tabs, settings, theme, live-refresh
     appearance.ts  token allowlist + validation, apply/reset, theme import/export

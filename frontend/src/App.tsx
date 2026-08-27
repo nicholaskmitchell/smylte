@@ -33,7 +33,20 @@ import { TodayView } from './components/TodayView'
 import { AppearancePanel } from './components/AppearancePanel'
 import { SettingsMenu } from './components/SettingsMenu'
 
-type Auth = 'loading' | 'in' | 'out'
+// 'offline' is NOT 'out'. A server that cannot be reached is not a session that
+// has gone away — the rule `api.ts`'s SSE loop already states and enforces ("a
+// server that is down is not a session that is gone, and signing a live session
+// out on one 502 from the tunnel would be a worse bug than the one this fixes").
+// Boot used to collapse the two, so any transport failure rendered the sign-in
+// card over a perfectly valid cookie AND flipped `enabled` false, which put the
+// disk mirror's last-known-good data out of reach from the very screen that had
+// nothing else to show.
+type Auth = 'loading' | 'in' | 'out' | 'offline'
+
+// How long boot waits for `/api/me` before calling it unreachable. A half-open
+// socket neither resolves nor rejects, and this one call decides whether the app
+// renders at all.
+const BOOT_TIMEOUT_MS = 15_000
 
 export function App() {
   const [auth, setAuth] = useState<Auth>('loading')
@@ -55,6 +68,19 @@ export function App() {
   // A tab picked while settings were still loading wins over the stored choice —
   // nothing is more jarring than the view changing under a deliberate click.
   const tabTouched = useRef(false)
+  // Whether the opening tab has been restored for this signed-in session. The
+  // settings read re-runs on every `settings_updated`; the tab restore inside
+  // it must not.
+  const tabRestored = useRef(false)
+  // PUTs issued and not yet settled. `pendingPatch` empties when the request is
+  // ISSUED, so it alone cannot tell whether our own write has landed.
+  const writesInFlight = useRef(0)
+  // Every settings key this tab has written, in order, appended at the GESTURE.
+  // The settings read snapshots its length before issuing and reads the tail
+  // when it answers, so it knows which of the values it is holding the user has
+  // since changed. An append-only list rather than a set because the question is
+  // "since when", not "ever".
+  const writeLog = useRef<string[]>([])
   const [theme, setTheme] = useState(() => document.documentElement.dataset.theme || 'light')
   const [tasksView, setTasksView] = useState<TasksViewMode>('list')
   const [sideCollapsed, setSideCollapsed] = useState(false)
@@ -84,6 +110,12 @@ export function App() {
   // which is what this used to be the only way to set.
   const [sessionTtl, setSessionTtl] = useState<number | null>(null)
   const [rev, setRev] = useState(0)
+  // A SECOND revision counter, for settings alone. `rev` drives the task and
+  // event refetch, and bumping it on a preference change is the request storm
+  // the SSE handler's early return was added to stop — but dropping the event
+  // outright left this tab holding whatever the settings blob said when it
+  // loaded. See the SSE effect and `store.update_settings`' shallow merge.
+  const [settingsRev, setSettingsRev] = useState(0)
   const [settingsOpen, setSettingsOpen] = useState(false)
   // Appearance is the one editor still opened over the app: it is a full token
   // workbench, not a row of settings. Tabs, connected apps and archived
@@ -105,7 +137,12 @@ export function App() {
   // Seeded from the pre-paint cache so the editor opens showing what is already
   // on screen; the server overwrites it a moment later like every other setting.
   const [appearance, setAppearance] = useState<Appearance>(() => readCachedAppearance() ?? {})
-  const [dashboard, setDashboard] = useState<DashboardModule[]>([])
+  // NULL means "never arranged", `[]` means "deliberately empty", and they used
+  // to be the same value. `HomeView` reads an empty array as "show the stock
+  // five", which is right for a new account and wrong the moment the owner
+  // removes their last module — Remove put five modules back on the board. One
+  // value cannot answer both questions, so there are two.
+  const [dashboard, setDashboard] = useState<DashboardModule[] | null>(null)
   // The calendar month, held here so returning to the Calendar tab lands where
   // you left it rather than snapping back to today.
   const [cursor, setCursor] = useState(() => {
@@ -149,16 +186,52 @@ export function App() {
     return () => { setErrorNotifier(null); clearTimeout(toastTimer.current) }
   }, [showToast])
 
+  // Bumped by the Retry button and by a recovery signal, to re-run boot.
+  const [bootTry, setBootTry] = useState(0)
+  const retryBoot = useCallback(() => setBootTry((n) => n + 1), [])
+
   useEffect(() => {
     // The cache is per-account and keyed by name, so a different user simply
     // misses rather than reading someone else's rows; clearing on a change is
     // quota hygiene. `setCacheUser` runs before `setAuth('in')` so the views —
     // which seed from the cache as they mount — never race it.
     sweepOldVersions()
-    api.me()
-      .then((m) => { setCacheUser(m.user); setUser(m.user); setAuth('in') })
-      .catch(() => setAuth('out'))
-  }, [])
+    const ctl = new AbortController()
+    const timer = setTimeout(() => ctl.abort(), BOOT_TIMEOUT_MS)
+    let alive = true
+    api.me(ctl.signal)
+      .then((m) => {
+        if (!alive) return
+        setCacheUser(m.user); setUser(m.user); setAuth('in')
+      })
+      // BRANCHED on the error. `j()` produces `AuthError` only for a 401 — a
+      // dropped connection rejects with a TypeError, a 5xx with HttpError, an
+      // abort with AbortError — and all of them used to land in one
+      // `catch(() => setAuth('out'))`.
+      .catch((e) => {
+        if (!alive) return
+        setAuth(e instanceof AuthError ? 'out' : 'offline')
+      })
+      .finally(() => clearTimeout(timer))
+    return () => { alive = false; ctl.abort(); clearTimeout(timer) }
+  }, [bootTry])
+
+  // Re-probe when the machine says it might work now, so a laptop that was shut
+  // while offline is signed in by the time its owner looks at it rather than
+  // waiting on a tap. Only while offline: `visibilitychange` fires constantly in
+  // ordinary use and there is nothing to re-probe in any other state.
+  useEffect(() => {
+    if (auth !== 'offline') return
+    const wake = () => {
+      if (document.visibilityState === 'visible') retryBoot()
+    }
+    window.addEventListener('online', retryBoot)
+    document.addEventListener('visibilitychange', wake)
+    return () => {
+      window.removeEventListener('online', retryBoot)
+      document.removeEventListener('visibilitychange', wake)
+    }
+  }, [auth, retryBoot])
 
   const applyTheme = useCallback((next: string) => {
     document.documentElement.dataset.theme = next
@@ -188,34 +261,75 @@ export function App() {
   // Settings are account-synced: once authenticated, the server is the source of
   // truth (localStorage is only the pre-paint cache to avoid a flash).
   useEffect(() => {
-    if (auth !== 'in') return
+    // A sign-out clears the restore latch, so signing back in (which never
+    // remounts this component) opens where the account says again.
+    if (auth !== 'in') { tabRestored.current = false; return }
     settingsFailed.current = false
+    // Where the write log stands as this read is ISSUED. Anything appended
+    // after this point is a preference the user changed while the read was in
+    // flight, and applying the payload's value for it would revert their
+    // gesture. See `keep` below.
+    const writesBefore = writeLog.current.length
     api.getSettings()
       .then((s) => {
-        if (s.theme === 'dark' || s.theme === 'light') applyTheme(s.theme)
+        // The generalisation of `tabTouched`. The read applied its whole
+        // payload unconditionally, and the gear is clickable the instant
+        // `/api/me` returns — the same commit that ISSUES this request — so the
+        // entire read RTT was a window in which a gesture could be silently
+        // undone. `get_settings` takes the backend's single global service lock,
+        // which is also held across CalDAV round trips during a sync sweep, so
+        // that window is seconds, not milliseconds.
+        //
+        // The author guarded exactly one field, `tabTouched` for the tab, and
+        // left every other setter to clobber whatever the user had just chosen:
+        // the row showed the account's old value, the account held the new one,
+        // and nothing said so — after which the next gesture cycled from the
+        // wrong value and, for an array preference, wrote the merged-wrong array
+        // back.
+        //
+        // Keyed on WHEN, not on whether: only keys written between this
+        // request being issued and its answer arriving are held back. A read
+        // issued afterwards — every `settings_updated` refetch, which already
+        // waits for our own PUT to land — carries the newer truth and is applied
+        // in full, so another device's change still reaches a tab that has
+        // touched the same preference.
+        const touched = new Set(writeLog.current.slice(writesBefore))
+        const keep = (k: keyof Settings) => !touched.has(k as string)
+
+        if (keep('theme') && (s.theme === 'dark' || s.theme === 'light')) applyTheme(s.theme)
         const order = sanitizeTabOrder(s.tab_order)
         const start = sanitizeTabStart(s.start_tab)
-        setTabOrder(order)
-        setStartTab(start)
-        if (!tabTouched.current) {
+        if (keep('tab_order')) setTabOrder(order)
+        if (keep('start_tab')) setStartTab(start)
+        // Restoring the opening tab is a FIRST-LOAD action, not something to
+        // redo on every read. This effect now re-runs on `settingsRev` too —
+        // any settings write on any device — and `tabTouched` is false for a
+        // tab the user simply has not switched, so without this latch a theme
+        // change on the phone yanked the open desktop view to whatever tab the
+        // account last recorded and `cacheTab` persisted the yank.
+        if (!tabTouched.current && !tabRestored.current && keep('last_tab')) {
+          tabRestored.current = true
           const opening = resolveStartTab(start, isTab(s.last_tab) ? s.last_tab : undefined, order)
           setTab(opening)
           cacheTab(opening)
         }
-        if (s.tasks_view === 'list' || s.tasks_view === 'day3' || s.tasks_view === 'week') {
+        if (keep('tasks_view')
+          && (s.tasks_view === 'list' || s.tasks_view === 'day3' || s.tasks_view === 'week')) {
           setTasksView(s.tasks_view)
         }
-        if (typeof s.sidebar_collapsed === 'boolean') setSideCollapsed(s.sidebar_collapsed)
-        if (Array.isArray(s.hidden_calendars)) {
+        if (keep('sidebar_collapsed') && typeof s.sidebar_collapsed === 'boolean') {
+          setSideCollapsed(s.sidebar_collapsed)
+        }
+        if (keep('hidden_calendars') && Array.isArray(s.hidden_calendars)) {
           setHiddenCals(s.hidden_calendars.filter((x) => typeof x === 'string'))
         }
-        if (Array.isArray(s.archived_calendars)) {
+        if (keep('archived_calendars') && Array.isArray(s.archived_calendars)) {
           setArchivedCals(s.archived_calendars.filter((x) => typeof x === 'string'))
         }
-        if (Array.isArray(s.hidden_lists)) {
+        if (keep('hidden_lists') && Array.isArray(s.hidden_lists)) {
           setHiddenLists(s.hidden_lists.filter((x) => typeof x === 'string'))
         }
-        if (Array.isArray(s.task_groups)) {
+        if (keep('task_groups') && Array.isArray(s.task_groups)) {
           // Defend against a malformed blob (hand-edited settings, an old
           // schema): keep only well-formed groups with a real id and name.
           setTaskGroups(s.task_groups.filter((g): g is TaskGroup =>
@@ -224,46 +338,60 @@ export function App() {
               id: g.id, name: g.name, lists: g.lists.filter((x) => typeof x === 'string'),
             })))
         }
-        if (Array.isArray(s.collapsed_groups)) {
+        if (keep('collapsed_groups') && Array.isArray(s.collapsed_groups)) {
           setCollapsedGroups(s.collapsed_groups.filter((x) => typeof x === 'string'))
         }
-        if (Array.isArray(s.collapsed_tasks)) {
+        if (keep('collapsed_tasks') && Array.isArray(s.collapsed_tasks)) {
           setCollapsedTasks(s.collapsed_tasks.filter((x) => typeof x === 'string'))
         }
-        if (typeof s.show_completed_tasks === 'boolean') setShowCompleted(s.show_completed_tasks)
-        if (isTimeFormat(s.time_format)) setTimeFormat(s.time_format)
+        if (keep('show_completed_tasks') && typeof s.show_completed_tasks === 'boolean') {
+          setShowCompleted(s.show_completed_tasks)
+        }
+        if (keep('time_format') && isTimeFormat(s.time_format)) setTimeFormat(s.time_format)
         // Treated as hand-edited, like every other settings value here. A
         // non-number default is dropped to null rather than coerced: a capacity
         // read out of junk would be a number nobody gave, which is the one
         // thing this feature must not produce.
         // A negative stored value is the CLEAR sentinel at rest, and reads back
         // as "never said" — the same answer the server's resolution gives it.
-        setDayCapacity(
-          typeof s.day_capacity_minutes === 'number'
-            && Number.isFinite(s.day_capacity_minutes)
-            && s.day_capacity_minutes >= 0
-            ? s.day_capacity_minutes
-            : null)
-        setDayCapacityByWeekday(sanitizeCapacityByWeekday(s.day_capacity_by_weekday))
-        if (typeof s.home_timezone === 'string') setHomeTz(s.home_timezone)
-        if (Array.isArray(s.calendar_task_lists)) {
+        // These two are the reason `keep` is a predicate rather than a filter
+        // over the payload: they are the only setters here that run
+        // UNCONDITIONALLY, so a stripped key would not be skipped — it would be
+        // applied as `undefined` and read back as "never said".
+        if (keep('day_capacity_minutes')) {
+          setDayCapacity(
+            typeof s.day_capacity_minutes === 'number'
+              && Number.isFinite(s.day_capacity_minutes)
+              && s.day_capacity_minutes >= 0
+              ? s.day_capacity_minutes
+              : null)
+        }
+        if (keep('day_capacity_by_weekday')) {
+          setDayCapacityByWeekday(sanitizeCapacityByWeekday(s.day_capacity_by_weekday))
+        }
+        if (keep('home_timezone') && typeof s.home_timezone === 'string') setHomeTz(s.home_timezone)
+        if (keep('calendar_task_lists') && Array.isArray(s.calendar_task_lists)) {
           setCalTaskLists(s.calendar_task_lists.filter((x) => typeof x === 'string'))
         }
-        if (typeof s.calendar_show_done_tasks === 'boolean') {
+        if (keep('calendar_show_done_tasks') && typeof s.calendar_show_done_tasks === 'boolean') {
           setCalShowDone(s.calendar_show_done_tasks)
         }
-        if (isCalendarFit(s.calendar_fit)) setCalFit(s.calendar_fit)
-        if (isSessionTtl(s.session_ttl_s)) setSessionTtl(s.session_ttl_s)
+        if (keep('calendar_fit') && isCalendarFit(s.calendar_fit)) setCalFit(s.calendar_fit)
+        if (keep('session_ttl_s') && isSessionTtl(s.session_ttl_s)) setSessionTtl(s.session_ttl_s)
         // Both blobs are re-validated here rather than trusted: they are the
         // two settings a user can hand-edit or import a file into, and an
         // unknown token or a garbage grid cell should degrade to the default
         // instead of reaching the CSSOM or the layout engine.
-        if (s.appearance) {
+        if (keep('appearance') && s.appearance) {
           const clean = sanitizeAppearance(s.appearance)
           setAppearance(clean)
           cacheAppearance(clean)
         }
-        if (Array.isArray(s.dashboard)) setDashboard(sanitizeLayout(s.dashboard))
+        // Only when the KEY is present. An account that has never arranged
+        // anything has no `dashboard` in its settings at all, and that absence
+        // is what `null` records — so a settings read must not turn it into an
+        // empty array on its way past.
+        if (keep('dashboard') && Array.isArray(s.dashboard)) setDashboard(sanitizeLayout(s.dashboard))
       })
       .catch((e) => {
         // The old handler was a bare `.catch(() => {})` with a comment saying it
@@ -281,7 +409,7 @@ export function App() {
         settingsFailed.current = true
         showToast("Couldn't load your preferences — changes won't be saved until this reloads")
       })
-  }, [auth, applyTheme, showToast])
+  }, [auth, settingsRev, applyTheme, showToast])
 
   // Every UI preference is written the same way, so the failure handling lives
   // in one place. These used to be `.catch(() => {})` — which swallowed an
@@ -339,6 +467,7 @@ export function App() {
   ] as const
 
   const saveSettings = useCallback((patch: Settings) => {
+    writeLog.current.push(...Object.keys(patch))
     if (settingsFailed.current) {
       const held = MERGED_SETTINGS.filter((k) => k in patch)
       if (held.length) {
@@ -348,12 +477,16 @@ export function App() {
       }
       if (!Object.keys(patch).length) return
     }
+    // Counted, not flagged: two gestures can be in flight at once (an
+    // immediate `saveSettings` alongside a debounced one), and the refetch
+    // guard below must wait for the LAST of them.
+    writesInFlight.current += 1
     api.putSettings(patch).catch((e) => {
       if (e instanceof AuthError) { setAuth('out'); return }
       // Offline is the ordinary case and the local state stands in fine; a
       // rejection from a server we *did* reach is what the user needs to know.
       if (e instanceof HttpError) showToast(`Couldn't save your preferences: ${e.message}`)
-    })
+    }).finally(() => { writesInFlight.current -= 1 })
   }, [showToast])
 
   // The settings a repeated gesture writes: an appearance slider fires onChange
@@ -369,6 +502,12 @@ export function App() {
   const saveTimer = useRef<ReturnType<typeof setTimeout>>()
   const pendingPatch = useRef<Settings>({})
   const saveSettingsSoon = useCallback((patch: Settings) => {
+    // Noted HERE, at the gesture, not 400ms later when the PUT goes out: a
+    // slider drag that starts inside a slow read's flight has already changed
+    // what the user is looking at. (The eventual `saveSettings` notes the same
+    // keys again; by then any refetch is already held off by `writesInFlight`,
+    // so the repeat cannot suppress another device's value.)
+    writeLog.current.push(...Object.keys(patch))
     pendingPatch.current = { ...pendingPatch.current, ...patch }
     clearTimeout(saveTimer.current)
     saveTimer.current = setTimeout(() => {
@@ -557,12 +696,65 @@ export function App() {
   useEffect(() => {
     if (auth !== 'in') return
     let timer: ReturnType<typeof setTimeout> | undefined
+    let settingsTimer: ReturnType<typeof setTimeout> | undefined
+    let settingsWaits = 0
     const unsubscribe = subscribe((type) => {
-      if (type === 'settings_updated') return
+      if (type === 'settings_updated') {
+        // Re-read the SETTINGS — but never bump `rev`, which is what the bare
+        // early return here was protecting: one appearance-slider drag would
+        // otherwise fire a full lists+tasks refetch per step.
+        //
+        // Dropping the event entirely was the other half of the problem. This is
+        // the only place `api.getSettings` is reached from, and its effect keys
+        // on an auth transition, so a tab open since this morning held this
+        // morning's blob for the rest of the day. `store.update_settings` merges
+        // SHALLOWLY, and every list-shaped preference — task_groups,
+        // hidden_lists, archived_calendars, dashboard, tab_order, appearance —
+        // is written back WHOLE from local state. So creating a group on the
+        // phone and then renaming a different one in the stale desktop tab sent
+        // `{task_groups: [<this morning's array>]}` and the new group was gone
+        // from the account, silently, on both devices. Same shape wipes a theme
+        // saved on another device.
+        //
+        // Held off while this tab has a write of its own outstanding: re-reading
+        // now would paint the value the write is about to replace.
+        //
+        // Two things that check gets wrong if it is a bare `pendingPatch` test
+        // at the moment the event ARRIVES. `pendingPatch` is emptied when the
+        // debounced PUT is ISSUED, not when it lands, so the whole flight of the
+        // request looked idle — and the server publishes `settings_updated` to
+        // every subscriber INCLUDING the tab that wrote it, so the event racing
+        // that window is exactly the common case. And a gesture that starts
+        // inside the 250ms debounce was never seen at all.
+        //
+        // So: check on the trailing edge, count in-flight requests too, and WAIT
+        // rather than drop. Dropping is not safe here — the event may be another
+        // device's, and this is the only path that re-reads settings, so a
+        // dropped one leaves the tab holding a stale blob that the next
+        // list-shaped write sends back whole. Capped at ~5s so a hung request
+        // cannot silence the refetch for good; a refetch that does race a write
+        // is a flicker, and the trailing write still wins.
+        clearTimeout(settingsTimer)
+        const armSettingsRefetch = () => {
+          settingsTimer = setTimeout(() => {
+            const busy = Object.keys(pendingPatch.current).length > 0
+              || writesInFlight.current > 0
+            if (busy && settingsWaits < 20) { settingsWaits += 1; armSettingsRefetch(); return }
+            settingsWaits = 0
+            setSettingsRev((r) => r + 1)
+          }, 250)
+        }
+        armSettingsRefetch()
+        return
+      }
       clearTimeout(timer)
       timer = setTimeout(() => setRev((r) => r + 1), 250)
     }, onExpire)
-    return () => { clearTimeout(timer); unsubscribe() }
+    return () => {
+      clearTimeout(timer)
+      clearTimeout(settingsTimer)
+      unsubscribe()
+    }
   }, [auth, onExpire])
 
   // Dismiss the settings menu on an outside click (like Søren's). Escape is
@@ -728,6 +920,18 @@ export function App() {
         <AppearancePanel appearance={appearance} onChange={changeAppearance}
           mode={theme === 'dark' ? 'dark' : 'light'} onMode={changeTheme}
           onClose={() => setAppearanceOpen(false)} />
+      )}
+      {/* The shell stays, and says why it is short. `auth === 'offline'` means
+          `/api/me` could not be reached, NOT that the session ended — so the
+          cached rows the views seed from are still on screen underneath this,
+          which is the whole point of the disk mirror. Retry re-runs boot; so
+          does coming back online or returning to the tab. */}
+      {auth === 'offline' && (
+        <div className="offline-bar" role="status">
+          <span>Can&rsquo;t reach the server — showing what was last saved on this
+            device. You are still signed in.</span>
+          <button className="btn ghost" onClick={retryBoot}>Retry</button>
+        </div>
       )}
       {toast && (
         <div className="toast" role="alert">

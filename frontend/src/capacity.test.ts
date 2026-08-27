@@ -138,3 +138,47 @@ describe('capacityInput', () => {
     }
   })
 })
+
+
+describe('a SETTING must not take a statement about today', () => {
+  const at1630 = new Date('2026-08-25T16:30:00')
+  const at0900 = new Date('2026-08-25T09:00:00')
+
+  it('refuses a stop time when the caller asks it to', () => {
+    // CapacitySection's own header says a stop time is deliberately NOT accepted
+    // there: "until 6pm" is a statement about today, and a default that meant
+    // six hours on Monday and two on Friday afternoon would be a setting whose
+    // value depended on when you last opened Settings.
+    //
+    // The field called the shared parser, which has the stop grammar, so it took
+    // exactly that spelling — and stored the interval from whenever Settings
+    // happened to be open, as the ACCOUNT-WIDE default for every weekday.
+    for (const line of ['until 6pm', 'til 18:00', 'to 6pm', '18:00', '6pm']) {
+      expect(parseCapacity(line, at1630, { stopTime: false }),
+        `${line} must not read as a span`).toBeNull()
+    }
+  })
+
+  it('refuses rather than falling through to the span grammar', () => {
+    // The failure worth naming: "until 6pm" quietly becoming "6 hours" would be
+    // a WRONG reading, which this module's docstring calls the one outcome worse
+    // than no reading.
+    expect(parseCapacity('until 6pm', at1630, { stopTime: false })).toBeNull()
+    expect(parseCapacity('6pm', at1630, { stopTime: false })).toBeNull()
+  })
+
+  it('still reads a span, and reads it the same at any hour', () => {
+    for (const now of [at1630, at0900]) {
+      expect(parseCapacity('5h', now, { stopTime: false })).toBe(300)
+      expect(parseCapacity('1h 30m', now, { stopTime: false })).toBe(90)
+      expect(parseCapacity('300', now, { stopTime: false })).toBe(300)
+    }
+  })
+
+  it("leaves the day's own control alone — it takes a stop time by design", () => {
+    // Default is unchanged, and it IS clock-dependent, which is correct there:
+    // that control is a statement about today.
+    expect(parseCapacity('until 6pm', at1630)).toBe(90)
+    expect(parseCapacity('until 6pm', at0900)).toBe(540)
+  })
+})

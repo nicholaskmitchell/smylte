@@ -3,12 +3,668 @@
 `docs/AUDIT.md` is the evidence. This file is the plan for closing those
 findings, and the map from a finding to the test that pins it.
 
-Two sweeps have been staged this way. The **2026-08-19** backlog is open and is
-the live plan; the **2026-08-16** one below it is closed and kept as the record
-of how the harness behaved in practice — its "Two strengths of pin" and
-"Ordering" notes are the reason the new pins are shaped the way they are.
+Three sweeps have been staged this way, and all three are CLOSED. The
+**2026-08-25** one is at the top. The **2026-08-19** and **2026-08-16** backlogs under it are both closed
+and kept as the record of how the harness behaved in practice — the latter's "Two
+strengths of pin" and "Ordering" notes are the reason the later pins are shaped
+the way they are.
 
-# Sweep — 2026-08-19 · the open backlog
+**Nothing in this file is a worklist any more.** All three sweeps are closed: no
+`xfail(strict=True)` or `it.fails` marker remains anywhere, every pin named here
+is an ordinary regression test that must stay green, and `docs/AUDIT.md` reads 0
+open. Each stage section is kept in place with what remediation taught appended
+to it, which is the part worth reading — the pins are in the repo, the reasoning
+is only here.
+
+# Sweep — 2026-08-25 · ✅ CLOSED
+
+34 findings survived verification, and **all 34 are fixed**, along with one more
+that this remediation turned up (`AUDIT.md`, marked `· found in remediation`).
+
+Two closed on REVIEW rather than on a fix — the stage 5 test gaps, whose subjects
+were correct and whose coverage was not — and one is **verified by hand on
+Windows only**, the WinForms dock order, because asserting it needs a realised
+control tree and a message loop. Everything else carries a regression test
+confirmed to fail against the tree before its fix.
+
+Same five buckets and the same sorting criteria as the two closed sweeps: a
+finding lands in a stage by what its failure *does*, lower stage winning a tie,
+severity ordering within. Restated under "The sorting criteria" further down; it
+has not changed.
+
+**Stage 1 was empty**, and that is a result rather than an omission. The sweep's
+eight HIGHs were already closed when it was staged, and nothing left put
+untrusted input into an unhandled exception. The 34 were 16 medium and 18 low.
+
+| stage | findings | pins |
+|---|---|---|
+| 1 | 0 | — |
+| 2 ✅ | 7 · **closed** | `backend/tests/test_backlog_aug25_stage2.py`, `desktop/Smylte.Desktop.Tests/LocalServerTests.cs` |
+| 3 ✅ | 12 · **closed** | `backend/tests/test_backlog_aug25_stage3.py`, `frontend/src/backlog.aug25.stage3.test.tsx` |
+| 4 ✅ | 13 · **closed** | `frontend/src/backlog.aug25.stage4.test.tsx`, `frontend/src/backlog.aug25.stage4.browser.test.tsx` |
+| 5 ✅ | 2 · **closed** | `backend/tests/test_backlog_aug25_stage5.py` (no markers — see below) |
+
+## Stage 2 — Abuse & resource exhaustion ✅ DONE
+
+7 findings · 1 medium, 6 low · **closed** · `backend/tests/test_backlog_aug25_stage2.py`,
+`desktop/Smylte.Desktop.Tests/LocalServerTests.cs`
+
+All seven are fixed and ticked in `docs/AUDIT.md`; every marker is gone and those
+tests are ordinary regression tests that must stay green. Six commits, one per
+fix, except findings 4 and 5 which were always one fix in two places. **One needs
+a hand on the server** — see "The one that does not land by merging" below.
+
+Work or storage an adversary — or, twice here, ordinary use — can make unbounded,
+and controls that do not cover what they say they cover.
+
+Two shapes recur. Three are **a guard in the wrong place**: `set_sidecar` lacks
+the live-item check `set_sort_orders` carries, whose own docstring argues "the
+guard belongs here, where every door passes"; `tasks.service` opens the very tree
+its hardening block exists to close; `RateLimiter` bounds a client and is treated
+as bounding the guess budget. The other three are **work that scales with an
+argument the caller chooses** — a `kid`, a day range, an address.
+
+| # | Finding | Where | Sev | Pin |
+|---|---|---|---|---|
+| 1 | smylte_review_day over a range re-reads every task of every named list once per day — 6.6 s under the service… | `backend/tasksd/mcp/api.py:1313` | medium | `test_a_range_review_reads_each_list_once_not_once_per_day` |
+| 2 | Cloudflare Access verification does a blocking JWKS fetch on the event loop, and an unknown `kid` forces one… | `backend/tasksd/access.py:31` | low | `test_an_unknown_kid_does_not_buy_a_jwks_fetch_per_request` + `…_does_not_freeze_the_event_loop` |
+| 3 | Nothing bounds the total anonymous scrypt work: the login limiter is keyed only on the client /64, so a single… | `backend/tasksd/app.py:1711` | low | `test_the_anonymous_guess_budget_is_bounded_across_client_addresses` |
+| 4 | PATCH /api/day/{day}/entries/{id} mints an unreclaimable sidecar row when the entry's task no longer exists… | `backend/tasksd/service.py:2321` | low | `test_estimating_a_day_entry_whose_task_is_gone_leaves_nothing_behind` |
+| 5 | store.set_sidecar has no live-item guard, so the day-plan estimate write-through mints sidecar rows gc_orphans… | `backend/tasksd/db/store.py:511` | low | `test_a_sidecar_is_not_minted_for_an_item_the_cache_does_not_hold` |
+| 6 | tasks.service grants the app write access to its own interpreter and source tree, contradicting the sandbox's… | `deploy/tasks.service:29` | low | `test_the_unit_does_not_open_its_own_interpreter_and_source_to_writes` |
+| 7 | The desktop client serves the SPA with no Content-Security-Policy — the whole policy is a response header the… | `desktop/Smylte.Desktop/LocalServer.cs:230` | low | `LocalServerCspTests.TheDocumentStillCarriesNoPolicy` (see below) |
+
+Findings 4 and 5 are one defect at two depths and one fix in `set_sidecar` closes
+both, so they are pinned together and should be reviewed together. Each carries a
+CONTROL beside it — an ordinary passing test that the live case still works —
+because the obvious over-correction here is a guard that refuses everything, and
+that would satisfy both pins by deleting the feature.
+
+### What `--runxfail` caught, and why the step is not optional
+
+`strict=True` catches a pin that unexpectedly PASSES. Nothing catches a pin that
+fails for the WRONG reason, and in a green run the two are indistinguishable.
+Every pin in this stage was therefore re-run under `--runxfail` and every
+traceback read. **Four of the seven were wrong on the first pass:**
+
+* two xfailed on a `TypeError` from an incomplete `Settings(...)` — the fixture
+  never built, so the finding was never exercised and the marker reported success;
+* the two Access pins xfailed on `FrozenInstanceError`, because `Settings` is a
+  frozen dataclass and the fixture assigned to it;
+* and once those were fixed, two pins *passed against unfixed code*: the
+  loop-blocking one cancelled its ticker before the ticker could observe the gap
+  it had just sat through, and the scrypt one sent `x-forwarded-for` where
+  `_client_ip` reads `X-Real-IP`, so all 200 requests keyed on one address and the
+  limiter stopped them at five.
+
+Only after that do the numbers match the findings: 31 joins over 30 days, 10 JWKS
+fetches for 10 requests, a 1.01 s loop freeze, and **200 password hashes spent by
+one /48 rotating 40 of its own /64s** — the multiplication the finding describes,
+observed rather than argued.
+
+### The one that could not be an xfail
+
+xunit has no `xfail`, and a `Skip` is the wrong shape: it stays skipped after the
+fix lands, green and silent, which is precisely the half of the harness this file
+exists to defend. So finding 7 is pinned as two paired methods —
+`TheDocumentStillCarriesNoPolicy`, live, asserting the DEFECT and going red the
+moment a policy is emitted, and `TheDocumentCarriesAPolicy`, skipped, holding the
+assertion actually worth keeping. Un-skipping the second and deleting the first is
+the whole of the ritual, and the first one's failure message says so.
+
+Verified both ways: the live test fails for the right reason when un-skipped
+(a real HTTP round trip against a started `LocalServer`, missing header — not a
+connection error), and the alarm was confirmed by adding a CSP header to
+`ServeStatic` and watching it go red.
+
+Unlike every other test in `LocalServerTests.cs`, this one has to `Start()` the
+server. The rest are pure path arithmetic over `Resolve`; the header set is only
+observable on a response.
+
+### What remediation taught, and what it cost
+
+**A pin that counts is not a pin that checks.** The `review_day` pin counts calls
+to `list_tasks`, which is the right assertion for the finding — the defect is
+`O(days × lists)` — and it is satisfied by a hoist that builds the WRONG map and
+answers `task: null` for every row. So a control went in beside it asserting that
+the range arm and the single-day arm give the same answer, bucket for bucket.
+**Its first draft spanned one day and passed a deliberately wrong hoist**
+(index built from the first day's lists), because with one plan there is nothing
+to get wrong. It now spans two days naming DIFFERENT lists. Every fix in this
+stage was subsequently run against two or three hand-written wrong versions of
+itself; two of the seven controls were widened as a result.
+
+**The obvious reading of a suggested fix was wrong twice, in opposite ways.**
+
+* For the Access `kid`, the audit says "cache negative kids for a short
+  interval". A per-kid cache is exactly what that describes and it buys *nothing*
+  — `kid` is a header field the caller writes, so the attacker never repeats one.
+  Measured with the cache in place: still one fetch per request across ten
+  distinct kids, and the pin stayed red. The bound had to go on the FETCH, not on
+  the kid.
+* For the login budget, the audit offers "a global token bucket **or** a global
+  failure counter with its own lockout". The second is a denial of service in its
+  own right: a global counter has no key to exempt the owner by, so an attacker
+  who burns it locks the account holder out for the window. The bucket also had
+  to REFUND a verified password, or the owner exhausts it by using the app —
+  which is what the new control asserts, and what nothing in the suite covered.
+
+**Two tests were edited as part of a fix, and both are on the record.**
+
+* `AccessVerifier.verify` became `async def`, so eight synchronous call sites
+  across two files were wrapped in `asyncio.run(...)`. Every assertion is
+  unchanged; only the call is. That is an API-shape change rather than a pin
+  edit, and the loop-blocking pin anticipated it in as many words ("offloading to
+  a thread and going async are both correct repairs").
+* The systemd pin's ANTI-VACUITY GUARD was widened. It read `assert rw` — "the
+  unit declares no ReadWritePaths at all, has it been renamed?" — a fair question
+  while the answer was a `ReadWritePaths` line, and the wrong one the moment the
+  correct fix removed it: `StateDirectory=tasks` makes the directive unnecessary,
+  so a unit with none was about to be indistinguishable from a unit that had lost
+  its writable path entirely. It now accepts either. **The assertion that detects
+  the finding was not touched**, and the distinction is the one worth keeping:
+  weakening the assertion is pin-fixing, correcting a guard that mis-modelled the
+  fix space is not.
+
+**Docker was unavailable, and 240 tests skip without it.** Seven of the nine
+`review_day` tests and both login-lockout tests are `@pytest.mark.radicale`, so
+the two changes with the widest blast radius had almost no local coverage. Rather
+than defer to CI, their contracts were driven in-process against a real
+`TaskService` and a real `create_app` before each landed — the uniform `task` key
+on every kind, an unplanned day in a range carrying no entries, read-only-ness,
+five wrong passwords still locking out, sixty concurrent guesses still evaluating
+exactly five. Two probes, thrown away after. Worth repeating in stages 3-5, which
+touch the same suites.
+
+**Docker was never actually needed, and finding that out cost a CI failure.**
+`scratch/docker-compose.yml` is convenience, not requirement: Radicale is a
+Python package, and `pip install radicale==3.7.4` plus the same
+`scratch/radicale/config` with its three paths rewritten gives a real server on
+:5233 that every one of those 240 tests is happy with. Driving the contracts
+in-process was the right fallback and it was still a fallback — it missed a
+regression that a live server caught in a second. **Install Radicale and run the
+whole suite** before deciding a contract is unverifiable here:
+
+```bash
+pip install --user radicale==3.7.4
+sed -e 's#/config/users#$DIR/users#' -e 's#/data/collections#$DIR/collections#' \
+    -e 's#0.0.0.0:5232#127.0.0.1:5233#' scratch/radicale/config > $DIR/config
+cp scratch/radicale/users $DIR/users
+python3 -m radicale --config $DIR/config &
+cd backend && SCRATCH_STORAGE=$DIR/collections SCRATCH_REQUIRED=1 python3 -m pytest
+# 936 passed, 0 skipped
+```
+
+**One duplication was closed that no behavioural test could reach.** The desktop
+client cannot borrow the backend's policy at runtime, so it builds its own — and
+each suite only ever compared its own side. `test_the_desktop_client_builds_the_
+same_policy` reads `LocalServer.cs` and compares the directive sets. It is a
+source-shape assertion, which `test_backlog_stage5.py`'s header disowns as a
+SUBSTITUTE for a behavioural one; it is not a substitute here, it is the only
+reader that sees both sides.
+
+### The one that does not land by merging
+
+Finding 6 moves the SQLite cache to `/var/lib/tasks/tasks.db`, granted by
+`StateDirectory=tasks`. `setup.sh` will not rewrite an `/etc/tasks/tasks.env`
+that already exists, so **an install made before this change still points
+`TASKS_DB` at a path the narrowed sandbox no longer grants, and the service will
+fail to open its cache.** `docs/DEPLOY.md` carries the one-time migration: stop,
+move `tasks.db` and its `-wal`/`-shm` sidecars, rewrite `TASKS_DB`, start. Move
+the file rather than letting a fresh one appear — it holds the sidecar-class
+tables a resync cannot rebuild.
+
+`setup.sh` deliberately gained no `install -d` for the new directory. systemd
+creates it, and a new absolute path in that script would escape the four literals
+`test_backlog_aug19_stage45.py`'s harness redirects and really create
+`/var/lib/tasks` on whatever machine ran the suite. Checked after the change that
+it does not.
+
+And what the file assertion still cannot say: that systemd then REFUSES the
+write. That needs a real host, and it stays recorded here as verifiable only
+there — as does the WinForms dock order in stage 4, for the same class of reason.
+
+## Stage 3 — Silent data corruption ✅ DONE
+
+12 findings · 9 medium, 3 low · **closed** · `backend/tests/test_backlog_aug25_stage3.py`,
+`frontend/src/backlog.aug25.stage3.test.tsx`
+
+All twelve are fixed and ticked in `docs/AUDIT.md`; every `xfail`/`it.fails`
+marker is gone and those tests are ordinary regression tests that must stay
+green. Ten commits, grouped by file, each carrying the pin it closes, the control
+that stops the obvious over-correction, and the extra tests its mutation pass
+demanded. **One NEW finding was opened by this stage's own verification** and is
+recorded rather than fixed — see "What remediation taught" below.
+
+Nothing raises, nothing is logged, and the answer is quietly wrong. Both closed
+sweeps call this the dangerous stage, and `backlog.aug19.stage3.test.tsx`'s header
+names the theme these twelve keep: *state that overwrites or discards the user's
+real data without saying so*.
+
+Two shapes recur. Six are **a whole-array or first-match answer to a question
+about one row**: a booking-link rollback that restores a snapshot of every link,
+a reorder that re-finds the dragged row by bare uid across the merged
+multi-list array, a tag field that re-splits a joined string on every save. The
+other six are **a write that half-happened**: a pointer gesture the platform
+aborted committed as if released, a task authored and then re-authored when only
+the day write failed, a move whose copy landed and whose delete did not.
+
+| # | Finding | Where | Sev | Pin |
+|---|---|---|---|---|
+| 1 | A time-only drag skips the desynchronization check entirely, so a BYHOUR/BYMINUTE rule moves only… | `backend/tasksd/ical/edit.py:1294` | medium | `test_a_time_only_drag_of_a_time_pinned_series_neither_desynchronizes_it_nor_gains_an_occurrence` |
+| 2 | smylte_list_tasks' due filters resolve in the server's timezone while its ordering was fixed to… | `backend/tasksd/mcp/api.py:453` | medium | `test_the_due_filters_file_a_deadline_on_the_day_the_owner_sees` |
+| 3 | A failed booking-link toggle rolls back a whole-array snapshot, reverting a concurrent toggle… | `frontend/src/components/SchedulingView.tsx:83` | medium | `a failed booking-link toggle > rolls back only the link that failed` |
+| 4 | A cancelled pointer gesture COMMITS the half-finished dashboard drag instead of discarding it | `frontend/src/components/HomeView.tsx:265` | medium | `an aborted dashboard drag > discards a gesture the platform cancelled` |
+| 5 | Drag-to-reorder resolves the dragged row by bare uid, so with one UID in two lists the wrong row… | `frontend/src/data.tsx:588` | medium | `reordering with one uid in two lists > moves the row the user dragged, …` |
+| 6 | Any save from the event editor splits a CATEGORIES value containing a comma into two tags | `frontend/src/components/CalendarView.tsx:907` | medium | `the event editor > keeps a category containing a comma whole across an unrelated save` |
+| 7 | endFromDuration treats P1D/P1W as exact milliseconds, so a DAVx5 DURATION-only event gains an hour… | `frontend/src/calendar.ts:72` | medium | `the event editor > seeds and saves a nominal DURATION at the same wall clock` |
+| 8 | Retrying the add box after a failed day-entry POST creates a second real task on the CalDAV list | `frontend/src/components/TodayView.tsx:1236` | medium | `the Today add box > does not author a second task when the retry follows a failed day write` |
+| 9 | Escape discards an unsaved reflection (and an unsaved capacity) because both commit only on blur | `frontend/src/components/ShutdownRitual.tsx:316` | medium | `the shutdown ritual > keeps a reflection the owner closed with Escape` |
+| 10 | move_event has no replay tolerance: a failure between the destination PUT and the source DELETE… | `backend/tasksd/sync/engine.py:442` | low | `test_a_move_whose_delete_reply_was_lost_can_still_be_completed` |
+| 11 | Changing a repeating event's cadence and then picking "This event" silently discards it and… | `frontend/src/components/CalendarView.tsx:934` | low | `the event editor > never drops a cadence change on the floor` |
+| 12 | A line pinned to "task" that the parser read nothing in writes its untrimmed text as the VTODO… | `frontend/src/components/TodayView.tsx:1240` | low | `the Today add box > trims the summary of a line the parser read nothing in` |
+
+SPA pin names are abbreviated: each is prefixed `2026-08-25 — ` in the file.
+The `Where` column carries the line as it stands NOW; several of AUDIT.md's own
+anchors are a few lines off, having been taken against the audit copy, and each
+pin's `reason` string names the current one.
+
+**Placement note.** Finding 9 (Escape discards the reflection) is stage 3 rather
+than stage 4 even though it looks like a dialog bug, because aug19's stage-3 SPA
+theme is exactly the sentence above: the user typed prose into the app's one
+free-text field, whose own hint promises "Kept with the day", and it is gone.
+
+**Seven of the sixteen tests are CONTROLS**, and one of them earned its place
+during this stage rather than in principle — see below. Every pin here has an
+over-correction that would satisfy it by deleting the feature: refuse every
+reschedule, stop sending `tags`, stop rolling anything back, latch the create.
+The controls are the half that says the feature still works.
+
+### What `--runxfail` and the `it.fails` flip caught this time
+
+The step is not optional and stage 2's note says why. This stage it caught two
+things, one in each half.
+
+**The control caught an over-correction, in a fix simulation rather than in
+review.** Each backend pin was re-run against a *simulated* fix to confirm it
+goes `XPASS(strict)` — red — when the bug is closed. The obvious simulation for
+finding 1 was "refuse whenever the rule carries `BYHOUR`/`BYMINUTE`/`BYSECOND`",
+which flips the pin correctly **and fails the control**: a DAY-only drag of
+`FREQ=WEEKLY;BYDAY=MO;BYHOUR=9` desynchronizes nothing and must still rotate. The
+refusal has to be conditional on the TIME OF DAY having changed, which is what the
+audit's suggested fix says and what a pin alone would not have held anyone to.
+
+**One SPA pin was failing on a harness fault that looked exactly like the
+defect.** `data.tsx` fans out with `lists.map((l) => api.tasks(l.id))` and
+concatenates, so `m.tasks.mockResolvedValue([...])` answers EVERY list with the
+same rows and the pane renders each task twice. Finding 5 is the only test in the
+tree with two lists, so no other suite has ever met this; flipped from `it.fails`
+to `it`, it read *"Found multiple elements with the text: A home copy"* — a query
+error, three assertions before the one that matters. Green, it was
+indistinguishable from a real pin. The fixture now answers per list.
+
+Two smaller notes from the same pass:
+
+* **jsdom does not fire `blur` on unmount**, which the plan had flagged as the
+  one thing that might force finding 9 onto the browser tier. It agrees with
+  Chrome and Safari here, so the pin stays in the jsdom file. Decided by running
+  it, not by reasoning about jsdom.
+* **jsdom implements no pointer capture at all.** `HomeView.onPointerDown` calls
+  `setPointerCapture` unconditionally, so without a stub the handler throws
+  before any drag starts and BOTH dashboard tests report "nothing was committed"
+  — which is finding 4's own passing condition. vitest reports the `TypeError` as
+  an unhandled error rather than a failure, so the pin would have been green and
+  worthless. The `clientWidth` stub has the same shape and the same danger, which
+  is why the control beside that pin is written FIRST and is load-bearing: it is
+  the only thing that proves the harness can produce a drag preview at all.
+
+### One half of a finding deliberately left unpinned
+
+Finding 2 names two skews: the `due_before`/`due_after` bounds, and `overdue_only`
+against `datetime.now()`. Only the first is pinned.
+
+The second is left out on purpose, and the reason is the rule this file keeps
+about naming a class rather than a repair. Whether a date-only deadline is
+"overdue" depends on how it resolves to an instant — midnight or end of day — and
+under the audit's own suggested fix (resolve the bound in `home_timezone`) a
+date-only task due today in Chicago is still `due < now` once Chicago's midnight
+has passed. So the fix does not necessarily change the answer, and any pin would
+be pinning one design decision. Driving it at all also needs a frozen wall clock
+this suite has no library for. Whoever fixes the filters should settle the
+question explicitly and write the test that follows from the decision.
+
+**Settled during remediation, as that last sentence asks.** The MCP filter now
+follows the app's OWN rule rather than inventing a third: `util.ts::isOverdue`
+says an all-day item is not overdue until its whole day has passed, and
+`service._due_day` resolves a deadline in `home_timezone`. `_due_parts` returns a
+deadline as `(due_at, overdue_at)`, and for a date-only value `overdue_at` is the
+start of the NEXT calendar day in that zone — both rules at once.
+
+Adopting the day rule is what made it testable, which is the part worth keeping.
+Under the "midnight" reading, whether today's date-only task is overdue depends on
+what hour the test runs, so there was nothing to assert and the "frozen wall
+clock" problem above was real. Under this one, today's is never overdue and
+yesterday's always is, at any hour — so the test needs no clock at all.
+
+### What remediation taught, and what it cost
+
+**A mutation pass found something in nine of the twelve.** Every fix was run
+against two to five hand-written wrong versions of itself before its commit. What
+survived was not usually a wrong fix — it was a *second manifestation the pin
+could not see*, and each one became a test:
+
+* **`reorder`'s TARGET lookup.** Keying only the DRAGGED row on `taskKey` passes
+  the pin and the second manifestation both, because in each the duplicated uid's
+  first occurrence IS the row being dropped on. The test now drops onto the LATER
+  copy.
+* **A DURATION's two halves have an ORDER.** Nominal-then-exact and
+  exact-then-nominal agree everywhere except one shape: `P1DT2H` starting an hour
+  before spring-forward is 03:00 the next day one way and 04:00 the other. Five of
+  six table rows passed the swapped version.
+* **`CapacityStep`.** The reflection is pinned; the capacity is named in the
+  finding's prose and is not. Fixing only the pinned one closes the finding and
+  leaves "until 6pm" typed and Escaped exactly as lost.
+* **The retry ref's SCOPE.** Remembering a failed line's client_id is the fix;
+  remembering it for the NEXT line, or past the retry that succeeded, are two new
+  bugs, and both survived until they had tests.
+* **A CSS assertion that was reading its own comment.** The `touch-action` test
+  matched the raw stylesheet, and the comment above the rule names both selectors
+  and says "scoped to `.arranging`" — so a mutation that dropped the scoping
+  passed. It strips comments first now. This is the same shape as stage 2's
+  vacuous pin, in a different disguise: **a test that greps source text can be
+  satisfied by prose.**
+
+**The pin's accepted alternative was the unsafe one, once.** The move-replay pin
+says a rollback on any delete failure and replay tolerance "both reach the same
+place", and for the case it drives they do. They do not in general: a transport
+error is a lost REPLY as often as a lost request, so rolling back there deletes
+the one remaining copy and the event is gone from BOTH calendars. That mutation
+passed the pin AND its control. A duplicate is recoverable; a deletion is not.
+
+**Verifying a fix's premise found a new bug, and it was three bugs.** The cadence
+fix is only correct if the backend's `split_series` really re-rules the tail, so
+that was driven in-process before relying on it. It does — and it also writes the
+tail's DTSTART as a FLOATING time, dropping the TZID even with a `VTIMEZONE`
+present. Recorded as an open finding first and fixed next, in its own commit
+after this stage closed; driving the other two anchor consumers before fixing it
+showed the same defect in both, each failing differently:
+`apply_occurrence_override` wrote a floating RECURRENCE-ID, which stops matching
+the instance the rule generates so "edit this one" renders as a DUPLICATE, and
+`exclude_occurrence` wrote a floating EXDATE, which excludes nothing so a deleted
+occurrence comes back. A UTC series lost its zone too.
+
+All three read their anchor from `_anchor_from_iso`, which had an arm for an
+AWARE ISO and none for the naive one the read path actually emits — **a guard as
+wide as the set it enumerates**, which is the pattern this whole sweep's header
+names. Its own docstring explained the arm that was there.
+
+**Two decisions where the shape of the fix mattered more than the fix.**
+
+* `durationMs`'s return shape was the open question, and the answer was neither
+  option the plan listed. `splitDuration` is now the one parser and returns
+  `{nominalDays, exactMs}`; `durationMs` is a thin wrapper over it. One parser, so
+  the overflow and refusal behaviour its own tests pin cannot drift — and no edit
+  to a closed finding's control.
+* "This event" cannot carry a cadence change, and the plan said to DISABLE the
+  Repeat select while that button is on screen. It cannot: the scope prompt
+  REPLACES the form, so a disabled control is not visible to disable, and the
+  pin's own refusal branch — dialog still open, Repeat still reading "weekly" —
+  would be unsatisfiable. The refusal sends the user back to the form with the
+  change still in it instead, and the prompt warns before they choose.
+
+**One deliberate test edit**, recorded in AUDIT.md beside its finding:
+`backlog.stage4.test.tsx` calls `d.reorder` directly and now passes two rows
+instead of two uid strings, because the signature widened. Only the argument
+shape changed. The `TagInput` conversion needed one more — the control types into
+a chip control rather than rewriting a comma-joined string — which is the
+affordance the finding's own suggested fix asks for.
+
+## Stage 4 — User-visible correctness & rendering ✅ DONE
+
+13 findings · 5 medium, 8 low · **closed** · `frontend/src/backlog.aug25.stage4.test.tsx`,
+`frontend/src/backlog.aug25.stage4.browser.test.tsx`
+
+Something on screen is wrong, missing, or unreachable — and unlike stage 3 the
+user can SEE it, which is the only reason it sorts lower.
+
+Two shapes recur, and both are about a failure the app cannot tell from an
+absence. **Three turn a fetch failure into a confident lie**: one bad list
+empties every task pane and each one then says "Nothing to do here.", a 502 on
+`/api/me` hands the owner a sign-in card, a failed day read shows a blank day
+that swallows the next write. The disk mirror, which exists exactly so those
+cases still have something to show, is itself cleared on mount. **Three are an
+affordance that is not there**: an indicator pointing at the wrong gap, a month
+grid no keyboard can reach, a stale alert standing over a fresh choice.
+
+| # | Finding | Where | Sev | Pin |
+|---|---|---|---|---|
+| 1 | One failing task list blanks the whole account's tasks — every pane then says "Nothing to do here."… | `frontend/src/data.tsx:217` | medium | `one task list that will not load > still shows the lists that answered` |
+| 2 | The calendar's disk mirror is wiped on every cold boot: the logout-clear effect also fires on mount… | `frontend/src/data.tsx:776` | medium | `the disk mirror on a cold boot > survives a mount that happens before /api/me has answered` |
+| 3 | Boot treats "can't reach the server" as "signed out": a network drop or a 502 on /api/me hands the… | `frontend/src/App.tsx:179` | medium | `booting with the server unreachable > does not hand the owner a sign-in card` |
+| 4 | The Today tab's drop indicator draws above the target on a downward drag, but the row lands below it | `frontend/src/components/TodayView.tsx:1761` | medium | `the Today tab > points at the gap the row will actually land in` |
+| 5 | A failed day read leaves the Today tab blank with no error, no empty state and no retry | `frontend/src/components/TodayView.tsx:646` | medium | `the Today tab > says the day could not be read, and does not swallow the next add` |
+| 6 | "That time was just taken" stays on screen after the visitor does what it told them to do | `frontend/src/components/BookingPage.tsx:288` | low | `the booking page after a taken slot > clears the warning once the visitor picks another slot` |
+| 7 | The archived-calendar agenda's negative margins are sized for a .modal but it renders inside the… | `frontend/src/styles/app.css:691` | low | **browser** · `the archived-calendar agenda on a phone > stays inside the sheet that actually contains it` |
+| 8 | The mobile-only hover rules on the sidebar bar leave the "View completed" toggle stuck in its… | `frontend/src/styles/app.css:838` | low | **browser** · `the phone-only hover rules > are all guarded by a hover-capability query` |
+| 9 | Removing the last Home module puts the five stock modules back on the board | `frontend/src/components/HomeView.tsx:52` | low | `clearing the dashboard > does not put five modules back when the last one is removed` |
+| 10 | The whole month grid is keyboard-inoperable: day cells and event chips are unfocusable divs | `frontend/src/components/CalendarView.tsx:636` | low | `reaching the month grid from a keyboard > exposes the event chip and the day cell as operable controls` |
+| 11 | Shutdown step 2 reports "Everything on today is done" after the owner MOVED everything to tomorrow | `frontend/src/components/ShutdownRitual.tsx:82` | low | `the shutdown ritual, step two > does not call a day that was postponed a day that was finished` |
+| 12 | The Today row's ✕, estimate and + are ~16–19px tap targets on the phone-primary surface | `frontend/src/styles/app.css:1715` | low | **browser** · `the Today row on a phone > gives every control a 44px tap box` |
+| 13 | The update notice is docked at the wrong end of the z-order, so it covers the top 36 px of the app | `desktop/Smylte.Desktop/MainForm.cs:49` | low | *none — see below* |
+
+SPA pin names are abbreviated: each is prefixed `2026-08-25 — ` in its file. The
+`Where` column carries the line as it stands now, which for several of these is a
+few lines off AUDIT.md's own anchor.
+
+**Eight of the twenty-two tests are CONTROLS.** Every pin here has an
+over-correction that would satisfy it by deleting the feature: stop signing out
+on any failure and a genuinely lapsed session stares at an empty shell; delete
+the clear-on-logout effect and the next account sees the last one's calendars;
+drop the negative margins and the agenda stops bleeding in the one parent it is
+supposed to.
+
+### Three findings on the browser tier, and one of them is not a measurement
+
+The tier from `bcf38cf` earns its keep here. The archived-agenda overflow is
+exactly the class of defect its header describes: measured at 390×844, the
+settings sheet's `.set-body` has `clientWidth` 362 against `scrollWidth` 380 —
+eighteen pixels of sideways scroll — and `.agenda-ev` starts at x = −4 against a
+sheet edge at x = 0, so the 2px `--ev-c` rule that says which calendar the
+preview belongs to is painted outside the sheet and clipped. Nothing that reads
+app.css as text can see any of that. The tap targets are the same story with
+numbers: `.check` 21×21, `.today-est` 42×34, `.today-drop` 27.2×28,
+`.today-plus` 29×31.
+
+**The hover-latch pin is the exception, and it says so in its own docstring.**
+Headless Chromium reports `hover: hover` and `pointer: fine`, so `:hover`
+behaves correctly there and no amount of hovering reproduces a touch latch. What
+the browser CAN answer — and what the fix actually changes — is whether the
+declaration is fenced off from devices that have no hover, so the pin walks the
+CSSOM (the rules a browser really built, not a regex over source text) for any
+`:hover` nested under a `max-width` query and not under a hover query. Swept
+rather than enumerated, and measured: today it finds exactly one, and it is the
+finding's own `.side-mobile-add:hover, .side-mobile-completed:hover`.
+
+**44px, not 40.** The tap-target pin asserts the accessibility guideline rather
+than the finding's own suggested `min-height: 40px`, and sweeps `.today-row
+button` rather than the three selectors the finding names — this stylesheet's
+recurring failure is a guard only as wide as the set it enumerates, and the
+closed sibling finding above this one was itself a rule that named three classes
+and reached none of them. Accepted cost, decided rather than discovered: a Today
+row goes from ~53px to ~62px, so roughly 13 rows fit an 844px phone instead of
+16.
+
+The harness those two files share (`viewport`, `mount`, `box`) moved to
+`src/test/browser-measure.ts` when the second one arrived. The two lines worth
+not duplicating are the order of `mount` and `document.fonts.ready`, and the
+`requestAnimationFrame` after it.
+
+### The one with no pin
+
+Finding 13 — the update notice docked at the wrong end of the z-order — ships
+**unpinned**, following finding 62's precedent rather than quietly dropping it.
+
+WinForms lays docked children out in reverse child-index order: the highest index
+is laid out first and takes the outer edge, and a `DockStyle.Fill` child claims
+the whole remaining rectangle without shrinking it for children laid out after
+it. `MainForm` sets the opposite arrangement, so `_web` is sized to the full
+client rectangle and `_notice` is then placed in the top 36px ON TOP of it —
+covering the SPA's header row and swallowing clicks in that band.
+
+Asserting the outcome needs a Windows host with a realised control tree and a
+message loop, which CI does not have. The only CI-reachable pin is a
+`SetChildIndex` source-shape assertion, and `test_backlog_stage5.py`'s own header
+explicitly disowns that shape as a substitute: it would go green the day the
+indices were written in the right order and say nothing about whether the strip
+displaces the web view. A pin that cannot fail for the right reason is worse than
+none, because it reads as coverage.
+
+So: verify by hand on Windows. Publish a newer version so `ClientOutdated` is
+true, and check the SPA's header row is pushed DOWN rather than covered. The same
+inversion is inside the strip — `BuildNotice` adds the Fill label last, so the
+two Right-docked buttons paint over its right end — and one fix should carry
+both.
+
+**The fix is written and has not been compiled by anyone yet.** `MainForm.cs`
+lives in `Smylte.Desktop.csproj` (`net8.0-windows`, `UseWindowsForms`), which no
+Linux host can build, and `Smylte.Desktop.Tests.csproj` links `LocalServer.cs`,
+`Updater.cs` and `Settings.cs` — not `MainForm.cs`. So the test project passing
+is evidence about three other files. CI's `windows-latest` job is the first
+compile; the behaviour still needs the by-hand check above.
+
+### What the `it.fails` flip caught this time
+
+Stage 3's note says the flip is not optional. This stage it caught a pin that was
+**vacuous for a reason that had nothing to do with its finding**.
+
+The disk-mirror pin writes a calendar to the mirror and asserts the provider
+still holds it after a mount with `enabled: false`. But `cache.ts` keys every
+entry on the account name and `write` NO-OPS without one — and the shared
+`beforeEach` calls `setCacheUser('')` to keep every other suite cold. So nothing
+was ever mirrored, the probe read `NONE` for the ordinary reason, and it would
+have gone on reading `NONE` after the fix. Green, it was indistinguishable from a
+real pin. It now names a user and carries an anti-vacuity guard —
+`readCachedCalendars()` must come back non-empty — before the render it is
+actually about.
+
+Two smaller ones from the same pass. `.dash-mod .label` also matches labels
+inside a module BODY, so the dashboard pin reported twelve modules where there
+were five; the selector is now the header's own label. And the failed-day-read
+pin asserted its two halves in sequence, so the second never ran while the first
+was red — a fix to only one of them would have read as complete. Both halves are
+now one object assertion, which is the shape the month-grid pin already used.
+
+### What remediation taught, and what it cost
+
+**The repair-agnostic pin is the right pin and it leaves the shipped shape
+untested.** Three pins in this stage say so in their own words — "the pin does
+not name the copy", "asserted as operability, not as a repair", "any honest fix
+changes it" — which is correct: a pin that names one repair rejects the others.
+The cost is that whatever actually lands is unasserted, and mutations found it
+every time: an INVERTED drop indicator differs from the plain one just as well as
+the right one; a state with no banner is silently short; a Retry button not in the
+effect's deps re-runs nothing; a `dayError` set and never cleared cannot recover.
+A landed fix may name its own shape, so each of those got a second test that does.
+
+**`rev` is not a retry, and three findings in a row needed one.** `taskListErrors`,
+`dayError` and the offline state each key their effect on `rev`, which only moves
+when the SERVER publishes a change — so on a quiet account every one of those
+error states was permanent. Each needed a nonce of its own in the deps, and in
+each case the mutation that drops it leaves a button that does nothing and passes
+every other assertion.
+
+**One pin was wrong, and the way it was wrong is the lesson.** The month-grid
+pin's docstring says a roving tabindex passes "since at least one cell carries
+`tabindex="0"` at any time", and its assertion took `querySelector('.cal-cell')`
+— the FIRST cell, which under a roving tabindex is a leading blank at `-1`. It
+rejected the repair it named. Edited, and recorded in AUDIT.md. A pin's prose and
+its assertion can disagree, and the prose is what a reader trusts.
+
+**Two comments stated their own mechanism backwards**, both in `MainForm.cs`, and
+that is why the dock-order bug survived a reader: one described the arrangement it
+prevented, the other said "the Fill has to be added last or it claims the whole
+strip" when adding it last is exactly what makes it claim the strip. A comment
+that is confidently wrong is worse than none — it answers the question a reader
+came to ask.
+
+**Two findings were closed by separating one value into two**, and both were the
+same bug wearing different clothes: `[]` meaning "never arranged" AND
+"deliberately cleared" on the dashboard, and `auth === 'out'` meaning "signed out"
+AND "cannot reach the server" at boot. In each case the "fix" that keeps one value
+just moves the lie somewhere else.
+
+**A measured fix is not the fix you reasoned to.** The agenda-bleed entry offers
+two shapes; one was measured and does NOT work (a child reaching the sheet's edge
+still overflows the box inside that padding), and its `overflow-x` clause was
+measured not to help either. What landed splits the bleed from the inset instead.
+Nothing that reads app.css as text could have told anyone that.
+
+**Six deliberate test edits**, each recorded beside its finding in AUDIT.md.
+Notably `App.test.tsx` and `HomeView.test.tsx` had *written the conflation into
+the tests*: one simulated a lapsed session with a bare `Error` that is neither an
+`AuthError` nor a 401, the other passed `[]` to mean "nothing is saved". The tests
+meant to hold the behaviour encoded the same confusion as the code.
+
+## Stage 5 — Delivery infrastructure & test gaps ✅ DONE
+
+2 findings · 1 medium, 1 low · **closed** · `backend/tests/test_backlog_aug25_stage5.py`
+
+Both are the same shape: a control that exists, works, and has nothing holding it
+in place.
+
+| # | Finding | Where | Sev | Test |
+|---|---|---|---|---|
+| 1 | Test gap: no test exercises `buffer_minutes` across a DST transition — reverting `pad()` to wall-clock arithmetic passes the entire backend suite | `backend/tasksd/scheduling.py:239` | medium | `test_a_buffer_is_real_time_on_both_sides_of_a_transition`, `test_the_buffer_a_spring_forward_slot_list_actually_honours` |
+| 2 | Test gap: `AccessVerifier` and the whole `access_required` posture have zero coverage, including the third fail-closed startup refusal | `backend/tasksd/access.py:32` | low | twelve tests, from the off-path no-op to `test_a_jwks_outage_fails_closed` |
+
+### Neither is a pin, and that is the result rather than an omission
+
+**Both subjects turned out CORRECT**, so both are ordinary passing tests with no
+marker — `xfail(strict=True)` over correct code XPASSes and reds the build the
+moment it runs. This is the rule the aug19 sweep established the hard way (three
+of its four gaps came out ordinary; the fourth found two live defects), and it is
+why the plan for this stage was *write both, run both, THEN classify* rather than
+deciding in advance.
+
+So `test_backlog_aug25_stage5.py` is the one file in this sweep with no markers,
+and it never needed any. Its findings carry a `**Covered by**` note rather than a
+`**Pinned by**` one, and they were **ticked on REVIEW** when the rest of the
+sweep closed — which is the only thing a test-gap finding with a correct subject
+can be closed on. There was nothing to fix; there was something to know, and now
+`pytest -q` knows it.
+
+### Every one confirmed against the regression it exists to catch
+
+A test written over correct code and never seen red is a claim, not evidence —
+which is precisely the criticism finding 1 makes of the existing DST battery. So
+all eighteen were run against four mutations, each applied alone and reverted:
+
+| mutation | what it stands for | what fails |
+|---|---|---|
+| `pad` → `Interval(iv.start - b, iv.end + b)` | the audit's own mutation, which passes the entire rest of the suite | both transition cases and the slot list |
+| `verify` → `except PyJWKClientConnectionError: return` | the sympathetic "don't lock people out during a Cloudflare outage" change | `test_a_jwks_outage_fails_closed`, and nothing else |
+| the `access_required` guard in `create_app` disabled | the third fail-closed startup refusal being dropped in a refactor | all three startup cases |
+| `decode(…, options={"verify_aud": False, "verify_iss": False})` | a verifier that checks the signature alone | the wrong-audience and wrong-issuer cases |
+
+The second row is the one worth reading twice. Access fails closed today only
+because `except Exception` happens to catch `PyJWKClientConnectionError` along
+with everything else; one sympathetic early `return` turns the edge gate into a
+no-op for the duration of an outage, and before this file `pytest -q` had nothing
+to say about it.
+
+Two implementation notes, both about comparing times:
+
+* The `pad` assertions compare **instants**, not local values. Every datetime in
+  the scheduling tests shares one `ZoneInfo` object and CPython short-circuits
+  `==` to a naive field comparison when `self.tzinfo is other.tzinfo`, so a local
+  comparison cannot tell the two versions of `pad` apart at all. That is the same
+  trap the closed fall-back findings were about, one function over.
+* The ordinary-day case in the same battery is not padding: it is what makes a
+  failure on the two transition days attributable to the transition rather than
+  to the shape of the test. A week after the spring forward the zone is CDT all
+  day and the two versions of `pad` agree, which is the point.
+
+# Sweep — 2026-08-19 · closed
 
 `docs/AUDIT.md` is the evidence. This is the plan for closing it.
 
@@ -70,9 +726,10 @@ OUTCOME any future fix must satisfy.
 The sweep opened at 36/44. Stage 4 closed 28 — its own 21 plus the 7 the Stage 3
 adversarial review had left open — remediation FILED 5 more along the way, and
 the closing review REOPENED one (D5, `_desynchronizing`), so the open count fell
-by 22 rather than 28. Of the 14 still open:
+by 22 rather than 28. Those 14 were then closed in turn, taking the sweep to 0.
+Where they had come from:
 
-| where it came from | open |
+| where it came from | count |
 |---|---|
 | the sweep itself (all stage 5) | 7 |
 | filed by the adversarial review of Stage 3 | 0 |
@@ -87,13 +744,14 @@ worked), `TasksView`'s uid-keyed maps, the `useEscape` consolidation, one failin
 calendar blanking a whole month, and `find_free_time`'s DST-unsafe end
 arithmetic. Closing a finding properly is itself a way of finding the next one.
 
-6 of the 7 remaining sweep findings are pinned — 2 as `xfail(strict=True)` /
-`it.fails` and 4 as ordinary passing tests (see "Test gaps that were only gaps" below); the
-unpinned one is finding 62. **All 7 of the review's open findings are now closed**, each pinned first. The 8th — from that review's own follow-up — is still open and unpinned. The review's
-other 3, the ones Stage 3 itself caused, are closed — along with 3 more the
-follow-up found in those very fixes. See `## Filed during the Stage 3 adversarial review` in
+All 7 of those remaining sweep findings are closed, and their pins — which
+included 2 written as `xfail(strict=True)` / `it.fails` — are ordinary passing
+tests now (see "Test gaps that were only gaps" below). **All 7 of the review's
+findings are closed**, each pinned first, as is the 8th from that review's own
+follow-up. The review's other 3, the ones Stage 3 itself caused, are closed —
+along with 3 more the follow-up found in those very fixes. See `## Filed during the Stage 3 adversarial review` in
 `docs/AUDIT.md`. One is deliberately **not** pinned; see
-"The one that is not pinned" below. The harness
+"The one that was not pinned" below. The harness
 described under *Stage 0* further down still applies unchanged; these pins live in
 their own files so the closed 2026-08-16 stages stay closed:
 
@@ -670,8 +1328,15 @@ Run a stage on its own:
 ```
 cd backend  && python -m pytest -m stage3          # one stage
 cd backend  && python -m pytest -m backlog -rxX    # the whole backlog, itemised
-cd frontend && npx vitest run backlog              # the SPA pins
+cd frontend && npx vitest run backlog              # the SPA pins, BOTH projects
+cd frontend && npm run test:browser                # the layout tier on its own
 ```
+
+That third line now spans two vitest projects and launches Chromium for the
+second of them: since `bcf38cf` the SPA has a `browser` project alongside `unit`,
+and the 2026-08-25 stage 4 put three pins in it. `npm test` is the unit project
+alone (`vitest run --project unit`), so a backlog pin in a `*.browser.test.tsx`
+file is NOT covered by it — CI runs both, in separate steps.
 
 ### Two strengths of pin
 

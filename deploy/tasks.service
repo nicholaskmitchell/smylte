@@ -16,17 +16,34 @@ ExecStart=/home/nicholaskmitchell/tasks/backend/.venv/bin/python -m tasksd
 Restart=on-failure
 RestartSec=3
 
-# Hardening. ProtectHome=read-only keeps the app from writing anywhere under
-# /home except the one path it needs (the SQLite cache). The app parses
-# attacker-influenced iCalendar/HTTP and is internet-reachable through the
-# tunnel, so the sandbox is tight: no capabilities (it binds 127.0.0.1:8080,
-# nothing privileged), no devices, no namespaces, loopback only.
+# Hardening. The app parses attacker-influenced iCalendar/HTTP and is
+# internet-reachable through the tunnel, so the sandbox is tight: no
+# capabilities (it binds 127.0.0.1:8080, nothing privileged), no devices, no
+# namespaces, loopback only.
+#
+# NOTHING UNDER /home IS WRITABLE, and that is the point of StateDirectory
+# below. This used to read `ReadWritePaths=…/tasks/backend`, with a comment
+# claiming it opened "the one path it needs (the SQLite cache)". It opened the
+# whole tree: `.venv`, the interpreter ExecStart runs, and `tasksd`, the source
+# it imports. Every other line here exists to contain a compromise of this
+# process, and all of them are moot against an attacker who can drop a one-line
+# `.pth` into site-packages — the next restart executes it, as the same user,
+# and the sandbox never notices, because the write went to a path the unit had
+# deliberately opened.
+#
+# StateDirectory grants exactly /var/lib/tasks (creating it, owned by this
+# user, mode 0700 under UMask below) and nothing else, so the venv and the
+# source are read-only like the rest of /home. TASKS_DB in /etc/tasks/tasks.env
+# points there. Moving an existing deployment: stop the unit, move tasks.db and
+# its -wal/-shm sidecars into /var/lib/tasks, update TASKS_DB, start — see
+# docs/DEPLOY.md, and note that setup.sh will not rewrite an env file that
+# already exists.
 NoNewPrivileges=true
 PrivateTmp=true
 PrivateDevices=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/home/nicholaskmitchell/tasks/backend
+StateDirectory=tasks
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectKernelLogs=true

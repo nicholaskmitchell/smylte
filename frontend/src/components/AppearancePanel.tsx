@@ -332,7 +332,7 @@ function TokenRow({ token, spec, value, isOverride, onChange, onClear }: {
         {spec.hint && <span className="appear-hint">{spec.hint}</span>}
       </label>
       <div className="appear-control">
-        {spec.kind === 'color' && <ColorControl id={token} value={value} onChange={onChange} />}
+        {spec.kind === 'color' && <ColorControl id={token} label={spec.label} value={value} onChange={onChange} />}
         {spec.kind === 'font' && <FontControl id={token} token={token} value={value} onChange={onChange} />}
         {spec.kind === 'keyword' && <KeywordControl id={token} spec={spec} value={value} onChange={onChange} />}
         {(spec.kind === 'length' || spec.kind === 'scale') &&
@@ -344,8 +344,8 @@ function TokenRow({ token, spec, value, isOverride, onChange, onClear }: {
   )
 }
 
-function ColorControl({ id, value, onChange }: {
-  id: string; value: string; onChange: (v: string) => void
+function ColorControl({ id, label, value, onChange }: {
+  id: string; label: string; value: string; onChange: (v: string) => void
 }) {
   // Two inputs on purpose. The native picker is the fast path but is sRGB-hex
   // only, and this design system is authored in OKLCH — so the text field
@@ -358,8 +358,13 @@ function ColorControl({ id, value, onChange }: {
 
   return (
     <>
+      {/* Named for the token it edits. This said "Pick a color" for every one of
+          them, so a screen-reader user tabbing the editor heard the same three
+          words fourteen times with no way to tell Background from Accent from
+          Rule — and the sibling text field, which has a real label, is the one
+          that carries the actual value. */}
       <input type="color" className="appear-swatch" value={swatch}
-        aria-label="Pick a color" onChange={(e) => onChange(e.target.value)} />
+        aria-label={`${label} — pick a color`} onChange={(e) => onChange(e.target.value)} />
       <input id={`tok${id}`} className={`input mono appear-text ${valid ? '' : 'bad'}`}
         value={text} spellCheck={false}
         onChange={(e) => {

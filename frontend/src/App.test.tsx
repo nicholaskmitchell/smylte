@@ -3,7 +3,7 @@ import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { App } from './App'
 import { api, AuthError, HttpError, subscribe } from './api'
-import { DEFAULT_TAB_ORDER, TAB_LABELS } from './tabs'
+import { DEFAULT_TAB_ORDER, TAB_LABELS, TAB_KEY } from './tabs'
 
 /** The shipped strip, as the top bar spells it. Derived rather than written out
  *  so adding a tab does not silently need this file edited in four places —
@@ -53,7 +53,14 @@ beforeEach(() => {
 
 describe('<App> auth gate', () => {
   it('shows only the login form when the session is invalid', async () => {
-    m.me.mockRejectedValue(new Error('unauthenticated'))
+    // A REAL `AuthError`, not a bare Error. Boot now branches on the error —
+    // only a 401 is a sign-out, everything else is "can't reach the server" —
+    // and a bare Error is neither an AuthError nor a 401, so this pinned the old
+    // conflation and could not tell the two cases apart. The 2026-08-25 stage 4
+    // pin that closed that finding says so in its own docstring and names this
+    // line. What the test asserts is unchanged; only the failure it simulates
+    // is now the one it always claimed to be.
+    m.me.mockRejectedValue(new AuthError('unauthenticated'))
     render(<App />)
     expect(await screen.findByRole('button', { name: /sign in/i })).toBeInTheDocument()
     // Nothing from the authed shell leaks out to a logged-out visitor.
@@ -393,6 +400,36 @@ describe('<App> live updates', () => {
     })
     expect(m.lists.mock.calls.length).toBe(before)
   })
+
+  it('DOES re-read the settings for a settings write, so another device cannot be overwritten', async () => {
+    // The other half of the same event. Dropping it outright left this tab
+    // holding whatever the blob said when it loaded — and `getSettings` is
+    // reached from exactly one effect, keyed on an auth transition, so that was
+    // for the life of the tab.
+    //
+    // `store.update_settings` merges SHALLOWLY, and every list-shaped preference
+    // is written back WHOLE from local state. So: create a group on the phone,
+    // then rename a different one in the desktop tab that has been open since
+    // morning, and the PUT carries the morning array — the new group is gone
+    // from the account, on both devices, with no error. Same shape wipes a theme
+    // saved on another device.
+    render(<App />)
+    await screen.findByRole('button', { name: 'Tasks' })
+    await waitFor(() => expect(subscribe).toHaveBeenCalled())
+    await waitFor(() => expect(m.getSettings).toHaveBeenCalledTimes(1))
+    const listsBefore = m.lists.mock.calls.length
+
+    // The other device changed something.
+    m.getSettings.mockResolvedValue({ task_groups: [{ id: 'g2', name: 'From the phone', lists: [] }] })
+    await act(async () => {
+      emit()('settings_updated')
+      await new Promise((r) => setTimeout(r, 400))
+    })
+
+    await waitFor(() => expect(m.getSettings).toHaveBeenCalledTimes(2))
+    // ...and still no task/event refetch, which is what the early return was for.
+    expect(m.lists.mock.calls.length).toBe(listsBefore)
+  })
 })
 
 describe('<App> clock setting', () => {
@@ -640,5 +677,157 @@ describe('<App> settings writes', () => {
     await waitFor(() => expect(m.putSettings).toHaveBeenCalled())
     expect(screen.queryByText(/couldn't save/i)).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /sign in/i })).not.toBeInTheDocument()
+  })
+})
+
+// ── the settings refetch, and the two things it must not disturb ────────────
+// `settings_updated` re-runs the settings effect. That effect does more than
+// load values: it also RESTORES THE OPENING TAB. Both cases below are about the
+// difference between "read the account again" and "boot again".
+
+describe('<App> settings refetch', () => {
+  const emit = () => vi.mocked(subscribe).mock.calls[0][0]
+  const active = () => document.querySelector('.tabs .tab.active')?.textContent ?? null
+
+  it('does not follow another device onto its tab', async () => {
+    // Switching tabs on the phone writes `last_tab` and publishes to every
+    // subscriber. On the desktop tab the restore is guarded by `tabTouched`,
+    // which is false for a tab the user simply has not switched — so the guard
+    // did not hold and the open desktop view jumped to whatever the phone was
+    // showing, with `cacheTab` persisting the jump for the next reload.
+    m.getSettings.mockResolvedValue({ start_tab: 'last', last_tab: 'calendar' })
+    render(<App />)
+    await screen.findByRole('button', { name: 'Tasks' })
+    await waitFor(() => expect(active()).toBe('Calendar'))
+    await waitFor(() => expect(subscribe).toHaveBeenCalled())
+
+    m.getSettings.mockResolvedValue({ start_tab: 'last', last_tab: 'tasks' })
+    await act(async () => {
+      emit()('settings_updated')
+      await new Promise((r) => setTimeout(r, 400))
+    })
+
+    await waitFor(() => expect(m.getSettings).toHaveBeenCalledTimes(2))
+    expect(active()).toBe('Calendar')
+    expect(localStorage.getItem(TAB_KEY)).toBe('calendar')
+  })
+
+  it('holds the re-read until its own write has landed', async () => {
+    // The server publishes to the writer too, so the event that arrives right
+    // after a preference change is usually this tab's own — and re-reading
+    // mid-flight paints the value the write is about to replace. The guard was
+    // `pendingPatch`, which is emptied when the PUT is ISSUED, so the whole
+    // flight of the request looked idle.
+    let land: (() => void) | undefined
+    m.putSettings.mockImplementation(() => new Promise((res) => { land = () => res({}) }))
+    render(<App />)
+    await screen.findByRole('button', { name: 'Tasks' })
+    await waitFor(() => expect(subscribe).toHaveBeenCalled())
+    await waitFor(() => expect(m.getSettings).toHaveBeenCalledTimes(1))
+
+    await openSettings('General')
+    await userEvent.click(screen.getByRole('button', { name: '12- or 24-hour clock' }))
+    await waitFor(() => expect(m.putSettings).toHaveBeenCalled())
+
+    await act(async () => {
+      emit()('settings_updated')
+      await new Promise((r) => setTimeout(r, 400))
+    })
+    expect(m.getSettings).toHaveBeenCalledTimes(1)
+
+    // ...and the moment it lands, the re-read goes ahead. Waiting must not mean
+    // dropping: this is the only path that re-reads settings, and the event may
+    // have been another device's.
+    await act(async () => {
+      land!()
+      await new Promise((r) => setTimeout(r, 500))
+    })
+    await waitFor(() => expect(m.getSettings).toHaveBeenCalledTimes(2))
+  })
+})
+
+// ── the settings read must not undo a gesture it raced ──────────────────────
+// The gear is clickable the instant `/api/me` returns — the same commit that
+// ISSUES `api.getSettings()` — so the whole read RTT is a window in which the
+// user can change a preference. `get_settings` takes the backend's single global
+// service lock, which is also held across CalDAV round trips during a sync
+// sweep, so that window is seconds. The read applied its payload
+// unconditionally; the author had guarded exactly one field (`tabTouched`, for
+// the tab) and every other setter clobbered whatever had just been chosen.
+
+describe('<App> a slow settings read', () => {
+  /** Render with `getSettings` held open; returns the resolver. */
+  const holdSettings = (answer: object) => {
+    let release!: () => void
+    m.getSettings.mockImplementation(() => new Promise((res) => {
+      release = () => res(answer as never)
+    }))
+    render(<App />)
+    return () => release()
+  }
+
+  it('does not revert a preference the user changed while it was in flight', async () => {
+    // The finding's own reproduction. The account holds 12h; the user cycles the
+    // clock to 24h during the read; the read then answers with the pre-click
+    // value. The write landed, so the account holds 24h — and the row used to
+    // snap back to "12-hour", after which the next click cycled from a value
+    // nobody had.
+    const release = holdSettings({ time_format: '12h' })
+    await screen.findByRole('button', { name: 'Tasks' })
+    await openSettings('General')
+    const clock = screen.getByRole('button', { name: '12- or 24-hour clock' })
+    await userEvent.click(clock)
+    expect(clock).toHaveTextContent('24-hour')
+    await waitFor(() => expect(m.putSettings).toHaveBeenCalledWith({ time_format: '24h' }))
+
+    await act(async () => { release(); await Promise.resolve() })
+
+    expect(clock, 'the stale read reverted a preference the account already holds')
+      .toHaveTextContent('24-hour')
+  })
+
+  it('still applies every preference the user did NOT touch', async () => {
+    // The control. A guard that held back the whole payload would satisfy the
+    // case above and lose the account's settings on every boot.
+    const release = holdSettings({ time_format: '12h', session_ttl_s: 30 * 24 * 3600 })
+    await screen.findByRole('button', { name: 'Tasks' })
+    await openSettings('General')
+    await userEvent.click(screen.getByRole('button', { name: '12- or 24-hour clock' }))
+
+    await act(async () => { release(); await Promise.resolve() })
+
+    // Only the UNTOUCHED preference is asserted here — that is what makes this a
+    // control. It passes against the pre-fix tree too, so a `keep` that held
+    // back the whole payload would show up as this test failing and the one
+    // above passing, rather than as both going green.
+    // The menu is already open — `openSettings` would toggle it shut.
+    await userEvent.click(screen.getByRole('tab', { name: 'Account' }))
+    expect(screen.getByRole('button', { name: 'How long to stay signed in' }),
+      'a preference the user never touched was held back too')
+      .toHaveTextContent('30 days')
+  })
+
+  it('guards every key it reads, so the next preference cannot be forgotten', async () => {
+    // The pattern this sweep kept finding: a guard is only as wide as the set it
+    // enumerates. `tabTouched` guarded one field out of twenty-three because it
+    // was written per-field. `keep` is per-field too — so this is the check that
+    // adding a preference and forgetting it is a failure rather than a silent
+    // revert.
+    const load = (import.meta as unknown as {
+      glob: (p: string, o: object) => Record<string, () => Promise<string>>
+    }).glob('./App.tsx', { query: '?raw', import: 'default' })['./App.tsx']
+    const src = await load()
+    const from = src.indexOf('const writesBefore')
+    const to = src.indexOf('.catch((e) =>', from)
+    expect(from, 'could not locate the settings read — rename the markers here too')
+      .toBeGreaterThan(-1)
+    const body = src.slice(from, to)
+    const read = new Set([...body.matchAll(/\bs\.([a-z_]+)/g)].map((mm) => mm[1]))
+    const kept = new Set([...body.matchAll(/keep\('([a-z_]+)'\)/g)].map((mm) => mm[1]))
+    expect(read.size, 'no payload keys found — the markers have drifted').toBeGreaterThan(15)
+    expect([...read].filter((k) => !kept.has(k)),
+      'these settings keys are applied with no `keep` guard, so a read that '
+      + 'lands after the user changed them silently reverts the gesture')
+      .toEqual([])
   })
 })

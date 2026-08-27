@@ -629,8 +629,27 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
   // over — the rollover re-runs this effect, which bumps the stamp.
   const token = useRef(0)
 
+  // The day read has a THIRD outcome, and it used to have two. `plan` only ever
+  // became non-null on a successful 200, a rejection was swallowed by `guard`
+  // into a transient toast, and every render of the day is gated on
+  // `entries !== null` — INCLUDING the empty state. So a failed read showed the
+  // heading, the add box, the calendar strip and the suggestions over a blank
+  // space that said nothing, with no retry short of navigating away and back.
+  //
+  // Worse than blank: every optimistic writer reads `setPlan((p) => (p && …))`,
+  // so with `plan` null they are all no-ops. The owner typed a line, pressed
+  // Add, the POST SUCCEEDED server-side, the box cleared — and no row appeared.
+  // `POST /api/day/{day}/open` derives its snapshot from CalDAV, so a Radicale
+  // hiccup that times out that one call while every other endpoint is healthy is
+  // the realistic trigger.
+  const [dayError, setDayError] = useState(false)
+  // The retry's own signal, for the same reason `reloadTasks` needed one: `rev`
+  // moves only when the SERVER publishes a change.
+  const [dayTry, setDayTry] = useState(0)
+
   useEffect(() => {
     const mine = ++token.current
+    setDayError(false)
     void guard(async () => {
       // THE load-bearing line of this file. `openDay` may be called for TODAY
       // and for no other day, because it is the only call that can create a
@@ -639,11 +658,22 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
       // `api.day` is `open_day(create=False)` and writes nothing whatsoever,
       // not even the opened marker, which is what makes stepping back safe.
       // Read the header before touching this.
-      const p = await (day === today ? api.openDay(day) : api.day(day))
+      let p: DayPlan | undefined
+      try {
+        p = await (day === today ? api.openDay(day) : api.day(day))
+      } catch (e) {
+        // Recorded here and RE-THROWN, so `guard` still raises its toast and
+        // still routes an AuthError to the login card. The flag is what the
+        // screen needs; the toast is what a transient blip needs.
+        if (mine === token.current) setDayError(true)
+        throw e
+      }
       if (mine !== token.current) return
       // A malformed body must not become the array every render maps over —
       // `guard` shields us from a rejection, not from a 200 with junk in it.
+      // A 200 with junk in it is a failed read too, and said so nowhere.
       if (p && Array.isArray(p.entries)) setPlan(p)
+      else setDayError(true)
     })
     // `today` alongside `day` because the effect READS it: the ternary above is
     // the load-bearing line of this file, and an effect that reads a key it has
@@ -656,7 +686,7 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
     // and whose rows came from `api.day` — and all it does is read that same
     // past day again through that same `api.day`. Harmless, and cheaper than a
     // dep array that lies about what the effect looks at.
-  }, [day, today, rev, guard])
+  }, [day, today, rev, guard, dayTry])
 
   // ── the picker's bounds ──────────────────────────────────────────────────
   //
@@ -1198,6 +1228,16 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
     ? (pinned ?? (reads ? 'task' : 'note'))
     : 'note'
 
+  // What a FAILED line left behind, so pressing Enter again finishes the write
+  // instead of starting a second one. `addParsedTask` is a compound write —
+  // author the task, then point the day at it — with no idempotency across the
+  // pair, so a failure of the second half replayed the first and authored a
+  // duplicate VTODO on the CalDAV list, one of which was on no day at all.
+  //
+  // Keyed on the LINE, because that is what the box puts back and therefore what
+  // the user retries. A different line is a different task and mints its own id.
+  const retry = useRef<{ line: string; cid: string; task?: Task } | null>(null)
+
   const commit = async () => {
     const raw = text.trim()
     if (!raw) return
@@ -1215,9 +1255,10 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
     // That rule held for the old decline path and it has to hold for a pinned
     // note as well, which is why it is keyed on `willBe` and not on `reads`.
     const ok = willBe === 'task'
-      ? await addParsedTask(on, listId, parsed, reads)
+      ? await addParsedTask(on, listId, parsed, reads, raw)
       : await addNote(on, raw)
     if (!ok) setText(raw)
+    else retry.current = null
   }
 
   /**
@@ -1234,17 +1275,39 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
    * claim about the task itself, and this is not the place to invent one.
    */
   const addParsedTask = async (
-    on: string, list: string, p: ParsedEntry, dated: boolean,
+    on: string, list: string, p: ParsedEntry, dated: boolean, raw: string,
   ): Promise<boolean> => {
-    const t = await create(list, {
-      summary: p.summary,
+    // The SAME line retried keeps its client_id, so the create is idempotent:
+    // the backend derives the VTODO's uid from it and answers a replay with the
+    // resource already written. And if the task itself landed last time, it is
+    // held here and the create is skipped outright — the retry re-sends only the
+    // half that failed.
+    const prior = retry.current?.line === raw ? retry.current : null
+    const cid = prior?.cid ?? clientId()
+    const t = prior?.task ?? await create(list, {
+      // TRIMMED at the call site, not in `parseEntry`. When the parser
+      // recognises nothing it returns `summary: text` byte for byte — its
+      // documented "'' in, '' out" rule, which `daytext.test.ts` pins — so the
+      // pinned-task path was the one branch sending raw input, while the note
+      // path beside it sends `text.trim()` and the parsed path sends `without()`'s
+      // trimmed remnant. A leading space is invisible in the chip preview and
+      // real in the VTODO: `sortTasks` orders by summary, so the task sorts ahead
+      // of everything, on every client on the account.
+      summary: p.summary.trim() || raw,
       // Omitted rather than sent empty — `CreateTaskBody`'s optional keys mean
       // "leave unset", and the backend only copies non-None fields onto the
       // VTODO.
       ...(dated ? { due: dueFromParse(p, on) } : {}),
-    })
-    if (!t) return false                 // `create` has already raised the toast
-    return addTask(on, t)
+    }, undefined, cid)
+    if (!t) {
+      // `create` has already raised the toast. The id is remembered so the
+      // retry is the same create rather than a new one.
+      retry.current = { line: raw, cid }
+      return false
+    }
+    if (await addTask(on, t)) return true
+    retry.current = { line: raw, cid, task: t }
+    return false
   }
 
   // ── suggestions: tasks ───────────────────────────────────────────────────
@@ -1714,6 +1777,14 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
   /** One row of the day, whichever group it is painting in. Every list renders
    *  through this — today's two and the look-back's six — so a fix to a row
    *  cannot reach one group and miss the others. */
+  // Where the dragged row STARTED, so each row can tell whether the drop lands
+  // above it or below. Read off `dayRows` rather than a map index, because
+  // `renderRow` is shared by eight groups and the index within a group is not
+  // the index in the day.
+  const dragIndex = useMemo(
+    () => (dragId ? dayRows.findIndex((r) => r.entry_id === dragId) : -1),
+    [dragId, dayRows])
+
   const renderRow = (e: DayEntry) => (
     <TodayRow key={e.entry_id} entry={e} task={taskFor(e)} tasksLoaded={loaded}
       color={colorOf(e.list)} onToggleTask={toggle} onToggleEntry={toggleEntry}
@@ -1759,6 +1830,15 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
       draggable={canArrange && e.kind !== 'habit' && !e.dropped_at}
       dragging={dragId === e.entry_id}
       dragOver={overId === e.entry_id && dragId !== null && dragId !== e.entry_id}
+      // Which EDGE the rule is drawn on. `moveRow` lands a downward drag AFTER
+      // the target — deliberately, and its comment says why — while
+      // `.today-row.drag-over` always painted the top edge, so on every downward
+      // drag the line the owner was aiming at sat one gap above where the row
+      // would actually go. The Tasks pane already carries this exact pair
+      // (`drag.below` + `.task-drag.drag-over.drag-below`); the Today tab is a
+      // separate, newer drag that never got it.
+      dragBelow={dragIndex >= 0
+        && dragIndex < dayRows.findIndex((r) => r.entry_id === e.entry_id)}
       onDragRow={setDragId}
       onDragOverRow={setOverId}
       onDropRow={(target) => {
@@ -1936,7 +2016,13 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
       {isToday && (
         <form className="quickadd today-add"
           onSubmit={(e) => { e.preventDefault(); void commit() }}>
+          {/* DISABLED while the day is unknown. Not cosmetic: with `plan` null
+              every optimistic writer here is a no-op, so an add would reach the
+              server, succeed, and paint nothing — a write that landed
+              invisibly, which is the worse half of this finding. Refusing is
+              the honest answer until the read comes back. */}
           <input className="input" value={text} aria-label="Add to today"
+            disabled={dayError}
             placeholder="Add to today — “invoice friday”, “gym at 7”…"
             // The chip below DESCRIBES this field rather than announcing at it.
             // It used to be a `role="status"` live region, which was tolerable
@@ -2180,6 +2266,18 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
                 holding three habits and nothing else is not a day with nothing
                 on it, and saying so under a visible list of habits would
                 contradict the screen it is printed on. */}
+            {/* The day is UNKNOWN, which is neither "empty" nor "loading". Every
+                other render of the day is gated on `entries !== null`, so
+                without this the tab showed its furniture over a blank space and
+                said nothing about why. Retry re-runs the read; `rev` cannot,
+                because it only moves when the server publishes a change. */}
+            {dayError && (
+              <p className="empty" role="status">
+                Couldn&rsquo;t read today.{' '}
+                <button type="button" className="today-linkish"
+                  onClick={() => setDayTry((n) => n + 1)}>Try again</button>
+              </p>
+            )}
             {entries !== null && entries.length === 0 && (
               <p className="empty">
                 Nothing on today yet. Type a line above, add one of the tasks
@@ -2526,7 +2624,7 @@ function EstimateCell({ minutes, readOnly, label, onChange }: {
 function TodayRow({
   entry, task, tasksLoaded, color, count, readOnly, onToggleTask, onToggleEntry, onDrop,
   onEstimate,
-  draggable = false, dragging = false, dragOver = false,
+  draggable = false, dragging = false, dragOver = false, dragBelow = false,
   onDragRow, onDragOverRow, onDropRow, onDragEndRow,
 }: {
   entry: DayEntry
@@ -2557,6 +2655,9 @@ function TodayRow({
   dragging?: boolean
   /** Something else is being carried and is currently over this row. */
   dragOver?: boolean
+  /** The dragged row started ABOVE this one, so the drop lands below it and the
+   *  rule belongs on the bottom edge. Only consulted while `dragOver`. */
+  dragBelow?: boolean
   onDragRow?: (entryId: string) => void
   onDragOverRow?: (entryId: string) => void
   onDropRow?: (entryId: string) => void
@@ -2603,7 +2704,8 @@ function TodayRow({
   const cls = ['today-row', isHabit && 'today-habit', dropped && 'today-dropped',
     moved && 'today-moved',
     done && 'done', gone && 'gone', draggable && 'today-draggable',
-    dragging && 'today-dragging', dragOver && 'drag-over'].filter(Boolean).join(' ')
+    dragging && 'today-dragging', dragOver && 'drag-over',
+    dragOver && dragBelow && 'today-below'].filter(Boolean).join(' ')
 
   // The leftmost cell, in three states rather than two. Lifted out of the JSX
   // because a three-armed conditional inside it cannot be commented arm by arm,

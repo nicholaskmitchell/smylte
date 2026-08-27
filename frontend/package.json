@@ -7,9 +7,10 @@
     "dev": "vite",
     "build": "vite build",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "preview": "vite preview"
+    "test": "vitest run --project unit",
+    "test:watch": "vitest --project unit",
+    "preview": "vite preview",
+    "test:browser": "vitest run --project browser"
   },
   "dependencies": {
     "react": "^18.3.1",
@@ -23,7 +24,9 @@
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^5.2.0",
+    "@vitest/browser": "^3.2.7",
     "jsdom": "^29.1.1",
+    "playwright": "~1.56.0",
     "typescript": "^5.6.3",
     "vite": "^7.3.6",
     "vitest": "^3.2.7"

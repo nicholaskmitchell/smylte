@@ -1,11 +1,12 @@
 """Audit backlog, 2026-08-19 sweep — stage 3: silent data corruption in the
 iCalendar, recurrence, sync and scheduling paths.
 
-Eight findings from the sweep of 2026-08-19, all of them **OPEN**. Unlike
-test_backlog_stage1.py … stage5.py beside this file — whose findings are closed
-and whose tests are now ordinary regression tests — every test here is an
-`xfail(strict=True)` pin: it asserts the behaviour the code SHOULD have and
-fails against the code as it stands. CI stays green while the finding is open
+Eight findings from the sweep of 2026-08-19, and **all of them are now CLOSED**.
+Every test here began as an `xfail(strict=True)` pin, asserting the behaviour the
+code SHOULD have and failing against the code as it stood; the markers are gone
+and these are ordinary regression tests that must stay green. What follows
+describes the harness they were written under. CI stayed green while a finding
+was open
 and goes red the moment it is fixed, which is the signal to drop the marker and
 tick the finding off. The harness is described in docs/STAGES.md.
 
@@ -1244,7 +1245,8 @@ def test_an_rdate_only_series_can_still_have_one_occurrence_edited():
 
 # ── Filed by the Stage 3 adversarial review — OPEN when written ─────────────
 #
-# These carry `xfail(strict=True)` like every other pin in this file. The rest
+# These began as `xfail(strict=True)` pins like every other one in this file,
+# and are ordinary passing tests now. The rest
 # of it is closed regression tests; a marker here is what tells the two apart.
 
 

@@ -253,9 +253,20 @@ def test_calendar_event_crud(client):
                        params={"start": "2026-07-01", "end": "2026-08-01"}).json()
     assert {e["summary"] for e in month} == {"Meeting", "Holiday"}
 
-    moved = client.patch(f"/api/calendars/{cid}/events/{ev['uid']}",
-                         json={"start": "2026-07-10T16:00:00", "summary": "Meeting (moved)"}).json()
-    assert moved["summary"] == "Meeting (moved)" and moved["start"] == "2026-07-10T16:00:00"
+    # BOTH ends, and the end is asserted. This sent `start` alone and checked
+    # only `summary` and `start` — so it passed while the server answered 200
+    # with DTSTART 16:00 beside an untouched DTEND of 15:00, an event ending an
+    # hour before it began. Measured against the pre-guard tree, which is how
+    # this surfaced: the span guard refused the move, and the test that was
+    # supposed to be protecting this path had never looked at the half that
+    # broke. The SPA always sends both ends; the guard requires them for a move
+    # that crosses the old end, and lets a one-end move inside the span through.
+    moved = client.patch(f"/api/calendars/{cid}/events/{ev['uid']}", json={
+        "start": "2026-07-10T16:00:00", "end": "2026-07-10T17:00:00",
+        "summary": "Meeting (moved)",
+    }).json()
+    assert moved["summary"] == "Meeting (moved)"
+    assert (moved["start"], moved["end"]) == ("2026-07-10T16:00:00", "2026-07-10T17:00:00")
 
     assert client.delete(f"/api/calendars/{cid}/events/{hol['uid']}").status_code == 204
     after = {e["summary"] for e in client.get(f"/api/calendars/{cid}/events",

@@ -54,6 +54,14 @@ const list: List = {
   open_count: 0, task_count: 0, event_count: 0, total: 0, color: '#D9480F',
 }
 
+const CREATED = {
+  token: 'tok-new', title: 'Intro call', description: null, calendar: 'c1',
+  calendar_name: 'Work', duration_minutes: 30, timezone: 'UTC',
+  availability: { '0': ['09:00-17:00'] }, show_busy: false, buffer_minutes: 0,
+  min_notice_hours: 24, horizon_days: 30, enabled: true, booking_count: 0,
+  calendar_missing: false, url: 'https://x/book/tok-new',
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   localStorage.clear()
@@ -149,7 +157,12 @@ describe('stage 4 — task data provider', () => {
     )
     await waitFor(() => expect(screen.getByTestId('order').textContent).toContain('a:1'))
 
-    const moving = d.reorder('b', 'a')            // in flight, will reject
+    // `reorder` takes the ROWS as of the 2026-08-25 stage 3 fix — a uid alone is
+    // ambiguous once one is copied into a second list. Only the ARGUMENT SHAPE
+    // changes here; the tasks named, the gesture and every assertion below are
+    // untouched.
+    const moving = d.reorder(task({ uid: 'b', sort_order: 2, summary: 'B' }),
+                             task({ uid: 'a', sort_order: 1, summary: 'A' }))
     // A concurrent write lands mid-flight — an ordinary edit, which the provider
     // applies to the same array the rollback was about to overwrite.
     m.patchTask.mockResolvedValue(
@@ -221,13 +234,23 @@ describe('stage 4 — booking-link editor', () => {
     await user.type(screen.getByPlaceholderText('30-minute intro call'), 'Intro call')
     const create = screen.getByRole('button', { name: /create link/i })
     let resolve: () => void = () => {}
+    // Resolves with a REAL link, not `{}`. The empty object resolved truthily,
+    // so the list rendered a card with `key={undefined}` and a
+    // `/book/undefined` URL — the React key warning this file printed while
+    // passing. Nothing here asserted the created link renders, which is why a
+    // stand-in that the real API never returns went unnoticed.
     m.createSchedulingLink.mockReturnValue(
-      new Promise((r) => { resolve = () => r({} as never) }))
+      new Promise((r) => { resolve = () => r(CREATED as never) }))
 
     await user.click(create)
     await user.click(create)                      // the second click, mid-flight
     expect(m.createSchedulingLink).toHaveBeenCalledTimes(1)
     resolve()
+
+    // The half nothing asserted: the published link has to appear in the list,
+    // with its real token. With the old `{}` stand-in this rendered a card keyed
+    // `undefined` showing `/book/undefined`, and the suite passed anyway.
+    expect(await screen.findByText('/book/tok-new')).toBeInTheDocument()
 
     fireEvent.keyDown(window, { key: 'Escape' })
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())

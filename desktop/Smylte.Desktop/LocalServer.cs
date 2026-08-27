@@ -1,5 +1,7 @@
 using System.Net;
 using System.Net.Sockets;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.RegularExpressions;
 
 namespace Smylte.Desktop;
@@ -17,6 +19,7 @@ public sealed class LocalServer : IDisposable
     private readonly CancellationTokenSource _cts = new();
     private readonly string _root;
     private readonly Uri _upstream;
+    private readonly string _csp;
 
     public int Port { get; }
     public string Origin => $"http://localhost:{Port}";
@@ -43,6 +46,89 @@ public sealed class LocalServer : IDisposable
         };
 
         _listener.Prefixes.Add($"http://localhost:{Port}/");
+
+        // Read ONCE, here, the way the backend does it (app.py reads the served
+        // index.html at startup for the same reason). MainForm awaits
+        // Updater.EnsureWebAssetsAsync before constructing this, so the file on
+        // disk is already the build that will be served.
+        _csp = PolicyFor(Path.Combine(_root, "index.html"));
+    }
+
+    // ── Content-Security-Policy ─────────────────────────────────────────────
+    //
+    // A PORT of backend/tasksd/csp.py, and it has to stay a faithful one. The
+    // app's policy exists only as a response header the BACKEND attaches;
+    // frontend/index.html carries no `http-equiv` meta (verified, zero
+    // occurrences), so the document WebView2 runs — served from disk by
+    // ServeStatic, which set exactly Content-Type and Cache-Control — had NO
+    // policy at all. Not `default-src 'self'`, not `connect-src 'self'`, not
+    // `object-src 'none'`, not the script-hash allowlist. On the one surface
+    // that also holds a live session cookie for the real server.
+    //
+    // What that costs, concretely: a foreign CalDAV client writes a collection
+    // property or an appearance value that slips past clean_color / cssColor /
+    // the appearance allowlist — the exact class of bug the audit has recorded
+    // twice as a url() beacon. In the browser it is blocked by img-src 'self'
+    // and never leaves the machine. In this window it fetches, and with no
+    // connect-src and no script-hash restriction, any script injection here can
+    // exfiltrate to an arbitrary host from an origin holding tasks_session.
+    //
+    // The HASH is derived from the file actually served rather than written
+    // down, for the reason csp.py gives: hardcoding it puts the same string in
+    // two places that must agree, and the failure when they stop agreeing is a
+    // blank window — the pre-paint script blocked. Vite rewrites that script on
+    // build, so a constant copied from the source would already be wrong.
+
+    /// A `<script>` with a body to hash, i.e. not a `src=` reference. Same
+    /// pattern as csp.py's `_INLINE_SCRIPT`, deliberately not an HTML parser:
+    /// this reads one file we ship ourselves, and a regex that is too eager errs
+    /// toward hashing something harmless while one that is too lax fails to
+    /// allowlist our own script — which is loud (the app does not paint) rather
+    /// than silent.
+    private static readonly Regex InlineScript = new(
+        @"<script(?![^>]*\bsrc\s*=)[^>]*>(.*?)</script>",
+        RegexOptions.Singleline | RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    /// The policy for the document at `indexPath`, or the no-inline-script
+    /// policy if it cannot be read. Never throws: a missing or unreadable
+    /// index.html means the updater has not landed a build yet, and refusing to
+    /// construct the server over it would turn a recoverable state into a dead
+    /// window.
+    internal static string PolicyFor(string indexPath)
+    {
+        var hashes = new List<string>();
+        try
+        {
+            foreach (Match m in InlineScript.Matches(File.ReadAllText(indexPath)))
+                hashes.Add("'sha256-" + Convert.ToBase64String(
+                    SHA256.HashData(Encoding.UTF8.GetBytes(m.Groups[1].Value))) + "'");
+        }
+        catch (IOException) { /* no build on disk yet — 'self' alone still binds */ }
+        catch (UnauthorizedAccessException) { }
+
+        var scriptSrc = hashes.Count == 0
+            ? "script-src 'self'"
+            : "script-src 'self' " + string.Join(" ", hashes);
+        // Directive for directive, in order, with csp.py's `"; "` join and no
+        // trailing semicolon. Two of these are load-bearing in a way that is easy
+        // to undo by accident and are commented there: script-src must never gain
+        // 'unsafe-inline' (ignored while a hash is present, honoured the moment
+        // the hash goes away), and style-src must never gain a hash or a nonce
+        // (either makes browsers ignore 'unsafe-inline', which this SPA cannot
+        // live without — every calendar and list colour is an inline style).
+        return string.Join("; ", new[]
+        {
+            "default-src 'self'",
+            "base-uri 'none'",
+            "object-src 'none'",
+            "frame-ancestors 'none'",
+            "form-action 'self'",
+            "img-src 'self'",
+            "connect-src 'self'",
+            scriptSrc,
+            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+            "font-src 'self' https://fonts.gstatic.com",
+        });
     }
 
     public void Start()
@@ -237,6 +323,15 @@ public sealed class LocalServer : IDisposable
             ext.Equals(".html", StringComparison.OrdinalIgnoreCase)
                 ? "no-cache"
                 : "public, max-age=31536000, immutable");
+
+        // On EVERY static response, not just the document — CSPMiddleware makes
+        // the same choice and gives the same reason: it costs one header on an
+        // asset and means there is no path, present or future, that quietly
+        // escapes the policy. AddHeader REPLACES where AppendHeader would add a
+        // second; browsers enforce the intersection of every policy present, so
+        // a duplicate is indistinguishable from a deliberate tightening.
+        ctx.Response.AddHeader("Content-Security-Policy", _csp);
+        ctx.Response.AddHeader("X-Content-Type-Options", "nosniff");
 
         var bytes = File.ReadAllBytes(file);
         ctx.Response.ContentLength64 = bytes.Length;

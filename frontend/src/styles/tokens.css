@@ -10,7 +10,13 @@
   --paper: #F2F0EA;
   --fg: #14131A;
   --fg-muted: rgba(20, 19, 26, 0.60);
-  --fg-faint: rgba(20, 19, 26, 0.36);
+  /* Raised from the value below to clear WCAG's 3:1 minimum for non-text UI
+     components on the WORST of this theme's three backgrounds. It was
+     2.28:1, and it is not only a caption colour — the Today row's drop, add
+     and estimate controls, the calendar's month arrows and the sidebar's
+     disclosure carets wear it, and it is their only affordance. Still the
+     quietest token by a clear margin: --fg-muted is around 5:1. */
+  --fg-faint: rgba(20, 19, 26, 0.48);
   --rule: rgba(20, 19, 26, 0.13);
   --rule-faint: rgba(20, 19, 26, 0.07);
   --accent: oklch(0.60 0.19 42);
@@ -67,7 +73,13 @@
   --paper: #1A1A22;
   --fg: #ECEAF2;
   --fg-muted: rgba(236, 234, 242, 0.60);
-  --fg-faint: rgba(236, 234, 242, 0.34);
+  /* Raised from the value below to clear WCAG's 3:1 minimum for non-text UI
+     components on the WORST of this theme's three backgrounds. It was
+     2.73:1, and it is not only a caption colour — the Today row's drop, add
+     and estimate controls, the calendar's month arrows and the sidebar's
+     disclosure carets wear it, and it is their only affordance. Still the
+     quietest token by a clear margin: --fg-muted is around 5:1. */
+  --fg-faint: rgba(236, 234, 242, 0.38);
   --rule: rgba(236, 234, 242, 0.14);
   --rule-faint: rgba(236, 234, 242, 0.07);
   --accent: oklch(0.72 0.16 45);
@@ -101,7 +113,13 @@
   --paper: #F5F5F7;
   --fg: #1D1D1F;
   --fg-muted: rgba(29, 29, 31, 0.62);
-  --fg-faint: rgba(29, 29, 31, 0.38);
+  /* Raised from the value below to clear WCAG's 3:1 minimum for non-text UI
+     components on the WORST of this theme's three backgrounds. It was
+     2.31:1, and it is not only a caption colour — the Today row's drop, add
+     and estimate controls, the calendar's month arrows and the sidebar's
+     disclosure carets wear it, and it is their only affordance. Still the
+     quietest token by a clear margin: --fg-muted is around 5:1. */
+  --fg-faint: rgba(29, 29, 31, 0.49);
   --rule: rgba(29, 29, 31, 0.11);
   --rule-faint: rgba(29, 29, 31, 0.06);
   --accent: oklch(0.56 0.16 253);
@@ -178,8 +196,27 @@ input, select, textarea { font-family: inherit; }
 .mono { font-family: var(--mono); }
 .serif { font-family: var(--serif); }
 
+/* `border: 1px solid transparent` and NOT `border: 0`, which is what this was.
+   `.btn.ghost` adds `border: 1px solid var(--rule)` and nothing takes a pixel
+   back out of the padding, so a ghost button was 2px taller and 2px wider than
+   a solid one — and in a row of both, `align-items` centred them, putting the
+   solid one 1px lower with a cap-height 1px off its neighbour's. Measured in
+   Chromium: Back 57.1x33 at y=4, Shut down 91.5x31 at y=5, side by side in the
+   shutdown ritual's action row. Every modal in the app pairs them that way.
+
+   `box-sizing: border-box` two rules up does not help: it governs elements with
+   a specified width or height, and neither of these has one, so an auto height
+   is content + padding + border either way.
+
+   Transparent rather than a padding adjustment, so the background — which paints
+   under the border by default — keeps the solid button pixel-identical while the
+   two boxes become the same size. It also gives `.btn.danger` a border to
+   colour: that rule sets `border-color` alone, which over `border: 0` coloured
+   nothing, so Settings -> Account's Disconnect — the only control that revokes a
+   live MCP OAuth grant — rendered as bare red text with no outline and no
+   background in a row of bordered controls. */
 .btn {
-  background: var(--fg); color: var(--bg); border: 0; border-radius: var(--radius);
+  background: var(--fg); color: var(--bg); border: 1px solid transparent; border-radius: var(--radius);
   font-family: var(--mono); font-size: calc(11px * var(--fs-scale)); font-weight: 500; text-transform: var(--label-case);
   letter-spacing: calc(0.06em * var(--tracking)); padding: 9px 13px; cursor: pointer;
 }

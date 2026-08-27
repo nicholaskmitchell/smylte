@@ -2,12 +2,16 @@
  * The 2026-08-19 sweep, stage 4a: user-visible correctness in the calendar,
  * the scheduling editor and the appearance layer.
  *
- * **These nine findings are OPEN.** Every test below asserts the behaviour the
- * app SHOULD have and fails against the code as it stands, so each is marked
- * `it.fails` — the file passes while a finding is open, and the moment one is
- * fixed its pin XPASSes, the file goes red, and somebody has to tick the
- * finding off in docs/AUDIT.md and drop the marker. Same contract as
- * `backlog.stage4.test.tsx`, whose api-mocking preamble this copies.
+ * **All nine are CLOSED.** Each began as an `it.fails` pin asserting the
+ * behaviour the app SHOULD have while failing against the code as it stood; the
+ * findings are fixed and ticked in docs/AUDIT.md, the markers are gone, and these
+ * are ordinary regression tests that must stay green. `grep -c 'it.fails('` over
+ * this file returns 0. Same contract as `backlog.stage4.test.tsx`, whose
+ * api-mocking preamble this copies.
+ *
+ * The `AUDIT (open):` banners below are kept in the past tense they were written
+ * in: a closed finding's value is the record of what the bug was, which is what
+ * stops it being reintroduced.
  *
  * The theme is one class of defect: the screen and the wire disagree with what
  * the user did. A month that failed to load once is recorded as loaded and
@@ -81,6 +85,16 @@ const theme = (o: Partial<CustomTheme> = {}): CustomTheme => ({
 /** userEvent has to be told about the fake clock or every await hangs. */
 const setupUser = () => userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
 
+/** What `POST /api/scheduling/links` actually answers with: the stored row,
+ *  including the minted token the list keys and links on. */
+const CREATED = {
+  token: 'tok-new', title: 'Intro call', description: null, calendar: 'c1',
+  calendar_name: 'Work', duration_minutes: 30, timezone: 'UTC',
+  availability: { '0': ['09:00-17:00'] }, show_busy: false, buffer_minutes: 0,
+  min_notice_hours: 24, horizon_days: 30, enabled: true, booking_count: 0,
+  calendar_missing: false, url: 'https://x/book/tok-new',
+}
+
 beforeEach(() => {
   // The calendar grid opens on today's month, so the clock decides which
   // fixtures render. March 2026 begins on a Sunday, which makes the six-week
@@ -112,7 +126,13 @@ beforeEach(() => {
   m.schedulingBookings.mockResolvedValue([])
   // Implementations survive clearAllMocks, so a rejection set inside one test
   // would leak into the next and make this file order-dependent.
-  m.createSchedulingLink.mockResolvedValue({} as never)
+  // A REAL link, not `{}`. The empty object resolved truthily, so `save()`
+  // appended it and the list rendered a card with `key={undefined}` and a
+  // `/book/undefined` URL — which is where the React key warning this suite
+  // prints comes from. Nothing asserted the created link renders, so the
+  // stand-in was never wrong enough to notice; see
+  // `a published link appears in the list` below.
+  m.createSchedulingLink.mockResolvedValue(CREATED as never)
 })
 
 afterEach(() => { vi.useRealTimers() })

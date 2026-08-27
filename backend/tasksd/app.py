@@ -41,7 +41,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
 from .access import AccessVerifier
-from .auth import Authenticator, RateLimiter, hash_password, limiter_key
+from .auth import Authenticator, HashBudget, RateLimiter, hash_password, limiter_key
 from .config import Settings, normalize_dav_url
 from .dav.errors import AuthError as DavAuthError
 from .dav.errors import DavError
@@ -1087,7 +1087,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.exception_handler(DavNotFound)
     async def _dav_not_found(request: Request, exc: DavNotFound):
-        return JSONResponse(status_code=404, content={"detail": str(exc)})
+        # Logged in full, answered in general terms. `_raise_for` builds every
+        # DavError message from `resp.request.url` — the fully resolved INTERNAL
+        # URL, carrying the Radicale origin, the account name, the collection
+        # UUID and the resource slug — and this was the one DAV handler that put
+        # the raw message in the response body.
+        #
+        # That reaches the unauthenticated booking surface: any DAV round-trip
+        # inside `book_slot` that 404s (the target calendar removed by another
+        # client inside the sync interval, or the just-written resource deleted
+        # between the PUT and the read-back) answered an anonymous visitor with
+        # the owner's internal href. It is the sibling of the already-closed
+        # "409 with the owner's internal CalDAV href", which was fixed by
+        # rewording one ConflictError while this route kept shipping it.
+        #
+        # It was a poor answer for the owner too: deleting a task on a phone and
+        # then ticking it complete in a still-open tab produced a toast reading
+        # `GET http://127.0.0.1:5232/testuser/9f3e…/ab12cd.ics -> 404`.
+        log.info("Radicale reported a missing resource: %s", exc)
+        return JSONResponse(
+            status_code=404,
+            content={"detail": "that item no longer exists on the calendar server"},
+        )
 
     @app.exception_handler(DavAuthError)
     async def _dav_auth(request: Request, exc: DavAuthError):
@@ -1109,7 +1130,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ) -> None:
         if authenticator is not None and not authenticator.verify_session(session):
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "authentication required")
-        verifier.verify(cf_token)  # optional extra layer; no-op unless access_required
+        # Awaited: `verify` does its JWKS work in a thread, because PyJWT's client
+        # is a synchronous urlopen with a 30 s default timeout and this is the
+        # first thing every /api request touches. No-op unless access_required.
+        await verifier.verify(cf_token)
 
     def _client_ip(request: Request) -> str:
         # The app binds 127.0.0.1 only (uvicorn host + host firewall), so the sole
@@ -1293,13 +1317,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @api.put("/lists/{list_id}/tasks/{uid}/sidecar")
     async def put_sidecar(request: Request, list_id: str, uid: str, body: Sidecar):
         href = await _href(request, list_id, component="VTODO")
-        # Check before writing, like every sibling route. store.set_sidecar does
-        # INSERT OR IGNORE with no referential check, so an unknown uid used to
-        # answer 200 with a body of `null` AND leave a row behind with
-        # orphaned_at IS NULL — which orphan_sidecar never sets (it only fires
-        # when a *known* item is deleted) and gc_orphans therefore never
-        # reclaims. The sidecar table is the one part of SQLite a resync cannot
-        # rebuild, so those rows were permanent.
+        # Check before writing, like every sibling route. This closed two things
+        # and now closes one: `store.set_sidecar` used to do INSERT OR IGNORE
+        # with no referential check, so an unknown uid answered 200 with a body
+        # of `null` AND left a row behind with orphaned_at IS NULL — which
+        # orphan_sidecar never sets (it only fires when a *known* item is
+        # deleted) and gc_orphans therefore never reclaims.
+        #
+        # The ROW half now belongs to the store, which carries the same EXISTS
+        # guard `set_sort_orders` does — a third door (the day-plan estimate
+        # write-through) passed here unguarded and that is where the guard
+        # belongs. This stays for the STATUS: without it the route returns
+        # `get_task`'s None as a 200 with a `null` body, where every sibling
+        # 404s the same uid. test_api.py asserts both halves.
         if not await _run(_svc(request).has_task, href, uid):
             raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown task {uid}")
         fields = {k: v for k, v in body.model_dump().items() if v is not None}
@@ -1699,6 +1729,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # Caps concurrent password hashes. Per-app (not a module global) so tests
     # don't share it, matching the limiter instances below.
     login_hashes = asyncio.Semaphore(4)
+    # ...and caps the RATE, which the semaphore never did. `login_hashes` bounds
+    # memory; `authenticator.limiter` bounds one client. Neither bounds the
+    # guess budget, because the limiter's key is the caller's own address and a
+    # routed /48 supplies 65 536 of them. Shared with the consent screen, which
+    # runs the same hash on the same unauthenticated surface — see the semaphore
+    # beside it and `HashBudget` for the sizing.
+    hash_budget = HashBudget()
     @app.post("/api/login")
     async def login(request: Request, body: Login):
         if authenticator is None:
@@ -1714,6 +1751,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "too many attempts, try later",
                 headers={"Retry-After": str(authenticator.limiter.retry_after(key))},
             )
+        # ...and the global budget, AFTER the per-client one. The order is
+        # load-bearing: a client already over its own allowance must be turned
+        # away by its own counter rather than spending from the shared pool, or
+        # one address could empty the budget for everyone.
+        if not hash_budget.take():
+            raise HTTPException(
+                status.HTTP_429_TOO_MANY_REQUESTS,
+                "too many attempts, try later",
+                headers={"Retry-After": str(hash_budget.retry_after())},
+            )
         # scrypt is memory-hard by design (~16 MiB a call), so unbounded
         # concurrency is an unauthenticated memory amplifier — and every other
         # endpoint shares this thread pool.
@@ -1725,6 +1772,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             # The attempt is already recorded by attempt() above.
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid credentials")
         authenticator.limiter.record_success(key)
+        # The right answer costs nothing: the budget is a GUESS budget, and the
+        # owner logging in must not spend from the same pool their attacker is
+        # draining. One token back, not a reset — see HashBudget.give_back.
+        hash_budget.give_back()
         resp = JSONResponse({"authenticated": True, "user": authenticator.user})
         resp.set_cookie(
             "tasks_session", authenticator.issue_session(),
@@ -1988,7 +2039,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # same memory-hard scrypt as /api/login, and what the bound protects is
         # this process's memory rather than either endpoint's throughput.
         _register_mcp(app, settings=settings, authenticator=authenticator,
-                      client_ip=_client_ip, run=_run, login_hashes=login_hashes)
+                      client_ip=_client_ip, run=_run, login_hashes=login_hashes,
+                      hash_budget=hash_budget)
         log.info("mcp: remote connector enabled at %s/mcp", settings.public_url)
 
     # -- static SPA (built frontend), mounted last so /api wins --

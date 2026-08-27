@@ -64,19 +64,39 @@ export interface TaskData {
    *  just as wrong as saying the account has no lists. */
   loaded: boolean
   setLists: (next: List[]) => void
+  /** `cid` is the create's idempotency key, minted here when not supplied. Pass
+   *  one to make a RETRY of the same logical create idempotent: the backend
+   *  derives the VTODO's uid from it, so a replay is answered by the resource
+   *  already written instead of authoring a second task. `createMany` has taken
+   *  an explicit cid per item all along, for the same reason. */
   create: (listId: string, body: CreateTaskBody,
-    after?: Promise<Task | undefined>) => Promise<Task | undefined>
+    after?: Promise<Task | undefined>, cid?: string) => Promise<Task | undefined>
   createMany: (items: Array<{ listId: string; body: CreateTaskBody; cid: string }>,
     onProgress: (done: number) => void) => Promise<number[]>
   addSub: (parent: string, summary: string) => void
   toggle: (t: Task) => Promise<void>
   remove: (t: Task) => Promise<void>
   saveDetail: (t: Task, patch: Record<string, unknown>) => Promise<void>
-  /** Move the task `uid` to where `target` currently sits. Same gesture as the
+  /** Move the task `from` to where `target` currently sits. Same gesture as the
    *  sidebar's list drag: dropping on a row below lands after it, above lands
    *  before it. Positions are assigned across every task on the account, not
-   *  just the visible ones — see `reorder` below. */
-  reorder: (uid: string, target: string) => Promise<void>
+   *  just the visible ones — see `reorder` below.
+   *
+   *  Takes the ROWS, not their uids. A uid is unique within a collection but not
+   *  across the account, and the local array is every list merged — so a VTODO
+   *  copied between lists (which Tasks.org, DAVx5 and Thunderbird all do,
+   *  preserving the UID) gave `findIndex` two candidates and it moved whichever
+   *  sorted first. `taskKey` is the identity everywhere else in this file. */
+  reorder: (from: Task, target: Task) => Promise<void>
+  /** The NAMES of the lists whose last fetch failed, empty when all answered.
+   *  The `windowErrors` analogue on the task side, and for the same reason its
+   *  comment gives: a pane that is short and does not say so is a confident lie
+   *  about the account. */
+  taskListErrors: string[]
+  /** Re-run the task fan-out. The effect keys on `loadKey`/`rev`, and `rev`
+   *  only moves when the SERVER publishes a change — so on an idle account a
+   *  failed fetch had no way back short of reloading the page. */
+  reloadTasks: () => void
 }
 
 export interface CalendarData {
@@ -199,6 +219,12 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
   keyRef.current = loadKey
   const fetchToken = useRef(0)
   const invalidateFetches = () => { fetchToken.current += 1 }
+  const [listErrors, setListErrors] = useState<string[]>([])
+  // The retry's own signal. `rev` cannot serve: it moves only when the server
+  // publishes a change, so on an idle account a failed fan-out had nothing to
+  // re-issue it.
+  const [taskNonce, setTaskNonce] = useState(0)
+  const reloadTasks = useCallback(() => setTaskNonce((n) => n + 1), [])
 
   // Waits for the real lists rather than fanning out over the cached ones: a
   // seeded id may name a list deleted in another client, and a 404 per stale
@@ -208,18 +234,45 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
     if (!enabled || !listsLoaded) return
     if (lists.length === 0) {
       setTasks([])
+      setListErrors([])
       setLoaded(true)
       return
     }
     const token = ++fetchToken.current
     const key = loadKey
     guard(async () => {
-      const per = await Promise.all(lists.map((l) => api.tasks(l.id)))
-      const ts = per.filter(Array.isArray).flat()
-      if (token === fetchToken.current && key === keyRef.current) setTasks(ts)
+      // `allSettled`, not `all`, exactly as the calendar window below does and
+      // for the same reason its comment gives. One list answering 500 — one
+      // poison VTODO from jtx Board or Tasks.org that 500s the DTO builder for
+      // its collection, a documented failure class here — rejected the whole
+      // batch, so `setTasks` never ran, `loaded` flipped true anyway, and EVERY
+      // task surface in the app (TasksView, HomeView, TodayView, the calendar's
+      // task overlay) reads that one array. TasksView then rendered "Nothing to
+      // do here.": the owner was told their account was empty.
+      const per = await Promise.allSettled(lists.map((l) => api.tasks(l.id)))
+      const ts = per.flatMap((r) =>
+        r.status === 'fulfilled' && Array.isArray(r.value) ? r.value : [])
+      const failed = lists
+        .filter((l, i) => per[i].status === 'rejected'
+          || !Array.isArray((per[i] as PromiseFulfilledResult<Task[]>).value))
+        .map((l) => l.name)
+      // An AuthError anywhere is the SESSION, not one list: let it out to
+      // `guard` so the app routes to the login card rather than reporting the
+      // whole account as a set of broken lists.
+      const auth = per.find((r) => r.status === 'rejected'
+        && (r as PromiseRejectedResult).reason instanceof AuthError)
+      if (auth) throw (auth as PromiseRejectedResult).reason
+      if (token !== fetchToken.current || key !== keyRef.current) return
+      // Only when SOMETHING landed, the lesson the calendar path already
+      // carries: writing `[]` for a fan-out where every list failed replaces
+      // rows that are still on screen with a blank pane, which is a worse blank
+      // than the one this fixes. A total failure leaves the previous rows up
+      // and says so through `taskListErrors`.
+      if (failed.length < lists.length) setTasks(ts)
+      setListErrors(failed)
     }).finally(() => setLoaded(true))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loadKey, rev, enabled, listsLoaded])
+  }, [loadKey, rev, enabled, listsLoaded, taskNonce])
 
   // Mirror to disk on the trailing edge, so a burst of optimistic paints costs
   // one write rather than one per keystroke. Writing on the optimistic paint
@@ -318,9 +371,9 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
   const pending = useRef(new Map<string, Promise<Task | undefined>>())
 
   const create = async (listId: string, body: CreateTaskBody,
-    after?: Promise<Task | undefined>): Promise<Task | undefined> => {
+    after?: Promise<Task | undefined>, explicitCid?: string): Promise<Task | undefined> => {
     if (!listId) return undefined
-    const cid = clientId()
+    const cid = explicitCid ?? clientId()
     const uid = uidFor(cid)
     const key = loadKey
     invalidateFetches()
@@ -585,14 +638,23 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
   // every list unconditionally), so "the whole sequence" costs nothing to
   // build: sort by the comparator that is already deciding what is on screen,
   // splice the dragged row in, and hand that over.
-  const reorder = async (uid: string, target: string) => {
-    if (uid === target) return
+  // Keyed on `taskKey`, not on the bare uid — including the no-op check. The
+  // backend keys items on (collection_href, uid), so a uid copied into a second
+  // list is two distinct tasks, and this array is every list merged. Matching on
+  // the uid gave `findIndex` two candidates and moved whichever sorted first, so
+  // dragging the Work copy moved the Home copy; `reorder` then renumbers
+  // `sort_order` for EVERY task on the account and POSTs it, making that
+  // permanent. And `uid === target` was true for a drop of one copy onto the
+  // other, so that gesture silently did nothing at all — the same cause, and the
+  // reason the early return had to move to keys with the rest.
+  const reorder = async (from_: Task, target_: Task) => {
+    if (taskKey(from_) === taskKey(target_)) return
     const placed = sortTasks(tasks)
-    const from = placed.findIndex((t) => t.uid === uid)
+    const from = placed.findIndex((t) => taskKey(t) === taskKey(from_))
     // Read before the removal, like Sidebar's list drag: dropping on a row
     // further down lands after it, further up lands before it, which is what
     // the gesture looks like it is doing.
-    const to = placed.findIndex((t) => t.uid === target)
+    const to = placed.findIndex((t) => taskKey(t) === taskKey(target_))
     if (from < 0 || to < 0) return
     const [moved] = placed.splice(from, 1)
     placed.splice(to, 0, moved)
@@ -626,6 +688,7 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
   const value: TaskData = {
     lists: ordered, serverOrderedLists: lists, tasks, listsLoaded, listsOk, loaded, setLists,
     create, createMany, addSub, toggle, remove, saveDetail, reorder,
+    taskListErrors: listErrors, reloadTasks,
   }
   return <TaskCtx.Provider value={value}>{children}</TaskCtx.Provider>
 }
@@ -772,8 +835,26 @@ function CalendarProvider({ rev, guard, enabled, children }: {
   // back in in the morning" shows a frozen snapshot missing everything DAVx5 or
   // Apple wrote overnight. `TaskProvider` already refetches — its effects list
   // `enabled` as a dep — which made this an inconsistency rather than a design.
+  //
+  // On the TRUE->FALSE TRANSITION only, which is the whole of what "the session
+  // went away" means. `enabled` is `auth === 'in'` and `auth` starts at
+  // `'loading'`, so this effect also ran ON MOUNT — before `/api/me` had
+  // answered — and threw away the `readCachedCalendars()` seed two lines of
+  // constructor above it, along with `seeded.current` and `latest.current`. The
+  // calendar half of `cache.ts` was therefore dead in practice: written on every
+  // change, read once, and cleared before the first paint that could use it. A
+  // cold boot on a slow connection showed an empty calendar for the whole
+  // round trip, which is exactly what the mirror exists to prevent.
+  //
+  // `wasEnabled` holds the value this effect last saw. The guard is the STEP,
+  // not the level, so no first invocation can be a fall whatever the ref is
+  // seeded with — seeding it with `enabled` says what it means rather than
+  // relying on that.
+  const wasEnabled = useRef(enabled)
   useEffect(() => {
-    if (enabled) return
+    const fell = wasEnabled.current && !enabled
+    wasEnabled.current = enabled
+    if (!fell) return
     setCals([])
     setWindows(new Map())
     setWindowFails(new Map())

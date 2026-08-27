@@ -130,17 +130,43 @@ def test_find_free_time_at_the_end_of_time_is_an_error_not_an_overflow():
 
 # ── AUDIT: _at_or_after compares aware against naive ───────────────────────
 
-@pytest.mark.parametrize("a, anchor", [
-    (datetime(2026, 1, 1, 9, 0), datetime(2026, 1, 1, 9, 0, tzinfo=timezone.utc)),
-    (datetime(2026, 1, 1, 9, 0, tzinfo=timezone.utc), datetime(2026, 1, 1, 9, 0)),
+_NAIVE_9 = datetime(2026, 1, 1, 9, 0)
+_AWARE_9 = datetime(2026, 1, 1, 9, 0, tzinfo=timezone.utc)
+_NAIVE_8 = datetime(2026, 1, 1, 8, 0)
+_AWARE_8 = datetime(2026, 1, 1, 8, 0, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize("a, anchor, expected", [
+    # The original crash: one side floating, one side aware, equal wall clock.
+    (_NAIVE_9, _AWARE_9, True),
+    (_AWARE_9, _NAIVE_9, True),
+    # ... and the same mix where the ORDERING is what is being asked, in both
+    # directions. Without these the pin passed on a branch returning a constant.
+    (_NAIVE_8, _AWARE_9, False),
+    (_NAIVE_9, _AWARE_8, True),
+    (_AWARE_8, _NAIVE_9, False),
+    (_AWARE_9, _NAIVE_8, True),
+    # Same-awareness pairs, so a "fix" that only ever answers the mixed case
+    # cannot pass either.
+    (_AWARE_8, _AWARE_9, False),
+    (_NAIVE_9, _NAIVE_8, True),
 ])
-def test_splitting_a_series_survives_a_floating_date_list_entry(a, anchor):
+def test_splitting_a_series_survives_a_floating_date_list_entry(a, anchor, expected):
     """`_as_utc` returns a naive datetime unchanged, so one floating (TZID-less)
     EXDATE / RDATE / RECURRENCE-ID made every "this and following" edit or
     delete a 500 — and a floating entry is exactly what a foreign CalDAV client
     writes. Fixed by mirroring the awareness guard the sibling `_same_instant`
-    already carried."""
-    assert isinstance(_at_or_after(a, anchor), bool)
+    already carried.
+
+    The ANSWER is asserted, not the type. `isinstance(..., bool)` did catch the
+    original TypeError, but it accepted any boolean, and both original cases were
+    the equal-instant one — so a later "we cannot compare these" tidy-up
+    returning a constant `False` would have passed. That value decides where a
+    series is cut: it gates `_drop_overrides` and the slot walk in
+    `ical/edit.py`, so getting it wrong leaves an EXDATE on the head and strips
+    it from the tail, silently resurrecting a deleted occurrence in every
+    instance of the new series."""
+    assert _at_or_after(a, anchor) is expected
 
 
 # ── AUDIT: the XML backstop misses lone surrogates and U+FFFE/U+FFFF ───────

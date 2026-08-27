@@ -21,11 +21,25 @@ export function ConnectionsSection({ onExpire }: {
   const tf = useTimeFormat()
   const [rows, setRows] = useState<McpConnection[]>([])
   const [loaded, setLoaded] = useState(false)
+  const [failed, setFailed] = useState(false)
   const [confirming, setConfirming] = useState<string | null>(null)
 
+  // `failed`, distinguished from an empty account — the flag ArchivedCalendarsSection
+  // ten lines away in the same settings panel already carries, with the comment
+  // saying why: an empty state over a failed fetch is a confident lie about the
+  // account. `makeGuard` swallows the rejection and resolves undefined, so a
+  // 502 or a timeout landed in the exact same render as "you have connected
+  // nothing" — on the ONLY screen that shows which applications hold a live MCP
+  // OAuth grant over the whole account, and the only place one can be revoked.
   useEffect(() => {
-    guard(async () => { setRows(await api.mcpConnections()); setLoaded(true) })
-      .finally(() => setLoaded(true))
+    let alive = true
+    guard(() => api.mcpConnections()).then((r) => {
+      if (!alive) return
+      if (Array.isArray(r)) setRows(r)
+      else setFailed(true)
+      setLoaded(true)
+    })
+    return () => { alive = false }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -49,6 +63,11 @@ export function ConnectionsSection({ onExpire }: {
     <>
       {!loaded ? (
         <div className="empty">Loading…</div>
+      ) : failed ? (
+        <div className="empty" role="alert">
+          Couldn&rsquo;t load your connected applications. Any grants you have
+          are still live — this list could not be read, not emptied.
+        </div>
       ) : rows.length === 0 ? (
         <div className="empty">
           Nothing is connected. Applications you connect through the MCP

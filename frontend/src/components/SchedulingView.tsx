@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type KeyboardEvent } from 'react'
+import { useEffect, useMemo, useState, type KeyboardEvent, useRef } from 'react'
 import { api, type Availability, type Booking, type BookingLink, type BookingLinkInput,
   type List } from '../api'
 import { makeGuard } from '../util'
@@ -19,6 +19,15 @@ const COMMON_TZS = [
   'Europe/Berlin', 'Asia/Tokyo', 'Asia/Shanghai', 'Asia/Kolkata', 'Australia/Sydney',
 ]
 
+/** A typed number field's value, bounded. The fields hold a STRING while they
+ *  are being edited (see the Duration input), so every reader of one has to
+ *  agree on how an empty or half-typed value resolves. */
+function clamp(raw: string, lo: number, hi: number, fallback: number): number {
+  const n = Number(raw)
+  if (raw.trim() === '' || !Number.isFinite(n)) return fallback
+  return Math.max(lo, Math.min(hi, n))
+}
+
 export function SchedulingView({ rev, onExpire }: { rev: number; onExpire: () => void }) {
   const guard = makeGuard(onExpire)
   const tf = useTimeFormat()
@@ -27,14 +36,32 @@ export function SchedulingView({ rev, onExpire }: { rev: number; onExpire: () =>
   const [bookings, setBookings] = useState<Booking[]>([])
   const [editing, setEditing] = useState<BookingLink | 'new' | null>(null)
   const [copied, setCopied] = useState<string | null>(null)
+  const [loaded, setLoaded] = useState(false)
+  const [failed, setFailed] = useState(false)
 
+  // `makeGuard` swallows every non-401 failure and RESOLVES undefined, so none
+  // of the setState calls below used to run and `links`/`bookings` stayed at
+  // their initial `[]` — which this view renders as its empty copy. A 502, a 429
+  // or a timeout therefore told the owner, in prose, that they had never created
+  // a booking link and that nothing was booked, with no error and no retry.
+  // ArchivedCalendarsSection carries this exact flag for the same reason, and
+  // its comment says why: an empty state over a failed fetch is a confident lie
+  // about the account.
   useEffect(() => {
+    let alive = true
+    setFailed(false)
     guard(async () => {
       const [ls, cs, bs] = await Promise.all([
         api.schedulingLinks(), api.calendars(), api.schedulingBookings(),
       ])
-      setLinks(ls); setCals(cs); setBookings(bs)
+      return { ls, cs, bs }
+    }).then((r) => {
+      if (!alive) return
+      if (r) { setLinks(r.ls); setCals(r.cs); setBookings(r.bs) }
+      else setFailed(true)
+      setLoaded(true)
     })
+    return () => { alive = false }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rev])
 
@@ -53,17 +80,46 @@ export function SchedulingView({ rev, onExpire }: { rev: number; onExpire: () =>
     }
   }
 
+  // Both writes below roll back ONLY the row that failed, functionally — never a
+  // whole-array snapshot. `data.tsx` carries this lesson twice, at `patchLocal`
+  // and at the reorder: "restore only the affected task — never a whole-array
+  // snapshot, which would clobber interleaved changes to other tasks". Here the
+  // interleaved change is another link's toggle, and the array captured at
+  // render holds it in its OLD state. Rolling that back left the owner looking
+  // at a link marked Live that the server had switched off — and "fixing" it by
+  // tapping the toggle turns it back on, publishing a URL they had disabled.
+  //
+  // Functional, not just narrow: `links` inside these closures is the value from
+  // the render the tap came from, so two writes in flight would each compute
+  // their `map` over a stale array and the later setState would win outright.
+
   const toggleEnabled = async (l: BookingLink) => {
-    const prev = links
-    setLinks(links.map((x) => (x.token === l.token ? { ...x, enabled: !l.enabled } : x)))
+    setLinks((ls) => ls.map((x) => (x.token === l.token ? { ...x, enabled: !l.enabled } : x)))
     const updated = await guard(() => api.patchSchedulingLink(l.token, { enabled: !l.enabled }))
-    if (!updated) setLinks(prev)
+    // Only the FIELD this write touched is restored, not the whole row `l`: an
+    // edit to the same link can land while the toggle is in flight (the editor
+    // replaces the row with the server's DTO), and putting `l` back wholesale
+    // reverts that title the same way the array snapshot reverted the other
+    // link. `l.enabled` is the value from before the tap, not a negation of
+    // whatever is there now, so a second failure cannot leave it flipped.
+    if (!updated) {
+      setLinks((ls) => ls.map((x) => (x.token === l.token ? { ...x, enabled: l.enabled } : x)))
+    }
   }
 
   const remove = async (l: BookingLink) => {
-    const prev = links
-    setLinks(links.filter((x) => x.token !== l.token))
-    if ((await guard(() => api.deleteSchedulingLink(l.token))) === undefined) setLinks(prev)
+    // Its position is remembered rather than the array, so a failed delete puts
+    // one link back where it was instead of resurrecting links deleted since.
+    const at = links.findIndex((x) => x.token === l.token)
+    setLinks((ls) => ls.filter((x) => x.token !== l.token))
+    if ((await guard(() => api.deleteSchedulingLink(l.token))) === undefined) {
+      setLinks((ls) => {
+        if (ls.some((x) => x.token === l.token)) return ls   // a refetch beat us to it
+        const back = [...ls]
+        back.splice(Math.min(at < 0 ? back.length : at, back.length), 0, l)
+        return back
+      })
+    }
   }
 
   /** Whether the write landed — the modal needs it to clear its in-flight guard.
@@ -92,12 +148,19 @@ export function SchedulingView({ rev, onExpire }: { rev: number; onExpire: () =>
           <button className="btn" onClick={() => setEditing('new')}>New link</button>
         </div>
         <div className="scroll">
-          {links.length === 0 && (
+          {!loaded ? (
+            <div className="empty" style={{ padding: '18px 26px' }}>Loading…</div>
+          ) : failed ? (
+            <div className="empty" style={{ padding: '18px 26px' }} role="alert">
+              Couldn&rsquo;t load your booking links. This is a display problem —
+              your links are still live and still taking bookings.
+            </div>
+          ) : links.length === 0 ? (
             <div className="empty" style={{ padding: '18px 26px' }}>
               Create a booking link, share it with a client, and their pick lands
               on your calendar.
             </div>
-          )}
+          ) : null}
           <div className="sched-list">
             {links.map((l) => (
               <div key={l.token} className={`sched-card ${l.enabled ? '' : 'off'}`}>
@@ -139,7 +202,7 @@ export function SchedulingView({ rev, onExpire }: { rev: number; onExpire: () =>
           <div className="section-label label" style={{ padding: '22px 26px 4px' }}>
             Upcoming bookings
           </div>
-          {upcoming.length === 0 && (
+          {loaded && !failed && upcoming.length === 0 && (
             <div className="empty" style={{ padding: '8px 26px' }}>Nothing booked yet.</div>
           )}
           <div className="sched-bookings">
@@ -247,15 +310,16 @@ function LinkModal({ link, cals, onClose, onSave, onDelete }: {
   const [title, setTitle] = useState(link?.title ?? '')
   const [description, setDescription] = useState(link?.description ?? '')
   const [calendar, setCalendar] = useState(link?.calendar ?? cals[0]?.id ?? '')
-  const [duration, setDuration] = useState(link?.duration_minutes ?? 30)
+  // Held as a STRING while the user types — see the Duration input for why.
+  const [duration, setDuration] = useState(String(link?.duration_minutes ?? 30))
   const [tz, setTz] = useState(
     link?.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone ?? 'UTC')
   const [days, setDays] = useState<DayRanges[]>(() => availToDays(
     link?.availability ?? { '0': [DEFAULT_RANGE], '1': [DEFAULT_RANGE], '2': [DEFAULT_RANGE], '3': [DEFAULT_RANGE], '4': [DEFAULT_RANGE] }))
   const [showBusy, setShowBusy] = useState(link?.show_busy ?? false)
-  const [buffer, setBuffer] = useState(link?.buffer_minutes ?? 0)
-  const [notice, setNotice] = useState(link?.min_notice_hours ?? 24)
-  const [horizon, setHorizon] = useState(link?.horizon_days ?? 30)
+  const [buffer, setBuffer] = useState(String(link?.buffer_minutes ?? 0))
+  const [notice, setNotice] = useState(String(link?.min_notice_hours ?? 24))
+  const [horizon, setHorizon] = useState(String(link?.horizon_days ?? 30))
   const [confirming, setConfirming] = useState(false)
 
   const patchDay = (i: number, d: Partial<DayRanges>) =>
@@ -267,10 +331,24 @@ function LinkModal({ link, cals, onClose, onSave, onDelete }: {
         (k === r ? (pos === 0 ? [v, x[1]] : [x[0], v]) : x) as [string, string]),
     })
 
+  const scrimPress = useRef(false)          // see the overlay below
+
   const dayErrors = availErrors(days)
-  const valid = title.trim() && calendar && tz.trim()
-    && Object.keys(daysToAvail(days)).length > 0
-    && dayErrors.size === 0
+  const noDays = Object.keys(daysToAvail(days)).length === 0
+  const valid = title.trim() && calendar && tz.trim() && !noDays && dayErrors.size === 0
+
+  // Why the button is dead, when it is dead for a reason nothing on screen shows.
+  // `dayErrors` renders a message per malformed RANGE, so a bad time gets an
+  // explanation — but turning every day off produced no error at all: Create/Save
+  // simply stayed disabled forever with the form looking complete. It is easy to
+  // arrive at, because clearing the shipped Mon-Fri defaults is the first thing
+  // someone does when their week is not Mon-Fri.
+  const blockedBecause = !title.trim() ? 'Give the link a title.'
+    : !calendar ? 'Pick a calendar for bookings to land on.'
+    : !tz.trim() ? 'Set the timezone your availability is in.'
+    : noDays ? 'Turn on at least one day, or nobody can book anything.'
+    : dayErrors.size ? 'Fix the highlighted time ranges.'
+    : null
 
   // `valid` bounds validity, not flight. Without this a double-click — or a
   // second Enter in any field, which also calls save() — published TWO live
@@ -288,13 +366,15 @@ function LinkModal({ link, cals, onClose, onSave, onDelete }: {
       title: title.trim(),
       description: description.trim() || null,
       calendar,
-      duration_minutes: duration,
+      // Clamped HERE as well as on blur: Enter submits without ever firing a
+      // blur, so the wire value must not depend on the field having been left.
+      duration_minutes: clamp(duration, 5, 480, 30),
       timezone: tz.trim(),
       availability: daysToAvail(days),
       show_busy: showBusy,
-      buffer_minutes: buffer,
-      min_notice_hours: notice,
-      horizon_days: horizon,
+      buffer_minutes: clamp(buffer, 0, 240, 0),
+      min_notice_hours: clamp(notice, 0, 720, 0),
+      horizon_days: clamp(horizon, 1, 180, 30),
     }, link?.token)
     if (!ok) setSaving(false)
   }
@@ -304,7 +384,15 @@ function LinkModal({ link, cals, onClose, onSave, onDelete }: {
   useEscape(onClose)
 
   return (
-    <div className="overlay" onClick={onClose}>
+    /* Escape and role="dialog" landed when this was last fixed; the SCRIM did
+       not, so the app's longest form still discarded itself when a drag-select
+       released outside it. See TaskModal for why a bare onClick is not enough. */
+    <div className="overlay"
+      onMouseDown={(e) => { scrimPress.current = e.target === e.currentTarget }}
+      onClick={(e) => {
+        if (e.target === e.currentTarget && scrimPress.current) onClose()
+        scrimPress.current = false
+      }}>
       <div className="modal sched-modal" role="dialog" aria-modal="true"
         aria-label={link ? 'Edit booking link' : 'New booking link'}
         onClick={(e) => e.stopPropagation()}>
@@ -313,33 +401,45 @@ function LinkModal({ link, cals, onClose, onSave, onDelete }: {
           <button className="icon-btn" onClick={onClose}>✕</button>
         </div>
         <div className="field">
-          <label className="label">Title</label>
-          <input className="input" autoFocus value={title} maxLength={200}
+          <label className="label" htmlFor="sched-title">Title</label>
+          <input className="input" id="sched-title" autoFocus value={title} maxLength={200}
             placeholder="30-minute intro call"
             onChange={(e) => setTitle(e.target.value)}
             onKeyDown={(e: KeyboardEvent) => { if (e.key === 'Enter') void save() }} />
         </div>
         <div className="field">
-          <label className="label">Description (shown to clients)</label>
-          <textarea className="input" rows={2} value={description} maxLength={2000}
+          <label className="label" htmlFor="sched-desc">Description (shown to clients)</label>
+          <textarea className="input" id="sched-desc" rows={2} value={description} maxLength={2000}
             onChange={(e) => setDescription(e.target.value)} />
         </div>
         <div className="field-row">
           <div className="field">
-            <label className="label">Calendar</label>
-            <select className="input" value={calendar} onChange={(e) => setCalendar(e.target.value)}>
+            <label className="label" htmlFor="sched-calendar">Calendar</label>
+            <select className="input" id="sched-calendar" value={calendar} onChange={(e) => setCalendar(e.target.value)}>
               {cals.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
           </div>
           <div className="field">
-            <label className="label">Duration (min)</label>
-            <input className="input" type="number" min={5} max={480} step={5} value={duration}
-              onChange={(e) => setDuration(Math.max(5, Math.min(480, Number(e.target.value) || 30)))} />
+            <label className="label" htmlFor="sched-duration">Duration (min)</label>
+            {/* Clamped on BLUR, not on change. Clamping the MINIMUM per keystroke
+                destroyed the first digit of every two-digit value under 50: type
+                `4` and it became `5`, so `45` came out `55` and `15` came out
+                `55`. `Number('') || 30` also made the field unclearable, so it
+                could not be emptied and retyped. `<input type=number>` has no
+                spinner in iOS Safari or Chrome on Android, which left no way at
+                all on a phone to set a 15-, 20-, 30- or 45-minute link — the
+                four values this feature exists for. The max still clamps on
+                change (typing past it is never a step towards a valid value),
+                and the element's own min/max keep the browser-level guard. */}
+            <input className="input" id="sched-duration" type="number" min={5} max={480}
+              step={5} value={duration}
+              onChange={(e) => setDuration(e.target.value === '' ? '' : String(Math.min(480, Number(e.target.value) || 0)))}
+              onBlur={() => setDuration(String(Math.max(5, Math.min(480, Number(duration) || 30))))} />
           </div>
         </div>
         <div className="field">
-          <label className="label">Timezone (your availability is in this zone)</label>
-          <input className="input" list="sched-tzs" value={tz} onChange={(e) => setTz(e.target.value)} />
+          <label className="label" htmlFor="sched-tz">Timezone (your availability is in this zone)</label>
+          <input className="input" id="sched-tz" list="sched-tzs" value={tz} onChange={(e) => setTz(e.target.value)} />
           <datalist id="sched-tzs">
             {COMMON_TZS.map((z) => <option key={z} value={z} />)}
           </datalist>
@@ -399,19 +499,25 @@ function LinkModal({ link, cals, onClose, onSave, onDelete }: {
         </div>
         <div className="field-row">
           <div className="field">
-            <label className="label">Buffer (min)</label>
-            <input className="input" type="number" min={0} max={240} step={5} value={buffer}
-              onChange={(e) => setBuffer(Math.max(0, Math.min(240, Number(e.target.value) || 0)))} />
+            <label className="label" htmlFor="sched-buffer">Buffer (min)</label>
+            <input className="input" id="sched-buffer" type="number" min={0} max={240}
+              step={5} value={buffer}
+              onChange={(e) => setBuffer(e.target.value === '' ? '' : String(Math.min(240, Number(e.target.value) || 0)))}
+              onBlur={() => setBuffer(String(Math.max(0, Math.min(240, Number(buffer) || 0))))} />
           </div>
           <div className="field">
-            <label className="label">Min notice (hrs)</label>
-            <input className="input" type="number" min={0} max={720} value={notice}
-              onChange={(e) => setNotice(Math.max(0, Math.min(720, Number(e.target.value) || 0)))} />
+            <label className="label" htmlFor="sched-notice">Min notice (hrs)</label>
+            <input className="input" id="sched-notice" type="number" min={0} max={720} value={notice}
+              onChange={(e) => setNotice(e.target.value === '' ? '' : String(Math.min(720, Number(e.target.value) || 0)))}
+              onBlur={() => setNotice(String(Math.max(0, Math.min(720, Number(notice) || 0))))} />
           </div>
           <div className="field">
-            <label className="label">Days ahead</label>
-            <input className="input" type="number" min={1} max={180} value={horizon}
-              onChange={(e) => setHorizon(Math.max(1, Math.min(180, Number(e.target.value) || 30)))} />
+            <label className="label" htmlFor="sched-horizon">Days ahead</label>
+            {/* Same shape: `|| 30` made this jump to 30 the moment a leading `0`
+                was typed on the way to `7`. */}
+            <input className="input" id="sched-horizon" type="number" min={1} max={180} value={horizon}
+              onChange={(e) => setHorizon(e.target.value === '' ? '' : String(Math.min(180, Number(e.target.value) || 0)))}
+              onBlur={() => setHorizon(String(Math.max(1, Math.min(180, Number(horizon) || 30))))} />
           </div>
         </div>
         <div className="modal-actions">
@@ -420,6 +526,9 @@ function LinkModal({ link, cals, onClose, onSave, onDelete }: {
               onClick={() => (confirming ? onDelete(link) : setConfirming(true))}>
               {confirming ? 'Really delete?' : 'Delete'}
             </button>
+          )}
+          {blockedBecause && (
+            <span className="sched-err" role="status">{blockedBecause}</span>
           )}
           <span className="spacer" />
           <button className="btn" disabled={!valid || saving} onClick={save}>

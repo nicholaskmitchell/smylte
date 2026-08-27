@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from bisect import bisect_left
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Iterable
@@ -207,6 +208,34 @@ def merge(intervals: list[Interval]) -> list[Interval]:
     return out
 
 
+def _widen(value: datetime, by: timedelta, tz) -> datetime:
+    """`value` moved by `by` as an instant, back in `tz` — clamped, not raising.
+
+    An interval near `datetime.min` or `datetime.max` runs out of representable
+    range here, and OverflowError is caught by nothing on this path:
+    `busy_intervals`' per-event guard has already returned, `generate_slots` does
+    not guard, and app.py's handler taxonomy has no entry for it. One VEVENT with
+    `DTSTART:00010101T000000` and a DURATION — which any client sharing the
+    collection can PUT, and which `store.get_events_in_range` admits for EVERY
+    window because its DURATION branch has no lower date bound — therefore 500'd
+    `GET /api/public/booking/{token}` permanently, for everyone, until someone
+    found and deleted the resource.
+
+    Clamping is the right answer rather than dropping the interval: a busy block
+    at the edge of representable time still blocks, and the buffer around it
+    cannot extend past the edge anyway. The safe direction on a booking path is
+    to keep blocking.
+    """
+    try:
+        return (_u(value) + by).astimezone(tz)
+    except (OverflowError, ValueError):
+        edge = datetime.max if by > timedelta(0) else datetime.min
+        try:
+            return edge.replace(tzinfo=timezone.utc).astimezone(tz)
+        except (OverflowError, ValueError):
+            return value            # cannot even be re-expressed; leave it as it was
+
+
 def pad(intervals: list[Interval], buffer_minutes: int) -> list[Interval]:
     """Each interval widened by the buffer on both sides, re-coalesced."""
     if not buffer_minutes:
@@ -216,8 +245,8 @@ def pad(intervals: list[Interval], buffer_minutes: int) -> list[Interval]:
     # aware datetime adds to its naive fields and re-derives the offset, so a
     # buffer straddling a transition would otherwise be an hour out.
     return merge([
-        Interval((_u(iv.start) - b).astimezone(iv.start.tzinfo),
-                 (_u(iv.end) + b).astimezone(iv.end.tzinfo))
+        Interval(_widen(iv.start, -b, iv.start.tzinfo),
+                 _widen(iv.end, b, iv.end.tzinfo))
         for iv in intervals
     ])
 
@@ -231,6 +260,58 @@ def clip(intervals: list[Interval], window: Interval) -> list[Interval]:
         if _u(s) < _u(e):
             out.append(Interval(s, e))
     return out
+
+
+def _window_end_utc(day: date, w_end: time, tz: ZoneInfo) -> datetime:
+    """The instant an availability window ends, never LATER than the owner said.
+
+    `datetime.combine(day, w_end, tzinfo=tz)` resolves a wall-clock time that does
+    not exist — the spring-forward gap — with PEP 495 fold=0, i.e. the
+    PRE-transition offset. For an end time that is the instant of `w_end + gap`
+    in post-transition local time, so the window GREW by the gap instead of
+    shrinking, and slots were emitted after the owner's stated hours. The comment
+    that used to sit here asserted the opposite; that is true only when the
+    START falls in the gap.
+
+    Where the gap sits in the last hour of the local day — America/Nuuk,
+    America/Godthab and America/Scoresbysund move -02 to -01 at 01:00 UTC, so
+    local 23:00:00-23:59:59 never happens — the over-run slot's local date is the
+    NEXT day, and `book_slot` re-validates with `only_day=req.date()`, a
+    different weekday whose availability does not contain it. So the public page
+    advertised a slot and the booking was then refused with "that time is not
+    available". Deterministic, not a race: an owner offering Saturday evenings
+    ending 23:30 had 00:00 Sunday offered on their behalf.
+
+    For a nonexistent wall time, fold=1 resolves with the POST-transition offset,
+    which lands strictly BEFORE the transition — inside the real window. Taking
+    it shrinks the window, which is the documented intent and the safe direction
+    on the one unauthenticated path into the owner's calendar. An ordinary time
+    is unaffected, and an ambiguous one (fall-back) keeps fold=0, the earlier
+    pass, exactly as before.
+    """
+    local = datetime.combine(day, w_end, tzinfo=tz)
+    as_instant = local.astimezone(timezone.utc)
+    # A wall time exists iff it survives a round trip through UTC.
+    if as_instant.astimezone(tz).replace(tzinfo=None) == local.replace(tzinfo=None):
+        return as_instant
+
+    # It does not, so the window really ends where the clock jumps: the
+    # transition instant. The two folds bracket it exactly — fold=0 resolves with
+    # the pre-transition offset and lands AT or AFTER the transition, fold=1 with
+    # the post-transition offset and lands BEFORE it — so bisect between them for
+    # the first instant carrying the new offset. Clamping to fold=1 alone would
+    # be a whole gap too conservative and would throw away real availability the
+    # owner offered (Nuuk 18:00-23:30 would stop at 22:00 instead of 23:00).
+    lo = local.replace(fold=1).astimezone(timezone.utc)
+    hi = as_instant
+    after = hi.astimezone(tz).utcoffset()
+    while hi - lo > timedelta(seconds=1):
+        mid = lo + (hi - lo) / 2
+        if mid.astimezone(tz).utcoffset() == after:
+            hi = mid
+        else:
+            lo = mid
+    return hi
 
 
 def generate_slots(
@@ -275,6 +356,11 @@ def generate_slots(
     open_from = open_from_utc.astimezone(tz)
     last_day = local_now.date() + timedelta(days=horizon_days)
     blocked = pad(busy, buffer_minutes)
+    # Converted ONCE, here, rather than per slot inside the overlap test — see
+    # `_overlaps_any`. `pad` returns a merged list, so these are ascending and
+    # searchable.
+    blocked_starts = [_u(b.start) for b in blocked]
+    blocked_ends = [_u(b.end) for b in blocked]
     duration = timedelta(minutes=duration_minutes)
 
     slots: list[Interval] = []
@@ -286,10 +372,13 @@ def generate_slots(
         for w_start, w_end in availability.get(day.weekday(), []):
             # Constructing with tzinfo= resolves DST gaps forward (PEP 495) —
             # a spring-forward window shrinks rather than crashing.
-            win = Interval(
-                datetime.combine(day, w_start, tzinfo=tz),
-                datetime.combine(day, w_end, tzinfo=tz),
-            )
+            # Only the START is taken from here now; the end goes through
+            # `_window_end_utc`, which does its own `datetime.combine`. Keeping
+            # an `Interval` whose `.end` no longer described what the loop used
+            # was the exact trap the comment it replaced warned about — and it
+            # cost a second tz-aware construction per window per day on the
+            # unauthenticated path.
+            win_start = datetime.combine(day, w_start, tzinfo=tz)
             # Step in UTC, not wall clock. `aware_dt + timedelta` adds to the
             # naive fields and re-derives the offset, so across a transition a
             # "30-minute" slot is not 30 minutes: spring-forward produced one
@@ -298,16 +387,22 @@ def generate_slots(
             # only unauthenticated write path into the owner's calendar. UTC has
             # no such discontinuity; the local values are derived back from it
             # for display and for matching a booking request.
-            s_utc = win.start.astimezone(timezone.utc)
-            end_utc = win.end.astimezone(timezone.utc)
+            s_utc = win_start.astimezone(timezone.utc)
+            # Not `win.end.astimezone(...)` — see `_window_end_utc` for the
+            # spring-forward gap that made this window grow instead of shrink.
+            end_utc = _window_end_utc(day, w_end, tz)
             while s_utc + duration <= end_utc:
-                slot = Interval(s_utc.astimezone(tz), (s_utc + duration).astimezone(tz))
-                # Filter on the INSTANT (`s_utc`), never on `slot.start`. Both
-                # passes of a repeated fall-back hour carry the same wall clock,
-                # so comparing local values admitted slots already in the past
-                # and hid genuinely free ones.
-                if s_utc >= open_from_utc and not _overlaps_any(slot, blocked):
-                    slots.append(slot)
+                e_utc = s_utc + duration
+                # Filter on the INSTANTS, never on local values. Both passes of a
+                # repeated fall-back hour carry the same wall clock, so comparing
+                # local values admitted slots already in the past and hid
+                # genuinely free ones. The local Interval is derived only for a
+                # slot that survives, so a rejected candidate costs no
+                # conversions at all.
+                if s_utc >= open_from_utc and not _overlaps_any(
+                    s_utc, e_utc, blocked_starts, blocked_ends
+                ):
+                    slots.append(Interval(s_utc.astimezone(tz), e_utc.astimezone(tz)))
                     if len(slots) >= max_slots:
                         # Reaching the backstop means the answer is INCOMPLETE:
                         # every day after this one will read as fully booked. Say
@@ -324,16 +419,30 @@ def generate_slots(
     return slots
 
 
-def _overlaps_any(slot: Interval, blocked: list[Interval]) -> bool:
-    # `blocked` is merged/sorted; a linear scan with early exit is plenty for
-    # the bounded horizon this runs over. Compared as instants: on a fall-back
-    # day a busy block in the first pass of the repeated hour shares its wall
-    # clock with the second, so local comparison blocked both.
-    s_start, s_end = _u(slot.start), _u(slot.end)
-    for b in blocked:
-        b_start, b_end = _u(b.start), _u(b.end)
-        if b_start >= s_end:
-            return False
-        if s_start < b_end and s_end > b_start:
-            return True
-    return False
+def _overlaps_any(
+    s_start: datetime, s_end: datetime,
+    blocked_starts: list[datetime], blocked_ends: list[datetime],
+) -> bool:
+    """Does the slot [s_start, s_end) hit any blocked interval?
+
+    Every argument is already a UTC INSTANT, and that is deliberate rather than
+    incidental: on a fall-back day a busy block in the first pass of the repeated
+    hour shares its wall clock with the second, so comparing local values blocked
+    both. Taking instants in the signature is what stops a caller reintroducing
+    that by passing `slot.start`.
+
+    `blocked` comes from `merge`, so it is disjoint and sorted by start — which
+    makes it sorted by end too — and the answer is a binary search rather than a
+    scan. This used to take an `Interval` list and call `_u()` on both ends of
+    every interval it walked, on every slot, with nothing hoisted: O(slots x
+    intervals) `astimezone` calls on the ONE unauthenticated path into the
+    owner's calendar, run inside the global service lock. A 15-minute link over a
+    90-day horizon with an ordinary calendar measured 2.9 s of pure CPU per
+    anonymous GET; the public limiter's 120 requests / 300 s is far more than
+    enough to keep the lock permanently occupied.
+    """
+    # First index whose interval starts at or after the slot ends; everything
+    # before it starts early enough to matter, and of those only the last can
+    # still be running when the slot opens.
+    i = bisect_left(blocked_starts, s_end)
+    return i > 0 and blocked_ends[i - 1] > s_start

@@ -705,6 +705,35 @@ def test_tool_arguments_are_checked_against_the_advertised_schema(mcp):
                                      {"list_id": "x", "summary": "y", "tags": [1]})
 
 
+def test_a_non_finite_number_is_refused_at_the_mcp_door_like_the_http_one():
+    """`allow_inf_nan=False` on the HTTP models had no counterpart here, and the
+    two doors write the same rows.
+
+    `server.parse_body`'s `parse_constant` blocks the bare `NaN`/`Infinity`
+    literals, and its own comment says it does NOT catch `1e400` — an ordinary
+    number literal `json.loads` overflows to `inf`. One of those reaching
+    `day_plan.position` was stored in the app-only sidecar, the part of SQLite
+    no resync can rebuild, and then made every later read of that day
+    unrenderable: `JSONResponse` serializes with `allow_nan=False`, so the tool
+    call 500s AFTER committing and both `smylte_get_today` and
+    `GET /api/day/{day}` 500 from then on. The owner could not even read the
+    entry back out to repair it.
+
+    Enforced in the validator rather than per tool, so it holds for every
+    `type: number` in the table."""
+    from tasksd.mcp.validate import SchemaError, check_value
+
+    for bad in (float("inf"), float("-inf"), float("nan"), 1e400):
+        with pytest.raises(SchemaError, match="finite"):
+            check_value(bad, {"type": "number"}, where="t.position")
+        with pytest.raises(SchemaError):
+            check_value(bad, {"type": "integer"}, where="t.n")
+
+    # Ordinary values, including a very large finite one, still pass.
+    for ok in (0, -3, 1.5, 1e300):
+        check_value(ok, {"type": "number"}, where="t.position")
+
+
 def test_every_tool_schema_stays_inside_what_the_validator_enforces(mcp):
     """A schema keyword the validator does not implement would be advertised and
     silently unenforced — which is the exact shape of the bug above."""
@@ -1617,3 +1646,66 @@ def test_a_habit_on_an_unopened_day_is_visible_but_cannot_be_ticked(mcp, tmp_pat
     assert "no entry" in r["content"][0]["text"]
     # And the attempt did not open the day on its way past.
     assert _day_rows(tmp_path) == (0, 0)
+
+
+def test_a_lone_surrogate_anywhere_on_the_reply_path_cannot_kill_the_response():
+    """`json.loads` accepts an unpaired surrogate and hands it back verbatim;
+    Starlette renders with `ensure_ascii=False` and then `.encode("utf-8")`,
+    which raises. That happens WHILE RENDERING — outside every exception handler
+    — so it is a 500, and for `tools/call` it lands after the tool has already
+    run: a real write committed while its caller was told the call failed, and in
+    a batch one poisoned id discarded all 50 replies.
+
+    Exactly the failure the non-finite-id guard was written for, which is why
+    `_usable_id` now checks a string is encodable as well, and why every place
+    that echoes caller-supplied text into a reply goes through `wire_safe`."""
+    import json as _json
+
+    from tasksd.mcp.oauth import wire_safe
+    from tasksd.mcp.server import _usable_id
+
+    def render(obj):                      # what starlette's JSONResponse does
+        return _json.dumps(obj, ensure_ascii=False, allow_nan=False).encode("utf-8")
+
+    assert _usable_id("\ud800") is False, "an unencodable id is not a reply address"
+    assert _usable_id("req-1") and _usable_id(7) and _usable_id(None)
+
+    assert wire_safe("a\ud800b") == "a?b"
+    render({"jsonrpc": "2.0", "id": None, "error": {"message": wire_safe("\ud800")}})
+
+    # The three other places caller-controlled text reaches a reply: an unknown
+    # method name, an unknown argument name, and an unknown OAuth scope.
+    for hostile in ("bad\ud800method", "\udfff", "ok"):
+        render({"m": wire_safe(hostile)})
+
+
+def test_merged_events_are_ordered_by_instant_not_by_iso_string():
+    """`list_events` merged every calendar's rows and sorted lexically over
+    `dt.isoformat()`, which carries whatever offset the WRITING client used.
+
+    `_intrinsic_order`'s docstring in the same file already says why that is
+    wrong — "lexical comparison happens to agree for ISO values of equal shape
+    and stops agreeing the moment a date-only and a timed value meet, or an
+    offset appears" — and the tasks path was fixed for it while the events path
+    was not. So a Berlin-anchored 09:00 (07:00Z, genuinely FIRST) sorted after a
+    plain 08:00Z, because "…T09:00" is lexically greater. tools.py pages this
+    list, so `limit: 1` handed the model the LATER meeting and it never saw the
+    earlier one.
+
+    Undated and unreadable rows sort LAST now rather than first — they came off
+    the wire from another client — and uid/recurrence_id make the order total."""
+    from tasksd.mcp.api import _event_order
+
+    rows = [
+        {"uid": "utcone", "start": "2026-08-21T08:00:00+00:00", "summary": "B"},
+        {"uid": "berlin", "start": "2026-08-21T09:00:00+02:00", "summary": "A"},
+        {"uid": "nostart", "start": None, "summary": "C"},
+        {"uid": "junk", "start": "(datetime.datetime(2026, 1, 1, 0, 0),)", "summary": "D"},
+    ]
+    assert [r["uid"] for r in sorted(rows, key=_event_order)] == [
+        "berlin", "utcone", "nostart", "junk"]
+
+    # Total: two rows sharing an instant and a summary still order stably.
+    same = [{"uid": "b", "start": "2026-08-21T08:00:00+00:00", "summary": "x"},
+            {"uid": "a", "start": "2026-08-21T10:00:00+02:00", "summary": "x"}]
+    assert [r["uid"] for r in sorted(same, key=_event_order)] == ["a", "b"]

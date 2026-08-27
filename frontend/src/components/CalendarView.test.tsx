@@ -594,3 +594,70 @@ describe('moving into a hidden calendar', () => {
     expect(onHiddenCalendarsChange).not.toHaveBeenCalled()
   })
 })
+
+// ── Escape, at both dialogs and at both depths ──────────────────────────────
+// This file holds TWO `role="dialog" aria-modal="true"` scrims: the event
+// editor, and the prompt a recurring drag parks in. The editor's Escape used to
+// be bound flat — one `useEscape(onClose)` at the component level, live even
+// while the scope prompt was showing in place of the form — so Escape at the
+// prompt threw away a filled-in event instead of backing out of the question.
+// The drag prompt had no Escape at all, and the structural guard could not see
+// that: it grepped the FILE, and the editor below already satisfied it.
+
+describe('Escape unwinds one step', () => {
+  it('backs out of the save-scope prompt with the form still filled in', async () => {
+    const user = setup([occurrence()])
+    await openEvent(user)
+    const title = screen.getByLabelText('Title')
+    await user.clear(title)
+    await user.type(title, 'Renamed standup')
+    await user.click(screen.getByText('Save'))
+    expect(await screen.findByText('Apply changes to which events?')).toBeInTheDocument()
+
+    fireEvent.keyDown(window, { key: 'Escape' })
+
+    // One step back: the question is gone, the form is not, and the edit
+    // survived. Nothing was written — Escape is not an answer to the prompt.
+    expect(screen.queryByText('Apply changes to which events?')).toBeNull()
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    expect(screen.getByLabelText('Title')).toHaveValue('Renamed standup')
+    expect(m.patchEvent).not.toHaveBeenCalled()
+
+    // A second Escape is at the top level, and closes the editor.
+    fireEvent.keyDown(window, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+  })
+
+  it('backs out of the delete-scope prompt the same way', async () => {
+    const user = setup([occurrence()])
+    await openEvent(user)
+    await user.click(screen.getByText('Delete'))
+    expect(await screen.findByText('Delete which events?')).toBeInTheDocument()
+
+    fireEvent.keyDown(window, { key: 'Escape' })
+
+    expect(screen.queryByText('Delete which events?')).toBeNull()
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    expect(m.deleteEvent).not.toHaveBeenCalled()
+  })
+
+  it('closes the drag-scope prompt, which is a second dialog in this file', async () => {
+    setup([occurrence()])
+    await waitFor(() => expect(screen.getAllByTitle(/^Standup/)[0]).toBeInTheDocument())
+    const chip = screen.getAllByTitle(/^Standup/)[0]
+    // The occurrence sits on the 9th; drop it on the 10th. `dataTransfer` is
+    // jsdom's gap, not the component's — the handler only calls setData on it.
+    const target = Array.from(document.querySelectorAll('.cal-cell')).find(
+      (c) => !c.classList.contains('dim')
+        && c.querySelector('.daynum')?.textContent === '10')
+    expect(target, 'could not find the 10th in the grid').toBeTruthy()
+    fireEvent.dragStart(chip, { dataTransfer: { setData: () => {}, effectAllowed: 'move' } })
+    fireEvent.drop(target!)
+
+    expect(await screen.findByText('Apply the change to which events?')).toBeInTheDocument()
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.queryByText('Apply the change to which events?')).toBeNull()
+    // Escape declines the move; it does not silently pick a scope.
+    expect(m.patchEvent).not.toHaveBeenCalled()
+  })
+})

@@ -61,15 +61,21 @@ lives in the web build.
 
 | Path | What |
 | --- | --- |
-| `%APPDATA%\Smylte\settings.json` | Server URL, username, encrypted password, window size |
+| `%APPDATA%\Smylte\settings.json` | Server URL, username, encrypted password, optional GitHub token, data folder, port, window size |
 | `<data folder>\web\` | The downloaded web build |
 | `<data folder>\profile\` | WebView2 profile — cookies, localStorage |
 
 The data folder defaults to `%LOCALAPPDATA%\Smylte` and is chosen on first run.
 
 Your password is encrypted with DPAPI against your Windows account, so a copied
-`settings.json` is useless on another account or machine. If it cannot be
-decrypted the app simply shows its own login screen.
+`settings.json` cannot be used to log in on another account or machine. If it
+cannot be decrypted the app simply shows its own login screen.
+
+**The password is the only encrypted field.** Setup also takes an optional
+**GitHub token** — worth setting only if the anonymous 60-requests-an-hour API
+limit starts biting on update checks — and that is stored in the clear, as are
+the server URL, username, data folder and port. So the file is not worthless to
+someone who copies it; treat it the way you would any file holding a token.
 
 ## Changing settings later
 
