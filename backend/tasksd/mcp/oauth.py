@@ -80,7 +80,7 @@ DEFAULT_SCOPE = f"{SCOPE_READ} {SCOPE_WRITE} {SCOPE_OFFLINE}"
 
 
 def wire_safe(value: str) -> str:
-    """`value` with anything UTF-8 cannot carry replaced.
+    r"""`value` with anything UTF-8 cannot carry replaced.
 
     `json.loads` accepts a lone surrogate (`"\ud800"`) and hands it back
     verbatim, but Starlette renders with `ensure_ascii=False` and then
@@ -89,6 +89,24 @@ def wire_safe(value: str) -> str:
     text into a reply could 500 the request after the work was already done.
     Same failure shape as the non-finite id documented in `handle`, and the same
     remedy: never put a value on the wire that cannot go on the wire.
+
+    THIS DOCSTRING IS RAW, and has to stay raw. Written without the `r`, the
+    `\ud800` above is not the six characters naming a surrogate — Python decodes
+    the escape and bakes a REAL lone surrogate into `wire_safe.__doc__`, at
+    position 97. The function guarding against unencodable text was itself
+    unencodable.
+
+    That took production down, and only production: **executing this module
+    raises `UnicodeEncodeError` on Python 3.13 and on no earlier version.**
+    Measured across 3.10, 3.11, 3.12 and 3.13 on the same source — the first
+    three import it happily and hand back a docstring with a surrogate at
+    position 97; 3.13 refuses at exec, with no Python frame of ours below the
+    importing line. `.github/workflows/ci.yml` pins 3.12, so a full green CI run
+    said nothing about the interpreter the service actually runs.
+
+    `tests/test_source_encodable.py` keeps this closed for the whole tree
+    rather than for this line, and does it by reading the source, so it holds on
+    every version including the ones that would not otherwise complain.
     """
     return value.encode("utf-8", "replace").decode("utf-8")
 
