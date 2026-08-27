@@ -11,6 +11,11 @@ Windows only** — the WinForms dock order — because asserting it needs a real
 control tree and a message loop, and a source-shape pin would read as coverage
 without being any.
 
+The whole suite — all 936, including the ~240 that need a live CalDAV server —
+now runs without Docker: Radicale is a pip package, and `docs/STAGES.md` carries
+the four lines that stand one up. That was learned late, from a regression a live
+server caught in a second and four stages of in-process probing had missed.
+
 Findings from the adversarial audit sweeps — one deep finder per subsystem, then
 two independent verifiers per finding whose job is to *refute* it. Everything
 here **survived verification**: a verifier tried to knock it down and could not.
