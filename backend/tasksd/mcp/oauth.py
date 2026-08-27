@@ -80,7 +80,7 @@ DEFAULT_SCOPE = f"{SCOPE_READ} {SCOPE_WRITE} {SCOPE_OFFLINE}"
 
 
 def wire_safe(value: str) -> str:
-    """`value` with anything UTF-8 cannot carry replaced.
+    r"""`value` with anything UTF-8 cannot carry replaced.
 
     `json.loads` accepts a lone surrogate (`"\ud800"`) and hands it back
     verbatim, but Starlette renders with `ensure_ascii=False` and then
@@ -89,6 +89,16 @@ def wire_safe(value: str) -> str:
     text into a reply could 500 the request after the work was already done.
     Same failure shape as the non-finite id documented in `handle`, and the same
     remedy: never put a value on the wire that cannot go on the wire.
+
+    THIS DOCSTRING IS RAW, and has to stay raw. Written without the `r`, the
+    `\ud800` above is not the six characters naming a surrogate — Python decodes
+    the escape and bakes a REAL lone surrogate into `wire_safe.__doc__`, at
+    position 97. That took the service down: anything encoding docstrings on the
+    import path (a tools/list description, a log handler, a serializer) raises
+    the very UnicodeEncodeError this function exists to prevent, before a single
+    request is served. The function guarding against unencodable text was itself
+    unencodable. `test_no_source_string_carries_a_lone_surrogate` keeps it that
+    way for the whole tree, not just for this line.
     """
     return value.encode("utf-8", "replace").decode("utf-8")
 
