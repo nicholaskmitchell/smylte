@@ -7,13 +7,22 @@ docstring, because the docstring quoted `"\ud800"` in a NON-raw string. Python
 decodes that escape at compile time, so `wire_safe.__doc__` did not describe a
 surrogate, it CONTAINED one, at position 97.
 
-Nothing in the module notices. It imports, it compiles, the tests pass, and the
-function itself is correct. It fails only where something encodes the docstring
-— a `tools/list` description, a log handler, a serializer, a traceback report —
-and on the import path that is a service that will not start. The report was
+Nothing in the module notices, on the interpreter the tests run under. It
+imports, it compiles, the suite passes, and the function itself is correct.
+
+**It fails at exec on Python 3.13, and on no earlier version.** Measured across
+3.10, 3.11, 3.12 and 3.13 against identical source: the first three hand back a
+docstring carrying a surrogate at position 97, and 3.13 raises
 `UnicodeEncodeError: 'utf-8' codec can't encode character '\ud800' in position
-97`, raised from `from .oauth import SCOPE_READ, SCOPE_WRITE`, with no frame of
-ours below it.
+97` from the importing line, with no Python frame of ours below it. Production
+runs 3.13; `.github/workflows/ci.yml` pins 3.12. A completely green CI run said
+nothing about the interpreter the service actually starts under, which is why
+this reached a deploy.
+
+That version split is the reason this guard reads the SOURCE rather than
+importing and checking `__doc__`: a runtime check only fails where the runtime
+happens to care, so on 3.12 it would pass and keep passing right up to the next
+deploy.
 
 So this reads the SOURCE rather than any one module's `__doc__`: the class of
 defect is "a literal that cannot go on the wire", and it can be introduced by
