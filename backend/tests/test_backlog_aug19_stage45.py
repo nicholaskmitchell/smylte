@@ -906,8 +906,20 @@ def _run_setup_sh(password: str, root: pathlib.Path, *, username: str = "",
     (etc / "systemd").mkdir(parents=True)
     (root / "usrbin").mkdir()
 
+    # The stub stands in for the venv's interpreter, and setup.sh now asks that
+    # interpreter for its version before it will install onto it — so answering
+    # only `hash-password` makes the whole script exit 1 here. The version comes
+    # out of the script's own accepted list rather than being hard-coded: a
+    # third literal copy of the supported set is the exact drift
+    # tests/test_ci_interpreters.py exists to stop.
+    arm = re.search(r'case\s+"\$PYVER"\s+in\s*\n\s*(3\.\d+)', _read("deploy/setup.sh"))
+    assert arm, "setup.sh's interpreter check is gone or no longer parseable"
     fake_py = root / "hash-password"
-    fake_py.write_text("#!/bin/sh\necho 'scrypt$16384$8$1$fake$fake'\n")
+    fake_py.write_text(
+        '#!/bin/sh\ncase "$*" in\n'
+        "  *hash-password*) echo 'scrypt$16384$8$1$fake$fake' ;;\n"
+        f"  *) echo '{arm.group(1)}' ;;\n"
+        "esac\n")
     fake_py.chmod(0o755)
 
     stubs = {

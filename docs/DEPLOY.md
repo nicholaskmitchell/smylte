@@ -36,6 +36,31 @@ browser blocks the script: a blank page. Everything else about a rebuild is
 picked up without a restart, so this is the one new rule.
 
 ## A. Install the app  **[SAFE]**
+
+### The Python the service runs on
+**Supported: 3.12 and 3.13.** CI runs the full backend suite on exactly those
+two (`.github/workflows/ci.yml`, job `backend`), and `setup.sh` refuses to
+install onto anything else.
+
+`setup.sh` does **not** create the venv. Its interpreter is whatever `python3`
+was on the day someone ran `venv`, and it stays that version forever — including
+across an OS upgrade that moves `python3` underneath it, which is exactly how
+this drifted out of CI's coverage once already. A docstring defect that raises
+at import on 3.13 and on no earlier version took the service down while CI, then
+pinned to 3.12, was fully green.
+
+Check what is there, and rebuild it if it is not on the list:
+```bash
+~/tasks/backend/.venv/bin/python -V
+# if it is not 3.12.x or 3.13.x:
+sudo systemctl stop tasks
+cd ~/tasks/backend && rm -rf .venv
+python3.13 -m venv .venv && .venv/bin/pip install -r requirements.txt
+sudo systemctl start tasks && curl -s localhost:8080/healthz
+```
+Worth re-checking after any `apt full-upgrade` that moves the system Python.
+
+### Run it
 ```bash
 sudo ~/tasks/deploy/setup.sh
 ```
