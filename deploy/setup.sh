@@ -11,6 +11,32 @@ BACKEND=/home/$USER_NAME/tasks/backend
 DEPLOY=/home/$USER_NAME/tasks/deploy
 PY=$BACKEND/.venv/bin/python
 [ -x "$PY" ] || { echo "backend venv missing at $PY — create it first"; exit 1; }
+
+# ...and it has to be an interpreter CI actually exercises. This script does not
+# CREATE the venv, so its Python is whatever `python3` happened to be the day
+# someone ran `venv` — and an OS upgrade moves `python3` out from under an
+# existing venv without touching it. That drift is not theoretical: a docstring
+# holding a lone surrogate raised UnicodeEncodeError at import on 3.13 and on no
+# earlier version, and took the service down while CI — pinned to 3.12 — was
+# fully green. Nothing anywhere stated which Python production ran; this line is
+# now that statement, and it is enforced before anything is written.
+#
+# The accepted set below IS the CI matrix (.github/workflows/ci.yml, job
+# `backend`). backend/tests/test_ci_interpreters.py parses this `case` arm and
+# fails if the two ever diverge, so the duplication cannot rot — but keep the arm
+# in its literal `3.x|3.y)` form or that guard has nothing to read.
+if ! PYVER=$("$PY" -c 'import sys; print("%d.%d" % sys.version_info[:2])') \
+   || [ -z "$PYVER" ]; then
+  echo "could not read the Python version of the venv at $PY" >&2
+  exit 1
+fi
+case "$PYVER" in
+  3.12|3.13) ;;
+  *) echo "backend venv runs Python $PYVER, which CI does not test (3.12, 3.13)." >&2
+     echo "Rebuild it on a tested interpreter before installing — docs/DEPLOY.md §A." >&2
+     exit 1 ;;
+esac
+
 [ "$(id -u)" -eq 0 ] || { echo "run with sudo"; exit 1; }
 
 echo "== /etc/tasks =="
