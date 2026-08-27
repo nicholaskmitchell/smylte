@@ -2048,6 +2048,12 @@
 /* A paused habit is still on the list — it is the screen that un-pauses it —
    so it recedes rather than disappearing. */
 .habit-edit.paused .habit-name, .habit-edit.paused .habit-day { color: var(--fg-faint); }
+/* A rule painted before the server has minted its id. Every control on it is
+   `disabled` — they would each name an id only this browser knows — and this
+   says so, for the instant it lasts. Deliberately faint rather than a spinner:
+   the row is real, it is already readable, and the only thing not true about it
+   yet is that it can be edited. */
+.habit-edit.pending { opacity: 0.55; }
 
 .habit-edit-top { display: flex; align-items: center; gap: 8px; }
 /* The name is the flexible part: the two buttons beside it are fixed-width

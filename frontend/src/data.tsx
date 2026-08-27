@@ -26,6 +26,7 @@ import {
 import { orderLists } from './lists'
 import { sortTasks, taskKey } from './order'
 import {
+  CACHE_DEBOUNCE_MS,
   cacheCalendars, cacheEvents, cacheLists, cacheTasks,
   readCachedCalendars, readCachedEvents, readCachedLists, readCachedTasks,
 } from './cache'
@@ -33,9 +34,6 @@ import { makeGuard } from './util'
 
 /** The shape a bare client_id has, matching the backend's `_CLIENT_ID_RE`. */
 const LEGACY_PARENT = /^[0-9a-f]{16,64}$/
-
-/** How long after a change the mirror is written. One drag, one write. */
-const CACHE_DEBOUNCE_MS = 400
 
 export interface TaskData {
   /** In the order the sidebar shows them — group by group, then ungrouped.

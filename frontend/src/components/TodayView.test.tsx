@@ -5,9 +5,12 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import userEvent from '@testing-library/user-event'
 import { TodayView, dueFromParse, orderEntries, weekStartOf } from './TodayView'
 import { DataProvider } from '../data'
-import { setCacheUser } from '../cache'
 import {
-  api,
+  cacheDayPlan, cacheDayRange, cacheHabits,
+  readCachedDayPlan, readCachedHabits, setCacheUser,
+} from '../cache'
+import {
+  api, uidFor,
   type CalEvent, type DayEntry, type DayEntrySource, type DayPlan, type Habit,
   type List, type Task,
 } from '../api'
@@ -99,6 +102,19 @@ const plan = (entries: DayEntry[] = [], day = today(), o: Partial<DayPlan> = {})
     capacity_minutes: null, capacity: null,
     committed_at: null, shutdown_at: null, reflection: null, ...o,
   })
+
+/** A promise left in flight, and the function that lands it.
+ *
+ *  What every "before the server answers" assertion below needs: a call held
+ *  open long enough to read what is on the screen while it is still pending.
+ *  `vi.fn()` with no implementation resolves immediately, which is exactly the
+ *  frame these tests are not about. */
+const held = <T,>() => {
+  let land: (v: T) => void = () => {}
+  let fail: (e: unknown) => void = () => {}
+  const promise = new Promise<T>((res, rej) => { land = res; fail = rej })
+  return { promise, land: (v: T) => land(v), fail: (e: unknown) => fail(e) }
+}
 
 /** `opts` reaches `userEvent.setup` untouched. The only caller that passes
  *  anything is a fake-timer suite: userEvent's own delays are `setTimeout`s, so
@@ -3495,6 +3511,454 @@ describe('<TodayView> the habits sheet', () => {
 })
 
 // ── pure helpers ────────────────────────────────────────────────────────────
+
+// ── painting before the server answers ──────────────────────────────────────
+//
+// The two halves of one property, and the two the Today tab was missing while
+// every other data surface in the app had both: what is on screen in the gap
+// between a MOUNT and the read that fills it, and in the gap between a GESTURE
+// and the write that settles it.
+//
+// The first gap is the one only this tab has. Every other task surface renders
+// a query over `tasks`, which `cache.ts` has mirrored to disk all along, so it
+// paints from the mirror on the first frame. A day plan exists nowhere but in
+// `day_plan` — that is the whole point of the tab (see TodayView.tsx's header)
+// — so with nothing cached there was nothing to paint until
+// `POST /api/day/{today}/open` answered, and that call derives its snapshot
+// from CalDAV. Switching tabs unmounts the view, so every return replayed it.
+
+describe('<TodayView> the disk mirror', () => {
+  it('paints the cached day on the first frame, then the server’s', async () => {
+    setCacheUser('nick')
+    cacheDayPlan(plan([entry({ entry_id: 'cached', title: 'From the mirror' })]))
+    const open = held<DayPlan>()
+    m.openDay.mockReturnValue(open.promise)
+
+    setup()
+    // Before anything has answered at all. This is the frame that used to be
+    // empty, on a cold load and on every switch back to the tab.
+    expect(rowTitles()).toEqual(['From the mirror'])
+
+    await act(async () => {
+      open.land(plan([entry({ entry_id: 'live', title: 'From the server' })]))
+    })
+    // Replaced, not merged: the server is the source of truth and the mirror is
+    // only what to show until it answers.
+    await waitFor(() => expect(rowTitles()).toEqual(['From the server']))
+  })
+
+  it('is keyed to the day, so yesterday’s rows never paint under today', async () => {
+    setCacheUser('nick')
+    cacheDayPlan(plan([entry({ title: 'Yesterday' })], inDays(-1)))
+    m.openDay.mockReturnValue(held<DayPlan>().promise)
+
+    setup()
+    // The rows on screen and the day every write carries have to be the same
+    // day or the surface lies — so a blob written for another day is a miss,
+    // not a head start.
+    await waitFor(() => expect(m.openDay).toHaveBeenCalled())
+    expect(rowTitles()).toEqual([])
+  })
+
+  it('mirrors the day it read, so the next mount has it', async () => {
+    setCacheUser('nick')
+    m.openDay.mockResolvedValue(plan([entry({ title: 'Water the plants' })]))
+    setup()
+    await screen.findByText('Water the plants')
+
+    // On the trailing edge, so a burst of optimistic paints — ticking four
+    // rows, dragging one — costs one write rather than one per click.
+    await waitFor(
+      () => expect(readCachedDayPlan(today())?.entries ?? []).toHaveLength(1),
+      { timeout: 3000 })
+  })
+
+  it('mirrors an optimistic add too, before the server has confirmed it', async () => {
+    setCacheUser('nick')
+    m.addDayEntry.mockReturnValue(held<DayEntry>().promise)
+    const user = setup()
+    await user.type(await screen.findByLabelText('Add to today'), 'call mum{Enter}')
+    await waitFor(() => expect(rowTitles()).toEqual(['call mum']))
+
+    // Deliberate, and the same call `data.tsx` makes for tasks: coming back to
+    // the tab straight after adding a line should show the line.
+    await waitFor(
+      () => expect(readCachedDayPlan(today())?.entries.map((e) => e.title))
+        .toEqual(['call mum']),
+      { timeout: 3000 })
+  })
+
+  it('writes only today, so a look-back cannot evict what a mount reads', async () => {
+    setCacheUser('nick')
+    m.openDay.mockResolvedValue(plan([entry({ title: 'Water the plants' })]))
+    m.day.mockImplementation(async (d) => plan([entry({ entry_id: 'y', title: 'Back then' })], d))
+    const user = setup()
+    await screen.findByText('Water the plants')
+    await waitFor(
+      () => expect(readCachedDayPlan(today())?.entries ?? []).toHaveLength(1),
+      { timeout: 3000 })
+
+    await user.click(screen.getByRole('button', { name: 'Previous day' }))
+    await screen.findByText('Back then')
+
+    // The mirror holds ONE day and the tab always mounts on today (`day` is
+    // seeded from the wall clock, so a look-back never survives a tab switch).
+    // A past day written here would only evict the entry that gets read.
+    await new Promise((r) => setTimeout(r, 600))
+    expect(readCachedDayPlan(inDays(-1))).toBeNull()
+    expect(readCachedDayPlan(today())?.entries ?? []).toHaveLength(1)
+  })
+
+  it('paints the cached habit rules the moment the sheet opens', async () => {
+    setCacheUser('nick')
+    cacheHabits([habit({ id: 'hb1', title: 'Read' })])
+    m.habits.mockReturnValue(held<Habit[]>().promise)
+    const user = setup()
+    await user.click(await screen.findByRole('button', { name: 'Habits' }))
+    await screen.findByRole('dialog', { name: 'Habits' })
+
+    // The sheet is opened on demand rather than mounted with the tab, so its
+    // fetch starts on the click: without a mirror the dialog was empty for a
+    // round trip every single time it was opened.
+    expect(screen.getByLabelText('Rename Read')).toBeInTheDocument()
+  })
+
+  it('still refuses the add box when the read failed and there is nothing cached',
+    async () => {
+      // The gate moved from `dayError` to "the read failed AND there is nothing
+      // to paint", because the mirror pulled those two apart. This is the half
+      // that must not have moved: with no plan for this day every optimistic
+      // writer is a no-op, so an add would reach the server, succeed, and paint
+      // nothing.
+      m.openDay.mockRejectedValue(new Error('boom'))
+      setup()
+      await waitFor(() => expect(screen.getByLabelText('Add to today')).toBeDisabled())
+    })
+
+  it('accepts the add box when the read failed but the mirror has the day', async () => {
+    setCacheUser('nick')
+    cacheDayPlan(plan([entry({ entry_id: 'cached', title: 'From the mirror' })]))
+    m.openDay.mockRejectedValue(new Error('boom'))
+    const user = setup()
+
+    // Refusing to write to a day that is visibly on the screen would be
+    // refusing for a reason the screen contradicts — and the add is safe
+    // against a stale snapshot besides (`add_day_entry` is idempotent on
+    // (day, task) and on (day, note text)).
+    const box = await screen.findByLabelText('Add to today')
+    await waitFor(() => expect(box).toBeEnabled())
+    await user.type(box, 'call mum{Enter}')
+    await waitFor(() => expect(m.addDayEntry).toHaveBeenCalledWith(
+      today(), expect.objectContaining({ kind: 'note', title: 'call mum' })))
+    expect(rowTitles()).toEqual(['From the mirror', 'call mum'])
+  })
+})
+
+// ── the writes, and the frame after the gesture ────────────────────────────
+
+describe('<TodayView> painting a write before it lands', () => {
+
+  it('puts a typed task on the day before the VTODO has been written', async () => {
+    // The commonest gesture on the tab, and the one write that was not
+    // optimistic: a line with a date in it AUTHORS a task and then points the
+    // day at it, and the day row used to wait for BOTH round trips. The box
+    // cleared and the screen showed nothing for the length of a CalDAV write.
+    const create = held<Task>()
+    m.createTask.mockReturnValue(create.promise)
+    const user = setup()
+    await user.type(await screen.findByLabelText('Add to today'), 'gym at 7{Enter}')
+
+    await waitFor(() => expect(m.createTask).toHaveBeenCalled())
+    const cid = (m.createTask.mock.calls[0][1] as { client_id: string }).client_id
+    // On the day while the task is still being written, reading its title off
+    // the stand-in `data.tsx::create` painted into `tasks` — the two agree
+    // because both are keyed on the uid the client_id derives (`uidFor`).
+    await waitFor(() => expect(rowTitles()).toEqual(['gym']))
+    expect(m.addDayEntry).not.toHaveBeenCalled()
+
+    await act(async () => { create.land(task({ uid: uidFor(cid), summary: 'gym' })) })
+    await waitFor(() => expect(m.addDayEntry).toHaveBeenCalledWith(
+      today(), expect.objectContaining({ kind: 'task', list: 'l1', uid: uidFor(cid) })))
+    // …and it did not flicker on the way through: the row the create settles
+    // into is the row that was already there.
+    expect(rowTitles()).toEqual(['gym'])
+  })
+
+  it('takes the painted row back off when the task create fails', async () => {
+    const create = held<Task>()
+    m.createTask.mockReturnValue(create.promise)
+    const user = setup()
+    await user.type(await screen.findByLabelText('Add to today'), 'gym at 7{Enter}')
+
+    // Painted first — that is the point of the change, and it is what makes
+    // the removal below a rollback rather than a no-op.
+    await waitFor(() => expect(rowTitles()).toEqual(['gym']))
+
+    await act(async () => { create.fail(new Error('boom')) })
+
+    // No task, so nothing for the row to point at. The line goes back in the
+    // box, which is what makes the retry a keystroke away.
+    await waitFor(() => expect(rowTitles()).toEqual([]))
+    expect(m.addDayEntry).not.toHaveBeenCalled()
+    expect(screen.getByLabelText('Add to today')).toHaveValue('gym at 7')
+  })
+
+  it('closes the planning ritual on the press, not a round trip later', async () => {
+    m.openDay.mockResolvedValue(plan([entry({ title: 'Water the plants' })]))
+    const patch = held<DayPlan>()
+    m.patchDay.mockReturnValue(patch.promise)
+    const user = setup()
+    await screen.findByText('Water the plants')
+
+    await user.click(screen.getByRole('button', { name: 'Plan my day' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Plan your day' })
+    await user.click(within(dialog).getByRole('button', { name: 'Next' }))
+    await user.click(within(dialog).getByRole('button', { name: 'Next' }))
+    await user.click(within(dialog).getByRole('button', { name: 'Start the day' }))
+
+    // The last press of a three-step flow. A round trip spent with the overlay
+    // still standing over the day reads as a flow that has hung.
+    await waitFor(() => expect(
+      screen.queryByRole('dialog', { name: 'Plan your day' })).not.toBeInTheDocument())
+    expect(m.patchDay).toHaveBeenCalledWith(today(), { committed: true })
+    // The band is gated on the day not having been begun, and the day knows it
+    // has been — though nothing has answered yet.
+    expect(screen.queryByRole('button', { name: 'Plan my day' })).not.toBeInTheDocument()
+
+    await act(async () => {
+      patch.land(plan([], today(), { committed_at: `${today()}T08:00:00.000Z` }))
+    })
+  })
+
+  it('puts the day back to un-begun when the commit is refused', async () => {
+    m.openDay.mockResolvedValue(plan([entry({ title: 'Water the plants' })]))
+    const patch = held<DayPlan>()
+    m.patchDay.mockReturnValue(patch.promise)
+    const user = setup()
+    await screen.findByText('Water the plants')
+
+    await user.click(screen.getByRole('button', { name: 'Plan my day' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Plan your day' })
+    await user.click(within(dialog).getByRole('button', { name: 'Next' }))
+    await user.click(within(dialog).getByRole('button', { name: 'Next' }))
+    await user.click(within(dialog).getByRole('button', { name: 'Start the day' }))
+
+    // Begun on the press, so the nudge is gone…
+    await waitFor(() => expect(
+      screen.queryByRole('button', { name: 'Plan my day' })).not.toBeInTheDocument())
+
+    await act(async () => { patch.fail(new Error('boom')) })
+
+    // …and back when the write is refused. `guard` has raised the toast; the
+    // screen must not go on claiming a day that was never begun.
+    expect(await screen.findByRole('button', { name: 'Plan my day' })).toBeInTheDocument()
+  })
+
+  it('settles only the field it wrote, so one reply cannot undo another', async () => {
+    // `patchDayEntry` answers with the WHOLE row, and settling all of it meant
+    // each reply carried an opinion about every other field. A tick and an
+    // estimate typed a moment apart on one row therefore raced, and whichever
+    // replied last wrote its own idea of the other's field back.
+    m.openDay.mockResolvedValue(plan([entry({ entry_id: 'e1', title: 'Water the plants' })]))
+    const tick = held<DayEntry>()
+    m.patchDayEntry.mockImplementation((_d, id, body) => (
+      'done' in body
+        ? tick.promise
+        : Promise.resolve(entry({
+          entry_id: id,
+          estimate_minutes: body.estimate_minutes === -1
+            ? null : body.estimate_minutes ?? null,
+        }))))
+    const user = setup()
+    await screen.findByText('Water the plants')
+
+    await user.click(screen.getByRole('button', { name: 'Check Water the plants' }))
+    await user.click(screen.getByRole('button', { name: 'Estimate Water the plants' }))
+    await user.type(screen.getByLabelText('Minutes for Water the plants'), '30{Enter}')
+    await waitFor(() => expect(
+      screen.getByRole('button', { name: /estimated at/ })).toBeInTheDocument())
+
+    // The tick's reply lands LAST, carrying the row as it stood before the
+    // estimate was typed.
+    await act(async () => {
+      tick.land(entry({
+        entry_id: 'e1', title: 'Water the plants',
+        done_at: `${today()}T10:00:00.000Z`, estimate_minutes: null,
+      }))
+    })
+
+    // Both survive: the tick settled its stamp and nothing else.
+    expect(screen.getByRole('button', { name: /estimated at/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Uncheck Water the plants' }))
+      .toHaveAttribute('aria-pressed', 'true')
+  })
+})
+
+describe('<TodayView> the habits sheet, before the server answers', () => {
+  const openSheet = async (user: ReturnType<typeof userEvent.setup>) => {
+    await user.click(await screen.findByRole('button', { name: 'Habits' }))
+    return screen.findByRole('dialog', { name: 'Habits' })
+  }
+
+  it('paints a new rule on the press, with its controls disabled until it lands',
+    async () => {
+      const create = held<Habit>()
+      m.createHabit.mockReturnValue(create.promise)
+      const user = setup()
+      const sheet = await openSheet(user)
+      await user.type(screen.getByLabelText('New habit'), 'Stretch')
+      await user.click(within(sheet).getByRole('button', { name: 'Add' }))
+
+      // On screen before the rule exists, with the box already empty for the
+      // next one — and with every control off, because each of them names an id
+      // only this browser knows.
+      const name = await screen.findByLabelText('Rename Stretch')
+      expect(name).toBeDisabled()
+      expect(screen.getByRole('button', { name: 'Delete Stretch' })).toBeDisabled()
+      expect(screen.getByRole('button', { name: 'Mon for Stretch' })).toBeDisabled()
+      expect(screen.getByLabelText('New habit')).toHaveValue('')
+
+      await act(async () => { create.land(habit({ id: 'hb-new', title: 'Stretch' })) })
+      expect(screen.getByLabelText('Rename Stretch')).toBeEnabled()
+    })
+
+  it('takes a refused rule back off and puts the line back', async () => {
+    const create = held<Habit>()
+    m.createHabit.mockReturnValue(create.promise)
+    const user = setup()
+    const sheet = await openSheet(user)
+    await user.type(screen.getByLabelText('New habit'), 'Stretch')
+    await user.click(within(sheet).getByRole('button', { name: 'Add' }))
+
+    // Painted, and the box cleared behind it, before any of this.
+    await screen.findByLabelText('Rename Stretch')
+    expect(screen.getByLabelText('New habit')).toHaveValue('')
+
+    await act(async () => { create.fail(new Error('boom')) })
+
+    await waitFor(() =>
+      expect(screen.queryByLabelText('Rename Stretch')).not.toBeInTheDocument())
+    expect(screen.getByLabelText('New habit')).toHaveValue('Stretch')
+  })
+
+  it('does not overwrite the next line with a refused one', async () => {
+    // The line goes back only if the field is still EMPTY. Restoring it over
+    // something already being typed would be the rollback doing more damage
+    // than the failure it is undoing.
+    const create = held<Habit>()
+    m.createHabit.mockReturnValue(create.promise)
+    const user = setup()
+    const sheet = await openSheet(user)
+    await user.type(screen.getByLabelText('New habit'), 'Stretch')
+    await user.click(within(sheet).getByRole('button', { name: 'Add' }))
+    await screen.findByLabelText('Rename Stretch')
+    await user.type(screen.getByLabelText('New habit'), 'Walk')
+
+    await act(async () => { create.fail(new Error('boom')) })
+
+    await waitFor(() =>
+      expect(screen.queryByLabelText('Rename Stretch')).not.toBeInTheDocument())
+    expect(screen.getByLabelText('New habit')).toHaveValue('Walk')
+  })
+
+  it('does not mirror a rule the server has not minted an id for yet', async () => {
+    // A pending row wears an id only this browser has heard of, and `pending`
+    // is session state — so a mirror written mid-flight would paint that row
+    // back on the next open with its controls enabled, every one of them
+    // naming an id the server can only 404.
+    setCacheUser('nick')
+    const create = held<Habit>()
+    m.createHabit.mockReturnValue(create.promise)
+    const user = setup()
+    const sheet = await openSheet(user)
+    await user.type(screen.getByLabelText('New habit'), 'Stretch')
+    await user.click(within(sheet).getByRole('button', { name: 'Add' }))
+    await screen.findByLabelText('Rename Stretch')
+
+    // Well past the debounce, and still nothing.
+    await new Promise((r) => setTimeout(r, 600))
+    expect(readCachedHabits()).toBeNull()
+
+    await act(async () => { create.land(habit({ id: 'hb-new', title: 'Stretch' })) })
+
+    // …and the settle a beat later re-runs the write with the real row.
+    await waitFor(() => expect(readCachedHabits()?.map((h) => h.id)).toEqual(['hb-new']),
+      { timeout: 3000 })
+  })
+
+  it('takes a deleted rule off on the press', async () => {
+    m.habits.mockResolvedValue([habit(), habit({ id: 'hb2', title: 'Stretch' })])
+    m.deleteHabit.mockReturnValue(held<null>().promise)
+    const user = setup()
+    await openSheet(user)
+
+    await user.click(await screen.findByRole('button', { name: 'Delete Read' }))
+    await user.click(screen.getByRole('button', { name: 'Confirm delete Read' }))
+
+    await waitFor(() =>
+      expect(screen.queryByLabelText('Rename Read')).not.toBeInTheDocument())
+    expect(screen.getByLabelText('Rename Stretch')).toBeInTheDocument()
+  })
+
+  it('puts a refused delete back in its own place', async () => {
+    m.habits.mockResolvedValue([habit(), habit({ id: 'hb2', title: 'Stretch' })])
+    const gone = held<null>()
+    m.deleteHabit.mockReturnValue(gone.promise)
+    const user = setup()
+    await openSheet(user)
+
+    await user.click(await screen.findByRole('button', { name: 'Delete Read' }))
+    await user.click(screen.getByRole('button', { name: 'Confirm delete Read' }))
+    await waitFor(() =>
+      expect(screen.queryByLabelText('Rename Read')).not.toBeInTheDocument())
+
+    await act(async () => { gone.fail(new Error('boom')) })
+
+    // Back, and back WHERE IT WAS: the list renders in the order the server
+    // gave it, so a restored row that had moved to the end would read as a
+    // second change the owner did not make.
+    await waitFor(() =>
+      expect(screen.getByLabelText('Rename Read')).toBeInTheDocument())
+    expect([...document.querySelectorAll('.habit-name')]
+      .map((n) => (n as HTMLInputElement).value)).toEqual(['Read', 'Stretch'])
+  })
+})
+
+
+describe('<TodayView> the disk mirror, on a pinned clock', () => {
+  // Friday, so the week has days behind it — the same pin, and the same reason,
+  // as `<TodayView> the weekly count` above: a suite that happened to run on a
+  // Monday would have nothing before `weekStartOf(today)` and the assertion
+  // would pass vacuously. The zone is America/New_York, from vite.config.ts.
+  const FRIDAY = new Date(2026, 7, 21, 9, 0)
+
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    vi.setSystemTime(FRIDAY)
+  })
+  afterEach(() => { vi.useRealTimers() })
+
+  it('seeds the fortnight behind the habit counts as well as the day', async () => {
+    // The one `api.days` read feeds the weekly counts and the "still open from
+    // a recent plan" group alike. Un-seeded, both arrived a round trip after
+    // the rows they belong to — the count popping in beside a habit already on
+    // screen, which is the flicker the rest of the app does not have.
+    setCacheUser('nick')
+    const WED = '2026-08-19'
+    // `[day - LOOKBACK_DAYS, day + 1)`, `to` exclusive — the window the view
+    // asks for, spelled here so a cached one for any other window is a miss.
+    cacheDayRange('2026-08-07', '2026-08-22', [
+      plan([occurrence({ entry_id: 'h-wed', day: WED, done_at: `${WED}T09:00:00.000Z` })], WED),
+    ])
+    m.days.mockReturnValue(held<DayPlan[]>().promise)
+    m.openDay.mockResolvedValue(plan([occurrence()]))
+    setup()
+
+    // Two occurrences: Wednesday's from the mirror, today's from the day in
+    // hand — which is `MIN_WEEK_COUNT`, the point the figure starts being said.
+    expect(await screen.findByText('1 of 2 this week')).toBeInTheDocument()
+  })
+})
 
 describe('orderEntries', () => {
   it('reads by position, with unpositioned rows trailing', () => {
