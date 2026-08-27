@@ -26,13 +26,26 @@ permissions:
 jobs:
   backend:
     runs-on: ubuntu-latest
+    # Both interpreters `backend/pyproject.toml` advertises, because testing one
+    # of them is how a service-down defect shipped: a lone surrogate baked into
+    # a docstring raised `UnicodeEncodeError` at import on 3.13 and on no earlier
+    # version, so a completely green run on 3.12 said nothing about the
+    # interpreter production starts under. `requires-python` and this list are
+    # tied together by tests/test_ci_interpreters.py — widening one without the
+    # other fails there.
+    strategy:
+      # A 3.13-only failure must not cancel the 3.12 leg: which versions are
+      # affected IS the diagnosis, and fail-fast throws that away.
+      fail-fast: false
+      matrix:
+        python-version: ['3.12', '3.13']
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: ${{ matrix.python-version }}
           cache: pip
           cache-dependency-path: backend/requirements.txt
       - name: Start scratch Radicale
