@@ -524,8 +524,107 @@ def _stamp(event: Event, now: datetime) -> None:
     _set_int(event, "SEQUENCE", int(event.get("SEQUENCE", 0)) + 1)
 
 
+def _check_event_span(event: Event, edit: EventEdit) -> None:
+    """Refuse an edit that would leave DTSTART and DTEND disagreeing.
+
+    RFC 5545 §3.6.1: DTEND's value type MUST match DTSTART's. Nothing enforced
+    that, and the HTTP PATCH model decides each end independently by feeding the
+    raw string to `_parse_datelike` — a bare `YYYY-MM-DD` becomes a `date`,
+    anything with a `T` a `datetime` — with no `all_day` flag to pair them and no
+    downstream re-pairing.
+
+    So `PATCH {"start": "2026-03-12"}` on a timed meeting wrote
+    `DTSTART;VALUE=DATE:20260312` beside the untouched `DTEND:20260310T100000`.
+    Every other client sharing the collection then has to cope with an invalid
+    resource — and this app's own read path reports `all_day` from DTSTART alone,
+    while `scheduling.busy_intervals` skips all-day events, so the meeting
+    stopped blocking anything and the anonymous booking page offered its hour as
+    free. (The same PATCH also left DTEND two days before its own DTSTART.)
+
+    The SPA always sends both ends, but `smylte_update_event` exposes them as
+    independent optional strings, so an LLM moving a meeting to a date is enough.
+
+    Refusing rather than guessing: coercing a bare date onto a timed event means
+    inventing a time. ValueError, which `patch_event` maps to 422 and the MCP
+    tools to a ToolError, so the caller reads the sentence below.
+    """
+    def kind(v) -> str:
+        return "timed" if isinstance(v, datetime) else "all-day"
+
+    start = edit.dtstart if (edit.dtstart is not UNSET and edit.dtstart is not None) else None
+    end = edit.dtend if (edit.dtend is not UNSET and edit.dtend is not None) else None
+    if start is None and end is None:
+        return
+
+    # An edit that CLEARS the end is not an edit that omits one. `EditEvent.end`
+    # is `str | None` and `_parse_datelike(None)` is None, so `{"start": …,
+    # "end": null}` arrives here with `dtend` SUPPLIED-as-None — and validating
+    # it against the DTEND it is about to remove refused an edit that is
+    # internally consistent. `_apply_event_fields` drops the property two lines
+    # later; there is nothing left to disagree with.
+    clearing_end = edit.dtend is not UNSET and edit.dtend is None
+    if clearing_end and start is None:
+        return
+
+    # BEFORE the pair logic below, because that returns early when there is no
+    # DTEND to compare against — and this is exactly the shape where there is
+    # none. An event's length can be expressed as a DURATION instead, which is
+    # what phone clients write, and RFC 5545 §3.6.1 asks the same of it: a DATE
+    # start takes a NOMINAL, day-valued duration. Switching such an event to
+    # all-day used to leave `DTSTART;VALUE=DATE` beside `DURATION:PT1H`, which
+    # the read path then reports as all-day from DTSTART alone — so
+    # `busy_intervals` skipped it and the booking page offered its hour.
+    if start is not None and not isinstance(start, datetime) and event.get("DTEND") is None:
+        dur = event.get("DURATION")
+        if dur is not None and hasattr(dur, "dt") and isinstance(dur.dt, timedelta):
+            if dur.dt.total_seconds() % 86400:
+                raise ValueError(
+                    "this event's length is measured in hours, so it cannot become "
+                    "an all-day event without a new end; send both ends together"
+                )
+
+    if start is not None and end is not None:
+        if kind(start) != kind(end):
+            raise ValueError(
+                f"start is {kind(start)} and end is {kind(end)} — an event's two "
+                f"ends must be the same kind; send both as dates or both as times"
+            )
+        lo, hi = start, end
+    else:
+        incoming, other_key = (start, "DTEND") if start is not None else (end, "DTSTART")
+        other = event.get(other_key)
+        # `hasattr(…, "dt")`, because a resource can carry the property TWICE and
+        # icalendar then hands back a list. Every other datelike reader in this
+        # file guards for it; without it this raised AttributeError, which is
+        # neither ValueError nor OverflowError, so `patch_event` did not map it
+        # and the event became permanently uneditable through the app.
+        if other is None or not hasattr(other, "dt"):
+            return
+        if start is not None and clearing_end:
+            # Moving the start while removing the end: nothing to compare, and
+            # the old DTEND is on its way out.
+            return
+        if kind(other.dt) != kind(incoming):
+            raise ValueError(
+                f"this event is {kind(other.dt)} and the new "
+                f"{'start' if start is not None else 'end'} is {kind(incoming)} — "
+                f"send both ends together to change which kind it is"
+            )
+        lo, hi = (incoming, other.dt) if start is not None else (other.dt, incoming)
+
+    # Same guard, one layer up: the pair now agrees on kind, so it can be
+    # ordered. Only checked when the edit touches an end, so a resource another
+    # client already wrote backwards stays editable in every other respect.
+    try:
+        if _as_sortable(hi) < _as_sortable(lo):
+            raise ValueError("an event cannot end before it starts")
+    except TypeError:
+        return                              # unorderable shapes are not this guard's
+
+
 def _apply_event_fields(event: Event, edit: EventEdit, now: datetime) -> None:
     """Apply an EventEdit's field intent to a single VEVENT (master or override)."""
+    _check_event_span(event, edit)
     if edit.summary is not UNSET:
         _set_text(event, "SUMMARY", edit.summary)
     if edit.description is not UNSET:
@@ -596,21 +695,48 @@ def build_new_event(
 
 def _anchor_from_iso(recurrence_id: str, master: Event | None = None) -> date | datetime:
     """Parse an occurrence anchor (the ISO the read path emitted) back to a
-    date (all-day) or datetime (timed).
+    date (all-day) or datetime (timed), IN THE SERIES' OWN ZONE.
 
-    An aware ISO carries only a numeric offset, so ``fromisoformat`` yields a
-    fixed-offset tzinfo — which icalendar would serialize as a fabricated
-    ``TZID="UTC-06:00"``: unparseable by other clients and unmatchable against
-    the series. Re-express the anchor in the master DTSTART's real zone so
-    RECURRENCE-ID / EXDATE / DTSTART values written from it stay in the
-    series' own TZID (the instant is unchanged)."""
+    Everything written from an anchor — a split tail's DTSTART, an override's
+    RECURRENCE-ID, an EXDATE — inherits its awareness, so an anchor with no zone
+    produces a form-1 DATE-TIME: a FLOATING time (RFC 5545 §3.3.5), meaning
+    "09:00 wherever the reader is" rather than 09:00 in the series' zone. Each
+    of the three fails differently in another client: a floating tail drifts away
+    from its own head across a DST boundary, a floating RECURRENCE-ID stops
+    matching the instance the rule generates so the override renders as a
+    DUPLICATE, and a floating EXDATE excludes nothing so a deleted occurrence
+    comes back.
+
+    Two arms, and only the first was here:
+
+    * An AWARE ISO carries only a numeric offset, so ``fromisoformat`` yields a
+      fixed-offset tzinfo — which icalendar would serialize as a fabricated
+      ``TZID="UTC-06:00"``: unparseable by other clients and unmatchable against
+      the series. Converted into the master's real zone; the instant is
+      unchanged.
+    * A NAIVE ISO is what the read path actually emits and the SPA actually sends
+      back — a local wall time in the series' own zone with no offset on it — so
+      this is the arm that runs in production, and it did not exist. The zone is
+      ATTACHED rather than converted, because the value already IS a reading in
+      that zone.
+
+    A wall time inside a fall-back repeat is ambiguous in this format however it
+    is parsed; ``replace`` takes the first of the two (``fold=0``). That
+    ambiguity is in the ISO the SPA sends, not in what is done with it here, and
+    naming one of the two instants is strictly better than naming neither.
+
+    A master whose own DTSTART is floating, or an all-day series (whose anchor is
+    a ``date``), has no zone to keep and is left exactly as it was — the control
+    for that is that ``VALUE=DATE`` is what makes an event all-day.
+    """
     s = recurrence_id.strip()
     anchor = datetime.fromisoformat(s) if "T" in s else date.fromisoformat(s)
-    if isinstance(anchor, datetime) and anchor.tzinfo is not None and master is not None:
+    if isinstance(anchor, datetime) and master is not None:
         ds = master.get("DTSTART")
         mdt = ds.dt if ds is not None else None
         if isinstance(mdt, datetime) and mdt.tzinfo is not None:
-            anchor = anchor.astimezone(mdt.tzinfo)
+            anchor = (anchor.astimezone(mdt.tzinfo) if anchor.tzinfo is not None
+                      else anchor.replace(tzinfo=mdt.tzinfo))
     return anchor
 
 
@@ -776,6 +902,28 @@ def _first_free(slots, after, blocked, excluded):
     return None
 
 
+def _like_anchor(value, anchor):
+    """`value` coerced to the anchor's dateness and awareness.
+
+    Every value this normalizes is about to be compared with the anchor, written
+    back as a RECURRENCE-ID, and subtracted from the anchor — so a mixed list is
+    not an inconsistency, it is a TypeError waiting for the one resource that
+    carries the other shape. Mixed-awareness drops to wall clock, which is the
+    same call `_comparable` makes for the same reason.
+    """
+    if not isinstance(value, date):          # datetime is a date subclass
+        return value                         # a shape we do not recognise; leave it
+    if isinstance(anchor, datetime):
+        if not isinstance(value, datetime):
+            value = datetime.combine(value, time())
+        if anchor.tzinfo is not None and value.tzinfo is None:
+            return value.replace(tzinfo=anchor.tzinfo)
+        if anchor.tzinfo is None and value.tzinfo is not None:
+            return value.replace(tzinfo=None)
+        return value
+    return value.date() if isinstance(value, datetime) else value
+
+
 def _next_generated(master: Event, after, *, blocked=()) -> date | datetime | None:
     """The series' next occurrence strictly after `after` that is FREE.
 
@@ -791,7 +939,11 @@ def _next_generated(master: Event, after, *, blocked=()) -> date | datetime | No
     """
     rule = _rrule_dict(master)
     dtstart = master.get("DTSTART")
-    rdates = [_period_start(r) for r in _datelist_values(master, "RDATE")]
+    # Normalised HERE, not at the point of use, because both branches below
+    # return from this list: the rule-less one answers straight out of it, and
+    # the rule one merges it with the generated candidates.
+    rdates = [_like_anchor(_period_start(r), after)
+              for r in _datelist_values(master, "RDATE")]
     if dtstart is None:
         return _UNKNOWN
     if rule is None:
@@ -821,14 +973,23 @@ def _next_generated(master: Event, after, *, blocked=()) -> date | datetime | No
     except (SearchBudgetExceeded, ValueError, TypeError):
         return _UNKNOWN
 
+    # Back into the anchor's own dateness and awareness before comparing or
+    # returning — `_comparable` may have stripped both ends to wall clock, and
+    # the value is about to become a RECURRENCE-ID and to be SUBTRACTED from the
+    # anchor by `_detach_thisandfuture`.
+    #
+    # `extra` goes through this too, which it did not before. Only the
+    # dateutil-produced candidates were normalized; the master's RDATEs were
+    # appended raw, so `_first_free` could hand back a floating datetime beside a
+    # zoned anchor, or a datetime beside a DATE anchor, and `nxt - anchor` raised
+    # TypeError — neither ValueError nor OverflowError, so nothing mapped it and
+    # it escaped as a 500 with the occurrence left permanently uneditable. Both
+    # shapes are ordinary in a shared collection: mixed zones are what
+    # `_rebuild_datelist` already calls out, and a DATE-valued
+    # RANGE=THISANDFUTURE override is what Apple and Thunderbird write for "this
+    # and all future events".
     slots = sorted(
-        # Back into the anchor's own awareness before comparing or returning —
-        # `_comparable` may have stripped both ends to wall clock, and the value
-        # is about to become a RECURRENCE-ID.
-        [(nxt.replace(tzinfo=after.tzinfo)
-          if isinstance(after, datetime) and after.tzinfo and not nxt.tzinfo
-          else (nxt if isinstance(after, datetime) else nxt.date()))
-         for nxt in candidates] + extra,
+        [_like_anchor(nxt, after) for nxt in candidates] + extra,
         key=_as_sortable,
     )
     free = _first_free(slots, after, blocked, excluded)
@@ -926,6 +1087,9 @@ def apply_occurrence_override(
     if master is None:
         raise NotEditable("resource has no VEVENT to edit")
     anchor = _anchor_from_iso(recurrence_id, master)
+    # Before anything is created: an orphan RECURRENCE-ID is not an inert record,
+    # it reads back as a live occurrence. See `_require_addressable`.
+    _require_addressable(cal, master, anchor)
     override = _find_override(cal, anchor)
     if override is None:
         # Seeded from whatever GOVERNS this slot, which is not always the
@@ -994,6 +1158,10 @@ def exclude_occurrence(
     if master is None:
         raise NotEditable("resource has no VEVENT to edit")
     anchor = _anchor_from_iso(recurrence_id, master)
+    # An EXDATE matching no occurrence is a write that answers 204 and deletes
+    # nothing, while the SPA optimistically removes the row. See
+    # `_require_addressable`.
+    _require_addressable(cal, master, anchor)
     master.add("EXDATE", anchor)
     cal.subcomponents = [
         c for c in cal.subcomponents
@@ -1152,15 +1320,39 @@ def _shift_until(until, delta: timedelta, master: Event):
 # rotates cleanly, an ordinal one ("1TU") does not.
 _DAY_SELECTING = ("BYMONTHDAY", "BYYEARDAY", "BYWEEKNO", "BYMONTH", "BYSETPOS")
 
+# ...and the parts that name WHICH TIME OF DAY it fires at. Exactly the same
+# failure, one axis over, and the guard used to miss it twice: these were not in
+# the tuple above, and the `if not day_delta` early return bailed out before the
+# loop precisely when a time-only drag was in progress — which is the only time
+# they matter. `FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;COUNT=4` dragged 09:00 -> 11:00
+# moved DTSTART and left BYHOUR naming 9, so the series produced Jan 5 at 11:00
+# and then three unmoved 09:00s and a FIFTH occurrence, because COUNT is
+# consumed from a later start. The bytes go to Radicale, so the loss is
+# permanent and visible in every other client.
+_TIME_SELECTING = ("BYHOUR", "BYMINUTE", "BYSECOND")
 
-def _desynchronizing(rule: dict, day_delta: int, new_weekday: int | None = None) -> str | None:
-    """The BY* part a day-shift would leave naming the old day, if any.
+
+def _desynchronizing(rule: dict, day_delta: int, new_weekday: int | None = None,
+                     *, time_changed: bool = False) -> str | None:
+    """The BY* part a shift would leave naming the old slot, if any.
+
+    Two axes, and a shift can move along either or both. `day_delta` is the
+    change in CALENDAR DAY and `time_changed` is whether the wall-clock time of
+    day moved — derived by the caller from the same delta, so a drag inside one
+    day has `day_delta == 0` and a whole-day drag has `time_changed` false.
 
     `new_weekday` is the weekday (Mon=0) DTSTART has AFTER the shift — the
     caller has already applied it — and is needed only for the BYDAY case below.
     None means "unknown", which keeps the old conservative answer."""
+    if time_changed:
+        for key in _TIME_SELECTING:
+            if rule.get(key):
+                return key
     if not day_delta:
-        return None                         # a time-only drag moves nothing else
+        # A time-only drag moves nothing else — but only once the time-selecting
+        # parts above have had their say. This return is where they used to be
+        # missed.
+        return None
     for key in _DAY_SELECTING:
         if rule.get(key):
             return key
@@ -1229,10 +1421,16 @@ def _shift_rrule(master: Event, delta: timedelta, day_delta: int) -> None:
     dtstart = master.get("DTSTART")
     start_value = getattr(dtstart, "dt", None)
     new_weekday = start_value.weekday() if start_value is not None else None
-    blocker = _desynchronizing(rule, day_delta, new_weekday)
+    # The wall-clock time of day moved iff the delta is not a whole number of
+    # days. `timedelta` normalises to (days, seconds, microseconds) with the
+    # sub-day parts always non-negative, so this reads correctly for a backwards
+    # drag too: -2h is `timedelta(days=-1, seconds=79200)`.
+    time_changed = bool(delta.seconds or delta.microseconds)
+    blocker = _desynchronizing(rule, day_delta, new_weekday, time_changed=time_changed)
     if blocker is not None:
+        axis = "time" if blocker in _TIME_SELECTING else "day"
         raise ValueError(
-            f"cannot move a series whose repeat rule pins it to a particular day "
+            f"cannot move a series whose repeat rule pins it to a particular {axis} "
             f"({blocker}); edit the occurrence instead, or change the repeat"
         )
     changed = False
@@ -1280,6 +1478,16 @@ def shift_series(
 
     repeat_changed = edit.rrule is not UNSET and _rule_changed(master, edit.rrule)
     override = _find_override(cal, anchor)
+
+    # The anchor is not just a label here: it is the BASE the delta is measured
+    # from, and that delta moves EVERY occurrence, the RRULE's UNTIL, both date
+    # lists and every override's RECURRENCE-ID. So an anchor naming no
+    # occurrence does not fail — it silently reschedules the whole series by an
+    # amount nobody asked for. Measured: an anchor from an unrelated resource
+    # moved every occurrence back four hours and left the series otherwise
+    # intact, so nothing about the result said it had happened.
+    _require_addressable(cal, master, anchor)
+
     base = override.get("DTSTART").dt if override is not None and override.get("DTSTART") else anchor
     # A foreign client may have given this occurrence's override a different
     # dateness than the series (a timed override on an all-day series, say);
@@ -1332,6 +1540,56 @@ def _until_before(anchor) -> date | datetime:
     if isinstance(anchor, datetime):
         return _as_utc(anchor - timedelta(seconds=1))
     return anchor - timedelta(days=1)
+
+
+def _bound_head_rule(master: Event, rule: dict, anchor) -> None:
+    """Bound the head's rule at the split. **Narrowing only, never widening.**
+
+    A split cuts a series in two; it cannot conjure occurrences. But the head
+    used to be rebounded unconditionally — `rule.pop("COUNT"); rule["UNTIL"] =
+    anchor - 1s` — on the assumption that the anchor is always a slot the RRULE
+    itself generates, where that can only narrow.
+
+    It is not always. `_require_occurrence` deliberately accepts an anchor named
+    by an **RDATE**, and an RDATE routinely sits *after* where the rule stopped —
+    that is the ordinary reason to add one ("the weekly run ended in January,
+    plus one extra session in March"). For those, dropping COUNT and writing a
+    later UNTIL EXTENDED the rule, and every slot between the rule's real end and
+    the anchor became a live occurrence.
+
+    Measured: `RRULE:FREQ=DAILY;COUNT=3` + `RDATE:20260210T090000Z` is four
+    occurrences; "this and following" on the RDATE produced a 36-occurrence head.
+    Reachable in two clicks — the SPA offers the scope picker on an RDATE row
+    like any other — and `delete_event(scope="thisandfuture")` PUTs the head, so
+    33 events the owner never created were written permanently into the shared
+    Radicale collection, where they also start blocking the public booking page.
+
+    So each bound is compared before it is replaced, and a rule that already ends
+    before the anchor is left exactly as it is — the RDATE partition alone is
+    then the whole split, which is correct.
+    """
+    cut = _until_before(anchor)
+    existing = rule.get("UNTIL")
+    if existing:
+        current, new = _comparable(existing[0], cut)
+        if current <= new:
+            return                          # already ends before the anchor
+    elif rule.get("COUNT"):
+        dtstart = master.get("DTSTART")
+        try:
+            original = int(rule["COUNT"][0])
+        except (TypeError, ValueError):
+            original = 0
+        # `_count_consumed` under-counts rather than over-counts when its search
+        # budget runs out, so this can only fail towards the old behaviour — and
+        # the old behaviour is exactly right whenever the anchor IS a rule slot.
+        if original and dtstart is not None and (
+            _count_consumed(rule, dtstart.dt, anchor) >= original
+        ):
+            return                          # every slot it makes is already before
+    rule.pop("COUNT", None)
+    rule["UNTIL"] = [cut]
+    _set_rrule(master, rule)
 
 
 def _rrule_dict(master: Event) -> dict | None:
@@ -1439,6 +1697,54 @@ def _partition_datelist(event: Event, key: str, anchor, *, keep_before: bool) ->
     _rebuild_datelist(
         event, key, lambda v: v if _at_or_after(v, anchor) != keep_before else None
     )
+
+
+def _require_addressable(cal: Calendar, master: Event, anchor) -> None:
+    """Refuse an anchor that names no occurrence of this resource.
+
+    `split_series` has demanded this since the stale-anchor finding recorded on
+    `_require_occurrence`; the other three anchored write paths did not, and a
+    stale anchor reaches all four the same two ways — a second tab holding an
+    older expansion, and `engine`'s retry re-applying the caller's
+    `recurrence_id` against a fresh copy after a 412. The MCP tools and the HTTP
+    route take `recurrence_id` straight from the caller, so an invented one is a
+    third.
+
+    What each path did with an anchor naming nothing, measured on
+    `FREQ=WEEKLY;COUNT=3` with a Friday anchor against a Tuesday series:
+
+      * `apply_occurrence_override` ADDED AN EVENT. The orphan RECURRENCE-ID is
+        not inert — `expand_occurrences` takes it for an instance, so the set
+        went from three occurrences to four and "edit this one" put a meeting on
+        the calendar that nothing generates. `_link_busy` builds the public
+        booking page's conflict set from that same expansion, so it also removes
+        an hour the owner never blocked.
+      * `shift_series` rescheduled the WHOLE series by a delta measured from the
+        slot that does not exist.
+      * `exclude_occurrence` wrote an EXDATE matching nothing: the write returns
+        204, the SPA optimistically drops the row, and the occurrence is still
+        there on the next read.
+
+    Three shapes are addressable without probing anything, and all three are
+    checked first so the guard cannot refuse work that already succeeds: an
+    instant an override component already claims (the resource itself vouches
+    for it, however it got there), the master's own DTSTART, and — via
+    `_require_occurrence` — an RDATE. Everything else is priced by the rule, on
+    that function's terms, including its allow-when-unprobeable policy.
+    """
+    if _find_override(cal, anchor) is not None:
+        return
+    dtstart = master.get("DTSTART")
+    if dtstart is not None and hasattr(dtstart, "dt") and _same_instant(dtstart.dt, anchor):
+        return
+    rule = _rrule_dict(master)
+    if rule is None and not _datelist_values(master, "RDATE"):
+        # `_require_occurrence`'s wording for a non-repeating event tells the
+        # caller to use scope='all'. Two of the three callers here ARE a
+        # per-occurrence scope, and the third IS scope='all' — so that sentence
+        # is either irrelevant or actively wrong. Name the real problem.
+        raise ValueError("recurrence_id does not name an occurrence of this event")
+    _require_occurrence(master, rule, anchor)
 
 
 def _require_occurrence(master: Event, rule: dict | None, anchor) -> None:
@@ -1569,9 +1875,7 @@ def split_series(
     rule = _rrule_dict(hmaster)
     _require_occurrence(hmaster, rule, anchor)
     if rule is not None:
-        rule.pop("COUNT", None)
-        rule["UNTIL"] = [_until_before(anchor)]
-        _set_rrule(hmaster, rule)
+        _bound_head_rule(hmaster, rule, anchor)
     _drop_overrides(head, anchor, keep_before=True)
     _partition_datelist(hmaster, "RDATE", anchor, keep_before=True)
     _partition_datelist(hmaster, "EXDATE", anchor, keep_before=True)
@@ -1619,6 +1923,18 @@ def split_series(
             # The anchor is an occurrence, so ≥1 remains for any sane split;
             # clamp defensively so a bad anchor can't emit COUNT=0 (invalid).
             tail_rule["COUNT"] = [max(remaining, 1)]
+        elif tail_rule.get("UNTIL"):
+            # The other half of `_bound_head_rule`'s problem. When the anchor is
+            # an RDATE past the rule's own end, the tail inherits an UNTIL that
+            # now precedes its own DTSTART — a rule that generates nothing, sat
+            # next to a DTSTART that does, which is not a series at all. The
+            # anchor is a one-off; say so by dropping the rule rather than
+            # shipping a self-contradicting one.
+            until, start_at = _comparable(tail_rule["UNTIL"][0], start)
+            if until < start_at:
+                tail_rule = None
+                _replace(tmaster, "RRULE")
+    if tail_rule is not None:
         _set_rrule(tmaster, tail_rule)
     _drop_overrides(tail, anchor, keep_before=False)
     _partition_datelist(tmaster, "RDATE", anchor, keep_before=False)

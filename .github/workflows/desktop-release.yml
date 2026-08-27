@@ -52,7 +52,8 @@ jobs:
       - run: npm run build
 
       - name: Stamp the build
-        # Read by the client to tell one build from another, and by anyone
+        # Not read by anything automatically — the client tells builds apart by
+        # the release asset's id and updated_at (Updater.cs). This is for a human
         # wondering which commit a running desktop app is actually on.
         run: |
           printf '{"sha":"%s","built":"%s"}\n' \
@@ -71,13 +72,24 @@ jobs:
     runs-on: windows-latest
     steps:
       # Same reasoning as `web`: NuGet restore and MSBuild run restored code,
-      # and `Microsoft.Web.WebView2` floats on `1.0.*`.
+      # and the restored packages run build targets on the runner.
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
+
+      # Same reasoning as `web` running the frontend gates: a release that
+      # skipped the tests would be a release nobody could trust. ci.yml runs
+      # these too, but ci.yml is a SEPARATE workflow with no dependency edge to
+      # this one — on a push to main both fire in parallel, so a red `desktop`
+      # job over there does not stop the publish over here, and a
+      # `workflow_dispatch` run can publish from a ref where ci.yml never ran at
+      # all. `release` needs `client`, so failing here is what actually holds
+      # the artifact back.
+      - name: Client unit tests
+        run: dotnet test desktop/Smylte.Desktop.Tests/Smylte.Desktop.Tests.csproj
 
       - name: Publish
         run: >

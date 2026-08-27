@@ -1,6 +1,17 @@
 /* Layout — a dense two-pane utility on the Søren design system. */
 
-.shell { height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
+/* `viewport-fit=cover` in index.html opts the page into the unsafe area, and the
+   vertical insets are read in several places — but the HORIZONTAL ones were read
+   nowhere. In landscape on a notched iPhone the notch is on the left or the
+   right, so the sidebar rail, the tab strip and every row's first column sat
+   underneath it. Applied once at the shell rather than per-surface: everything
+   inside is laid out within it, and `env()` is 0 on every device without an
+   inset, so this changes nothing anywhere else. */
+.shell {
+  height: 100dvh; display: flex; flex-direction: column; overflow: hidden;
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+}
 
 /* ---- top bar ---- */
 .topbar {
@@ -111,7 +122,16 @@
   display: flex; align-items: center; gap: 8px; padding: 8px 16px;
   cursor: pointer; border-left: 2px solid transparent; color: var(--fg);
 }
-.side-item:hover { background: var(--bg-elev); }
+/* Guarded for the same reason as `.side-mobile-*` in the phone block: this
+   background is IDENTICAL to `.side-item.active`'s, so inside the mobile drawer
+   a tapped row stayed lit and read as the selected list until something else
+   was touched. The finding names this one specifically as the same latent bug;
+   the other unguarded `:hover` rules in this file are cosmetic-only and are
+   left alone rather than swept, since none has been shown to misreport a
+   state. */
+@media (hover: hover) {
+  .side-item:hover { background: var(--bg-elev); }
+}
 .side-item.active { border-left-color: var(--accent); background: var(--bg-elev); }
 .side-item .swatch { width: 8px; height: 8px; flex: none; background: var(--fg-faint); }
 /* the pinned "All" row's swatch — a ring of the preset collection colors. The
@@ -356,7 +376,15 @@
 .pri-med { background: var(--pri-med); }
 .pri-low { background: var(--pri-low); }
 .task-body { flex: 1; min-width: 0; }
-.task-title { font-size: calc(15px * var(--fs-scale)); color: var(--fg); }
+/* `overflow-wrap` because this renders a SUMMARY another CalDAV client wrote,
+   and a pasted URL is one long token with no soft wrap opportunity. Both
+   scrollers these titles live in declare only `overflow-y: auto`, and per CSS
+   Overflow that computes `overflow-x` to `auto` too — so the overflow becomes
+   sideways scrolling of the whole pane, dragging the month grid off screen with
+   it. The stylesheet already applies this guard to `.day-card-title`,
+   `.sched-card-title`, `.toast span` and the Today chips for the same reason. */
+.task-title { font-size: calc(15px * var(--fs-scale)); color: var(--fg);
+  min-width: 0; overflow-wrap: anywhere; }
 .task-meta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 3px; align-items: center; }
 .task-meta .due { font-family: var(--mono); font-size: calc(11px * var(--fs-scale)); color: var(--fg-muted); }
 .task-meta .due.overdue { color: var(--warn); }
@@ -378,7 +406,13 @@
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
   padding: 8px var(--gutter);
   color: var(--fg-faint); font-size: calc(13px * var(--fs-scale));
-  border-bottom: 1px solid var(--line);
+  /* `--rule`, like every other rule line in this file. This said `var(--line)`,
+     which is defined in no theme and in no token file — so the declaration was
+     invalid at computed-value time, the shorthand's longhands fell back to
+     `unset`, `border-bottom-style` became `none`, and the partial-month banner
+     had no bottom rule at all. `--line` is not in the appearance token table
+     either, so no theme could ever have supplied it. */
+  border-bottom: 1px solid var(--rule);
 }
 .section-label { padding: 14px var(--gutter) 4px; }
 
@@ -603,6 +637,10 @@
   background: none; border: 0; border-bottom: 1px solid var(--rule-faint);
   border-left: 2px solid var(--ev-c, var(--accent));
   padding: 12px 14px; font-size: calc(15px * var(--fs-scale)); color: var(--fg); cursor: pointer;
+  /* see `.task-title` — the summary here is foreign-authored too, and the
+     unclassed span holding it is a flex item whose default `min-width: auto`
+     resolves to min-content, i.e. the longest word. */
+  overflow-wrap: anywhere; min-width: 0;
 }
 .agenda-ev:hover { background: var(--bg-elev); }
 /* A task agenda row: same frame as an event, marked by its checkbox. */
@@ -659,14 +697,41 @@
   font-size: calc(12px * var(--fs-scale)); color: var(--fg-muted);
   padding-bottom: 8px; border-bottom: 1px solid var(--rule);
 }
-.arch-events { max-height: 55vh; overflow-y: auto; margin: 0 -18px -18px; }
+/* The agenda BLEEDS to its container's edge, and it has TWO containers with
+   different padding. The bleed was a hard -18px, written for the `.modal` this
+   section used to live in; `SettingsMenu` mounts it inside `.set-panels`, and
+   the settings container is padded 14px. The block came out 36px wider than its
+   parent's content box — 18px past the right, which became scrollable overflow
+   because the ancestor scroller declares only `overflow-y: auto` (so
+   `overflow-x` computes to `auto`), and 18px past the left, unreachable in LTR
+   and simply clipped, taking each row's 2px `--ev-c` calendar-colour rule with
+   it. Measured at 390px: `.agenda-ev` started at x = -4 against a sheet edge at
+   x = 0.
+
+   One number per container, inherited down to the row padding so the bleed and
+   the inset cannot drift apart again — which is how they drifted in the first
+   place, the margin being changed in one place and the padding in another. */
+.arch-events {
+  /* Two numbers, because they answer two questions the old single -18px
+     conflated: how much of the CONTAINER's padding to cancel, and how far in
+     the row's own content sits. Default is the SETTINGS case, where the panel
+     has no padding of its own to cancel and the rows take the same 2px inset as
+     `.arch-row` directly above them in the same panel. */
+  --arch-bleed: 0px;
+  --arch-inset: 2px;
+  max-height: 55vh; overflow-y: auto;
+  margin: 0 calc(-1 * var(--arch-bleed)) calc(-1 * var(--arch-bleed));
+}
+/* …and the MODAL case, which is what the hard -18px was written for and the
+   only place it was ever right. */
+.modal .arch-events { --arch-bleed: 18px; --arch-inset: 18px; }
 .arch-day-head {
   font-family: var(--mono); font-size: calc(10px * var(--fs-scale)); text-transform: var(--label-case);
   letter-spacing: calc(0.08em * var(--tracking)); color: var(--fg-faint);
-  padding: 12px 18px 4px; position: sticky; top: 0; background: var(--bg-elev);
+  padding: 12px var(--arch-inset) 4px; position: sticky; top: 0; background: var(--bg-elev);
 }
 /* the previews are read-only, so drop the interactive affordances */
-.arch-events .agenda-ev { cursor: default; padding: 9px 18px; font-size: calc(14px * var(--fs-scale)); }
+.arch-events .agenda-ev { cursor: default; padding: 9px var(--arch-inset); font-size: calc(14px * var(--fs-scale)); }
 .arch-events .agenda-ev:hover { background: none; }
 
 /* ---- login ---- */
@@ -806,7 +871,16 @@
     color: var(--fg-muted); cursor: pointer; padding: 0 16px; font-size: calc(18px * var(--fs-scale)); line-height: 1;
   }
   .side-mobile-completed.active { color: var(--accent); }
-  .side-mobile-add:hover, .side-mobile-completed:hover { color: var(--accent); }
+  /* GUARDED, and paired with `:active` — the shape `tokens.css` uses for every
+     other button state, and for the reason this rule proves. A tap on a touch
+     device leaves `:hover` stuck on the element until something else is
+     touched, so "View completed" sat in its ACTIVE colour after being tapped
+     OFF: the one control whose whole job is to report a binary state reported
+     the wrong one, on the surface it exists for. */
+  @media (hover: hover) {
+    .side-mobile-add:hover, .side-mobile-completed:hover { color: var(--accent); }
+  }
+  .side-mobile-add:active, .side-mobile-completed:active { color: var(--accent); }
 
   /* the drawer itself: a bottom sheet that reuses .side / .side-item / .group-* */
   .drawer-overlay { align-items: flex-end; padding: 0; }
@@ -842,8 +916,6 @@
   .side.drawer .group-caret { padding: 4px 2px; }
 
   /* content spacing + touch targets */
-  .task, .quickadd, .content-head, .cal-head, .empty, .banner { padding-left: 14px; padding-right: 14px; }
-  .section-label { padding: 14px 14px 4px; }
   .content-head { flex-wrap: wrap; row-gap: 8px; }
   .undated-hint { padding: 8px 14px 0; }
 
@@ -859,6 +931,34 @@
   .day-col-body { padding-bottom: calc(24px + env(safe-area-inset-bottom)); }
   .task { padding-top: 11px; padding-bottom: 11px; }
   .task.sub { padding-left: calc(var(--gutter) + var(--task-depth, 1) * 18px); }
+  /* The density token, re-declared rather than narrowed selector by selector.
+     What this replaced was a hand-maintained list — `.task, .quickadd,
+     .content-head, .cal-head, .empty, .banner` plus `.section-label` — and the
+     Today-tab fence added ~500 lines below it resolves `var(--gutter)`
+     everywhere, so it stayed at its :root 26px on a phone. On the one tab a
+     phone user opens every morning, the section labels and the add box were
+     inset 14px and the rows beneath them 26px: a 12px stair-step repeated down
+     the screen, and 24px of a 390px row spent on margin. Every one of those
+     seven selectors takes its horizontal padding from `var(--gutter)` in its
+     base rule, so the token does the same work and does it for any tab added
+     later.
+
+     `:root[data-preset]` is not decoration. A preset is a whole alternative
+     design and lives in tokens.css as `:root[data-preset="workspace"]`, which
+     is (0,2,0) — MORE specific than a bare `:root`, so a plain re-declaration
+     here would have lost to it and left every preset user on 24px. Matching its
+     specificity and winning on source order (app.css is imported after
+     tokens.css) is what makes this cover them.
+
+     A gutter the user set THEMSELVES still wins, and deliberately: `applyTokens`
+     writes a saved theme's tokens as inline properties on <html>, which beat any
+     stylesheet rule. That is the same deference every other themeable density
+     token gets, and it is now consistent — under the old list a user who chose a
+     40px gutter got 40px on `.today-row` and a forced 14px on `.task`, which is
+     the stair-step again, pointing the other way. (`--check-size` is re-declared
+     just below with a bare `:root` because it is deliberately NOT themeable — see
+     its note beside the base value.) */
+  :root, :root[data-preset] { --gutter: 14px; }
   /* On :root, so `.check` and `.today-check-gap` move together — see the note
      beside the base value. */
   :root { --check-size: 21px; }
@@ -897,7 +997,13 @@
      modal that can fail a save is rendered inside an overlay. Below 90 it
      painted under the scrim, and a click aimed at its dismiss button hit the
      backdrop and closed the modal instead. */
-  position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 120;
+  /* The inset as well as the offset. `.shell` is 100dvh under
+     `viewport-fit=cover`, so `bottom: 24px` put the app's ONLY error channel
+     inside the home-indicator band on a notched phone — under the pill, and
+     under the bottom sheets it is deliberately painted above. */
+  position: fixed; left: 50%; z-index: 120;
+  bottom: calc(24px + env(safe-area-inset-bottom));
+  transform: translateX(-50%);
   display: flex; align-items: center; gap: 10px;
   max-width: min(480px, calc(100vw - 32px));
   padding: 10px 12px;
@@ -907,6 +1013,19 @@
 }
 .toast span { min-width: 0; overflow-wrap: break-word; }
 .toast .icon-btn { flex: none; }
+
+/* The offline bar. A STRIP under the top bar rather than a toast: this is a
+   standing condition the owner needs to keep seeing (everything under it is
+   last-known-good), not an event they dismiss. `--fg-faint` on `--bg-elev`
+   rather than the toast's `--warn`, because being offline with your data still
+   on screen is a state, not an error. */
+.offline-bar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 8px var(--gutter);
+  background: var(--bg-elev); border-bottom: 1px solid var(--rule);
+  color: var(--fg-faint); font-size: calc(13px * var(--fs-scale));
+}
+.offline-bar span { min-width: 0; overflow-wrap: break-word; }
 
 /* ---- client scheduling: owner view ---- */
 .sched-list { display: flex; flex-wrap: wrap; gap: 12px; padding: 6px var(--gutter); }
@@ -1082,6 +1201,18 @@
 }
 .dash-grid.arranging .dash-mod-head { cursor: grab; background: var(--paper); }
 .dash-grid.arranging .dash-mod-head:active { cursor: grabbing; }
+/* The drag handles opt out of browser touch gestures WHILE ARRANGING. Arrange
+   mode is gated on `useIsMobile` (max-width: 720px), so it is offered on every
+   touch device wider than that — an iPad in landscape, a Surface, a touchscreen
+   laptop — and there a downward drag on a header is a pan of the enclosing
+   `.scroll` as far as the browser is concerned. `e.preventDefault()` on
+   pointerdown does not suppress it; only this does. Without it the gesture is
+   stolen and pointercancel fires, which HomeView now discards rather than
+   commits — but a drag the user cannot perform at all is not much better, so
+   both halves are the fix. Scoped to `.arranging` so ordinary reading of a
+   module still scrolls the page with a finger. */
+.dash-grid.arranging .dash-mod-head,
+.dash-grid.arranging .dash-grip { touch-action: none; }
 .dash-mod-body { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 0; }
 .dash-remove {
   margin-left: auto; background: none; border: 0; cursor: pointer;
@@ -1155,7 +1286,16 @@
 .mini-day.today .mini-dot { box-shadow: 0 0 0 0.5px var(--bg); }
 
 /* mobile: modules stack full-width, read-only (arranging is desktop-only) */
-.dash-stack { display: flex; flex-direction: column; gap: 12px; padding: 12px 14px; }
+/* The `padding` shorthand here sits at the same (0,1,0) specificity as the
+   mobile `.scroll` rule but 291 lines later, so it reset all four sides and Home
+   became the one tab whose scroller lost its home-indicator inset — the last
+   module's final rows sat under the pill with no further scroll to lift them.
+   (`.shell` is `height: 100dvh` and index.html opts into `viewport-fit=cover`,
+   so this scroller's bottom edge IS the physical screen bottom.)
+   `.dash-stack` is phone-only, so it carries the inset itself rather than
+   deferring to a rule it outranks; `env()` is 0 everywhere else. */
+.dash-stack { display: flex; flex-direction: column; gap: 12px;
+  padding: 12px 14px calc(12px + env(safe-area-inset-bottom)); }
 /* `flex: none` — that is `flex-shrink: 0` — and it is the whole fix.
    `.dash-stack` is a flex column inside `.scroll`, which is a FIXED-HEIGHT
    scroller (`flex: 1; overflow-y: auto`). A flex child defaults to
@@ -1292,6 +1432,25 @@
      therefore rendered at 12px on a phone — 9.6px at the minimum --fs-scale of
      0.8 — which is exactly the condition the floor exists to prevent. */
   .appear-text { font-size: max(16px, calc(12px * var(--fs-scale))); }
+  /* And the same again for the Today/Shutdown fence added after that fix — the
+     third time this exact regression has shipped. `.shut-date`, `.shut-reflect`
+     and `.today-est-input` all carry `.input`, all declare font-size at the same
+     (0,1,0) specificity, and all sit LATER in this file, so all three win in
+     every viewport. `.today-est-input` is the worst of them: it is `autoFocus`,
+     so tapping a row's `est` cell focuses an 11px field and Safari zooms
+     immediately, with no tap on the field itself.
+
+     And the fix has to OUTRANK them, not merely follow the rule it is written
+     under: declaring these three at a bare (0,1,0) here is the same declaration
+     the comment above just explained loses, so it lost — measured in Chromium at
+     390px, `.shut-date` and `.today-est-input` computed to 11px and
+     `.shut-reflect` to 14px with this rule in the sheet. Every one of the three
+     carries `.input`, which the comment already notes, so qualifying by it takes
+     them to (0,2,0) and settles the question by specificity rather than by which
+     block someone appends the next fence to. */
+  .input.shut-date, .input.shut-reflect, .input.today-est-input {
+    font-size: max(16px, calc(16px * var(--fs-scale)));
+  }
   /* the modal is already a scrolling bottom sheet — a nested scroller inside
      one is miserable on touch, so let the rows flow into it instead */
   .bulk-rows { max-height: none; overflow: visible; gap: 10px; }
@@ -1307,6 +1466,63 @@
   .bulk-x { order: -1; margin-left: auto; }
   .bulk-f-title { flex: 1 1 100%; }
   .bulk-cell-label { display: block; flex: 1 0 100%; }
+
+  /* ---- touch targets this block had already set a standard for ----------
+     Two lines above, `.task-actions button` is grown to `padding: 5px 6px` and
+     the drawer's group buttons to `6px 7px`, because the phone is the primary
+     surface. Three groups were left at their mouse sizes, and each is a
+     first-class control rather than an ornament. */
+
+  /* The Today tab's per-row controls: drop-to-tomorrow, add-a-child, and the
+     estimate cell. All three render at 2px vertical padding on a `line-height:
+     1` glyph — roughly 18x16 — and `.today-drop` has its OWN
+     `@media (hover: none)` rule making it permanently visible on touch, i.e. it
+     is explicitly meant to be tapped. The whole Today fence sits outside every
+     media block, which is how they were missed.
+
+     Qualified for the reason the font-size floor above is: the fence declares
+     `padding: 2px 4px` on all three at (0,1,0) and sits ~250 lines below this
+     block, so the bare form of these rules never applied. Measured in Chromium
+     at 390px with them in the sheet, `.today-drop` computed to 2px/4px — a
+     15x16 box, which is the finding's own number, unchanged by its fix.
+     `.today-est` kept only the `min-height`, because the fence has nothing to
+     say about that one. Buttons here, so an element qualifier is enough; the
+     estimate cell renders as both a button and a span, and both carry `mono`. */
+  button.today-drop, button.today-plus { padding: 8px 10px; }
+  .today-est.mono { padding: 8px 6px; min-height: 34px; }
+  .input.today-est-input { padding: 6px 8px; }
+
+  /* …and the rest of the way to the 44px guideline, SWEPT over every button in
+     the row rather than over the three the finding names. The recurring failure
+     in this stylesheet is a guard only as wide as the set it enumerates — the
+     sibling finding above was itself a rule that named three classes and reached
+     none of them — so the tick (`.check`, which the finding does not mention)
+     is covered, and so is a button added to this row later.
+
+     A tap BOX, not bigger type: `min-height`/`min-width` with a flex centre
+     leaves every glyph and the row's own text at its designed size. The rules
+     above stay because they set the padding this builds on.
+
+     Accepted cost, decided rather than discovered: a Today row goes from ~53px
+     to ~62px, so roughly 13 rows fit an 844px phone instead of 16. STAGES.md
+     records the decision. */
+  .today-row button, .today-row .today-est {
+    min-height: 44px; min-width: 44px;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+
+  /* `.menu-toggle` is EVERY settings control on the phone sheet — Clock, Theme,
+     Home timezone, Calendar window, Completed tasks, Stay signed in — at about
+     27px tall. */
+  .menu-toggle { padding: 10px 13px; }
+
+  /* The Home mini calendar's day cell is a real button that opens the day
+     popover, at roughly 48x21 in the phone stack. Vertical padding only: the
+     column width is set by the 7-column grid and must not change. */
+  .mini-day { padding: 11px 0; }
+
+  /* One pixel apart, at 23x30, next to each other in the drawer. */
+  .side.drawer .group-actions { gap: 6px; }
 }
 
 /* ---- corner radius ----------------------------------------------------
@@ -1542,6 +1758,7 @@
 .today-check-gap { width: var(--check-size); flex: none; }
 .today-title {
   flex: 1; min-width: 0; font-size: calc(15px * var(--fs-scale)); color: var(--fg);
+  overflow-wrap: anywhere;                  /* see `.task-title` */
 }
 .today-row.done .today-title { color: var(--fg-faint); text-decoration: line-through; }
 .today-row.gone .today-title { color: var(--fg-faint); font-style: italic; }
@@ -1612,6 +1829,11 @@
    what makes a drop target on this screen read as the same idea it does on
    every other. */
 .today-row.drag-over { box-shadow: inset 0 2px 0 var(--accent); }
+/* …and the BOTTOM edge when the drop lands below, which `moveRow` makes it do
+   for every downward drag. Without this the line was always on the top edge, so
+   dragging down aimed the owner at the gap ABOVE where the row would go. Same
+   pair as `.task-drag.drag-over.drag-below` in the Tasks pane. */
+.today-row.drag-over.today-below { box-shadow: inset 0 -2px 0 var(--accent); }
 /* The row in hand recedes rather than disappearing: the gap it leaves is what
    tells you where it is coming FROM while you look for where it is going to. */
 .today-dragging { opacity: 0.45; }
@@ -1772,7 +1994,16 @@
    on the BASELINE, and a button left to that hangs off the title's baseline and
    sits proud of everything beside it. It was an `.icon-btn` holding a single
    glyph, which is square enough not to show it; a `.btn` holding a word is not. */
-.today-habits-open { flex: none; align-self: center; margin-left: 10px; }
+/* No `margin-left`. It carried 10px from the commit that added habits, where
+   this was an `.icon-btn` holding a bare glyph and the ONLY button in the
+   header — the margin separated it from the counts text beside it. Review and
+   Shut down were added in front of it later and were never given one, so the
+   row read 12px, 12px, 22px: two buttons at the container's `gap` and the third
+   pushed out past both. Below 720px `.content-head` wraps, and there the same
+   10px indented Habits' whole row 10px right of every other left edge in the
+   header. The container's `gap` is the only spacing now, which is what makes
+   the three read as one group. */
+.today-habits-open { flex: none; align-self: center; }
 
 /* A button that reads as a link, for the two places habits are offered in the
    middle of a sentence. It has to be a BUTTON — it opens a dialog, it goes

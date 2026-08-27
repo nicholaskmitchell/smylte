@@ -29,7 +29,10 @@ export function HomeView({ rev, onExpire, layout, onLayoutChange,
   hiddenCalendars = [], archivedCalendars = [] }: {
   rev: number
   onExpire: () => void
-  layout: DashboardModule[]
+  /** The owner's arrangement, or NULL when they have never made one. The two
+   *  are different: `null` takes the stock five, `[]` is a board deliberately
+   *  cleared. Collapsing them meant removing the last module put five back. */
+  layout: DashboardModule[] | null
   onLayoutChange: (next: DashboardModule[]) => void
   // Read-only here: the mini calendar honours the Calendar tab's visibility
   // choices so an archived calendar doesn't keep dotting the dashboard. That
@@ -49,7 +52,12 @@ export function HomeView({ rev, onExpire, layout, onLayoutChange,
   // An account that has never arranged anything gets the stock arrangement
   // rather than an empty page. It is not written back until the user actually
   // changes something — an untouched dashboard stays "unset" server-side.
-  const committed = layout.length ? layout : DEFAULT_LAYOUT
+  //
+  // Keyed on NULL, not on emptiness. `layout.length ? … : DEFAULT_LAYOUT` made
+  // "never arranged" and "deliberately empty" the same board, so removing the
+  // last module handed back the stock five — a Remove that ADDS five modules,
+  // and no way to reach an empty dashboard at all.
+  const committed = layout ?? DEFAULT_LAYOUT
   const mods = preview ?? committed
   const rows = layoutRows(mods)
 
@@ -81,11 +89,32 @@ export function HomeView({ rev, onExpire, layout, onLayoutChange,
     setPreview(next)
   }
 
+  // A RELEASE commits. `pointerup` is the gesture finishing where the user let
+  // go, and only that is an instruction.
   const endDrag = () => {
     if (!drag.current) return
     drag.current = null
     if (preview) commit(preview)
     else setPreview(null)
+  }
+
+  // A CANCEL discards. `pointercancel` means the platform took the gesture over
+  // — the finger never came up, so there is no position the user chose. Sharing
+  // `endDrag` between the two wrote the module to wherever the pointer happened
+  // to be when the browser started panning, and `commit` calls `onLayoutChange`,
+  // which App persists with `saveSettingsSoon({dashboard})`. That is not a
+  // stray preview to be cleaned up later: it is a saved arrangement nobody made.
+  //
+  // Not theoretical. Arrange mode is gated on `useIsMobile` (max-width 720px),
+  // so every touch device WIDER than that gets it — an iPad in landscape, a
+  // Surface, a touchscreen laptop — and there the browser steals a downward drag
+  // to scroll the enclosing `.scroll`, firing pointercancel every time. The
+  // `touch-action: none` now on the handles (app.css) is the other half: it
+  // stops the steal happening, and this stops the theft being recorded as a move.
+  const cancelDrag = () => {
+    if (!drag.current) return
+    drag.current = null
+    setPreview(null)
   }
 
   // A pointer released outside the grid (or a cancelled gesture) must not leave
@@ -262,7 +291,7 @@ export function HomeView({ rev, onExpire, layout, onLayoutChange,
       <div className="scroll">
         <div ref={gridRef} className={`dash-grid ${arranging ? 'arranging' : ''}`}
           style={{ height: rows * (ROW_H + GAP) }}
-          onPointerMove={onPointerMove} onPointerUp={endDrag} onPointerCancel={endDrag}>
+          onPointerMove={onPointerMove} onPointerUp={endDrag} onPointerCancel={cancelDrag}>
           {mods.map((m) => (
             // Cells are laid out as percentages of the grid's own width (so the
             // 12 columns stay proportional at any window size), with the gutter

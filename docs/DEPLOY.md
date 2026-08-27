@@ -44,6 +44,31 @@ generates the session + hook secrets, writes `/etc/tasks/tasks.env` and
 `/etc/tasks/hook-secret` (both 0600), installs `/usr/local/bin/tasks-notify` and
 `tasks.service`, and starts it on `127.0.0.1:8080`. Check: `curl -s localhost:8080/healthz`.
 
+The SQLite cache lives at `/var/lib/tasks/tasks.db`, which `StateDirectory=tasks`
+in the unit creates and owns. It is deliberately outside the source tree: the
+unit used to grant `ReadWritePaths=~/tasks/backend`, which is where `.venv` and
+`tasksd` live, so a write primitive in the internet-reachable parse path could
+drop a `.pth` into site-packages and survive every restart.
+
+### Moving an existing install to /var/lib/tasks  **[PROD — one time]**
+`setup.sh` leaves an existing `/etc/tasks/tasks.env` untouched, so an install
+made before this change still points `TASKS_DB` at the old path — which the
+narrowed sandbox no longer grants, and the service will fail to open its cache.
+Move it by hand, once:
+```bash
+sudo systemctl stop tasks
+sudo install -d -o nicholaskmitchell -g nicholaskmitchell -m 0700 /var/lib/tasks
+sudo mv ~/tasks/backend/tasks.db     /var/lib/tasks/tasks.db
+sudo mv ~/tasks/backend/tasks.db-wal /var/lib/tasks/ 2>/dev/null || true
+sudo mv ~/tasks/backend/tasks.db-shm /var/lib/tasks/ 2>/dev/null || true
+sudo chown nicholaskmitchell:nicholaskmitchell /var/lib/tasks/tasks.db*
+sudo sed -i 's#^TASKS_DB=.*#TASKS_DB=/var/lib/tasks/tasks.db#' /etc/tasks/tasks.env
+sudo systemctl start tasks && curl -s localhost:8080/healthz
+```
+Move the file rather than letting a fresh one be created: `tasks.db` holds the
+sidecar-class tables under **Backups** below, and those are the one part of it a
+resync cannot rebuild. Take the backup first.
+
 ## B. Public Caddy site (path split)  **[PROD — reload Caddy]**
 Append `~/tasks/deploy/Caddyfile.snippet` to `/etc/caddy/Caddyfile`, then:
 ```bash
@@ -237,15 +262,20 @@ logged at startup: `journalctl -u tasks | grep csp:`.
 
 ## If the password leaks — signing out everywhere
 
-Sessions are JWTs, so they are valid until they expire (`TASKS_SESSION_TTL`, 7
-days by default) whether or not the browser still holds the cookie. Logging out
+Sessions are JWTs, so they are valid until they expire whether or not the
+browser still holds the cookie. How long that is comes from the **Stay signed
+in** setting under Settings → Account (1 day / 7 days / 30 days / Never), NOT
+from the env file: `TASKS_SESSION_TTL` is only the fallback used until the
+account has chosen, so editing it does nothing once a choice has been stored. Logging out
 withdraws one session *by name*; it cannot reach a session minted on someone
 else's machine, whose id you have never seen.
 
 Two levers, in the order to reach for them:
 
-1. **Change the password.** Regenerate with `python -m tasksd hash-password`,
-   set `TASKS_AUTH_PASSWORD_HASH` in `/etc/tasks/tasks.env`, `sudo systemctl
+1. **Change the password.** Regenerate with `cd ~/tasks/backend && .venv/bin/python
+   -m tasksd hash-password` — `tasksd` is not installed anywhere, so it resolves
+   only from the backend directory and run from elsewhere this aborts on "No
+   module named tasksd" — set `TASKS_AUTH_PASSWORD_HASH` in `/etc/tasks/tasks.env`, `sudo systemctl
    restart tasks`. Every existing session is refused from that moment: a token
    carries a fingerprint of the credentials it was minted under, so changing
    the password (or `TASKS_AUTH_USER`) invalidates all of them. This is the
@@ -269,7 +299,7 @@ consent screen, which is the point. (This has not always been true: before the
 ## Backups (spec §9 — important)
 Back up **both**:
 - `~/radicale/collections` — the source of truth (all `.ics`).
-- the app's **sidecar-class tables** from `~/tasks/backend/tasks.db`:
+- the app's **sidecar-class tables** from `/var/lib/tasks/tasks.db`:
   `sidecar`, `list_settings`, `completions`, `attachments`, **`booking_links`**
   and **`bookings`** (every scheduling-link config plus client names/emails/
   notes — this exists nowhere on the wire), **`day_plan`** plus

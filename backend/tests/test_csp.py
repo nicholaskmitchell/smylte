@@ -14,6 +14,7 @@ from __future__ import annotations
 import base64
 import dataclasses
 import hashlib
+import re
 import threading
 from pathlib import Path
 
@@ -218,3 +219,50 @@ def test_the_shipped_index_html_yields_exactly_one_script_hash():
     hashes = inline_script_hashes(index.read_text(encoding="utf-8"))
     assert len(hashes) == 1, hashes
     assert hashes[0] in policy_for_index(index.read_text(encoding="utf-8"))
+
+
+# ── the desktop client's copy ───────────────────────────────────────────────
+
+def test_the_desktop_client_builds_the_same_policy():
+    """The one duplication no behavioural test can reach.
+
+    `LocalServer.ServeStatic` serves the SPA off disk in the Windows client, so
+    the document WebView2 runs never passes through `CSPMiddleware` and cannot
+    borrow this policy at runtime — it has to build its own. `LocalServerTests`
+    proves the C# emits *a* policy and that it carries the hash of the script it
+    actually served, which is the half that matters; what neither suite can see
+    is the two DIRECTIVE LISTS drifting apart, because each is only ever compared
+    against itself.
+
+    So this reads the C# and compares. A source-shape assertion, which
+    `test_backlog_stage5.py`'s header rightly disowns as a substitute for a
+    behavioural one — it is not a substitute here, it is the only reader that
+    sees both sides. What it can catch is a directive added or tightened on this
+    side and not the other, which is the realistic drift: the desktop window is
+    the surface nobody is looking at when they edit `build_policy`.
+
+    Compared as a SET of directives rather than as a string, because the C# is
+    entitled to its own formatting; the join and the ordering are asserted by the
+    hash test on the C# side, which pins the exact header a browser receives.
+    """
+    source = (Path(__file__).resolve().parents[2]
+              / "desktop" / "Smylte.Desktop" / "LocalServer.cs").read_text(encoding="utf-8")
+    body = source.split("internal static string PolicyFor(", 1)[1]
+    body = body[:body.index("\n    }")]
+
+    # Every quoted directive literal in that method: the array `string.Join`
+    # builds, plus the `script-src 'self'` it assembles separately when the page
+    # has no inline script to hash.
+    # `.rstrip()` because the C# writes `"script-src 'self' " + join(hashes)` for
+    # the with-hashes arm, and that trailing space is a concatenation detail
+    # rather than a directive.
+    theirs = {m.group(1).rstrip() for m in re.finditer(
+        r'"([a-z-]+-(?:src|uri|ancestors|action) [^"]*)"', body)}
+    assert theirs, "no directives were found in LocalServer.cs — has PolicyFor moved?"
+
+    ours = set(build_policy([]).split("; "))
+    assert theirs == ours, (
+        "the desktop client's Content-Security-Policy has drifted from this one.\n"
+        f"  only in csp.py:       {sorted(ours - theirs)}\n"
+        f"  only in LocalServer:  {sorted(theirs - ours)}"
+    )

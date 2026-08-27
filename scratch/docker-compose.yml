@@ -23,7 +23,13 @@ services:
       - ./radicale/users:/config/users:ro
       - ./data/collections:/data/collections
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:5232/', timeout=3).status in (200,301,302,401,207) else 1)"]
+      # Liveness only, and deliberately anonymous — it proves the process is
+      # answering, not that the test account works. `401` used to be in this
+      # tuple and could never match: urlopen RAISES HTTPError on 4xx rather than
+      # returning a response, so the branch was dead. Whether the credentials
+      # work is checked where it belongs, by conftest's `_scratch_up` probe,
+      # which under SCRATCH_REQUIRED=1 fails the run instead of skipping it.
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:5232/', timeout=3).status in (200,301,302,207) else 1)"]
       interval: 10s
       timeout: 5s
       retries: 5

@@ -20,7 +20,7 @@ from __future__ import annotations
 import re
 import secrets
 from contextlib import contextmanager
-from datetime import date, datetime, time as time_of_day, timedelta
+from datetime import date, datetime, time as time_of_day, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from ..ical import EventEdit, TaskEdit, rrule_from_spec
@@ -119,6 +119,64 @@ def _hhmm(value: str, *, field: str) -> time_of_day:
         raise ToolError(f"{field}={value!r} is not a time. Use 'HH:MM'.") from None
 
 
+def _instant_in(value: date | datetime, zone) -> float:
+    """A date-or-datetime as an absolute instant, resolved in `zone`.
+
+    THE one resolution rule in this module, and it is one rule on purpose: this
+    file already had two, and their drifting apart was the whole of a finding.
+    `_due_instant` resolved a deadline in the owner's zone while the `due_before`
+    / `due_after` filters four lines from it went through `_as_dt`, which
+    flattens to the SERVER's wall clock — so `smylte_list_tasks` sorted a task by
+    one zone and filtered it by another, and disagreed with `service._due_day`
+    and with the SPA about which day a deadline falls on.
+
+    An all-day value becomes midnight; a naive time is read as the owner's; an
+    aware one keeps the instant it already names.
+    """
+    if not isinstance(value, datetime):
+        value = datetime.combine(value, time_of_day.min)
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=zone) if zone is not None else value.astimezone()
+    return value.timestamp()
+
+
+def _bound_instant(value, zone, *, field: str) -> float | None:
+    """A caller-supplied `due_before`/`due_after` bound, as an instant.
+
+    Parsed STRICTLY, unlike a deadline off the wire: `_parse_dt` refusing a value
+    the caller sent is a correct, actionable error, and the soft-fail in
+    `_due_parts` exists only because a cached value came from another CalDAV
+    client. See that function's note.
+    """
+    parsed = _parse_dt(value, field=field)
+    return None if parsed is None else _instant_in(parsed, zone)
+
+
+def _due_parts(raw, zone) -> tuple[float, float] | None:
+    """A deadline as `(due_at, overdue_at)`, both instants in `zone`.
+
+    Two numbers because a deadline expires later than it is due, and only for
+    an all-day one: `util.ts::isOverdue` is the app's own rule — "an all-day item
+    isn't overdue until its whole day has passed" — and `service._due_day`
+    resolves the day in `home_timezone`. Both are honoured here rather than a
+    third answer being invented. The day is added as WALL CLOCK, so a deadline
+    whose day contains a DST transition expires 23 or 25 hours later, not 24.
+    """
+    if not raw:
+        return None
+    try:
+        value = _parse_dt(raw, field="due")
+    except ToolError:
+        # Fail SOFT, and only here — see `_due_instant`.
+        return None
+    if value is None:
+        return None
+    due_at = _instant_in(value, zone)
+    if isinstance(value, datetime):
+        return due_at, due_at
+    return due_at, _instant_in(value + timedelta(days=1), zone)
+
+
 def _due_instant(t: dict, zone) -> float | None:
     """A task's deadline as an absolute instant, the way `dueAt` computes it.
 
@@ -136,17 +194,8 @@ def _due_instant(t: dict, zone) -> float | None:
     uses for floating times. None keeps the previous behaviour (the server's
     local zone), which is what a caller with no service handle gets.
     """
-    raw = t.get("due")
-    if not raw:
-        return None
-    value = _parse_dt(raw, field="due")
-    if value is None:
-        return None
-    if not isinstance(value, datetime):
-        value = datetime.combine(value, time_of_day.min)
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=zone) if zone is not None else value.astimezone()
-    return value.timestamp()
+    parts = _due_parts(t.get("due"), zone)
+    return None if parts is None else parts[0]
 
 
 def _intrinsic_order(t: dict, zone=None):
@@ -302,6 +351,44 @@ def _not_found(message: str):
         raise ToolError(message) from None
 
 
+def _event_order(row: dict) -> tuple:
+    """Sort key for a merged event list: INSTANT first, then a total tie-break.
+
+    This used to be `(row["start"] or "", row["summary"] or "")` — a lexical
+    compare over `dt.isoformat()`, which carries whatever offset the writing
+    client used. `_intrinsic_order`'s docstring in this same file already says
+    why that is wrong ("lexical comparison happens to agree for ISO values of
+    equal shape and stops agreeing the moment a date-only and a timed value meet,
+    or an offset appears"); the tasks path was fixed for it and the events path
+    was not.
+
+    So `DTSTART;TZID=Europe/Berlin:20260821T090000` (07:00Z, genuinely first)
+    sorted AFTER `DTSTART:20260821T080000Z` (08:00Z), because "2026-08-21T09:00"
+    is lexically greater. `tools.py` then pages this list, so `limit: 1` handed
+    the model the LATER meeting and it never saw the earlier one.
+
+    An unreadable or absent start sorts last rather than raising — these rows
+    come off the wire from other clients. uid and recurrence_id complete the
+    order so it is total, the way `_intrinsic_order` is.
+    """
+    raw = row.get("start")
+    when = None
+    if raw:
+        try:
+            parsed = _parse_dt(raw, field="start")
+        except ToolError:
+            parsed = None
+        if parsed is not None:
+            when = _as_dt(parsed)
+    return (
+        when is None,                       # undated / unreadable last
+        when or datetime.min,   # naive, matching `_as_dt`'s output
+        row.get("summary") or "",
+        row.get("uid") or "",
+        row.get("recurrence_id") or "",
+    )
+
+
 class McpApi:
     """Everything the tools can reach, and nothing else.
 
@@ -400,9 +487,16 @@ class McpApi:
 
     def list_tasks(self, list_id=None, *, include_done=False, due_before=None,
                    due_after=None, overdue_only=False, tag=None):
-        before = _as_dt(_parse_dt(due_before, field="due_before"))
-        after = _as_dt(_parse_dt(due_after, field="due_after"))
-        now = datetime.now()
+        # The OWNER's zone, the same one `_in_display_order` sorts by at the foot
+        # of this method. These two used to go through `_as_dt` — the server's
+        # wall clock — so the same call sorted a task by one zone and filtered it
+        # by another: with the process in UTC and the owner in America/Chicago,
+        # a deadline of 22:00 on Friday was excluded from "due before Saturday"
+        # and reported under Saturday instead.
+        zone = self._home_zone()
+        before = _bound_instant(due_before, zone, field="due_before")
+        after = _bound_instant(due_after, zone, field="due_after")
+        now = datetime.now(timezone.utc).timestamp()
         rows: list[dict] = []
         for href in self._task_lists(list_id):
             rows.extend(self._svc.list_tasks(href, include_done=True))
@@ -413,14 +507,20 @@ class McpApi:
             if tag and tag not in (t.get("tags") or []):
                 continue
             if before or after or overdue_only:
-                due = _as_dt(_parse_dt(t.get("due"), field="due"))
-                if due is None:
-                    continue          # a filter on the deadline excludes undated work
-                if before and due >= before:
+                parts = _due_parts(t.get("due"), zone)
+                if parts is None:
+                    # Undated, or unreadable — which sorts and filters the same
+                    # way. A filter on the deadline excludes work that has none.
                     continue
-                if after and due < after:
+                due, overdue_at = parts
+                if before is not None and due >= before:
                     continue
-                if overdue_only and (due >= now or t["completed"] or t["cancelled"]):
+                if after is not None and due < after:
+                    continue
+                # `overdue_at`, not `due`: an all-day deadline is not overdue
+                # until its whole day has passed, which is `isOverdue`'s rule on
+                # the client and the one this now shares.
+                if overdue_only and (overdue_at > now or t["completed"] or t["cancelled"]):
                     continue
             out.append(t)
         return _in_display_order(out, self._home_zone())
@@ -551,7 +651,7 @@ class McpApi:
         rows: list[dict] = []
         for href in self._event_calendars(calendar_id):
             rows.extend(self._svc.events_in_range(href, s.isoformat(), e.isoformat()))
-        rows.sort(key=lambda r: (r.get("start") or "", r.get("summary") or ""))
+        rows.sort(key=_event_order)
         return rows
 
     def get_event(self, calendar_id, uid):
@@ -909,25 +1009,31 @@ class McpApi:
             )
         return resolved
 
-    def _entries_with_tasks(self, entries: list[dict]) -> list[dict]:
-        """Day entries with the task each one names folded in.
+    @staticmethod
+    def _lists_named(*groups: list[dict]) -> set[str]:
+        """The task lists named across any number of entry groups."""
+        return {e["list"] for g in groups for e in g
+                if e["kind"] == "task" and e["list"]}
 
-        A day entry is a POINTER: the wire stores no title and no done flag for a
-        task entry, deliberately, because the VTODO is the single truth for both.
-        Handing a model bare (list, uid) pairs would make it call
-        smylte_get_task once per row to learn what any of them say, so the join
-        happens once here instead.
+    def _task_index(self, list_ids: set[str]) -> dict[tuple[str, str], dict]:
+        """Every task in `list_ids`, keyed the way an entry names one.
 
-        Tasks are read a LIST at a time rather than one call per entry: each
-        `get_task` takes the global service lock, and a twelve-row day would take
-        it twelve times behind whatever CalDAV I/O happens to be in flight.
+        Read a LIST at a time rather than one call per entry: each `get_task`
+        takes the global service lock, and a twelve-row day would take it twelve
+        times behind whatever CalDAV I/O happens to be in flight.
 
-        Every record that comes back carries `task`, whatever its kind — see the
-        loop for why the alternative was a trap.
+        Lifted out of `_entries_with_tasks` so a caller answering about MANY days
+        can build it once. It was inline, which made `review_day`'s range arm
+        O(days x lists): every day re-resolved its lists and re-read every task
+        in them — a full `store.get_items` with raw_ics, plus a `_task_dto` per
+        row — and then threw the map away. `day_range` allows 190 days, and the
+        range is an argument the calling model chooses: measured 0.06 s for one
+        day and 6.63 s for 180, against 0.003 s for the HTTP route that answers
+        the same question with no join at all. Same shape `service.search` was
+        fixed into, and its comment says the same thing: built ONCE.
         """
-        wanted = {e["list"] for e in entries if e["kind"] == "task" and e["list"]}
         by_key: dict[tuple[str, str], dict] = {}
-        for list_id in sorted(wanted):
+        for list_id in sorted(list_ids):
             href = self._svc.resolve_list(list_id, component="VTODO")
             if href is None:
                 # The list has left the wire. The ENTRY still stands — that is
@@ -936,6 +1042,29 @@ class McpApi:
                 continue
             for t in self._svc.list_tasks(href, include_done=True):
                 by_key[(t["list"], t["uid"])] = t
+        return by_key
+
+    def _entries_with_tasks(
+        self, entries: list[dict], index: dict[tuple[str, str], dict] | None = None
+    ) -> list[dict]:
+        """Day entries with the task each one names folded in.
+
+        A day entry is a POINTER: the wire stores no title and no done flag for a
+        task entry, deliberately, because the VTODO is the single truth for both.
+        Handing a model bare (list, uid) pairs would make it call
+        smylte_get_task once per row to learn what any of them say, so the join
+        happens once here instead.
+
+        `index` is a prebuilt `_task_index` for a caller that is answering about
+        more than one day — or, in `today`'s case, asking twice about one. It is
+        OPTIONAL rather than required because the map a single day needs is
+        exactly the map this function would build, so a caller with one day to
+        answer about should not have to know that.
+
+        Every record that comes back carries `task`, whatever its kind — see the
+        loop for why the alternative was a trap.
+        """
+        by_key = self._task_index(self._lists_named(entries)) if index is None else index
         out = []
         for e in entries:
             row = dict(e)
@@ -992,7 +1121,14 @@ class McpApi:
         """
         day = self._today()
         plan = self._svc.open_day(day, create=False)
-        entries = self._entries_with_tasks(plan["entries"])
+        # The preview is resolved before the join rather than after, so the two
+        # answers share ONE index. They name much the same lists — a preview is
+        # this day's plan as it would be — and building the map twice read every
+        # task of every one of them twice for a single tool call.
+        preview = None if plan["planned"] else self._svc.preview_day(day)
+        index = self._task_index(self._lists_named(
+            plan["entries"], *([preview] if preview is not None else [])))
+        entries = self._entries_with_tasks(plan["entries"], index)
         out = {
             "day": day, "planned": plan["planned"],
             **self._day_facts(plan),
@@ -1004,8 +1140,8 @@ class McpApi:
             "totals": self._day_totals(entries, done=_task_flag_done),
             "entries": entries,
         }
-        if not plan["planned"]:
-            out["preview"] = self._entries_with_tasks(self._svc.preview_day(day))
+        if preview is not None:
+            out["preview"] = self._entries_with_tasks(preview, index)
         return out
 
     @staticmethod
@@ -1276,8 +1412,19 @@ class McpApi:
             start, end, days = resolved, resolved, [resolved]
         # `end` is exclusive everywhere in this service, so a single day is the
         # half-open span [day, day+1) rather than a second code path.
-        span_end = end if ranged else (
-            date.fromisoformat(start) + timedelta(days=1)).isoformat()
+        if ranged:
+            span_end = end
+        else:
+            # Saturate rather than overflow, exactly as `find_free_time` does on
+            # the same boundary. `_day_or_today` accepts "9999-12-31" because it
+            # is a real calendar date, and adding a day to it raises OverflowError
+            # — not a ValueError, so nothing here catches it, and the catch-all
+            # reported the misleading "the calendar server may be unreachable" for
+            # an argument the calling model chose. The HTTP twin is unaffected;
+            # this was MCP-only.
+            day_obj = date.fromisoformat(start)
+            span_end = (day_obj + timedelta(days=1)).isoformat() if day_obj < date.max \
+                else day_obj.isoformat()
         done_by_day = self._completions_by_day(start, span_end)
         by_day = {p["day"]: p for p in plans}
         # A day with completions but no plan still belongs in a range review:
@@ -1307,10 +1454,24 @@ class McpApi:
         # the inconsistent shape `_entries_with_tasks` was just fixed for.
         arm_of = {"user": "chosen", "carried": "carried", "auto": "derived",
                   "habit": "habits"}
+        # ONE index for the whole range, built before the loop.
+        #
+        # This call used to be inside it, so the join ran once per PLANNED DAY:
+        # each day re-resolved the lists it named and re-read every task in them
+        # — a full `store.get_items` with raw_ics, under the global service lock,
+        # plus a `_task_dto` per row — and then threw the map away. `day_range`
+        # allows 190 days and the range is an argument the calling model chooses,
+        # so the cost was O(days x lists x tasks) for one read-scoped tool call:
+        # measured 1.01 s at 30 days and 6.63 s at 180, against 0.003 s for the
+        # HTTP route answering the same question. The lists named across the
+        # whole range are the same handful the first day already needed.
+        index = self._task_index(self._lists_named(*(p["entries"] for p in plans)))
         out = []
         for d in wanted:
             plan = by_day.get(d)
-            entries = self._entries_with_tasks(plan["entries"]) if plan else []
+            # Still `if plan else []`: a day with completions but no plan belongs
+            # in a range review and has no entries to join.
+            entries = self._entries_with_tasks(plan["entries"], index) if plan else []
             buckets: dict[str, list] = {
                 "chosen": [], "carried": [], "derived": [], "habits": [],
                 "other": [], "moved": [], "dropped": [],

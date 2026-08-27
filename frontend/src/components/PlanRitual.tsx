@@ -26,7 +26,7 @@
 // leave is a wizard, and this one stands between the owner and a list they may
 // simply have wanted to glance at.
 
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { DayEntry, Task } from '../api'
 import { useEscape } from '../hooks'
@@ -179,6 +179,22 @@ function CapacityStep({ capacity, meetingMinutes, onCapacity }: {
     setDraft(capacityInput(next))
     if (next !== capacity) onCapacity(next)
   }
+
+  // Committed on UNMOUNT as well as on blur — the same gap `ReflectStep` has,
+  // for the same reason: Escape unmounts the overlay and browsers fire no blur
+  // for a focused element removed from the DOM, so "until 6pm" typed and then
+  // Escaped was never stored. The effect ADDS a path; blur still commits, which
+  // is what makes the parse error visible while the ritual is still open.
+  //
+  // It runs `commit` itself rather than sending the raw draft, so an unmount
+  // resolves "until 6pm" against the clock exactly as a blur would — the whole
+  // point of that function being where the parsing lives. A draft the parser
+  // REFUSES writes nothing on unmount, which is the same answer blur gives; the
+  // alternative would be storing a number nobody asked for from text the app has
+  // already said it cannot read.
+  const latest = useRef(commit)
+  latest.current = commit
+  useEffect(() => () => { latest.current() }, [])
 
   return (
     <div className="plan-body">

@@ -1,17 +1,19 @@
 import {
-  useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties,
+  useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties,
 } from 'react'
 import {
   api, clientId, uidFor, type CalEvent, type EventScope, type List, type Task,
 } from '../api'
 import { useCalendarData, useTaskData } from '../data'
-import { cssColor, dayKey, makeGuard, pad, textDir, toLocalInput, ymd } from '../util'
+import { useEscape } from '../hooks'
+import { cssColor, dayKey, makeGuard, pad, sameValue, textDir, toLocalInput, ymd } from '../util'
 import { fmtClock, inputLang } from '../time'
 import { useTimeFormat } from '../timeformat'
 import {
   bucketByDay, bucketTasksByDay, cellCapacity, chipsShown, dragBody, daysBetween,
   endFromDuration, eventKey, lastDayOf, monthGrid, shiftYmd, type CalendarFit, type DayEv,
 } from '../calendar'
+import { TagInput } from './AddMultipleModal'
 import { taskKey } from '../order'
 import { useIsMobile } from '../hooks'
 import { AgendaEvent, AgendaTask, DayPopover } from './DayPopover'
@@ -209,6 +211,90 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
   }, [cursor])
 
   const days = useMemo(() => monthGrid(cursor), [cursor])
+
+  // ── the grid's keyboard walk ──────────────────────────────────────────────
+  //
+  // ONE tab stop for 42 cells, moved by the arrows — the roving-tabindex
+  // pattern a date grid is expected to have. Forty-two real tab stops would be
+  // reachable and unusable: crossing the month to get to whatever follows it is
+  // not an improvement on not reaching it at all.
+  //
+  // Held as a DAY KEY rather than an index, so the tab stop survives a month
+  // change: the grid always starts on a different weekday, so index 8 is a
+  // different date every month, and paging with the arrows would wander.
+  const [keyDay, setKeyDay] = useState(() => ymd(new Date()))
+  const keyCellRef = useRef<HTMLDivElement>(null)
+  // Set when the walk itself moved the focus, so focus follows the arrows —
+  // and NOT on an ordinary render, which would steal focus from whatever the
+  // owner was actually using.
+  const walking = useRef(false)
+
+  useEffect(() => {
+    if (!walking.current) return
+    walking.current = false
+    keyCellRef.current?.focus()
+  }, [keyDay, cursor])
+
+  // The focused day must always be ONE of the 42 on screen, or the tab stop
+  // disappears and the grid drops out of the tab order entirely. Paging the
+  // month is the case: `keyDay` stays where it was and is no longer rendered.
+  useEffect(() => {
+    const keys = days.map(ymd)
+    if (keys.includes(keyDay)) return
+    // The same day-of-month where it exists, else the nearest end of the month
+    // being shown — which is what a reader who paged here expects to land on.
+    const wanted = keyDay.slice(8)
+    const inMonth = days.filter((d) => d.getMonth() === cursor.getMonth())
+    const match = inMonth.find((d) => ymd(d).slice(8) === wanted)
+    setKeyDay(ymd(match ?? inMonth[inMonth.length - 1] ?? days[0]))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [days])
+
+  // What a screen reader announces on landing in a cell. The visible text is a
+  // bare day NUMBER, which out of its column is not a date at all.
+  const fmtCellLabel = (d: Date) =>
+    d.toLocaleDateString(undefined, {
+      weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
+    })
+
+  const stepMonth = (by: number) =>
+    setCursor(new Date(cursor.getFullYear(), cursor.getMonth() + by, 1))
+
+  const onGridKey = (ev: React.KeyboardEvent) => {
+    // Only the CELL's own keys. A chip inside it is a separate control with its
+    // own Enter/Space handler, and it stops propagation; anything else in here
+    // (a `+N more` button) keeps its native behaviour.
+    const step: Record<string, number> = {
+      ArrowLeft: -1, ArrowRight: 1, ArrowUp: -7, ArrowDown: 7,
+    }
+    const target = ev.target as HTMLElement
+    if (!target.classList.contains('cal-cell')) return
+    if (ev.key === 'Enter' || ev.key === ' ') {
+      ev.preventDefault()
+      setDraft({ date: keyDay })
+      return
+    }
+    const keys = days.map(ymd)
+    const at = keys.indexOf(keyDay)
+    if (at < 0) return
+    let next = at
+    if (ev.key in step) next = at + step[ev.key]
+    else if (ev.key === 'Home') next = at - (at % 7)
+    else if (ev.key === 'End') next = at - (at % 7) + 6
+    else if (ev.key === 'PageUp') { ev.preventDefault(); walking.current = true; stepMonth(-1); return }
+    else if (ev.key === 'PageDown') { ev.preventDefault(); walking.current = true; stepMonth(1); return }
+    else return
+    ev.preventDefault()
+    // Off either end pages the month, so the walk is not fenced inside one
+    // six-week window — the effect above then picks the landing cell.
+    if (next < 0 || next > 41) {
+      walking.current = true
+      stepMonth(next < 0 ? -1 : 1)
+      return
+    }
+    walking.current = true
+    setKeyDay(keys[next])
+  }
 
   // The window the grid shows, as the API wants it: the six-week span plus one
   // exclusive day. Both halves of the pair are derived once so the fetch and
@@ -417,6 +503,7 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
   const [drag, setDrag] = useState<{ ev: DayEv; fromDay: string; mode: 'move' | 'resize' } | null>(null)
   const [overDay, setOverDay] = useState<string | null>(null)
   const [moveAsk, setMoveAsk] = useState<{ ev: CalEvent; body: Record<string, unknown> } | null>(null)
+  const movePress = useRef(false)          // see the scope prompt's overlay
 
   const dropOnDay = (key: string) => {
     const d = drag
@@ -431,6 +518,16 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
     if (d.ev.is_recurring) setMoveAsk({ ev: d.ev, body })
     else save(body, calIdOf(d.ev), d.ev.uid)
   }
+  // The scope prompt is a `role="dialog" aria-modal="true"` in its own right —
+  // a second one in this file, which is why the modal-contract guard test never
+  // saw it: that test greps a FILE for `useEscape(`, and `EventModal` below
+  // already satisfied it. Declared modal, it owes the same key.
+  //
+  // Written as a functional update so the handler identity never changes and the
+  // listener is not re-bound on every drag: when nothing is asking, Escape here
+  // returns the same state and React re-renders nothing.
+  useEscape(useCallback(() => setMoveAsk((a) => (a ? null : a)), []))
+
   const pickMoveScope = (scope: EventScope) => {
     if (!moveAsk) return
     save({ ...moveAsk.body, recurrence_id: moveAsk.ev.recurrence_id, scope },
@@ -552,8 +649,20 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
                 </button>
               </div>
             )}
-            <div className="cal-grid">
-              {DOW.map((d) => <div key={d} className="cal-dow">{d}</div>)}
+            {/* A GRID, and the day cells take a roving tabindex — the pattern a
+                date grid is expected to have, and the one screen readers
+                announce as a grid rather than as 42 anonymous divs. One tab
+                stop for the whole month; the arrows walk it. Every interactive
+                surface in here used to be a plain `<div>` with an `onClick`,
+                so there was no key sequence that opened an event or created one
+                on a given day — while `+N more` two lines down is a real
+                `<button>` and the mobile agenda rows are buttons too, which is
+                what made the omission look deliberate rather than uniform. */}
+            <div className="cal-grid" role="grid" aria-label="Month"
+              onKeyDown={onGridKey}>
+              {DOW.map((d) => (
+                <div key={d} className="cal-dow" role="columnheader">{d}</div>
+              ))}
               {days.map((d) => {
                 const key = ymd(d)
                 const inMonth = d.getMonth() === cursor.getMonth()
@@ -570,6 +679,16 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
                 return (
                   <div key={key}
                     className={`cal-cell ${inMonth ? '' : 'dim'} ${key === todayKey ? 'today' : ''} ${isMobile && key === focusDay ? 'focus' : ''} ${drag && overDay === key ? 'drag-over' : ''}`}
+                    role="gridcell"
+                    aria-label={fmtCellLabel(d)}
+                    // THE roving tabindex: exactly one cell is in the tab order
+                    // at a time, and the arrows move which. `key === keyDay`
+                    // rather than an index so the tab stop survives a month
+                    // change landing on a different number of leading blanks.
+                    tabIndex={key === keyDay ? 0 : -1}
+                    data-day={key}
+                    ref={key === keyDay ? keyCellRef : undefined}
+                    onFocus={() => setKeyDay(key)}
                     onDragOver={(ev) => { if (!drag) return; ev.preventDefault(); setOverDay(key) }}
                     onDragLeave={() => setOverDay((o) => (o === key ? null : o))}
                     onDrop={(ev) => { ev.preventDefault(); dropOnDay(key) }}
@@ -625,6 +744,19 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
                               style={evStyle(e)}
                               dir={textDir(e.summary)}
                               title={e.is_recurring ? `${e.summary || ''} (repeating)` : (e.summary || '')}
+                              // Operable, and OUT of the roving walk: a chip is
+                              // reached by tabbing on from the focused cell, so
+                              // the arrows stay the grid's. The sidebar row in
+                              // this same file is the in-file precedent for the
+                              // role/tabIndex/keydown trio.
+                              role="button"
+                              tabIndex={0}
+                              onKeyDown={(ev) => {
+                                if (ev.key !== 'Enter' && ev.key !== ' ') return
+                                ev.preventDefault()
+                                ev.stopPropagation()
+                                setDraft({ event: e })
+                              }}
                               draggable
                               onDragStart={(ev) => {
                                 ev.stopPropagation()
@@ -671,6 +803,18 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
                           return (
                             <div key={taskKey(t)} className={`cal-task ${done ? 'done' : ''}`}
                               style={taskStyle(t)} dir={textDir(t.summary)} title={t.summary || ''}
+                              // Same treatment as the event chip beside it. The
+                              // finding names the event chip; a task chip in the
+                              // same cell that stayed unreachable would be the
+                              // same bug with a different selector.
+                              role="button"
+                              tabIndex={0}
+                              onKeyDown={(ev) => {
+                                if (ev.key !== 'Enter' && ev.key !== ' ') return
+                                ev.preventDefault()
+                                ev.stopPropagation()
+                                setTaskDetail(t)
+                              }}
                               onClick={(ev) => { ev.stopPropagation(); setTaskDetail(t) }}>
                               <span className="tick" aria-hidden="true">{done ? '☑' : '☐'}</span>
                               {timed && <span className="t">{fmtClock(t.due!, tf)}</span>}
@@ -753,11 +897,17 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
       )}
 
       {moveAsk && (
-        <div className="overlay" onClick={() => setMoveAsk(null)}>
-          <div className="modal" onClick={(ev) => ev.stopPropagation()}>
+        <div className="overlay"
+          onMouseDown={(ev) => { movePress.current = ev.target === ev.currentTarget }}
+          onClick={(ev) => {
+            if (ev.target === ev.currentTarget && movePress.current) setMoveAsk(null)
+            movePress.current = false
+          }}>
+          <div className="modal" role="dialog" aria-modal="true" aria-label="Repeating event"
+            onClick={(ev) => ev.stopPropagation()}>
             <div className="modal-head">
               <span className="modal-title">Repeating event</span>
-              <button className="icon-btn" onClick={() => setMoveAsk(null)}>✕</button>
+              <button className="icon-btn" onClick={() => setMoveAsk(null)} aria-label="Close">✕</button>
             </div>
             <div className="scope-choose">
               <p className="scope-q">Apply the change to which events?</p>
@@ -818,7 +968,13 @@ function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete }: {
   const endUnknown = !!e && !e.end && !derivedEnd
   const [location, setLocation] = useState(e?.location || '')
   const [description, setDescription] = useState(e?.description || '')
-  const [tags, setTags] = useState((e?.tags || []).join(', '))
+  // Held as a LIST, not as a comma-joined string that is re-split on save.
+  // `CATEGORIES:Home\,Garden` is ONE category per RFC 5545 — the backend reads
+  // it with icalendar's `.cats` and writes it back escaped — so any
+  // delimiter-joined text field destroys a category another CalDAV client
+  // authored with a comma in it. That is `TagInput`'s whole reason for existing
+  // on the task side; the event editor was simply never converted.
+  const [tags, setTags] = useState<string[]>(e?.tags || [])
   // A new/non-recurring event picks a concrete cadence; an existing recurring one
   // defaults to "keep" — we don't surface its exact FREQ, so leaving it untouched
   // preserves the rule.
@@ -886,7 +1042,12 @@ function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete }: {
   const startOut = startVal
   const endOut = allDay ? shiftYmd(clampedEnd, 1) : clampedEnd
 
-  const tagList = () => tags.split(',').map((s) => s.trim()).filter(Boolean)
+  // Sent only when they actually differ from what the event holds. `commit`
+  // used to include `tags` on EVERY save, so an edit that only changed the title
+  // rewrote CATEGORIES too — which is how the re-split above reached events the
+  // user never touched the tags of. `sameValue` is TaskModal's precedent.
+  const tagFields = (): Record<string, unknown> =>
+    (e && sameValue(tags, e.tags || [])) ? {} : { tags }
   const repeatFields = (): Record<string, unknown> => {
     if (repeat === 'keep') return {}          // leave the existing rule untouched
     const b: Record<string, unknown> = { repeat }
@@ -897,10 +1058,10 @@ function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete }: {
   const commit = (scope: EventScope) => {
     if (!e) {
       onSave({ summary, all_day: allDay, start: startOut, end: endOut,
-               location, description, tags: tagList(), ...repeatFields() }, calPick)
+               location, description, tags, ...repeatFields() }, calPick)
       return
     }
-    const details = { summary, location, description, tags: tagList() }
+    const details = { summary, location, description, ...tagFields() }
     // An event whose span we could not reconstruct sends no end at all, so the
     // stored DTEND/DURATION is left exactly as its author wrote it.
     const times = endUnknown
@@ -914,7 +1075,22 @@ function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete }: {
       const shift = timeChanged ? { ...times, recurrence_id: e.recurrence_id } : {}
       onSave({ ...details, ...shift, ...repeatFields(), scope: 'all' }, calPick, e.uid)
     } else if (recurring) {
-      onSave({ ...details, ...times, recurrence_id: e.recurrence_id, scope }, calPick, e.uid)
+      // "This & following" carries the repeat too. The backend splits the series
+      // at the anchor and re-rules the TAIL from `edit.rrule` — verified against
+      // `ical.split_series` directly: a tail asked for weekly comes back
+      // `RRULE:FREQ=WEEKLY`, and one asked for "does not repeat" comes back with
+      // no RRULE at all. Dropping `repeatFields()` here meant a user who changed
+      // Repeat and then answered the scope prompt with this button got no rule
+      // change, no error and no warning — the modal closed and the grid
+      // repainted as if it had worked.
+      //
+      // "This event" still cannot: it writes a RECURRENCE-ID override for one
+      // occurrence, and a rule on an override means nothing. That combination is
+      // REFUSED in `pickScope` rather than sent-and-dropped — the one thing that
+      // is not an answer is closing as if it had worked.
+      const cadence = scope === 'thisandfuture' ? repeatFields() : {}
+      onSave({ ...details, ...times, ...cadence, recurrence_id: e.recurrence_id, scope },
+             calPick, e.uid)
     } else {
       onSave({ ...details, ...times, ...repeatFields() }, calPick, e.uid)
     }
@@ -922,14 +1098,57 @@ function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete }: {
 
   const onSaveClick = () => { if (recurring) setScopeAsk('save'); else commit('all') }
   const onDeleteClick = () => { if (!e) return; recurring ? setScopeAsk('delete') : onDelete(e.uid) }
+  // See the overlay below.
+  const scrimPress = useRef(false)
+
+  // A cadence change cannot ride on "This event": that writes a RECURRENCE-ID
+  // override for one occurrence, and an RRULE on an override is meaningless. The
+  // other two scopes carry it — "All events" always did, and "This & following"
+  // now does, because the backend's `split_series` re-rules the tail.
+  const cadenceBlocked = scopeAsk === 'save' && repeat !== 'keep'
+  const [scopeErr, setScopeErr] = useState<string | null>(null)
+
   const pickScope = (scope: EventScope) => {
+    if (scopeAsk === 'save' && scope === 'this' && repeat !== 'keep') {
+      // Sent back to the form with the change still in it, rather than closed as
+      // if it had worked. The user can pick another scope, or set Repeat back to
+      // "Keep current schedule" and save this occurrence alone.
+      setScopeAsk(null)
+      setScopeErr('A repeat change cannot apply to a single occurrence. '
+        + 'Use “This & following” or “All events”, or set Repeat back to '
+        + '“Keep current schedule”.')
+      return
+    }
+    setScopeErr(null)
     if (scopeAsk === 'delete' && e) onDelete(e.uid, { recurrence_id: e.recurrence_id, scope })
     else commit(scope)
     setScopeAsk(null)
   }
 
+  // The modal contract every other dialog keeps. This one — the calendar tab's
+  // only editor for creating, editing and deleting events — declared
+  // `aria-modal="true"` with no focus trap and no keydown listener at all, so a
+  // keyboard or screen-reader user had no way out of it but the mouse.
+  //
+  // The existing guard test greps components that ALREADY import `useEscape`,
+  // which is structurally incapable of catching a dialog that never adopted it.
+  //
+  // Escape unwinds ONE step. The scope prompt renders in place of the form, with
+  // the form's state still held behind it; a bare `onClose` there threw away a
+  // filled-in event because the user pressed Escape at a prompt they only meant
+  // to back out of — and the prompt's own Cancel button does exactly this.
+  useEscape(useCallback(() => {
+    if (scopeAsk) { setScopeAsk(null); return }
+    onClose()
+  }, [scopeAsk, onClose]))
+
   return (
-    <div className="overlay" onClick={onClose}>
+    <div className="overlay"
+      onMouseDown={(ev) => { scrimPress.current = ev.target === ev.currentTarget }}
+      onClick={(ev) => {
+        if (ev.target === ev.currentTarget && scrimPress.current) onClose()
+        scrimPress.current = false
+      }}>
       <div className="modal" role="dialog" aria-modal="true"
         aria-label={e ? (recurring ? 'Repeating event' : 'Event') : 'New event'}
         onClick={(ev) => ev.stopPropagation()}>
@@ -943,6 +1162,12 @@ function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete }: {
             <p className="scope-q">
               {scopeAsk === 'delete' ? 'Delete which events?' : 'Apply changes to which events?'}
             </p>
+            {cadenceBlocked && (
+              <p className="scope-hint" role="status">
+                The repeat change needs “This &amp; following” or “All events” — a single
+                occurrence has no schedule of its own.
+              </p>
+            )}
             <button className="btn" onClick={() => pickScope('this')}>This event</button>
             <button className="btn" onClick={() => pickScope('thisandfuture')}>This &amp; following</button>
             <button className="btn" onClick={() => pickScope('all')}>All events</button>
@@ -950,6 +1175,7 @@ function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete }: {
           </div>
         ) : (
           <>
+            {scopeErr && <p className="scope-hint" role="alert">{scopeErr}</p>}
             <div className="field">
               <label className="label" htmlFor="ev-title">Title</label>
               <input className="input" id="ev-title" autoFocus value={summary} onChange={(ev) => setSummary(ev.target.value)} />
@@ -1000,8 +1226,8 @@ function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete }: {
               <textarea className="input" id="ev-notes" rows={2} value={description} onChange={(ev) => setDescription(ev.target.value)} />
             </div>
             <div className="field">
-              <label className="label" htmlFor="ev-tags">Tags (comma-separated)</label>
-              <input className="input" id="ev-tags" value={tags} onChange={(ev) => setTags(ev.target.value)} />
+              <label className="label">Tags</label>
+              <TagInput label="Tags" value={tags} onChange={setTags} />
             </div>
             {recurring && (
               <p className="scope-hint">

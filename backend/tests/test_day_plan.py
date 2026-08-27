@@ -1091,6 +1091,55 @@ def test_day_range_is_bounded(svc):
     assert DAY_RANGE_MAX_DAYS == 190
 
 
+def test_day_range_touches_the_connection_only_under_the_service_lock(svc):
+    """`store.connect` opens ONE connection `check_same_thread=False`, on the
+    stated promise that this class serializes every access behind `_lock`. The
+    route reaches `day_range` through `asyncio.to_thread`, so two concurrent
+    GET /api/day calls are two threadpool threads inside that one connection.
+
+    `day_range` used to close the lock after the range read and then build the
+    DTOs outside it — and `_day_plan_dto` is not a pure formatter: it reads
+    `day_ritual`, and through `_effective_capacity` the settings blob. That was
+    two unserialized queries per day, up to 380 at the 190-day bound. Concurrent
+    callers raised `sqlite3.InterfaceError: bad parameter or other API misuse`;
+    the quieter outcome was worse, a row fetched for one day handed to the
+    reader for another, so a day reported another day's capacity or reflection
+    with no error at all.
+
+    Asserted by counting store reads issued while the lock is NOT held, rather
+    than by racing threads: a thread race reproduces this most of the time,
+    which is not the same as always, and a flaky pin on a data-integrity
+    property is worth less than none."""
+    for day in (PREV, DAY, NEXT):
+        svc.open_day(day, create=True)
+        store.set_day_ritual(svc._conn, day, reflection="went fine")
+
+    unlocked: list[str] = []
+    originals = {n: getattr(store, n) for n in ("get_day_ritual", "get_settings")}
+
+    def watch(name, fn):
+        def spy(conn, *a, **k):
+            if not svc._lock._is_owned():
+                unlocked.append(name)
+            return fn(conn, *a, **k)
+        return spy
+
+    for name, fn in originals.items():
+        setattr(store, name, watch(name, fn))
+    try:
+        days = svc.day_range(PREV, "2026-08-23")
+    finally:
+        for name, fn in originals.items():
+            setattr(store, name, fn)
+
+    assert [d["day"] for d in days] == [PREV, DAY, NEXT]
+    assert all(d["reflection"] == "went fine" for d in days), (
+        "the batched ritual read must still reach each day's own row")
+    assert unlocked == [], (
+        f"day_range read the shared connection {len(unlocked)} times outside the "
+        f"service lock ({sorted(set(unlocked))}); every access must be serialized")
+
+
 # ── the HTTP contract ────────────────────────────────────────────────────────
 #
 # The routes over the same service, through the real app. Each test uses days of
@@ -1598,3 +1647,19 @@ def test_an_estimate_given_when_planning_survives_a_retry(mcp_api, svc):
                              estimate_minutes=40)
     assert again["entry_id"] == first["entry_id"], "still one row"
     assert again["estimate_minutes"] == 40, "the stated estimate was dropped"
+
+
+def test_review_day_saturates_at_the_last_representable_day(mcp_api):
+    """`_day_or_today` accepts "9999-12-31" because it is a real calendar date,
+    and the span computation added a day to it — OverflowError, which is not a
+    ValueError, so nothing on this path caught it and the catch-all reported "the
+    calendar server may be unreachable" for an argument the calling model chose.
+
+    The same boundary was already fixed twice elsewhere: `find_free_time` breaks
+    at `date.max`, and the HTTP event PATCH maps OverflowError to a 422. The HTTP
+    twin of this route is unaffected — it was MCP-only."""
+    out = mcp_api.review_day(day="9999-12-31")
+    assert out is not None
+    # The day before still answers the same way, so the clamp did not change the
+    # ordinary case into the boundary one.
+    assert mcp_api.review_day(day="9999-12-30") is not None

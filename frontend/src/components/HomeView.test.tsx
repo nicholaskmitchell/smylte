@@ -33,7 +33,7 @@ const list = { id: 'l1', href: '/l1/', name: 'Work', is_task_list: true, is_cale
   open_count: 1, task_count: 1, event_count: 0, total: 1, color: '#D9480F' }
 
 /** Render with a controlled layout so assertions can watch it change. */
-function setup(initial: DashboardModule[] = DEFAULT_LAYOUT,
+function setup(initial: DashboardModule[] | null = DEFAULT_LAYOUT,
   props: { hiddenCalendars?: string[]; archivedCalendars?: string[] } = {}) {
   const onLayoutChange = vi.fn()
   render(
@@ -64,15 +64,20 @@ beforeEach(() => {
 })
 
 describe('<HomeView>', () => {
+  // NULL is "nothing is saved" as of the 2026-08-25 stage 4 fix; `[]` now means
+  // a board the owner deliberately cleared. These two tests said `[]` and meant
+  // the first, which is the conflation that fix was about — removing the last
+  // module produced `[]` and put the stock five straight back. Only the value
+  // standing for "unset" changed here; both assertions are as they were.
   it('falls back to the stock arrangement when nothing is saved', async () => {
-    setup([])
+    setup(null)
     expect(await screen.findByText('Today')).toBeInTheDocument()
     expect(screen.getByText('Upcoming')).toBeInTheDocument()
     expect(screen.getByText('Mini calendar')).toBeInTheDocument()
   })
 
   it('does not persist the stock arrangement until something is changed', async () => {
-    const { onLayoutChange } = setup([])
+    const { onLayoutChange } = setup(null)
     await screen.findByText('Today')
     // An untouched dashboard stays "unset" server-side, so a later change to the
     // shipped default still reaches accounts that never arranged anything.

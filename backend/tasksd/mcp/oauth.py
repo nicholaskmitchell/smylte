@@ -79,6 +79,20 @@ SUPPORTED_SCOPES = (SCOPE_READ, SCOPE_WRITE, SCOPE_OFFLINE)
 DEFAULT_SCOPE = f"{SCOPE_READ} {SCOPE_WRITE} {SCOPE_OFFLINE}"
 
 
+def wire_safe(value: str) -> str:
+    """`value` with anything UTF-8 cannot carry replaced.
+
+    `json.loads` accepts a lone surrogate (`"\ud800"`) and hands it back
+    verbatim, but Starlette renders with `ensure_ascii=False` and then
+    `.encode("utf-8")`, which raises UnicodeEncodeError. That happens while
+    rendering — outside every exception handler — so anything echoing untrusted
+    text into a reply could 500 the request after the work was already done.
+    Same failure shape as the non-finite id documented in `handle`, and the same
+    remedy: never put a value on the wire that cannot go on the wire.
+    """
+    return value.encode("utf-8", "replace").decode("utf-8")
+
+
 class OAuthError(Exception):
     """An RFC 6749 error. `redirectable` marks the ones the spec wants handed
     back to the client via its redirect_uri rather than rendered here — which is
@@ -246,15 +260,28 @@ class OAuthServer:
         requested = scope_set(raw_scope) or scope_set(DEFAULT_SCOPE)
         unknown = requested - set(SUPPORTED_SCOPES)
         if unknown:
-            raise OAuthError("invalid_client_metadata",
-                             f"unsupported scope: {' '.join(sorted(unknown))}")
+            # `wire_safe`: every value here is attacker-chosen and this endpoint
+            # needs no session, so the message is quoting an anonymous caller's
+            # own bytes back at them. `json.loads` accepts a lone surrogate and
+            # Starlette's render then dies on `.encode("utf-8")` — while
+            # rendering, outside every handler, so a 500 rather than the 400 the
+            # request has coming.
+            # Truncated as well as made encodable, matching the sibling check
+            # two branches down. This endpoint needs no session, so `unknown` is
+            # every token an anonymous caller chose to send — a megabyte of them
+            # would otherwise be joined into the response body AND the log.
+            raise OAuthError(
+                "invalid_client_metadata",
+                f"unsupported scope: {wire_safe(' '.join(sorted(unknown)))[:200]}")
 
         # "none" means a public client, which is what DCR clients are. Anything
         # else gets a secret; we only ever store its hash.
         auth_method = body.get("token_endpoint_auth_method") or "none"
         if auth_method not in ("none", "client_secret_post", "client_secret_basic"):
-            raise OAuthError("invalid_client_metadata",
-                             f"unsupported token_endpoint_auth_method: {auth_method}")
+            raise OAuthError(
+                "invalid_client_metadata",
+                f"unsupported token_endpoint_auth_method: "
+                f"{wire_safe(str(auth_method))[:100]}")
 
         client_id = secrets.token_urlsafe(24)
         secret_plain = None if auth_method == "none" else secrets.token_urlsafe(32)
@@ -264,7 +291,9 @@ class OAuthServer:
             conn,
             client_id=client_id,
             client_secret_hash=sha256_hex(secret_plain) if secret_plain else None,
-            client_name=str(name)[:200] if isinstance(name, str) else None,
+            # Truncated AND made encodable: it is stored, then read back and
+            # rendered on the consent screen and the connections list.
+            client_name=wire_safe(name)[:200] if isinstance(name, str) else None,
             redirect_uris=clean,
             scope=scope_str(requested),
             now=now,

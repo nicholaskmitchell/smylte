@@ -50,6 +50,10 @@ const STOP_RE = /^(?:un?til|till|til|to)?\s*(\d{1,2})(?:[:.](\d{2}))?\s*(am|pm)?
  * strikes. It is unused for a span, which is the point: "5h" means five hours
  * whenever it is typed, and only "until 6pm" needs to know when now is.
  *
+ * `opts.stopTime: false` refuses a stop time outright, for the caller that
+ * stores a SETTING rather than a statement about today. See the note in the
+ * function body.
+ *
  * REFUSES rather than guesses, everywhere it is unsure. A line this cannot read
  * leaves the field alone and the owner types something else; a line it reads
  * WRONGLY silently books them a day of the wrong length. So a bare number is
@@ -57,7 +61,23 @@ const STOP_RE = /^(?:un?til|till|til|to)?\s*(\d{1,2})(?:[:.](\d{2}))?\s*(am|pm)?
  * most likely means), a stop time already past today answers null rather than
  * assuming tomorrow, and anything else is null.
  */
-export function parseCapacity(input: string, now: Date): number | null {
+export function parseCapacity(
+  input: string, now: Date, opts: { stopTime?: boolean } = {},
+): number | null {
+  // `stopTime` defaults to true — the day's own control, which is where this
+  // grammar was written for, takes "until 6pm" and should go on taking it.
+  //
+  // It is a parameter because a SETTING must not. CapacitySection's own header
+  // says so: "A stop time is deliberately NOT accepted here: 'until 6pm' is a
+  // statement about today, and a default that meant 'six hours' on Monday and
+  // 'two' on Friday afternoon would be a setting whose value depended on when
+  // you last opened Settings." That is exactly what happened — the field called
+  // the shared parser, which has this branch, so typing the sentence the app
+  // teaches everywhere else stored 90 minutes at 16:30 and 540 at 09:00, as the
+  // account-wide default for every day of the week. The comment at the call site
+  // asserted "`parseCapacity` ignores the clock for one", which is true of a
+  // span and was never true of the input the field actually accepted.
+  const allowStop = opts.stopTime !== false
   const raw = input.trim().toLowerCase()
   if (!raw) return null
 
@@ -68,8 +88,14 @@ export function parseCapacity(input: string, now: Date): number | null {
   const stop = STOP_RE.exec(raw)
   // Guarded on the introducer OR a meridiem OR a colon: without one of those,
   // `STOP_RE` matches a bare number, which the branch above has already claimed.
-  if (stop && (/^(un?til|till|til|to)/.test(raw) || stop[3] || /[:.]/.test(raw))) {
-    const mins = stopTimeToMinutes(stop, now)
+  const looksLikeStop = !!stop
+    && (/^(un?til|till|til|to)/.test(raw) || !!stop[3] || /[:.]/.test(raw))
+  if (looksLikeStop) {
+    // REFUSE rather than fall through to the span grammar. "until 6pm" must not
+    // quietly become "6 hours" here — a wrong reading is the one outcome this
+    // function's docstring says is worse than no reading.
+    if (!allowStop) return null
+    const mins = stopTimeToMinutes(stop!, now)
     if (mins !== null) return mins
   }
 

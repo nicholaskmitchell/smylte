@@ -1,20 +1,18 @@
 """The 2026-08-19 sweep: user-visible backend correctness (stage 4) and
 delivery infrastructure / test gaps (stage 5).
 
-This file is now MIXED, and which is which is readable off the markers. A test
-still carrying `xfail(strict=True)` pins an OPEN finding: it drives the real
-code, asserts the behaviour that code SHOULD have, and fails against what it
-does today — the marker is what keeps CI green while the finding is open, and
-what turns the build red the moment it is fixed without being ticked off. A test
-with no marker is a closed finding's regression test and must stay green.
+**Stages 4 and 5 are CLOSED.** Every test here began as an `xfail(strict=True)`
+pin — driving the real code, asserting the behaviour that code SHOULD have, and
+failing against what it did that day. The markers are gone: these are ordinary
+regression tests and must stay green.
 
-**Both stage-4 findings here are closed** (the consent form's default button,
-and `/book/<token>/`). Each was widened before it was fixed and then run against
-a plausible half-fix to confirm the widened pin still caught one — for the
-consent form that half-fix was "autofocus Connect but leave Cancel first in tree
-order", which does not change the default button and which the pin refuses. What
-remains open is stage 5: the release workflow's token scope, and setup.sh's
-password escaping.
+Both stage-4 findings (the consent form's default button, and `/book/<token>/`)
+were widened before they were fixed and then run against a plausible half-fix to
+confirm the widened pin still caught one — for the consent form that half-fix was
+"autofocus Connect but leave Cancel first in tree order", which does not change
+the default button and which the pin refuses. The two stage-5 findings, the
+release workflow's token scope and setup.sh's password escaping, closed the same
+way.
 
 The test-gap findings are the exception, and they split two ways, exactly as
 test_backlog_stage5.py describes: a gap is closed by a test EXISTING, so the
@@ -51,6 +49,7 @@ from urllib.parse import parse_qs, quote, urlsplit
 from zoneinfo import ZoneInfo
 
 import pytest
+import yaml
 from fastapi.testclient import TestClient
 
 from tasksd import scheduling
@@ -707,10 +706,6 @@ def test_the_build_jobs_hold_no_write_token():
       worth asserting at all. Without this the whole `ci.yml` half is vacuous,
       since `None != "write"` is true today.
     """
-    # PyYAML rides in with uvicorn[standard]; skip rather than fake a pin if
-    # it ever stops doing so — an ImportError is not this finding's failure.
-    yaml = pytest.importorskip("yaml")
-
     checked: list[str] = []
     for filename in _WORKFLOWS:
         wf = yaml.safe_load(_read(f".github/workflows/{filename}"))
@@ -770,7 +765,6 @@ def test_the_release_job_can_still_publish():
     Asserted through the same effective-permission rule, so it holds however the
     grant is spelled.
     """
-    yaml = pytest.importorskip("yaml")
     wf = yaml.safe_load(_read(".github/workflows/desktop-release.yml"))
     release = (wf.get("jobs") or {}).get("release")
     assert release is not None, "the release job is gone"

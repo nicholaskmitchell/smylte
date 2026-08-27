@@ -46,7 +46,12 @@ export function Login({ onLogin }: { onLogin: (user: string) => void }) {
             autoComplete="current-password"
             onChange={(e) => setPassword(e.target.value)} />
         </div>
-        {err && <div className="login-err">{err}</div>}
+        {/* `role="alert"` — an assertive live region. Without it a failed
+            sign-in was silent to a screen reader: focus stays in the form, the
+            error paints below it, and nothing announces. This is the first
+            screen anyone meets and the one where a wrong password is the
+            expected outcome. */}
+        {err && <div className="login-err" role="alert">{err}</div>}
         <button className="btn" type="submit" disabled={busy}>{busy ? '…' : 'Sign in'}</button>
       </form>
     </div>

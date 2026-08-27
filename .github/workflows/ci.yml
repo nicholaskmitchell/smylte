@@ -1,7 +1,10 @@
-# Gate for the autopull deploy: main only ever receives commits that passed the
-# full backend suite (against a real scratch Radicale), the frontend unit +
-# rendering tests, a typecheck + build, and the security checks (dependency
-# audits on both stacks and bandit static analysis on the backend).
+# Gate for the autopull deploy: main only ever receives commits that passed all
+# five jobs below — the full backend suite (against a real scratch Radicale, and
+# `SCRATCH_REQUIRED` is what makes that clause enforceable rather than
+# aspirational); the frontend unit + rendering tests, a typecheck and a build;
+# the Windows client's build and unit tests; the release workflow's publish step
+# against a stubbed `gh`; and the security checks (dependency audits on both
+# stacks and bandit static analysis on the backend).
 name: CI
 
 on:
@@ -47,6 +50,14 @@ jobs:
         working-directory: backend
         env:
           SCRATCH_STORAGE: ${{ github.workspace }}/scratch/data/collections
+          # Without this the gate this job advertises is unenforceable: conftest's
+          # `_scratch_up` turns ANY probe failure into a skip, so a container that
+          # starts and answers the anonymous healthcheck but rejects the test
+          # credentials silently converts ~240 tests — every DAV round-trip, sync,
+          # concurrency and MCP test — into skips, and pytest still exits 0.
+          # SCRATCH_REQUIRED makes that a failure here while leaving a laptop with
+          # no Docker free to skip.
+          SCRATCH_REQUIRED: '1'
       - name: Audit backlog status
         # The backlog pins (docs/STAGES.md) already ran above — an xfail is not
         # a failure and an XPASS already failed the step. This re-runs just them
@@ -57,6 +68,7 @@ jobs:
         working-directory: backend
         env:
           SCRATCH_STORAGE: ${{ github.workspace }}/scratch/data/collections
+          SCRATCH_REQUIRED: '1'
 
   frontend:
     runs-on: ubuntu-latest
@@ -73,9 +85,33 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
+      # Playwright's browsers live outside node_modules, so `cache: npm` above
+      # does not cover them. Keyed on the resolved playwright version, which is
+      # what decides the Chromium build.
+      - name: Chromium cache key
+        id: pw
+        run: echo "v=$(node -p "require('playwright/package.json').version")" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.pw.outputs.v }}
       - run: npm run typecheck
-      - name: Unit + rendering tests (vitest)
+      - name: Unit + rendering tests (vitest, jsdom)
         run: npm test
+      # The layout tier. jsdom computes no layout and the unit project runs with
+      # `css: false`, so a mobile rule that loses the cascade is invisible to all
+      # 1164 tests above — four have shipped dead that way, each one green here.
+      # This project renders the real stylesheets in real Chromium and measures.
+      #
+      # No `if:` and no "required" env var, deliberately: `vitest run --project
+      # browser` exits 1 both when the browser is missing and when the include
+      # glob matches nothing, so the tier cannot go quietly missing the way the
+      # scratch-Radicale tier could before SCRATCH_REQUIRED. A knob here would
+      # have nothing to do.
+      - name: Install Chromium for the layout tier
+        run: npx playwright install --with-deps chromium
+      - name: Layout tests (real browser)
+        run: npm run test:browser
       - run: npm run build
 
   desktop:

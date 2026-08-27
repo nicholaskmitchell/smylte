@@ -93,11 +93,14 @@ function CapacityField({ id, value, placeholder, name, onCommit }: {
     // An emptied field CLEARS, which is the only way back to "never said" and
     // the reason the wire needed a sentinel for it.
     if (!raw) { if (value != null) onCommit(null); return }
-    // `new Date()` here rather than a passed clock: this field takes a SPAN, and
-    // `parseCapacity` ignores the clock for one. It is handed over only because
-    // the signature is shared with the day's control, which does take a stop
-    // time — and a second parser for "5h" would be the drift worth avoiding.
-    const next = parseCapacity(raw, new Date())
+    // `stopTime: false` is what makes the header's promise true. The signature is
+    // shared with the day's control, which DOES take "until 6pm" — and this
+    // field used to take it as well, storing the interval from whenever Settings
+    // happened to be open: 90 minutes at 16:30, 540 at 09:00, as the
+    // account-wide default for every day of the week. The clock is still handed
+    // over because the signature is shared; with the stop grammar refused it is
+    // now genuinely unused here.
+    const next = parseCapacity(raw, new Date(), { stopTime: false })
     // A line the parser cannot read snaps back rather than clearing. Clearing on
     // a typo would silently delete a setting the owner was in the middle of
     // editing, which is the one outcome worse than doing nothing.

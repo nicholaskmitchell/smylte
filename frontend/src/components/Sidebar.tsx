@@ -1,9 +1,9 @@
 import {
-  useState, type CSSProperties, type DragEvent, type KeyboardEvent, type ReactNode,
+  useEffect, useRef, useState, type CSSProperties, type DragEvent, type KeyboardEvent, type ReactNode,
 } from 'react'
 import { clientId, type List, type TaskGroup } from '../api'
 import { cssColor } from '../util'
-import { useIsMobile } from '../hooks'
+import { useEscape, useIsMobile } from '../hooks'
 
 // Preset collection colors — muted, editorial, distinct from the accent.
 export const SWATCHES = [
@@ -104,8 +104,23 @@ export function Sidebar({ title, placeholder, items, sel = '', countOf, onSelect
   // desktop rail can do (rename, recolor, delete, group) is reachable on touch.
   const [drawerOpen, setDrawerOpen] = useState(false)
 
+  // An in-flight guard, the way the booking-link editor already has one. The
+  // form keeps its input mounted, focused and holding the typed name for the
+  // whole round trip, so a second Enter fired a second `api.create` with the
+  // same name — and each one is a real MKCALENDAR/MKCOL against Radicale. The
+  // account ended up with two indistinguishable collections that Tasks.org, jtx
+  // and Thunderbird all see too, and deleting the right one is its own
+  // destructive step.
+  const creating = useRef(false)
   const create = async (name: string, color: string | null) => {
-    const l = await api.create(name, color)
+    if (creating.current) return
+    creating.current = true
+    let l
+    try {
+      l = await api.create(name, color)
+    } finally {
+      creating.current = false
+    }
     setAdding(false)
     // A new item is simply not hidden, so it shows by default. In select mode we
     // also focus it; in pure-visibility mode there is no selection to move.
@@ -491,7 +506,11 @@ export function Sidebar({ title, placeholder, items, sel = '', countOf, onSelect
               </svg>
             </button>
           )}
+          {/* aria-label as well as title, matching the drawer's copy of this
+              button. Its text content is "+", and `title` is only the
+              last-resort step of the accessible-name algorithm. */}
           <button className="icon-btn" title={`New ${placeholder.toLowerCase()}`}
+            aria-label={`New ${placeholder.toLowerCase()}`}
             onClick={() => setAdding(true)}>+</button>
           {onToggle && (
             <button className="icon-btn side-toggle" title="Collapse sidebar"
@@ -519,6 +538,11 @@ function GroupHeader({ group, count, collapsed, canToggle, anyVisible,
   const [renaming, setRenaming] = useState(false)
   const [confirming, setConfirming] = useState(false)
   const [name, setName] = useState(group.name)
+
+  // Disarm on Escape, and whenever the header changes shape underneath the armed
+  // state — collapsing, renaming, or the group itself changing.
+  useEscape(() => setConfirming(false))
+  useEffect(() => { setConfirming(false) }, [group.id, collapsed, renaming])
 
   if (renaming) {
     return (
@@ -549,13 +573,28 @@ function GroupHeader({ group, count, collapsed, canToggle, anyVisible,
         </button>
       )}
       {confirming ? (
-        <button className="group-btn danger" title="Delete group (lists are kept)"
-          onClick={onDelete}>delete?</button>
+        // A way BACK OUT. `confirming` was set to true by the ✕ and set back to
+        // false by nothing — no Escape, no blur, no cancel — so arming the
+        // delete replaced the whole action cluster (the rename ✎ included) with
+        // a red button that deletes on the next click, permanently, with the
+        // only escape being to unmount the sidebar by switching tabs or closing
+        // the drawer. Neither is discoverable, and the two controls that arm it
+        // sit one pixel apart in the drawer.
+        <span className="group-actions">
+          {/* The visible word stays IN the accessible name — it is what the
+              button says and what a sighted user reads back; the group is
+              appended because ✎ / ✕ / delete? repeat once per group. */}
+          <button className="group-btn danger" title="Delete group (lists are kept)"
+            aria-label={`delete? — group ${group.name}, lists are kept`}
+            onClick={onDelete}>delete?</button>
+          <button className="group-btn" title="Keep the group"
+            aria-label="Cancel" onClick={() => setConfirming(false)}>✕</button>
+        </span>
       ) : (
         <span className="group-actions">
-          <button className="group-btn" title="Rename group"
+          <button className="group-btn" title="Rename group" aria-label={`Rename group ${group.name}`}
             onClick={() => { setName(group.name); setRenaming(true) }}>✎</button>
-          <button className="group-btn" title="Delete group"
+          <button className="group-btn" title="Delete group" aria-label={`Delete group ${group.name}`}
             onClick={() => setConfirming(true)}>✕</button>
         </span>
       )}
@@ -682,12 +721,25 @@ function EditModal({ item, placeholder, groups, groupId, onSetGroup, onClose, on
     onSave(item.id, body)
   }
 
+  // The only place a list or calendar is renamed, recoloured, regrouped,
+  // archived or deleted — and on a phone the only route to any of it. It was the
+  // last dialog in the app with no Escape, no dialog role and a bare
+  // click-to-close scrim over a form.
+  useEscape(onClose)
+  const scrimPress = useRef(false)
+
   return (
-    <div className="overlay" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+    <div className="overlay"
+      onMouseDown={(e) => { scrimPress.current = e.target === e.currentTarget }}
+      onClick={(e) => {
+        if (e.target === e.currentTarget && scrimPress.current) onClose()
+        scrimPress.current = false
+      }}>
+      <div className="modal" role="dialog" aria-modal="true" aria-label={placeholder}
+        onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
           <span className="modal-title">{placeholder}</span>
-          <button className="icon-btn" onClick={onClose}>✕</button>
+          <button className="icon-btn" onClick={onClose} aria-label="Close">✕</button>
         </div>
         <div className="field">
           <label className="label">Name</label>

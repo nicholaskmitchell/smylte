@@ -873,3 +873,183 @@ def test_the_per_link_ceiling_still_bounds_real_bookings(client, many_ips):
         codes.append(many_ips(url, json=_book_body(slot)).status_code)
     assert 429 in codes, "the per-link ceiling never engaged"
     assert codes.count(201) <= 30, codes
+
+
+# ── the public page's cost is bounded, not quadratic ────────────────────────
+
+def test_slot_generation_scales_with_the_calendar_rather_than_squaring_it():
+    """`GET /api/public/booking/{token}` needs no session and runs this inside
+    the global service lock, so its CPU cost is an availability property, not a
+    performance nicety.
+
+    `_overlaps_any` used to walk the busy list from index 0 for every candidate
+    slot, calling `_u()` — i.e. `astimezone` — on BOTH ends of every interval it
+    touched, with nothing hoisted. That is O(slots x intervals): a 15-minute link
+    over a 90-day horizon with ten meetings a day measured 2.7 s of pure CPU per
+    anonymous request, and the public limiter's 120 requests / 300 s is far more
+    than enough to keep the lock permanently held. It is a binary search over
+    bounds converted once now.
+
+    Asserted as a RATIO between two problem sizes, not as wall-clock seconds: a
+    shared runner has no absolute budget worth pinning, but doubling both the
+    slot count and the busy count must not quadruple the work."""
+    import time as _time
+
+    def _run(days: int) -> tuple[int, float]:
+        av = scheduling.parse_availability({str(d): ["07:00-22:00"] for d in range(7)})
+        busy = []
+        for d in range(days):
+            base = NOW.replace(hour=0, minute=0) + timedelta(days=d)
+            for k in range(10):
+                s = base.replace(hour=8) + timedelta(minutes=75 * k)
+                busy.append(Interval(s, s + timedelta(minutes=30)))
+        best = None
+        for _ in range(3):        # least-of-three: the floor is the signal
+            t0 = _time.perf_counter()
+            slots = scheduling.generate_slots(
+                availability=av, duration_minutes=15, busy=busy, buffer_minutes=0,
+                tz=TZ, now=NOW, min_notice_hours=1, horizon_days=days,
+                max_slots=10_000_000,
+            )
+            el = _time.perf_counter() - t0
+            best = el if best is None else min(best, el)
+        return len(slots), best
+
+    n_small, t_small = _run(45)
+    n_big, t_big = _run(90)
+    assert n_big > n_small > 0
+
+    # Quadratic would be ~4x for a 2x problem. Linear-ish is ~2x. 3x leaves room
+    # for a loaded runner and the log factor while still failing the shape that
+    # made this an unauthenticated DoS lever.
+    growth = t_big / max(t_small, 1e-6)
+    assert growth < 3.0, (
+        f"slot generation grew {growth:.1f}x for a 2x problem "
+        f"({n_small} slots in {t_small * 1000:.0f} ms -> {n_big} in {t_big * 1000:.0f} ms); "
+        f"the per-slot busy scan is back"
+    )
+
+
+def test_overlap_matches_a_brute_force_scan_including_across_a_transition():
+    """The binary search replaced a linear scan, so it has to answer the same
+    question — including the adjacency edges (a slot that starts exactly when a
+    block ends is free) and the fall-back day, where two different instants share
+    one wall clock."""
+    for day, window in ((date(2026, 7, 13), "00:00-23:30"), (FALL_BACK, "00:00-05:00")):
+        av = scheduling.parse_availability({str(day.weekday()): [window]})
+        base = datetime(day.year, day.month, day.day, tzinfo=TZ)
+        busy = [
+            Interval(base + timedelta(minutes=m), base + timedelta(minutes=m + n))
+            for m, n in ((0, 30), (30, 15), (120, 90), (300, 30), (301, 5), (1200, 60))
+        ]
+        got = scheduling.generate_slots(
+            availability=av, duration_minutes=30, busy=busy, buffer_minutes=0,
+            tz=TZ, now=base - timedelta(hours=1), min_notice_hours=0,
+            horizon_days=1, only_day=day,
+        )
+        blocked = scheduling.pad(busy, 0)
+
+        def hits(slot):
+            s0, s1 = slot.start.astimezone(timezone.utc), slot.end.astimezone(timezone.utc)
+            return any(
+                s0 < b.end.astimezone(timezone.utc) and s1 > b.start.astimezone(timezone.utc)
+                for b in blocked
+            )
+
+        assert got, f"no slots generated for {day}"
+        assert not any(hits(s) for s in got), (
+            f"a slot overlapping a busy block was advertised on {day}")
+
+
+def test_a_year_one_busy_interval_cannot_take_down_the_public_page():
+    """`pad` widens each interval by moving the INSTANT and converting back, and
+    at the edges of representable time that conversion raises OverflowError —
+    which nothing on this path catches. `busy_intervals`' per-event guard has
+    already returned, `generate_slots` does not guard, and app.py's handler
+    taxonomy has no OverflowError entry.
+
+    One VEVENT with `DTSTART:00010101T000000` and a DURATION does it. Any client
+    sharing the collection can PUT that, and `store.get_events_in_range` admits
+    it for EVERY window because its DURATION branch carries no lower date bound
+    — so `GET /api/public/booking/{token}` 500'd permanently, for everyone,
+    until someone found and deleted the resource.
+
+    Clamped rather than dropped: a busy block at the edge of time still blocks,
+    and on a booking path continuing to block is the safe direction."""
+    ancient = Interval(datetime(1, 1, 1, 0, 0, tzinfo=timezone.utc),
+                       datetime(1, 1, 1, 1, 0, tzinfo=timezone.utc))
+    far_future = Interval(datetime(9999, 12, 31, 22, 0, tzinfo=timezone.utc),
+                          datetime(9999, 12, 31, 23, 0, tzinfo=timezone.utc))
+    meeting = _iv(9, 0, 10, 0)
+
+    assert len(scheduling.pad([ancient], 15)) == 1
+    assert len(scheduling.pad([far_future], 15)) == 1
+
+    # And end to end, with a real meeting beside the poison: the page still
+    # answers, and the meeting still takes its hour off the board.
+    slots = _slots(availability=scheduling.parse_availability({"0": ["09:00-17:00"]}),
+                   busy=[ancient, far_future, meeting], buffer_minutes=15,
+                   horizon_days=0)
+    starts = sorted(s.start.strftime("%H:%M") for s in slots)
+    assert starts, "the page returned nothing at all"
+    assert "09:00" not in starts and "10:00" not in starts, (
+        f"the meeting stopped blocking its own hour: {starts}")
+    assert "10:30" in starts, f"real availability was lost: {starts}"
+
+
+# ── an availability window may shrink into a DST gap, never grow past it ────
+
+NUUK = ZoneInfo("America/Nuuk")          # -02 -> -01 at 01:00 UTC on 2026-03-28,
+                                         # so local 23:00:00-23:59:59 never happens
+
+
+def test_a_window_ending_inside_the_spring_forward_gap_does_not_overrun():
+    """`datetime.combine(day, w_end, tzinfo=tz)` resolves a wall time that does
+    not exist with PEP 495 fold=0 — the PRE-transition offset — which for an END
+    is the instant of `w_end + gap` in post-transition local time. So the window
+    GREW by the gap rather than shrinking, and slots were emitted past the hours
+    the owner declared. The comment that sat here claimed the opposite; that is
+    only true when the START falls in the gap.
+
+    In the Greenland zones the gap sits in the last hour of the local day, so the
+    over-run slot's local date is the NEXT day — and `book_slot` re-validates
+    with `only_day=req.date()`, a different weekday with no availability at all.
+    The public page advertised a slot and the booking was then refused with "that
+    time is not available". Deterministic, not a race: an owner offering Saturday
+    evenings ending 23:30 had 00:00 Sunday offered on their behalf."""
+    av = scheduling.parse_availability({"4": ["18:00-23:30"], "5": ["18:00-23:30"]})
+    slots = scheduling.generate_slots(
+        availability=av, duration_minutes=30, busy=[], buffer_minutes=0, tz=NUUK,
+        now=datetime(2026, 3, 20, 12, tzinfo=timezone.utc),
+        min_notice_hours=0, horizon_days=20,
+    )
+    sunday = [s for s in slots if s.start.date() == date(2026, 3, 29)]
+    assert not sunday, (
+        f"advertised {len(sunday)} slot(s) on a weekday with no availability: "
+        f"{[s.start.isoformat() for s in sunday]}")
+
+    # ...and the shrink is exact: every real minute the owner offered is kept.
+    # The last slot ends at 23:00 local, which is the transition instant itself.
+    saturday = sorted(s.start.strftime("%H:%M") for s in slots
+                      if s.start.date() == date(2026, 3, 28))
+    assert saturday[0] == "18:00"
+    assert saturday[-1] == "22:30", (
+        f"the clamp threw away availability that genuinely exists: {saturday}")
+
+
+def test_an_ordinary_window_and_a_fall_back_window_are_unaffected():
+    """The gap handling must not touch a day with no transition, nor change which
+    pass of a repeated hour a fall-back window ends in."""
+    plain = _slots(availability=scheduling.parse_availability({"0": ["09:00-12:00"]}))
+    assert [s.start.strftime("%H:%M") for s in plain] == [
+        "09:00", "09:30", "10:00", "10:30", "11:00", "11:30"]
+
+    av = scheduling.parse_availability({str(FALL_BACK.weekday()): ["00:00-05:00"]})
+    fall = scheduling.generate_slots(
+        availability=av, duration_minutes=30, busy=[], buffer_minutes=0, tz=TZ,
+        now=datetime(2026, 10, 31, 12, tzinfo=timezone.utc),
+        min_notice_hours=0, horizon_days=1, only_day=FALL_BACK,
+    )
+    # Six wall-clock hours of real time in a five-hour window, because 01:00-02:00
+    # happens twice. That is the pre-existing behaviour and must not change.
+    assert len(fall) == 12, [s.start.isoformat() for s in fall]
