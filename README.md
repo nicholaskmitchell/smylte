@@ -34,6 +34,14 @@ rather than per-list, because the pane is always the merged view. That order
 lives in the app-only sidecar, so it is Smylte's own and does not reach the
 other CalDAV clients.
 
+**Subtasks drag too**, among their own siblings — a subtask lands between the
+steps of the thing it is a step of, never on a top-level row, because moving a
+subtask out from under its parent would be re-parenting rather than ordering.
+Subtasks are usually a sequence ("prep, cook, serve") and a sequence is not
+something the sort keys can express: undated and unprioritised, they come out in
+title order, which is an order nobody chose. One drag writes the whole sequence,
+the same one the top-level rows use.
+
 **Calendar.** Month grid across multiple calendars, each with a visibility
 toggle and non-destructive **archive** (hide without deleting; restore from
 Settings → Calendar). Events support all-day and timed spans, drag to move or

@@ -75,17 +75,24 @@ export interface TaskData {
   toggle: (t: Task) => Promise<void>
   remove: (t: Task) => Promise<void>
   saveDetail: (t: Task, patch: Record<string, unknown>) => Promise<void>
-  /** Move the task `from` to where `target` currently sits. Same gesture as the
-   *  sidebar's list drag: dropping on a row below lands after it, above lands
-   *  before it. Positions are assigned across every task on the account, not
-   *  just the visible ones — see `reorder` below.
+  /** Move the task `from` to where `target` currently sits WITHIN `run`. Same
+   *  gesture as the sidebar's list drag: dropping on a row below lands after
+   *  it, above lands before it. Positions are assigned across every task on the
+   *  account, not just the visible ones — see `reorder` below.
+   *
+   *  `run` is the sequence the two rows are DISPLAYED in: the pane's top-level
+   *  rows, or one parent's subtasks. It is a parameter rather than re-derived
+   *  here because those are different sequences and only the caller knows which
+   *  one the gesture happened in — a subtask dragged among its siblings must
+   *  land where the sibling list says, not where the account-wide sequence
+   *  happens to put it.
    *
    *  Takes the ROWS, not their uids. A uid is unique within a collection but not
    *  across the account, and the local array is every list merged — so a VTODO
    *  copied between lists (which Tasks.org, DAVx5 and Thunderbird all do,
    *  preserving the UID) gave `findIndex` two candidates and it moved whichever
    *  sorted first. `taskKey` is the identity everywhere else in this file. */
-  reorder: (from: Task, target: Task) => Promise<void>
+  reorder: (run: Task[], from: Task, target: Task) => Promise<void>
   /** The NAMES of the lists whose last fetch failed, empty when all answered.
    *  The `windowErrors` analogue on the task side, and for the same reason its
    *  comment gives: a pane that is short and does not say so is a confident lie
@@ -645,17 +652,41 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
   // permanent. And `uid === target` was true for a drop of one copy onto the
   // other, so that gesture silently did nothing at all — the same cause, and the
   // reason the early return had to move to keys with the rest.
-  const reorder = async (from_: Task, target_: Task) => {
+  const reorder = async (run: Task[], from_: Task, target_: Task) => {
     if (taskKey(from_) === taskKey(target_)) return
-    const placed = sortTasks(tasks)
-    const from = placed.findIndex((t) => taskKey(t) === taskKey(from_))
+    // Spliced in the RUN — the sequence on screen — not in the account-wide one.
+    // Those two agree while every row is placed, or while none is; they part
+    // company for a row created since the last drag, because `sortTasks` puts an
+    // unplaced row "half a step before its first later neighbour" and that
+    // neighbour is a different task in a subset than in the whole account. The
+    // gesture is about what the user can see, so it is measured there: a subtask
+    // dragged past the sibling above it lands above that sibling, whatever the
+    // account-wide sequence thinks of the pair.
+    const order = run.slice()
+    const from = order.findIndex((t) => taskKey(t) === taskKey(from_))
     // Read before the removal, like Sidebar's list drag: dropping on a row
     // further down lands after it, further up lands before it, which is what
     // the gesture looks like it is doing.
-    const to = placed.findIndex((t) => taskKey(t) === taskKey(target_))
+    const to = order.findIndex((t) => taskKey(t) === taskKey(target_))
     if (from < 0 || to < 0) return
-    const [moved] = placed.splice(from, 1)
-    placed.splice(to, 0, moved)
+    const [moved] = order.splice(from, 1)
+    order.splice(to, 0, moved)
+
+    // Folded back into the account-wide sequence, which is what gets written:
+    // manual position has to be comparable across lists (the pane is always the
+    // merged view) and sending only the run would leave every other row's
+    // position stranded among the new ones.
+    //
+    // The run's members keep the SLOTS they already occupy and are re-dealt into
+    // them in the order the drop produced. Nothing outside the run moves, and
+    // the run's own order afterwards is exactly the one the user just saw — the
+    // property that makes the drop indicator and the result the same statement.
+    // The count is exact: `run` is built from `tasks` and `taskKey` is unique
+    // within it, so there is one slot per member.
+    const inRun = new Set(run.map(taskKey))
+    let dealt = 0
+    const placed = sortTasks(tasks).map(
+      (t) => (inRun.has(taskKey(t)) ? order[dealt++] : t))
 
     // Paint the new positions locally so the row stays where it was dropped:
     // the comparator reads sort_order first, so writing 1..N here is the same
