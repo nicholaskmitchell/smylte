@@ -176,6 +176,25 @@ five wrong passwords still locking out, sixty concurrent guesses still evaluatin
 exactly five. Two probes, thrown away after. Worth repeating in stages 3-5, which
 touch the same suites.
 
+**Docker was never actually needed, and finding that out cost a CI failure.**
+`scratch/docker-compose.yml` is convenience, not requirement: Radicale is a
+Python package, and `pip install radicale==3.7.4` plus the same
+`scratch/radicale/config` with its three paths rewritten gives a real server on
+:5233 that every one of those 240 tests is happy with. Driving the contracts
+in-process was the right fallback and it was still a fallback — it missed a
+regression that a live server caught in a second. **Install Radicale and run the
+whole suite** before deciding a contract is unverifiable here:
+
+```bash
+pip install --user radicale==3.7.4
+sed -e 's#/config/users#$DIR/users#' -e 's#/data/collections#$DIR/collections#' \
+    -e 's#0.0.0.0:5232#127.0.0.1:5233#' scratch/radicale/config > $DIR/config
+cp scratch/radicale/users $DIR/users
+python3 -m radicale --config $DIR/config &
+cd backend && SCRATCH_STORAGE=$DIR/collections SCRATCH_REQUIRED=1 python3 -m pytest
+# 936 passed, 0 skipped
+```
+
 **One duplication was closed that no behavioural test could reach.** The desktop
 client cannot borrow the backend's policy at runtime, so it builds its own — and
 each suite only ever compared its own side. `test_the_desktop_client_builds_the_
