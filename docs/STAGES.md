@@ -506,6 +506,13 @@ inversion is inside the strip — `BuildNotice` adds the Fill label last, so the
 two Right-docked buttons paint over its right end — and one fix should carry
 both.
 
+**The fix is written and has not been compiled by anyone yet.** `MainForm.cs`
+lives in `Smylte.Desktop.csproj` (`net8.0-windows`, `UseWindowsForms`), which no
+Linux host can build, and `Smylte.Desktop.Tests.csproj` links `LocalServer.cs`,
+`Updater.cs` and `Settings.cs` — not `MainForm.cs`. So the test project passing
+is evidence about three other files. CI's `windows-latest` job is the first
+compile; the behaviour still needs the by-hand check above.
+
 ### What the `it.fails` flip caught this time
 
 Stage 3's note says the flip is not optional. This stage it caught a pin that was
