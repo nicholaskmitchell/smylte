@@ -130,7 +130,7 @@ const noopApi = {
 beforeEach(() => { cleanup() })
 
 const mountSidebar = () => render(
-  <Sidebar title="Lists" placeholder="List" items={[list('work', 'Work')]}
+  <Sidebar kind="list" items={[list('work', 'Work')]}
     countOf={(l) => l.open_count} onItems={() => {}} api={noopApi as never}
     hiddenIds={new Set()} onHiddenChange={() => {}} />,
 )

@@ -499,7 +499,7 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
           order is an app-only view that has no business rewriting what other
           CalDAV clients read. The rail looks identical either way — its group
           sections are filters, so they preserve relative order. */}
-      <Sidebar title="Lists" placeholder="List" items={serverOrderedLists}
+      <Sidebar kind="list" items={serverOrderedLists}
         countOf={(l) => l.open_count} onItems={setLists} api={listApi}
         collapsed={sideCollapsed} onToggle={onToggleSide}
         hiddenIds={hiddenSet} onHiddenChange={onHiddenListsChange}

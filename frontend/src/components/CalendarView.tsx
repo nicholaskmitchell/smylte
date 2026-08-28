@@ -608,7 +608,7 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
       {/* Sidebar keeps the full `cals` set (so reorder/drag operate on the real
           order and send the full id list); `archivedIds` hides archived rows at
           render time only. */}
-      <Sidebar title="Calendars" placeholder="Calendar" items={cals}
+      <Sidebar kind="calendar" items={cals}
         countOf={(c) => c.event_count} onItems={setCals} api={calApi}
         collapsed={sideCollapsed} onToggle={onToggleSide}
         hiddenIds={hidden} onHiddenChange={onHiddenCalendarsChange}

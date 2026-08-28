@@ -4,6 +4,7 @@ import {
 import { clientId, type List, type TaskGroup } from '../api'
 import { cssColor } from '../util'
 import { useEscape, useIsMobile } from '../hooks'
+import { useT } from '../i18n'
 
 // Preset collection colors — muted, editorial, distinct from the accent.
 export const SWATCHES = [
@@ -33,12 +34,55 @@ export interface CollectionApi {
   reorder: (ids: string[]) => Promise<unknown>
 }
 
-export function Sidebar({ title, placeholder, items, sel = '', countOf, onSelect, onItems, api,
+/**
+ * Which kind of collection this sidebar manages — and, through `WORDS`, every
+ * sentence that names it.
+ *
+ * It used to take `title="Lists"` and `placeholder="List"` and compose the rest:
+ * `` `New ${placeholder.toLowerCase()}` ``, `` `Drag a ${placeholder.toLowerCase()} here` ``,
+ * `` `Manage ${title.toLowerCase()}` ``. Lower-casing a noun to drop it into a
+ * sentence is a rule about English orthography and nothing more — German
+ * capitalises every noun, so the same trick yields "Neue liste" — and the
+ * article in front of it ("a list", "a calendar") is a fact about the noun that
+ * only the noun's own language knows: eine Liste, but einen Kalender.
+ *
+ * So the sentences are written whole, one set per kind, and the caller says
+ * which kind it is rather than handing over two words to be assembled.
+ */
+export type CollectionKind = 'list' | 'calendar'
+
+const WORDS: Record<CollectionKind, {
+  /** The section heading: "Lists". */
+  heading: string
+  /** The singular, standing alone as the edit dialog's title: "List". */
+  one: string
+  /** "New list" — a whole label, not "New " plus a noun. */
+  new: string
+  manage: string
+  groupEmpty: string
+  dropHere: string
+  /** Carries an `{archive}` slot, filled with `side.archiveClause` or nothing
+   *  depending on whether this sidebar offers archiving. */
+  tapHint: string
+}> = {
+  list: {
+    heading: 'side.lists.heading', one: 'side.lists.one', new: 'side.lists.new',
+    manage: 'side.lists.manage', groupEmpty: 'side.lists.groupEmpty',
+    dropHere: 'side.lists.dropHere', tapHint: 'side.lists.tapHint',
+  },
+  calendar: {
+    heading: 'side.calendars.heading', one: 'side.calendars.one',
+    new: 'side.calendars.new', manage: 'side.calendars.manage',
+    groupEmpty: 'side.calendars.groupEmpty', dropHere: 'side.calendars.dropHere',
+    tapHint: 'side.calendars.tapHint',
+  },
+}
+
+export function Sidebar({ kind, items, sel = '', countOf, onSelect, onItems, api,
   collapsed, onToggle, allLabel, hiddenIds, onHiddenChange, onArchive, archivedIds,
   groups, onGroupsChange, collapsedGroups, onCollapsedGroupsChange,
   completedActive, onToggleCompleted, extra }: {
-  title: string
-  placeholder: string
+  kind: CollectionKind
   items: List[]
   sel?: string
   countOf: (l: List) => number
@@ -82,6 +126,8 @@ export function Sidebar({ title, placeholder, items, sel = '', countOf, onSelect
   // One slot, used by both the desktop panel and the mobile drawer.
   extra?: ReactNode
 }) {
+  const tr = useT()
+  const words = WORDS[kind]
   const isMobile = useIsMobile()
   const canSelect = !!onSelect
   const canToggle = !!onHiddenChange
@@ -260,7 +306,8 @@ export function Sidebar({ title, placeholder, items, sel = '', countOf, onSelect
         <span className="swatch" style={swatchStyle(l)} />
         <span className="name">{l.name}</span>
         <span className="count">{countOf(l)}</span>
-        <button className="side-edit" title="Edit" aria-label={`Edit ${l.name}`}
+        <button className="side-edit" title={tr('side.edit')}
+          aria-label={tr('side.editItem', { name: l.name })}
           onClick={(e) => { e.stopPropagation(); setEditing(l) }}>⋯</button>
       </div>
     )
@@ -308,9 +355,7 @@ export function Sidebar({ title, placeholder, items, sel = '', countOf, onSelect
                 {!isCollapsed && members.map(renderRow)}
                 {!isCollapsed && members.length === 0 && (
                   <div className="group-empty">
-                    {isMobile
-                      ? `Empty — assign a ${placeholder.toLowerCase()} from its ⋯ menu`
-                      : `Drag a ${placeholder.toLowerCase()} here`}
+                    {isMobile ? tr(words.groupEmpty) : tr(words.dropHere)}
                   </div>
                 )}
               </div>
@@ -333,7 +378,7 @@ export function Sidebar({ title, placeholder, items, sel = '', countOf, onSelect
       )}
 
       {shown.length === 0 && !adding && (
-        <div className="empty" style={{ padding: '14px 16px' }}>Nothing here yet.</div>
+        <div className="empty" style={{ padding: '14px 16px' }}>{tr('side.nothingHere')}</div>
       )}
     </>
   )
@@ -344,7 +389,7 @@ export function Sidebar({ title, placeholder, items, sel = '', countOf, onSelect
     <>
       {addingGroup && (
         <div className="side-add">
-          <input className="input" autoFocus placeholder="Group name"
+          <input className="input" autoFocus placeholder={tr('side.groupName')}
             onBlur={(e) => { if (!e.target.value.trim()) setAddingGroup(false) }}
             onKeyDown={(e: KeyboardEvent<HTMLInputElement>) => {
               const v = (e.target as HTMLInputElement).value
@@ -353,19 +398,21 @@ export function Sidebar({ title, placeholder, items, sel = '', countOf, onSelect
             }} />
         </div>
       )}
-      {adding && <AddForm placeholder={placeholder} onCancel={() => setAdding(false)} onCreate={create} />}
+      {adding && (
+        <AddForm placeholder={tr(words.one)} onCancel={() => setAdding(false)} onCreate={create} />
+      )}
     </>
   )
 
   const completedFooter = onToggleCompleted && (
     <button className={`side-completed ${completedActive ? 'active' : ''}`}
       aria-pressed={completedActive} onClick={onToggleCompleted}>
-      {completedActive ? '← Back to tasks' : '✓ View completed'}
+      {completedActive ? tr('side.backToTasks') : tr('side.viewCompleted')}
     </button>
   )
 
   const editModal = editing && (
-    <EditModal item={editing} placeholder={placeholder}
+    <EditModal item={editing} placeholder={tr(words.one)}
       groups={groupsOn ? groups! : undefined}
       groupId={groupsOn ? (groupOf.get(editing.id) ?? null) : undefined}
       onSetGroup={groupsOn ? (gid) => moveListToGroup(editing.id, gid) : undefined}
@@ -382,8 +429,8 @@ export function Sidebar({ title, placeholder, items, sel = '', countOf, onSelect
     const total = shown.length
     const shownCount = canToggle ? shown.filter((l) => !hidden.has(l.id)).length : total
     const summary = total === 0
-      ? 'None yet'
-      : canToggle ? `${shownCount} of ${total} shown` : `${total}`
+      ? tr('side.noneYet')
+      : canToggle ? tr('side.shownOf', { shown: shownCount, total }) : `${total}`
     const closeDrawer = () => { setDrawerOpen(false); setAdding(false); setAddingGroup(false) }
     return (
       <>
@@ -395,29 +442,31 @@ export function Sidebar({ title, placeholder, items, sel = '', countOf, onSelect
               <line x1="4" y1="7" x2="20" y2="7" /><line x1="4" y1="12" x2="20" y2="12" />
               <line x1="4" y1="17" x2="20" y2="17" />
             </svg>
-            <span className="mb-title">{title}</span>
+            <span className="mb-title">{tr(words.heading)}</span>
             <span className="mb-summary">{summary}</span>
             <span className="mb-caret" aria-hidden="true">▾</span>
           </button>
           {completedFooter && (
             <button className={`side-mobile-completed ${completedActive ? 'active' : ''}`}
-              title={completedActive ? 'Back to tasks' : 'View completed'}
+              title={completedActive
+                ? tr('side.backToTasksShort') : tr('side.viewCompletedShort')}
               aria-pressed={completedActive} onClick={onToggleCompleted}>✓</button>
           )}
-          <button className="side-mobile-add" title={`New ${placeholder.toLowerCase()}`}
-            aria-label={`New ${placeholder.toLowerCase()}`}
+          <button className="side-mobile-add" title={tr(words.new)}
+            aria-label={tr(words.new)}
             onClick={() => { setDrawerOpen(true); setAdding(true) }}>+</button>
         </div>
 
         {drawerOpen && (
           <div className="overlay drawer-overlay" onClick={closeDrawer}>
-            <div className="side drawer" role="dialog" aria-label={`Manage ${title.toLowerCase()}`}
+            <div className="side drawer" role="dialog" aria-label={tr(words.manage)}
               onClick={(e) => e.stopPropagation()}>
               <div className="side-head">
-                <span className="label">{title}</span>
+                <span className="label">{tr(words.heading)}</span>
                 <span className="side-head-actions">
                   {groupsOn && (
-                    <button className="icon-btn" title="New group" aria-label="New group"
+                    <button className="icon-btn" title={tr('side.newGroup')}
+                      aria-label={tr('side.newGroup')}
                       onClick={() => setAddingGroup(true)}>
                       <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
                         strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
@@ -427,17 +476,18 @@ export function Sidebar({ title, placeholder, items, sel = '', countOf, onSelect
                       </svg>
                     </button>
                   )}
-                  <button className="icon-btn" title={`New ${placeholder.toLowerCase()}`}
-                    aria-label={`New ${placeholder.toLowerCase()}`}
+                  <button className="icon-btn" title={tr(words.new)}
+                    aria-label={tr(words.new)}
                     onClick={() => setAdding(true)}>+</button>
-                  <button className="icon-btn" title="Done" aria-label="Close"
+                  <button className="icon-btn" title={tr('side.drawerDone')}
+                    aria-label={tr('common.close')}
                     onClick={closeDrawer}>✕</button>
                 </span>
               </div>
               {canToggle && (
                 <p className="drawer-hint">
-                  Tap a {placeholder.toLowerCase()} to show or hide it. Tap ⋯ to rename,
-                  recolor{onArchive ? ', archive' : ''} or delete.
+                  {tr(words.tapHint,
+                    { archive: onArchive ? tr('side.archiveClause') : '' })}
                 </p>
               )}
               <div className="side-list">{collectionsBody}{extra}</div>
@@ -458,8 +508,8 @@ export function Sidebar({ title, placeholder, items, sel = '', countOf, onSelect
   if (collapsed) {
     return (
       <div className="side collapsed">
-        <button className="icon-btn side-toggle" title="Expand sidebar"
-          aria-label="Expand sidebar" onClick={onToggle}>»</button>
+        <button className="icon-btn side-toggle" title={tr('side.expand')}
+          aria-label={tr('side.expand')} onClick={onToggle}>»</button>
         <div className="side-rail">
           {allLabel && items.length > 1 && (
             <button className={`rail-dot ${sel === ALL_ID ? 'active' : ''}`}
@@ -483,7 +533,8 @@ export function Sidebar({ title, placeholder, items, sel = '', countOf, onSelect
         </div>
         {onToggleCompleted && (
           <button className={`icon-btn side-completed-rail ${completedActive ? 'active' : ''}`}
-            title={completedActive ? 'Back to tasks' : 'View completed'}
+            title={completedActive
+              ? tr('side.backToTasksShort') : tr('side.viewCompletedShort')}
             aria-pressed={completedActive} onClick={onToggleCompleted}>✓</button>
         )}
       </div>
@@ -493,11 +544,11 @@ export function Sidebar({ title, placeholder, items, sel = '', countOf, onSelect
   return (
     <div className="side">
       <div className="side-head">
-        <span className="label">{title}</span>
+        <span className="label">{tr(words.heading)}</span>
         <span className="side-head-actions">
           {groupsOn && (
-            <button className="icon-btn" title="New group"
-              aria-label="New group" onClick={() => setAddingGroup(true)}>
+            <button className="icon-btn" title={tr('side.newGroup')}
+              aria-label={tr('side.newGroup')} onClick={() => setAddingGroup(true)}>
               <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor"
                 strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M3 7a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v3" />
@@ -509,12 +560,12 @@ export function Sidebar({ title, placeholder, items, sel = '', countOf, onSelect
           {/* aria-label as well as title, matching the drawer's copy of this
               button. Its text content is "+", and `title` is only the
               last-resort step of the accessible-name algorithm. */}
-          <button className="icon-btn" title={`New ${placeholder.toLowerCase()}`}
-            aria-label={`New ${placeholder.toLowerCase()}`}
+          <button className="icon-btn" title={tr(words.new)}
+            aria-label={tr(words.new)}
             onClick={() => setAdding(true)}>+</button>
           {onToggle && (
-            <button className="icon-btn side-toggle" title="Collapse sidebar"
-              aria-label="Collapse sidebar" onClick={onToggle}>«</button>
+            <button className="icon-btn side-toggle" title={tr('side.collapse')}
+              aria-label={tr('side.collapse')} onClick={onToggle}>«</button>
           )}
         </span>
       </div>
@@ -535,6 +586,7 @@ function GroupHeader({ group, count, collapsed, canToggle, anyVisible,
   onToggleCollapse: () => void; onToggleVisible: () => void
   onRename: (name: string) => void; onDelete: () => void
 }) {
+  const tr = useT()
   const [renaming, setRenaming] = useState(false)
   const [confirming, setConfirming] = useState(false)
   const [name, setName] = useState(group.name)
@@ -559,15 +611,17 @@ function GroupHeader({ group, count, collapsed, canToggle, anyVisible,
   }
   return (
     <div className="group-head">
-      <button className="group-caret" title={collapsed ? 'Expand' : 'Collapse'}
+      <button className="group-caret"
+        title={collapsed ? tr('side.groupExpand') : tr('side.groupCollapse')}
         aria-expanded={!collapsed} onClick={onToggleCollapse}>
         <span className={`caret ${collapsed ? '' : 'open'}`}>▸</span>
       </button>
       <button className="group-name" onClick={onToggleCollapse}>{group.name}</button>
       <span className="count">{count}</span>
       {canToggle && (
-        <button className="group-eye" title={anyVisible ? 'Hide all in group' : 'Show all in group'}
-          aria-label={anyVisible ? 'Hide all in group' : 'Show all in group'}
+        <button className="group-eye"
+          title={anyVisible ? tr('side.hideAllInGroup') : tr('side.showAllInGroup')}
+          aria-label={anyVisible ? tr('side.hideAllInGroup') : tr('side.showAllInGroup')}
           aria-pressed={anyVisible} onClick={onToggleVisible}>
           {anyVisible ? '◉' : '◌'}
         </button>
@@ -584,17 +638,19 @@ function GroupHeader({ group, count, collapsed, canToggle, anyVisible,
           {/* The visible word stays IN the accessible name — it is what the
               button says and what a sighted user reads back; the group is
               appended because ✎ / ✕ / delete? repeat once per group. */}
-          <button className="group-btn danger" title="Delete group (lists are kept)"
-            aria-label={`delete? — group ${group.name}, lists are kept`}
-            onClick={onDelete}>delete?</button>
-          <button className="group-btn" title="Keep the group"
-            aria-label="Cancel" onClick={() => setConfirming(false)}>✕</button>
+          <button className="group-btn danger" title={tr('side.deleteGroupTitle')}
+            aria-label={tr('side.deleteGroupConfirmAria', { name: group.name })}
+            onClick={onDelete}>{tr('side.deleteGroupConfirm')}</button>
+          <button className="group-btn" title={tr('side.keepGroup')}
+            aria-label={tr('common.cancel')} onClick={() => setConfirming(false)}>✕</button>
         </span>
       ) : (
         <span className="group-actions">
-          <button className="group-btn" title="Rename group" aria-label={`Rename group ${group.name}`}
+          <button className="group-btn" title={tr('side.renameGroup')}
+            aria-label={tr('side.renameGroupOf', { name: group.name })}
             onClick={() => { setName(group.name); setRenaming(true) }}>✎</button>
-          <button className="group-btn" title="Delete group" aria-label={`Delete group ${group.name}`}
+          <button className="group-btn" title={tr('side.deleteGroup')}
+            aria-label={tr('side.deleteGroupOf', { name: group.name })}
             onClick={() => setConfirming(true)}>✕</button>
         </span>
       )}
@@ -609,6 +665,7 @@ function GroupHeader({ group, count, collapsed, canToggle, anyVisible,
  * ALL_SWATCH_STYLE is built from SWATCHES rather than written out again.
  */
 function ColorRow({ color, onPick }: { color: string | null; onPick: (c: string | null) => void }) {
+  const tr = useT()
   // Compare on the RGB prefix: the wire value may carry an alpha byte (Apple
   // Calendar and DAVx5 both write one) and it has to keep matching its preset.
   const isSwatch = (c: string) => color?.slice(0, 7).toLowerCase() === c.toLowerCase()
@@ -623,7 +680,8 @@ function ColorRow({ color, onPick }: { color: string | null; onPick: (c: string 
 
   return (
     <div className="color-row">
-      <button className={`color-dot none ${color === null ? 'on' : ''}`} title="No color"
+      <button className={`color-dot none ${color === null ? 'on' : ''}`}
+        title={tr('side.noColor')}
         onClick={() => onPick(null)}>✕</button>
       {SWATCHES.map((c) => (
         <button key={c} className={`color-dot ${isSwatch(c) ? 'on' : ''}`}
@@ -642,9 +700,10 @@ function ColorRow({ color, onPick }: { color: string | null; onPick: (c: string 
           lower it here. Picking drops any alpha byte on purpose — the dialog
           cannot show alpha, so re-attaching the old one would keep a
           translucency the user never saw. */}
-      <label className={`color-dot custom ${customColor ? 'on' : ''}`} title="Custom color"
+      <label className={`color-dot custom ${customColor ? 'on' : ''}`}
+        title={tr('side.customColor')}
         style={customColor ? { background: customColor } : undefined}>
-        <input type="color" aria-label="Custom color"
+        <input type="color" aria-label={tr('side.customColor')}
           value={(cssColor(color)?.slice(0, 7) ?? '#808080').toLowerCase()}
           onChange={(e) => onPick(e.target.value)} />
       </label>
@@ -696,6 +755,7 @@ function EditModal({ item, placeholder, groups, groupId, onSetGroup, onClose, on
   onDelete: (id: string) => void
   onArchive?: (id: string) => void
 }) {
+  const tr = useT()
   const [name, setName] = useState(item.name)
   // Hold the wire value as written. It may carry an alpha byte (#RRGGBBAA —
   // Apple Calendar and DAVx5 both write one); truncating it for the swatch
@@ -739,24 +799,24 @@ function EditModal({ item, placeholder, groups, groupId, onSetGroup, onClose, on
         onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
           <span className="modal-title">{placeholder}</span>
-          <button className="icon-btn" onClick={onClose} aria-label="Close">✕</button>
+          <button className="icon-btn" onClick={onClose} aria-label={tr('common.close')}>✕</button>
         </div>
         <div className="field">
-          <label className="label">Name</label>
+          <label className="label">{tr('side.name')}</label>
           <input className="input" autoFocus value={name}
             onChange={(e) => setName(e.target.value)}
             onKeyDown={(e: KeyboardEvent) => { if (e.key === 'Enter') save() }} />
         </div>
         <div className="field">
-          <label className="label">Color</label>
+          <label className="label">{tr('side.color')}</label>
           <ColorRow color={color} onPick={setColor} />
         </div>
         {groups && onSetGroup && (
           <div className="field">
-            <label className="label">Group</label>
+            <label className="label">{tr('side.group')}</label>
             <select className="input" value={groupId ?? ''}
               onChange={(e) => onSetGroup(e.target.value || null)}>
-              <option value="">No group</option>
+              <option value="">{tr('side.noGroup')}</option>
               {groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
             </select>
           </div>
@@ -764,14 +824,14 @@ function EditModal({ item, placeholder, groups, groupId, onSetGroup, onClose, on
         <div className="modal-actions">
           <button className={`btn ghost ${confirming ? 'danger' : ''}`}
             onClick={() => (confirming ? onDelete(item.id) : setConfirming(true))}>
-            {confirming ? 'Really delete?' : 'Delete'}
+            {confirming ? tr('side.reallyDelete') : tr('common.delete')}
           </button>
           {onArchive && !confirming && (
-            <button className="btn ghost" title="Hide without deleting — restore later from Settings"
-              onClick={() => onArchive(item.id)}>Archive</button>
+            <button className="btn ghost" title={tr('side.archiveTitle')}
+              onClick={() => onArchive(item.id)}>{tr('side.archive')}</button>
           )}
           <span className="spacer" />
-          <button className="btn" onClick={save}>Save</button>
+          <button className="btn" onClick={save}>{tr('common.save')}</button>
         </div>
       </div>
     </div>
