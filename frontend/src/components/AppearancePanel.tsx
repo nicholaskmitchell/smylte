@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { clientId } from '../api'
 import { useEscape } from '../hooks'
+import { useT } from '../i18n'
 import {
   DEFAULTS, FONT_CHOICES, GROUPS, MAX_NAME_LEN, MAX_THEMES, PRESETS, SHARED_DEFAULTS,
-  TOKENS, defaultValue, ensureFont, findPreset, isSharedToken, isValidToken,
+  GROUP_LABEL, TOKENS, defaultValue, ensureFont, findPreset, isSharedToken, isValidToken,
   parseTheme, serializeTheme, themeTokens, toSwatchHex,
   type Appearance, type CustomTheme, type Mode, type ThemeTokens, type TokenSpec,
 } from '../appearance'
@@ -26,8 +27,9 @@ import {
 // the default look the moment a slider moved.
 
 // Every path that would need to create a theme says the same thing when there
-// is no room for one, rather than each failing its own silent way.
-const AT_CAP = `You can keep ${MAX_THEMES} themes — delete one first.`
+// is no room for one, rather than each failing its own silent way. A KEY now,
+// resolved at the two call sites — a module constant has no translator.
+const AT_CAP = 'appear.atCap'
 
 export function AppearancePanel({ appearance, onChange, mode, onMode, onClose }: {
   appearance: Appearance
@@ -36,6 +38,12 @@ export function AppearancePanel({ appearance, onChange, mode, onMode, onClose }:
   onMode: (next: Mode) => void
   onClose: () => void
 }) {
+  const tr = useT()
+  // The mode as a WORD, twice on this screen: inside a sentence ("2 overrides
+  // in dark") and on a button ("Reset dark"). Both want the lowercase form —
+  // German capitalises nouns, not adjectives — while the two tabs above want
+  // the capitalised one, which is why there are two keys and not a `.toLower`.
+  const modeWord = mode === 'light' ? 'appear.lightLower' : 'appear.darkLower'
   const themes = appearance.themes ?? []
   // A preset's id *is* `appearance.active`, so everything downstream that reads
   // `active` — the picker's value, `current`, export — works unchanged.
@@ -71,7 +79,9 @@ export function AppearancePanel({ appearance, onChange, mode, onMode, onClose }:
    */
   const seedFork = (source: CustomTheme | null): CustomTheme => ({
     id: clientId().slice(0, 16),
-    name: (source ? `${source.name} copy` : 'Custom').slice(0, MAX_NAME_LEN),
+    name: (source
+      ? tr('appear.copySuffix', { name: source.name })
+      : tr('appear.custom')).slice(0, MAX_NAME_LEN),
     base: source?.base ?? mode,
     light: { ...(source?.light ?? {}) },
     dark: { ...(source?.dark ?? {}) },
@@ -113,7 +123,7 @@ export function AppearancePanel({ appearance, onChange, mode, onMode, onClose }:
     // with no room for one there is nothing to write. This used to be a bare
     // `return`: the panel stayed fully interactive, the sliders moved and the
     // color field accepted typing, and nothing was ever applied or saved.
-    if (themes.length >= MAX_THEMES) { window.alert(AT_CAP); return }
+    if (themes.length >= MAX_THEMES) { window.alert(tr(AT_CAP, { max: MAX_THEMES })); return }
     // Merged, not replaced: the seed has to survive the very edit that made it.
     const fork = splitPatch(seedFork(preset), patch)
     onChange({ active: fork.id, themes: [...themes, fork] })
@@ -123,7 +133,7 @@ export function AppearancePanel({ appearance, onChange, mode, onMode, onClose }:
 
   const saveAs = () => {
     if (!active) return
-    if (themes.length >= MAX_THEMES) { window.alert(AT_CAP); return }
+    if (themes.length >= MAX_THEMES) { window.alert(tr(AT_CAP, { max: MAX_THEMES })); return }
     const copy = seedFork(active)
     onChange({ active: copy.id, themes: [...themes, copy] })
   }
@@ -175,8 +185,8 @@ export function AppearancePanel({ appearance, onChange, mode, onMode, onClose }:
 
   const importTheme = async (file: File) => {
     const parsed = parseTheme(await file.text(), clientId().slice(0, 16))
-    if (!parsed) { window.alert('That file is not a Smylte theme.'); return }
-    if (themes.length >= MAX_THEMES) { window.alert(AT_CAP); return }
+    if (!parsed) { window.alert(tr('appear.notATheme')); return }
+    if (themes.length >= MAX_THEMES) { window.alert(tr(AT_CAP, { max: MAX_THEMES })); return }
     onChange({ active: parsed.id, themes: [...themes, parsed] })
   }
 
@@ -200,32 +210,39 @@ export function AppearancePanel({ appearance, onChange, mode, onMode, onClose }:
 
   return (
     <div className="overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}>
-      <div className="modal appearance-modal" role="dialog" aria-label="Appearance" aria-modal="true">
+      <div className="modal appearance-modal" role="dialog"
+        aria-label={tr('appear.title')} aria-modal="true">
         <div className="modal-head">
-          <span className="modal-title">Appearance</span>
-          <button className="icon-btn" aria-label="Close" onClick={onClose}>✕</button>
+          <span className="modal-title">{tr('appear.title')}</span>
+          <button className="icon-btn" aria-label={tr('common.close')} onClick={onClose}>✕</button>
         </div>
 
         {/* ---- theme ---- */}
         <div className="appear-bar">
-          <select className="input" value={active?.id ?? ''} aria-label="Theme"
+          <select className="input" value={active?.id ?? ''} aria-label={tr('appear.theme')}
             onChange={(e) => selectTheme(e.target.value)}>
             {/* Outside every group, and first: the way back is never buried. */}
-            <option value="">Smylte (default)</option>
-            <optgroup label="Built in">
+            <option value="">{tr('appear.smylteDefault')}</option>
+            <optgroup label={tr('appear.builtIn')}>
               {PRESETS.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
             </optgroup>
             {themes.length > 0 && (
-              <optgroup label="Your themes">
+              <optgroup label={tr('appear.yourThemes')}>
                 {themes.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
               </optgroup>
             )}
           </select>
-          <button className="btn ghost" onClick={saveAs} disabled={!active}>Duplicate</button>
+          <button className="btn ghost" onClick={saveAs} disabled={!active}>
+            {tr('appear.duplicate')}
+          </button>
           <button className="btn ghost" onClick={() => { setName(active?.name ?? ''); setRenaming(true) }}
-            disabled={!active || isPreset}>Rename</button>
-          <button className="btn ghost" onClick={exportTheme} disabled={!active}>Export</button>
-          <button className="btn ghost" onClick={() => fileRef.current?.click()}>Import</button>
+            disabled={!active || isPreset}>{tr('appear.rename')}</button>
+          <button className="btn ghost" onClick={exportTheme} disabled={!active}>
+            {tr('appear.export')}
+          </button>
+          <button className="btn ghost" onClick={() => fileRef.current?.click()}>
+            {tr('appear.import')}
+          </button>
           <input ref={fileRef} type="file" accept="application/json,.json" hidden
             onChange={(e) => {
               const f = e.target.files?.[0]
@@ -237,34 +254,40 @@ export function AppearancePanel({ appearance, onChange, mode, onMode, onClose }:
         {renaming && active && !isPreset && (
           <div className="appear-bar">
             <input className="input" value={name} autoFocus maxLength={MAX_NAME_LEN}
-              aria-label="Theme name" onChange={(e) => setName(e.target.value)}
+              aria-label={tr('appear.themeName')} onChange={(e) => setName(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') { rename(name); setRenaming(false) } }} />
-            <button className="btn" onClick={() => { rename(name); setRenaming(false) }}>Save</button>
-            <button className="btn ghost" onClick={() => setRenaming(false)}>Cancel</button>
+            <button className="btn" onClick={() => { rename(name); setRenaming(false) }}>
+              {tr('common.save')}
+            </button>
+            <button className="btn ghost" onClick={() => setRenaming(false)}>
+              {tr('common.cancel')}
+            </button>
           </div>
         )}
 
         <p className="hintline">
           {isPreset
-            ? `${active!.name} is a built-in theme. Change anything below and it forks into a theme of your own.`
+            ? tr('appear.presetHint', { name: active!.name })
             : active
-              ? 'Editing this theme. Smylte’s own design is never modified — switch back to it any time.'
-              : 'Smylte’s shipped design. Change anything below and it forks into a theme of your own.'}
+              ? tr('appear.editingHint')
+              : tr('appear.shippedHint')}
         </p>
 
         {/* ---- which mode am I editing ---- */}
-        <div className="appear-modes" role="group" aria-label="Editing mode">
+        <div className="appear-modes" role="group" aria-label={tr('appear.editingMode')}>
           {(['light', 'dark'] as Mode[]).map((m) => (
             <button key={m} className={`view-tab ${mode === m ? 'active' : ''}`}
               aria-pressed={mode === m} onClick={() => onMode(m)}>
-              {m === 'light' ? 'Light' : 'Dark'}
+              {m === 'light' ? tr('appear.light') : tr('appear.dark')}
             </button>
           ))}
           <span className="spacer" />
           <span className="hintline">
             {isPreset
-              ? 'Built-in theme'
-              : `${Object.keys(overridden).length} override${Object.keys(overridden).length === 1 ? '' : 's'} in ${mode}`}
+              ? tr('appear.builtInTheme')
+              : tr('appear.overrides', {
+                count: Object.keys(overridden).length, mode: tr(modeWord),
+              })}
           </span>
         </div>
 
@@ -275,7 +298,7 @@ export function AppearancePanel({ appearance, onChange, mode, onMode, onClose }:
             if (!entries.length) return null
             return (
               <section key={group} className="appear-group">
-                <div className="menu-head">{group}</div>
+                <div className="menu-head">{tr(GROUP_LABEL[group] ?? group)}</div>
                 {entries.map(([token, spec]) => (
                   <TokenRow key={token} token={token} spec={spec}
                     value={current[token]} isOverride={token in overridden}
@@ -306,9 +329,15 @@ export function AppearancePanel({ appearance, onChange, mode, onMode, onClose }:
         <div className="modal-actions">
           {/* Neither applies to a preset: there is nothing of the user's to
               clear, and leaving one is just selecting something else. */}
-          {active && !isPreset && <button className="btn ghost" onClick={resetMode}>Reset {mode}</button>}
-          {active && !isPreset && <button className="btn ghost danger" onClick={remove}>Delete theme</button>}
-          <button className="btn" onClick={onClose}>Done</button>
+          {active && !isPreset && (
+            <button className="btn ghost" onClick={resetMode}>
+              {tr('appear.resetMode', { mode: tr(modeWord) })}
+            </button>
+          )}
+          {active && !isPreset && (
+            <button className="btn ghost danger" onClick={remove}>{tr('appear.deleteTheme')}</button>
+          )}
+          <button className="btn" onClick={onClose}>{tr('appear.done')}</button>
         </div>
       </div>
     </div>
@@ -325,20 +354,24 @@ function TokenRow({ token, spec, value, isOverride, onChange, onClear }: {
   onChange: (value: string) => void
   onClear: () => void
 }) {
+  const tr = useT()
   return (
     <div className="appear-row">
       <label className="appear-label" htmlFor={`tok${token}`}>
-        {spec.label}
-        {spec.hint && <span className="appear-hint">{spec.hint}</span>}
+        {tr(spec.label)}
+        {spec.hint && <span className="appear-hint">{tr(spec.hint)}</span>}
       </label>
       <div className="appear-control">
-        {spec.kind === 'color' && <ColorControl id={token} label={spec.label} value={value} onChange={onChange} />}
+        {spec.kind === 'color' && (
+          <ColorControl id={token} label={tr(spec.label)} value={value} onChange={onChange} />
+        )}
         {spec.kind === 'font' && <FontControl id={token} token={token} value={value} onChange={onChange} />}
         {spec.kind === 'keyword' && <KeywordControl id={token} spec={spec} value={value} onChange={onChange} />}
         {(spec.kind === 'length' || spec.kind === 'scale') &&
           <RangeControl id={token} token={token} spec={spec} value={value} onChange={onChange} />}
         <button className="appear-clear" onClick={onClear} disabled={!isOverride}
-          title="Back to the Smylte value" aria-label={`Reset ${spec.label}`}>↺</button>
+          title={tr('appear.resetToken')}
+          aria-label={tr('appear.resetNamed', { token: tr(spec.label) })}>↺</button>
       </div>
     </div>
   )
@@ -347,6 +380,7 @@ function TokenRow({ token, spec, value, isOverride, onChange, onClear }: {
 function ColorControl({ id, label, value, onChange }: {
   id: string; label: string; value: string; onChange: (v: string) => void
 }) {
+  const tr = useT()
   // Two inputs on purpose. The native picker is the fast path but is sRGB-hex
   // only, and this design system is authored in OKLCH — so the text field
   // accepts the real value and is what a theme round-trips through. Typing is
@@ -364,7 +398,8 @@ function ColorControl({ id, label, value, onChange }: {
           Rule — and the sibling text field, which has a real label, is the one
           that carries the actual value. */}
       <input type="color" className="appear-swatch" value={swatch}
-        aria-label={`${label} — pick a color`} onChange={(e) => onChange(e.target.value)} />
+        aria-label={tr('appear.pickColor', { token: label })}
+        onChange={(e) => onChange(e.target.value)} />
       <input id={`tok${id}`} className={`input mono appear-text ${valid ? '' : 'bad'}`}
         value={text} spellCheck={false}
         onChange={(e) => {
@@ -378,6 +413,7 @@ function ColorControl({ id, label, value, onChange }: {
 function FontControl({ id, token, value, onChange }: {
   id: string; token: string; value: string; onChange: (v: string) => void
 }) {
+  const tr = useT()
   const tier = token === '--serif' ? 'serif' : token === '--sans' ? 'sans' : 'mono'
   const choices = FONT_CHOICES[tier]
   // A theme imported with a stack we don't offer still needs a stable option to
@@ -386,7 +422,11 @@ function FontControl({ id, token, value, onChange }: {
   return (
     <select id={`tok${id}`} className="input" value={known ? value : ''}
       onChange={(e) => { ensureFont(e.target.value); onChange(e.target.value) }}>
-      {!known && <option value="">Custom ({value.split(',')[0].replace(/"/g, '')})</option>}
+      {!known && (
+        <option value="">
+          {tr('appear.customFont', { family: value.split(',')[0].replace(/"/g, '') })}
+        </option>
+      )}
       {choices.map((c) => <option key={c.label} value={c.stack}>{c.label}</option>)}
     </select>
   )
@@ -396,12 +436,15 @@ function FontControl({ id, token, value, onChange }: {
 function KeywordControl({ id, spec, value, onChange }: {
   id: string; spec: TokenSpec; value: string; onChange: (v: string) => void
 }) {
+  const tr = useT()
   const choices = spec.values ?? []
   return (
     <select id={`tok${id}`} className="input" value={value}
       onChange={(e) => onChange(e.target.value)}>
       {choices.map((v) => (
-        <option key={v} value={v}>{spec.valueLabels?.[v] ?? v}</option>
+        <option key={v} value={v}>
+          {spec.valueLabels?.[v] ? tr(spec.valueLabels[v]) : v}
+        </option>
       ))}
     </select>
   )
