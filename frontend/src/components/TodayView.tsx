@@ -2588,9 +2588,37 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
               </p>
             )}
             {dayRows.length > 0 && (
-              <ul className="today-list">
-                {dayRows.map(renderRow)}
-              </ul>
+              <section className="today-day">
+                {/* THE DAY'S OWN ROWS, NAMED. The habits group above has carried
+                    a heading since it arrived; the rows below it never did, so
+                    the boundary between the two was one heavier hairline under
+                    the last habit — a line that says "something changed here"
+                    only to a reader who is looking at that line. Everything
+                    else about the two lists is identical: same row, same
+                    checkbox, same left edge, by design.
+
+                    Named unconditionally rather than only when habits sit above
+                    it. Two reasons. The sequence on this tab is now Habits →
+                    The day → On the calendar, three blocks each saying what it
+                    is, and the middle one appearing only sometimes would make
+                    the tab's shape depend on whether a habit happened to be due
+                    — the heading would pop in on Tuesday and out on Wednesday.
+                    And "On the calendar" below is already unconditional on
+                    today, so a heading over the day's rows is this screen's
+                    existing voice rather than a new one.
+
+                    It is NOT the rule about headings over nothing (see the
+                    habits group and the hint below it): those guard an EMPTY
+                    group, which advertises a feature as a permanent blank. This
+                    one is gated on the rows it names. */}
+                <div className="label section-label">{tr('today.theDay')}</div>
+                {/* Named for assistive tech for the same reason the habits list
+                    is: the heading above is a sibling `div`, and nothing tells
+                    a screen reader it belongs to this list. */}
+                <ul className="today-list" aria-label={tr('today.theDay')}>
+                  {dayRows.map(renderRow)}
+                </ul>
+              </section>
             )}
 
             {/* The other half of the habits trace: a day that HAS rows but no
