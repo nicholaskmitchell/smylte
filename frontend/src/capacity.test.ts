@@ -68,6 +68,51 @@ describe('parseCapacity — stop times', () => {
   })
 })
 
+describe('parseCapacity — the German spellings', () => {
+  // One grammar, not two. `daytext.ts` needed a grammar per language because it
+  // DELETES the phrase it read from a title somebody typed; this field holds
+  // nothing but the quantity, so there is nothing to mangle and a line it cannot
+  // read leaves the field alone. None of these words collides with an English
+  // one, and a field that takes both keeps working when an account switches
+  // language mid-week.
+  it('reads bis as an introducer', () => {
+    expect(parseCapacity('bis 18:00', NINE_AM)).toBe(9 * 60)
+    expect(parseCapacity('bis 18 Uhr', NINE_AM)).toBe(9 * 60)
+  })
+
+  it('takes Uhr as a marker, never as a half of the day', () => {
+    // "Uhr" says the number is a clock and says nothing about morning or
+    // evening, so 18 is 18:00 — it must not reach the meridiem branch, where a
+    // number above 12 is not a time anybody means.
+    expect(parseCapacity('18 Uhr', NINE_AM)).toBe(9 * 60)
+    expect(parseCapacity('6 Uhr', NINE_AM)).toBe(9 * 60)
+  })
+
+  it('reads Std. and Min. as h and m', () => {
+    expect(parseCapacity('5 Std.', NINE_AM)).toBe(300)
+    expect(parseCapacity('5 Stunden', NINE_AM)).toBe(300)
+    expect(parseCapacity('90 Min.', NINE_AM)).toBe(90)
+    expect(parseCapacity('90 Minuten', NINE_AM)).toBe(90)
+    expect(parseCapacity('1 Std. 30 Min.', NINE_AM)).toBe(90)
+  })
+
+  it('is what the German hint promises, exactly', () => {
+    // `capacity.example.until` in i18n/de.ts is "bis 18 Uhr", and an example is
+    // a promise that the parser takes that exact text. This is the assertion
+    // that keeps the promise true — the catalogue says so above the entry.
+    expect(parseCapacity('bis 18 Uhr', NINE_AM)).not.toBeNull()
+    expect(parseCapacity('5h', NINE_AM)).toBe(300)
+  })
+
+  it('refuses a setting spelled as a stop time, in German too', () => {
+    // The whole point of `stopTime: false` — a default that meant six hours on
+    // Monday and two on Friday afternoon is not a setting. Adding a second
+    // spelling of the same sentence must not open a second way in.
+    expect(parseCapacity('bis 18 Uhr', NINE_AM, { stopTime: false })).toBeNull()
+    expect(parseCapacity('18 Uhr', NINE_AM, { stopTime: false })).toBeNull()
+  })
+})
+
 describe('parseCapacity — refusing', () => {
   it('says nothing rather than guessing', () => {
     // A line this cannot read costs a retype. A line it reads WRONGLY books a

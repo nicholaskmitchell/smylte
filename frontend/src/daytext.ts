@@ -71,7 +71,39 @@
 // hours"). None of them names a day without a policy nobody has agreed on, and
 // the relative ones would put the wall clock back into the reading.
 
+// ── two languages, two grammars ────────────────────────────────────────────
+//
+// The rules above are about SHAPES — a bare integer is not a clock, a range has
+// nowhere to live, a recognised phrase must never eat the last word — and those
+// hold whatever language the line is in. The WORDS do not, so every word this
+// module knows sits in `GRAMMARS`, one entry per language, and the scanners take
+// the grammar as a parameter. Nothing else is duplicated: both languages run the
+// same guards, the same position rule and the same inference table, so a fix to
+// any of them fixes both.
+//
+// The German grammar admits what the English one admits, said in German, and
+// then stops. Three deliberate absences, each for the reason the header already
+// gives:
+//
+//   * `übermorgen`. A common enough word, but JavaScript's `\b` is defined by
+//     ASCII `\w`, so it does not match before `ü` — the anchor that keeps
+//     "3friday" out cannot be written for it, and a day word admitted mid-word
+//     is the kind of hole this file exists to not have.
+//   * The two-letter abbreviations (Mo, Di, Mi, Do, Fr, Sa, So). `so` is an
+//     ordinary German word, so admitting them would import the "enjoy the sun"
+//     mangling the English short forms already carry — knowingly, into a second
+//     language, where nothing forces it.
+//   * The dotted clock ("19.30 Uhr"). It is the standard German spelling and it
+//     is still refused: `1.30` is also a version number, a decimal and a price,
+//     and the colon form is what the box's own placeholder teaches. "19:30 Uhr"
+//     and "um 19:30" both read.
+//
+// German has no meridiem, so the fifth group of its time pattern is `Uhr`, which
+// MARKS a number as a clock the way a colon does without saying which half of
+// the day it is — see `Grammar.meridiem`.
+
 import { addDays, pad, parseDate, ymd } from './util'
+import { DEFAULT_LANGUAGE, type Language } from './lang'
 
 /** What the box managed to read out of one typed line. */
 export interface ParsedEntry {
@@ -94,38 +126,134 @@ export interface ParsedEntry {
 
 // ── grammar ────────────────────────────────────────────────────────────────
 
-/** Every time the grammar admits, and a few it does not, which the guards below
- *  then throw out. One regex rather than three because the guards have to see
- *  the candidate's neighbouring characters, and that is far easier to get right
- *  with a single match whose start and end are known.
+/** Everything about reading a line that is a fact about the LANGUAGE it is in.
  *
- *  Groups: 1 `at`, 2 `@`, 3 hour, 4 minute, 5 meridiem. The introducer is part
- *  of the match so the whole phrase — not just the digits — comes out of the
- *  title. `[ \t]` rather than `\s`, so a phrase can never be stitched together
- *  across a line break. */
-const TIME_RE = /(?:\b(at)[ \t]+|(@)[ \t]*)?(\d{1,2})(?::(\d{2}))?(?:[ \t]*(am|pm)\b)?/gi
+ *  Everything NOT in here — the position rule, the range and adjacency guards,
+ *  the inference table, rule 4's refusal to eat the last word — is a fact about
+ *  shapes, and is shared. */
+interface Grammar {
+  /** Every time the grammar admits, and a few it does not, which the guards
+   *  below then throw out. One regex rather than three because the guards have
+   *  to see the candidate's neighbouring characters, and that is far easier to
+   *  get right with a single match whose start and end are known.
+   *
+   *  Groups: 1 introducer word, 2 `@`, 3 hour, 4 minute, 5 the clock marker.
+   *  The introducer is part of the match so the whole phrase — not just the
+   *  digits — comes out of the title. `[ \t]` rather than `\s`, so a phrase can
+   *  never be stitched together across a line break. */
+  time: RegExp
+  /** Whether group 5 of `time` states a HALF OF THE DAY (English's am/pm) or
+   *  merely marks the number as a clock (German's "Uhr"). Both satisfy rule 1 —
+   *  the number is no longer bare — but only a meridiem overrides the inference
+   *  table, which is why they are not the same flag. */
+  meridiem: boolean
+  /** Every date the grammar admits.
+   *
+   *  Groups: 1 introducer word, 2 `@`, 3 modifier, 4 the day word. The modifier
+   *  sits in its own optional group AFTER the plain introducers so "on next
+   *  friday" is one phrase; otherwise "on" would be stranded in the title when
+   *  the rest of the phrase was lifted out.
+   *
+   *  `\b` on both ends keeps "3friday" and "mondays" out — a plural is a
+   *  recurrence in disguise and must not be read as one day. The lookahead adds
+   *  the apostrophe that `\b` does not cover, so "gym on tomorrow's route" is
+   *  not read as tomorrow with a title of "gym 's route". */
+  date: RegExp
+  /** The day words that are not weekdays, lowercased. `tonight` is the one that
+   *  also implies an hour. */
+  today: readonly string[]
+  tonight: readonly string[]
+  tomorrow: readonly string[]
+  /** The weekday names the grammar asks for, full and abbreviated, to the day
+   *  number `Date#getDay` uses. */
+  weekday: Readonly<Record<string, number | undefined>>
+  /** A weekday range or list, checked on either side of the day WORD. */
+  dayRangeBefore: RegExp
+  dayRangeAfter: RegExp
+  /** Recurrence markers, vetoing a date phrase anywhere to their right. */
+  recur: RegExp
+  /** Which of the `date` pattern's modifiers means the week AFTER the next
+   *  occurrence, rather than that occurrence itself. Every other modifier the
+   *  pattern admits reads as "this one". */
+  nextWeek: RegExp
+  /** A phrase the pattern matched that the language does not mean. `left` is
+   *  everything before the phrase, `intro` and `word` are lower-cased. */
+  veto?: (intro: string, word: string, left: string) => boolean
+}
 
-/** The weekday names, full and three-letter, as the grammar asks for. Typed as
- *  possibly-undefined because a string index into a Record is not a promise
- *  that the key is there. */
-const WEEKDAY: Readonly<Record<string, number | undefined>> = {
+const EN_WEEKDAY: Readonly<Record<string, number | undefined>> = {
   sunday: 0, sun: 0, monday: 1, mon: 1, tuesday: 2, tue: 2, wednesday: 3,
   wed: 3, thursday: 4, thu: 4, friday: 5, fri: 5, saturday: 6, sat: 6,
 }
 
-/** Every date the grammar admits.
- *
- *  Groups: 1 `at|on|by`, 2 `@`, 3 `next|this`, 4 the day word. `next`/`this` sit
- *  in their own optional group AFTER the plain introducers so "on next friday"
- *  is one phrase; otherwise "on" would be stranded in the title when the rest
- *  of the phrase was lifted out.
- *
- *  `\b` on both ends keeps "3friday" and "mondays" out — a plural is a
- *  recurrence in disguise and must not be read as one day. The lookahead adds
- *  the apostrophe that `\b` does not cover, so "gym on tomorrow's route" is not
- *  read as tomorrow with a title of "gym 's route". */
-const DATE_RE =
-  /(?:\b(at|on|by)[ \t]+|(@)[ \t]*)?(?:\b(next|this)[ \t]+)?\b(today|tonight|tomorrow|sunday|sun|monday|mon|tuesday|tue|wednesday|wed|thursday|thu|friday|fri|saturday|sat)\b(?!['’])/gi
+// Sonnabend is Sonntag's neighbour in the north and east and means Saturday;
+// it costs one alternative and nothing else.
+const DE_WEEKDAY: Readonly<Record<string, number | undefined>> = {
+  sonntag: 0, montag: 1, dienstag: 2, mittwoch: 3, donnerstag: 4,
+  freitag: 5, samstag: 6, sonnabend: 6,
+}
+
+const DE_DAYS = 'montag|dienstag|mittwoch|donnerstag|freitag|samstag|sonnabend|sonntag'
+
+export const GRAMMARS: Readonly<Record<Language, Grammar>> = {
+  en: {
+    time: /(?:\b(at)[ \t]+|(@)[ \t]*)?(\d{1,2})(?::(\d{2}))?(?:[ \t]*(am|pm)\b)?/gi,
+    meridiem: true,
+    date: /(?:\b(at|on|by)[ \t]+|(@)[ \t]*)?(?:\b(next|this)[ \t]+)?\b(today|tonight|tomorrow|sunday|sun|monday|mon|tuesday|tue|wednesday|wed|thursday|thu|friday|fri|saturday|sat)\b(?!['’])/gi,
+    today: ['today'],
+    tonight: ['tonight'],
+    tomorrow: ['tomorrow'],
+    weekday: EN_WEEKDAY,
+    dayRangeBefore: /(?:[-–—/,&][ \t]*|\b(?:to|and|through)[ \t]+)$/i,
+    dayRangeAfter: /^(?:[ \t]*[-–—/,&]|[ \t]+(?:to|and|through)\b)/i,
+    recur: /\b(every|each)\b/i,
+    nextWeek: /^next$/i,
+  },
+  de: {
+    // "um" is the one introducer a bare hour gets, as `at` is in English.
+    // "Uhr" is group 5 and is a MARKER, not a meridiem: it says the number is a
+    // clock and says nothing about which half of the day, so "7 Uhr" still goes
+    // through the inference table and still comes back a guess.
+    time: /(?:\b(um)[ \t]+|(@)[ \t]*)?(\d{1,2})(?::(\d{2}))?(?:[ \t]*(uhr)\b)?/gi,
+    meridiem: false,
+    // `am` and `zum` locate a day, `bis` states a deadline — the three the box
+    // actually sees, and the direct analogues of on/at and by. The modifiers
+    // carry their inflections because German declines them: nächsten Freitag,
+    // nächste Woche, diesen Montag.
+    date: /(?:\b(am|bis|zum)[ \t]+|(@)[ \t]*)?(?:\b(nächste[nrms]?|kommende[nrms]?|diese[nrms]?)[ \t]+)?\b(heute abend|heute|morgen|montag|dienstag|mittwoch|donnerstag|freitag|samstag|sonnabend|sonntag)\b(?!['’])/gi,
+    today: ['heute'],
+    tonight: ['heute abend'],
+    tomorrow: ['morgen'],
+    weekday: DE_WEEKDAY,
+    // The word separators are anchored to a day word, which the English pair
+    // deliberately are not — there, "to" and "and" refuse a phrase on their own
+    // and "call bob on friday to confirm" is an accepted miss. German cannot
+    // afford the same looseness: `bis` is also the deadline introducer, so an
+    // unanchored rule would refuse "Rechnung bis Freitag", which is the single
+    // most ordinary line this grammar exists to read. Requiring a day on the
+    // far side separates "montag bis freitag" from "bis freitag" exactly.
+    dayRangeBefore: new RegExp(`(?:[-–—/,&][ \\t]*|\\b(?:${DE_DAYS})[ \\t]+(?:bis|und)[ \\t]+)$`, 'i'),
+    dayRangeAfter: new RegExp(`^(?:[ \\t]*[-–—/,&]|[ \\t]+(?:bis|und)[ \\t]+(?:${DE_DAYS})\\b)`, 'i'),
+    // "jeden Montag", "alle zwei Wochen". `täglich`/`wöchentlich` match nothing
+    // in the grammar to begin with, exactly as `daily`/`weekly` do not.
+    recur: /\b(jede[nsrm]?|alle)\b/i,
+    // `nächste*` skips a week, exactly as `next` does; `kommende*` and `diese*`
+    // name the occurrence already coming, exactly as `this` does. German usage
+    // is genuinely split on "nächsten Montag" — plenty of speakers mean the one
+    // three days away — and this module cannot ask. Following the English rule
+    // is the choice that makes one word mean one thing in both languages, which
+    // is worth more here than picking a side in somebody else's argument.
+    nextWeek: /^n[äa]chste/i,
+    // `morgen` is tomorrow as an adverb and the morning as a noun, and the box
+    // is lower-cased prose where the capital that tells them apart cannot be
+    // relied on. Three phrases mean the noun and none of them means a day:
+    // "am Morgen", "heute Morgen" (which is this morning, already past), and
+    // "gestern Morgen". Reading any of them as tomorrow would date an entry a
+    // day out and eat the word that said so.
+    veto: (intro, word, left) => word === 'morgen'
+      && (intro === 'am' || /\b(heute|gestern)[ \t]+$/i.test(left)),
+  },
+}
 
 /** The hour "tonight" means when the line names no other time. Inferred, so it
  *  is always reported as a guess. */
@@ -141,14 +269,14 @@ const TONIGHT_AT = '19:00'
  *  the version number leaves the title.
  *
  *  Only a candidate that marks ITSELF as a clock ever reaches this guard, so
- *  every line it catches carries a colon or a meridiem: a bare number is gone
- *  at rule 1 before any guard runs, and an introduced one has the introducer's
- *  space or its `@` in front of the digits rather than any of these characters.
- *  "release v2:10" (a letter), "standup 14:00-15:00" (the hyphen before the
- *  second half), "meet 2/3pm", "meet 3.05pm", "row #12:30", "fee $5pm",
- *  "fare €5:30" and "off 20%3pm" are the shapes that die here — "Pay invoice
- *  1099", "$300 deposit" and "invoice due 3/4" never get this far, because
- *  every candidate in them is a bare integer. */
+ *  every line it catches carries a colon or a clock marker: a bare number is
+ *  gone at rule 1 before any guard runs, and an introduced one has the
+ *  introducer's space or its `@` in front of the digits rather than any of these
+ *  characters. "release v2:10" (a letter), "standup 14:00-15:00" (the hyphen
+ *  before the second half), "meet 2/3pm", "meet 3.05pm", "row #12:30", "fee
+ *  $5pm", "fare €5:30" and "off 20%3pm" are the shapes that die here — "Pay
+ *  invoice 1099", "$300 deposit" and "invoice due 3/4" never get this far,
+ *  because every candidate in them is a bare integer. */
 const BEFORE_BAD = /[#$%\/.\-\d\p{L}\p{Sc}]/u
 
 /** The same, immediately after a candidate.
@@ -159,7 +287,11 @@ const BEFORE_BAD = /[#$%\/.\-\d\p{L}\p{Sc}]/u
  *  mangling this module can produce. The percent and the slash earn their keep
  *  on introduced lines, where no other guard would refuse them: without them
  *  "raise at 20%" reads 20:00 and hands back "raise %", and "due at 3/4" reads
- *  15:00 and hands back "due /4". The digit is what refuses "gym at 1930". */
+ *  15:00 and hands back "due /4". The digit is what refuses "gym at 1930".
+ *
+ *  It is also what refuses German's dotted clock, by way of `AFTER_PAIR` below:
+ *  "19.30 Uhr" dies rather than reading half past seven, and that is the header's
+ *  choice rather than an oversight. */
 const AFTER_BAD = /[%\/\d\p{L}]/u
 
 /** A separator wedged directly between two numbers.
@@ -167,11 +299,12 @@ const AFTER_BAD = /[%\/\d\p{L}]/u
  *  Conditional on the digit, unlike the sets above: a trailing "." with a space
  *  after it is ordinary punctuation, but one glued to another number means the
  *  candidate is part of a larger construct — "3.30" (a British-style time this
- *  grammar does not read), "10:30:45" (a stamp with seconds), "v1.2". Reading
- *  the head of any of those as a clock would leave its tail behind in the
- *  title. "meet at 3.30" is the shape that needs it: introduced, so neither
- *  rule 1 nor the position rule would refuse it, and without the dot it reads
- *  15:00 and hands back "meet .30".
+ *  grammar does not read, and the standard German spelling it does not read
+ *  either), "10:30:45" (a stamp with seconds), "v1.2". Reading the head of any
+ *  of those as a clock would leave its tail behind in the title. "meet at 3.30"
+ *  is the shape that needs it: introduced, so neither rule 1 nor the position
+ *  rule would refuse it, and without the dot it reads 15:00 and hands back
+ *  "meet .30".
  *
  *  After a candidate, every dash spelling is `RANGE_AFTER`'s below, so a range
  *  answers to one guard rather than to two that have to agree. Before one, the
@@ -206,40 +339,20 @@ const AFTER_PAIR = /^[.:]\d/
 const RANGE_BEFORE = /\d[ \t]*(?:[ap]m)?[ \t]*[-–—][ \t]*$/i
 const RANGE_AFTER = /^[ \t]*[-–—][ \t]*\d/
 
-/** The same shape with days in it: a weekday range or list, in the spellings
- *  the box actually sees — "mon-fri", "mon–fri", "gym mon - fri", "sat/sun",
- *  "mon,wed,fri", "tue&thu", "mon to fri", "sat and sun", "monday through
- *  friday".
+/** A meridiem no grammar here spells, e.g. "7 p.m.".
  *
- *  A day word has no digits for the guards above to hang on, so what marks the
- *  range here is the separator itself, on one side of the word or the other.
- *  Every candidate in the phrase is refused rather than one picked: "gym
- *  mon-fri" read as next Friday, handing back the title "gym mon-", is exactly
- *  the silent loss the header says this module exists to prevent, and the first
- *  day of a range is no better an answer than the last.
+ *  Only English's `am`/`pm` are ever read. Without this guard the match would
+ *  stop at the hour, the dotted meridiem would be left in the title, and "call
+ *  at 7 p.m." would be read as 07:00 by the inference table — the exact half of
+ *  the day the user had ruled out. Refusing is a miss; reading it backwards is a
+ *  wrong time on a real entry.
  *
- *  The word separators cost a real line — "call bob on friday to confirm" is
- *  refused, where it used to read 2026-08-28. That is a MISS, which the
- *  header's bargain allows and which hands the line back verbatim; reading
- *  "gym on mon to fri" as the Friday and handing back the title "gym on mon
- *  to" is a mangling, which it does not. */
-const DAY_RANGE_BEFORE = /(?:[-–—/,&][ \t]*|\b(?:to|and|through)[ \t]+)$/i
-const DAY_RANGE_AFTER = /^(?:[ \t]*[-–—/,&]|[ \t]+(?:to|and|through)\b)/i
-
-/** A meridiem the grammar does not spell, e.g. "7 p.m.".
- *
- *  Only `am`/`pm` are read. Without this guard the match would stop at the
- *  hour, the dotted meridiem would be left in the title, and "call at 7 p.m."
- *  would be read as 07:00 by the inference table below — the exact half of the
- *  day the user had ruled out. Refusing is a miss; reading it backwards is a
- *  wrong time on a real entry. */
+ *  Shared rather than per-language, and that is the point rather than an
+ *  economy: German has no meridiem of its own, so the guard never fires on a
+ *  German line — but "Sport um 7 p.m." is a line somebody types, and the
+ *  argument against reading it as 07:00 does not care which language the rest of
+ *  the sentence was in. */
 const DOTTED_MERIDIEM = /^[ \t]*[ap]\.[ \t]?m\.?/i
-
-/** Recurrence markers. See the exclusion note in the header: these veto a DATE
- *  phrase, not a time. Eating the weekday out of "gym every monday" is the
- *  mangling; a bare hour left on "gym every monday at 7" harms nothing and the
- *  repeat stays legible in the title, where the user can act on it. */
-const RECUR = /\b(every|each)\b/i
 
 /** The shape the backend accepts, and `ymd` cannot pad a year into range. */
 const YMD = /^\d{4}-\d{2}-\d{2}$/
@@ -311,36 +424,42 @@ function readClock(h: number, m: number, mer: string): { time: string; guessed: 
  * `addDays` moves the date field and leaves the wall clock alone, so it crosses
  * both transitions intact.
  */
-function readDay(word: string, mod: string, now: Date): string {
+function readDay(word: string, mod: string, now: Date, g: Grammar): string {
   const base = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-  if (word === 'today' || word === 'tonight' || word === 'tomorrow') {
+  const relative = g.today.includes(word) || g.tonight.includes(word)
+    || g.tomorrow.includes(word)
+  if (relative) {
     // "next tomorrow" and "this today" are not phrases. Refusing leaves the
     // words in the title, which is the honest outcome for a line nobody can
     // read; guessing which of two days was meant is not.
     if (mod) return ''
-    return dayOut(word === 'tomorrow' ? addDays(base, 1) : base)
+    return dayOut(g.tomorrow.includes(word) ? addDays(base, 1) : base)
   }
-  const target = WEEKDAY[word]
+  const target = g.weekday[word]
   if (target === undefined) return ''      // unreachable through DATE_RE; belt for a later edit
   // Strictly after today: a bare "friday" typed ON a Friday means the next one.
   // The day already half spent is the one reading the user cannot have meant,
   // since they would have typed "today".
   const ahead = ((target - base.getDay() + 7) % 7) || 7
-  return dayOut(addDays(base, mod === 'next' ? ahead + 7 : ahead))
+  return dayOut(addDays(base, mod && g.nextWeek.test(mod) ? ahead + 7 : ahead))
 }
 
 /** Every time phrase in `text` that survives the guards. `eol` is where the
  *  line ends once trailing whitespace is ignored — a typed line usually still
  *  carries the space left before Enter, and the position rule must not turn on
  *  it. */
-function timePhrases(text: string, eol: number): Phrase[] {
+function timePhrases(text: string, eol: number, g: Grammar): Phrase[] {
   const out: Phrase[] = []
   // `lastIndex` is reset by hand because these regexes are module-level and
   // /g-flagged: a previous call that ended early would otherwise start this one
   // partway through the string.
-  TIME_RE.lastIndex = 0
-  for (let m = TIME_RE.exec(text); m; m = TIME_RE.exec(text)) {
-    const [whole, at, sign, hh, mm, mer] = m
+  g.time.lastIndex = 0
+  for (let m = g.time.exec(text); m; m = g.time.exec(text)) {
+    const [whole, at, sign, hh, mm, marker] = m
+    // A meridiem STATES a half of the day; a marker only says "this is a
+    // clock". Both make a bare number readable — see `Grammar.meridiem`.
+    const mer = g.meridiem ? (marker || '') : ''
+    const marked = !!marker
     const numAt = m.index + whole.search(/\d/)
     const after = m.index + whole.length
     const introduced = !!(at || sign)
@@ -349,7 +468,7 @@ function timePhrases(text: string, eol: number): Phrase[] {
     // Rule 1: a bare integer is never a time. Only an introducer, a colon or a
     // meridiem makes a number a clock, which is what keeps "Pay invoice 1099",
     // "buy 2 tickets" and "Room 3 booking" whole.
-    if (!introduced && !mm && !mer) continue
+    if (!introduced && !mm && !marked) continue
     // The position rule: at the end of the line, or introduced. A time loose in
     // the middle of a sentence is far more often a quantity than an hour.
     if (!introduced && after !== eol) continue
@@ -363,7 +482,7 @@ function timePhrases(text: string, eol: number): Phrase[] {
     // line, "lunch at 12:00 - 13:00" its first as an introduced phrase.
     if (RANGE_AFTER.test(rest) || RANGE_BEFORE.test(text.slice(0, m.index))) continue
 
-    const clock = readClock(Number(hh), mm ? Number(mm) : 0, mer || '')
+    const clock = readClock(Number(hh), mm ? Number(mm) : 0, mer)
     if (!clock) continue
     out.push({ start: m.index, end: after, date: '', time: clock.time, guessed: clock.guessed, tonight: false })
   }
@@ -371,10 +490,10 @@ function timePhrases(text: string, eol: number): Phrase[] {
 }
 
 /** Every date phrase in `text` that survives the guards. */
-function datePhrases(text: string, eol: number, now: Date): Phrase[] {
+function datePhrases(text: string, eol: number, now: Date, g: Grammar): Phrase[] {
   const out: Phrase[] = []
-  DATE_RE.lastIndex = 0
-  for (let m = DATE_RE.exec(text); m; m = DATE_RE.exec(text)) {
+  g.date.lastIndex = 0
+  for (let m = g.date.exec(text); m; m = g.date.exec(text)) {
     const [whole, intro, sign, mod, word] = m
     const end = m.index + whole.length
     // `next`/`this` introduce as well as modify, so either alone satisfies the
@@ -385,16 +504,23 @@ function datePhrases(text: string, eol: number, now: Date): Phrase[] {
     // far side of the word from any separator, so "on mon-fri" is caught on the
     // hyphen after "on mon" and again on the hyphen before "fri".
     const wordAt = end - word.length
-    if (DAY_RANGE_BEFORE.test(text.slice(0, wordAt)) || DAY_RANGE_AFTER.test(text.slice(end))) continue
+    if (g.dayRangeBefore.test(text.slice(0, wordAt))
+      || g.dayRangeAfter.test(text.slice(end))) continue
     // The recurrence veto reads everything to the LEFT, not just the word
     // before, so "run every other friday" and "standup every 2nd monday" are
     // refused along with the plain "gym every monday".
-    if (RECUR.test(text.slice(0, m.index))) continue
+    if (g.recur.test(text.slice(0, m.index))) continue
 
-    const key = word.toLowerCase()
-    const date = readDay(key, (mod || '').toLowerCase(), now)
+    const key = word.toLowerCase().replace(/[ \t]+/g, ' ')
+    // A phrase the pattern matched and the language does not mean — German's
+    // "am Morgen" is a time of day, not a date. See `Grammar.veto`.
+    if (g.veto?.((intro || '').toLowerCase(), key, text.slice(0, m.index))) continue
+    const date = readDay(key, (mod || '').toLowerCase(), now, g)
     if (!date) continue
-    out.push({ start: m.index, end, date, time: '', guessed: false, tonight: key === 'tonight' })
+    out.push({
+      start: m.index, end, date, time: '', guessed: false,
+      tonight: g.tonight.includes(key),
+    })
   }
   return out
 }
@@ -414,11 +540,13 @@ function without(s: string, start: number, end: number): string {
  * line it decides — two introduced hours, both legal, and the later one is the
  * one being typed. "Room 3 booking at 4" is NOT an example of it, however it
  * reads: rule 1 threw the bare 3 out before there was anything to compare. */
-function rightmost(text: string, now: Date, wantDate: boolean, wantTime: boolean): Phrase | null {
+function rightmost(
+  text: string, now: Date, wantDate: boolean, wantTime: boolean, g: Grammar,
+): Phrase | null {
   const eol = text.trimEnd().length
   const all = [
-    ...(wantTime ? timePhrases(text, eol) : []),
-    ...(wantDate ? datePhrases(text, eol, now) : []),
+    ...(wantTime ? timePhrases(text, eol, g) : []),
+    ...(wantDate ? datePhrases(text, eol, now, g) : []),
   ]
   let best: Phrase | null = null
   for (const p of all) if (!best || p.start > best.start) best = p
@@ -448,7 +576,14 @@ function rightmost(text: string, now: Date, wantDate: boolean, wantTime: boolean
  *     read Friday. A miss, and the line survives whole; the alternative is
  *     reading "gym on mon to fri" as Monday.
  */
-export function parseEntry(text: string, now: Date): ParsedEntry {
+export function parseEntry(
+  text: string, now: Date, lang: Language = DEFAULT_LANGUAGE,
+): ParsedEntry {
+  // Defaulted so every caller and test that predates the Language setting reads
+  // exactly the lines it read before. An unknown tag falls back to English
+  // rather than to no grammar at all: a settings blob is hand-editable, and a
+  // box that suddenly stopped reading anything would be the worse failure.
+  const g = GRAMMARS[lang] ?? GRAMMARS[DEFAULT_LANGUAGE]
   // Rule 4's answer, and the answer for a line with nothing in it to read: the
   // input, untouched.
   const verbatim: ParsedEntry = { summary: text, dueDate: '', dueTime: '', guessed: false }
@@ -466,7 +601,7 @@ export function parseEntry(text: string, now: Date): ParsedEntry {
   // remembering offsets also means the second phrase is always measured against
   // the text that will really remain, so two candidates can never overlap.
   for (let pass = 0; pass < 2; pass++) {
-    const hit = rightmost(rest, now, !dueDate, !dueTime)
+    const hit = rightmost(rest, now, !dueDate, !dueTime, g)
     if (!hit) break
     const next = without(rest, hit.start, hit.end)
     // Rule 4: never consume the only word. Abandoning the WHOLE parse rather

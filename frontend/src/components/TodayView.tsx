@@ -608,7 +608,7 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
   hiddenCalendars?: string[]
   archivedCalendars?: string[]
 }) {
-  const { locale, t: tr } = useI18n()
+  const { lang, locale, t: tr } = useI18n()
   // A STABLE guard, so it can sit in an effect's dependency list honestly
   // instead of behind an eslint-disable. `makeGuard(onExpire)` written at the
   // top of a render mints a fresh function on every paint, which would re-run
@@ -1409,7 +1409,12 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
   // "friday" against the clock it is handed, so a line left sitting in the box
   // across midnight has to be read again or the chip would promise a date one
   // day behind the one the entry would actually get.
-  const parsed = useMemo(() => parseEntry(text, new Date()), [text, day])
+  // The GRAMMAR follows the language setting, not just the words around the box.
+  // A German account typing "Rechnung Freitag" is typing a date, and a parser
+  // that only ever knew English would leave it whole while the chip beneath
+  // promised it a note. `lang` in the dependency list because switching the
+  // setting has to re-read the line already typed.
+  const parsed = useMemo(() => parseEntry(text, new Date(), lang), [text, day, lang])
   const reads = !!(parsed.dueDate || parsed.dueTime)
 
   /**
