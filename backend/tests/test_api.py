@@ -517,6 +517,31 @@ def test_settings_time_format_sync(client):
     assert client.put("/api/settings", json={"time_format": "H:mm"}).status_code == 422
 
 
+def test_settings_language_sync(client):
+    # Only the languages the app has a catalogue for. The blob is hand-editable
+    # and an unknown tag would reach `Intl.PluralRules` and `toLocaleDateString`
+    # on every client that read it, so it is refused here rather than defended
+    # against on the way back out.
+    r = client.put("/api/settings", json={"language": "de"})
+    assert r.status_code == 200 and r.json().get("language") == "de"
+    assert client.get("/api/settings").json().get("language") == "de"
+    assert client.put("/api/settings", json={"language": "en"}).status_code == 200
+    assert client.get("/api/settings").json().get("language") == "en"
+    assert client.put("/api/settings", json={"language": "fr"}).status_code == 422
+    assert client.put("/api/settings", json={"language": "de-AT"}).status_code == 422
+
+
+def test_settings_language_does_not_reach_anything_stored(client):
+    # It is a DISPLAY setting. The server is not translated, reads this nowhere,
+    # and nothing an account has named changes because of it — which is the
+    # promise the settings hint makes to the user in as many words.
+    client.put("/api/settings", json={"language": "de"})
+    lists = client.get("/api/lists").json()
+    assert lists, "the fixture account has at least one list to be sure about"
+    before = [l["name"] for l in lists]
+    assert [l["name"] for l in client.get("/api/lists").json()] == before
+
+
 def test_settings_home_timezone_sync(client):
     # The zone the account authors floating times in. Validated on the way in
     # because it is fed to ZoneInfo on the public booking path, and the blob is
