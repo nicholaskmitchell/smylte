@@ -649,6 +649,22 @@ class SettingsPatch(BaseModel):
     # displays follow it: the public booking page is rendered for visitors who
     # are not this account, so it stays on their own locale.
     time_format: Literal["12h", "24h"] | None = None
+    # Which language the app is shown in. Absent means English, which is what
+    # every account read before this was settable.
+    #
+    # A DISPLAY setting and nothing more: the server is not translated and never
+    # reads this. Error text still reaches the client in English (the frontend's
+    # src/i18n/index.ts says why that is out of scope), and nothing stored —
+    # a list's name, a task's summary, a habit's title — is touched by it. The
+    # public booking page ignores it too, for the reason `time_format` gives one
+    # line up: those visitors are not this account, and the language they read
+    # is theirs rather than the link owner's.
+    #
+    # A `Literal` like the two settings either side, so an unknown tag is a 422
+    # rather than a value the client has to defend against on the way back out.
+    # Adding a language means adding a catalogue under frontend/src/i18n/ and
+    # one entry here.
+    language: Literal["en", "de"] | None = None
     # Ids of task lists whose tasks are drawn on the calendar grid. An ALLOWLIST,
     # unlike hidden_calendars/hidden_lists above — those are denylists so a new
     # collection shows by default, which is right for a collection the user just
