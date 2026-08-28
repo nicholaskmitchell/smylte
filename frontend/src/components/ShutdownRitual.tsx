@@ -28,8 +28,11 @@ import { taskKey } from '../order'
 import { textDir } from '../util'
 import { DateTimeInput } from './DateTimeInput'
 import { useI18n } from '../i18n'
+import { useT } from '../i18n'
 
-const STEPS = ['How today went', 'What follows you', 'Anything to note?'] as const
+// Catalogue KEYS, like `PlanRitual`'s — the order is the ritual's and the
+// count is read off the array, so it stays an array.
+const STEPS = ['shut.step.done', 'shut.step.follows', 'shut.step.reflect'] as const
 
 /** How far ahead "a day you name" may reach.
  *
@@ -77,6 +80,7 @@ export function ShutdownRitual({
   onShutdown: () => void
   onClose: () => void
 }) {
+  const tr = useT()
   const [step, setStep] = useState(0)
   const scrimPress = useRef(false)
   useEscape(onClose)
@@ -108,11 +112,14 @@ export function ShutdownRitual({
         scrimPress.current = false
       }}>
       <div className="modal plan-ritual" role="dialog" aria-modal="true"
-        aria-label="Shut down the day" onClick={(e) => e.stopPropagation()}>
+        aria-label={tr('shut.aria')} onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
-          <span className="modal-title">{STEPS[step]}</span>
-          <span className="plan-step mono">{step + 1} of {STEPS.length}</span>
-          <button className="icon-btn" onClick={onClose} aria-label="Close">✕</button>
+          <span className="modal-title">{tr(STEPS[step])}</span>
+          <span className="plan-step mono">
+            {tr('plan.stepOf', { n: step + 1, total: STEPS.length })}
+          </span>
+          <button className="icon-btn" onClick={onClose}
+            aria-label={tr('common.close')}>✕</button>
         </div>
 
         {step === 0 && (
@@ -130,18 +137,18 @@ export function ShutdownRitual({
 
         <div className="modal-actions plan-actions">
           {step > 0 && (
-            <button className="btn ghost" onClick={() => setStep(step - 1)}>Back</button>
+            <button className="btn ghost" onClick={() => setStep(step - 1)}>{tr('common.back')}</button>
           )}
           <span className="spacer" />
           {!last && (
-            <button className="btn ghost" onClick={() => setStep(step + 1)}>Skip</button>
+            <button className="btn ghost" onClick={() => setStep(step + 1)}>{tr('plan.skip')}</button>
           )}
           {last ? (
             <button className="btn" onClick={onShutdown}>
-              {shutdownAt ? 'Done' : 'Shut down'}
+              {shutdownAt ? tr('shut.done') : tr('shut.shutDown')}
             </button>
           ) : (
-            <button className="btn" onClick={() => setStep(step + 1)}>Next</button>
+            <button className="btn" onClick={() => setStep(step + 1)}>{tr('plan.next')}</button>
           )}
         </div>
       </div>
@@ -162,6 +169,7 @@ function DoneStep({ entries, offPlan, planned, done, doneMinutes, unestimated,
   renderRow: (e: DayEntry) => ReactNode
   colorOf: (listId: string | null) => string | null
 }) {
+  const tr = useT()
   const { locale } = useI18n()
   const tf = useTimeFormat()
   return (
@@ -172,8 +180,7 @@ function DoneStep({ entries, offPlan, planned, done, doneMinutes, unestimated,
         // expected — an evening thought belongs in the same reflection as the
         // rest — so the state is reported and nothing is refused.
         <p className="plan-hint">
-          You shut today down at {fmtClock(shutdownAt, tf, locale)}. Anything you change
-          from here still lands on today.
+          {tr('shut.alreadyShutdown', { time: fmtClock(shutdownAt, tf, locale) })}
         </p>
       )}
       {/* FACTUAL, and nothing more. No percentage, no ratio coloured against a
@@ -182,14 +189,16 @@ function DoneStep({ entries, offPlan, planned, done, doneMinutes, unestimated,
           opening, and this is the one you would be opening at the end of a hard
           day. */}
       <p className="plan-hint">
-        {done} of {entries.length} done
-        {planned > 0 && ` · ${fmtDuration(doneMinutes)} of ${fmtDuration(planned)} planned`}
+        {tr('shut.doneCount', { done, total: entries.length })}
+        {planned > 0 && tr('shut.plannedOf', {
+          done: fmtDuration(doneMinutes), planned: fmtDuration(planned),
+        })}
         {/* What the minutes are SILENT about, in the same words the day's own
             strip and the planning ritual use. Without it a day whose finished
             rows happened to be the unestimated ones reads "0m of 1h 20m
             planned" and looks like a day nothing happened on — which is the
             exact verdict this step is written to avoid. */}
-        {planned > 0 && unestimated > 0 && ` · ${unestimated} not estimated`}
+        {planned > 0 && unestimated > 0 && tr('shut.unestimated', { count: unestimated })}
       </p>
       {entries.length > 0 && (
         <ul className="today-list">{entries.map(renderRow)}</ul>
@@ -198,19 +207,19 @@ function DoneStep({ entries, offPlan, planned, done, doneMinutes, unestimated,
         <>
           {/* Usually the more interesting half, and the half a plan cannot
               know: work that happened without ever being planned. */}
-          <div className="label section-label">Done off-plan</div>
-          <ul className="today-list" aria-label="Done off-plan">
+          <div className="label section-label">{tr('shut.offPlan')}</div>
+          <ul className="today-list" aria-label={tr('shut.offPlan')}>
             {offPlan.map((t) => (
               <li key={taskKey(t)} className="today-row">
                 <span className="today-check-gap today-mark mono" role="img"
-                  aria-label="Done">✓</span>
+                  aria-label={tr('shut.doneMark')}>✓</span>
                 <span className="today-kind-mark" data-kind="task" role="img"
-                  aria-label="Task">
+                  aria-label={tr('common.task')}>
                   <span className="today-kind-box" style={colorOf(t.list)
                     ? { background: colorOf(t.list)! } : undefined} />
                 </span>
                 <span className="today-title" dir={textDir(t.summary)}>
-                  {t.summary || '(untitled)'}
+                  {t.summary || tr('common.untitled')}
                 </span>
                 <span className="today-due mono">{fmtClock(t.completed_at!, tf, locale)}</span>
               </li>
@@ -219,7 +228,7 @@ function DoneStep({ entries, offPlan, planned, done, doneMinutes, unestimated,
         </>
       )}
       {entries.length === 0 && offPlan.length === 0 && (
-        <p className="empty">Nothing on today, and nothing finished off-plan.</p>
+        <p className="empty">{tr('shut.nothingAtAll')}</p>
       )}
     </div>
   )
@@ -236,6 +245,7 @@ function FollowsStep({ day, unfinished, titleOf, decided, onRoll, onDrop }: {
   onRoll: (e: DayEntry, to: string) => void
   onDrop: (e: DayEntry) => void
 }) {
+  const tr = useT()
   const tomorrow = addDayKey(day, 1)
   // The floor for the date field, so the browser's own picker cannot offer a day
   // the server would refuse. The rule is enforced server-side regardless
@@ -255,19 +265,14 @@ function FollowsStep({ day, unfinished, titleOf, decided, onRoll, onDrop }: {
             be able to say, and it has to stay true: an owner who moved every row
             to tomorrow decided about their day, they did not finish it. */}
         <p className="empty">
-          {decided > 0
-            ? 'Everything on today is decided. Nothing left to carry.'
-            : 'Everything on today is done. Nothing to carry.'}
+          {decided > 0 ? tr('shut.allDecided') : tr('shut.allDone')}
         </p>
       </div>
     )
   }
   return (
     <div className="plan-body plan-scroll">
-      <p className="plan-hint">
-        Leave anything alone and it carries by itself — this is for the ones you
-        want to decide about. Deciding makes a row leave this list.
-      </p>
+      <p className="plan-hint">{tr('shut.followsHint')}</p>
       {/* The whole-list version of the arm every row has, and worth its own
           control: "none of this happened today, all of it happens tomorrow" is
           the commonest true answer, and paying for it one row at a time is what
@@ -277,7 +282,7 @@ function FollowsStep({ day, unfinished, titleOf, decided, onRoll, onDrop }: {
         <div className="shut-all">
           <button type="button" className="btn ghost"
             onClick={() => { for (const e of movable) onRoll(e, tomorrow) }}>
-            Move all {movable.length} to tomorrow
+            {tr('shut.moveAll', { count: movable.length })}
           </button>
         </div>
       )}
@@ -286,7 +291,7 @@ function FollowsStep({ day, unfinished, titleOf, decided, onRoll, onDrop }: {
           // `titleOf` is empty only in the instant before the tasks land, and a
           // blank row on the one screen whose job is deciding about rows is
           // worse than a placeholder. It is never what a loaded day shows.
-          const name = titleOf(e) || '(this task)'
+          const name = titleOf(e) || tr('shut.thisTask')
           return (
             <li key={e.entry_id} className="today-row shut-row">
               <span className="today-title" dir={textDir(name)}>{name}</span>
@@ -305,21 +310,21 @@ function FollowsStep({ day, unfinished, titleOf, decided, onRoll, onDrop }: {
                 {e.kind !== 'habit' && (
                   <>
                     <button type="button" className="btn ghost shut-act"
-                      aria-label={`Move ${name} to tomorrow`}
-                      onClick={() => onRoll(e, tomorrow)}>Tomorrow</button>
+                      aria-label={tr('shut.moveToTomorrow', { task: name })}
+                      onClick={() => onRoll(e, tomorrow)}>{tr('shut.tomorrow')}</button>
                     {/* The field with the most to gain: it shows no value at
                         all (picking a day IS the whole of it), so before the
                         picker opened on a tap there was nothing on screen to
                         aim at but the glyph. */}
                     <DateTimeInput type="date" className="input shut-date"
-                      aria-label={`Move ${name} to a day`}
+                      aria-label={tr('shut.moveToDay', { task: name })}
                       min={tomorrow} max={max} value=""
                       onChange={(ev) => { if (ev.target.value) onRoll(e, ev.target.value) }} />
                   </>
                 )}
                 <button type="button" className="btn ghost shut-act"
-                  aria-label={`Take ${name} off the plan`}
-                  onClick={() => onDrop(e)}>Off the plan</button>
+                  aria-label={tr('shut.takeOff', { task: name })}
+                  onClick={() => onDrop(e)}>{tr('shut.offThePlan')}</button>
               </span>
             </li>
           )
@@ -334,6 +339,7 @@ function ReflectStep({ reflection, onReflect }: {
   reflection: string | null
   onReflect: (text: string) => void
 }) {
+  const tr = useT()
   const [draft, setDraft] = useState(reflection ?? '')
 
   // Committed on UNMOUNT as well as on blur, and the effect ADDS a path rather
@@ -360,20 +366,18 @@ function ReflectStep({ reflection, onReflect }: {
   return (
     <div className="plan-body">
       <label className="plan-label" htmlFor="shut-reflect">
-        How did today go?
+        {tr('shut.howDidItGo')}
       </label>
       <textarea id="shut-reflect" className="input shut-reflect" rows={4} autoFocus
-        value={draft} placeholder="A sentence is plenty."
-        aria-label="A note about today"
+        value={draft} placeholder={tr('shut.reflectPlaceholder')}
+        aria-label={tr('shut.reflectAria')}
         onChange={(e) => setDraft(e.target.value)}
         // On blur rather than per keystroke: this is prose, and a PATCH per
         // character would be a write storm for a field nobody is racing on.
         // `saved` is updated by the render that follows, so the unmount effect
         // above does not send it a second time.
         onBlur={() => { if (draft !== (reflection ?? '')) onReflect(draft) }} />
-      <p className="plan-hint">
-        Kept with the day. You will see it whenever you look back at today.
-      </p>
+      <p className="plan-hint">{tr('shut.reflectHint')}</p>
     </div>
   )
 }

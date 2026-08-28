@@ -184,4 +184,122 @@ export const de: Catalogue = {
   'common.delete': 'Löschen',
   'common.add': 'Hinzufügen',
   'common.save': 'Speichern',
+  // ── plan ritual ─────────────────────────────────────────────────────────────
+  'plan.step.capacity': 'Wie lang ist heute?',
+  'plan.step.pick': 'Was machst du heute?',
+  'plan.step.shape': 'In Form bringen',
+  'plan.aria': 'Plane deinen Tag',
+  'plan.stepOf': '{n} von {total}',
+  'plan.total': '{planned} von {capacity}',
+  // Keeps the leading separator, because the three fragments of this line are
+  // concatenated in the component and the middle one has to bring its own.
+  'plan.unestimated': ' · {count} ohne Schätzung',
+  'plan.over': ' · {amount} zu viel',
+  'common.back': 'Zurück',
+  'plan.skip': 'Überspringen',
+  'plan.done': 'Fertig',
+  'plan.start': 'Tag beginnen',
+  'plan.next': 'Weiter',
+  'plan.warn': 'Das ist {amount} mehr, als du arbeiten wolltest. Du kannst trotzdem anfangen — aber jetzt etwas zu verschieben ist leichter als um vier.',
+  'plan.stopping': 'Wann hörst du heute auf?',
+  // The examples must be things the parser actually takes, so these change
+  // when daytext.ts learns German and not before. See daytext.ts.
+  'plan.capacityPlaceholder': 'bis 18 Uhr, oder 5h',
+  'plan.capacityAria': 'Wie lange du heute arbeitest',
+  'plan.capacityRefused': 'Versuch {a} oder {b}.',
+  'plan.capacityHint': 'Beides geht — {a} oder {b}. Das gilt nur für heute; in den Einstellungen steht die Vorgabe.',
+  'plan.meetings': 'Du hast heute schon {amount} im Kalender.',
+  'plan.leftovers': 'Das ist letztes Mal liegen geblieben',
+  'plan.nothingWaiting': 'Nichts liegt an. Was heute sonst noch ansteht, tippst du in das Feld dahinter.',
+  'plan.addToToday': '{task} zu heute hinzufügen',
+  'common.task': 'Aufgabe',
+  'plan.nothingOnToday': 'Heute steht noch nichts an.',
+  'plan.shapeHint': 'Tippe auf eine Schätzung, um sie zu setzen. Zieh eine Zeile, um sie zu verschieben.',
+  // ── parser examples ─────────────────────────────────────────────────────────
+  // An example is a PROMISE that the parser takes this exact text. Its German
+  // is therefore not a translator's choice but a fact about `parseCapacity`,
+  // and the two have to change together — see daytext.ts.
+  'capacity.example.until': 'bis 18 Uhr',
+  'capacity.example.length': '5h',
+  // ── shutdown ritual ─────────────────────────────────────────────────────────
+  'shut.step.done': 'Wie heute lief',
+  'shut.step.follows': 'Was dir folgt',
+  'shut.step.reflect': 'Etwas festzuhalten?',
+  'shut.aria': 'Den Tag abschließen',
+  'shut.done': 'Fertig',
+  'shut.shutDown': 'Abschließen',
+  'shut.alreadyShutdown': 'Du hast heute um {time} abgeschlossen. Was du von hier aus änderst, landet trotzdem auf heute.',
+  'shut.doneCount': '{done} von {total} erledigt',
+  'shut.plannedOf': ' · {done} von {planned} geplant',
+  'shut.unestimated': ' · {count} ohne Schätzung',
+  'shut.offPlan': 'Ungeplant erledigt',
+  'shut.doneMark': 'Erledigt',
+  'shut.nothingAtAll': 'Nichts auf heute, und ungeplant auch nichts erledigt.',
+  'shut.allDecided': 'Über alles von heute ist entschieden. Es bleibt nichts übrig.',
+  'shut.allDone': 'Alles von heute ist erledigt. Es bleibt nichts übrig.',
+  'shut.followsHint': 'Was du in Ruhe lässt, wandert von selbst weiter — hier geht es um die Zeilen, über die du entscheiden willst. Eine Entscheidung nimmt die Zeile aus dieser Liste.',
+  'shut.moveAll': 'Alle {count} auf morgen schieben',
+  'shut.thisTask': '(diese Aufgabe)',
+  'shut.moveToTomorrow': '{task} auf morgen schieben',
+  'shut.tomorrow': 'Morgen',
+  'shut.moveToDay': '{task} auf einen Tag schieben',
+  'shut.takeOff': '{task} aus dem Plan nehmen',
+  'shut.offThePlan': 'Nicht im Plan',
+  'shut.howDidItGo': 'Wie war dein Tag?',
+  'shut.reflectPlaceholder': 'Ein Satz reicht völlig.',
+  'shut.reflectAria': 'Eine Notiz zu heute',
+  'shut.reflectHint': 'Bleibt beim Tag. Du siehst sie jedes Mal, wenn du auf heute zurückschaust.',
+  // ── task fields ─────────────────────────────────────────────────────────────
+  'field.list': 'Liste',
+  'field.due': 'Fällig',
+  'field.dueDate': 'Fälligkeitsdatum',
+  'field.dueTime': 'Fälligkeitszeit',
+  'field.start': 'Beginn',
+  'field.startDate': 'Startdatum',
+  'field.startTime': 'Startzeit',
+  'field.priority': 'Priorität',
+  'field.tags': 'Schlagwörter',
+  'field.notes': 'Notizen',
+  // A SUFFIX in English and a suffix in German, but written as a whole
+  // message with the field name in a slot — a language that puts the scope
+  // in front can say so, and this file cannot tell it not to.
+  'field.forAll': '{name}, für alle Aufgaben',
+  'field.forRow': '{name}, Zeile {n}',
+  'tags.remove': '{tag} entfernen',
+  'tags.placeholder': 'Schlagwort hinzufügen…',
+  // ── add multiple ────────────────────────────────────────────────────────────
+  'bulk.aria': 'Mehrere Aufgaben hinzufügen',
+  'bulk.title': 'Mehrere hinzufügen',
+  'bulk.sameForAll': 'Für alle gleich',
+  'bulk.rowTitle': 'Titel',
+  'bulk.titleForRow': 'Titel, Zeile {n}',
+  'bulk.titlePlaceholder': 'Aufgabentitel',
+  'bulk.removeRow': 'Zeile {n} entfernen',
+  'bulk.addRow': 'Noch eine Zeile',
+  'bulk.addRowShort': '+ Zeile',
+  'bulk.truncated': 'Nur die ersten {max} Zeilen wurden übernommen.',
+  'bulk.pasteHint': 'Füg eine Liste von Titeln ein, um mehrere Zeilen auf einmal zu füllen.',
+  // One message, not a fragment plus "— press Add to retry." concatenated
+  // after it: the English put the singular/plural half in a ternary and the
+  // tail outside it, which hands a translator two pieces and an order.
+  //
+  // "Die Zeile", not "Ihre Zeile". The possessive would be correct German —
+  // ihre, the task's — but it lands first in the sentence and so is capitalised,
+  // and a capital Ihre is indistinguishable from the formal address this app
+  // does not use. The du/Sie guard cannot tell them apart and should not try:
+  // the case it would have to allow through is exactly the one worth catching.
+  'bulk.failed': {
+    one: '1 Aufgabe konnte nicht angelegt werden. Die Zeile ist geblieben — drück auf Hinzufügen, um es noch einmal zu versuchen.',
+    other: '{count} Aufgaben konnten nicht angelegt werden. Die Zeilen sind geblieben — drück auf Hinzufügen, um es noch einmal zu versuchen.',
+  },
+  'bulk.progress': '{done} / {total}',
+  'bulk.adding': 'Wird hinzugefügt…',
+  // German puts the count first and the verb last, which is exactly the
+  // reordering a ternary on `n === 1` around a fixed "Add " prefix cannot
+  // express.
+  'bulk.submit': {
+    one: '{count} Aufgabe hinzufügen',
+    other: '{count} Aufgaben hinzufügen',
+  },
+  'bulk.submitEmpty': 'Aufgaben hinzufügen',
 }

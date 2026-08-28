@@ -151,9 +151,12 @@ export function TaskModal({ task, lists, defaultList, initialTitle, onClose, onC
         <div className="task-props">
           {props.map((f) => (
             <div key={f.key} className={`task-prop prop-${f.key}`}>
-              <label className="label">{f.label}</label>
+              <label className="label">{tr(f.label)}</label>
               <span className="task-prop-controls">
-                {f.render(vals, patch, { lists, where: '', disabled: false, lang })}
+                {/* One form, one of each control, so nothing needs telling
+                    apart: the field's own name is the whole accessible name. */}
+                {f.render(vals, patch,
+                  { lists, disabled: false, lang, t: tr, scope: (n) => n })}
               </span>
             </div>
           ))}
