@@ -922,6 +922,29 @@
 
   /* content spacing + touch targets */
   .content-head { flex-wrap: wrap; row-gap: 8px; }
+
+  /* THE TODAY HEADER, which is the one that does not fit.
+     It carries a title, a two-button day nav, a date, a count and three named
+     actions — Review, Shut down, Habits — and `flex-wrap` alone left them in
+     the worst possible arrangement. Measured in this harness at 390px before
+     this rule: 147px tall, over four lines, with `Habits` orphaned on a line of
+     its own under `Review` and `Shut down`. Two of the four lines were spent on
+     nothing: `.spacer` is `flex: 1`, so it claimed 81px of trailing space on the
+     title line and pushed everything after it down.
+
+     `.cal-head` has had the first half of this since the calendar was written
+     ("`.cal-head .spacer { display: none }`") — a header shorter than this one,
+     fixed years earlier. The Today tab is the phone-primary surface and never
+     got it.
+
+     Two rules, and they do different jobs. Dropping the spacer stops the
+     artificial break. Giving the count a full-line basis is what puts the three
+     actions TOGETHER: without it they wrap after whichever one runs out of
+     room, and 161px of count plus 260px of buttons cannot share 362px however
+     they are ordered. So the count takes the line it needs and the actions take
+     theirs — 284px of the 362 available, one row, in the order they are read. */
+  .today-head .spacer { display: none; }
+  .today-head .today-count { flex-basis: 100%; }
   .undated-hint { padding: 8px 14px 0; }
 
   /* multi-day task views: swipeable full-height columns */
@@ -1504,16 +1527,41 @@
      none of them — so the tick (`.check`, which the finding does not mention)
      is covered, and so is a button added to this row later.
 
-     A tap BOX, not bigger type: `min-height`/`min-width` with a flex centre
-     leaves every glyph and the row's own text at its designed size. The rules
-     above stay because they set the padding this builds on.
+     A tap BOX, not bigger type, and now not a bigger ELEMENT either. This was
+     `min-height: 44px; min-width: 44px` on the controls themselves, which is the
+     obvious reading of the guideline and cost more than it looks:
 
-     Accepted cost, decided rather than discovered: a Today row goes from ~53px
-     to ~62px, so roughly 13 rows fit an 844px phone instead of 16. STAGES.md
-     records the decision. */
+       * `.check` is the one control here that PAINTS its box — a bordered
+         square — so growing the element grew the checkbox. On a phone the Today
+         tab's tick rendered at 44px against the Tasks tab's 21px: the same
+         control, on the same account, at twice the size, which is what "the
+         buttons are huge" means when someone says it.
+       * The other three paint nothing (`border: 0; background: none`), so their
+         44px bought a wider invisible box and nothing else — and the four
+         together took 145px of a 362px row. Measured here at 390px, that left
+         `.today-title` 115px, which wrapped an ordinary task summary onto THREE
+         lines and made the row 86.5px. The accepted cost recorded in STAGES.md
+         was ~62px.
+
+     A pseudo-element is the tap box instead: absolutely positioned, centred,
+     transparent, 44x44, and part of its originating element's hit region — so
+     the target is the size the guideline asks for while the control keeps the
+     size it was designed at and the row keeps the width for its title. Verified
+     by hit-testing rather than by measuring a border box, which is what the pin
+     in `backlog.aug25.stage4.browser.test.tsx` now does; that file also asserts
+     no two of these areas overlap, which is the one hazard this technique has
+     and the old one could not have.
+
+     `display: inline-flex` stays: it is what centres each glyph in whatever box
+     it ends up with, and `position: relative` is what the ::after is measured
+     from. */
   .today-row button, .today-row .today-est {
-    min-height: 44px; min-width: 44px;
+    position: relative;
     display: inline-flex; align-items: center; justify-content: center;
+  }
+  .today-row button::after, .today-row .today-est::after {
+    content: ''; position: absolute; top: 50%; left: 50%;
+    width: 44px; height: 44px; transform: translate(-50%, -50%);
   }
 
   /* `.menu-toggle` is EVERY settings control on the phone sheet — Clock, Theme,

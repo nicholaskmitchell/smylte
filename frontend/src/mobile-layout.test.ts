@@ -371,6 +371,41 @@ const allMobile = (() => {
   return parts.join('\n')
 })()
 
+describe('the Today header the phone rules aim at', () => {
+  // The mobile fix is two rules scoped to `.today-head`, and the browser test
+  // that measures it mounts raw markup. Both are worthless if the component
+  // stops rendering the classes they name — so this is the tie between them,
+  // which is the job this file does for every other measured selector.
+  it('is named in the JSX, count and all', () => {
+    const src = read('src/components/TodayView.tsx')
+    expect(src, 'the Today header lost its own class, so the phone rules below '
+      + 'match nothing').toMatch(/className="content-head today-head"/)
+    expect(src, 'the open/done count lost `today-count`, so nothing gives it a '
+      + 'line of its own and the three actions wrap apart again')
+      .toMatch(/className="content-sub today-count"/)
+  })
+
+  it('has both phone rules, in a mobile block', () => {
+    expect(allMobile, '`.today-head .spacer` is not dropped on a phone, so '
+      + '`flex: 1` still claims the trailing space and forces a wrap')
+      .toMatch(/\.today-head \.spacer\s*\{[^{}]*display:\s*none/)
+    expect(allMobile, 'the count has no full-line basis, so it shares a row '
+      + 'with the actions and pushes one of them onto the next')
+      .toMatch(/\.today-head \.today-count\s*\{[^{}]*flex-basis:\s*100%/)
+  })
+
+  it('gives the row controls a tap area that costs no width', () => {
+    // The `min-width: 44px` this replaced grew `.check` — the one control here
+    // that paints its box — to twice the size the Tasks tab draws the same tick
+    // at, and took 145px of a 362px row for four controls. The pseudo-element
+    // is the tap target now; `layout.browser.test.tsx` hit-tests it.
+    expect(allMobile, 'the row controls are back to growing their own boxes')
+      .not.toMatch(/\.today-row button[^{}]*\{[^{}]*min-width:\s*44px/)
+    expect(allMobile, 'there is no 44px tap area on the row controls at all')
+      .toMatch(/\.today-row button::after[^{}]*\{[^{}]*width:\s*44px/)
+  })
+})
+
 describe('the iOS 16px floor covers every control that carries .input', () => {
   it('no later rule sets a sub-16px font-size on an .input consumer', () => {
     // `.input`'s mobile floor exists to stop Safari zooming when a control under
