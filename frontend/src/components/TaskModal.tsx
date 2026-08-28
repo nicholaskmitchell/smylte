@@ -14,6 +14,7 @@ import { dayKey, hasZone, instantFromLocal, sameValue, toLocalInput } from '../u
 import { inputLang } from '../time'
 import { useTimeFormat } from '../timeformat'
 import { blankValues, bodyFrom, FIELDS, type RowValues } from './AddMultipleModal'
+import { useI18n } from '../i18n'
 
 /**
  * A date+time pair as the wire should carry it.
@@ -52,7 +53,7 @@ export function TaskModal({ task, lists, defaultList, initialTitle, onClose, onC
   onMultiple: (listId: string, summary: string) => void
 }) {
   const creating = task === null
-  const lang = inputLang(useTimeFormat())
+  const lang = inputLang(useTimeFormat(), useI18n().lang)
   const [summary, setSummary] = useState(task?.summary || initialTitle || '')
   const [notes, setNotes] = useState(task?.notes || '')
   // Every other property lives in the same bag the bulk composer uses, and is

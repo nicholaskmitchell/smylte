@@ -27,6 +27,7 @@ import { fmtClock, fmtDuration } from '../time'
 import { taskKey } from '../order'
 import { textDir } from '../util'
 import { DateTimeInput } from './DateTimeInput'
+import { useI18n } from '../i18n'
 
 const STEPS = ['How today went', 'What follows you', 'Anything to note?'] as const
 
@@ -161,6 +162,7 @@ function DoneStep({ entries, offPlan, planned, done, doneMinutes, unestimated,
   renderRow: (e: DayEntry) => ReactNode
   colorOf: (listId: string | null) => string | null
 }) {
+  const { locale } = useI18n()
   const tf = useTimeFormat()
   return (
     <div className="plan-body plan-scroll">
@@ -170,7 +172,7 @@ function DoneStep({ entries, offPlan, planned, done, doneMinutes, unestimated,
         // expected — an evening thought belongs in the same reflection as the
         // rest — so the state is reported and nothing is refused.
         <p className="plan-hint">
-          You shut today down at {fmtClock(shutdownAt, tf)}. Anything you change
+          You shut today down at {fmtClock(shutdownAt, tf, locale)}. Anything you change
           from here still lands on today.
         </p>
       )}
@@ -210,7 +212,7 @@ function DoneStep({ entries, offPlan, planned, done, doneMinutes, unestimated,
                 <span className="today-title" dir={textDir(t.summary)}>
                   {t.summary || '(untitled)'}
                 </span>
-                <span className="today-due mono">{fmtClock(t.completed_at!, tf)}</span>
+                <span className="today-due mono">{fmtClock(t.completed_at!, tf, locale)}</span>
               </li>
             ))}
           </ul>

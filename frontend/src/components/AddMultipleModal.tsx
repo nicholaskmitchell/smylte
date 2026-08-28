@@ -7,6 +7,7 @@ import { inputLang } from '../time'
 import { useTimeFormat } from '../timeformat'
 import { useEscape } from '../hooks'
 import { DateTimeInput } from './DateTimeInput'
+import { useI18n } from '../i18n'
 
 // Each create is a CalDAV PUT plus a re-read GET behind a single server-side
 // lock, so a batch this size is already a slow half-minute. It also bounds what
@@ -261,7 +262,7 @@ export function AddMultipleModal({ lists, defaultList, initialTitle, onSubmit, o
   ) => Promise<number[]>
   onClose: () => void
 }) {
-  const lang = inputLang(useTimeFormat())
+  const lang = inputLang(useTimeFormat(), useI18n().lang)
   const [rows, setRows] = useState<Row[]>(() => [
     { ...blankRow(defaultList), summary: initialTitle?.trim() || '' },
     blankRow(defaultList), blankRow(defaultList),

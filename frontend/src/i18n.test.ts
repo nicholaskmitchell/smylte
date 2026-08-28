@@ -7,6 +7,8 @@
 // German is the ordinary way a translated app rots, and it is invisible in
 // every other test because the suite runs in English.
 
+import { readdirSync, readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { CATALOGUES, translate, type Plural } from './i18n/index'
 import { en } from './i18n/en'
@@ -171,5 +173,47 @@ describe('localeFor', () => {
 
   it('is case-insensitive, as BCP-47 is', () => {
     expect(localeFor('de', ['DE-at'])).toBe('DE-at')
+  })
+})
+
+// ── the source, swept ────────────────────────────────────────────────────────
+//
+// Two structural guards over the components themselves. Both catch the same
+// class of mistake: a screen that is translated in its words and still English
+// in its dates, which is worse than an untranslated screen because it looks
+// finished. The idiom — assert against the files on disk — is the one
+// `mobile-layout.test.ts` uses, and for the same reason: what is being checked
+// is a property of every call site at once, not of any one render.
+
+describe('the source', () => {
+  const src = (p: string) => readFileSync(resolve(process.cwd(), p), 'utf8')
+  const components = readdirSync(resolve(process.cwd(), 'src/components'))
+    .filter((f) => f.endsWith('.tsx') && !f.includes('.test.'))
+
+  it('formats dates in the app language, not the device one', () => {
+    // `toLocaleDateString(undefined, …)` means "whatever the device is set to",
+    // which is what every one of these calls said before the Language setting
+    // existed. Left alone it is the seam: the words change and the dates do not.
+    //
+    // BookingPage is the one exemption and it is a real one — nobody on that
+    // page is signed in, so there is no app language to follow, and the visitor's
+    // own is the right answer. Its `fmtTime` carries the argument in a comment.
+    const offenders = components
+      .filter((f) => f !== 'BookingPage.tsx')
+      .filter((f) => /toLocale\w*\(\s*undefined/.test(src(`src/components/${f}`)))
+    expect(offenders).toEqual([])
+  })
+
+  it('does not spell weekday or month names out in a component', () => {
+    // Seven weekdays hardcoded in a component are seven strings a translator
+    // never sees, in the one place where asking the platform is strictly better
+    // than translating: CLDR has every name in every language, in the
+    // abbreviations native readers use. See names.ts.
+    const offenders = components.filter((f) => {
+      const text = src(`src/components/${f}`).replace(/\/\/[^\n]*|\/\*[\s\S]*?\*\//g, '')
+      return /'(Mon|Monday|Jan|January)'\s*,\s*'(Tue|Tuesday|Feb|February)'/.test(text)
+        || /'(Sun|Sunday)'\s*,\s*'(Mon|Monday)'/.test(text)
+    })
+    expect(offenders).toEqual([])
   })
 })

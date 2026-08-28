@@ -18,12 +18,9 @@ import { useEffect, useState } from 'react'
 import { HABIT_DAYS } from '../api'
 import { capacityInput, parseCapacity } from '../capacity'
 import { fmtDuration } from '../time'
+import { useI18n } from '../i18n'
+import { habitDayLabel } from '../names'
 
-/** "mon" → "Mon", derived from the token rather than looked up in a table —
- *  the same call `TodayView`'s habit chips make, and for the same reason: any
- *  table mapping these names to anything is a second copy of one the server
- *  owns. */
-const label = (d: string) => d[0].toUpperCase() + d.slice(1)
 
 export function CapacitySection({ minutes, byWeekday, onChange, onWeekdayChange }: {
   /** The account-wide default, or null for "never said". */
@@ -34,6 +31,7 @@ export function CapacitySection({ minutes, byWeekday, onChange, onWeekdayChange 
   onChange: (next: number | null) => void
   onWeekdayChange: (next: Record<string, number>) => void
 }) {
+  const { locale } = useI18n()
   return (
     <>
       <div className="menu-row">
@@ -45,13 +43,13 @@ export function CapacitySection({ minutes, byWeekday, onChange, onWeekdayChange 
       <div className="cap-week">
         {HABIT_DAYS.map((d) => (
           <div key={d} className="cap-day">
-            <span className="cap-day-name">{label(d)}</span>
+            <span className="cap-day-name">{habitDayLabel(d, locale)}</span>
             <CapacityField id={`cap-${d}`} value={byWeekday[d] ?? null}
               // An unset weekday says it INHERITS rather than showing 0. Those
               // are different statements — "same as most days" and "I do not
               // work Sundays" — and a zero standing in for silence would make
               // the second unsayable.
-              placeholder="same as most days" name={label(d)}
+              placeholder="same as most days" name={habitDayLabel(d, locale)}
               onCommit={(next) => {
                 const out = { ...byWeekday }
                 if (next == null) delete out[d]

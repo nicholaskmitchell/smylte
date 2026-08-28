@@ -13,10 +13,12 @@ import { api, type McpConnection } from '../api'
 import { makeGuard } from '../util'
 import { fmtWhen } from '../time'
 import { useTimeFormat } from '../timeformat'
+import { useI18n } from '../i18n'
 
 export function ConnectionsSection({ onExpire }: {
   onExpire: () => void
 }) {
+  const { locale } = useI18n()
   const guard = makeGuard(onExpire)
   const tf = useTimeFormat()
   const [rows, setRows] = useState<McpConnection[]>([])
@@ -81,7 +83,7 @@ export function ConnectionsSection({ onExpire }: {
                 <div className="conn-name">{c.client_name || 'An application'}</div>
                 <div className="conn-meta">
                   <span className="chip">{what(c.scope)}</span>
-                  <span className="mono">Connected {fmtWhen(isoOf(c.granted_at), tf)}</span>
+                  <span className="mono">Connected {fmtWhen(isoOf(c.granted_at), tf, locale)}</span>
                 </div>
               </div>
               {confirming === c.family_id ? (

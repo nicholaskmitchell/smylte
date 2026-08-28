@@ -6,12 +6,18 @@ import { fmtWhen, inputLang } from '../time'
 import { useTimeFormat } from '../timeformat'
 import { useEscape } from '../hooks'
 import { DateTimeInput } from './DateTimeInput'
+import { useI18n } from '../i18n'
+import { weekdayNames } from '../names'
 
 // Owner side of client scheduling: manage booking links (availability, target
 // calendar, redacted-busy toggle) and see who booked. The public counterpart
 // lives at /book/<token> (BookingPage).
 
-const WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+// The availability map's keys are "0".."6", Monday-first — `parse_availability`
+// in backend/tasksd/scheduling.py. The NAMES for those seven slots are not
+// spelled here any more: they come from `weekdayNames`, which reads them out of
+// the platform in whatever language the app is set to.
+const DAYS_IN_WEEK = 7
 const DEFAULT_RANGE = '09:00-17:00'
 
 const COMMON_TZS = [
@@ -32,6 +38,7 @@ function clamp(raw: string, lo: number, hi: number, fallback: number): number {
 export function SchedulingView({ rev, onExpire }: { rev: number; onExpire: () => void }) {
   const guard = makeGuard(onExpire)
   const tf = useTimeFormat()
+  const { locale } = useI18n()
   const [links, setLinks] = useState<BookingLink[]>([])
   const [cals, setCals] = useState<List[]>([])
   const [bookings, setBookings] = useState<Booking[]>([])
@@ -209,7 +216,7 @@ export function SchedulingView({ rev, onExpire }: { rev: number; onExpire: () =>
           <div className="sched-bookings">
             {upcoming.map((b) => (
               <div key={b.id} className="sched-booking">
-                <span className="when mono">{fmtWhen(b.start, tf)}</span>
+                <span className="when mono">{fmtWhen(b.start, tf, locale)}</span>
                 <span className="who">
                   {b.name} <span className="email">{b.email}</span>
                 </span>
@@ -238,7 +245,7 @@ export function SchedulingView({ rev, onExpire }: { rev: number; onExpire: () =>
 interface DayRanges { on: boolean; ranges: [string, string][] }
 
 const availToDays = (av: Availability): DayRanges[] =>
-  WEEKDAYS.map((_, i) => {
+  Array.from({ length: DAYS_IN_WEEK }, (_, i) => {
     const ranges = (av[String(i)] ?? []).map((r) => r.split('-') as [string, string])
     return { on: ranges.length > 0, ranges: ranges.length ? ranges : [DEFAULT_RANGE.split('-') as [string, string]] }
   })
@@ -307,7 +314,8 @@ function LinkModal({ link, cals, onClose, onSave, onDelete }: {
   onSave: (body: BookingLinkInput, token?: string) => Promise<boolean>
   onDelete: (l: BookingLink) => void
 }) {
-  const lang = inputLang(useTimeFormat())
+  const { lang: appLang, locale } = useI18n()
+  const lang = inputLang(useTimeFormat(), appLang)
   const [title, setTitle] = useState(link?.title ?? '')
   const [description, setDescription] = useState(link?.description ?? '')
   const [calendar, setCalendar] = useState(link?.calendar ?? cals[0]?.id ?? '')
@@ -448,12 +456,15 @@ function LinkModal({ link, cals, onClose, onSave, onDelete }: {
         <div className="field">
           <label className="label">Weekly availability</label>
           <div className="sched-week">
-            {WEEKDAYS.map((name, i) => (
+            {weekdayNames(locale, 'short').map((name, i) => (
               <div key={name} className={`sched-day ${days[i].on ? '' : 'off'}`}>
                 <label className="sched-day-name">
                   <input type="checkbox" checked={days[i].on}
                     onChange={(e) => patchDay(i, { on: e.target.checked })} />
-                  <span>{name.slice(0, 3)}</span>
+                  {/* The platform's own abbreviation, not the first three
+                      letters of the long name: German shortens Mittwoch to
+                      "Mi.", and slicing would have given "Mit". */}
+                  <span>{name}</span>
                 </label>
                 {days[i].on ? (
                   <div className="sched-ranges" aria-invalid={dayErrors.has(i) || undefined}>
