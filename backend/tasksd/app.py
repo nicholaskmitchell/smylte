@@ -562,8 +562,14 @@ class DashboardModule(BaseModel):
     # they exist so a malformed layout cannot ask the client to lay out a
     # module a million rows tall.
     id: str = Field(min_length=1, max_length=64)
+    # An ALLOWLIST, and it has to stay in step with `MODULE_SPECS` in
+    # dashboard.ts. A kind the client ships and this does not is not a module
+    # that quietly fails to render: the whole PUT is refused, so the theme, the
+    # tab order and everything else in the same write go down with it (see the
+    # note on `_settings_or_422` below). `dashboard.test.ts` reads this list back
+    # out of this file and fails when the two disagree.
     kind: Literal[
-        "today", "overdue", "upcoming", "mini_calendar",
+        "today", "day_plan", "overdue", "upcoming", "mini_calendar",
         "completed", "booking_links", "bookings", "quick_add",
     ]
     x: int = Field(ge=0, le=11)

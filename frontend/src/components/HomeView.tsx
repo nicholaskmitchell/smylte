@@ -1,13 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
-import { api, clientId, type Booking, type BookingLink, type CalEvent, type List, type Task } from '../api'
-import { useIsMobile } from '../hooks'
+import {
+  api, clientId,
+  type Booking, type BookingLink, type CalEvent, type DayEntry, type DayPlan,
+  type List, type Task,
+} from '../api'
+import { useIsMobile, useToday } from '../hooks'
 import { useCalendarData, useTaskData, type TaskData } from '../data'
-import { cssColor, makeGuard, addDays, dayKey, isOverdue, ymd } from '../util'
-import { fmtDue } from '../time'
+import { cssColor, makeGuard, addDays, dayKey, isOverdue, textDir, ymd } from '../util'
+import { fmtDue, fmtDuration } from '../time'
 import { sortByCompletion, sortTasks, taskKey } from '../order'
 import { useTimeFormat } from '../timeformat'
 import { bucketByDay, monthGrid, type DayEv } from '../calendar'
 import { DayPopover } from './DayPopover'
+import { entryTitle, orderEntries, rowDone } from './TodayView'
+import { readCachedDayPlan } from '../cache'
 import { useI18n, useT } from '../i18n'
 import { weekdayNames } from '../names'
 import {
@@ -137,7 +143,7 @@ export function HomeView({ rev, onExpire, layout, onLayoutChange,
   // ── data ─────────────────────────────────────────────────────────────────
   // The same lists and tasks the Tasks pane holds — one fetch, not two, and it
   // survives the tab switch that used to send both views back to an empty array.
-  const { lists, tasks, loaded, create } = useTaskData()
+  const { lists, tasks, loaded, create, toggle } = useTaskData()
   // The mini calendar reads the same calendars and window the Calendar tab
   // does, so opening one after the other costs no second fan-out.
   const { cals, eventsFor, requestWindow, windowErrors } = useCalendarData()
@@ -147,6 +153,39 @@ export function HomeView({ rev, onExpire, layout, onLayoutChange,
   const needs = useMemo(() => new Set(mods.map((m) => m.kind)), [mods])
   const needsCal = needs.has('mini_calendar')
   const needsSched = needs.has('booking_links') || needs.has('bookings')
+  const needsPlan = needs.has('day_plan')
+
+  // ── the day's plan ───────────────────────────────────────────────────────
+  //
+  // A READ, and only ever a read. `api.openDay` is the one call that can CREATE
+  // a plan — it derives a snapshot from CalDAV and writes it — and the Today tab
+  // is built around being the only caller. A dashboard that opened the day would
+  // snapshot it on a morning the owner never looked at it, which is not a thing
+  // a dashboard gets to decide. On a day nobody has opened this answers
+  // `planned: false` with no rows, and the module says so rather than inventing
+  // any.
+  //
+  // Seeded from the disk mirror the Today tab already writes, so the card paints
+  // on the first frame instead of after the slowest read the app makes.
+  const todayKey = useToday()
+  const [plan, setPlan] = useState<DayPlan | null>(() => readCachedDayPlan(ymd(new Date())))
+  // The same staleness guard `needsSched` carries below and for the same reason:
+  // the effect re-runs on `rev`, so two SSE-driven refreshes put two reads in
+  // flight and whichever settled last would win.
+  const planToken = useRef(0)
+  useEffect(() => {
+    if (!needsPlan) return
+    const mine = ++planToken.current
+    const guard = makeGuard(onExpire)
+    guard(async () => {
+      const p = await api.day(todayKey)
+      if (mine === planToken.current) setPlan(p)
+    })
+  }, [rev, needsPlan, todayKey, onExpire])
+  // A day the picker never wrote — or a rollover — leaves a plan for the wrong
+  // day in hand. Gated rather than filtered: rows from yesterday under a heading
+  // that says today is the one mistake a day-scoped surface cannot make.
+  const planForToday = plan && plan.day === todayKey ? plan : null
 
   // The mini calendar's six-week grid. Fetching and rendering share this array,
   // so the days either side of the month can never be dotless for want of data.
@@ -229,7 +268,8 @@ export function HomeView({ rev, onExpire, layout, onLayoutChange,
     <ModuleBody kind={m.kind} tasks={tasks} lists={lists} days={days} byDay={byDay}
       calErrors={calErrors}
       links={links} bookings={bookings} colorOf={colorOf} eventColor={eventColor}
-      onExpire={onExpire} loaded={loaded} create={create} />
+      onExpire={onExpire} loaded={loaded} create={create}
+      plan={planForToday} onPlan={setPlan} toggleTask={toggle} tasksLoaded={loaded} />
   )
 
   // ── mobile: a plain stack ────────────────────────────────────────────────
@@ -339,7 +379,7 @@ export function HomeView({ rev, onExpire, layout, onLayoutChange,
 // ── module bodies ──────────────────────────────────────────────────────────
 
 function ModuleBody({ kind, tasks, lists, days, byDay, calErrors, links, bookings, colorOf,
-  eventColor, onExpire, loaded, create }: {
+  eventColor, onExpire, loaded, create, plan, onPlan, toggleTask, tasksLoaded }: {
   kind: ModuleKind
   tasks: Task[]
   lists: List[]
@@ -354,6 +394,12 @@ function ModuleBody({ kind, tasks, lists, days, byDay, calErrors, links, booking
   onExpire: () => void
   loaded: boolean
   create: TaskData['create']
+  /** Today's plan, or null while it is unknown. Already checked to be TODAY's
+   *  by the caller. */
+  plan: DayPlan | null
+  onPlan: (next: DayPlan | null | ((p: DayPlan | null) => DayPlan | null)) => void
+  toggleTask: TaskData['toggle']
+  tasksLoaded: boolean
 }) {
   const tr = useT()
   const today = ymd(new Date())
@@ -389,6 +435,9 @@ function ModuleBody({ kind, tasks, lists, days, byDay, calErrors, links, booking
       return <TaskList items={sortByCompletion(done).slice(0, 40)}
         colorOf={colorOf} empty={tr('home.emptyCompleted')} done loaded={loaded} />
     }
+    case 'day_plan':
+      return <DayPlanList plan={plan} tasks={tasks} tasksLoaded={tasksLoaded}
+        colorOf={colorOf} onExpire={onExpire} onPlan={onPlan} toggleTask={toggleTask} />
     case 'mini_calendar':
       return <MiniCalendar days={days} byDay={byDay} eventColor={eventColor} failed={calErrors} />
     case 'booking_links':
@@ -438,6 +487,142 @@ function TaskList({ items, colorOf, empty, overdue, done, loaded }: {
         )
       })}
     </ul>
+  )
+}
+
+/**
+ * Today's plan, as the dashboard shows it: the same rows the Today tab has, in
+ * the same order, tickable.
+ *
+ * NOT a second implementation of that tab. `orderEntries`, `entryTitle` and
+ * `rowDone` all come from it, because those three are where two surfaces would
+ * quietly come to disagree about one row — which order it sits in, what it is
+ * called once its task has been deleted, and whether it counts as done. What is
+ * NOT borrowed is `TodayRow` itself: drag handles, an editable estimate, a drop
+ * button and a weekly habit count are the tab's business, and a summary card
+ * that grew them would be the tab in a smaller box.
+ *
+ * `rowDone(…, true)` — live — because a dashboard only ever shows today, so a
+ * task row reads its doneness off the task NOW rather than off a completion
+ * stamp that has to fall on the right day.
+ */
+function DayPlanList({ plan, tasks, tasksLoaded, colorOf, onExpire, onPlan, toggleTask }: {
+  plan: DayPlan | null
+  tasks: Task[]
+  tasksLoaded: boolean
+  colorOf: (listId: string) => string | null
+  onExpire: () => void
+  onPlan: (next: DayPlan | null | ((p: DayPlan | null) => DayPlan | null)) => void
+  toggleTask: TaskData['toggle']
+}) {
+  const tr = useT()
+  // A task entry joins back to its task on (list, uid) — never on uid alone. A
+  // CalDAV UID is unique per COLLECTION, so the same one can live in two lists.
+  const taskFor = useMemo(() => {
+    const by = new Map(tasks.map((t) => [taskKey(t), t] as const))
+    return (e: DayEntry) => (e.kind === 'task' && e.list && e.uid
+      ? by.get(`${e.list}\u0000${e.uid}`) : undefined)
+  }, [tasks])
+
+  /** Tick a row whose doneness lives ON THE ENTRY: a note, or a habit
+   *  occurrence. A task row never reaches this — the task's own state is the
+   *  truth, and `toggleTask` is what writes it. */
+  const toggleEntry = async (e: DayEntry) => {
+    if (!plan) return
+    const done = !e.done_at
+    const at = done ? new Date().toISOString() : null
+    const patch = (stamp: string | null) => onPlan((p) => (p && p.day === plan.day
+      ? { ...p, entries: p.entries.map((x) => (x.entry_id === e.entry_id
+        ? { ...x, done_at: stamp } : x)) }
+      : p))
+    // Painted first, settled second, and put back on failure — `guard` has
+    // already raised the toast. THE STAMP ONLY on every arm: `patchDayEntry`
+    // answers with the whole row, and settling all of it would give this reply
+    // an opinion about an estimate somebody typed on the Today tab a moment ago.
+    patch(at)
+    const dto = await makeGuard(onExpire)(() =>
+      api.patchDayEntry(plan.day, e.entry_id, { done }))
+    patch(dto ? dto.done_at : e.done_at)
+  }
+
+  // Nothing to say yet. Blank rather than "Nothing on today" — the empty state
+  // flashing up before the rows land reads as a bug, which is the same call
+  // `TaskList` makes one function up.
+  if (!plan) return null
+  // Dropped rows are decisions, not work: "I am not doing this" belongs in the
+  // day's own record and not on a card that answers "what am I doing".
+  const rows = orderEntries(plan.entries.filter((e) => !e.dropped_at))
+  if (!rows.length) return <p className="dash-empty">{tr('home.planEmpty')}</p>
+  return (
+    <ul className="dash-tasks">
+      {rows.map((e) => {
+        const task = taskFor(e)
+        const done = rowDone(e, task, true)
+        const title = entryTitle(e, task, tasksLoaded, tr)
+        // A task entry whose task is gone can still be read, but not ticked:
+        // there is nothing left to tick. Disabled rather than absent, so the
+        // row keeps the column every other row has.
+        const orphan = e.kind === 'task' && !task
+        return (
+          <li key={e.entry_id} className={`dash-task dash-day-row ${done ? 'done' : ''}`}>
+            <button type="button" className={`check ${done ? 'on' : ''}`}
+              disabled={orphan}
+              aria-pressed={done}
+              aria-label={done
+                ? tr('home.planUncheck', { entry: title || tr('today.entry') })
+                : tr('home.planCheck', { entry: title || tr('today.entry') })}
+              onClick={() => void (task ? toggleTask(task) : orphan ? null : toggleEntry(e))}>
+              ✓
+            </button>
+            {/* The Today tab's own three-way mark, class for class. It is
+                self-contained (`--today-mark-w` is on `:root`) and it is the
+                vocabulary that tab teaches: filled is a task and leaves the
+                app, hollow is a note and does not, ↻ is a habit. Teaching it
+                there and dropping it here would undo the teaching. */}
+            <span className="today-kind-mark" data-kind={e.kind} role="img"
+              aria-label={tr(KIND_ARIA[e.kind] ?? 'today.kind.entry')}>
+              {e.kind === 'habit'
+                ? <span aria-hidden="true">↻</span>
+                : <span className="today-kind-box" style={e.kind === 'task' && colorOf(e.list ?? '')
+                  ? { background: colorOf(e.list ?? '')! } : undefined} />}
+            </span>
+            <span className="dash-task-title" dir={textDir(title)}>{title}</span>
+            <PlanRowMeta entry={e} task={task} />
+          </li>
+        )
+      })}
+    </ul>
+  )
+}
+
+/** A day entry's `kind` → the name assistive tech gets for its mark. The Today
+ *  tab's `KIND_LABEL` keyed the same way and read with the same fallback, and
+ *  for the reason api.ts gives: `DayEntryKind` widens silently, so a kind this
+ *  build has not heard of announces itself as "Entry" rather than handing a
+ *  screen reader a nameless `role="img"`. */
+const KIND_ARIA: Record<string, string> = {
+  task: 'today.kind.task', note: 'today.kind.note', habit: 'today.kind.habit',
+}
+
+/** The one thing on the right of a plan row.
+ *
+ *  The Today tab has room for an estimate AND a due date in separate columns;
+ *  a dashboard card has room for one, so this picks the one that says
+ *  something. The estimate wins when there is one — "what am I doing today" is
+ *  a question about time. Failing that, a due date, but only when it is NOT
+ *  today: a due of today repeated down every row of a card headed "Today's
+ *  plan" is the date already in the heading, said again per row. */
+function PlanRowMeta({ entry, task }: { entry: DayEntry; task: Task | undefined }) {
+  const { locale } = useI18n()
+  const tf = useTimeFormat()
+  if (entry.estimate_minutes != null) {
+    return <span className="dash-task-due mono">{fmtDuration(entry.estimate_minutes)}</span>
+  }
+  if (!task?.due || dayKey(task.due) === entry.day) return null
+  return (
+    <span className={`dash-task-due mono ${isOverdue(task.due, task.due_is_date) ? 'overdue' : ''}`}>
+      {fmtDue(task.due, task.due_is_date, tf, locale)}
+    </span>
   )
 }
 

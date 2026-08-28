@@ -296,7 +296,8 @@ import {
   readCachedDayPlan, readCachedDayRange, readCachedHabits,
 } from '../cache'
 import {
-  addDays, cssColor, dayKey, isOverdue, makeGuard, parseDate, textDir, ymd,
+  addDays, cssColor, dayKey, isOverdue, makeGuard, msUntilMidnight, parseDate,
+  textDir, ymd,
 } from '../util'
 import { fmtClock, fmtDue, fmtDuration } from '../time'
 import { useI18n } from '../i18n'
@@ -309,15 +310,6 @@ import { AgendaEvent } from './DayPopover'
 import { PlanRitual } from './PlanRitual'
 import { ShutdownRitual } from './ShutdownRitual'
 import { useT } from '../i18n'
-
-/** How far past the computed midnight the rollover timer aims.
- *
- *  `setTimeout` is allowed to fire a whisker EARLY, and a callback that runs at
- *  23:59:59.999 reads the wall clock as still yesterday — it would set the day
- *  it already holds and arm the next timer for a midnight 24 hours away, so the
- *  surface would sit on the wrong day for a whole day. Half a second of slack
- *  is invisible and removes the whole class. */
-const MIDNIGHT_SLACK_MS = 500
 
 /** How far ahead the "next 7 days" suggestions reach. Same horizon as the Home
  *  dashboard's Upcoming module, so the two never disagree about what is soon. */
@@ -593,7 +585,24 @@ export function entryTitle(
   return tasksLoaded ? t('today.taskGone') : ''
 }
 
-function rowDone(e: DayEntry, task: Task | undefined, live: boolean): boolean {
+/**
+ * Whether a row counts as finished.
+ *
+ * A TASK entry never records doneness of its own — the task's own state is the
+ * truth, and this file's header says why. A note and a habit occurrence exist
+ * nowhere but in the day, so the day is where their stamp lives.
+ *
+ * `live` is what separates the two readings of a task row. On a day still
+ * running, "done" means the task is done NOW; on a finished day it means the
+ * task was finished ON THAT DAY, so a task ticked this morning cannot add itself
+ * to last Tuesday's record.
+ *
+ * Exported for the dashboard's plan module, which shows the same rows and must
+ * read them the same way. Two surfaces deciding doneness independently is
+ * exactly the drift this function exists to prevent — the module passes
+ * `live: true`, because a dashboard only ever shows today.
+ */
+export function rowDone(e: DayEntry, task: Task | undefined, live: boolean): boolean {
   if (e.kind !== 'task') return !!e.done_at
   if (live) return !!task?.completed
   return !!task?.completed_at && dayKey(task.completed_at) === e.day
@@ -645,12 +654,9 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
   view.current = { day, today }
 
   useEffect(() => {
-    const now = new Date()
-    // Built from the local calendar fields rather than by adding 86_400_000 ms,
-    // which is an hour wrong on both changeover days in any zone that observes
-    // DST — and this repo's own test suite runs in America/New_York precisely
-    // so that class of bug can fail a test.
-    const next = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).getTime()
+    // `msUntilMidnight` carries the arithmetic and the slack — see util.ts. What
+    // stays here is what this surface does when it fires, which is more than
+    // `useToday` does: the picker moves only while it is parked on today.
     const t = setTimeout(() => {
       // The wall clock decides, never arithmetic on the key we were holding. A
       // laptop asleep through midnight fires this LATE — possibly days late,
@@ -668,7 +674,7 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
       if (view.current.day === view.current.today) setDay(nowKey)
       setToday(nowKey)
       setArmed((n) => n + 1)
-    }, Math.max(0, next - now.getTime()) + MIDNIGHT_SLACK_MS)
+    }, msUntilMidnight())
     return () => clearTimeout(t)
   }, [armed])
 

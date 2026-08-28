@@ -698,4 +698,10 @@ export const en = {
   'book.taken': 'That time was just taken — please pick another.',
   // ── today — the tomorrow suggestion ─────────────────────────────────────────
   'today.sug.tomorrow': 'Due tomorrow',
+  // ── home — the day-plan module ──────────────────────────────────────────────
+  'module.day_plan': 'Today\'s plan',
+  'module.day_plan.blurb': 'What you chose to do today, plus your habits and notes.',
+  'home.planEmpty': 'Nothing on today yet. Plan it from the Today tab.',
+  'home.planUncheck': 'Uncheck {entry}',
+  'home.planCheck': 'Check {entry}',
 } as const

@@ -89,6 +89,37 @@ export function ymd(d: Date): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
 }
 
+/** Half a second past midnight, and the reason it is not midnight exactly.
+ *
+ *  A timeout armed for the millisecond of the changeover can fire a hair EARLY:
+ *  a callback that reads the wall clock at 23:59:59.999 sees yesterday, sets the
+ *  day it already holds, and arms the next timer for a midnight 24 hours away —
+ *  so the surface sits on the wrong day for a whole day. Half a second is
+ *  invisible and removes the whole class. */
+export const MIDNIGHT_SLACK_MS = 500
+
+/**
+ * How long until the next local midnight, with `MIDNIGHT_SLACK_MS` on the end.
+ *
+ * Built from the local calendar FIELDS rather than by adding 86_400_000ms,
+ * which is an hour wrong on both changeover days in any zone that observes DST
+ * — and this repo's suite runs in America/New_York precisely so that class of
+ * bug can fail a test.
+ *
+ * Shared by every surface that has to notice a rollover, which is now two: the
+ * Today tab and the dashboard's plan module. Only the arithmetic is shared —
+ * what each does when the timer fires is its own business, and the Today tab's
+ * is genuinely different because it also has to decide whether to move a picker
+ * somebody may be reading last Tuesday through.
+ *
+ * Clamped at zero: a system clock that jumps backwards mid-render must not arm
+ * a negative timeout, which fires immediately and spins.
+ */
+export function msUntilMidnight(now: Date = new Date()): number {
+  const next = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).getTime()
+  return Math.max(0, next - now.getTime()) + MIDNIGHT_SLACK_MS
+}
+
 export function addDays(d: Date, n: number): Date {
   const x = new Date(d)
   x.setDate(x.getDate() + n)

@@ -12,7 +12,7 @@ export const ROW_H = 44        // px per grid row; mirrored by --dash-row in app
 export const GAP = 12          // px between modules
 
 export type ModuleKind =
-  | 'today' | 'overdue' | 'upcoming' | 'mini_calendar'
+  | 'today' | 'day_plan' | 'overdue' | 'upcoming' | 'mini_calendar'
   | 'completed' | 'booking_links' | 'bookings' | 'quick_add'
 
 export interface DashboardModule {
@@ -41,6 +41,11 @@ export interface ModuleSpec {
 // — the same call `TAB_LABELS` and `timeFormatKey` make, for the same reason.
 export const MODULE_SPECS: Record<ModuleKind, ModuleSpec> = {
   today: { label: 'module.today', blurb: 'module.today.blurb', w: 4, h: 6, minW: 3, minH: 3 },
+  // Next to `today` and not the same thing, which is the whole reason it
+  // exists: that one is every task whose DUE DATE happens to be today, this one
+  // is the day's plan — what the owner chose, plus their habits and notes.
+  // The blurbs are what tell them apart in the picker, so they say so plainly.
+  day_plan: { label: 'module.day_plan', blurb: 'module.day_plan.blurb', w: 4, h: 6, minW: 3, minH: 3 },
   overdue: { label: 'module.overdue', blurb: 'module.overdue.blurb', w: 4, h: 5, minW: 3, minH: 3 },
   upcoming: { label: 'module.upcoming', blurb: 'module.upcoming.blurb', w: 4, h: 6, minW: 3, minH: 3 },
   mini_calendar: { label: 'module.mini_calendar', blurb: 'module.mini_calendar.blurb', w: 4, h: 6, minW: 3, minH: 5 },

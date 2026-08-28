@@ -782,4 +782,10 @@ export const de: Catalogue = {
   'book.taken': 'Diese Zeit wurde gerade vergeben — bitte wähl eine andere.',
   // ── today — the tomorrow suggestion ─────────────────────────────────────────
   'today.sug.tomorrow': 'Morgen fällig',
+  // ── home — the day-plan module ──────────────────────────────────────────────
+  'module.day_plan': 'Tagesplan',
+  'module.day_plan.blurb': 'Was du dir für heute vorgenommen hast, dazu deine Gewohnheiten und Notizen.',
+  'home.planEmpty': 'Heute steht noch nichts an. Plan ihn im Heute-Tab.',
+  'home.planUncheck': '{entry} abhaken rückgängig',
+  'home.planCheck': '{entry} abhaken',
 }

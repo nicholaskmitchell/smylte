@@ -1282,6 +1282,19 @@
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dash-task-due { flex: none; font-size: calc(11px * var(--fs-scale)); color: var(--fg-muted); }
 .dash-task-due.overdue { color: var(--warn); }
+/* A plan row carries a CHECKBOX and a kind mark, which the other dashboard
+   lists do not. `align-items: baseline` is right for a row of text and wrong
+   for a row with controls in it — the box would sit on the text's baseline
+   rather than beside it — so this one row type centres instead. Scoped to its
+   own class rather than changing `.dash-task`, because every other module on
+   this board is text and reads better on the baseline. */
+.dash-day-row { align-items: center; gap: 6px; }
+/* The check is the Tasks pane's, one size down: a dashboard row is 6px of
+   padding where a task row is 11px, and the full control crowded it. */
+.dash-day-row .check { width: 14px; height: 14px; margin-top: 0; font-size: 10px; }
+/* The kind mark keeps its own width from `:root`, so the left edge lines up
+   with the Today tab's. Nothing else is restated. */
+.dash-day-row .today-kind-mark { font-size: calc(10px * var(--fs-scale)); }
 .dash-quickadd { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 12px; }
 .dash-quickadd .input { flex: 1; min-width: 0; }
 /* A task added here is undated, so no module on this board shows it — the
