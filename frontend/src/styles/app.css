@@ -678,6 +678,11 @@
 .scope-choose { display: flex; flex-direction: column; gap: 8px; }
 .scope-q { font-family: var(--serif); font-size: calc(15px * var(--fs-scale)); margin: 2px 0 4px; }
 .scope-hint { font-size: calc(12px * var(--fs-scale)); color: var(--fg-muted); margin: -2px 0 2px; line-height: 1.35; }
+/* A line under one field, explaining what its current value will do. Inside a
+   `.field`, which already supplies the 5px gap, so this carries no margin of
+   its own — the same weight and colour as `.scope-hint` above and `.plan-hint`,
+   which are the modal's other two ways of saying a consequence. */
+.field-hint { margin: 0; font-size: calc(12px * var(--fs-scale)); color: var(--fg-muted); line-height: 1.35; }
 
 /* ---- archived calendars (settings modal) ---- */
 .arch-list { display: flex; flex-direction: column; max-height: 60vh; overflow-y: auto; }

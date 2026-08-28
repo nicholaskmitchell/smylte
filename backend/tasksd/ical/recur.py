@@ -78,6 +78,11 @@ class Occurrence:
     description: str | None
     location: str | None
     status: str | None
+    # This instance's TRANSP, if the component carries one. An override may
+    # differ from its master — "the Tuesday standup is Free that week" is a
+    # thing Apple Calendar can express — so it is read per occurrence like
+    # `status` beside it, and falls back to the master's in `_occurrence_dto`.
+    transp: str | None
 
 
 def _end_fields(comp) -> tuple[str | None, bool]:
@@ -508,6 +513,7 @@ def _occurrence(comp, override_anchors: set[str], tf_shifts: dict[str, timedelta
         description=_text(comp, "DESCRIPTION"),
         location=_text(comp, "LOCATION"),
         status=_text(comp, "STATUS"),
+        transp=_text(comp, "TRANSP"),
     )
 
 

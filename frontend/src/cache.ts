@@ -269,6 +269,12 @@ export function sanitizeEvent(v: unknown): CalEvent | null {
     duration: orNull(o.duration),
     all_day: bool(o.all_day),
     status: orNull(o.status),
+    // `!== false`, not `bool(...)`. Absent from anything this cache wrote
+    // before the field existed, and the DTO's own default for an event with no
+    // TRANSP is BUSY — so a missing value has to read as true or an upgrade
+    // would paint every cached event as free for one round trip. `bool()`
+    // would answer false for exactly those rows.
+    busy: o.busy !== false,
     tags: strs(o.tags),
     has_rrule: bool(o.has_rrule),
     href: orNull(o.href) ?? '',

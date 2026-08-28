@@ -132,6 +132,19 @@ export interface CalEvent {
   duration: string | null
   all_day: boolean
   status: string | null
+  /** Whether this event consumes the owner's time — iCalendar's TRANSP, which
+   *  Apple Calendar and Google Calendar both put in front of the user as
+   *  "Busy / Free" and Thunderbird as "Show Time As".
+   *
+   *  A boolean rather than the property's own two words because the wire has
+   *  three states and only two meanings: OPAQUE, TRANSPARENT, and ABSENT — and
+   *  RFC 5545 §3.8.2.7 makes absent the same as OPAQUE. The server resolves that
+   *  default once (`read.blocks_time`) so no reader here has to.
+   *
+   *  It is not decoration: `false` takes the event out of the busy set behind
+   *  the public booking page, so a slot sitting on it is offered. See
+   *  `scheduling.busy_intervals`. */
+  busy: boolean
   tags: string[]
   has_rrule: boolean
   href: string

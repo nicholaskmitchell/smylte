@@ -11,7 +11,7 @@ const ev = (start: string | null, end: string | null,
   uid: 'e', id: 'e', recurrence_id: null, is_recurring: false, calendar: 'c',
   summary: 'E', description: null, location: null,
   start, start_is_date: false, end, end_is_date: false, duration: null,
-  all_day: false, status: null, tags: [], has_rrule: false, href: '/c/e.ics', etag: '"1"',
+  all_day: false, status: null, busy: true, tags: [], has_rrule: false, href: '/c/e.ics', etag: '"1"',
   ...o,
 })
 

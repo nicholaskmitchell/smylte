@@ -82,6 +82,10 @@ function draftEvent(uid: string, calHref: string, body: Record<string, unknown>)
     start, start_is_date: !!start && !start.includes('T'),
     end, end_is_date: !!end && !end.includes('T'), duration: null,
     all_day: allDay, status: null,
+    // The create omits `busy` unless the owner picked Free, and an event with
+    // no TRANSP is busy — so the stand-in agrees with the DTO that is about to
+    // replace it either way.
+    busy: body.busy !== false,
     tags: Array.isArray(body.tags) ? (body.tags as string[]) : [],
     has_rrule: false, href: '', etag: '',
   }
@@ -975,6 +979,16 @@ function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete }: {
   // authored with a comma in it. That is `TagInput`'s whole reason for existing
   // on the task side; the event editor was simply never converted.
   const [tags, setTags] = useState<string[]>(e?.tags || [])
+  /**
+   * Whether this event consumes the owner's time — iCalendar's TRANSP, the
+   * field Apple Calendar labels "Busy/Free" and Thunderbird "Show Time As".
+   *
+   * `e?.busy ?? true` rather than `!!e?.busy`, because a new event has no DTO
+   * to read and the answer for one is BUSY: that is the RFC's default for an
+   * absent property, so the control opens agreeing with what the server would
+   * store if it were never touched.
+   */
+  const [busy, setBusy] = useState(e?.busy ?? true)
   // A new/non-recurring event picks a concrete cadence; an existing recurring one
   // defaults to "keep" — we don't surface its exact FREQ, so leaving it untouched
   // preserves the rule.
@@ -1048,6 +1062,22 @@ function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete }: {
   // user never touched the tags of. `sameValue` is TaskModal's precedent.
   const tagFields = (): Record<string, unknown> =>
     (e && sameValue(tags, e.tags || [])) ? {} : { tags }
+  /**
+   * `busy`, only when it actually differs from what the event holds.
+   *
+   * The same discipline `tagFields` keeps, and it is load-bearing for the same
+   * reason it is there: the backend WRITES the property when the key is
+   * present, so sending it on every save would stamp `TRANSP:OPAQUE` onto every
+   * event this app touches — including ones another CalDAV client deliberately
+   * left the property off, and including a pure rename. Invariant #2: a
+   * resource's properties are not ours to rewrite in passing.
+   *
+   * On a NEW event the same rule reads the other way round: there is nothing to
+   * compare against, and an omitted key means no TRANSP at all, which is
+   * already busy. So only Free is worth saying.
+   */
+  const busyFields = (): Record<string, unknown> =>
+    (e ? busy === e.busy : busy) ? {} : { busy }
   const repeatFields = (): Record<string, unknown> => {
     if (repeat === 'keep') return {}          // leave the existing rule untouched
     const b: Record<string, unknown> = { repeat }
@@ -1058,10 +1088,10 @@ function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete }: {
   const commit = (scope: EventScope) => {
     if (!e) {
       onSave({ summary, all_day: allDay, start: startOut, end: endOut,
-               location, description, tags, ...repeatFields() }, calPick)
+               location, description, tags, ...busyFields(), ...repeatFields() }, calPick)
       return
     }
-    const details = { summary, location, description, ...tagFields() }
+    const details = { summary, location, description, ...tagFields(), ...busyFields() }
     // An event whose span we could not reconstruct sends no end at all, so the
     // stored DTEND/DURATION is left exactly as its author wrote it.
     const times = endUnknown
@@ -1201,6 +1231,37 @@ function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete }: {
                 {recurring && <option value="keep">Keep current schedule</option>}
                 {REPEATS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
               </select>
+            </div>
+            {/* WHAT THIS DOES TO THE OWNER'S AVAILABILITY, said in the words
+                the consequence is about rather than in the property's.
+                "Transparency" is what the wire calls it and what nobody means;
+                Apple says Busy/Free and so does this.
+
+                A select rather than a checkbox, because the two values are two
+                statements and neither is the negation of the other on screen —
+                "not busy" reads as "unset" where "Free" reads as a decision.
+                Same shape as Repeat above it, which is the other field here
+                whose value is a choice among named behaviours.
+
+                Placed under the times, since it is a statement ABOUT that span
+                and means nothing without one. */}
+            <div className="field">
+              <label className="label" htmlFor="ev-busy">Show as</label>
+              <select className="input" id="ev-busy" value={busy ? 'busy' : 'free'}
+                onChange={(ev) => setBusy(ev.target.value === 'busy')}>
+                <option value="busy">Busy</option>
+                <option value="free">Free</option>
+              </select>
+              {/* Only on the arm that changes something, and only for the
+                  half of it a person cannot see: an event that blocks is what
+                  every event does, and saying so would be a line of chrome
+                  under every event in the app. */}
+              {!busy && (
+                <p className="field-hint">
+                  Free time can still be booked — this will not block a slot on
+                  your booking links.
+                </p>
+              )}
             </div>
             {repeat !== 'keep' && repeat !== 'none' && (
               <div className="field">

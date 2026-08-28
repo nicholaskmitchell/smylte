@@ -61,6 +61,16 @@ clicking it opens the same editor the Tasks tab uses.
 minimum notice, and a horizon, with a public booking page at `/book/{token}`
 that writes a real event onto the target calendar.
 
+What blocks a slot is the owner's to decide, and iCalendar already has the field
+for it: every event has a **Show as** of Busy or Free (`TRANSP` — what Apple
+Calendar and Google Calendar call Busy/Free and Thunderbird "Show Time As"), and
+an event marked Free is left out of the busy set behind the booking page, out of
+the redacted busy shown on it, and out of `smylte_find_free_time`. It reads what
+the other clients on these collections write, so a hold someone marked Free on
+their phone already means it here. Absent is Busy — RFC 5545's own default — and
+so is anything unrecognised, because the only direction a page that hands
+availability to anonymous visitors may be wrong in is over-blocking.
+
 **Home.** The landing tab: a 12-column canvas of modules — Today, Overdue,
 Upcoming, mini calendar, recently completed, booking links, upcoming bookings,
 quick add — that you drag, resize and add/remove in **Arrange** mode. The layout

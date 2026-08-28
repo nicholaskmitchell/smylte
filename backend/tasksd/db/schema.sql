@@ -76,6 +76,11 @@ CREATE TABLE IF NOT EXISTS items (
     -- column, which the query treats as "unknown, admit it".
     min_instant      TEXT,
     location         TEXT,
+    -- VEVENT TRANSP: 'OPAQUE' (blocks time) or 'TRANSPARENT' (does not) — what
+    -- Apple Calendar calls Busy/Free. NULL is the property being ABSENT, which
+    -- RFC 5545 defines as OPAQUE; every reader goes through `read.blocks_time`
+    -- rather than testing this column, so the default is stated once.
+    transp           TEXT,
     created          TEXT,
     last_modified    TEXT,
     synced_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
