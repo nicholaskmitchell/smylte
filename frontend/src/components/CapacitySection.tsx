@@ -18,7 +18,7 @@ import { useEffect, useState } from 'react'
 import { HABIT_DAYS } from '../api'
 import { capacityInput, parseCapacity } from '../capacity'
 import { fmtDuration } from '../time'
-import { useI18n } from '../i18n'
+import { useI18n, useT, useTx } from '../i18n'
 import { habitDayLabel } from '../names'
 
 
@@ -32,12 +32,14 @@ export function CapacitySection({ minutes, byWeekday, onChange, onWeekdayChange 
   onWeekdayChange: (next: Record<string, number>) => void
 }) {
   const { locale } = useI18n()
+  const tr = useT()
+  const tx = useTx()
   return (
     <>
       <div className="menu-row">
-        <label htmlFor="cap-default">Most days</label>
-        <CapacityField id="cap-default" value={minutes} placeholder="not set"
-          name="the default working day" onCommit={onChange} />
+        <label htmlFor="cap-default">{tr('capacity.mostDays')}</label>
+        <CapacityField id="cap-default" value={minutes} placeholder={tr('capacity.notSet')}
+          name={tr('capacity.defaultDay')} onCommit={onChange} />
       </div>
 
       <div className="cap-week">
@@ -49,7 +51,7 @@ export function CapacitySection({ minutes, byWeekday, onChange, onWeekdayChange 
               // are different statements — "same as most days" and "I do not
               // work Sundays" — and a zero standing in for silence would make
               // the second unsayable.
-              placeholder="same as most days" name={habitDayLabel(d, locale)}
+              placeholder={tr('capacity.sameAsMostDays')} name={habitDayLabel(d, locale)}
               onCommit={(next) => {
                 const out = { ...byWeekday }
                 if (next == null) delete out[d]
@@ -61,10 +63,10 @@ export function CapacitySection({ minutes, byWeekday, onChange, onWeekdayChange 
       </div>
 
       <p className="hintline">
-        Say it as <span className="mono">5h</span> or{' '}
-        <span className="mono">300</span> minutes. A day you have not given a
-        length is never counted against you — the Today tab simply says nothing
-        about how full it is.
+        {tx('capacity.hint', {
+          short: <span className="mono">5h</span>,
+          long: <span className="mono">300</span>,
+        })}
       </p>
     </>
   )
@@ -79,6 +81,7 @@ function CapacityField({ id, value, placeholder, name, onCommit }: {
   name: string
   onCommit: (next: number | null) => void
 }) {
+  const tr = useT()
   const [draft, setDraft] = useState(() => capacityInput(value))
   // Follow the value when it changes UNDERNEATH — a rejected settings write
   // leaves the old number in place, and another device can change it — so a
@@ -109,7 +112,7 @@ function CapacityField({ id, value, placeholder, name, onCommit }: {
 
   return (
     <input id={id} className="input cap-input" value={draft}
-      placeholder={placeholder} aria-label={`Working time for ${name}`}
+      placeholder={placeholder} aria-label={tr('capacity.workingTimeFor', { name })}
       // The stored value in words, for anyone who cannot see the field snap
       // back to "5h" after typing "300".
       title={value == null ? placeholder : fmtDuration(value)}

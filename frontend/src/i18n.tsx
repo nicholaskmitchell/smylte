@@ -12,7 +12,7 @@
 // being touched, and it is deliberate rather than lucky: the English catalogue
 // holds today's strings verbatim.
 
-import { createContext, useContext, useMemo, type ReactNode } from 'react'
+import { createContext, Fragment, useContext, useMemo, type ReactNode } from 'react'
 import { DEFAULT_LANGUAGE, localeFor, type Language } from './lang'
 import { translate, type Vars } from './i18n/index'
 
@@ -60,4 +60,40 @@ export function useI18n(): I18n {
  */
 export function useT(): I18n['t'] {
   return useContext(Ctx).t
+}
+
+/**
+ * The translator for a sentence with MARKUP inside it.
+ *
+ * `t` returns a string, which is all most messages need. Some do not: the
+ * capacity hint says "Say it as 5h or 300 minutes" with the two examples in the
+ * mono face, and the usual way that gets written — three JSX fragments with the
+ * spans between them — hands a translator three sentence FRAGMENTS and a fixed
+ * order to put them in. That order is a property of English. German moves the
+ * verb; a language with a different one cannot be spelled at all.
+ *
+ * So the message stays one whole sentence with a `{name}` where the marked-up
+ * part goes, and the node is dropped in here. The translator moves `{example}`
+ * wherever their grammar wants it and the mono face follows it there.
+ *
+ * String and number vars are still filled in by `translate`, so plural selection
+ * and `Intl.NumberFormat` work exactly as they do for `t` — only the node slots
+ * are left standing for this to fill.
+ */
+export function useTx(): (key: string, vars: Record<string, ReactNode>) => ReactNode {
+  const { lang } = useI18n()
+  return (key, vars) => {
+    const scalars: Record<string, string | number> = {}
+    for (const [k, v] of Object.entries(vars)) {
+      if (typeof v === 'string' || typeof v === 'number') scalars[k] = v
+    }
+    const text = translate(lang, key, scalars)
+    // `split` with a capturing group interleaves the separators, so the odd
+    // indices are exactly the placeholder names.
+    return text.split(/\{(\w+)\}/g).map((part, i) => (
+      // A key is needed because this is an array; the index is stable because
+      // the message is, and there is nothing else to key on.
+      <Fragment key={i}>{i % 2 ? vars[part] : part}</Fragment>
+    ))
+  }
 }

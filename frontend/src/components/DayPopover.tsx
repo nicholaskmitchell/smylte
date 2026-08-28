@@ -11,18 +11,18 @@ import { dayKey } from '../util'
 import { fmtClock, type TimeFormat } from '../time'
 import { useTimeFormat } from '../timeformat'
 import { useEscape } from '../hooks'
-import { useI18n } from '../i18n'
+import { useI18n, type I18n } from '../i18n'
 
 /** The time label for an event as it appears on `day`: a continuation day shows
  *  the end time if the span finishes that day, and otherwise reads as all day. */
-function label(ev: DayEv, day: string, f: TimeFormat): string {
-  if (ev.all_day) return 'all day'
+function label(ev: DayEv, day: string, f: TimeFormat, i18n: I18n): string {
+  if (ev.all_day) return i18n.t('common.allDay')
   if (ev.cont) {
     return ev.end && !ev.end_is_date && dayKey(ev.end) === day
-      ? `– ${fmtClock(ev.end, f)}`
-      : 'all day'
+      ? `– ${fmtClock(ev.end, f, i18n.locale)}`
+      : i18n.t('common.allDay')
   }
-  return ev.start ? fmtClock(ev.start, f) : ''
+  return ev.start ? fmtClock(ev.start, f, i18n.locale) : ''
 }
 
 export function AgendaEvent({ ev, day, style, onOpen }: {
@@ -32,12 +32,13 @@ export function AgendaEvent({ ev, day, style, onOpen }: {
   onOpen?: (e: CalEvent) => void
 }) {
   const tf = useTimeFormat()
+  const i18n = useI18n()
   const body = (
     <>
-      <span className="t">{label(ev, day, tf)}</span>
+      <span className="t">{label(ev, day, tf, i18n)}</span>
       <span>
         {ev.is_recurring && <span className="recur" aria-hidden="true">↻ </span>}
-        {ev.summary || '(untitled)'}
+        {ev.summary || i18n.t('common.untitled')}
       </span>
     </>
   )
@@ -55,7 +56,7 @@ export function AgendaTask({ task, style, onOpen }: {
   style?: CSSProperties
   onOpen?: (t: Task) => void
 }) {
-  const { locale } = useI18n()
+  const { locale, t: tr } = useI18n()
   const tf = useTimeFormat()
   const timed = !!task.due && task.due.includes('T') && !task.due_is_date
   const done = task.completed || task.cancelled
@@ -64,7 +65,7 @@ export function AgendaTask({ task, style, onOpen }: {
       <span className="t">{timed ? fmtClock(task.due!, tf, locale) : ''}</span>
       <span>
         <span className="tick" aria-hidden="true">{done ? '☑ ' : '☐ '}</span>
-        {task.summary || '(untitled)'}
+        {task.summary || tr('common.untitled')}
       </span>
     </>
   )

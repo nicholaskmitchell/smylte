@@ -129,4 +129,59 @@ export const de: Catalogue = {
   'session.never': 'Nie',
   'settings.connectedApps': 'Verbundene Apps',
   'settings.logout': 'Abmelden',
+  // ── archived calendars ──────────────────────────────────────────────────────
+  'arch.loading': 'Wird geladen…',
+  'arch.loadFailed': 'Deine archivierten Kalender konnten nicht geladen werden.',
+  'arch.none': 'Keine archivierten Kalender.',
+  'arch.viewEvents': 'Termine ansehen',
+  'arch.restore': 'Wiederherstellen',
+  'arch.restoreCalendar': 'Kalender wiederherstellen',
+  // The English is a range written with an en dash. German writes ranges that
+  // way too, but the dates themselves already carry points and spaces, and
+  // „5. Feb. – 5. Mrz.“ reads as three separate things. Naming the ends in
+  // words says the same fact with less punctuation.
+  'arch.showing': 'Termine von {from} bis {to}',
+  'arch.calLoadFailed': 'Die Termine dieses Kalenders konnten nicht geladen werden.',
+  'arch.noEvents': 'Keine Termine in diesem Zeitraum.',
+  'common.allDay': 'ganztägig',
+  'common.untitled': '(ohne Titel)',
+  // ── connected apps ──────────────────────────────────────────────────────────
+  'conn.readWrite': 'Lesen und schreiben',
+  'conn.readOnly': 'Nur lesen',
+  'conn.noAccess': 'Kein Zugriff',
+  'conn.loading': 'Wird geladen…',
+  // “not read, not emptied” is the whole point of the sentence: the failure
+  // is in the reading, not in the data. German keeps the same contrast.
+  'conn.loadFailed': 'Deine verbundenen Anwendungen konnten nicht geladen werden. Erteilte Zugriffe gelten weiter — die Liste ließ sich nicht lesen, sie ist nicht leer.',
+  'conn.none': 'Nichts ist verbunden. Anwendungen, die du über den MCP-Endpunkt verbindest, erscheinen hier.',
+  'conn.anApplication': 'Eine Anwendung',
+  'conn.connectedAt': 'Verbunden {when}',
+  'conn.keep': 'Behalten',
+  'conn.disconnect': 'Trennen',
+  'conn.hint': 'Das Trennen wirkt sofort — die Anwendung muss neu verbunden und erneut freigegeben werden, bevor sie wieder etwas lesen kann.',
+  // ── capacity ────────────────────────────────────────────────────────────────
+  'capacity.mostDays': 'Meistens',
+  'capacity.notSet': 'nicht gesetzt',
+  'capacity.defaultDay': 'den üblichen Arbeitstag',
+  'capacity.sameAsMostDays': 'wie meistens',
+  'capacity.workingTimeFor': 'Arbeitszeit für {name}',
+  // {short} and {long} are the two examples in the mono face. They are slots
+  // rather than three fragments spliced around <span>s, so this sentence can
+  // be reordered — see `useTx` in i18n.tsx.
+  'capacity.hint': 'Schreib es als {short} oder {long} Minuten. Ein Tag, dem du keine Länge gegeben hast, wird dir nie angerechnet — der Heute-Tab sagt dann einfach nichts darüber, wie voll er ist.',
+  // ── sign in ─────────────────────────────────────────────────────────────────
+  'login.invalid': 'Ungültige Zugangsdaten',
+  'login.username': 'Benutzername',
+  'login.password': 'Passwort',
+  'login.submit': 'Anmelden',
+  // ── task modal ──────────────────────────────────────────────────────────────
+  'taskModal.add': 'Aufgabe hinzufügen',
+  'taskModal.edit': 'Aufgabe',
+  'common.close': 'Schließen',
+  'taskModal.title': 'Titel',
+  'taskModal.notes': 'Notizen',
+  'taskModal.addMultiple': 'Mehrere hinzufügen',
+  'common.delete': 'Löschen',
+  'common.add': 'Hinzufügen',
+  'common.save': 'Speichern',
 }
