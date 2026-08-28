@@ -1977,10 +1977,39 @@
    is one of two jobs: making a habit row read as a habit rather than as a jot,
    and keeping its weekly count a record rather than a verdict. */
 
-/* The group's own edge. Every row already carries a --rule-faint hairline, so
-   the last habit gets the fuller --rule instead: that one line is the whole
-   visual statement that the spine is above the day and not part of it. */
+/* The group's own SURFACE, and the loudest of the three things that now say a
+   habit is not a task.
+
+   It used to be one line: the last habit's hairline stepped up from
+   --rule-faint to --rule, and that was the whole visual statement that the
+   spine sits above the day rather than inside it. That line is still here — it
+   is what closes the band — but on its own it only speaks to a reader looking
+   directly at it. Everything else about the two lists is identical by design:
+   same row, same checkbox, same left edge, same type. Four habits followed by
+   four tasks read as eight rows with a slightly darker line in the middle.
+
+   --paper is the recessed tone this app already uses for a surface that is
+   beside the content rather than part of it — the sidebar, a dimmed calendar
+   cell, a dashboard module head — so the band is the existing vocabulary for
+   "this is a different thing", not a new one invented here.
+
+   Deliberately NOT the only carrier, and this is the reason the other two
+   changes ship with it. --paper is a themeable token: the Appearance editor
+   will happily set it to --bg and flatten this to nothing. The ↻ on every row
+   and the headings above and below both survive that, and both survive a
+   greyscale screenshot. */
+.today-habits { background: var(--paper); }
 .today-habits .today-row:last-child { border-bottom-color: var(--rule); }
+/* Hover, computed FROM the band rather than inherited from `.today-row:hover`.
+   That rule paints --bg-elev, which is a step LIGHTER than --bg in the light
+   themes and — because --paper is lighter than --bg-elev in the dark ones — a
+   step DARKER than the band here. So a habit row would have receded on hover
+   while every other row on the screen lifted. Mixing --fg into the band is one
+   step away from it in whichever direction the theme runs, which is what
+   "hovered" has to mean in both. */
+.today-habits .today-row:hover {
+  background: color-mix(in oklab, var(--fg) 6%, var(--paper));
+}
 
 /* ---- the kind column --------------------------------------------------
    One cell, one width, on every row this screen paints — the day's rows, the
@@ -2024,6 +2053,27 @@
 .today-kind-mark[data-kind="note"] .today-kind-box {
   background: none; border: 1px solid var(--fg-faint);
 }
+/* ↻ — a habit, and the only mark in this column that is a GLYPH rather than a
+   box. It takes --fg-muted where the column's own default is --fg-faint: the
+   quietest token in the theme is the right colour for the column's furniture
+   and the wrong one for the single character that says which kind this row is.
+   Filled against hollow is a comparison you can only make with both marks on
+   screen; the ↻ has to be legible on its own, in a list whose next row is a
+   task. It is the same call `[data-kind="task"]` already made when it took
+   --fg rather than the --fg-faint the old `.list-dot` had.
+
+   This reaches the dashboard's day module too — `.dash-day-row` borrows this
+   column class for class, on purpose — and that is the list in this app where
+   habits and tasks are genuinely interleaved with no grouping, no band and no
+   heading to help. The row mark is the only cue there, so it is the one that
+   most needs to be visible.
+
+   COLOUR ONLY, no size: `.dash-day-row .today-kind-mark` sets a smaller
+   font-size for that module and carries the same specificity as this
+   selector, so a font-size here would win on source order and silently
+   undo it. */
+.today-kind-mark[data-kind="habit"] { color: var(--fg-muted); }
+
 /* A habit that is done is still a habit: the title greys and strikes through
    like any other done row (`.today-row.done`), but the mark keeps its weight so
    the group stays readable as a group at a glance down the left edge. */
