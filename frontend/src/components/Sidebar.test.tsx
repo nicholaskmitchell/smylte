@@ -25,7 +25,7 @@ const toggleSidebar = (props: {
   hidden?: Set<string>
   onHiddenChange?: (next: string[]) => void
 }) => (
-  <Sidebar title="Lists" placeholder="List"
+  <Sidebar kind="list"
     items={[list('work', 'Work'), list('home', 'Home')]}
     countOf={(l) => l.open_count} onItems={() => {}} api={noopApi}
     hiddenIds={props.hidden ?? new Set()} onHiddenChange={props.onHiddenChange ?? (() => {})} />
@@ -70,7 +70,7 @@ describe('<Sidebar> per-collection visibility toggles', () => {
 
 describe('<Sidebar> "View completed" footer button', () => {
   const withCompleted = (props: { active?: boolean; onToggle?: () => void }) => (
-    <Sidebar title="Lists" placeholder="List" items={[list('work', 'Work')]}
+    <Sidebar kind="list" items={[list('work', 'Work')]}
       countOf={(l) => l.open_count} onItems={() => {}} api={noopApi}
       hiddenIds={new Set()} onHiddenChange={() => {}}
       completedActive={props.active} onToggleCompleted={props.onToggle ?? (() => {})} />
@@ -78,7 +78,7 @@ describe('<Sidebar> "View completed" footer button', () => {
 
   it('renders only when onToggleCompleted is provided', () => {
     const { rerender } = render(
-      <Sidebar title="Lists" placeholder="List" items={[list('work', 'Work')]}
+      <Sidebar kind="list" items={[list('work', 'Work')]}
         countOf={(l) => l.open_count} onItems={() => {}} api={noopApi}
         hiddenIds={new Set()} onHiddenChange={() => {}} />,
     )
@@ -124,7 +124,7 @@ describe('<Sidebar> mobile management drawer', () => {
     groups: TaskGroup[]
     onGroupsChange: (next: TaskGroup[]) => void
   }> = {}) => (
-    <Sidebar title="Lists" placeholder="List"
+    <Sidebar kind="list"
       items={[list('work', 'Work'), list('home', 'Home')]}
       countOf={(l) => l.open_count} onItems={() => {}}
       api={over.api ?? noopApi}
@@ -204,7 +204,7 @@ describe('<Sidebar> mobile management drawer', () => {
 // block actually holds any rows — an empty one must not draw a dangling rule.
 describe('<Sidebar> group dividers', () => {
   const grouped = (groups: TaskGroup[]) => (
-    <Sidebar title="Lists" placeholder="List"
+    <Sidebar kind="list"
       items={[list('work', 'Work'), list('home', 'Home')]}
       countOf={(l) => l.open_count} onItems={() => {}} api={noopApi}
       hiddenIds={new Set()} onHiddenChange={() => {}}
@@ -238,7 +238,7 @@ describe('<Sidebar> a delete that fails', () => {
     onGroupsChange?: (next: TaskGroup[]) => void
     groups?: TaskGroup[]
   }) => (
-    <Sidebar title="Lists" placeholder="List"
+    <Sidebar kind="list"
       items={[list('work', 'Work'), list('home', 'Home')]}
       countOf={(l) => l.open_count} onItems={over.onItems ?? (() => {})}
       api={(over.api ?? noopApi) as typeof noopApi}
@@ -320,7 +320,7 @@ describe('<Sidebar> a hostile wire color', () => {
   const hostile = 'url(https://evil.example/beacon.png)'
 
   const withWireColor = (hiddenIds: Set<string>) => (
-    <Sidebar title="Lists" placeholder="List"
+    <Sidebar kind="list"
       items={[{ ...list('work', 'Work'), color: hostile }]}
       countOf={(l) => l.open_count} onItems={() => {}} api={noopApi}
       hiddenIds={hiddenIds} onHiddenChange={() => {}}
@@ -352,7 +352,7 @@ describe('<Sidebar> edit modal colors', () => {
   })
 
   const withColor = (color: string | null, api: ReturnType<typeof editApi>) => (
-    <Sidebar title="Lists" placeholder="List" items={[list('work', 'Work', color)]}
+    <Sidebar kind="list" items={[list('work', 'Work', color)]}
       countOf={(l) => l.open_count} onItems={() => {}} api={api}
       hiddenIds={new Set()} onHiddenChange={() => {}} />
   )
@@ -504,7 +504,7 @@ describe('<Sidebar> color on a new collection', () => {
   })
 
   const withApi = (api: ReturnType<typeof addApi>) => (
-    <Sidebar title="Calendars" placeholder="Calendar" items={[]}
+    <Sidebar kind="calendar" items={[]}
       countOf={(l) => l.open_count} onItems={() => {}} api={api}
       hiddenIds={new Set()} onHiddenChange={() => {}} />
   )
@@ -552,7 +552,7 @@ describe('<Sidebar> color on a new collection', () => {
     render(
       <>
         <button>elsewhere</button>
-        <Sidebar title="Calendars" placeholder="Calendar" items={[]}
+        <Sidebar kind="calendar" items={[]}
           countOf={(l) => l.open_count} onItems={() => {}} api={addApi()}
           hiddenIds={new Set()} onHiddenChange={() => {}} />
       </>,
@@ -590,7 +590,7 @@ describe('<Sidebar> color on a new collection', () => {
     render(
       <>
         <button>elsewhere</button>
-        <Sidebar title="Calendars" placeholder="Calendar" items={[]}
+        <Sidebar kind="calendar" items={[]}
           countOf={(l) => l.open_count} onItems={() => {}} api={addApi()}
           hiddenIds={new Set()} onHiddenChange={() => {}} />
       </>,
@@ -667,7 +667,7 @@ describe('<Sidebar> extra section', () => {
   // collection borrowed for visibility only — none of this sidebar's
   // rename/recolor/delete/reorder applies to them.
   const withExtra = () => (
-    <Sidebar title="Calendars" placeholder="Calendar"
+    <Sidebar kind="calendar"
       items={[list('work', 'Work')]}
       countOf={(l) => l.open_count} onItems={() => {}} api={noopApi}
       hiddenIds={new Set()} onHiddenChange={() => {}}
