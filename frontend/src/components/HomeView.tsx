@@ -8,7 +8,8 @@ import { sortByCompletion, sortTasks, taskKey } from '../order'
 import { useTimeFormat } from '../timeformat'
 import { bucketByDay, monthGrid, type DayEv } from '../calendar'
 import { DayPopover } from './DayPopover'
-import { useI18n } from '../i18n'
+import { useI18n, useT } from '../i18n'
+import { weekdayNames } from '../names'
 import {
   COLS, DEFAULT_LAYOUT, GAP, MODULE_KINDS, MODULE_SPECS, ROW_H, addModule, layoutRows,
   moveModule, pxToCellDelta, removeModule, resizeModule, sanitizeLayout,
@@ -41,6 +42,7 @@ export function HomeView({ rev, onExpire, layout, onLayoutChange,
   hiddenCalendars?: string[]
   archivedCalendars?: string[]
 }) {
+  const tr = useT()
   const isMobile = useIsMobile()
   const [arranging, setArranging] = useState(false)
   const [picking, setPicking] = useState(false)
@@ -238,14 +240,16 @@ export function HomeView({ rev, onExpire, layout, onLayoutChange,
     return (
       <div className="content">
         <div className="content-head">
-          <span className="content-title">Home</span>
-          <span className="content-sub">{ordered.length} modules</span>
+          <span className="content-title">{tr('home.title')}</span>
+          <span className="content-sub">
+            {tr('home.moduleCount', { count: ordered.length })}
+          </span>
         </div>
         <div className="scroll dash-stack">
           {ordered.map((m) => (
             <section key={m.id} className="dash-mod">
               <header className="dash-mod-head">
-                <span className="label">{MODULE_SPECS[m.kind].label}</span>
+                <span className="label">{tr(MODULE_SPECS[m.kind].label)}</span>
               </header>
               <div className="dash-mod-body">{body(m)}</div>
             </section>
@@ -258,32 +262,36 @@ export function HomeView({ rev, onExpire, layout, onLayoutChange,
   return (
     <div className="content">
       <div className="content-head">
-        <span className="content-title">Home</span>
+        <span className="content-title">{tr('home.title')}</span>
         <span className="content-sub">
-          {arranging ? 'Drag to move · corner to resize' : `${mods.length} modules`}
+          {arranging
+            ? tr('home.arrangeHint')
+            : tr('home.moduleCount', { count: mods.length })}
         </span>
         <span className="spacer" />
         {arranging && (
           <>
             <button className="btn ghost" onClick={() => setPicking((p) => !p)}
               disabled={!available.length} aria-expanded={picking}>
-              Add module
+              {tr('home.addModule')}
             </button>
-            <button className="btn ghost" onClick={() => commit(DEFAULT_LAYOUT)}>Reset layout</button>
+            <button className="btn ghost" onClick={() => commit(DEFAULT_LAYOUT)}>
+              {tr('home.resetLayout')}
+            </button>
           </>
         )}
         <button className={`view-tab ${arranging ? 'active' : ''}`} aria-pressed={arranging}
           onClick={() => { setArranging((a) => !a); setPicking(false) }}>
-          {arranging ? 'Done' : 'Arrange'}
+          {arranging ? tr('home.arrangeDone') : tr('home.arrange')}
         </button>
       </div>
 
       {picking && (
-        <div className="dash-picker" role="dialog" aria-label="Add a module">
+        <div className="dash-picker" role="dialog" aria-label={tr('home.picker')}>
           {available.map((k) => (
             <button key={k} className="dash-pick" onClick={() => add(k)}>
-              <span className="dash-pick-name">{MODULE_SPECS[k].label}</span>
-              <span className="dash-pick-blurb">{MODULE_SPECS[k].blurb}</span>
+              <span className="dash-pick-name">{tr(MODULE_SPECS[k].label)}</span>
+              <span className="dash-pick-blurb">{tr(MODULE_SPECS[k].blurb)}</span>
             </button>
           ))}
         </div>
@@ -306,10 +314,11 @@ export function HomeView({ rev, onExpire, layout, onLayoutChange,
             }}>
               <header className="dash-mod-head"
                 onPointerDown={(e) => onPointerDown(e, m, 'move')}>
-                <span className="label">{MODULE_SPECS[m.kind].label}</span>
+                <span className="label">{tr(MODULE_SPECS[m.kind].label)}</span>
                 {arranging && (
-                  <button className="dash-remove" title="Remove"
-                    aria-label={`Remove ${MODULE_SPECS[m.kind].label}`}
+                  <button className="dash-remove" title={tr('common.remove')}
+                    aria-label={tr('home.removeModule',
+                      { module: tr(MODULE_SPECS[m.kind].label) })}
                     onPointerDown={(e) => e.stopPropagation()}
                     onClick={() => commit(removeModule(committed, m.id))}>✕</button>
                 )}
@@ -346,6 +355,7 @@ function ModuleBody({ kind, tasks, lists, days, byDay, calErrors, links, booking
   loaded: boolean
   create: TaskData['create']
 }) {
+  const tr = useT()
   const today = ymd(new Date())
   // Top-level only, mirroring the Tasks pane — a dashboard card is a summary,
   // and subtasks read as duplicates without their parent for context.
@@ -358,16 +368,16 @@ function ModuleBody({ kind, tasks, lists, days, byDay, calErrors, links, booking
   switch (kind) {
     case 'today':
       return <TaskList items={sortTasks(open.filter((t) => t.due && dayKey(t.due) === today))}
-        colorOf={colorOf} empty="Nothing due today." loaded={loaded} />
+        colorOf={colorOf} empty={tr('home.emptyToday')} loaded={loaded} />
     case 'overdue':
       return <TaskList items={sortTasks(open.filter((t) => isOverdue(t.due, t.due_is_date)))}
-        colorOf={colorOf} empty="Nothing overdue." overdue loaded={loaded} />
+        colorOf={colorOf} empty={tr('home.emptyOverdue')} overdue loaded={loaded} />
     case 'upcoming': {
       const end = ymd(addDays(new Date(), 7))
       return <TaskList
         items={sortTasks(open
           .filter((t) => t.due && dayKey(t.due) > today && dayKey(t.due) <= end))}
-        colorOf={colorOf} empty="Nothing in the next seven days." loaded={loaded} />
+        colorOf={colorOf} empty={tr('home.emptyUpcoming')} loaded={loaded} />
     }
     case 'completed': {
       // Most recently finished first, by the COMPLETED stamp the wire has always
@@ -377,7 +387,7 @@ function ModuleBody({ kind, tasks, lists, days, byDay, calErrors, links, booking
       // view, which had the same block written out a second time.
       const done = tops.filter((t) => t.completed || t.cancelled)
       return <TaskList items={sortByCompletion(done).slice(0, 40)}
-        colorOf={colorOf} empty="Nothing completed yet." done loaded={loaded} />
+        colorOf={colorOf} empty={tr('home.emptyCompleted')} done loaded={loaded} />
     }
     case 'mini_calendar':
       return <MiniCalendar days={days} byDay={byDay} eventColor={eventColor} failed={calErrors} />
@@ -400,6 +410,7 @@ function TaskList({ items, colorOf, empty, overdue, done, loaded }: {
   done?: boolean
   loaded?: boolean
 }) {
+  const tr = useT()
   const { locale } = useI18n()
   // Read before the early returns below — a hook can't sit behind a branch.
   const tf = useTimeFormat()
@@ -417,7 +428,7 @@ function TaskList({ items, colorOf, empty, overdue, done, loaded }: {
         return (
           <li key={taskKey(t)} className={`dash-task ${done ? 'done' : ''}`}>
             <span className="list-dot" style={c ? { background: c } : undefined} />
-            <span className="dash-task-title">{t.summary || '(untitled)'}</span>
+            <span className="dash-task-title">{t.summary || tr('common.untitled')}</span>
             {t.due && (
               <span className={`dash-task-due mono ${overdue ? 'overdue' : ''}`}>
                 {fmtDue(t.due, t.due_is_date, tf, locale)}
@@ -456,6 +467,7 @@ function MiniCalendar({ days, byDay, eventColor, failed = [] }: {
   byDay: Map<string, DayEv[]>
   eventColor: (e: CalEvent) => string | null
 }) {
+  const tr = useT()
   const { locale } = useI18n()
   const now = new Date()
   const today = ymd(now)
@@ -475,11 +487,15 @@ function MiniCalendar({ days, byDay, eventColor, failed = [] }: {
     <div className="mini-cal">
       {failed.length > 0 && (
         <div className="cal-partial" role="status">
-          Couldn&rsquo;t load {failed.join(', ')} &mdash; some events may be missing.
+          {tr('home.calPartial', { cals: failed.join(', ') })}
         </div>
       )}
       <div className="mini-cal-head">
-        {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((d, i) => (
+        {/* Sunday-first: the grid below is built from real dates and its
+            columns line up by `Date#getDay`. Narrow, because a mini-calendar
+            column is one character wide — and from `Intl`, so the character is
+            the one that language uses. */}
+        {weekdayNames(locale, 'narrow', 'sun').map((d, i) => (
           <span key={i} className="label">{d}</span>
         ))}
       </div>
@@ -501,7 +517,7 @@ function MiniCalendar({ days, byDay, eventColor, failed = [] }: {
               // focusable would bury the rest of the dashboard behind them.
               disabled={!evs.length}
               aria-label={evs.length
-                ? `${long}, ${evs.length} event${evs.length === 1 ? '' : 's'}`
+                ? tr('home.dayWithEvents', { day: long, count: evs.length })
                 : long}
               aria-haspopup="dialog"
               aria-expanded={open?.day === key}
@@ -539,13 +555,16 @@ function MiniCalendar({ days, byDay, eventColor, failed = [] }: {
 }
 
 function LinkList({ links }: { links: BookingLink[] }) {
-  if (!links.length) return <p className="dash-empty">No booking links yet.</p>
+  const tr = useT()
+  if (!links.length) return <p className="dash-empty">{tr('home.noLinks')}</p>
   return (
     <ul className="dash-tasks">
       {links.map((l) => (
         <li key={l.token} className={`dash-task ${l.enabled ? '' : 'done'}`}>
           <span className="dash-task-title">{l.title}</span>
-          <span className="dash-task-due mono">{l.duration_minutes}m</span>
+          <span className="dash-task-due mono">
+            {tr('home.linkDuration', { n: l.duration_minutes })}
+          </span>
         </li>
       ))}
     </ul>
@@ -553,13 +572,14 @@ function LinkList({ links }: { links: BookingLink[] }) {
 }
 
 function BookingList({ bookings }: { bookings: Booking[] }) {
+  const tr = useT()
   const { locale } = useI18n()
   const tf = useTimeFormat()
   const upcoming = bookings
     .filter((b) => new Date(b.start).getTime() >= Date.now())
     .sort((a, b) => a.start.localeCompare(b.start))
     .slice(0, 20)
-  if (!upcoming.length) return <p className="dash-empty">No upcoming bookings.</p>
+  if (!upcoming.length) return <p className="dash-empty">{tr('home.noBookings')}</p>
   return (
     <ul className="dash-tasks">
       {upcoming.map((b) => (
@@ -573,6 +593,7 @@ function BookingList({ bookings }: { bookings: Booking[] }) {
 }
 
 function QuickAddModule({ lists, create }: { lists: List[]; create: TaskData['create'] }) {
+  const tr = useT()
   const [text, setText] = useState('')
   const [listId, setListId] = useState('')
   // What the last submit did, cleared on the next keystroke. A task added here
@@ -596,18 +617,20 @@ function QuickAddModule({ lists, create }: { lists: List[]; create: TaskData['cr
     setAdded(lists.find((l) => l.id === target)?.name ?? null)
   }
 
-  if (!lists.length) return <p className="dash-empty">Create a list first.</p>
+  if (!lists.length) return <p className="dash-empty">{tr('home.needList')}</p>
   return (
     <form className="dash-quickadd" onSubmit={submit}>
       <input className="input" value={text}
         onChange={(e) => { setText(e.target.value); setAdded(null) }}
-        placeholder="Add a task…" aria-label="Add a task" />
+        placeholder={tr('home.quickAddPlaceholder')} aria-label={tr('home.quickAddAria')} />
       <select className="input quickadd-list" value={target}
-        onChange={(e) => setListId(e.target.value)} aria-label="List">
+        onChange={(e) => setListId(e.target.value)} aria-label={tr('field.list')}>
         {lists.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
       </select>
-      <button className="btn" type="submit" disabled={!text.trim()}>Add</button>
-      {added && <p className="dash-added" role="status">Added to {added}.</p>}
+      <button className="btn" type="submit" disabled={!text.trim()}>{tr('common.add')}</button>
+      {added && (
+        <p className="dash-added" role="status">{tr('home.addedTo', { list: added })}</p>
+      )}
     </form>
   )
 }

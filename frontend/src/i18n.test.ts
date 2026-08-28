@@ -238,6 +238,9 @@ describe('the source', () => {
       const text = src(`src/components/${f}`).replace(/\/\/[^\n]*|\/\*[\s\S]*?\*\//g, '')
       return /'(Mon|Monday|Jan|January)'\s*,\s*'(Tue|Tuesday|Feb|February)'/.test(text)
         || /'(Sun|Sunday)'\s*,\s*'(Mon|Monday)'/.test(text)
+        // The narrow form too — the mini calendar's header was ['S', 'M', 'T',
+        // …], which is a week of names however short each one is.
+        || /'S'\s*,\s*'M'\s*,\s*'T'/.test(text)
     })
     expect(offenders).toEqual([])
   })
