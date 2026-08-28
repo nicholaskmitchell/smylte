@@ -4,12 +4,13 @@ import userEvent from '@testing-library/user-event'
 import { App } from './App'
 import { api, AuthError, HttpError, subscribe } from './api'
 import { DEFAULT_TAB_ORDER, TAB_LABELS, TAB_KEY } from './tabs'
+import { translate } from './i18n/index'
 
 /** The shipped strip, as the top bar spells it. Derived rather than written out
  *  so adding a tab does not silently need this file edited in four places —
  *  what the strip *should* contain is pinned in tabs.test.ts, and what belongs
  *  here is that the shell renders it. */
-const SHIPPED = DEFAULT_TAB_ORDER.map((t) => TAB_LABELS[t])
+const SHIPPED = DEFAULT_TAB_ORDER.map((t) => translate('en', TAB_LABELS[t]))
 
 // Mock the whole API module: every method becomes a vi.fn() so the shell and
 // whichever view mounts never touch the network (jsdom has no EventSource).

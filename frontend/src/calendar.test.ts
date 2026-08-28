@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  DEFAULT_CALENDAR_FIT, bucketByDay, bucketTasksByDay, calendarFitLabel, cellCapacity,
+  DEFAULT_CALENDAR_FIT, bucketByDay, bucketTasksByDay, calendarFitKey, cellCapacity,
   chipsShown, dragBody, daysBetween, endIsExclusive, isCalendarFit, lastDayOf, monthGrid,
   nextCalendarFit, shiftIso,
 } from './calendar'
@@ -422,8 +422,10 @@ describe('calendar fit', () => {
     expect(DEFAULT_CALENDAR_FIT).toBe('dynamic')
     expect(nextCalendarFit('dynamic')).toBe('fixed')
     expect(nextCalendarFit(nextCalendarFit('dynamic'))).toBe('dynamic')
-    expect(calendarFitLabel('fixed')).toBe('Fixed')
-    expect(calendarFitLabel('dynamic')).toBe('Dynamic')
+    // A catalogue KEY, not the text: the label is shown in whatever language
+    // the app is set to, and this module is React-free — see `calendarFitKey`.
+    expect(calendarFitKey('fixed')).toBe('calendarFit.fixed')
+    expect(calendarFitKey('dynamic')).toBe('calendarFit.dynamic')
   })
 
   it('refuses a stored value it did not write', () => {

@@ -3,11 +3,14 @@ import {
   DEFAULT_TAB_ORDER, DEFAULT_TAB_START, TABS, TAB_KEY, TAB_LABELS, cacheTab, isTab,
   moveTab, readCachedTab, resolveStartTab, sanitizeTabOrder, sanitizeTabStart,
 } from './tabs'
+import { translate } from './i18n/index'
 
 describe('the shipped strip', () => {
   it('leads with Today', () => {
     expect(DEFAULT_TAB_ORDER[0]).toBe('today')
-    expect(TAB_LABELS.today).toBe('Today')
+    // `TAB_LABELS` holds catalogue KEYS now, so what it leads with is checked
+    // through the catalogue — which is also what the strip renders.
+    expect(translate('en', TAB_LABELS.today)).toBe('Today')
   })
 
   it('still opens a fresh account on Home', () => {

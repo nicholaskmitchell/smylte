@@ -5,6 +5,7 @@
 // allowlist and the grid math — and re-exported here so the wire contract still
 // reads in one place. The backend mirrors them in SettingsPatch.
 import type { Appearance } from './appearance'
+import type { Language } from './lang'
 import type { CalendarFit } from './calendar'
 import type { DashboardModule } from './dashboard'
 import type { Tab, TabStart } from './tabs'
@@ -524,6 +525,11 @@ export interface Settings {
   session_ttl_s?: number | null    // how long a login lasts; null defers to the deployment
   show_completed_tasks?: boolean   // show completed/cancelled tasks inline in the main view (default hidden)
   time_format?: TimeFormat         // 12- or 24-hour clock across the app (see time.ts); default '12h'
+  // The language the app is shown in, and the locale it formats dates with
+  // (see lang.ts). Account-synced like every other display preference here —
+  // what the DEVICE was set up in is a different question from what its owner
+  // wants to read an app in.
+  language?: Language
   calendar_task_lists?: string[]   // task-list ids DRAWN on the calendar — an allowlist, empty by default
   calendar_show_done_tasks?: boolean  // keep completed tasks on the calendar (default hidden)
   // Whether the month grid fits the pane ('fixed': six equal week rows, a busy

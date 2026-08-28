@@ -14,10 +14,12 @@
 // section's name in the title bar. `data-view` is what CSS gates that on.
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { calendarFitLabel, type CalendarFit } from '../calendar'
+import { calendarFitKey, type CalendarFit } from '../calendar'
 import { useIsMobile, useEscape } from '../hooks'
-import { sessionLabel } from '../session'
-import { timeFormatLabel, type TimeFormat } from '../time'
+import { sessionKey } from '../session'
+import { timeFormatKey, type TimeFormat } from '../time'
+import { LANGUAGES, languageLabel, type Language } from '../lang'
+import { useT } from '../i18n'
 import type { List } from '../api'
 import type { Tab, TabStart } from '../tabs'
 import { ArchivedCalendarsSection } from './ArchivedCalendarsSection'
@@ -27,12 +29,16 @@ import { CapacitySection } from './CapacitySection'
 
 // The nav, in order. `label` is the accessible name of both the nav item and,
 // on a phone, the title bar — Søren's test asserts they agree.
+// `label` is now a catalogue KEY rather than the text. The comment above still
+// holds and is the reason it has to be: the nav item and the phone title bar
+// both render it, a test asserts they agree, and two `tr()` calls on one key
+// agree by construction where two translations of one English word need not.
 const SECTIONS = [
-  { id: 'general', label: 'General' },
-  { id: 'appearance', label: 'Appearance' },
-  { id: 'calendar', label: 'Calendar' },
-  { id: 'tasks', label: 'Tasks' },
-  { id: 'account', label: 'Account' },
+  { id: 'general', label: 'settings.section.general' },
+  { id: 'appearance', label: 'settings.section.appearance' },
+  { id: 'calendar', label: 'settings.section.calendar' },
+  { id: 'tasks', label: 'settings.section.tasks' },
+  { id: 'account', label: 'settings.section.account' },
 ] as const
 
 type Section = (typeof SECTIONS)[number]['id']
@@ -41,6 +47,7 @@ export function SettingsMenu({
   theme, onToggleTheme, onCustomizeAppearance,
   tabOrder, startTab, onTabOrderChange, onStartTabChange,
   timeFormat, onToggleTimeFormat,
+  language, onLanguageChange,
   dayCapacity, onDayCapacityChange, dayCapacityByWeekday, onDayCapacityByWeekdayChange,
   homeTz, onToggleHomeTz,
   calFit, onToggleCalFit,
@@ -57,6 +64,8 @@ export function SettingsMenu({
   onTabOrderChange: (next: Tab[]) => void
   onStartTabChange: (next: TabStart) => void
   timeFormat: TimeFormat
+  language: Language
+  onLanguageChange: (next: Language) => void
   onToggleTimeFormat: () => void
   /** The account-wide working day, or null for "never said". */
   dayCapacity: number | null
@@ -116,17 +125,18 @@ export function SettingsMenu({
   // three levels (agenda -> section -> closed) and is the control.
   useEscape(back)
 
+  const tr = useT()
   const active = SECTIONS.find((s) => s.id === section)!
   // What the title bar says. Beside a visible nav it would only be saying the
   // section's name twice, so on a desktop it stays "Settings".
   const title = viewingCal ? viewingCal.name
-    : isMobile && view === 'panel' ? active.label
-    : 'Settings'
+    : isMobile && view === 'panel' ? tr(active.label)
+    : tr('app.settings')
   // The back arrow appears wherever there is a step to take back.
   const canGoBack = !!viewingCal || (isMobile && view === 'panel')
 
   const nav = (
-    <div className="set-nav" role="tablist" aria-label="Settings sections">
+    <div className="set-nav" role="tablist" aria-label={tr('settings.sections')}>
       {SECTIONS.map((s) => (
         // `role="tab"`, not a plain button: the topbar already has a *Tasks*
         // tab and so does this nav, and the roles are what keep the two apart.
@@ -134,7 +144,7 @@ export function SettingsMenu({
           className={`set-nav-item ${section === s.id ? 'active' : ''}`}
           aria-selected={section === s.id} aria-controls={`set-panel-${s.id}`}
           onClick={() => show(s.id)}>
-          {s.label}
+          {tr(s.label)}
         </button>
       ))}
     </div>
@@ -146,39 +156,59 @@ export function SettingsMenu({
         aria-labelledby={`set-tab-${section}`}>
         {section === 'general' && (
           <>
-            <div className="menu-head">Tabs</div>
+            <div className="menu-head">{tr('settings.tabs')}</div>
             <TabsSection order={tabOrder} start={startTab}
               onOrderChange={onTabOrderChange} onStartChange={onStartTabChange} />
 
-            <div className="menu-head">Clock</div>
+            {/* First in the panel, above the clock: it decides what every
+                other label on this screen says, so a reader who cannot read
+                them should not have to get past them to reach it. */}
+            <div className="menu-head">{tr('settings.language')}</div>
             <div className="menu-row">
-              <label>Clock</label>
+              <label htmlFor="set-language">{tr('settings.language')}</label>
+              {/* A picker, not a cycling toggle like the ones under it. The
+                  list will grow past two, and a control you press repeatedly to
+                  find the language you read is the wrong shape for the one
+                  setting whose labels a reader may not be able to read. */}
+              <select className="menu-toggle" id="set-language" value={language}
+                aria-label={tr('settings.language.aria')}
+                onChange={(e) => onLanguageChange(e.target.value as Language)}>
+                {LANGUAGES.map((l) => (
+                  // The endonym, so every option is legible to the person who
+                  // would choose it — see `LANGUAGE_LABEL`.
+                  <option key={l} value={l}>{languageLabel(l)}</option>
+                ))}
+              </select>
+            </div>
+            <div className="hintline">{tr('settings.language.hint')}</div>
+
+            <div className="menu-head">{tr('settings.clock')}</div>
+            <div className="menu-row">
+              <label>{tr('settings.clock')}</label>
               <button className="menu-toggle" onClick={onToggleTimeFormat}
-                aria-label="12- or 24-hour clock">
-                {timeFormatLabel(timeFormat)}
+                aria-label={tr('settings.clock.aria')}>
+                {tr(timeFormatKey(timeFormat))}
               </button>
             </div>
-            <div className="hintline">
-              The clock covers every time the app draws itself. Date and time
-              pickers are drawn by the browser — Chrome, Edge and the Windows
-              app follow this setting, Firefox follows your system's.
-            </div>
+            <div className="hintline">{tr('settings.clock.hint')}</div>
 
             {/* Beside the clock, because both answer "how does this account
                 measure time" — and a day's length belongs next to how the day
                 is drawn rather than buried under the Tasks panel. */}
-            <div className="menu-head">Working day</div>
+            <div className="menu-head">{tr('settings.workingDay')}</div>
             <CapacitySection minutes={dayCapacity} byWeekday={dayCapacityByWeekday}
               onChange={onDayCapacityChange}
               onWeekdayChange={onDayCapacityByWeekdayChange} />
 
-            <div className="menu-head">Time zone</div>
+            <div className="menu-head">{tr('settings.timezone')}</div>
             <div className="menu-row">
-              <label>Home timezone</label>
+              <label>{tr('settings.homeTimezone')}</label>
               <button className="menu-toggle" onClick={onToggleHomeTz}
-                aria-label="Timezone your events are written in"
-                title="Which clock your events are written on. Scheduling links use it to know when you are really busy.">
-                {homeTz || 'Not set'}
+                aria-label={tr('settings.homeTimezone.aria')}
+                title={tr('settings.homeTimezone.title')}>
+                {/* An IANA zone name is not translated: it is an identifier the
+                    server and every other CalDAV client share. */}
+                {homeTz || tr('settings.notSet')}
               </button>
             </div>
           </>
@@ -187,16 +217,16 @@ export function SettingsMenu({
         {section === 'appearance' && (
           <>
             <div className="menu-row">
-              <label>Theme</label>
+              <label>{tr('settings.theme')}</label>
               <button className="menu-toggle" onClick={onToggleTheme}>
-                {theme === 'dark' ? 'Dark' : 'Light'}
+                {tr(theme === 'dark' ? 'theme.dark' : 'theme.light')}
               </button>
             </div>
             <div className="menu-row">
-              <label>Appearance</label>
-              <button className="menu-toggle" aria-label="Customize appearance"
+              <label>{tr('settings.appearance')}</label>
+              <button className="menu-toggle" aria-label={tr('settings.appearance.aria')}
                 onClick={onCustomizeAppearance}>
-                Customize…
+                {tr('settings.appearance.customize')}
               </button>
             </div>
             <div className="hintline">
@@ -217,11 +247,11 @@ export function SettingsMenu({
                 stepping back does not refetch. */}
             {!viewingCal && (<>
             <div className="menu-row">
-              <label>Calendar window</label>
+              <label>{tr('settings.calendarWindow')}</label>
               <button className="menu-toggle" onClick={onToggleCalFit}
-                aria-label="Fixed or dynamic calendar grid"
-                title="Fixed keeps every week the same height; a day with more than fits collapses into “+N more” instead of stretching its week.">
-                {calendarFitLabel(calFit)}
+                aria-label={tr('settings.calendarFit.aria')}
+                title={tr('settings.calendarFit.title')}>
+                {tr(calendarFitKey(calFit))}
               </button>
             </div>
             <div className="hintline">
@@ -230,7 +260,7 @@ export function SettingsMenu({
               “+N more”. Dynamic lets a busy week grow and the grid scroll.
             </div>
 
-            <div className="menu-head">Archived calendars</div>
+            <div className="menu-head">{tr('settings.archivedCalendars')}</div>
             </>)}
             <ArchivedCalendarsSection archived={archivedCals}
               onChange={onArchivedCalsChange} onExpire={onExpire}
@@ -249,10 +279,11 @@ export function SettingsMenu({
         {section === 'tasks' && (
           <>
             <div className="menu-row">
-              <label>Completed tasks</label>
+              <label>{tr('settings.completedTasks')}</label>
               <button className="menu-toggle" onClick={onToggleShowCompleted}
                 aria-pressed={showCompleted}>
-                {showCompleted ? 'Shown' : 'Hidden'}
+                {tr(showCompleted
+                  ? 'settings.completedTasks.shown' : 'settings.completedTasks.hidden')}
               </button>
             </div>
             <div className="hintline">
@@ -265,14 +296,14 @@ export function SettingsMenu({
         {section === 'account' && (
           <>
             <div className="menu-row">
-              <label>Signed in as</label>
+              <label>{tr('settings.signedInAs')}</label>
               <span className="menu-value">{user}</span>
             </div>
             <div className="menu-row">
-              <label>Stay signed in</label>
+              <label>{tr('settings.staySignedIn')}</label>
               <button className="menu-toggle" onClick={onCycleSessionTtl}
-                aria-label="How long to stay signed in">
-                {sessionLabel(sessionTtl)}
+                aria-label={tr('settings.staySignedIn.aria')}>
+                {tr(sessionKey(sessionTtl))}
               </button>
             </div>
             <div className="hintline">
@@ -280,11 +311,11 @@ export function SettingsMenu({
               longer one starts from your next sign-in.
             </div>
 
-            <div className="menu-head">Connected apps</div>
+            <div className="menu-head">{tr('settings.connectedApps')}</div>
             <ConnectionsSection onExpire={onExpire} />
 
             <div className="menu-actions">
-              <button className="btn ghost" onClick={onLogout}>Log out</button>
+              <button className="btn ghost" onClick={onLogout}>{tr('settings.logout')}</button>
             </div>
           </>
         )}
@@ -296,10 +327,11 @@ export function SettingsMenu({
     <>
       <div className="menu-head set-head">
         {canGoBack ? (
-          <button className="icon-btn set-back" onClick={back} aria-label="Back">‹</button>
+          <button className="icon-btn set-back" onClick={back} aria-label={tr('app.back')}>‹</button>
         ) : <span className="set-back-slot" />}
         <span className="set-title">{title}</span>
-        <button className="icon-btn set-close" onClick={onClose} aria-label="Close settings">✕</button>
+        <button className="icon-btn set-close" onClick={onClose}
+          aria-label={tr('app.closeSettings')}>✕</button>
       </div>
       <div className="set-body">
         {nav}
@@ -317,7 +349,7 @@ export function SettingsMenu({
     return (
       <div className="overlay set-overlay" onClick={onClose}>
         <div ref={panelRef} className="settings-menu set-sheet" data-view={view}
-          role="dialog" aria-modal="true" aria-label="Settings"
+          role="dialog" aria-modal="true" aria-label={tr('app.settings')}
           onClick={(e) => e.stopPropagation()}>
           {body}
         </div>
@@ -327,7 +359,7 @@ export function SettingsMenu({
 
   return (
     <div ref={panelRef} className="menu settings-menu" data-view="panel"
-      role="dialog" aria-label="Settings">
+      role="dialog" aria-label={tr('app.settings')}>
       {body}
     </div>
   )

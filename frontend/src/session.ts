@@ -14,11 +14,13 @@
  *  expiry — so "never" is a long finite life, not an unbounded one. */
 export const SESSION_NEVER = 10 * 365 * 24 * 3600
 
+// `key` is a catalogue key, not the text — see `timeFormatKey` in time.ts for
+// why a React-free module hands back an identity rather than a string.
 export const SESSION_CHOICES = [
-  { s: 24 * 3600, label: '1 day' },
-  { s: 7 * 24 * 3600, label: '7 days' },
-  { s: 30 * 24 * 3600, label: '30 days' },
-  { s: SESSION_NEVER, label: 'Never' },
+  { s: 24 * 3600, key: 'session.1d' },
+  { s: 7 * 24 * 3600, key: 'session.7d' },
+  { s: 30 * 24 * 3600, key: 'session.30d' },
+  { s: SESSION_NEVER, key: 'session.never' },
 ] as const
 
 /** The deployment's own default, used until the account chooses otherwise.
@@ -29,10 +31,10 @@ export function isSessionTtl(v: unknown): v is number {
   return typeof v === 'number' && SESSION_CHOICES.some((c) => c.s === v)
 }
 
-/** What to show for a stored value, falling back to the shipped default. */
-export function sessionLabel(ttl: number | null | undefined): string {
+/** The catalogue key for a stored value, falling back to the shipped default. */
+export function sessionKey(ttl: number | null | undefined): string {
   const hit = SESSION_CHOICES.find((c) => c.s === ttl)
-  return (hit ?? SESSION_CHOICES.find((c) => c.s === SESSION_DEFAULT)!).label
+  return (hit ?? SESSION_CHOICES.find((c) => c.s === SESSION_DEFAULT)!).key
 }
 
 /** The next choice along, wrapping — the menu is a cycling button like the

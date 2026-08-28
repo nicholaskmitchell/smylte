@@ -3,6 +3,7 @@ import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { TabsSection } from './TabsSection'
 import { DEFAULT_TAB_ORDER, TAB_LABELS, type Tab, type TabStart } from '../tabs'
+import { translate } from '../i18n/index'
 
 function show(order: Tab[] = DEFAULT_TAB_ORDER, start: TabStart = 'home') {
   const onOrderChange = vi.fn()
@@ -35,8 +36,8 @@ describe('<TabsSection>', () => {
   it('cannot move the ends off the strip', () => {
     // Named off the strip rather than hardcoded, so this keeps testing the ENDS
     // as tabs are added or reordered instead of two tabs that used to be at them.
-    const first = TAB_LABELS[DEFAULT_TAB_ORDER[0]]
-    const last = TAB_LABELS[DEFAULT_TAB_ORDER[DEFAULT_TAB_ORDER.length - 1]]
+    const first = translate('en', TAB_LABELS[DEFAULT_TAB_ORDER[0]])
+    const last = translate('en', TAB_LABELS[DEFAULT_TAB_ORDER[DEFAULT_TAB_ORDER.length - 1]])
     show()
     expect(screen.getByRole('button', { name: `Move ${first} left` })).toBeDisabled()
     expect(screen.getByRole('button', { name: `Move ${last} right` })).toBeDisabled()
