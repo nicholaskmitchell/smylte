@@ -420,9 +420,9 @@ export function App() {
         // past its session TTL used to keep accepting preference changes.
         if (e instanceof AuthError) { setAuth('out'); return }
         settingsFailed.current = true
-        showToast("Couldn't load your preferences — changes won't be saved until this reloads")
+        showToast(tr('app.settingsLoadFailed'))
       })
-  }, [auth, settingsRev, applyTheme, showToast])
+  }, [auth, settingsRev, applyTheme, showToast, tr])
 
   // Every UI preference is written the same way, so the failure handling lives
   // in one place. These used to be `.catch(() => {})` — which swallowed an
@@ -486,7 +486,7 @@ export function App() {
       if (held.length) {
         patch = Object.fromEntries(
           Object.entries(patch).filter(([k]) => !held.includes(k as never))) as Settings
-        showToast("Your preferences didn't load, so this change wasn't saved — reload to try again")
+        showToast(tr('app.settingsNotLoaded'))
       }
       if (!Object.keys(patch).length) return
     }
@@ -498,9 +498,11 @@ export function App() {
       if (e instanceof AuthError) { setAuth('out'); return }
       // Offline is the ordinary case and the local state stands in fine; a
       // rejection from a server we *did* reach is what the user needs to know.
-      if (e instanceof HttpError) showToast(`Couldn't save your preferences: ${e.message}`)
+      // The server's own words ride along untranslated — see i18n/index.ts on
+      // why server text is out of scope — inside a sentence that is not.
+      if (e instanceof HttpError) showToast(tr('app.settingsSaveFailed', { error: e.message }))
     }).finally(() => { writesInFlight.current -= 1 })
-  }, [showToast])
+  }, [showToast, tr])
 
   // The settings a repeated gesture writes: an appearance slider fires onChange
   // on every step (a drag across one range is up to 56 of them), a dashboard
@@ -819,7 +821,7 @@ export function App() {
       await api.logout()
     } catch (e) {
       if (!(e instanceof AuthError)) {
-        showToast("Couldn't sign out — you are still signed in on this device.")
+        showToast(tr('app.logoutFailed'))
         return
       }
     }
@@ -957,8 +959,7 @@ export function App() {
           does coming back online or returning to the tab. */}
       {auth === 'offline' && (
         <div className="offline-bar" role="status">
-          <span>Can&rsquo;t reach the server — showing what was last saved on this
-            device. You are still signed in.</span>
+          <span>{tr('app.offline')}</span>
           <button className="btn ghost" onClick={retryBoot}>{tr('app.retry')}</button>
         </div>
       )}

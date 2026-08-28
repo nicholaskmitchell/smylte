@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
+import { deviceLanguage } from '../lang'
+import { translate, type Vars } from '../i18n/index'
 import { api, AuthError, clientId, HttpError, type PublicBookingInfo, type PublicSlot } from '../api'
 import { ymd } from '../util'
 
@@ -40,6 +42,22 @@ const fmtDay = (key: string) =>
 const localDay = (iso: string) => ymd(new Date(iso))
 
 export function BookingPage({ token }: { token: string }) {
+  // Its OWN translator, and the browser's language rather than the app's.
+  //
+  // Both halves follow from this page being standalone. There is no session, so
+  // there is no account setting to read — and the setting belongs to the owner
+  // of the link, who is not the person reading it; formatting a stranger's
+  // invitation in a language they may not speak would be the owner's preference
+  // landing on somebody else's screen. Same argument as the timezone, one line
+  // up in `fmtTime`.
+  //
+  // Not `useT`, for the same reason this file imports nothing from the authed
+  // shell: `I18nProvider` is App's, and this page is mounted beside App rather
+  // than under it (see main.tsx). `translate` and `deviceLanguage` are
+  // React-free leaves, which is the whole of what is borrowed here.
+  const lang = useMemo(() => deviceLanguage(), [])
+  const tr = useMemo(
+    () => (key: string, vars?: Vars) => translate(lang, key, vars), [lang])
   const [phase, setPhase] = useState<Phase>('loading')
   const [info, setInfo] = useState<PublicBookingInfo | null>(null)
   const [day, setDay] = useState('')
@@ -158,7 +176,7 @@ export function BookingPage({ token }: { token: string }) {
       const msg = e instanceof Error ? e.message : String(e)
       if (/not available/i.test(msg)) {
         // Lost the race — refresh the slot list and let them pick again.
-        setError('That time was just taken — please pick another.')
+        setError(tr('book.taken'))
         setSlot(null)
         setPhase('pick')
         await load({ keepPhase: true })
@@ -182,7 +200,7 @@ export function BookingPage({ token }: { token: string }) {
       <div className="booking-wrap">
         <div className="booking-card">
           <div className="login-brand">Smylte<span className="dot">.</span></div>
-          <p className="booking-lead" role="status" aria-live="polite">Loading the available times…</p>
+          <p className="booking-lead" role="status" aria-live="polite">{tr('book.loading')}</p>
         </div>
       </div>
     )
@@ -193,11 +211,8 @@ export function BookingPage({ token }: { token: string }) {
       <div className="booking-wrap">
         <div className="booking-card">
           <div className="login-brand">Smylte<span className="dot">.</span></div>
-          <p className="booking-lead">This booking link is no longer available.</p>
-          <p className="hintline">
-            It may have been turned off or removed. Ask the person who sent it
-            for a fresh link.
-          </p>
+          <p className="booking-lead">{tr('book.notFound')}</p>
+          <p className="hintline">{tr('book.notFoundHint')}</p>
         </div>
       </div>
     )
@@ -208,13 +223,10 @@ export function BookingPage({ token }: { token: string }) {
       <div className="booking-wrap">
         <div className="booking-card">
           <div className="login-brand">Smylte<span className="dot">.</span></div>
-          <p className="booking-lead">Couldn’t load this page just now.</p>
-          <p className="hintline">
-            The link is probably fine — something went wrong on the way. Try again
-            in a moment.
-          </p>
+          <p className="booking-lead">{tr('book.unavailable')}</p>
+          <p className="hintline">{tr('book.unavailableHint')}</p>
           <button className="btn" onClick={() => { setPhase('loading'); load() }}>
-            Try again
+            {tr('book.tryAgain')}
           </button>
         </div>
       </div>
@@ -225,18 +237,20 @@ export function BookingPage({ token }: { token: string }) {
     return (
       <div className="booking-wrap">
         <div className="booking-card">
-          <div className="label">Confirmed</div>
+          <div className="label">{tr('book.confirmed')}</div>
           <h1 className="booking-title">{info.title}</h1>
           <p className="booking-lead">
             {new Date(booked.start).toLocaleDateString(undefined,
               { weekday: 'long', month: 'long', day: 'numeric' })}
             {' · '}
             {booked.zoned
-              ? `${fmtTimeZoned(booked.start)}–${fmtTimeZoned(booked.end)}`
-              : `${fmtTime(booked.start)}–${fmtTime(booked.end)}`}
+              ? tr('book.range',
+                { from: fmtTimeZoned(booked.start), to: fmtTimeZoned(booked.end) })
+              : tr('book.range',
+                { from: fmtTime(booked.start), to: fmtTime(booked.end) })}
           </p>
           <p className="hintline">
-            You're booked, {name.trim()}. Times shown in {visitorTz}.
+            {tr('book.youAreBooked', { name: name.trim(), tz: visitorTz })}
           </p>
         </div>
       </div>
@@ -248,18 +262,18 @@ export function BookingPage({ token }: { token: string }) {
   return (
     <div className="booking-wrap">
       <div className="booking-card">
-        <div className="label">Book a time</div>
+        <div className="label">{tr('book.bookATime')}</div>
         <h1 className="booking-title">{info.title}</h1>
         {info.description && <p className="booking-desc">{info.description}</p>}
         <div className="booking-meta">
-          <span className="chip">{info.duration_minutes} min</span>
-          <span className="booking-tz">Times shown in {visitorTz}</span>
+          <span className="chip">{tr('book.minutes', { n: info.duration_minutes })}</span>
+          <span className="booking-tz">{tr('book.timesShownIn', { tz: visitorTz })}</span>
         </div>
 
         {error && <div className="booking-err" role="alert">{error}</div>}
 
         {days.length === 0 && (
-          <p className="booking-lead">No open times right now — check back later.</p>
+          <p className="booking-lead">{tr('book.noTimes')}</p>
         )}
 
         {days.length > 0 && phase === 'pick' && (
@@ -283,8 +297,8 @@ export function BookingPage({ token }: { token: string }) {
               <div className="booking-busy">
                 {(busyByDay.get(selDay) ?? []).map((b, i) => (
                   <span key={i} className="busy-chip"
-                    title="The host is busy during this time">
-                    Busy {fmtTime(b.start)}–{fmtTime(b.end)}
+                    title={tr('book.hostBusy')}>
+                    {tr('book.busyRange', { from: fmtTime(b.start), to: fmtTime(b.end) })}
                   </span>
                 ))}
               </div>
@@ -315,7 +329,7 @@ export function BookingPage({ token }: { token: string }) {
               </span>
               <button className="btn ghost"
                 onClick={() => { setError(null); setSlot(null); setPhase('pick') }}>
-                Change
+                {tr('book.change')}
               </button>
             </div>
             {/* htmlFor/id, the pair every other form in the app uses — Login's
@@ -324,28 +338,28 @@ export function BookingPage({ token }: { token: string }) {
                 accessible name, on the one form in the app an anonymous visitor
                 fills in, often on a phone with a screen reader. */}
             <div className="field">
-              <label className="label" htmlFor="booking-name">Your name</label>
+              <label className="label" htmlFor="booking-name">{tr('book.yourName')}</label>
               <input className="input" id="booking-name" name="name" autoComplete="name"
                 autoFocus value={name} maxLength={200}
                 onChange={(e) => setName(e.target.value)} />
             </div>
             <div className="field">
-              <label className="label" htmlFor="booking-email">Email</label>
+              <label className="label" htmlFor="booking-email">{tr('book.email')}</label>
               <input className="input" id="booking-email" name="email" type="email"
                 autoComplete="email" value={email} maxLength={320}
                 onChange={(e) => setEmail(e.target.value)} />
             </div>
             <div className="field">
-              <label className="label" htmlFor="booking-notes">Notes (optional)</label>
+              <label className="label" htmlFor="booking-notes">{tr('book.notes')}</label>
               <textarea className="input" id="booking-notes" name="notes" rows={3}
                 value={notes} maxLength={2000}
-                placeholder="Anything the host should know?"
+                placeholder={tr('book.notesPlaceholder')}
                 onChange={(e) => setNotes(e.target.value)} />
             </div>
             <div className="modal-actions">
               <button className="btn" disabled={busyNow || !name.trim() || !/^\S+@\S+\.\S+$/.test(email.trim())}
                 onClick={submit}>
-                {busyNow ? 'Booking…' : 'Confirm booking'}
+                {busyNow ? tr('book.booking') : tr('book.confirm')}
               </button>
             </div>
           </>
