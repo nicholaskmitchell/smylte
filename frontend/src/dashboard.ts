@@ -25,6 +25,7 @@ export interface DashboardModule {
 }
 
 export interface ModuleSpec {
+  /** Catalogue keys, not text — see `MODULE_SPECS`. */
   label: string
   blurb: string
   w: number
@@ -34,15 +35,19 @@ export interface ModuleSpec {
 }
 
 /** What each module is, and how big it wants to be when first placed. */
+// `label` and `blurb` are catalogue KEYS, not text. This module is React-free
+// and has no translator; handing back the identity of a string and letting the
+// one component that renders it do the lookup keeps every word in the catalogue
+// — the same call `TAB_LABELS` and `timeFormatKey` make, for the same reason.
 export const MODULE_SPECS: Record<ModuleKind, ModuleSpec> = {
-  today: { label: 'Today', blurb: 'Tasks due today, across every list.', w: 4, h: 6, minW: 3, minH: 3 },
-  overdue: { label: 'Overdue', blurb: 'Anything past its due date.', w: 4, h: 5, minW: 3, minH: 3 },
-  upcoming: { label: 'Upcoming', blurb: 'The next seven days of tasks.', w: 4, h: 6, minW: 3, minH: 3 },
-  mini_calendar: { label: 'Mini calendar', blurb: "This month, dotted in each calendar's color.", w: 4, h: 6, minW: 3, minH: 5 },
-  completed: { label: 'Recently completed', blurb: 'What you have finished lately.', w: 4, h: 5, minW: 3, minH: 3 },
-  booking_links: { label: 'Booking links', blurb: 'Your scheduling links and their state.', w: 6, h: 5, minW: 3, minH: 3 },
-  bookings: { label: 'Upcoming bookings', blurb: 'Who has booked time with you.', w: 6, h: 5, minW: 3, minH: 3 },
-  quick_add: { label: 'Quick add', blurb: 'Drop a task straight onto a list.', w: 4, h: 3, minW: 3, minH: 2 },
+  today: { label: 'module.today', blurb: 'module.today.blurb', w: 4, h: 6, minW: 3, minH: 3 },
+  overdue: { label: 'module.overdue', blurb: 'module.overdue.blurb', w: 4, h: 5, minW: 3, minH: 3 },
+  upcoming: { label: 'module.upcoming', blurb: 'module.upcoming.blurb', w: 4, h: 6, minW: 3, minH: 3 },
+  mini_calendar: { label: 'module.mini_calendar', blurb: 'module.mini_calendar.blurb', w: 4, h: 6, minW: 3, minH: 5 },
+  completed: { label: 'module.completed', blurb: 'module.completed.blurb', w: 4, h: 5, minW: 3, minH: 3 },
+  booking_links: { label: 'module.booking_links', blurb: 'module.booking_links.blurb', w: 6, h: 5, minW: 3, minH: 3 },
+  bookings: { label: 'module.bookings', blurb: 'module.bookings.blurb', w: 6, h: 5, minW: 3, minH: 3 },
+  quick_add: { label: 'module.quick_add', blurb: 'module.quick_add.blurb', w: 4, h: 3, minW: 3, minH: 2 },
 }
 
 export const MODULE_KINDS = Object.keys(MODULE_SPECS) as ModuleKind[]
