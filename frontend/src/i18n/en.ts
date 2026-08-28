@@ -550,6 +550,10 @@ export const en = {
   'today.setUpHabit': 'set up a habit',
   'today.habitsHint': 'A habit is a rule that puts a line on your day, on the days you choose. It never becomes a task, and it never leaves this app. ',
   'today.setOneUp': 'Set one up',
+  // The day's OWN rows, named — see TodayView, where the heading is added.
+  // Short, and a noun rather than a verb: it sits between "Habits" and "On
+  // the calendar", and all three have to read as the same kind of thing.
+  'today.theDay': 'The day',
   'today.onTheCalendar': 'On the calendar',
   'today.addToToday': 'Add {task} to today',
   'today.showAll': 'Show all {count}',
