@@ -693,6 +693,13 @@ def build_tools(api) -> dict[str, Tool]:
             "location": {"type": "string", "pattern": XML_SAFE_PATTERN},
             "description": {"type": "string", "pattern": XML_SAFE_PATTERN},
             "tags": _TAGS,
+            "busy": {"type": "boolean",
+                     "description": "Whether this consumes the owner's time (iCalendar "
+                                    "TRANSP; Apple Calendar calls it Busy/Free). false "
+                                    "means it does NOT block — it is left out of "
+                                    "smylte_find_free_time and never blocks a booking "
+                                    "slot. Omit to leave it to the calendar default, "
+                                    "which is busy."},
             "repeat": _REPEAT,
             "repeat_interval": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 1,
                                 "description": "Every N periods; 2 with weekly is fortnightly."},
@@ -718,6 +725,13 @@ def build_tools(api) -> dict[str, Tool]:
             "start": {"type": "string"}, "end": {"type": "string"},
             "tags": _TAGS,
             "status": {"type": "string", "enum": ["CONFIRMED", "TENTATIVE", "CANCELLED"]},
+            "busy": {"type": "boolean",
+                     "description": "Whether this consumes the owner's time (iCalendar "
+                                    "TRANSP; Apple Calendar calls it Busy/Free). false "
+                                    "means it does NOT block — it is left out of "
+                                    "smylte_find_free_time and never blocks a booking "
+                                    "slot. Omit to leave it to the calendar default, "
+                                    "which is busy."},
             "repeat": _REPEAT,
             "repeat_interval": {"type": "integer", "minimum": 1, "maximum": 1000},
             "repeat_count": {"type": "integer", "minimum": 1, "maximum": 10000},

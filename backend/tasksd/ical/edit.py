@@ -107,6 +107,16 @@ class EventEdit:
     categories: Any = UNSET           # list[str] | None
     status: Any = UNSET               # CONFIRMED/TENTATIVE/CANCELLED or None
     rrule: Any = UNSET               # icalendar RRULE value dict, or None to clear
+    # TRANSP (RFC 5545 §3.8.2.7) as the boolean the property actually encodes:
+    # True writes OPAQUE, False writes TRANSPARENT, None REMOVES the property.
+    #
+    # Three states rather than two, and the third is not decoration. Absent is
+    # OPAQUE by the spec's own default, so removing it and writing OPAQUE mean
+    # the same thing to every reader — but only one of them leaves the resource
+    # as its author wrote it. A caller who has never heard of Busy/Free leaves
+    # this UNSET and nothing is touched at all, which is invariant #2's rule:
+    # a property another client authored is not ours to rewrite in passing.
+    busy: Any = UNSET
 
 
 def _replace(todo: Todo, key: str) -> None:
@@ -642,6 +652,17 @@ def _apply_event_fields(event: Event, edit: EventEdit, now: datetime) -> None:
         _replace(event, "STATUS")
         if edit.status:
             event.add("STATUS", edit.status.upper())
+    if edit.busy is not UNSET:
+        # Written EXPLICITLY on both arms, OPAQUE included, rather than leaving
+        # the default to say it. This is the property Apple Calendar, Google
+        # Calendar and Thunderbird all render as a control the owner has just
+        # touched, and "I set this back to Busy" reaching the wire as the
+        # absence of a line is a change no other client can see the owner made —
+        # it reads identically to never having been asked. `None` is the one
+        # value that removes it, and no client sends that today.
+        _replace(event, "TRANSP")
+        if edit.busy is not None:
+            event.add("TRANSP", "OPAQUE" if edit.busy else "TRANSPARENT")
     if edit.rrule is not UNSET:
         _set_rrule(event, edit.rrule)
     _stamp(event, now)

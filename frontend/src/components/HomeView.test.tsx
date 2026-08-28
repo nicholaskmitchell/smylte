@@ -230,7 +230,7 @@ const event = (calId: string, id: string, summary: string, hour = 9,
   summary, description: null, location: null,
   start: `${key(day)}T${p2(hour)}:00:00`, start_is_date: false,
   end: `${key(day)}T${p2(hour + 1)}:00:00`, end_is_date: false, duration: null,
-  all_day: false, status: null, tags: [], has_rrule: false,
+  all_day: false, status: null, busy: true, tags: [], has_rrule: false,
   href: `/${calId}/${id}.ics`, etag: '"1"', ...over,
 })
 

@@ -32,7 +32,7 @@ const event = (o: Partial<CalEvent> = {}): CalEvent => ({
   uid: 'e1', id: 'e1', recurrence_id: null, is_recurring: false, calendar: '/c1/',
   summary: 'Lunch', description: null, location: null, start: '2026-07-15',
   start_is_date: true, end: '2026-07-16', end_is_date: true, duration: null, all_day: true,
-  status: null, tags: [], has_rrule: false, href: '/c1/e1.ics', etag: '"1"', ...o,
+  status: null, busy: true, tags: [], has_rrule: false, href: '/c1/e1.ics', etag: '"1"', ...o,
 })
 
 const dayEntry = (o: Partial<DayEntry> = {}): DayEntry => ({
@@ -220,6 +220,32 @@ describe('cache writes stay bounded', () => {
     })
     expect(readCachedTasks()).toBeNull()
     spy.mockRestore()
+  })
+})
+
+describe('an event\'s busy flag', () => {
+  it('reads a missing value as BUSY, not as free', () => {
+    // Absent from anything this cache wrote before the field existed, and the
+    // DTO's own default for an event with no TRANSP is busy — so a missing
+    // value has to read as true. `bool()` would answer false for exactly those
+    // rows, and every one of them would paint as free for one round trip after
+    // an upgrade.
+    expect(sanitizeEvent({ ...event(), busy: undefined })?.busy).toBe(true)
+    const { busy: _drop, ...without } = event()
+    expect(sanitizeEvent(without)?.busy).toBe(true)
+  })
+
+  it('keeps an explicit false, and reads junk as busy', () => {
+    expect(sanitizeEvent({ ...event(), busy: false })?.busy).toBe(false)
+    // Only `false` means free. A hand-edited blob saying "no" is not a decision
+    // this cache gets to make on the owner's behalf.
+    expect(sanitizeEvent({ ...event(), busy: 'no' })?.busy).toBe(true)
+    expect(sanitizeEvent({ ...event(), busy: 0 })?.busy).toBe(true)
+  })
+
+  it('round trips through the window cache', () => {
+    cacheEvents('2026-06-28', '2026-08-09', [event({ busy: false })])
+    expect(readCachedEvents('2026-06-28', '2026-08-09')![0].busy).toBe(false)
   })
 })
 

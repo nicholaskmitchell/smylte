@@ -263,6 +263,12 @@ class CreateEvent(Repeat):
     location: XmlSafeText | None = None
     description: XmlSafeText | None = None
     tags: list[XmlSafeText] | None = None
+    # Does this event consume the owner's time — iCalendar's TRANSP, and what
+    # Apple Calendar calls Busy/Free. Omitted means "no opinion", and no TRANSP
+    # is written at all: the RFC's default is OPAQUE, so an omitted field and an
+    # explicit `true` describe the same event, and not writing the line keeps
+    # this app's own resources as terse as they have always been.
+    busy: bool | None = None
     client_id: str | None = None      # idempotency: a replayed create reuses the slug
 
 
@@ -274,6 +280,10 @@ class EditEvent(Repeat):
     end: str | None = None
     tags: list[XmlSafeText] | None = None
     status: str | None = None         # CONFIRMED|TENTATIVE|CANCELLED
+    # TRANSP, as on `CreateEvent`. Tri-state through `model_fields_set` like
+    # every other field on this model: an omitted key leaves the property
+    # exactly as its author wrote it, and an explicit null removes it.
+    busy: bool | None = None
     # Per-occurrence editing (Tier 3): which slice of a recurring series to touch.
     recurrence_id: str | None = None  # the occurrence anchor (original-slot ISO)
     scope: str | None = None          # all|this|thisandfuture (default: all)
@@ -868,6 +878,8 @@ def _event_edit_from_create(req: CreateEvent) -> EventEdit | None:
         kw["location"] = req.location
     if req.tags is not None:
         kw["categories"] = req.tags
+    if req.busy is not None:
+        kw["busy"] = req.busy
     if req.repeat is not None:
         kw["rrule"] = _rrule_from_repeat(req)
     return EventEdit(**kw) if kw else None
@@ -890,6 +902,8 @@ def _event_edit_from_patch(req: EditEvent) -> EventEdit:
         kw["categories"] = req.tags
     if "status" in fs:
         kw["status"] = _check_status(req.status, _EVENT_STATUS)
+    if "busy" in fs:
+        kw["busy"] = req.busy
     if "repeat" in fs:
         kw["rrule"] = _rrule_from_repeat(req)
     return EventEdit(**kw)

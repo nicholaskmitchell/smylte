@@ -274,6 +274,42 @@ def test_calendar_event_crud(client):
     assert after == {"Meeting (moved)"}
 
 
+def test_event_busy_round_trips(client):
+    """TRANSP over HTTP: what Apple Calendar calls Busy/Free.
+
+    The field is tri-state on the wire and the two ends of that matter
+    differently — an omitted key must leave the property exactly as its author
+    wrote it (a rename must not un-mark an event someone marked Free in another
+    client), and an explicit value must reach the VEVENT."""
+    cid = _cal(client)["id"]
+
+    # Omitted on create: no opinion, and an absent TRANSP is OPAQUE.
+    ev = client.post(f"/api/calendars/{cid}/events", json={
+        "summary": "Meeting", "start": "2026-07-10T14:00:00", "end": "2026-07-10T15:00:00",
+    }).json()
+    assert ev["busy"] is True
+
+    hold = client.post(f"/api/calendars/{cid}/events", json={
+        "summary": "Hold", "start": "2026-07-10T16:00:00", "end": "2026-07-10T17:00:00",
+        "busy": False,
+    }).json()
+    assert hold["busy"] is False
+
+    # A patch that does not mention it leaves it alone…
+    renamed = client.patch(f"/api/calendars/{cid}/events/{hold['uid']}",
+                           json={"summary": "Hold (renamed)"}).json()
+    assert renamed["summary"] == "Hold (renamed)" and renamed["busy"] is False
+
+    # …and one that does, changes it.
+    back = client.patch(f"/api/calendars/{cid}/events/{hold['uid']}",
+                        json={"busy": True}).json()
+    assert back["busy"] is True
+
+    # It survives the read path the calendar grid uses, not just the write's echo.
+    month = {e["summary"]: e["busy"] for e in _events(client, cid)}
+    assert month == {"Meeting": True, "Hold (renamed)": True}
+
+
 def _events(client, cid, start="2026-07-01", end="2026-08-01"):
     return client.get(f"/api/calendars/{cid}/events", params={"start": start, "end": end}).json()
 

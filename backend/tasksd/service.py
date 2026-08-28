@@ -29,7 +29,7 @@ from .dav import xml as davxml
 from .dav.client import DavClient
 from .dav.errors import NotFound as DavNotFound
 from .db import store
-from .ical import PRIORITY, UNSET, EventEdit, TaskEdit, recur
+from .ical import PRIORITY, UNSET, EventEdit, TaskEdit, blocks_time, recur
 from .sync import SyncEngine, SyncStats
 
 log = logging.getLogger("tasksd.service")
@@ -848,6 +848,11 @@ class TaskService:
             "duration": it["duration"],
             "all_day": bool(it["dtstart_is_date"]),
             "status": it["status"],
+            # TRANSP as the question every reader actually asks. The wire has
+            # three states — OPAQUE, TRANSPARENT, absent — and the third is
+            # OPAQUE by RFC 5545 §3.8.2.7, so a boolean loses nothing; `raw_ics`
+            # keeps the property itself, as it keeps everything.
+            "busy": blocks_time(it["transp"]),
             "tags": cats.get(uid, []),
             "has_rrule": bool(it["has_rrule"]),
             "href": it["href"],
@@ -880,6 +885,12 @@ class TaskService:
             "duration": None,
             "all_day": occ.start_is_date,
             "status": occ.status if occ.status is not None else it["status"],
+            # The occurrence's own TRANSP when the override carries one, else
+            # the master's — the same fallback every other per-instance field
+            # here makes, and the reason `Occurrence` reads it at all: an
+            # override may be Free on a week the series is Busy.
+            "busy": blocks_time(
+                occ.transp if occ.transp is not None else it["transp"]),
             "tags": cats.get(uid, []),
             "has_rrule": True,
             "href": it["href"],
