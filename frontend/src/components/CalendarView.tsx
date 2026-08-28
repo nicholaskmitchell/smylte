@@ -19,6 +19,7 @@ import { useIsMobile } from '../hooks'
 import { AgendaEvent, AgendaTask, DayPopover } from './DayPopover'
 import { Sidebar } from './Sidebar'
 import { TaskModal } from './TaskModal'
+import { DateTimeInput } from './DateTimeInput'
 
 const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June',
@@ -1216,12 +1217,14 @@ function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete }: {
             <div className="field-row">
               <div className="field">
                 <label className="label" htmlFor="ev-start">Start</label>
-                <input className="input" id="ev-start" type={allDay ? 'date' : 'datetime-local'} value={startVal}
+                <DateTimeInput className="input" id="ev-start"
+                  type={allDay ? 'date' : 'datetime-local'} value={startVal}
                   lang={lang} onChange={(ev) => changeStart(ev.target.value)} />
               </div>
               <div className="field">
                 <label className="label" htmlFor="ev-end">{allDay ? 'End (last day)' : 'End'}</label>
-                <input className="input" id="ev-end" type={allDay ? 'date' : 'datetime-local'} value={endVal}
+                <DateTimeInput className="input" id="ev-end"
+                  type={allDay ? 'date' : 'datetime-local'} value={endVal}
                   lang={lang} min={startVal} onChange={(ev) => setEnd(ev.target.value)} />
               </div>
             </div>
@@ -1266,7 +1269,7 @@ function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete }: {
             {repeat !== 'keep' && repeat !== 'none' && (
               <div className="field">
                 <label className="label" htmlFor="ev-until">Repeat until (optional)</label>
-                <input className="input" id="ev-until" type="date" value={repeatUntil}
+                <DateTimeInput className="input" id="ev-until" type="date" value={repeatUntil}
                   onChange={(ev) => setRepeatUntil(ev.target.value)} />
               </div>
             )}

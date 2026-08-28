@@ -5,6 +5,7 @@ import { makeGuard } from '../util'
 import { fmtWhen, inputLang } from '../time'
 import { useTimeFormat } from '../timeformat'
 import { useEscape } from '../hooks'
+import { DateTimeInput } from './DateTimeInput'
 
 // Owner side of client scheduling: manage booking links (availability, target
 // calendar, redacted-busy toggle) and see who booked. The public counterpart
@@ -461,10 +462,10 @@ function LinkModal({ link, cals, onClose, onSave, onDelete }: {
                     )}
                     {days[i].ranges.map((r, k) => (
                       <span key={k} className="sched-range">
-                        <input className="input" type="time" value={r[0]} lang={lang}
+                        <DateTimeInput className="input" type="time" value={r[0]} lang={lang}
                           onChange={(e) => patchRange(i, k, 0, e.target.value)} />
                         –
-                        <input className="input" type="time" value={r[1]} lang={lang}
+                        <DateTimeInput className="input" type="time" value={r[1]} lang={lang}
                           onChange={(e) => patchRange(i, k, 1, e.target.value)} />
                         {days[i].ranges.length > 1 && (
                           <button className="icon-btn" title="Remove range"
