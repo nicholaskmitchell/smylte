@@ -299,6 +299,8 @@ import {
   addDays, cssColor, dayKey, isOverdue, makeGuard, parseDate, textDir, ymd,
 } from '../util'
 import { fmtClock, fmtDue, fmtDuration } from '../time'
+import { useI18n } from '../i18n'
+import { habitDayLabel } from '../names'
 import { useTimeFormat } from '../timeformat'
 import { sortByCompletion, sortTasks, taskKey } from '../order'
 import { bucketByDay, eventKey, monthGrid, type DayEv } from '../calendar'
@@ -602,6 +604,7 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
   hiddenCalendars?: string[]
   archivedCalendars?: string[]
 }) {
+  const { locale } = useI18n()
   // A STABLE guard, so it can sit in an effect's dependency list honestly
   // instead of behind an eslint-disable. `makeGuard(onExpire)` written at the
   // top of a render mints a fresh function on every paint, which would re-run
@@ -1872,7 +1875,7 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
     return c ? { '--ev-c': c } as CSSProperties : undefined
   }, [calByHref])
 
-  const heading = new Date(`${day}T00:00`).toLocaleDateString(undefined,
+  const heading = new Date(`${day}T00:00`).toLocaleDateString(locale,
     { weekday: 'long', month: 'long', day: 'numeric' })
   /** Whether a row counts as finished.
    *
@@ -2326,7 +2329,7 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
                 // Through `fmtDue` with the live 12/24-hour setting, so what the
                 // chip promises is exactly what the row will read once it exists.
                 <span className="mono">
-                  {fmtDue(dueFromParse(parsed, day), !parsed.dueTime, tf)}
+                  {fmtDue(dueFromParse(parsed, day), !parsed.dueTime, tf, locale)}
                   {parsed.guessed ? ' (guess)' : ''}
                 </span>
               )}
@@ -2622,7 +2625,7 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
                   </span>
                   {t.due && (
                     <span className={`today-due mono ${g.key === 'overdue' ? 'overdue' : ''}`}>
-                      {fmtDue(t.due, t.due_is_date, tf)}
+                      {fmtDue(t.due, t.due_is_date, tf, locale)}
                     </span>
                   )}
                 </li>
@@ -2674,6 +2677,7 @@ function LookBack({ review, offPlan, reflection, renderRow, colorOf, live = fals
    *  than writing a second one that could describe a day differently. */
   live?: boolean
 }) {
+  const { locale } = useI18n()
   const tf = useTimeFormat()
   // Nothing at all until the read lands — the same discipline the day's own
   // empty state keeps. "Nothing was planned" flashed over a fetch in flight is
@@ -2730,7 +2734,7 @@ function LookBack({ review, offPlan, reflection, renderRow, colorOf, live = fals
                     and `fmtDue` would repeat it on every row. `completed_at` is
                     non-null for every task in this list by construction — it is
                     what put them in it. */}
-                <span className="today-due mono">{fmtClock(t.completed_at!, tf)}</span>
+                <span className="today-due mono">{fmtClock(t.completed_at!, tf, locale)}</span>
               </li>
             ))}
           </ul>
@@ -2912,6 +2916,7 @@ function TodayRow({
   onDropRow?: (entryId: string) => void
   onDragEndRow?: () => void
 }) {
+  const { locale } = useI18n()
   const tf = useTimeFormat()
   /** The last press on this row landed in a TEXT FIELD. Written on mousedown and
    *  read on dragstart — see the row's own comment for why the obvious
@@ -3156,8 +3161,8 @@ function TodayRow({
             less interesting of the two facts, and the target day's own row
             carries it anyway. */}
         {entry.rolled_to
-          ? `→ ${fmtDue(entry.rolled_to, true, tf)}`
-          : task?.due ? fmtDue(task.due, task.due_is_date, tf) : ''}
+          ? `→ ${fmtDue(entry.rolled_to, true, tf, locale)}`
+          : task?.due ? fmtDue(task.due, task.due_is_date, tf, locale) : ''}
       </span>
       {/* Absent, not disabled, on a finished day. Dropping is the one write the
           backend DOES still allow on a past day — `update_day_entry` permits it
@@ -3176,16 +3181,6 @@ function TodayRow({
 }
 
 // ── the habits sheet ─────────────────────────────────────────────────────────
-
-/** "mon" → "Mon", for a chip's face and for its accessible name.
- *
- *  Display only, and DERIVED from the token rather than looked up in a table
- *  keyed by day. That is the point of writing it this way: any such table —
- *  mapping these seven names to a full day name, and above all to a weekday
- *  NUMBER — would be a second copy of a mapping the server already owns, and
- *  two copies is how "wed" comes to mean Wednesday on one side and Thursday on
- *  the other, for one weekday only. See `HABIT_DAYS` in api.ts. */
-const dayLabel = (d: string) => d[0].toUpperCase() + d.slice(1)
 
 /**
  * The days a habit's `days` names, as a set of `HABIT_DAYS` tokens.
@@ -3462,6 +3457,7 @@ function HabitEditRow({ habit, pending = false, onPatch, onDelete }: {
 }) {
   const [name, setName] = useState(habit.title)
   const [confirming, setConfirming] = useState(false)
+  const { locale } = useI18n()
   // The draft follows the habit when it changes UNDERNEATH — a rejected rename
   // leaves the old title in place, and an SSE bump refetches the whole list — so
   // a stale draft cannot be committed over a newer value on the next blur.
@@ -3529,8 +3525,8 @@ function HabitEditRow({ habit, pending = false, onPatch, onDelete }: {
         {HABIT_DAYS.map((d) => (
           <button key={d} type="button" className={`chip habit-day ${on.has(d) ? 'on' : ''}`}
             disabled={pending}
-            aria-pressed={on.has(d)} aria-label={`${dayLabel(d)} for ${habit.title}`}
-            onClick={() => toggleDay(d)}>{dayLabel(d)}</button>
+            aria-pressed={on.has(d)} aria-label={`${habitDayLabel(d, locale)} for ${habit.title}`}
+            onClick={() => toggleDay(d)}>{habitDayLabel(d, locale)}</button>
         ))}
         {/* Said in words as well as in chips, because "all seven lit" and "every
             day" are the same schedule and only one of them is legible at a

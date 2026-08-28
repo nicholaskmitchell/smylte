@@ -20,10 +20,8 @@ import { AgendaEvent, AgendaTask, DayPopover } from './DayPopover'
 import { Sidebar } from './Sidebar'
 import { TaskModal } from './TaskModal'
 import { DateTimeInput } from './DateTimeInput'
-
-const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
-const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June',
-  'July', 'August', 'September', 'October', 'November', 'December']
+import { useI18n } from '../i18n'
+import { monthNames, weekdayNames } from '../names'
 
 interface Draft { event?: CalEvent; date?: string }
 
@@ -187,6 +185,11 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
   const guard = makeGuard(onExpire)
   const isMobile = useIsMobile()
   const tf = useTimeFormat()
+  const { locale } = useI18n()
+  // Sunday-first, because the grid's columns are indexed by `Date#getDay` and
+  // the header row has to line up with them.
+  const dow = weekdayNames(locale, 'short', 'sun')
+  const months = monthNames(locale)
   const { cals, loaded, setCals, eventsFor, requestWindow, setEvents, reload,
     windowErrors } = useCalendarData()
   // Tasks need no fetch of their own: the provider above this already holds
@@ -258,7 +261,7 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
   // What a screen reader announces on landing in a cell. The visible text is a
   // bare day NUMBER, which out of its column is not a date at all.
   const fmtCellLabel = (d: Date) =>
-    d.toLocaleDateString(undefined, {
+    d.toLocaleDateString(locale, {
       weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
     })
 
@@ -621,7 +624,7 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
           <button className="icon-btn" onClick={() => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() - 1, 1))}>‹</button>
           <button className="btn ghost" onClick={() => { const n = new Date(); setCursor(new Date(n.getFullYear(), n.getMonth(), 1)) }}>Today</button>
           <button className="icon-btn" onClick={() => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1))}>›</button>
-          <span className="cal-title">{MONTHS[cursor.getMonth()]} {cursor.getFullYear()}</span>
+          <span className="cal-title">{months[cursor.getMonth()]} {cursor.getFullYear()}</span>
           <span className="spacer" />
           {visibleCals.length > 0 && !isMobile && (
             <button className="btn" onClick={() => setDraft({ date: todayKey })}>New event</button>
@@ -665,7 +668,7 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
                 what made the omission look deliberate rather than uniform. */}
             <div className="cal-grid" role="grid" aria-label="Month"
               onKeyDown={onGridKey}>
-              {DOW.map((d) => (
+              {dow.map((d) => (
                 <div key={d} className="cal-dow" role="columnheader">{d}</div>
               ))}
               {days.map((d) => {
@@ -772,7 +775,7 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
                               onDragEnd={() => { setDrag(null); setOverDay(null) }}
                               onClick={(ev) => { ev.stopPropagation(); setDraft({ event: e }) }}>
                               {!e.all_day && e.start && !e.cont && (
-                                <span className="t">{fmtClock(e.start, tf)}</span>
+                                <span className="t">{fmtClock(e.start, tf, locale)}</span>
                               )}
                               {e.is_recurring && <span className="recur" aria-hidden="true">↻ </span>}
                               {e.cont && <span className="t" aria-hidden="true">‥ </span>}
@@ -822,7 +825,7 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
                               }}
                               onClick={(ev) => { ev.stopPropagation(); setTaskDetail(t) }}>
                               <span className="tick" aria-hidden="true">{done ? '☑' : '☐'}</span>
-                              {timed && <span className="t">{fmtClock(t.due!, tf)}</span>}
+                              {timed && <span className="t">{fmtClock(t.due!, tf, locale)}</span>}
                               {/* Cut by CSS, never by the string — see the event
                                   chip above for why that distinction matters. */}
                               <bdi>{t.summary || '(untitled)'}</bdi>
@@ -846,7 +849,7 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
               <div className="day-agenda">
                 <div className="agenda-head">
                   <span className="label">
-                    {new Date(`${focusDay}T00:00`).toLocaleDateString(undefined,
+                    {new Date(`${focusDay}T00:00`).toLocaleDateString(locale,
                       { weekday: 'long', month: 'long', day: 'numeric' })}
                   </span>
                   <button className="btn" onClick={() => setDraft({ date: focusDay })}>+ Event</button>
@@ -939,7 +942,7 @@ function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete }: {
   onDelete: (uid: string, opts?: { recurrence_id?: string | null; scope?: EventScope }) => void
 }) {
   const e = draft.event
-  const lang = inputLang(useTimeFormat())
+  const lang = inputLang(useTimeFormat(), useI18n().lang)
   const recurring = !!e?.is_recurring
   // Where the event goes: a new event is created here, an existing one is
   // moved here (whole resource — a series always changes calendar as one).

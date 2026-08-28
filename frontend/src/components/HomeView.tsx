@@ -8,6 +8,7 @@ import { sortByCompletion, sortTasks, taskKey } from '../order'
 import { useTimeFormat } from '../timeformat'
 import { bucketByDay, monthGrid, type DayEv } from '../calendar'
 import { DayPopover } from './DayPopover'
+import { useI18n } from '../i18n'
 import {
   COLS, DEFAULT_LAYOUT, GAP, MODULE_KINDS, MODULE_SPECS, ROW_H, addModule, layoutRows,
   moveModule, pxToCellDelta, removeModule, resizeModule, sanitizeLayout,
@@ -399,6 +400,7 @@ function TaskList({ items, colorOf, empty, overdue, done, loaded }: {
   done?: boolean
   loaded?: boolean
 }) {
+  const { locale } = useI18n()
   // Read before the early returns below — a hook can't sit behind a branch.
   const tf = useTimeFormat()
   // Stay blank until the first fetch lands: "Nothing due today." flashing up and
@@ -418,7 +420,7 @@ function TaskList({ items, colorOf, empty, overdue, done, loaded }: {
             <span className="dash-task-title">{t.summary || '(untitled)'}</span>
             {t.due && (
               <span className={`dash-task-due mono ${overdue ? 'overdue' : ''}`}>
-                {fmtDue(t.due, t.due_is_date, tf)}
+                {fmtDue(t.due, t.due_is_date, tf, locale)}
               </span>
             )}
           </li>
@@ -454,6 +456,7 @@ function MiniCalendar({ days, byDay, eventColor, failed = [] }: {
   byDay: Map<string, DayEv[]>
   eventColor: (e: CalEvent) => string | null
 }) {
+  const { locale } = useI18n()
   const now = new Date()
   const today = ymd(now)
   // The grid is always the current month, so the middle of it names the month
@@ -490,7 +493,7 @@ function MiniCalendar({ days, byDay, eventColor, failed = [] }: {
             key === today ? 'today' : '',
             evs.length ? 'busy' : '',
           ].filter(Boolean).join(' ')
-          const long = d.toLocaleDateString(undefined,
+          const long = d.toLocaleDateString(locale,
             { weekday: 'long', month: 'long', day: 'numeric' })
           return (
             <button key={key} type="button" className={cls}
@@ -550,6 +553,7 @@ function LinkList({ links }: { links: BookingLink[] }) {
 }
 
 function BookingList({ bookings }: { bookings: Booking[] }) {
+  const { locale } = useI18n()
   const tf = useTimeFormat()
   const upcoming = bookings
     .filter((b) => new Date(b.start).getTime() >= Date.now())
@@ -561,7 +565,7 @@ function BookingList({ bookings }: { bookings: Booking[] }) {
       {upcoming.map((b) => (
         <li key={b.id} className="dash-task">
           <span className="dash-task-title">{b.name}</span>
-          <span className="dash-task-due mono">{fmtDue(b.start, false, tf)}</span>
+          <span className="dash-task-due mono">{fmtDue(b.start, false, tf, locale)}</span>
         </li>
       ))}
     </ul>

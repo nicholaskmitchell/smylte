@@ -11,6 +11,7 @@ import { dayKey } from '../util'
 import { fmtClock, type TimeFormat } from '../time'
 import { useTimeFormat } from '../timeformat'
 import { useEscape } from '../hooks'
+import { useI18n } from '../i18n'
 
 /** The time label for an event as it appears on `day`: a continuation day shows
  *  the end time if the span finishes that day, and otherwise reads as all day. */
@@ -54,12 +55,13 @@ export function AgendaTask({ task, style, onOpen }: {
   style?: CSSProperties
   onOpen?: (t: Task) => void
 }) {
+  const { locale } = useI18n()
   const tf = useTimeFormat()
   const timed = !!task.due && task.due.includes('T') && !task.due_is_date
   const done = task.completed || task.cancelled
   const body = (
     <>
-      <span className="t">{timed ? fmtClock(task.due!, tf) : ''}</span>
+      <span className="t">{timed ? fmtClock(task.due!, tf, locale) : ''}</span>
       <span>
         <span className="tick" aria-hidden="true">{done ? '☑ ' : '☐ '}</span>
         {task.summary || '(untitled)'}
@@ -83,8 +85,9 @@ export function DayPopover({ day, x, y, events, tasks = [], styleOf, taskStyleOf
   onOpenTask?: (t: Task) => void
   onClose: () => void
 }) {
+  const { locale } = useI18n()
   useEscape(onClose)
-  const long = new Date(`${day}T00:00`).toLocaleDateString(undefined,
+  const long = new Date(`${day}T00:00`).toLocaleDateString(locale,
     { weekday: 'long', month: 'long', day: 'numeric' })
   // Clamp to the viewport so edge cells don't push the popover off-screen.
   const left = Math.max(8, Math.min(x, window.innerWidth - 268))
@@ -94,7 +97,7 @@ export function DayPopover({ day, x, y, events, tasks = [], styleOf, taskStyleOf
       <div className="day-pop" style={{ left, top }} onClick={(ev) => ev.stopPropagation()}
         role="dialog" aria-label={long}>
         <div className="day-pop-head">
-          {new Date(`${day}T00:00`).toLocaleDateString(undefined,
+          {new Date(`${day}T00:00`).toLocaleDateString(locale,
             { weekday: 'short', month: 'short', day: 'numeric' })}
         </div>
         {events.map((e) => (

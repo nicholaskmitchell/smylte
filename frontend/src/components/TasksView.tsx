@@ -12,6 +12,7 @@ import { useTimeFormat } from '../timeformat'
 import { AddMultipleModal } from './AddMultipleModal'
 import { dateOut, TaskModal } from './TaskModal'
 import { Sidebar } from './Sidebar'
+import { useI18n } from '../i18n'
 
 const VIEWS: ReadonlyArray<readonly [TasksViewMode, string]> = [
   ['list', 'List'], ['day3', '3-Day'], ['week', 'Week'],
@@ -75,6 +76,7 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
   collapsedTasks: string[]; onCollapsedTasksChange: (next: string[]) => void
   showCompleted: boolean
 }) {
+  const { locale } = useI18n()
   const guard = makeGuard(onExpire)
   // Lists, tasks and every write against them live above the tab strip, so
   // switching away and back neither drops them nor refetches from empty — and
@@ -488,7 +490,7 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
   }))
   const undated = sortTasks(shownTasks.filter((t) => !t.completed && !t.cancelled && !t.due))
 
-  const fmtD = (d: Date) => d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+  const fmtD = (d: Date) => d.toLocaleDateString(locale, { month: 'short', day: 'numeric' })
 
   return (
     <div className="work">
@@ -838,6 +840,7 @@ function DayColumn({ date, isToday, open, done, overdue, dotOf, onToggle, onOpen
   onAdd: (summary: string) => void
   dragActive: boolean; onDropTask: () => void; onDragTask: (key: string | null) => void
 }) {
+  const { locale } = useI18n()
   const [adding, setAdding] = useState(false)
   // dragover bubbles up from the cards, so entering a child re-asserts `over`.
   const [over, setOver] = useState(false)
@@ -847,7 +850,7 @@ function DayColumn({ date, isToday, open, done, overdue, dotOf, onToggle, onOpen
       onDragLeave={() => setOver(false)}
       onDrop={(e) => { e.preventDefault(); setOver(false); onDropTask() }}>
       <div className="day-col-head">
-        <span className="dow">{date.toLocaleDateString(undefined, { weekday: 'short' })}</span>
+        <span className="dow">{date.toLocaleDateString(locale, { weekday: 'short' })}</span>
         <span className="dnum">{date.getDate()}</span>
         {open.length + overdue.length > 0 && (
           <span className="count">{open.length + overdue.length}</span>
@@ -897,6 +900,7 @@ function DayCard({ task, showDate, dot, onToggle, onOpen, onDrag }: {
   onToggle: (t: Task) => void; onOpen: (t: Task) => void
   onDrag: (uid: string | null) => void
 }) {
+  const { locale } = useI18n()
   const pri = task.priority_label
   const priClass = pri === 'high' ? 'pri-high' : pri === 'medium' ? 'pri-med' : pri === 'low' ? 'pri-low' : ''
   const done = task.completed || task.cancelled
@@ -924,12 +928,12 @@ function DayCard({ task, showDate, dot, onToggle, onOpen, onDrag }: {
           <div className="task-meta">
             {showDate && task.due && (
               <span className={`due ${!task.completed ? 'overdue' : ''}`}>
-                ◷ {fmtDue(task.due, task.due_is_date, tf)}
+                ◷ {fmtDue(task.due, task.due_is_date, tf, locale)}
               </span>
             )}
             {!showDate && timed && (
               <span className={`due ${isOverdue(task.due, task.due_is_date) && !task.completed ? 'overdue' : ''}`}>
-                {fmtClock(task.due!, tf)}
+                {fmtClock(task.due!, tf, locale)}
               </span>
             )}
             {task.tags.map((tg) => <span key={tg} className="chip">#{tg}</span>)}
@@ -954,6 +958,7 @@ function TaskRow({ task, depth = 0, dot, progress, collapsed, onCollapse,
   onToggle: (t: Task) => void; onRemove: (t: Task) => void
   onOpen: (t: Task) => void; onAddSub?: () => void
 }) {
+  const { locale } = useI18n()
   const pri = task.priority_label
   const priClass = pri === 'high' ? 'pri-high' : pri === 'medium' ? 'pri-med' : pri === 'low' ? 'pri-low' : ''
   const label = task.summary || '(untitled)'
@@ -982,7 +987,7 @@ function TaskRow({ task, depth = 0, dot, progress, collapsed, onCollapse,
           <div className="task-meta">
             {task.due && (
               <span className={`due ${isOverdue(task.due, task.due_is_date) && !task.completed ? 'overdue' : ''}`}>
-                ◷ {fmtDue(task.due, task.due_is_date, tf)}
+                ◷ {fmtDue(task.due, task.due_is_date, tf, locale)}
               </span>
             )}
             {progress && (

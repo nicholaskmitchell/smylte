@@ -3,6 +3,7 @@ import { api, type CalEvent, type List } from '../api'
 import { cssColor, dayKey, makeGuard, ymd } from '../util'
 import { fmtClock } from '../time'
 import { useTimeFormat } from '../timeformat'
+import { useI18n } from '../i18n'
 
 // Archive is app-level: the CalDAV collection stays on the wire, so an archived
 // calendar's events are still fetchable. This section lists archived calendars
@@ -13,11 +14,14 @@ import { useTimeFormat } from '../timeformat'
 // back control and its own Escape, and reports upward through `onViewing` so the
 // panel's back control steps out of the agenda before it leaves the section.
 
-const fmtMonth = (d: Date) =>
-  d.toLocaleDateString(undefined, { month: 'short', year: 'numeric' })
+// `locale` rather than `undefined`: these read the app's Language setting, not
+// the device's, so the agenda's dates are in the same language as the words
+// around them.
+const fmtMonth = (d: Date, locale: string) =>
+  d.toLocaleDateString(locale, { month: 'short', year: 'numeric' })
 
-const fmtDay = (day: string) =>
-  new Date(`${day}T00:00`).toLocaleDateString(undefined,
+const fmtDay = (day: string, locale: string) =>
+  new Date(`${day}T00:00`).toLocaleDateString(locale,
     { weekday: 'short', month: 'short', day: 'numeric' })
 
 export function ArchivedCalendarsSection({ archived, onChange, onExpire, viewing, onViewing }: {
@@ -100,6 +104,7 @@ function ArchivedEvents({ cal, onExpire, onRestore }: {
 }) {
   const guard = makeGuard(onExpire)
   const tf = useTimeFormat()
+  const { locale } = useI18n()
   const [events, setEvents] = useState<CalEvent[]>([])
   const [loaded, setLoaded] = useState(false)
   const [failed, setFailed] = useState(false)
@@ -138,7 +143,7 @@ function ArchivedEvents({ cal, onExpire, onRestore }: {
   return (
     <>
       <div className="arch-caption">
-        Showing events {fmtMonth(from)} – {fmtMonth(to)}
+        Showing events {fmtMonth(from, locale)} – {fmtMonth(to, locale)}
         <button className="btn ghost" onClick={onRestore}>Restore calendar</button>
       </div>
       <div className="arch-events">
@@ -150,11 +155,11 @@ function ArchivedEvents({ cal, onExpire, onRestore }: {
           <div className="arch-empty">No events in this window.</div>
         ) : days.map(([day, evs]) => (
           <div key={day} className="arch-day">
-            <div className="arch-day-head">{fmtDay(day)}</div>
+            <div className="arch-day-head">{fmtDay(day, locale)}</div>
             {evs.map((e) => (
               <div key={e.id} className="agenda-ev"
                 style={cssColor(cal.color) ? { '--ev-c': cssColor(cal.color) } as CSSProperties : undefined}>
-                <span className="t">{e.all_day || e.start_is_date ? 'all day' : (e.start ? fmtClock(e.start, tf) : '')}</span>
+                <span className="t">{e.all_day || e.start_is_date ? 'all day' : (e.start ? fmtClock(e.start, tf, locale) : '')}</span>
                 <span>
                   {e.is_recurring && <span className="recur" aria-hidden="true">↻ </span>}
                   {e.summary || '(untitled)'}

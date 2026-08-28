@@ -12,6 +12,12 @@ import { ymd } from '../util'
 // telling a visitor to go ask for a fresh one is both wrong and unrecoverable.
 type Phase = 'loading' | 'notfound' | 'unavailable' | 'pick' | 'confirm' | 'done'
 
+// `undefined` — the VISITOR's locale — and deliberately not the app's Language
+// setting, for the same reason the times are in the visitor's timezone: nobody
+// on this page is signed in. The setting belongs to the owner of the link, who
+// is not the person reading it, and formatting a stranger's calendar in a
+// language they may not read would be the owner's preference leaking onto
+// somebody else's screen.
 const fmtTime = (iso: string) =>
   new Date(iso).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
 
