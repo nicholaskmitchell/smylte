@@ -13,10 +13,12 @@ import { api, type McpConnection } from '../api'
 import { makeGuard } from '../util'
 import { fmtWhen } from '../time'
 import { useTimeFormat } from '../timeformat'
+import { useI18n } from '../i18n'
 
 export function ConnectionsSection({ onExpire }: {
   onExpire: () => void
 }) {
+  const { locale, t: tr } = useI18n()
   const guard = makeGuard(onExpire)
   const tf = useTimeFormat()
   const [rows, setRows] = useState<McpConnection[]>([])
@@ -54,46 +56,43 @@ export function ConnectionsSection({ onExpire }: {
 
   const what = (scope: string) => {
     const can = scope.split(' ').filter(Boolean)
-    if (can.includes('mcp:write')) return 'Read and write'
-    if (can.includes('mcp:read')) return 'Read only'
-    return scope || 'No access'
+    if (can.includes('mcp:write')) return tr('conn.readWrite')
+    if (can.includes('mcp:read')) return tr('conn.readOnly')
+    // A scope the server invented and we have no word for is shown RAW —
+    // untranslated, but true. Calling an unknown grant "Kein Zugriff" would
+    // be a translation of something we did not read.
+    return scope || tr('conn.noAccess')
   }
 
   return (
     <>
       {!loaded ? (
-        <div className="empty">Loading…</div>
+        <div className="empty">{tr('conn.loading')}</div>
       ) : failed ? (
-        <div className="empty" role="alert">
-          Couldn&rsquo;t load your connected applications. Any grants you have
-          are still live — this list could not be read, not emptied.
-        </div>
+        <div className="empty" role="alert">{tr('conn.loadFailed')}</div>
       ) : rows.length === 0 ? (
-        <div className="empty">
-          Nothing is connected. Applications you connect through the MCP
-          endpoint appear here.
-        </div>
+        <div className="empty">{tr('conn.none')}</div>
       ) : (
         <div className="conn-list">
           {rows.map((c) => (
             <div key={c.family_id} className="conn">
               <div className="conn-main">
-                <div className="conn-name">{c.client_name || 'An application'}</div>
+                <div className="conn-name">{c.client_name || tr('conn.anApplication')}</div>
                 <div className="conn-meta">
                   <span className="chip">{what(c.scope)}</span>
-                  <span className="mono">Connected {fmtWhen(isoOf(c.granted_at), tf)}</span>
+                  <span className="mono">{tr('conn.connectedAt', { when: fmtWhen(isoOf(c.granted_at), tf, locale) })}</span>
                 </div>
               </div>
               {confirming === c.family_id ? (
                 <span className="conn-actions">
-                  <button className="btn ghost" onClick={() => setConfirming(null)}>Keep</button>
+                  <button className="btn ghost" onClick={() => setConfirming(null)}>{tr('conn.keep')}</button>
                   <button className="btn danger" onClick={() => disconnect(c.family_id)}>
-                    Disconnect
+                    {tr('conn.disconnect')}
                   </button>
                 </span>
               ) : (
                 <button className="btn ghost" onClick={() => setConfirming(c.family_id)}>
-                  Disconnect
+                  {tr('conn.disconnect')}
                 </button>
               )}
             </div>
@@ -101,10 +100,7 @@ export function ConnectionsSection({ onExpire }: {
         </div>
       )}
 
-      <div className="hintline">
-        Disconnecting takes effect at once — the application has to be
-        reconnected, and approved again, before it can read anything.
-      </div>
+      <div className="hintline">{tr('conn.hint')}</div>
     </>
   )
 }

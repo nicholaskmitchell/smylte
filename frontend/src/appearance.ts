@@ -23,6 +23,8 @@ export type Mode = 'light' | 'dark'
 export type TokenKind = 'color' | 'length' | 'scale' | 'font' | 'keyword'
 
 export interface TokenSpec {
+  /** Catalogue keys, not text — see `TOKENS`. `group` is the exception: it is
+   *  an identifier, and its heading comes from `GROUP_LABEL`. */
   label: string
   group: string
   kind: TokenKind
@@ -60,56 +62,80 @@ export interface Appearance {
 // the single source of truth for what "customizable" means, and the backend
 // mirrors it (see SettingsPatch in backend/tasksd/app.py).
 
+// `label`, `hint` and every `valueLabels` entry are catalogue KEYS, not text.
+// This module is React-free and is also the backend's mirror; a translator has
+// no business in it, and the one component that renders these looks them up.
+// `group` is NOT a key — it is the identifier the editor buckets by, and
+// `GROUP_LABEL` below carries its heading.
 export const TOKENS: Record<string, TokenSpec> = {
-  '--bg': { label: 'Background', group: 'Surfaces', kind: 'color' },
-  '--bg-elev': { label: 'Raised', group: 'Surfaces', kind: 'color',
-    hint: 'Cards, modals, hover states.' },
-  '--paper': { label: 'Sunken', group: 'Surfaces', kind: 'color',
-    hint: 'The sidebar and column headers.' },
+  '--bg': { label: 'token.bg', group: 'Surfaces', kind: 'color' },
+  '--bg-elev': { label: 'token.bgElev', group: 'Surfaces', kind: 'color',
+    hint: 'token.bgElev.hint' },
+  '--paper': { label: 'token.paper', group: 'Surfaces', kind: 'color',
+    hint: 'token.paper.hint' },
 
-  '--fg': { label: 'Text', group: 'Text', kind: 'color' },
-  '--fg-muted': { label: 'Muted', group: 'Text', kind: 'color' },
-  '--fg-faint': { label: 'Faint', group: 'Text', kind: 'color' },
+  '--fg': { label: 'token.fg', group: 'Text', kind: 'color' },
+  '--fg-muted': { label: 'token.fgMuted', group: 'Text', kind: 'color' },
+  '--fg-faint': { label: 'token.fgFaint', group: 'Text', kind: 'color' },
 
-  '--rule': { label: 'Rule', group: 'Rules', kind: 'color',
-    hint: 'Borders and dividers.' },
-  '--rule-faint': { label: 'Rule, faint', group: 'Rules', kind: 'color' },
+  '--rule': { label: 'token.rule', group: 'Rules', kind: 'color',
+    hint: 'token.rule.hint' },
+  '--rule-faint': { label: 'token.ruleFaint', group: 'Rules', kind: 'color' },
 
-  '--accent': { label: 'Accent', group: 'Accents', kind: 'color' },
-  '--warn': { label: 'Warning', group: 'Accents', kind: 'color',
-    hint: 'Overdue dates, destructive actions.' },
-  '--ok': { label: 'Success', group: 'Accents', kind: 'color',
-    hint: 'All-day events, enabled booking links.' },
+  '--accent': { label: 'token.accent', group: 'Accents', kind: 'color' },
+  '--warn': { label: 'token.warn', group: 'Accents', kind: 'color',
+    hint: 'token.warn.hint' },
+  '--ok': { label: 'token.ok', group: 'Accents', kind: 'color',
+    hint: 'token.ok.hint' },
 
-  '--pri-high': { label: 'High', group: 'Priority', kind: 'color' },
-  '--pri-med': { label: 'Medium', group: 'Priority', kind: 'color' },
-  '--pri-low': { label: 'Low', group: 'Priority', kind: 'color' },
+  '--pri-high': { label: 'token.priHigh', group: 'Priority', kind: 'color' },
+  '--pri-med': { label: 'token.priMed', group: 'Priority', kind: 'color' },
+  '--pri-low': { label: 'token.priLow', group: 'Priority', kind: 'color' },
 
-  '--serif': { label: 'Reading', group: 'Type', kind: 'font',
-    hint: 'Titles and headings.' },
-  '--sans': { label: 'Interface', group: 'Type', kind: 'font',
-    hint: 'Body text and controls.' },
-  '--mono': { label: 'Mono', group: 'Type', kind: 'font',
-    hint: 'Labels, dates, counts.' },
+  '--serif': { label: 'token.serif', group: 'Type', kind: 'font',
+    hint: 'token.serif.hint' },
+  '--sans': { label: 'token.sans', group: 'Type', kind: 'font',
+    hint: 'token.sans.hint' },
+  '--mono': { label: 'token.mono', group: 'Type', kind: 'font',
+    hint: 'token.mono.hint' },
 
-  '--radius': { label: 'Corners', group: 'Shape', kind: 'length', min: 0, max: 24 },
-  '--fs-scale': { label: 'Text size', group: 'Shape', kind: 'scale', min: 0.8, max: 1.4 },
-  '--label-case': { label: 'Labels', group: 'Shape', kind: 'keyword',
+  '--radius': { label: 'token.radius', group: 'Shape', kind: 'length', min: 0, max: 24 },
+  '--fs-scale': { label: 'token.fsScale', group: 'Shape', kind: 'scale', min: 0.8, max: 1.4 },
+  '--label-case': { label: 'token.labelCase', group: 'Shape', kind: 'keyword',
     values: ['uppercase', 'none'],
-    valueLabels: { uppercase: 'Uppercase', none: 'Sentence case' },
-    hint: 'Buttons, micro-labels and column heads.' },
-  '--tracking': { label: 'Label tracking', group: 'Shape', kind: 'scale', min: 0, max: 1.5,
-    hint: 'Letter-spacing on those same labels. 0 closes it up.' },
-  '--gutter': { label: 'Gutter', group: 'Density', kind: 'length', min: 8, max: 64,
-    hint: 'Horizontal breathing room around content.' },
-  '--row-y': { label: 'Row height', group: 'Density', kind: 'length', min: 2, max: 24,
-    hint: 'Vertical padding inside a task row.' },
+    valueLabels: {
+      uppercase: 'token.labelCase.uppercase', none: 'token.labelCase.none',
+    },
+    hint: 'token.labelCase.hint' },
+  '--tracking': { label: 'token.tracking', group: 'Shape', kind: 'scale', min: 0, max: 1.5,
+    hint: 'token.tracking.hint' },
+  '--gutter': { label: 'token.gutter', group: 'Density', kind: 'length', min: 8, max: 64,
+    hint: 'token.gutter.hint' },
+  '--row-y': { label: 'token.rowY', group: 'Density', kind: 'length', min: 2, max: 24,
+    hint: 'token.rowY.hint' },
 }
 
 export const TOKEN_NAMES = Object.keys(TOKENS)
 
-/** Editor section order. Tokens render grouped under these headings. */
+/** Editor section order. Tokens render grouped under these headings.
+ *
+ *  The strings are IDENTIFIERS — each one is a `TokenSpec.group` value and the
+ *  key this list buckets by — so they stay English and untranslated. What the
+ *  reader sees is `GROUP_LABEL[group]`, looked up in the catalogue. */
 export const GROUPS = ['Surfaces', 'Text', 'Rules', 'Accents', 'Priority', 'Shape', 'Density', 'Type']
+
+/** The catalogue key for a group's heading. Spelled out rather than built by
+ *  concatenation so every key in this app can be found by grepping for it. */
+export const GROUP_LABEL: Record<string, string> = {
+  Surfaces: 'tokenGroup.Surfaces',
+  Text: 'tokenGroup.Text',
+  Rules: 'tokenGroup.Rules',
+  Accents: 'tokenGroup.Accents',
+  Priority: 'tokenGroup.Priority',
+  Shape: 'tokenGroup.Shape',
+  Density: 'tokenGroup.Density',
+  Type: 'tokenGroup.Type',
+}
 
 // ── the shipped defaults ────────────────────────────────────────────────────
 // A mirror of styles/tokens.css. Duplicated deliberately: the editor needs to

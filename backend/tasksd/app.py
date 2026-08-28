@@ -263,6 +263,12 @@ class CreateEvent(Repeat):
     location: XmlSafeText | None = None
     description: XmlSafeText | None = None
     tags: list[XmlSafeText] | None = None
+    # Does this event consume the owner's time — iCalendar's TRANSP, and what
+    # Apple Calendar calls Busy/Free. Omitted means "no opinion", and no TRANSP
+    # is written at all: the RFC's default is OPAQUE, so an omitted field and an
+    # explicit `true` describe the same event, and not writing the line keeps
+    # this app's own resources as terse as they have always been.
+    busy: bool | None = None
     client_id: str | None = None      # idempotency: a replayed create reuses the slug
 
 
@@ -274,6 +280,10 @@ class EditEvent(Repeat):
     end: str | None = None
     tags: list[XmlSafeText] | None = None
     status: str | None = None         # CONFIRMED|TENTATIVE|CANCELLED
+    # TRANSP, as on `CreateEvent`. Tri-state through `model_fields_set` like
+    # every other field on this model: an omitted key leaves the property
+    # exactly as its author wrote it, and an explicit null removes it.
+    busy: bool | None = None
     # Per-occurrence editing (Tier 3): which slice of a recurring series to touch.
     recurrence_id: str | None = None  # the occurrence anchor (original-slot ISO)
     scope: str | None = None          # all|this|thisandfuture (default: all)
@@ -552,8 +562,14 @@ class DashboardModule(BaseModel):
     # they exist so a malformed layout cannot ask the client to lay out a
     # module a million rows tall.
     id: str = Field(min_length=1, max_length=64)
+    # An ALLOWLIST, and it has to stay in step with `MODULE_SPECS` in
+    # dashboard.ts. A kind the client ships and this does not is not a module
+    # that quietly fails to render: the whole PUT is refused, so the theme, the
+    # tab order and everything else in the same write go down with it (see the
+    # note on `_settings_or_422` below). `dashboard.test.ts` reads this list back
+    # out of this file and fails when the two disagree.
     kind: Literal[
-        "today", "overdue", "upcoming", "mini_calendar",
+        "today", "day_plan", "overdue", "upcoming", "mini_calendar",
         "completed", "booking_links", "bookings", "quick_add",
     ]
     x: int = Field(ge=0, le=11)
@@ -639,6 +655,22 @@ class SettingsPatch(BaseModel):
     # displays follow it: the public booking page is rendered for visitors who
     # are not this account, so it stays on their own locale.
     time_format: Literal["12h", "24h"] | None = None
+    # Which language the app is shown in. Absent means English, which is what
+    # every account read before this was settable.
+    #
+    # A DISPLAY setting and nothing more: the server is not translated and never
+    # reads this. Error text still reaches the client in English (the frontend's
+    # src/i18n/index.ts says why that is out of scope), and nothing stored —
+    # a list's name, a task's summary, a habit's title — is touched by it. The
+    # public booking page ignores it too, for the reason `time_format` gives one
+    # line up: those visitors are not this account, and the language they read
+    # is theirs rather than the link owner's.
+    #
+    # A `Literal` like the two settings either side, so an unknown tag is a 422
+    # rather than a value the client has to defend against on the way back out.
+    # Adding a language means adding a catalogue under frontend/src/i18n/ and
+    # one entry here.
+    language: Literal["en", "de"] | None = None
     # Ids of task lists whose tasks are drawn on the calendar grid. An ALLOWLIST,
     # unlike hidden_calendars/hidden_lists above — those are denylists so a new
     # collection shows by default, which is right for a collection the user just
@@ -868,6 +900,8 @@ def _event_edit_from_create(req: CreateEvent) -> EventEdit | None:
         kw["location"] = req.location
     if req.tags is not None:
         kw["categories"] = req.tags
+    if req.busy is not None:
+        kw["busy"] = req.busy
     if req.repeat is not None:
         kw["rrule"] = _rrule_from_repeat(req)
     return EventEdit(**kw) if kw else None
@@ -890,6 +924,8 @@ def _event_edit_from_patch(req: EditEvent) -> EventEdit:
         kw["categories"] = req.tags
     if "status" in fs:
         kw["status"] = _check_status(req.status, _EVENT_STATUS)
+    if "busy" in fs:
+        kw["busy"] = req.busy
     if "repeat" in fs:
         kw["rrule"] = _rrule_from_repeat(req)
     return EventEdit(**kw)

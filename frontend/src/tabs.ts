@@ -15,12 +15,15 @@ export type Tab = 'today' | 'home' | 'tasks' | 'calendar' | 'scheduling'
 /** Which tab the app opens on: a fixed one, or wherever the user left off. */
 export type TabStart = Tab | 'last'
 
+// Catalogue KEYS, not text — see `timeFormatKey` in time.ts for why a
+// React-free module hands back an identity. `TABS` is still derived from this,
+// so the set of tabs and the set of tab names cannot drift apart.
 export const TAB_LABELS: Record<Tab, string> = {
-  today: 'Today',
-  home: 'Home',
-  tasks: 'Tasks',
-  calendar: 'Calendar',
-  scheduling: 'Scheduling',
+  today: 'tab.today',
+  home: 'tab.home',
+  tasks: 'tab.tasks',
+  calendar: 'tab.calendar',
+  scheduling: 'tab.scheduling',
 }
 
 export const TABS = Object.keys(TAB_LABELS) as Tab[]

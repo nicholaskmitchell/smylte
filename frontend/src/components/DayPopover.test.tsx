@@ -8,7 +8,7 @@ const ev = (o: Partial<DayEv> = {}): DayEv => ({
   uid: 'e', id: 'e', recurrence_id: null, is_recurring: false, calendar: '/c/',
   summary: 'Standup', description: null, location: null,
   start: '2026-08-03T09:00:00', start_is_date: false, end: '2026-08-03T09:30:00',
-  end_is_date: false, duration: null, all_day: false, status: null, tags: [], has_rrule: false,
+  end_is_date: false, duration: null, all_day: false, status: null, busy: true, tags: [], has_rrule: false,
   href: '/c/e.ics', etag: '"1"', ...o,
 })
 

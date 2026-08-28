@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_TIME_FORMAT, fmtClock, fmtDue, fmtDuration, fmtWhen, inputLang, isTimeFormat,
-  nextTimeFormat, timeFormatLabel,
+  nextTimeFormat, timeFormatKey,
 } from './time'
 
 // The suite runs under a fixed TZ (vite.config sets it) and these assertions
@@ -83,8 +83,9 @@ describe('the stored value', () => {
   it('cycles between the two and labels each', () => {
     expect(nextTimeFormat('12h')).toBe('24h')
     expect(nextTimeFormat('24h')).toBe('12h')
-    expect(timeFormatLabel('12h')).toBe('12-hour')
-    expect(timeFormatLabel('24h')).toBe('24-hour')
+    // Catalogue keys, not text — see `timeFormatKey`.
+    expect(timeFormatKey('12h')).toBe('clock.12h')
+    expect(timeFormatKey('24h')).toBe('clock.24h')
   })
 })
 
@@ -94,6 +95,60 @@ describe('inputLang', () => {
     // en-US is 12-hour, which is the whole trick.
     expect(inputLang('24h')).toBe('en-GB')
     expect(inputLang('12h')).toBe('en-US')
+  })
+
+  it("carries the app's language, so the picker names months in it", () => {
+    // The same attribute that chooses the clock also chooses the calendar
+    // popup's month names. German everywhere and "September" in the one popup
+    // would be the seam showing.
+    expect(inputLang('24h', 'de')).toBe('de')
+  })
+
+  it('asks outright for a clock no region of the language keeps', () => {
+    // Every German-speaking country runs a 24-hour clock, so unlike English
+    // there is no region to pick for 12h — only the -u-hc- extension says it.
+    // Where a browser ignores extensions the fallback is German's own 24-hour
+    // clock, which is a sane thing to be handed rather than a broken one.
+    expect(inputLang('12h', 'de')).toBe('de-u-hc-h12')
+  })
+
+  it('defaults to the two tags it always returned', () => {
+    // Callers and tests that predate the Language setting pass one argument.
+    // English is the one language here that needs no extension, which is also
+    // why it degrades correctly in a browser that honours none.
+    expect(inputLang('24h', 'en')).toBe(inputLang('24h'))
+    expect(inputLang('12h', 'en')).toBe(inputLang('12h'))
+  })
+})
+
+describe('the locale argument', () => {
+  // Every formatter takes one, and every formatter treats omitting it as
+  // "format for the device" — which is what these calls passed before the
+  // Language setting existed. That is what lets a call site be threaded one at
+  // a time without a flag day.
+  it('is optional, and omitting it means the device', () => {
+    expect(fmtClock('2024-02-05T14:05:00', '24h')).toBe(
+      fmtClock('2024-02-05T14:05:00', '24h', undefined))
+    expect(fmtDue('2024-02-05T14:05:00', true, '24h')).toBe(
+      fmtDue('2024-02-05T14:05:00', true, '24h', undefined))
+    expect(fmtWhen('2024-02-05T14:05:00', '24h')).toBe(
+      fmtWhen('2024-02-05T14:05:00', '24h', undefined))
+  })
+
+  it('reorders the date, not just the words in it', () => {
+    // The reason this is a locale and not a lookup of month names: German
+    // writes the day first and puts a point after it. A catalogue of translated
+    // month names would have produced "Feb. 5" in German.
+    expect(fmtDue('2024-02-05T00:00:00', true, '24h', 'de')).toBe('5. Feb.')
+    expect(fmtDue('2024-02-05T00:00:00', true, '24h', 'en')).toBe('Feb 5')
+  })
+
+  it('does not let the locale overrule the clock setting', () => {
+    // German is a 24-hour language and the setting still wins: the whole point
+    // of `clockOpts` passing `hour12` explicitly is that the format is the
+    // account's choice, not a property of the language it reads.
+    expect(fmtClock('2024-02-05T14:05:00', '12h', 'de')).toMatch(/2:05/)
+    expect(fmtClock('2024-02-05T14:05:00', '24h', 'de')).toBe('14:05')
   })
 })
 

@@ -158,10 +158,14 @@ describe('stage 4 — task data provider', () => {
     await waitFor(() => expect(screen.getByTestId('order').textContent).toContain('a:1'))
 
     // `reorder` takes the ROWS as of the 2026-08-25 stage 3 fix — a uid alone is
-    // ambiguous once one is copied into a second list. Only the ARGUMENT SHAPE
-    // changes here; the tasks named, the gesture and every assertion below are
-    // untouched.
-    const moving = d.reorder(task({ uid: 'b', sort_order: 2, summary: 'B' }),
+    // ambiguous once one is copied into a second list — and, since subtasks
+    // became reorderable, the RUN they are displayed in as well: a drag is
+    // measured in the sequence on screen, and only the caller knows whether that
+    // is the pane's top-level rows or one parent's subtasks. Only the ARGUMENT
+    // SHAPE changes here; the tasks named, the gesture and every assertion below
+    // are untouched.
+    const moving = d.reorder(d.tasks,
+                             task({ uid: 'b', sort_order: 2, summary: 'B' }),
                              task({ uid: 'a', sort_order: 1, summary: 'A' }))
     // A concurrent write lands mid-flight — an ordinary edit, which the provider
     // applies to the same array the rollback was about to overwrite.

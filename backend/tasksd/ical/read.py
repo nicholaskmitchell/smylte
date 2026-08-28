@@ -42,6 +42,15 @@ class ItemFields:
     sequence: int | None = None
     has_rrule: bool = False
     location: str | None = None
+    # VEVENT TRANSP (RFC 5545 §3.8.2.7): "OPAQUE" (the event consumes time) or
+    # "TRANSPARENT" (it does not). Apple Calendar spells this "Busy"/"Free",
+    # Google "Busy"/"Free", Thunderbird "Show Time As".
+    #
+    # NULL means the property is ABSENT, which the spec gives a default for —
+    # OPAQUE — rather than leaving undefined. Kept as the raw wire text rather
+    # than a boolean so the column says what the resource says; every reader
+    # goes through `blocks_time` for the default and for anything unrecognised.
+    transp: str | None = None
     # The earliest instant this RESOURCE can produce, across every component —
     # the master's DTSTART, any RDATE, and any RECURRENCE-ID override's DTSTART.
     # See `min_instant` below for why the master's DTSTART is not it.
@@ -408,6 +417,7 @@ def extract(cal: Calendar, *, wire: dict[str | None, str] | None = None) -> Item
         if "DUE" in comp:
             f.due, f.due_is_date = _iso(comp.get("DUE"))
     else:  # VEVENT
+        f.transp = _text(comp, "TRANSP") or None
         if "DTEND" in comp:
             f.dtend, f.dtend_is_date = _iso(comp.get("DTEND"))
         if "DURATION" in comp:
@@ -438,6 +448,28 @@ def extract(cal: Calendar, *, wire: dict[str | None, str] | None = None) -> Item
             f.duration = authored if split_duration(authored) is not None else None
     f.min_instant = _min_instant(cal, f.dtstart)
     return f
+
+
+def blocks_time(transp: str | None) -> bool:
+    """Does an event carrying this TRANSP consume time on the owner's calendar?
+
+    THE ONE PLACE the TRANSP default is decided, because three surfaces ask —
+    the DTO the app and the connector read, the booking page's busy set, and
+    `find_free_time` — and a day described as free by one and busy by another is
+    worse than either being slightly wrong.
+
+    Absent is OPAQUE, and that is RFC 5545 §3.8.2.7's own default rather than a
+    convenience: "the default value is OPAQUE". It is also the conservative
+    direction for the reader that matters most — the busy set behind a public
+    booking page, where reading an unknown as free hands an anonymous visitor
+    the owner's real appointment.
+
+    Anything that is neither spelling is OPAQUE for the same reason. The
+    property's value type admits exactly two words, so a third is a foreign
+    client's bug, and the safe reading of a bug is "this might be a real
+    commitment".
+    """
+    return (transp or "").strip().upper() != "TRANSPARENT"
 
 
 def _min_instant(cal: Calendar, dtstart: str | None) -> str | None:

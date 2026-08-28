@@ -476,7 +476,7 @@ describe('aug19 stage 3 — logging out and back in', () => {
       summary, description: null, location: null,
       start: `${day}T09:00:00`, start_is_date: false,
       end: `${day}T09:30:00`, end_is_date: false, duration: null,
-      all_day: false, status: null, tags: [], has_rrule: false,
+      all_day: false, status: null, busy: true, tags: [], has_rrule: false,
       href: '/c1/e1.ics', etag: '"1"',
     }
   }

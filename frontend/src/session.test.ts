@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   SESSION_CHOICES, SESSION_DEFAULT, SESSION_NEVER,
-  isSessionTtl, nextSessionTtl, sessionLabel,
+  isSessionTtl, nextSessionTtl, sessionKey,
 } from './session'
 
 describe('session length choices', () => {
@@ -26,15 +26,16 @@ describe('session length choices', () => {
   })
 
   it('falls back to the shipped default when nothing is stored', () => {
-    expect(sessionLabel(null)).toBe(sessionLabel(SESSION_DEFAULT))
-    expect(sessionLabel(undefined)).toBe('7 days')
+    // Catalogue keys, not text — see `sessionKey`.
+    expect(sessionKey(null)).toBe(sessionKey(SESSION_DEFAULT))
+    expect(sessionKey(undefined)).toBe('session.7d')
     // …and for a value the server would refuse, rather than showing it back.
-    expect(sessionLabel(99)).toBe('7 days')
+    expect(sessionKey(99)).toBe('session.7d')
   })
 
   it('labels each choice', () => {
-    expect(sessionLabel(86400)).toBe('1 day')
-    expect(sessionLabel(SESSION_NEVER)).toBe('Never')
+    expect(sessionKey(86400)).toBe('session.1d')
+    expect(sessionKey(SESSION_NEVER)).toBe('session.never')
   })
 
   it('cycles through every choice and wraps', () => {

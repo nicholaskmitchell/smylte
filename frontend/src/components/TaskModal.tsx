@@ -14,6 +14,7 @@ import { dayKey, hasZone, instantFromLocal, sameValue, toLocalInput } from '../u
 import { inputLang } from '../time'
 import { useTimeFormat } from '../timeformat'
 import { blankValues, bodyFrom, FIELDS, type RowValues } from './AddMultipleModal'
+import { useI18n, useT } from '../i18n'
 
 /**
  * A date+time pair as the wire should carry it.
@@ -52,7 +53,8 @@ export function TaskModal({ task, lists, defaultList, initialTitle, onClose, onC
   onMultiple: (listId: string, summary: string) => void
 }) {
   const creating = task === null
-  const lang = inputLang(useTimeFormat())
+  const lang = inputLang(useTimeFormat(), useI18n().lang)
+  const tr = useT()
   const [summary, setSummary] = useState(task?.summary || initialTitle || '')
   const [notes, setNotes] = useState(task?.notes || '')
   // Every other property lives in the same bag the bulk composer uses, and is
@@ -132,16 +134,16 @@ export function TaskModal({ task, lists, defaultList, initialTitle, onClose, onC
         scrimPress.current = false
       }}>
       <div className="modal task-modal" role="dialog" aria-modal="true"
-        aria-label={creating ? 'Add task' : 'Task'}
+        aria-label={creating ? tr('taskModal.add') : tr('taskModal.edit')}
         onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
-          <span className="modal-title">{creating ? 'Add task' : 'Task'}</span>
-          <button className="icon-btn" onClick={onClose} aria-label="Close">✕</button>
+          <span className="modal-title">{creating ? tr('taskModal.add') : tr('taskModal.edit')}</span>
+          <button className="icon-btn" onClick={onClose} aria-label={tr('common.close')}>✕</button>
         </div>
         {/* Title and notes are the two controls FIELDS doesn't render, so they
             carry their own htmlFor/id pair — only one form is ever open. */}
         <div className="field">
-          <label className="label" htmlFor="task-title">Title</label>
+          <label className="label" htmlFor="task-title">{tr('taskModal.title')}</label>
           <input id="task-title" className="input" value={summary} autoFocus={creating}
             onChange={(e) => setSummary(e.target.value)}
             onKeyDown={(e: KeyboardEvent) => { if (e.key === 'Enter') submit() }} />
@@ -149,29 +151,32 @@ export function TaskModal({ task, lists, defaultList, initialTitle, onClose, onC
         <div className="task-props">
           {props.map((f) => (
             <div key={f.key} className={`task-prop prop-${f.key}`}>
-              <label className="label">{f.label}</label>
+              <label className="label">{tr(f.label)}</label>
               <span className="task-prop-controls">
-                {f.render(vals, patch, { lists, where: '', disabled: false, lang })}
+                {/* One form, one of each control, so nothing needs telling
+                    apart: the field's own name is the whole accessible name. */}
+                {f.render(vals, patch,
+                  { lists, disabled: false, lang, t: tr, scope: (n) => n })}
               </span>
             </div>
           ))}
         </div>
         <div className="field">
-          <label className="label" htmlFor="task-notes">Notes</label>
+          <label className="label" htmlFor="task-notes">{tr('taskModal.notes')}</label>
           <textarea id="task-notes" className="input" rows={3} value={notes}
             onChange={(e) => setNotes(e.target.value)} />
         </div>
         <div className="modal-actions">
           {creating ? (
             <button className="btn ghost" onClick={() => onMultiple(listId, summary)}>
-              Add multiple
+              {tr('taskModal.addMultiple')}
             </button>
           ) : (
-            <button className="btn ghost" onClick={onDelete}>Delete</button>
+            <button className="btn ghost" onClick={onDelete}>{tr('common.delete')}</button>
           )}
           <span className="spacer" />
           <button className="btn" onClick={submit} disabled={creating && !summary.trim()}>
-            {creating ? 'Add' : 'Save'}
+            {creating ? tr('common.add') : tr('common.save')}
           </button>
         </div>
       </div>

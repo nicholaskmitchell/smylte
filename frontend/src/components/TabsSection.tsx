@@ -9,6 +9,7 @@
 
 import { useEffect, useRef } from 'react'
 import { TAB_LABELS, moveTab, type Tab, type TabStart } from '../tabs'
+import { useT } from '../i18n'
 
 export function TabsSection({ order, start, onOrderChange, onStartChange }: {
   order: Tab[]
@@ -27,6 +28,8 @@ export function TabsSection({ order, start, onOrderChange, onStartChange }: {
     refocus.current = null
   }, [order])
 
+  const tr = useT()
+
   const move = (t: Tab, dir: -1 | 1) => {
     refocus.current = `${t}:${dir}`
     onOrderChange(moveTab(order, t, dir))
@@ -35,7 +38,8 @@ export function TabsSection({ order, start, onOrderChange, onStartChange }: {
   const arrow = (t: Tab, dir: -1 | 1, disabled: boolean) => (
     <button className="icon-btn" disabled={disabled}
       ref={(el) => { if (el) arrows.current.set(`${t}:${dir}`, el) }}
-      aria-label={`Move ${TAB_LABELS[t]} ${dir === -1 ? 'left' : 'right'}`}
+      aria-label={tr(dir === -1 ? 'tabs.moveLeft' : 'tabs.moveRight',
+        { tab: tr(TAB_LABELS[t]) })}
       onClick={() => move(t, dir)}>
       {dir === -1 ? '↑' : '↓'}
     </button>
@@ -47,7 +51,7 @@ export function TabsSection({ order, start, onOrderChange, onStartChange }: {
         {order.map((t, i) => (
           <div key={t} className="tab-order-row">
             <span className="mono num">{i + 1}</span>
-            <span className="name">{TAB_LABELS[t]}</span>
+            <span className="name">{tr(TAB_LABELS[t])}</span>
             {arrow(t, -1, i === 0)}
             {arrow(t, 1, i === order.length - 1)}
           </div>
@@ -55,18 +59,15 @@ export function TabsSection({ order, start, onOrderChange, onStartChange }: {
       </div>
 
       <div className="menu-row">
-        <label htmlFor="start-tab">Opens on</label>
+        <label htmlFor="start-tab">{tr('tabs.opensOn')}</label>
         <select id="start-tab" className="input" value={start}
           onChange={(e) => onStartChange(e.target.value as TabStart)}>
-          {order.map((t) => <option key={t} value={t}>{TAB_LABELS[t]}</option>)}
-          <option value="last">Last used tab</option>
+          {order.map((x) => <option key={x} value={x}>{tr(TAB_LABELS[x])}</option>)}
+          <option value="last">{tr('tabs.lastUsed')}</option>
         </select>
       </div>
 
-      <p className="hintline">
-        The order here is the order across the top. “Last used tab” reopens
-        wherever you left off, on every device signed into this account.
-      </p>
+      <p className="hintline">{tr('tabs.hint')}</p>
     </>
   )
 }

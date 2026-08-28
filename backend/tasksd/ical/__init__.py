@@ -21,6 +21,7 @@ from .edit import (
 from .read import (
     ItemFields,
     TaskFields,
+    blocks_time,
     extract,
     extract_from_raw,
     find_component,
@@ -31,6 +32,7 @@ from .read import (
 __all__ = [
     "ItemFields",
     "TaskFields",
+    "blocks_time",
     "extract",
     "extract_from_raw",
     "parse_calendar",

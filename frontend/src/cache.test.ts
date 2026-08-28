@@ -1,11 +1,14 @@
 import { describe, expect, it, beforeEach, vi, afterEach } from 'vitest'
 import {
   CACHE_PREFIX, CACHE_VERSION, MAX_BYTES, MAX_ROWS,
-  cacheCalendars, cacheEvents, cacheLists, cacheTasks, clearCache,
-  readCachedCalendars, readCachedEvents, readCachedLists, readCachedTasks,
-  sanitizeEvent, sanitizeList, sanitizeTask, setCacheUser, sweepOldVersions,
+  cacheCalendars, cacheDayPlan, cacheDayRange, cacheEvents, cacheHabits,
+  cacheLists, cacheTasks, clearCache,
+  readCachedCalendars, readCachedDayPlan, readCachedDayRange, readCachedEvents,
+  readCachedHabits, readCachedLists, readCachedTasks,
+  sanitizeDayEntry, sanitizeDayPlan, sanitizeEvent, sanitizeHabit, sanitizeList,
+  sanitizeTask, setCacheUser, sweepOldVersions,
 } from './cache'
-import type { CalEvent, List, Task } from './api'
+import type { CalEvent, DayEntry, DayPlan, Habit, List, Task } from './api'
 
 const task = (o: Partial<Task> = {}): Task => ({
   uid: 'u1', list: 'l1', summary: 'Ship it', notes: null, status: 'NEEDS-ACTION',
@@ -29,7 +32,24 @@ const event = (o: Partial<CalEvent> = {}): CalEvent => ({
   uid: 'e1', id: 'e1', recurrence_id: null, is_recurring: false, calendar: '/c1/',
   summary: 'Lunch', description: null, location: null, start: '2026-07-15',
   start_is_date: true, end: '2026-07-16', end_is_date: true, duration: null, all_day: true,
-  status: null, tags: [], has_rrule: false, href: '/c1/e1.ics', etag: '"1"', ...o,
+  status: null, busy: true, tags: [], has_rrule: false, href: '/c1/e1.ics', etag: '"1"', ...o,
+})
+
+const dayEntry = (o: Partial<DayEntry> = {}): DayEntry => ({
+  entry_id: 'e1', day: '2026-08-21', kind: 'note', list: null, uid: null,
+  title: 'Water the plants', source: 'user', position: 1,
+  done_at: null, dropped_at: null, habit_id: null, rolled_to: null,
+  estimate_minutes: null, created_at: '2026-08-21T08:00:00.000Z', ...o,
+})
+
+const dayPlan = (o: Partial<DayPlan> = {}): DayPlan => ({
+  day: '2026-08-21', planned: true, capacity_minutes: null, capacity: null,
+  committed_at: null, shutdown_at: null, reflection: null, entries: [], ...o,
+})
+
+const habit = (o: Partial<Habit> = {}): Habit => ({
+  id: 'hb1', title: 'Read', days: '', paused_at: null, position: 1,
+  estimate_minutes: null, created_at: '2026-08-01T08:00:00.000Z', ...o,
 })
 
 const keyOf = (kind: string, user = 'nick') =>
@@ -203,6 +223,32 @@ describe('cache writes stay bounded', () => {
   })
 })
 
+describe('an event\'s busy flag', () => {
+  it('reads a missing value as BUSY, not as free', () => {
+    // Absent from anything this cache wrote before the field existed, and the
+    // DTO's own default for an event with no TRANSP is busy — so a missing
+    // value has to read as true. `bool()` would answer false for exactly those
+    // rows, and every one of them would paint as free for one round trip after
+    // an upgrade.
+    expect(sanitizeEvent({ ...event(), busy: undefined })?.busy).toBe(true)
+    const { busy: _drop, ...without } = event()
+    expect(sanitizeEvent(without)?.busy).toBe(true)
+  })
+
+  it('keeps an explicit false, and reads junk as busy', () => {
+    expect(sanitizeEvent({ ...event(), busy: false })?.busy).toBe(false)
+    // Only `false` means free. A hand-edited blob saying "no" is not a decision
+    // this cache gets to make on the owner's behalf.
+    expect(sanitizeEvent({ ...event(), busy: 'no' })?.busy).toBe(true)
+    expect(sanitizeEvent({ ...event(), busy: 0 })?.busy).toBe(true)
+  })
+
+  it('round trips through the window cache', () => {
+    cacheEvents('2026-06-28', '2026-08-09', [event({ busy: false })])
+    expect(readCachedEvents('2026-06-28', '2026-08-09')![0].busy).toBe(false)
+  })
+})
+
 describe('the event window', () => {
   it('only answers for the window it was written for', () => {
     cacheEvents('2026-06-28', '2026-08-09', [event()])
@@ -248,5 +294,154 @@ describe('cache lifecycle', () => {
     expect(localStorage.getItem(`${CACHE_PREFIX}:0:nick:tasks`)).toBeNull()
     expect(readCachedTasks()).toHaveLength(1)
     expect(localStorage.getItem('tasks-theme')).toBe('dark')
+  })
+})
+
+describe('the day plan', () => {
+  it('returns the day it stored, entries and all', () => {
+    cacheDayPlan(dayPlan({
+      entries: [dayEntry({ entry_id: 'a' }), dayEntry({ entry_id: 'b', kind: 'habit' })],
+      capacity: 300, capacity_minutes: 300, reflection: 'Slow start.',
+    }))
+    const back = readCachedDayPlan('2026-08-21')
+    expect(back?.entries.map((e) => e.entry_id)).toEqual(['a', 'b'])
+    expect(back?.capacity).toBe(300)
+    expect(back?.reflection).toBe('Slow start.')
+  })
+
+  it('only answers for the day it was written for', () => {
+    cacheDayPlan(dayPlan())
+    expect(readCachedDayPlan('2026-08-21')).not.toBeNull()
+    // The rows on screen and the day every write carries have to be the same
+    // day, so a blob for another one is a miss rather than a head start.
+    expect(readCachedDayPlan('2026-08-22')).toBeNull()
+  })
+
+  it('keeps an EMPTY day, which is a real answer and not a corrupt entry', () => {
+    // The one place this differs from the row caches above: an opened day the
+    // owner emptied is a day with nothing on it, and reporting that as a miss
+    // would blank the tab for exactly the account whose last look at it was
+    // blank.
+    cacheDayPlan(dayPlan({ entries: [] }))
+    expect(readCachedDayPlan('2026-08-21')?.entries).toEqual([])
+  })
+
+  it('refuses a blob whose envelope and body name different days', () => {
+    localStorage.setItem(keyOf('day'), JSON.stringify({
+      at: Date.now(), day: '2026-08-21', plan: dayPlan({ day: '2026-08-20' }),
+    }))
+    expect(readCachedDayPlan('2026-08-21')).toBeNull()
+  })
+
+  it('drops rows that are not entries, keeping the ones that are', () => {
+    localStorage.setItem(keyOf('day'), JSON.stringify({
+      at: Date.now(),
+      day: '2026-08-21',
+      plan: {
+        day: '2026-08-21',
+        entries: [dayEntry({ entry_id: 'good' }), null, 7, 'nope',
+          { entry_id: 'no-kind', day: '2026-08-21', source: 'user' }],
+      },
+    }))
+    expect(readCachedDayPlan('2026-08-21')?.entries.map((e) => e.entry_id))
+      .toEqual(['good'])
+  })
+
+  it('treats an unparseable blob as a miss', () => {
+    localStorage.setItem(keyOf('day'), '{not json')
+    expect(readCachedDayPlan('2026-08-21')).toBeNull()
+  })
+
+  it('keeps a kind it has never heard of rather than rewriting it', () => {
+    // `DayEntryKind` widens silently and TodayView reads it through fallback
+    // maps for that reason. An allowlist here would rewrite an unfamiliar kind
+    // into a familiar one on the way through the disk cache ONLY, so a row
+    // would read one way live and another way cached.
+    const back = sanitizeDayEntry({ ...dayEntry(), kind: 'ritual' })
+    expect(back?.kind).toBe('ritual')
+    // …but a row that does not say what it is, or which day it is on, is not a
+    // row: both are load-bearing everywhere they are read.
+    expect(sanitizeDayEntry({ ...dayEntry(), kind: '' })).toBeNull()
+    expect(sanitizeDayEntry({ ...dayEntry(), day: null })).toBeNull()
+    expect(sanitizeDayEntry({ ...dayEntry(), source: undefined })).toBeNull()
+  })
+
+  it('rebuilds every field to its own type', () => {
+    const back = sanitizeDayPlan({
+      day: '2026-08-21', planned: 'yes', capacity: 'lots', capacity_minutes: {},
+      committed_at: 5, shutdown_at: [], reflection: false,
+      entries: [{ ...dayEntry(), position: 'top', estimate_minutes: 'ages',
+        created_at: 42, done_at: 1 }],
+    })
+    expect(back).toMatchObject({
+      planned: false, capacity: null, capacity_minutes: null,
+      committed_at: null, shutdown_at: null, reflection: null,
+    })
+    expect(back?.entries[0]).toMatchObject({
+      position: null, estimate_minutes: null, created_at: '', done_at: null,
+    })
+  })
+
+  it('misses with no user set, so one account never reads another\'s', () => {
+    cacheDayPlan(dayPlan())
+    setCacheUser('someone-else')
+    expect(readCachedDayPlan('2026-08-21')).toBeNull()
+    setCacheUser('nick')
+    expect(readCachedDayPlan('2026-08-21')).not.toBeNull()
+  })
+
+  it('goes with the rest on logout', () => {
+    cacheDayPlan(dayPlan())
+    cacheDayRange('2026-08-07', '2026-08-22', [dayPlan()])
+    cacheHabits([habit()])
+    clearCache()
+    expect(readCachedDayPlan('2026-08-21')).toBeNull()
+    expect(readCachedDayRange('2026-08-07', '2026-08-22')).toBeNull()
+    expect(readCachedHabits()).toBeNull()
+  })
+})
+
+describe('the fortnight window', () => {
+  it('only answers for the window it was written for', () => {
+    cacheDayRange('2026-08-07', '2026-08-22', [dayPlan()])
+    expect(readCachedDayRange('2026-08-07', '2026-08-22')).toHaveLength(1)
+    // Both ends move at a rollover and at every step of the picker, and a
+    // window that does not match answers a different fortnight.
+    expect(readCachedDayRange('2026-08-06', '2026-08-21')).toBeNull()
+  })
+
+  it('keeps one window — the latest write wins', () => {
+    cacheDayRange('2026-08-07', '2026-08-22', [dayPlan({ day: '2026-08-21' })])
+    cacheDayRange('2026-08-08', '2026-08-23', [dayPlan({ day: '2026-08-22' })])
+    expect(readCachedDayRange('2026-08-07', '2026-08-22')).toBeNull()
+    expect(readCachedDayRange('2026-08-08', '2026-08-23')![0].day).toBe('2026-08-22')
+  })
+
+  it('treats an empty window as a miss, unlike a single day', () => {
+    // "No plans in there" and "nothing cached" are indistinguishable to every
+    // reader of this — `recentPlans` answers [] either way — so there is
+    // nothing to preserve and the ordinary corrupt-blob rule applies.
+    cacheDayRange('2026-08-07', '2026-08-22', [])
+    expect(readCachedDayRange('2026-08-07', '2026-08-22')).toBeNull()
+  })
+})
+
+describe('the habit rules', () => {
+  it('returns what it stored', () => {
+    cacheHabits([habit(), habit({ id: 'hb2', title: 'Stretch', days: 'mon,wed' })])
+    expect(readCachedHabits()!.map((h) => h.title)).toEqual(['Read', 'Stretch'])
+    expect(readCachedHabits()![1].days).toBe('mon,wed')
+  })
+
+  it('rebuilds every field to its own type, and reads a missing schedule as every day', () => {
+    // '' is EVERY DAY, spelled as the absence of a restriction — so the default
+    // is not a stand-in for a missing value, it IS the value a habit with no
+    // restriction carries.
+    expect(sanitizeHabit({ id: 'hb1', days: null, position: 'first' }))
+      .toEqual({
+        id: 'hb1', title: '', days: '', paused_at: null, position: null,
+        estimate_minutes: null, created_at: '',
+      })
+    expect(sanitizeHabit({ title: 'no id' })).toBeNull()
   })
 })

@@ -34,6 +34,14 @@ rather than per-list, because the pane is always the merged view. That order
 lives in the app-only sidecar, so it is Smylte's own and does not reach the
 other CalDAV clients.
 
+**Subtasks drag too**, among their own siblings — a subtask lands between the
+steps of the thing it is a step of, never on a top-level row, because moving a
+subtask out from under its parent would be re-parenting rather than ordering.
+Subtasks are usually a sequence ("prep, cook, serve") and a sequence is not
+something the sort keys can express: undated and unprioritised, they come out in
+title order, which is an order nobody chose. One drag writes the whole sequence,
+the same one the top-level rows use.
+
 **Calendar.** Month grid across multiple calendars, each with a visibility
 toggle and non-destructive **archive** (hide without deleting; restore from
 Settings → Calendar). Events support all-day and timed spans, drag to move or
@@ -52,6 +60,16 @@ clicking it opens the same editor the Tasks tab uses.
 **Scheduling.** Calendly-style booking links: weekly availability, buffers,
 minimum notice, and a horizon, with a public booking page at `/book/{token}`
 that writes a real event onto the target calendar.
+
+What blocks a slot is the owner's to decide, and iCalendar already has the field
+for it: every event has a **Show as** of Busy or Free (`TRANSP` — what Apple
+Calendar and Google Calendar call Busy/Free and Thunderbird "Show Time As"), and
+an event marked Free is left out of the busy set behind the booking page, out of
+the redacted busy shown on it, and out of `smylte_find_free_time`. It reads what
+the other clients on these collections write, so a hold someone marked Free on
+their phone already means it here. Absent is Busy — RFC 5545's own default — and
+so is anything unrecognised, because the only direction a page that hands
+availability to anonymous visitors may be wrong in is over-blocking.
 
 **Home.** The landing tab: a 12-column canvas of modules — Today, Overdue,
 Upcoming, mini calendar, recently completed, booking links, upcoming bookings,

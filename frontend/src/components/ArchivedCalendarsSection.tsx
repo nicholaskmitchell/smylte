@@ -3,6 +3,7 @@ import { api, type CalEvent, type List } from '../api'
 import { cssColor, dayKey, makeGuard, ymd } from '../util'
 import { fmtClock } from '../time'
 import { useTimeFormat } from '../timeformat'
+import { useI18n, useT } from '../i18n'
 
 // Archive is app-level: the CalDAV collection stays on the wire, so an archived
 // calendar's events are still fetchable. This section lists archived calendars
@@ -13,11 +14,14 @@ import { useTimeFormat } from '../timeformat'
 // back control and its own Escape, and reports upward through `onViewing` so the
 // panel's back control steps out of the agenda before it leaves the section.
 
-const fmtMonth = (d: Date) =>
-  d.toLocaleDateString(undefined, { month: 'short', year: 'numeric' })
+// `locale` rather than `undefined`: these read the app's Language setting, not
+// the device's, so the agenda's dates are in the same language as the words
+// around them.
+const fmtMonth = (d: Date, locale: string) =>
+  d.toLocaleDateString(locale, { month: 'short', year: 'numeric' })
 
-const fmtDay = (day: string) =>
-  new Date(`${day}T00:00`).toLocaleDateString(undefined,
+const fmtDay = (day: string, locale: string) =>
+  new Date(`${day}T00:00`).toLocaleDateString(locale,
     { weekday: 'short', month: 'short', day: 'numeric' })
 
 export function ArchivedCalendarsSection({ archived, onChange, onExpire, viewing, onViewing }: {
@@ -30,6 +34,7 @@ export function ArchivedCalendarsSection({ archived, onChange, onExpire, viewing
   onViewing: (cal: List | null) => void
 }) {
   const guard = makeGuard(onExpire)
+  const tr = useT()
   const [cals, setCals] = useState<List[]>([])
   const [loaded, setLoaded] = useState(false)
   const [failed, setFailed] = useState(false)
@@ -70,20 +75,20 @@ export function ArchivedCalendarsSection({ archived, onChange, onExpire, viewing
   ) : (
     <div className="arch-list">
       {!loaded ? (
-        <div className="arch-empty">Loading…</div>
+        <div className="arch-empty">{tr('arch.loading')}</div>
       ) : failed ? (
         // Distinguished from an empty archive on purpose: "No archived
         // calendars." over a failed fetch is a confident lie about the account.
-        <div className="arch-empty">Couldn&rsquo;t load your archived calendars.</div>
+        <div className="arch-empty">{tr('arch.loadFailed')}</div>
       ) : archivedCals.length === 0 ? (
-        <div className="arch-empty">No archived calendars.</div>
+        <div className="arch-empty">{tr('arch.none')}</div>
       ) : archivedCals.map((c) => (
         <div key={c.id} className="arch-row">
           <span className="swatch" style={cssColor(c.color) ? { background: cssColor(c.color)! } : undefined} />
           <span className="name">{c.name}</span>
           <span className="count">{c.event_count}</span>
-          <button className="btn ghost" onClick={() => onViewing(c)}>View events</button>
-          <button className="btn" onClick={() => restore(c.id)}>Restore</button>
+          <button className="btn ghost" onClick={() => onViewing(c)}>{tr('arch.viewEvents')}</button>
+          <button className="btn" onClick={() => restore(c.id)}>{tr('arch.restore')}</button>
         </div>
       ))}
     </div>
@@ -100,6 +105,7 @@ function ArchivedEvents({ cal, onExpire, onRestore }: {
 }) {
   const guard = makeGuard(onExpire)
   const tf = useTimeFormat()
+  const { locale, t: tr } = useI18n()
   const [events, setEvents] = useState<CalEvent[]>([])
   const [loaded, setLoaded] = useState(false)
   const [failed, setFailed] = useState(false)
@@ -138,26 +144,26 @@ function ArchivedEvents({ cal, onExpire, onRestore }: {
   return (
     <>
       <div className="arch-caption">
-        Showing events {fmtMonth(from)} – {fmtMonth(to)}
-        <button className="btn ghost" onClick={onRestore}>Restore calendar</button>
+        {tr('arch.showing', { from: fmtMonth(from, locale), to: fmtMonth(to, locale) })}
+        <button className="btn ghost" onClick={onRestore}>{tr('arch.restoreCalendar')}</button>
       </div>
       <div className="arch-events">
         {!loaded ? (
-          <div className="arch-empty">Loading…</div>
+          <div className="arch-empty">{tr('arch.loading')}</div>
         ) : failed ? (
-          <div className="arch-empty">Couldn&rsquo;t load this calendar&rsquo;s events.</div>
+          <div className="arch-empty">{tr('arch.calLoadFailed')}</div>
         ) : days.length === 0 ? (
-          <div className="arch-empty">No events in this window.</div>
+          <div className="arch-empty">{tr('arch.noEvents')}</div>
         ) : days.map(([day, evs]) => (
           <div key={day} className="arch-day">
-            <div className="arch-day-head">{fmtDay(day)}</div>
+            <div className="arch-day-head">{fmtDay(day, locale)}</div>
             {evs.map((e) => (
               <div key={e.id} className="agenda-ev"
                 style={cssColor(cal.color) ? { '--ev-c': cssColor(cal.color) } as CSSProperties : undefined}>
-                <span className="t">{e.all_day || e.start_is_date ? 'all day' : (e.start ? fmtClock(e.start, tf) : '')}</span>
+                <span className="t">{e.all_day || e.start_is_date ? tr('common.allDay') : (e.start ? fmtClock(e.start, tf, locale) : '')}</span>
                 <span>
                   {e.is_recurring && <span className="recur" aria-hidden="true">↻ </span>}
-                  {e.summary || '(untitled)'}
+                  {e.summary || tr('common.untitled')}
                 </span>
               </div>
             ))}
