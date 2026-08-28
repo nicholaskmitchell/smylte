@@ -34,6 +34,7 @@ import { taskKey } from '../order'
 import { textDir } from '../util'
 import { fmtDuration } from '../time'
 import { capacityInput, parseCapacity } from '../capacity'
+import { useT, useTx } from '../i18n'
 
 /** A suggestion group as `TodayView` builds it. */
 export interface SuggestGroup {
@@ -48,7 +49,10 @@ export interface SuggestGroup {
  *  whole job is to make you look at it. */
 const LEFTOVER_KEY = 'open'
 
-const STEPS = ['How long is today?', 'What are you doing?', 'Shape it'] as const
+// Catalogue KEYS, not text — the same reason `TAB_LABELS` holds keys. The
+// order is the ritual's order and the count is read off it, so this stays an
+// array rather than three lookups.
+const STEPS = ['plan.step.capacity', 'plan.step.pick', 'plan.step.shape'] as const
 
 export function PlanRitual({
   entries, suggestions, capacity, planned, meetingMinutes, unestimated,
@@ -74,6 +78,7 @@ export function PlanRitual({
   onCommit: () => void
   onClose: () => void
 }) {
+  const tr = useT()
   const [step, setStep] = useState(0)
   /** Whether the press that started this click landed on the scrim itself. */
   const scrimPress = useRef(false)
@@ -94,11 +99,14 @@ export function PlanRitual({
         scrimPress.current = false
       }}>
       <div className="modal plan-ritual" role="dialog" aria-modal="true"
-        aria-label="Plan your day" onClick={(e) => e.stopPropagation()}>
+        aria-label={tr('plan.aria')} onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
-          <span className="modal-title">{STEPS[step]}</span>
-          <span className="plan-step mono">{step + 1} of {STEPS.length}</span>
-          <button className="icon-btn" onClick={onClose} aria-label="Close">✕</button>
+          <span className="modal-title">{tr(STEPS[step])}</span>
+          <span className="plan-step mono">
+            {tr('plan.stepOf', { n: step + 1, total: STEPS.length })}
+          </span>
+          <button className="icon-btn" onClick={onClose}
+            aria-label={tr('common.close')}>✕</button>
         </div>
 
         {step === 0 && (
@@ -117,28 +125,30 @@ export function PlanRitual({
             adding — which is the whole reason the ritual is worth walking. */}
         {step > 0 && capacity != null && (
           <p className={`plan-total mono ${over ? 'over' : ''}`} role="status">
-            {fmtDuration(planned)} of {fmtDuration(capacity)}
-            {unestimated > 0 && ` · ${unestimated} not estimated`}
-            {over && ` · ${fmtDuration(planned - capacity)} over`}
+            {tr('plan.total', {
+              planned: fmtDuration(planned), capacity: fmtDuration(capacity),
+            })}
+            {unestimated > 0 && tr('plan.unestimated', { count: unestimated })}
+            {over && tr('plan.over', { amount: fmtDuration(planned - capacity) })}
           </p>
         )}
 
         <div className="modal-actions plan-actions">
           {step > 0 && (
-            <button className="btn ghost" onClick={() => setStep(step - 1)}>Back</button>
+            <button className="btn ghost" onClick={() => setStep(step - 1)}>{tr('common.back')}</button>
           )}
           <span className="spacer" />
           {!last && (
             // "Skip" and not a disabled Next: every step is optional, and a
             // flow that refused to advance would be the wizard this is not.
-            <button className="btn ghost" onClick={() => setStep(step + 1)}>Skip</button>
+            <button className="btn ghost" onClick={() => setStep(step + 1)}>{tr('plan.skip')}</button>
           )}
           {last ? (
             <button className="btn" onClick={onCommit}>
-              {committedAt ? 'Done' : 'Start the day'}
+              {committedAt ? tr('plan.done') : tr('plan.start')}
             </button>
           ) : (
-            <button className="btn" onClick={() => setStep(step + 1)}>Next</button>
+            <button className="btn" onClick={() => setStep(step + 1)}>{tr('plan.next')}</button>
           )}
         </div>
 
@@ -148,9 +158,7 @@ export function PlanRitual({
             decision it does not have the standing to make. */}
         {last && over && (
           <p className="plan-warn" role="status">
-            That is {fmtDuration(planned - capacity!)} more than you said you
-            would work. You can start anyway — but it is easier to move
-            something now than at four o'clock.
+            {tr('plan.warn', { amount: fmtDuration(planned - capacity!) })}
           </p>
         )}
       </div>
@@ -164,6 +172,8 @@ function CapacityStep({ capacity, meetingMinutes, onCapacity }: {
   meetingMinutes: number
   onCapacity: (minutes: number | null) => void
 }) {
+  const tr = useT()
+  const tx = useTx()
   const [draft, setDraft] = useState(() => capacityInput(capacity))
   const [refused, setRefused] = useState(false)
 
@@ -199,11 +209,11 @@ function CapacityStep({ capacity, meetingMinutes, onCapacity }: {
   return (
     <div className="plan-body">
       <label className="plan-label" htmlFor="plan-capacity">
-        When are you stopping today?
+        {tr('plan.stopping')}
       </label>
       <input id="plan-capacity" className="input" autoFocus value={draft}
-        placeholder="until 6pm, or 5h"
-        aria-label="How long you are working today"
+        placeholder={tr('plan.capacityPlaceholder')}
+        aria-label={tr('plan.capacityAria')}
         onChange={(e) => { setDraft(e.target.value); setRefused(false) }}
         onBlur={commit}
         onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commit() } }} />
@@ -212,14 +222,17 @@ function CapacityStep({ capacity, meetingMinutes, onCapacity }: {
         // It names what it takes instead of saying "invalid", because the useful
         // half of a rejection is the example.
         <p className="plan-hint warn" role="status">
-          Try <span className="mono">until 6pm</span> or{' '}
-          <span className="mono">5h</span>.
+          {tx('plan.capacityRefused', {
+            a: <span className="mono">{tr('capacity.example.until')}</span>,
+            b: <span className="mono">{tr('capacity.example.length')}</span>,
+          })}
         </p>
       ) : (
         <p className="plan-hint">
-          Say it either way — <span className="mono">until 6pm</span> or{' '}
-          <span className="mono">5h</span>. It is only for today; Settings holds
-          the one that fills this in.
+          {tx('plan.capacityHint', {
+            a: <span className="mono">{tr('capacity.example.until')}</span>,
+            b: <span className="mono">{tr('capacity.example.length')}</span>,
+          })}
         </p>
       )}
       {meetingMinutes > 0 && (
@@ -227,7 +240,7 @@ function CapacityStep({ capacity, meetingMinutes, onCapacity }: {
         // this app does not get to make on the owner's behalf, so the collision
         // is put in front of them and the arithmetic is left alone.
         <p className="plan-hint">
-          You already have {fmtDuration(meetingMinutes)} on the calendar today.
+          {tr('plan.meetings', { amount: fmtDuration(meetingMinutes) })}
         </p>
       )}
     </div>
@@ -240,22 +253,20 @@ function PickStep({ suggestions, colorOf, onAddTask }: {
   colorOf: (listId: string | null) => string | null
   onAddTask: (t: Task) => void
 }) {
+  const tr = useT()
   // Leftovers first, and reworded. The rest keep the order and the labels the
   // day itself gives them, so nothing here is a second opinion about what
   // matters — only about what to look at first.
   const leftovers = suggestions.find((g) => g.key === LEFTOVER_KEY)
   const rest = suggestions.filter((g) => g.key !== LEFTOVER_KEY)
   const groups = leftovers
-    ? [{ ...leftovers, label: 'You did not finish these last time' }, ...rest]
+    ? [{ ...leftovers, label: tr('plan.leftovers') }, ...rest]
     : rest
 
   if (!groups.length) {
     return (
       <div className="plan-body">
-        <p className="empty">
-          Nothing waiting. Whatever else today needs, type it into the box behind
-          this.
-        </p>
+        <p className="empty">{tr('plan.nothingWaiting')}</p>
       </div>
     )
   }
@@ -268,15 +279,15 @@ function PickStep({ suggestions, colorOf, onAddTask }: {
             {g.items.map((t) => (
               <li key={taskKey(t)} className="today-row today-sug">
                 <button type="button" className="today-plus"
-                  aria-label={`Add ${t.summary || '(untitled)'} to today`}
+                  aria-label={tr('plan.addToToday', { task: t.summary || tr('common.untitled') })}
                   onClick={() => onAddTask(t)}>+</button>
                 <span className="today-kind-mark" data-kind="task" role="img"
-                  aria-label="Task">
+                  aria-label={tr('common.task')}>
                   <span className="today-kind-box" style={colorOf(t.list)
                     ? { background: colorOf(t.list)! } : undefined} />
                 </span>
                 <span className="today-title" dir={textDir(t.summary)}>
-                  {t.summary || '(untitled)'}
+                  {t.summary || tr('common.untitled')}
                 </span>
               </li>
             ))}
@@ -292,18 +303,17 @@ function ShapeStep({ entries, renderRow }: {
   entries: DayEntry[]
   renderRow: (e: DayEntry) => ReactNode
 }) {
+  const tr = useT()
   if (!entries.length) {
     return (
       <div className="plan-body">
-        <p className="empty">Nothing on today yet.</p>
+        <p className="empty">{tr('plan.nothingOnToday')}</p>
       </div>
     )
   }
   return (
     <div className="plan-body plan-scroll">
-      <p className="plan-hint">
-        Press an estimate to set it. Drag a row to move it.
-      </p>
+      <p className="plan-hint">{tr('plan.shapeHint')}</p>
       {/* The day's OWN rows, through the day's own renderer — so the estimate
           cell, the checkbox and the drag behave here exactly as they do behind
           this dialog, and there is no second implementation to drift. */}
