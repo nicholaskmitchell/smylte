@@ -2081,7 +2081,14 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
 
   return (
     <div className="content">
-      <div className="content-head">
+      {/* `today-head` because this header holds more than any other tab's — a
+          title, a two-button day nav, a date, a count and THREE named actions —
+          and on a phone that is a layout question the shared rule cannot
+          answer. Tasks has a title, a count and a view switcher; Calendar has a
+          title and a month nav. Naming it is what lets the mobile block put the
+          actions on one row here without touching the tabs that do not need
+          it. */}
+      <div className="content-head today-head">
         {/* The tab is Today; what is on the screen may not be. Renaming the
             title is the cheapest way to say which — a heading that still reads
             "Today" over last Tuesday's rows is the one mistake this surface
@@ -2110,7 +2117,7 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
         <span className="content-sub">{heading}</span>
         <span className="spacer" />
         {entries !== null && (
-          <span className="content-sub">
+          <span className="content-sub today-count">
             {/* "3 open" is a to-do list's figure and belongs on the day you can
                 still act on. On a finished day the same rows are better counted
                 the other way up: what got done THAT DAY is the thing a look-back
