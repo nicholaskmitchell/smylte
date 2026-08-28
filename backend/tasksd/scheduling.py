@@ -9,6 +9,22 @@ All-day events deliberately do NOT count as busy: in practice they are
 annotations (birthdays, holidays, trip banners), and treating them as 24h busy
 would silently zero out whole days of availability. An owner who wants to block
 a day can add a timed event spanning it.
+
+Neither do events the owner has marked FREE — iCalendar's
+``TRANSP:TRANSPARENT``, which Apple Calendar spells "Busy/Free" and Thunderbird
+"Show Time As". That is the property's entire purpose: RFC 5545 §3.8.2.7 defines
+OPAQUE as "consumes time on a calendar" and TRANSPARENT as does not, and the
+example the RFC itself gives for the latter is an event that "does not block
+searches for busy time". A held slot, a tentative pencilling-in, a colleague's
+FYI invite — the owner has already said these do not block, in the field their
+other calendar clients put in front of them, and a booking page that ignored it
+would be the one reader on the account overruling them.
+
+The DEFAULT is OPAQUE and the decision lives in ``read.blocks_time``, not here:
+absent is busy, an unrecognised value is busy, and a cache row written before
+the column existed is busy. Every way of not knowing lands on "this might be a
+real commitment", which is the only direction a page that hands availability to
+anonymous visitors may be wrong in.
 """
 from __future__ import annotations
 
@@ -131,8 +147,9 @@ def busy_intervals(
     events: Iterable[dict], tz: ZoneInfo, *, naive_tz: ZoneInfo | None = None
 ) -> list[Interval]:
     """Blocking intervals from event DTOs (``TaskService.events_in_range`` shape,
-    recurrences already expanded). Cancelled and all-day events don't block (see
-    module docstring); a malformed event is skipped rather than failing the page.
+    recurrences already expanded). Cancelled, all-day and FREE events don't block
+    (see module docstring); a malformed event is skipped rather than failing the
+    page.
 
     ``naive_tz``: the zone floating times are authored in — see
     ``parse_event_time``. Defaults to ``tz``, the historical behaviour."""
@@ -142,6 +159,16 @@ def busy_intervals(
             if not ev.get("start") or ev.get("start_is_date") or ev.get("all_day"):
                 continue
             if str(ev.get("status") or "").upper() == "CANCELLED":
+                continue
+            # `is False`, not falsy, and not `.get("busy", True)` either. The
+            # DTO always carries this key — `_event_dto` and `_occurrence_dto`
+            # both set it from `blocks_time`, which has already applied the
+            # spec's default — so the only way to arrive here without one is a
+            # dict some other caller built. Reading a MISSING key as free would
+            # make every such caller's events silently bookable over; reading
+            # only an explicit `False` as free keeps the fail-safe direction the
+            # module docstring commits to.
+            if ev.get("busy") is False:
                 continue
             start = parse_event_time(ev["start"], tz, naive_tz)
             if ev.get("end"):

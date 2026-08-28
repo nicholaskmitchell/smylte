@@ -100,7 +100,7 @@ const ev = (o: Partial<CalEvent> = {}): CalEvent => ({
   summary: 'Standup', description: null, location: null,
   start: '2026-03-06T09:00:00', start_is_date: false,
   end: '2026-03-06T09:30:00', end_is_date: false, duration: null,
-  all_day: false, status: null, tags: [], has_rrule: false,
+  all_day: false, status: null, busy: true, tags: [], has_rrule: false,
   href: '/c1/e1.ics', etag: '"1"', ...o,
 })
 
@@ -1159,6 +1159,7 @@ describe('aug19 leftovers — every dialog answers Escape at the window', () => 
       tabOrder={DEFAULT_TAB_ORDER} startTab="home"
       onTabOrderChange={vi.fn()} onStartTabChange={vi.fn()}
       timeFormat="12h" onToggleTimeFormat={vi.fn()}
+      language="en" onLanguageChange={vi.fn()}
       dayCapacity={null} onDayCapacityChange={vi.fn()}
       dayCapacityByWeekday={{}} onDayCapacityByWeekdayChange={vi.fn()}
       homeTz="" onToggleHomeTz={vi.fn()}

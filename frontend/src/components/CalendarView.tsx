@@ -19,10 +19,9 @@ import { useIsMobile } from '../hooks'
 import { AgendaEvent, AgendaTask, DayPopover } from './DayPopover'
 import { Sidebar } from './Sidebar'
 import { TaskModal } from './TaskModal'
-
-const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
-const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June',
-  'July', 'August', 'September', 'October', 'November', 'December']
+import { DateTimeInput } from './DateTimeInput'
+import { useI18n, useT } from '../i18n'
+import { monthNames, weekdayNames } from '../names'
 
 interface Draft { event?: CalEvent; date?: string }
 
@@ -82,6 +81,10 @@ function draftEvent(uid: string, calHref: string, body: Record<string, unknown>)
     start, start_is_date: !!start && !start.includes('T'),
     end, end_is_date: !!end && !end.includes('T'), duration: null,
     all_day: allDay, status: null,
+    // The create omits `busy` unless the owner picked Free, and an event with
+    // no TRANSP is busy — so the stand-in agrees with the DTO that is about to
+    // replace it either way.
+    busy: body.busy !== false,
     tags: Array.isArray(body.tags) ? (body.tags as string[]) : [],
     has_rrule: false, href: '', etag: '',
   }
@@ -107,6 +110,7 @@ function CalendarTasksSection({ lists, shown, onShownChange, showDone, onShowDon
   showDone: boolean
   onShowDoneChange: () => void
 }) {
+  const tr = useT()
   const [collapsed, setCollapsed] = useState(false)
   if (!lists.length) return null
   const anyShown = lists.some((l) => shown.has(l.id))
@@ -117,13 +121,13 @@ function CalendarTasksSection({ lists, shown, onShownChange, showDone, onShowDon
     <div className="side-group cal-tasks">
       <div className="group-head">
         <button className="group-caret" aria-expanded={!collapsed}
-          aria-label={collapsed ? 'Show task lists' : 'Hide task lists'}
+          aria-label={collapsed ? tr('cal.showTaskLists') : tr('cal.hideTaskLists')}
           onClick={() => setCollapsed((c) => !c)}>
           <span className={`caret ${collapsed ? '' : 'open'}`}>›</span>
         </button>
-        <span className="group-name">Tasks</span>
+        <span className="group-name">{tr('cal.tasksGroup')}</span>
         <button className="group-eye" aria-pressed={anyShown}
-          title={anyShown ? 'Take task lists off the calendar' : 'Put every task list on the calendar'}
+          title={anyShown ? tr('cal.takeTasksOff') : tr('cal.putTasksOn')}
           onClick={() => onShownChange(anyShown ? [] : lists.map((l) => l.id))}>
           {anyShown ? '◉' : '◌'}
         </button>
@@ -149,7 +153,7 @@ function CalendarTasksSection({ lists, shown, onShownChange, showDone, onShowDon
             )
           })}
           <button className="cal-tasks-done" aria-pressed={showDone} onClick={onShowDoneChange}>
-            Completed · {showDone ? 'shown' : 'hidden'}
+            {showDone ? tr('cal.completedShown') : tr('cal.completedHidden')}
           </button>
         </>
       )}
@@ -182,6 +186,11 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
   const guard = makeGuard(onExpire)
   const isMobile = useIsMobile()
   const tf = useTimeFormat()
+  const { locale, t: tr } = useI18n()
+  // Sunday-first, because the grid's columns are indexed by `Date#getDay` and
+  // the header row has to line up with them.
+  const dow = weekdayNames(locale, 'short', 'sun')
+  const months = monthNames(locale)
   const { cals, loaded, setCals, eventsFor, requestWindow, setEvents, reload,
     windowErrors } = useCalendarData()
   // Tasks need no fetch of their own: the provider above this already holds
@@ -253,7 +262,7 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
   // What a screen reader announces on landing in a cell. The visible text is a
   // bare day NUMBER, which out of its column is not a date at all.
   const fmtCellLabel = (d: Date) =>
-    d.toLocaleDateString(undefined, {
+    d.toLocaleDateString(locale, {
       weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
     })
 
@@ -600,7 +609,7 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
       {/* Sidebar keeps the full `cals` set (so reorder/drag operate on the real
           order and send the full id list); `archivedIds` hides archived rows at
           render time only. */}
-      <Sidebar title="Calendars" placeholder="Calendar" items={cals}
+      <Sidebar kind="calendar" items={cals}
         countOf={(c) => c.event_count} onItems={setCals} api={calApi}
         collapsed={sideCollapsed} onToggle={onToggleSide}
         hiddenIds={hidden} onHiddenChange={onHiddenCalendarsChange}
@@ -614,12 +623,12 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
       <div className="content">
         <div className="cal-head">
           <button className="icon-btn" onClick={() => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() - 1, 1))}>‹</button>
-          <button className="btn ghost" onClick={() => { const n = new Date(); setCursor(new Date(n.getFullYear(), n.getMonth(), 1)) }}>Today</button>
+          <button className="btn ghost" onClick={() => { const n = new Date(); setCursor(new Date(n.getFullYear(), n.getMonth(), 1)) }}>{tr('tasks.today')}</button>
           <button className="icon-btn" onClick={() => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1))}>›</button>
-          <span className="cal-title">{MONTHS[cursor.getMonth()]} {cursor.getFullYear()}</span>
+          <span className="cal-title">{months[cursor.getMonth()]} {cursor.getFullYear()}</span>
           <span className="spacer" />
           {visibleCals.length > 0 && !isMobile && (
-            <button className="btn" onClick={() => setDraft({ date: todayKey })}>New event</button>
+            <button className="btn" onClick={() => setDraft({ date: todayKey })}>{tr('cal.newEvent')}</button>
           )}
         </div>
         {visibleCals.length === 0 ? (
@@ -627,10 +636,10 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
           // lands is ignorance, not an empty account.
           <div className="empty" aria-busy={!loaded || undefined}>
             {!loaded
-              ? 'Loading…'
+              ? tr('common.loading')
               : cals.length === 0
-                ? 'Create a calendar to get started.'
-                : 'All calendars are archived — restore one from Settings.'}
+                ? tr('cal.createCalendarFirst')
+                : tr('cal.allArchived')}
           </div>
         ) : (
           <div ref={scrollRef} className={`cal-scroll${fitted ? ' fixed' : ''}`}>
@@ -642,10 +651,9 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
                 usually unhealthy for all of them. */}
             {failedCals.length > 0 && (
               <div className="cal-partial" role="status">
-                Couldn&rsquo;t load {failedCals.join(', ')} — this month may be
-                missing events.{' '}
+                {tr('cal.partial', { cals: failedCals.join(', ') })}{' '}
                 <button className="btn ghost" onClick={reloadHere}>
-                  Retry
+                  {tr('common.retry')}
                 </button>
               </div>
             )}
@@ -658,9 +666,9 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
                 on a given day — while `+N more` two lines down is a real
                 `<button>` and the mobile agenda rows are buttons too, which is
                 what made the omission look deliberate rather than uniform. */}
-            <div className="cal-grid" role="grid" aria-label="Month"
+            <div className="cal-grid" role="grid" aria-label={tr('cal.grid')}
               onKeyDown={onGridKey}>
-              {DOW.map((d) => (
+              {dow.map((d) => (
                 <div key={d} className="cal-dow" role="columnheader">{d}</div>
               ))}
               {days.map((d) => {
@@ -743,7 +751,9 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
                               className={`cal-ev ${e.all_day ? 'allday' : ''} ${e.cont ? 'cont' : ''}`}
                               style={evStyle(e)}
                               dir={textDir(e.summary)}
-                              title={e.is_recurring ? `${e.summary || ''} (repeating)` : (e.summary || '')}
+                              title={e.is_recurring
+                                ? tr('cal.repeatingTitle', { summary: e.summary || '' })
+                                : (e.summary || '')}
                               // Operable, and OUT of the roving walk: a chip is
                               // reached by tabbing on from the focused cell, so
                               // the arrows stay the grid's. The sidebar row in
@@ -767,7 +777,7 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
                               onDragEnd={() => { setDrag(null); setOverDay(null) }}
                               onClick={(ev) => { ev.stopPropagation(); setDraft({ event: e }) }}>
                               {!e.all_day && e.start && !e.cont && (
-                                <span className="t">{fmtClock(e.start, tf)}</span>
+                                <span className="t">{fmtClock(e.start, tf, locale)}</span>
                               )}
                               {e.is_recurring && <span className="recur" aria-hidden="true">↻ </span>}
                               {e.cont && <span className="t" aria-hidden="true">‥ </span>}
@@ -783,9 +793,9 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
                                   above keeps the whole thing a hover away, and
                                   <bdi> stops an RTL title reordering the clock
                                   prefix and the ↻ around it. */}
-                              <bdi>{e.summary || '(untitled)'}</bdi>
+                              <bdi>{e.summary || tr('common.untitled')}</bdi>
                               {resizable && (
-                                <span className="ev-resize" title="Drag to change the last day"
+                                <span className="ev-resize" title={tr('cal.dragEndDay')}
                                   draggable
                                   onDragStart={(ev) => {
                                     ev.stopPropagation()
@@ -817,10 +827,10 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
                               }}
                               onClick={(ev) => { ev.stopPropagation(); setTaskDetail(t) }}>
                               <span className="tick" aria-hidden="true">{done ? '☑' : '☐'}</span>
-                              {timed && <span className="t">{fmtClock(t.due!, tf)}</span>}
+                              {timed && <span className="t">{fmtClock(t.due!, tf, locale)}</span>}
                               {/* Cut by CSS, never by the string — see the event
                                   chip above for why that distinction matters. */}
-                              <bdi>{t.summary || '(untitled)'}</bdi>
+                              <bdi>{t.summary || tr('common.untitled')}</bdi>
                             </div>
                           )
                         })}
@@ -829,7 +839,7 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
                             ev.stopPropagation()
                             const r = ev.currentTarget.closest('.cal-cell')!.getBoundingClientRect()
                             setMore({ day: key, x: r.left, y: r.top })
-                          }}>+{hiddenCount} more</button>
+                          }}>{tr('cal.moreOnDay', { count: hiddenCount })}</button>
                         )}
                       </>
                     )}
@@ -841,10 +851,10 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
               <div className="day-agenda">
                 <div className="agenda-head">
                   <span className="label">
-                    {new Date(`${focusDay}T00:00`).toLocaleDateString(undefined,
+                    {new Date(`${focusDay}T00:00`).toLocaleDateString(locale,
                       { weekday: 'long', month: 'long', day: 'numeric' })}
                   </span>
-                  <button className="btn" onClick={() => setDraft({ date: focusDay })}>+ Event</button>
+                  <button className="btn" onClick={() => setDraft({ date: focusDay })}>{tr('cal.addEvent')}</button>
                 </div>
                 {focusEvents.map((e) => (
                   <AgendaEvent key={eventKey(e)} ev={e} day={focusDay} style={evStyle(e)}
@@ -855,7 +865,7 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
                     onOpen={() => setTaskDetail(t)} />
                 ))}
                 {focusEvents.length === 0 && focusTasks.length === 0 && (
-                  <div className="agenda-empty">Nothing this day.</div>
+                  <div className="agenda-empty">{tr('cal.nothingThisDay')}</div>
                 )}
               </div>
             )}
@@ -903,18 +913,20 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
             if (ev.target === ev.currentTarget && movePress.current) setMoveAsk(null)
             movePress.current = false
           }}>
-          <div className="modal" role="dialog" aria-modal="true" aria-label="Repeating event"
+          <div className="modal" role="dialog" aria-modal="true"
+            aria-label={tr('cal.repeatingEvent')}
             onClick={(ev) => ev.stopPropagation()}>
             <div className="modal-head">
-              <span className="modal-title">Repeating event</span>
-              <button className="icon-btn" onClick={() => setMoveAsk(null)} aria-label="Close">✕</button>
+              <span className="modal-title">{tr('cal.repeatingEvent')}</span>
+              <button className="icon-btn" onClick={() => setMoveAsk(null)}
+                aria-label={tr('common.close')}>✕</button>
             </div>
             <div className="scope-choose">
-              <p className="scope-q">Apply the change to which events?</p>
-              <button className="btn" onClick={() => pickMoveScope('this')}>This event</button>
-              <button className="btn" onClick={() => pickMoveScope('thisandfuture')}>This &amp; following</button>
-              <button className="btn" onClick={() => pickMoveScope('all')}>All events</button>
-              <button className="btn ghost" onClick={() => setMoveAsk(null)}>Cancel</button>
+              <p className="scope-q">{tr('cal.applyToWhich')}</p>
+              <button className="btn" onClick={() => pickMoveScope('this')}>{tr('cal.scope.this')}</button>
+              <button className="btn" onClick={() => pickMoveScope('thisandfuture')}>{tr('cal.scope.following')}</button>
+              <button className="btn" onClick={() => pickMoveScope('all')}>{tr('cal.scope.all')}</button>
+              <button className="btn ghost" onClick={() => setMoveAsk(null)}>{tr('common.cancel')}</button>
             </div>
           </div>
         </div>
@@ -923,9 +935,11 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
   )
 }
 
+// Wire value paired with a catalogue KEY, like `VIEWS` in TasksView.
 const REPEATS: ReadonlyArray<readonly [string, string]> = [
-  ['none', 'Does not repeat'], ['daily', 'Daily'], ['weekly', 'Weekly'],
-  ['monthly', 'Monthly'], ['yearly', 'Yearly'],
+  ['none', 'cal.repeat.none'], ['daily', 'cal.repeat.daily'],
+  ['weekly', 'cal.repeat.weekly'], ['monthly', 'cal.repeat.monthly'],
+  ['yearly', 'cal.repeat.yearly'],
 ]
 
 function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete }: {
@@ -934,8 +948,15 @@ function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete }: {
   onDelete: (uid: string, opts?: { recurrence_id?: string | null; scope?: EventScope }) => void
 }) {
   const e = draft.event
-  const lang = inputLang(useTimeFormat())
+  const { lang: appLang } = useI18n()
+  const lang = inputLang(useTimeFormat(), appLang)
+  const tr = useT()
   const recurring = !!e?.is_recurring
+  // Named once: the dialog's visible title and its accessible name are the same
+  // sentence, and the old code spelled the three-way ternary out twice.
+  const modalTitle = e
+    ? (recurring ? tr('cal.repeatingEvent') : tr('cal.event'))
+    : tr('cal.newEvent')
   // Where the event goes: a new event is created here, an existing one is
   // moved here (whole resource — a series always changes calendar as one).
   const [calPick, setCalPick] = useState(initialCal)
@@ -975,6 +996,16 @@ function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete }: {
   // authored with a comma in it. That is `TagInput`'s whole reason for existing
   // on the task side; the event editor was simply never converted.
   const [tags, setTags] = useState<string[]>(e?.tags || [])
+  /**
+   * Whether this event consumes the owner's time — iCalendar's TRANSP, the
+   * field Apple Calendar labels "Busy/Free" and Thunderbird "Show Time As".
+   *
+   * `e?.busy ?? true` rather than `!!e?.busy`, because a new event has no DTO
+   * to read and the answer for one is BUSY: that is the RFC's default for an
+   * absent property, so the control opens agreeing with what the server would
+   * store if it were never touched.
+   */
+  const [busy, setBusy] = useState(e?.busy ?? true)
   // A new/non-recurring event picks a concrete cadence; an existing recurring one
   // defaults to "keep" — we don't surface its exact FREQ, so leaving it untouched
   // preserves the rule.
@@ -1048,6 +1079,22 @@ function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete }: {
   // user never touched the tags of. `sameValue` is TaskModal's precedent.
   const tagFields = (): Record<string, unknown> =>
     (e && sameValue(tags, e.tags || [])) ? {} : { tags }
+  /**
+   * `busy`, only when it actually differs from what the event holds.
+   *
+   * The same discipline `tagFields` keeps, and it is load-bearing for the same
+   * reason it is there: the backend WRITES the property when the key is
+   * present, so sending it on every save would stamp `TRANSP:OPAQUE` onto every
+   * event this app touches — including ones another CalDAV client deliberately
+   * left the property off, and including a pure rename. Invariant #2: a
+   * resource's properties are not ours to rewrite in passing.
+   *
+   * On a NEW event the same rule reads the other way round: there is nothing to
+   * compare against, and an omitted key means no TRANSP at all, which is
+   * already busy. So only Free is worth saying.
+   */
+  const busyFields = (): Record<string, unknown> =>
+    (e ? busy === e.busy : busy) ? {} : { busy }
   const repeatFields = (): Record<string, unknown> => {
     if (repeat === 'keep') return {}          // leave the existing rule untouched
     const b: Record<string, unknown> = { repeat }
@@ -1058,10 +1105,10 @@ function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete }: {
   const commit = (scope: EventScope) => {
     if (!e) {
       onSave({ summary, all_day: allDay, start: startOut, end: endOut,
-               location, description, tags, ...repeatFields() }, calPick)
+               location, description, tags, ...busyFields(), ...repeatFields() }, calPick)
       return
     }
-    const details = { summary, location, description, ...tagFields() }
+    const details = { summary, location, description, ...tagFields(), ...busyFields() }
     // An event whose span we could not reconstruct sends no end at all, so the
     // stored DTEND/DURATION is left exactly as its author wrote it.
     const times = endUnknown
@@ -1114,9 +1161,7 @@ function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete }: {
       // if it had worked. The user can pick another scope, or set Repeat back to
       // "Keep current schedule" and save this occurrence alone.
       setScopeAsk(null)
-      setScopeErr('A repeat change cannot apply to a single occurrence. '
-        + 'Use “This & following” or “All events”, or set Repeat back to '
-        + '“Keep current schedule”.')
+      setScopeErr(tr('cal.cadenceRefused'))
       return
     }
     setScopeErr(null)
@@ -1150,94 +1195,123 @@ function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete }: {
         scrimPress.current = false
       }}>
       <div className="modal" role="dialog" aria-modal="true"
-        aria-label={e ? (recurring ? 'Repeating event' : 'Event') : 'New event'}
+        aria-label={modalTitle}
         onClick={(ev) => ev.stopPropagation()}>
         <div className="modal-head">
-          <span className="modal-title">{e ? (recurring ? 'Repeating event' : 'Event') : 'New event'}</span>
-          <button className="icon-btn" onClick={onClose} aria-label="Close">✕</button>
+          <span className="modal-title">{modalTitle}</span>
+          <button className="icon-btn" onClick={onClose} aria-label={tr('common.close')}>✕</button>
         </div>
 
         {scopeAsk ? (
           <div className="scope-choose">
             <p className="scope-q">
-              {scopeAsk === 'delete' ? 'Delete which events?' : 'Apply changes to which events?'}
+              {scopeAsk === 'delete' ? tr('cal.deleteWhich') : tr('cal.applyChangesToWhich')}
             </p>
             {cadenceBlocked && (
-              <p className="scope-hint" role="status">
-                The repeat change needs “This &amp; following” or “All events” — a single
-                occurrence has no schedule of its own.
-              </p>
+              <p className="scope-hint" role="status">{tr('cal.cadenceBlocked')}</p>
             )}
-            <button className="btn" onClick={() => pickScope('this')}>This event</button>
-            <button className="btn" onClick={() => pickScope('thisandfuture')}>This &amp; following</button>
-            <button className="btn" onClick={() => pickScope('all')}>All events</button>
-            <button className="btn ghost" onClick={() => setScopeAsk(null)}>Cancel</button>
+            <button className="btn" onClick={() => pickScope('this')}>{tr('cal.scope.this')}</button>
+            <button className="btn" onClick={() => pickScope('thisandfuture')}>{tr('cal.scope.following')}</button>
+            <button className="btn" onClick={() => pickScope('all')}>{tr('cal.scope.all')}</button>
+            <button className="btn ghost" onClick={() => setScopeAsk(null)}>{tr('common.cancel')}</button>
           </div>
         ) : (
           <>
             {scopeErr && <p className="scope-hint" role="alert">{scopeErr}</p>}
             <div className="field">
-              <label className="label" htmlFor="ev-title">Title</label>
+              <label className="label" htmlFor="ev-title">{tr('cal.title')}</label>
               <input className="input" id="ev-title" autoFocus value={summary} onChange={(ev) => setSummary(ev.target.value)} />
             </div>
             <label className="chip" style={{ alignSelf: 'flex-start', cursor: 'pointer' }}>
-              <input type="checkbox" checked={allDay} onChange={(ev) => setAllDay(ev.target.checked)} /> all day
+              <input type="checkbox" checked={allDay} onChange={(ev) => setAllDay(ev.target.checked)} /> {tr('common.allDay')}
             </label>
             <div className="field-row">
               <div className="field">
-                <label className="label" htmlFor="ev-start">Start</label>
-                <input className="input" id="ev-start" type={allDay ? 'date' : 'datetime-local'} value={startVal}
+                <label className="label" htmlFor="ev-start">{tr('cal.startField')}</label>
+                <DateTimeInput className="input" id="ev-start"
+                  type={allDay ? 'date' : 'datetime-local'} value={startVal}
                   lang={lang} onChange={(ev) => changeStart(ev.target.value)} />
               </div>
               <div className="field">
-                <label className="label" htmlFor="ev-end">{allDay ? 'End (last day)' : 'End'}</label>
-                <input className="input" id="ev-end" type={allDay ? 'date' : 'datetime-local'} value={endVal}
+                <label className="label" htmlFor="ev-end">
+                  {allDay ? tr('cal.endLastDay') : tr('cal.end')}
+                </label>
+                <DateTimeInput className="input" id="ev-end"
+                  type={allDay ? 'date' : 'datetime-local'} value={endVal}
                   lang={lang} min={startVal} onChange={(ev) => setEnd(ev.target.value)} />
               </div>
             </div>
             <div className="field">
-              <label className="label" htmlFor="ev-repeat">Repeat</label>
+              <label className="label" htmlFor="ev-repeat">{tr('cal.repeat')}</label>
               <select className="input" id="ev-repeat" value={repeat} onChange={(ev) => setRepeat(ev.target.value)}>
-                {recurring && <option value="keep">Keep current schedule</option>}
-                {REPEATS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                {recurring && <option value="keep">{tr('cal.repeat.keep')}</option>}
+                {REPEATS.map(([v, l]) => <option key={v} value={v}>{tr(l)}</option>)}
               </select>
+            </div>
+            {/* WHAT THIS DOES TO THE OWNER'S AVAILABILITY, said in the words
+                the consequence is about rather than in the property's.
+                "Transparency" is what the wire calls it and what nobody means;
+                Apple says Busy/Free and so does this.
+
+                A select rather than a checkbox, because the two values are two
+                statements and neither is the negation of the other on screen —
+                "not busy" reads as "unset" where "Free" reads as a decision.
+                Same shape as Repeat above it, which is the other field here
+                whose value is a choice among named behaviours.
+
+                Placed under the times, since it is a statement ABOUT that span
+                and means nothing without one. */}
+            <div className="field">
+              <label className="label" htmlFor="ev-busy">{tr('cal.showAs')}</label>
+              <select className="input" id="ev-busy" value={busy ? 'busy' : 'free'}
+                onChange={(ev) => setBusy(ev.target.value === 'busy')}>
+                <option value="busy">{tr('cal.busy')}</option>
+                <option value="free">{tr('cal.free')}</option>
+              </select>
+              {/* Only on the arm that changes something, and only for the
+                  half of it a person cannot see: an event that blocks is what
+                  every event does, and saying so would be a line of chrome
+                  under every event in the app. */}
+              {!busy && (
+                <p className="field-hint">{tr('cal.freeHint')}</p>
+              )}
             </div>
             {repeat !== 'keep' && repeat !== 'none' && (
               <div className="field">
-                <label className="label" htmlFor="ev-until">Repeat until (optional)</label>
-                <input className="input" id="ev-until" type="date" value={repeatUntil}
+                <label className="label" htmlFor="ev-until">{tr('cal.repeatUntil')}</label>
+                <DateTimeInput className="input" id="ev-until" type="date" value={repeatUntil}
                   onChange={(ev) => setRepeatUntil(ev.target.value)} />
               </div>
             )}
             {cals.length > 1 && (
               <div className="field">
-                <label className="label" htmlFor="ev-cal">Calendar</label>
+                <label className="label" htmlFor="ev-cal">{tr('cal.calendarField')}</label>
                 <select className="input" id="ev-cal" value={calPick} onChange={(ev) => setCalPick(ev.target.value)}>
                   {cals.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
                 </select>
               </div>
             )}
             <div className="field">
-              <label className="label" htmlFor="ev-location">Location</label>
+              <label className="label" htmlFor="ev-location">{tr('cal.location')}</label>
               <input className="input" id="ev-location" value={location} onChange={(ev) => setLocation(ev.target.value)} />
             </div>
             <div className="field">
-              <label className="label" htmlFor="ev-notes">Notes</label>
+              <label className="label" htmlFor="ev-notes">{tr('cal.notes')}</label>
               <textarea className="input" id="ev-notes" rows={2} value={description} onChange={(ev) => setDescription(ev.target.value)} />
             </div>
             <div className="field">
-              <label className="label">Tags</label>
-              <TagInput label="Tags" value={tags} onChange={setTags} />
+              <label className="label">{tr('field.tags')}</label>
+              <TagInput label={tr('field.tags')} value={tags} onChange={setTags} />
             </div>
             {recurring && (
-              <p className="scope-hint">
-                “All events” moves every occurrence by the same offset — use “This event” to move just one.
-              </p>
+              <p className="scope-hint">{tr('cal.moveHint')}</p>
             )}
             <div className="modal-actions">
-              {e && <button className="btn ghost" onClick={onDeleteClick}>Delete</button>}
+              {e && (
+                <button className="btn ghost" onClick={onDeleteClick}>{tr('common.delete')}</button>
+              )}
               <span className="spacer" />
-              <button className="btn" onClick={onSaveClick}>Save</button>
+              <button className="btn" onClick={onSaveClick}>{tr('common.save')}</button>
             </div>
           </>
         )}

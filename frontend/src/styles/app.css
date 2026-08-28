@@ -678,6 +678,11 @@
 .scope-choose { display: flex; flex-direction: column; gap: 8px; }
 .scope-q { font-family: var(--serif); font-size: calc(15px * var(--fs-scale)); margin: 2px 0 4px; }
 .scope-hint { font-size: calc(12px * var(--fs-scale)); color: var(--fg-muted); margin: -2px 0 2px; line-height: 1.35; }
+/* A line under one field, explaining what its current value will do. Inside a
+   `.field`, which already supplies the 5px gap, so this carries no margin of
+   its own — the same weight and colour as `.scope-hint` above and `.plan-hint`,
+   which are the modal's other two ways of saying a consequence. */
+.field-hint { margin: 0; font-size: calc(12px * var(--fs-scale)); color: var(--fg-muted); line-height: 1.35; }
 
 /* ---- archived calendars (settings modal) ---- */
 .arch-list { display: flex; flex-direction: column; max-height: 60vh; overflow-y: auto; }
@@ -917,6 +922,29 @@
 
   /* content spacing + touch targets */
   .content-head { flex-wrap: wrap; row-gap: 8px; }
+
+  /* THE TODAY HEADER, which is the one that does not fit.
+     It carries a title, a two-button day nav, a date, a count and three named
+     actions — Review, Shut down, Habits — and `flex-wrap` alone left them in
+     the worst possible arrangement. Measured in this harness at 390px before
+     this rule: 147px tall, over four lines, with `Habits` orphaned on a line of
+     its own under `Review` and `Shut down`. Two of the four lines were spent on
+     nothing: `.spacer` is `flex: 1`, so it claimed 81px of trailing space on the
+     title line and pushed everything after it down.
+
+     `.cal-head` has had the first half of this since the calendar was written
+     ("`.cal-head .spacer { display: none }`") — a header shorter than this one,
+     fixed years earlier. The Today tab is the phone-primary surface and never
+     got it.
+
+     Two rules, and they do different jobs. Dropping the spacer stops the
+     artificial break. Giving the count a full-line basis is what puts the three
+     actions TOGETHER: without it they wrap after whichever one runs out of
+     room, and 161px of count plus 260px of buttons cannot share 362px however
+     they are ordered. So the count takes the line it needs and the actions take
+     theirs — 284px of the 362 available, one row, in the order they are read. */
+  .today-head .spacer { display: none; }
+  .today-head .today-count { flex-basis: 100%; }
   .undated-hint { padding: 8px 14px 0; }
 
   /* multi-day task views: swipeable full-height columns */
@@ -1254,6 +1282,19 @@
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dash-task-due { flex: none; font-size: calc(11px * var(--fs-scale)); color: var(--fg-muted); }
 .dash-task-due.overdue { color: var(--warn); }
+/* A plan row carries a CHECKBOX and a kind mark, which the other dashboard
+   lists do not. `align-items: baseline` is right for a row of text and wrong
+   for a row with controls in it — the box would sit on the text's baseline
+   rather than beside it — so this one row type centres instead. Scoped to its
+   own class rather than changing `.dash-task`, because every other module on
+   this board is text and reads better on the baseline. */
+.dash-day-row { align-items: center; gap: 6px; }
+/* The check is the Tasks pane's, one size down: a dashboard row is 6px of
+   padding where a task row is 11px, and the full control crowded it. */
+.dash-day-row .check { width: 14px; height: 14px; margin-top: 0; font-size: 10px; }
+/* The kind mark keeps its own width from `:root`, so the left edge lines up
+   with the Today tab's. Nothing else is restated. */
+.dash-day-row .today-kind-mark { font-size: calc(10px * var(--fs-scale)); }
 .dash-quickadd { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 12px; }
 .dash-quickadd .input { flex: 1; min-width: 0; }
 /* A task added here is undated, so no module on this board shows it — the
@@ -1499,16 +1540,41 @@
      none of them — so the tick (`.check`, which the finding does not mention)
      is covered, and so is a button added to this row later.
 
-     A tap BOX, not bigger type: `min-height`/`min-width` with a flex centre
-     leaves every glyph and the row's own text at its designed size. The rules
-     above stay because they set the padding this builds on.
+     A tap BOX, not bigger type, and now not a bigger ELEMENT either. This was
+     `min-height: 44px; min-width: 44px` on the controls themselves, which is the
+     obvious reading of the guideline and cost more than it looks:
 
-     Accepted cost, decided rather than discovered: a Today row goes from ~53px
-     to ~62px, so roughly 13 rows fit an 844px phone instead of 16. STAGES.md
-     records the decision. */
+       * `.check` is the one control here that PAINTS its box — a bordered
+         square — so growing the element grew the checkbox. On a phone the Today
+         tab's tick rendered at 44px against the Tasks tab's 21px: the same
+         control, on the same account, at twice the size, which is what "the
+         buttons are huge" means when someone says it.
+       * The other three paint nothing (`border: 0; background: none`), so their
+         44px bought a wider invisible box and nothing else — and the four
+         together took 145px of a 362px row. Measured here at 390px, that left
+         `.today-title` 115px, which wrapped an ordinary task summary onto THREE
+         lines and made the row 86.5px. The accepted cost recorded in STAGES.md
+         was ~62px.
+
+     A pseudo-element is the tap box instead: absolutely positioned, centred,
+     transparent, 44x44, and part of its originating element's hit region — so
+     the target is the size the guideline asks for while the control keeps the
+     size it was designed at and the row keeps the width for its title. Verified
+     by hit-testing rather than by measuring a border box, which is what the pin
+     in `backlog.aug25.stage4.browser.test.tsx` now does; that file also asserts
+     no two of these areas overlap, which is the one hazard this technique has
+     and the old one could not have.
+
+     `display: inline-flex` stays: it is what centres each glyph in whatever box
+     it ends up with, and `position: relative` is what the ::after is measured
+     from. */
   .today-row button, .today-row .today-est {
-    min-height: 44px; min-width: 44px;
+    position: relative;
     display: inline-flex; align-items: center; justify-content: center;
+  }
+  .today-row button::after, .today-row .today-est::after {
+    content: ''; position: absolute; top: 50%; left: 50%;
+    width: 44px; height: 44px; transform: translate(-50%, -50%);
   }
 
   /* `.menu-toggle` is EVERY settings control on the phone sheet — Clock, Theme,
@@ -2048,6 +2114,12 @@
 /* A paused habit is still on the list — it is the screen that un-pauses it —
    so it recedes rather than disappearing. */
 .habit-edit.paused .habit-name, .habit-edit.paused .habit-day { color: var(--fg-faint); }
+/* A rule painted before the server has minted its id. Every control on it is
+   `disabled` — they would each name an id only this browser knows — and this
+   says so, for the instant it lasts. Deliberately faint rather than a spinner:
+   the row is real, it is already readable, and the only thing not true about it
+   yet is that it can be edited. */
+.habit-edit.pending { opacity: 0.55; }
 
 .habit-edit-top { display: flex; align-items: center; gap: 8px; }
 /* The name is the flexible part: the two buttons beside it are fixed-width

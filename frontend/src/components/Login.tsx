@@ -1,7 +1,12 @@
 import { useState, type FormEvent } from 'react'
 import { api, AuthError } from '../api'
+import { useT } from '../i18n'
 
 export function Login({ onLogin }: { onLogin: (user: string) => void }) {
+  // English until a session says otherwise, EXCEPT here: App gives the
+  // signed-out shell the browser's language, because there is no account to
+  // ask yet. See `deviceLanguage` in lang.ts.
+  const tr = useT()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [err, setErr] = useState('')
@@ -20,7 +25,7 @@ export function Login({ onLogin }: { onLogin: (user: string) => void }) {
       // threw before reading the body — so the login card rendered that
       // internal token at the user, matching neither string this checked for.
       // Everything else (a 429 lockout, a 5xx) is shown as the server put it.
-      setErr(ex instanceof AuthError ? 'Invalid credentials' : (ex as Error).message)
+      setErr(ex instanceof AuthError ? tr('login.invalid') : (ex as Error).message)
     } finally {
       setBusy(false)
     }
@@ -35,13 +40,13 @@ export function Login({ onLogin }: { onLogin: (user: string) => void }) {
             here were unlabelled to a screen reader — on the one form in the app
             where getting it wrong means the user cannot sign in at all. */}
         <div className="field">
-          <label className="label" htmlFor="login-username">Username</label>
+          <label className="label" htmlFor="login-username">{tr('login.username')}</label>
           <input id="login-username" className="input" value={username} autoFocus
             autoComplete="username"
             onChange={(e) => setUsername(e.target.value)} />
         </div>
         <div className="field">
-          <label className="label" htmlFor="login-password">Password</label>
+          <label className="label" htmlFor="login-password">{tr('login.password')}</label>
           <input id="login-password" className="input" type="password" value={password}
             autoComplete="current-password"
             onChange={(e) => setPassword(e.target.value)} />
@@ -52,7 +57,7 @@ export function Login({ onLogin }: { onLogin: (user: string) => void }) {
             screen anyone meets and the one where a wrong password is the
             expected outcome. */}
         {err && <div className="login-err" role="alert">{err}</div>}
-        <button className="btn" type="submit" disabled={busy}>{busy ? '…' : 'Sign in'}</button>
+        <button className="btn" type="submit" disabled={busy}>{busy ? '…' : tr('login.submit')}</button>
       </form>
     </div>
   )

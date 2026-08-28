@@ -343,8 +343,9 @@ export function nextCalendarFit(f: CalendarFit): CalendarFit {
   return f === 'fixed' ? 'dynamic' : 'fixed'
 }
 
-export function calendarFitLabel(f: CalendarFit): string {
-  return f === 'fixed' ? 'Fixed' : 'Dynamic'
+/** The catalogue key for this choice — see `timeFormatKey`, same reason. */
+export function calendarFitKey(f: CalendarFit): string {
+  return f === 'fixed' ? 'calendarFit.fixed' : 'calendarFit.dynamic'
 }
 
 /** One day cell's vertical layout, in px, as read off the rendered grid.

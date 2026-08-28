@@ -274,6 +274,42 @@ def test_calendar_event_crud(client):
     assert after == {"Meeting (moved)"}
 
 
+def test_event_busy_round_trips(client):
+    """TRANSP over HTTP: what Apple Calendar calls Busy/Free.
+
+    The field is tri-state on the wire and the two ends of that matter
+    differently — an omitted key must leave the property exactly as its author
+    wrote it (a rename must not un-mark an event someone marked Free in another
+    client), and an explicit value must reach the VEVENT."""
+    cid = _cal(client)["id"]
+
+    # Omitted on create: no opinion, and an absent TRANSP is OPAQUE.
+    ev = client.post(f"/api/calendars/{cid}/events", json={
+        "summary": "Meeting", "start": "2026-07-10T14:00:00", "end": "2026-07-10T15:00:00",
+    }).json()
+    assert ev["busy"] is True
+
+    hold = client.post(f"/api/calendars/{cid}/events", json={
+        "summary": "Hold", "start": "2026-07-10T16:00:00", "end": "2026-07-10T17:00:00",
+        "busy": False,
+    }).json()
+    assert hold["busy"] is False
+
+    # A patch that does not mention it leaves it alone…
+    renamed = client.patch(f"/api/calendars/{cid}/events/{hold['uid']}",
+                           json={"summary": "Hold (renamed)"}).json()
+    assert renamed["summary"] == "Hold (renamed)" and renamed["busy"] is False
+
+    # …and one that does, changes it.
+    back = client.patch(f"/api/calendars/{cid}/events/{hold['uid']}",
+                        json={"busy": True}).json()
+    assert back["busy"] is True
+
+    # It survives the read path the calendar grid uses, not just the write's echo.
+    month = {e["summary"]: e["busy"] for e in _events(client, cid)}
+    assert month == {"Meeting": True, "Hold (renamed)": True}
+
+
 def _events(client, cid, start="2026-07-01", end="2026-08-01"):
     return client.get(f"/api/calendars/{cid}/events", params={"start": start, "end": end}).json()
 
@@ -479,6 +515,31 @@ def test_settings_time_format_sync(client):
     assert client.put("/api/settings", json={"time_format": "12h"}).status_code == 200
     assert client.get("/api/settings").json().get("time_format") == "12h"
     assert client.put("/api/settings", json={"time_format": "H:mm"}).status_code == 422
+
+
+def test_settings_language_sync(client):
+    # Only the languages the app has a catalogue for. The blob is hand-editable
+    # and an unknown tag would reach `Intl.PluralRules` and `toLocaleDateString`
+    # on every client that read it, so it is refused here rather than defended
+    # against on the way back out.
+    r = client.put("/api/settings", json={"language": "de"})
+    assert r.status_code == 200 and r.json().get("language") == "de"
+    assert client.get("/api/settings").json().get("language") == "de"
+    assert client.put("/api/settings", json={"language": "en"}).status_code == 200
+    assert client.get("/api/settings").json().get("language") == "en"
+    assert client.put("/api/settings", json={"language": "fr"}).status_code == 422
+    assert client.put("/api/settings", json={"language": "de-AT"}).status_code == 422
+
+
+def test_settings_language_does_not_reach_anything_stored(client):
+    # It is a DISPLAY setting. The server is not translated, reads this nowhere,
+    # and nothing an account has named changes because of it — which is the
+    # promise the settings hint makes to the user in as many words.
+    client.put("/api/settings", json={"language": "de"})
+    lists = client.get("/api/lists").json()
+    assert lists, "the fixture account has at least one list to be sure about"
+    before = [l["name"] for l in lists]
+    assert [l["name"] for l in client.get("/api/lists").json()] == before
 
 
 def test_settings_home_timezone_sync(client):
@@ -868,6 +929,26 @@ def test_settings_dashboard_sync(client):
     # An empty list is a real value (back to the stock arrangement).
     client.put("/api/settings", json={"dashboard": []})
     assert client.get("/api/settings").json()["dashboard"] == []
+
+
+def test_settings_dashboard_takes_every_kind_the_client_ships(client):
+    # `kind` is an allowlist and the whole PUT is validated at once, so a kind
+    # the client can place and the server has not heard of does not degrade to a
+    # missing card — it 422s the write and takes the theme, the tab order and
+    # everything else in the same body down with it. The list is mirrored in
+    # dashboard.ts; `dashboard.test.ts` reads this file back out and fails when
+    # the two part. This is the same claim from the other side.
+    kinds = [
+        "today", "day_plan", "overdue", "upcoming", "mini_calendar",
+        "completed", "booking_links", "bookings", "quick_add",
+    ]
+    layout = [
+        {"id": f"m{i}", "kind": k, "x": 0, "y": i, "w": 4, "h": 1}
+        for i, k in enumerate(kinds)
+    ]
+    r = client.put("/api/settings", json={"dashboard": layout})
+    assert r.status_code == 200, r.text
+    assert client.get("/api/settings").json()["dashboard"] == layout
 
 
 def test_settings_dashboard_rejects_bad_geometry(client):

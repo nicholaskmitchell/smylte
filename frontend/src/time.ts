@@ -9,8 +9,15 @@
 //
 // React-free like tabs.ts, lists.ts and session.ts, so the formatting rules can
 // be tested directly rather than through a rendered view.
+//
+// Each formatter takes an optional `locale` — the BCP-47 tag the app's Language
+// setting resolves to (`localeFor` in lang.ts). It is OPTIONAL, and omitting it
+// means `undefined`, which is what these calls have always passed: format for
+// the device. That keeps every caller that has not been threaded yet, and every
+// test written before the setting existed, reading exactly as it did.
 
 import { parseDate } from './util'
+import { DEFAULT_LANGUAGE, type Language } from './lang'
 
 export type TimeFormat = '12h' | '24h'
 
@@ -29,8 +36,15 @@ export function nextTimeFormat(f: TimeFormat): TimeFormat {
   return f === '12h' ? '24h' : '12h'
 }
 
-export function timeFormatLabel(f: TimeFormat): string {
-  return f === '24h' ? '24-hour' : '12-hour'
+/** The catalogue key for this choice, not the text.
+ *
+ *  A KEY because the label is shown in whatever language the app is set to and
+ *  this module is React-free — it has no `t` and should not grow one. Returning
+ *  the identity of the label and letting the one component that renders it look
+ *  the string up keeps the translation in the catalogue with every other
+ *  string, which is the only place a translator has to look. */
+export function timeFormatKey(f: TimeFormat): string {
+  return f === '24h' ? 'clock.24h' : 'clock.12h'
 }
 
 // `hour12` is passed explicitly rather than left to the locale — that is the
@@ -44,27 +58,28 @@ function clockOpts(f: TimeFormat): Intl.DateTimeFormatOptions {
 }
 
 /** A time of day on its own — "14:05" or "2:05 PM". */
-export function fmtClock(iso: string, f: TimeFormat): string {
+export function fmtClock(iso: string, f: TimeFormat, locale?: string): string {
   const d = parseDate(iso)
-  return isNaN(d.getTime()) ? iso : d.toLocaleTimeString(undefined, clockOpts(f))
+  return isNaN(d.getTime()) ? iso : d.toLocaleTimeString(locale, clockOpts(f))
 }
 
 /** A task's due stamp: a bare date when all-day, date + time when timed. */
-export function fmtDue(iso: string | null, isDate: boolean, f: TimeFormat): string {
+export function fmtDue(iso: string | null, isDate: boolean, f: TimeFormat,
+                       locale?: string): string {
   if (!iso) return ''
   const d = parseDate(iso)
   if (isNaN(d.getTime())) return iso
-  return d.toLocaleDateString(undefined,
+  return d.toLocaleDateString(locale,
     isDate
       ? { month: 'short', day: 'numeric' }
       : { month: 'short', day: 'numeric', ...clockOpts(f) })
 }
 
 /** A booking's "when": weekday, date and time in one line. */
-export function fmtWhen(iso: string, f: TimeFormat): string {
+export function fmtWhen(iso: string, f: TimeFormat, locale?: string): string {
   const d = parseDate(iso)
   if (isNaN(d.getTime())) return iso
-  return d.toLocaleString(undefined,
+  return d.toLocaleString(locale,
     { weekday: 'short', month: 'short', day: 'numeric', ...clockOpts(f) })
 }
 
@@ -78,9 +93,30 @@ export function fmtWhen(iso: string, f: TimeFormat): string {
  * locale; there is no supported override short of replacing the controls with
  * hand-built pickers, so the setting's hint text says as much rather than
  * promising something that only holds in some browsers.
+ *
+ * It carries the LANGUAGE too, because the same attribute names the month the
+ * date picker's calendar spells out. An account reading German everywhere else
+ * and "September" in the one popup would be the seam showing.
+ *
+ * Two ways to state the clock, and which one applies is a fact about the
+ * language rather than a preference:
+ *
+ *   * A REGION whose everyday clock is already the one wanted. en-US is a
+ *     12-hour place and en-GB a 24-hour one, so English needs no extension and
+ *     — this is the part worth keeping — degrades correctly in a browser that
+ *     ignores extensions entirely.
+ *   * The `-u-hc-` extension, for a language where no region will do it. Every
+ *     German-speaking country runs a 24-hour clock, so `de` + 12h has nothing
+ *     to pick and must ask outright. Where the browser honours it, the picker
+ *     shows AM/PM; where it does not, the user gets German's own 24-hour clock,
+ *     which is a sane thing to be given rather than a broken one.
+ *
+ * `lang` defaults to English so the callers and tests that predate the Language
+ * setting keep the exact two tags they had.
  */
-export function inputLang(f: TimeFormat): string {
-  return f === '24h' ? 'en-GB' : 'en-US'
+export function inputLang(f: TimeFormat, lang: Language = DEFAULT_LANGUAGE): string {
+  if (lang === 'en') return f === '24h' ? 'en-GB' : 'en-US'
+  return f === '24h' ? lang : `${lang}-u-hc-h12`
 }
 
 /**

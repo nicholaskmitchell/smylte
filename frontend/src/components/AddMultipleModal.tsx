@@ -6,6 +6,8 @@ import { sameValue } from '../util'
 import { inputLang } from '../time'
 import { useTimeFormat } from '../timeformat'
 import { useEscape } from '../hooks'
+import { DateTimeInput } from './DateTimeInput'
+import { useI18n, useT } from '../i18n'
 
 // Each create is a CalDAV PUT plus a re-read GET behind a single server-side
 // lock, so a batch this size is already a slow half-minute. It also bounds what
@@ -50,11 +52,27 @@ const blankRow = (listId: string): Row =>
 // `lang` reaches the native date/time pickers, which are drawn by the browser
 // and read it to pick a 12- or 24-hour clock. It rides in the context rather
 // than being read from the hook here because FIELDS is a plain table, not a
-// component — see time.ts's `inputLang` for what it can and cannot do.
-export interface FieldCtx { lists: List[]; where: string; disabled: boolean; lang: string }
+// component — see time.ts's `inputLang` for what it can and cannot do. `t` and
+// `scope` ride along for the same reason: a table has no hooks to call.
+export interface FieldCtx {
+  lists: List[]
+  disabled: boolean
+  lang: string
+  t: (key: string, vars?: Record<string, string | number>) => string
+  /** A control's accessible name, said in full for WHERE it is.
+   *
+   *  This used to be a `where` SUFFIX the render functions concatenated —
+   *  `` `Due date${where}` `` with `where` set to ", for all tasks". A suffix is
+   *  a claim about word order that only English makes; here the caller composes
+   *  the whole name through the catalogue instead, so a language that puts the
+   *  scope first can say so. */
+  scope: (name: string) => string
+}
 
 export interface FieldSpec {
   key: FieldKey
+  /** A catalogue KEY, not the text — see `timeFormatKey` in time.ts for why a
+   *  plain table hands back an identity instead of a string. */
   label: string
   // The RowValues keys this field owns. Multi-slot fields switch together: a
   // shared due date implies a shared due time, since a date here and a time
@@ -84,6 +102,7 @@ export function TagInput({ label, value, disabled, onChange }: {
   disabled?: boolean
   onChange: (next: string[]) => void
 }) {
+  const tr = useT()
   const [text, setText] = useState('')
   const commit = (raw: string) => {
     const tag = raw.trim()
@@ -95,11 +114,11 @@ export function TagInput({ label, value, disabled, onChange }: {
       {value.map((t) => (
         <span key={t} className="chip">
           #{t}
-          <button type="button" className="chip-x" aria-label={`Remove ${t}`} disabled={disabled}
+          <button type="button" className="chip-x" aria-label={tr('tags.remove', { tag: t })} disabled={disabled}
             onClick={() => onChange(value.filter((x) => x !== t))}>×</button>
         </span>
       ))}
-      <input className="input" aria-label={label} placeholder="Add a tag…"
+      <input className="input" aria-label={label} placeholder={tr('tags.placeholder')}
         value={text} disabled={disabled}
         onChange={(e) => {
           // A pasted "a, b, c" commits every complete tag and leaves the tail
@@ -121,32 +140,29 @@ export function TagInput({ label, value, disabled, onChange }: {
   )
 }
 
-// Distinguishes a shared control from both its own toggle and the per-row
-// controls of the same property.
-const FOR_ALL = ', for all tasks'
-
 // One table drives the toggle strip, the shared controls, the column headers,
 // the per-row cells — and the single-task editor in TasksView — so adding a
 // property is one entry rather than an edit in five places.
 export const FIELDS: readonly FieldSpec[] = [
   {
-    key: 'list', label: 'List', slots: ['listId'],
-    render: (v, set, { lists, where, disabled }) => (
-      <select className="input" aria-label={`List${where}`} value={v.listId} disabled={disabled}
+    key: 'list', label: 'field.list', slots: ['listId'],
+    render: (v, set, { lists, disabled, t, scope }) => (
+      <select className="input" aria-label={scope(t('field.list'))} value={v.listId} disabled={disabled}
         onChange={(e) => set({ listId: e.target.value })}>
         {lists.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
       </select>
     ),
   },
   {
-    key: 'due', label: 'Due', slots: ['dueDate', 'dueTime'],
-    render: (v, set, { where, disabled, lang }) => (
+    key: 'due', label: 'field.due', slots: ['dueDate', 'dueTime'],
+    render: (v, set, { disabled, lang, t, scope }) => (
       <>
-        <input className="input" type="date" aria-label={`Due date${where}`} value={v.dueDate}
+        <DateTimeInput className="input" type="date" aria-label={scope(t('field.dueDate'))} value={v.dueDate}
           disabled={disabled} onChange={(e) => set({ dueDate: e.target.value })} />
         {/* A time with no date isn't expressible as a due, so keep the
             constraint visible rather than silently dropping the time. */}
-        <input className="input" type="time" aria-label={`Due time${where}`} value={v.dueTime} lang={lang}
+        <DateTimeInput className="input" type="time" aria-label={scope(t('field.dueTime'))} value={v.dueTime}
+          lang={lang}
           disabled={disabled || !v.dueDate} onChange={(e) => set({ dueTime: e.target.value })} />
       </>
     ),
@@ -155,37 +171,38 @@ export const FIELDS: readonly FieldSpec[] = [
     // Two slots like Due: a task's DTSTART can be timed, and other CalDAV
     // clients routinely write one. With a date-only control the time had
     // nowhere to live and any save silently dropped it.
-    key: 'start', label: 'Start', slots: ['startDate', 'startTime'],
-    render: (v, set, { where, disabled, lang }) => (
+    key: 'start', label: 'field.start', slots: ['startDate', 'startTime'],
+    render: (v, set, { disabled, lang, t, scope }) => (
       <>
-        <input className="input" type="date" aria-label={`Start date${where}`} value={v.startDate}
+        <DateTimeInput className="input" type="date" aria-label={scope(t('field.startDate'))} value={v.startDate}
           disabled={disabled} onChange={(e) => set({ startDate: e.target.value })} />
         {/* A time with no date isn't expressible as a start, same as Due. */}
-        <input className="input" type="time" aria-label={`Start time${where}`} value={v.startTime} lang={lang}
+        <DateTimeInput className="input" type="time" aria-label={scope(t('field.startTime'))} value={v.startTime}
+          lang={lang}
           disabled={disabled || !v.startDate} onChange={(e) => set({ startTime: e.target.value })} />
       </>
     ),
   },
   {
-    key: 'priority', label: 'Priority', slots: ['priority'],
-    render: (v, set, { where, disabled }) => (
-      <select className="input" aria-label={`Priority${where}`} value={v.priority} disabled={disabled}
+    key: 'priority', label: 'field.priority', slots: ['priority'],
+    render: (v, set, { disabled, t, scope }) => (
+      <select className="input" aria-label={scope(t('field.priority'))} value={v.priority} disabled={disabled}
         onChange={(e) => set({ priority: e.target.value })}>
         {PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
       </select>
     ),
   },
   {
-    key: 'tags', label: 'Tags', slots: ['tags'],
-    render: (v, set, { where, disabled }) => (
-      <TagInput label={`Tags${where}`} value={v.tags} disabled={disabled}
+    key: 'tags', label: 'field.tags', slots: ['tags'],
+    render: (v, set, { disabled, t, scope }) => (
+      <TagInput label={scope(t('field.tags'))} value={v.tags} disabled={disabled}
         onChange={(tags) => set({ tags })} />
     ),
   },
   {
-    key: 'notes', label: 'Notes', slots: ['notes'],
-    render: (v, set, { where, disabled }) => (
-      <input className="input" aria-label={`Notes${where}`} value={v.notes} disabled={disabled}
+    key: 'notes', label: 'field.notes', slots: ['notes'],
+    render: (v, set, { disabled, t, scope }) => (
+      <input className="input" aria-label={scope(t('field.notes'))} value={v.notes} disabled={disabled}
         onChange={(e) => set({ notes: e.target.value })} />
     ),
   },
@@ -258,7 +275,8 @@ export function AddMultipleModal({ lists, defaultList, initialTitle, onSubmit, o
   ) => Promise<number[]>
   onClose: () => void
 }) {
-  const lang = inputLang(useTimeFormat())
+  const lang = inputLang(useTimeFormat(), useI18n().lang)
+  const tr = useT()
   const [rows, setRows] = useState<Row[]>(() => [
     { ...blankRow(defaultList), summary: initialTitle?.trim() || '' },
     blankRow(defaultList), blankRow(defaultList),
@@ -414,16 +432,17 @@ export function AddMultipleModal({ lists, defaultList, initialTitle, onSubmit, o
     <div className="overlay"
       onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) onClose() }}>
       <div className="modal task-modal" role="dialog" aria-modal="true"
-        aria-label="Add multiple tasks">
+        aria-label={tr('bulk.aria')}>
         <div className="modal-head">
-          <span className="modal-title">Add multiple</span>
-          <button className="icon-btn" onClick={onClose} disabled={busy} aria-label="Close">✕</button>
+          <span className="modal-title">{tr('bulk.title')}</span>
+          <button className="icon-btn" onClick={onClose} disabled={busy}
+            aria-label={tr('common.close')}>✕</button>
         </div>
 
         {/* A plain field with a micro-label heading, exactly like the weekly
             availability editor in Scheduling — not a panel. */}
         <div className="field">
-          <label className="label">Same for all</label>
+          <label className="label">{tr('bulk.sameForAll')}</label>
           <div className="task-props">
             {FIELDS.map((f) => (
               <div key={f.key}
@@ -431,12 +450,17 @@ export function AddMultipleModal({ lists, defaultList, initialTitle, onSubmit, o
                 <label className="bulk-toggle">
                   <input type="checkbox" checked={sharedOn[f.key]} disabled={busy}
                     onChange={() => toggleShared(f)} />
-                  <span>{f.label}</span>
+                  <span>{tr(f.label)}</span>
                 </label>
                 {sharedOn[f.key] && (
                   <span className="task-prop-controls">
                     {f.render(shared, (p) => setShared((v) => ({ ...v, ...p })),
-                      { lists, where: FOR_ALL, disabled: busy, lang })}
+                      {
+                        lists, disabled: busy, lang, t: tr,
+                        // Distinguishes a shared control from both its own
+                        // toggle and the per-row controls of the same property.
+                        scope: (n) => tr('field.forAll', { name: n }),
+                      })}
                   </span>
                 )}
               </div>
@@ -446,9 +470,9 @@ export function AddMultipleModal({ lists, defaultList, initialTitle, onSubmit, o
 
         <div className="bulk-head">
           <span className="bulk-cell bulk-f-num" />
-          <span className="bulk-cell bulk-f-title label">Title</span>
+          <span className="bulk-cell bulk-f-title label">{tr('bulk.rowTitle')}</span>
           {perRow.map((f) => (
-            <span key={f.key} className={`bulk-cell bulk-f-${f.key} label`}>{f.label}</span>
+            <span key={f.key} className={`bulk-cell bulk-f-${f.key} label`}>{tr(f.label)}</span>
           ))}
           <span className="bulk-x-gap" />
         </div>
@@ -459,7 +483,8 @@ export function AddMultipleModal({ lists, defaultList, initialTitle, onSubmit, o
               <span className="bulk-cell bulk-f-num bulk-num">{i + 1}</span>
               <span className="bulk-cell bulk-f-title">
                 <input className="input" value={row.summary} disabled={busy}
-                  aria-label={`Title, row ${i + 1}`} placeholder="Task title"
+                  aria-label={tr('bulk.titleForRow', { n: i + 1 })}
+                  placeholder={tr('bulk.titlePlaceholder')}
                   autoFocus={i === 0}
                   ref={(el) => {
                     if (el) titleRefs.current.set(row.key, el)
@@ -473,43 +498,50 @@ export function AddMultipleModal({ lists, defaultList, initialTitle, onSubmit, o
                 <span key={f.key} className={`bulk-cell bulk-f-${f.key}`}>
                   {/* Carries the column name once the header row is hidden and
                       each row stacks into a card (mobile). */}
-                  <span className="bulk-cell-label label">{f.label}</span>
+                  <span className="bulk-cell-label label">{tr(f.label)}</span>
                   {f.render(row, (p) => patchRow(row.key, p),
-                    { lists, where: `, row ${i + 1}`, disabled: busy, lang })}
+                    {
+                      lists, disabled: busy, lang, t: tr,
+                      scope: (n) => tr('field.forRow', { name: n, n: i + 1 }),
+                    })}
                 </span>
               ))}
               <button className="icon-btn bulk-x" disabled={busy}
-                aria-label={`Remove row ${i + 1}`} onClick={() => removeRow(row.key)}>✕</button>
+                aria-label={tr('bulk.removeRow', { n: i + 1 })}
+                onClick={() => removeRow(row.key)}>✕</button>
             </div>
           ))}
         </div>
 
         <div className="bulk-foot">
-          <button className="bulk-add-row" title="Add another row"
-            onClick={() => addRow()} disabled={busy || rows.length >= MAX_ROWS}>+ row</button>
+          <button className="bulk-add-row" title={tr('bulk.addRow')}
+            onClick={() => addRow()} disabled={busy || rows.length >= MAX_ROWS}>
+            {tr('bulk.addRowShort')}
+          </button>
           <span className="hintline">
             {truncated
-              ? `Only the first ${MAX_ROWS} rows were kept.`
-              : 'Paste a list of titles to fill several rows at once.'}
+              ? tr('bulk.truncated', { max: MAX_ROWS })
+              : tr('bulk.pasteHint')}
           </span>
         </div>
 
         {failed.length > 0 && (
           <div className="bulk-fail" role="alert">
-            {failed.length === 1
-              ? "1 task couldn't be created. Its row was kept"
-              : `${failed.length} tasks couldn't be created. Their rows were kept`}
-            {' '}— press Add to retry.
+            {tr('bulk.failed', { count: failed.length })}
           </div>
         )}
 
         <div className="modal-actions">
-          {busy && <span className="bulk-progress">{done} / {live.length}</span>}
+          {busy && (
+            <span className="bulk-progress">
+              {tr('bulk.progress', { done, total: live.length })}
+            </span>
+          )}
           <span className="spacer" />
           <button className="btn" onClick={submit} disabled={busy || !live.length}>
-            {busy ? 'Adding…'
-              : live.length ? `Add ${live.length} ${live.length === 1 ? 'task' : 'tasks'}`
-              : 'Add tasks'}
+            {busy ? tr('bulk.adding')
+              : live.length ? tr('bulk.submit', { count: live.length })
+              : tr('bulk.submitEmpty')}
           </button>
         </div>
       </div>

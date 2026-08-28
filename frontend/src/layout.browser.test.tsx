@@ -276,3 +276,104 @@ describe('the settings sheet is reachable to its end on a phone', () => {
       + 'everything past the fold is unreachable').toBeTruthy()
   })
 })
+
+// ── the Today header on a phone ─────────────────────────────────────────────
+
+// The header the real component renders, class for class: a title, the two-
+// button day nav, the date, the spacer, the count, and the three named actions.
+// `today-head` and `today-count` are the two names the fix added; the component
+// suite holds them to the JSX.
+const TODAY_HEAD = `
+  <div class="shell"><div class="main"><div class="content">
+    <div class="content-head today-head">
+      <span class="content-title">Today</span>
+      <div class="today-nav">
+        <button type="button" class="icon-btn" aria-label="Previous day">&#8249;</button>
+        <button type="button" class="icon-btn" aria-label="Next day">&#8250;</button>
+      </div>
+      <span class="content-sub">Friday, August 28</span>
+      <span class="spacer"></span>
+      <span class="content-sub today-count">3 open &middot; 5 on the day</span>
+      <button type="button" class="btn ghost today-review">Review</button>
+      <button type="button" class="btn ghost today-shutdown">Shut down</button>
+      <button type="button" class="btn ghost today-habits-open">
+        <span class="mono">&#8635;</span> Habits</button>
+    </div>
+  </div></div></div>`
+
+describe('the Today header keeps its actions together on a phone', () => {
+  const actions = (host: Element) =>
+    ['.today-review', '.today-shutdown', '.today-habits-open']
+      .map((sel) => ({ sel, ...box(host.querySelector(sel)!) }))
+
+  it('puts Review, Shut down and Habits on one row', async () => {
+    // EVIDENCE. Measured in this harness at 390x844 before the fix: the header
+    // was 147px over four lines, with `Habits` alone on the last one under
+    // `Review` and `Shut down` — which is what "the top buttons are on
+    // different rows" means. Two of those four lines were spent on nothing:
+    // `.spacer` is `flex: 1` and claimed 81px of trailing space on the title
+    // line, pushing everything after it down.
+    //
+    // After: three lines — title/nav/date, the count, then the three actions
+    // together at 284px of the 362 available.
+    //
+    // Checked across the phone range rather than at one width. 320 is the
+    // narrowest phone still in use and the only one where the header takes a
+    // fourth line (a long date wraps too, at 154px) — the actions still share
+    // theirs, which is the property, and it is the width a rule tuned to 390
+    // would quietly break.
+    for (const w of [320, 360, 390, 430]) {
+      document.body.innerHTML = ''
+      await viewport(w)
+      const host = await mount(TODAY_HEAD)
+      const tops = actions(host).map((a) => Math.round(a.top))
+
+      expect(new Set(tops).size,
+        `at ${w}px the actions are on ${new Set(tops).size} rows, `
+        + `at tops ${tops.join(', ')}`).toBe(1)
+    }
+  })
+
+  it('in the order they are read, none of them clipped', async () => {
+    await viewport(390)
+    const host = await mount(TODAY_HEAD)
+    const laid = actions(host)
+
+    // Left to right, in DOM order — a wrapped row that reflowed them would
+    // still share a top.
+    expect(laid.map((a) => a.left)).toEqual([...laid.map((a) => a.left)].sort((x, y) => x - y))
+    // …and the last one ends inside the viewport. `.today-habits-open` is the
+    // one that was orphaned, so it is the one that would overflow if the row
+    // were forced instead of made to fit.
+    expect(laid[2].right, 'the actions run past the right edge').toBeLessThanOrEqual(390)
+  })
+
+  it('and does not eat the screen doing it', async () => {
+    // 147px before, 129.5px after, on an 844px phone. Not a target so much as a
+    // ratchet: this is the one tab opened every morning, and a header that
+    // grows again by another line is a regression whether or not it wraps
+    // tidily.
+    await viewport(390)
+    const host = await mount(TODAY_HEAD)
+    expect(box(host.querySelector('.content-head')!).h).toBeLessThanOrEqual(135)
+  })
+
+  it('leaves the other tabs\' spacer alone', async () => {
+    // `.cal-head` has dropped its spacer on a phone since the calendar was
+    // written; `.content-head` never did, and the fix is scoped to `today-head`
+    // rather than to every tab. The Tasks header is shorter and its spacer is
+    // what right-aligns the view switcher, so a blanket rule would have moved
+    // something nobody complained about.
+    await viewport(390)
+    const host = await mount(`
+      <div class="shell"><div class="main"><div class="content">
+        <div class="content-head">
+          <span class="content-title">All lists</span>
+          <span class="content-sub">4 open</span>
+          <span class="spacer"></span>
+          <div class="view-tabs"><button class="view-tab active">List</button></div>
+        </div>
+      </div></div></div>`)
+    expect(getComputedStyle(host.querySelector('.spacer')!).display).not.toBe('none')
+  })
+})

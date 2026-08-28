@@ -1445,6 +1445,261 @@ describe('<TasksView> drag-to-reorder', () => {
   })
 })
 
+// ── subtasks reorder among their siblings ──────────────────────────────────
+//
+// Steps are the ordinary reason to have subtasks, and "first, then, then" is
+// not a spelling the intrinsic keys can express: an undated, unprioritised run
+// of them sorts by title, which is an order nobody chose. The persistence could
+// always carry it — `sort_order` is one account-wide sequence and `reorder` has
+// always sent every task in it, subtasks included — so the whole of what was
+// missing was that `drag` stopped at the top level.
+
+describe('<TasksView> reordering subtasks', () => {
+  const wrapFor = (title: string) =>
+    screen.getByText(title).closest('.task-drag') as HTMLElement
+  const topTitles = () =>
+    [...document.querySelectorAll('.task:not(.sub) .task-title')]
+      .map((n) => n.textContent?.trim())
+  /** The subtask titles under `parent`, in the order they render. */
+  const subTitles = (parent: string) =>
+    [...wrapFor(parent).querySelectorAll('.task.sub .task-title')]
+      .map((n) => n.textContent?.trim())
+
+  const transfer = () => ({ setData: vi.fn(), getData: vi.fn(), effectAllowed: '' })
+  const dragOnto = (from: string, to: string) => {
+    const dataTransfer = transfer()
+    // `mousedown` first, on the title, because that is the order a browser
+    // produces and the wrapper's text-field guard reads it.
+    fireEvent.mouseDown(screen.getByText(from))
+    fireEvent.dragStart(wrapFor(from), { dataTransfer })
+    fireEvent.drop(wrapFor(to), { dataTransfer })
+  }
+
+  // Undated and unprioritised, which is what a checklist of steps looks like —
+  // so the only key left is the title, and the pane opens on Cook, Prep, Serve.
+  const parent = task({ uid: 'p', summary: 'Dinner' })
+  const kid = (uid: string, summary: string) => task({ uid, summary, parent: 'p' })
+  const cook = kid('k-cook', 'Cook')
+  const prep = kid('k-prep', 'Prep')
+  const serve = kid('k-serve', 'Serve')
+
+  it('opens in title order, which is the thing being fixed', async () => {
+    m.tasks.mockResolvedValue([parent, cook, prep, serve])
+    setup('list')
+    await screen.findByText('Dinner')
+    expect(subTitles('Dinner')).toEqual(['Cook', 'Prep', 'Serve'])
+  })
+
+  it('drags one subtask above another and writes the account-wide sequence', async () => {
+    m.tasks.mockResolvedValue([parent, cook, prep, serve])
+    m.reorderTasks.mockResolvedValue({ ok: true })
+    setup('list')
+    await screen.findByText('Dinner')
+
+    dragOnto('Prep', 'Cook')
+
+    // Painted at once, like every other write in this app.
+    expect(subTitles('Dinner')).toEqual(['Prep', 'Cook', 'Serve'])
+    await waitFor(() => expect(m.reorderTasks).toHaveBeenCalled())
+    // Every task on the account, not just the run: manual position has to be
+    // comparable across lists, and sending only the siblings would leave every
+    // other row's position stranded among the new ones. The parent keeps the
+    // slot it already had — nothing outside the run moves.
+    expect(m.reorderTasks.mock.calls[0][0].map((x: { uid: string }) => x.uid))
+      .toEqual(['k-prep', 'p', 'k-cook', 'k-serve'])
+  })
+
+  it('holds the new order through the refetch', async () => {
+    m.tasks.mockResolvedValue([parent, cook, prep, serve])
+    m.reorderTasks.mockResolvedValue({ ok: true })
+    const { bumpRev } = setup('list')
+    await screen.findByText('Dinner')
+
+    dragOnto('Serve', 'Cook')
+    expect(subTitles('Dinner')).toEqual(['Serve', 'Cook', 'Prep'])
+
+    m.tasks.mockResolvedValue([
+      { ...parent, sort_order: 2 }, { ...serve, sort_order: 1 },
+      { ...cook, sort_order: 3 }, { ...prep, sort_order: 4 },
+    ])
+    bumpRev(1)
+    await waitFor(() => expect(m.tasks).toHaveBeenCalledTimes(2))
+    expect(subTitles('Dinner')).toEqual(['Serve', 'Cook', 'Prep'])
+  })
+
+  it('puts the old order back when the write fails', async () => {
+    m.tasks.mockResolvedValue([parent, cook, prep, serve])
+    m.reorderTasks.mockRejectedValue(new Error('nope'))
+    setup('list')
+    await screen.findByText('Dinner')
+
+    dragOnto('Serve', 'Cook')
+    // Painted first — that is what makes the line below a rollback rather than
+    // a gesture that never did anything.
+    expect(subTitles('Dinner')).toEqual(['Serve', 'Cook', 'Prep'])
+
+    // The UI must not keep claiming a move the server refused.
+    await waitFor(() => expect(subTitles('Dinner')).toEqual(['Cook', 'Prep', 'Serve']))
+  })
+
+  it('refuses to drop a subtask on a top-level row', async () => {
+    // Ordering is one gesture and re-parenting is another. A drop that crossed
+    // runs would have to mean one of them, and whichever it meant the other
+    // would be a silent accident.
+    //
+    // THIS IS ALSO THE TEST FOR THE `stopPropagation` IN `onDragStart`. The
+    // wrapper contains the whole subtree, so the dragstart fired at a subtask
+    // bubbles through every ancestor wrapper; without it the last one to run —
+    // the top-level row — would be recorded as the row being carried, in the
+    // top-level run, and this drop would land.
+    m.tasks.mockResolvedValue([
+      parent, cook, prep, serve, task({ uid: 'a', summary: 'Alpha' }),
+    ])
+    m.reorderTasks.mockResolvedValue({ ok: true })
+    setup('list')
+    await screen.findByText('Dinner')
+
+    dragOnto('Cook', 'Alpha')
+
+    expect(m.reorderTasks).not.toHaveBeenCalled()
+    expect(subTitles('Dinner')).toEqual(['Cook', 'Prep', 'Serve'])
+    expect(topTitles()).toEqual(['Alpha', 'Dinner'])
+  })
+
+  it('refuses to drop a subtask on its own parent', async () => {
+    // The parent is in the top-level run, not in its children's — dropping a
+    // step onto the thing it is a step of names no position at all.
+    m.tasks.mockResolvedValue([parent, cook, prep, serve])
+    m.reorderTasks.mockResolvedValue({ ok: true })
+    setup('list')
+    await screen.findByText('Dinner')
+
+    const dataTransfer = transfer()
+    fireEvent.mouseDown(screen.getByText('Serve'))
+    fireEvent.dragStart(wrapFor('Serve'), { dataTransfer })
+    // The parent's own row, not its wrapper: the wrapper is an ancestor of the
+    // dragged row and the drop has to be aimed at what the pointer is over.
+    fireEvent.drop(screen.getByText('Dinner').closest('.task')!, { dataTransfer })
+
+    expect(m.reorderTasks).not.toHaveBeenCalled()
+    expect(subTitles('Dinner')).toEqual(['Cook', 'Prep', 'Serve'])
+
+    // …and the drag was live the whole time: the same carried row lands on a
+    // SIBLING without being picked up again. Without this the assertions above
+    // would also pass on a build where nothing could be dragged at all.
+    fireEvent.drop(wrapFor('Cook'), { dataTransfer })
+    expect(subTitles('Dinner')).toEqual(['Serve', 'Cook', 'Prep'])
+  })
+
+  it('still targets the top-level row when one is dragged over a subtask', async () => {
+    // The other direction of the same rule, and the behaviour that was there
+    // before subtasks had handlers at all: the whole subtree is one drop target
+    // for a top-level drag. A row whose run does not match lets the event
+    // bubble, so the nearest ancestor whose run DOES match takes it.
+    const alpha = task({ uid: 'a', summary: 'Alpha', due: '2026-08-10', due_is_date: true })
+    const dinner = { ...parent, due: '2026-08-11', due_is_date: true }
+    m.tasks.mockResolvedValue([alpha, dinner, cook])
+    m.reorderTasks.mockResolvedValue({ ok: true })
+    setup('list')
+    await screen.findByText('Cook')
+    expect(topTitles()).toEqual(['Alpha', 'Dinner'])
+
+    dragOnto('Alpha', 'Cook')
+
+    // Alpha landed relative to DINNER — dropped on a row further down, so
+    // after it — and Cook is exactly where it was.
+    expect(topTitles()).toEqual(['Dinner', 'Alpha'])
+    expect(subTitles('Dinner')).toEqual(['Cook'])
+  })
+
+  it('takes a subtask\'s own subtasks with it', async () => {
+    const grandkid = task({ uid: 'k-cook-1', summary: 'Chop', parent: 'k-cook' })
+    m.tasks.mockResolvedValue([parent, cook, prep, serve, grandkid])
+    m.reorderTasks.mockResolvedValue({ ok: true })
+    setup('list')
+    await screen.findByText('Chop')
+
+    dragOnto('Cook', 'Serve')
+
+    // The wrapper is the whole subtree the whole way down, so Chop travels
+    // under Cook rather than being left behind.
+    expect(subTitles('Dinner')).toEqual(['Prep', 'Serve', 'Cook', 'Chop'])
+    expect(screen.getByText('Chop').closest('.task-drag')!.parentElement)
+      .toBe(screen.getByText('Cook').closest('.task-drag'))
+  })
+
+  it('draws the drop line on the edge the row will land on', async () => {
+    m.tasks.mockResolvedValue([parent, cook, prep, serve])
+    setup('list')
+    await screen.findByText('Dinner')
+
+    // Dragging UP: the row lands BEFORE the target, so the line is on its top
+    // edge. `.drag-below` is the class the stylesheet turns into the bottom one.
+    const dataTransfer = transfer()
+    fireEvent.mouseDown(screen.getByText('Serve'))
+    fireEvent.dragStart(wrapFor('Serve'), { dataTransfer })
+    fireEvent.dragOver(wrapFor('Cook'), { dataTransfer })
+    expect(wrapFor('Cook')).toHaveClass('drag-over')
+    expect(wrapFor('Cook')).not.toHaveClass('drag-below')
+    fireEvent.dragEnd(wrapFor('Serve'))
+
+    // Dragging DOWN: after the target, so the bottom edge.
+    fireEvent.mouseDown(screen.getByText('Cook'))
+    fireEvent.dragStart(wrapFor('Cook'), { dataTransfer })
+    fireEvent.dragOver(wrapFor('Serve'), { dataTransfer })
+    expect(wrapFor('Serve')).toHaveClass('drag-over')
+    expect(wrapFor('Serve')).toHaveClass('drag-below')
+  })
+
+  it('marks no drop target at all while a foreign row is being carried', async () => {
+    // A subtask in flight must not light up a top-level row on the way past.
+    m.tasks.mockResolvedValue([
+      parent, cook, prep, serve, task({ uid: 'a', summary: 'Alpha' }),
+    ])
+    setup('list')
+    await screen.findByText('Dinner')
+
+    const dataTransfer = transfer()
+    fireEvent.mouseDown(screen.getByText('Cook'))
+    fireEvent.dragStart(wrapFor('Cook'), { dataTransfer })
+    fireEvent.dragOver(wrapFor('Alpha'), { dataTransfer })
+    expect(wrapFor('Alpha')).not.toHaveClass('drag-over')
+  })
+
+  it('measures the drag in the sibling list, not in the account-wide sequence',
+    async () => {
+      // THE REASON `reorder` TAKES THE RUN. Those two sequences agree while
+      // every row is placed, or while none is — but a row created since the last
+      // drag is unplaced among placed ones, and `sortTasks` puts it "half a step
+      // before its first later neighbour", which is a DIFFERENT task in one
+      // parent's sibling list than in the whole account.
+      //
+      // Here: Aerate is undated, so among its dated siblings it sorts last and
+      // the pane shows it last. Account-wide, the first placed row in manual
+      // order is the undated "Zulu", which Aerate sorts before by title — so the
+      // account-wide sequence has Aerate FIRST. Spliced there, dragging Aerate
+      // up onto Bake read as a downward move and landed it after Bake: the
+      // gesture did the opposite of what it looked like.
+      const zulu = task({ uid: 'z', summary: 'Zulu', sort_order: 1 })
+      const dad = task({ uid: 'p', summary: 'Dinner', sort_order: 2 })
+      const bake = task({ uid: 'k-bake', summary: 'Bake', parent: 'p', sort_order: 3,
+        due: '2026-08-10', due_is_date: true })
+      const chill = task({ uid: 'k-chill', summary: 'Chill', parent: 'p', sort_order: 4,
+        due: '2026-08-11', due_is_date: true })
+      const aerate = task({ uid: 'k-aerate', summary: 'Aerate', parent: 'p' })
+      m.tasks.mockResolvedValue([zulu, dad, bake, chill, aerate])
+      m.reorderTasks.mockResolvedValue({ ok: true })
+      setup('list')
+      await screen.findByText('Aerate')
+      expect(subTitles('Dinner')).toEqual(['Bake', 'Chill', 'Aerate'])
+
+      dragOnto('Aerate', 'Bake')
+
+      // Dropped on the row above it, so it lands above it.
+      expect(subTitles('Dinner')).toEqual(['Aerate', 'Bake', 'Chill'])
+    })
+})
+
 // ── Stage 4 backlog closures (docs/AUDIT.md) ───────────────────────────────
 
 describe('stage 4 — list drag and the prune gate', () => {

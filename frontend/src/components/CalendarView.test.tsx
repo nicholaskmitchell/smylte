@@ -37,7 +37,7 @@ const ev = (o: Partial<CalEvent> = {}): CalEvent => ({
   summary: 'Standup', description: null, location: null,
   start: '2026-03-02T09:00:00', start_is_date: false,
   end: '2026-03-02T09:30:00', end_is_date: false, duration: null,
-  all_day: false, status: null, tags: [], has_rrule: false,
+  all_day: false, status: null, busy: true, tags: [], has_rrule: false,
   href: '/c1/u1.ics', etag: '"1"', ...o,
 })
 
@@ -112,8 +112,18 @@ async function openEvent(user: ReturnType<typeof userEvent.setup>, name = 'Stand
   return screen.findByRole('dialog')
 }
 
-const body = (call: 'patchEvent' | 'createEvent') =>
-  (call === 'patchEvent' ? m.patchEvent : m.createEvent).mock.calls[0][2] as Record<string, unknown>
+/** The body of the first write of its kind.
+ *
+ *  The two calls put it in different places — `patchEvent(cal, uid, body)` and
+ *  `createEvent(cal, body)` — and this helper had one index for both. Nothing
+ *  noticed because every caller so far asked about a patch; a create came back
+ *  `undefined` and `toMatchObject` on it fails as a missing property rather
+ *  than as the harness fault it is. */
+const body = (call: 'patchEvent' | 'createEvent') => (
+  call === 'patchEvent'
+    ? m.patchEvent.mock.calls[0][2]
+    : m.createEvent.mock.calls[0][1]
+) as Record<string, unknown>
 
 beforeEach(() => {
   // The grid opens on today's month, so the clock decides which fixtures render.
@@ -131,6 +141,106 @@ beforeEach(() => {
 })
 
 afterEach(() => { vi.useRealTimers() })
+
+// ── Busy / Free (iCalendar TRANSP) ──────────────────────────────────────────
+//
+// The field Apple Calendar calls "Busy/Free". It is not cosmetic: `false` takes
+// the event out of the busy set behind the public booking page, so a slot
+// sitting on it is offered to whoever holds the link. What the modal sends —
+// and, just as much, what it does NOT send — is the whole of that contract on
+// this side, because the backend writes TRANSP whenever the key is present.
+
+describe('busy / free', () => {
+  const openNew = async (user: ReturnType<typeof userEvent.setup>) => {
+    await user.click(await screen.findByRole('button', { name: 'New event' }))
+    return screen.findByRole('dialog', { name: 'New event' })
+  }
+
+  it('opens on Busy for a new event, and sends nothing for it', async () => {
+    // An event with no TRANSP is busy by RFC 5545's own default, so the control
+    // opens agreeing with what the server would store if it were never touched
+    // — and leaving it alone writes no property at all.
+    const user = setup([])
+    await openNew(user)
+    expect(screen.getByLabelText('Show as')).toHaveValue('busy')
+
+    await user.type(screen.getByLabelText('Title'), 'Meeting')
+    await user.click(screen.getByText('Save'))
+
+    await waitFor(() => expect(m.createEvent).toHaveBeenCalled())
+    expect(body('createEvent')).not.toHaveProperty('busy')
+  })
+
+  it('sends busy:false when a new event is marked Free', async () => {
+    const user = setup([])
+    await openNew(user)
+    await user.type(screen.getByLabelText('Title'), 'Hold')
+    await user.selectOptions(screen.getByLabelText('Show as'), 'free')
+    await user.click(screen.getByText('Save'))
+
+    await waitFor(() => expect(m.createEvent).toHaveBeenCalled())
+    expect(body('createEvent')).toMatchObject({ busy: false })
+  })
+
+  it('opens on Free for an event that is marked free', async () => {
+    const user = setup([ev({ busy: false })])
+    await openEvent(user)
+    expect(screen.getByLabelText('Show as')).toHaveValue('free')
+    // …and says what that costs, which is the half a person cannot see.
+    expect(screen.getByText(/will not block a slot/i)).toBeInTheDocument()
+  })
+
+  it('says nothing about availability while the event blocks', async () => {
+    // The hint is only on the arm that changes something. Every event blocks;
+    // saying so under every one of them would be a line of chrome in the app's
+    // busiest dialog.
+    const user = setup([ev()])
+    await openEvent(user)
+    expect(screen.queryByText(/will not block a slot/i)).not.toBeInTheDocument()
+  })
+
+  it('leaves busy off a save that did not touch it', async () => {
+    // THE LOAD-BEARING ONE. The backend writes TRANSP whenever the key is
+    // present, so a rename that carried `busy` would stamp `TRANSP:OPAQUE` onto
+    // an event another CalDAV client had deliberately marked Free — invariant
+    // #2, and the same discipline `tagFields` keeps one line above it.
+    const user = setup([ev({ busy: false })])
+    await openEvent(user)
+    // The event really is marked Free — otherwise the assertion below would
+    // hold on a build that has no such field at all.
+    expect(screen.getByLabelText('Show as')).toHaveValue('free')
+    await user.clear(screen.getByLabelText('Title'))
+    await user.type(screen.getByLabelText('Title'), 'Renamed')
+    await user.click(screen.getByText('Save'))
+
+    await waitFor(() => expect(m.patchEvent).toHaveBeenCalled())
+    expect(body('patchEvent')).toMatchObject({ summary: 'Renamed' })
+    expect(body('patchEvent')).not.toHaveProperty('busy')
+  })
+
+  it('sends it in both directions when it is changed', async () => {
+    const user = setup([ev()])
+    await openEvent(user)
+    await user.selectOptions(screen.getByLabelText('Show as'), 'free')
+    await user.click(screen.getByText('Save'))
+    await waitFor(() => expect(m.patchEvent).toHaveBeenCalled())
+    expect(body('patchEvent')).toMatchObject({ busy: false })
+  })
+
+  it('carries the change through a recurring save\'s scope prompt', async () => {
+    // The scope prompt renders in place of the form with its state held behind
+    // it, so a field answered before the prompt has to survive the round trip
+    // through it.
+    const user = setup([occurrence()])
+    await openEvent(user)
+    await user.selectOptions(screen.getByLabelText('Show as'), 'free')
+    await user.click(screen.getByText('Save'))
+    await user.click(await screen.findByText('All events'))
+
+    await waitFor(() => expect(m.patchEvent).toHaveBeenCalled())
+    expect(body('patchEvent')).toMatchObject({ busy: false, scope: 'all' })
+  })
+})
 
 // ── recurrence scope routing ────────────────────────────────────────────────
 // Every per-occurrence write addresses the instance by recurrence_id, so the

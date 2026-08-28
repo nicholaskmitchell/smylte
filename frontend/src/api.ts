@@ -5,6 +5,7 @@
 // allowlist and the grid math — and re-exported here so the wire contract still
 // reads in one place. The backend mirrors them in SettingsPatch.
 import type { Appearance } from './appearance'
+import type { Language } from './lang'
 import type { CalendarFit } from './calendar'
 import type { DashboardModule } from './dashboard'
 import type { Tab, TabStart } from './tabs'
@@ -132,6 +133,19 @@ export interface CalEvent {
   duration: string | null
   all_day: boolean
   status: string | null
+  /** Whether this event consumes the owner's time — iCalendar's TRANSP, which
+   *  Apple Calendar and Google Calendar both put in front of the user as
+   *  "Busy / Free" and Thunderbird as "Show Time As".
+   *
+   *  A boolean rather than the property's own two words because the wire has
+   *  three states and only two meanings: OPAQUE, TRANSPARENT, and ABSENT — and
+   *  RFC 5545 §3.8.2.7 makes absent the same as OPAQUE. The server resolves that
+   *  default once (`read.blocks_time`) so no reader here has to.
+   *
+   *  It is not decoration: `false` takes the event out of the busy set behind
+   *  the public booking page, so a slot sitting on it is offered. See
+   *  `scheduling.busy_intervals`. */
+  busy: boolean
   tags: string[]
   has_rrule: boolean
   href: string
@@ -511,6 +525,11 @@ export interface Settings {
   session_ttl_s?: number | null    // how long a login lasts; null defers to the deployment
   show_completed_tasks?: boolean   // show completed/cancelled tasks inline in the main view (default hidden)
   time_format?: TimeFormat         // 12- or 24-hour clock across the app (see time.ts); default '12h'
+  // The language the app is shown in, and the locale it formats dates with
+  // (see lang.ts). Account-synced like every other display preference here —
+  // what the DEVICE was set up in is a different question from what its owner
+  // wants to read an app in.
+  language?: Language
   calendar_task_lists?: string[]   // task-list ids DRAWN on the calendar — an allowlist, empty by default
   calendar_show_done_tasks?: boolean  // keep completed tasks on the calendar (default hidden)
   // Whether the month grid fits the pane ('fixed': six equal week rows, a busy

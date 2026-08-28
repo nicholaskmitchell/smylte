@@ -230,6 +230,39 @@ const TODAY_ROWS = `
 describe('2026-08-25 — the Today row on a phone', () => {
   const TARGET = 44
 
+  /**
+   * The size of a control's real TAP TARGET, by hit-testing outward from its
+   * centre until the point stops belonging to it.
+   *
+   * This replaced `box(el)`, and the swap is the point rather than an
+   * implementation detail. A border box was only ever a PROXY for the target,
+   * and it is the proxy that made the first fix cost what it did: satisfying it
+   * meant growing the elements, which grew `.check` — the one control here that
+   * paints its box — to a 44px bordered square against the Tasks tab's 21px,
+   * and took 145px of a 362px row for four controls, leaving an ordinary task
+   * summary 115px to wrap onto three lines in. The guideline never asked for
+   * either. It asks for somewhere you can put a thumb.
+   *
+   * So the tap area is now a transparent, centred `::after`, and this measures
+   * what a thumb would actually land on. `elementFromPoint` returns the
+   * ORIGINATING element for a point inside its pseudo-element, which is the
+   * whole mechanism.
+   */
+  const hit = (el: HTMLElement) => {
+    const b = box(el)
+    const cx = b.left + b.w / 2
+    const cy = b.top + b.h / 2
+    const owns = (x: number, y: number) => document.elementFromPoint(x, y) === el
+    // Bounded, so a stylesheet that made something cover the viewport cannot
+    // walk this to the edge of the page one pixel at a time.
+    let l = cx; let r = cx; let t = cy; let bot = cy
+    while (cx - l < 200 && owns(l - 1, cy)) l -= 1
+    while (r - cx < 200 && owns(r + 1, cy)) r += 1
+    while (cy - t < 200 && owns(cx, t - 1)) t -= 1
+    while (bot - cy < 200 && owns(cx, bot + 1)) bot += 1
+    return { w: r - l + 1, h: bot - t + 1, left: l, right: r, top: t, bottom: bot }
+  }
+
   // ── AUDIT (open): app.css:1587 — the Today row's ✕, estimate and + are
   //    ~16–19px tap targets on the phone-primary surface ────────────────────
   it(`gives every control a ${TARGET}px tap box`, async () => {
@@ -266,6 +299,11 @@ describe('2026-08-25 — the Today row on a phone', () => {
     // named three classes and reached none of them — so the tick is included
     // even though the finding does not name it, and a button added to this row
     // later is covered without anyone remembering to add it here.
+    //
+    // MEASURED BY HIT-TESTING as of the mobile-layout fix — see `hit`. The
+    // property is unchanged and the number is unchanged; what changed is that
+    // the assertion is now about the target rather than about the border box
+    // that used to stand in for it.
     await viewport(390)
     const host = await mount(TODAY_ROWS)
     const buttons = [...host.querySelectorAll<HTMLElement>('.today-row button')]
@@ -277,12 +315,54 @@ describe('2026-08-25 — the Today row on a phone', () => {
       'every box is zero — the stylesheet did not load').toBeGreaterThan(0)
 
     const small = buttons
-      .map((b) => ({ cls: b.className, ...box(b) }))
+      .map((b) => ({ cls: b.className, ...hit(b) }))
       .filter((b) => b.w < TARGET || b.h < TARGET)
       .map((b) => `${b.cls} ${b.w}x${b.h}`)
 
     expect(small, `under the ${TARGET}px touch guideline on the phone-primary `
       + `surface: ${small.join(', ')}`).toEqual([])
+  })
+
+  // The hazard the technique brings, and the one the old measurement could not
+  // have caught: a tap area wider than its control can reach across a gap into
+  // the next one, and a target you cannot hit without hitting its neighbour is
+  // not a 44px target. Measured at 390px, the two adjacent controls with the
+  // least room between them — the estimate cell and the ✕ — leave 62px of clear
+  // space, and the tick is alone at the left edge.
+  it('without any two of those areas overlapping', async () => {
+    await viewport(390)
+    const host = await mount(TODAY_ROWS)
+    const rows = [...host.querySelectorAll('.today-row')]
+
+    const clashes: string[] = []
+    for (const row of rows) {
+      const areas = [...row.querySelectorAll<HTMLElement>('button')]
+        .map((b) => ({ cls: b.className, ...hit(b) }))
+        .sort((a, b) => a.left - b.left)
+      for (let i = 1; i < areas.length; i++) {
+        if (areas[i].left <= areas[i - 1].right) {
+          clashes.push(`${areas[i - 1].cls} / ${areas[i].cls}`)
+        }
+      }
+    }
+    expect(clashes, 'these tap areas overlap — a thumb aimed at one lands on '
+      + `both: ${clashes.join(', ')}`).toEqual([])
+  })
+
+  // …and the other half of the same fix: the CONTROLS went back to the size
+  // they are drawn at, which is what "the buttons are huge" meant. Measured at
+  // 390px before it: `.check` 44x44, the same tick the Tasks tab renders at
+  // 21px. After: 21x21, with the 44px target still there and asserted above.
+  it('while the tick stays the size the rest of the app draws it', async () => {
+    await viewport(390)
+    const host = await mount(TODAY_ROWS)
+    const check = host.querySelector<HTMLElement>('.check')!
+    const size = parseFloat(getComputedStyle(document.documentElement)
+      .getPropertyValue('--check-size'))
+
+    expect(size, '--check-size did not resolve').toBeGreaterThan(0)
+    expect(box(check).w, 'the tick is drawn bigger than --check-size').toBe(size)
+    expect(box(check).h, 'the tick is drawn bigger than --check-size').toBe(size)
   })
 
   // CONTROL (passes today, must keep passing). The glyphs stay small even as

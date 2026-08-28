@@ -1,4 +1,4 @@
-// Last-known-good task and calendar data, mirrored to localStorage.
+// Last-known-good task, calendar and day-plan data, mirrored to localStorage.
 //
 // Same contract the tab and appearance caches already state: the server is the
 // source of truth, and this is only what to show until it answers. What it buys
@@ -17,9 +17,17 @@
 // React-free on purpose, like tabs.ts and dashboard.ts, so the part that has to
 // survive a hand-edited or out-of-date blob can be tested on its own.
 
-import type { CalEvent, List, Task } from './api'
+import type { CalEvent, DayEntry, DayPlan, Habit, List, Task } from './api'
 
 export const CACHE_PREFIX = 'smylte-cache'
+
+/** How long after a change the mirror is written. One drag, one write.
+ *
+ *  Here rather than in `data.tsx` because there are now four writers on three
+ *  surfaces — the task and calendar mirrors, the day plan, the fortnight behind
+ *  the Today tab and the habit rules — and a second spelling of this number is
+ *  how one of them comes to write on every keystroke while the others coalesce. */
+export const CACHE_DEBOUNCE_MS = 400
 /** Bumped when a cached shape changes; older versions are swept on boot. */
 export const CACHE_VERSION = 1
 
@@ -261,10 +269,108 @@ export function sanitizeEvent(v: unknown): CalEvent | null {
     duration: orNull(o.duration),
     all_day: bool(o.all_day),
     status: orNull(o.status),
+    // `!== false`, not `bool(...)`. Absent from anything this cache wrote
+    // before the field existed, and the DTO's own default for an event with no
+    // TRANSP is BUSY — so a missing value has to read as true or an upgrade
+    // would paint every cached event as free for one round trip. `bool()`
+    // would answer false for exactly those rows.
+    busy: o.busy !== false,
     tags: strs(o.tags),
     has_rrule: bool(o.has_rrule),
     href: orNull(o.href) ?? '',
     etag: orNull(o.etag) ?? '',
+  }
+}
+
+// ── the day plan's own sanitizers ───────────────────────────────────────────
+//
+// The Today tab holds a SNAPSHOT rather than a query (see TodayView.tsx's
+// header), which is exactly why it wants a mirror: every other task surface can
+// recompute itself from the tasks already on disk, and this one cannot — the
+// rows it paints exist nowhere but in `day_plan`. Without this the tab was the
+// one screen in the app that still opened blank on a cold load and blanked
+// again on every return to it, because switching tabs unmounts the view.
+
+/** `kind` and `source` come back as free strings on purpose.
+ *
+ *  Both unions widen SILENTLY — api.ts says so of `DayEntryKind` in as many
+ *  words, and TodayView reads both through fallback maps (`KIND_LABEL`,
+ *  `REVIEW_ARM`) for that reason. Narrowing them to an allowlist here would
+ *  rewrite a kind this build has not heard of into one it has, on the way
+ *  through the disk cache only, so a row would read one way live and another
+ *  way cached. Required rather than defaulted, though: a row that does not say
+ *  what it is, or which day it belongs to, is not a row. */
+export function sanitizeDayEntry(v: unknown): DayEntry | null {
+  const o = obj(v)
+  const entry_id = o && str(o.entry_id)
+  const day = o && str(o.day)
+  const kind = o && str(o.kind)
+  const source = o && str(o.source)
+  if (!o || !entry_id || !day || !kind || !source) return null
+  return {
+    entry_id,
+    day,
+    kind: kind as DayEntry['kind'],
+    source: source as DayEntry['source'],
+    list: orNull(o.list),
+    uid: orNull(o.uid),
+    title: orNull(o.title),
+    position: numOrNull(o.position),
+    done_at: orNull(o.done_at),
+    dropped_at: orNull(o.dropped_at),
+    habit_id: orNull(o.habit_id),
+    rolled_to: orNull(o.rolled_to),
+    estimate_minutes: numOrNull(o.estimate_minutes),
+    // `orderEntries` tie-breaks on this with `localeCompare`, so it has to be a
+    // string whatever the blob says — a null here would throw while sorting the
+    // day. '' is the earliest value there is, so a row that arrived without a
+    // stamp sorts first among the rows it ties with rather than moving between
+    // renders; `entry_id` behind it keeps the order total either way.
+    created_at: orNull(o.created_at) ?? '',
+  }
+}
+
+/** A whole day. `entries: []` is a REAL answer here and is kept — an opened day
+ *  the owner emptied is a day with nothing on it, and reporting that as a miss
+ *  would make the tab paint blank for exactly the account whose last look at it
+ *  was blank. That is the one place this differs from `read` above, which treats
+ *  an empty row set as a corrupt entry. */
+export function sanitizeDayPlan(v: unknown): DayPlan | null {
+  const o = obj(v)
+  const day = o && str(o.day)
+  if (!o || !day) return null
+  const rows = Array.isArray(o.entries) ? o.entries : []
+  return {
+    day,
+    planned: bool(o.planned),
+    capacity_minutes: numOrNull(o.capacity_minutes),
+    // Null is a REAL answer and every reader has to handle it — an account that
+    // never stated a capacity must not be told it has overcommitted against a
+    // number it never gave. `numOrNull` says exactly that for a missing field.
+    capacity: numOrNull(o.capacity),
+    committed_at: orNull(o.committed_at),
+    shutdown_at: orNull(o.shutdown_at),
+    reflection: orNull(o.reflection),
+    entries: rows.slice(0, MAX_ROWS)
+      .map(sanitizeDayEntry).filter((e): e is DayEntry => e !== null),
+  }
+}
+
+export function sanitizeHabit(v: unknown): Habit | null {
+  const o = obj(v)
+  const id = o && str(o.id)
+  if (!o || !id) return null
+  return {
+    id,
+    title: orNull(o.title) ?? '',
+    // '' is EVERY DAY, spelled as the absence of a restriction — see api.ts.
+    // So the default is not a stand-in for a missing value, it IS the value a
+    // habit with no restriction carries.
+    days: orNull(o.days) ?? '',
+    paused_at: orNull(o.paused_at),
+    position: numOrNull(o.position),
+    estimate_minutes: numOrNull(o.estimate_minutes),
+    created_at: orNull(o.created_at) ?? '',
   }
 }
 
@@ -316,3 +422,89 @@ export function readCachedEvents(from: string, to: string): CalEvent[] | null {
     return rows.length ? rows : null
   } catch { return null }
 }
+
+// ── the day plan, the fortnight behind it, and the habit rules ──────────────
+
+// ONE day, stored with the key it is for, so a blob written yesterday is a miss
+// rather than yesterday's rows under today's heading — the same shape, and the
+// same reason, as the event window above.
+//
+// One is enough because the Today tab always MOUNTS on today: `day` is seeded
+// from the wall clock, so a look-back never survives a tab switch and a mirror
+// of last Tuesday could never be read back. TodayView only writes today's for
+// that reason — a past day's would evict the one entry that gets used.
+export function cacheDayPlan(plan: DayPlan): void {
+  const key = keyFor('day')
+  if (!key) return
+  try {
+    const body = JSON.stringify({
+      at: Date.now(),
+      day: plan.day,
+      plan: { ...plan, entries: plan.entries.slice(0, MAX_ROWS) },
+    })
+    if (body.length > MAX_BYTES) { localStorage.removeItem(key); return }
+    localStorage.setItem(key, body)
+  } catch { /* private mode / quota */ }
+}
+
+export function readCachedDayPlan(day: string): DayPlan | null {
+  const key = keyFor('day')
+  if (!key) return null
+  try {
+    const raw = localStorage.getItem(key)
+    if (!raw) return null
+    const blob = JSON.parse(raw) as { at?: unknown; day?: unknown; plan?: unknown }
+    if (typeof blob.at !== 'number' || Date.now() - blob.at > MAX_AGE_MS) {
+      localStorage.removeItem(key)
+      return null
+    }
+    if (blob.day !== day) return null
+    const plan = sanitizeDayPlan(blob.plan)
+    // The envelope and the body have to name the SAME day. TodayView keys every
+    // render of the day on `plan.day === day` and every write carries the key in
+    // its URL, so a blob whose two halves disagree is corrupt rather than merely
+    // stale, and painting either answer would be a claim about a day.
+    return plan && plan.day === day ? plan : null
+  } catch { return null }
+}
+
+// The fortnight behind the habit counts and the "still open from a recent plan"
+// suggestions — one `api.days` window, mirrored like the event window and read
+// back only for the window it was written for. Both ends move at a rollover and
+// at every step of the picker, so a window that does not match is a miss.
+export function cacheDayRange(from: string, to: string, plans: DayPlan[]): void {
+  const key = keyFor('days')
+  if (!key) return
+  try {
+    const body = JSON.stringify({ at: Date.now(), from, to, rows: plans.slice(0, MAX_ROWS) })
+    if (body.length > MAX_BYTES) { localStorage.removeItem(key); return }
+    localStorage.setItem(key, body)
+  } catch { /* private mode / quota */ }
+}
+
+export function readCachedDayRange(from: string, to: string): DayPlan[] | null {
+  const key = keyFor('days')
+  if (!key) return null
+  try {
+    const raw = localStorage.getItem(key)
+    if (!raw) return null
+    const blob = JSON.parse(raw) as { at?: unknown; from?: unknown; to?: unknown; rows?: unknown }
+    if (typeof blob.at !== 'number' || Date.now() - blob.at > MAX_AGE_MS) {
+      localStorage.removeItem(key)
+      return null
+    }
+    if (blob.from !== from || blob.to !== to || !Array.isArray(blob.rows)) return null
+    const rows = blob.rows.map(sanitizeDayPlan).filter((p): p is DayPlan => p !== null)
+    // Empty IS a miss here, unlike a single day above: "no plans in the window"
+    // and "nothing cached" are indistinguishable to every reader of this
+    // (`recentPlans` answers `[]` either way), so there is nothing to preserve
+    // and the ordinary corrupt-blob rule applies.
+    return rows.length ? rows : null
+  } catch { return null }
+}
+
+// The habit RULES, so the sheet paints its list the moment it opens rather than
+// after a round trip. Definitions only — occurrences are day-plan rows and ride
+// in the mirror above, which is the same split the API draws.
+export const cacheHabits = (rows: Habit[]) => write('habits', rows)
+export const readCachedHabits = () => read('habits', sanitizeHabit)

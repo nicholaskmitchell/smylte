@@ -28,19 +28,43 @@ import { fmtDuration } from './time'
  *  and so a 500 rather than a 422. */
 export const MAX_CAPACITY = 1440
 
-/** `5h`, `5h30`, `5h 30m`, `90m`, `1.5h`, or a bare number of minutes.
+// ── one grammar, two languages ─────────────────────────────────────────────
+//
+// `daytext.ts` needed a grammar per language and this file does not, and the
+// difference is worth stating rather than looking like an oversight. That module
+// DELETES the phrase it recognised from a title somebody typed, so a word read
+// in the wrong language costs a word; this one reads a whole field whose only
+// content is the quantity, and a line it cannot read leaves the field alone.
+// There is nothing here to mangle.
+//
+// So the German spellings are added to the same patterns rather than switched
+// between: `bis` beside `until`, `Uhr` beside the meridiem, `Std.` beside `h`
+// and `Min.` beside `m`. None of them collides with an English one — nobody
+// types "bis" in this field meaning anything else — and a field that takes both
+// is a field that keeps working when an account switches language mid-week.
+
+/** `5h`, `5h30`, `5h 30m`, `90m`, `1.5h`, `5 Std. 30 Min.`, or a bare number of
+ *  minutes.
  *
  *  The minute UNIT is optional so that `5h30` reads — it is how a span gets
  *  typed at least as often as `5h 30m`. That would also let a bare number match
  *  the minute group, which is exactly right and exactly why the bare-integer
  *  branch runs first: it claims that case explicitly rather than leaving it to
- *  fall through a grammar whose groups are all optional. */
-const SPAN_RE = /^(?:(\d+(?:\.\d+)?)\s*h(?:ours?)?)?\s*(?:(\d+)\s*(?:m(?:ins?|inutes?)?)?)?$/i
+ *  fall through a grammar whose groups are all optional.
+ *
+ *  `std` and `stunden?` come before the bare `h` in the hour alternation, and
+ *  `min` before the bare `m`, because a regex alternation is first-match: with
+ *  `h` first, "5 std" would match the hour as `h` and leave "td" unconsumed. */
+const SPAN_RE = /^(?:(\d+(?:\.\d+)?)\s*(?:std\.?|stunden?|h(?:ours?)?))?\s*(?:(\d+)\s*(?:min\.?|minuten?|m(?:ins?|inutes?)?)?)?$/i
 
-/** `until 6pm`, `till 18:00`, `to 5.30pm`, or a bare `6pm`. The introducer is
- *  optional because "6pm" alone is unambiguous — there is no span it could be
- *  confused with, since a span always carries its unit. */
-const STOP_RE = /^(?:un?til|till|til|to)?\s*(\d{1,2})(?:[:.](\d{2}))?\s*(am|pm)?$/i
+/** `until 6pm`, `till 18:00`, `to 5.30pm`, `bis 18 Uhr`, or a bare `6pm`. The
+ *  introducer is optional because "6pm" alone is unambiguous — there is no span
+ *  it could be confused with, since a span always carries its unit.
+ *
+ *  German's `Uhr` is a trailing MARKER rather than a meridiem — it says the
+ *  number is a clock and nothing about which half of the day — so it is captured
+ *  apart from `am|pm` and never reaches `stopTimeToMinutes`' meridiem branch. */
+const STOP_RE = /^(?:un?til|till|til|to|bis)?\s*(\d{1,2})(?:[:.](\d{2}))?\s*(am|pm)?\s*(uhr)?$/i
 
 /**
  * Read a typed capacity into minutes, or null when the line says nothing usable.
@@ -89,7 +113,7 @@ export function parseCapacity(
   // Guarded on the introducer OR a meridiem OR a colon: without one of those,
   // `STOP_RE` matches a bare number, which the branch above has already claimed.
   const looksLikeStop = !!stop
-    && (/^(un?til|till|til|to)/.test(raw) || !!stop[3] || /[:.]/.test(raw))
+    && (/^(un?til|till|til|to|bis)/.test(raw) || !!stop[3] || !!stop[4] || /[:.]/.test(raw))
   if (looksLikeStop) {
     // REFUSE rather than fall through to the span grammar. "until 6pm" must not
     // quietly become "6 hours" here — a wrong reading is the one outcome this

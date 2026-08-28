@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  DEFAULT_CALENDAR_FIT, bucketByDay, bucketTasksByDay, calendarFitLabel, cellCapacity,
+  DEFAULT_CALENDAR_FIT, bucketByDay, bucketTasksByDay, calendarFitKey, cellCapacity,
   chipsShown, dragBody, daysBetween, endIsExclusive, isCalendarFit, lastDayOf, monthGrid,
   nextCalendarFit, shiftIso,
 } from './calendar'
@@ -11,7 +11,7 @@ const ev = (start: string | null, end: string | null,
   uid: 'e', id: 'e', recurrence_id: null, is_recurring: false, calendar: 'c',
   summary: 'E', description: null, location: null,
   start, start_is_date: false, end, end_is_date: false, duration: null,
-  all_day: false, status: null, tags: [], has_rrule: false, href: '/c/e.ics', etag: '"1"',
+  all_day: false, status: null, busy: true, tags: [], has_rrule: false, href: '/c/e.ics', etag: '"1"',
   ...o,
 })
 
@@ -422,8 +422,10 @@ describe('calendar fit', () => {
     expect(DEFAULT_CALENDAR_FIT).toBe('dynamic')
     expect(nextCalendarFit('dynamic')).toBe('fixed')
     expect(nextCalendarFit(nextCalendarFit('dynamic'))).toBe('dynamic')
-    expect(calendarFitLabel('fixed')).toBe('Fixed')
-    expect(calendarFitLabel('dynamic')).toBe('Dynamic')
+    // A catalogue KEY, not the text: the label is shown in whatever language
+    // the app is set to, and this module is React-free — see `calendarFitKey`.
+    expect(calendarFitKey('fixed')).toBe('calendarFit.fixed')
+    expect(calendarFitKey('dynamic')).toBe('calendarFit.dynamic')
   })
 
   it('refuses a stored value it did not write', () => {

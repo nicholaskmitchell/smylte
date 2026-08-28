@@ -661,7 +661,7 @@ class McpApi:
         return event
 
     def create_event(self, calendar_id, *, summary, start, end=None, all_day=False,
-                     location=None, description=None, tags=None, repeat=None,
+                     location=None, description=None, tags=None, busy=None, repeat=None,
                      repeat_interval=1, repeat_count=None, repeat_until=None):
         href = self._href(calendar_id, kind="calendar")
         dtstart = self._event_dt(start, all_day, field="start")
@@ -675,6 +675,8 @@ class McpApi:
             kw["location"] = location
         if tags is not None:
             kw["categories"] = list(tags)
+        if busy is not None:
+            kw["busy"] = bool(busy)
         if repeat is not None:
             kw["rrule"] = self._rrule(repeat, repeat_interval, repeat_count, repeat_until)
         event = self._svc.create_event(
@@ -735,6 +737,12 @@ class McpApi:
             kw["dtend"] = _parse_dt(fields["end"], field="end")
         if "tags" in fields:
             kw["categories"] = list(fields["tags"] or [])
+        if "busy" in fields:
+            # `bool()`, so a JSON `false` and a stray string do not part company.
+            # The tool schema says boolean and the model is what writes it, but a
+            # coerced value here is one line and a booking page offering a real
+            # meeting is not.
+            kw["busy"] = bool(fields["busy"])
         if "status" in fields:
             status = str(fields["status"]).strip().upper()
             if status not in ("CONFIRMED", "TENTATIVE", "CANCELLED"):
@@ -813,6 +821,15 @@ class McpApi:
         busy: list[tuple[datetime, datetime]] = []
         for event in self.list_events(start, end, calendar_id):
             if (event.get("status") or "").upper() == "CANCELLED":
+                continue
+            # Marked FREE by the owner (TRANSP:TRANSPARENT) — see
+            # `scheduling.busy_intervals`, which draws the same line for the
+            # booking page. The all-day divergence documented above stands: an
+            # all-day event blocks HERE and not there, because "what is my day
+            # like" and "what may a stranger book" are different questions. What
+            # the owner has explicitly said does not consume time is not one of
+            # them, so both surfaces honour it.
+            if event.get("busy") is False:
                 continue
             raw_start = _parse_dt(event.get("start"), field="start")
             b_start = _as_dt(raw_start)
