@@ -3161,6 +3161,56 @@ describe('<TodayView> habits', () => {
       'the habits group did not come first').toBeTruthy()
   })
 
+  it('names the day’s own rows, so the group above is not the only boundary',
+    async () => {
+      // The habits group has carried a heading since it arrived and the rows
+      // below it never did, so the whole statement that the spine is not part
+      // of the day was ONE heavier hairline under the last habit. Every other
+      // thing about the two lists is identical by design — same row, same
+      // checkbox, same left edge, same type — so four habits followed by four
+      // tasks read as eight rows with a slightly darker line in the middle.
+      m.openDay.mockResolvedValue(plan([
+        entry({ entry_id: 'n1', title: 'Water the plants', position: 1 }),
+        occurrence({ entry_id: 'h1', title: 'Read', position: 2 }),
+      ]))
+      setup()
+      await screen.findByText('Read')
+
+      // The first two headings on the tab, in order. Sliced rather than
+      // compared whole because the suggestion groups and "On the calendar"
+      // paint below and are not what this is about.
+      const headings = [...document.querySelectorAll('.section-label')]
+        .map((n) => n.textContent)
+      expect(headings.slice(0, 2)).toEqual(['Habits', 'The day'])
+
+      // And the heading is attached to the list for anyone who cannot see that
+      // it sits above it — the same job `aria-label` does for the habits group,
+      // and the reason a visible heading alone was not enough there either.
+      const day = screen.getByRole('list', { name: 'The day' })
+      expect([...day.querySelectorAll('.today-title')].map((n) => n.textContent))
+        .toEqual(['Water the plants'])
+    })
+
+  it('keeps that heading on a day with no habits at all', async () => {
+    // Unconditional, deliberately. Gated on the habits group being present, the
+    // tab would grow a heading on Tuesday and lose it on Wednesday — its shape
+    // would depend on whether a habit happened to be due, which is exactly the
+    // kind of moving furniture the surface someone opens every morning should
+    // not have. It is NOT the "no heading over nothing" rule the habits group
+    // and the hint below it follow: that guards an EMPTY group, and this is
+    // gated on the rows it names.
+    m.openDay.mockResolvedValue(plan([
+      entry({ entry_id: 'n1', title: 'Water the plants' }),
+    ]))
+    setup()
+    await screen.findByText('Water the plants')
+
+    expect([...document.querySelectorAll('.section-label')].map((n) => n.textContent))
+      .toContain('The day')
+    // …and there is still nothing advertising an empty habits group over it.
+    expect(screen.queryByRole('list', { name: 'Habits' })).not.toBeInTheDocument()
+  })
+
   it('still counts them in the day totals', async () => {
     m.openDay.mockResolvedValue(plan([
       occurrence({ entry_id: 'h1' }),
@@ -4128,6 +4178,46 @@ describe('the Today tab stylesheet', () => {
     const appearance = readFileSync(resolve(process.cwd(), 'src/appearance.ts'), 'utf8')
     expect(appearance).not.toContain('today-mark-w')
     expect(appearance).not.toContain('check-size')
+  })
+
+  it('gives the habits group a surface of its own, and never only that', () => {
+    // What tells a habit from a task on this tab is three carriers, and the
+    // point of the test is that no one of them is load-bearing alone:
+    //
+    //  * the BAND — `.today-habits` paints --paper, the recessed tone the
+    //    sidebar and a dimmed calendar cell already use for "beside the
+    //    content, not part of it". It is the one a reader sees mid-scroll,
+    //    and it is the one a theme can erase: --paper is themeable, and an
+    //    appearance that sets it to --bg flattens the group back to nothing.
+    //  * the MARK — the ↻ on every habit row, which survives that, and a
+    //    greyscale screenshot, and being read one row at a time.
+    //  * the HEADINGS above and below it, which survive all of that and are
+    //    the only carrier that says anything to a screen reader.
+    //
+    // Asserted here rather than by computed style because jsdom applies no
+    // stylesheet to a render, so the rules themselves are the only thing a
+    // test in this file can see.
+    expect(block).toMatch(/\.today-habits\s*\{[^}]*background:\s*var\(--paper\)/)
+    // The band's own hover, computed FROM the band. `.today-row:hover` paints
+    // --bg-elev, which is a step lighter than --bg in the light themes and — 
+    // because --paper is lighter than --bg-elev in the dark ones — a step
+    // DARKER than the band here, so a habit row receded on hover while every
+    // other row on the screen lifted.
+    expect(block).toMatch(/\.today-habits\s+\.today-row:hover\s*\{[^}]*--paper/)
+    // The mark carries its own weight rather than the column's furniture
+    // colour: --fg-faint is the quietest token in every theme, and it is the
+    // wrong one for the single character that says which kind a row is. Filled
+    // against hollow is a comparison needing both marks on screen; the glyph
+    // has to be legible on its own.
+    expect(block)
+      .toMatch(/\[data-kind="habit"\]\s*\{[^}]*color:\s*var\(--fg-muted\)/)
+    // Colour ONLY. `.dash-day-row .today-kind-mark` sets a smaller font-size
+    // for the dashboard's day module and carries the same specificity as this
+    // selector, so a size here would win on source order and silently undo it
+    // — on the one list in the app where habits and tasks are interleaved with
+    // no band and no heading to help.
+    const rule = block.slice(block.indexOf('.today-kind-mark[data-kind="habit"]'))
+    expect(rule.slice(0, rule.indexOf('}'))).not.toContain('font-size')
   })
 
   it('contains no literal colour', () => {

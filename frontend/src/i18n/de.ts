@@ -625,6 +625,7 @@ export const de: Catalogue = {
   // should not have to. See bulk.failed for the same call.
   'today.habitsHint': 'Eine Gewohnheit ist eine Regel, die an den Tagen, die du wählst, eine Zeile auf deinen Tag setzt — und dabei nie zur Aufgabe wird und diese App nie verlässt. ',
   'today.setOneUp': 'Richte eine ein',
+  'today.theDay': 'Der Tag',
   'today.onTheCalendar': 'Im Kalender',
   'today.addToToday': '{task} zu heute hinzufügen',
   'today.showAll': 'Alle {count} zeigen',
