@@ -13,9 +13,12 @@ import { AddMultipleModal } from './AddMultipleModal'
 import { dateOut, TaskModal } from './TaskModal'
 import { Sidebar } from './Sidebar'
 import { useI18n } from '../i18n'
+import { useT } from '../i18n'
 
+// Catalogue keys for the labels, like `TAB_LABELS` — the pairing of mode to
+// label is data, and data in this repo holds identities rather than text.
 const VIEWS: ReadonlyArray<readonly [TasksViewMode, string]> = [
-  ['list', 'List'], ['day3', '3-Day'], ['week', 'Week'],
+  ['list', 'tasks.view.list'], ['day3', 'tasks.view.day3'], ['week', 'tasks.view.week'],
 ]
 
 /** Drag-to-reorder wiring, threaded to every row of the list view — top-level
@@ -76,7 +79,7 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
   collapsedTasks: string[]; onCollapsedTasksChange: (next: string[]) => void
   showCompleted: boolean
 }) {
-  const { locale } = useI18n()
+  const { locale, t: tr } = useI18n()
   const guard = makeGuard(onExpire)
   // Lists, tasks and every write against them live above the tab strip, so
   // switching away and back neither drops them nor refetches from empty — and
@@ -509,28 +512,37 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
 
       <div className="content">
         <div className="content-head">
-          <span className="content-title">{completedOnly ? 'Completed' : 'All lists'}</span>
+          <span className="content-title">
+            {completedOnly ? tr('tasks.completed') : tr('tasks.allLists')}
+          </span>
           <span className="content-sub">
             {completedOnly
-              ? `${completedTasks.length} completed`
-              : view === 'list' ? `${active.length} open` : `${fmtD(days[0])} – ${fmtD(days[span - 1])}`}
+              ? tr('tasks.completedCount', { count: completedTasks.length })
+              : view === 'list'
+                ? tr('tasks.openCount', { count: active.length })
+                : tr('tasks.range',
+                  { from: fmtD(days[0]), to: fmtD(days[span - 1]) })}
           </span>
           <span className="spacer" />
           {!completedOnly && view !== 'list' && (
             <div className="range-nav">
-              <button className="icon-btn" title="Earlier" aria-label="Earlier"
+              <button className="icon-btn" title={tr('tasks.earlier')}
+                aria-label={tr('tasks.earlier')}
                 onClick={() => setAnchor(addDays(days[0], -span))}>‹</button>
-              <button className="btn ghost" onClick={() => setAnchor(new Date())}>Today</button>
-              <button className="icon-btn" title="Later" aria-label="Later"
+              <button className="btn ghost" onClick={() => setAnchor(new Date())}>
+                {tr('tasks.today')}
+              </button>
+              <button className="icon-btn" title={tr('tasks.later')}
+                aria-label={tr('tasks.later')}
                 onClick={() => setAnchor(addDays(days[0], span))}>›</button>
             </div>
           )}
           {!completedOnly && (
-            <div className="view-tabs" role="tablist" aria-label="Task view">
+            <div className="view-tabs" role="tablist" aria-label={tr('tasks.viewTabs')}>
               {VIEWS.map(([v, label]) => (
                 <button key={v} role="tab" aria-selected={view === v}
                   className={`view-tab ${view === v ? 'active' : ''}`}
-                  onClick={() => onView(v)}>{label}</button>
+                  onClick={() => onView(v)}>{tr(label)}</button>
               ))}
             </div>
           )}
@@ -538,7 +550,9 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
 
         {completedOnly ? (
           <div className="scroll">
-            {completedTasks.length === 0 && <div className="empty">No completed tasks.</div>}
+            {completedTasks.length === 0 && (
+              <div className="empty">{tr('tasks.noCompleted')}</div>
+            )}
             {completedTasks.map((t) => (
               <TaskGroup key={taskKey(t)} task={t} childrenOf={completedKids} dot={dotFor(t)}
                 progressOf={progressOf} isCollapsed={isCollapsed} onCollapse={setCollapsed}
@@ -552,10 +566,10 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
           // during every cold load and every tab switch.
           <div className="empty" aria-busy={!listsLoaded || undefined}>
             {!listsLoaded
-              ? 'Loading…'
+              ? tr('common.loading')
               : lists.length === 0
-                ? 'Create a list to get started.'
-                : 'Every list is hidden — toggle one on from the sidebar.'}
+                ? tr('tasks.createListFirst')
+                : tr('tasks.allHidden')}
           </div>
         ) : view === 'list' ? (
           <>
@@ -573,9 +587,10 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
                 month that is missing one collection. */}
             {taskListErrors.length > 0 && (
               <div className="cal-partial" role="status">
-                Couldn&rsquo;t load {taskListErrors.join(', ')} — some tasks may
-                be missing.{' '}
-                <button className="btn ghost" onClick={reloadTasks}>Retry</button>
+                {tr('tasks.partial', { lists: taskListErrors.join(', ') })}{' '}
+                <button className="btn ghost" onClick={reloadTasks}>
+                  {tr('common.retry')}
+                </button>
               </div>
             )}
             <div className="scroll">
@@ -587,12 +602,14 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
               ))}
               {active.length === 0 && taskListErrors.length === 0 && (
                 <div className="empty" aria-busy={!loaded || undefined}>
-                  {loaded ? 'Nothing to do here.' : 'Loading…'}
+                  {loaded ? tr('tasks.nothingToDo') : tr('common.loading')}
                 </div>
               )}
               {showCompleted && done.length > 0 && (
                 <>
-                  <div className="section-label label">Completed · {done.length}</div>
+                  <div className="section-label label">
+                    {tr('tasks.completedSection', { count: done.length })}
+                  </div>
                   {done.map((t) => (
                     <TaskGroup key={taskKey(t)} task={t} childrenOf={childrenOf} dot={dotFor(t)}
                       progressOf={progressOf} isCollapsed={isCollapsed} onCollapse={setCollapsed}
@@ -606,16 +623,16 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
           <>
             {undated.length > 0 && (
               <div className="undated-hint">
-                {undated.length} undated {undated.length === 1 ? 'task' : 'tasks'} not shown —{' '}
-                <button onClick={() => onView('list')}>switch to List</button>
+                {tr('tasks.undatedHidden', { count: undated.length })}
+                <button onClick={() => onView('list')}>{tr('tasks.switchToList')}</button>
               </div>
             )}
             {/* Overdue tasks pool on today's column; when the visible window
                 doesn't include today they'd silently vanish — point back. */}
             {overdue.length > 0 && !days.some((d) => ymd(d) === todayKey) && (
               <div className="undated-hint">
-                {overdue.length} overdue {overdue.length === 1 ? 'task' : 'tasks'} not shown —{' '}
-                <button onClick={() => setAnchor(new Date())}>jump to today</button>
+                {tr('tasks.overdueHidden', { count: overdue.length })}
+                <button onClick={() => setAnchor(new Date())}>{tr('tasks.jumpToToday')}</button>
               </div>
             )}
             <div className={`day-cols cols-${span}`}>
@@ -709,6 +726,7 @@ function TaskGroup({ task, childrenOf, dot, progressOf, depth = 0, seen, group =
    *  `reorder` has always sent every task in it, subtasks included. */
   drag?: ReorderDrag
 }) {
+  const tr = useT()
   const [adding, setAdding] = useState(false)
   /** The last press on this row landed in a text field. Written on mousedown and
    *  read on dragstart — see the wrapper's comment for why the obvious
@@ -818,7 +836,7 @@ function TaskGroup({ task, childrenOf, dot, progressOf, depth = 0, seen, group =
       ))}
       {!folded && adding && (
         <div className="task" style={indentStyle(indent + 1)}>
-          <InlineCreate placeholder="Subtask" grow
+          <InlineCreate placeholder={tr('tasks.subtaskPlaceholder')} grow
             onSubmit={(v) => { onAddSub(task.uid, v); setAdding(false) }}
             onCancel={() => setAdding(false)} />
         </div>
@@ -840,7 +858,7 @@ function DayColumn({ date, isToday, open, done, overdue, dotOf, onToggle, onOpen
   onAdd: (summary: string) => void
   dragActive: boolean; onDropTask: () => void; onDragTask: (key: string | null) => void
 }) {
-  const { locale } = useI18n()
+  const { locale, t: tr } = useI18n()
   const [adding, setAdding] = useState(false)
   // dragover bubbles up from the cards, so entering a child re-asserts `over`.
   const [over, setOver] = useState(false)
@@ -859,12 +877,12 @@ function DayColumn({ date, isToday, open, done, overdue, dotOf, onToggle, onOpen
       <div className="day-col-body">
         {overdue.length > 0 && (
           <>
-            <div className="col-label label overdue">Overdue</div>
+            <div className="col-label label overdue">{tr('tasks.overdue')}</div>
             {overdue.map((t) => (
               <DayCard key={taskKey(t)} task={t} showDate dot={dotOf(t)} onToggle={onToggle} onOpen={onOpen}
                 onDrag={onDragTask} />
             ))}
-            {open.length > 0 && <div className="col-label label">Today</div>}
+            {open.length > 0 && <div className="col-label label">{tr('tasks.today')}</div>}
           </>
         )}
         {open.map((t) => (
@@ -875,7 +893,7 @@ function DayColumn({ date, isToday, open, done, overdue, dotOf, onToggle, onOpen
         )}
         {done.length > 0 && (
           <>
-            <div className="col-label label">Done · {done.length}</div>
+            <div className="col-label label">{tr('tasks.doneSection', { count: done.length })}</div>
             {done.map((t) => (
               <DayCard key={taskKey(t)} task={t} dot={dotOf(t)} onToggle={onToggle} onOpen={onOpen} onDrag={onDragTask} />
             ))}
@@ -883,12 +901,12 @@ function DayColumn({ date, isToday, open, done, overdue, dotOf, onToggle, onOpen
         )}
         {adding ? (
           <div className="day-card">
-            <InlineCreate placeholder="Task" grow
+            <InlineCreate placeholder={tr('common.task')} grow
               onSubmit={(v) => { onAdd(v); setAdding(false) }}
               onCancel={() => setAdding(false)} />
           </div>
         ) : (
-          <button className="col-add" onClick={() => setAdding(true)}>+ Add</button>
+          <button className="col-add" onClick={() => setAdding(true)}>{tr('tasks.colAdd')}</button>
         )}
       </div>
     </div>
@@ -900,7 +918,7 @@ function DayCard({ task, showDate, dot, onToggle, onOpen, onDrag }: {
   onToggle: (t: Task) => void; onOpen: (t: Task) => void
   onDrag: (uid: string | null) => void
 }) {
-  const { locale } = useI18n()
+  const { locale, t: tr } = useI18n()
   const pri = task.priority_label
   const priClass = pri === 'high' ? 'pri-high' : pri === 'medium' ? 'pri-med' : pri === 'low' ? 'pri-low' : ''
   const done = task.completed || task.cancelled
@@ -917,12 +935,12 @@ function DayCard({ task, showDate, dot, onToggle, onOpen, onDrag }: {
       }}
       onDragEnd={() => onDrag(null)}>
       <div className={`pri-bar ${priClass}`} />
-      <button className={`check ${task.completed ? 'on' : ''}`} title="Toggle complete"
+      <button className={`check ${task.completed ? 'on' : ''}`} title={tr('tasks.toggleComplete')}
         onClick={() => onToggle(task)}>✓</button>
       <div className="day-card-body" onClick={() => onOpen(task)}>
         <div className="day-card-title">
           {dot !== undefined && <span className="list-dot" style={dot ? { background: dot } : undefined} />}
-          {task.summary || '(untitled)'}
+          {task.summary || tr('common.untitled')}
         </div>
         {(showDate || timed || task.tags.length > 0) && (
           <div className="task-meta">
@@ -958,10 +976,10 @@ function TaskRow({ task, depth = 0, dot, progress, collapsed, onCollapse,
   onToggle: (t: Task) => void; onRemove: (t: Task) => void
   onOpen: (t: Task) => void; onAddSub?: () => void
 }) {
-  const { locale } = useI18n()
+  const { locale, t: tr } = useI18n()
   const pri = task.priority_label
   const priClass = pri === 'high' ? 'pri-high' : pri === 'medium' ? 'pri-med' : pri === 'low' ? 'pri-low' : ''
-  const label = task.summary || '(untitled)'
+  const label = task.summary || tr('common.untitled')
   const tf = useTimeFormat()
   return (
     <div className={`task ${depth > 0 ? 'sub' : ''} ${task.completed || task.cancelled ? 'done' : ''}`}
@@ -972,16 +990,20 @@ function TaskRow({ task, depth = 0, dot, progress, collapsed, onCollapse,
       {collapsed === undefined ? <span className="twisty-gap" /> : (
         <button className={`twisty ${collapsed ? '' : 'open'}`}
           aria-expanded={!collapsed}
-          title={collapsed ? `Show subtasks of ${label}` : `Hide subtasks of ${label}`}
-          aria-label={collapsed ? `Show subtasks of ${label}` : `Hide subtasks of ${label}`}
+          title={collapsed
+            ? tr('tasks.showSubtasks', { task: label })
+            : tr('tasks.hideSubtasks', { task: label })}
+          aria-label={collapsed
+            ? tr('tasks.showSubtasks', { task: label })
+            : tr('tasks.hideSubtasks', { task: label })}
           onClick={() => onCollapse?.(!collapsed)}>›</button>
       )}
-      <button className={`check ${task.completed ? 'on' : ''}`} title="Toggle complete"
+      <button className={`check ${task.completed ? 'on' : ''}`} title={tr('tasks.toggleComplete')}
         onClick={() => onToggle(task)}>✓</button>
       <div className="task-body" style={{ cursor: 'pointer' }} onClick={() => onOpen(task)}>
         <div className="task-title">
           {dot !== undefined && <span className="list-dot" style={dot ? { background: dot } : undefined} />}
-          {label} {task.cancelled && <span className="chip">won't do</span>}
+          {label} {task.cancelled && <span className="chip">{tr('tasks.wontDo')}</span>}
         </div>
         {(task.due || progress || task.tags.length > 0) && (
           <div className="task-meta">
@@ -998,8 +1020,14 @@ function TaskRow({ task, depth = 0, dot, progress, collapsed, onCollapse,
         )}
       </div>
       <div className="task-actions">
-        {onAddSub && <button onClick={onAddSub} title="Add subtask">+ sub</button>}
-        <button className="danger" onClick={() => onRemove(task)} title="Delete">del</button>
+        {onAddSub && (
+          <button onClick={onAddSub} title={tr('tasks.addSubtask')}>
+            {tr('tasks.addSubtaskShort')}
+          </button>
+        )}
+        <button className="danger" onClick={() => onRemove(task)} title={tr('common.delete')}>
+          {tr('tasks.deleteShort')}
+        </button>
       </div>
     </div>
   )
@@ -1016,6 +1044,7 @@ function QuickAdd({ onSubmit, onExpand, defaultList, lists }: {
   // otherwise the single focused list is implied.
   lists?: List[]
 }) {
+  const tr = useT()
   const [v, setV] = useState('')
   const [listId, setListId] = useState(defaultList)
   // Keep the target valid as the visible set changes (a hidden/deleted list
@@ -1027,19 +1056,19 @@ function QuickAdd({ onSubmit, onExpand, defaultList, lists }: {
   const go = () => { if (v.trim() && target) { onSubmit(target, v.trim()); setV('') } }
   return (
     <div className="quickadd">
-      <input className="input" placeholder="Add a task…" value={v}
+      <input className="input" placeholder={tr('tasks.quickAddPlaceholder')} value={v}
         onChange={(e) => setV(e.target.value)}
         onKeyDown={(e: KeyboardEvent) => { if (e.key === 'Enter') go() }} />
       {lists && lists.length > 1 && (
-        <select className="input quickadd-list" value={listId} title="List for the new task"
+        <select className="input quickadd-list" value={listId} title={tr('tasks.quickAddList')}
           onChange={(e) => setListId(e.target.value)}>
           {lists.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
         </select>
       )}
       {/* Labelled with an ellipsis because it opens the form rather than
           creating outright — Enter in the field is the instant path. */}
-      <button className="btn" title="Open the full form for a new task"
-        onClick={() => { onExpand(target, v.trim()); setV('') }}>New…</button>
+      <button className="btn" title={tr('tasks.openFullForm')}
+        onClick={() => { onExpand(target, v.trim()); setV('') }}>{tr('tasks.newEllipsis')}</button>
     </div>
   )
 }
