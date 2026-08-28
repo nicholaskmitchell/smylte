@@ -30,7 +30,7 @@ import { CalendarView } from './components/CalendarView'
 import { SchedulingView } from './components/SchedulingView'
 import { HomeView } from './components/HomeView'
 import { TodayView } from './components/TodayView'
-import { DEFAULT_LANGUAGE, isLanguage, type Language } from './lang'
+import { DEFAULT_LANGUAGE, deviceLanguage, isLanguage, type Language } from './lang'
 import { I18nProvider } from './i18n'
 import { translate } from './i18n/index'
 import { AppearancePanel } from './components/AppearancePanel'
@@ -840,7 +840,11 @@ export function App() {
   // that has not yet said who we are.
   return (
     <DataProvider rev={rev} onExpire={onExpire} taskGroups={taskGroups} enabled={auth === 'in'}>
-      <I18nProvider value={language}>
+      {/* Signed out there is no account to ask, so the browser's preference is
+          the best answer available — see `deviceLanguage`. It is used ONLY in
+          that state: once a session resolves the account's setting wins, back to
+          English included. */}
+      <I18nProvider value={auth === 'out' ? deviceLanguage() : language}>
       <TimeFormatProvider value={timeFormat}>
       {auth === 'out'
         ? <Login onLogin={(u) => { setCacheUser(u); setUser(u); setAuth('in') }} />

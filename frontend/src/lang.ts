@@ -86,3 +86,30 @@ export function localeFor(
   }
   return lang
 }
+
+/**
+ * The language to speak when there is no account to ask.
+ *
+ * The sign-in screen is the one place that has none — no session, no settings,
+ * nothing stored — and it is also the first screen anybody sees. Rendering it in
+ * English to a German speaker because their setting has not loaded yet is
+ * exactly the failure `languageLabel`'s endonyms exist to avoid, one screen
+ * earlier.
+ *
+ * That the setting deliberately does NOT follow the browser (see the header)
+ * still holds and is not contradicted here: this is the fallback for having
+ * nobody to ask, not a second source of truth. The moment a session resolves,
+ * the account's choice replaces it — including back to English, which is why
+ * this must not be used while signed in.
+ */
+export function deviceLanguage(
+  preferred: readonly string[] = typeof navigator === 'undefined'
+    ? [] : (navigator.languages ?? [navigator.language].filter(Boolean)),
+): Language {
+  for (const tag of preferred) {
+    if (typeof tag !== 'string') continue
+    const base = tag.toLowerCase().split('-')[0]
+    if (isLanguage(base)) return base
+  }
+  return DEFAULT_LANGUAGE
+}

@@ -13,7 +13,7 @@ import { describe, expect, it } from 'vitest'
 import { CATALOGUES, translate, type Plural } from './i18n/index'
 import { en } from './i18n/en'
 import { de } from './i18n/de'
-import { DEFAULT_LANGUAGE, LANGUAGES, isLanguage, languageLabel, localeFor } from './lang'
+import { DEFAULT_LANGUAGE, LANGUAGES, deviceLanguage, isLanguage, languageLabel, localeFor } from './lang'
 
 const keys = (c: object) => Object.keys(c).sort()
 const placeholders = (m: string | Plural): string[] => {
@@ -145,6 +145,31 @@ describe('the language setting', () => {
     expect(languageLabel('de')).toBe('Deutsch')
     expect(languageLabel('en')).toBe('English')
     expect(languageLabel('xx' as never)).toBe(languageLabel(DEFAULT_LANGUAGE))
+  })
+})
+
+describe('deviceLanguage', () => {
+  // The sign-in screen has no account to ask and is the first thing anyone
+  // sees. Everywhere else the account's setting decides, which is why App uses
+  // this only while signed out.
+  it('reads a supported language out of the browser list', () => {
+    expect(deviceLanguage(['de-AT', 'en-US'])).toBe('de')
+    expect(deviceLanguage(['en-GB'])).toBe('en')
+  })
+
+  it('reads past languages it has no catalogue for', () => {
+    expect(deviceLanguage(['fr-CA', 'ja', 'de'])).toBe('de')
+  })
+
+  it('falls back to English when nothing in the list is supported', () => {
+    expect(deviceLanguage(['fr', 'ja'])).toBe('en')
+    expect(deviceLanguage([])).toBe('en')
+  })
+
+  it('ignores anything in the list that is not a tag', () => {
+    // `navigator.languages` is a browser-supplied array; nothing here trusts
+    // its contents to be strings any more than the settings blob is trusted.
+    expect(deviceLanguage([null as unknown as string, 'de'])).toBe('de')
   })
 })
 
