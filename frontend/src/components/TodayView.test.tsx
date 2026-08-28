@@ -822,6 +822,51 @@ describe('<TodayView> suggestions', () => {
     expect(add('Someday')).not.toBeInTheDocument()
   })
 
+  it('gives tomorrow its own heading, out of the seven-day block', async () => {
+    // Tomorrow is the one future day a plan for today is routinely about — the
+    // thing pulled forward because this afternoon is free, or looked at to
+    // decide whether it can wait. Inside a list headed "Next seven days" it was
+    // a row like any other, six days out of context.
+    m.tasks.mockResolvedValue([
+      task({ uid: 'a', summary: 'Due today', due: today() }),
+      task({ uid: 'b', summary: 'Tomorrow thing', due: inDays(1) }),
+      task({ uid: 'c', summary: 'Thursday thing', due: inDays(3) }),
+    ])
+    m.openDay.mockResolvedValue(plan([]))
+    setup()
+    await screen.findByRole('button', { name: 'Add Tomorrow thing to today' })
+
+    const headings = [...document.querySelectorAll('.section-label')].map((n) => n.textContent)
+    expect(headings).toContain('Due tomorrow')
+    // Between the day's own business and the horizon: what the day is
+    // answerable for above, what is coming below.
+    expect(headings.indexOf('Due tomorrow'))
+      .toBeGreaterThan(headings.indexOf('Due today'))
+    expect(headings.indexOf('Due tomorrow'))
+      .toBeLessThan(headings.indexOf('Next seven days'))
+  })
+
+  it('does not offer tomorrow twice', async () => {
+    // The horizon predicate is still `> day`, so tomorrow matches it too — the
+    // `offered` set is what keeps the two apart, exactly as it does for a task
+    // that is both due today and overdue from 09:01. Two headings offering one
+    // task is two "add" buttons for one row, and the first press makes the
+    // second a no-op the user cannot explain.
+    m.tasks.mockResolvedValue([
+      task({ uid: 'b', summary: 'Tomorrow thing', due: inDays(1) }),
+    ])
+    m.openDay.mockResolvedValue(plan([]))
+    setup()
+    await screen.findByRole('button', { name: 'Add Tomorrow thing to today' })
+
+    expect(screen.getAllByRole('button', { name: 'Add Tomorrow thing to today' }))
+      .toHaveLength(1)
+    // And with nothing else in the window, the horizon group is absent rather
+    // than present and empty.
+    const headings = [...document.querySelectorAll('.section-label')].map((n) => n.textContent)
+    expect(headings).not.toContain('Next seven days')
+  })
+
   it('offers back a task the day recorded as DROPPED, but not one it MOVED', async () => {
     // The two stamps are different answers and this is the one place the
     // difference shows. "I decided against this" leaves the task undecided

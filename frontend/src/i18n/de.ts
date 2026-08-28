@@ -780,4 +780,6 @@ export const de: Catalogue = {
   'book.booking': 'Wird gebucht…',
   'book.confirm': 'Buchung bestätigen',
   'book.taken': 'Diese Zeit wurde gerade vergeben — bitte wähl eine andere.',
+  // ── today — the tomorrow suggestion ─────────────────────────────────────────
+  'today.sug.tomorrow': 'Morgen fällig',
 }

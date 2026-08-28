@@ -1672,6 +1672,10 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
     // the horizon has to move with the day, and the two are the same value on
     // every other render anyway.
     const soon = ymd(addDays(new Date(`${day}T00:00`), SOON_DAYS))
+    // The day after the one on screen. Through `addDays` like every other day
+    // arithmetic here: a bare +86_400_000 lands at 23:00 on a 25-hour day and
+    // "tomorrow" comes back as today.
+    const tomorrow = ymd(addDays(new Date(`${day}T00:00`), 1))
     // The day a task has to have been left alone since to count as untouched.
     const stale = ymd(addDays(new Date(`${day}T00:00`), -STALE_DAYS))
 
@@ -1697,6 +1701,25 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
     // and one of these carries an interpolated number besides.
     group('today', tr('today.sug.today'), (t) => !!t.due && dayKey(t.due) === day)
     group('overdue', tr('today.sug.overdue'), (t) => isOverdue(t.due, t.due_is_date))
+    // Tomorrow, out of the seven-day block and under its own heading. It is the
+    // one future day a plan for today is routinely about — the thing you pull
+    // forward because this afternoon is free, or look at to decide whether it
+    // can wait — and inside a list headed "Next seven days" it was a row like
+    // any other, six days out of context.
+    //
+    // Between "Overdue" and the horizon rather than beside "Due today": the
+    // block above is what the day is answerable for and the block below is what
+    // is coming, and this is the first line of the second block rather than the
+    // last of the first.
+    group('tomorrow', tr('today.sug.tomorrow'), (t) => !!t.due && dayKey(t.due) === tomorrow)
+    // The HORIZON, unchanged, and still `> day` rather than `> tomorrow`: the
+    // `offered` set above has already taken tomorrow's tasks, and a second copy
+    // of that fact in the predicate is a second thing to keep in step. Same
+    // reason "Due today" leaves the overdue-from-09:01 case to precedence.
+    //
+    // The window is still SOON_DAYS, so this and the Home dashboard's Upcoming
+    // module still surface the same set of tasks — they only differ now in how
+    // many headings this screen puts over them.
     group('soon', tr('today.sug.soon'),
       (t) => !!t.due && dayKey(t.due) > day && dayKey(t.due) <= soon)
     // Below the dated three, and after them in precedence: a task that is both

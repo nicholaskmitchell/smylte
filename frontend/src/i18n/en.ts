@@ -696,4 +696,6 @@ export const en = {
   'book.booking': 'Booking…',
   'book.confirm': 'Confirm booking',
   'book.taken': 'That time was just taken — please pick another.',
+  // ── today — the tomorrow suggestion ─────────────────────────────────────────
+  'today.sug.tomorrow': 'Due tomorrow',
 } as const
