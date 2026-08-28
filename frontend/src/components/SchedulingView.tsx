@@ -38,7 +38,7 @@ function clamp(raw: string, lo: number, hi: number, fallback: number): number {
 export function SchedulingView({ rev, onExpire }: { rev: number; onExpire: () => void }) {
   const guard = makeGuard(onExpire)
   const tf = useTimeFormat()
-  const { locale } = useI18n()
+  const { locale, t: tr } = useI18n()
   const [links, setLinks] = useState<BookingLink[]>([])
   const [cals, setCals] = useState<List[]>([])
   const [bookings, setBookings] = useState<Booking[]>([])
@@ -151,22 +151,20 @@ export function SchedulingView({ rev, onExpire }: { rev: number; onExpire: () =>
     <div className="work">
       <div className="content">
         <div className="content-head">
-          <span className="content-title">Scheduling</span>
+          <span className="content-title">{tr('sched.title')}</span>
           <span className="spacer" />
-          <button className="btn" onClick={() => setEditing('new')}>New link</button>
+          <button className="btn" onClick={() => setEditing('new')}>{tr('sched.newLink')}</button>
         </div>
         <div className="scroll">
           {!loaded ? (
-            <div className="empty" style={{ padding: '18px 26px' }}>Loading…</div>
+            <div className="empty" style={{ padding: '18px 26px' }}>{tr('common.loading')}</div>
           ) : failed ? (
             <div className="empty" style={{ padding: '18px 26px' }} role="alert">
-              Couldn&rsquo;t load your booking links. This is a display problem —
-              your links are still live and still taking bookings.
+              {tr('sched.loadFailed')}
             </div>
           ) : links.length === 0 ? (
             <div className="empty" style={{ padding: '18px 26px' }}>
-              Create a booking link, share it with a client, and their pick lands
-              on your calendar.
+              {tr('sched.empty')}
             </div>
           ) : null}
           <div className="sched-list">
@@ -179,39 +177,42 @@ export function SchedulingView({ rev, onExpire }: { rev: number; onExpire: () =>
                       toggle says why rather than sitting there inert. */}
                   <label className="sched-toggle"
                     title={l.calendar_missing
-                      ? 'The calendar this link books into no longer exists'
-                      : l.enabled ? 'Link is live' : 'Link is off'}>
+                      ? tr('sched.calendarGone')
+                      : l.enabled ? tr('sched.linkLive') : tr('sched.linkOff')}>
                     <input type="checkbox" checked={l.enabled} disabled={l.calendar_missing}
                       onChange={() => toggleEnabled(l)} />
-                    <span>{l.calendar_missing ? 'No calendar' : l.enabled ? 'Live' : 'Off'}</span>
+                    <span>
+                      {l.calendar_missing
+                        ? tr('sched.noCalendar') : l.enabled ? tr('sched.live') : tr('sched.off')}
+                    </span>
                   </label>
                 </div>
                 <div className="sched-card-meta">
-                  {l.duration_minutes} min ·{' '}
+                  {tr('sched.minutes', { n: l.duration_minutes })} ·{' '}
                   {l.calendar_missing
-                    ? <span className="warn">calendar deleted — pick another to re-enable</span>
+                    ? <span className="warn">{tr('sched.calendarDeleted')}</span>
                     : (l.calendar_name || l.calendar)} · {l.timezone}
-                  {l.show_busy ? ' · shows busy times' : ''}
+                  {l.show_busy ? tr('sched.showsBusy') : ''}
                 </div>
                 <div className="sched-card-meta">
-                  {l.booking_count} booking{l.booking_count === 1 ? '' : 's'} ·{' '}
+                  {tr('sched.bookingCount', { count: l.booking_count })} ·{' '}
                   <span className="mono">/book/{l.token}</span>
                 </div>
                 <div className="sched-card-actions">
                   <button className="btn ghost" onClick={() => copyLink(l)}>
-                    {copied === l.token ? 'Copied ✓' : 'Copy link'}
+                    {copied === l.token ? tr('sched.copied') : tr('sched.copyLink')}
                   </button>
-                  <button className="btn ghost" onClick={() => setEditing(l)}>Edit</button>
+                  <button className="btn ghost" onClick={() => setEditing(l)}>{tr('common.edit')}</button>
                 </div>
               </div>
             ))}
           </div>
 
           <div className="section-label label" style={{ padding: '22px 26px 4px' }}>
-            Upcoming bookings
+            {tr('sched.upcoming')}
           </div>
           {loaded && !failed && upcoming.length === 0 && (
-            <div className="empty" style={{ padding: '8px 26px' }}>Nothing booked yet.</div>
+            <div className="empty" style={{ padding: '8px 26px' }}>{tr('sched.nothingBooked')}</div>
           )}
           <div className="sched-bookings">
             {upcoming.map((b) => (
@@ -274,21 +275,25 @@ const isBlankRange = ([s, e]: [string, string]) => !s && !e
  * range had ever been typed.
  */
 export function availErrors(days: DayRanges[]): Map<number, string> {
+  // Catalogue KEYS, not sentences. This function is a mirror of the server's
+  // `parse_availability` and belongs beside it rather than beside a translator;
+  // the component that shows a message looks it up. Same call `sessionKey` and
+  // `timeFormatKey` make.
   const out = new Map<number, string>()
   days.forEach((d, i) => {
     if (!d.on) return
     const filled = d.ranges.filter((r) => !isBlankRange(r))
     if (filled.some(([s, e]) => !s || !e)) {
-      out.set(i, 'Fill in both times, or remove the range.')
+      out.set(i, 'sched.err.bothTimes')
       return
     }
     if (filled.some(([s, e]) => s >= e)) {
-      out.set(i, 'Each range must start before it ends.')
+      out.set(i, 'sched.err.startBeforeEnd')
       return
     }
     const sorted = [...filled].sort((a, b) => a[0].localeCompare(b[0]))
     if (sorted.some((r, k) => k > 0 && r[0] < sorted[k - 1][1])) {
-      out.set(i, 'These ranges overlap.')
+      out.set(i, 'sched.err.overlap')
     }
   })
   return out
@@ -314,8 +319,9 @@ function LinkModal({ link, cals, onClose, onSave, onDelete }: {
   onSave: (body: BookingLinkInput, token?: string) => Promise<boolean>
   onDelete: (l: BookingLink) => void
 }) {
-  const { lang: appLang, locale } = useI18n()
+  const { lang: appLang, locale, t: tr } = useI18n()
   const lang = inputLang(useTimeFormat(), appLang)
+  const modalTitle = link ? tr('sched.editLink') : tr('sched.newLinkTitle')
   const [title, setTitle] = useState(link?.title ?? '')
   const [description, setDescription] = useState(link?.description ?? '')
   const [calendar, setCalendar] = useState(link?.calendar ?? cals[0]?.id ?? '')
@@ -352,11 +358,11 @@ function LinkModal({ link, cals, onClose, onSave, onDelete }: {
   // simply stayed disabled forever with the form looking complete. It is easy to
   // arrive at, because clearing the shipped Mon-Fri defaults is the first thing
   // someone does when their week is not Mon-Fri.
-  const blockedBecause = !title.trim() ? 'Give the link a title.'
-    : !calendar ? 'Pick a calendar for bookings to land on.'
-    : !tz.trim() ? 'Set the timezone your availability is in.'
-    : noDays ? 'Turn on at least one day, or nobody can book anything.'
-    : dayErrors.size ? 'Fix the highlighted time ranges.'
+  const blockedBecause = !title.trim() ? tr('sched.err.title')
+    : !calendar ? tr('sched.err.calendar')
+    : !tz.trim() ? tr('sched.err.tz')
+    : noDays ? tr('sched.err.noDays')
+    : dayErrors.size ? tr('sched.err.ranges')
     : null
 
   // `valid` bounds validity, not flight. Without this a double-click — or a
@@ -403,33 +409,33 @@ function LinkModal({ link, cals, onClose, onSave, onDelete }: {
         scrimPress.current = false
       }}>
       <div className="modal sched-modal" role="dialog" aria-modal="true"
-        aria-label={link ? 'Edit booking link' : 'New booking link'}
+        aria-label={modalTitle}
         onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
-          <span className="modal-title">{link ? 'Edit booking link' : 'New booking link'}</span>
+          <span className="modal-title">{modalTitle}</span>
           <button className="icon-btn" onClick={onClose}>✕</button>
         </div>
         <div className="field">
-          <label className="label" htmlFor="sched-title">Title</label>
+          <label className="label" htmlFor="sched-title">{tr('sched.titleField')}</label>
           <input className="input" id="sched-title" autoFocus value={title} maxLength={200}
-            placeholder="30-minute intro call"
+            placeholder={tr('sched.titlePlaceholder')}
             onChange={(e) => setTitle(e.target.value)}
             onKeyDown={(e: KeyboardEvent) => { if (e.key === 'Enter') void save() }} />
         </div>
         <div className="field">
-          <label className="label" htmlFor="sched-desc">Description (shown to clients)</label>
+          <label className="label" htmlFor="sched-desc">{tr('sched.description')}</label>
           <textarea className="input" id="sched-desc" rows={2} value={description} maxLength={2000}
             onChange={(e) => setDescription(e.target.value)} />
         </div>
         <div className="field-row">
           <div className="field">
-            <label className="label" htmlFor="sched-calendar">Calendar</label>
+            <label className="label" htmlFor="sched-calendar">{tr('sched.calendarField')}</label>
             <select className="input" id="sched-calendar" value={calendar} onChange={(e) => setCalendar(e.target.value)}>
               {cals.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
           </div>
           <div className="field">
-            <label className="label" htmlFor="sched-duration">Duration (min)</label>
+            <label className="label" htmlFor="sched-duration">{tr('sched.duration')}</label>
             {/* Clamped on BLUR, not on change. Clamping the MINIMUM per keystroke
                 destroyed the first digit of every two-digit value under 50: type
                 `4` and it became `5`, so `45` came out `55` and `15` came out
@@ -447,14 +453,14 @@ function LinkModal({ link, cals, onClose, onSave, onDelete }: {
           </div>
         </div>
         <div className="field">
-          <label className="label" htmlFor="sched-tz">Timezone (your availability is in this zone)</label>
+          <label className="label" htmlFor="sched-tz">{tr('sched.timezone')}</label>
           <input className="input" id="sched-tz" list="sched-tzs" value={tz} onChange={(e) => setTz(e.target.value)} />
           <datalist id="sched-tzs">
             {COMMON_TZS.map((z) => <option key={z} value={z} />)}
           </datalist>
         </div>
         <div className="field">
-          <label className="label">Weekly availability</label>
+          <label className="label">{tr('sched.weekly')}</label>
           <div className="sched-week">
             {weekdayNames(locale, 'short').map((name, i) => (
               <div key={name} className={`sched-day ${days[i].on ? '' : 'off'}`}>
@@ -469,7 +475,7 @@ function LinkModal({ link, cals, onClose, onSave, onDelete }: {
                 {days[i].on ? (
                   <div className="sched-ranges" aria-invalid={dayErrors.has(i) || undefined}>
                     {dayErrors.has(i) && (
-                      <span className="sched-err" role="alert">{dayErrors.get(i)}</span>
+                      <span className="sched-err" role="alert">{tr(dayErrors.get(i)!)}</span>
                     )}
                     {days[i].ranges.map((r, k) => (
                       <span key={k} className="sched-range">
@@ -479,20 +485,20 @@ function LinkModal({ link, cals, onClose, onSave, onDelete }: {
                         <DateTimeInput className="input" type="time" value={r[1]} lang={lang}
                           onChange={(e) => patchRange(i, k, 1, e.target.value)} />
                         {days[i].ranges.length > 1 && (
-                          <button className="icon-btn" title="Remove range"
+                          <button className="icon-btn" title={tr('sched.removeRange')}
                             onClick={() => patchDay(i, { ranges: days[i].ranges.filter((_, j) => j !== k) })}>
                             ✕
                           </button>
                         )}
                       </span>
                     ))}
-                    <button className="sched-add-range" title="Add another range"
+                    <button className="sched-add-range" title={tr('sched.addRange')}
                       onClick={() => patchDay(i, { ranges: [...days[i].ranges, ['', '']] })}>
-                      + range
+                      {tr('sched.addRangeShort')}
                     </button>
                   </div>
                 ) : (
-                  <span className="sched-unavail">Unavailable</span>
+                  <span className="sched-unavail">{tr('sched.unavailable')}</span>
                 )}
               </div>
             ))}
@@ -501,30 +507,28 @@ function LinkModal({ link, cals, onClose, onSave, onDelete }: {
         <div className="field">
           <label className="sched-check">
             <input type="checkbox" checked={showBusy} onChange={(e) => setShowBusy(e.target.checked)} />
-            <span>Show my busy times on the booking page</span>
+            <span>{tr('sched.showBusy')}</span>
           </label>
           <div className="hintline">
-            Clients see unlabeled “Busy” blocks — never event names or details.
-            Booked and existing timed events always block slots; all-day events
-            (birthdays, trips) don't.
+            {tr('sched.showBusyHint')}
           </div>
         </div>
         <div className="field-row">
           <div className="field">
-            <label className="label" htmlFor="sched-buffer">Buffer (min)</label>
+            <label className="label" htmlFor="sched-buffer">{tr('sched.buffer')}</label>
             <input className="input" id="sched-buffer" type="number" min={0} max={240}
               step={5} value={buffer}
               onChange={(e) => setBuffer(e.target.value === '' ? '' : String(Math.min(240, Number(e.target.value) || 0)))}
               onBlur={() => setBuffer(String(Math.max(0, Math.min(240, Number(buffer) || 0))))} />
           </div>
           <div className="field">
-            <label className="label" htmlFor="sched-notice">Min notice (hrs)</label>
+            <label className="label" htmlFor="sched-notice">{tr('sched.notice')}</label>
             <input className="input" id="sched-notice" type="number" min={0} max={720} value={notice}
               onChange={(e) => setNotice(e.target.value === '' ? '' : String(Math.min(720, Number(e.target.value) || 0)))}
               onBlur={() => setNotice(String(Math.max(0, Math.min(720, Number(notice) || 0))))} />
           </div>
           <div className="field">
-            <label className="label" htmlFor="sched-horizon">Days ahead</label>
+            <label className="label" htmlFor="sched-horizon">{tr('sched.horizon')}</label>
             {/* Same shape: `|| 30` made this jump to 30 the moment a leading `0`
                 was typed on the way to `7`. */}
             <input className="input" id="sched-horizon" type="number" min={1} max={180} value={horizon}
@@ -536,7 +540,7 @@ function LinkModal({ link, cals, onClose, onSave, onDelete }: {
           {link && (
             <button className={`btn ghost ${confirming ? 'danger' : ''}`}
               onClick={() => (confirming ? onDelete(link) : setConfirming(true))}>
-              {confirming ? 'Really delete?' : 'Delete'}
+              {confirming ? tr('side.reallyDelete') : tr('common.delete')}
             </button>
           )}
           {blockedBecause && (
@@ -544,7 +548,7 @@ function LinkModal({ link, cals, onClose, onSave, onDelete }: {
           )}
           <span className="spacer" />
           <button className="btn" disabled={!valid || saving} onClick={save}>
-            {link ? 'Save' : 'Create link'}
+            {link ? tr('common.save') : tr('sched.createLink')}
           </button>
         </div>
       </div>
