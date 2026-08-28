@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   api, AuthError, HttpError, subscribe,
   type DashboardModule, type Settings, type TaskGroup, type TasksViewMode,
@@ -11,12 +11,12 @@ import {
   resolve, sanitizeAppearance, syncThemeColor, type Appearance, type Mode,
 } from './appearance'
 import {
-  DEFAULT_CALENDAR_FIT, calendarFitLabel, isCalendarFit, nextCalendarFit, type CalendarFit,
+  DEFAULT_CALENDAR_FIT, isCalendarFit, nextCalendarFit, type CalendarFit,
 } from './calendar'
 import { sanitizeLayout } from './dashboard'
-import { isSessionTtl, nextSessionTtl, sessionLabel } from './session'
+import { isSessionTtl, nextSessionTtl } from './session'
 import {
-  DEFAULT_TIME_FORMAT, isTimeFormat, nextTimeFormat, timeFormatLabel, type TimeFormat,
+  DEFAULT_TIME_FORMAT, isTimeFormat, nextTimeFormat, type TimeFormat,
 } from './time'
 import { sanitizeCapacityByWeekday } from './capacity'
 import { TimeFormatProvider } from './timeformat'
@@ -30,6 +30,9 @@ import { CalendarView } from './components/CalendarView'
 import { SchedulingView } from './components/SchedulingView'
 import { HomeView } from './components/HomeView'
 import { TodayView } from './components/TodayView'
+import { DEFAULT_LANGUAGE, isLanguage, type Language } from './lang'
+import { I18nProvider } from './i18n'
+import { translate } from './i18n/index'
 import { AppearancePanel } from './components/AppearancePanel'
 import { SettingsMenu } from './components/SettingsMenu'
 
@@ -92,6 +95,15 @@ export function App() {
   const [collapsedTasks, setCollapsedTasks] = useState<string[]>([])
   const [showCompleted, setShowCompleted] = useState(false)
   const [timeFormat, setTimeFormat] = useState<TimeFormat>(DEFAULT_TIME_FORMAT)
+  const [language, setLanguage] = useState<Language>(DEFAULT_LANGUAGE)
+  // App's own translator rather than `useT()`, because App is what RENDERS the
+  // provider: a hook read here would see the default context, not the value one
+  // line of JSX below it, and the top bar would stay English on a German
+  // account. It owns `language` outright, so it needs no context to ask.
+  const tr = useMemo(
+    () => (key: string, vars?: Parameters<typeof translate>[2]) =>
+      translate(language, key, vars),
+    [language])
   // How long a day is expected to hold. Null is "never said", and it stays null
   // rather than defaulting to an assumed working day — see
   // `service._effective_capacity`, which every reader of this agrees with.
@@ -348,6 +360,7 @@ export function App() {
           setShowCompleted(s.show_completed_tasks)
         }
         if (keep('time_format') && isTimeFormat(s.time_format)) setTimeFormat(s.time_format)
+        if (keep('language') && isLanguage(s.language)) setLanguage(s.language)
         // Treated as hand-edited, like every other settings value here. A
         // non-number default is dropped to null rather than coerced: a capacity
         // read out of junk would be a number nobody gave, which is the one
@@ -455,7 +468,7 @@ export function App() {
     'collapsed_groups', 'collapsed_tasks', 'dashboard', 'calendar_task_lists',
     'tab_order', 'session_ttl_s', 'home_timezone', 'appearance',
     'sidebar_collapsed', 'show_completed_tasks', 'calendar_show_done_tasks',
-    'calendar_fit', 'time_format',
+    'calendar_fit', 'time_format', 'language',
     // The per-weekday map is READ-MODIFY-WRITE: the section rebuilds the whole
     // object to change one weekday, and `store.update_settings` merges
     // shallowly — so writing it after a failed read would replace the account's
@@ -677,6 +690,15 @@ export function App() {
     saveSettings({ time_format: next })
   }, [timeFormat])
 
+  /** Chosen from a picker rather than cycled, unlike the toggles around it: the
+   *  list will grow past two, and a control you press repeatedly to find the
+   *  language you read is the wrong shape for the one setting a reader may not
+   *  be able to read the labels of. */
+  const changeLanguage = useCallback((next: Language) => {
+    setLanguage(next)
+    saveSettings({ language: next })
+  }, [])
+
   // Live updates: a server-side *data* change bumps `rev`, which the views
   // watch. One user action can publish several events in a burst (e.g. a move
   // is a delete + create) — debounce so they coalesce into a single refetch pass.
@@ -818,6 +840,7 @@ export function App() {
   // that has not yet said who we are.
   return (
     <DataProvider rev={rev} onExpire={onExpire} taskGroups={taskGroups} enabled={auth === 'in'}>
+      <I18nProvider value={language}>
       <TimeFormatProvider value={timeFormat}>
       {auth === 'out'
         ? <Login onLogin={(u) => { setCacheUser(u); setUser(u); setAuth('in') }} />
@@ -845,14 +868,15 @@ export function App() {
             <button key={t} className={`tab ${tab === t ? 'active' : ''}`}
               ref={t === tab ? activeTabRef : undefined}
               onClick={() => changeTab(t)}>
-              {TAB_LABELS[t]}
+              {tr(TAB_LABELS[t])}
             </button>
           ))}
         </div>
         <span className="spacer" />
         {booting ? null : (
         <button ref={gearRef} className={`icon-btn ${settingsOpen ? 'active' : ''}`}
-          title="Settings" aria-label="Settings" onClick={() => setSettingsOpen((o) => !o)}>
+          title={tr('app.settings')} aria-label={tr('app.settings')}
+          onClick={() => setSettingsOpen((o) => !o)}>
           <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
             strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
             <circle cx="12" cy="12" r="3" />
@@ -868,6 +892,7 @@ export function App() {
             tabOrder={tabOrder} startTab={startTab}
             onTabOrderChange={changeTabOrder} onStartTabChange={changeStartTab}
             timeFormat={timeFormat} onToggleTimeFormat={toggleTimeFormat}
+            language={language} onLanguageChange={changeLanguage}
             dayCapacity={dayCapacity} onDayCapacityChange={changeDayCapacity}
             dayCapacityByWeekday={dayCapacityByWeekday}
             onDayCapacityByWeekdayChange={changeDayCapacityByWeekday}
@@ -930,18 +955,20 @@ export function App() {
         <div className="offline-bar" role="status">
           <span>Can&rsquo;t reach the server — showing what was last saved on this
             device. You are still signed in.</span>
-          <button className="btn ghost" onClick={retryBoot}>Retry</button>
+          <button className="btn ghost" onClick={retryBoot}>{tr('app.retry')}</button>
         </div>
       )}
       {toast && (
         <div className="toast" role="alert">
           <span>{toast}</span>
-          <button className="icon-btn" aria-label="Dismiss" onClick={() => setToast(null)}>✕</button>
+          <button className="icon-btn" aria-label={tr('app.dismiss')}
+            onClick={() => setToast(null)}>✕</button>
         </div>
       )}
     </div>
         )}
       </TimeFormatProvider>
+      </I18nProvider>
     </DataProvider>
   )
 }

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_TIME_FORMAT, fmtClock, fmtDue, fmtDuration, fmtWhen, inputLang, isTimeFormat,
-  nextTimeFormat, timeFormatLabel,
+  nextTimeFormat, timeFormatKey,
 } from './time'
 
 // The suite runs under a fixed TZ (vite.config sets it) and these assertions
@@ -83,8 +83,9 @@ describe('the stored value', () => {
   it('cycles between the two and labels each', () => {
     expect(nextTimeFormat('12h')).toBe('24h')
     expect(nextTimeFormat('24h')).toBe('12h')
-    expect(timeFormatLabel('12h')).toBe('12-hour')
-    expect(timeFormatLabel('24h')).toBe('24-hour')
+    // Catalogue keys, not text — see `timeFormatKey`.
+    expect(timeFormatKey('12h')).toBe('clock.12h')
+    expect(timeFormatKey('24h')).toBe('clock.24h')
   })
 })
 

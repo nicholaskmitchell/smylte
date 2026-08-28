@@ -29,8 +29,15 @@ export function nextTimeFormat(f: TimeFormat): TimeFormat {
   return f === '12h' ? '24h' : '12h'
 }
 
-export function timeFormatLabel(f: TimeFormat): string {
-  return f === '24h' ? '24-hour' : '12-hour'
+/** The catalogue key for this choice, not the text.
+ *
+ *  A KEY because the label is shown in whatever language the app is set to and
+ *  this module is React-free — it has no `t` and should not grow one. Returning
+ *  the identity of the label and letting the one component that renders it look
+ *  the string up keeps the translation in the catalogue with every other
+ *  string, which is the only place a translator has to look. */
+export function timeFormatKey(f: TimeFormat): string {
+  return f === '24h' ? 'clock.24h' : 'clock.12h'
 }
 
 // `hour12` is passed explicitly rather than left to the locale — that is the
