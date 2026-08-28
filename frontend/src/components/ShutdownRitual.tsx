@@ -26,6 +26,7 @@ import { useTimeFormat } from '../timeformat'
 import { fmtClock, fmtDuration } from '../time'
 import { taskKey } from '../order'
 import { textDir } from '../util'
+import { DateTimeInput } from './DateTimeInput'
 
 const STEPS = ['How today went', 'What follows you', 'Anything to note?'] as const
 
@@ -304,7 +305,11 @@ function FollowsStep({ day, unfinished, titleOf, decided, onRoll, onDrop }: {
                     <button type="button" className="btn ghost shut-act"
                       aria-label={`Move ${name} to tomorrow`}
                       onClick={() => onRoll(e, tomorrow)}>Tomorrow</button>
-                    <input type="date" className="input shut-date"
+                    {/* The field with the most to gain: it shows no value at
+                        all (picking a day IS the whole of it), so before the
+                        picker opened on a tap there was nothing on screen to
+                        aim at but the glyph. */}
+                    <DateTimeInput type="date" className="input shut-date"
                       aria-label={`Move ${name} to a day`}
                       min={tomorrow} max={max} value=""
                       onChange={(ev) => { if (ev.target.value) onRoll(e, ev.target.value) }} />

@@ -6,6 +6,7 @@ import { sameValue } from '../util'
 import { inputLang } from '../time'
 import { useTimeFormat } from '../timeformat'
 import { useEscape } from '../hooks'
+import { DateTimeInput } from './DateTimeInput'
 
 // Each create is a CalDAV PUT plus a re-read GET behind a single server-side
 // lock, so a batch this size is already a slow half-minute. It also bounds what
@@ -142,11 +143,12 @@ export const FIELDS: readonly FieldSpec[] = [
     key: 'due', label: 'Due', slots: ['dueDate', 'dueTime'],
     render: (v, set, { where, disabled, lang }) => (
       <>
-        <input className="input" type="date" aria-label={`Due date${where}`} value={v.dueDate}
+        <DateTimeInput className="input" type="date" aria-label={`Due date${where}`} value={v.dueDate}
           disabled={disabled} onChange={(e) => set({ dueDate: e.target.value })} />
         {/* A time with no date isn't expressible as a due, so keep the
             constraint visible rather than silently dropping the time. */}
-        <input className="input" type="time" aria-label={`Due time${where}`} value={v.dueTime} lang={lang}
+        <DateTimeInput className="input" type="time" aria-label={`Due time${where}`} value={v.dueTime}
+          lang={lang}
           disabled={disabled || !v.dueDate} onChange={(e) => set({ dueTime: e.target.value })} />
       </>
     ),
@@ -158,10 +160,11 @@ export const FIELDS: readonly FieldSpec[] = [
     key: 'start', label: 'Start', slots: ['startDate', 'startTime'],
     render: (v, set, { where, disabled, lang }) => (
       <>
-        <input className="input" type="date" aria-label={`Start date${where}`} value={v.startDate}
+        <DateTimeInput className="input" type="date" aria-label={`Start date${where}`} value={v.startDate}
           disabled={disabled} onChange={(e) => set({ startDate: e.target.value })} />
         {/* A time with no date isn't expressible as a start, same as Due. */}
-        <input className="input" type="time" aria-label={`Start time${where}`} value={v.startTime} lang={lang}
+        <DateTimeInput className="input" type="time" aria-label={`Start time${where}`} value={v.startTime}
+          lang={lang}
           disabled={disabled || !v.startDate} onChange={(e) => set({ startTime: e.target.value })} />
       </>
     ),
