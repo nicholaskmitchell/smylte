@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import {
   COLS, DEFAULT_LAYOUT, MODULE_KINDS, MODULE_SPECS,
   addModule, clampToGrid, layoutRows, moveModule, overlaps, packDown,
@@ -212,5 +214,23 @@ describe('module registry', () => {
   it('ships a default layout that is legal by its own rules', () => {
     expect(sanitizeLayout(DEFAULT_LAYOUT)).toEqual(DEFAULT_LAYOUT)
     expect(noOverlaps(DEFAULT_LAYOUT)).toBe(true)
+  })
+
+  it('names exactly the kinds the server will accept', () => {
+    // The two lists are a MIRROR and the failure when they part is not a module
+    // that quietly does not render: `SettingsPatch.dashboard` is validated as a
+    // whole, so one unknown kind 422s the entire PUT — taking the theme, the tab
+    // order and everything else in the same write down with it. app.py says so
+    // in as many words, and this is what makes the claim checkable.
+    //
+    // Read out of the source rather than duplicated here, so this file is not a
+    // third copy of the same list.
+    const py = readFileSync(
+      resolve(process.cwd(), '../backend/tasksd/app.py'), 'utf8')
+    const block = /class DashboardModule\(BaseModel\):[\s\S]*?kind: Literal\[([\s\S]*?)\]/
+      .exec(py)
+    expect(block, 'DashboardModule.kind not found in app.py').toBeTruthy()
+    const serverKinds = [...block![1].matchAll(/"([a-z_]+)"/g)].map((m) => m[1])
+    expect([...serverKinds].sort()).toEqual([...MODULE_KINDS].sort())
   })
 })

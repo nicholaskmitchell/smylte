@@ -253,6 +253,153 @@ function withCalendars(cals: import('../api').List[],
 
 const MINI: DashboardModule[] = [{ id: 'x', kind: 'mini_calendar', x: 0, y: 0, w: 4, h: 6 }]
 
+// ── the day-plan module ────────────────────────────────────────────────────
+
+/** A day entry, shaped like the wire's. Kept beside this suite rather than
+ *  imported from `TodayView.test.tsx`: a factory shared between two suites is a
+ *  third thing both have to agree with, and the fields that matter here are not
+ *  the ones that matter there. */
+const entry = (o: Partial<import('../api').DayEntry> = {}): import('../api').DayEntry => ({
+  entry_id: 'e1', day: today(), kind: 'note', list: null, uid: null,
+  title: 'Water the plants', source: 'user', position: 1,
+  done_at: null, dropped_at: null, habit_id: null, estimate_minutes: null,
+  rolled_to: null, created_at: '2026-08-21T08:00:00.000Z', ...o,
+})
+
+const dayPlan = (entries: import('../api').DayEntry[] = [], day = today()) =>
+  ({
+    day, planned: true, entries, capacity_minutes: null, capacity: null,
+    committed_at: null, shutdown_at: null, reflection: null,
+  } as import('../api').DayPlan)
+
+const PLAN_MODULE: DashboardModule[] = [{ id: 'x', kind: 'day_plan', x: 0, y: 0, w: 6, h: 6 }]
+
+describe("the day-plan module", () => {
+  it('shows the day plan, in the order the day gives it', async () => {
+    m.day.mockResolvedValue(dayPlan([
+      entry({ entry_id: 'b', title: 'Second', position: 2 }),
+      entry({ entry_id: 'a', title: 'First', position: 1 }),
+    ]))
+    setup(PLAN_MODULE)
+    expect(await screen.findByText('First')).toBeInTheDocument()
+    // `orderEntries` is the Today tab's, so the two screens cannot disagree
+    // about which row comes first.
+    const titles = [...document.querySelectorAll('.dash-task-title')].map((n) => n.textContent)
+    expect(titles).toEqual(['First', 'Second'])
+  })
+
+  it('READS the day and never opens it', async () => {
+    // The invariant this module is built around. `openDay` is the only call
+    // that can CREATE a plan — it derives a snapshot from CalDAV and writes it —
+    // and a dashboard that called it would snapshot a day on a morning the owner
+    // never looked at. The Today tab is the only caller, by design.
+    m.day.mockResolvedValue(dayPlan([entry({ title: 'A row' })]))
+    setup(PLAN_MODULE)
+    await screen.findByText('A row')
+    expect(m.day).toHaveBeenCalledWith(today())
+    expect(m.openDay).not.toHaveBeenCalled()
+  })
+
+  it('is not fetched at all when the module is not on the board', async () => {
+    setup([{ id: 'x', kind: 'overdue', x: 0, y: 0, w: 6, h: 5 }])
+    await screen.findByText('Nothing overdue.')
+    expect(m.day).not.toHaveBeenCalled()
+  })
+
+  it('says what to do when the day has nothing on it', async () => {
+    m.day.mockResolvedValue(dayPlan([]))
+    setup(PLAN_MODULE)
+    // A day nobody has opened answers `planned: false` with no rows, and this
+    // reads the same to a user as one they opened and emptied. The card points
+    // at the tab that can change it rather than offering to plan the day here.
+    expect(await screen.findByText('Nothing on today yet. Plan it from the Today tab.'))
+      .toBeInTheDocument()
+  })
+
+  it('leaves dropped rows out', async () => {
+    // "I am not doing this" is a decision and belongs in the day's own record,
+    // not on a card answering "what am I doing".
+    m.day.mockResolvedValue(dayPlan([
+      entry({ entry_id: 'a', title: 'Still on' }),
+      entry({ entry_id: 'b', title: 'Dropped', dropped_at: '2026-08-21T09:00:00.000Z' }),
+    ]))
+    setup(PLAN_MODULE)
+    expect(await screen.findByText('Still on')).toBeInTheDocument()
+    expect(screen.queryByText('Dropped')).not.toBeInTheDocument()
+  })
+
+  it('does not show a plan for a different day', async () => {
+    // The rollover guard. Rows from yesterday under a heading that says today
+    // is the one mistake a day-scoped surface cannot make, so this is gated
+    // rather than filtered.
+    m.day.mockResolvedValue(dayPlan([entry({ title: 'Yesterday row' })], '2020-01-01'))
+    setup(PLAN_MODULE)
+    await waitFor(() => expect(m.day).toHaveBeenCalled())
+    expect(screen.queryByText('Yesterday row')).not.toBeInTheDocument()
+  })
+
+  it('ticks a NOTE through the day entry', async () => {
+    m.day.mockResolvedValue(dayPlan([entry({ entry_id: 'n1', title: 'A note' })]))
+    m.patchDayEntry.mockResolvedValue(entry({ entry_id: 'n1', title: 'A note',
+      done_at: '2026-08-21T10:00:00.000Z' }))
+    setup(PLAN_MODULE)
+    const box = await screen.findByRole('button', { name: 'Check A note' })
+    await userEvent.click(box)
+    expect(m.patchDayEntry).toHaveBeenCalledWith(today(), 'n1', { done: true })
+    // And the row flips: the accessible name is the other half of the toggle.
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Uncheck A note' }))
+      .toBeInTheDocument())
+  })
+
+  it('ticks a TASK through the task, never through the entry', async () => {
+    // A task entry records no doneness of its own — the task's state is the
+    // truth, and two writers for one fact is how they come to disagree.
+    m.tasks.mockResolvedValue([task({ uid: 'u1', list: 'l1', summary: 'Ship it' })])
+    m.day.mockResolvedValue(dayPlan([
+      entry({ entry_id: 't1', kind: 'task', list: 'l1', uid: 'u1', title: null }),
+    ]))
+    m.complete.mockResolvedValue(task({ uid: 'u1', list: 'l1', summary: 'Ship it',
+      completed: true, status: 'COMPLETED' }))
+    setup(PLAN_MODULE)
+    const box = await screen.findByRole('button', { name: 'Check Ship it' })
+    await userEvent.click(box)
+    await waitFor(() => expect(m.complete).toHaveBeenCalledWith('l1', 'u1', true))
+    expect(m.patchDayEntry).not.toHaveBeenCalled()
+  })
+
+  it('shows a task entry whose task is gone, but will not tick it', async () => {
+    // `entryTitle` says what happened; there is nothing left to tick, so the
+    // control is disabled rather than absent and the row keeps its column.
+    m.tasks.mockResolvedValue([])
+    m.day.mockResolvedValue(dayPlan([
+      entry({ entry_id: 't1', kind: 'task', list: 'l1', uid: 'gone', title: null }),
+    ]))
+    setup(PLAN_MODULE)
+    expect(await screen.findByText('This task is no longer in your lists')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^Check / })).toBeDisabled()
+  })
+
+  it('shows the estimate when there is one, and a due date only when it is not today', async () => {
+    // One cell, and it has to say something. A due of today repeated down every
+    // row of a card headed "Today's plan" is the date already in the heading.
+    m.tasks.mockResolvedValue([
+      task({ uid: 'a', list: 'l1', summary: 'Due today', due: today() }),
+      task({ uid: 'b', list: 'l1', summary: 'Due later', due: '2099-03-04' }),
+    ])
+    m.day.mockResolvedValue(dayPlan([
+      entry({ entry_id: '1', title: 'Estimated', estimate_minutes: 45 }),
+      entry({ entry_id: '2', kind: 'task', list: 'l1', uid: 'a', title: null }),
+      entry({ entry_id: '3', kind: 'task', list: 'l1', uid: 'b', title: null }),
+    ]))
+    setup(PLAN_MODULE)
+    await screen.findByText('Estimated')
+    expect(screen.getByText('45m')).toBeInTheDocument()
+    const row = (t: string) => screen.getByText(t).closest('.dash-task')!
+    expect(row('Due today').querySelector('.dash-task-due')).toBeNull()
+    expect(row('Due later').querySelector('.dash-task-due')).not.toBeNull()
+  })
+})
+
 describe('mini calendar', () => {
   const dayButton = (d: Date) =>
     screen.getByRole('button', { name: new RegExp(`^${longLabel(d)}`) })

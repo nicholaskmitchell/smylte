@@ -124,6 +124,29 @@ describe('the app in German', () => {
     }
   })
 
+  it('prints no catalogue key in a module that is not on the stock board', async () => {
+    // The tab walk above only ever reaches the five modules DEFAULT_LAYOUT
+    // ships, so a module nobody has placed is invisible to it. This puts one on
+    // the board deliberately — the day-plan card, which is the newest and the
+    // one whose keys nothing else would exercise.
+    m.getSettings.mockResolvedValue({
+      language: 'de',
+      dashboard: [{ id: 'p', kind: 'day_plan', x: 0, y: 0, w: 6, h: 6 }],
+    })
+    m.day.mockResolvedValue({
+      day: new Date().toISOString().slice(0, 10), planned: true,
+      entries: [], capacity_minutes: null, capacity: null,
+      committed_at: null, shutdown_at: null, reflection: null,
+    })
+    const { container } = render(<App />)
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Aufgaben' }))
+      .toBeInTheDocument())
+    await userEvent.click(screen.getAllByRole('button', { name: 'Start' })[0])
+    await screen.findByText('Tagesplan')
+    const keys = visibleStrings(container).filter((s) => KEYISH.test(s))
+    expect(keys, `unresolved keys on the plan card: ${keys.join(', ')}`).toEqual([])
+  })
+
   it('offers each language under its own name', async () => {
     // The endonyms, which are the one pair of strings that must NOT follow the
     // setting: a menu that offered "German" to somebody who cannot read the

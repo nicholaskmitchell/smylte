@@ -931,6 +931,26 @@ def test_settings_dashboard_sync(client):
     assert client.get("/api/settings").json()["dashboard"] == []
 
 
+def test_settings_dashboard_takes_every_kind_the_client_ships(client):
+    # `kind` is an allowlist and the whole PUT is validated at once, so a kind
+    # the client can place and the server has not heard of does not degrade to a
+    # missing card — it 422s the write and takes the theme, the tab order and
+    # everything else in the same body down with it. The list is mirrored in
+    # dashboard.ts; `dashboard.test.ts` reads this file back out and fails when
+    # the two part. This is the same claim from the other side.
+    kinds = [
+        "today", "day_plan", "overdue", "upcoming", "mini_calendar",
+        "completed", "booking_links", "bookings", "quick_add",
+    ]
+    layout = [
+        {"id": f"m{i}", "kind": k, "x": 0, "y": i, "w": 4, "h": 1}
+        for i, k in enumerate(kinds)
+    ]
+    r = client.put("/api/settings", json={"dashboard": layout})
+    assert r.status_code == 200, r.text
+    assert client.get("/api/settings").json()["dashboard"] == layout
+
+
 def test_settings_dashboard_rejects_bad_geometry(client):
     for bad in (
         {"id": "m1", "kind": "today", "x": 99, "y": 0, "w": 4, "h": 6},    # off-grid
