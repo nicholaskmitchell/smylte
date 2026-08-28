@@ -245,3 +245,50 @@ describe('the source', () => {
     expect(offenders).toEqual([])
   })
 })
+
+describe('every key the app asks for', () => {
+  // The other direction from the parity tests above. Those say both catalogues
+  // answer the same keys; this says the keys the CODE asks for are keys that
+  // exist. A mistyped key is invisible in review and nearly invisible in the
+  // app — `translate` falls back to the key itself, so the screen shows
+  // "today.showAll" in a place a number was expected, on whichever branch the
+  // reviewer did not happen to open.
+  //
+  // Only literal calls are collected. A key held in a table — TAB_LABELS,
+  // MODULE_SPECS, REPEATS, the two rituals' STEPS — is out of reach of a regex
+  // and is covered by the tests that render those surfaces.
+  const CALL = /\b(?:tr|tx|t)\(\s*'([a-z][\w]*(?:\.[\w]+)+)'/g
+
+  const files = () => {
+    const out: string[] = []
+    const walk = (dir: string) => {
+      for (const name of readdirSync(dir, { withFileTypes: true })) {
+        const full = `${dir}/${name.name}`
+        if (name.isDirectory()) { walk(full); continue }
+        if (!/\.tsx?$/.test(name.name) || name.name.includes('.test.')) continue
+        if (full.includes('/i18n/')) continue
+        out.push(full)
+      }
+    }
+    walk(resolve(process.cwd(), 'src'))
+    return out
+  }
+
+  it('is a key English has', () => {
+    const missing: string[] = []
+    for (const file of files()) {
+      const text = readFileSync(file, 'utf8')
+      for (const m of text.matchAll(CALL)) {
+        if (!(m[1] in en)) missing.push(`${file.split('/src/')[1]}: ${m[1]}`)
+      }
+    }
+    expect(missing, `keys nothing answers: ${missing.join(' | ')}`).toEqual([])
+  })
+
+  it('finds enough of them for this to be worth running', () => {
+    // A scan that quietly stopped matching would pass the test above forever.
+    let n = 0
+    for (const file of files()) n += [...readFileSync(file, 'utf8').matchAll(CALL)].length
+    expect(n).toBeGreaterThan(300)
+  })
+})
