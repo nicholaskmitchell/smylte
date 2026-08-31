@@ -226,6 +226,148 @@ export interface BookingLink {
   updated_at: string
 }
 
+/** A passive screen on a wall. Takes no input; shows one of two things.
+ *
+ * `token` is the whole credential: it is the URL a panel is pointed at, and it
+ * reaches one read-only frame and nothing else. It is returned by these routes
+ * (unlike the notification bot token, which is write-only) because the owner has
+ * to be able to read it off the settings page to type it into a device — see
+ * `service._display_dto` for the argument.
+ */
+export interface Display {
+  token: string
+  name: string
+  mode: DisplayMode
+  palette: DisplayPalette
+  calendars: string[]              // allowlist; empty means every calendar
+  lists: string[]                  // allowlist; empty means every list
+  hide_done_habits: boolean
+  hide_done_tasks: boolean
+  refresh_seconds: number
+  panel_width: number | null       // the server-rendered image's pixels
+  panel_height: number | null
+  rotation: 0 | 90 | 180 | 270
+  enabled: boolean
+  last_seen_at: string | null      // null = never fetched a frame
+  created_at: string
+  updated_at: string
+}
+
+export type DisplayMode = 'calendar' | 'habits'
+export type DisplayPalette = 'color' | 'eink'
+
+export interface DisplayInput {
+  name: string
+  mode?: DisplayMode
+  palette?: DisplayPalette
+  calendars?: string[]
+  lists?: string[]
+  hide_done_habits?: boolean
+  hide_done_tasks?: boolean
+  refresh_seconds?: number
+  // 0 CLEARS the stored size (the server floors a real one at 100); null is
+  // never sent, because PATCH refuses an explicit null on every field.
+  panel_width?: number
+  panel_height?: number
+  rotation?: 0 | 90 | 180 | 270
+  enabled?: boolean
+}
+
+/** What a display shows, already formatted. Fetched with the token and no session.
+ *
+ * Every string here is display-ready: the month title, the weekday names and
+ * every clock are formatted SERVER-side, in the account's language and clock
+ * setting. That is deliberate — the browser page and the server-rendered image
+ * for a browserless panel are two rasterizers over this one object, and
+ * localizing in each would let them drift. See backend tasksd/display/frame.py.
+ */
+export interface DisplayFrame {
+  display: {
+    name: string
+    mode: DisplayMode
+    palette: DisplayPalette
+    refresh_seconds: number
+    rotation: number
+  }
+  generated_at: string
+  day: string                      // the owner's calendar day, YYYY-MM-DD
+  language: string
+  time_format: '12h' | '24h'
+  sources: DisplaySource[]
+  calendar?: DisplayCalendar       // mode === 'calendar'
+  habits?: DisplayHabits           // mode === 'habits'
+}
+
+/** One calendar or list, and how it is told apart from the others.
+ *
+ * `treatment` is the eink answer to having no colour: a filled chip, a hollow
+ * one, a left bar, a dotted one. `initial` is set on EVERY source or on none —
+ * once there are more sources than treatments they all carry a letter, because
+ * a letter on some chips and not others reads as meaning something extra.
+ */
+export interface DisplaySource {
+  id: string
+  name: string
+  color: string | null
+  treatment: 'solid' | 'outline' | 'bar' | 'dotted'
+  initial: string                  // '' unless the treatments have run out
+}
+
+export interface DisplayCalendar {
+  month: string                    // YYYY-MM
+  title: string                    // "August 2026", already localized
+  weekday_names: string[]          // Sunday-first, matching the app's own grid
+  weeks: DisplayCell[][]           // always six rows, so the layout never moves
+}
+
+export interface DisplayCell {
+  day: string
+  label: string
+  in_month: boolean
+  today: boolean
+  items: DisplayItem[]
+  hidden: number                   // items the frame itself capped away
+}
+
+export interface DisplayItem {
+  text: string
+  time: string                     // '' for an all-day event
+  all_day: boolean
+  source: string | null
+  continued: boolean               // a later day of a span
+}
+
+export interface DisplayHabits {
+  /** False when nobody has opened today: these rows are a PREVIEW of what
+   *  opening it would derive, and nothing has been written. Surfaced rather
+   *  than smoothed over — a screen that drew a preview as a plan would claim a
+   *  commitment the owner never made. */
+  planned: boolean
+  heading: string
+  day_heading: string
+  habits: DisplayRow[]
+  tasks: DisplayRow[]
+  /** Counted BEFORE the done rows are hidden. With `hide_done_habits` on, the
+   *  list empties as the day goes, and this is the only thing left that
+   *  remembers there was anything on it. */
+  counts: {
+    habits_done: number; habits_total: number
+    tasks_done: number; tasks_total: number
+  }
+  empty_text: string
+  all_done_text: string
+  preview_text: string
+  preview_hint: string
+}
+
+export interface DisplayRow {
+  text: string
+  done: boolean
+  kind: 'task' | 'note' | 'habit'
+  source: string | null
+  estimate_minutes: number | null
+}
+
 export interface BookingLinkInput {
   title: string
   description?: string | null
@@ -881,6 +1023,19 @@ export const api = {
     j<Booking[]>('GET',
       `/api/scheduling/bookings${token ? `?link=${encodeURIComponent(token)}` : ''}`),
 
+  // displays (owner side)
+  displays: () => j<Display[]>('GET', '/api/displays'),
+  createDisplay: (body: DisplayInput) => j<Display>('POST', '/api/displays', body),
+  patchDisplay: (token: string, body: DisplayInput | Partial<DisplayInput>) =>
+    j<Display>('PATCH', `/api/displays/${encodeURIComponent(token)}`, body),
+  /** Re-key a display whose URL got out, keeping the display itself. Its own
+   *  route rather than a PATCH field: the token is the primary key, so "set the
+   *  token" would mean letting a client choose a bearer credential. */
+  rotateDisplayToken: (token: string) =>
+    j<Display>('POST', `/api/displays/${encodeURIComponent(token)}/rotate`),
+  deleteDisplay: (token: string) =>
+    j<null>('DELETE', `/api/displays/${encodeURIComponent(token)}`),
+
   // client scheduling (public booking page — no session needed)
   publicBookingInfo: (token: string) =>
     j<PublicBookingInfo>('GET', `/api/public/booking/${encodeURIComponent(token)}`),
@@ -894,6 +1049,18 @@ export const api = {
   ) =>
     j<PublicBookingResult>('POST',
       `/api/public/booking/${encodeURIComponent(token)}/book`, { client_id: clientId(), ...body }),
+
+  // displays (the panel itself — token in the URL, no session)
+  /** One frame for the screen on the wall.
+   *
+   * No `client_id` and no retry key, unlike `publicBook`: this writes nothing
+   * an idempotency key could protect. The one write anywhere behind it is the
+   * display's own `last_seen_at`, which is a timestamp being overwritten with a
+   * newer timestamp.
+   */
+  publicDisplayFrame: (token: string, signal?: AbortSignal) =>
+    j<DisplayFrame>('GET', `/api/public/display/${encodeURIComponent(token)}`,
+      undefined, signal),
 
   // settings (account-synced UI preferences)
   getSettings: () => j<Settings>('GET', '/api/settings'),
