@@ -112,6 +112,59 @@ export const de: Catalogue = {
     + 'täuscht — alles sieht normal aus und die Daten sind eingefroren. Höchstens '
     + 'eine stumme Nachricht am Tag, mit dem Namen der Liste statt der '
     + 'Fehlermeldung.',
+  'notif.more': 'Standardmäßig aus',
+  'notif.more.hint': 'Smylte hält diese für die meisten Leute nicht für '
+    + 'sinnvoll — jede wiederholt entweder einen Dauerzustand oder etwas, das '
+    + 'ohnehin auf dem Bildschirm steht, den du öffnest. Der Grund steht jeweils '
+    + 'darunter. Wenn du das anders siehst: du kennst deine Tage besser als die App.',
+  'notif.firesEvening': 'Kommt zur Abendzeit weiter unten.',
+  'notif.trigger.itemReminder': 'Erinnerungen, die du setzt',
+  'notif.trigger.itemReminder.hint': 'Das „Erinnere mich“, das du an einer '
+    + 'einzelnen Aufgabe oder einem Termin gesetzt hast. Ohne dein Zutun passiert '
+    + 'hier nichts.',
+  'notif.trigger.taskDueSoon': 'Vor jeder fälligen Aufgabe',
+  'notif.trigger.taskDueSoon.hint': 'Eine Frist ist entweder etwas, das du '
+    + 'ohnehin wusstest — dann ist das Lärm — oder etwas, das du in einer halben '
+    + 'Stunde nicht mehr schaffst, dann ist es Druck. Genau deshalb gibt es '
+    + '„Erinnere mich“ pro Aufgabe. Wiederkehrende und ganztägige Aufgaben bleiben '
+    + 'außen vor: beide haben keine Uhrzeit, auf die sich ehrlich zählen ließe.',
+  'notif.trigger.taskOverdue': 'Was überfällig ist',
+  'notif.trigger.taskOverdue.hint': 'Überfällig bleibt jede Minute wahr, bis du '
+    + 'etwas tust — das hier ist also eine Zahl am Morgen, keine Neuigkeit. Der '
+    + 'Tagesüberblick nennt dieselbe Zahl bereits in einer Zeile.',
+  'notif.trigger.dayUnplanned': 'Heute ist nicht geplant',
+  'notif.trigger.dayUnplanned.hint': 'Du weißt, dass du heute nicht geplant hast. '
+    + 'Hier bittet die App um Aufmerksamkeit für sich selbst — und das ist die '
+    + 'Nachricht, wegen der man am ehesten alles stummschaltet.',
+  'notif.trigger.overcommitted': 'Der Plan wird zu lang',
+  'notif.trigger.overcommitted.hint': 'Die Zahl steht schon auf dem Bildschirm, '
+    + 'auf dem du planst, bevor der Tag beginnt. Kommt nie, wenn du nicht gesagt '
+    + 'hast, wie lang dein Tag ist — die App erfindet dir keinen.',
+  'notif.trigger.notShutDown': 'Heute wurde nicht abgeschlossen',
+  'notif.trigger.notShutDown.hint': 'Das erzieht eher zur Gewohnheit, als dass es '
+    + 'informiert: es sagt dir nichts, was du nicht weißt. Nur an einem Tag, den '
+    + 'du tatsächlich geplant hast.',
+  'notif.trigger.habitsLeft': 'Offene Gewohnheiten',
+  'notif.trigger.habitsLeft.hint': 'Die Haltung der App ist, dass eine Gewohnheit '
+    + 'nie als Fehlschlag eingefärbt wird und hier nichts deinen Tag bewertet — '
+    + 'und das hier passt zu beidem schlecht. Es nennt, was offen ist, und sonst '
+    + 'nichts: keine Serie, kein Prozentwert, keine Zählung von Auslassungen.',
+  'notif.trigger.linkBroken': 'Ein Buchungslink ist kaputt',
+  'notif.trigger.linkBroken.hint': 'Ein geteilter Link zeigt auf einen Kalender, '
+    + 'den es nicht mehr gibt — wer ihn öffnet, sieht einen Fehler. Selten: '
+    + 'löschst du einen Kalender in Smylte, werden seine Links automatisch '
+    + 'deaktiviert.',
+  'notif.trigger.syncRecovered': 'Sync läuft wieder',
+  'notif.trigger.syncRecovered.hint': 'Eine zweite Nachricht, die die erste '
+    + 'zurücknimmt, bringt Leute dazu, Meldungen nicht mehr zu lesen. Andererseits: '
+    + 'wenn du es repariert hast, willst du vielleicht wissen, dass es geklappt hat.',
+  'notif.eveningTime': 'Abendregeln um',
+  'notif.eveningTime.hint': 'Wann die beiden Tagesabschluss-Regeln oben kommen, '
+    + 'falls du sie einschaltest.',
+  'notif.taskLead': 'Vorlauf bei Aufgaben',
+  'notif.taskLead.hint': 'Minuten Vorwarnung, bevor eine Aufgabe fällig ist — für '
+    + '„Vor jeder fälligen Aufgabe“. Eine an einer Aufgabe gesetzte Erinnerung '
+    + 'nutzt stattdessen ihren eigenen Wert.',
   'notif.timing': 'Zeitpunkt',
   'notif.digestTime': 'Überblick kommt um',
   'notif.digestTime.hint': 'In deiner Heimatzeitzone ({tz}). Ein Überblick, der '

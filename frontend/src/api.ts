@@ -624,6 +624,11 @@ export interface Settings {
    *  cost most of two minutes, so a shorter lead fires after the meeting has
    *  started, and the rule refuses to send then. */
   notify_event_lead_minutes?: number
+  /** The hour the evening opt-in rules fire at, HH:MM. Absent means 21:00. */
+  notify_evening_time?: string
+  /** The blanket lead for a task deadline, used only when `task_due_soon` is
+   *  switched on. Absent means 30. */
+  notify_task_lead_minutes?: number
   /** The master switch. Absent means OFF — unlike the per-rule map, whose
    *  absent key means "that rule's default", this one has no safe default but
    *  off: it is what stands between a deploy that merely has a bot token in its

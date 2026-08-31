@@ -94,6 +94,55 @@ export const en = {
   'notif.trigger.syncStalled.hint': 'The one state where the app is lying to '
     + 'you — everything looks normal and the data is frozen. At most one silent '
     + 'message a day, and it names the list rather than carrying the error.',
+  'notif.more': 'Off by default',
+  'notif.more.hint': 'Smylte does not think most people want these — each one '
+    + 'restates something standing, or something already on the screen you open '
+    + 'anyway. The reason is under each. If you disagree, you know your own days '
+    + 'better than the app does.',
+  'notif.firesEvening': 'Arrives at the evening hour below.',
+  'notif.trigger.itemReminder': 'Reminders you set',
+  'notif.trigger.itemReminder.hint': 'The "Remind me" you put on one task or '
+    + 'event. Nothing fires unless you asked for it on that item.',
+  'notif.trigger.taskDueSoon': 'Before every task is due',
+  'notif.trigger.taskDueSoon.hint': 'A deadline is either something you already '
+    + 'knew about, in which case this is noise, or something you cannot do in '
+    + 'half an hour, in which case it is stress — which is why "Remind me" is '
+    + 'per task instead. Skips repeating and all-day tasks: neither has a clock '
+    + 'this can honestly count down to.',
+  'notif.trigger.taskOverdue': 'What is overdue',
+  'notif.trigger.taskOverdue.hint': 'Overdue is true every minute until you do '
+    + 'something about it, so this is a count once a morning rather than news. '
+    + 'The digest already carries the same number as one line.',
+  'notif.trigger.dayUnplanned': "Today isn't planned",
+  'notif.trigger.dayUnplanned.hint': 'You know you have not planned today. This '
+    + 'is the app asking for your attention on its own behalf — and the message '
+    + 'most likely to make you mute the lot.',
+  'notif.trigger.overcommitted': 'The plan runs long',
+  'notif.trigger.overcommitted.hint': 'The number is already on the screen where '
+    + 'you do the planning, before the day starts. Never sent if you have not '
+    + 'said how long your day is — the app will not invent one for you.',
+  'notif.trigger.notShutDown': "Today wasn't shut down",
+  'notif.trigger.notShutDown.hint': 'Habit-forming rather than informative: it '
+    + 'tells you nothing you do not know. Only for a day you actually planned.',
+  'notif.trigger.habitsLeft': 'Habits left today',
+  'notif.trigger.habitsLeft.hint': 'The app\u2019s position is that a habit is never '
+    + 'coloured as a failure and nothing here scores your day, and this sits '
+    + 'awkwardly with both. It names what is left and nothing else — no streak, '
+    + 'no percentage, no count of misses.',
+  'notif.trigger.linkBroken': 'A booking link is broken',
+  'notif.trigger.linkBroken.hint': 'A link you have shared pointing at a calendar '
+    + 'that no longer exists, so anyone opening it sees an error. Rare: deleting '
+    + 'a calendar in Smylte disables its links for you.',
+  'notif.trigger.syncRecovered': 'Sync is working again',
+  'notif.trigger.syncRecovered.hint': 'A second message to retract the first is '
+    + 'how people learn to stop reading alerts. On the other hand, if you fixed '
+    + 'it you may want to know it took.',
+  'notif.eveningTime': 'Evening rules at',
+  'notif.eveningTime.hint': 'When the two end-of-day rules above fire, if you '
+    + 'turn them on.',
+  'notif.taskLead': 'Task warning',
+  'notif.taskLead.hint': 'Minutes of warning before a task is due, for "Before '
+    + 'every task is due". A reminder set on one task uses its own value instead.',
   'notif.timing': 'Timing',
   'notif.digestTime': 'Digest arrives',
   'notif.digestTime.hint': 'In your home timezone ({tz}). A digest more than '

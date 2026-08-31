@@ -24,12 +24,35 @@ window that closed while the box was down simply never fires and leaves no row.
 DST is correct by construction wherever it matters, because a fire instant is
 derived from the event's own instant rather than from a wall clock.
 
-THE ADMISSION TEST FOR A FIFTH RULE. Write its `dedupe_key` first. If you cannot
+TWO TIERS, AND THE DIFFERENCE IS THE DEFAULT. The rules above ship ON: they are
+the four that clear the bar for an owner who has said nothing. Everything below
+`# ── opt-in ──` ships OFF, and each one was argued against on this page before
+it was written — "task due soon" is noise or stress, "you're overdue" is a pager
+loop, "you haven't planned today" is the app asking for attention on its own
+behalf. Those arguments still stand, and they are what the defaults encode.
+
+What they do not do is decide for someone who disagrees. An owner who wants a
+07:30 nudge that today is unplanned knows their own working habits better than
+this file does, and a default is a starting position rather than a verdict. So
+the cut rules are here, off, each with the case against it written beside it so
+the choice is informed rather than blind — which is the honest way to hold both
+positions at once: the app does not think you need this, and the app is not the
+one living your day.
+
+THE ADMISSION TEST FOR A NEW RULE. Write its `dedupe_key` first. If you cannot
 express it as something that STOPS EXISTING — a day key, a start instant, a
 booking id — then the condition is standing, it will re-qualify on every sweep,
-and whatever dedupe policy you pick to stop it repeating is arbitrary. Standing
-conditions are digest lines. `sync_stalled` below is the one deliberate
-exception and it is marked as such.
+and whatever dedupe policy you pick to stop it repeating is arbitrary. The
+answer for a standing condition is a WALL-CLOCK rule: sample it once a day at an
+hour the owner set, keyed on the day. That is what every opt-in rule below does,
+and it is why they can be loud without a quiet-hours setting — an hour the owner
+chose cannot land at 3am by accident.
+
+LOUD AND QUIET, RESTATED FOR THE OPT-IN TIER. Every rule below is either
+wall-clock (fires at an hour the owner set, so it may buzz) or silent. Nothing
+event-driven and loud was added except `task_due_soon`, whose timing comes from
+the owner's own deadline — the same category as `event_starting`. The property
+that keeps quiet hours unnecessary therefore survives the whole tier.
 
 LOUD AND QUIET ARE FIXED IN CODE, NOT CONFIGURED. `daily_digest` and
 `event_starting` buzz; `booking_created` and `sync_stalled` always send with
@@ -54,15 +77,32 @@ from ..scheduling import parse_event_time
 # settings-blob toggle keys and the UI labels. A rule not named here cannot be
 # enabled, and a stale key in the settings blob is ignored rather than honoured.
 TRIGGERS: tuple[str, ...] = (
+    # On by default.
     "daily_digest",
     "event_starting",
     "item_reminder",
     "booking_created",
     "sync_stalled",
+    # Off by default — see the docstring's two-tier note.
+    "task_due_soon",
+    "task_overdue",
+    "day_unplanned",
+    "capacity_overcommitted",
+    "day_not_shut_down",
+    "habits_outstanding",
+    "booking_link_broken",
+    "sync_recovered",
 )
 
 DEFAULT_DIGEST_TIME = "07:30"
 DEFAULT_EVENT_LEAD_MINUTES = 10
+# The evening rules' hour. A second wall clock rather than a third and a fourth:
+# every opt-in rule that samples a standing condition fires at either the morning
+# hour or this one, so the whole tier costs two settings instead of eight.
+DEFAULT_EVENING_TIME = "21:00"
+# The blanket task lead. Longer than the meeting default because a deadline is
+# not an appointment — you cannot walk into it, you have to have started.
+DEFAULT_TASK_LEAD_MINUTES = 30
 
 # A digest more than this late is stale — the day is half over and it would be
 # describing a morning that already happened. Skip the day rather than send it.
@@ -80,6 +120,11 @@ SYNC_STALL_AFTER = timedelta(hours=1)
 # reminder is about a different day than the one it names, and the scan
 # window it implies stops being cheap.
 MAX_REMINDER_MINUTES = 7 * 24 * 60
+
+# How many titles a list-shaped message names before it stops naming them. The
+# same reasoning as the digest's caps: past a handful the message is a report,
+# and a report is something you open the app for.
+MAX_NAMED = 5
 
 # Shape guards for the digest. The failure mode of a daily summary is that it
 # gets long and stops being read; `notify.clip` is the backstop, not the plan.
@@ -161,6 +206,54 @@ def _hhmm(value: str) -> tuple[int, int]:
     return int(h), int(m)
 
 
+def evening_time(prefs: dict[str, Any]) -> tuple[int, int]:
+    """The hour the evening rules fire at, as (hour, minute)."""
+    return _read_time(prefs, "notify_evening_time", DEFAULT_EVENING_TIME)
+
+
+def _read_time(prefs: dict[str, Any], key: str, fallback: str) -> tuple[int, int]:
+    raw = prefs.get(key)
+    if not isinstance(raw, str):
+        raw = fallback
+    try:
+        hh, _, mm = raw.partition(":")
+        h, m = int(hh), int(mm)
+    except (TypeError, ValueError):
+        return _hhmm(fallback)
+    return (h, m) if (0 <= h <= 23 and 0 <= m <= 59) else _hhmm(fallback)
+
+
+def wall_clock_due(s: "Sweep", hour: int, minute: int) -> bool:
+    """Is this the sweep that a rule scheduled for `hour:minute` fires on?
+
+    `fire <= now < fire + DIGEST_STALE_AFTER` — the closing window every rule in
+    this file uses, in its wall-clock form. Two consequences worth stating:
+
+      * A restart inside the window still fires (the ledger stops a second
+        send), which is why the loop sweeps before its first wait.
+      * A window that closed while the box was down never fires and leaves no
+        row. A nudge to plan your day, delivered at four in the afternoon, is
+        worse than no nudge.
+
+    Returns False with no home timezone, for every wall-clock rule and not just
+    the digest: an hour resolved against the server clock — UTC in the ordinary
+    deploy — is not the hour anyone chose.
+    """
+    if s.tz is None:
+        return False
+    local = s.local_now
+    fire = local.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    return fire <= local < fire + DIGEST_STALE_AFTER
+
+
+def task_lead(prefs: dict[str, Any]) -> timedelta:
+    """The blanket lead for a task deadline, for owners who opt into one."""
+    raw = prefs.get("notify_task_lead_minutes")
+    if not isinstance(raw, int) or isinstance(raw, bool):
+        raw = DEFAULT_TASK_LEAD_MINUTES
+    return timedelta(minutes=max(3, min(raw, 1440)))
+
+
 def event_lead(prefs: dict[str, Any]) -> timedelta:
     """How far ahead of a meeting to say something.
 
@@ -194,18 +287,8 @@ def _eval_digest(s: Sweep) -> list[Pending]:
     This is the only rule that is genuinely worth the interruption, and it is
     worth it because it REPLACES an action rather than adding one.
     """
-    # Refuse rather than guess. With `home_timezone` unset the server clock is
-    # UTC in the ordinary deploy, so "07:30" would arrive at 03:30 in California
-    # — and a digest that lands in the middle of the night is how the channel
-    # gets muted, taking the other three rules with it. The scheduler logs this
-    # once; Settings says so too.
-    if s.tz is None:
-        return []
-
-    hour, minute = digest_time(s.prefs)
-    local = s.local_now
-    fire = local.replace(hour=hour, minute=minute, second=0, microsecond=0)
-    if not (fire <= local < fire + DIGEST_STALE_AFTER):
+    # `wall_clock_due` refuses outright with no home timezone — see its note.
+    if not wall_clock_due(s, *digest_time(s.prefs)):
         return []
 
     text = _digest_text(s)
@@ -222,7 +305,7 @@ def _digest_text(s: Sweep) -> str:
     if due_today:
         counts.append(f"{len(due_today)} due")
     if overdue:
-        counts.append(f"{overdue} overdue")
+        counts.append(f"{len(overdue)} overdue")
     headline = s.local_now.strftime("%a %-d %b")
     # An empty day is a real answer and worth saying — it is the one morning the
     # owner most wants to be told they can stop checking.
@@ -259,8 +342,8 @@ def _todays_events(s: Sweep) -> list[tuple[datetime, str, bool]]:
     return out
 
 
-def _todays_tasks(s: Sweep) -> tuple[list[str], int]:
-    """(titles due today, count already overdue).
+def _todays_tasks(s: Sweep) -> tuple[list[str], list[str]]:
+    """(titles due today, titles already overdue).
 
     "Overdue" is `due.due_parts`, the app's own rule, imported rather than
     re-derived — the connector and `frontend/src/util.ts` answer with the same
@@ -270,14 +353,14 @@ def _todays_tasks(s: Sweep) -> tuple[list[str], int]:
 
     now_epoch = s.now.timestamp()
     due_today: list[str] = []
-    overdue = 0
+    overdue: list[str] = []
     for lst in s.svc.list_lists():
         for task in s.svc.list_tasks(lst["href"], include_done=False):
             parts = due_rules.due_parts(task.get("due"), s.tz)
             if parts is None:
                 continue
             if parts[1] < now_epoch:
-                overdue += 1
+                overdue.append(task.get("summary") or "(untitled)")
                 continue
             if _due_day(task.get("due"), is_date=task.get("due_is_date", False),
                         zone=s.tz) == s.day:
@@ -412,6 +495,7 @@ def _reminder_lead(raw) -> timedelta | None:
 def _reminder_pending(
     s: Sweep, moment: datetime, lead: timedelta, *,
     summary: str, key: str, all_day: bool, due: bool = False,
+    trigger: str = "item_reminder",
 ) -> Pending | None:
     """The shared window and wording for both halves of the rule.
 
@@ -429,7 +513,7 @@ def _reminder_pending(
     when = local.strftime("%a %-d %b") if all_day else _fmt_time(local, s.prefs)
     verb = "due" if due else "at"
     return Pending(
-        "item_reminder",
+        trigger,
         # The moment, not the lead: moving the item is a new occasion and
         # re-arms, and changing the lead on an item whose reminder already went
         # out does not send a second one.
@@ -514,6 +598,261 @@ def _eval_sync_stalled(s: Sweep) -> list[Pending]:
     )]
 
 
+# ── opt-in ───────────────────────────────────────────────────────────────────
+#
+# Everything below ships OFF. Each was argued against before it was written, and
+# the argument is kept beside it rather than deleted — a rule you switch on
+# should come with the reason the app did not switch it on for you.
+
+
+def _eval_task_due_soon(s: Sweep) -> list[Pending]:
+    """A blanket lead on every timed task deadline.
+
+    THE CASE AGAINST, which is why it is off: a task due at 17:00 is either
+    something you already knew about, in which case the ping is noise, or
+    something you cannot do in thirty minutes, in which case it is stress. The
+    per-item `item_reminder` exists precisely so a deadline can be made to notify
+    without every deadline doing so.
+
+    THE CASE FOR: some people work from a deadline list and want the whole list
+    to speak. That is a working style, not an error, and this file is not
+    entitled to an opinion about it.
+
+    Two exclusions are not preferences and cannot be turned off:
+
+      * a recurring VTODO — `items.due` is the MASTER's deadline and nothing in
+        this codebase expands a VTODO recurrence set, so this would fire once on
+        a date that stopped being true months ago and never again;
+      * an all-day deadline — it names a day, not a clock, so "in 30 minutes"
+        would be measured against a midnight nobody chose. Those are what the
+        digest's "due today" line is for.
+    """
+    lead = task_lead(s.prefs)
+    out: list[Pending] = []
+    for lst in s.svc.list_lists():
+        for task in s.svc.list_tasks(lst["href"], include_done=False):
+            if task.get("has_rrule") or task.get("due_is_date"):
+                continue
+            # An item carrying its own lead belongs to `item_reminder`; without
+            # this the same task is announced twice, at two different times.
+            if task.get("notify_minutes_before") is not None:
+                continue
+            parts = due_rules.due_parts(task.get("due"), s.tz)
+            if parts is None:
+                continue
+            due_at = datetime.fromtimestamp(parts[0], tz=timezone.utc)
+            pending = _reminder_pending(
+                s, due_at, lead,
+                summary=task.get("summary") or "(untitled)",
+                key=f"{lst['href']}|{task.get('uid')}",
+                all_day=False, due=True, trigger="task_due_soon",
+            )
+            if pending:
+                out.append(pending)
+    return out
+
+
+def _eval_task_overdue(s: Sweep) -> list[Pending]:
+    """How much is past its deadline, once a day at the morning hour.
+
+    THE CASE AGAINST: "this task is overdue" is true on every sweep from now
+    until the heat death of the task list, so any implementation is really a
+    dedupe policy wearing a trigger's clothes. This one picks the least
+    arbitrary policy available — sample it once a day, at an hour the owner set,
+    keyed on the day — and reports a COUNT rather than pretending each task is
+    news. The digest already carries the same number as one line, which is why
+    this is off: turning it on means wanting the number badly enough to be
+    interrupted by it on a day you did not open the app.
+    """
+    if not wall_clock_due(s, *digest_time(s.prefs)):
+        return []
+    _, overdue = _todays_tasks(s)
+    if not overdue:
+        return []
+    lines = [f"{len(overdue)} task{'s' if len(overdue) != 1 else ''} overdue."]
+    lines += [f"· {t}" for t in overdue[:MAX_NAMED]]
+    if len(overdue) > MAX_NAMED:
+        lines.append(f"+{len(overdue) - MAX_NAMED} more")
+    return [Pending("task_overdue", s.day, "\n".join(lines), silent=False)]
+
+
+def _eval_day_unplanned(s: Sweep) -> list[Pending]:
+    """Today has no committed plan, at the morning hour.
+
+    THE CASE AGAINST: the owner knows they have not planned today. Sending a
+    message about it is the app asking for attention on its own behalf rather
+    than giving them something, and it is the single most likely message to be
+    muted — which then takes the digest down with it.
+
+    THE CASE FOR: a ritual that only works when you remember to perform it is a
+    ritual with a reliability problem, and an alarm clock is not an insult.
+    """
+    if not wall_clock_due(s, *digest_time(s.prefs)):
+        return []
+    plan = s.svc.open_day(s.day, create=False)
+    # `create=False` is mandatory and not a default worth trusting to a caller:
+    # create=True would BUILD the snapshot, so the rule that reports the day is
+    # unplanned would be the thing that planned it.
+    if plan.get("committed_at"):
+        return []
+    return [Pending("day_unplanned", s.day, "Today isn't planned yet.", silent=False)]
+
+
+def _eval_capacity_overcommitted(s: Sweep) -> list[Pending]:
+    """Today's plan runs past the length the owner said they would work.
+
+    THE CASE AGAINST: the number is already on the screen where the planning
+    happens, in words, before the day starts. A message about a number you are
+    looking at while you create the condition is not information.
+
+    The one guard that is NOT optional: an account that has never stated a
+    capacity is told nothing at all. `plan["capacity"]` is None for those, and
+    inventing an eight-hour day for someone is the thing this app must not do —
+    see `service._effective_capacity`. Zero is a real capacity ("not working
+    today") and is honoured as one.
+    """
+    if not wall_clock_due(s, *digest_time(s.prefs)):
+        return []
+    plan = s.svc.open_day(s.day, create=False)
+    capacity = plan.get("capacity")
+    if not isinstance(capacity, int):
+        return []
+    planned = sum(
+        e.get("estimate_minutes") or 0
+        for e in plan.get("entries") or []
+        # Dropped and MOVED rows are out, exactly as the app's own strip has
+        # them: declining something, or doing it on Thursday, is how a day gets
+        # back under its capacity.
+        if not e.get("dropped_at") and not e.get("rolled_to") and not e.get("done_at")
+    )
+    if planned <= capacity:
+        return []
+    over = planned - capacity
+    return [Pending(
+        "capacity_overcommitted", s.day,
+        f"Today's plan runs {_minutes(over)} past the {_minutes(capacity)} "
+        f"you said you'd work.",
+        silent=False,
+    )]
+
+
+def _eval_day_not_shut_down(s: Sweep) -> list[Pending]:
+    """The day was planned and never closed, at the evening hour.
+
+    THE CASE AGAINST: habit-formation, not information — it tells the owner
+    nothing they do not know.
+
+    Only for a day that was actually PLANNED. Nagging someone to shut down a day
+    they never opened is asking them to perform a ritual for its own sake, which
+    is the exact failure the case against names.
+    """
+    if not wall_clock_due(s, *evening_time(s.prefs)):
+        return []
+    plan = s.svc.open_day(s.day, create=False)
+    if not plan.get("planned") or plan.get("shutdown_at"):
+        return []
+    return [Pending("day_not_shut_down", s.day,
+                    "Today hasn't been shut down.", silent=False)]
+
+
+def _eval_habits_outstanding(s: Sweep) -> list[Pending]:
+    """Habits still open on today's plan, at the evening hour.
+
+    THE CASE AGAINST, and it is the strongest one on this page: the app's own
+    position is that a habit is "never coloured as a failure", that nothing here
+    scores the day, and that a weekly count is over the occurrences that EXIST so
+    days you never opened are not counted against you. A message that lists what
+    you have not done is in tension with all three, and it is the rule most
+    likely to make someone feel worse for having a habit than for not having one.
+
+    So the wording carries no verdict — it names what is left, in the same voice
+    the day itself uses, and never a streak, a percentage or a count of misses.
+    And it fires only on a day whose plan EXISTS: a habit occurrence lives
+    nowhere but in a `day_plan` row, so on a day nobody opened there is nothing
+    to be outstanding and nothing the owner could tick if there were.
+    """
+    if not wall_clock_due(s, *evening_time(s.prefs)):
+        return []
+    plan = s.svc.open_day(s.day, create=False)
+    if not plan.get("planned"):
+        return []
+    left = [
+        e.get("title") or "(untitled)"
+        for e in plan.get("entries") or []
+        if e.get("kind") == "habit"
+        and not e.get("done_at") and not e.get("dropped_at") and not e.get("rolled_to")
+    ]
+    if not left:
+        return []
+    head = f"{len(left)} habit{'s' if len(left) != 1 else ''} left today."
+    return [Pending("habits_outstanding", s.day,
+                    "\n".join([head] + [f"· {t}" for t in left[:MAX_NAMED]]),
+                    silent=False)]
+
+
+def _eval_booking_link_broken(s: Sweep) -> list[Pending]:
+    """An enabled booking link pointing at a calendar that is gone.
+
+    Deleting a calendar IN THE APP auto-disables its links, so this can only
+    happen the other way round: the collection left the wire from another client,
+    and a public URL the owner has already shared now answers with nothing behind
+    it. Silent — it is a thing to fix at a keyboard.
+
+    Sampled daily rather than on the change, because there is no change to hang
+    it on: the link did not move, the calendar did.
+    """
+    broken = [link for link in s.svc.list_booking_links()
+              if link.get("enabled") and link.get("calendar_missing")]
+    if not broken:
+        return []
+    names = ", ".join(sorted({(link.get("title") or "?") for link in broken}))
+    return [Pending("booking_link_broken", s.day,
+                    f"Booking link{'s' if len(broken) != 1 else ''} pointing at a "
+                    f"calendar that no longer exists — {names}. Anyone with the "
+                    f"link sees an error.", silent=True)]
+
+
+def _eval_sync_recovered(s: Sweep) -> list[Pending]:
+    """Sync is working again, after a `sync_stalled` message went out.
+
+    THE CASE AGAINST: a second message to retract the first is exactly the
+    pattern that trains people to stop reading — every alert now costs two
+    interruptions and the second one carries no action.
+
+    THE CASE FOR: an owner who acted on the first one wants to know their fix
+    took, without opening the app to check.
+
+    Keyed on the outage it closes, not on the day: the `claimed_at` of the
+    `sync_stalled` row that is being answered. A flapping server therefore
+    produces one down and one up per outage rather than a pair every day, and a
+    recovery can never be announced for an outage that was never announced.
+    """
+    if s.svc.sync_health():
+        return []
+    last = s.svc.notifications(_last_stall)
+    if last is None:
+        return []
+    return [Pending("sync_recovered", last,
+                    "Smylte sync is working again.", silent=True)]
+
+
+def _last_stall(conn):
+    """The `claimed_at` of the most recent sync_stalled delivery, or None."""
+    row = conn.execute(
+        "SELECT claimed_at FROM notification_deliveries "
+        "WHERE trigger='sync_stalled' ORDER BY claimed_at DESC LIMIT 1"
+    ).fetchone()
+    return row[0] if row else None
+
+
+def _minutes(total: int) -> str:
+    """A duration as the app writes one: "45 min", "2h", "1h 30m"."""
+    hours, mins = divmod(max(0, total), 60)
+    if not hours:
+        return f"{mins} min"
+    return f"{hours}h" if not mins else f"{hours}h {mins}m"
+
+
 # ── shared plumbing ──────────────────────────────────────────────────────────
 
 def _occurrences(s: Sweep, start: datetime, end: datetime) -> list[dict[str, Any]]:
@@ -569,6 +908,19 @@ RULES: tuple[Rule, ...] = (
     Rule("item_reminder", default_on=True, silent=False, evaluate=_eval_item_reminder),
     Rule("booking_created", default_on=True, silent=True, evaluate=_eval_booking_created),
     Rule("sync_stalled", default_on=True, silent=True, evaluate=_eval_sync_stalled),
+    # ── off by default ───────────────────────────────────────────────────────
+    Rule("task_due_soon", default_on=False, silent=False, evaluate=_eval_task_due_soon),
+    Rule("task_overdue", default_on=False, silent=False, evaluate=_eval_task_overdue),
+    Rule("day_unplanned", default_on=False, silent=False, evaluate=_eval_day_unplanned),
+    Rule("capacity_overcommitted", default_on=False, silent=False,
+         evaluate=_eval_capacity_overcommitted),
+    Rule("day_not_shut_down", default_on=False, silent=False,
+         evaluate=_eval_day_not_shut_down),
+    Rule("habits_outstanding", default_on=False, silent=False,
+         evaluate=_eval_habits_outstanding),
+    Rule("booking_link_broken", default_on=False, silent=True,
+         evaluate=_eval_booking_link_broken),
+    Rule("sync_recovered", default_on=False, silent=True, evaluate=_eval_sync_recovered),
 )
 
 assert tuple(r.id for r in RULES) == TRIGGERS, "RULES and TRIGGERS must stay in step"

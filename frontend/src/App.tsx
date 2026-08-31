@@ -20,8 +20,9 @@ import {
 } from './time'
 import { sanitizeCapacityByWeekday } from './capacity'
 import {
-  DEFAULT_DIGEST_TIME, DEFAULT_EVENT_LEAD_MINUTES, isDigestTime,
-  sanitizeEventLead, sanitizeTriggers, type Trigger,
+  DEFAULT_DIGEST_TIME, DEFAULT_EVENING_TIME, DEFAULT_EVENT_LEAD_MINUTES,
+  DEFAULT_TASK_LEAD_MINUTES, isDigestTime, sanitizeEventLead, sanitizeTaskLead,
+  sanitizeTriggers, type Trigger,
 } from './notifications'
 import { TimeFormatProvider } from './timeformat'
 import {
@@ -129,6 +130,8 @@ export function App() {
   const [notifyBotId, setNotifyBotId] = useState('')
   const [notifyDigestTime, setNotifyDigestTime] = useState(DEFAULT_DIGEST_TIME)
   const [notifyEventLead, setNotifyEventLead] = useState(DEFAULT_EVENT_LEAD_MINUTES)
+  const [notifyEveningTime, setNotifyEveningTime] = useState(DEFAULT_EVENING_TIME)
+  const [notifyTaskLead, setNotifyTaskLead] = useState(DEFAULT_TASK_LEAD_MINUTES)
   // An allowlist, not a hidden-set: no task list is drawn on the calendar until
   // it is opted in (see the SettingsPatch comment for why this one is inverted).
   const [calTaskLists, setCalTaskLists] = useState<string[]>([])
@@ -429,6 +432,13 @@ export function App() {
         if (keep('notify_event_lead_minutes')
             && typeof s.notify_event_lead_minutes === 'number') {
           setNotifyEventLead(sanitizeEventLead(s.notify_event_lead_minutes))
+        }
+        if (keep('notify_evening_time') && isDigestTime(s.notify_evening_time)) {
+          setNotifyEveningTime(s.notify_evening_time)
+        }
+        if (keep('notify_task_lead_minutes')
+            && typeof s.notify_task_lead_minutes === 'number') {
+          setNotifyTaskLead(sanitizeTaskLead(s.notify_task_lead_minutes))
         }
         if (keep('calendar_task_lists') && Array.isArray(s.calendar_task_lists)) {
           setCalTaskLists(s.calendar_task_lists.filter((x) => typeof x === 'string'))
@@ -767,6 +777,18 @@ export function App() {
     saveSettings({ notify_digest_time: next })
   }, [])
 
+  const changeNotifyEveningTime = useCallback((next: string) => {
+    if (!isDigestTime(next)) return
+    setNotifyEveningTime(next)
+    saveSettings({ notify_evening_time: next })
+  }, [])
+
+  const changeNotifyTaskLead = useCallback((next: number) => {
+    const clean = sanitizeTaskLead(next)
+    setNotifyTaskLead(clean)
+    saveSettingsSoon({ notify_task_lead_minutes: clean })
+  }, [])
+
   const changeNotifyEventLead = useCallback((next: number) => {
     const clean = sanitizeEventLead(next)
     setNotifyEventLead(clean)
@@ -1021,6 +1043,10 @@ export function App() {
             onNotifyDigestTimeChange={changeNotifyDigestTime}
             notifyEventLead={notifyEventLead}
             onNotifyEventLeadChange={changeNotifyEventLead}
+            notifyEveningTime={notifyEveningTime}
+            onNotifyEveningTimeChange={changeNotifyEveningTime}
+            notifyTaskLead={notifyTaskLead}
+            onNotifyTaskLeadChange={changeNotifyTaskLead}
             user={user} sessionTtl={sessionTtl} onCycleSessionTtl={cycleSessionTtl}
             onLogout={onLogout} onExpire={onExpire}
             onClose={() => setSettingsOpen(false)} />

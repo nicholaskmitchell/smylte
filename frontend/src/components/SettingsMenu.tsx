@@ -61,7 +61,9 @@ export function SettingsMenu({
   notifyTokenSet, notifyBotId, onNotifyTokenChange,
   notifyTriggers, onNotifyTriggersChange,
   notifyDigestTime, onNotifyDigestTimeChange,
+  notifyEveningTime, onNotifyEveningTimeChange,
   notifyEventLead, onNotifyEventLeadChange,
+  notifyTaskLead, onNotifyTaskLeadChange,
   user, sessionTtl, onCycleSessionTtl,
   onLogout, onExpire, onClose, panelRef,
 }: {
@@ -104,8 +106,12 @@ export function SettingsMenu({
   onNotifyTriggersChange: (next: Partial<Record<Trigger, boolean>>) => void
   notifyDigestTime: string
   onNotifyDigestTimeChange: (next: string) => void
+  notifyEveningTime: string
+  onNotifyEveningTimeChange: (next: string) => void
   notifyEventLead: number
   onNotifyEventLeadChange: (next: number) => void
+  notifyTaskLead: number
+  onNotifyTaskLeadChange: (next: number) => void
   user: string
   sessionTtl: number | null
   onCycleSessionTtl: () => void
@@ -331,8 +337,12 @@ export function SettingsMenu({
               onTriggersChange={onNotifyTriggersChange}
               digestTime={notifyDigestTime}
               onDigestTimeChange={onNotifyDigestTimeChange}
+              eveningTime={notifyEveningTime}
+              onEveningTimeChange={onNotifyEveningTimeChange}
               eventLead={notifyEventLead}
               onEventLeadChange={onNotifyEventLeadChange}
+              taskLead={notifyTaskLead}
+              onTaskLeadChange={onNotifyTaskLeadChange}
               homeTz={homeTz} />
           </>
         )}

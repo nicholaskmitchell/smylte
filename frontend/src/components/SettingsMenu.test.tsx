@@ -50,6 +50,8 @@ function show(over: Partial<Parameters<typeof SettingsMenu>[0]> = {}) {
     notifyTriggers={{}} onNotifyTriggersChange={vi.fn()}
     notifyDigestTime="07:30" onNotifyDigestTimeChange={vi.fn()}
     notifyEventLead={10} onNotifyEventLeadChange={vi.fn()}
+    notifyEveningTime="21:00" onNotifyEveningTimeChange={vi.fn()}
+    notifyTaskLead={30} onNotifyTaskLeadChange={vi.fn()}
     user="admin" sessionTtl={null} onCycleSessionTtl={vi.fn()}
     onLogout={vi.fn()} onExpire={vi.fn()} onClose={onClose}
     {...over} />)

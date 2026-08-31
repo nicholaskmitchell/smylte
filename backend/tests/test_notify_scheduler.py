@@ -255,3 +255,65 @@ def test_local_midnight_is_the_owners_midnight_not_the_servers(db):
     # budget must start at the 30th's midnight.
     stamp = Notifier._local_midnight(datetime(2026, 8, 31, 0, 30, tzinfo=timezone.utc), NY)
     assert stamp.startswith("2026-08-30T04:00")
+
+
+# ── batching across rules ────────────────────────────────────────────────────
+
+def test_a_morning_of_opt_in_nudges_arrives_as_one_message(db):
+    # Turning on the morning tier puts four qualifying messages in the 07:30
+    # sweep. Four interruptions in one minute is how a channel gets muted.
+    tasks = [{"uid": "t1", "summary": "Overdue thing", "due": "2026-08-01",
+              "due_is_date": True, "notify_minutes_before": None, "has_rrule": False}]
+    svc = StubSvc(db, settings={**ON, "notify_digest_time": "07:30",
+                                "notify_triggers": {"task_overdue": True,
+                                                    "day_unplanned": True,
+                                                    "capacity_overcommitted": True}},
+                  tasks=tasks,
+                  day={"day": "2026-08-31", "planned": True, "capacity": 60,
+                       "committed_at": None, "shutdown_at": None,
+                       "entries": [{"kind": "task", "title": "x", "done_at": None,
+                                    "dropped_at": None, "rolled_to": None,
+                                    "estimate_minutes": 200}]})
+    sender = StubSender()
+    result = _notifier(svc, sender).sweep(MORNING)
+
+    assert len(sender.sent) == 1, "one message, not four"
+    assert result.sent == 4, "but all four occasions are accounted for"
+    text = sender.sent[0]["text"]
+    assert text.startswith("4 updates.")
+    # Full bodies, not just headlines — a batch must not cost information.
+    assert "Overdue thing" in text
+    assert "isn't planned yet" in text
+    assert "past the 1h" in text
+    # And each occasion still holds its own ledger row.
+    assert len(store.recent_notifications(db)) == 4
+
+
+def test_a_loud_burst_and_a_quiet_one_never_share_a_message(db):
+    # Averaging them would either wake someone for a booking or swallow a
+    # meeting alert.
+    events = [_event("2026-08-31T07:38:00", summary=f"Mtg {i}", uid=f"e{i}")
+              for i in range(3)]
+    links = [{"token": f"t{i}", "title": f"Link {i}", "enabled": True,
+              "calendar_missing": True} for i in range(3)]
+    svc = StubSvc(db, settings={**ON, "notify_triggers": {"daily_digest": False,
+                                                          "booking_link_broken": True}},
+                  events=events, links=links)
+    sender = StubSender()
+    _notifier(svc, sender).sweep(MORNING)
+
+    assert len(sender.sent) == 2
+    by_silent = {s["silent"]: s["text"] for s in sender.sent}
+    assert by_silent[False].startswith("3 things starting soon.")
+    assert "Link 0" in by_silent[True]
+
+
+def test_an_opt_in_rule_stays_off_until_it_is_asked_for(db):
+    # The whole point of the tier: nothing here fires for an owner who has said
+    # nothing, however true the condition is.
+    svc = StubSvc(db, settings={**ON, "notify_triggers": {"daily_digest": False}},
+                  day={"day": "2026-08-31", "planned": True, "capacity": None,
+                       "committed_at": None, "shutdown_at": None, "entries": []})
+    sender = StubSender()
+    assert _notifier(svc, sender).sweep(MORNING).sent == 0
+    assert sender.sent == []
