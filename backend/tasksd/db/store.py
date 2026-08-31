@@ -720,6 +720,48 @@ def list_bookings(
     return list(conn.execute(q + " ORDER BY start_at", params))
 
 
+def bookings_created_since(conn: sqlite3.Connection, stamp: str) -> list[sqlite3.Row]:
+    """Bookings whose ROW was created at or after `stamp` (an ISO '...Z' string).
+
+    `list_bookings(after=...)` filters `start_at` — when the meeting is — and
+    cannot answer this, which is when someone *made* it. The notifier needs the
+    second: a booking taken this morning for next month is news today.
+
+    LEFT JOIN, not JOIN: the bookings table deliberately has no FK to
+    `booking_links` so the ledger outlives a deleted link, and an inner join
+    would silently drop exactly those rows.
+    """
+    return list(conn.execute(
+        "SELECT b.*, l.title AS link_title FROM bookings b "
+        "LEFT JOIN booking_links l ON l.token = b.link_token "
+        "WHERE b.created_at >= ? ORDER BY b.created_at",
+        (stamp,),
+    ))
+
+
+def sync_health(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Collections whose last sync attempt left an error standing.
+
+    `last_error` is written by `set_sync_error` without touching `last_sync_at`,
+    and `last_sync_at` is bumped by `set_sync_token` only after a good pass — so
+    the two columns together distinguish "erroring right now" from "erroring and
+    nothing has succeeded since", which is the difference between a Radicale
+    restart and a real outage. The caller applies the time part; this just
+    reports what is standing.
+
+    Soft-deleted collections are excluded: an error frozen on a list the owner
+    removed is not a fault to report.
+    """
+    return list(conn.execute(
+        "SELECT s.collection_href, s.last_sync_at, s.last_error, "
+        "       c.displayname AS name "
+        "  FROM sync_state s "
+        "  LEFT JOIN collections c ON c.href = s.collection_href "
+        " WHERE s.last_error IS NOT NULL AND s.last_error != '' "
+        "   AND COALESCE(c.deleted, 0) = 0"
+    ))
+
+
 def bookings_count_by_link(conn: sqlite3.Connection) -> dict[str, int]:
     return {
         r["link_token"]: r["n"]
@@ -1390,6 +1432,26 @@ def recent_notifications(conn: sqlite3.Connection, *, limit: int = 50) -> list[d
         (max(1, min(limit, 500)),),
     )
     return [dict(r) for r in rows]
+
+
+def loud_notifications_since(conn: sqlite3.Connection, stamp: str) -> int:
+    """How many BUZZING notifications have been claimed since `stamp`.
+
+    The count behind the daily ceiling. Served by
+    `idx_notification_deliveries_claimed`.
+
+    Approximate at exactly one margin, and knowingly: `silent` is stamped by
+    `settle_notification`, so a row claimed and not yet settled reads `silent=0`
+    and counts as loud. Rows settle within seconds of being claimed, so the error
+    is at most one message and it errs toward QUIETER, which is the right
+    direction for a noise ceiling to be wrong in.
+    """
+    row = conn.execute(
+        "SELECT COUNT(*) FROM notification_deliveries "
+        "WHERE claimed_at >= ? AND silent = 0",
+        (stamp,),
+    ).fetchone()
+    return int(row[0]) if row else 0
 
 
 def gc_notifications(conn: sqlite3.Connection, *, before: str) -> int:

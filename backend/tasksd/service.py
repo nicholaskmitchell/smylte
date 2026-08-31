@@ -2565,6 +2565,34 @@ class TaskService:
         with self._lock:
             return fn(self._conn, *args, **kwargs)
 
+    # ── notifications ─────────────────────────────────────────────────────────
+    def notifications(self, fn, *args, **kwargs):
+        """Run one store function against the connection, under the lock.
+
+        The notifier needs the delivery ledger (claim/settle), and the ledger is
+        in the same single SQLite connection everything else shares. This is the
+        same borrow `oauth` performs and for the same reason: a second handle on
+        the database, or a second idea of when it is safe to write, is how the
+        `InterfaceError` in this file's other long comment happened.
+
+        Deliberately NOT held across the send. The caller claims under this
+        lock, releases it, does the HTTP, then settles under it again — network
+        I/O inside a process-wide RLock blocks every API route for the length of
+        an HTTP timeout.
+        """
+        with self._lock:
+            return fn(self._conn, *args, **kwargs)
+
+    def sync_health(self) -> list[dict[str, Any]]:
+        """Collections with a sync error standing — see `store.sync_health`."""
+        with self._lock:
+            return [dict(r) for r in store.sync_health(self._conn)]
+
+    def bookings_created_since(self, stamp: str) -> list[dict[str, Any]]:
+        """Bookings whose row was written at or after `stamp`."""
+        with self._lock:
+            return [dict(r) for r in store.bookings_created_since(self._conn, stamp)]
+
     # ── app settings (account-synced) ─────────────────────────────────────────
     def get_settings(self) -> dict[str, Any]:
         with self._lock:

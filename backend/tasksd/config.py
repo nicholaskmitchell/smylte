@@ -124,6 +124,11 @@ class Settings:
     # it is deployment configuration rather than a preference, and pairing it
     # with the token keeps "who this bot talks to" in one file.
     telegram_chat_id: str = ""
+    # How often the notification scheduler wakes. Sixty seconds is the whole
+    # resolution of the feature: an event alert can be up to this late, which is
+    # why the lead time is floored well above it. Raise it on a small box —
+    # `event_starting` re-expands every recurring resource on each pass.
+    notify_interval_s: float = 60.0
 
     # Content-Security-Policy posture: "on" (enforce), "report-only" (log
     # violations in the browser console, block nothing) or "off". An escape
@@ -173,4 +178,5 @@ class Settings:
             notify_enabled=_bool("TASKS_NOTIFY_ENABLED", False),
             telegram_bot_token=os.environ.get("TASKS_TELEGRAM_BOT_TOKEN", "").strip(),
             telegram_chat_id=os.environ.get("TASKS_TELEGRAM_CHAT_ID", "").strip(),
+            notify_interval_s=float(os.environ.get("TASKS_NOTIFY_INTERVAL", "60")),
         )

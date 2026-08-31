@@ -23,6 +23,7 @@ from contextlib import contextmanager
 from datetime import date, datetime, time as time_of_day, timedelta, timezone
 from zoneinfo import ZoneInfo
 
+from .. import due
 from ..ical import EventEdit, TaskEdit, rrule_from_spec
 from ..ical.read import normalize_offset, split_duration
 from ..service import day_key as _day_key, priority_from_label
@@ -122,22 +123,12 @@ def _hhmm(value: str, *, field: str) -> time_of_day:
 def _instant_in(value: date | datetime, zone) -> float:
     """A date-or-datetime as an absolute instant, resolved in `zone`.
 
-    THE one resolution rule in this module, and it is one rule on purpose: this
-    file already had two, and their drifting apart was the whole of a finding.
-    `_due_instant` resolved a deadline in the owner's zone while the `due_before`
-    / `due_after` filters four lines from it went through `_as_dt`, which
-    flattens to the SERVER's wall clock — so `smylte_list_tasks` sorted a task by
-    one zone and filtered it by another, and disagreed with `service._due_day`
-    and with the SPA about which day a deadline falls on.
-
-    An all-day value becomes midnight; a naive time is read as the owner's; an
-    aware one keeps the instant it already names.
+    THE one resolution rule for this module, and now for the whole app: it moved
+    to `tasksd/due.py` when the notifier became a second reader of a deadline.
+    Re-exported under the old private name so every call site in this file keeps
+    reading the way it did.
     """
-    if not isinstance(value, datetime):
-        value = datetime.combine(value, time_of_day.min)
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=zone) if zone is not None else value.astimezone()
-    return value.timestamp()
+    return due.instant_in(value, zone)
 
 
 def _bound_instant(value, zone, *, field: str) -> float | None:
@@ -145,7 +136,7 @@ def _bound_instant(value, zone, *, field: str) -> float | None:
 
     Parsed STRICTLY, unlike a deadline off the wire: `_parse_dt` refusing a value
     the caller sent is a correct, actionable error, and the soft-fail in
-    `_due_parts` exists only because a cached value came from another CalDAV
+    `due.due_parts` exists only because a cached value came from another CalDAV
     client. See that function's note.
     """
     parsed = _parse_dt(value, field=field)
@@ -155,26 +146,12 @@ def _bound_instant(value, zone, *, field: str) -> float | None:
 def _due_parts(raw, zone) -> tuple[float, float] | None:
     """A deadline as `(due_at, overdue_at)`, both instants in `zone`.
 
-    Two numbers because a deadline expires later than it is due, and only for
-    an all-day one: `util.ts::isOverdue` is the app's own rule — "an all-day item
-    isn't overdue until its whole day has passed" — and `service._due_day`
-    resolves the day in `home_timezone`. Both are honoured here rather than a
-    third answer being invented. The day is added as WALL CLOCK, so a deadline
-    whose day contains a DST transition expires 23 or 25 hours later, not 24.
+    Moved to `tasksd/due.py` — the daily digest counts overdue tasks and had to
+    ask the same question, and a second implementation is a second number for
+    the same task on the same screen. Kept under the old name here because the
+    call sites in this file read better with it.
     """
-    if not raw:
-        return None
-    try:
-        value = _parse_dt(raw, field="due")
-    except ToolError:
-        # Fail SOFT, and only here — see `_due_instant`.
-        return None
-    if value is None:
-        return None
-    due_at = _instant_in(value, zone)
-    if isinstance(value, datetime):
-        return due_at, due_at
-    return due_at, _instant_in(value + timedelta(days=1), zone)
+    return due.due_parts(raw, zone)
 
 
 def _due_instant(t: dict, zone) -> float | None:

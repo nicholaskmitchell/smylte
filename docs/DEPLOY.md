@@ -321,6 +321,43 @@ consent screen, which is the point. (This has not always been true: before the
 `cv` column on `oauth_tokens`, both levers left every MCP grant working, and
 "signing out everywhere" reached only the browser sessions.)
 
+## Telegram notifications (optional, off by default)
+Four rules, described in full in `backend/tasksd/notify/rules.py`: a **daily
+digest** at an hour you set, a nudge **before a meeting starts**, a note when
+**someone books you**, and a warning when **sync has stopped working**. The
+first two buzz; the last two always arrive silent, which is why there is no
+quiet-hours setting to configure.
+
+1. Create a bot with [@BotFather](https://t.me/BotFather) and **message it once**
+   — a bot cannot open a conversation, so a chat it has never heard from answers
+   `chat not found`.
+2. Put `TASKS_NOTIFY_ENABLED=true`, `TASKS_TELEGRAM_BOT_TOKEN` and
+   `TASKS_TELEGRAM_CHAT_ID` in `/etc/tasks/tasks.env`. The app refuses to start
+   with the flag on and either value missing.
+3. **Open egress.** This is the step that is easy to miss and impossible to
+   diagnose from the outside. `deploy/tasks.service` is loopback-only
+   (`IPAddressDeny=any`), so until it is widened every send fails at connect,
+   gets retried, gets recorded in `notification_deliveries` with an error, and
+   nothing reaches a phone. Add Telegram's ranges as `IPAddressAllow=` lines
+   above the deny rather than deleting it — see the long note in the unit. The
+   process parses attacker-influenced iCalendar, so unrestricted egress turns a
+   parser bug into an exfiltration channel.
+4. `sudo systemctl daemon-reload && sudo systemctl restart tasks`. The scheduler
+   sweeps once at startup, so a correctly configured deploy proves itself within
+   a minute.
+
+Which rules are on, the digest hour and the meeting lead time are **per-account
+preferences**, not env vars: they live in the settings blob and are edited in
+the app. `GET /api/notifications/recent` shows what the bot has actually sent,
+including anything the daily ceiling downgraded to silent.
+
+**The bot token is a credential and never enters `tasks.db`** — it is read from
+the environment on every send. Rotating it is `/revoke` in BotFather plus a
+restart. Note that Telegram's Bot API is not end-to-end encrypted and this
+server captures nothing of the reply side: treat every notification as a
+postcard, which is why the sync-failure alert names the collection and points at
+the log rather than carrying the error text.
+
 ## Backups (spec §9 — important)
 Back up **both**:
 - `~/radicale/collections` — the source of truth (all `.ics`).

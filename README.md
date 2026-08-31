@@ -132,6 +132,38 @@ finished record** — read-only end to end, because a log you can fill in
 afterwards is a scorecard. Reading a day never creates one: only today can be
 opened, which is what keeps the record honest about what was actually intended.
 
+**Notifications.** Optional, off until you turn them on, and Telegram-only for
+now. Four things earn a message, and the list is short on purpose: Smylte
+already holds everything you will come looking for, so a notification has to be
+something you *cannot* recover by opening the app later. A **daily digest** at
+an hour you pick — today's events, what is due, how much is overdue — which
+exists to replace opening the app rather than to advertise it. A nudge **before
+a meeting starts**, the one thing a morning digest structurally cannot cover. A
+note when **someone books you** through a scheduling link, the only information
+in the app that arrives from outside while you are not looking. And a warning
+when **sync has stopped working**, the one state where the app is actively
+lying: everything on screen looks normal and the data is simply frozen.
+
+The first two buzz; a booking and a sync failure always arrive **silent** — they
+land in the chat and wait, because nothing can be done about either at 3am.
+That is fixed in code rather than configured, which is why there are no quiet
+hours to set up. Past eight buzzing messages in a day the rest are downgraded to
+silent rather than dropped, so a pathological day costs you the interruption but
+never the information.
+
+What is deliberately absent is the entire category of nag — "task due soon",
+"you are overdue", "you have not planned today". Those restate something
+standing, or something already on the screen you open anyway, and each is a line
+in the digest instead. It is the same position the rest of the app takes: a day
+that runs long says so in words and never blocks, a habit is never coloured as
+a failure, and nothing here scores you. A notification channel that buzzes about
+your own backlog gets muted, and a muted channel cannot tell you the meeting
+starts in ten minutes.
+
+`backend/tasksd/notify/rules.py` is the whole policy, including the admission
+test any fifth rule has to pass. Setup — and the systemd egress rule it needs,
+which is the easy step to miss — is in `docs/DEPLOY.md`.
+
 **Tabs.** Settings → General → Tabs reorders the top strip and picks which tab
 the app opens on — a fixed one, or wherever you left off. Both follow the
 account.
@@ -231,6 +263,11 @@ backend/
     mcp/        remote MCP server: OAuth 2.1 AS + resource server (oauth.py),
                 Streamable-HTTP JSON-RPC transport (server.py), the tool table
                 (tools.py) and its adapter onto the service (api.py)
+    notify/     outbound notifications: the Telegram sender (borrowed from
+                Søren), the trigger rules, and the sweep that claims/sends/
+                settles against the delivery ledger
+    due.py      one answer to "when is this due, and when is it late", shared
+                by the connector and the notifier
     scheduling.py, auth.py, access.py, config.py,
                 csp.py (Content-Security-Policy), limits.py (request-body cap)
   tests/        api + security + sync + concurrency + fidelity + scheduling (pytest)
