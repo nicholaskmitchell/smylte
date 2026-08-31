@@ -337,7 +337,10 @@ Back up **both**:
   prose in this database that exists nowhere else), and **`habits`** (the rules
   that put entries on a day — they are never PUT to Radicale and carry no RRULE,
   so the wire has no copy; losing them stops every habit recurring, though the
-  occurrences already in `day_plan` keep their titles and stay readable). All of
+  occurrences already in `day_plan` keep their titles and stay readable), and
+  **`notification_deliveries`** (what has already been said out loud — the
+  record that stops a notification arriving twice; a restore without it re-sends
+  whatever still falls inside the scheduler's catch-up window). All of
   these are app-only
   state that a resync CANNOT rebuild (see docs/phase0-findings.md). Only the
   *cache* tables (items/collections/sync_state/FTS) are disposable — "the DB is a disposable
