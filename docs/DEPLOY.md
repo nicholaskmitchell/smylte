@@ -375,6 +375,52 @@ server captures nothing of the reply side: treat every notification as a
 postcard, which is why the sync-failure alert names the collection and points at
 the log rather than carrying the error text.
 
+## Displays (the passive screens)
+A display is a screen with nothing to tap — a calendar in a hallway, today's
+habits in a kitchen. It is paired in **Settings → Displays**, which mints a
+token and gives you two URLs for it:
+
+- `https://<host>/display/<token>` — the page. Point any browser at it: a
+  Raspberry Pi in kiosk mode, an old tablet, a Boox or a jailbroken Kindle. It
+  polls at the interval the display is set to and takes no input at all.
+- `https://<host>/api/public/display/<token>.png` (or `.bmp`) — the same frame
+  rasterized server-side, for a panel that is a microcontroller rather than a
+  browser (ESP32 + Waveshare, Inkplate, TRMNL). Set the panel's pixels in
+  Settings or pass `?w=&h=`; `?rotate=` and `?palette=` override per fetch.
+  `.bmp` exists because those boards' display libraries read a bitmap and have
+  no decompressor. There is also `/api/public/display/<token>` on its own, which
+  returns the frame as JSON for firmware that would rather draw it itself.
+
+**Both image formats and the JSON answer 304 to a matching `If-None-Match`.**
+Honour it in your firmware: a full eink refresh flashes the panel and takes the
+better part of a second, and a display polling every five minutes would
+otherwise do that 288 times a day to redraw a month that changed twice. The
+frame's ETag is taken over the body WITHOUT its timestamp, so it only moves when
+something on the screen actually does.
+
+**The token is a bearer credential for private data.** Unlike a booking link —
+which is meant to be published and shows a stranger a redacted busy grid — this
+one shows your actual events and actual habits, and it will be sitting in a Pi's
+autostart file or an ESP32's flash. It is 32 bytes rather than 16, it reaches
+exactly one read-only call, and nothing behind it can write: the single write in
+the whole path is the display's own `last_seen_at`, which is what Settings uses
+to tell you a screen has gone dark. If a URL gets out, **New URL** re-keys the
+display in place and keeps everything else about it; deleting removes the
+display itself. Switching one off makes its URL answer as though it never
+existed.
+
+A display never opens a day. On a day you have not opened yourself it shows a
+clearly labelled PREVIEW of what opening it would derive and writes nothing —
+the same rule the MCP connector is held to, for the same reason: the day plan is
+worth keeping only while it records what was actually intended, and a panel in a
+hallway intends nothing.
+
+The server-side renderer needs **Pillow** (`requirements.txt`), which is what
+rasterizes the Inter vendored under `backend/tasksd/display/fonts/` — the same
+typeface the browser page uses, converted from the woff2 the frontend already
+ships. No outbound network is involved, so `IPAddressDeny=any` in
+`deploy/tasks.service` does not have to be relaxed for any of this.
+
 ## Backups (spec §9 — important)
 Back up **both**:
 - `~/radicale/collections` — the source of truth (all `.ics`).
@@ -394,7 +440,11 @@ Back up **both**:
   occurrences already in `day_plan` keep their titles and stay readable), and
   **`notification_deliveries`** (what has already been said out loud — the
   record that stops a notification arriving twice; a restore without it re-sends
-  whatever still falls inside the scheduler's catch-up window). All of
+  whatever still falls inside the scheduler's catch-up window), and
+  **`displays`** (the passive screens: each one's token, what it shows, and the
+  panel it is drawn for — losing it does not lose data, it UN-PAIRS every screen
+  in the house, which is recoverable only by walking round and pointing each one
+  at a new URL). All of
   these are app-only
   state that a resync CANNOT rebuild (see docs/phase0-findings.md). Only the
   *cache* tables (items/collections/sync_state/FTS) are disposable — "the DB is a disposable
