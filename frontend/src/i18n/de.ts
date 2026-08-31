@@ -56,6 +56,50 @@ export const de: Catalogue = {
   'settings.section.appearance': 'Darstellung',
   'settings.section.calendar': 'Kalender',
   'settings.section.tasks': 'Aufgaben',
+  'settings.section.notifications': 'Benachrichtigungen',
+
+  // ── Benachrichtigungen ─────────────────────────────────────────────────────
+  'notif.intro': 'In Smylte steht ohnehin alles, wonach du später suchen wirst. '
+    + 'Eine Benachrichtigung muss also etwas sein, das du nicht nachträglich in '
+    + 'der App findest. Darum ist diese Liste kurz.',
+  'notif.on': 'An',
+  'notif.off': 'Aus',
+  'notif.volume.buzzes': 'meldet sich',
+  'notif.volume.silent': 'stumm',
+  'notif.trigger.aria': 'Benachrichtigung „{rule}“ an- oder ausschalten',
+  'notif.trigger.dailyDigest': 'Tagesüberblick',
+  'notif.trigger.dailyDigest.hint': 'Die Termine des Tages, was fällig ist und '
+    + 'wie viel überfällig — einmal am Morgen. Er ersetzt den Blick in die App, '
+    + 'er wirbt nicht für sie.',
+  'notif.trigger.eventStarting': 'Vor einem Termin',
+  'notif.trigger.eventStarting.hint': 'Das Einzige, was ein Morgenüberblick '
+    + 'nicht abdecken kann. Wenn dein Telefonkalender ohnehin erinnert, lass '
+    + 'das aus — Smylte sieht diese Alarme nicht und meldet sich sonst doppelt.',
+  'notif.trigger.bookingCreated': 'Jemand bucht dich',
+  'notif.trigger.bookingCreated.hint': 'Das Einzige in der App, das von außen '
+    + 'kommt, während du nicht hinsiehst. Immer stumm: gegen eine Buchung um 3 '
+    + 'Uhr lässt sich um 3 Uhr nichts machen.',
+  'notif.trigger.syncStalled': 'Sync steht still',
+  'notif.trigger.syncStalled.hint': 'Der eine Zustand, in dem die App dich '
+    + 'täuscht — alles sieht normal aus und die Daten sind eingefroren. Höchstens '
+    + 'eine stumme Nachricht am Tag, mit dem Namen der Liste statt der '
+    + 'Fehlermeldung.',
+  'notif.timing': 'Zeitpunkt',
+  'notif.digestTime': 'Überblick kommt um',
+  'notif.digestTime.hint': 'In deiner Heimatzeitzone ({tz}). Ein Überblick, der '
+    + 'mehr als vier Stunden zu spät wäre, entfällt — er würde einen Morgen '
+    + 'beschreiben, der schon vorbei ist.',
+  'notif.digestTime.noTz': 'Stelle zuerst unter Allgemein eine Heimatzeitzone '
+    + 'ein. Ohne sie kommt der Überblick gar nicht: eine Uhrzeit, die gegen die '
+    + 'Serveruhr aufgelöst wird, ist nicht die Uhrzeit, die du gewählt hast.',
+  'notif.eventLead': 'Vorlauf vor Terminen',
+  'notif.eventLead.hint': 'Minuten Vorwarnung, bevor ein Termin beginnt. Drei '
+    + 'ist das Minimum: Abgleich und Prüfung kosten zusammen fast zwei Minuten, '
+    + 'und eine Meldung nach Terminbeginn wird nie verschickt.',
+  'notif.ceiling.hint': 'Ab acht hörbaren Nachrichten am Tag kommen die '
+    + 'übrigen stumm an. Verworfen wird nie etwas — ein Kanal, der bei allem '
+    + 'summt, wird stummgeschaltet, und dann sagt er dir auch nicht mehr, dass '
+    + 'der Termin in zehn Minuten beginnt.',
   'settings.section.account': 'Konto',
 
   'settings.tabs': 'Reiter',

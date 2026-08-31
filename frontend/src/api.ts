@@ -553,6 +553,31 @@ export interface Settings {
    *  days on two paths. See `capacity.ts`. */
   day_capacity_minutes?: number
   day_capacity_by_weekday?: Record<string, number>
+  /** Which notification rules are on, as a SPARSE override map: an absent rule
+   *  means that rule's own default (all four ship on). Sparse rather than four
+   *  booleans because a rule added later would otherwise be governed by
+   *  whatever this blob happened to contain before it existed.
+   *
+   *  The server FILTERS names it does not know rather than 422-ing, so unlike
+   *  `tab_order` these two halves can deploy in either order — a client that
+   *  knows a rule the server does not loses that one key, not the whole
+   *  settings write. See `notifications.ts`. */
+  notify_triggers?: Partial<Record<string, boolean>>
+  /** The hour the daily digest arrives, HH:MM on a 24-hour clock, in the
+   *  account's `home_timezone`. Absent means 07:30. The server REJECTS a
+   *  malformed value rather than filtering it — a half-typed time would 422 the
+   *  whole PUT — which is why the field commits on blur, not on every keystroke.
+   *
+   *  With no `home_timezone` set the digest does not fire at all: an hour
+   *  resolved against the server clock (UTC in the ordinary deploy) is not the
+   *  hour anyone chose, and a rule that is on but never fires is worse than one
+   *  that is off. */
+  notify_digest_time?: string
+  /** How many minutes before a meeting to say something. Absent means 10, and
+   *  the server floors it at 3 — the CalDAV poll and the notify tick together
+   *  cost most of two minutes, so a shorter lead fires after the meeting has
+   *  started, and the rule refuses to send then. */
+  notify_event_lead_minutes?: number
 }
 
 // Creates carry a client-generated id that becomes the CalDAV resource slug,

@@ -26,6 +26,8 @@ import { ArchivedCalendarsSection } from './ArchivedCalendarsSection'
 import { ConnectionsSection } from './ConnectionsSection'
 import { TabsSection } from './TabsSection'
 import { CapacitySection } from './CapacitySection'
+import { NotificationsSection } from './NotificationsSection'
+import type { Trigger } from '../notifications'
 
 // The nav, in order. `label` is the accessible name of both the nav item and,
 // on a phone, the title bar — Søren's test asserts they agree.
@@ -38,6 +40,7 @@ const SECTIONS = [
   { id: 'appearance', label: 'settings.section.appearance' },
   { id: 'calendar', label: 'settings.section.calendar' },
   { id: 'tasks', label: 'settings.section.tasks' },
+  { id: 'notifications', label: 'settings.section.notifications' },
   { id: 'account', label: 'settings.section.account' },
 ] as const
 
@@ -53,6 +56,9 @@ export function SettingsMenu({
   calFit, onToggleCalFit,
   archivedCals, onArchivedCalsChange,
   showCompleted, onToggleShowCompleted,
+  notifyTriggers, onNotifyTriggersChange,
+  notifyDigestTime, onNotifyDigestTimeChange,
+  notifyEventLead, onNotifyEventLeadChange,
   user, sessionTtl, onCycleSessionTtl,
   onLogout, onExpire, onClose, panelRef,
 }: {
@@ -81,6 +87,13 @@ export function SettingsMenu({
   onArchivedCalsChange: (next: string[]) => void
   showCompleted: boolean
   onToggleShowCompleted: () => void
+  /** Sparse overrides: an absent rule means that rule's own default. */
+  notifyTriggers: Partial<Record<Trigger, boolean>>
+  onNotifyTriggersChange: (next: Partial<Record<Trigger, boolean>>) => void
+  notifyDigestTime: string
+  onNotifyDigestTimeChange: (next: string) => void
+  notifyEventLead: number
+  onNotifyEventLeadChange: (next: number) => void
   user: string
   sessionTtl: number | null
   onCycleSessionTtl: () => void
@@ -290,6 +303,20 @@ export function SettingsMenu({
               Whether completed tasks stay in the main view. The sidebar's
               “View completed” works either way.
             </div>
+          </>
+        )}
+
+        {section === 'notifications' && (
+          <>
+            <div className="hintline">{tr('notif.intro')}</div>
+            <NotificationsSection
+              triggers={notifyTriggers}
+              onTriggersChange={onNotifyTriggersChange}
+              digestTime={notifyDigestTime}
+              onDigestTimeChange={onNotifyDigestTimeChange}
+              eventLead={notifyEventLead}
+              onEventLeadChange={onNotifyEventLeadChange}
+              homeTz={homeTz} />
           </>
         )}
 

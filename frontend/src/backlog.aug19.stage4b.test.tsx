@@ -1166,6 +1166,9 @@ describe('aug19 leftovers — every dialog answers Escape at the window', () => 
       calFit="dynamic" onToggleCalFit={vi.fn()}
       archivedCals={[]} onArchivedCalsChange={vi.fn()}
       showCompleted={false} onToggleShowCompleted={vi.fn()}
+      notifyTriggers={{}} onNotifyTriggersChange={vi.fn()}
+      notifyDigestTime="07:30" onNotifyDigestTimeChange={vi.fn()}
+      notifyEventLead={10} onNotifyEventLeadChange={vi.fn()}
       user="admin" sessionTtl={null} onCycleSessionTtl={vi.fn()}
       onLogout={vi.fn()} onExpire={vi.fn()} onClose={onClose} />)
 
