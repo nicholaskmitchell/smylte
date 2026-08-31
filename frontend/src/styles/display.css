@@ -23,6 +23,15 @@
  * tablet looks like the product rather than like a second product. It borrows
  * their VALUES rather than the tokens themselves, for the reason at the top:
  * `var(--fg)` would pick up whatever the account customized.
+ *
+ * The TYPE is borrowed the same way, and it is the whole editorial system
+ * rather than one family: Fraunces at 500 for headlines and day numbers,
+ * uppercase tracked JetBrains Mono for micro-labels and every clock, Inter for
+ * the things that are read rather than scanned. `fonts.css` is imported for the
+ * whole app in main.tsx, so these faces cost this page no extra request beyond
+ * the ones it actually sets — and `tasksd/display/render.py` draws the server
+ * -rendered version in the same three, at the same weights, so a browser panel
+ * and a bitmap panel are the same design rather than two that agree on content.
  */
 
 .display {
@@ -34,12 +43,21 @@
   --d-pad: clamp(12px, 2vw, 28px);
   --d-gap: clamp(4px, 0.7vw, 10px);
 
+  /* The three type slots, spelled out rather than taken from `--serif` /
+     `--sans` / `--mono`. Same reason the colours are: those tokens carry the
+     account's Appearance overrides, and a font choice made for a laptop is not
+     one to inherit onto a screen read across a room. The stacks and the
+     fallbacks are tokens.css's own. */
+  --d-serif: "Fraunces", Georgia, "Times New Roman", serif;
+  --d-sans: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+  --d-mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+
   position: fixed;
   inset: 0;
   overflow: hidden;               /* a wall panel has no scrollbar and no hand */
   background: var(--d-paper);
   color: var(--d-ink);
-  font-family: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+  font-family: var(--d-sans);
   font-variant-numeric: tabular-nums;
   /* The whole point, stated once. Nothing below is clickable, focusable or
      selectable — a passive display that responded to a fingertip would be a
@@ -63,6 +81,41 @@
      the intermediate values this palette exists to avoid. */
   -webkit-font-smoothing: none;
   font-smooth: never;
+  /* Fraunces carries an optical-size axis, and `auto` — the default the app
+     relies on — picks a DISPLAY cut at headline sizes: fine hairlines and high
+     contrast, which is precisely what one bit deep destroys. Measured against a
+     thresholded render: at the top of the axis "August 2026" loses its stems
+     and a day number turns to mush, while the bottom of it stays solid from
+     15px to 44px and still reads unmistakably as Fraunces. `none` pins the
+     font's own default (opsz 9) — the same instance the server-side renderer
+     is built at, so the two draw the same letterforms rather than merely the
+     same family. The colour palette keeps `auto`: an LCD has no threshold to
+     survive, and the display cut is better there. */
+  font-optical-sizing: none;
+}
+
+/* The micro-label: uppercase mono, tracked, quiet. The loudest editorial marker
+   the product has, and the reason a display reads as this app rather than as a
+   dashboard. `render.py::_label` draws the same thing by hand, one glyph at a
+   time, because Pillow has no letter-spacing. */
+.display-label {
+  font-family: var(--d-mono);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--d-muted);
+}
+/* On eink `--d-muted` is black — the palette has no greys — so a label there is
+   held back by size and tracking alone, which is what one bit deep can carry. */
+
+/* Serif for the things that are looked at rather than read: the month, the
+   display's name, a day's number. Weight 500 and the same slight negative
+   tracking `.cal-title` and `.content-title` use in app.css, so a display's
+   headline is the product's headline. */
+.display-title {
+  font-family: var(--d-serif);
+  font-weight: 500;
+  letter-spacing: -0.01em;
 }
 
 /* ---- the states that are not content ---------------------------------- */
@@ -74,7 +127,7 @@
   align-items: center; justify-content: center;
   height: 100%; padding: var(--d-pad); text-align: center;
 }
-.display__gone-title { margin: 0; font-size: clamp(18px, 3vw, 30px); font-weight: 700; }
+.display__gone-title { margin: 0; font-size: clamp(20px, 3.2vw, 34px); }
 .display__gone-hint { margin: 0; font-size: clamp(13px, 1.8vw, 18px); color: var(--d-muted); }
 .display--eink .display__gone-hint { font-weight: 400; }
 
@@ -84,8 +137,7 @@
 .display__stale {
   position: absolute; left: 0; right: 0; bottom: 0;
   padding: 3px var(--d-pad);
-  font-size: clamp(10px, 1.1vw, 13px);
-  letter-spacing: 0.08em; text-transform: uppercase;
+  font-size: clamp(10px, 1.1vw, 13px); letter-spacing: 0.08em;
   color: var(--d-paper); background: var(--d-ink);
 }
 
@@ -97,19 +149,14 @@
   display: flex; align-items: baseline; justify-content: space-between;
   gap: 12px; padding-bottom: 6px; border-bottom: 1px solid var(--d-rule-strong);
 }
-.display-cal__title { margin: 0; font-size: clamp(20px, 3.4vw, 46px); font-weight: 700; letter-spacing: -0.02em; }
+.display-cal__title { margin: 0; font-size: clamp(22px, 3.8vw, 52px); }
 .display-cal__name {
-  font-size: clamp(10px, 1.2vw, 16px); font-weight: 700;
-  letter-spacing: 0.1em; text-transform: uppercase; color: var(--d-muted);
+  font-size: clamp(10px, 1.2vw, 16px);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 30%;
 }
 
 .display-cal__weekdays { display: grid; grid-template-columns: repeat(7, 1fr); }
-.display-cal__weekday {
-  padding: 4px 5px;
-  font-size: clamp(9px, 1.05vw, 14px); font-weight: 700;
-  letter-spacing: 0.1em; text-transform: uppercase; color: var(--d-muted);
-}
+.display-cal__weekday { padding: 4px 5px; font-size: clamp(9px, 1.05vw, 14px); }
 
 /* Six rows, always — even in a month five would hold. A grid that changed
    height on the 1st would repaint the whole panel for no new information, which
@@ -131,14 +178,22 @@
 .display--eink .display-cal__cell { border-left-style: dotted; }
 
 .display-cal__daynum { display: flex; align-items: center; justify-content: space-between; gap: 4px; }
-.display-cal__num { font-size: clamp(11px, 1.4vw, 20px); font-weight: 700; line-height: 1.3; }
-.display-cal__more { font-size: clamp(9px, 1vw, 13px); color: var(--d-muted); }
-.display--eink .display-cal__more { font-weight: 400; }
+.display-cal__num { font-size: clamp(13px, 1.6vw, 23px); line-height: 1.3; }
+/* A count, so mono and untracked — a number to be read, not a label to be
+   scanned. The same distinction `.day-col-head .count` makes in app.css. */
+.display-cal__more {
+  font-family: var(--d-mono); font-size: clamp(9px, 1vw, 13px);
+  letter-spacing: 0; color: var(--d-muted);
+}
 
-/* A day outside this month is quieter, and on eink that cannot mean fainter —
-   so it means lighter in WEIGHT, which is a difference one bit deep can hold. */
-.display-cal__cell.is-outside .display-cal__num { color: var(--d-muted); font-weight: 400; }
-.display--eink .display-cal__cell.is-outside .display-cal__num { opacity: 1; }
+/* A day outside this month is quieter, and on eink that cannot mean fainter:
+   `--d-muted` there IS black, so a colour step alone made July's last week
+   indistinguishable from August's first — the whole point of drawing those days.
+   A SIZE step is one of the three things that survive thresholding, and it says
+   it without reaching for a second typeface. */
+.display-cal__cell.is-outside .display-cal__num {
+  color: var(--d-muted); font-size: clamp(11px, 1.3vw, 18px);
+}
 
 /* Today is knocked out of a filled block. It reads at a glance and survives
    thresholding, which a tinted background would not. */
@@ -173,8 +228,13 @@
    rather than as a different calendar. */
 .display--color .display-chip__mark { width: 0.62em; box-shadow: none; border: 0; }
 
-.display-chip__initial { flex: none; font-weight: 700; }
-.display-chip__time { flex: none; font-variant-numeric: tabular-nums; }
+.display-chip__initial { flex: none; font-family: var(--d-mono); font-weight: 500; }
+/* Every clock the app draws is mono (`.task-meta .due`), and here it also buys
+   tabular figures — so the times line up down a column instead of ragging. */
+.display-chip__time {
+  flex: none; font-family: var(--d-mono);
+  font-size: 0.92em; letter-spacing: 0;
+}
 .display-chip__text { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 
 /* ---- habits + tasks mode ----------------------------------------------- */
@@ -196,23 +256,22 @@
    against 480, so every size collapsed to its floor and a screen meant to be
    read from the doorway rendered at desk-reading sizes. The month grid below
    keeps `vw`, because seven columns really are a horizontal constraint. */
-.display-day__title { margin: 0; font-size: clamp(22px, 5.4vh, 52px); font-weight: 700; letter-spacing: -0.02em; }
-.display-day__tally { font-size: clamp(22px, 5.4vh, 52px); font-weight: 700; font-variant-numeric: tabular-nums; }
+.display-day__title { margin: 0; font-size: clamp(24px, 5.6vh, 56px); }
+/* The same serif as the name it sits beside — a headline and its figure, not a
+   label. Right-aligned, so 9/10 growing to 10/10 extends leftwards and the
+   name it shares a line with never moves. */
+.display-day__tally { font-size: clamp(24px, 5.6vh, 56px); }
 
 .display-day__preview { display: flex; flex-direction: column; gap: 2px; }
 .display-day__preview-title {
-  margin: 0; font-size: clamp(12px, 1.9vh, 20px); font-weight: 700;
-  letter-spacing: 0.06em; text-transform: uppercase;
+  margin: 0; font-size: clamp(12px, 1.9vh, 20px);
+  letter-spacing: 0.06em; color: var(--d-ink);
 }
 .display-day__preview-hint { margin: 0; font-size: clamp(12px, 1.9vh, 20px); color: var(--d-muted); }
 .display--eink .display-day__preview-hint { font-weight: 400; }
 
 .display-day__section { display: flex; flex-direction: column; gap: 4px; min-height: 0; }
-.display-day__label {
-  margin: 0; font-size: clamp(11px, 1.7vh, 18px); font-weight: 700;
-  letter-spacing: 0.12em; text-transform: uppercase; color: var(--d-muted);
-}
-.display--eink .display-day__label { color: var(--d-ink); }
+.display-day__label { margin: 0; font-size: clamp(11px, 1.7vh, 18px); }
 
 .display-day__rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
 .display-row {

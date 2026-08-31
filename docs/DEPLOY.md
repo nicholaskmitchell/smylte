@@ -416,9 +416,13 @@ worth keeping only while it records what was actually intended, and a panel in a
 hallway intends nothing.
 
 The server-side renderer needs **Pillow** (`requirements.txt`), which is what
-rasterizes the Inter vendored under `backend/tasksd/display/fonts/` — the same
-typeface the browser page uses, converted from the woff2 the frontend already
-ships. No outbound network is involved, so `IPAddressDeny=any` in
+rasterizes the three typefaces vendored under `backend/tasksd/display/fonts/` —
+Fraunces, Inter and JetBrains Mono, the app's own, converted from the woff2 the
+frontend already ships so a bitmap panel is set in the same type as the browser
+page. Rebuild them with `python -m dev.build_display_fonts` if the frontend's
+fonts are ever replaced; nothing does it automatically, and a stale instance
+here shows up as a panel drifting from the app rather than as an error. No
+outbound network is involved either way, so `IPAddressDeny=any` in
 `deploy/tasks.service` does not have to be relaxed for any of this.
 
 ## Backups (spec §9 — important)

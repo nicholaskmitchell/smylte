@@ -219,12 +219,31 @@ rule the MCP connector is held to, and for the same reason. The plan is worth
 keeping only while it records what was actually intended, and a panel in a
 hallway intends nothing.
 
+**It is the app's own design, not a second one.** A display is set in the same
+three typefaces everything else is: Fraunces at 500 for the month, the day
+numbers and a screen's name, tracked uppercase JetBrains Mono for every
+micro-label and every clock, Inter for the things that are read rather than
+scanned — the same slots, at the same weights, as `.cal-title` and `.task-meta
+.due` in the app. The server-side renderer draws in them too, from static
+instances of the very woff2 the frontend ships, so a bitmap panel and a browser
+panel are one design rather than two that agree about the content.
+
+Two type decisions are the eink constraint rather than taste, and both were
+measured against a thresholded render. Fraunces is pinned to the **bottom** of
+its optical-size axis: its display cut is high-contrast with fine hairlines,
+which is precisely what one bit deep destroys — at the top of the axis "August
+2026" loses its stems and a day number turns to mush. And the mono micro-labels
+sit one weight step above the app's, because a label read at arm's length and a
+label read at three metres are not the same label.
+
 **And it works on eink, where every pixel is binary.** That is a design under a
 constraint, not a dark theme inverted. There is no grey, because an intermediate
 value on a one-bit panel becomes a dither pattern that shimmers between
 refreshes and turns small text to mush — so hierarchy is carried by size, weight
 and rule, all of which survive being thresholded, and never by opacity, which
-does not. There is no colour either, so *which calendar* an event belongs to is
+does not. That rule has teeth: a day outside the current month is drawn one size
+step smaller rather than merely fainter, because "fainter" on a panel with one
+ink is not drawn differently at all. There is no colour either, so *which calendar* an event belongs to is
 carried by the shape of its mark: filled, hollow, a left bar, a dotted outline.
 Four, because four are what stay apart across a room; a fifth calendar does not
 get a fifth pattern nobody can read, it gets a letter on every chip and the
@@ -363,13 +382,15 @@ backend/
                 settles against the delivery ledger
     display/    passive screens: frame.py builds what one SAYS (pure, no I/O),
                 render.py rasterizes it for a panel with no browser (Pillow +
-                the vendored Inter under fonts/)
+                the app's own three typefaces under fonts/, built by
+                dev/build_display_fonts.py)
     due.py      one answer to "when is this due, and when is it late", shared
                 by the connector and the notifier
     scheduling.py, auth.py, access.py, config.py,
                 csp.py (Content-Security-Policy), limits.py (request-body cap)
   tests/        api + security + sync + concurrency + fidelity + scheduling (pytest)
   dev/          empirical probes (fidelity comparison, normalization, smokes)
+                + the display fonts build (build_display_fonts.py)
 frontend/
   src/
     components/ TodayView, TasksView, CalendarView, SchedulingView, HomeView,

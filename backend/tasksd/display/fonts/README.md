@@ -1,40 +1,39 @@
-# Inter, for the server-side renderer
+# The app's three typefaces, for the server-side renderer
 
-`Inter-Regular.ttf` and `Inter-Bold.ttf` are static instances (wght 400 and 700)
-of the **same Inter the app already ships**, built from
-`frontend/public/fonts/inter-latin.woff2` and `inter-latin-ext.woff2` — not a
-new typeface and not a second download. A panel rendered by the server therefore
-reads in the face the browser page renders in, which is the point: a display is
-one design with two rasterizers, and two typefaces would make it two designs.
+These are static instances of **the same three families the app already ships**
+— not new typefaces and not a second download. They are built from
+`frontend/public/fonts/*.woff2` by `backend/dev/build_display_fonts.py`, which
+carries the reasoning behind every weight and axis value:
 
-They are TTF rather than WOFF2 because no Python rasterizer reads WOFF2 —
-FreeType, which is what Pillow is, takes SFNT. The conversion is mechanical
-(decompress, pin the variable `wght` axis, merge the two subsets) and reproducible:
+| file | family | slot | pinned at |
+| --- | --- | --- | --- |
+| `Fraunces-Medium.ttf` | Fraunces | `--serif` | `wght 500`, `opsz 9` |
+| `Inter-Regular.ttf` | Inter | `--sans` | `wght 400` |
+| `JetBrainsMono-Medium.ttf` | JetBrains Mono | `--mono` | `wght 500` |
+
+Rebuild them with:
 
 ```bash
-pip install fonttools brotli
-python - <<'PY'
-from fontTools.ttLib import TTFont
-from fontTools.varLib import instancer
-from fontTools.merge import Merger
-SRC = "frontend/public/fonts"
-for weight, out in ((400, "Inter-Regular.ttf"), (700, "Inter-Bold.ttf")):
-    parts = []
-    for subset in ("inter-latin.woff2", "inter-latin-ext.woff2"):
-        font = TTFont(f"{SRC}/{subset}")
-        instancer.instantiateVariableFont(font, {"wght": weight}, inplace=True)
-        font.save(path := f"/tmp/{subset}.{weight}.ttf")
-        parts.append(path)
-    Merger().merge(parts).save(out)
-PY
+cd backend && python -m dev.build_display_fonts   # needs fonttools + brotli
 ```
 
-The two subsets are merged rather than one being picked, because they carve up
-the alphabet between them: `inter-latin` holds ASCII and Latin-1 (so `ü`, `é`,
-`ç`), `inter-latin-ext` holds the rest of extended Latin (so `ż`, `ł`). Titles
-on a display are the owner's own text and a list called *Ćwiczenia* should not
-render as boxes.
+A display is one design with two rasterizers — a browser and Pillow — and this
+directory is what keeps the second one in the first one's typefaces. A panel on
+a wall gets Fraunces headlines, tracked uppercase mono micro-labels and Inter
+rows, the same as the page; without these it would be a dashboard that happens
+to hold the same data.
 
-Licensed under the SIL Open Font License 1.1 — `OFL.txt` here, the same licence
-already carried beside the woff2 files. The OFL requires the licence to travel
-with the font, which is why it is copied rather than referenced.
+They are TTF rather than WOFF2 because no Python rasterizer reads WOFF2 —
+FreeType, which is what Pillow is, takes SFNT.
+
+The two interesting numbers, both empirical and both explained at length in the
+build script: **Fraunces is pinned to the bottom of its optical-size axis**,
+because its display cut's fine hairlines are exactly what a one-bit panel
+destroys (and because `font-optical-sizing: none` in `display.css` resolves the
+browser to the same instance), and **JetBrains Mono is one weight step above
+the app's**, because a micro-label read at three metres needs it and one read at
+arm's length does not.
+
+All three are SIL Open Font License 1.1 — `OFL.txt` here, the same licence text
+that ships beside the woff2 files. The OFL requires the licence to travel with
+the font, which is why it is copied rather than referenced.
