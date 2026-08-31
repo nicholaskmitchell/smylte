@@ -132,6 +132,68 @@ finished record** — read-only end to end, because a log you can fill in
 afterwards is a scorecard. Reading a day never creates one: only today can be
 opened, which is what keeps the record honest about what was actually intended.
 
+**Notifications.** Optional, off until you turn them on, and Telegram-only for
+now. Four things earn a message, and the list is short on purpose: Smylte
+already holds everything you will come looking for, so a notification has to be
+something you *cannot* recover by opening the app later. A **daily digest** at
+an hour you pick — today's events, what is due, how much is overdue — which
+exists to replace opening the app rather than to advertise it. A nudge **before
+a meeting starts**, the one thing a morning digest structurally cannot cover. A
+note when **someone books you** through a scheduling link, the only information
+in the app that arrives from outside while you are not looking. And a warning
+when **sync has stopped working**, the one state where the app is actively
+lying: everything on screen looks normal and the data is simply frozen.
+
+The first two buzz; a booking and a sync failure always arrive **silent** — they
+land in the chat and wait, because nothing can be done about either at 3am.
+That is fixed in code rather than configured, which is why there are no quiet
+hours to set up. Past eight buzzing messages in a day the rest are downgraded to
+silent rather than dropped, so a pathological day costs you the interruption but
+never the information.
+
+**And a reminder you set yourself.** Any task or event takes a "Remind me"
+lead — *20 minutes before*, *a day before* — and that one is the exception to
+everything below: there is no blanket "task due soon" rule, on purpose, but a
+lead set on one item is you asking rather than the app guessing, and an explicit
+request outranks any bar the app would otherwise apply. It is stored app-side
+rather than as a VALARM, deliberately: Tasks.org, Thunderbird and Apple Calendar
+share these collections and would each fire their own alarm off a VALARM, buying
+interoperability by notifying you three times. It reaches the MCP connector too,
+so Claude can set one when you ask it to.
+
+Setup lives in Settings → Notifications: the bot token, the chat, which rules
+are on, and a **Send a test message** button — because every way of getting a
+bot token and a chat id wrong fails identically and silently, and without that
+button the only feedback loop is waiting for tomorrow's digest not to arrive.
+The token is write-only: the app accepts it and never shows it again, since the
+settings the page loads would otherwise carry a working bot into the browser.
+
+**And eight more, off.** Everything usually built and not defaulted on here —
+before every task is due, what is overdue, today isn't planned, the plan runs
+long, today wasn't shut down, habits left, a broken booking link, sync recovered
+— is in Settings, switched off, each carrying the reason it is off. Those
+reasons are real: a deadline warning is noise or stress, "overdue" is true every
+minute until you act, a plan-your-day nudge is the app asking for attention on
+its own behalf, and the habits one sits awkwardly with the app's own position
+that a habit is never coloured as a failure. That is why none of them greets a
+new account.
+
+It is also not a verdict. You know your own days better than the app does, and a
+default is a starting position. So the argument is written next to the switch
+rather than used to hide it, and turning one on is an informed choice instead of
+a blind one. The switches that stay off are the app's opinion; the switches
+existing at all is the app not mistaking an opinion for a rule.
+
+Two things hold whatever you turn on. Nothing that buzzes is timed by anything
+but you — an hour you set, or a moment already in your calendar — which is why
+there are still no quiet hours to configure. And a sweep that would produce
+three or more messages sends one instead, so switching on the whole morning tier
+costs you one interruption at 07:30, not four.
+
+`backend/tasksd/notify/rules.py` is the whole policy, including the admission
+test any fifth rule has to pass. Setup — and the systemd egress rule it needs,
+which is the easy step to miss — is in `docs/DEPLOY.md`.
+
 **Tabs.** Settings → General → Tabs reorders the top strip and picks which tab
 the app opens on — a fixed one, or wherever you left off. Both follow the
 account.
@@ -231,6 +293,11 @@ backend/
     mcp/        remote MCP server: OAuth 2.1 AS + resource server (oauth.py),
                 Streamable-HTTP JSON-RPC transport (server.py), the tool table
                 (tools.py) and its adapter onto the service (api.py)
+    notify/     outbound notifications: the Telegram sender (borrowed from
+                Søren), the trigger rules, and the sweep that claims/sends/
+                settles against the delivery ledger
+    due.py      one answer to "when is this due, and when is it late", shared
+                by the connector and the notifier
     scheduling.py, auth.py, access.py, config.py,
                 csp.py (Content-Security-Policy), limits.py (request-body cap)
   tests/        api + security + sync + concurrency + fidelity + scheduling (pytest)

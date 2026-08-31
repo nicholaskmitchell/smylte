@@ -143,6 +143,20 @@ def init_db(conn: sqlite3.Connection) -> None:
         # exactly what "nobody moved this" means — nothing to backfill. Same
         # one-change rule as the two above: `_day_entry_dto` reads this key.
         conn.execute("ALTER TABLE day_plan ADD COLUMN rolled_to TEXT")
+    side_cols = {r["name"] for r in conn.execute("PRAGMA table_info(sidecar)")}
+    if "notify_minutes_before" not in side_cols:
+        # NULL on every item written before per-item reminders existed, which is
+        # exactly what "I did not ask to be told about this one" means — nothing
+        # to backfill, and no value that could be backfilled without inventing a
+        # reminder nobody set.
+        #
+        # Same one-change rule as the day_plan columns above: `service._task_dto`
+        # and `_event_dto` read `s["notify_minutes_before"]`, sqlite3.Row answers
+        # IndexError for a column the query did not return, and IndexError is
+        # outside the taxonomy app.py maps — so the DTO line without this block
+        # is a 500 on every read of every task AND every event. The reverse
+        # order is inert.
+        conn.execute("ALTER TABLE sidecar ADD COLUMN notify_minutes_before INTEGER")
     habit_cols = {r["name"] for r in conn.execute("PRAGMA table_info(habits)")}
     if "estimate_minutes" not in habit_cols:
         # Habits written before estimates keep NULL, and their occurrences are
@@ -564,7 +578,8 @@ def set_sidecar(conn: sqlite3.Connection, collection_href: str, uid: str, **fiel
     position to do anything about it, and a 500 on an estimate the user typed is
     worse than the estimate not being remembered for next time.
     """
-    allowed = {"kanban_column", "sort_order", "pinned", "estimated_minutes", "repeat_from_completion"}
+    allowed = {"kanban_column", "sort_order", "pinned", "estimated_minutes",
+               "repeat_from_completion", "notify_minutes_before"}
     bad = set(fields) - allowed
     if bad:
         raise ValueError(f"unknown sidecar fields: {bad}")
@@ -718,6 +733,48 @@ def list_bookings(
     if where:
         q += " WHERE " + " AND ".join(where)
     return list(conn.execute(q + " ORDER BY start_at", params))
+
+
+def bookings_created_since(conn: sqlite3.Connection, stamp: str) -> list[sqlite3.Row]:
+    """Bookings whose ROW was created at or after `stamp` (an ISO '...Z' string).
+
+    `list_bookings(after=...)` filters `start_at` — when the meeting is — and
+    cannot answer this, which is when someone *made* it. The notifier needs the
+    second: a booking taken this morning for next month is news today.
+
+    LEFT JOIN, not JOIN: the bookings table deliberately has no FK to
+    `booking_links` so the ledger outlives a deleted link, and an inner join
+    would silently drop exactly those rows.
+    """
+    return list(conn.execute(
+        "SELECT b.*, l.title AS link_title FROM bookings b "
+        "LEFT JOIN booking_links l ON l.token = b.link_token "
+        "WHERE b.created_at >= ? ORDER BY b.created_at",
+        (stamp,),
+    ))
+
+
+def sync_health(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Collections whose last sync attempt left an error standing.
+
+    `last_error` is written by `set_sync_error` without touching `last_sync_at`,
+    and `last_sync_at` is bumped by `set_sync_token` only after a good pass — so
+    the two columns together distinguish "erroring right now" from "erroring and
+    nothing has succeeded since", which is the difference between a Radicale
+    restart and a real outage. The caller applies the time part; this just
+    reports what is standing.
+
+    Soft-deleted collections are excluded: an error frozen on a list the owner
+    removed is not a fault to report.
+    """
+    return list(conn.execute(
+        "SELECT s.collection_href, s.last_sync_at, s.last_error, "
+        "       c.displayname AS name "
+        "  FROM sync_state s "
+        "  LEFT JOIN collections c ON c.href = s.collection_href "
+        " WHERE s.last_error IS NOT NULL AND s.last_error != '' "
+        "   AND COALESCE(c.deleted, 0) = 0"
+    ))
 
 
 def bookings_count_by_link(conn: sqlite3.Connection) -> dict[str, int]:
@@ -1278,6 +1335,152 @@ def update_settings(conn: sqlite3.Connection, patch: dict) -> dict:
         (_SETTINGS_KEY, json.dumps(current)),
     )
     return current
+
+
+# ── notifications (SIDECAR: the record of what has already been said) ────────
+#
+# The scheduler re-evaluates the same window on every wake, so "have I already
+# said this?" is not answerable from the data that triggered the notification —
+# it is answered here. `dedupe_key` names the OCCASION (uid + day, uid + start
+# instant, a day key for a digest), never the wording.
+#
+# The claim/settle split is the whole point. `claim_notification` writes the row
+# BEFORE the message is sent and reports whether this caller is the one that got
+# it; the send then happens OUTSIDE the service lock (network I/O under the
+# process-wide RLock would block every API route for the length of an HTTP
+# timeout), and `settle_notification` stamps the outcome back. A crash between
+# the two leaves a claimed-but-unsettled row, which is deliberately treated as
+# SENT: a duplicate 3am alert costs more trust than a missed one.
+
+_NOTIFY_CHANNEL = "telegram"
+
+
+def claim_notification(
+    conn: sqlite3.Connection,
+    trigger: str,
+    dedupe_key: str,
+    *,
+    channel: str = _NOTIFY_CHANNEL,
+) -> bool:
+    """Reserve the right to send one notification. True when this caller won it.
+
+    False means the occasion has already been claimed — by an earlier sweep, or
+    by a concurrent one — and the caller must not send. Atomic on its own (one
+    statement), so it needs no surrounding transaction.
+    """
+    cur = conn.execute(
+        "INSERT INTO notification_deliveries (trigger, dedupe_key, channel) "
+        "VALUES (?, ?, ?) ON CONFLICT DO NOTHING",
+        (trigger, dedupe_key, channel),
+    )
+    return bool(cur.rowcount)
+
+
+def settle_notification(
+    conn: sqlite3.Connection,
+    trigger: str,
+    dedupe_key: str,
+    *,
+    channel: str = _NOTIFY_CHANNEL,
+    ok: bool,
+    silent: bool = False,
+    error: str | None = None,
+) -> None:
+    """Record how a claimed send turned out.
+
+    `error` must already be redacted — the bot token travels in the request path
+    and httpx puts the URL in its exception text, so an unredacted string here is
+    a plaintext credential in every backup of this file. `notify.telegram`
+    redacts on the way out; this function is not the place to start trusting it.
+    """
+    conn.execute(
+        "UPDATE notification_deliveries SET "
+        "settled_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'), ok=?, silent=?, error=? "
+        "WHERE trigger=? AND dedupe_key=? AND channel=?",
+        (1 if ok else 0, 1 if silent else 0, error, trigger, dedupe_key, channel),
+    )
+
+
+def release_notification(
+    conn: sqlite3.Connection,
+    trigger: str,
+    dedupe_key: str,
+    *,
+    channel: str = _NOTIFY_CHANNEL,
+) -> None:
+    """Hand a claim back, for when the send was abandoned before it was attempted.
+
+    Only for the case where nothing left the process — the channel turned out to
+    be unconfigured, quiet hours swallowed the message, the batch it belonged to
+    was dropped. Never call this after the transport has been reached: if the API
+    call happened, the message may well have arrived, and re-arming it is exactly
+    the duplicate this table exists to prevent.
+    """
+    conn.execute(
+        "DELETE FROM notification_deliveries "
+        "WHERE trigger=? AND dedupe_key=? AND channel=?",
+        (trigger, dedupe_key, channel),
+    )
+
+
+def notification_already_sent(
+    conn: sqlite3.Connection,
+    trigger: str,
+    dedupe_key: str,
+    *,
+    channel: str = _NOTIFY_CHANNEL,
+) -> bool:
+    """Read-only companion to `claim_notification`, for previewing a sweep."""
+    row = conn.execute(
+        "SELECT 1 FROM notification_deliveries "
+        "WHERE trigger=? AND dedupe_key=? AND channel=?",
+        (trigger, dedupe_key, channel),
+    ).fetchone()
+    return row is not None
+
+
+def recent_notifications(conn: sqlite3.Connection, *, limit: int = 50) -> list[dict]:
+    """The last `limit` deliveries, newest first — what Settings shows so the
+    owner can see what the bot has been saying without opening Telegram."""
+    rows = conn.execute(
+        "SELECT * FROM notification_deliveries ORDER BY claimed_at DESC LIMIT ?",
+        (max(1, min(limit, 500)),),
+    )
+    return [dict(r) for r in rows]
+
+
+def loud_notifications_since(conn: sqlite3.Connection, stamp: str) -> int:
+    """How many BUZZING notifications have been claimed since `stamp`.
+
+    The count behind the daily ceiling. Served by
+    `idx_notification_deliveries_claimed`.
+
+    Approximate at exactly one margin, and knowingly: `silent` is stamped by
+    `settle_notification`, so a row claimed and not yet settled reads `silent=0`
+    and counts as loud. Rows settle within seconds of being claimed, so the error
+    is at most one message and it errs toward QUIETER, which is the right
+    direction for a noise ceiling to be wrong in.
+    """
+    row = conn.execute(
+        "SELECT COUNT(*) FROM notification_deliveries "
+        "WHERE claimed_at >= ? AND silent = 0",
+        (stamp,),
+    ).fetchone()
+    return int(row[0]) if row else 0
+
+
+def gc_notifications(conn: sqlite3.Connection, *, before: str) -> int:
+    """Drop delivery rows claimed before `before` (an ISO stamp).
+
+    Called from the send path rather than a timer of its own, like `gc_oauth`.
+    The retention only has to outlive the longest dedupe window any trigger uses
+    — once the occasion can no longer recur, the row is answering a question
+    nobody will ask again.
+    """
+    cur = conn.execute(
+        "DELETE FROM notification_deliveries WHERE claimed_at < ?", (before,)
+    )
+    return cur.rowcount or 0
 
 
 def count_items(conn: sqlite3.Connection, collection_href: str | None = None) -> int:

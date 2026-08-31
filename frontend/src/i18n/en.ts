@@ -40,6 +40,125 @@ export const en = {
   'settings.section.appearance': 'Appearance',
   'settings.section.calendar': 'Calendar',
   'settings.section.tasks': 'Tasks',
+  // ── per-item reminders ─────────────────────────────────────────────────────
+  'reminder.label': 'Remind me',
+  'reminder.aria': 'How long before this to send a reminder',
+  'reminder.none': "Don't notify",
+  'reminder.atTime': 'At the time',
+  'reminder.minutes': '{n} minutes before',
+  'reminder.hours': '{n} hours before',
+  'reminder.days': '{n} days before',
+  'settings.section.notifications': 'Notifications',
+
+  // ── notifications ──────────────────────────────────────────────────────────
+  'notif.intro': 'Smylte already holds everything you will come looking for, so '
+    + 'a notification has to be something you cannot recover by opening the app '
+    + 'later. That is why this list is short.',
+  'notif.enabled': 'Telegram notifications',
+  'notif.enabled.hint': 'Off until you turn it on, and nothing is sent until a '
+    + 'bot token and a chat id are both set below.',
+  'notif.telegram': 'Connection',
+  'notif.rules': 'What gets sent',
+  'notif.token': 'Bot token',
+  'notif.token.placeholder': 'Paste a token from @BotFather',
+  'notif.token.stored': 'Stored — bot {bot}',
+  'notif.token.remove': 'Remove it',
+  'notif.token.hint': 'Create a bot with @BotFather in Telegram and paste its '
+    + 'token. It is never shown again after you save it — the settings this page '
+    + 'loads deliberately do not carry it.',
+  'notif.token.removed': 'Bot token removed.',
+  'notif.chatId': 'Chat id',
+  'notif.chatId.hint': 'Your own id for a direct message, or a negative number '
+    + 'for a group. Message the bot once first — a bot cannot open a '
+    + 'conversation, so an unmessaged chat answers "chat not found".',
+  'notif.test': 'Send a test message',
+  'notif.test.sending': 'Sending…',
+  'notif.on': 'On',
+  'notif.off': 'Off',
+  'notif.volume.buzzes': 'buzzes',
+  'notif.volume.silent': 'silent',
+  'notif.trigger.aria': 'Turn the {rule} notification on or off',
+  'notif.trigger.dailyDigest': 'Daily digest',
+  'notif.trigger.dailyDigest.hint': "Today's events, what is due and how much is "
+    + 'overdue, once each morning. It exists to replace opening the app, not to '
+    + 'advertise it.',
+  'notif.trigger.eventStarting': 'Before a meeting',
+  'notif.trigger.eventStarting.hint': 'The one thing a morning digest cannot '
+    + 'cover. If your phone calendar already alerts you, leave this off — Smylte '
+    + 'cannot see those alarms and will happily tell you twice.',
+  'notif.trigger.bookingCreated': 'Someone books you',
+  'notif.trigger.bookingCreated.hint': 'The only thing in the app that arrives '
+    + 'from outside while you are not looking. Always silent: nothing can be '
+    + 'done about a 3am booking at 3am.',
+  'notif.trigger.syncStalled': 'Sync has stopped',
+  'notif.trigger.syncStalled.hint': 'The one state where the app is lying to '
+    + 'you — everything looks normal and the data is frozen. At most one silent '
+    + 'message a day, and it names the list rather than carrying the error.',
+  'notif.more': 'Off by default',
+  'notif.more.hint': 'Smylte does not think most people want these — each one '
+    + 'restates something standing, or something already on the screen you open '
+    + 'anyway. The reason is under each. If you disagree, you know your own days '
+    + 'better than the app does.',
+  'notif.firesEvening': 'Arrives at the evening hour below.',
+  'notif.trigger.itemReminder': 'Reminders you set',
+  'notif.trigger.itemReminder.hint': 'The "Remind me" you put on one task or '
+    + 'event. Nothing fires unless you asked for it on that item.',
+  'notif.trigger.taskDueSoon': 'Before every task is due',
+  'notif.trigger.taskDueSoon.hint': 'A deadline is either something you already '
+    + 'knew about, in which case this is noise, or something you cannot do in '
+    + 'half an hour, in which case it is stress — which is why "Remind me" is '
+    + 'per task instead. Skips repeating and all-day tasks: neither has a clock '
+    + 'this can honestly count down to.',
+  'notif.trigger.taskOverdue': 'What is overdue',
+  'notif.trigger.taskOverdue.hint': 'Overdue is true every minute until you do '
+    + 'something about it, so this is a count once a morning rather than news. '
+    + 'The digest already carries the same number as one line.',
+  'notif.trigger.dayUnplanned': "Today isn't planned",
+  'notif.trigger.dayUnplanned.hint': 'You know you have not planned today. This '
+    + 'is the app asking for your attention on its own behalf — and the message '
+    + 'most likely to make you mute the lot.',
+  'notif.trigger.overcommitted': 'The plan runs long',
+  'notif.trigger.overcommitted.hint': 'The number is already on the screen where '
+    + 'you do the planning, before the day starts. Never sent if you have not '
+    + 'said how long your day is — the app will not invent one for you.',
+  'notif.trigger.notShutDown': "Today wasn't shut down",
+  'notif.trigger.notShutDown.hint': 'Habit-forming rather than informative: it '
+    + 'tells you nothing you do not know. Only for a day you actually planned.',
+  'notif.trigger.habitsLeft': 'Habits left today',
+  'notif.trigger.habitsLeft.hint': 'The app\u2019s position is that a habit is never '
+    + 'coloured as a failure and nothing here scores your day, and this sits '
+    + 'awkwardly with both. It names what is left and nothing else — no streak, '
+    + 'no percentage, no count of misses.',
+  'notif.trigger.linkBroken': 'A booking link is broken',
+  'notif.trigger.linkBroken.hint': 'A link you have shared pointing at a calendar '
+    + 'that no longer exists, so anyone opening it sees an error. Rare: deleting '
+    + 'a calendar in Smylte disables its links for you.',
+  'notif.trigger.syncRecovered': 'Sync is working again',
+  'notif.trigger.syncRecovered.hint': 'A second message to retract the first is '
+    + 'how people learn to stop reading alerts. On the other hand, if you fixed '
+    + 'it you may want to know it took.',
+  'notif.eveningTime': 'Evening rules at',
+  'notif.eveningTime.hint': 'When the two end-of-day rules above fire, if you '
+    + 'turn them on.',
+  'notif.taskLead': 'Task warning',
+  'notif.taskLead.hint': 'Minutes of warning before a task is due, for "Before '
+    + 'every task is due". A reminder set on one task uses its own value instead.',
+  'notif.timing': 'Timing',
+  'notif.digestTime': 'Digest arrives',
+  'notif.digestTime.hint': 'In your home timezone ({tz}). A digest more than '
+    + 'four hours late is skipped rather than sent — by then it is describing a '
+    + 'morning that already happened.',
+  'notif.digestTime.noTz': 'Set a home timezone under General first. Without '
+    + 'one the digest does not fire at all, because an hour resolved against the '
+    + "server's clock is not the hour you chose.",
+  'notif.eventLead': 'Meeting warning',
+  'notif.eventLead.hint': 'Minutes of warning before a meeting starts. Three is '
+    + 'the floor: syncing and checking together cost most of two minutes, and an '
+    + 'alert that would land after the meeting began is never sent.',
+  'notif.ceiling.hint': 'Past eight buzzing messages in a day the rest arrive '
+    + 'silently instead. Nothing is ever dropped — a channel that buzzes for '
+    + 'everything gets muted, and then it cannot tell you the meeting starts in '
+    + 'ten minutes.',
   'settings.section.account': 'Account',
 
   'settings.tabs': 'Tabs',

@@ -321,6 +321,60 @@ consent screen, which is the point. (This has not always been true: before the
 `cv` column on `oauth_tokens`, both levers left every MCP grant working, and
 "signing out everywhere" reached only the browser sessions.)
 
+## Telegram notifications (optional, off by default)
+Thirteen rules, described in full in `backend/tasksd/notify/rules.py`. Five ship
+on: a **daily digest** at an hour you set, a nudge **before a meeting starts**,
+the **reminders you set** on individual tasks and events, a note when **someone
+books you**, and a warning when **sync has stopped working**. The other eight —
+the deadline and end-of-day nudges — ship off, with the case against each written
+beside its switch in Settings.
+
+Whatever is on, a rule may buzz only when its timing is the owner's (an hour they
+set, or a moment in their own calendar), and everything else is silent. That is
+what keeps a quiet-hours setting unnecessary, and it is the property any new rule
+has to preserve — `tests/test_notify_rules.py` asserts it rather than trusting
+it.
+
+1. Create a bot with [@BotFather](https://t.me/BotFather) and **message it once**
+   — a bot cannot open a conversation, so a chat it has never heard from answers
+   `chat not found`.
+2. Paste the token and your chat id into **Settings → Notifications**, turn the
+   switch on, and press **Send a test message**. Nothing is sent until all three
+   are true. (A deployment that never opens the UI can use
+   `TASKS_TELEGRAM_BOT_TOKEN` and `TASKS_TELEGRAM_CHAT_ID` in
+   `/etc/tasks/tasks.env` instead; the account's own values win when both are
+   set. `TASKS_NOTIFY_ENABLED=false` is an operator kill switch that stops the
+   scheduler being built at all, whatever the settings say.)
+3. **Open egress.** This is the step that is easy to miss and impossible to
+   diagnose from the outside. `deploy/tasks.service` is loopback-only
+   (`IPAddressDeny=any`), so until it is widened every send fails at connect,
+   gets retried, gets recorded in `notification_deliveries` with an error, and
+   nothing reaches a phone. Add Telegram's ranges as `IPAddressAllow=` lines
+   above the deny rather than deleting it — see the long note in the unit. The
+   process parses attacker-influenced iCalendar, so unrestricted egress turns a
+   parser bug into an exfiltration channel.
+4. `sudo systemctl daemon-reload && sudo systemctl restart tasks`. The scheduler
+   sweeps once at startup, so a correctly configured deploy proves itself within
+   a minute.
+
+Which rules are on, the digest hour and the meeting lead time are **per-account
+preferences**, not env vars: they live in the settings blob and are edited in
+the app. `GET /api/notifications/recent` shows what the bot has actually sent,
+including anything the daily ceiling downgraded to silent.
+
+**The bot token is a credential.** Entered in Settings it is stored in
+`meta.app_settings` in the clear, like `booking_links.token` beside it — the app
+has to reproduce it to send, so unlike an OAuth secret it cannot be hashed, and
+it is therefore in every backup of `tasks.db`. It is never returned over HTTP:
+`GET /api/settings` substitutes a boolean and the public bot-id half, so the
+settings document the browser fetches on every page load carries no working
+credential. Put it in `/etc/tasks/tasks.env` instead if you would rather it
+never touch the database. Rotating it either way is `/revoke` in BotFather plus
+re-entering it. Note that Telegram's Bot API is not end-to-end encrypted and this
+server captures nothing of the reply side: treat every notification as a
+postcard, which is why the sync-failure alert names the collection and points at
+the log rather than carrying the error text.
+
 ## Backups (spec §9 — important)
 Back up **both**:
 - `~/radicale/collections` — the source of truth (all `.ics`).
@@ -337,7 +391,10 @@ Back up **both**:
   prose in this database that exists nowhere else), and **`habits`** (the rules
   that put entries on a day — they are never PUT to Radicale and carry no RRULE,
   so the wire has no copy; losing them stops every habit recurring, though the
-  occurrences already in `day_plan` keep their titles and stay readable). All of
+  occurrences already in `day_plan` keep their titles and stay readable), and
+  **`notification_deliveries`** (what has already been said out loud — the
+  record that stops a notification arriving twice; a restore without it re-sends
+  whatever still falls inside the scheduler's catch-up window). All of
   these are app-only
   state that a resync CANNOT rebuild (see docs/phase0-findings.md). Only the
   *cache* tables (items/collections/sync_state/FTS) are disposable — "the DB is a disposable

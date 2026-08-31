@@ -86,7 +86,8 @@
 /* `.input` is `width: 100%`, which in a `.menu-row` swallows the row and wraps
    the label onto two lines. Cap it so the label keeps its own line. */
 .set-panel .menu-row .input { width: auto; max-width: min(220px, 60%); }
-.settings-menu .arch-row, .settings-menu .conn { flex-wrap: wrap; row-gap: 6px; }
+.settings-menu .arch-row, .settings-menu .conn,
+.settings-menu .notif-rule .menu-row { flex-wrap: wrap; row-gap: 6px; }
 .menu-head {
   font-family: var(--mono); font-size: calc(10px * var(--fs-scale)); text-transform: var(--label-case);
   letter-spacing: calc(0.1em * var(--tracking)); color: var(--fg-faint);
@@ -1604,6 +1605,41 @@
 .day-card, .cal-ev, .view-tab, .col-add, .sched-add-range, .booking-day,
 .slot-btn, .busy-chip, .booking-err, .booking-picked, .side.drawer,
 .dash-mod, .bulk-add-row, .bulk-fail, .chip { border-radius: var(--radius); }
+
+/* ── notifications ─────────────────────────────────────────────────────────── */
+/* One block per rule: the row that toggles it, then the hintline that says what
+   it is for. The rules are separated rather than run together because each
+   hintline explains the row directly above it and a flat list put four of them
+   in a stack at the bottom — the failure that produced the settings nav in the
+   first place. */
+.notif-rules { display: flex; flex-direction: column; gap: 14px; margin-bottom: 4px; }
+.notif-rule { display: flex; flex-direction: column; gap: 4px; }
+/* Whether a rule buzzes is fixed in the backend and cannot be configured, so
+   this is a LABEL, not a control: no pointer cursor, no hover, nothing that
+   invites a click that would do nothing. */
+.notif-volume {
+  font-family: var(--mono); font-size: calc(10px * var(--fs-scale));
+  text-transform: var(--label-case); letter-spacing: calc(0.06em * var(--tracking));
+  color: var(--fg-faint); margin-left: auto;
+}
+.notif-volume.loud { color: var(--fg-muted); }
+/* The one hint that is a warning rather than a note: the digest is switched on
+   and will never fire until a home timezone exists. */
+.hintline.warn { color: var(--warn); }
+.set-panel .menu-row .notif-time { max-width: 140px; }
+.set-panel .menu-row .notif-token, .set-panel .menu-row .notif-chat { max-width: min(240px, 60%); }
+/* A picker, so it sizes like the other cycling controls rather than like a
+   text input that happens to be a select. */
+.reminder-field { max-width: 200px; }
+.reminder-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+/* Inline "Remove it" inside a hintline: a link, not a button, because it sits
+   mid-sentence and a button there would read as the section's main action. */
+.linklike {
+  background: none; border: 0; padding: 0; font: inherit; color: var(--fg-muted);
+  text-decoration: underline; cursor: pointer;
+}
+.linklike:hover { color: var(--fg); }
+.set-panel .menu-row .notif-lead { max-width: 90px; }
 
 /* ── connected applications (MCP connector grants) ─────────────────────────── */
 .conn-list { max-height: 52vh; overflow-y: auto; margin-bottom: 4px; }

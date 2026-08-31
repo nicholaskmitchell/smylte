@@ -56,6 +56,131 @@ export const de: Catalogue = {
   'settings.section.appearance': 'Darstellung',
   'settings.section.calendar': 'Kalender',
   'settings.section.tasks': 'Aufgaben',
+  // ── Erinnerungen pro Eintrag ───────────────────────────────────────────────
+  'reminder.label': 'Erinnere mich',
+  'reminder.aria': 'Wie lange vorher eine Erinnerung geschickt wird',
+  'reminder.none': 'Nicht erinnern',
+  'reminder.atTime': 'Zum Zeitpunkt',
+  'reminder.minutes': '{n} Minuten vorher',
+  'reminder.hours': '{n} Stunden vorher',
+  'reminder.days': '{n} Tage vorher',
+  'settings.section.notifications': 'Benachrichtigungen',
+
+  // ── Benachrichtigungen ─────────────────────────────────────────────────────
+  'notif.intro': 'In Smylte steht ohnehin alles, wonach du später suchen wirst. '
+    + 'Eine Benachrichtigung muss also etwas sein, das du nicht nachträglich in '
+    + 'der App findest. Darum ist diese Liste kurz.',
+  'notif.enabled': 'Telegram-Benachrichtigungen',
+  'notif.enabled.hint': 'Aus, bis du sie einschaltest — und nichts wird '
+    + 'verschickt, solange Bot-Token und Chat-ID unten nicht beide gesetzt sind.',
+  'notif.telegram': 'Verbindung',
+  'notif.rules': 'Was verschickt wird',
+  'notif.token': 'Bot-Token',
+  'notif.token.placeholder': 'Token von @BotFather einfügen',
+  'notif.token.stored': 'Gespeichert — Bot {bot}',
+  'notif.token.remove': 'Entfernen',
+  'notif.token.hint': 'Lege in Telegram mit @BotFather einen Bot an und füge '
+    + 'sein Token ein. Es wird danach nie wieder angezeigt — die Einstellungen, '
+    + 'die diese Seite lädt, enthalten es bewusst nicht.',
+  'notif.token.removed': 'Bot-Token entfernt.',
+  'notif.chatId': 'Chat-ID',
+  'notif.chatId.hint': 'Deine eigene ID für eine Direktnachricht, oder eine '
+    + 'negative Zahl für eine Gruppe. Schreibe dem Bot vorher einmal — ein Bot '
+    + 'kann kein Gespräch beginnen, ein unangeschriebener Chat antwortet mit '
+    + '„chat not found“.',
+  'notif.test': 'Testnachricht senden',
+  'notif.test.sending': 'Wird gesendet…',
+  'notif.on': 'An',
+  'notif.off': 'Aus',
+  'notif.volume.buzzes': 'meldet sich',
+  'notif.volume.silent': 'stumm',
+  'notif.trigger.aria': 'Benachrichtigung „{rule}“ an- oder ausschalten',
+  'notif.trigger.dailyDigest': 'Tagesüberblick',
+  'notif.trigger.dailyDigest.hint': 'Die Termine des Tages, was fällig ist und '
+    + 'wie viel überfällig — einmal am Morgen. Er ersetzt den Blick in die App, '
+    + 'er wirbt nicht für sie.',
+  'notif.trigger.eventStarting': 'Vor einem Termin',
+  'notif.trigger.eventStarting.hint': 'Das Einzige, was ein Morgenüberblick '
+    + 'nicht abdecken kann. Wenn dein Telefonkalender ohnehin erinnert, lass '
+    + 'das aus — Smylte sieht diese Alarme nicht und meldet sich sonst doppelt.',
+  'notif.trigger.bookingCreated': 'Jemand bucht dich',
+  'notif.trigger.bookingCreated.hint': 'Das Einzige in der App, das von außen '
+    + 'kommt, während du nicht hinsiehst. Immer stumm: gegen eine Buchung um 3 '
+    + 'Uhr lässt sich um 3 Uhr nichts machen.',
+  'notif.trigger.syncStalled': 'Sync steht still',
+  'notif.trigger.syncStalled.hint': 'Der eine Zustand, in dem die App dich '
+    + 'täuscht — alles sieht normal aus und die Daten sind eingefroren. Höchstens '
+    + 'eine stumme Nachricht am Tag, mit dem Namen der Liste statt der '
+    + 'Fehlermeldung.',
+  'notif.more': 'Standardmäßig aus',
+  'notif.more.hint': 'Smylte hält diese für die meisten Leute nicht für '
+    + 'sinnvoll — jede wiederholt entweder einen Dauerzustand oder etwas, das '
+    + 'ohnehin auf dem Bildschirm steht, den du öffnest. Der Grund steht jeweils '
+    + 'darunter. Wenn du das anders siehst: du kennst deine Tage besser als die App.',
+  'notif.firesEvening': 'Kommt zur Abendzeit weiter unten.',
+  'notif.trigger.itemReminder': 'Erinnerungen, die du setzt',
+  'notif.trigger.itemReminder.hint': 'Das „Erinnere mich“, das du an einer '
+    + 'einzelnen Aufgabe oder einem Termin gesetzt hast. Ohne dein Zutun passiert '
+    + 'hier nichts.',
+  'notif.trigger.taskDueSoon': 'Vor jeder fälligen Aufgabe',
+  'notif.trigger.taskDueSoon.hint': 'Eine Frist ist entweder etwas, das du '
+    + 'ohnehin wusstest — dann ist das Lärm — oder etwas, das du in einer halben '
+    + 'Stunde nicht mehr schaffst, dann ist es Druck. Genau deshalb gibt es '
+    + '„Erinnere mich“ pro Aufgabe. Wiederkehrende und ganztägige Aufgaben bleiben '
+    + 'außen vor: beide haben keine Uhrzeit, auf die sich ehrlich zählen ließe.',
+  'notif.trigger.taskOverdue': 'Was überfällig ist',
+  'notif.trigger.taskOverdue.hint': 'Überfällig bleibt jede Minute wahr, bis du '
+    + 'etwas tust — das hier ist also eine Zahl am Morgen, keine Neuigkeit. Der '
+    + 'Tagesüberblick nennt dieselbe Zahl bereits in einer Zeile.',
+  'notif.trigger.dayUnplanned': 'Heute ist nicht geplant',
+  'notif.trigger.dayUnplanned.hint': 'Du weißt, dass du heute nicht geplant hast. '
+    + 'Hier bittet die App um Aufmerksamkeit für sich selbst — und das ist die '
+    + 'Nachricht, wegen der man am ehesten alles stummschaltet.',
+  'notif.trigger.overcommitted': 'Der Plan wird zu lang',
+  'notif.trigger.overcommitted.hint': 'Die Zahl steht schon auf dem Bildschirm, '
+    + 'auf dem du planst, bevor der Tag beginnt. Kommt nie, wenn du nicht gesagt '
+    + 'hast, wie lang dein Tag ist — die App erfindet dir keinen.',
+  'notif.trigger.notShutDown': 'Heute wurde nicht abgeschlossen',
+  'notif.trigger.notShutDown.hint': 'Das erzieht eher zur Gewohnheit, als dass es '
+    + 'informiert: es sagt dir nichts, was du nicht weißt. Nur an einem Tag, den '
+    + 'du tatsächlich geplant hast.',
+  'notif.trigger.habitsLeft': 'Offene Gewohnheiten',
+  'notif.trigger.habitsLeft.hint': 'Die Haltung der App ist, dass eine Gewohnheit '
+    + 'nie als Fehlschlag eingefärbt wird und hier nichts deinen Tag bewertet — '
+    + 'und das hier passt zu beidem schlecht. Es nennt, was offen ist, und sonst '
+    + 'nichts: keine Serie, kein Prozentwert, keine Zählung von Auslassungen.',
+  'notif.trigger.linkBroken': 'Ein Buchungslink ist kaputt',
+  'notif.trigger.linkBroken.hint': 'Ein geteilter Link zeigt auf einen Kalender, '
+    + 'den es nicht mehr gibt — wer ihn öffnet, sieht einen Fehler. Selten: '
+    + 'löschst du einen Kalender in Smylte, werden seine Links automatisch '
+    + 'deaktiviert.',
+  'notif.trigger.syncRecovered': 'Sync läuft wieder',
+  'notif.trigger.syncRecovered.hint': 'Eine zweite Nachricht, die die erste '
+    + 'zurücknimmt, bringt Leute dazu, Meldungen nicht mehr zu lesen. Andererseits: '
+    + 'wenn du es repariert hast, willst du vielleicht wissen, dass es geklappt hat.',
+  'notif.eveningTime': 'Abendregeln um',
+  'notif.eveningTime.hint': 'Wann die beiden Tagesabschluss-Regeln oben kommen, '
+    + 'falls du sie einschaltest.',
+  'notif.taskLead': 'Vorlauf bei Aufgaben',
+  'notif.taskLead.hint': 'Minuten Vorwarnung, bevor eine Aufgabe fällig ist — für '
+    + '„Vor jeder fälligen Aufgabe“. Eine an einer Aufgabe gesetzte Erinnerung '
+    + 'nutzt stattdessen ihren eigenen Wert.',
+  'notif.timing': 'Zeitpunkt',
+  'notif.digestTime': 'Überblick kommt um',
+  'notif.digestTime.hint': 'In deiner Heimatzeitzone ({tz}). Ein Überblick, der '
+    + 'mehr als vier Stunden zu spät wäre, entfällt — er würde einen Morgen '
+    + 'beschreiben, der schon vorbei ist.',
+  'notif.digestTime.noTz': 'Stelle zuerst unter Allgemein eine Heimatzeitzone '
+    + 'ein. Ohne sie kommt der Überblick gar nicht: eine Uhrzeit, die gegen die '
+    + 'Serveruhr aufgelöst wird, ist nicht die Uhrzeit, die du gewählt hast.',
+  'notif.eventLead': 'Vorlauf vor Terminen',
+  'notif.eventLead.hint': 'Minuten Vorwarnung, bevor ein Termin beginnt. Drei '
+    + 'ist das Minimum: Abgleich und Prüfung kosten zusammen fast zwei Minuten, '
+    + 'und eine Meldung nach Terminbeginn wird nie verschickt.',
+  'notif.ceiling.hint': 'Ab acht hörbaren Nachrichten am Tag kommen die '
+    + 'übrigen stumm an. Verworfen wird nie etwas — ein Kanal, der bei allem '
+    + 'summt, wird stummgeschaltet, und dann sagt er dir auch nicht mehr, dass '
+    + 'der Termin in zehn Minuten beginnt.',
   'settings.section.account': 'Konto',
 
   'settings.tabs': 'Reiter',
