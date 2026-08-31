@@ -28,7 +28,7 @@ beforeEach(() => {
   m.mcpConnections.mockResolvedValue([])
 })
 
-const SECTIONS = ['General', 'Appearance', 'Calendar', 'Tasks', 'Account']
+const SECTIONS = ['General', 'Appearance', 'Calendar', 'Tasks', 'Notifications', 'Account']
 
 function show(over: Partial<Parameters<typeof SettingsMenu>[0]> = {}) {
   const onClose = vi.fn()
@@ -44,6 +44,9 @@ function show(over: Partial<Parameters<typeof SettingsMenu>[0]> = {}) {
     calFit="dynamic" onToggleCalFit={vi.fn()}
     archivedCals={[]} onArchivedCalsChange={vi.fn()}
     showCompleted={false} onToggleShowCompleted={vi.fn()}
+    notifyTriggers={{}} onNotifyTriggersChange={vi.fn()}
+    notifyDigestTime="07:30" onNotifyDigestTimeChange={vi.fn()}
+    notifyEventLead={10} onNotifyEventLeadChange={vi.fn()}
     user="admin" sessionTtl={null} onCycleSessionTtl={vi.fn()}
     onLogout={vi.fn()} onExpire={vi.fn()} onClose={onClose}
     {...over} />)

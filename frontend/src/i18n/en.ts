@@ -40,6 +40,49 @@ export const en = {
   'settings.section.appearance': 'Appearance',
   'settings.section.calendar': 'Calendar',
   'settings.section.tasks': 'Tasks',
+  'settings.section.notifications': 'Notifications',
+
+  // ── notifications ──────────────────────────────────────────────────────────
+  'notif.intro': 'Smylte already holds everything you will come looking for, so '
+    + 'a notification has to be something you cannot recover by opening the app '
+    + 'later. That is why this list is short.',
+  'notif.on': 'On',
+  'notif.off': 'Off',
+  'notif.volume.buzzes': 'buzzes',
+  'notif.volume.silent': 'silent',
+  'notif.trigger.aria': 'Turn the {rule} notification on or off',
+  'notif.trigger.dailyDigest': 'Daily digest',
+  'notif.trigger.dailyDigest.hint': "Today's events, what is due and how much is "
+    + 'overdue, once each morning. It exists to replace opening the app, not to '
+    + 'advertise it.',
+  'notif.trigger.eventStarting': 'Before a meeting',
+  'notif.trigger.eventStarting.hint': 'The one thing a morning digest cannot '
+    + 'cover. If your phone calendar already alerts you, leave this off — Smylte '
+    + 'cannot see those alarms and will happily tell you twice.',
+  'notif.trigger.bookingCreated': 'Someone books you',
+  'notif.trigger.bookingCreated.hint': 'The only thing in the app that arrives '
+    + 'from outside while you are not looking. Always silent: nothing can be '
+    + 'done about a 3am booking at 3am.',
+  'notif.trigger.syncStalled': 'Sync has stopped',
+  'notif.trigger.syncStalled.hint': 'The one state where the app is lying to '
+    + 'you — everything looks normal and the data is frozen. At most one silent '
+    + 'message a day, and it names the list rather than carrying the error.',
+  'notif.timing': 'Timing',
+  'notif.digestTime': 'Digest arrives',
+  'notif.digestTime.hint': 'In your home timezone ({tz}). A digest more than '
+    + 'four hours late is skipped rather than sent — by then it is describing a '
+    + 'morning that already happened.',
+  'notif.digestTime.noTz': 'Set a home timezone under General first. Without '
+    + 'one the digest does not fire at all, because an hour resolved against the '
+    + "server's clock is not the hour you chose.",
+  'notif.eventLead': 'Meeting warning',
+  'notif.eventLead.hint': 'Minutes of warning before a meeting starts. Three is '
+    + 'the floor: syncing and checking together cost most of two minutes, and an '
+    + 'alert that would land after the meeting began is never sent.',
+  'notif.ceiling.hint': 'Past eight buzzing messages in a day the rest arrive '
+    + 'silently instead. Nothing is ever dropped — a channel that buzzes for '
+    + 'everything gets muted, and then it cannot tell you the meeting starts in '
+    + 'ten minutes.',
   'settings.section.account': 'Account',
 
   'settings.tabs': 'Tabs',
