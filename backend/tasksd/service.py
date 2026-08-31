@@ -29,6 +29,7 @@ from .dav import xml as davxml
 from .dav.client import DavClient
 from .dav.errors import NotFound as DavNotFound
 from .db import store
+from .display import frame as display_frame_mod
 from .ical import PRIORITY, UNSET, EventEdit, TaskEdit, blocks_time, recur
 from .sync import SyncEngine, SyncStats
 
@@ -2628,6 +2629,315 @@ class TaskService:
         with self._lock:
             return [dict(r) for r in store.bookings_created_since(self._conn, stamp)]
 
+    # ── displays (the passive screens) ────────────────────────────────────────
+    #
+    # CRUD shaped exactly like the booking links above, because the two are the
+    # same kind of object: a row whose primary key is a token that reaches data
+    # without a session. `display_frame` is the one addition, and it is the only
+    # method here a token can reach.
+    #
+    # Every route into this section is READ-ONLY about the account's data. That
+    # is not a convention to be careful about — it is the feature. A display
+    # takes no input, so there is no write for a token to reach even if one
+    # leaked, and the single write anywhere in the path (`touch_display`) writes
+    # a timestamp onto the display's own row.
+    _DISPLAY_MODES = ("calendar", "habits")
+    _DISPLAY_PALETTES = ("color", "eink")
+    # Under a minute is not a refresh rate, it is a fault: an eink panel driven
+    # that hard is spending its rated refresh count on a screen nobody is
+    # reading that closely, and a browser page doing it is just heat. Ten
+    # minutes is the ceiling only in the sense that a display asking for longer
+    # can simply be pointed at its own timer — the frame reports what it was
+    # told and nothing enforces it on a device.
+    _REFRESH_MIN_S = 60
+    _REFRESH_MAX_S = 86_400
+
+    def list_displays(self) -> list[dict[str, Any]]:
+        with self._lock:
+            return [self._display_dto(r) for r in store.list_displays(self._conn)]
+
+    def list_displays_one(self, token: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = store.get_display(self._conn, token)
+            return None if row is None else self._display_dto(row)
+
+    @staticmethod
+    def _display_dto(row, *, with_token: bool = True) -> dict[str, Any]:
+        """One display, as the settings screen sees it.
+
+        The token IS returned here, unlike the notification bot token beside it,
+        and the difference is what each one is FOR. A bot token is a credential
+        the owner never needs to see again once it is stored; a display token is
+        a URL they have to be able to read off the screen and type into a panel,
+        and re-issuing it is the only alternative to showing it. It is therefore
+        exactly as secret as the settings page it is drawn on.
+        """
+        dto = {
+            "name": row["name"],
+            "mode": row["mode"],
+            "palette": row["palette"],
+            "calendars": json.loads(row["calendars"] or "[]"),
+            "lists": json.loads(row["lists"] or "[]"),
+            "hide_done_habits": bool(row["hide_done_habits"]),
+            "hide_done_tasks": bool(row["hide_done_tasks"]),
+            "refresh_seconds": row["refresh_seconds"],
+            "panel_width": row["panel_width"],
+            "panel_height": row["panel_height"],
+            "rotation": row["rotation"],
+            "enabled": bool(row["enabled"]),
+            "last_seen_at": row["last_seen_at"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+        if with_token:
+            dto["token"] = row["token"]
+        return dto
+
+    def _normalize_display_fields(self, fields: dict[str, Any]) -> dict[str, Any]:
+        """Validate/canonicalize display fields. Raises ValueError (routes → 422)."""
+        out = dict(fields)
+        if "name" in out:
+            out["name"] = (out["name"] or "").strip()
+            if not out["name"]:
+                raise ValueError("a display needs a name")
+        for key, allowed in (("mode", self._DISPLAY_MODES),
+                             ("palette", self._DISPLAY_PALETTES)):
+            if key in out and out[key] not in allowed:
+                raise ValueError(f"{key} must be one of {', '.join(allowed)}")
+        for key in ("calendars", "lists"):
+            if key in out:
+                ids = out[key] or []
+                if not isinstance(ids, list) or any(not isinstance(i, str) for i in ids):
+                    raise ValueError(f"{key} must be a list of collection ids")
+                # Stored as given rather than resolved to hrefs. A display may
+                # legitimately name a collection that does not exist yet or has
+                # gone away — the same tolerance `hidden_calendars` has — and
+                # resolving here would turn a rename on the wire into a display
+                # that silently shows everything.
+                out[key] = json.dumps(ids)
+        if "refresh_seconds" in out:
+            seconds = int(out["refresh_seconds"])
+            if not self._REFRESH_MIN_S <= seconds <= self._REFRESH_MAX_S:
+                raise ValueError(
+                    f"refresh_seconds must be between {self._REFRESH_MIN_S} and "
+                    f"{self._REFRESH_MAX_S}")
+            out["refresh_seconds"] = seconds
+        for key in ("panel_width", "panel_height"):
+            if key in out and out[key] is not None:
+                px = int(out[key])
+                # The floor is legibility and the ceiling is memory: the image
+                # renderer allocates width×height, and an unbounded pair here is
+                # an out-of-memory on an authenticated route.
+                if not 100 <= px <= 4096:
+                    raise ValueError(f"{key} must be between 100 and 4096 pixels")
+                out[key] = px
+        if "rotation" in out:
+            if int(out["rotation"]) not in (0, 90, 180, 270):
+                raise ValueError("rotation must be 0, 90, 180 or 270")
+            out["rotation"] = int(out["rotation"])
+        for key in ("hide_done_habits", "hide_done_tasks", "enabled"):
+            if key in out:
+                out[key] = int(bool(out[key]))
+        return out
+
+    def create_display(self, fields: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            token = secrets.token_urlsafe(32)
+            store.create_display(
+                self._conn, token, self._normalize_display_fields(fields))
+        self._publish({"type": "display_created", "display": token})
+        return self.list_displays_one(token)
+
+    def update_display(self, token: str, fields: dict[str, Any]) -> dict[str, Any] | None:
+        with self._lock:
+            row = store.update_display(
+                self._conn, token, self._normalize_display_fields(fields))
+            if row is None:
+                return None
+        self._publish({"type": "display_updated", "display": token})
+        return self.list_displays_one(token)
+
+    def rotate_display_token(self, token: str) -> dict[str, Any] | None:
+        """Re-key a display whose URL got out, keeping the display itself."""
+        with self._lock:
+            row = store.rotate_display_token(
+                self._conn, token, secrets.token_urlsafe(32))
+            if row is None:
+                return None
+            dto = self._display_dto(row)
+        self._publish({"type": "display_updated", "display": dto["token"]})
+        return dto
+
+    def delete_display(self, token: str) -> bool:
+        with self._lock:
+            ok = store.delete_display(self._conn, token)
+        if ok:
+            self._publish({"type": "display_deleted", "display": token})
+        return ok
+
+    def display_frame(self, token: str) -> dict[str, Any] | None:
+        """Everything one display shows, right now. The only call a token reaches.
+
+        None for an unknown OR a disabled display, deliberately collapsed into
+        one answer: the route turns both into the same 404, so switching a
+        display off is indistinguishable from never having made it. The
+        alternative — 403 for disabled — tells whoever holds a revoked URL that
+        it used to be real, which is the one fact they can act on.
+
+        NOTHING here opens a day. `open_day(create=False)` is a pure read and
+        `preview_day` writes nothing at all, so a screen on a wall polling every
+        five minutes cannot manufacture a plan the owner never made. That is not
+        an optimisation: the day plan is worth keeping only while it records
+        what was actually intended, and a panel in a hallway intends nothing.
+        The same rule the MCP connector is held to, for the same reason.
+        """
+        with self._lock:
+            row = store.get_display(self._conn, token)
+            if row is None or not row["enabled"]:
+                return None
+            display = self._display_dto(row, with_token=False)
+            settings = store.get_settings(self._conn)
+            day = self._today()
+            language = settings.get("language") or "en"
+            time_format = settings.get("time_format") or "12h"
+            if display["mode"] == "habits":
+                sources, rows, planned = self._display_day_rows(day, display)
+                events = None
+            else:
+                sources, events = self._display_events(day, display)
+                rows, planned = None, True
+            frame = display_frame_mod.build_frame(
+                display=display, day=day, generated_at=_stamp(),
+                language=language, time_format=time_format,
+                sources=sources, events=events, rows=rows, planned=planned,
+            )
+            # Last, and inside the lock: a display that got its frame is a
+            # display that was seen. It is deliberately not awaited on, checked
+            # or allowed to fail the read — see `store.touch_display`.
+            store.touch_display(self._conn, token)
+        return frame
+
+    def _display_calendars(self, display: dict[str, Any]) -> list:
+        """The collections one display draws from, honouring its allowlist.
+
+        Empty means everything, matching `hidden_calendars`: a display made in
+        March should show a calendar made in April without being edited. The
+        account's ARCHIVED calendars are excluded either way — archiving is the
+        owner saying a calendar is not part of their present, and a screen on
+        the wall is as present as it gets.
+        """
+        wanted = set(display["calendars"])
+        archived = set(store.get_settings(self._conn).get("archived_calendars") or [])
+        out = []
+        for row in store.get_collections(self._conn):
+            if "VEVENT" not in (row["components"] or ""):
+                continue
+            slug = _slug(row["href"])
+            if wanted and slug not in wanted:
+                continue
+            if slug in archived:
+                continue
+            out.append(row)
+        return out
+
+    def _display_events(
+        self, day: str, display: dict[str, Any]
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """The month grid's events, one record per day each one covers.
+
+        A span is listed on every day it touches, exactly as `bucketByDay` does
+        in the frontend: a conference that ran Monday to Friday is on the wall
+        all week or it is misinformation by Tuesday. The walk is clipped to the
+        grid at both ends, because another CalDAV client can trivially write an
+        event that runs for years and stepping a day at a time to reach its
+        DTEND would build records nothing draws.
+        """
+        grid = display_frame_mod.month_grid(day)
+        first, last = grid[0][0], grid[-1][-1]
+        # The window is the grid plus a day: `events_in_range` takes an
+        # exclusive upper bound, and an event on the grid's last day must be in
+        # it.
+        window_end = (date.fromisoformat(last) + timedelta(days=1)).isoformat()
+        sources, out = [], []
+        for row in self._display_calendars(display):
+            href = row["href"]
+            sources.append({
+                "id": _slug(href),
+                "name": row["displayname"] or _slug(href),
+                "color": row["color"],
+            })
+            for ev in self.events_in_range(href, first, window_end):
+                start_day = _event_day(ev.get("start"), bool(ev.get("start_is_date")))
+                if not start_day:
+                    continue
+                end_day = _event_last_day(ev, start_day)
+                cursor = max(start_day, first)
+                stop = min(end_day, last)
+                while cursor <= stop:
+                    out.append({
+                        "day": cursor,
+                        "summary": ev.get("summary"),
+                        "start": ev.get("start"),
+                        "all_day": bool(ev.get("all_day")),
+                        "source": _slug(href),
+                        "continued": cursor != start_day,
+                    })
+                    cursor = (date.fromisoformat(cursor) + timedelta(days=1)).isoformat()
+        return sources, out
+
+    def _display_day_rows(
+        self, day: str, display: dict[str, Any]
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], bool]:
+        """Today's rows with every title resolved, and whether they are real.
+
+        A task entry is a POINTER — the day plan stores no title and no done
+        flag for one, because the VTODO is the single truth for both — so the
+        join happens here, once, the same way `mcp/api.py::_entries_with_tasks`
+        does it for the connector.
+
+        Dropped and rolled rows are left out. They are exactly what a day's
+        RECORD needs and exactly what a wall does not: "I decided against this"
+        is a thing to read in the look-back, not a line on a screen in the
+        kitchen that can never be acknowledged.
+        """
+        plan = self.open_day(day, create=False)
+        planned = bool(plan["planned"])
+        entries = plan["entries"] if planned else self.preview_day(day)
+        wanted = set(display["lists"])
+        # One read for every collection's name, not one per row: a day of twenty
+        # entries would otherwise be twenty queries under the lock, on the app's
+        # most frequently polled call.
+        named = {r["href"]: (r["displayname"] or _slug(r["href"]))
+                 for r in store.get_collections(self._conn)}
+        names: dict[str, str] = {}
+        out = []
+        for entry in entries:
+            if entry.get("dropped_at") or entry.get("rolled_to"):
+                continue
+            kind = entry["kind"]
+            title, done = entry.get("title"), bool(entry.get("done_at"))
+            source_id = entry.get("list")
+            if kind == "task":
+                if wanted and source_id not in wanted:
+                    continue
+                href = self.resolve_list(source_id, component="VTODO") if source_id else None
+                item = store.get_item(self._conn, href, entry["uid"]) if href else None
+                if item is None:
+                    # The task has left the wire — completed and purged by
+                    # another client, or its list deleted. The entry outlives it
+                    # by design (there is no FK), but a row with no title is a
+                    # blank line on a wall, so it is dropped rather than drawn.
+                    continue
+                title, done = item["summary"], item["status"] in ("COMPLETED", "CANCELLED")
+                names.setdefault(href, named.get(href) or source_id)
+            out.append({
+                "kind": kind, "title": title, "done": done,
+                "source_id": source_id if kind == "task" else None,
+                "estimate_minutes": entry.get("estimate_minutes"),
+            })
+        sources = [{"id": _slug(h), "name": n, "color": None} for h, n in names.items()]
+        return sources, out, planned
+
     # ── app settings (account-synced) ─────────────────────────────────────────
     def get_settings(self) -> dict[str, Any]:
         with self._lock:
@@ -2639,6 +2949,49 @@ class TaskService:
         # Notify other open tabs/devices so the change syncs live.
         self._publish({"type": "settings_updated"})
         return settings
+
+
+
+def _event_day(value: str | None, is_date: bool) -> str:
+    """The calendar day an event's DTSTART falls on, or "" if it has none.
+
+    Deliberately the day the STRING names, not the day an instant converts to.
+    The frontend's `dayKey` reads local components off a `Date`, and the events
+    here were selected by `events_in_range` against the same window the grid is
+    drawn for — so taking the first ten characters is what keeps a display and
+    the app's own calendar tab agreeing about which cell an event is in.
+    `_due_day` converts and says why; this one must not, or an event would sit
+    in one cell on the wall and another on the phone.
+    """
+    if not value:
+        return ""
+    if is_date or "T" not in value:
+        return value[:10]
+    try:
+        return datetime.fromisoformat(value).date().isoformat()
+    except ValueError:
+        return value[:10]
+
+
+def _event_last_day(ev: dict[str, Any], start_day: str) -> str:
+    """The last day an event is visible on. Ports `calendar.ts::lastDayOf`.
+
+    DTEND is EXCLUSIVE for an all-day event (RFC 5545 §3.6.1), and a timed event
+    that ends at exactly midnight does not spill into the next day — both are
+    the same rule from the reader's side: an event ends on the last day it has
+    time on. Getting this wrong draws a Friday-to-Sunday trip through Monday.
+    """
+    end = ev.get("end")
+    if not end:
+        return start_day
+    end_day = _event_day(end, bool(ev.get("end_is_date")))
+    if not end_day:
+        return start_day
+    exclusive = bool(ev.get("end_is_date")) or (
+        "T" in end and end[11:16] == "00:00")
+    if exclusive:
+        end_day = (date.fromisoformat(end_day) - timedelta(days=1)).isoformat()
+    return max(end_day, start_day)
 
 
 # Fields where -1 means CLEAR rather than a value. The same sentinel the day
