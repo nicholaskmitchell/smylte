@@ -761,6 +761,15 @@ class SettingsPatch(BaseModel):
     # CalDAV poll plus a 60s notify tick) and belongs beside the code that knows
     # those numbers; this bound only keeps an absurd value out of the blob.
     notify_event_lead_minutes: int | None = Field(default=None, ge=1, le=120)
+    # The hour the EVENING rules fire at. A second wall clock rather than one
+    # per rule: every opt-in rule that samples a standing condition fires at
+    # either the digest hour or this one, so the whole tier costs two settings.
+    notify_evening_time: str | None = Field(default=None, max_length=5)
+    # The blanket lead for a task deadline, for owners who turn `task_due_soon`
+    # on. Bounded at a day: past that it is not a warning about a deadline, it is
+    # a second deadline. Floored at 3 in the rule for the same pipeline reason
+    # the event lead is.
+    notify_task_lead_minutes: int | None = Field(default=None, ge=1, le=1440)
     # The master switch. Absent means OFF — unlike the per-rule map, whose
     # absent key means "that rule's default", this one has no safe default but
     # off: it is what stands between a deploy that merely has a bot token in its
@@ -826,7 +835,7 @@ class SettingsPatch(BaseModel):
         return {k: val for k, val in v.items()
                 if k in NOTIFY_TRIGGERS and isinstance(val, bool)}
 
-    @field_validator("notify_digest_time")
+    @field_validator("notify_digest_time", "notify_evening_time")
     @classmethod
     def _wall_clock(cls, v: str | None) -> str | None:
         """HH:MM on a 24-hour clock, or nothing.

@@ -322,11 +322,18 @@ consent screen, which is the point. (This has not always been true: before the
 "signing out everywhere" reached only the browser sessions.)
 
 ## Telegram notifications (optional, off by default)
-Four rules, described in full in `backend/tasksd/notify/rules.py`: a **daily
-digest** at an hour you set, a nudge **before a meeting starts**, a note when
-**someone books you**, and a warning when **sync has stopped working**. The
-first two buzz; the last two always arrive silent, which is why there is no
-quiet-hours setting to configure.
+Thirteen rules, described in full in `backend/tasksd/notify/rules.py`. Five ship
+on: a **daily digest** at an hour you set, a nudge **before a meeting starts**,
+the **reminders you set** on individual tasks and events, a note when **someone
+books you**, and a warning when **sync has stopped working**. The other eight —
+the deadline and end-of-day nudges — ship off, with the case against each written
+beside its switch in Settings.
+
+Whatever is on, a rule may buzz only when its timing is the owner's (an hour they
+set, or a moment in their own calendar), and everything else is silent. That is
+what keeps a quiet-hours setting unnecessary, and it is the property any new rule
+has to preserve — `tests/test_notify_rules.py` asserts it rather than trusting
+it.
 
 1. Create a bot with [@BotFather](https://t.me/BotFather) and **message it once**
    — a bot cannot open a conversation, so a chat it has never heard from answers

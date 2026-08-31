@@ -251,17 +251,32 @@ class Notifier:
 
     @staticmethod
     def _batches(claimed: list[R.Pending]) -> list[list[R.Pending]]:
-        """Group by rule, collapsing a burst from one rule into a single send."""
-        by_trigger: dict[str, list[R.Pending]] = {}
-        for p in claimed:
-            by_trigger.setdefault(p.trigger, []).append(p)
+        """Collapse a burst into one send, ACROSS rules and not just within one.
+
+        Partitioned by `silent` first, because that is the one thing a batch
+        cannot average: a loud rule and a quiet one sharing a message would
+        either wake someone for a booking or swallow a meeting alert.
+
+        Across rules, because that is where the real burst is. Turning on the
+        three morning nudges puts four qualifying messages in the 07:30 sweep —
+        the digest, what is overdue, that the day is unplanned, that the plan
+        runs long — and four interruptions in one minute is precisely how a
+        channel gets muted. Within-rule batching alone would have sent all four.
+
+        Each occasion still holds its own ledger row, so the dedupe guarantee is
+        untouched; only the delivery is combined.
+        """
         out: list[list[R.Pending]] = []
-        for group in by_trigger.values():
+        for silent in (False, True):
+            group = [p for p in claimed if p.silent is silent]
+            if not group:
+                continue
             if len(group) >= BATCH_THRESHOLD:
                 out.append(group)
             else:
                 out.extend([p] for p in group)
-        # Preserve the urgency order the caller sorted into.
+        # The urgency order the caller sorted into, preserved so the ceiling
+        # silences the digest before it silences a meeting.
         out.sort(key=lambda g: (_URGENCY.get(g[0].trigger, 9), g[0].dedupe_key))
         return out
 
@@ -269,13 +284,17 @@ class Notifier:
     def _render(group: list[R.Pending]) -> str:
         if len(group) == 1:
             return clip(group[0].text)
-        # A batch keeps only each message's headline: the first line is written
-        # to be the whole message on a lock screen, so it is exactly the right
-        # thing to keep when several have to share one.
+        # Full bodies, not just headlines. A batch is a convenience of DELIVERY
+        # and must not cost information — the digest's whole value is its lines,
+        # and a morning batch that kept only "Mon 31 Aug: 3 events, 5 due" would
+        # have replaced the one message worth sending with a summary of it.
+        # `clip` is the backstop; the per-rule shape caps are what keep it from
+        # being reached.
         head = (f"{len(group)} things starting soon."
-                if group[0].trigger in ("event_starting", "item_reminder")
+                if all(p.trigger in ("event_starting", "item_reminder", "task_due_soon")
+                       for p in group)
                 else f"{len(group)} updates.")
-        return clip("\n".join([head] + [p.text.split("\n", 1)[0] for p in group]))
+        return clip("\n".join([head] + [p.text for p in group]))
 
     @staticmethod
     def _local_midnight(now: datetime, tz) -> str:

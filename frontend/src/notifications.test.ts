@@ -2,29 +2,64 @@
 // out-of-date settings blob.
 import { describe, expect, it } from 'vitest'
 import {
-  DEFAULT_EVENT_LEAD_MINUTES, MAX_EVENT_LEAD_MINUTES, MIN_EVENT_LEAD_MINUTES,
-  TRIGGERS, TRIGGER_DEFAULTS, TRIGGER_HINTS, TRIGGER_IS_LOUD, TRIGGER_LABELS,
-  isDigestTime, isTrigger, sanitizeEventLead, sanitizeTriggers, triggerEnabled,
+  DEFAULT_EVENT_LEAD_MINUTES, DEFAULT_OFF, DEFAULT_ON, MAX_EVENT_LEAD_MINUTES,
+  MIN_EVENT_LEAD_MINUTES, TRIGGERS, TRIGGER_DEFAULTS, TRIGGER_HINTS,
+  TRIGGER_IS_EVENING, TRIGGER_IS_LOUD, TRIGGER_LABELS, isDigestTime, isTrigger,
+  sanitizeEventLead, sanitizeTriggers, triggerEnabled,
 } from './notifications'
 
 describe('the trigger vocabulary', () => {
   it('labels, hints, volumes and defaults cover exactly the same rules', () => {
     // Four maps keyed by the same union is four chances to add a rule to three
     // of them. TypeScript catches a missing key; this catches a stray one.
-    for (const map of [TRIGGER_LABELS, TRIGGER_HINTS, TRIGGER_IS_LOUD, TRIGGER_DEFAULTS]) {
+    for (const map of [TRIGGER_LABELS, TRIGGER_HINTS, TRIGGER_IS_LOUD,
+                       TRIGGER_DEFAULTS, TRIGGER_IS_EVENING]) {
       expect(Object.keys(map).sort()).toEqual([...TRIGGERS].sort())
     }
   })
 
-  it('puts the rules that buzz first', () => {
+  it('puts the rules that buzz first WITHIN each tier', () => {
     // Whether a notification interrupts you is the thing worth knowing before
-    // you read what it is about.
-    const loud = TRIGGERS.map((t) => TRIGGER_IS_LOUD[t])
-    expect(loud).toEqual([...loud].sort((a, b) => Number(b) - Number(a)))
+    // you read what it is about. Across the whole list it no longer holds —
+    // the two tiers are rendered as separate blocks — so the ordering claim is
+    // per tier, which is what the reader actually sees.
+    for (const tier of [DEFAULT_ON, DEFAULT_OFF]) {
+      const loud = tier.map((t) => TRIGGER_IS_LOUD[t])
+      expect(loud, tier.join(',')).toEqual([...loud].sort((a, b) => Number(b) - Number(a)))
+    }
   })
 
-  it('ships every rule on', () => {
-    expect(Object.values(TRIGGER_DEFAULTS).every(Boolean)).toBe(true)
+  it('ships exactly the five that clear the bar, and nothing else', () => {
+    expect(DEFAULT_ON).toEqual([
+      'daily_digest', 'event_starting', 'item_reminder',
+      'booking_created', 'sync_stalled',
+    ])
+    // Everything else is available and off — the app has a position, and the
+    // position is not a lock.
+    expect(DEFAULT_OFF.length).toBeGreaterThan(0)
+    expect([...DEFAULT_ON, ...DEFAULT_OFF].sort()).toEqual([...TRIGGERS].sort())
+  })
+
+  it('never lets a rule the outside world drives buzz', () => {
+    // The property that makes a quiet-hours setting unnecessary. A rule may
+    // buzz only if its timing is the owner's — an hour they set, or a moment in
+    // their own calendar or task list.
+    const OWNER_TIMED = new Set([
+      'daily_digest', 'task_overdue', 'day_unplanned', 'capacity_overcommitted',
+      'day_not_shut_down', 'habits_outstanding',
+      'event_starting', 'item_reminder', 'task_due_soon',
+    ])
+    for (const t of TRIGGERS) {
+      if (TRIGGER_IS_LOUD[t]) expect(OWNER_TIMED.has(t), t).toBe(true)
+    }
+  })
+
+  it('agrees with the backend about which rules fire in the evening', () => {
+    // Only these two, and both are opt-in — so the evening hour is a setting
+    // that means nothing until one of them is switched on.
+    const evening = TRIGGERS.filter((t) => TRIGGER_IS_EVENING[t])
+    expect(evening).toEqual(['day_not_shut_down', 'habits_outstanding'])
+    for (const t of evening) expect(TRIGGER_DEFAULTS[t]).toBe(false)
   })
 
   it('recognises only rules this build has', () => {

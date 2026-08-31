@@ -168,14 +168,27 @@ button the only feedback loop is waiting for tomorrow's digest not to arrive.
 The token is write-only: the app accepts it and never shows it again, since the
 settings the page loads would otherwise carry a working bot into the browser.
 
-What is deliberately absent is the entire category of nag — "task due soon",
-"you are overdue", "you have not planned today". Those restate something
-standing, or something already on the screen you open anyway, and each is a line
-in the digest instead. It is the same position the rest of the app takes: a day
-that runs long says so in words and never blocks, a habit is never coloured as
-a failure, and nothing here scores you. A notification channel that buzzes about
-your own backlog gets muted, and a muted channel cannot tell you the meeting
-starts in ten minutes.
+**And eight more, off.** Everything usually built and not defaulted on here —
+before every task is due, what is overdue, today isn't planned, the plan runs
+long, today wasn't shut down, habits left, a broken booking link, sync recovered
+— is in Settings, switched off, each carrying the reason it is off. Those
+reasons are real: a deadline warning is noise or stress, "overdue" is true every
+minute until you act, a plan-your-day nudge is the app asking for attention on
+its own behalf, and the habits one sits awkwardly with the app's own position
+that a habit is never coloured as a failure. That is why none of them greets a
+new account.
+
+It is also not a verdict. You know your own days better than the app does, and a
+default is a starting position. So the argument is written next to the switch
+rather than used to hide it, and turning one on is an informed choice instead of
+a blind one. The switches that stay off are the app's opinion; the switches
+existing at all is the app not mistaking an opinion for a rule.
+
+Two things hold whatever you turn on. Nothing that buzzes is timed by anything
+but you — an hour you set, or a moment already in your calendar — which is why
+there are still no quiet hours to configure. And a sweep that would produce
+three or more messages sends one instead, so switching on the whole morning tier
+costs you one interruption at 07:30, not four.
 
 `backend/tasksd/notify/rules.py` is the whole policy, including the admission
 test any fifth rule has to pass. Setup — and the systemd egress rule it needs,

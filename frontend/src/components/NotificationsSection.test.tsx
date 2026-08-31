@@ -4,7 +4,7 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { NotificationsSection } from './NotificationsSection'
-import { TRIGGERS } from '../notifications'
+import { DEFAULT_OFF, DEFAULT_ON, TRIGGERS, TRIGGER_IS_LOUD } from '../notifications'
 
 function show(over: Partial<Parameters<typeof NotificationsSection>[0]> = {}) {
   const onTriggersChange = vi.fn()
@@ -21,6 +21,8 @@ function show(over: Partial<Parameters<typeof NotificationsSection>[0]> = {}) {
     triggers={{}} onTriggersChange={onTriggersChange}
     digestTime="07:30" onDigestTimeChange={onDigestTimeChange}
     eventLead={10} onEventLeadChange={onEventLeadChange}
+    eveningTime="21:00" onEveningTimeChange={vi.fn()}
+    taskLead={30} onTaskLeadChange={vi.fn()}
     homeTz="America/New_York"
     {...over} />)
   return { onTriggersChange, onDigestTimeChange, onEventLeadChange,
@@ -28,11 +30,34 @@ function show(over: Partial<Parameters<typeof NotificationsSection>[0]> = {}) {
 }
 
 describe('the rule rows', () => {
-  it('renders one row per rule, all on by default', () => {
+  it('renders every rule, on in the first tier and off in the second', () => {
     show()
-    const toggles = TRIGGERS.map((t) => document.getElementById(`notif-${t}`)!)
-    expect(toggles).toHaveLength(TRIGGERS.length)
-    for (const el of toggles) expect(el).toHaveAttribute('aria-pressed', 'true')
+    for (const t of DEFAULT_ON) {
+      expect(document.getElementById(`notif-${t}`), t).toHaveAttribute('aria-pressed', 'true')
+    }
+    for (const t of DEFAULT_OFF) {
+      expect(document.getElementById(`notif-${t}`), t).toHaveAttribute('aria-pressed', 'false')
+    }
+  })
+
+  it('separates the two tiers rather than listing thirteen rows flat', () => {
+    // "These are what the app thinks you need" and "these are available if you
+    // disagree" are different statements, and a flat list makes neither.
+    show()
+    expect(screen.getByText('Off by default')).toBeInTheDocument()
+    expect(screen.getByText(/know your own days better/)).toBeInTheDocument()
+  })
+
+  it('gives every opt-in rule the reason it is off', () => {
+    // A rule you switch on should come with the reason the app did not switch
+    // it on for you.
+    show()
+    for (const t of DEFAULT_OFF) {
+      const label = document.querySelector(`label[for="notif-${t}"]`)
+      const hint = label?.closest('.notif-rule')?.querySelector('.hintline')
+      expect(hint?.textContent, t).toBeTruthy()
+      expect(hint!.textContent!.length, t).toBeGreaterThan(40)
+    }
   })
 
   it('writes a sparse override when a rule is turned off', () => {
@@ -54,8 +79,9 @@ describe('the rule rows', () => {
     // Loud and quiet are fixed in the backend, so this is the only way the
     // owner learns what leaving a rule on actually costs them.
     show()
-    expect(screen.getAllByText('buzzes')).toHaveLength(2)
-    expect(screen.getAllByText('silent')).toHaveLength(2)
+    const loud = TRIGGERS.filter((t) => TRIGGER_IS_LOUD[t]).length
+    expect(screen.getAllByText('buzzes')).toHaveLength(loud)
+    expect(screen.getAllByText('silent')).toHaveLength(TRIGGERS.length - loud)
   })
 })
 
@@ -108,6 +134,8 @@ describe('the home-timezone warning', () => {
       triggers={{}} onTriggersChange={vi.fn()}
       digestTime="07:30" onDigestTimeChange={vi.fn()}
       eventLead={10} onEventLeadChange={vi.fn()}
+      eveningTime="21:00" onEveningTimeChange={vi.fn()}
+      taskLead={30} onTaskLeadChange={vi.fn()}
       homeTz="" />)
     expect(container.querySelector('.hintline.warn')).toBeTruthy()
     expect(screen.getByText(/home timezone/i)).toBeInTheDocument()
@@ -138,6 +166,8 @@ describe('the bot token', () => {
       triggers={{}} onTriggersChange={vi.fn()}
       digestTime="07:30" onDigestTimeChange={vi.fn()}
       eventLead={10} onEventLeadChange={vi.fn()}
+      eveningTime="21:00" onEveningTimeChange={vi.fn()}
+      taskLead={30} onTaskLeadChange={vi.fn()}
       homeTz="America/New_York" />)
     const field = document.getElementById('notif-token') as HTMLInputElement
     expect(field.type).toBe('password')

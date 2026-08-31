@@ -15,8 +15,9 @@ import { useEffect, useState } from 'react'
 import { api, AuthError } from '../api'
 import { useT } from '../i18n'
 import {
-  MAX_EVENT_LEAD_MINUTES, MIN_EVENT_LEAD_MINUTES, TRIGGERS, TRIGGER_HINTS,
-  TRIGGER_IS_LOUD, TRIGGER_LABELS, isDigestTime, triggerEnabled, type Trigger,
+  DEFAULT_OFF, DEFAULT_ON, MAX_EVENT_LEAD_MINUTES, MIN_EVENT_LEAD_MINUTES,
+  TRIGGER_HINTS, TRIGGER_IS_EVENING, TRIGGER_IS_LOUD, TRIGGER_LABELS,
+  isDigestTime, triggerEnabled, type Trigger,
 } from '../notifications'
 import { DateTimeInput } from './DateTimeInput'
 
@@ -26,7 +27,9 @@ export function NotificationsSection({
   tokenSet, botId, onTokenChange,
   triggers, onTriggersChange,
   digestTime, onDigestTimeChange,
+  eveningTime, onEveningTimeChange,
   eventLead, onEventLeadChange,
+  taskLead, onTaskLeadChange,
   homeTz, onExpire,
 }: {
   enabled: boolean
@@ -44,8 +47,16 @@ export function NotificationsSection({
   onTriggersChange: (next: Partial<Record<Trigger, boolean>>) => void
   digestTime: string
   onDigestTimeChange: (next: string) => void
+  /** The hour the evening rules fire at. A second wall clock rather than one
+   *  per rule — every rule that samples a standing condition uses this or the
+   *  digest hour, so the whole opt-in tier costs two settings. */
+  eveningTime: string
+  onEveningTimeChange: (next: string) => void
   eventLead: number
   onEventLeadChange: (next: number) => void
+  /** The blanket lead for a task deadline, used only by `task_due_soon`. */
+  taskLead: number
+  onTaskLeadChange: (next: number) => void
   /** The account's home timezone, or '' — the digest refuses to fire without one. */
   homeTz: string
   onExpire: () => void
@@ -86,8 +97,43 @@ export function NotificationsSection({
     else setDraft(digestTime)
   }
 
+  const [eveningDraft, setEveningDraft] = useState(eveningTime)
+  useEffect(() => { setEveningDraft(eveningTime) }, [eveningTime])
+  const commitEvening = () => {
+    if (isDigestTime(eveningDraft)) onEveningTimeChange(eveningDraft)
+    else setEveningDraft(eveningTime)
+  }
+
   const toggle = (t: Trigger) => {
     onTriggersChange({ ...triggers, [t]: !triggerEnabled(triggers, t) })
+  }
+
+  const rule = (t: Trigger) => {
+    const on = triggerEnabled(triggers, t)
+    return (
+      <div className="notif-rule" key={t}>
+        <div className="menu-row">
+          <label htmlFor={`notif-${t}`}>{tr(TRIGGER_LABELS[t])}</label>
+          <span className={`chip notif-volume${TRIGGER_IS_LOUD[t] ? ' loud' : ''}`}>
+            {tr(TRIGGER_IS_LOUD[t] ? 'notif.volume.buzzes' : 'notif.volume.silent')}
+          </span>
+          <button className="menu-toggle" id={`notif-${t}`}
+            aria-pressed={on}
+            aria-label={tr('notif.trigger.aria', { rule: tr(TRIGGER_LABELS[t]) })}
+            onClick={() => toggle(t)}>
+            {tr(on ? 'notif.on' : 'notif.off')}
+          </button>
+        </div>
+        <div className="hintline">
+          {tr(TRIGGER_HINTS[t])}
+          {/* Where its timing comes from, said once per rule rather than left
+              to be inferred: a wall-clock rule is governed by a field further
+              down this page, and knowing which one is the difference between
+              "why did this arrive at 9pm" and knowing where to change it. */}
+          {on && TRIGGER_IS_EVENING[t] && ` ${tr('notif.firesEvening')}`}
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -152,28 +198,15 @@ export function NotificationsSection({
 
       <div className="menu-head">{tr('notif.rules')}</div>
 
-      <div className="notif-rules">
-        {TRIGGERS.map((t) => {
-          const on = triggerEnabled(triggers, t)
-          return (
-            <div className="notif-rule" key={t}>
-              <div className="menu-row">
-                <label htmlFor={`notif-${t}`}>{tr(TRIGGER_LABELS[t])}</label>
-                <span className={`chip notif-volume${TRIGGER_IS_LOUD[t] ? ' loud' : ''}`}>
-                  {tr(TRIGGER_IS_LOUD[t] ? 'notif.volume.buzzes' : 'notif.volume.silent')}
-                </span>
-                <button className="menu-toggle" id={`notif-${t}`}
-                  aria-pressed={on}
-                  aria-label={tr('notif.trigger.aria', { rule: tr(TRIGGER_LABELS[t]) })}
-                  onClick={() => toggle(t)}>
-                  {tr(on ? 'notif.on' : 'notif.off')}
-                </button>
-              </div>
-              <div className="hintline">{tr(TRIGGER_HINTS[t])}</div>
-            </div>
-          )
-        })}
-      </div>
+      <div className="notif-rules">{DEFAULT_ON.map(rule)}</div>
+
+      <div className="menu-head">{tr('notif.more')}</div>
+      {/* The honest framing, and the reason this tier is a separate block
+          rather than eight more rows: the app has a position on these, the
+          position is "probably not", and saying so is more useful than a flat
+          list that implies it has no view at all. */}
+      <div className="hintline">{tr('notif.more.hint')}</div>
+      <div className="notif-rules">{DEFAULT_OFF.map(rule)}</div>
 
       <div className="menu-head">{tr('notif.timing')}</div>
 
@@ -197,6 +230,31 @@ export function NotificationsSection({
         {homeTz ? tr('notif.digestTime.hint', { tz: homeTz })
           : tr('notif.digestTime.noTz')}
       </div>
+
+      <div className="menu-row">
+        <label htmlFor="notif-evening">{tr('notif.eveningTime')}</label>
+        <DateTimeInput type="time" className="input notif-time" id="notif-evening"
+          value={eveningDraft}
+          onChange={(e) => setEveningDraft(e.target.value)}
+          onBlur={commitEvening}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') { commitEvening(); (e.target as HTMLInputElement).blur() }
+            if (e.key === 'Escape') { setEveningDraft(eveningTime); e.stopPropagation() }
+          }} />
+      </div>
+      <div className="hintline">{tr('notif.eveningTime.hint')}</div>
+
+      <div className="menu-row">
+        <label htmlFor="notif-task-lead">{tr('notif.taskLead')}</label>
+        <input className="input notif-lead" id="notif-task-lead" type="number"
+          min={MIN_EVENT_LEAD_MINUTES} max={1440} step={1}
+          value={taskLead}
+          onChange={(e) => {
+            const n = Number(e.target.value)
+            if (Number.isFinite(n)) onTaskLeadChange(n)
+          }} />
+      </div>
+      <div className="hintline">{tr('notif.taskLead.hint')}</div>
 
       <div className="menu-row">
         <label htmlFor="notif-lead">{tr('notif.eventLead')}</label>
