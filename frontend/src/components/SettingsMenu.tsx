@@ -24,6 +24,7 @@ import type { List } from '../api'
 import type { Tab, TabStart } from '../tabs'
 import { ArchivedCalendarsSection } from './ArchivedCalendarsSection'
 import { ConnectionsSection } from './ConnectionsSection'
+import { DisplaysSection } from './DisplaysSection'
 import { TabsSection } from './TabsSection'
 import { CapacitySection } from './CapacitySection'
 import { NotificationsSection } from './NotificationsSection'
@@ -41,6 +42,7 @@ const SECTIONS = [
   { id: 'calendar', label: 'settings.section.calendar' },
   { id: 'tasks', label: 'settings.section.tasks' },
   { id: 'notifications', label: 'settings.section.notifications' },
+  { id: 'displays', label: 'settings.section.displays' },
   { id: 'account', label: 'settings.section.account' },
 ] as const
 
@@ -344,6 +346,13 @@ export function SettingsMenu({
               taskLead={notifyTaskLead}
               onTaskLeadChange={onNotifyTaskLeadChange}
               homeTz={homeTz} />
+          </>
+        )}
+
+        {section === 'displays' && (
+          <>
+            <div className="hintline">{tr('disp.intro')}</div>
+            <DisplaysSection onExpire={onExpire} />
           </>
         )}
 

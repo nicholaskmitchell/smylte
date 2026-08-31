@@ -1,0 +1,250 @@
+/* The passive display page (/display/<token>).
+ *
+ * Its own stylesheet rather than a section of app.css, and it deliberately does
+ * NOT read the appearance override layer. A display is not a theme of the app:
+ * it is a poster. The Appearance editor exists so the owner can tune a surface
+ * they interact with all day, and letting a 0.8 text scale or a custom accent
+ * reach a screen across a room would break the one thing this design is for —
+ * being legible from three metres away, on hardware that may be one bit deep.
+ *
+ * Two palettes, and the eink one is not "the dark theme inverted". It is the
+ * design under the constraint that EVERY PIXEL IS INK OR PAPER:
+ *
+ *   - no alpha anywhere. A tint on a 1-bit panel becomes a dither pattern that
+ *     shimmers between partial refreshes and turns small text to mush.
+ *   - no colour, so the calendar a chip belongs to is carried by its SHAPE:
+ *     filled, hollow, a left bar, a dotted outline. Four, because four are what
+ *     stay apart across a room. Past four the frame adds a letter to every chip
+ *     (see `assign_sources` in the backend) and the shapes keep cycling under it.
+ *   - hierarchy by size, weight and rule — all of which survive thresholding —
+ *     never by opacity, which does not.
+ *
+ * The colour palette borrows the app's own light tokens, so a display on an old
+ * tablet looks like the product rather than like a second product. It borrows
+ * their VALUES rather than the tokens themselves, for the reason at the top:
+ * `var(--fg)` would pick up whatever the account customized.
+ */
+
+.display {
+  --d-ink: #14131A;
+  --d-paper: #FBFAF7;
+  --d-muted: rgba(20, 19, 26, 0.60);
+  --d-rule: rgba(20, 19, 26, 0.13);
+  --d-rule-strong: rgba(20, 19, 26, 0.28);
+  --d-pad: clamp(12px, 2vw, 28px);
+  --d-gap: clamp(4px, 0.7vw, 10px);
+
+  position: fixed;
+  inset: 0;
+  overflow: hidden;               /* a wall panel has no scrollbar and no hand */
+  background: var(--d-paper);
+  color: var(--d-ink);
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+  font-variant-numeric: tabular-nums;
+  /* The whole point, stated once. Nothing below is clickable, focusable or
+     selectable — a passive display that responded to a fingertip would be a
+     bad app, and the finger most likely to arrive is a cleaning cloth. */
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: none;
+}
+
+.display--eink {
+  --d-ink: #000000;
+  --d-paper: #FFFFFF;
+  /* Black, not a grey. On a panel one bit deep a "muted" tint thresholds to
+     whichever side it happens to land on, which is not a decision worth
+     leaving to a rounding rule. Quietness is carried by size and weight below. */
+  --d-muted: #000000;
+  --d-rule: #000000;
+  --d-rule-strong: #000000;
+  /* Off, everywhere. Sub-pixel smoothing on a monochrome panel produces exactly
+     the intermediate values this palette exists to avoid. */
+  -webkit-font-smoothing: none;
+  font-smooth: never;
+}
+
+/* ---- the states that are not content ---------------------------------- */
+
+.display__booting { position: absolute; inset: 0; background: var(--d-paper); }
+
+.display__gone {
+  display: flex; flex-direction: column; gap: 8px;
+  align-items: center; justify-content: center;
+  height: 100%; padding: var(--d-pad); text-align: center;
+}
+.display__gone-title { margin: 0; font-size: clamp(18px, 3vw, 30px); font-weight: 700; }
+.display__gone-hint { margin: 0; font-size: clamp(13px, 1.8vw, 18px); color: var(--d-muted); }
+.display--eink .display__gone-hint { font-weight: 400; }
+
+/* A hairline strip, not a banner and never a modal: there is nobody standing
+   at this screen to dismiss one, and the information — "what you are reading
+   may be old" — is worth exactly one line. */
+.display__stale {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  padding: 3px var(--d-pad);
+  font-size: clamp(10px, 1.1vw, 13px);
+  letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--d-paper); background: var(--d-ink);
+}
+
+/* ---- calendar mode ----------------------------------------------------- */
+
+.display-cal { display: flex; flex-direction: column; height: 100%; padding: var(--d-pad); }
+
+.display-cal__head {
+  display: flex; align-items: baseline; justify-content: space-between;
+  gap: 12px; padding-bottom: 6px; border-bottom: 1px solid var(--d-rule-strong);
+}
+.display-cal__title { margin: 0; font-size: clamp(20px, 3.4vw, 46px); font-weight: 700; letter-spacing: -0.02em; }
+.display-cal__name {
+  font-size: clamp(10px, 1.2vw, 16px); font-weight: 700;
+  letter-spacing: 0.1em; text-transform: uppercase; color: var(--d-muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 30%;
+}
+
+.display-cal__weekdays { display: grid; grid-template-columns: repeat(7, 1fr); }
+.display-cal__weekday {
+  padding: 4px 5px;
+  font-size: clamp(9px, 1.05vw, 14px); font-weight: 700;
+  letter-spacing: 0.1em; text-transform: uppercase; color: var(--d-muted);
+}
+
+/* Six rows, always — even in a month five would hold. A grid that changed
+   height on the 1st would repaint the whole panel for no new information, which
+   on eink is a visible full-screen flash. */
+.display-cal__grid { flex: 1; display: grid; grid-template-rows: repeat(6, 1fr); min-height: 0; }
+.display-cal__week {
+  display: grid; grid-template-columns: repeat(7, 1fr);
+  border-top: 1px solid var(--d-rule-strong); min-height: 0;
+}
+.display-cal__cell {
+  padding: 3px 5px; min-width: 0; overflow: hidden;
+  border-left: 1px solid var(--d-rule);
+  display: flex; flex-direction: column; gap: 2px;
+}
+.display-cal__cell:first-child { border-left: 0; }
+/* On eink a solid hairline column rule is a full-height black line that
+   out-weighs the events it separates. Dotted keeps the grid legible at a tenth
+   of the ink. */
+.display--eink .display-cal__cell { border-left-style: dotted; }
+
+.display-cal__daynum { display: flex; align-items: center; justify-content: space-between; gap: 4px; }
+.display-cal__num { font-size: clamp(11px, 1.4vw, 20px); font-weight: 700; line-height: 1.3; }
+.display-cal__more { font-size: clamp(9px, 1vw, 13px); color: var(--d-muted); }
+.display--eink .display-cal__more { font-weight: 400; }
+
+/* A day outside this month is quieter, and on eink that cannot mean fainter —
+   so it means lighter in WEIGHT, which is a difference one bit deep can hold. */
+.display-cal__cell.is-outside .display-cal__num { color: var(--d-muted); font-weight: 400; }
+.display--eink .display-cal__cell.is-outside .display-cal__num { opacity: 1; }
+
+/* Today is knocked out of a filled block. It reads at a glance and survives
+   thresholding, which a tinted background would not. */
+.display-cal__cell.is-today .display-cal__num {
+  background: var(--d-ink); color: var(--d-paper);
+  padding: 0 5px; margin-left: -3px;
+}
+
+.display-cal__items { display: flex; flex-direction: column; gap: 1px; min-height: 0; overflow: hidden; }
+
+/* ---- an event chip ----------------------------------------------------- */
+
+.display-chip {
+  display: flex; align-items: baseline; gap: 4px;
+  font-size: clamp(9px, 1.05vw, 14px); line-height: 1.35;
+  white-space: nowrap; min-width: 0;
+}
+.display-chip__mark {
+  flex: none; width: 0.62em; height: 0.62em; align-self: center;
+  background: var(--d-ink);          /* overridden inline with the calendar's colour */
+}
+/* The four treatments. They are what tells one calendar from another when there
+   is no colour to do it with, and they are drawn rather than tinted so each one
+   is still itself after thresholding. */
+.display-chip--outline .display-chip__mark { background: transparent; box-shadow: inset 0 0 0 1.5px var(--d-ink); }
+.display-chip--bar .display-chip__mark { width: 0.22em; }
+.display-chip--dotted .display-chip__mark { background: transparent; border: 1.5px dotted var(--d-ink); }
+/* On a colour screen the treatments step aside entirely and every mark is the
+   same square, because colour is the better signal and it is available. Keeping
+   the bar there "since it costs nothing" was wrong on the screen: one calendar
+   drawn as a thin stripe among squares reads as a different KIND of thing
+   rather than as a different calendar. */
+.display--color .display-chip__mark { width: 0.62em; box-shadow: none; border: 0; }
+
+.display-chip__initial { flex: none; font-weight: 700; }
+.display-chip__time { flex: none; font-variant-numeric: tabular-nums; }
+.display-chip__text { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+
+/* ---- habits + tasks mode ----------------------------------------------- */
+
+.display-day {
+  display: flex; flex-direction: column; height: 100%;
+  /* The gap is vertical, so it scales with the panel's HEIGHT — the same
+     reason the type below does. A portrait panel sized off `vw` put the next
+     section's label hard against the last row of the one above it. */
+  padding: var(--d-pad); gap: clamp(8px, 1.8vh, 22px);
+}
+.display-day__head {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+  padding-bottom: 6px; border-bottom: 1px solid var(--d-rule-strong);
+}
+/* Sized off the VIEWPORT HEIGHT, not its width, and that is the same decision
+   `render._scale` makes for the rasterized version. A habits display is usually
+   PORTRAIT — 480×800 is the common panel — and `vw` on one of those resolves
+   against 480, so every size collapsed to its floor and a screen meant to be
+   read from the doorway rendered at desk-reading sizes. The month grid below
+   keeps `vw`, because seven columns really are a horizontal constraint. */
+.display-day__title { margin: 0; font-size: clamp(22px, 5.4vh, 52px); font-weight: 700; letter-spacing: -0.02em; }
+.display-day__tally { font-size: clamp(22px, 5.4vh, 52px); font-weight: 700; font-variant-numeric: tabular-nums; }
+
+.display-day__preview { display: flex; flex-direction: column; gap: 2px; }
+.display-day__preview-title {
+  margin: 0; font-size: clamp(12px, 1.9vh, 20px); font-weight: 700;
+  letter-spacing: 0.06em; text-transform: uppercase;
+}
+.display-day__preview-hint { margin: 0; font-size: clamp(12px, 1.9vh, 20px); color: var(--d-muted); }
+.display--eink .display-day__preview-hint { font-weight: 400; }
+
+.display-day__section { display: flex; flex-direction: column; gap: 4px; min-height: 0; }
+.display-day__label {
+  margin: 0; font-size: clamp(11px, 1.7vh, 18px); font-weight: 700;
+  letter-spacing: 0.12em; text-transform: uppercase; color: var(--d-muted);
+}
+.display--eink .display-day__label { color: var(--d-ink); }
+
+.display-day__rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.display-row {
+  display: flex; align-items: center; gap: clamp(8px, 1.6vh, 18px);
+  padding: clamp(3px, 0.8vh, 10px) 0;
+  font-size: clamp(16px, 3.2vh, 34px); line-height: 1.25;
+}
+.display-row__text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.display-row__box, .display-row__ring {
+  flex: none; width: 0.72em; height: 0.72em;
+  box-shadow: inset 0 0 0 2px var(--d-ink);
+}
+.display-row__ring { border-radius: 50%; }
+
+/* Done. Filled rather than ticked for the ring — a diagonal through a circle
+   is the sign for "not allowed", and a habit that was kept should not read as
+   one that was forbidden. The box does take a tick, drawn in CSS because ✓ is
+   not in the Latin subsets this app ships and would render as a box. */
+.display-row.is-done .display-row__ring { background: var(--d-ink); }
+.display-row.is-done .display-row__box {
+  position: relative; background: var(--d-ink);
+}
+.display-row.is-done .display-row__box::after {
+  content: ""; position: absolute;
+  left: 22%; top: 8%; width: 32%; height: 62%;
+  border: solid var(--d-paper); border-width: 0 2px 2px 0;
+  transform: rotate(42deg);
+}
+/* Struck through rather than greyed: one bit deep there is no grey to be done
+   in, and a line through the words says the same thing at any depth. */
+.display-row.is-done .display-row__text { text-decoration: line-through; }
+.display--color .display-row.is-done { color: var(--d-muted); }
+
+.display-day__empty { margin: 0; font-size: clamp(16px, 3.2vh, 34px); }
