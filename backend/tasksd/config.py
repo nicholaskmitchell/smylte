@@ -106,6 +106,25 @@ class Settings:
     # Largest request body accepted, enforced ahead of the router — see
     # tasksd/limits.py for why it cannot live in the routes themselves.
     max_body_bytes: int = DEFAULT_MAX_BODY_BYTES
+    # ── outbound notifications (OPT-IN) ──────────────────────────────────────
+    # Off by default for the same reason the MCP connector is: a deploy should
+    # never grow an outbound network surface on its own. Turning this on is a
+    # deliberate act with a deployment consequence — deploy/tasks.service is
+    # loopback-only (`IPAddressDeny=any`), so the unit must be widened before a
+    # single message can leave the box. See docs/DEPLOY.md.
+    notify_enabled: bool = False
+    # The bot token lives in the ENVIRONMENT, never in the settings blob, and so
+    # never in tasks.db. The schema header promises that reading that file does
+    # not yield a working credential — it hashes OAuth secrets for exactly this
+    # reason — and a bot token in `meta.app_settings` would be the one plaintext
+    # credential in a file that goes into every backup. /etc/tasks/tasks.env is
+    # already 0600 and already holds the Radicale password.
+    telegram_bot_token: str = ""
+    # Where notifications go. Not a secret (it is an integer naming a chat), but
+    # it is deployment configuration rather than a preference, and pairing it
+    # with the token keeps "who this bot talks to" in one file.
+    telegram_chat_id: str = ""
+
     # Content-Security-Policy posture: "on" (enforce), "report-only" (log
     # violations in the browser console, block nothing) or "off". An escape
     # hatch rather than a knob: a policy that turns out to block something real
@@ -151,4 +170,7 @@ class Settings:
                 os.environ.get("TASKS_MAX_BODY_BYTES", str(DEFAULT_MAX_BODY_BYTES))
             ),
             csp_mode=os.environ.get("TASKS_CSP", "on").strip().lower() or "on",
+            notify_enabled=_bool("TASKS_NOTIFY_ENABLED", False),
+            telegram_bot_token=os.environ.get("TASKS_TELEGRAM_BOT_TOKEN", "").strip(),
+            telegram_chat_id=os.environ.get("TASKS_TELEGRAM_CHAT_ID", "").strip(),
         )

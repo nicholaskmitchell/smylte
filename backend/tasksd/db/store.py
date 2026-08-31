@@ -1280,6 +1280,132 @@ def update_settings(conn: sqlite3.Connection, patch: dict) -> dict:
     return current
 
 
+# ── notifications (SIDECAR: the record of what has already been said) ────────
+#
+# The scheduler re-evaluates the same window on every wake, so "have I already
+# said this?" is not answerable from the data that triggered the notification —
+# it is answered here. `dedupe_key` names the OCCASION (uid + day, uid + start
+# instant, a day key for a digest), never the wording.
+#
+# The claim/settle split is the whole point. `claim_notification` writes the row
+# BEFORE the message is sent and reports whether this caller is the one that got
+# it; the send then happens OUTSIDE the service lock (network I/O under the
+# process-wide RLock would block every API route for the length of an HTTP
+# timeout), and `settle_notification` stamps the outcome back. A crash between
+# the two leaves a claimed-but-unsettled row, which is deliberately treated as
+# SENT: a duplicate 3am alert costs more trust than a missed one.
+
+_NOTIFY_CHANNEL = "telegram"
+
+
+def claim_notification(
+    conn: sqlite3.Connection,
+    trigger: str,
+    dedupe_key: str,
+    *,
+    channel: str = _NOTIFY_CHANNEL,
+) -> bool:
+    """Reserve the right to send one notification. True when this caller won it.
+
+    False means the occasion has already been claimed — by an earlier sweep, or
+    by a concurrent one — and the caller must not send. Atomic on its own (one
+    statement), so it needs no surrounding transaction.
+    """
+    cur = conn.execute(
+        "INSERT INTO notification_deliveries (trigger, dedupe_key, channel) "
+        "VALUES (?, ?, ?) ON CONFLICT DO NOTHING",
+        (trigger, dedupe_key, channel),
+    )
+    return bool(cur.rowcount)
+
+
+def settle_notification(
+    conn: sqlite3.Connection,
+    trigger: str,
+    dedupe_key: str,
+    *,
+    channel: str = _NOTIFY_CHANNEL,
+    ok: bool,
+    silent: bool = False,
+    error: str | None = None,
+) -> None:
+    """Record how a claimed send turned out.
+
+    `error` must already be redacted — the bot token travels in the request path
+    and httpx puts the URL in its exception text, so an unredacted string here is
+    a plaintext credential in every backup of this file. `notify.telegram`
+    redacts on the way out; this function is not the place to start trusting it.
+    """
+    conn.execute(
+        "UPDATE notification_deliveries SET "
+        "settled_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'), ok=?, silent=?, error=? "
+        "WHERE trigger=? AND dedupe_key=? AND channel=?",
+        (1 if ok else 0, 1 if silent else 0, error, trigger, dedupe_key, channel),
+    )
+
+
+def release_notification(
+    conn: sqlite3.Connection,
+    trigger: str,
+    dedupe_key: str,
+    *,
+    channel: str = _NOTIFY_CHANNEL,
+) -> None:
+    """Hand a claim back, for when the send was abandoned before it was attempted.
+
+    Only for the case where nothing left the process — the channel turned out to
+    be unconfigured, quiet hours swallowed the message, the batch it belonged to
+    was dropped. Never call this after the transport has been reached: if the API
+    call happened, the message may well have arrived, and re-arming it is exactly
+    the duplicate this table exists to prevent.
+    """
+    conn.execute(
+        "DELETE FROM notification_deliveries "
+        "WHERE trigger=? AND dedupe_key=? AND channel=?",
+        (trigger, dedupe_key, channel),
+    )
+
+
+def notification_already_sent(
+    conn: sqlite3.Connection,
+    trigger: str,
+    dedupe_key: str,
+    *,
+    channel: str = _NOTIFY_CHANNEL,
+) -> bool:
+    """Read-only companion to `claim_notification`, for previewing a sweep."""
+    row = conn.execute(
+        "SELECT 1 FROM notification_deliveries "
+        "WHERE trigger=? AND dedupe_key=? AND channel=?",
+        (trigger, dedupe_key, channel),
+    ).fetchone()
+    return row is not None
+
+
+def recent_notifications(conn: sqlite3.Connection, *, limit: int = 50) -> list[dict]:
+    """The last `limit` deliveries, newest first — what Settings shows so the
+    owner can see what the bot has been saying without opening Telegram."""
+    rows = conn.execute(
+        "SELECT * FROM notification_deliveries ORDER BY claimed_at DESC LIMIT ?",
+        (max(1, min(limit, 500)),),
+    )
+    return [dict(r) for r in rows]
+
+
+def gc_notifications(conn: sqlite3.Connection, *, before: str) -> int:
+    """Drop delivery rows claimed before `before` (an ISO stamp).
+
+    Called from the send path rather than a timer of its own, like `gc_oauth`.
+    The retention only has to outlive the longest dedupe window any trigger uses
+    — once the occasion can no longer recur, the row is answering a question
+    nobody will ask again.
+    """
+    cur = conn.execute(
+        "DELETE FROM notification_deliveries WHERE claimed_at < ?", (before,)
+    )
+    return cur.rowcount or 0
+
+
 def count_items(conn: sqlite3.Connection, collection_href: str | None = None) -> int:
     if collection_href is None:
         return conn.execute("SELECT COUNT(*) FROM items").fetchone()[0]
