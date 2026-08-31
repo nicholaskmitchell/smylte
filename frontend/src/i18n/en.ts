@@ -40,12 +40,39 @@ export const en = {
   'settings.section.appearance': 'Appearance',
   'settings.section.calendar': 'Calendar',
   'settings.section.tasks': 'Tasks',
+  // ── per-item reminders ─────────────────────────────────────────────────────
+  'reminder.label': 'Remind me',
+  'reminder.aria': 'How long before this to send a reminder',
+  'reminder.none': "Don't notify",
+  'reminder.atTime': 'At the time',
+  'reminder.minutes': '{n} minutes before',
+  'reminder.hours': '{n} hours before',
+  'reminder.days': '{n} days before',
   'settings.section.notifications': 'Notifications',
 
   // ── notifications ──────────────────────────────────────────────────────────
   'notif.intro': 'Smylte already holds everything you will come looking for, so '
     + 'a notification has to be something you cannot recover by opening the app '
     + 'later. That is why this list is short.',
+  'notif.enabled': 'Telegram notifications',
+  'notif.enabled.hint': 'Off until you turn it on, and nothing is sent until a '
+    + 'bot token and a chat id are both set below.',
+  'notif.telegram': 'Connection',
+  'notif.rules': 'What gets sent',
+  'notif.token': 'Bot token',
+  'notif.token.placeholder': 'Paste a token from @BotFather',
+  'notif.token.stored': 'Stored — bot {bot}',
+  'notif.token.remove': 'Remove it',
+  'notif.token.hint': 'Create a bot with @BotFather in Telegram and paste its '
+    + 'token. It is never shown again after you save it — the settings this page '
+    + 'loads deliberately do not carry it.',
+  'notif.token.removed': 'Bot token removed.',
+  'notif.chatId': 'Chat id',
+  'notif.chatId.hint': 'Your own id for a direct message, or a negative number '
+    + 'for a group. Message the bot once first — a bot cannot open a '
+    + 'conversation, so an unmessaged chat answers "chat not found".',
+  'notif.test': 'Send a test message',
+  'notif.test.sending': 'Sending…',
   'notif.on': 'On',
   'notif.off': 'Off',
   'notif.volume.buzzes': 'buzzes',

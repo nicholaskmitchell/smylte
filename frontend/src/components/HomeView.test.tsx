@@ -24,7 +24,7 @@ const task = (o: Partial<import('../api').Task> = {}): import('../api').Task => 
   parent: null, children: [], child_count: 0, completed_child_count: 0,
   derived_percent: null, pinned: false, sort_order: null,
   // Present on every DTO the server sends; see api.ts's Task.
-  completed_at: null, kanban_column: null, estimated_minutes: null, has_rrule: false,
+  completed_at: null, kanban_column: null, estimated_minutes: null, notify_minutes_before: null, has_rrule: false,
   created: null, last_modified: null,
   href: '/l1/u1.ics', etag: '"1"', ...o,
 })
@@ -230,7 +230,7 @@ const event = (calId: string, id: string, summary: string, hour = 9,
   summary, description: null, location: null,
   start: `${key(day)}T${p2(hour)}:00:00`, start_is_date: false,
   end: `${key(day)}T${p2(hour + 1)}:00:00`, end_is_date: false, duration: null,
-  all_day: false, status: null, busy: true, tags: [], has_rrule: false,
+  all_day: false, status: null, busy: true, notify_minutes_before: null, tags: [], has_rrule: false,
   href: `/${calId}/${id}.ics`, etag: '"1"', ...over,
 })
 

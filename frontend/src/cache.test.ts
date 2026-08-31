@@ -18,7 +18,7 @@ const task = (o: Partial<Task> = {}): Task => ({
   parent: null, children: [], child_count: 0, completed_child_count: 0,
   derived_percent: null, pinned: false, sort_order: null,
   // Present on every DTO the server sends; see api.ts's Task.
-  completed_at: null, kanban_column: null, estimated_minutes: null, has_rrule: false,
+  completed_at: null, kanban_column: null, estimated_minutes: null, notify_minutes_before: null, has_rrule: false,
   created: null, last_modified: null,
   href: '/l1/u1.ics', etag: '"1"', ...o,
 })
@@ -32,7 +32,7 @@ const event = (o: Partial<CalEvent> = {}): CalEvent => ({
   uid: 'e1', id: 'e1', recurrence_id: null, is_recurring: false, calendar: '/c1/',
   summary: 'Lunch', description: null, location: null, start: '2026-07-15',
   start_is_date: true, end: '2026-07-16', end_is_date: true, duration: null, all_day: true,
-  status: null, busy: true, tags: [], has_rrule: false, href: '/c1/e1.ics', etag: '"1"', ...o,
+  status: null, busy: true, notify_minutes_before: null, tags: [], has_rrule: false, href: '/c1/e1.ics', etag: '"1"', ...o,
 })
 
 const dayEntry = (o: Partial<DayEntry> = {}): DayEntry => ({

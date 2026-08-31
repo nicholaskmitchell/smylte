@@ -331,9 +331,13 @@ quiet-hours setting to configure.
 1. Create a bot with [@BotFather](https://t.me/BotFather) and **message it once**
    — a bot cannot open a conversation, so a chat it has never heard from answers
    `chat not found`.
-2. Put `TASKS_NOTIFY_ENABLED=true`, `TASKS_TELEGRAM_BOT_TOKEN` and
-   `TASKS_TELEGRAM_CHAT_ID` in `/etc/tasks/tasks.env`. The app refuses to start
-   with the flag on and either value missing.
+2. Paste the token and your chat id into **Settings → Notifications**, turn the
+   switch on, and press **Send a test message**. Nothing is sent until all three
+   are true. (A deployment that never opens the UI can use
+   `TASKS_TELEGRAM_BOT_TOKEN` and `TASKS_TELEGRAM_CHAT_ID` in
+   `/etc/tasks/tasks.env` instead; the account's own values win when both are
+   set. `TASKS_NOTIFY_ENABLED=false` is an operator kill switch that stops the
+   scheduler being built at all, whatever the settings say.)
 3. **Open egress.** This is the step that is easy to miss and impossible to
    diagnose from the outside. `deploy/tasks.service` is loopback-only
    (`IPAddressDeny=any`), so until it is widened every send fails at connect,
@@ -351,9 +355,15 @@ preferences**, not env vars: they live in the settings blob and are edited in
 the app. `GET /api/notifications/recent` shows what the bot has actually sent,
 including anything the daily ceiling downgraded to silent.
 
-**The bot token is a credential and never enters `tasks.db`** — it is read from
-the environment on every send. Rotating it is `/revoke` in BotFather plus a
-restart. Note that Telegram's Bot API is not end-to-end encrypted and this
+**The bot token is a credential.** Entered in Settings it is stored in
+`meta.app_settings` in the clear, like `booking_links.token` beside it — the app
+has to reproduce it to send, so unlike an OAuth secret it cannot be hashed, and
+it is therefore in every backup of `tasks.db`. It is never returned over HTTP:
+`GET /api/settings` substitutes a boolean and the public bot-id half, so the
+settings document the browser fetches on every page load carries no working
+credential. Put it in `/etc/tasks/tasks.env` instead if you would rather it
+never touch the database. Rotating it either way is `/revoke` in BotFather plus
+re-entering it. Note that Telegram's Bot API is not end-to-end encrypted and this
 server captures nothing of the reply side: treat every notification as a
 postcard, which is why the sync-failure alert names the collection and points at
 the log rather than carrying the error text.

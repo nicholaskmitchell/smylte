@@ -78,7 +78,7 @@ const task = (o: Partial<Task> = {}): Task => ({
   tags: [], parent: null, children: [], child_count: 0, completed_child_count: 0,
   derived_percent: null, pinned: false, sort_order: null,
   // Present on every DTO the server sends; see api.ts's Task.
-  completed_at: null, kanban_column: null, estimated_minutes: null, has_rrule: false,
+  completed_at: null, kanban_column: null, estimated_minutes: null, notify_minutes_before: null, has_rrule: false,
   created: null, last_modified: null,
  
   href: '/l1/u1.ics', etag: '"1"', ...o,
@@ -100,7 +100,7 @@ const ev = (o: Partial<CalEvent> = {}): CalEvent => ({
   summary: 'Standup', description: null, location: null,
   start: '2026-03-06T09:00:00', start_is_date: false,
   end: '2026-03-06T09:30:00', end_is_date: false, duration: null,
-  all_day: false, status: null, busy: true, tags: [], has_rrule: false,
+  all_day: false, status: null, busy: true, notify_minutes_before: null, tags: [], has_rrule: false,
   href: '/c1/e1.ics', etag: '"1"', ...o,
 })
 
@@ -1166,6 +1166,9 @@ describe('aug19 leftovers — every dialog answers Escape at the window', () => 
       calFit="dynamic" onToggleCalFit={vi.fn()}
       archivedCals={[]} onArchivedCalsChange={vi.fn()}
       showCompleted={false} onToggleShowCompleted={vi.fn()}
+      notifyEnabled={false} onNotifyEnabledChange={vi.fn()}
+      notifyChatId="" onNotifyChatIdChange={vi.fn()}
+      notifyTokenSet={false} notifyBotId="" onNotifyTokenChange={vi.fn()}
       notifyTriggers={{}} onNotifyTriggersChange={vi.fn()}
       notifyDigestTime="07:30" onNotifyDigestTimeChange={vi.fn()}
       notifyEventLead={10} onNotifyEventLeadChange={vi.fn()}

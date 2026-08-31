@@ -239,6 +239,7 @@ export function sanitizeTask(v: unknown): Task | null {
     // `numOrNull` renders as null — "nobody said how long this takes", the same
     // thing a task nobody has estimated says. Nothing to migrate.
     estimated_minutes: numOrNull(o.estimated_minutes),
+    notify_minutes_before: null,
     has_rrule: bool(o.has_rrule),
     href: orNull(o.href) ?? '',
     etag: orNull(o.etag) ?? '',
@@ -275,6 +276,7 @@ export function sanitizeEvent(v: unknown): CalEvent | null {
     // would paint every cached event as free for one round trip. `bool()`
     // would answer false for exactly those rows.
     busy: o.busy !== false,
+    notify_minutes_before: null,
     tags: strs(o.tags),
     has_rrule: bool(o.has_rrule),
     href: orNull(o.href) ?? '',

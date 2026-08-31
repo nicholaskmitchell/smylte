@@ -86,7 +86,7 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
   // Home reads the same copy rather than fanning out a second one.
   const {
     lists, serverOrderedLists, tasks, listsLoaded, listsOk, loaded, setLists,
-    create, createMany, addSub, toggle, remove, saveDetail, reorder,
+    create, createMany, addSub, toggle, remove, saveDetail, setReminder, reorder,
     taskListErrors, reloadTasks,
   } = useTaskData()
   const [detail, setDetail] = useState<Task | null>(null)
@@ -658,6 +658,7 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
           onClose={() => setDetail(null)}
           onCreate={() => {}}
           onSave={(patch) => { saveDetail(detail, patch); setDetail(null) }}
+          onReminderChange={(m) => { void setReminder(detail, m) }}
           onDelete={() => { remove(detail); setDetail(null) }}
           onMultiple={() => {}} />
       )}

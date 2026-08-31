@@ -74,7 +74,7 @@ const ev = (o: Partial<CalEvent> = {}): CalEvent => ({
   summary: 'Standup', description: null, location: null,
   start: '2026-03-02T09:00:00', start_is_date: false,
   end: '2026-03-02T09:30:00', end_is_date: false, duration: null,
-  all_day: false, status: null, busy: true, tags: [], has_rrule: false,
+  all_day: false, status: null, busy: true, notify_minutes_before: null, tags: [], has_rrule: false,
   href: '/c1/u1.ics', etag: '"1"', ...o,
 })
 

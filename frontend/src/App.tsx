@@ -121,6 +121,12 @@ export function App() {
   // safe. See notifications.ts.
   const [notifyTriggers, setNotifyTriggers] =
     useState<Partial<Record<Trigger, boolean>>>({})
+  const [notifyEnabled, setNotifyEnabled] = useState(false)
+  const [notifyChatId, setNotifyChatId] = useState('')
+  // The token itself never comes back from the server (it is write-only over
+  // HTTP), so what the UI holds is whether one is stored and which bot it is.
+  const [notifyTokenSet, setNotifyTokenSet] = useState(false)
+  const [notifyBotId, setNotifyBotId] = useState('')
   const [notifyDigestTime, setNotifyDigestTime] = useState(DEFAULT_DIGEST_TIME)
   const [notifyEventLead, setNotifyEventLead] = useState(DEFAULT_EVENT_LEAD_MINUTES)
   // An allowlist, not a hidden-set: no task list is drawn on the calendar until
@@ -399,6 +405,23 @@ export function App() {
         // settings blob is one hand-editable JSON document, and an unknown rule
         // name in it must be dropped rather than rendered as a row nothing can
         // turn off.
+        if (keep('notifications_enabled') && typeof s.notifications_enabled === 'boolean') {
+          setNotifyEnabled(s.notifications_enabled)
+        }
+        if (keep('notify_telegram_chat_id') && typeof s.notify_telegram_chat_id === 'string') {
+          setNotifyChatId(s.notify_telegram_chat_id)
+        }
+        // Guarded like everything else. These two are DERIVED by the server
+        // rather than typed here, which is why they looked exempt — but pasting
+        // a token sets them optimistically, so a read already in flight would
+        // land afterwards and put the row back to "no token" a moment after one
+        // was pasted. `changeNotifyToken` logs them for exactly this.
+        if (keep('notify_telegram_bot_token_set')) {
+          setNotifyTokenSet(s.notify_telegram_bot_token_set === true)
+        }
+        if (keep('notify_telegram_bot_id')) {
+          setNotifyBotId(typeof s.notify_telegram_bot_id === 'string' ? s.notify_telegram_bot_id : '')
+        }
         if (keep('notify_triggers')) setNotifyTriggers(sanitizeTriggers(s.notify_triggers))
         if (keep('notify_digest_time') && isDigestTime(s.notify_digest_time)) {
           setNotifyDigestTime(s.notify_digest_time)
@@ -500,6 +523,12 @@ export function App() {
     // carries the value just entered in a field, so what is written is what was
     // asked for whether or not the read landed.
     'notify_triggers',
+    // A toggle and a text field the user types into. Both are single-value
+    // writes, so they are NOT read-modify-write — but a late read landing
+    // after either was changed would still revert the gesture, which is what
+    // `keep` guards on the read side; they stay out of this list for the same
+    // reason `day_capacity_minutes` does.
+
     // The per-weekday map is READ-MODIFY-WRITE: the section rebuilds the whole
     // object to change one weekday, and `store.update_settings` merges
     // shallowly — so writing it after a failed read would replace the account's
@@ -697,6 +726,32 @@ export function App() {
     setHomeTz(next)
     saveSettings({ home_timezone: next })
   }, [homeTz])
+
+  const changeNotifyEnabled = useCallback((next: boolean) => {
+    setNotifyEnabled(next)
+    saveSettings({ notifications_enabled: next })
+  }, [])
+
+  const changeNotifyChatId = useCallback((next: string) => {
+    setNotifyChatId(next)
+    saveSettingsSoon({ notify_telegram_chat_id: next })
+  }, [])
+
+  const changeNotifyToken = useCallback((next: string) => {
+    // Optimistic, like every other write here — but on the DERIVED flags, since
+    // the token itself is never held locally. An empty string is the explicit
+    // Remove, not an accidentally cleared field: the section only calls this
+    // with '' from its own Remove control.
+    setNotifyTokenSet(!!next)
+    setNotifyBotId(next.includes(':') ? next.split(':', 1)[0] : '')
+    // The write log is keyed on what the PATCH carries, and the patch carries
+    // the token — but what this gesture changed on screen is the two derived
+    // flags, and they are what a read in flight would revert. Logged by hand
+    // because they are the one pair whose local value has no key of its own on
+    // the wire.
+    writeLog.current.push('notify_telegram_bot_token_set', 'notify_telegram_bot_id')
+    saveSettings({ notify_telegram_bot_token: next })
+  }, [])
 
   const changeNotifyTriggers = useCallback((next: Partial<Record<Trigger, boolean>>) => {
     setNotifyTriggers(next)
@@ -957,6 +1012,10 @@ export function App() {
             calFit={calFit} onToggleCalFit={toggleCalFit}
             archivedCals={archivedCals} onArchivedCalsChange={changeArchivedCals}
             showCompleted={showCompleted} onToggleShowCompleted={toggleShowCompleted}
+            notifyEnabled={notifyEnabled} onNotifyEnabledChange={changeNotifyEnabled}
+            notifyChatId={notifyChatId} onNotifyChatIdChange={changeNotifyChatId}
+            notifyTokenSet={notifyTokenSet} notifyBotId={notifyBotId}
+            onNotifyTokenChange={changeNotifyToken}
             notifyTriggers={notifyTriggers} onNotifyTriggersChange={changeNotifyTriggers}
             notifyDigestTime={notifyDigestTime}
             onNotifyDigestTimeChange={changeNotifyDigestTime}
