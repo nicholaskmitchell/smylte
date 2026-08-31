@@ -43,6 +43,8 @@ from pydantic import BaseModel, Field, field_validator
 from .access import AccessVerifier
 from .auth import Authenticator, HashBudget, RateLimiter, hash_password, limiter_key
 from .config import Settings, normalize_dav_url
+from .db import store
+from .notify.rules import TRIGGERS as NOTIFY_TRIGGERS
 from .dav.errors import AuthError as DavAuthError
 from .dav.errors import DavError
 from .dav.errors import NotFound as DavNotFound
@@ -721,6 +723,29 @@ class SettingsPatch(BaseModel):
     day_capacity_minutes: int | None = Field(default=None, ge=-1, le=1440)
     day_capacity_by_weekday: dict[str, int] | None = Field(default=None, max_length=7)
 
+    # ── notifications ─────────────────────────────────────────────────────────
+    # Which rules are on, as a SPARSE override map: an absent key means that
+    # rule's own default (notify/rules.py::trigger_enabled). Not four booleans
+    # defaulting true, because a rule added in six months would then be governed
+    # by whatever the account's blob happened to contain before it existed.
+    #
+    # There is deliberately no quiet-hours setting here. Loud and quiet are
+    # fixed per rule in code — a booking or a sync failure is always silent — so
+    # nothing this app chooses to send can wake anyone at 3am, and a preference
+    # to compensate for that would be a preference compensating for a policy
+    # mistake. See the notify/rules.py docstring.
+    notify_triggers: dict[str, bool] | None = Field(default=None, max_length=16)
+    # The hour the daily digest arrives, in the owner's own zone. HH:MM, 24-hour
+    # — a stored string rather than two ints because that is what the settings
+    # blob already holds for every other time-like value and what a <input
+    # type="time"> hands back.
+    notify_digest_time: str | None = Field(default=None, max_length=5)
+    # How far ahead of a meeting to say something. Floored at 3 in the rule
+    # rather than here, because the floor is a property of the pipeline (a 30s
+    # CalDAV poll plus a 60s notify tick) and belongs beside the code that knows
+    # those numbers; this bound only keeps an absurd value out of the blob.
+    notify_event_lead_minutes: int | None = Field(default=None, ge=1, le=120)
+
     @field_validator("day_capacity_by_weekday")
     @classmethod
     def _check_capacity_map(cls, v: dict[str, int] | None) -> dict[str, int] | None:
@@ -745,6 +770,45 @@ class SettingsPatch(BaseModel):
             if 0 <= minutes <= 1440:
                 out[name] = minutes
         return out
+
+    @field_validator("notify_triggers", mode="before")
+    @classmethod
+    def _known_triggers(cls, v):
+        """Keep only rules this build actually has, carrying a real boolean.
+
+        FILTERS rather than 422s, for the reason `_check_capacity_map` gives: a
+        blob written by a client that knows a rule this build does not must not
+        reject the whole settings PUT and take the theme down with it. It also
+        means retiring a rule cannot strand an account on a write it can never
+        make again.
+
+        `mode="before"` is load-bearing, not stylistic. Declared as
+        `dict[str, bool]`, pydantic coerces each value BEFORE any validator of
+        mine runs — so `{"sync_stalled": "x"}` raised `bool_parsing` and 422'd
+        the entire PUT, which is precisely the whole-settings-lost failure this
+        docstring claims to prevent. Filtering ahead of coercion makes the claim
+        true; the annotation then coerces nothing, because only real bools are
+        left.
+        """
+        if not isinstance(v, dict):
+            return None
+        return {k: val for k, val in v.items()
+                if k in NOTIFY_TRIGGERS and isinstance(val, bool)}
+
+    @field_validator("notify_digest_time")
+    @classmethod
+    def _wall_clock(cls, v: str | None) -> str | None:
+        """HH:MM on a 24-hour clock, or nothing.
+
+        Rejected rather than filtered, unlike the map above: this is one scalar
+        the user typed in a time field, so a refusal is a correct, actionable
+        error rather than a silently dropped preference.
+        """
+        if v is None or v == "":
+            return v
+        if not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", v):
+            raise ValueError(f"{v!r} is not a time; use HH:MM on a 24-hour clock")
+        return v
 
     @field_validator("home_timezone")
     @classmethod
@@ -949,6 +1013,61 @@ async def _sync_loop(app: FastAPI) -> None:
             log.warning("sync loop error: %s", e)
 
 
+# ── background notification scheduler ─────────────────────────────────────────
+
+def _build_notifier(settings: Settings, svc: TaskService):
+    """The notifier, or None when notifications are switched off.
+
+    None is the ordinary case — `TASKS_NOTIFY_ENABLED` is false by default — and
+    `_notification_loop` returns immediately when it finds one, so a deployment
+    that has not opted in runs no extra task and opens no HTTP client.
+    """
+    if not settings.notify_enabled:
+        return None
+    from .notify.scheduler import Notifier
+    from .notify.telegram import TelegramSender
+
+    sender = TelegramSender(settings.telegram_bot_token)
+    log.info("notify: telegram scheduler enabled (every %.0fs)", settings.notify_interval_s)
+    return Notifier(svc, sender, settings.telegram_chat_id, log=log)
+
+
+
+async def _notification_loop(app: FastAPI) -> None:
+    """Sweep the notification rules on a timer, and once at startup.
+
+    The sweep happens BEFORE the first wait, deliberately. A restart is the
+    ordinary case for a missed notification — the box came back at 07:32 and the
+    digest was due at 07:30 — and a loop that waits first would hold that until
+    the next tick. The rules are written as windows that close, so sweeping
+    early is safe: anything whose moment has passed simply does not qualify.
+
+    The interval is re-read every iteration rather than snapshotted like
+    `_sync_loop` does, so a change to the account settings takes effect without
+    a restart.
+    """
+    notifier = getattr(app.state, "notifier", None)
+    if notifier is None:
+        return
+    svc: TaskService = app.state.service
+    trigger: asyncio.Event = app.state.notify_trigger
+    first = True
+    while True:
+        if not first:
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(
+                    trigger.wait(), timeout=max(5.0, svc.settings.notify_interval_s)
+                )
+            trigger.clear()
+        first = False
+        try:
+            await asyncio.to_thread(notifier.sweep)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            log.warning("notification loop error: %s", e)
+
+
 # ── app factory ───────────────────────────────────────────────────────────────
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -958,6 +1077,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "TASKS_ACCESS_REQUIRED is set but TASKS_ACCESS_TEAM_DOMAIN / TASKS_ACCESS_AUD "
             "are not configured — refusing to start unprotected."
         )
+    # Notifications are opt-in and refuse to come up half-configured, the same
+    # posture the MCP connector takes below: a scheduler that runs with no chat
+    # to send to is a feature that silently does nothing, and the owner would
+    # have no way to tell that from "nothing was worth notifying about".
+    if settings.notify_enabled:
+        missing = [name for name, value in (
+            ("TASKS_TELEGRAM_BOT_TOKEN", settings.telegram_bot_token),
+            ("TASKS_TELEGRAM_CHAT_ID", settings.telegram_chat_id),
+        ) if not value]
+        if missing:
+            raise RuntimeError(
+                f"TASKS_NOTIFY_ENABLED is set but {' and '.join(missing)} "
+                f"{'is' if len(missing) == 1 else 'are'} not configured — "
+                "refusing to start a notifier that can never send. Create a bot "
+                "with @BotFather, message it once so it may reply, and put the "
+                "token and your chat id in /etc/tasks/tasks.env. Note that "
+                "deploy/tasks.service is loopback-only: outbound access to "
+                "api.telegram.org has to be opened before anything can leave "
+                "the box (see docs/DEPLOY.md)."
+            )
+
     verifier = AccessVerifier(settings)
 
     # Primary gate: the app's own username/password. Secure-by-default — with auth
@@ -1042,18 +1182,29 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         svc.bind_loop(asyncio.get_running_loop())
         app.state.service = svc
         app.state.sync_trigger = asyncio.Event()
+        app.state.notify_trigger = asyncio.Event()
+        app.state.notifier = _build_notifier(settings, svc)
         if authenticator is not None:
             # Sessions ended before this process started stay ended.
             authenticator.load_revocations(await asyncio.to_thread(svc.live_revocations))
             _refresh_session_ttl(await asyncio.to_thread(svc.get_settings))
         await asyncio.to_thread(svc.bootstrap)
         loop_task = asyncio.create_task(_sync_loop(app))
+        notify_task = asyncio.create_task(_notification_loop(app))
         try:
             yield
         finally:
-            loop_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await loop_task
+            # Both loops go down BEFORE svc.close(), or the survivor's next
+            # iteration writes to a closed SQLite connection and asyncio logs an
+            # unretrieved exception on every restart.
+            for task in (loop_task, notify_task):
+                task.cancel()
+            for task in (loop_task, notify_task):
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+            notifier = getattr(app.state, "notifier", None)
+            if notifier is not None:
+                notifier.close()
             svc.close()
 
     app = FastAPI(title="tasksd", version="0.1.0-phase1", lifespan=lifespan)
@@ -1699,7 +1850,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # Adopted straight away, so shortening the session takes effect on the
         # next request rather than the next restart.
         _refresh_session_ttl(merged)
+        # Wake the scheduler so a changed digest hour or a re-enabled rule takes
+        # effect now rather than on the next tick. Read defensively: four test
+        # modules build the app without the lifespan and hand-wire app.state, so
+        # the attribute may simply not be there.
+        notify_trigger = getattr(request.app.state, "notify_trigger", None)
+        if notify_trigger is not None:
+            notify_trigger.set()
         return merged
+
+    # -- notifications --
+    #
+    # Read-only, and deliberately so. Everything that CONFIGURES notifications
+    # is a preference and goes through PUT /api/settings with the rest; this is
+    # the one thing that is not a preference — what the bot has actually been
+    # saying — so the owner can audit the channel without opening Telegram, and
+    # can see what the daily ceiling swallowed (`silent` on a rule that buzzes).
+    @api.get("/notifications/recent")
+    async def get_recent_notifications(request: Request, limit: int = Query(50, ge=1, le=200)):
+        rows = await _run(_svc(request).notifications, store.recent_notifications, limit=limit)
+        return {"deliveries": rows, "triggers": list(NOTIFY_TRIGGERS)}
 
     # -- tags / search / sync --
     @api.get("/tags")
