@@ -5,7 +5,8 @@
 --     derived projection of what is on the wire. Delete them, full-resync, and
 --     you get byte-identical application state back (invariant #1).
 --   * SIDECAR tables (sidecar, list_settings, completions, attachments,
---     day_plan, day_plan_opened, day_ritual, habits) hold app-only state that
+--     day_plan, day_plan_opened, day_ritual, habits, notification_deliveries)
+--     hold app-only state that
 --     exists NOWHERE on the wire (kanban column, manual sort, pins, per-list
 --     settings, the day's plan, which days were opened at all, what the owner
 --     SAID about each day — its capacity, its stamps and the line they wrote
@@ -130,6 +131,23 @@ CREATE TABLE IF NOT EXISTS sidecar (
     pinned                 INTEGER NOT NULL DEFAULT 0,
     estimated_minutes      INTEGER,          -- DURATION is exclusive with DUE; keep it here
     repeat_from_completion INTEGER NOT NULL DEFAULT 0,
+    -- "Notify me this many minutes before." Set per ITEM, on a task's due
+    -- instant or an event's start, and NULL on almost everything — which is what
+    -- "I did not ask to be told about this one" means.
+    --
+    -- Here rather than as a VALARM on the wire, and that is a decision rather
+    -- than a shortcut. A VALARM is the interoperable answer and would be the
+    -- right one if Smylte were the only client — but it is not: Tasks.org,
+    -- Thunderbird and Apple Calendar share these collections and would each
+    -- fire their own alarm off the same property, so writing one would buy
+    -- interop by notifying the owner three times. `ical/read.py` also skips
+    -- subcomponents whole, so honouring VALARM properly is a read/write change
+    -- against the fidelity invariants rather than a column.
+    --
+    -- Sidecar-class for the ordinary reason too: it survives the
+    -- delete-and-recreate a foreign client's edit can look like, so a reminder
+    -- the owner set does not evaporate because their phone rewrote the resource.
+    notify_minutes_before  INTEGER,
     orphaned_at            TEXT,             -- set when UID leaves the wire; GC after 7 days
     updated_at             TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     PRIMARY KEY (collection_href, uid)
@@ -424,3 +442,57 @@ CREATE TABLE IF NOT EXISTS habits (
     estimate_minutes INTEGER,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
+
+-- ── notifications (SIDECAR: what has already been said out loud) ─────────────
+--
+-- One row per notification that has been SENT, keyed by what it was about. The
+-- table exists for one reason: a notification must never arrive twice. The
+-- scheduler wakes on a timer and re-evaluates the same window repeatedly — the
+-- 09:00 sweep on a day the process restarted at 09:02 sees exactly what the
+-- 09:00 sweep saw — so "have I already said this?" cannot be answered from the
+-- data that triggered it. It is answered here.
+--
+-- `dedupe_key` is the identity of the OCCASION, not of the message: the task
+-- uid plus the day, the event uid plus its start instant, the day key for a
+-- once-a-day digest. Two different wordings of the same occasion share a key
+-- and the second one is not sent.
+--
+-- A row is written BEFORE the send (see store.claim_notification), not after.
+-- Writing it after leaves a window in which a crash between the API call and
+-- the INSERT re-arms a message that already reached the phone, and a duplicate
+-- 3am alert costs more trust than a missed one. The outcome is stamped back
+-- onto the claimed row afterwards, so a failed send is recorded rather than
+-- retried: the transport has already retried it (notify/telegram.py), and a
+-- "starting in 10 minutes" redelivered half an hour later is worse than
+-- silence.
+--
+-- Sidecar-class, and listed as such above and in docs/DEPLOY.md: nothing here
+-- is on the wire and no resync rebuilds it. Losing it is not corruption, but a
+-- restored machine will re-send whatever still falls inside the scheduler's
+-- catch-up window — which is the one visible cost, and the reason it is in the
+-- backup list rather than treated as scratch.
+--
+-- Deliberately NO foreign key to `items`, for the same reason `day_plan` has
+-- none: `mark_collection_deleted` hard-deletes an entire collection's rows and
+-- a completed task leaves the wire routinely. A cascade here would silently
+-- re-arm a notification that has already been delivered.
+CREATE TABLE IF NOT EXISTS notification_deliveries (
+    trigger     TEXT NOT NULL,            -- which rule fired, e.g. 'event_starting'
+    dedupe_key  TEXT NOT NULL,            -- the occasion it fired about
+    channel     TEXT NOT NULL DEFAULT 'telegram',
+    -- When the row was CLAIMED. The send happens after, outside the service
+    -- lock, so this is within a few seconds of delivery and never after it.
+    claimed_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    -- NULL until the transport has answered: a row in that state is a send that
+    -- was claimed and never resolved, which is what a crash mid-send looks like.
+    settled_at  TEXT,
+    ok          INTEGER NOT NULL DEFAULT 0,
+    silent      INTEGER NOT NULL DEFAULT 0,   -- sent with disable_notification
+    -- The transport's error, ALREADY REDACTED (notify/telegram.py::_redact).
+    -- The bot token travels in the request path, so an unredacted httpx error
+    -- string here would be a plaintext credential in every backup of this file.
+    error       TEXT,
+    PRIMARY KEY (trigger, dedupe_key, channel)
+);
+CREATE INDEX IF NOT EXISTS idx_notification_deliveries_claimed
+    ON notification_deliveries(claimed_at);

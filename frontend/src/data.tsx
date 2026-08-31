@@ -75,6 +75,11 @@ export interface TaskData {
   toggle: (t: Task) => Promise<void>
   remove: (t: Task) => Promise<void>
   saveDetail: (t: Task, patch: Record<string, unknown>) => Promise<void>
+  /** "Notify me N minutes before this is due", or -1 to clear it. Its own call
+   *  rather than a field on saveDetail: the reminder is app-only, and sending
+   *  it through PATCH would PUT the VTODO back and move its etag, making every
+   *  other CalDAV client re-fetch a resource that did not change. */
+  setReminder: (t: Task, minutes: number) => Promise<void>
   /** Move the task `from` to where `target` currently sits WITHIN `run`. Same
    *  gesture as the sidebar's list drag: dropping on a row below lands after
    *  it, above lands before it. Positions are assigned across every task on the
@@ -333,7 +338,7 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
     // the user hasn't placed by hand (see order.ts). The list is sorted at
     // render, so this stand-in paints where the real task will be — it does not
     // matter that `create` appends it to the end of the array.
-    pinned: false, sort_order: null, kanban_column: null, estimated_minutes: null,
+    pinned: false, sort_order: null, kanban_column: null, estimated_minutes: null, notify_minutes_before: null,
     // Nothing here is a stand-in for a server value the way `priority_label` is
     // above — these are facts about a task that does not exist on the wire yet.
     // It has no COMPLETED stamp (it is not done), no RRULE (this app authors
@@ -602,6 +607,14 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
     settle(await guard(() => api.patchTask(t.list, t.uid, patch)), t)
   }
 
+  const setReminder = async (t: Task, minutes: number) => {
+    // Painted immediately like every other write here, then reconciled. -1 is
+    // the clear sentinel on the wire and `null` is what the DTO carries for it.
+    patchLocal(t, { notify_minutes_before: minutes < 0 ? null : minutes })
+    invalidateFetches()
+    settle(await guard(() => api.setTaskReminder(t.list, t.uid, minutes)), t)
+  }
+
   // Repair, once per row, the subtasks written before `uidFor` existed: their
   // RELATED-TO holds the create's client_id rather than the uid derived from
   // it, so it resolves to nothing. Reinterpreting them at render (TasksView)
@@ -716,7 +729,7 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
 
   const value: TaskData = {
     lists: ordered, serverOrderedLists: lists, tasks, listsLoaded, listsOk, loaded, setLists,
-    create, createMany, addSub, toggle, remove, saveDetail, reorder,
+    create, createMany, addSub, toggle, remove, saveDetail, setReminder, reorder,
     taskListErrors: listErrors, reloadTasks,
   }
   return <TaskCtx.Provider value={value}>{children}</TaskCtx.Provider>

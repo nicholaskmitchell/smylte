@@ -20,6 +20,7 @@ import { AgendaEvent, AgendaTask, DayPopover } from './DayPopover'
 import { Sidebar } from './Sidebar'
 import { TaskModal } from './TaskModal'
 import { DateTimeInput } from './DateTimeInput'
+import { NO_REMINDER, ReminderField } from './ReminderField'
 import { useI18n, useT } from '../i18n'
 import { monthNames, weekdayNames } from '../names'
 
@@ -85,6 +86,7 @@ function draftEvent(uid: string, calHref: string, body: Record<string, unknown>)
     // no TRANSP is busy — so the stand-in agrees with the DTO that is about to
     // replace it either way.
     busy: body.busy !== false,
+    notify_minutes_before: null,
     tags: Array.isArray(body.tags) ? (body.tags as string[]) : [],
     has_rrule: false, href: '', etag: '',
   }
@@ -195,7 +197,8 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
     windowErrors } = useCalendarData()
   // Tasks need no fetch of their own: the provider above this already holds
   // every task of every list, and HomeView reads both datasets the same way.
-  const { lists: taskLists, tasks, listsLoaded, saveDetail, remove: removeTask } = useTaskData()
+  const { lists: taskLists, tasks, listsLoaded, saveDetail, setReminder,
+          remove: removeTask } = useTaskData()
   const setCursor = onCursorChange
   // Every calendar is visible by default; this holds the ids the user hid, so a
   // brand-new calendar shows up without any extra write.
@@ -875,6 +878,11 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
 
       {draft && (
         <EventModal draft={draft} cals={visibleCals} onClose={() => setDraft(null)}
+          onReminderChange={(uid, m) => {
+            void guard(() => api.setEventReminder(
+              draft.event ? calIdOf(draft.event) : defaultCal, uid, m))
+              .then(() => { reloadHere() })
+          }}
           initialCal={draft.event ? calIdOf(draft.event) : defaultCal}
           onSave={(body, cal, uid) => {
             // Existing events are patched where they live, then relocated if a
@@ -894,6 +902,7 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
           onClose={() => setTaskDetail(null)}
           onCreate={() => {}} onMultiple={() => {}}
           onSave={(patch) => { void saveDetail(taskDetail, patch); setTaskDetail(null) }}
+          onReminderChange={(m) => { void setReminder(taskDetail, m) }}
           onDelete={() => { void removeTask(taskDetail); setTaskDetail(null) }} />
       )}
 
@@ -942,10 +951,14 @@ const REPEATS: ReadonlyArray<readonly [string, string]> = [
   ['yearly', 'cal.repeat.yearly'],
 ]
 
-function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete }: {
+function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete,
+                     onReminderChange }: {
   draft: Draft; cals: List[]; initialCal: string; onClose: () => void
   onSave: (body: Record<string, unknown>, cal: string, uid?: string) => void
   onDelete: (uid: string, opts?: { recurrence_id?: string | null; scope?: EventScope }) => void
+  /** "Notify me N minutes before", in minutes, or -1 to clear. Its own callback
+   *  because it is not a wire property and must not ride in the PATCH body. */
+  onReminderChange?: (uid: string, minutes: number) => void
 }) {
   const e = draft.event
   const { lang: appLang } = useI18n()
@@ -1006,6 +1019,15 @@ function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete }: {
    * store if it were never touched.
    */
   const [busy, setBusy] = useState(e?.busy ?? true)
+  // "Notify me N minutes before this starts." Not an iCalendar property (see
+  // api.ts) — on a CREATE it rides in the body, which the server applies once
+  // the uid exists, and on an EDIT it goes to its own endpoint so a PATCH does
+  // not PUT the VEVENT back and move its etag for a field that is not on it.
+  //
+  // On the SERIES, not the occurrence: the sidecar is keyed on the resource, so
+  // "twenty minutes before my standup" is a statement about the standup rather
+  // than about next Tuesday's. That is why it sits outside the scope prompt.
+  const [reminder, setReminder] = useState<number | null>(e?.notify_minutes_before ?? null)
   // A new/non-recurring event picks a concrete cadence; an existing recurring one
   // defaults to "keep" — we don't surface its exact FREQ, so leaving it untouched
   // preserves the rule.
@@ -1105,8 +1127,15 @@ function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete }: {
   const commit = (scope: EventScope) => {
     if (!e) {
       onSave({ summary, all_day: allDay, start: startOut, end: endOut,
-               location, description, tags, ...busyFields(), ...repeatFields() }, calPick)
+               location, description, tags, ...busyFields(), ...repeatFields(),
+               ...(reminder !== null ? { notify_minutes_before: reminder } : {}) }, calPick)
       return
+    }
+    // Sent only when it actually changed, so an unrelated rename does not write
+    // the sidecar. -1 clears: 0 is a real lead ("tell me at the moment itself"),
+    // so the clear cannot borrow falsiness.
+    if (reminder !== (e.notify_minutes_before ?? null)) {
+      onReminderChange?.(e.uid, reminder === null ? NO_REMINDER : reminder)
     }
     const details = { summary, location, description, ...tagFields(), ...busyFields() }
     // An event whose span we could not reconstruct sends no end at all, so the
@@ -1261,6 +1290,10 @@ function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete }: {
 
                 Placed under the times, since it is a statement ABOUT that span
                 and means nothing without one. */}
+            <div className="field reminder-row">
+              <label className="label" htmlFor="ev-reminder">{tr('reminder.label')}</label>
+              <ReminderField id="ev-reminder" value={reminder} onChange={setReminder} />
+            </div>
             <div className="field">
               <label className="label" htmlFor="ev-busy">{tr('cal.showAs')}</label>
               <select className="input" id="ev-busy" value={busy ? 'busy' : 'free'}

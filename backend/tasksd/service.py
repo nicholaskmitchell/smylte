@@ -598,6 +598,11 @@ class TaskService:
             # No migration: a database old enough to lack this column predates
             # the table it is on.
             "estimated_minutes": s["estimated_minutes"] if s else None,
+            # "Notify me this many minutes before." NULL on almost everything,
+            # which is what "I did not ask to be told about this one" means —
+            # and what keeps the reminder rule quiet by default. See
+            # notify/rules.py::_eval_item_reminder.
+            "notify_minutes_before": s["notify_minutes_before"] if s else None,
             "has_rrule": bool(it["has_rrule"]),
             "href": it["href"],
             "etag": it["etag"],
@@ -762,9 +767,22 @@ class TaskService:
 
     def set_sidecar(self, href: str, uid: str, **fields: object) -> dict[str, Any] | None:
         with self._lock:
-            store.set_sidecar(self._conn, href, uid, **fields)
+            store.set_sidecar(self._conn, href, uid, **_clear_sentinels(fields))
         self._publish({"type": "task_updated", "list": _slug(href), "uid": uid})
         return self.get_task(href, uid)
+
+    def set_event_sidecar(self, href: str, uid: str, **fields: object) -> dict[str, Any] | None:
+        """The same write for a VEVENT.
+
+        Its own method rather than a flag on `set_sidecar`, for the two things
+        that actually differ: the SSE event names an event, and the DTO returned
+        is an event's. A calendar told `task_updated` refetches the wrong
+        collection and paints nothing.
+        """
+        with self._lock:
+            store.set_sidecar(self._conn, href, uid, **_clear_sentinels(fields))
+        self._publish({"type": "event_updated", "list": _slug(href), "uid": uid})
+        return self.get_event(href, uid)
 
     # ── calendars / events ───────────────────────────────────────────────────
     def list_calendars(self) -> list[dict[str, Any]]:
@@ -790,32 +808,36 @@ class TaskService:
         with self._lock:
             rows = store.get_events_in_range(self._conn, href, start_iso, end_iso)
             cats = store.get_all_categories(self._conn, href)
+            # One query for the whole collection, like `cats` beside it — an
+            # event's per-item reminder lives in the same sidecar row a task's
+            # does, and a per-event lookup would be a round trip per row.
+            side = store.get_all_sidecar(self._conn, href)
         win_start, win_end = _parse_window(start_iso), _parse_window(end_iso)
         out: list[dict[str, Any]] = []
         for r in rows:
             if not r["has_rrule"]:
-                out.append(self._event_dto(r, cats))          # one row, one instance
+                out.append(self._event_dto(r, cats, side))    # one row, one instance
                 continue
             # Recurring: fan the cached raw_ics out into per-occurrence rows. A
             # single malformed resource must not blank the whole month — fall back
             # to showing its master row.
             try:
                 for occ in recur.expand_occurrences(r["raw_ics"], win_start, win_end):
-                    out.append(self._occurrence_dto(r, occ, cats))
+                    out.append(self._occurrence_dto(r, occ, cats, side))
             except Exception:  # noqa: BLE001
                 log.warning("recurrence expansion failed for %s; showing master", r["uid"])
                 if blocking:
-                    out.append(self._opaque_span_dto(r, start_iso, end_iso, cats))
+                    out.append(self._opaque_span_dto(r, start_iso, end_iso, cats, side))
                 else:
-                    out.append(self._event_dto(r, cats))
+                    out.append(self._event_dto(r, cats, side))
         return out
 
     def _opaque_span_dto(
-        self, row, start_iso: str, end_iso: str, cats
+        self, row, start_iso: str, end_iso: str, cats, side=None
     ) -> dict[str, Any]:
         """A recurring resource we could not expand, as one interval covering the
         whole query window — "assume busy" rather than "assume free"."""
-        dto = dict(self._event_dto(row, cats))
+        dto = dict(self._event_dto(row, cats, side))
         dto["start"], dto["end"] = start_iso, end_iso
         dto["start_is_date"] = dto["end_is_date"] = False
         dto["duration"] = None
@@ -827,10 +849,12 @@ class TaskService:
             if row is None or row["component"] != "VEVENT":
                 return None
             cats = store.get_all_categories(self._conn, href)
-        return self._event_dto(row, cats)
+            side = store.get_all_sidecar(self._conn, href)
+        return self._event_dto(row, cats, side)
 
-    def _event_dto(self, it, cats) -> dict[str, Any]:
+    def _event_dto(self, it, cats, side=None) -> dict[str, Any]:
         uid = it["uid"]
+        s = (side or {}).get(uid)
         return {
             "uid": uid,
             "id": uid,                       # non-recurring: instance id == uid
@@ -859,15 +883,20 @@ class TaskService:
             "etag": it["etag"],
             "created": it["created"],
             "last_modified": it["last_modified"],
+            # The same per-item reminder a task carries, on the same sidecar
+            # row — an event's "notify me 20 minutes before" and a task's are
+            # one feature, so they are one column and one rule.
+            "notify_minutes_before": s["notify_minutes_before"] if s else None,
         }
 
-    def _occurrence_dto(self, it, occ: recur.Occurrence, cats) -> dict[str, Any]:
+    def _occurrence_dto(self, it, occ: recur.Occurrence, cats, side=None) -> dict[str, Any]:
         """One expanded occurrence of a recurring series. Same keys as
         ``_event_dto`` (so the frontend stays uniform), but ``id`` is unique per
         instance and ``start``/``end`` are this occurrence's times; per-instance
         text falls back to the master's when an override omits a field. ``uid`` /
         ``href`` stay the base resource so series-level edit/delete still work."""
         uid = it["uid"]
+        s = (side or {}).get(uid)
         return {
             "uid": uid,
             "id": f"{uid}::{occ.recurrence_id}",
@@ -897,6 +926,12 @@ class TaskService:
             "etag": it["etag"],
             "created": it["created"],
             "last_modified": it["last_modified"],
+            # The series' reminder, carried by every occurrence. The sidecar is
+            # keyed on the RESOURCE (invariant #4), so a recurring event has one
+            # reminder rather than one per instance — "notify me 20 minutes
+            # before my standup" is a statement about the standup, not about
+            # next Tuesday's.
+            "notify_minutes_before": s["notify_minutes_before"] if s else None,
         }
 
     def create_event(self, href: str, summary: str, *, dtstart, dtend=None,
@@ -2565,6 +2600,34 @@ class TaskService:
         with self._lock:
             return fn(self._conn, *args, **kwargs)
 
+    # ── notifications ─────────────────────────────────────────────────────────
+    def notifications(self, fn, *args, **kwargs):
+        """Run one store function against the connection, under the lock.
+
+        The notifier needs the delivery ledger (claim/settle), and the ledger is
+        in the same single SQLite connection everything else shares. This is the
+        same borrow `oauth` performs and for the same reason: a second handle on
+        the database, or a second idea of when it is safe to write, is how the
+        `InterfaceError` in this file's other long comment happened.
+
+        Deliberately NOT held across the send. The caller claims under this
+        lock, releases it, does the HTTP, then settles under it again — network
+        I/O inside a process-wide RLock blocks every API route for the length of
+        an HTTP timeout.
+        """
+        with self._lock:
+            return fn(self._conn, *args, **kwargs)
+
+    def sync_health(self) -> list[dict[str, Any]]:
+        """Collections with a sync error standing — see `store.sync_health`."""
+        with self._lock:
+            return [dict(r) for r in store.sync_health(self._conn)]
+
+    def bookings_created_since(self, stamp: str) -> list[dict[str, Any]]:
+        """Bookings whose row was written at or after `stamp`."""
+        with self._lock:
+            return [dict(r) for r in store.bookings_created_since(self._conn, stamp)]
+
     # ── app settings (account-synced) ─────────────────────────────────────────
     def get_settings(self) -> dict[str, Any]:
         with self._lock:
@@ -2576,6 +2639,19 @@ class TaskService:
         # Notify other open tabs/devices so the change syncs live.
         self._publish({"type": "settings_updated"})
         return settings
+
+
+# Fields where -1 means CLEAR rather than a value. The same sentinel the day
+# ritual and the day entry use, and for the same reason: 0 is a real answer for
+# every one of them ("tell me exactly when it is due", "not working today"), so
+# the clear cannot borrow falsiness. Mapped here, once, rather than in each
+# route — `store.set_sidecar` writes what it is given and has no business
+# knowing which integers are sentinels.
+_CLEARABLE = ("notify_minutes_before",)
+
+
+def _clear_sentinels(fields: dict[str, object]) -> dict[str, object]:
+    return {k: (None if k in _CLEARABLE and v == -1 else v) for k, v in fields.items()}
 
 
 def priority_from_label(label: str | None) -> int | None:

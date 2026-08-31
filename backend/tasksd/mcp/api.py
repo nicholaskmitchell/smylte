@@ -23,6 +23,7 @@ from contextlib import contextmanager
 from datetime import date, datetime, time as time_of_day, timedelta, timezone
 from zoneinfo import ZoneInfo
 
+from .. import due
 from ..ical import EventEdit, TaskEdit, rrule_from_spec
 from ..ical.read import normalize_offset, split_duration
 from ..service import day_key as _day_key, priority_from_label
@@ -122,22 +123,12 @@ def _hhmm(value: str, *, field: str) -> time_of_day:
 def _instant_in(value: date | datetime, zone) -> float:
     """A date-or-datetime as an absolute instant, resolved in `zone`.
 
-    THE one resolution rule in this module, and it is one rule on purpose: this
-    file already had two, and their drifting apart was the whole of a finding.
-    `_due_instant` resolved a deadline in the owner's zone while the `due_before`
-    / `due_after` filters four lines from it went through `_as_dt`, which
-    flattens to the SERVER's wall clock — so `smylte_list_tasks` sorted a task by
-    one zone and filtered it by another, and disagreed with `service._due_day`
-    and with the SPA about which day a deadline falls on.
-
-    An all-day value becomes midnight; a naive time is read as the owner's; an
-    aware one keeps the instant it already names.
+    THE one resolution rule for this module, and now for the whole app: it moved
+    to `tasksd/due.py` when the notifier became a second reader of a deadline.
+    Re-exported under the old private name so every call site in this file keeps
+    reading the way it did.
     """
-    if not isinstance(value, datetime):
-        value = datetime.combine(value, time_of_day.min)
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=zone) if zone is not None else value.astimezone()
-    return value.timestamp()
+    return due.instant_in(value, zone)
 
 
 def _bound_instant(value, zone, *, field: str) -> float | None:
@@ -145,7 +136,7 @@ def _bound_instant(value, zone, *, field: str) -> float | None:
 
     Parsed STRICTLY, unlike a deadline off the wire: `_parse_dt` refusing a value
     the caller sent is a correct, actionable error, and the soft-fail in
-    `_due_parts` exists only because a cached value came from another CalDAV
+    `due.due_parts` exists only because a cached value came from another CalDAV
     client. See that function's note.
     """
     parsed = _parse_dt(value, field=field)
@@ -155,26 +146,12 @@ def _bound_instant(value, zone, *, field: str) -> float | None:
 def _due_parts(raw, zone) -> tuple[float, float] | None:
     """A deadline as `(due_at, overdue_at)`, both instants in `zone`.
 
-    Two numbers because a deadline expires later than it is due, and only for
-    an all-day one: `util.ts::isOverdue` is the app's own rule — "an all-day item
-    isn't overdue until its whole day has passed" — and `service._due_day`
-    resolves the day in `home_timezone`. Both are honoured here rather than a
-    third answer being invented. The day is added as WALL CLOCK, so a deadline
-    whose day contains a DST transition expires 23 or 25 hours later, not 24.
+    Moved to `tasksd/due.py` — the daily digest counts overdue tasks and had to
+    ask the same question, and a second implementation is a second number for
+    the same task on the same screen. Kept under the old name here because the
+    call sites in this file read better with it.
     """
-    if not raw:
-        return None
-    try:
-        value = _parse_dt(raw, field="due")
-    except ToolError:
-        # Fail SOFT, and only here — see `_due_instant`.
-        return None
-    if value is None:
-        return None
-    due_at = _instant_in(value, zone)
-    if isinstance(value, datetime):
-        return due_at, due_at
-    return due_at, _instant_in(value + timedelta(days=1), zone)
+    return due.due_parts(raw, zone)
 
 
 def _due_instant(t: dict, zone) -> float | None:
@@ -525,6 +502,31 @@ class McpApi:
             out.append(t)
         return _in_display_order(out, self._home_zone())
 
+    # ── per-item reminders ───────────────────────────────────────────────────
+    #
+    # `notify_minutes_before` is a SIDECAR field, not an iCalendar property (see
+    # the schema comment on the column: a VALARM would make three other CalDAV
+    # clients fire their own alarm off it). So it cannot ride in a TaskEdit or
+    # an EventEdit and is written on its own, after the wire write has landed —
+    # which also means a create can only set it once the uid exists.
+
+    @staticmethod
+    def _reminder(value):
+        """Validate a reminder lead, mapping -1 to "clear" the way HTTP does."""
+        if value is None:
+            return None
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ToolError(
+                f"notify_minutes_before={value!r} must be a whole number of "
+                f"minutes, or -1 to clear the reminder."
+            )
+        if value < -1 or value > 10080:
+            raise ToolError(
+                "notify_minutes_before must be between 0 and 10080 minutes "
+                "(a week), or -1 to clear it."
+            )
+        return value
+
     def get_task(self, list_id, uid):
         task = self._svc.get_task(self._href(list_id), uid)
         if task is None:
@@ -538,7 +540,7 @@ class McpApi:
         return self._svc.all_tags()
 
     def create_task(self, list_id, *, summary, notes=None, due=None, start=None,
-                    priority=None, tags=None, parent=None):
+                    priority=None, tags=None, parent=None, notify_minutes_before=None):
         href = self._href(list_id)
         if parent and not self._svc.has_task(href, parent):
             raise ToolError(
@@ -556,14 +558,31 @@ class McpApi:
             kw["priority"] = priority_from_label(priority)
         if tags is not None:
             kw["categories"] = list(tags)
-        return self._svc.create_task(
+        lead = self._reminder(notify_minutes_before)
+        task = self._svc.create_task(
             href, summary, edit=TaskEdit(**kw) if kw else None, parent_uid=parent or None
         )
+        if lead is None or task is None:
+            return task
+        # After the wire write, because the sidecar row is keyed on a uid that
+        # does not exist until the create lands.
+        return self._svc.set_sidecar(href, task["uid"], notify_minutes_before=lead) or task
 
     def update_task(self, list_id, uid, fields: dict):
         href = self._href(list_id)
         if not fields:
             raise ToolError("Nothing to change — pass at least one field to update.")
+        # Split first: a reminder is app-only, and an update that changes ONLY
+        # the reminder must not reach the wire at all — an empty TaskEdit would
+        # PUT the resource back unchanged, moving its etag and making every
+        # other CalDAV client re-fetch it for nothing.
+        lead = self._reminder(fields.get("notify_minutes_before"))
+        wire = {k: v for k, v in fields.items() if k != "notify_minutes_before"}
+        if lead is not None and not wire:
+            if not self._svc.has_task(href, uid):
+                raise ToolError(f"No task {uid!r} in list {list_id!r}.")
+            return self._svc.set_sidecar(href, uid, notify_minutes_before=lead)
+        fields = wire
         kw = {}
         if "summary" in fields:
             kw["summary"] = fields["summary"]
@@ -597,6 +616,8 @@ class McpApi:
             task = self._svc.edit_task(href, uid, TaskEdit(**kw))
         if task is None:
             raise ToolError(f"No task {uid!r} in list {list_id!r}.")
+        if lead is not None:
+            return self._svc.set_sidecar(href, uid, notify_minutes_before=lead) or task
         return task
 
     def complete_task(self, list_id, uid, *, done=True):
@@ -662,7 +683,8 @@ class McpApi:
 
     def create_event(self, calendar_id, *, summary, start, end=None, all_day=False,
                      location=None, description=None, tags=None, busy=None, repeat=None,
-                     repeat_interval=1, repeat_count=None, repeat_until=None):
+                     repeat_interval=1, repeat_count=None, repeat_until=None,
+                     notify_minutes_before=None):
         href = self._href(calendar_id, kind="calendar")
         dtstart = self._event_dt(start, all_day, field="start")
         dtend = self._event_dt(end, all_day, field="end") if end else None
@@ -685,7 +707,11 @@ class McpApi:
         )
         if event is None:
             raise ToolError("The event was written but could not be read back.")
-        return event
+        lead = self._reminder(notify_minutes_before)
+        if lead is None:
+            return event
+        return self._svc.set_event_sidecar(
+            href, event["uid"], notify_minutes_before=lead) or event
 
     @staticmethod
     def _event_dt(value, all_day, *, field):
@@ -755,7 +781,16 @@ class McpApi:
                 fields["repeat"], fields.get("repeat_interval", 1),
                 fields.get("repeat_count"), fields.get("repeat_until"),
             )
+        lead = self._reminder(fields.get("notify_minutes_before"))
         if not kw:
+            # A reminder is app-only, so an update that changes ONLY the
+            # reminder must not reach the wire: an empty EventEdit would PUT the
+            # resource back unchanged, move its etag, and make every other
+            # CalDAV client re-fetch it for nothing.
+            if lead is not None:
+                if self._svc.get_event(href, uid) is None:
+                    raise ToolError(f"No event {uid!r} on calendar {calendar_id!r}.")
+                return self._svc.set_event_sidecar(href, uid, notify_minutes_before=lead)
             raise ToolError("Nothing to change — pass at least one field to update.")
         try:
             with _not_found(f"No event {uid!r} on calendar {calendar_id!r}."):
@@ -766,6 +801,9 @@ class McpApi:
             raise ToolError(str(exc)) from None
         if event is None:
             raise ToolError(f"No event {uid!r} on calendar {calendar_id!r}.")
+        if lead is not None:
+            return self._svc.set_event_sidecar(
+                href, uid, notify_minutes_before=lead) or event
         return event
 
     def move_event(self, calendar_id, uid, to_calendar_id):

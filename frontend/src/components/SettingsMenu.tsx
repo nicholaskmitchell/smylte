@@ -26,6 +26,8 @@ import { ArchivedCalendarsSection } from './ArchivedCalendarsSection'
 import { ConnectionsSection } from './ConnectionsSection'
 import { TabsSection } from './TabsSection'
 import { CapacitySection } from './CapacitySection'
+import { NotificationsSection } from './NotificationsSection'
+import type { Trigger } from '../notifications'
 
 // The nav, in order. `label` is the accessible name of both the nav item and,
 // on a phone, the title bar — Søren's test asserts they agree.
@@ -38,6 +40,7 @@ const SECTIONS = [
   { id: 'appearance', label: 'settings.section.appearance' },
   { id: 'calendar', label: 'settings.section.calendar' },
   { id: 'tasks', label: 'settings.section.tasks' },
+  { id: 'notifications', label: 'settings.section.notifications' },
   { id: 'account', label: 'settings.section.account' },
 ] as const
 
@@ -53,6 +56,14 @@ export function SettingsMenu({
   calFit, onToggleCalFit,
   archivedCals, onArchivedCalsChange,
   showCompleted, onToggleShowCompleted,
+  notifyEnabled, onNotifyEnabledChange,
+  notifyChatId, onNotifyChatIdChange,
+  notifyTokenSet, notifyBotId, onNotifyTokenChange,
+  notifyTriggers, onNotifyTriggersChange,
+  notifyDigestTime, onNotifyDigestTimeChange,
+  notifyEveningTime, onNotifyEveningTimeChange,
+  notifyEventLead, onNotifyEventLeadChange,
+  notifyTaskLead, onNotifyTaskLeadChange,
   user, sessionTtl, onCycleSessionTtl,
   onLogout, onExpire, onClose, panelRef,
 }: {
@@ -81,6 +92,26 @@ export function SettingsMenu({
   onArchivedCalsChange: (next: string[]) => void
   showCompleted: boolean
   onToggleShowCompleted: () => void
+  notifyEnabled: boolean
+  onNotifyEnabledChange: (next: boolean) => void
+  notifyChatId: string
+  onNotifyChatIdChange: (next: string) => void
+  /** Whether a bot token is stored, and which bot. The token itself never comes
+   *  back from the server, so this is all the UI has — and all it needs. */
+  notifyTokenSet: boolean
+  notifyBotId: string
+  onNotifyTokenChange: (next: string) => void
+  /** Sparse overrides: an absent rule means that rule's own default. */
+  notifyTriggers: Partial<Record<Trigger, boolean>>
+  onNotifyTriggersChange: (next: Partial<Record<Trigger, boolean>>) => void
+  notifyDigestTime: string
+  onNotifyDigestTimeChange: (next: string) => void
+  notifyEveningTime: string
+  onNotifyEveningTimeChange: (next: string) => void
+  notifyEventLead: number
+  onNotifyEventLeadChange: (next: number) => void
+  notifyTaskLead: number
+  onNotifyTaskLeadChange: (next: number) => void
   user: string
   sessionTtl: number | null
   onCycleSessionTtl: () => void
@@ -290,6 +321,29 @@ export function SettingsMenu({
               Whether completed tasks stay in the main view. The sidebar's
               “View completed” works either way.
             </div>
+          </>
+        )}
+
+        {section === 'notifications' && (
+          <>
+            <div className="hintline">{tr('notif.intro')}</div>
+            <NotificationsSection
+              enabled={notifyEnabled} onEnabledChange={onNotifyEnabledChange}
+              chatId={notifyChatId} onChatIdChange={onNotifyChatIdChange}
+              tokenSet={notifyTokenSet} botId={notifyBotId}
+              onTokenChange={onNotifyTokenChange}
+              onExpire={onExpire}
+              triggers={notifyTriggers}
+              onTriggersChange={onNotifyTriggersChange}
+              digestTime={notifyDigestTime}
+              onDigestTimeChange={onNotifyDigestTimeChange}
+              eveningTime={notifyEveningTime}
+              onEveningTimeChange={onNotifyEveningTimeChange}
+              eventLead={notifyEventLead}
+              onEventLeadChange={onNotifyEventLeadChange}
+              taskLead={notifyTaskLead}
+              onTaskLeadChange={onNotifyTaskLeadChange}
+              homeTz={homeTz} />
           </>
         )}
 
