@@ -137,6 +137,21 @@ class TelegramSender:
     def configured(self) -> bool:
         return bool(self._token)
 
+    @property
+    def token(self) -> str:
+        return self._token
+
+    @token.setter
+    def token(self, value: str) -> None:
+        """Adopt a new bot token, keeping the connection pool.
+
+        Settable because the token can now be typed into Settings and must take
+        effect on the next sweep rather than at the next restart. Rebuilding the
+        whole sender per sweep would discard the httpx pool — and the redaction
+        below reads `self._token`, so it has to be the one the last request
+        actually used, not one captured at construction."""
+        self._token = (value or "").strip()
+
     def close(self) -> None:
         self._http.close()
 

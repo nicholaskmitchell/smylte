@@ -21,41 +21,33 @@ def _settings(tmp_path, **over):
     return dataclasses.replace(api_settings(str(tmp_path / "n.db")), **over)
 
 
-# ── the startup gate ─────────────────────────────────────────────────────────
+# ── the deployment switch ────────────────────────────────────────────────────
 
-def test_notifications_are_off_unless_asked_for(tmp_path):
-    # A deploy should never grow an outbound network surface on its own.
-    s = _settings(tmp_path)
-    assert s.notify_enabled is False
-    app = create_app(s)
+def test_the_app_starts_with_nothing_configured(tmp_path):
+    # Configuration lives in the account's settings now and can arrive at any
+    # moment, so a boot-time credential check would refuse to start a perfectly
+    # good deployment that simply has not been set up yet.
+    app = create_app(_settings(tmp_path))
     assert app is not None
 
 
-@pytest.mark.parametrize("over,missing", [
-    ({}, "TASKS_TELEGRAM_BOT_TOKEN"),
-    ({"telegram_bot_token": "t"}, "TASKS_TELEGRAM_CHAT_ID"),
-    ({"telegram_chat_id": "5"}, "TASKS_TELEGRAM_BOT_TOKEN"),
-])
-def test_enabling_without_credentials_refuses_to_start(tmp_path, over, missing):
-    # A scheduler with nowhere to send is a feature that silently does nothing,
-    # and the owner could not tell that from "nothing was worth notifying about".
-    with pytest.raises(RuntimeError) as caught:
-        create_app(_settings(tmp_path, notify_enabled=True, **over))
-    assert missing in str(caught.value)
-
-
-def test_the_refusal_names_the_egress_problem_too(tmp_path):
-    # The unit is loopback-only; without this line the first thing the owner
-    # meets after fixing the token is a silent, retrying, never-arriving send.
-    with pytest.raises(RuntimeError) as caught:
-        create_app(_settings(tmp_path, notify_enabled=True))
-    assert "api.telegram.org" in str(caught.value)
-
-
-def test_a_fully_configured_app_builds(tmp_path):
-    app = create_app(_settings(tmp_path, notify_enabled=True,
-                               telegram_bot_token="t", telegram_chat_id="5"))
+def test_the_env_flag_is_a_kill_switch_not_the_feature_switch(tmp_path):
+    # Default is "allowed"; nothing sends until the ACCOUNT turns it on.
+    assert _settings(tmp_path).notify_enabled is True
+    app = create_app(_settings(tmp_path, notify_enabled=False))
     assert app is not None
+
+
+def test_a_disabled_deployment_builds_no_notifier(tmp_path):
+    app = create_app(_settings(tmp_path, notify_enabled=False))
+    with TestClient(app) as c:
+        assert getattr(c.app.state, "notifier", "missing") is None
+
+
+def test_an_allowed_deployment_builds_one_even_with_no_credentials(tmp_path):
+    app = create_app(_settings(tmp_path))
+    with TestClient(app) as c:
+        assert c.app.state.notifier is not None
 
 
 # ── the loop ─────────────────────────────────────────────────────────────────
@@ -165,3 +157,84 @@ def test_the_recent_limit_is_bounded(api):
     assert api.get("/api/notifications/recent?limit=0").status_code == 422
     assert api.get("/api/notifications/recent?limit=9999").status_code == 422
     assert api.get("/api/notifications/recent?limit=5").status_code == 200
+
+
+# ── the bot token is write-only ──────────────────────────────────────────────
+
+def test_the_token_is_accepted_but_never_read_back(api):
+    # The settings blob is fetched on every page load. Echoing the token would
+    # put a working bot in the DOM, in the network tab, and in any screenshot.
+    r = api.put("/api/settings", json={
+        "notifications_enabled": True,
+        "notify_telegram_chat_id": "8517516151",
+        "notify_telegram_bot_token": "123456789:AAHsecretsecretsecretsecret",
+    })
+    assert r.status_code == 200
+    for body in (r.json(), api.get("/api/settings").json()):
+        assert "notify_telegram_bot_token" not in body
+        assert "AAHsecret" not in str(body)
+        assert body["notify_telegram_bot_token_set"] is True
+        # The bot id half is public — it names which bot without being able to
+        # speak as it.
+        assert body["notify_telegram_bot_id"] == "123456789"
+        assert body["notify_telegram_chat_id"] == "8517516151"
+
+
+def test_an_unset_token_reports_itself_as_unset(api):
+    body = api.get("/api/settings").json()
+    assert body["notify_telegram_bot_token_set"] is False
+    assert body["notify_telegram_bot_id"] == ""
+
+
+def test_the_stored_token_still_reaches_the_notifier(api):
+    api.put("/api/settings", json={"notify_telegram_bot_token": "999:AAHtok"})
+    # The service's own view is unredacted — the redaction is a property of the
+    # HTTP surface, not of storage, because the sender has to reproduce it.
+    stored = api.app.state.service.get_settings()
+    assert stored["notify_telegram_bot_token"] == "999:AAHtok"
+
+
+# ── the test-send ────────────────────────────────────────────────────────────
+
+def test_a_test_send_with_no_token_says_what_is_missing(api):
+    # Every misconfiguration fails identically and silently, so the value of
+    # this endpoint is entirely in the sentence it hands back.
+    r = api.post("/api/notifications/test")
+    assert r.status_code == 409
+    assert "bot token" in r.json()["detail"].lower()
+
+
+def test_a_test_send_with_no_chat_id_says_that_instead(api):
+    api.put("/api/settings", json={"notify_telegram_bot_token": "1:AAHtok"})
+    r = api.post("/api/notifications/test")
+    assert r.status_code == 409
+    assert "chat id" in r.json()["detail"].lower()
+
+
+def test_a_test_send_needs_auth(tmp_path):
+    app = create_app(_settings(tmp_path))
+    with TestClient(app) as anon:
+        assert anon.post("/api/notifications/test").status_code == 401
+
+
+def test_a_test_send_is_refused_when_the_deployment_forbids_notifications(tmp_path):
+    app = create_app(_settings(tmp_path, notify_enabled=False))
+    with TestClient(app) as c:
+        c.post("/api/login", json={"username": "admin", "password": "testpass123"})
+        r = c.post("/api/notifications/test")
+        assert r.status_code == 409 and "TASKS_NOTIFY_ENABLED" in r.json()["detail"]
+
+
+# ── the per-item reminder ────────────────────────────────────────────────────
+
+def test_the_reminder_field_is_bounded_on_both_sides():
+    import pydantic
+
+    from tasksd.app import Sidecar
+    # -1 is the clear sentinel and the only negative allowed; a week is the cap,
+    # past which the reminder is about a different day than the one it names.
+    assert Sidecar(notify_minutes_before=-1).notify_minutes_before == -1
+    assert Sidecar(notify_minutes_before=10080).notify_minutes_before == 10080
+    for bad in (-2, 10081):
+        with pytest.raises(pydantic.ValidationError):
+            Sidecar(notify_minutes_before=bad)

@@ -502,6 +502,31 @@ class McpApi:
             out.append(t)
         return _in_display_order(out, self._home_zone())
 
+    # ── per-item reminders ───────────────────────────────────────────────────
+    #
+    # `notify_minutes_before` is a SIDECAR field, not an iCalendar property (see
+    # the schema comment on the column: a VALARM would make three other CalDAV
+    # clients fire their own alarm off it). So it cannot ride in a TaskEdit or
+    # an EventEdit and is written on its own, after the wire write has landed —
+    # which also means a create can only set it once the uid exists.
+
+    @staticmethod
+    def _reminder(value):
+        """Validate a reminder lead, mapping -1 to "clear" the way HTTP does."""
+        if value is None:
+            return None
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ToolError(
+                f"notify_minutes_before={value!r} must be a whole number of "
+                f"minutes, or -1 to clear the reminder."
+            )
+        if value < -1 or value > 10080:
+            raise ToolError(
+                "notify_minutes_before must be between 0 and 10080 minutes "
+                "(a week), or -1 to clear it."
+            )
+        return value
+
     def get_task(self, list_id, uid):
         task = self._svc.get_task(self._href(list_id), uid)
         if task is None:
@@ -515,7 +540,7 @@ class McpApi:
         return self._svc.all_tags()
 
     def create_task(self, list_id, *, summary, notes=None, due=None, start=None,
-                    priority=None, tags=None, parent=None):
+                    priority=None, tags=None, parent=None, notify_minutes_before=None):
         href = self._href(list_id)
         if parent and not self._svc.has_task(href, parent):
             raise ToolError(
@@ -533,14 +558,31 @@ class McpApi:
             kw["priority"] = priority_from_label(priority)
         if tags is not None:
             kw["categories"] = list(tags)
-        return self._svc.create_task(
+        lead = self._reminder(notify_minutes_before)
+        task = self._svc.create_task(
             href, summary, edit=TaskEdit(**kw) if kw else None, parent_uid=parent or None
         )
+        if lead is None or task is None:
+            return task
+        # After the wire write, because the sidecar row is keyed on a uid that
+        # does not exist until the create lands.
+        return self._svc.set_sidecar(href, task["uid"], notify_minutes_before=lead) or task
 
     def update_task(self, list_id, uid, fields: dict):
         href = self._href(list_id)
         if not fields:
             raise ToolError("Nothing to change — pass at least one field to update.")
+        # Split first: a reminder is app-only, and an update that changes ONLY
+        # the reminder must not reach the wire at all — an empty TaskEdit would
+        # PUT the resource back unchanged, moving its etag and making every
+        # other CalDAV client re-fetch it for nothing.
+        lead = self._reminder(fields.get("notify_minutes_before"))
+        wire = {k: v for k, v in fields.items() if k != "notify_minutes_before"}
+        if lead is not None and not wire:
+            if not self._svc.has_task(href, uid):
+                raise ToolError(f"No task {uid!r} in list {list_id!r}.")
+            return self._svc.set_sidecar(href, uid, notify_minutes_before=lead)
+        fields = wire
         kw = {}
         if "summary" in fields:
             kw["summary"] = fields["summary"]
@@ -574,6 +616,8 @@ class McpApi:
             task = self._svc.edit_task(href, uid, TaskEdit(**kw))
         if task is None:
             raise ToolError(f"No task {uid!r} in list {list_id!r}.")
+        if lead is not None:
+            return self._svc.set_sidecar(href, uid, notify_minutes_before=lead) or task
         return task
 
     def complete_task(self, list_id, uid, *, done=True):
@@ -639,7 +683,8 @@ class McpApi:
 
     def create_event(self, calendar_id, *, summary, start, end=None, all_day=False,
                      location=None, description=None, tags=None, busy=None, repeat=None,
-                     repeat_interval=1, repeat_count=None, repeat_until=None):
+                     repeat_interval=1, repeat_count=None, repeat_until=None,
+                     notify_minutes_before=None):
         href = self._href(calendar_id, kind="calendar")
         dtstart = self._event_dt(start, all_day, field="start")
         dtend = self._event_dt(end, all_day, field="end") if end else None
@@ -662,7 +707,11 @@ class McpApi:
         )
         if event is None:
             raise ToolError("The event was written but could not be read back.")
-        return event
+        lead = self._reminder(notify_minutes_before)
+        if lead is None:
+            return event
+        return self._svc.set_event_sidecar(
+            href, event["uid"], notify_minutes_before=lead) or event
 
     @staticmethod
     def _event_dt(value, all_day, *, field):
@@ -732,7 +781,16 @@ class McpApi:
                 fields["repeat"], fields.get("repeat_interval", 1),
                 fields.get("repeat_count"), fields.get("repeat_until"),
             )
+        lead = self._reminder(fields.get("notify_minutes_before"))
         if not kw:
+            # A reminder is app-only, so an update that changes ONLY the
+            # reminder must not reach the wire: an empty EventEdit would PUT the
+            # resource back unchanged, move its etag, and make every other
+            # CalDAV client re-fetch it for nothing.
+            if lead is not None:
+                if self._svc.get_event(href, uid) is None:
+                    raise ToolError(f"No event {uid!r} on calendar {calendar_id!r}.")
+                return self._svc.set_event_sidecar(href, uid, notify_minutes_before=lead)
             raise ToolError("Nothing to change — pass at least one field to update.")
         try:
             with _not_found(f"No event {uid!r} on calendar {calendar_id!r}."):
@@ -743,6 +801,9 @@ class McpApi:
             raise ToolError(str(exc)) from None
         if event is None:
             raise ToolError(f"No event {uid!r} on calendar {calendar_id!r}.")
+        if lead is not None:
+            return self._svc.set_event_sidecar(
+                href, uid, notify_minutes_before=lead) or event
         return event
 
     def move_event(self, calendar_id, uid, to_calendar_id):

@@ -17,11 +17,18 @@ MORNING = datetime(2026, 8, 31, 11, 30, tzinfo=timezone.utc)   # 07:30 in NY
 
 
 def _notifier(svc, sender=None):
-    return Notifier(svc, sender or StubSender(), "555", log=NullLog())
+    # "555" and the token stand in for the environment fallbacks; the account's
+    # own settings win over both when it sets them.
+    return Notifier(svc, sender or StubSender(), "555", log=NullLog(), token="env-token")
+
+
+# The master switch is an ACCOUNT setting now and absent means off, so every
+# stub that expects a send has to say it is on.
+ON = {"notifications_enabled": True}
 
 
 def _digest_svc(db, **kw):
-    kw.setdefault("settings", {"notify_digest_time": "07:30"})
+    kw.setdefault("settings", {**ON, "notify_digest_time": "07:30"})
     return StubSvc(db, **kw)
 
 
@@ -121,7 +128,7 @@ def test_a_burst_from_one_rule_becomes_one_message(db):
     # Three interruptions in a minute is how a channel gets muted.
     events = [_event("2026-08-31T07:38:00", summary=f"Mtg {i}", uid=f"e{i}")
               for i in range(3)]
-    svc = StubSvc(db, settings={"notify_triggers": {"daily_digest": False},
+    svc = StubSvc(db, settings={**ON, "notify_triggers": {"daily_digest": False},
                                 "time_format": "24h"}, events=events)
     sender = StubSender()
     result = _notifier(svc, sender).sweep(MORNING)
@@ -138,7 +145,7 @@ def test_a_burst_from_one_rule_becomes_one_message(db):
 def test_two_at_once_stay_two_messages(db):
     events = [_event("2026-08-31T07:38:00", summary=f"Mtg {i}", uid=f"e{i}")
               for i in range(2)]
-    svc = StubSvc(db, settings={"notify_triggers": {"daily_digest": False}},
+    svc = StubSvc(db, settings={**ON, "notify_triggers": {"daily_digest": False}},
                   events=events)
     sender = StubSender()
     _notifier(svc, sender).sweep(MORNING)
@@ -152,7 +159,7 @@ def test_one_broken_rule_does_not_cost_the_others_their_sweep(db):
         def sync_health(self):
             raise RuntimeError("store exploded")
 
-    svc = Boom(db, settings={"notify_digest_time": "07:30"})
+    svc = Boom(db, settings={**ON, "notify_digest_time": "07:30"})
     result = _notifier(svc).sweep(MORNING)
     assert result.sent == 1, "a broken digest must not swallow a meeting alert"
     assert any("sync_stalled" in e for e in result.errors)
@@ -177,7 +184,7 @@ def test_the_meeting_keeps_its_buzz_when_the_ceiling_bites(db):
 
 
 def test_a_disabled_trigger_is_never_evaluated(db):
-    svc = _digest_svc(db, settings={"notify_digest_time": "07:30",
+    svc = _digest_svc(db, settings={**ON, "notify_digest_time": "07:30",
                                     "notify_triggers": {"daily_digest": False}})
     sender = StubSender()
     assert _notifier(svc, sender).sweep(MORNING).sent == 0
@@ -187,9 +194,49 @@ def test_a_disabled_trigger_is_never_evaluated(db):
 def test_an_unconfigured_notifier_does_nothing_at_all(db):
     svc = _digest_svc(db)
     sender = StubSender()
-    n = Notifier(svc, sender, "", log=NullLog())          # no chat id
+    n = Notifier(svc, sender, "", log=NullLog(), token="")   # nothing anywhere
     assert n.configured is False
     assert n.sweep(MORNING).sent == 0 and sender.sent == []
+
+
+def test_nothing_is_sent_until_the_account_switches_notifications_on(db):
+    # Absent means OFF for the master switch, unlike the per-rule map. It is
+    # what stands between a deploy that merely has a bot token in its env and
+    # one whose owner asked to be messaged.
+    svc = StubSvc(db, settings={"notify_digest_time": "07:30"})   # no ON
+    sender = StubSender()
+    assert _notifier(svc, sender).sweep(MORNING).sent == 0
+    assert sender.sent == []
+
+
+def test_the_accounts_own_credentials_win_over_the_environment(db):
+    svc = _digest_svc(db, settings={**ON, "notify_digest_time": "07:30",
+                                    "notify_telegram_chat_id": "999",
+                                    "notify_telegram_bot_token": "account-token"})
+    sender = StubSender()
+    n = _notifier(svc, sender)
+    n.sweep(MORNING)
+    assert sender.sent[0]["chat_id"] == "999"
+    assert sender.token == "account-token"
+
+
+def test_the_environment_still_works_for_a_deployment_that_never_opens_the_ui(db):
+    svc = _digest_svc(db)
+    sender = StubSender()
+    _notifier(svc, sender).sweep(MORNING)
+    assert sender.sent[0]["chat_id"] == "555"
+    assert sender.token == "env-token"
+
+
+def test_a_token_typed_into_settings_takes_effect_without_a_restart(db):
+    svc = _digest_svc(db)
+    sender = StubSender()
+    n = _notifier(svc, sender)
+    n.sweep(MORNING)
+    assert sender.token == "env-token"
+    svc._settings["notify_telegram_bot_token"] = "typed-later"
+    n.sweep(MORNING.replace(day=30))          # a different day, so a new digest
+    assert sender.token == "typed-later"
 
 
 # ── ledger housekeeping ──────────────────────────────────────────────────────

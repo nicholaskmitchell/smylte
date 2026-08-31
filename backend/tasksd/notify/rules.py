@@ -56,6 +56,7 @@ from ..scheduling import parse_event_time
 TRIGGERS: tuple[str, ...] = (
     "daily_digest",
     "event_starting",
+    "item_reminder",
     "booking_created",
     "sync_stalled",
 )
@@ -74,6 +75,11 @@ BOOKING_CATCH_UP = timedelta(hours=24)
 # only on a good pass, so "an error stands AND nothing has succeeded for an
 # hour" is precisely "this is not a Radicale restart".
 SYNC_STALL_AFTER = timedelta(hours=1)
+
+# The longest lead a per-item reminder may carry: a week. Past that the
+# reminder is about a different day than the one it names, and the scan
+# window it implies stops being cheap.
+MAX_REMINDER_MINUTES = 7 * 24 * 60
 
 # Shape guards for the digest. The failure mode of a daily summary is that it
 # gets long and stops being read; `notify.clip` is the backstop, not the plan.
@@ -294,6 +300,12 @@ def _eval_event_starting(s: Sweep) -> list[Pending]:
     for occ in _occurrences(s, s.now - timedelta(days=1), s.now + lead + timedelta(days=1)):
         if occ.get("all_day") or occ.get("status") == "CANCELLED" or not occ.get("busy"):
             continue
+        # An event the owner set their own lead on belongs to `item_reminder`.
+        # Without this both rules qualify and the same meeting is announced
+        # twice, at two different times — the blanket rule at the global lead
+        # and the explicit one at theirs.
+        if occ.get("notify_minutes_before") is not None:
+            continue
         start = _instant(occ, s)
         if start is None:
             continue
@@ -321,6 +333,110 @@ def _eval_event_starting(s: Sweep) -> list[Pending]:
             silent=False,
         ))
     return out
+
+
+# ── item_reminder ────────────────────────────────────────────────────────────
+
+def _eval_item_reminder(s: Sweep) -> list[Pending]:
+    """"Notify me N minutes before this one", set on a single task or event.
+
+    This is the rule that lets task deadlines earn a notification at all. A
+    blanket "task due soon" was rejected outright and the reasoning stands — a
+    task due at 17:00 is either something you already knew about, in which case
+    the ping is noise, or something you cannot do in thirty minutes, in which
+    case it is stress. What changes here is who is asking. A lead the owner set
+    on ONE task is not the app guessing that a deadline is worth an
+    interruption; it is the owner saying this one is, and an explicit request
+    outranks the interruption bar every time.
+
+    That is also why the field is per item and has no global default for tasks:
+    a default would quietly recreate the blanket rule, and the whole reason this
+    is acceptable is that nothing fires unless someone asked for it.
+    """
+    out: list[Pending] = []
+    horizon = timedelta(minutes=MAX_REMINDER_MINUTES)
+
+    for occ in _occurrences(s, s.now - timedelta(days=1), s.now + horizon + timedelta(days=1)):
+        lead = _reminder_lead(occ.get("notify_minutes_before"))
+        if lead is None or occ.get("status") == "CANCELLED":
+            continue
+        start = _instant(occ, s)
+        if start is None:
+            continue
+        pending = _reminder_pending(
+            s, start, lead,
+            summary=occ.get("summary") or "(untitled)",
+            key=f"{occ.get('calendar')}|{occ.get('master_uid') or occ.get('uid')}",
+            all_day=bool(occ.get("all_day")),
+        )
+        if pending:
+            out.append(pending)
+
+    for lst in s.svc.list_lists():
+        for task in s.svc.list_tasks(lst["href"], include_done=False):
+            lead = _reminder_lead(task.get("notify_minutes_before"))
+            if lead is None:
+                continue
+            # A recurring VTODO's `items.due` is the MASTER's deadline and
+            # nothing in this codebase expands a VTODO recurrence set
+            # (`recur.expand_occurrences` is VEVENT-only, one caller). Reminding
+            # off it would fire once on a date that stopped being true months
+            # ago, and never again.
+            if task.get("has_rrule"):
+                continue
+            parts = due_rules.due_parts(task.get("due"), s.tz)
+            if parts is None:
+                continue
+            due_at = datetime.fromtimestamp(parts[0], tz=timezone.utc)
+            pending = _reminder_pending(
+                s, due_at, lead,
+                summary=task.get("summary") or "(untitled)",
+                key=f"{lst['href']}|{task.get('uid')}",
+                all_day=bool(task.get("due_is_date")),
+                due=True,
+            )
+            if pending:
+                out.append(pending)
+    return out
+
+
+def _reminder_lead(raw) -> timedelta | None:
+    """The stored lead, or None when this item carries no reminder."""
+    if not isinstance(raw, int) or isinstance(raw, bool):
+        return None
+    if raw < 0 or raw > MAX_REMINDER_MINUTES:
+        return None
+    return timedelta(minutes=raw)
+
+
+def _reminder_pending(
+    s: Sweep, moment: datetime, lead: timedelta, *,
+    summary: str, key: str, all_day: bool, due: bool = False,
+) -> Pending | None:
+    """The shared window and wording for both halves of the rule.
+
+    `fire <= now < moment` — the same closing window every other rule uses. The
+    upper bound is the moment itself: once it has passed, saying "in -3 minutes"
+    is noise, and nothing is claimed, so a later restart cannot resurrect it.
+    """
+    delta = moment - s.now
+    if not (timedelta(0) <= delta <= lead):
+        return None
+    minutes = max(0, int(delta.total_seconds() // 60))
+    local = moment.astimezone(s.tz) if s.tz else moment
+    # An all-day deadline has no clock to name, and "due at 12:00 AM" is a time
+    # nobody set — it is midnight because a date has to resolve to something.
+    when = local.strftime("%a %-d %b") if all_day else _fmt_time(local, s.prefs)
+    verb = "due" if due else "at"
+    return Pending(
+        "item_reminder",
+        # The moment, not the lead: moving the item is a new occasion and
+        # re-arms, and changing the lead on an item whose reminder already went
+        # out does not send a second one.
+        f"{key}|{moment.astimezone(timezone.utc).isoformat()}",
+        f"{summary} {verb} {when} — in {minutes} min.",
+        silent=False,
+    )
 
 
 # ── booking_created ──────────────────────────────────────────────────────────
@@ -450,6 +566,7 @@ def _parse_iso(raw) -> datetime | None:
 RULES: tuple[Rule, ...] = (
     Rule("daily_digest", default_on=True, silent=False, evaluate=_eval_digest),
     Rule("event_starting", default_on=True, silent=False, evaluate=_eval_event_starting),
+    Rule("item_reminder", default_on=True, silent=False, evaluate=_eval_item_reminder),
     Rule("booking_created", default_on=True, silent=True, evaluate=_eval_booking_created),
     Rule("sync_stalled", default_on=True, silent=True, evaluate=_eval_sync_stalled),
 )

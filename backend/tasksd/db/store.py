@@ -143,6 +143,20 @@ def init_db(conn: sqlite3.Connection) -> None:
         # exactly what "nobody moved this" means — nothing to backfill. Same
         # one-change rule as the two above: `_day_entry_dto` reads this key.
         conn.execute("ALTER TABLE day_plan ADD COLUMN rolled_to TEXT")
+    side_cols = {r["name"] for r in conn.execute("PRAGMA table_info(sidecar)")}
+    if "notify_minutes_before" not in side_cols:
+        # NULL on every item written before per-item reminders existed, which is
+        # exactly what "I did not ask to be told about this one" means — nothing
+        # to backfill, and no value that could be backfilled without inventing a
+        # reminder nobody set.
+        #
+        # Same one-change rule as the day_plan columns above: `service._task_dto`
+        # and `_event_dto` read `s["notify_minutes_before"]`, sqlite3.Row answers
+        # IndexError for a column the query did not return, and IndexError is
+        # outside the taxonomy app.py maps — so the DTO line without this block
+        # is a 500 on every read of every task AND every event. The reverse
+        # order is inert.
+        conn.execute("ALTER TABLE sidecar ADD COLUMN notify_minutes_before INTEGER")
     habit_cols = {r["name"] for r in conn.execute("PRAGMA table_info(habits)")}
     if "estimate_minutes" not in habit_cols:
         # Habits written before estimates keep NULL, and their occurrences are
@@ -564,7 +578,8 @@ def set_sidecar(conn: sqlite3.Connection, collection_href: str, uid: str, **fiel
     position to do anything about it, and a 500 on an estimate the user typed is
     worse than the estimate not being remembered for next time.
     """
-    allowed = {"kanban_column", "sort_order", "pinned", "estimated_minutes", "repeat_from_completion"}
+    allowed = {"kanban_column", "sort_order", "pinned", "estimated_minutes",
+               "repeat_from_completion", "notify_minutes_before"}
     bad = set(fields) - allowed
     if bad:
         raise ValueError(f"unknown sidecar fields: {bad}")
