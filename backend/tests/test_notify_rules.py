@@ -65,9 +65,13 @@ class StubSender:
     def __init__(self, ok=True):
         self.sent = []
         self._ok = ok
+        # Settable, like the real transport: the token can be edited in Settings
+        # and is adopted per sweep rather than per process.
+        self.token = "stub-token"
+
 
     def send(self, chat_id, text, *, silent=False, **kw):
-        self.sent.append({"text": text, "silent": silent})
+        self.sent.append({"text": text, "silent": silent, "chat_id": chat_id})
         from tasksd.notify.telegram import SendResult
         return SendResult(self._ok, message_id=1 if self._ok else None,
                           error=None if self._ok else "HTTP 502: Bad Gateway")
@@ -315,4 +319,108 @@ def test_the_registry_and_the_trigger_names_stay_in_step():
 def test_loud_and_quiet_are_fixed_in_code():
     urgency = {r.id: r.silent for r in R.RULES}
     assert urgency == {"daily_digest": False, "event_starting": False,
-                       "booking_created": True, "sync_stalled": True}
+                       "item_reminder": False, "booking_created": True,
+                       "sync_stalled": True}
+
+
+# ── item_reminder ────────────────────────────────────────────────────────────
+#
+# The rule that lets a task deadline earn a notification at all: not because the
+# app decided a deadline is worth an interruption, but because the owner set a
+# lead on that one item by hand.
+
+def _task(summary="Renew passport", due="2026-08-31T10:00:00", *, is_date=False,
+          notify=None, uid="t1", rrule=False):
+    return {"uid": uid, "summary": summary, "due": due, "due_is_date": is_date,
+            "notify_minutes_before": notify, "has_rrule": rrule}
+
+
+def test_a_task_with_a_lead_fires_and_one_without_never_does(db):
+    now = datetime(2026, 8, 31, 13, 52, tzinfo=timezone.utc)   # 09:52 NY
+    svc = StubSvc(db, settings={"time_format": "24h"},
+                  tasks=[_task(notify=10), _task(summary="Silent one", uid="t2")])
+    out = R._eval_item_reminder(_sweep(svc, now))
+    assert len(out) == 1
+    assert out[0].text == "Renew passport due 10:00 — in 8 min."
+    assert out[0].trigger == "item_reminder" and out[0].silent is False
+
+
+def test_a_task_outside_its_own_lead_does_not_fire(db):
+    svc = StubSvc(db, tasks=[_task(notify=10)])
+    early = datetime(2026, 8, 31, 13, 40, tzinfo=timezone.utc)   # 20 min out
+    assert R._eval_item_reminder(_sweep(svc, early)) == []
+    late = datetime(2026, 8, 31, 14, 1, tzinfo=timezone.utc)     # already due
+    assert R._eval_item_reminder(_sweep(svc, late)) == []
+
+
+def test_a_recurring_task_is_skipped_because_its_due_is_a_stale_master(db):
+    # Nothing in this codebase expands a VTODO recurrence set, so items.due is
+    # the master's deadline — reminding off it fires once on a date that stopped
+    # being true months ago, and never again.
+    svc = StubSvc(db, tasks=[_task(notify=10, rrule=True)])
+    now = datetime(2026, 8, 31, 13, 52, tzinfo=timezone.utc)
+    assert R._eval_item_reminder(_sweep(svc, now)) == []
+
+
+def test_an_all_day_deadline_names_the_day_not_a_midnight_clock(db):
+    # "due at 12:00 AM" is a time nobody set — it is midnight only because a
+    # date has to resolve to something.
+    svc = StubSvc(db, tasks=[_task(due="2026-09-01", is_date=True, notify=60)])
+    now = datetime(2026, 9, 1, 3, 30, tzinfo=timezone.utc)      # 23:30 NY, 30m out
+    out = R._eval_item_reminder(_sweep(svc, now))
+    assert len(out) == 1 and "due Tue 1 Sep" in out[0].text
+    assert "12:00" not in out[0].text
+
+
+def test_an_event_with_its_own_lead_fires_from_the_reminder_rule(db):
+    ev = _event("2026-08-31T10:00:00")
+    ev["notify_minutes_before"] = 30
+    svc = StubSvc(db, settings={"time_format": "24h"}, events=[ev])
+    now = datetime(2026, 8, 31, 13, 35, tzinfo=timezone.utc)     # 25 min out
+    out = R._eval_item_reminder(_sweep(svc, now))
+    assert len(out) == 1 and out[0].text == "Design review at 10:00 — in 25 min."
+
+
+def test_the_blanket_rule_yields_to_an_explicit_lead(db):
+    # Otherwise the same meeting is announced twice, at two different times.
+    ev = _event("2026-08-31T10:00:00")
+    ev["notify_minutes_before"] = 30
+    svc = StubSvc(db, events=[ev])
+    now = datetime(2026, 8, 31, 13, 52, tzinfo=timezone.utc)     # inside BOTH windows
+    assert R._eval_event_starting(_sweep(svc, now)) == []
+    assert len(R._eval_item_reminder(_sweep(svc, now))) == 1
+
+
+def test_a_lead_of_zero_means_tell_me_exactly_when_it_is_due(db):
+    # 0 is a real answer, which is why the clear sentinel is -1 and not falsiness.
+    svc = StubSvc(db, tasks=[_task(notify=0)])
+    at_due = datetime(2026, 8, 31, 14, 0, tzinfo=timezone.utc)
+    out = R._eval_item_reminder(_sweep(svc, at_due))
+    assert len(out) == 1 and "in 0 min" in out[0].text
+
+
+@pytest.mark.parametrize("junk", [None, True, False, -1, -5, 999_999, "10", 10.5])
+def test_a_lead_that_is_not_a_usable_number_is_no_reminder(db, junk):
+    svc = StubSvc(db, tasks=[_task(notify=junk)])
+    now = datetime(2026, 8, 31, 13, 52, tzinfo=timezone.utc)
+    assert R._eval_item_reminder(_sweep(svc, now)) == []
+
+
+def test_the_dedupe_key_is_the_moment_so_rescheduling_re_arms(db):
+    svc = StubSvc(db, tasks=[_task(notify=10)])
+    now = datetime(2026, 8, 31, 13, 52, tzinfo=timezone.utc)
+    first = R._eval_item_reminder(_sweep(svc, now))[0].dedupe_key
+
+    svc._tasks = [_task(due="2026-08-31T11:00:00", notify=10)]
+    later = datetime(2026, 8, 31, 14, 52, tzinfo=timezone.utc)
+    assert R._eval_item_reminder(_sweep(svc, later))[0].dedupe_key != first
+
+
+def test_changing_only_the_lead_does_not_re_send_a_reminder_already_out(db):
+    # The key names the MOMENT, not the lead — so editing "30 minutes" to "45"
+    # on an item whose reminder already went out is not a second occasion.
+    svc = StubSvc(db, tasks=[_task(notify=10)])
+    now = datetime(2026, 8, 31, 13, 52, tzinfo=timezone.utc)
+    first = R._eval_item_reminder(_sweep(svc, now))[0].dedupe_key
+    svc._tasks = [_task(notify=15)]
+    assert R._eval_item_reminder(_sweep(svc, now))[0].dedupe_key == first

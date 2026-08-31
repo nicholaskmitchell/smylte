@@ -131,6 +131,23 @@ CREATE TABLE IF NOT EXISTS sidecar (
     pinned                 INTEGER NOT NULL DEFAULT 0,
     estimated_minutes      INTEGER,          -- DURATION is exclusive with DUE; keep it here
     repeat_from_completion INTEGER NOT NULL DEFAULT 0,
+    -- "Notify me this many minutes before." Set per ITEM, on a task's due
+    -- instant or an event's start, and NULL on almost everything — which is what
+    -- "I did not ask to be told about this one" means.
+    --
+    -- Here rather than as a VALARM on the wire, and that is a decision rather
+    -- than a shortcut. A VALARM is the interoperable answer and would be the
+    -- right one if Smylte were the only client — but it is not: Tasks.org,
+    -- Thunderbird and Apple Calendar share these collections and would each
+    -- fire their own alarm off the same property, so writing one would buy
+    -- interop by notifying the owner three times. `ical/read.py` also skips
+    -- subcomponents whole, so honouring VALARM properly is a read/write change
+    -- against the fidelity invariants rather than a column.
+    --
+    -- Sidecar-class for the ordinary reason too: it survives the
+    -- delete-and-recreate a foreign client's edit can look like, so a reminder
+    -- the owner set does not evaporate because their phone rewrote the resource.
+    notify_minutes_before  INTEGER,
     orphaned_at            TEXT,             -- set when UID leaves the wire; GC after 7 days
     updated_at             TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     PRIMARY KEY (collection_href, uid)

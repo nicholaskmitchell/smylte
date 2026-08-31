@@ -243,6 +243,14 @@ class Sidecar(BaseModel):
     # a 422. A minute count has no business being astronomical anyway.
     estimated_minutes: int | None = Field(default=None, ge=0, le=100_000_000)
     repeat_from_completion: bool | None = None
+    # "Notify me this many minutes before", or -1 to CLEAR. Same sentinel and
+    # the same reasoning as PatchDayEntry.estimate_minutes — one spelling for a
+    # duration wherever this app takes one — and the clear cannot borrow
+    # falsiness because 0 is a real answer ("tell me exactly when it is due").
+    # Bounded at a week: past that the reminder is about a different day than
+    # the one it names, and an unbounded int reaches SQLite as an OverflowError,
+    # outside the taxonomy this module maps.
+    notify_minutes_before: int | None = Field(default=None, ge=-1, le=10080)
 
 
 class Repeat(BaseModel):
@@ -745,6 +753,21 @@ class SettingsPatch(BaseModel):
     # CalDAV poll plus a 60s notify tick) and belongs beside the code that knows
     # those numbers; this bound only keeps an absurd value out of the blob.
     notify_event_lead_minutes: int | None = Field(default=None, ge=1, le=120)
+    # The master switch. Absent means OFF — unlike the per-rule map, whose
+    # absent key means "that rule's default", this one has no safe default but
+    # off: it is what stands between a deploy that merely has a bot token in its
+    # env and one whose owner asked to be messaged.
+    notifications_enabled: bool | None = None
+    # Where messages go. Not a secret (an integer naming a chat), so it reads
+    # back like any other preference.
+    notify_telegram_chat_id: str | None = Field(default=None, max_length=64)
+    # The bot token. WRITE-ONLY: accepted here, never returned by GET /settings
+    # — `_public_settings` strips it and substitutes a boolean. It is the whole
+    # bot, and a settings blob is fetched by the SPA on every load, so echoing
+    # it would put a working credential into the page, into any screenshot of
+    # it, and within reach of anything that can read the DOM. '' clears it and
+    # falls back to the environment.
+    notify_telegram_bot_token: str | None = Field(default=None, max_length=200)
 
     @field_validator("day_capacity_by_weekday")
     @classmethod
@@ -1023,13 +1046,18 @@ def _build_notifier(settings: Settings, svc: TaskService):
     that has not opted in runs no extra task and opens no HTTP client.
     """
     if not settings.notify_enabled:
+        log.info("notify: disabled by TASKS_NOTIFY_ENABLED; no scheduler will run")
         return None
     from .notify.scheduler import Notifier
     from .notify.telegram import TelegramSender
 
+    # Built whether or not anything is configured yet, because the configuration
+    # now lives in the account's settings and can arrive at any moment. The
+    # sweep is a no-op until notifications are switched on and a token and chat
+    # id exist, so an unconfigured deployment pays one idle timer.
     sender = TelegramSender(settings.telegram_bot_token)
-    log.info("notify: telegram scheduler enabled (every %.0fs)", settings.notify_interval_s)
-    return Notifier(svc, sender, settings.telegram_chat_id, log=log)
+    return Notifier(svc, sender, settings.telegram_chat_id, log=log,
+                    token=settings.telegram_bot_token)
 
 
 
@@ -1077,27 +1105,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "TASKS_ACCESS_REQUIRED is set but TASKS_ACCESS_TEAM_DOMAIN / TASKS_ACCESS_AUD "
             "are not configured — refusing to start unprotected."
         )
-    # Notifications are opt-in and refuse to come up half-configured, the same
-    # posture the MCP connector takes below: a scheduler that runs with no chat
-    # to send to is a feature that silently does nothing, and the owner would
-    # have no way to tell that from "nothing was worth notifying about".
-    if settings.notify_enabled:
-        missing = [name for name, value in (
-            ("TASKS_TELEGRAM_BOT_TOKEN", settings.telegram_bot_token),
-            ("TASKS_TELEGRAM_CHAT_ID", settings.telegram_chat_id),
-        ) if not value]
-        if missing:
-            raise RuntimeError(
-                f"TASKS_NOTIFY_ENABLED is set but {' and '.join(missing)} "
-                f"{'is' if len(missing) == 1 else 'are'} not configured — "
-                "refusing to start a notifier that can never send. Create a bot "
-                "with @BotFather, message it once so it may reply, and put the "
-                "token and your chat id in /etc/tasks/tasks.env. Note that "
-                "deploy/tasks.service is loopback-only: outbound access to "
-                "api.telegram.org has to be opened before anything can leave "
-                "the box (see docs/DEPLOY.md)."
-            )
-
     verifier = AccessVerifier(settings)
 
     # Primary gate: the app's own username/password. Secure-by-default — with auth
@@ -1522,6 +1529,36 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         fields = {k: v for k, v in body.model_dump().items() if v is not None}
         return await _run(_svc(request).set_sidecar, href, uid, **fields)
 
+    class EventReminder(BaseModel):
+        """The one app-only field an event carries. Its own model rather than
+        `Sidecar`, because every other field there is a task's — a kanban column
+        or a manual sort order on an event would be accepted and then mean
+        nothing."""
+        notify_minutes_before: int | None = Field(default=None, ge=-1, le=10080)
+
+    @api.put("/calendars/{cal_id}/events/{uid}/reminder")
+    async def put_event_reminder(request: Request, cal_id: str, uid: str,
+                                 body: EventReminder):
+        """"Notify me N minutes before this event."
+
+        The sidecar, not a VALARM. A VALARM is the interoperable answer and
+        would be right if Smylte were the only client, but Tasks.org,
+        Thunderbird and Apple Calendar share these collections and would each
+        fire their own alarm off the same property — buying interop by
+        notifying the owner three times. See the schema comment on the column.
+
+        Keyed on the RESOURCE, so a recurring series has one reminder rather
+        than one per occurrence: "twenty minutes before my standup" is a
+        statement about the standup, not about next Tuesday's.
+        """
+        href = await _href(request, cal_id, component="VEVENT")
+        # Checked before writing, like the task sidecar route: without it an
+        # unknown uid answers 200 with a null body where every sibling 404s.
+        if await _run(_svc(request).get_event, href, uid) is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown event {uid}")
+        fields = {k: v for k, v in body.model_dump().items() if v is not None}
+        return await _run(_svc(request).set_event_sidecar, href, uid, **fields)
+
     # -- day plan (the Today tab) --
     @api.post("/day/{day}/open")
     async def post_day_open(request: Request, day: str):
@@ -1839,9 +1876,29 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return await _run(_svc(request).list_bookings, link)
 
     # -- settings (account-synced UI preferences) --
+    def _public_settings(stored: dict) -> dict:
+        """The settings blob as the browser may see it.
+
+        Exactly one key is withheld. The bot token is a credential and this
+        document is fetched on every page load, so returning it would put a
+        working bot in the DOM, in the network tab, and in any screenshot of
+        either. What the UI actually needs is whether one is set, which is not
+        a secret — so it gets a boolean and a short fingerprint of the bot id,
+        enough to tell two bots apart without being able to speak as either.
+        """
+        out = dict(stored)
+        token = out.pop("notify_telegram_bot_token", "")
+        token = token.strip() if isinstance(token, str) else ""
+        out["notify_telegram_bot_token_set"] = bool(token)
+        # A bot token is "<bot_id>:<secret>". The id half is public — it is the
+        # bot's user id — so naming it identifies which bot is configured while
+        # revealing nothing that could send as it.
+        out["notify_telegram_bot_id"] = token.split(":", 1)[0] if ":" in token else ""
+        return out
+
     @api.get("/settings")
     async def get_settings(request: Request):
-        return await _run(_svc(request).get_settings)
+        return _public_settings(await _run(_svc(request).get_settings))
 
     @api.put("/settings")
     async def put_settings(request: Request, body: SettingsPatch):
@@ -1857,7 +1914,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         notify_trigger = getattr(request.app.state, "notify_trigger", None)
         if notify_trigger is not None:
             notify_trigger.set()
-        return merged
+        return _public_settings(merged)
 
     # -- notifications --
     #
@@ -1870,6 +1927,37 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def get_recent_notifications(request: Request, limit: int = Query(50, ge=1, le=200)):
         rows = await _run(_svc(request).notifications, store.recent_notifications, limit=limit)
         return {"deliveries": rows, "triggers": list(NOTIFY_TRIGGERS)}
+
+    @api.post("/notifications/test")
+    async def post_test_notification(request: Request):
+        """Send one message now, to prove the configuration works.
+
+        The whole reason this exists: a bot token and a chat id are two opaque
+        strings, and every way of getting them wrong fails identically and
+        silently — the wrong chat id, a bot nobody has messaged first, a token
+        with a character missing, and the loopback-only systemd unit all end as
+        "nothing arrived". Without a button that reports the actual error, the
+        owner's only feedback loop is to wait for tomorrow's digest not to come.
+
+        Deliberately NOT ledgered: it is not an occasion, it is a check, and the
+        owner may want to run it twice. It also ignores the daily ceiling and
+        the per-rule switches for the same reason — they govern what the app
+        decides to say, and this is the owner speaking.
+        """
+        notifier = getattr(request.app.state, "notifier", None)
+        if notifier is None:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "notifications are disabled for this deployment "
+                "(TASKS_NOTIFY_ENABLED=false)",
+            )
+        prefs = await _run(_svc(request).get_settings)
+        ok, detail = await asyncio.to_thread(notifier.send_test, prefs)
+        if not ok:
+            # 409 rather than 502: nothing is broken about this server, the
+            # configuration does not work yet, and the body says how.
+            raise HTTPException(status.HTTP_409_CONFLICT, detail)
+        return {"sent": True, "detail": detail}
 
     # -- tags / search / sync --
     @api.get("/tags")

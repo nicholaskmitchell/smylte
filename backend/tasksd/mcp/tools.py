@@ -143,6 +143,22 @@ _ESTIMATE = {
         "honest; an invented number is a plan the owner did not make."
     ),
 }
+#: "Notify me this many minutes before." App-only (a sidecar column, not a
+#: VALARM — see the schema comment: three other CalDAV clients share these
+#: collections and would each fire their own alarm off a VALARM). Absent on
+#: almost everything, which is what "nobody asked to be told about this one"
+#: means, and the reason a blanket "task due soon" rule does not exist: a lead
+#: set on ONE item is the owner asking, not the app guessing.
+_REMINDER = {
+    "type": "integer", "minimum": -1, "maximum": 10080,
+    "description": (
+        "Send a Telegram reminder this many minutes before the task's due time "
+        "or the event's start. 0 means at the moment itself, -1 clears an "
+        "existing reminder, and the maximum is a week. Set it only when the "
+        "owner asks to be reminded — nothing else in the app notifies about a "
+        "task deadline, on purpose."
+    ),
+}
 _SCOPE = {
     "type": "string", "enum": ["all", "this", "thisandfuture"], "default": "all",
     "description": (
@@ -302,13 +318,16 @@ def build_tools(api) -> dict[str, Tool]:
             "tags": _TAGS,
             "parent": {"type": "string",
                        "description": "uid of the parent task, which must be in the same list."},
+            "notify_minutes_before": _REMINDER,
         }, ["list_id", "summary"]),
         scope=SCOPE_WRITE, read_only=False,
     )
     def _create_task(list_id, summary, notes=None, due=None, start=None,
-                     priority=None, tags=None, parent=None):
+                     priority=None, tags=None, parent=None,
+                     notify_minutes_before=None):
         return api.create_task(list_id, summary=summary, notes=notes, due=due,
-                               start=start, priority=priority, tags=tags, parent=parent)
+                               start=start, priority=priority, tags=tags, parent=parent,
+                               notify_minutes_before=notify_minutes_before)
 
     @tool(
         "smylte_update_task", "Update a task",
@@ -324,6 +343,7 @@ def build_tools(api) -> dict[str, Tool]:
                        "enum": ["NEEDS-ACTION", "IN-PROCESS", "COMPLETED", "CANCELLED"]},
             "parent": {"type": "string",
                        "description": "Re-parent the task. Empty string promotes it to top level."},
+            "notify_minutes_before": _REMINDER,
         }, ["list_id", "uid"]),
         scope=SCOPE_WRITE, read_only=False, idempotent=True,
     )
@@ -707,6 +727,7 @@ def build_tools(api) -> dict[str, Tool]:
                              "description": "Stop after this many occurrences."},
             "repeat_until": {"type": "string",
                              "description": "Stop after this date. Ignored if repeat_count is set."},
+            "notify_minutes_before": _REMINDER,
         }, ["calendar_id", "summary", "start"]),
         scope=SCOPE_WRITE, read_only=False,
     )
@@ -737,6 +758,11 @@ def build_tools(api) -> dict[str, Tool]:
             "repeat_count": {"type": "integer", "minimum": 1, "maximum": 10000},
             "repeat_until": {"type": "string"},
             "recurrence_id": _RECURRENCE_ID, "scope": _SCOPE,
+            # On the SERIES, not an occurrence: the sidecar is keyed on the
+            # resource (invariant #4), so "twenty minutes before my standup" is
+            # a statement about the standup, not about next Tuesday's. `scope`
+            # does not reach it.
+            "notify_minutes_before": _REMINDER,
         }, ["calendar_id", "uid"]),
         scope=SCOPE_WRITE, read_only=False, idempotent=True,
     )

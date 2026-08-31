@@ -106,19 +106,29 @@ class Settings:
     # Largest request body accepted, enforced ahead of the router — see
     # tasksd/limits.py for why it cannot live in the routes themselves.
     max_body_bytes: int = DEFAULT_MAX_BODY_BYTES
-    # ── outbound notifications (OPT-IN) ──────────────────────────────────────
-    # Off by default for the same reason the MCP connector is: a deploy should
-    # never grow an outbound network surface on its own. Turning this on is a
-    # deliberate act with a deployment consequence — deploy/tasks.service is
-    # loopback-only (`IPAddressDeny=any`), so the unit must be widened before a
-    # single message can leave the box. See docs/DEPLOY.md.
-    notify_enabled: bool = False
-    # The bot token lives in the ENVIRONMENT, never in the settings blob, and so
-    # never in tasks.db. The schema header promises that reading that file does
-    # not yield a working credential — it hashes OAuth secrets for exactly this
-    # reason — and a bot token in `meta.app_settings` would be the one plaintext
-    # credential in a file that goes into every backup. /etc/tasks/tasks.env is
-    # already 0600 and already holds the Radicale password.
+    # ── outbound notifications ───────────────────────────────────────────────
+    # An operator KILL SWITCH, not the feature's on/off. It defaults to
+    # allowing, and nothing is sent regardless until the account turns
+    # notifications on in Settings AND a bot token and chat id exist — so a
+    # deploy still does not grow an outbound surface on its own, which is what
+    # the MCP connector's opt-in was protecting against. Set it false to
+    # guarantee a deployment can never message anyone, whatever the settings
+    # blob says.
+    #
+    # Sending also needs egress: deploy/tasks.service is loopback-only
+    # (`IPAddressDeny=any`), so the unit must be widened before a single
+    # message can leave the box. See docs/DEPLOY.md.
+    notify_enabled: bool = True
+    # A FALLBACK for the account's own setting, for a deployment configured
+    # entirely from /etc/tasks/tasks.env and never through the UI. Settings wins
+    # when both are present.
+    #
+    # Worth knowing either way: a token set here stays out of tasks.db and so
+    # out of every backup of it, which is what the schema header's promise about
+    # reading that file is worth. One typed into Settings is stored in the clear
+    # in `meta.app_settings`, like `booking_links.token` beside it — the app has
+    # to be able to reproduce it to send, so it cannot be hashed. It is never
+    # read back out over HTTP (see `_public_settings`).
     telegram_bot_token: str = ""
     # Where notifications go. Not a secret (it is an integer naming a chat), but
     # it is deployment configuration rather than a preference, and pairing it
@@ -175,7 +185,7 @@ class Settings:
                 os.environ.get("TASKS_MAX_BODY_BYTES", str(DEFAULT_MAX_BODY_BYTES))
             ),
             csp_mode=os.environ.get("TASKS_CSP", "on").strip().lower() or "on",
-            notify_enabled=_bool("TASKS_NOTIFY_ENABLED", False),
+            notify_enabled=_bool("TASKS_NOTIFY_ENABLED", True),
             telegram_bot_token=os.environ.get("TASKS_TELEGRAM_BOT_TOKEN", "").strip(),
             telegram_chat_id=os.environ.get("TASKS_TELEGRAM_CHAT_ID", "").strip(),
             notify_interval_s=float(os.environ.get("TASKS_NOTIFY_INTERVAL", "60")),
