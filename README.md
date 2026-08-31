@@ -7,9 +7,9 @@ Apple's — find it via RFC 6764 discovery at the root). It is one CalDAV client
 several — Tasks.org (DAVx⁵), jtx Board, and Thunderbird share the same
 collections and have equal rights. **Radicale is the source of truth; SQLite
 is a disposable cache** (except the app-only sidecar — pins, manual order, the
-day plan, habits and what you wrote about each day: things that have nowhere to
-live on the wire, so a resync cannot rebuild them and a backup must include
-them. See
+day plan, habits, the displays you have paired and what you wrote about each
+day: things that have nowhere to live on the wire, so a resync cannot rebuild
+them and a backup must include them. See
 `docs/phase0-findings.md`, and `docs/DEPLOY.md` for which tables those are).
 
 The stack is a FastAPI backend (`tasksd`) that owns the CalDAV/sync/write path
@@ -194,6 +194,71 @@ costs you one interruption at 07:30, not four.
 test any fifth rule has to pass. Setup — and the systemd egress rule it needs,
 which is the easy step to miss — is in `docs/DEPLOY.md`.
 
+**Displays.** A display is a screen with nothing to tap — the calendar in the
+hallway, today's habits in the kitchen. It shows one of two things and accepts
+no input, which is the specification rather than a limitation: there is no
+session, no control and nothing focusable anywhere on the page, and the only
+call its URL reaches is one read.
+
+**The month**, drawn the way a paper wall calendar is drawn — six fixed weeks,
+Sunday-first like the app's own grid, every day placed relative to the days
+around it. Not an agenda: an agenda is a thing you consult, and a wall calendar
+is a thing you glance at. Or **habits + today**, which is the other thing that
+earns a wall: a list short enough to read from the doorway that gets *shorter as
+the day goes*, because a completed habit leaves the screen. That is on by
+default and off in a switch, and the count in the corner is taken before the
+hiding — with the list emptying as the day goes, "4 / 5" is the only thing left
+that remembers there was anything on it. There is deliberately no plain "tasks"
+mode: every task view in the app is a query over a list that grows without
+bound, and a screen with no scroll would show the first eight of forty while
+implying that was all of them.
+
+**A display never opens a day.** On a day nobody has opened it shows a clearly
+labelled preview of what opening it would derive, and writes nothing — the same
+rule the MCP connector is held to, and for the same reason. The plan is worth
+keeping only while it records what was actually intended, and a panel in a
+hallway intends nothing.
+
+**And it works on eink, where every pixel is binary.** That is a design under a
+constraint, not a dark theme inverted. There is no grey, because an intermediate
+value on a one-bit panel becomes a dither pattern that shimmers between
+refreshes and turns small text to mush — so hierarchy is carried by size, weight
+and rule, all of which survive being thresholded, and never by opacity, which
+does not. There is no colour either, so *which calendar* an event belongs to is
+carried by the shape of its mark: filled, hollow, a left bar, a dotted outline.
+Four, because four are what stay apart across a room; a fifth calendar does not
+get a fifth pattern nobody can read, it gets a letter on every chip and the
+shapes keep cycling underneath. The grid is a fixed six weeks even in a month
+five would hold, since a layout that changed height on the 1st would flash the
+whole panel for no new information.
+
+Two ways to drive one, because two kinds of hardware turn up. **A browser** —
+a Pi in kiosk mode, an old tablet, a Boox — opens `/display/<token>` and renders
+the page. **A panel with no browser** — an ESP32 with a Waveshare screen
+soldered to it — fetches `/api/public/display/<token>.png`, or `.bmp` for the
+display libraries that read a bitmap and have no decompressor, and is handed
+pixels laid out server-side. A third option for anyone who would rather draw it
+themselves: the same frame as JSON. All three are one content model with
+different rasterizers, so what a display *says* is fixed in one place and only
+how it *looks* is written twice; every string arrives already formatted in the
+account's language and clock, which is what stops a panel and a browser
+disagreeing about a date. Everything answers 304 to a matching `If-None-Match`,
+and that is the one piece of HTTP that matters here: a full eink refresh flashes
+the panel for the better part of a second, and a screen polling every five
+minutes would otherwise do it 288 times a day to redraw a month that changed
+twice.
+
+Each screen is its own row in Settings → Displays — name, mode, palette, which
+calendars, how often, and the panel's own pixels and rotation — because the
+kitchen and the hallway want different things and neither has a settings button.
+The honest caveat is stated on that screen rather than buried here: **the URL is
+the whole credential**, and unlike a booking link it shows the calendar itself
+rather than a redacted busy grid. It is 32 bytes, it reaches one read-only call,
+nothing behind it can write, and *New URL* re-keys a display in place — keeping
+its name, mode and geometry — so a leaked token never costs you the screen's
+configuration, which is the thing that would otherwise tempt anyone to leave one
+in place.
+
 **Tabs.** Settings → General → Tabs reorders the top strip and picks which tab
 the app opens on — a fixed one, or wherever you left off. Both follow the
 account.
@@ -296,6 +361,9 @@ backend/
     notify/     outbound notifications: the Telegram sender (borrowed from
                 Søren), the trigger rules, and the sweep that claims/sends/
                 settles against the delivery ledger
+    display/    passive screens: frame.py builds what one SAYS (pure, no I/O),
+                render.py rasterizes it for a panel with no browser (Pillow +
+                the vendored Inter under fonts/)
     due.py      one answer to "when is this due, and when is it late", shared
                 by the connector and the notifier
     scheduling.py, auth.py, access.py, config.py,
@@ -305,8 +373,8 @@ backend/
 frontend/
   src/
     components/ TodayView, TasksView, CalendarView, SchedulingView, HomeView,
-                BookingPage, Sidebar, Login, TaskModal, AppearancePanel,
-                ArchivedCalendarsSection
+                BookingPage, DisplayView, Sidebar, Login, TaskModal,
+                AppearancePanel, ArchivedCalendarsSection, DisplaysSection
     api.ts      typed, same-origin API client (+ SSE subscribe)
     App.tsx     shell: tabs, settings, theme, live-refresh
     appearance.ts  token allowlist + validation, apply/reset, theme import/export
@@ -314,7 +382,8 @@ frontend/
     daytext.ts     reading one typed line ("gym at 7") — pure, unit-tested
     order.ts       the one task sort — total, so array order can't leak through
     time.ts        every clock the app draws, 12- or 24-hour
-    styles/     design tokens + app.css
+    styles/     design tokens + app.css + display.css (the wall screens, which
+                deliberately do NOT read the appearance override layer)
 desktop/        Windows client: a WebView2 window that serves the CI-built SPA
                 from disk and proxies /api to the server (desktop/README.md)
 scratch/        disposable Radicale 3.7.4 in Docker on :5233 (NEVER production)
