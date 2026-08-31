@@ -44,6 +44,9 @@ function show(over: Partial<Parameters<typeof SettingsMenu>[0]> = {}) {
     calFit="dynamic" onToggleCalFit={vi.fn()}
     archivedCals={[]} onArchivedCalsChange={vi.fn()}
     showCompleted={false} onToggleShowCompleted={vi.fn()}
+    notifyEnabled={false} onNotifyEnabledChange={vi.fn()}
+    notifyChatId="" onNotifyChatIdChange={vi.fn()}
+    notifyTokenSet={false} notifyBotId="" onNotifyTokenChange={vi.fn()}
     notifyTriggers={{}} onNotifyTriggersChange={vi.fn()}
     notifyDigestTime="07:30" onNotifyDigestTimeChange={vi.fn()}
     notifyEventLead={10} onNotifyEventLeadChange={vi.fn()}

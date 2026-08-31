@@ -151,6 +151,23 @@ hours to set up. Past eight buzzing messages in a day the rest are downgraded to
 silent rather than dropped, so a pathological day costs you the interruption but
 never the information.
 
+**And a reminder you set yourself.** Any task or event takes a "Remind me"
+lead — *20 minutes before*, *a day before* — and that one is the exception to
+everything below: there is no blanket "task due soon" rule, on purpose, but a
+lead set on one item is you asking rather than the app guessing, and an explicit
+request outranks any bar the app would otherwise apply. It is stored app-side
+rather than as a VALARM, deliberately: Tasks.org, Thunderbird and Apple Calendar
+share these collections and would each fire their own alarm off a VALARM, buying
+interoperability by notifying you three times. It reaches the MCP connector too,
+so Claude can set one when you ask it to.
+
+Setup lives in Settings → Notifications: the bot token, the chat, which rules
+are on, and a **Send a test message** button — because every way of getting a
+bot token and a chat id wrong fails identically and silently, and without that
+button the only feedback loop is waiting for tomorrow's digest not to arrive.
+The token is write-only: the app accepts it and never shows it again, since the
+settings the page loads would otherwise carry a working bot into the browser.
+
 What is deliberately absent is the entire category of nag — "task due soon",
 "you are overdue", "you have not planned today". Those restate something
 standing, or something already on the screen you open anyway, and each is a line

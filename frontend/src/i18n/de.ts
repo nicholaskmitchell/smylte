@@ -56,12 +56,40 @@ export const de: Catalogue = {
   'settings.section.appearance': 'Darstellung',
   'settings.section.calendar': 'Kalender',
   'settings.section.tasks': 'Aufgaben',
+  // ── Erinnerungen pro Eintrag ───────────────────────────────────────────────
+  'reminder.label': 'Erinnere mich',
+  'reminder.aria': 'Wie lange vorher eine Erinnerung geschickt wird',
+  'reminder.none': 'Nicht erinnern',
+  'reminder.atTime': 'Zum Zeitpunkt',
+  'reminder.minutes': '{n} Minuten vorher',
+  'reminder.hours': '{n} Stunden vorher',
+  'reminder.days': '{n} Tage vorher',
   'settings.section.notifications': 'Benachrichtigungen',
 
   // ── Benachrichtigungen ─────────────────────────────────────────────────────
   'notif.intro': 'In Smylte steht ohnehin alles, wonach du später suchen wirst. '
     + 'Eine Benachrichtigung muss also etwas sein, das du nicht nachträglich in '
     + 'der App findest. Darum ist diese Liste kurz.',
+  'notif.enabled': 'Telegram-Benachrichtigungen',
+  'notif.enabled.hint': 'Aus, bis du sie einschaltest — und nichts wird '
+    + 'verschickt, solange Bot-Token und Chat-ID unten nicht beide gesetzt sind.',
+  'notif.telegram': 'Verbindung',
+  'notif.rules': 'Was verschickt wird',
+  'notif.token': 'Bot-Token',
+  'notif.token.placeholder': 'Token von @BotFather einfügen',
+  'notif.token.stored': 'Gespeichert — Bot {bot}',
+  'notif.token.remove': 'Entfernen',
+  'notif.token.hint': 'Lege in Telegram mit @BotFather einen Bot an und füge '
+    + 'sein Token ein. Es wird danach nie wieder angezeigt — die Einstellungen, '
+    + 'die diese Seite lädt, enthalten es bewusst nicht.',
+  'notif.token.removed': 'Bot-Token entfernt.',
+  'notif.chatId': 'Chat-ID',
+  'notif.chatId.hint': 'Deine eigene ID für eine Direktnachricht, oder eine '
+    + 'negative Zahl für eine Gruppe. Schreibe dem Bot vorher einmal — ein Bot '
+    + 'kann kein Gespräch beginnen, ein unangeschriebener Chat antwortet mit '
+    + '„chat not found“.',
+  'notif.test': 'Testnachricht senden',
+  'notif.test.sending': 'Wird gesendet…',
   'notif.on': 'An',
   'notif.off': 'Aus',
   'notif.volume.buzzes': 'meldet sich',

@@ -168,6 +168,10 @@ class CreateTask(BaseModel):
     tags: list[XmlSafeText] | None = None
     parent: str | None = None         # parent task UID (subtask/checklist item)
     client_id: str | None = None      # idempotency: a replayed create reuses the slug
+    # "Notify me this many minutes before." App-only (a sidecar column, not a
+    # VALARM — see the schema comment), so it is applied after the wire create
+    # rather than carried in the iCalendar body.
+    notify_minutes_before: int | None = Field(default=None, ge=0, le=10080)
 
 
 # The client-supplied creation id becomes the resource's href slug, so it must
@@ -280,6 +284,10 @@ class CreateEvent(Repeat):
     # this app's own resources as terse as they have always been.
     busy: bool | None = None
     client_id: str | None = None      # idempotency: a replayed create reuses the slug
+    # "Notify me this many minutes before." App-only (a sidecar column, not a
+    # VALARM — see the schema comment), so it is applied after the wire create
+    # rather than carried in the iCalendar body.
+    notify_minutes_before: int | None = Field(default=None, ge=0, le=10080)
 
 
 class EditEvent(Repeat):
@@ -1438,11 +1446,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         href = await _href(request, list_id, component="VTODO")
         _check_client_id(body.client_id)
         await _check_parent(request, href, body.parent)
-        return await _run(
+        task = await _run(
             _svc(request).create_task, href, body.summary,
             edit=_edit_from_create(body), parent_uid=body.parent,
             client_id=body.client_id,
         )
+        if body.notify_minutes_before is None or task is None:
+            return task
+        # After the wire write: the sidecar row is keyed on a uid that does not
+        # exist until the create lands.
+        return await _run(_svc(request).set_sidecar, href, task["uid"],
+                          notify_minutes_before=body.notify_minutes_before) or task
 
     @api.get("/lists/{list_id}/tasks/{uid}")
     async def get_one_task(request: Request, list_id: str, uid: str):
@@ -1748,13 +1762,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def post_event(request: Request, cal_id: str, body: CreateEvent):
         href = await _href(request, cal_id, component="VEVENT")
         _check_client_id(body.client_id)
-        return await _run(
+        event = await _run(
             _svc(request).create_event, href, body.summary,
             dtstart=_event_dt(body.start, body.all_day, required=True),
             dtend=_event_dt(body.end, body.all_day),
             edit=_event_edit_from_create(body),
             client_id=body.client_id,
         )
+        if body.notify_minutes_before is None or event is None:
+            return event
+        return await _run(_svc(request).set_event_sidecar, href, event["uid"],
+                          notify_minutes_before=body.notify_minutes_before) or event
 
     @api.get("/calendars/{cal_id}/events/{uid}")
     async def get_one_event(request: Request, cal_id: str, uid: str):

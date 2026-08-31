@@ -80,6 +80,20 @@ export interface Task {
    *  planning the task copies this onto that day's entry, and the entry is what
    *  that day counts. This only decides where the next plan starts. */
   estimated_minutes: number | null
+  /** "Notify me this many minutes before" — the task's due time, or the
+   *  event's start. Null on almost everything, which is what "nobody asked to
+   *  be told about this one" means.
+   *
+   *  Sidecar, so Smylte-only and invisible to Tasks.org, jtx Board and
+   *  Thunderbird — deliberately, not as a shortcut. A VALARM is the
+   *  interoperable answer and would be right if Smylte were the only client,
+   *  but those three share these collections and would each fire their own
+   *  alarm off it, buying interop by notifying the owner three times.
+   *
+   *  It is the only thing that makes a task deadline notify at all: there is no
+   *  blanket "task due soon" rule, on purpose, because a lead set on ONE item is
+   *  the owner asking rather than the app guessing. */
+  notify_minutes_before: number | null
   // This task carries an RRULE or RDATE. VTODO recurrence is GATED (see
   // docs/recurrence-findings.md) so nothing in this app advances such a task —
   // but one written by Tasks.org or jtx Board is already in the cache, and a
@@ -111,6 +125,11 @@ export interface CreateTaskBody {
   start?: string             // 'YYYY-MM-DD'
   tags?: string[]
   parent?: string            // parent task uid, for subtasks
+  /** "Notify me N minutes before this is due." App-only, so the server applies
+   *  it after the wire create rather than putting it in the VTODO — which is
+   *  also why it can be sent here at all: there is no uid to hang a sidecar row
+   *  on until the create lands. */
+  notify_minutes_before?: number
 }
 
 export interface CalEvent {
@@ -148,8 +167,35 @@ export interface CalEvent {
   busy: boolean
   tags: string[]
   has_rrule: boolean
+  /** "Notify me this many minutes before" — the task's due time, or the
+   *  event's start. Null on almost everything, which is what "nobody asked to
+   *  be told about this one" means.
+   *
+   *  Sidecar, so Smylte-only and invisible to Tasks.org, jtx Board and
+   *  Thunderbird — deliberately, not as a shortcut. A VALARM is the
+   *  interoperable answer and would be right if Smylte were the only client,
+   *  but those three share these collections and would each fire their own
+   *  alarm off it, buying interop by notifying the owner three times.
+   *
+   *  It is the only thing that makes a task deadline notify at all: there is no
+   *  blanket "task due soon" rule, on purpose, because a lead set on ONE item is
+   *  the owner asking rather than the app guessing. */
+  notify_minutes_before: number | null
   href: string
   etag: string
+}
+
+/** One row of the delivery ledger. `silent` on a rule that normally buzzes is
+ *  how the owner sees what the daily ceiling swallowed. */
+export interface NotificationDelivery {
+  trigger: string
+  dedupe_key: string
+  channel: string
+  claimed_at: string
+  settled_at: string | null
+  ok: number
+  silent: number
+  error: string | null
 }
 
 // Which slice of a recurring series a write applies to.
@@ -578,6 +624,26 @@ export interface Settings {
    *  cost most of two minutes, so a shorter lead fires after the meeting has
    *  started, and the rule refuses to send then. */
   notify_event_lead_minutes?: number
+  /** The master switch. Absent means OFF — unlike the per-rule map, whose
+   *  absent key means "that rule's default", this one has no safe default but
+   *  off: it is what stands between a deploy that merely has a bot token in its
+   *  environment and one whose owner asked to be messaged. */
+  notifications_enabled?: boolean
+  /** Where messages go. Not a secret (an integer naming a chat), so it reads
+   *  back like any other preference. */
+  notify_telegram_chat_id?: string
+  /** WRITE-ONLY. Accepted by PUT, never returned by GET — the settings document
+   *  is fetched on every page load, so echoing the token would put a working
+   *  bot in the DOM, in the network tab, and in any screenshot of either. The
+   *  two fields below are what comes back instead. Send '' to clear it and fall
+   *  back to the environment. */
+  notify_telegram_bot_token?: string
+  /** Read-only, server-derived: whether a token is stored at all. */
+  notify_telegram_bot_token_set?: boolean
+  /** Read-only, server-derived: the PUBLIC half of the token — the bot's own
+   *  user id — which names which bot is configured while revealing nothing that
+   *  could send as it. '' when no token is stored. */
+  notify_telegram_bot_id?: string
 }
 
 // Creates carry a client-generated id that becomes the CalDAV resource slug,
@@ -691,6 +757,14 @@ export const api = {
     j<Task>('POST', `/api/lists/${listId}/tasks`, { client_id: clientId(), ...body }),
   patchTask: (listId: string, uid: string, body: Record<string, unknown>) =>
     j<Task>('PATCH', `/api/lists/${listId}/tasks/${encodeURIComponent(uid)}`, body),
+  /** "Notify me N minutes before this is due." Pass -1 to clear it.
+   *
+   *  Its own call rather than a field on patchTask, because it is not on the
+   *  wire: a PATCH would PUT the VTODO back and move its etag, making every
+   *  other CalDAV client re-fetch a resource that did not change. */
+  setTaskReminder: (listId: string, uid: string, minutes: number) =>
+    j<Task>('PUT', `/api/lists/${listId}/tasks/${encodeURIComponent(uid)}/sidecar`,
+      { notify_minutes_before: minutes }),
   complete: (listId: string, uid: string, done = true) =>
     j<Task>('POST', `/api/lists/${listId}/tasks/${encodeURIComponent(uid)}/complete?done=${done}`),
   cancel: (listId: string, uid: string) =>
@@ -759,8 +833,24 @@ export const api = {
     j<CalEvent[]>('GET', `/api/calendars/${calId}/events?start=${start}&end=${end}`),
   createEvent: (calId: string, body: Record<string, unknown>) =>
     j<CalEvent>('POST', `/api/calendars/${calId}/events`, { client_id: clientId(), ...body }),
+  /** What the bot has actually said, newest first — including anything the
+   *  daily ceiling downgraded to silent. */
+  recentNotifications: (limit = 50) =>
+    j<{ deliveries: NotificationDelivery[]; triggers: string[] }>(
+      'GET', `/api/notifications/recent?limit=${limit}`),
+  /** Send one message now and report what actually failed. */
+  testNotification: () => j<{ sent: boolean; detail: string }>(
+    'POST', '/api/notifications/test'),
   patchEvent: (calId: string, uid: string, body: Record<string, unknown>) =>
     j<CalEvent>('PATCH', `/api/calendars/${calId}/events/${encodeURIComponent(uid)}`, body),
+  /** "Notify me N minutes before this starts." Pass -1 to clear it.
+   *
+   *  On the SERIES for a repeating event — the sidecar is keyed on the resource,
+   *  so "twenty minutes before my standup" is a statement about the standup, not
+   *  about next Tuesday's. There is no scope to pass. */
+  setEventReminder: (calId: string, uid: string, minutes: number) =>
+    j<CalEvent>('PUT', `/api/calendars/${calId}/events/${encodeURIComponent(uid)}/reminder`,
+      { notify_minutes_before: minutes }),
   moveEvent: (calId: string, uid: string, toCalId: string) =>
     j<CalEvent>('POST', `/api/calendars/${calId}/events/${encodeURIComponent(uid)}/move`,
       { calendar: toCalId }),

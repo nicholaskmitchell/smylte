@@ -12,6 +12,7 @@
 // to set) but "what am I agreeing to by leaving this on".
 
 import { useEffect, useState } from 'react'
+import { api, AuthError } from '../api'
 import { useT } from '../i18n'
 import {
   MAX_EVENT_LEAD_MINUTES, MIN_EVENT_LEAD_MINUTES, TRIGGERS, TRIGGER_HINTS,
@@ -20,11 +21,25 @@ import {
 import { DateTimeInput } from './DateTimeInput'
 
 export function NotificationsSection({
+  enabled, onEnabledChange,
+  chatId, onChatIdChange,
+  tokenSet, botId, onTokenChange,
   triggers, onTriggersChange,
   digestTime, onDigestTimeChange,
   eventLead, onEventLeadChange,
-  homeTz,
+  homeTz, onExpire,
 }: {
+  enabled: boolean
+  onEnabledChange: (next: boolean) => void
+  chatId: string
+  onChatIdChange: (next: string) => void
+  /** Whether a bot token is stored. The token itself is never sent back — see
+   *  `_public_settings` server-side — so this and `botId` are all the UI has,
+   *  and all it needs: enough to say which bot is configured without being able
+   *  to speak as it. */
+  tokenSet: boolean
+  botId: string
+  onTokenChange: (next: string) => void
   triggers: Partial<Record<Trigger, boolean>>
   onTriggersChange: (next: Partial<Record<Trigger, boolean>>) => void
   digestTime: string
@@ -33,8 +48,30 @@ export function NotificationsSection({
   onEventLeadChange: (next: number) => void
   /** The account's home timezone, or '' — the digest refuses to fire without one. */
   homeTz: string
+  onExpire: () => void
 }) {
   const tr = useT()
+  // A write-only field: it starts empty even when a token IS stored, because
+  // there is nothing to prefill it with. Emptying it is therefore not "clear
+  // the token" — the row has its own Remove for that, so a stray click in a
+  // field the owner never meant to touch cannot silently disconnect the bot.
+  const [token, setToken] = useState('')
+  const [testing, setTesting] = useState(false)
+  const [result, setResult] = useState<{ ok: boolean; detail: string } | null>(null)
+
+  const runTest = async () => {
+    setTesting(true)
+    setResult(null)
+    try {
+      const r = await api.testNotification()
+      setResult({ ok: true, detail: r.detail })
+    } catch (err) {
+      if (err instanceof AuthError) { onExpire(); return }
+      setResult({ ok: false, detail: err instanceof Error ? err.message : String(err) })
+    } finally {
+      setTesting(false)
+    }
+  }
 
   // The time field holds a local draft and commits on blur/Enter, like
   // CapacityField: an <input type="time"> reports every intermediate value as
@@ -55,6 +92,66 @@ export function NotificationsSection({
 
   return (
     <>
+      <div className="menu-row">
+        <label htmlFor="notif-enabled">{tr('notif.enabled')}</label>
+        <button className="menu-toggle" id="notif-enabled" aria-pressed={enabled}
+          onClick={() => onEnabledChange(!enabled)}>
+          {tr(enabled ? 'notif.on' : 'notif.off')}
+        </button>
+      </div>
+      <div className="hintline">{tr('notif.enabled.hint')}</div>
+
+      <div className="menu-head">{tr('notif.telegram')}</div>
+
+      <div className="menu-row">
+        <label htmlFor="notif-token">{tr('notif.token')}</label>
+        <input className="input notif-token" id="notif-token" type="password"
+          autoComplete="off" spellCheck={false}
+          placeholder={tokenSet ? tr('notif.token.stored', { bot: botId || '?' })
+            : tr('notif.token.placeholder')}
+          value={token}
+          onChange={(e) => setToken(e.target.value)}
+          onBlur={() => {
+            // Only a non-empty value is a write. An emptied field is not a
+            // request to disconnect the bot — Remove is.
+            if (!token.trim()) return
+            onTokenChange(token.trim())
+            setToken('')
+          }} />
+      </div>
+      <div className="hintline">
+        {tr('notif.token.hint')}
+        {tokenSet && (
+          <>
+            {' '}
+            <button className="linklike" onClick={() => onTokenChange('')}>
+              {tr('notif.token.remove')}
+            </button>
+          </>
+        )}
+      </div>
+
+      <div className="menu-row">
+        <label htmlFor="notif-chat">{tr('notif.chatId')}</label>
+        <input className="input notif-chat" id="notif-chat" inputMode="numeric"
+          autoComplete="off" spellCheck={false} value={chatId}
+          onChange={(e) => onChatIdChange(e.target.value.trim())} />
+      </div>
+      <div className="hintline">{tr('notif.chatId.hint')}</div>
+
+      <div className="menu-actions">
+        <button className="btn ghost" onClick={() => { void runTest() }} disabled={testing}>
+          {tr(testing ? 'notif.test.sending' : 'notif.test')}
+        </button>
+      </div>
+      {result && (
+        <div className={`hintline${result.ok ? '' : ' warn'}`} role="status">
+          {result.detail}
+        </div>
+      )}
+
+      <div className="menu-head">{tr('notif.rules')}</div>
+
       <div className="notif-rules">
         {TRIGGERS.map((t) => {
           const on = triggerEnabled(triggers, t)

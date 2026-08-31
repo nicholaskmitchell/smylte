@@ -11,7 +11,7 @@ const ev = (start: string | null, end: string | null,
   uid: 'e', id: 'e', recurrence_id: null, is_recurring: false, calendar: 'c',
   summary: 'E', description: null, location: null,
   start, start_is_date: false, end, end_is_date: false, duration: null,
-  all_day: false, status: null, busy: true, tags: [], has_rrule: false, href: '/c/e.ics', etag: '"1"',
+  all_day: false, status: null, busy: true, notify_minutes_before: null, tags: [], has_rrule: false, href: '/c/e.ics', etag: '"1"',
   ...o,
 })
 
@@ -367,7 +367,7 @@ describe('bucketTasksByDay', () => {
     child_count: 0, completed_child_count: 0, derived_percent: null,
     pinned: false, sort_order: null,
   // Present on every DTO the server sends; see api.ts's Task.
-  completed_at: null, kanban_column: null, estimated_minutes: null, has_rrule: false,
+  completed_at: null, kanban_column: null, estimated_minutes: null, notify_minutes_before: null, has_rrule: false,
   created: null, last_modified: null,
   href: '/l1/t1.ics', etag: '"1"', ...o,
   })

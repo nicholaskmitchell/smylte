@@ -15,6 +15,7 @@ import { inputLang } from '../time'
 import { useTimeFormat } from '../timeformat'
 import { blankValues, bodyFrom, FIELDS, type RowValues } from './AddMultipleModal'
 import { useI18n, useT } from '../i18n'
+import { NO_REMINDER, ReminderField } from './ReminderField'
 
 /**
  * A date+time pair as the wire should carry it.
@@ -41,7 +42,7 @@ export const dateOut = (date: string, time: string, original: string | null | un
  * it lands) and the footer offers the route to the bulk composer instead of
  * Delete.
  */
-export function TaskModal({ task, lists, defaultList, initialTitle, onClose, onCreate, onSave, onDelete, onMultiple }: {
+export function TaskModal({ task, lists, defaultList, initialTitle, onClose, onCreate, onSave, onDelete, onMultiple, onReminderChange }: {
   task: Task | null
   lists: List[]
   defaultList: string
@@ -49,6 +50,11 @@ export function TaskModal({ task, lists, defaultList, initialTitle, onClose, onC
   onClose: () => void
   onCreate: (listId: string, body: CreateTaskBody) => void
   onSave: (patch: Record<string, unknown>) => void
+  /** "Notify me N minutes before", in minutes, or -1 to clear it. Its own
+   *  callback because it is not a wire property and does not belong in the
+   *  PATCH body. Optional: a caller that has nowhere to put it simply does
+   *  not offer the change rather than failing. */
+  onReminderChange?: (minutes: number) => void
   onDelete: () => void
   onMultiple: (listId: string, summary: string) => void
 }) {
@@ -72,6 +78,11 @@ export function TaskModal({ task, lists, defaultList, initialTitle, onClose, onC
     startTime: startHasTime ? toLocalInput(task!.start!).slice(11, 16) : '',
     tags: task?.tags ?? [],
   })
+  // The reminder is not a wire property, so it is not in RowValues and does not
+  // ride in the PATCH body — it has its own endpoint (api.setTaskReminder), for
+  // the reason api.ts gives: a PATCH would PUT the VTODO back and move its etag,
+  // making every other CalDAV client re-fetch a resource that did not change.
+  const [reminder, setReminder] = useState<number | null>(task?.notify_minutes_before ?? null)
   const [start] = useState<RowValues>(initial)
   const [vals, setVals] = useState<RowValues>(start)
   // Every value here has round-tripped through a lossy form representation, so
@@ -96,7 +107,12 @@ export function TaskModal({ task, lists, defaultList, initialTitle, onClose, onC
   const submit = () => {
     if (creating) {
       if (!summary.trim()) return
-      onCreate(listId, bodyFrom(summary.trim(), { ...vals, notes }))
+      const body = bodyFrom(summary.trim(), { ...vals, notes })
+      // Carried in the create body rather than sent afterwards: the server
+      // applies it once the uid exists, so there is no window in which the task
+      // is on screen without the reminder the owner just set.
+      if (reminder !== null) body.notify_minutes_before = reminder
+      onCreate(listId, body)
       onClose()
       return
     }
@@ -111,6 +127,12 @@ export function TaskModal({ task, lists, defaultList, initialTitle, onClose, onC
       body.start = dateOut(vals.startDate, vals.startTime, task?.start)
     }
     if (changed('tags')) body.tags = vals.tags
+    // -1 rather than null: 0 is a real lead ("tell me at the moment itself"),
+    // so the clear cannot borrow falsiness. Only sent when it actually changed,
+    // so an unrelated rename does not write the sidecar.
+    if (reminder !== (task?.notify_minutes_before ?? null)) {
+      onReminderChange?.(reminder === null ? NO_REMINDER : reminder)
+    }
     onSave(body)
   }
 
@@ -160,6 +182,10 @@ export function TaskModal({ task, lists, defaultList, initialTitle, onClose, onC
               </span>
             </div>
           ))}
+        </div>
+        <div className="field reminder-row">
+          <label className="label" htmlFor="task-reminder">{tr('reminder.label')}</label>
+          <ReminderField id="task-reminder" value={reminder} onChange={setReminder} />
         </div>
         <div className="field">
           <label className="label" htmlFor="task-notes">{tr('taskModal.notes')}</label>

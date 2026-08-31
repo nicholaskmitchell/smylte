@@ -59,7 +59,7 @@ const task = (o: Partial<Task> = {}): Task => ({
   tags: [], parent: null, children: [], child_count: 0, completed_child_count: 0,
   derived_percent: null, pinned: false, sort_order: null,
   // Present on every DTO the server sends; see api.ts's Task.
-  completed_at: null, kanban_column: null, estimated_minutes: null, has_rrule: false,
+  completed_at: null, kanban_column: null, estimated_minutes: null, notify_minutes_before: null, has_rrule: false,
   created: null, last_modified: null,
  
   href: '/l1/u1.ics', etag: '"1"', ...o,
@@ -476,7 +476,7 @@ describe('aug19 stage 3 — logging out and back in', () => {
       summary, description: null, location: null,
       start: `${day}T09:00:00`, start_is_date: false,
       end: `${day}T09:30:00`, end_is_date: false, duration: null,
-      all_day: false, status: null, busy: true, tags: [], has_rrule: false,
+      all_day: false, status: null, busy: true, notify_minutes_before: null, tags: [], has_rrule: false,
       href: '/c1/e1.ics', etag: '"1"',
     }
   }

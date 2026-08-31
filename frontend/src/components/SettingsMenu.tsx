@@ -56,6 +56,9 @@ export function SettingsMenu({
   calFit, onToggleCalFit,
   archivedCals, onArchivedCalsChange,
   showCompleted, onToggleShowCompleted,
+  notifyEnabled, onNotifyEnabledChange,
+  notifyChatId, onNotifyChatIdChange,
+  notifyTokenSet, notifyBotId, onNotifyTokenChange,
   notifyTriggers, onNotifyTriggersChange,
   notifyDigestTime, onNotifyDigestTimeChange,
   notifyEventLead, onNotifyEventLeadChange,
@@ -87,6 +90,15 @@ export function SettingsMenu({
   onArchivedCalsChange: (next: string[]) => void
   showCompleted: boolean
   onToggleShowCompleted: () => void
+  notifyEnabled: boolean
+  onNotifyEnabledChange: (next: boolean) => void
+  notifyChatId: string
+  onNotifyChatIdChange: (next: string) => void
+  /** Whether a bot token is stored, and which bot. The token itself never comes
+   *  back from the server, so this is all the UI has — and all it needs. */
+  notifyTokenSet: boolean
+  notifyBotId: string
+  onNotifyTokenChange: (next: string) => void
   /** Sparse overrides: an absent rule means that rule's own default. */
   notifyTriggers: Partial<Record<Trigger, boolean>>
   onNotifyTriggersChange: (next: Partial<Record<Trigger, boolean>>) => void
@@ -310,6 +322,11 @@ export function SettingsMenu({
           <>
             <div className="hintline">{tr('notif.intro')}</div>
             <NotificationsSection
+              enabled={notifyEnabled} onEnabledChange={onNotifyEnabledChange}
+              chatId={notifyChatId} onChatIdChange={onNotifyChatIdChange}
+              tokenSet={notifyTokenSet} botId={notifyBotId}
+              onTokenChange={onNotifyTokenChange}
+              onExpire={onExpire}
               triggers={notifyTriggers}
               onTriggersChange={onNotifyTriggersChange}
               digestTime={notifyDigestTime}
