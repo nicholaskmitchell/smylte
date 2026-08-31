@@ -78,6 +78,38 @@ describe('<DisplayView>', () => {
     expect(document.querySelector('.display-cal__cell.is-outside')).toBeTruthy()
   })
 
+  it('marks its headlines and micro-labels for the editorial type', async () => {
+    frameMock.mockResolvedValue(CAL)
+    const { container } = render(<DisplayView token="tok" />)
+    await screen.findByText('August 2026')
+    // These two classes ARE the editorial system on this page — serif for what
+    // is looked at, tracked uppercase mono for what is scanned — and
+    // `display.browser.test.tsx` measures the computed faces through them in a
+    // real browser. This is the half that holds them to the real JSX, so a
+    // refactor cannot drop a class and leave that suite measuring markup the
+    // component no longer renders.
+    expect(container.querySelector('.display-cal__title')!.className)
+      .toContain('display-title')
+    expect(container.querySelector('.display-cal__num')!.className)
+      .toContain('display-title')
+    for (const sel of ['.display-cal__name', '.display-cal__weekday', '.display-cal__more']) {
+      expect(container.querySelector(sel)!.className, sel).toContain('display-label')
+    }
+    expect(container.querySelector('.display-chip__time')).toBeInTheDocument()
+  })
+
+  it('marks the habits face the same way', async () => {
+    frameMock.mockResolvedValue(DAY)
+    const { container } = render(<DisplayView token="tok" />)
+    await screen.findByText('Stretch')
+    expect(container.querySelector('.display-day__title')!.className)
+      .toContain('display-title')
+    expect(container.querySelector('.display-day__tally')!.className)
+      .toContain('display-title')
+    expect(container.querySelector('.display-day__label')!.className)
+      .toContain('display-label')
+  })
+
   it('takes no input at all', async () => {
     frameMock.mockResolvedValue(CAL)
     const { container } = render(<DisplayView token="tok" />)

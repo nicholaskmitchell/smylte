@@ -502,6 +502,43 @@ def test_a_portrait_panel_is_laid_out_portrait_and_turned_at_the_end():
     assert body != unrotated
 
 
+def test_a_bigger_panel_shows_more_rather_than_the_same_thing_louder():
+    """The principle `_scale` states and `_item_scale` is what makes true.
+
+    A headline growing with the panel is right — there is one of it. A cell's
+    event text growing with the panel is not: the column it sits in grows at
+    exactly the same rate, so the number of characters that fit never improves
+    and a 13" panel truncates the same titles a 7.5" one does, with half its
+    cells empty.
+    """
+    # The common 7.5" panel is the reference and is untouched by this.
+    assert R._item_scale(R._scale(480)) == 1.0
+    assert R._item_scale(R._scale(825)) < R._scale(825)
+
+    day = DAY
+    events = [{"day": day, "summary": f"Event number {i}", "start": f"{day}T0{i}:00:00",
+               "all_day": False, "source": "a", "continued": False} for i in range(1, 8)]
+    frame = F.build_frame(
+        display=_display_row(), day=day, generated_at="t", language="en",
+        time_format="24h", events=events,
+        sources=[{"id": "a", "name": "Work", "color": None}])
+
+    def drawn(height: int) -> int:
+        """How many of the day's events the renderer actually put on the panel."""
+        scale = R._scale(height)
+        small = R._item_scale(scale)
+        pad = int(16 * scale)
+        row_h = (height - (pad + int(38 * scale) + int(18 * scale)) - pad) / 6
+        item_top = int(3 * scale) + int(21 * scale)
+        return max(0, int((row_h - item_top - 2 * scale) // int(15 * small)))
+
+    assert drawn(825) > drawn(480), "a taller panel drew no more rows"
+    # And it is not merely taller-per-row: the small tier grew more slowly than
+    # the panel, which is where the extra rows and the extra words come from.
+    assert R._font("sans", int(12 * R._item_scale(R._scale(825)))).size \
+        < R._font("sans", int(12 * R._scale(825))).size
+
+
 def test_the_same_frame_renders_the_same_bytes():
     # Everything a panel does NOT repaint rests on this: the routes hash the
     # body for the ETag, and a renderer that varied run to run would flash the
@@ -522,13 +559,82 @@ def test_long_text_is_cut_with_an_ellipsis_rather_than_overrunning():
 
     img = Image.new("L", (200, 40), 255)
     draw = ImageDraw.Draw(img)
-    font = R._font(False, 14)
+    font = R._font("sans", 14)
     assert R._fit(draw, "short", font, 200) == "short"
     long = R._fit(draw, "a title far too long for the space it has", font, 60)
     assert long.endswith("…") and len(long) < 40
     # No room at all answers with nothing, not with a lone ellipsis: a column of
     # "…" tells the reader only that the layout is wrong.
     assert R._fit(draw, "anything", font, 2) == ""
+
+
+def test_the_renderer_draws_in_the_apps_three_type_slots():
+    """A display is drawn in the product's own typefaces, not in a default one.
+
+    Asserted by ROLE rather than by filename, which is also how the renderer
+    names them at every call site: "this is a micro-label" survives a change of
+    typeface and "this is JetBrainsMono-Medium" does not. What matters is that
+    three distinct faces exist and that the roles map to different files —
+    collapsing them (a stray `_font("sans", …)` on a headline) is exactly the
+    regression that turns this back into a generic dashboard.
+    """
+    faces = {role: R._font(role, 20).path for role in ("serif", "sans", "mono")}
+    assert len(set(faces.values())) == 3
+    assert "Fraunces" in faces["serif"]
+    assert "Inter" in faces["sans"]
+    assert "JetBrainsMono" in faces["mono"]
+
+
+def test_a_micro_label_is_tracked_and_right_aligns_to_its_edge():
+    from PIL import Image, ImageDraw
+
+    draw = ImageDraw.Draw(Image.new("L", (400, 60), 255))
+    # Tracked by hand, one glyph at a time: Pillow has no letter-spacing, and
+    # uppercase mono set solid is a different thing from the app's label.
+    solid = R._label(draw, (0, 0), "HABITS", 12, 0, track=0)
+    airy = R._label(draw, (0, 20), "HABITS", 12, 0, track=R._TRACK_WIDE)
+    assert airy > solid
+    # Five gaps for six characters, not six: CSS puts letter-spacing after every
+    # character including the last, which leaves a right-aligned label sitting a
+    # gap short of its edge.
+    assert round(airy - solid, 3) == round(12 * R._TRACK_WIDE * 5, 3)
+
+
+def test_a_right_aligned_label_ends_where_it_was_told_to():
+    from PIL import Image, ImageDraw
+
+    img = Image.new("L", (200, 30), 255)
+    draw = ImageDraw.Draw(img)
+    width = R._label(draw, (0, 5), "SAT", 12, 0, right=150)
+    ink = [x for x in range(200) if any(img.getpixel((x, y)) < 128 for y in range(30))]
+    assert ink, "nothing was drawn"
+    # Within a glyph's side bearing of the edge it was aligned to, and starting
+    # where the measured width says it should.
+    assert 140 <= max(ink) <= 150
+    assert abs(min(ink) - (150 - width)) <= 3
+
+
+def test_a_day_outside_the_month_is_told_apart_by_SIZE_not_only_colour():
+    """The eink regression this exists to keep closed.
+
+    `--fg-muted` on a one-bit panel IS black, so drawing July's last week in
+    "muted" and August's first in "ink" produced two identical numbers — and the
+    only reason to draw the neighbouring month at all is to show where it ends.
+    """
+    import copy
+
+    frame = _frame()                                  # eink, one bit deep
+    assert any(not c["in_month"] for w in frame["calendar"]["weeks"] for c in w)
+    flat = copy.deepcopy(frame)
+    for week in flat["calendar"]["weeks"]:
+        for cell in week:
+            cell["in_month"] = True
+
+    # The assertion is that the two renders DIFFER. If `in_month` were carried
+    # by colour alone, they would be byte-identical here — the eink palette has
+    # exactly one ink — and that byte-identity is precisely the bug.
+    assert R.render_frame(frame, width=800, height=480, fmt="png") \
+        != R.render_frame(flat, width=800, height=480, fmt="png")
 
 
 # ── the HTTP tier ───────────────────────────────────────────────────────────

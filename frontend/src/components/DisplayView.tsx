@@ -124,7 +124,7 @@ export function DisplayView({ token }: { token: string }) {
         // The one message this page will ever show instead of content, and it
         // is addressed to whoever walks up to the screen — not to a developer.
         <div className="display__gone">
-          <p className="display__gone-title">This display is no longer connected.</p>
+          <p className="display-title display__gone-title">This display is no longer connected.</p>
           <p className="display__gone-hint">Pair it again from Settings → Displays.</p>
         </div>
       ) : !frame ? (
@@ -136,7 +136,7 @@ export function DisplayView({ token }: { token: string }) {
         <>
           {frame.calendar ? <CalendarFace frame={frame} /> : null}
           {frame.habits ? <HabitsFace frame={frame} /> : null}
-          {stale ? <div className="display__stale">Not updated recently</div> : null}
+          {stale ? <div className="display-label display__stale">Not updated recently</div> : null}
         </>
       )}
     </div>
@@ -223,12 +223,12 @@ function CalendarFace({ frame }: { frame: DisplayFrame }) {
   return (
     <div className="display-cal">
       <header className="display-cal__head">
-        <h1 className="display-cal__title">{cal.title}</h1>
-        <span className="display-cal__name">{frame.display.name}</span>
+        <h1 className="display-title display-cal__title">{cal.title}</h1>
+        <span className="display-label display-cal__name">{frame.display.name}</span>
       </header>
       <div className="display-cal__weekdays">
         {cal.weekday_names.map(name => (
-          <span key={name} className="display-cal__weekday">{name}</span>
+          <span key={name} className="display-label display-cal__weekday">{name}</span>
         ))}
       </div>
       <div className="display-cal__grid" ref={gridRef}>
@@ -249,13 +249,13 @@ function CalendarFace({ frame }: { frame: DisplayFrame }) {
                   }
                 >
                   <div className="display-cal__daynum">
-                    <span className="display-cal__num">{cell.label}</span>
+                    <span className="display-title display-cal__num">{cell.label}</span>
                     {/* The count rides on the date's line rather than taking an
                         item row of its own. On a small panel a cell holds about
                         two events, and spending one of them to say "+4" costs
                         the reader more than the count is worth. */}
                     {spare > 0 ? (
-                      <span className="display-cal__more">+{spare}</span>
+                      <span className="display-label display-cal__more">+{spare}</span>
                     ) : null}
                   </div>
                   <div className="display-cal__items">
@@ -281,13 +281,13 @@ function HabitsFace({ frame }: { frame: DisplayFrame }) {
   return (
     <div className="display-day">
       <header className="display-day__head">
-        <h1 className="display-day__title">{frame.display.name}</h1>
+        <h1 className="display-title display-day__title">{frame.display.name}</h1>
         {counts.habits_total > 0 ? (
           // The score. It is the whole reason the counts are taken before the
           // done rows are hidden: with hiding on, the list empties as the day
           // goes and this is the only thing left that remembers there was
           // anything on it.
-          <span className="display-day__tally">
+          <span className="display-title display-day__tally">
             {counts.habits_done}/{counts.habits_total}
           </span>
         ) : null}
@@ -295,14 +295,14 @@ function HabitsFace({ frame }: { frame: DisplayFrame }) {
 
       {block.planned ? null : (
         <div className="display-day__preview">
-          <p className="display-day__preview-title">{block.preview_text}</p>
+          <p className="display-label display-day__preview-title">{block.preview_text}</p>
           <p className="display-day__preview-hint">{block.preview_hint}</p>
         </div>
       )}
 
       {block.habits.length > 0 ? (
         <section className="display-day__section">
-          <h2 className="display-day__label">{block.heading}</h2>
+          <h2 className="display-label display-day__label">{block.heading}</h2>
           <ul className="display-day__rows">
             {block.habits.map((row, i) => (
               <li key={`h-${i}`} className={`display-row${row.done ? ' is-done' : ''}`}>
@@ -320,7 +320,7 @@ function HabitsFace({ frame }: { frame: DisplayFrame }) {
 
       {block.tasks.length > 0 ? (
         <section className="display-day__section">
-          <h2 className="display-day__label">{block.day_heading}</h2>
+          <h2 className="display-label display-day__label">{block.day_heading}</h2>
           <ul className="display-day__rows">
             {block.tasks.map((row, i) => (
               <li key={`t-${i}`} className={`display-row${row.done ? ' is-done' : ''}`}>

@@ -36,8 +36,28 @@ from typing import Any
 from PIL import Image, ImageDraw, ImageFont
 
 _FONT_DIR = os.path.join(os.path.dirname(__file__), "fonts")
-_REGULAR = os.path.join(_FONT_DIR, "Inter-Regular.ttf")
-_BOLD = os.path.join(_FONT_DIR, "Inter-Bold.ttf")
+
+# The app's three type slots, by the names tokens.css gives them. A display is
+# drawn in the product's own typefaces at the product's own weights, so a panel
+# on a wall reads as Smylte rather than as a generic dashboard that happens to
+# hold the same data — see `dev/build_display_fonts.py` for how each file is
+# pinned and why.
+#
+# The ROLE is what is named at every call site below, never the file. "This is a
+# micro-label" survives a change of typeface; "this is JetBrainsMono-Medium"
+# does not.
+_FACES = {
+    "serif": os.path.join(_FONT_DIR, "Fraunces-Medium.ttf"),
+    "sans": os.path.join(_FONT_DIR, "Inter-Regular.ttf"),
+    "mono": os.path.join(_FONT_DIR, "JetBrainsMono-Medium.ttf"),
+}
+
+# How far a micro-label is tracked, as a fraction of its size. app.css spends
+# 0.06em–0.12em on these depending on how small the label is; the two values
+# here are the ends of that range, and the uppercase mono they go with is the
+# loudest editorial marker the product has.
+_TRACK_TIGHT = 0.06
+_TRACK_WIDE = 0.12
 
 # The light theme's tokens, mirrored from frontend/src/styles/tokens.css (the
 # OKLCH accents converted once to sRGB). A display is always "light": it is
@@ -59,15 +79,49 @@ _COLOR = {"ink": _INK, "paper": _PAPER, "muted": _MUTED,
 
 
 @lru_cache(maxsize=64)
-def _font(bold: bool, size: int) -> ImageFont.FreeTypeFont:
-    """One FreeType face per (weight, size). Cached: a month grid asks for the
-    same four sizes a few hundred times, and each `truetype()` call re-reads and
-    re-parses 150KB from disk."""
-    return ImageFont.truetype(_BOLD if bold else _REGULAR, size)
+def _font(role: str, size: int) -> ImageFont.FreeTypeFont:
+    """One FreeType face per (role, size). Cached: a month grid asks for the
+    same handful of sizes a few hundred times, and each `truetype()` call
+    re-reads and re-parses the whole file from disk."""
+    return ImageFont.truetype(_FACES[role], size)
 
 
 def _text_width(draw: ImageDraw.ImageDraw, s: str, font) -> int:
     return int(draw.textlength(s, font=font))
+
+
+def _label(
+    draw: ImageDraw.ImageDraw, xy: tuple[float, float], text: str, size: int,
+    fill, *, track: float = _TRACK_WIDE, right: float | None = None,
+) -> float:
+    """A micro-label: uppercase mono, tracked. Returns the width it drew.
+
+    Tracked BY HAND, one glyph at a time, because Pillow has no letter-spacing
+    and the tracking is not decoration here — uppercase mono set solid is a
+    different thing from the app's label, which is airy on purpose. This is the
+    one piece of typography the browser gets for free (`letter-spacing`) and the
+    rasterizer has to build.
+
+    `right` right-aligns to that x instead of drawing from `xy[0]`, which needs
+    the width up front — hence measuring and drawing in the same function rather
+    than a caller doing both.
+
+    The trailing gap is dropped from the measurement. CSS puts letter-spacing
+    AFTER every character including the last, so a right-aligned tracked label
+    measured naively sits one gap short of its edge; browsers have the same
+    quirk and it is visible at 0.12em on a wall.
+    """
+    text = text.upper()
+    if not text:
+        return 0.0
+    font = _font("mono", size)
+    gap = size * track
+    width = sum(draw.textlength(c, font=font) for c in text) + gap * (len(text) - 1)
+    x = (right - width) if right is not None else xy[0]
+    for char in text:
+        draw.text((x, xy[1]), char, font=font, fill=fill)
+        x += draw.textlength(char, font=font) + gap
+    return width
 
 
 def _fit(draw: ImageDraw.ImageDraw, s: str, font, width: int) -> str:
@@ -174,6 +228,25 @@ def _scale(height: int) -> float:
     return max(0.75, min(2.6, height / 480))
 
 
+def _item_scale(scale: float) -> float:
+    """The scale for the SMALL tier — a month cell's events and their clocks.
+
+    Deliberately gentler than `_scale`, and it is the same sentence that
+    function's own docstring ends on: a bigger screen should show MORE, not the
+    same thing louder. A headline that grows with the panel is right, because
+    there is one of it; a cell's event text that grows with the panel is not,
+    because the column it sits in grows at exactly the same rate and so the
+    number of characters that fit never improves. Measured on a 1200×825 panel
+    with linear scaling: "1:1 with Sam" still truncated to "1:1 wit…" on a cell
+    with half its height empty.
+
+    Growing the small tier at a bit over half the rate spends the extra pixels
+    on more words and more rows instead. It is a no-op at 480px, where the
+    common 7.5" panel sits and where nothing was wrong.
+    """
+    return 1.0 + (scale - 1.0) * 0.55
+
+
 def _render_calendar(
     img: Image.Image, frame: dict[str, Any], *, eink: bool, colors,
 ) -> None:
@@ -184,19 +257,32 @@ def _render_calendar(
     cal = frame["calendar"]
     treatments = {s["id"]: s for s in frame["sources"]}
 
-    title_font = _font(True, int(26 * scale))
-    head_font = _font(True, int(12 * scale))
-    day_font = _font(True, int(13 * scale))
-    item_font = _font(False, int(12 * scale))
+    # The app's own type slots, by role. A serif headline, a tracked uppercase
+    # mono micro-label, sans for the things that are read rather than scanned —
+    # the same three the product uses everywhere else.
+    title_font = _font("serif", int(30 * scale))
+    day_font = _font("serif", int(15 * scale))
+    # A day outside this month, one size step down. It is NOT merely a quieter
+    # colour: `--fg-muted` on a one-bit panel IS black, so a colour step alone
+    # made July's last week indistinguishable from August's first — the whole
+    # point of drawing those days at all. Size is one of the three things that
+    # survive thresholding (the others being weight and rule), and it keeps the
+    # distinction inside one type system rather than reaching for a second face
+    # to say "not this month".
+    outside_font = _font("serif", int(12 * scale))
+    small = _item_scale(scale)
+    item_font = _font("sans", int(12 * small))
+    time_font = _font("mono", int(10 * small))
+    label_size = int(11 * scale)
 
     # Header: the month, and the display's own name at the right. The name is
     # there because a household with two panels needs to know which one it is
-    # looking at when one of them is showing last week.
-    draw.text((pad, pad), cal["title"], font=title_font, fill=colors["ink"])
-    name = _fit(draw, frame["display"]["name"], head_font, width // 3)
-    if name:
-        draw.text((width - pad - _text_width(draw, name, head_font), pad + int(10 * scale)),
-                  name, font=head_font, fill=colors["muted"])
+    # looking at when one of them is showing last week. It is a micro-label
+    # rather than a second headline, exactly as `.topbar-meta` is in the app.
+    draw.text((pad, pad - int(4 * scale)), cal["title"], font=title_font, fill=colors["ink"])
+    _label(draw, (0, pad + int(12 * scale)),
+           _fit(draw, frame["display"]["name"], _font("mono", label_size), width // 3),
+           label_size, colors["muted"], right=width - pad)
     top = pad + int(38 * scale)
     draw.line([(pad, top), (width - pad, top)], fill=colors["rule"], width=1)
 
@@ -210,9 +296,8 @@ def _render_calendar(
     row_h = grid_h / 6
 
     for i, label in enumerate(cal["weekday_names"]):
-        x = pad + col_w * i
-        draw.text((x + int(4 * scale), top + int(3 * scale)), label.upper(),
-                  font=head_font, fill=colors["muted"])
+        _label(draw, (pad + col_w * i + int(4 * scale), top + int(3 * scale)),
+               label, label_size, colors["muted"])
 
     # Column separators. A month grid without them lets one day's text run into
     # the next day's cell, and on a wall the reader has no cursor to disambiguate
@@ -227,15 +312,15 @@ def _render_calendar(
         else:
             draw.line([(x, grid_top), (x, height - pad)], fill=colors["rule"], width=1)
 
-    item_h = int(15 * scale)
-    marker_size = int(7 * scale)
+    item_h = int(15 * small)
+    marker_size = int(7 * small)
     for r, week in enumerate(cal["weeks"]):
         y = grid_top + row_h * r
         draw.line([(pad, y), (width - pad, y)], fill=colors["rule"], width=1)
         for c, cell in enumerate(week):
             x = pad + col_w * c
             cx, cy = int(x + 4 * scale), int(y + 3 * scale)
-            number = _font(True, int(13 * scale)) if cell["today"] else day_font
+            number = day_font
             if cell["today"]:
                 # Today is a filled block with the number knocked out of it.
                 # It reads at a glance and, crucially, survives thresholding —
@@ -249,9 +334,15 @@ def _render_calendar(
                 # A day outside this month is quieter but never grey on eink —
                 # it is the regular weight where an in-month day is bold, which
                 # is a difference that survives being one bit deep.
-                fill = colors["ink"] if cell["in_month"] else colors["muted"]
-                font = day_font if cell["in_month"] else _font(False, int(13 * scale))
-                draw.text((cx + int(3 * scale), cy), cell["label"], font=font, fill=fill)
+                # A day outside the month is the SAME serif at the same
+                # weight, only quieter — there is one type system on this
+                # screen, and dropping to another face to say "not this month"
+                # would be saying it with the wrong instrument.
+                inside = cell["in_month"]
+                draw.text((cx + int(3 * scale), cy + (0 if inside else int(2 * scale))),
+                          cell["label"],
+                          font=day_font if inside else outside_font,
+                          fill=colors["ink"] if inside else colors["muted"])
 
             # However many item lines are left under the number. The frame
             # carries up to twenty; this is what fits, and anything past it is
@@ -268,10 +359,12 @@ def _render_calendar(
                 # spending one of them to say "+4" costs the reader more than
                 # the count is worth. It cannot push the grid taller either,
                 # which the fixed six-row layout depends on.
-                more = f"+{spare}"
-                draw.text((x + col_w - _text_width(draw, more, item_font) - 4 * scale,
-                           cy + int(3 * scale)),
-                          more, font=item_font, fill=colors["muted"])
+                # Mono, like every other count in the app (`.day-col-head
+                # .count`, `.side-item .count`), and untracked: this is a
+                # number to be read, not a label to be scanned.
+                _label(draw, (0, cy + int(4 * scale)), f"+{spare}",
+                       int(10 * scale), colors["muted"], track=0,
+                       right=x + col_w - 4 * scale)
             for i, item in enumerate(shown):
                 iy = item_top + i * item_h
                 src = treatments.get(item["source"], {})
@@ -279,16 +372,24 @@ def _render_calendar(
                         treatment=src.get("treatment", "solid"),
                         color=src.get("color") or _ACCENT, eink=eink, colors=colors)
                 tx = cx + marker_size + int(4 * scale)
-                prefix = f"{src['initial']} " if src.get("initial") else ""
-                # The clock leads the title. A wall calendar is read for WHEN
-                # before WHAT, and a time at a fixed left edge can be scanned
-                # down the column; one trailing a title of variable length
-                # cannot.
-                label = f"{prefix}{item['time']} {item['text']}".strip() if item["time"] \
-                    else f"{prefix}{item['text']}".strip()
-                label = _fit(draw, label, item_font, int(col_w - (tx - x) - 4 * scale))
-                if label:
-                    draw.text((tx, iy), label, font=item_font, fill=colors["ink"])
+                room_w = int(col_w - (tx - x) - 4 * scale)
+                # The clock leads the title, in mono — the app sets every time
+                # it draws in mono (`.task-meta .due`), and here it also buys
+                # tabular figures, so the times line up down the column instead
+                # of ragging. A wall calendar is read for WHEN before WHAT, and
+                # a fixed left edge is what makes the column scannable.
+                if src.get("initial"):
+                    tx += _label(draw, (tx, iy + int(1 * small)), src["initial"],
+                                 int(11 * small), colors["ink"], track=0) + int(3 * small)
+                if item["time"]:
+                    stamp = item["time"]
+                    draw.text((tx, iy), stamp, font=time_font, fill=colors["ink"])
+                    used = _text_width(draw, stamp, time_font) + int(4 * small)
+                    tx += used
+                    room_w -= used
+                text = _fit(draw, item["text"], item_font, room_w)
+                if text:
+                    draw.text((tx, iy), text, font=item_font, fill=colors["ink"])
 
 
 def _render_habits(
@@ -300,17 +401,18 @@ def _render_habits(
     pad = int(20 * scale)
     block = frame["habits"]
 
-    title_font = _font(True, int(24 * scale))
-    label_font = _font(True, int(11 * scale))
-    row_font = _font(False, int(17 * scale))
-    note_font = _font(False, int(12 * scale))
+    title_font = _font("serif", int(28 * scale))
+    row_font = _font("sans", int(17 * scale))
+    note_font = _font("sans", int(12 * scale))
+    label_size = int(11 * scale)
 
     draw.text((pad, pad), frame["display"]["name"], font=title_font, fill=colors["ink"])
     counts = block["counts"]
-    # The score, at the right of the header. It is the whole reason the counts
-    # are computed before the hiding: with `hide_done_habits` on, the list
-    # empties as the day goes and this is the only thing left that remembers
-    # there was anything on it.
+    # The score, at the right of the header, in the SAME serif as the name it
+    # sits beside — a headline and its figure, not a label. It is the whole
+    # reason the counts are computed before the hiding: with `hide_done_habits`
+    # on, the list empties as the day goes and this is the only thing left that
+    # remembers there was anything on it.
     tally = f"{counts['habits_done']}/{counts['habits_total']}"
     if counts["habits_total"]:
         draw.text((width - pad - _text_width(draw, tally, title_font), pad),
@@ -324,8 +426,9 @@ def _render_habits(
         # do not exist yet — the app's own rule is that only the owner opens a
         # day, and a screen in a hallway that drew this as a plan would be
         # claiming a commitment that was never made.
-        draw.text((pad, y), block["preview_text"], font=label_font, fill=colors["muted"])
-        y += int(14 * scale)
+        _label(draw, (pad, y), block["preview_text"], label_size, colors["ink"],
+               track=_TRACK_TIGHT)
+        y += int(16 * scale)
         draw.text((pad, y), block["preview_hint"], font=note_font, fill=colors["muted"])
         y += int(20 * scale)
 
@@ -335,8 +438,8 @@ def _render_habits(
     def section(label: str, rows: list[dict], *, habit: bool, cursor: int) -> int:
         if not rows:
             return cursor
-        draw.text((pad, cursor), label.upper(), font=label_font, fill=colors["muted"])
-        cursor += int(16 * scale)
+        _label(draw, (pad, cursor), label, label_size, colors["muted"])
+        cursor += int(18 * scale)
         for row in rows:
             if cursor + row_h > height - pad:
                 break
