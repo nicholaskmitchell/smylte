@@ -375,6 +375,163 @@ server captures nothing of the reply side: treat every notification as a
 postcard, which is why the sync-failure alert names the collection and points at
 the log rather than carrying the error text.
 
+## Displays (the passive screens)
+
+> **Previewing one without owning the panel.** Settings → Developer renders
+> every mode at the sizes real panels come in, through
+> `GET /api/displays/preview.png?mode=&palette=&w=&h=&rotate=` — authed, writes
+> nothing, creates no display and no token. Use it rather than minting a real
+> display to look at a layout: a display token is a bearer credential for the
+> calendar and every one you make is one to remember to revoke.
+
+**Set `home_timezone` if the server is not in your zone.** A display draws the
+OWNER's day and the OWNER's clock, which is what the app's own calendar tab has
+always drawn: an event another CalDAV client cached as
+`2026-09-01T02:00:00+00:00` is September 1st at 02:00 in UTC and August 31st at
+22:00 on a screen in New York, and the panel now says the same thing the phone
+does. The zone comes from `home_timezone` in Settings, and **an account that has
+not set one falls back to the server process's zone** — the same fallback
+`_due_day` and the day plan already take, so the grid, its chips and the day
+behind them are all in one zone rather than three. On a UTC container with no
+`home_timezone`, a panel therefore draws UTC clocks.
+A display is a screen with nothing to tap — a calendar in a hallway, today's
+habits in a kitchen. It is paired in **Settings → Displays**, which mints a
+token and gives you two URLs for it:
+
+- `https://<host>/display/<token>` — the page. Point any browser at it: a
+  Raspberry Pi in kiosk mode, an old tablet, a Boox or a jailbroken Kindle. It
+  polls at the interval the display is set to and takes no input at all.
+- `https://<host>/api/public/display/<token>.bin` — **the packed 1-bit
+  framebuffer, and nothing else.** This is the one to point a microcontroller
+  at. Eight pixels per byte, MSB leftmost, rows of `ceil(width/8)`, bit 1 =
+  white paper — which is `framebuf.MONO_HLSB`, so at 800×480 it is exactly
+  48,000 bytes and the client is `sock.readinto(epd.buffer)`. `?invert=1` for a
+  driver whose convention is 0 = white. `firmware/` has a worked MicroPython
+  example for a Pico 2 W and a Waveshare 7.5".
+- `https://<host>/api/public/display/<token>.png` (or `.bmp`) — the same frame
+  as an image, for a board that has a decoder. Set the panel's pixels in
+  Settings or pass `?w=&h=`; `?rotate=` and `?palette=` override per fetch.
+  A render is bounded by AREA as well as by side: `w × h` may not exceed
+  **4,000,000 pixels** (422 past that), which covers every browserless panel
+  made — 4096 × 4096 was a 50 MB body from one unauthenticated request.
+  Be aware what each costs to decode: the **PNG is saved with adaptive row
+  filtering**, so it needs zlib *and* all five PNG unfilters (a single 400×300
+  render uses filter types 1, 2 and 3), and the **BMP is a 62-byte container
+  stored bottom-up with rows padded to four bytes**. On a Pico-class board
+  either is a decoder you have to write before you can see a calendar.
+- There is also `/api/public/display/<token>` on its own, which returns the
+  frame as JSON for firmware that would rather draw it itself. Size it before
+  you parse it on a microcontroller: a typical month is ~30 KB and the frame's
+  own per-day cap puts the worst case near 130 KB.
+
+**`.bin` is 1-bit whatever the display is set to; `.png` and `.bmp` are not.**
+On those two the one-bit guarantee holds only while the display's palette is
+*eink* — switch it to colour and the same URL serves 24-bit BGR, which at
+800×480 is **1,152,054 bytes** against the 48,000 a board just allocated. That
+is why `.bin` refuses a `?palette=` at all: a format whose byte width depends on
+a setting somewhere else is a format that overruns a buffer.
+
+`.bin` is also *drawn* in the e-ink palette whatever the display is set to, and
+that is a separate fact from its byte width. Thresholding a colour render at
+the end kept the length right and lost the picture: the colour rule is
+`(206,204,200)`, which converts to paper, so every column separator and week
+rule vanished and a month came back as floating text with nothing dividing one
+day from the next. A one-bit target is an e-ink target. For the same reason
+`.bin` never advises a refresh interval below the e-ink floor, even on a
+display configured as colour — `X-Display-Refresh-Seconds` is clamped to 180 on
+that route.
+
+**Headers a firmware should check before it paints.** `.bin` carries
+`X-Display-Width`, `X-Display-Height`, `X-Display-Stride` and
+`X-Display-Format` (`mono-hlsb`, or `mono-hlsb-inverted` with `?invert=1`), and
+`Content-Length` equals `stride × height`. Check all five **before you read the
+body**, not after: on a board that reads straight into its framebuffer, a
+refusal that comes afterwards has already overwritten the picture on the wall.
+Send `Accept-Encoding: identity` and refuse a chunked or re-encoded body too —
+RFC 9110 §12.5.3 makes an absent `Accept-Encoding` an invitation for any hop to
+gzip 48,000 bytes of framebuffer. The failure mode all of this avoids is
+diagonal garbage on a wall in another room with nothing on screen to say why.
+The stride matters most at a width that is not a multiple of eight: 250 pixels
+is 32 bytes a row, not 31.25.
+
+**A display token is a bearer credential, and TLS alone may not be protecting
+it.** MicroPython's `ssl.wrap_socket` defaults to `cert_reqs=CERT_NONE` and
+`server_hostname` only sets SNI, so an unconfigured client completes its
+handshake against any certificate at all — which stops a passive listener and
+nothing else. `firmware/README.md` has the CA setup; if a panel of yours is on
+a network you do not control, do that rather than assume `https://` covered it.
+  Size it before you parse it on a microcontroller: a typical month is ~30 KB,
+  and the frame's own per-day cap puts the worst case near 130 KB, which is
+  more than an ESP32 will comfortably hold alongside a JSON document tree. The
+  image endpoints exist precisely so that board does not have to.
+
+**Panel sizes.** The month grid needs seven readable columns, so it has a
+minimum — about **360×260** — and `render.py::month_grid_fits` is the one place
+that decides. Below it the image endpoint draws a sentence saying so and naming
+the mode that does fit, rather than seven columns of overlapping ink, and
+Settings says the same thing beside the size field the moment you type it.
+Tested against the panels people actually mount: a 4.2" (400×300) clears it and
+reads; a 2.9" (296×128) does not. Habits + today has no such floor — it fits
+whatever it can and counts the rest.
+
+A **portrait** panel is worth a word. The grid's type is sized by the column,
+not by the panel's height, because seven columns is what binds it; and where a
+column is too narrow to hold a clock and an event, the clock is dropped so the
+row can say *what* rather than *when*. Both are automatic.
+
+**Refresh interval: e-ink is floored at 180 seconds.** The panel makers rate
+these screens at no more than one refresh every 180s and require them to be put
+to sleep in between — Waveshare say plainly that the alternative *"will damage
+the e-Paper and cannot be repaired"*. So an e-ink display cannot be set below
+that, and Settings says why beside the control. A colour display (an old tablet,
+an LCD) keeps the 60s floor, because none of that is true of a backlight. **On
+upgrade, any e-ink display stored below 180s is raised to it on first start** —
+a setting changed without asking, because the thing being protected is hardware.
+Note also that `X-Display-Refresh-Seconds` is advisory: nothing enforces it on a
+device, so firmware should carry its own floor (the example does).
+
+**Every format, including `.bin`, answers 304 to a matching `If-None-Match`.**
+Honour it in your firmware: a full eink refresh flashes the panel and takes the
+better part of a second, and a display polling every five minutes would
+otherwise do that 288 times a day to redraw a month that changed twice. The
+frame's ETag is taken over the body WITHOUT its timestamp, so it only moves when
+something on the screen actually does.
+
+**The token is a bearer credential for private data.** Unlike a booking link —
+which is meant to be published and shows a stranger a redacted busy grid — this
+one shows your actual events and actual habits, and it will be sitting in a Pi's
+autostart file or an ESP32's flash. It is 32 bytes rather than 16, it reaches
+exactly one read-only call, and nothing behind it can write: the single write in
+the whole path is the display's own `last_seen_at`, which is what Settings uses
+to tell you a screen has gone dark. If a URL gets out, **New URL** re-keys the
+display in place and keeps everything else about it; deleting removes the
+display itself. Switching one off makes its URL answer as though it never
+existed.
+
+A display never opens a day. On a day you have not opened yourself it shows a
+clearly labelled PREVIEW of what opening it would derive and writes nothing —
+the same rule the MCP connector is held to, for the same reason: the day plan is
+worth keeping only while it records what was actually intended, and a panel in a
+hallway intends nothing.
+
+**Greyscale panels are not a separate palette yet.** A 4- or 16-level grey
+panel (a Kindle, a reMarkable, an Inkplate in greyscale mode) gets either the
+1-bit render, which throws away levels it has, or the colour one, which it has
+to dither itself. Both work; neither uses the hardware well. Same for the
+7-colour ACeP and Spectra panels, which receive full sRGB and map it to their
+own fixed palette. Pick `eink` for these today. `.bin` is 1-bit only this round — no greyscale
+plane, and no second plane for the tri-colour (black/white/red) panels.
+
+The server-side renderer needs **Pillow** (`requirements.txt`), which is what
+rasterizes the three typefaces vendored under `backend/tasksd/display/fonts/` —
+Fraunces, Inter and JetBrains Mono, the app's own, converted from the woff2 the
+frontend already ships so a bitmap panel is set in the same type as the browser
+page. Rebuild them with `python -m dev.build_display_fonts` if the frontend's
+fonts are ever replaced; nothing does it automatically, and a stale instance
+here shows up as a panel drifting from the app rather than as an error. No
+outbound network is involved either way, so `IPAddressDeny=any` in
+`deploy/tasks.service` does not have to be relaxed for any of this.
+
 ## Backups (spec §9 — important)
 Back up **both**:
 - `~/radicale/collections` — the source of truth (all `.ics`).
@@ -394,7 +551,11 @@ Back up **both**:
   occurrences already in `day_plan` keep their titles and stay readable), and
   **`notification_deliveries`** (what has already been said out loud — the
   record that stops a notification arriving twice; a restore without it re-sends
-  whatever still falls inside the scheduler's catch-up window). All of
+  whatever still falls inside the scheduler's catch-up window), and
+  **`displays`** (the passive screens: each one's token, what it shows, and the
+  panel it is drawn for — losing it does not lose data, it UN-PAIRS every screen
+  in the house, which is recoverable only by walking round and pointing each one
+  at a new URL). All of
   these are app-only
   state that a resync CANNOT rebuild (see docs/phase0-findings.md). Only the
   *cache* tables (items/collections/sync_state/FTS) are disposable — "the DB is a disposable

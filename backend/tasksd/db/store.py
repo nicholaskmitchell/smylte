@@ -9,6 +9,7 @@ delete-and-recreate survival requirement).
 from __future__ import annotations
 
 import json
+import logging
 import re
 import sqlite3
 from contextlib import contextmanager
@@ -16,6 +17,8 @@ from pathlib import Path
 
 from ..dav.client import CollectionInfo, Item
 from ..ical.read import TaskFields
+
+log = logging.getLogger(__name__)
 
 _SCHEMA = (Path(__file__).parent / "schema.sql").read_text(encoding="utf-8")
 
@@ -166,6 +169,23 @@ def init_db(conn: sqlite3.Connection) -> None:
 
 
 # ── collections ──────────────────────────────────────────────────────────────
+    # A DATA migration, which is a different animal from the ALTERs above and is
+    # here for a reason they are not: it changes a setting the owner chose.
+    #
+    # An eink display refreshing every 60s was settable until the panel's own
+    # limit was written down (service._REFRESH_MIN_EINK_S). Waveshare rate these
+    # screens at one refresh per 180s and require them to sleep in between, and
+    # say plainly that the alternative damages the panel beyond repair. A row
+    # left at 60 goes on driving a screen in someone's hallway at 60 until they
+    # happen to open Settings, and no validation reaches a row nobody edits.
+    #
+    # Exact rather than heuristic: after the service change no row can legally
+    # re-enter this state, so every row this matches predates the rule. Runs in
+    # microseconds over a handful of rows and is idempotent.
+    conn.execute(
+        "UPDATE displays SET refresh_seconds=180 "
+        "WHERE palette='eink' AND refresh_seconds<180")
+
 
 def upsert_collection(conn: sqlite3.Connection, ci: CollectionInfo) -> None:
     conn.execute(
@@ -1827,3 +1847,116 @@ def list_oauth_grants(conn: sqlite3.Connection, *, now: float) -> list[dict]:
     for row in rows:
         row["scope"] = " ".join(live.get(row["family_id"], []))
     return rows
+
+
+# ── displays ────────────────────────────────────────────────────────────────
+# The same five calls `booking_links` has, and deliberately the same shape: both
+# tables are a token in a URL, so the code that revokes one should read like the
+# code that revokes the other. The one addition is `touch_display`, which has no
+# analogue there because a booking link's use is already recorded — every use
+# writes a row to `bookings`, and a display's use writes nothing at all.
+_DISPLAY_FIELDS = {
+    "name", "mode", "palette", "calendars", "lists", "hide_done_habits",
+    "hide_done_tasks", "refresh_seconds", "panel_width", "panel_height",
+    "rotation", "enabled",
+}
+
+
+def create_display(conn: sqlite3.Connection, token: str, fields: dict) -> sqlite3.Row:
+    bad = set(fields) - _DISPLAY_FIELDS
+    if bad:
+        raise ValueError(f"unknown display fields: {bad}")
+    cols = ["token", *fields.keys()]
+    conn.execute(
+        # cols are vetted against _DISPLAY_FIELDS above — not attacker input.
+        f"INSERT INTO displays ({', '.join(cols)}) "  # nosec B608
+        f"VALUES ({', '.join('?' * len(cols))})",
+        (token, *fields.values()),
+    )
+    return get_display(conn, token)
+
+
+def get_display(conn: sqlite3.Connection, token: str) -> sqlite3.Row | None:
+    return conn.execute("SELECT * FROM displays WHERE token=?", (token,)).fetchone()
+
+
+def list_displays(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    return list(conn.execute("SELECT * FROM displays ORDER BY created_at"))
+
+
+def update_display(
+    conn: sqlite3.Connection, token: str, fields: dict
+) -> sqlite3.Row | None:
+    bad = set(fields) - _DISPLAY_FIELDS
+    if bad:
+        raise ValueError(f"unknown display fields: {bad}")
+    if get_display(conn, token) is None:
+        return None
+    # One transaction for the whole edit, for the reason `update_booking_link`
+    # spells out: the connection is in autocommit, so a value the schema rejects
+    # half way through would otherwise leave the earlier fields applied.
+    with tx(conn):
+        for k, v in fields.items():
+            conn.execute(
+                # {k} is vetted against _DISPLAY_FIELDS above — not attacker input.
+                f"UPDATE displays SET {k}=?, "  # nosec B608
+                "updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE token=?",
+                (v, token),
+            )
+    return get_display(conn, token)
+
+
+def rotate_display_token(
+    conn: sqlite3.Connection, token: str, new_token: str
+) -> sqlite3.Row | None:
+    """Re-key one display, keeping everything else it is.
+
+    A rotation rather than a delete-and-recreate because the two are different
+    events: this one says "that URL got out", and it must not cost the owner the
+    display's name, mode and geometry — which is exactly what would make someone
+    leave a leaked token in place. `last_seen_at` is CLEARED with the token, so
+    the panel reads as un-paired until it has actually been re-pointed; carrying
+    the old stamp over would show a display as live while it was in fact still
+    holding a URL that no longer works.
+    """
+    if get_display(conn, token) is None:
+        return None
+    with tx(conn):
+        conn.execute(
+            "UPDATE displays SET token=?, last_seen_at=NULL, "
+            "updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE token=?",
+            (new_token, token),
+        )
+    return get_display(conn, new_token)
+
+
+def delete_display(conn: sqlite3.Connection, token: str) -> bool:
+    return conn.execute("DELETE FROM displays WHERE token=?", (token,)).rowcount > 0
+
+
+def touch_display(conn: sqlite3.Connection, token: str) -> None:
+    """Stamp that this display fetched a frame. Never fails a fetch.
+
+    A display polls on a timer forever, so this is the app's most frequent
+    write by a wide margin — and it is bookkeeping, not the answer. It is
+    therefore both cheap (one UPDATE, no read back) and unconditional about
+    the reply: the caller does not check it, because a panel on the wall going
+    blank over a failed timestamp would be the tail wagging the dog.
+
+    Which is why the write is SWALLOWED rather than merely unchecked. The
+    docstring has always promised this and the code did not deliver it: this is
+    the one write on an otherwise entirely read-only path, `display_frame` calls
+    it as its last act, and nothing anywhere in tasksd catches `sqlite3.Error`
+    — app.py registers handlers for seven exception types and none of them is a
+    database error. So a locked or full database turned a fully-built frame into
+    a 500, on the route with no session, for a timestamp nobody reads but the
+    settings screen.
+    """
+    try:
+        conn.execute(
+            "UPDATE displays SET last_seen_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') "
+            "WHERE token=?",
+            (token,),
+        )
+    except sqlite3.Error:
+        log.warning("could not stamp last_seen_at for a display", exc_info=True)

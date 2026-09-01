@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import hmac
 import json
 import logging
@@ -44,6 +45,7 @@ from .access import AccessVerifier
 from .auth import Authenticator, HashBudget, RateLimiter, hash_password, limiter_key
 from .config import Settings, normalize_dav_url
 from .db import store
+from .display import render
 from .notify.rules import TRIGGERS as NOTIFY_TRIGGERS
 from .dav.errors import AuthError as DavAuthError
 from .dav.errors import DavError
@@ -470,6 +472,52 @@ class EditBookingLink(BaseModel):
     buffer_minutes: int | None = Field(default=None, ge=0, le=240)
     min_notice_hours: int | None = Field(default=None, ge=0, le=720)
     horizon_days: int | None = Field(default=None, ge=1, le=180)
+    enabled: bool | None = None
+
+
+class CreateDisplay(BaseModel):
+    """A screen on a wall. Bounded like every other free text a client sends.
+
+    `name` is the owner's own label for a place — "Hallway" — and never leaves
+    the account: no display route echoes it to an unauthenticated caller except
+    the frame the display's own token fetches. It is XML-safe anyway, for the
+    reason `CreateHabit` gives: one rule at one edge beats a rule per field.
+    """
+
+    name: XmlSafeText = Field(min_length=1, max_length=100)
+    mode: Literal["calendar", "habits"] = "calendar"
+    palette: Literal["color", "eink"] = "color"
+    # Allowlists of collection ids. Empty is "everything", the default, and a
+    # real value that clears the set — see `_normalize_display_fields`.
+    calendars: list[str] = Field(default_factory=list, max_length=64)
+    lists: list[str] = Field(default_factory=list, max_length=64)
+    hide_done_habits: bool = True
+    hide_done_tasks: bool = True
+    refresh_seconds: int = Field(default=300, ge=60, le=86_400)
+    # The panel's own pixels, for the server-rendered image. Null is "the
+    # request will say", which is what a browser page never needs to.
+    panel_width: int | None = Field(default=None, ge=100, le=4096)
+    panel_height: int | None = Field(default=None, ge=100, le=4096)
+    rotation: Literal[0, 90, 180, 270] = 0
+    enabled: bool = True
+
+
+class EditDisplay(BaseModel):
+    name: XmlSafeText | None = Field(default=None, min_length=1, max_length=100)
+    mode: Literal["calendar", "habits"] | None = None
+    palette: Literal["color", "eink"] | None = None
+    calendars: list[str] | None = Field(default=None, max_length=64)
+    lists: list[str] | None = Field(default=None, max_length=64)
+    hide_done_habits: bool | None = None
+    hide_done_tasks: bool | None = None
+    refresh_seconds: int | None = Field(default=None, ge=60, le=86_400)
+    # `ge=0` with 0 as the CLEAR, not the -1 sentinel the estimates use. Zero is
+    # not a real panel size — the service floors a real one at 100 — so it can
+    # carry the clear here without the ambiguity that made -1 necessary for a
+    # capacity, where 0 is a genuine answer.
+    panel_width: int | None = Field(default=None, ge=0, le=4096)
+    panel_height: int | None = Field(default=None, ge=0, le=4096)
+    rotation: Literal[0, 90, 180, 270] | None = None
     enabled: bool | None = None
 
 
@@ -1923,6 +1971,145 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         out["notify_telegram_bot_id"] = token.split(":", 1)[0] if ":" in token else ""
         return out
 
+    # -- displays (the passive screens) --
+    #
+    # CRUD only. The frame a display actually fetches is the PUBLIC route far
+    # below, reached by the display's own token and never by a session — which
+    # is the whole reason these two sets of routes are written apart rather than
+    # sharing a prefix: everything under `api` is behind `require_auth`, and a
+    # screen on a wall has no session to authenticate with.
+    @api.get("/displays")
+    async def get_displays(request: Request):
+        return await _run(_svc(request).list_displays)
+
+    # Registered ABOVE `/displays/{token}` for the reason the public suffix
+    # routes are: `{token}` is `[^/]+` and would swallow "preview.png" whole,
+    # answering 404 for a display nobody made. That bug has already shipped once
+    # in this file.
+    @api.api_route("/displays/preview.png", methods=["GET", "HEAD"])
+    async def get_display_preview(
+        request: Request,
+        mode: str = Query(default="calendar"),
+        palette: str = Query(default="color"),
+        w: int = Query(default=800, ge=100, le=4096),
+        h: int = Query(default=480, ge=100, le=4096),
+        rotate: int = Query(default=0),
+        hide_done_habits: bool = Query(default=True),
+        hide_done_tasks: bool = Query(default=True),
+    ):
+        """A display rendered for a panel nobody owns yet. Settings → Developer.
+
+        BEHIND THE SESSION, unlike everything else that draws a display, and
+        that is the point of it existing at all: checking a layout at eleven
+        panel sizes should not require minting eleven live tokens — each one a
+        credential that reaches this calendar without a session — and then
+        remembering to revoke them.
+
+        It writes nothing: no row, no token, no `last_seen_at`. And it renders
+        through exactly the same frame builder and rasterizer the token routes
+        use, so what is previewed is what would ship.
+        """
+        if rotate not in (0, 90, 180, 270):
+            raise HTTPException(422, "rotate must be 0, 90, 180 or 270")
+        if w * h > render.MAX_PIXELS:
+            raise HTTPException(
+                422,
+                f"{w}×{h} is more than the {render.MAX_PIXELS:,} pixels "
+                "a display render may cover")
+        try:
+            frame = await _run(_svc(request).preview_display_frame, {
+                "name": "Preview", "mode": mode, "palette": palette,
+                "rotation": rotate,
+                "hide_done_habits": hide_done_habits,
+                "hide_done_tasks": hide_done_tasks,
+            })
+        except ValueError as e:
+            raise HTTPException(422, str(e)) from None
+        body, media = await asyncio.to_thread(
+            render.render_frame, frame, width=w, height=h,
+            rotation=rotate, fmt="png")
+        return Response(
+            content=body, media_type=media,
+            # A preview is the account's own calendar drawn as a picture. It is
+            # behind the session and must not sit in a shared cache any more
+            # than the token routes' images do.
+            headers={"Cache-Control": "no-store, private"})
+
+    @api.get("/displays/preview")
+    async def get_display_preview_frame(
+        request: Request,
+        mode: str = Query(default="calendar"),
+        palette: str = Query(default="color"),
+        hide_done_habits: bool = Query(default=True),
+        hide_done_tasks: bool = Query(default=True),
+    ):
+        """The same preview as JSON, for the browser face and for reading the
+        numbers the picture cannot show — how many items a day carries, what the
+        frame capped away."""
+        try:
+            return await _run(_svc(request).preview_display_frame, {
+                "name": "Preview", "mode": mode, "palette": palette,
+                "hide_done_habits": hide_done_habits,
+                "hide_done_tasks": hide_done_tasks,
+            })
+        except ValueError as e:
+            raise HTTPException(422, str(e)) from None
+
+    @api.post("/displays", status_code=201)
+    async def post_display(request: Request, body: CreateDisplay):
+        try:
+            return await _run(_svc(request).create_display, body.model_dump())
+        except ValueError as e:
+            raise HTTPException(422, str(e)) from None
+
+    @api.patch("/displays/{token}")
+    async def patch_display(request: Request, token: str, body: EditDisplay):
+        # An explicit null is refused rather than ignored, exactly as
+        # `patch_habit` refuses one and for the same reason: None is how the
+        # service spells "the client did not send this", so a null would be
+        # dropped silently and the caller told an edit landed that never did.
+        # The panel dimensions clear with 0, which is why they are not an
+        # exception here.
+        nulled = sorted(k for k in body.model_fields_set if getattr(body, k) is None)
+        if nulled:
+            raise HTTPException(
+                422, f"these fields cannot be null: {', '.join(nulled)}")
+        fields = body.model_dump(exclude_unset=True)
+        # 0 is the clear for the panel size — see EditDisplay — and the store
+        # holds NULL for "the request will say".
+        for key in ("panel_width", "panel_height"):
+            if fields.get(key) == 0:
+                fields[key] = None
+        try:
+            dto = await _run(_svc(request).update_display, token, fields)
+        except ValueError as e:
+            raise HTTPException(422, str(e)) from None
+        if dto is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown display {token}")
+        return dto
+
+    @api.post("/displays/{token}/rotate")
+    async def post_rotate_display(request: Request, token: str):
+        """Re-key a display whose URL got out.
+
+        A separate route rather than a field on PATCH, because it is a separate
+        decision: every other edit changes what a screen SHOWS and this one
+        changes what reaches it. It also cannot be expressed as a field — the
+        token is the primary key, so "set the token" would have to be "set it to
+        something the client chose", and a client-chosen bearer credential is
+        exactly what `secrets.token_urlsafe` exists to prevent.
+        """
+        dto = await _run(_svc(request).rotate_display_token, token)
+        if dto is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown display {token}")
+        return dto
+
+    @api.delete("/displays/{token}", status_code=204)
+    async def delete_display(request: Request, token: str):
+        if not await _run(_svc(request).delete_display, token):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown display {token}")
+        return Response(status_code=204)
+
     @api.get("/settings")
     async def get_settings(request: Request):
         return _public_settings(await _run(_svc(request).get_settings))
@@ -2234,6 +2421,260 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             public_post_link_limiter.release(link_key)
         return result
 
+    # -- displays: the frame a screen on a wall fetches --
+    #
+    # Token-gated and deliberately NOT behind require_auth, the same shape the
+    # booking pages above take. The difference is what the token reaches, and it
+    # is worth being explicit about: a booking link shows a stranger a redacted
+    # busy grid, while this shows the owner's actual events and actual habits.
+    # It is a bearer credential for private data, living in a Raspberry Pi's
+    # autostart file, and the honest mitigations are that it is 32 bytes rather
+    # than 16, that it reaches exactly one read-only call, that it can be
+    # rotated without rebuilding the display, and that `last_seen_at` makes an
+    # abandoned one visible in Settings.
+    #
+    # Its own limiter, sized for what a display actually does. A screen polls on
+    # a timer forever — that is its whole behaviour — so it must never be able
+    # to lock itself out. The worst case is the COLOUR floor of 60s, since an
+    # eink display cannot be set below 180: ten colour displays behind one NAT
+    # address spend 50 requests in a five-minute window against a 300 ceiling,
+    # and each may send a HEAD before its GET, which doubles it to 100. Still
+    # a third of the ceiling.
+    display_limiter = RateLimiter(max_fails=300, window_s=300, lockout_s=300)
+
+    def _display_throttle(request: Request) -> None:
+        """Spend this fetch's credit. Stays on the event loop deliberately: the
+        limiter is an in-memory counter, and the service call it guards is the
+        thing that goes to a worker thread (see `_run`, and the guard in
+        tests/test_loop_blocking.py that keeps it that way)."""
+        _throttle(limiter_key(_client_ip(request)), display_limiter)
+
+    def _frame_response(frame: dict, request: Request, *, seconds: int) -> Response:
+        """A frame, with the ETag that lets a panel skip a repaint.
+
+        This is the one piece of HTTP that matters to an eink screen. A full
+        refresh flashes the whole panel black and takes the better part of a
+        second, and a display polling every five minutes would do that 288 times
+        a day to redraw a month that changed twice. So the body is hashed
+        MINUS its `generated_at` — the timestamp is the one field guaranteed to
+        differ on every request, and hashing it would make the ETag change every
+        time while the screen said the same thing — and a matching
+        If-None-Match gets a 304 with no body, which the browser page and a
+        firmware alike can treat as "nothing to draw".
+        """
+        stable = {k: v for k, v in frame.items() if k != "generated_at"}
+        etag = '"' + hashlib.sha256(
+            json.dumps(stable, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()[:32] + '"'
+        headers = {
+            "ETag": etag,
+            # no-store rather than a max-age: this is private data on a URL with
+            # no session, so it must not sit in a proxy that a second device
+            # could be handed it from. The panel's own polling interval is in
+            # the body, which is the schedule that actually governs.
+            "Cache-Control": "no-store, private",
+            "X-Display-Refresh-Seconds": str(seconds),
+        }
+        if request.headers.get("if-none-match") == etag:
+            return Response(status_code=status.HTTP_304_NOT_MODIFIED, headers=headers)
+        return JSONResponse(frame, headers=headers)
+
+    # GET and HEAD, and the HEAD is not decoration. `@app.get` builds a FastAPI
+    # `APIRoute`, which registers `methods={"GET"}` and nothing else — Starlette's
+    # plain `Route` derives HEAD from GET, `APIRoute` does not — so a HEAD fell
+    # through to the SPA mount and answered a bare JSON 404. That is the same
+    # trap `/book/{token}` documents, and it costs more here: a HEAD is exactly
+    # how a panel with a few hundred kilobytes of RAM asks "has anything
+    # changed?" without pulling a 50KB bitmap down to find out. Starlette drops
+    # the body itself; only the route has to exist. The image is still RENDERED
+    # for a HEAD, because the ETag is a hash of the bytes and an ETag that did
+    # not depend on them would be a lie a panel acts on.
+    @app.api_route("/api/public/display/{token}.png", methods=["GET", "HEAD"])
+    async def public_display_png(
+        request: Request, token: str,
+        w: int | None = Query(default=None, ge=100, le=4096),
+        h: int | None = Query(default=None, ge=100, le=4096),
+        rotate: int | None = Query(default=None),
+        # A panel that wants ink-on-paper regardless of what the display is
+        # configured as — the honest case being a colour-configured display
+        # being checked from a phone, and the reverse.
+        palette: str | None = Query(default=None),
+    ):
+        """The same frame, rasterized. For a panel with no browser.
+
+        Geometry comes from the display's stored `panel_width`/`panel_height`
+        and may be overridden per request, because the two are different facts:
+        the stored pair is what that screen IS, and the query is what this fetch
+        wants — a firmware that knows its own resolution should not have to be
+        configured twice.
+        """
+        return await _display_image(request, token, "png", w, h, rotate, palette)
+
+    @app.api_route("/api/public/display/{token}.bmp", methods=["GET", "HEAD"])
+    async def public_display_bmp(
+        request: Request, token: str,
+        w: int | None = Query(default=None, ge=100, le=4096),
+        h: int | None = Query(default=None, ge=100, le=4096),
+        rotate: int | None = Query(default=None),
+        palette: str | None = Query(default=None),
+    ):
+        """The same image as a 1-bit BMP.
+
+        BMP earns its place next to PNG for one reason: the eink libraries that
+        ship with these panels — Waveshare's, Inkplate's — read a bitmap into a
+        framebuffer and have no decompressor. PNG needs zlib and a line filter
+        on a device with a few hundred kilobytes of RAM, and a format that is
+        already a packed bit array is what those boards can actually take.
+        """
+        return await _display_image(request, token, "bmp", w, h, rotate, palette)
+
+    @app.api_route("/api/public/display/{token}.bin", methods=["GET", "HEAD"])
+    async def public_display_raw(
+        request: Request, token: str,
+        w: int | None = Query(default=None, ge=100, le=4096),
+        h: int | None = Query(default=None, ge=100, le=4096),
+        rotate: int | None = Query(default=None),
+        invert: bool = Query(default=False),
+        palette: str | None = Query(default=None),
+    ):
+        """The packed one-bit framebuffer, and nothing else.
+
+        This is the format a microcontroller actually wants, and the reason it
+        exists is that the other two are not reachable from one. PNG is saved
+        with `optimize=True`, so libpng picks a filter per row and a decoder
+        needs all five unfilters plus zlib — measured on a single 400×300
+        render, filter types 1, 2 and 3 all appeared. BMP is a 62-byte
+        container, stored bottom-up, with rows padded to four bytes. On a
+        Pico-class board both are a decoder you have to write before you can
+        see a calendar.
+
+        What comes back here is what the panel takes: eight pixels per byte,
+        MSB leftmost, rows of `ceil(width / 8)` — MicroPython's
+        `framebuf.MONO_HLSB` stride — and bit 1 = white paper, 0 = black ink,
+        which is Waveshare's own convention. At 800×480 it is exactly 48,000
+        bytes and the client is `sock.readinto(epd.buffer)`.
+
+        `palette` is accepted only to be REFUSED. On the other two routes the
+        one-bit guarantee holds while the display is CONFIGURED as eink — flip
+        it to colour and the same URL serves 24-bit BGR, which at 800×480 is
+        1,152,054 bytes against the 48,000 a board just allocated. A format
+        whose byte width depends on a setting somewhere else is a format that
+        overruns a buffer, so this one is one-bit by construction. Declaring the
+        parameter and answering 422 is what makes that visible: FastAPI ignores
+        a query it was never told about, so leaving it out would let
+        `?palette=color` look accepted and do nothing.
+        """
+        if palette is not None:
+            raise HTTPException(422, "raw is 1-bit only — palette does not apply")
+        return await _display_image(request, token, "raw", w, h, rotate, None,
+                                    invert=invert)
+
+    async def _display_image(
+        request: Request, token: str, fmt: str,
+        w: int | None, h: int | None, rotate: int | None, palette: str | None,
+        *, invert: bool = False,
+    ) -> Response:
+        if rotate is not None and rotate not in (0, 90, 180, 270):
+            raise HTTPException(422, "rotate must be 0, 90, 180 or 270")
+        if palette is not None and palette not in ("color", "eink"):
+            raise HTTPException(422, "palette must be color or eink")
+        _display_throttle(request)
+        frame = await _run(_svc(request).display_frame, token)
+        if frame is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "unknown display")
+        stored = await _run(_svc(request).list_displays_one, token)
+        width = w or (stored or {}).get("panel_width")
+        height = h or (stored or {}).get("panel_height")
+        if not width or not height:
+            # 422 rather than a guessed default. There is no honest default
+            # panel size, and inventing one would hand a device a picture that
+            # is the wrong shape for its screen with nothing saying why.
+            raise HTTPException(
+                422,
+                "this display has no panel size — set one in Settings, or pass "
+                "?w=&h= with the panel's pixels")
+        if width * height > render.MAX_PIXELS:
+            # Each dimension being bounded is not the area being bounded:
+            # 4096×4096 is 16.7 million pixels, and `.bmp` on a colour display
+            # is three bytes each — one ~200-byte request came back with
+            # 50,331,702 bytes, on a route that by design has no session.
+            raise HTTPException(
+                422,
+                f"{width}×{height} is more than the {render.MAX_PIXELS:,} pixels "
+                "a display render may cover")
+        if palette:
+            frame = {**frame, "display": {**frame["display"], "palette": palette}}
+        turn = rotate if rotate is not None else frame["display"].get("rotation", 0)
+        # Rendering is CPU-bound Pillow work — off the event loop, like every
+        # other blocking call in this module.
+        body, media = await asyncio.to_thread(
+            render.render_frame, frame, width=width, height=height,
+            rotation=turn, fmt=fmt, invert=invert)
+        etag = '"' + hashlib.sha256(body).hexdigest()[:32] + '"'
+        # `raw` is a one-bit framebuffer, which is to say an e-ink panel is
+        # asking — whatever the display happens to be CONFIGURED as. The stored
+        # interval is floored by the palette, so a display left on the default
+        # `color` was advising 60 seconds to glass Waveshare rate at 180 and
+        # document as damaged beyond repair below it. The firmware carries its
+        # own floor precisely because this header is advisory, but a server that
+        # advises a number it knows to be unsafe is not much of a defence.
+        seconds = frame["display"]["refresh_seconds"]
+        if fmt == "raw":
+            seconds = max(seconds, TaskService._REFRESH_MIN_EINK_S)
+        headers = {
+            "ETag": etag,
+            "Cache-Control": "no-store, private",
+            "X-Display-Refresh-Seconds": str(seconds),
+        }
+        if fmt == "raw":
+            # What the bytes ARE, so a device can refuse them rather than paint
+            # a mis-shaped buffer onto its glass and read the result off the
+            # wall. Separate width and height rather than one "800x480": a
+            # microcontroller comparing two integers should not first have to
+            # split a string.
+            headers["X-Display-Width"] = str(width)
+            headers["X-Display-Height"] = str(height)
+            headers["X-Display-Format"] = (
+                render.RAW_FORMAT_INVERTED if invert else render.RAW_FORMAT)
+            # RAW ONLY, and that is not tidiness. `ceil(width / 8)` is the packed
+            # framebuffer's stride; a BMP's rows are padded to a FOUR-byte
+            # boundary instead, so the same header on the .bmp route would be
+            # wrong for every width where the two disagree — 296 pixels is 37
+            # bytes packed and 40 in a BMP — and a client that trusted it would
+            # skew by three bytes more on every row down the panel.
+            #
+            # It earns its place here because that padding is invisible from the
+            # outside: 250 pixels is 32 bytes and not 31.25, and a client that
+            # divided rather than asking gets a picture that shears.
+            headers["X-Display-Stride"] = str((width + 7) // 8)
+        if request.headers.get("if-none-match") == etag:
+            # The one that matters: a panel that got a 304 does not repaint, and
+            # an eink panel that does not repaint is a panel that is not
+            # flashing at the room every five minutes.
+            return Response(status_code=status.HTTP_304_NOT_MODIFIED, headers=headers)
+        return Response(body, media_type=media, headers=headers)
+
+    # LAST of the three, and it has to be. Starlette matches routes in the order
+    # they were registered, and `{token}` is `[^/]+` — so registered first it
+    # answers `/api/public/display/<tok>.png` with the token `<tok>.png`, which
+    # is not a display, and every image request became a 404. The suffix routes
+    # are more specific and therefore go above.
+    @app.api_route("/api/public/display/{token}", methods=["GET", "HEAD"])
+    async def public_display_frame(request: Request, token: str):
+        """What this display shows, as data.
+
+        The DIY path, and the reason it exists: a panel that is a microcontroller
+        rather than a browser can render this itself, in whatever way suits the
+        hardware in front of it, without this app pretending to know what its
+        screen looks like. The image routes above are for the ones that would
+        rather be handed pixels.
+        """
+        _display_throttle(request)
+        frame = await _run(_svc(request).display_frame, token)
+        if frame is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "unknown display")
+        return _frame_response(frame, request, seconds=frame["display"]["refresh_seconds"])
+
     # -- internal change hook (localhost only, shared secret; NOT behind Access) --
     @app.post("/internal/changed", status_code=202)
     async def internal_changed(
@@ -2325,6 +2766,29 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # client.
     app.add_api_route(
         "/book/{token}/", booking_spa, methods=["GET", "HEAD"],
+        include_in_schema=False,
+    )
+
+    # -- display deep link: the same SPA shell, for the same reason --
+    #
+    # `/display/<token>` is a real page rather than a redirect to the app,
+    # because the device that opens it has no session and never will: the app
+    # shell would show it a login screen. main.tsx branches on this path before
+    # it mounts, exactly as it does for a booking link, so a panel loads the
+    # display page and never the authed app.
+    @app.api_route("/display/{token}", methods=["GET", "HEAD"], include_in_schema=False)
+    async def display_spa(token: str):
+        index = os.path.join(settings.static_dir, "index.html")
+        if not os.path.isfile(index):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "frontend not built")
+        return FileResponse(index)
+
+    # Both spellings, for the reason the booking route registers both: the SPA
+    # mount at "/" full-matches every path, so `redirect_slashes` never runs and
+    # a trailing slash would be a bare JSON 404 on a URL someone typed by hand
+    # into a kiosk config.
+    app.add_api_route(
+        "/display/{token}/", display_spa, methods=["GET", "HEAD"],
         include_in_schema=False,
     )
 

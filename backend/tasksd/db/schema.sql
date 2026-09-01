@@ -496,3 +496,74 @@ CREATE TABLE IF NOT EXISTS notification_deliveries (
 );
 CREATE INDEX IF NOT EXISTS idx_notification_deliveries_claimed
     ON notification_deliveries(claimed_at);
+
+-- ── displays (SIDECAR: the passive screens on the wall) ─────────────────────
+--
+-- One row per DEVICE, not one row of settings. A display is a screen in a
+-- place — the calendar in the hallway, the habit list in the kitchen — and the
+-- two want different modes, different palettes and different geometry. Shaped
+-- after `booking_links` deliberately: both are a token in a URL that reaches
+-- data without a session, both are revoked by deleting the row, and one shape
+-- for both means one thing to reason about when either is audited.
+--
+-- The token is the ONLY credential. It is `secrets.token_urlsafe(32)` rather
+-- than the booking link's 16, because the two are not exposed to the same
+-- degree of risk: a booking link is meant to be published and shows a redacted
+-- busy grid to a stranger, while this one shows the owner's actual events and
+-- actual habits in full. It is a bearer credential for private data sitting in
+-- a Raspberry Pi's autostart file, and the mitigations are that it grants
+-- READ of one frame and nothing else, that it can be rotated without deleting
+-- the display, and that `last_seen_at` makes an unused one visible.
+--
+-- Sidecar-class, like every table below `items`: nothing here is on the wire
+-- and no resync rebuilds it. Losing it does not lose data — it un-pairs every
+-- panel, which is recoverable by pairing them again — so it belongs in
+-- docs/DEPLOY.md's backup list beside the day plan and the habits.
+CREATE TABLE IF NOT EXISTS displays (
+    token       TEXT PRIMARY KEY,          -- secrets.token_urlsafe(32); the URL key
+    name        TEXT NOT NULL,             -- "Hallway", "Kitchen" — for the owner only
+    -- calendar | habits. What the screen is FOR, and the only two the app
+    -- claims to draw well. A TEXT rather than an INTEGER enum so the DB reads
+    -- like the API; unknown values are refused at the service, never here.
+    mode        TEXT NOT NULL DEFAULT 'calendar',
+    -- color | eink. NOT a theme: it decides whether the frame may use colour at
+    -- all, and an eink frame is authored in pure black and white with no alpha,
+    -- because every intermediate value on a 1-bit panel becomes a dither
+    -- pattern that shimmers between refreshes. See display/frame.py.
+    palette     TEXT NOT NULL DEFAULT 'color',
+    -- JSON arrays of collection SLUGS. Empty is "everything", the same denylist
+    -- default `hidden_calendars` takes, because a display added before a
+    -- calendar exists should still show that calendar's events.
+    calendars   TEXT NOT NULL DEFAULT '[]',
+    lists       TEXT NOT NULL DEFAULT '[]',
+    -- Whether a ticked habit leaves the screen. DEFAULT ON, which is the
+    -- feature as asked for: a wall habit tracker earns its place by getting
+    -- shorter as the day goes, and a list that only ever grows is a list of
+    -- reproaches. Off keeps the occurrence visible with its tick, for someone
+    -- who wants the day's whole shape.
+    hide_done_habits INTEGER NOT NULL DEFAULT 1,
+    hide_done_tasks  INTEGER NOT NULL DEFAULT 1,
+    -- How often the panel is told to come back, in seconds. Advisory: it is
+    -- reported in the frame and honoured by the browser page, and a firmware
+    -- polling on its own schedule is neither helped nor hindered by it. Floored
+    -- at 60 by the service — an eink panel that repaints faster than that is
+    -- wearing itself out for a screen nobody is looking at that closely.
+    refresh_seconds  INTEGER NOT NULL DEFAULT 300,
+    -- The panel's pixels, for the server-rendered image. NULL means the request
+    -- has to say (`?w=&h=`), which is what a browser page never needs. Rotation
+    -- is degrees clockwise applied AFTER layout, so a portrait panel is laid
+    -- out portrait rather than being drawn landscape and turned.
+    panel_width  INTEGER,
+    panel_height INTEGER,
+    rotation     INTEGER NOT NULL DEFAULT 0,   -- 0 | 90 | 180 | 270
+    enabled     INTEGER NOT NULL DEFAULT 1,
+    -- Stamped on every fetch that answered with a frame. The ONLY thing
+    -- recorded about the device: no address, no user agent, no request log.
+    -- It exists to answer one question the owner cannot otherwise answer —
+    -- "is that screen still talking to me, or has it been dark for a week" —
+    -- and anything more would be a surveillance log of a household kept in a
+    -- file that gets backed up.
+    last_seen_at TEXT,
+    created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
