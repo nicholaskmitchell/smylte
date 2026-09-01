@@ -166,6 +166,23 @@ def init_db(conn: sqlite3.Connection) -> None:
 
 
 # ── collections ──────────────────────────────────────────────────────────────
+    # A DATA migration, which is a different animal from the ALTERs above and is
+    # here for a reason they are not: it changes a setting the owner chose.
+    #
+    # An eink display refreshing every 60s was settable until the panel's own
+    # limit was written down (service._REFRESH_MIN_EINK_S). Waveshare rate these
+    # screens at one refresh per 180s and require them to sleep in between, and
+    # say plainly that the alternative damages the panel beyond repair. A row
+    # left at 60 goes on driving a screen in someone's hallway at 60 until they
+    # happen to open Settings, and no validation reaches a row nobody edits.
+    #
+    # Exact rather than heuristic: after the service change no row can legally
+    # re-enter this state, so every row this matches predates the rule. Runs in
+    # microseconds over a handful of rows and is idempotent.
+    conn.execute(
+        "UPDATE displays SET refresh_seconds=180 "
+        "WHERE palette='eink' AND refresh_seconds<180")
+
 
 def upsert_collection(conn: sqlite3.Connection, ci: CollectionInfo) -> None:
     conn.execute(

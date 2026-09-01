@@ -487,6 +487,97 @@ def test_bmp_is_offered_because_a_panel_library_may_have_no_decompressor():
     assert img.mode == "1" and img.size == (800, 480)
 
 
+def test_raw_is_the_framebuffer_a_panel_already_holds():
+    """The whole point of the format: no container, nothing to decode.
+
+    Byte-equal to the PNG's own decoded pixels, so it is provably the same
+    picture — and exactly `stride × height` long, which is what a firmware
+    checks `Content-Length` against before it paints anything.
+    """
+    from PIL import Image
+    import io
+
+    frame = _frame()
+    body, media = R.render_frame(frame, width=800, height=480, fmt="raw")
+    assert media == "application/octet-stream"
+    # 800 / 8 = 100 bytes a row, 480 rows. The number a Waveshare 7.5" driver
+    # allocates as `bytearray(800 * 480 // 8)`.
+    assert len(body) == 48_000
+    png, _ = R.render_frame(frame, width=800, height=480, fmt="png")
+    assert body == Image.open(io.BytesIO(png)).tobytes()
+
+
+def test_raw_is_one_bit_even_on_a_display_configured_for_colour():
+    """The footgun this format exists to not have.
+
+    On `.bmp` the one-bit guarantee holds only while the display is CONFIGURED
+    as eink; flip it to colour and the same URL serves 24-bit BGR — 1,152,054
+    bytes at 800×480 against the 48,000 a board just allocated, with no header
+    in a raw stream to say so. Raw is one-bit by construction instead.
+    """
+    colour = _frame(palette="color")
+    body, _ = R.render_frame(colour, width=800, height=480, fmt="raw")
+    assert len(body) == 48_000
+    # And the other formats are unchanged — this must not have been achieved by
+    # thresholding everything, which is what `test_a_colour_render_keeps_its_colour`
+    # is standing guard over.
+    bmp, _ = R.render_frame(colour, width=800, height=480, fmt="bmp")
+    assert len(bmp) > 1_000_000
+
+
+def test_raw_pads_each_row_to_a_whole_byte():
+    """The reason `X-Display-Stride` is on the wire.
+
+    A width that is not a multiple of eight is padded to a byte per row — 250
+    pixels is 32 bytes, not 31.25 — and a client that divided rather than asking
+    would shear its picture by two more pixels on every row down the panel.
+    This is also MicroPython's own `framebuf.MONO_HLSB` stride, which is why the
+    packing needs no translation at the other end.
+    """
+    body, _ = R.render_frame(_frame(), width=250, height=122, fmt="raw")
+    assert len(body) == 32 * 122 == 3_904
+    assert len(body) != 250 * 122 // 8
+
+
+def test_invert_is_a_strict_complement_of_every_bit():
+    """Guards the one line that three obvious cleanups would silently break.
+
+    `ImageChops.invert`, `Image.eval(v: 255-v)` and `img.point(lambda v: 255-v)`
+    on a mode-"1" image all return an entirely WHITE image — measured — because
+    mode "1" is stored one byte per pixel and those calls leave 254 behind,
+    which repacks as 1. Only inverting the packed bytes inverts the picture.
+    A panel would show blank white and nobody would know why.
+    """
+    frame = _frame()
+    plain, _ = R.render_frame(frame, width=800, height=480, fmt="raw")
+    flipped, _ = R.render_frame(frame, width=800, height=480, fmt="raw", invert=True)
+    assert flipped == bytes(b ^ 0xFF for b in plain)
+    # Not merely different — a blank white buffer would also be "different".
+    assert flipped != plain and set(plain) != {0xFF}
+
+
+def test_invert_is_refused_on_a_format_that_has_no_bits_to_flip():
+    # Ignoring it would hand back a normal PNG with no way to tell, and the
+    # failure would surface as a panel full of black.
+    for fmt in ("png", "bmp"):
+        with pytest.raises(ValueError):
+            R.render_frame(_frame(), width=800, height=480, fmt=fmt, invert=True)
+
+
+def test_raw_renders_the_same_bytes_twice():
+    """The raw sibling of the determinism test, and the ETag rests on it.
+
+    Nothing in the render draws a clock — if anything ever did, every panel
+    would repaint on every poll and the 304 would quietly stop meaning anything.
+    """
+    frame = _frame()
+    first, _ = R.render_frame(frame, width=800, height=480, fmt="raw")
+    second, _ = R.render_frame(
+        {**frame, "generated_at": "a completely different timestamp"},
+        width=800, height=480, fmt="raw")
+    assert first == second
+
+
 def test_a_portrait_panel_is_laid_out_portrait_and_turned_at_the_end():
     from PIL import Image
     import io
@@ -875,7 +966,8 @@ def test_head_reaches_every_display_route(api):
                            "panel_height": 480}).json()["token"]
     for path in (f"/api/public/display/{token}",
                  f"/api/public/display/{token}.png",
-                 f"/api/public/display/{token}.bmp"):
+                 f"/api/public/display/{token}.bmp",
+                 f"/api/public/display/{token}.bin"):
         head = api.head(path)
         assert head.status_code == 200, path
         # The ETag has to be THERE and has to be the one a GET would give, or a
@@ -901,6 +993,8 @@ def test_the_image_needs_a_panel_size_and_then_renders_one(api):
     assert stored.status_code == 200
     bmp = api.get(f"/api/public/display/{token}.bmp")
     assert bmp.headers["content-type"] == "image/bmp"
+    raw = api.get(f"/api/public/display/{token}.bin")
+    assert raw.headers["content-type"] == "application/octet-stream"
 
 
 def test_the_image_answers_304_as_well(api):
@@ -919,6 +1013,127 @@ def test_the_image_refuses_a_geometry_it_cannot_draw(api, query):
                      json={"name": "Hallway", "panel_width": 800,
                            "panel_height": 480}).json()["token"]
     assert api.get(f"/api/public/display/{token}.png?{query}").status_code == 422
+
+
+def test_the_raw_route_states_what_its_bytes_are(api):
+    """Everything a firmware needs to refuse a frame instead of painting it.
+
+    The product assertion is the one that matters: a board compares
+    `Content-Length` against `stride × height` computed from its own constants,
+    and aborts on a mismatch rather than clocking a mis-shaped buffer onto glass
+    it then has to walk over and look at.
+    """
+    token = api.post("/api/displays",
+                     json={"name": "Hallway", "palette": "eink",
+                           "panel_width": 800, "panel_height": 480}).json()["token"]
+    r = api.get(f"/api/public/display/{token}.bin")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "application/octet-stream"
+    assert r.headers["x-display-width"] == "800"
+    assert r.headers["x-display-height"] == "480"
+    assert r.headers["x-display-stride"] == "100"
+    assert r.headers["x-display-format"] == "mono-hlsb"
+    stride, height = int(r.headers["x-display-stride"]), int(r.headers["x-display-height"])
+    assert int(r.headers["content-length"]) == stride * height == len(r.content) == 48_000
+
+
+def test_the_stride_header_is_not_offered_where_it_would_be_a_lie(api):
+    """A BMP's rows are padded to FOUR bytes, not to `ceil(w/8)`.
+
+    At 296 wide that is 40 against 37, so the same header on `.bmp` would be
+    wrong for every width where the two disagree, and a client trusting it would
+    skew three bytes further on every row.
+    """
+    token = api.post("/api/displays",
+                     json={"name": "Hallway", "panel_width": 296,
+                           "panel_height": 128}).json()["token"]
+    assert "x-display-stride" not in api.get(f"/api/public/display/{token}.bmp").headers
+    assert "x-display-stride" in api.get(f"/api/public/display/{token}.bin").headers
+
+
+def test_raw_inverts_on_request_and_says_that_it_did(api):
+    token = api.post("/api/displays",
+                     json={"name": "Hallway", "palette": "eink",
+                           "panel_width": 800, "panel_height": 480}).json()["token"]
+    plain = api.get(f"/api/public/display/{token}.bin")
+    flipped = api.get(f"/api/public/display/{token}.bin?invert=1")
+    assert flipped.content == bytes(b ^ 0xFF for b in plain.content)
+    assert flipped.headers["x-display-format"] == "mono-hlsb-inverted"
+    # Different bytes must mean a different ETag, or two panels of opposite
+    # polarity behind one cache would be handed each other's frame.
+    assert flipped.headers["etag"] != plain.headers["etag"]
+    # And the parameter is a real boolean, so nonsense is a 422 rather than a
+    # silently un-inverted panel.
+    assert api.get(f"/api/public/display/{token}.bin?invert=maybe").status_code == 422
+
+
+def test_raw_refuses_a_palette_because_it_only_has_one(api):
+    """Declared so it can be refused.
+
+    FastAPI ignores a query it was never told about, so leaving `palette` out
+    would let `?palette=color` look accepted and do nothing — on the one route
+    whose entire contract is that its byte width never depends on a setting.
+    """
+    token = api.post("/api/displays",
+                     json={"name": "Hallway", "panel_width": 800,
+                           "panel_height": 480}).json()["token"]
+    for value in ("color", "eink"):
+        r = api.get(f"/api/public/display/{token}.bin?palette={value}")
+        assert r.status_code == 422 and "1-bit" in r.text
+
+
+def test_raw_is_still_one_bit_when_the_display_is_set_to_colour(api):
+    """The colour trap, at the HTTP tier.
+
+    A board that sized its buffer from the documentation and pointed itself at a
+    display someone later switched to colour would otherwise be handed 1,152,054
+    bytes for its 48,000-byte framebuffer.
+    """
+    token = api.post("/api/displays",
+                     json={"name": "Hallway", "palette": "color",
+                           "panel_width": 800, "panel_height": 480}).json()["token"]
+    assert len(api.get(f"/api/public/display/{token}.bin").content) == 48_000
+    assert len(api.get(f"/api/public/display/{token}.bmp").content) > 1_000_000
+
+
+def test_an_eink_display_cannot_be_set_to_refresh_faster_than_its_glass(api):
+    """Waveshare rate these panels at one refresh per 180s and require them to
+    sleep in between — the alternative damages them beyond repair. A minute was
+    on offer, which on that hardware is the app recommending its own
+    destruction. A colour screen is a backlight and keeps the minute."""
+    refused = api.post("/api/displays",
+                       json={"name": "Panel", "palette": "eink", "refresh_seconds": 60})
+    assert refused.status_code == 422 and "180" in refused.text
+
+    colour = api.post("/api/displays",
+                      json={"name": "Tablet", "palette": "color", "refresh_seconds": 60})
+    assert colour.status_code == 201 and colour.json()["refresh_seconds"] == 60
+
+    # Flipping that display to eink says nothing about its interval, so refusing
+    # the write would be refusing a change the owner DID make because of a value
+    # they did not touch. It comes up to the floor instead, and the DTO says so.
+    flipped = api.patch(f"/api/displays/{colour.json()['token']}",
+                        json={"palette": "eink"})
+    assert flipped.status_code == 200 and flipped.json()["refresh_seconds"] == 180
+
+
+def test_a_legacy_display_below_the_floor_can_still_be_edited(api):
+    """The trap a merged-validation floor would spring.
+
+    A display stored at eink/60s before the floor existed must not become
+    uneditable: renaming it sends only `{"name": ...}`, and a floor that
+    validated the merged row would 422 on a field the caller never touched.
+    """
+    made = api.post("/api/displays",
+                    json={"name": "Legacy", "palette": "color",
+                          "refresh_seconds": 60}).json()
+    svc = api.app.state.service
+    store.update_display(svc._conn, made["token"], {"palette": "eink"})
+    renamed = api.patch(f"/api/displays/{made['token']}", json={"name": "Hallway"})
+    assert renamed.status_code == 200 and renamed.json()["name"] == "Hallway"
+    # And it is reported at the floor rather than at what the row still says,
+    # so no panel is ever told 60 by a row nobody edited.
+    assert renamed.json()["refresh_seconds"] == 180
 
 
 def test_a_palette_override_reaches_the_render_without_changing_the_display(api):

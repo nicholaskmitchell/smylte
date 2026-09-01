@@ -383,13 +383,41 @@ token and gives you two URLs for it:
 - `https://<host>/display/<token>` — the page. Point any browser at it: a
   Raspberry Pi in kiosk mode, an old tablet, a Boox or a jailbroken Kindle. It
   polls at the interval the display is set to and takes no input at all.
+- `https://<host>/api/public/display/<token>.bin` — **the packed 1-bit
+  framebuffer, and nothing else.** This is the one to point a microcontroller
+  at. Eight pixels per byte, MSB leftmost, rows of `ceil(width/8)`, bit 1 =
+  white paper — which is `framebuf.MONO_HLSB`, so at 800×480 it is exactly
+  48,000 bytes and the client is `sock.readinto(epd.buffer)`. `?invert=1` for a
+  driver whose convention is 0 = white. `firmware/` has a worked MicroPython
+  example for a Pico 2 W and a Waveshare 7.5".
 - `https://<host>/api/public/display/<token>.png` (or `.bmp`) — the same frame
-  rasterized server-side, for a panel that is a microcontroller rather than a
-  browser (ESP32 + Waveshare, Inkplate, TRMNL). Set the panel's pixels in
+  as an image, for a board that has a decoder. Set the panel's pixels in
   Settings or pass `?w=&h=`; `?rotate=` and `?palette=` override per fetch.
-  `.bmp` exists because those boards' display libraries read a bitmap and have
-  no decompressor. There is also `/api/public/display/<token>` on its own, which
-  returns the frame as JSON for firmware that would rather draw it itself.
+  Be aware what each costs to decode: the **PNG is saved with adaptive row
+  filtering**, so it needs zlib *and* all five PNG unfilters (a single 400×300
+  render uses filter types 1, 2 and 3), and the **BMP is a 62-byte container
+  stored bottom-up with rows padded to four bytes**. On a Pico-class board
+  either is a decoder you have to write before you can see a calendar.
+- There is also `/api/public/display/<token>` on its own, which returns the
+  frame as JSON for firmware that would rather draw it itself. Size it before
+  you parse it on a microcontroller: a typical month is ~30 KB and the frame's
+  own per-day cap puts the worst case near 130 KB.
+
+**`.bin` is 1-bit whatever the display is set to; `.png` and `.bmp` are not.**
+On those two the one-bit guarantee holds only while the display's palette is
+*eink* — switch it to colour and the same URL serves 24-bit BGR, which at
+800×480 is **1,152,054 bytes** against the 48,000 a board just allocated. That
+is why `.bin` refuses a `?palette=` at all: a format whose byte width depends on
+a setting somewhere else is a format that overruns a buffer.
+
+**Headers a firmware should check before it paints.** `.bin` carries
+`X-Display-Width`, `X-Display-Height`, `X-Display-Stride` and
+`X-Display-Format` (`mono-hlsb`, or `mono-hlsb-inverted` with `?invert=1`), and
+`Content-Length` equals `stride × height`. Refuse a frame that disagrees with
+your own constants rather than clocking it onto the glass — the failure mode is
+diagonal garbage on a wall in another room with nothing on screen to say why.
+The stride matters most at a width that is not a multiple of eight: 250 pixels
+is 32 bytes a row, not 31.25.
   Size it before you parse it on a microcontroller: a typical month is ~30 KB,
   and the frame's own per-day cap puts the worst case near 130 KB, which is
   more than an ESP32 will comfortably hold alongside a JSON document tree. The
@@ -409,7 +437,18 @@ not by the panel's height, because seven columns is what binds it; and where a
 column is too narrow to hold a clock and an event, the clock is dropped so the
 row can say *what* rather than *when*. Both are automatic.
 
-**Both image formats and the JSON answer 304 to a matching `If-None-Match`.**
+**Refresh interval: e-ink is floored at 180 seconds.** The panel makers rate
+these screens at no more than one refresh every 180s and require them to be put
+to sleep in between — Waveshare say plainly that the alternative *"will damage
+the e-Paper and cannot be repaired"*. So an e-ink display cannot be set below
+that, and Settings says why beside the control. A colour display (an old tablet,
+an LCD) keeps the 60s floor, because none of that is true of a backlight. **On
+upgrade, any e-ink display stored below 180s is raised to it on first start** —
+a setting changed without asking, because the thing being protected is hardware.
+Note also that `X-Display-Refresh-Seconds` is advisory: nothing enforces it on a
+device, so firmware should carry its own floor (the example does).
+
+**Every format, including `.bin`, answers 304 to a matching `If-None-Match`.**
 Honour it in your firmware: a full eink refresh flashes the panel and takes the
 better part of a second, and a display polling every five minutes would
 otherwise do that 288 times a day to redraw a month that changed twice. The
@@ -438,7 +477,8 @@ panel (a Kindle, a reMarkable, an Inkplate in greyscale mode) gets either the
 1-bit render, which throws away levels it has, or the colour one, which it has
 to dither itself. Both work; neither uses the hardware well. Same for the
 7-colour ACeP and Spectra panels, which receive full sRGB and map it to their
-own fixed palette. Pick `eink` for these today.
+own fixed palette. Pick `eink` for these today. `.bin` is 1-bit only this round — no greyscale
+plane, and no second plane for the tri-colour (black/white/red) panels.
 
 The server-side renderer needs **Pillow** (`requirements.txt`), which is what
 rasterizes the three typefaces vendored under `backend/tasksd/display/fonts/` —

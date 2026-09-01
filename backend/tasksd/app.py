@@ -2362,8 +2362,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     #
     # Its own limiter, sized for what a display actually does. A screen polls on
     # a timer forever — that is its whole behaviour — so it must never be able
-    # to lock itself out: at the 60s floor, ten displays behind one NAT address
-    # spend 50 requests in a five-minute window against a 300 ceiling.
+    # to lock itself out. The worst case is the COLOUR floor of 60s, since an
+    # eink display cannot be set below 180: ten colour displays behind one NAT
+    # address spend 50 requests in a five-minute window against a 300 ceiling,
+    # and each may send a HEAD before its GET, which doubles it to 100. Still
+    # a third of the ceiling.
     display_limiter = RateLimiter(max_fails=300, window_s=300, lockout_s=300)
 
     def _display_throttle(request: Request) -> None:
@@ -2452,9 +2455,51 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         """
         return await _display_image(request, token, "bmp", w, h, rotate, palette)
 
+    @app.api_route("/api/public/display/{token}.bin", methods=["GET", "HEAD"])
+    async def public_display_raw(
+        request: Request, token: str,
+        w: int | None = Query(default=None, ge=100, le=4096),
+        h: int | None = Query(default=None, ge=100, le=4096),
+        rotate: int | None = Query(default=None),
+        invert: bool = Query(default=False),
+        palette: str | None = Query(default=None),
+    ):
+        """The packed one-bit framebuffer, and nothing else.
+
+        This is the format a microcontroller actually wants, and the reason it
+        exists is that the other two are not reachable from one. PNG is saved
+        with `optimize=True`, so libpng picks a filter per row and a decoder
+        needs all five unfilters plus zlib — measured on a single 400×300
+        render, filter types 1, 2 and 3 all appeared. BMP is a 62-byte
+        container, stored bottom-up, with rows padded to four bytes. On a
+        Pico-class board both are a decoder you have to write before you can
+        see a calendar.
+
+        What comes back here is what the panel takes: eight pixels per byte,
+        MSB leftmost, rows of `ceil(width / 8)` — MicroPython's
+        `framebuf.MONO_HLSB` stride — and bit 1 = white paper, 0 = black ink,
+        which is Waveshare's own convention. At 800×480 it is exactly 48,000
+        bytes and the client is `sock.readinto(epd.buffer)`.
+
+        `palette` is accepted only to be REFUSED. On the other two routes the
+        one-bit guarantee holds while the display is CONFIGURED as eink — flip
+        it to colour and the same URL serves 24-bit BGR, which at 800×480 is
+        1,152,054 bytes against the 48,000 a board just allocated. A format
+        whose byte width depends on a setting somewhere else is a format that
+        overruns a buffer, so this one is one-bit by construction. Declaring the
+        parameter and answering 422 is what makes that visible: FastAPI ignores
+        a query it was never told about, so leaving it out would let
+        `?palette=color` look accepted and do nothing.
+        """
+        if palette is not None:
+            raise HTTPException(422, "raw is 1-bit only — palette does not apply")
+        return await _display_image(request, token, "raw", w, h, rotate, None,
+                                    invert=invert)
+
     async def _display_image(
         request: Request, token: str, fmt: str,
         w: int | None, h: int | None, rotate: int | None, palette: str | None,
+        *, invert: bool = False,
     ) -> Response:
         if rotate is not None and rotate not in (0, 90, 180, 270):
             raise HTTPException(422, "rotate must be 0, 90, 180 or 270")
@@ -2482,13 +2527,34 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # other blocking call in this module.
         body, media = await asyncio.to_thread(
             render.render_frame, frame, width=width, height=height,
-            rotation=turn, fmt=fmt)
+            rotation=turn, fmt=fmt, invert=invert)
         etag = '"' + hashlib.sha256(body).hexdigest()[:32] + '"'
         headers = {
             "ETag": etag,
             "Cache-Control": "no-store, private",
             "X-Display-Refresh-Seconds": str(frame["display"]["refresh_seconds"]),
         }
+        if fmt == "raw":
+            # What the bytes ARE, so a device can refuse them rather than paint
+            # a mis-shaped buffer onto its glass and read the result off the
+            # wall. Separate width and height rather than one "800x480": a
+            # microcontroller comparing two integers should not first have to
+            # split a string.
+            headers["X-Display-Width"] = str(width)
+            headers["X-Display-Height"] = str(height)
+            headers["X-Display-Format"] = (
+                render.RAW_FORMAT_INVERTED if invert else render.RAW_FORMAT)
+            # RAW ONLY, and that is not tidiness. `ceil(width / 8)` is the packed
+            # framebuffer's stride; a BMP's rows are padded to a FOUR-byte
+            # boundary instead, so the same header on the .bmp route would be
+            # wrong for every width where the two disagree — 296 pixels is 37
+            # bytes packed and 40 in a BMP — and a client that trusted it would
+            # skew by three bytes more on every row down the panel.
+            #
+            # It earns its place here because that padding is invisible from the
+            # outside: 250 pixels is 32 bytes and not 31.25, and a client that
+            # divided rather than asking gets a picture that shears.
+            headers["X-Display-Stride"] = str((width + 7) // 8)
         if request.headers.get("if-none-match") == etag:
             # The one that matters: a panel that got a 304 does not repaint, and
             # an eink panel that does not repaint is a panel that is not

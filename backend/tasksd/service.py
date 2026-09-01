@@ -2644,14 +2644,29 @@ class TaskService:
     # a timestamp onto the display's own row.
     _DISPLAY_MODES = ("calendar", "habits")
     _DISPLAY_PALETTES = ("color", "eink")
-    # Under a minute is not a refresh rate, it is a fault: an eink panel driven
-    # that hard is spending its rated refresh count on a screen nobody is
-    # reading that closely, and a browser page doing it is just heat. Ten
-    # minutes is the ceiling only in the sense that a display asking for longer
-    # can simply be pointed at its own timer — the frame reports what it was
-    # told and nothing enforces it on a device.
+    # Under a minute is not a refresh rate, it is a fault: a browser page doing
+    # it is just heat. A day is the ceiling only in the sense that a display
+    # asking for longer can simply be pointed at its own timer — the frame
+    # reports what it was told and nothing enforces it on a device.
     _REFRESH_MIN_S = 60
     _REFRESH_MAX_S = 86_400
+    # An EINK panel has a floor its glass imposes, and it is three minutes.
+    # Waveshare's own documentation for these screens says to set the refresh
+    # interval to at least 180 seconds, and to sleep or power the panel down
+    # between refreshes — "otherwise the screen will remain in a high voltage
+    # state for a long time, which will damage the e-Paper and cannot be
+    # repaired". A minute was on offer here, which on that hardware is the app
+    # recommending its own destruction.
+    #
+    # It is not a preference and so it is not a preference to set. A colour
+    # display — an old tablet, an LCD in a hallway — has none of this and keeps
+    # the 60s floor, because none of it is true of a backlight.
+    _REFRESH_MIN_EINK_S = 180
+
+    @staticmethod
+    def _refresh_floor(palette: str | None) -> int:
+        return (TaskService._REFRESH_MIN_EINK_S if palette == "eink"
+                else TaskService._REFRESH_MIN_S)
 
     def list_displays(self) -> list[dict[str, Any]]:
         with self._lock:
@@ -2681,7 +2696,15 @@ class TaskService:
             "lists": json.loads(row["lists"] or "[]"),
             "hide_done_habits": bool(row["hide_done_habits"]),
             "hide_done_tasks": bool(row["hide_done_tasks"]),
-            "refresh_seconds": row["refresh_seconds"],
+            # Clamped to the palette's floor on the way OUT, which is the
+            # safety net rather than the policy. A display stored at 60s before
+            # the eink floor existed would otherwise go on telling a panel to
+            # refresh every minute forever; no migration reaches a row nobody
+            # edits, and this does. The write path above is what makes the
+            # number the owner sees agree with it.
+            "refresh_seconds": max(
+                row["refresh_seconds"],
+                TaskService._refresh_floor(row["palette"])),
             "panel_width": row["panel_width"],
             "panel_height": row["panel_height"],
             "rotation": row["rotation"],
@@ -2706,8 +2729,16 @@ class TaskService:
             dto["token"] = row["token"]
         return dto
 
-    def _normalize_display_fields(self, fields: dict[str, Any]) -> dict[str, Any]:
-        """Validate/canonicalize display fields. Raises ValueError (routes → 422)."""
+    def _normalize_display_fields(
+        self, fields: dict[str, Any], existing: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Validate/canonicalize display fields. Raises ValueError (routes → 422).
+
+        `existing` is the display as it stands, for a PATCH: some rules depend
+        on the row this write is landing on rather than on the write alone —
+        see the refresh floor, which is a property of the palette the display
+        ends up with.
+        """
         out = dict(fields)
         if "name" in out:
             out["name"] = (out["name"] or "").strip()
@@ -2728,13 +2759,27 @@ class TaskService:
                 # resolving here would turn a rename on the wire into a display
                 # that silently shows everything.
                 out[key] = json.dumps(ids)
+        # The floor depends on what the display will BE once this write lands,
+        # not on what it is now — flipping a screen to eink is exactly the write
+        # that has to start respecting the panel's own limit.
+        palette = out.get("palette") or (existing or {}).get("palette") or "color"
+        floor = self._refresh_floor(palette)
         if "refresh_seconds" in out:
             seconds = int(out["refresh_seconds"])
-            if not self._REFRESH_MIN_S <= seconds <= self._REFRESH_MAX_S:
+            if not floor <= seconds <= self._REFRESH_MAX_S:
                 raise ValueError(
-                    f"refresh_seconds must be between {self._REFRESH_MIN_S} and "
+                    f"refresh_seconds must be between {floor} and "
                     f"{self._REFRESH_MAX_S}")
             out["refresh_seconds"] = seconds
+        elif "palette" in out and existing:
+            # Switching an existing display to eink, without saying anything
+            # about its interval. Refusing the write would be refusing a change
+            # the owner DID make because of a value they did not touch, so the
+            # interval comes up to the floor as part of the same write and the
+            # DTO reports it — Settings shows 3 minutes the moment the palette
+            # flips, rather than a 422 about a field that is not on screen.
+            if (existing.get("refresh_seconds") or 0) < floor:
+                out["refresh_seconds"] = floor
         for key in ("panel_width", "panel_height"):
             if key in out and out[key] is not None:
                 px = int(out[key])
@@ -2763,8 +2808,15 @@ class TaskService:
 
     def update_display(self, token: str, fields: dict[str, Any]) -> dict[str, Any] | None:
         with self._lock:
+            # Read the row FIRST: the refresh floor is a property of the palette
+            # the display ends up with, and a PATCH that flips it to eink says
+            # nothing about the interval it is about to make illegal.
+            current = store.get_display(self._conn, token)
+            if current is None:
+                return None
             row = store.update_display(
-                self._conn, token, self._normalize_display_fields(fields))
+                self._conn, token,
+                self._normalize_display_fields(fields, dict(current)))
             if row is None:
                 return None
         self._publish({"type": "display_updated", "display": token})

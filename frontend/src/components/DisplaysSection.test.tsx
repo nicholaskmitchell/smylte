@@ -168,6 +168,44 @@ describe('<DisplaysSection>', () => {
       expect(screen.queryByRole('alert')).not.toBeInTheDocument()
     })
 
+  it('does not offer an e-ink screen an interval its glass forbids', async () => {
+    // The panel makers rate these at one refresh per 180s and require them to
+    // sleep in between; the alternative damages them permanently. "Every
+    // minute" on an e-ink display is the app recommending its own destruction.
+    m.displays.mockResolvedValue([{ ...DISPLAY, palette: 'eink' }] as never)
+    m.patchDisplay.mockImplementation(((_t: string, body: object) =>
+      Promise.resolve({ ...DISPLAY, palette: 'eink', ...body })) as never)
+    const { unmount } = mount()
+    await userEvent.click(await screen.findByRole('button', { name: /set up/i }))
+    expect(screen.getByText(/three minutes is the floor on e-ink/i)).toBeInTheDocument()
+
+    // Cycling from 5 minutes lands on 15, never on 1.
+    await userEvent.click(screen.getByRole('button', { name: 'Every 5 minutes' }))
+    expect(m.patchDisplay).toHaveBeenCalledWith('tok-hallway', { refresh_seconds: 900 })
+    unmount()
+
+    // A colour screen is a backlight and keeps the minute, with no lecture.
+    m.displays.mockResolvedValue([DISPLAY] as never)
+    mount()
+    await userEvent.click(await screen.findByRole('button', { name: /set up/i }))
+    expect(screen.queryByText(/three minutes is the floor/i)).not.toBeInTheDocument()
+  })
+
+  it('points an e-ink screen at the raw framebuffer, not the PNG', async () => {
+    // A microcontroller has no PNG decoder. Handing it the .png would be asking
+    // a board with 520KB to grow a zlib inflater and five unfilters first.
+    m.displays.mockResolvedValue([{ ...DISPLAY, palette: 'eink' }] as never)
+    const { unmount } = mount()
+    await userEvent.click(await screen.findByRole('button', { name: /set up/i }))
+    expect(screen.getByText(new RegExp(`${DISPLAY.token}\\.bin`))).toBeInTheDocument()
+    unmount()
+
+    m.displays.mockResolvedValue([DISPLAY] as never)
+    mount()
+    await userEvent.click(await screen.findByRole('button', { name: /set up/i }))
+    expect(screen.getByText(new RegExp(`${DISPLAY.token}\\.png`))).toBeInTheDocument()
+  })
+
   it('adds a display and opens it, because a new one is useless unpaired',
     async () => {
       m.displays.mockResolvedValue([] as never)
