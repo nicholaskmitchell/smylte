@@ -1541,3 +1541,226 @@ def test_the_preview_is_the_renderer_that_ships(api):
     # The grid itself — everything below the header rule — is identical.
     crop = (0, 120, 800, 480)
     assert a.crop(crop).tobytes() == b.crop(crop).tobytes()
+
+
+# ── the owner's zone, on both the day and the clock ─────────────────────────
+#
+# A display is a screen in the owner's house, so it shows the owner's day and
+# the owner's clock. It used to show the AUTHORING CLIENT's: `fmt_time` and
+# `_event_day` both read the ISO string without converting its offset, so an
+# event Thunderbird cached as `2026-09-01T02:00:00+00:00` drew on September 1st
+# at 02:00 while the app's own calendar tab — whose `dayKey` and `fmtClock` go
+# through `new Date` and read LOCAL components — put it on August 31st at 22:00
+# in New York.
+#
+# Every case below is a value another CalDAV client can trivially write. None of
+# them could be caught before, because nothing in the suite set a home_timezone
+# on the calendar path and the container runs in UTC, where the conversion is
+# the identity.
+
+def _tz_service(monkeypatch) -> TaskService:
+    """A fresh service on its own in-memory DB, with today pinned to DAY.
+
+    A factory rather than the `svc` fixture because several of these tests need
+    TWO services — the same event read under two different zones — and the
+    whole point is that the two answers differ.
+    """
+    s = TaskService(_settings())
+    monkeypatch.setattr(TaskService, "_today", lambda self: DAY)
+    return s
+
+
+def _zoned(svc, tz: str | None, stored: str, *, end: str | None = None,
+           summary: str = "Standup") -> dict:
+    """One event, one zone, through the real display path."""
+    from tasksd.dav.client import CollectionInfo
+    from tasksd.db import store
+
+    with svc._lock:
+        store.upsert_collection(svc._conn, CollectionInfo(
+            href="/cal/work/", displayname="Work", components={"VEVENT"}))
+        _seed_event(svc._conn, "/cal/work/", "u1", summary, start=stored, end=end)
+        svc._conn.commit()
+    patch = {"time_format": "24h"}
+    if tz:
+        patch["home_timezone"] = tz
+    svc.update_settings(patch)
+    token = svc.create_display({"name": "Hallway"})["token"]
+    frame = svc.display_frame(token)
+    return frame
+
+
+def _chips(frame) -> list[tuple[str, str, bool]]:
+    """(day, clock, continued) for every chip on the grid."""
+    return [(cell["day"], item["time"], item["continued"])
+            for week in frame["calendar"]["weeks"] for cell in week
+            for item in cell["items"]]
+
+
+@pytest.mark.parametrize("tz,stored,expect_day,expect_clock", [
+    # The plain case: a Z-anchored event drawn in the owner's clock.
+    ("Europe/Berlin", "2026-08-31T13:00:00+00:00", "2026-08-31", "15:00"),
+    # Crossing midnight FORWARD — the day moves too, not just the clock.
+    ("Europe/Berlin", "2026-08-31T23:30:00+00:00", "2026-09-01", "01:30"),
+    # ...and BACKWARD, into the previous day.
+    ("America/New_York", "2026-09-01T02:00:00+00:00", "2026-08-31", "22:00"),
+    ("America/New_York", "2026-08-31T13:00:00+00:00", "2026-08-31", "09:00"),
+    # A half-hour zone, where an hours-only conversion would be wrong by 30.
+    ("Asia/Kolkata", "2026-08-31T13:00:00+00:00", "2026-08-31", "18:30"),
+    ("Asia/Kolkata", "2026-08-31T23:30:00+00:00", "2026-09-01", "05:00"),
+    # A FLOATING value — what this app writes itself — is naive local wall time
+    # and must NOT move. Converting it would invent an instant the wire never
+    # named, which is the same rule `_due_day` follows.
+    ("Europe/Berlin", "2026-08-31T09:00:00", "2026-08-31", "09:00"),
+    ("America/New_York", "2026-08-31T09:00:00", "2026-08-31", "09:00"),
+])
+def test_a_display_draws_the_owners_day_and_the_owners_clock(
+        monkeypatch, tz, stored, expect_day, expect_clock):
+    svc = _tz_service(monkeypatch)
+    got = _chips(_zoned(svc, tz, stored))
+    assert got == [(expect_day, expect_clock, False)]
+    # And it is the definition, not a table: what the app's own calendar tab
+    # computes from the same value.
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    moment = datetime.fromisoformat(stored)
+    if moment.tzinfo is not None:
+        moment = moment.astimezone(ZoneInfo(tz))
+    assert (moment.date().isoformat(), moment.strftime("%H:%M")) == \
+        (expect_day, expect_clock)
+
+
+def test_the_zone_is_the_one_the_grid_itself_is_drawn_in(monkeypatch):
+    """One zone for the whole display, which is the point.
+
+    `_today` has always used `home_timezone` — the grid's own "today" cell is
+    the owner's day — so bucketing the chips by anything else placed events
+    against a grid drawn in a different zone.
+    """
+    svc = _tz_service(monkeypatch)
+    frame = _zoned(svc, "Asia/Kolkata", "2026-08-31T20:00:00+00:00")
+    # 20:00Z is 01:30 on September 1st in Kolkata.
+    assert _chips(frame) == [("2026-09-01", "01:30", False)]
+    # An account with no home_timezone falls back to the process zone — the
+    # same fallback `_due_day` and `_today` take — so nothing is half-converted.
+    svc2 = _tz_service(monkeypatch)
+    assert _chips(_zoned(svc2, None, "2026-08-31T20:00:00+00:00")) == \
+        [("2026-08-31", "20:00", False)]      # the container runs in UTC
+
+
+def test_a_span_resolves_both_of_its_ends_in_the_same_zone(monkeypatch):
+    """The subtle way to get this wrong is to thread the zone to DTSTART and
+    forget DTEND, which draws a continuation chip on a day the event never
+    touched."""
+    svc = _tz_service(monkeypatch)
+    # 16:00-22:00 on the 31st in New York, cached by a UTC-anchored client.
+    frame = _zoned(svc, "America/New_York",
+                   "2026-08-31T20:00:00+00:00", end="2026-09-01T02:00:00+00:00")
+    assert _chips(frame) == [("2026-08-31", "16:00", False)]
+
+
+def test_a_dtend_is_exclusive_at_the_owners_midnight_not_at_the_strings(
+        monkeypatch):
+    """"Ends exactly at midnight, so it does not spill" is a claim about the
+    reader's clock, and `end[11:16] == "00:00"` read the characters instead.
+
+    The app tests the converted one — `endIsExclusive` is
+    `parseDate(e.end).getHours() === 0 && getMinutes() === 0`. A DTEND of
+    `2026-09-01T00:00:00+00:00` spells midnight but is 02:00 on the 1st in
+    Berlin, so the event really does have time on the 1st and belongs in that
+    cell.
+    """
+    svc = _tz_service(monkeypatch)
+    berlin = _chips(_zoned(svc, "Europe/Berlin",
+                           "2026-08-30T10:00:00+00:00", end="2026-09-01T00:00:00+00:00"))
+    assert [d for d, _c, _k in berlin] == [
+        "2026-08-30", "2026-08-31", "2026-09-01"], \
+        "the span stopped at the STRING's midnight, not the owner's"
+
+    # The mirror: a value that is NOT midnight in the string but IS in the
+    # owner's zone. 22:00Z is 00:00 on the 1st in Berlin, so the event has no
+    # time on the 1st and must not be drawn there.
+    svc2 = _tz_service(monkeypatch)
+    edge = _chips(_zoned(svc2, "Europe/Berlin",
+                         "2026-08-30T10:00:00+00:00", end="2026-08-31T22:00:00+00:00"))
+    assert [d for d, _c, _k in edge] == ["2026-08-30", "2026-08-31"]
+
+    # And the same stored value under UTC really does stop a day earlier — the
+    # answer depends on the reader, which is the whole point.
+    svc3 = _tz_service(monkeypatch)
+    utc = _chips(_zoned(svc3, "UTC",
+                        "2026-08-30T10:00:00+00:00", end="2026-09-01T00:00:00+00:00"))
+    assert [d for d, _c, _k in utc] == ["2026-08-30", "2026-08-31"]
+
+
+def test_a_continuation_carries_no_clock(monkeypatch):
+    """Days 2..N of a span carry the SAME start, so printing it says a
+    conference begins at 09:00 on the Wednesday as well as the Monday. The app
+    draws the clock only on the first day (`!e.cont`)."""
+    svc = _tz_service(monkeypatch)
+    frame = _zoned(svc, "Europe/Berlin",
+                   "2026-08-30T09:00:00+02:00", end="2026-09-01T17:00:00+02:00")
+    got = _chips(frame)
+    assert [(d, k) for d, _c, k in got] == [
+        ("2026-08-30", False), ("2026-08-31", True), ("2026-09-01", True)]
+    assert got[0][1] == "09:00"
+    assert got[1][1] == "" and got[2][1] == "", "a continuation printed a clock"
+
+
+def test_chips_in_a_cell_are_ordered_by_the_instant_not_by_the_string(
+        monkeypatch):
+    """The sort has to move with the clock or the cell contradicts itself.
+
+    `calendar.ts::startOrder` makes the same argument: the lexicographic order
+    of an offset-carrying value and a floating one has nothing to do with their
+    order on the clock — and because the cell keeps only the first N, a mis-sort
+    drops a different event than the app does.
+    """
+    from tasksd.dav.client import CollectionInfo
+    from tasksd.db import store
+
+    svc = _tz_service(monkeypatch)
+    with svc._lock:
+        store.upsert_collection(svc._conn, CollectionInfo(
+            href="/cal/work/", displayname="Work", components={"VEVENT"}))
+        # In Berlin: A is 10:00, B is 09:00 — so B comes first. As STRINGS,
+        # "2026-08-31T08:00:00+00:00" sorts before "2026-08-31T09:00:00", which
+        # is the opposite order.
+        _seed_event(svc._conn, "/cal/work/", "a", "Zed", start="2026-08-31T08:00:00+00:00")
+        _seed_event(svc._conn, "/cal/work/", "b", "Alpha", start="2026-08-31T09:00:00")
+        svc._conn.commit()
+    svc.update_settings({"time_format": "24h", "home_timezone": "Europe/Berlin"})
+    token = svc.create_display({"name": "Hallway"})["token"]
+    cell = next(c for wk in svc.display_frame(token)["calendar"]["weeks"]
+                for c in wk if c["items"])
+    assert [(i["text"], i["time"]) for i in cell["items"]] == [
+        ("Alpha", "09:00"), ("Zed", "10:00")], "sorted by the string, not the clock"
+
+
+def test_the_day_helpers_refuse_to_be_called_without_a_zone():
+    """`None` is a legitimate zone meaning "the process's own", so a call site
+    that forgot to thread one would be indistinguishable from one that meant it
+    — and the only symptom would be a span's two ends resolved differently."""
+    from tasksd import service as S
+
+    with pytest.raises(TypeError):
+        S._event_day("2026-08-31T13:00:00+00:00", True)          # positional
+    with pytest.raises(TypeError):
+        S._event_day("2026-08-31T13:00:00+00:00", is_date=False)  # no zone
+    with pytest.raises(TypeError):
+        S._event_last_day({"end": None}, "2026-08-31")            # no zone
+
+
+def test_a_datetime_at_the_edge_of_the_calendar_does_not_500_the_display():
+    """`astimezone` raises OverflowError near datetime.min/max, which a
+    ValueError guard does not catch — on a route with no session that is a 500
+    for every fetch of that display."""
+    from zoneinfo import ZoneInfo
+
+    from tasksd import service as S
+
+    for value in ("0001-01-01T00:00:00+00:00", "9999-12-31T23:59:59+00:00"):
+        for zone in (ZoneInfo("Pacific/Kiritimati"), ZoneInfo("Pacific/Midway"), None):
+            assert S._event_day(value, is_date=False, zone=zone)[:4].isdigit()
+    assert F.fmt_time("9999-12-31T23:59:59+00:00", all_day=False,
+                      time_format="24h", zone=ZoneInfo("Pacific/Kiritimati")) in ("", "23:59")

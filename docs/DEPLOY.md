@@ -383,6 +383,17 @@ the log rather than carrying the error text.
 > nothing, creates no display and no token. Use it rather than minting a real
 > display to look at a layout: a display token is a bearer credential for the
 > calendar and every one you make is one to remember to revoke.
+
+**Set `home_timezone` if the server is not in your zone.** A display draws the
+OWNER's day and the OWNER's clock, which is what the app's own calendar tab has
+always drawn: an event another CalDAV client cached as
+`2026-09-01T02:00:00+00:00` is September 1st at 02:00 in UTC and August 31st at
+22:00 on a screen in New York, and the panel now says the same thing the phone
+does. The zone comes from `home_timezone` in Settings, and **an account that has
+not set one falls back to the server process's zone** — the same fallback
+`_due_day` and the day plan already take, so the grid, its chips and the day
+behind them are all in one zone rather than three. On a UTC container with no
+`home_timezone`, a panel therefore draws UTC clocks.
 A display is a screen with nothing to tap — a calendar in a hallway, today's
 habits in a kitchen. It is paired in **Settings → Displays**, which mints a
 token and gives you two URLs for it:

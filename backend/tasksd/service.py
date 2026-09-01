@@ -2890,15 +2890,22 @@ class TaskService:
         day = self._today()
         language = settings.get("language") or "en"
         time_format = settings.get("time_format") or "12h"
+        # ONE zone for the whole display. `_today` above already reads it — the
+        # grid's own "today" has always been the owner's day — so an event
+        # bucketed by anything else would be placed against a grid drawn in a
+        # different zone. None means the process's own, exactly as in `_due_day`
+        # and `_today`, which is why an account whose server is not in its own
+        # zone wants `home_timezone` set.
+        zone = self._home_tz()
         if display["mode"] == "habits":
             sources, rows, planned = self._display_day_rows(day, display)
             events = None
         else:
-            sources, events = self._display_events(day, display)
+            sources, events = self._display_events(day, display, zone)
             rows, planned = None, True
         return display_frame_mod.build_frame(
             display=display, day=day, generated_at=_stamp(),
-            language=language, time_format=time_format,
+            language=language, time_format=time_format, zone=zone,
             sources=sources, events=events, rows=rows, planned=planned,
         )
 
@@ -2958,7 +2965,7 @@ class TaskService:
         return out
 
     def _display_events(
-        self, day: str, display: dict[str, Any]
+        self, day: str, display: dict[str, Any], zone: ZoneInfo | None,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         """The month grid's events, one record per day each one covers.
 
@@ -2971,10 +2978,19 @@ class TaskService:
         """
         grid = display_frame_mod.month_grid(day)
         first, last = grid[0][0], grid[-1][-1]
-        # The window is the grid plus a day: `events_in_range` takes an
-        # exclusive upper bound, and an event on the grid's last day must be in
-        # it.
-        window_end = (date.fromisoformat(last) + timedelta(days=1)).isoformat()
+        # The QUERY window is wider than the grid; the DRAWN range below is not.
+        #
+        # `get_events_in_range` gates on a lexicographic compare of the stored
+        # ISO string, so it selects by the day a value SPELLS while the bucketing
+        # below places it by the day it means in the owner's zone. Those differ
+        # by up to the offset gap, and the legal range runs from UTC+14
+        # (Pacific/Kiritimati) to UTC-12 — 26 hours, which is two calendar days,
+        # not one. Two days of slack at each end therefore covers every offset
+        # that exists; the walk is still clamped to `first`/`last`, so nothing
+        # outside the grid can be drawn and the extra rows cost only the
+        # candidates they add.
+        window_start = (date.fromisoformat(first) - timedelta(days=2)).isoformat()
+        window_end = (date.fromisoformat(last) + timedelta(days=3)).isoformat()
         sources, out = [], []
         for row in self._display_calendars(display):
             href = row["href"]
@@ -2983,11 +2999,13 @@ class TaskService:
                 "name": row["displayname"] or _slug(href),
                 "color": row["color"],
             })
-            for ev in self.events_in_range(href, first, window_end):
-                start_day = _event_day(ev.get("start"), bool(ev.get("start_is_date")))
+            for ev in self.events_in_range(href, window_start, window_end):
+                start_day = _event_day(
+                    ev.get("start"), is_date=bool(ev.get("start_is_date")),
+                    zone=zone)
                 if not start_day:
                     continue
-                end_day = _event_last_day(ev, start_day)
+                end_day = _event_last_day(ev, start_day, zone=zone)
                 cursor = max(start_day, first)
                 stop = min(end_day, last)
                 while cursor <= stop:
@@ -3069,43 +3087,105 @@ class TaskService:
 
 
 
-def _event_day(value: str | None, is_date: bool) -> str:
-    """The calendar day an event's DTSTART falls on, or "" if it has none.
+def _event_day(value: str | None, *, is_date: bool, zone: ZoneInfo | None) -> str:
+    """The calendar day an event's DTSTART falls on IN THE OWNER'S ZONE, or "".
 
-    Deliberately the day the STRING names, not the day an instant converts to.
-    The frontend's `dayKey` reads local components off a `Date`, and the events
-    here were selected by `events_in_range` against the same window the grid is
-    drawn for — so taking the first ten characters is what keeps a display and
-    the app's own calendar tab agreeing about which cell an event is in.
-    `_due_day` converts and says why; this one must not, or an event would sit
-    in one cell on the wall and another on the phone.
+    The same rule `_due_day` applies to a task's DUE, and for the same reason —
+    the frontend's `dayKey` hands the value to `Date` and reads LOCAL components
+    back, so an event another CalDAV client cached as
+    `2026-09-01T02:00:00+00:00` is September 1st in UTC and August 31st on a
+    screen in New York. Taking the string's own first ten characters put it in
+    a different cell on the wall than in the app's calendar tab, and printed a
+    different clock beside it.
+
+    Two shapes are deliberately NOT converted, exactly as in `_due_day`, because
+    converting them would invent an instant the wire never named:
+
+      * a DATE-valued DTSTART — what an all-day event is on the wire. It is
+        already a bare calendar day.
+      * a floating datetime — naive local wall time, which `dayKey` also reads
+        as-is. Its day is the day it already spells.
+
+    `zone` is keyword-only and REQUIRED, matching `_due_day`. It has no default
+    on purpose: `None` is a legitimate value meaning "the process's own zone",
+    so a call site that forgot to thread the zone would be indistinguishable
+    from one that meant it — and the only symptom would be a span's two ends
+    resolved in two different zones.
     """
     if not value:
         return ""
     if is_date or "T" not in value:
         return value[:10]
     try:
-        return datetime.fromisoformat(value).date().isoformat()
+        stamp = datetime.fromisoformat(value)
     except ValueError:
+        return value[:10]
+    if stamp.tzinfo is None:
+        return stamp.date().isoformat()
+    try:
+        # `astimezone(zone)` with zone=None converts to the process's local
+        # zone, which is exactly the unset-`home_timezone` fallback — the same
+        # one `_today` takes, so the grid and the chips inside it agree.
+        return stamp.astimezone(zone).date().isoformat()
+    except (OverflowError, OSError):
+        # A value near datetime.min/max overflows here rather than raising
+        # ValueError above. This runs on a route with no session, where an
+        # unhandled exception is a 500 on every fetch of that display.
         return value[:10]
 
 
-def _event_last_day(ev: dict[str, Any], start_day: str) -> str:
+def _local_midnight(value: str, zone: ZoneInfo | None) -> bool:
+    """Does `value` land exactly on midnight in the owner's zone?
+
+    Ports `calendar.ts::endIsExclusive`, which tests
+    `parseDate(e.end).getHours() === 0 && getMinutes() === 0` — the CONVERTED
+    local clock, not the characters. Reading `end[11:16] == "00:00"` off the
+    string called a DTEND of `2026-08-31T00:00:00+02:00` midnight, when in UTC
+    it is 22:00 on the 30th and only Berlin sees midnight; the two surfaces then
+    disagreed about whether the span spills into another day.
+    """
+    stamp = _event_stamp(value, zone)
+    return stamp is not None and stamp.hour == 0 and stamp.minute == 0
+
+
+def _event_stamp(value: str, zone: ZoneInfo | None) -> datetime | None:
+    """`value` as a datetime in the owner's zone, or None if it is not one."""
+    try:
+        stamp = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if stamp.tzinfo is None:
+        return stamp
+    try:
+        return stamp.astimezone(zone)
+    except (OverflowError, OSError):
+        return None
+
+
+def _event_last_day(ev: dict[str, Any], start_day: str, *,
+                    zone: ZoneInfo | None) -> str:
     """The last day an event is visible on. Ports `calendar.ts::lastDayOf`.
 
     DTEND is EXCLUSIVE for an all-day event (RFC 5545 §3.6.1), and a timed event
     that ends at exactly midnight does not spill into the next day — both are
     the same rule from the reader's side: an event ends on the last day it has
     time on. Getting this wrong draws a Friday-to-Sunday trip through Monday.
+
+    Both ends resolve in the SAME zone. Threading it to the day but not to the
+    midnight test, or to DTSTART but not DTEND, is the subtle way to get this
+    wrong: an event 16:00–22:00 on the 31st in New York, cached as
+    `…T20:00:00+00:00`–`…T02:00:00+00:00`, would start on the 31st and end on
+    the 1st, and the wall would draw a continuation chip on a day the event
+    never touched.
     """
     end = ev.get("end")
     if not end:
         return start_day
-    end_day = _event_day(end, bool(ev.get("end_is_date")))
+    end_day = _event_day(end, is_date=bool(ev.get("end_is_date")), zone=zone)
     if not end_day:
         return start_day
     exclusive = bool(ev.get("end_is_date")) or (
-        "T" in end and end[11:16] == "00:00")
+        "T" in end and _local_midnight(end, zone))
     if exclusive:
         end_day = (date.fromisoformat(end_day) - timedelta(days=1)).isoformat()
     return max(end_day, start_day)
