@@ -50,6 +50,7 @@ export const en = {
   'reminder.days': '{n} days before',
   'settings.section.notifications': 'Notifications',
   'settings.section.displays': 'Displays',
+  'settings.section.developer': 'Developer',
 
   // Displays — the passive screens. A display takes no input, so every word it
   // shows and every choice about it is made here.
@@ -92,6 +93,15 @@ export const en = {
   'disp.panel': 'For a panel with no browser',
   'disp.panelHint': 'An e-ink panel driven by a microcontroller can fetch a ready-made image instead of running the page. Give it the panel’s pixels and how it is mounted.',
   'disp.panelSize': 'Panel size',
+
+  // Settings → Developer. A display is drawn for hardware whoever is designing
+  // it does not own, so this draws it at the sizes that hardware comes in.
+  'dev.intro': 'Every display mode, drawn at the sizes real panels come in. Nothing here is saved, and no display or token is created.',
+  'dev.panels': 'Panels',
+  'dev.refresh': 'Redraw',
+  'dev.hideDone': 'Hide what is done',
+  'dev.alt': '{panel}, {w} by {h} pixels',
+  'dev.hint': 'Each preview is the real renderer at that panel’s pixels, shown scaled down. The size beside an e-ink panel is the packed framebuffer it would receive — what a microcontroller has to allocate before it can ask for a frame.',
   // Its own accessible name — the width field borrows the label above, the
   // height field had nothing at all.
   'disp.panelWidth': 'Panel width in pixels',

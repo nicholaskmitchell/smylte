@@ -2872,26 +2872,67 @@ class TaskService:
             if row is None or not row["enabled"]:
                 return None
             display = self._display_dto(row, with_token=False)
-            settings = store.get_settings(self._conn)
-            day = self._today()
-            language = settings.get("language") or "en"
-            time_format = settings.get("time_format") or "12h"
-            if display["mode"] == "habits":
-                sources, rows, planned = self._display_day_rows(day, display)
-                events = None
-            else:
-                sources, events = self._display_events(day, display)
-                rows, planned = None, True
-            frame = display_frame_mod.build_frame(
-                display=display, day=day, generated_at=_stamp(),
-                language=language, time_format=time_format,
-                sources=sources, events=events, rows=rows, planned=planned,
-            )
+            frame = self._build_display_frame(display)
             # Last, and inside the lock: a display that got its frame is a
             # display that was seen. It is deliberately not awaited on, checked
             # or allowed to fail the read — see `store.touch_display`.
             store.touch_display(self._conn, token)
         return frame
+
+    def _build_display_frame(self, display: dict[str, Any]) -> dict[str, Any]:
+        """The frame one display's settings produce. Caller holds the lock.
+
+        Shared by the token route and by the developer preview, so the thing
+        being previewed is the thing that ships rather than a second renderer
+        that agrees with it today.
+        """
+        settings = store.get_settings(self._conn)
+        day = self._today()
+        language = settings.get("language") or "en"
+        time_format = settings.get("time_format") or "12h"
+        if display["mode"] == "habits":
+            sources, rows, planned = self._display_day_rows(day, display)
+            events = None
+        else:
+            sources, events = self._display_events(day, display)
+            rows, planned = None, True
+        return display_frame_mod.build_frame(
+            display=display, day=day, generated_at=_stamp(),
+            language=language, time_format=time_format,
+            sources=sources, events=events, rows=rows, planned=planned,
+        )
+
+    def preview_display_frame(self, fields: dict[str, Any]) -> dict[str, Any]:
+        """A frame for a display that does not exist.
+
+        For Settings → Developer, which draws every mode at every panel size so
+        a layout can be checked against hardware nobody in the room owns.
+        Making that use a real display would mean minting a live token — a
+        credential that reaches this calendar with no session — in order to look
+        at a layout, and then remembering to revoke it.
+
+        So this is authed, takes the settings directly, and WRITES NOTHING: no
+        row, no token, no `last_seen_at`. It reaches the same data the owner is
+        already looking at on the screen that called it.
+
+        The fields go through `_normalize_display_fields`, so a preview cannot
+        ask for anything a real display could not be set to — including an
+        interval under the e-ink floor.
+        """
+        settings = self._normalize_display_fields(dict(fields), existing=None)
+        display = {
+            "name": settings.get("name") or "Preview",
+            "mode": settings.get("mode") or "calendar",
+            "palette": settings.get("palette") or "color",
+            "calendars": settings.get("calendars") or [],
+            "lists": settings.get("lists") or [],
+            "hide_done_habits": bool(settings.get("hide_done_habits", True)),
+            "hide_done_tasks": bool(settings.get("hide_done_tasks", True)),
+            "refresh_seconds": settings.get("refresh_seconds") or 300,
+            "rotation": settings.get("rotation") or 0,
+        }
+        with self._lock:
+            return self._build_display_frame(display)
 
     def _display_calendars(self, display: dict[str, Any]) -> list:
         """The collections one display draws from, honouring its allowlist.

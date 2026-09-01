@@ -2317,3 +2317,36 @@
    deliberately: they are one column of the same kind of answer. */
 .set-panel .menu-row .cap-input { max-width: 160px; }
 /* today-tab:css:end */
+
+/* ---- Settings → Developer: the display previews --------------------------
+   Auto-fit rather than a fixed column count, because the panels themselves are
+   nothing like the same shape — a 296×128 badge beside a 1536×2048 portrait —
+   and a grid that gave them equal cells would either crop the tall ones or
+   waste half the width on the wide ones. */
+.dev-grid {
+  display: grid; gap: 18px; margin-top: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  align-items: start;
+}
+.dev-panel { margin: 0; display: flex; flex-direction: column; gap: 6px; }
+/* The preview is a picture of a panel, so it is shown as one: its own aspect
+   ratio, scaled to the column, on the paper colour it will be printed on. The
+   rule is what makes the panel's EDGE visible — at 296×128 the difference
+   between "the layout stops here" and "the image stops here" is the whole
+   question being asked. */
+.dev-panel__shot {
+  width: 100%; height: auto; display: block;
+  background: #fff; border: 1px solid var(--rule);
+  /* Never smoothed. These are 1-bit renders and a browser that interpolates
+     them is showing greys the panel cannot produce — which is exactly the
+     judgement this view exists to support. */
+  image-rendering: pixelated;
+}
+.dev-panel__cap {
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  font-size: 12px; color: var(--fg-muted);
+}
+.dev-panel__name { color: var(--fg); }
+.dev-panel__size, .dev-panel__bytes { font-size: 11px; }
+.dev-panel__bytes::before { content: '· '; }
+

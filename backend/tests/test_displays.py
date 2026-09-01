@@ -1461,3 +1461,83 @@ def test_a_long_display_name_does_not_overprint_the_score():
         stride = 100
         return b"".join(buf[y * stride + 88:(y + 1) * stride] for y in range(10, 44))
     assert band(long_body) == band(short_body), "the name overprinted the score"
+
+
+# ── the developer preview ───────────────────────────────────────────────────
+
+def test_the_preview_needs_a_session_and_makes_no_display(api):
+    """The whole reason it exists: checking a layout at eleven panel sizes must
+    not mean minting eleven live tokens, each a credential reaching this
+    calendar with no session."""
+    before = api.get("/api/displays").json()
+    assert api.get("/api/displays/preview.png").status_code == 200
+    assert api.get("/api/displays/preview?mode=habits").status_code == 200
+    # Nothing was created, and nothing was written.
+    assert api.get("/api/displays").json() == before
+
+    api.cookies.clear()
+    # Unlike every other route that draws a display, this one is not public.
+    assert api.get("/api/displays/preview.png").status_code == 401
+    assert api.get("/api/displays/preview").status_code == 401
+
+
+def test_the_preview_route_is_not_swallowed_by_the_token_route(api):
+    """`/displays/{token}` is `[^/]+` and would take "preview.png" whole. That
+    bug has already shipped once in this file, on the public routes."""
+    r = api.get("/api/displays/preview.png")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "image/png"
+    assert r.headers["Cache-Control"] == "no-store, private"
+
+
+@pytest.mark.parametrize("mode", ["calendar", "habits"])
+@pytest.mark.parametrize("palette", ["color", "eink"])
+@pytest.mark.parametrize("size", [(296, 128), (400, 300), (800, 480), (1600, 1200)])
+def test_the_preview_draws_every_mode_at_every_panel(api, mode, palette, size):
+    w, h = size
+    r = api.get(f"/api/displays/preview.png?mode={mode}&palette={palette}&w={w}&h={h}")
+    assert r.status_code == 200
+    from PIL import Image
+    import io
+    img = Image.open(io.BytesIO(r.content))
+    assert img.size == (w, h)
+    # The palette really is honoured — the point of previewing at all.
+    assert img.mode == ("1" if palette == "eink" else "RGB")
+
+
+def test_the_preview_refuses_what_a_real_display_would_be_refused(api):
+    """It goes through `_normalize_display_fields`, so a preview cannot show a
+    configuration no display could actually be set to."""
+    assert api.get("/api/displays/preview.png?mode=agenda").status_code == 422
+    assert api.get("/api/displays/preview.png?palette=sepia").status_code == 422
+    assert api.get("/api/displays/preview.png?rotate=45").status_code == 422
+    # And it is bounded by the same total-pixel rule as the public routes.
+    assert api.get("/api/displays/preview.png?w=4096&h=4096").status_code == 422
+
+
+def test_the_preview_is_the_renderer_that_ships(api):
+    """Previewing through a second path would be previewing a second product.
+
+    Asserted by rendering the same frame both ways and comparing the bytes: a
+    preview that diverged would be worth less than no preview.
+    """
+    made = api.post("/api/displays",
+                    json={"name": "Preview", "palette": "eink",
+                          "panel_width": 800, "panel_height": 480}).json()
+    token = made["token"]
+    through_token = api.get(f"/api/public/display/{token}.png")
+    through_preview = api.get(
+        "/api/displays/preview.png?palette=eink&w=800&h=480")
+    assert through_token.status_code == through_preview.status_code == 200
+    # The display's NAME differs (its own, against "Preview"), so the bytes are
+    # compared for the month grid rather than the header band: same renderer,
+    # same data, same layout.
+    assert len(through_preview.content) > 0
+    from PIL import Image
+    import io
+    a = Image.open(io.BytesIO(through_token.content))
+    b = Image.open(io.BytesIO(through_preview.content))
+    assert a.size == b.size and a.mode == b.mode
+    # The grid itself — everything below the header rule — is identical.
+    crop = (0, 120, 800, 480)
+    assert a.crop(crop).tobytes() == b.crop(crop).tobytes()
