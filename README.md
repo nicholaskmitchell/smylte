@@ -263,13 +263,30 @@ the row says *what* rather than *when*. Habits + today has no floor at all — i
 shows what fits and counts the rest, down to a 2.9" panel showing one line and
 "+6".
 
-Two ways to drive one, because two kinds of hardware turn up. **A browser** —
-a Pi in kiosk mode, an old tablet, a Boox — opens `/display/<token>` and renders
-the page. **A panel with no browser** — an ESP32 with a Waveshare screen
-soldered to it — fetches `/api/public/display/<token>.png`, or `.bmp` for the
-display libraries that read a bitmap and have no decompressor, and is handed
-pixels laid out server-side. A third option for anyone who would rather draw it
-themselves: the same frame as JSON. All three are one content model with
+Three ways to drive one, because three kinds of hardware turn up. **A browser**
+— a Pi in kiosk mode, an old tablet, a Boox — opens `/display/<token>` and
+renders the page. **A microcontroller** — a Pico 2 W with a Waveshare panel on
+it — fetches `/api/public/display/<token>.bin` and gets the **packed one-bit
+framebuffer itself**: eight pixels a byte, MSB leftmost, bit 1 = white, which is
+`framebuf.MONO_HLSB`, which is the `bytearray(800 * 480 // 8)` the driver
+already holds. So the whole client is `sock.readinto(epd.buffer)` — no decoder,
+no copy, exactly 48,000 bytes. That format exists because the other two are out
+of reach from there: the PNG is saved with adaptive row filtering, so decoding
+it needs zlib *and* all five unfilters, and the BMP is a container stored
+bottom-up with padded rows. **A board with a decoder** takes `.png` or `.bmp`
+instead, and anyone who would rather draw it themselves takes the same frame as
+JSON. `firmware/` has a worked example for the Pico.
+
+One trap worth naming, because it is closed rather than avoided: on `.png` and
+`.bmp` the one-bit guarantee holds only while the display is *configured* as
+e-ink — flip it to colour and the same URL serves 24-bit BGR, 1,152,054 bytes
+against the 48,000 a board just allocated. `.bin` is one-bit by construction and
+refuses a palette parameter at all.
+
+**And e-ink refreshes no faster than every three minutes.** Not our preference —
+the panel makers rate these screens at that and require them to sleep in
+between, and say the alternative damages them permanently. A colour screen is a
+backlight and keeps the minute. All three are one content model with
 different rasterizers, so what a display *says* is fixed in one place and only
 how it *looks* is written twice; every string arrives already formatted in the
 account's language and clock, which is what stops a panel and a browser
@@ -417,6 +434,9 @@ frontend/
     time.ts        every clock the app draws, 12- or 24-hour
     styles/     design tokens + app.css + display.css (the wall screens, which
                 deliberately do NOT read the appearance override layer)
+firmware/       MicroPython example for a Pico 2 W + Waveshare 7.5" e-paper:
+                reads the raw framebuffer straight into the panel's own buffer
+                (firmware/README.md)
 desktop/        Windows client: a WebView2 window that serves the CI-built SPA
                 from disk and proxies /api to the server (desktop/README.md)
 scratch/        disposable Radicale 3.7.4 in Docker on :5233 (NEVER production)
@@ -433,6 +453,21 @@ load from local disk instead of over the network, and that installing is one
 `.exe` that keeps itself current: CI publishes the built SPA to a rolling
 release, and the client picks it up on the next launch. API calls still go to
 the server, so nothing about CalDAV latency changes. See `desktop/README.md`.
+
+## Panel firmware
+
+`firmware/` is a worked MicroPython example: a **Pico 2 W** and a **Waveshare
+Pico-ePaper-7.5** showing a Smylte display. It is about sixty lines because the
+server does the hard part — `.bin` hands back the framebuffer the panel already
+holds, so the client reads a socket into `epd.buffer` and shows it.
+
+It is an example, not a library and not a product, and it deliberately does not
+vendor Waveshare's driver — that is third-party code with its own licence and
+its own release cadence, and a stale copy here would be worse than none. A test
+in `backend/tests/` parses the file and checks its constants against the live
+endpoint, because every CI job in this repo is scoped to a directory and a new
+top-level one would otherwise ship with no check at all. See
+`firmware/README.md`.
 
 ## Develop
 

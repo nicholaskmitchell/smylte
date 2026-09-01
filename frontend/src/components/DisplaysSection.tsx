@@ -21,7 +21,18 @@ import { fmtWhen } from '../time'
 import { useTimeFormat } from '../timeformat'
 import { useI18n } from '../i18n'
 
-const REFRESH_CHOICES = [60, 300, 900, 3600] as const
+// What a display may be set to refresh at, by palette.
+//
+// An e-ink panel is not offered a minute, and that is its GLASS talking rather
+// than our taste: Waveshare's documentation for these screens says to refresh no
+// more often than every 180 seconds and to sleep the panel in between, or it is
+// damaged beyond repair. A colour display — an old tablet, an LCD — has none of
+// that and keeps the minute. The server enforces the same two floors; this is
+// only what the control offers.
+const REFRESH_CHOICES = {
+  color: [60, 300, 900, 3600],
+  eink: [180, 300, 900, 3600],
+} as const
 const ROTATIONS = [0, 90, 180, 270] as const
 
 export function DisplaysSection({ onExpire }: { onExpire: () => void }) {
@@ -101,10 +112,17 @@ export function DisplaysSection({ onExpire }: { onExpire: () => void }) {
   }
 
   const urlFor = (d: Display) => `${location.origin}/display/${d.token}`
+  // The format that matches the screen. An e-ink panel driven by a
+  // microcontroller wants `.bin` — the packed framebuffer, which it writes
+  // straight to its glass — and handing it the `.png` instead means asking a
+  // board with no decoder to grow a zlib inflater and five PNG unfilters first.
+  // A colour panel is something with a browser or an image library, so it gets
+  // the PNG. Both suffixes work on every display; this is just the useful one.
   const imageUrlFor = (d: Display) => {
     const size = d.panel_width && d.panel_height
       ? '' : '?w=800&h=480'
-    return `${location.origin}/api/public/display/${d.token}.png${size}`
+    const ext = d.palette === 'eink' ? 'bin' : 'png'
+    return `${location.origin}/api/public/display/${d.token}.${ext}${size}`
   }
 
   const copy = async (token: string, value: string) => {
@@ -190,19 +208,26 @@ export function DisplaysSection({ onExpire }: { onExpire: () => void }) {
                     <label>{tr('disp.refresh')}</label>
                     <button className="menu-toggle"
                       onClick={() => {
-                        const i = REFRESH_CHOICES.indexOf(
-                          d.refresh_seconds as typeof REFRESH_CHOICES[number])
-                        const next = REFRESH_CHOICES[(i + 1) % REFRESH_CHOICES.length]
+                        const choices: readonly number[] = REFRESH_CHOICES[d.palette]
+                        const i = choices.indexOf(d.refresh_seconds)
+                        // `indexOf` of a value not in the list is -1, so the
+                        // next one is choices[0] — which is what should happen
+                        // to a display carrying an interval the API set.
+                        const next = choices[(i + 1) % choices.length]
                         void patch(d.token, { refresh_seconds: next })
                       }}>
                       {/* A value outside the four choices can only come from
                           the API, and it is shown as a plain number of seconds
                           rather than as a missing catalogue key. */}
-                      {(REFRESH_CHOICES as readonly number[]).includes(d.refresh_seconds)
+                      {(REFRESH_CHOICES[d.palette] as readonly number[])
+                        .includes(d.refresh_seconds)
                         ? tr(`disp.refresh.${d.refresh_seconds}`)
                         : tr('disp.refresh.seconds', { n: String(d.refresh_seconds) })}
                     </button>
                   </div>
+                  {d.palette === 'eink' ? (
+                    <div className="hintline">{tr('disp.refreshEinkHint')}</div>
+                  ) : null}
 
                   {d.mode === 'habits' ? (
                     <>

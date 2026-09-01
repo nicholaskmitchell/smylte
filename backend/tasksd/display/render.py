@@ -36,6 +36,24 @@ from typing import Any
 from PIL import Image, ImageDraw, ImageFont
 
 
+# What the raw format IS, stated on the wire so a firmware can assert its
+# panel's convention rather than assume it. `mono-hlsb` is MicroPython's own
+# name for this packing, which is the vocabulary the client already speaks.
+RAW_FORMAT = "mono-hlsb"
+RAW_FORMAT_INVERTED = "mono-hlsb-inverted"
+_RAW_MEDIA = "application/octet-stream"
+
+# A 256-byte lookup that complements a byte. Every idiomatic Pillow way to
+# invert a mode-"1" image is SILENTLY WRONG — measured on an 8×2 image with two
+# black pixels (`3fff`): `ImageChops.invert`, `Image.eval(v: 255-v)` and
+# `img.point(lambda v: 255-v)` all return `ffff`, an entirely white image, and
+# `ImageOps.invert` refuses mode "1" outright. Mode "1" is stored one byte per
+# pixel as 0/255, and after those calls the formerly-white pixels read back as
+# 254 — nonzero, so they repack as 1. Inverting the PACKED BYTES is the only
+# thing that inverts the picture, and it is also 22× faster over a 48KB
+# framebuffer (0.06ms against 1.3ms for a generator expression).
+_INVERT = bytes(255 - i for i in range(256))
+
 _FONT_DIR = os.path.join(os.path.dirname(__file__), "fonts")
 
 # The app's three type slots, by the names tokens.css gives them. A display is
@@ -645,22 +663,28 @@ def _render_habits(
         draw.text((pad, y), message, font=row_font, fill=colors["ink"])
 
 
-def render_frame(
-    frame: dict[str, Any], *, width: int, height: int,
-    rotation: int = 0, fmt: str = "png",
-) -> tuple[bytes, str]:
-    """Draw `frame` for a `width`×`height` panel. Returns (bytes, media type).
+def _compose(
+    frame: dict[str, Any], *, width: int, height: int, rotation: int,
+    force_mono: bool = False,
+) -> Image.Image:
+    """Everything up to the encode: the drawn, rotated, thresholded image.
 
-    `width` and `height` are the panel's FRAMEBUFFER — what the device expects
-    to be handed — and `rotation` is how that framebuffer is turned to reach the
-    glass. So a portrait panel driven through a landscape controller is laid out
-    PORTRAIT and rotated at the end, rather than being laid out landscape and
-    turned, which would leave a month grid in seven columns lying on its side.
+    Split out of `render_frame` so a format that is not a container — a packed
+    framebuffer — can take the pixels without going through an encoder that
+    would only have to be undone on the other side.
+
+    The transposed canvas stays HERE rather than moving to a caller.
+    `_render_calendar` and `_render_habits` read their geometry from `img.size`,
+    so a caller that built its own canvas and forgot the transpose would get a
+    seven-column month laid out landscape and then turned on its side — silently,
+    with no error anywhere.
+
+    `force_mono` thresholds regardless of palette. It exists for `raw`, which is
+    a one-bit format by definition: the alternative is a format whose byte width
+    depends on how the display happens to be configured, and a microcontroller
+    that sized its buffer from the documentation would be handed 24-bit BGR —
+    1,152,054 bytes at 800×480 against the 48,000 it allocated.
     """
-    if rotation not in (0, 90, 180, 270):
-        raise ValueError("rotation must be 0, 90, 180 or 270")
-    if fmt not in ("png", "bmp"):
-        raise ValueError("format must be png or bmp")
     eink = frame["display"].get("palette") == "eink"
     colors = _EINK if eink else _COLOR
     # The canvas is the panel turned back the other way, so that layout happens
@@ -684,14 +708,76 @@ def render_frame(
         # Negative: PIL rotates counter-clockwise and `rotation` is stated
         # clockwise, which is how every panel datasheet states it.
         img = img.rotate(-rotation, expand=True)
-    if eink:
+    if eink or force_mono:
         # The one threshold, at the end. `dither=NONE` on purpose: Floyd
         # -Steinberg would turn the anti-aliased edge of every glyph into
         # scattered pixels that an eink panel's partial refresh leaves as ghosts.
         img = img.convert("1", dither=Image.Dither.NONE)
+    return img
+
+
+def render_frame(
+    frame: dict[str, Any], *, width: int, height: int,
+    rotation: int = 0, fmt: str = "png", invert: bool = False,
+) -> tuple[bytes, str]:
+    """Draw `frame` for a `width`×`height` panel. Returns (bytes, media type).
+
+    `width` and `height` are the panel's FRAMEBUFFER — what the device expects
+    to be handed — and `rotation` is how that framebuffer is turned to reach the
+    glass. So a portrait panel driven through a landscape controller is laid out
+    PORTRAIT and rotated at the end, rather than being laid out landscape and
+    turned, which would leave a month grid in seven columns lying on its side.
+
+    Three formats, for three kinds of client:
+
+      * `png` — a browser, or anything with an image library. Note that it is
+        saved with `optimize=True`, so libpng picks a filter PER ROW: a decoder
+        needs all five unfilters (None/Sub/Up/Average/Paeth) as well as zlib.
+        Measured on one 400×300 render: filter types 1, 2 and 3 all appeared.
+      * `bmp` — a board whose display library reads a bitmap. Closer to the
+        metal, but still a 62-byte container, stored BOTTOM-UP, with rows padded
+        to a four-byte boundary.
+      * `raw` — the packed one-bit framebuffer itself, and nothing else. See the
+        branch below for what it is byte for byte.
+    """
+    if rotation not in (0, 90, 180, 270):
+        raise ValueError("rotation must be 0, 90, 180 or 270")
+    if fmt not in ("png", "bmp", "raw"):
+        raise ValueError("format must be png, bmp or raw")
+    if invert and fmt != "raw":
+        # Refused rather than ignored. A caller asking for an inverted PNG and
+        # getting a normal one back has no way to tell, and the failure shows up
+        # as a panel full of black.
+        raise ValueError("invert applies only to raw")
+    img = _compose(frame, width=width, height=height, rotation=rotation,
+                   force_mono=(fmt == "raw"))
+    if fmt == "raw":
+        # PIL's mode "1" packing IS the framebuffer these panels want, with no
+        # transformation at either end: eight pixels per byte, MSB leftmost,
+        # rows padded to `ceil(width / 8)` — which is also MicroPython's
+        # `framebuf.MONO_HLSB` stride — and bit 1 = white paper, 0 = black ink,
+        # which is Waveshare's own convention (`Clear(0xff)` blanks a panel).
+        # At 800×480 that is exactly 48,000 bytes in 100-byte rows.
+        #
+        # So the client is `sock.readinto(epd.buffer)`. No header to skip, no
+        # row order to flip, no stride to unpad, no decompressor.
+        body = img.tobytes()
+        if invert:
+            # For a controller whose driver takes 0 as white. Done on the packed
+            # bytes and not on the image — see `_INVERT` for why every obvious
+            # Pillow alternative returns a blank white panel instead. The row
+            # padding at a width that is not a multiple of eight is flipped too;
+            # those bits are off-panel for MONO_HLSB, so it costs nothing.
+            body = body.translate(_INVERT)
+        return body, _RAW_MEDIA
     buf = io.BytesIO()
     if fmt == "png":
         img.save(buf, "PNG", optimize=True)
         return buf.getvalue(), "image/png"
-    img.save(buf, "BMP")
-    return buf.getvalue(), "image/bmp"
+    # Explicit rather than a fallthrough. This used to be the `else`, which made
+    # the allowlist above the only thing standing between a typo'd format and a
+    # BMP served under the wrong content type.
+    if fmt == "bmp":
+        img.save(buf, "BMP")
+        return buf.getvalue(), "image/bmp"
+    raise ValueError(f"unhandled format {fmt!r}")
