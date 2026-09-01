@@ -393,6 +393,9 @@ token and gives you two URLs for it:
 - `https://<host>/api/public/display/<token>.png` (or `.bmp`) — the same frame
   as an image, for a board that has a decoder. Set the panel's pixels in
   Settings or pass `?w=&h=`; `?rotate=` and `?palette=` override per fetch.
+  A render is bounded by AREA as well as by side: `w × h` may not exceed
+  **4,000,000 pixels** (422 past that), which covers every browserless panel
+  made — 4096 × 4096 was a 50 MB body from one unauthenticated request.
   Be aware what each costs to decode: the **PNG is saved with adaptive row
   filtering**, so it needs zlib *and* all five PNG unfilters (a single 400×300
   render uses filter types 1, 2 and 3), and the **BMP is a 62-byte container
@@ -410,14 +413,35 @@ On those two the one-bit guarantee holds only while the display's palette is
 is why `.bin` refuses a `?palette=` at all: a format whose byte width depends on
 a setting somewhere else is a format that overruns a buffer.
 
+`.bin` is also *drawn* in the e-ink palette whatever the display is set to, and
+that is a separate fact from its byte width. Thresholding a colour render at
+the end kept the length right and lost the picture: the colour rule is
+`(206,204,200)`, which converts to paper, so every column separator and week
+rule vanished and a month came back as floating text with nothing dividing one
+day from the next. A one-bit target is an e-ink target. For the same reason
+`.bin` never advises a refresh interval below the e-ink floor, even on a
+display configured as colour — `X-Display-Refresh-Seconds` is clamped to 180 on
+that route.
+
 **Headers a firmware should check before it paints.** `.bin` carries
 `X-Display-Width`, `X-Display-Height`, `X-Display-Stride` and
 `X-Display-Format` (`mono-hlsb`, or `mono-hlsb-inverted` with `?invert=1`), and
-`Content-Length` equals `stride × height`. Refuse a frame that disagrees with
-your own constants rather than clocking it onto the glass — the failure mode is
+`Content-Length` equals `stride × height`. Check all five **before you read the
+body**, not after: on a board that reads straight into its framebuffer, a
+refusal that comes afterwards has already overwritten the picture on the wall.
+Send `Accept-Encoding: identity` and refuse a chunked or re-encoded body too —
+RFC 9110 §12.5.3 makes an absent `Accept-Encoding` an invitation for any hop to
+gzip 48,000 bytes of framebuffer. The failure mode all of this avoids is
 diagonal garbage on a wall in another room with nothing on screen to say why.
 The stride matters most at a width that is not a multiple of eight: 250 pixels
 is 32 bytes a row, not 31.25.
+
+**A display token is a bearer credential, and TLS alone may not be protecting
+it.** MicroPython's `ssl.wrap_socket` defaults to `cert_reqs=CERT_NONE` and
+`server_hostname` only sets SNI, so an unconfigured client completes its
+handshake against any certificate at all — which stops a passive listener and
+nothing else. `firmware/README.md` has the CA setup; if a panel of yours is on
+a network you do not control, do that rather than assume `https://` covered it.
   Size it before you parse it on a microcontroller: a typical month is ~30 KB,
   and the frame's own per-day cap puts the worst case near 130 KB, which is
   more than an ESP32 will comfortably hold alongside a JSON document tree. The

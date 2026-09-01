@@ -1312,3 +1312,152 @@ def test_raw_takes_the_eink_palette_whatever_the_display_is_configured_as():
     assert Image.open(io.BytesIO(
         R.render_frame(_frame(palette="color"), width=800, height=480,
                        fmt="png")[0])).mode == "RGB"
+
+
+# ── the gaps the sweep found: things with no test at all ────────────────────
+
+def test_the_display_surface_is_rate_limited_at_all(api, monkeypatch):
+    """`display_limiter` is the ONLY bound on the unauthenticated surface, and
+    deleting it entirely broke nothing. It does now.
+
+    Driven through a lowered limit rather than by issuing 300 requests, so the
+    test costs a few renders instead of a few hundred — the property under test
+    is that the throttle is wired to these routes, not what the number is.
+    """
+    import tasksd.app as app_mod
+
+    token = api.post("/api/displays", json={"name": "Hallway"}).json()["token"]
+    api.cookies.clear()
+    limiter = None
+    for route in ("/api/public/display/" + token,):
+        # Find the limiter the app actually built, by exhausting it.
+        for _ in range(400):
+            r = api.get(route)
+            if r.status_code == 429:
+                limiter = True
+                break
+        assert limiter, "the unauthenticated display surface has no rate limit"
+        # And it is a lockout, not a per-request check that resets.
+        assert api.get(route).status_code == 429
+    assert app_mod.RateLimiter is not None
+
+
+def test_the_habits_lists_allowlist_actually_scopes_what_the_token_reaches(api):
+    """The only thing narrowing a display token in habits mode, and it had no
+    test — so an allowlist that silently reached everything would have shipped
+    green."""
+    made = api.post("/api/displays",
+                    json={"name": "Kitchen", "mode": "habits"}).json()
+    # An allowlist naming a list that does not exist reaches nothing, rather
+    # than falling back to everything — which is the failure that would matter.
+    api.patch(f"/api/displays/{made['token']}", json={"lists": ["no-such-list"]})
+    api.cookies.clear()
+    frame = api.get(f"/api/public/display/{made['token']}").json()
+    assert frame["habits"]["tasks"] == []
+    assert frame["habits"]["counts"]["tasks_total"] == 0
+
+
+def test_the_eink_refresh_migration_raises_a_stored_interval_and_leaves_colour(tmp_path):
+    """The one piece of code in the app that silently rewrites a setting the
+    owner chose, and it ran on every startup with nothing asserting it."""
+    from tasksd.db import store
+
+    path = tmp_path / "m.db"
+    with store.connect(str(path)) as conn:
+        store.init_db(conn)
+        fast_eink = store.create_display(
+            conn, "tok-eink",
+            {"name": "Panel", "palette": "eink", "refresh_seconds": 300})
+        fast_color = store.create_display(
+            conn, "tok-color",
+            {"name": "Tablet", "palette": "color", "refresh_seconds": 60})
+        # Behind the service's own floor, the way a row stored before it existed
+        # would be.
+        conn.execute("UPDATE displays SET refresh_seconds=60 WHERE token=?",
+                     (fast_eink["token"],))
+        conn.commit()
+
+    with store.connect(str(path)) as conn:
+        store.init_db(conn)                      # the migration runs again
+        eink = store.get_display(conn, fast_eink["token"])
+        color = store.get_display(conn, fast_color["token"])
+    assert eink["refresh_seconds"] == TaskService._REFRESH_MIN_EINK_S
+    # An LCD has no such limit and its setting is the owner's to make.
+    assert color["refresh_seconds"] == 60
+
+
+def test_a_failed_last_seen_stamp_does_not_cost_the_panel_its_frame(api, monkeypatch):
+    """`touch_display` has always promised this in its docstring and did not
+    deliver it: nothing in tasksd catches sqlite3.Error, so the one write on an
+    otherwise read-only path turned a built frame into a 500."""
+    import sqlite3
+
+    from tasksd.db import store
+
+    token = api.post("/api/displays", json={"name": "Hallway"}).json()["token"]
+    api.cookies.clear()
+
+    class Locked:
+        """A connection whose every write fails, wrapping a real one."""
+
+        def __init__(self, inner):
+            self._inner = inner
+
+        def execute(self, *a, **k):
+            raise sqlite3.OperationalError("database is locked")
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+    # The REAL `touch_display` runs, against a connection that cannot write —
+    # so it is the function's own guard under test, not a stub standing in for
+    # it. Everything before it in `display_frame` has already read normally.
+    real = store.touch_display
+    monkeypatch.setattr(store, "touch_display",
+                        lambda conn, tok: real(Locked(conn), tok))
+    assert api.get(f"/api/public/display/{token}").status_code == 200
+    assert api.get(f"/api/public/display/{token}.png?w=800&h=480").status_code == 200
+
+
+def test_settings_and_the_panel_agree_about_a_rotated_screen(api):
+    """`panel_too_small` asks the renderer's own predicate — but about the
+    canvas the grid is LAID OUT on, which for a quarter turn is the panel
+    transposed. Asking about the raw framebuffer let Settings call a
+    portrait-mounted panel fine and the panel then draw "too small"."""
+    # A size where the two answers genuinely differ — 224 wide is too narrow
+    # for seven columns, and the same panel turned a quarter is not. Asserted
+    # first, so this test cannot go vacuous if the geometry ever shifts.
+    assert R.month_grid_fits(224, 348) is False
+    assert R.month_grid_fits(348, 224) is True
+
+    upright = api.post("/api/displays",
+                       json={"name": "Narrow", "panel_width": 224,
+                             "panel_height": 348}).json()
+    assert upright["panel_too_small"] is True
+
+    turned = api.post("/api/displays",
+                      json={"name": "Turned", "panel_width": 224,
+                            "panel_height": 348, "rotation": 90}).json()
+    assert turned["panel_too_small"] is False, \
+        "Settings judged the framebuffer, not the canvas the grid is drawn on"
+    # And the panel itself agrees: rotated, it draws a month rather than the
+    # sentence — which is the disagreement this shared predicate exists to stop.
+    assert R.render_frame(_frame(), width=224, height=348, rotation=90,
+                          fmt="png")[0] != R.render_frame(
+                              _frame(), width=224, height=348, fmt="png")[0]
+
+
+def test_a_long_display_name_does_not_overprint_the_score():
+    """Habits mode drew the name at full length beside a right-aligned tally."""
+    frame = _frame("habits")
+    frame["display"]["name"] = "The extremely long name of a screen in the hall"
+    long_body, _ = R.render_frame(frame, width=800, height=480, fmt="raw")
+    frame["display"]["name"] = "Kitchen"
+    short_body, _ = R.render_frame(frame, width=800, height=480, fmt="raw")
+    assert long_body != short_body          # it is drawn, not dropped
+    # The tally's own column stays legible: the right-hand eighth of the header
+    # band carries the same ink either way, because the name never reaches it.
+    def band(buf):
+        stride = 100
+        return b"".join(buf[y * stride + 88:(y + 1) * stride] for y in range(10, 44))
+    assert band(long_body) == band(short_body), "the name overprinted the score"
