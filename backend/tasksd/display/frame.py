@@ -65,12 +65,16 @@ _TEXT = {
         "habits": "Habits", "day": "Today", "all_done": "All done",
         "not_planned": "Today isn’t planned yet",
         "not_planned_hint": "This is what opening it would put on it.",
+        "too_small": "This screen is too small for a month.",
+        "too_small_hint": "Set it to habits + today, or use a bigger panel.",
     },
     "de": {
         "today": "Heute", "nothing": "Heute nichts", "no_events": "Keine Termine",
         "habits": "Gewohnheiten", "day": "Heute", "all_done": "Alles erledigt",
         "not_planned": "Heute ist noch nicht geplant",
         "not_planned_hint": "Das käme beim Öffnen darauf.",
+        "too_small": "Dieser Bildschirm ist zu klein für einen Monat.",
+        "too_small_hint": "Auf Gewohnheiten + heute stellen oder ein größeres Panel nehmen.",
     },
 }
 
@@ -215,6 +219,13 @@ def build_calendar(
         "title": f"{names[anchor.month - 1]} {anchor.year}",
         "weekday_names": list(_WEEKDAYS_SHORT.get(language, _WEEKDAYS_SHORT["en"])),
         "weeks": weeks,
+        # What to say on a screen too small to hold seven columns. Carried in
+        # the frame rather than owned by either renderer, because BOTH have to
+        # say it and in the owner's language: `render.py` when the panel it is
+        # handed fails `month_grid_fits`, and the browser page under the one
+        # media query that matches a panel and never a phone.
+        "too_small_text": text(language, "too_small"),
+        "too_small_hint": text(language, "too_small_hint"),
     }
 
 

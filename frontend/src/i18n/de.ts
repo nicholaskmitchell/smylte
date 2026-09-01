@@ -105,6 +105,7 @@ export const de: Catalogue = {
   'disp.panel': 'Für ein Panel ohne Browser',
   'disp.panelHint': 'Ein E-Ink-Panel an einem Mikrocontroller kann ein fertiges Bild holen, statt die Seite auszuführen. Dazu die Pixel des Panels und seine Montage angeben.',
   'disp.panelSize': 'Panelgröße',
+  'disp.panelTooSmall': 'Zu klein für einen Monat — sieben Spalten passen nicht. Der Bildschirm sagt das dann, statt einen zu zeichnen; Gewohnheiten + heute liest sich in jeder Größe.',
   'disp.rotation': 'Drehung',
   'disp.imageHint': 'Für Boards, deren Display-Bibliothek Bitmaps liest, .bmp statt .png anhängen. Beide antworten mit 304, wenn sich nichts geändert hat — das Panel zeichnet also nur bei Neuem.',
   'disp.enabled': 'Verbunden',

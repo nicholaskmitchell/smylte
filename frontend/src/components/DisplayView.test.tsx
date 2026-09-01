@@ -25,6 +25,8 @@ const CAL: DisplayFrame = {
     month: '2026-08',
     title: 'August 2026',
     weekday_names: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'],
+    too_small_text: 'This screen is too small for a month.',
+    too_small_hint: 'Set it to habits + today, or use a bigger panel.',
     weeks: [[
       { day: '2026-08-30', label: '30', in_month: true, today: false, items: [], hidden: 0 },
       { day: '2026-08-31', label: '31', in_month: true, today: true, hidden: 2,

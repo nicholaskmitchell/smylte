@@ -222,6 +222,16 @@ function CalendarFace({ frame }: { frame: DisplayFrame }) {
   const room = useCellRoom(gridRef, cal.month)
   return (
     <div className="display-cal">
+      {/* Rendered always, shown only by the one media query in display.css
+          that matches a screen too small for seven columns. A panel that small
+          does not run a browser at all — which is why the image endpoint
+          refuses the same sizes — but a kiosk pointed at one would otherwise
+          show six empty slivers and no day numbers, which reads as broken
+          rather than as misconfigured. */}
+      <div className="display-cal__toosmall">
+        <p className="display-title display-cal__toosmall-title">{cal.too_small_text}</p>
+        <p className="display-cal__toosmall-hint">{cal.too_small_hint}</p>
+      </div>
       <header className="display-cal__head">
         <h1 className="display-title display-cal__title">{cal.title}</h1>
         <span className="display-label display-cal__name">{frame.display.name}</span>

@@ -204,10 +204,28 @@
 
 .display-cal__items { display: flex; flex-direction: column; gap: 1px; min-height: 0; overflow: hidden; }
 
+/* A screen too small to hold seven columns, in the browser. The bound is
+   deliberately narrow AND short together: 296×128 is a 2.9" panel and is
+   caught, 400×300 is a 4.2" panel that renders fine and is not, and no phone in
+   either orientation is under 260px tall — so the owner checking their hallway
+   display from bed still gets the month. `render.py::month_grid_fits` makes the
+   same call from the panel's own geometry for the image endpoint. */
+.display-cal__toosmall { display: none; }
+@media (max-width: 340px) and (max-height: 260px) {
+  .display-cal__weekdays, .display-cal__grid { display: none; }
+  .display-cal__toosmall { display: block; padding-top: 8px; }
+}
+.display-cal__toosmall-title { margin: 0 0 4px; font-size: clamp(13px, 4vw, 20px); }
+.display-cal__toosmall-hint { margin: 0; font-size: clamp(11px, 3.4vw, 16px); color: var(--d-muted); }
+
 /* ---- an event chip ----------------------------------------------------- */
 
 .display-chip {
-  display: flex; align-items: baseline; gap: 4px;
+  display: flex; align-items: baseline;
+  /* Relative, so the seam between a mono clock and a sans title keeps its air
+     at every panel size. A flat 4px came out as one space width at the small
+     end and "10:00" ran into "1:1 with Sam" as a single word. */
+  gap: 0.45em;
   font-size: clamp(9px, 1.05vw, 14px); line-height: 1.35;
   white-space: nowrap; min-width: 0;
 }
@@ -236,6 +254,16 @@
   font-size: 0.92em; letter-spacing: 0;
 }
 .display-chip__text { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+
+/* Below this the clock stops earning its place, and the renderer makes the same
+   trade per cell: a fixed-width mono time goes FIRST, so on a narrow column it
+   eats the title whole and leaves "14:30 …" — a row that says when something is
+   and not what it is. Seven columns out of 560px is 76px a day, which is about
+   where a title stops surviving the time in front of it. "Dentist" with no time
+   beats "14:30 …" with no event. */
+@media (max-width: 560px) {
+  .display-chip__time { display: none; }
+}
 
 /* ---- habits + tasks mode ----------------------------------------------- */
 
