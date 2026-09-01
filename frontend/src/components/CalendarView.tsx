@@ -309,11 +309,30 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
   }
 
   // The window the grid shows, as the API wants it: the six-week span plus one
-  // exclusive day. Both halves of the pair are derived once so the fetch and
-  // the cache lookup can never disagree about which window is on screen.
-  const from = ymd(days[0])
+  // exclusive day, and then two days of slack at each end. Both halves of the
+  // pair are derived once so the fetch and the cache lookup can never disagree
+  // about which window is on screen.
+  //
+  // The slack is about zones, and the server's display path takes exactly the
+  // same two days for exactly the same reason. `get_events_in_range` selects on
+  // a lexicographic compare of the STORED string — the day a value spells —
+  // while `bucketByDay` places it by `dayKey`, the day it means HERE. Those
+  // differ by the offset gap, and the legal range runs UTC+14 to UTC-12: 26
+  // hours, which is two calendar days. Without the slack an event another
+  // client wrote as `2026-10-31T23:15:00+00:00` is 00:15 on November 1st in
+  // Berlin — the grid's first cell — and is never fetched at all. Nothing
+  // outside the grid is rendered either way, so the slack costs only the extra
+  // candidate rows.
+  const WINDOW_SLACK_DAYS = 2
+  const from = useMemo(() => {
+    const start = new Date(days[0])
+    start.setDate(start.getDate() - WINDOW_SLACK_DAYS)
+    return ymd(start)
+  }, [days])
   const to = useMemo(() => {
-    const end = new Date(days[41]); end.setDate(end.getDate() + 1); return ymd(end)
+    const end = new Date(days[41])
+    end.setDate(end.getDate() + 1 + WINDOW_SLACK_DAYS)
+    return ymd(end)
   }, [days])
 
   // Prune hidden/archived ids for calendars that no longer exist, so the stored

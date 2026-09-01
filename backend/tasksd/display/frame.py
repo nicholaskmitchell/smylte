@@ -24,6 +24,7 @@ from __future__ import annotations
 import re
 from datetime import date, datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 # How different calendars are told apart when there is no colour to tell them
 # apart with. On a 1-bit panel every colour is either ink or paper, so the
@@ -141,23 +142,85 @@ def text(language: str, key: str) -> str:
     return _TEXT.get(language, _TEXT["en"]).get(key, _TEXT["en"][key])
 
 
-def fmt_time(value: str | None, *, all_day: bool, time_format: str) -> str:
+def local(value: str, zone: ZoneInfo | None) -> datetime | None:
+    """A stored ISO value as a datetime in the display's zone, or None.
+
+    The one place the display path decides what an instant means, and it is a
+    port of the frontend's `parseDate` + local-component reads rather than a
+    second opinion:
+
+      * an OFFSET-CARRYING value names an instant, so it is converted. This is
+        what another CalDAV client writes — `_iso` keeps whatever offset the
+        wire had — and it is the whole bug: the panel drew the authoring
+        client's clock while the app's own calendar tab drew the viewer's.
+      * a FLOATING value is naive local wall time, which is what this app
+        writes itself. Its clock is the clock it already spells, so it is
+        returned unchanged. `new Date("2026-08-31T09:00:00")` reads the same
+        way in the browser.
+
+    `zone` is the owner's `home_timezone`, and None means the process's own
+    zone — the same fallback `_due_day` and `_today` take, so a display's grid,
+    its chips and the day plan behind them are all in ONE zone rather than
+    three.
+    """
+    try:
+        stamp = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if stamp.tzinfo is None:
+        return stamp
+    try:
+        return stamp.astimezone(zone)
+    except (OverflowError, OSError, ValueError):
+        # `astimezone` on a value near datetime.min/max overflows rather than
+        # raising ValueError, and this runs on a route with no session — an
+        # unhandled one there is a 500 for every fetch of that display.
+        return None
+
+
+def instant(value: str | None, zone: ZoneInfo | None) -> float:
+    """The moment `value` names, for ordering. Ports `calendar.ts::startOrder`.
+
+    Sorting the chips in a cell by their RAW string is wrong the moment two of
+    them carry different offsets, and the frontend says why at length: the
+    lexicographic order of `2026-08-03T19:00:00+01:00` and a floating
+    `2026-08-03T16:00:00` has nothing to do with their order on the clock. It
+    is not only a reorder either — the cell keeps the first `MAX_ITEMS_PER_DAY`
+    and the renderer keeps the first `room` of those, so a mis-sort drops a
+    different event than the app does.
+
+    A floating value is anchored in the display's zone, which is what
+    `new Date(...)` does with one in the browser.
+    """
+    if not value:
+        return 0.0
+    stamp = local(value, zone)
+    if stamp is None:
+        return 0.0
+    try:
+        if stamp.tzinfo is None and zone is not None:
+            stamp = stamp.replace(tzinfo=zone)
+        return stamp.timestamp()
+    except (OverflowError, OSError, ValueError):
+        return 0.0
+
+
+def fmt_time(value: str | None, *, all_day: bool, time_format: str,
+             zone: ZoneInfo | None = None) -> str:
     """An event's start as a display clock, or "" for an all-day one.
 
     The app's own rule, ported: `time.ts` is the only thing that formats a clock
     in the frontend, and this is the only thing that formats one for a display —
     two implementations rather than three, and both read the same setting.
+
+    The clock is the one the OWNER is in, not the one the authoring client was
+    in: see `local`. `zone=None` is the process zone, which is what an account
+    with no `home_timezone` gets everywhere else too.
     """
     if all_day or not value:
         return ""
-    try:
-        # Both shapes the cache holds: a bare floating `2026-08-31T09:00:00` and
-        # an offset-carrying one. The offset is NOT converted here — the events
-        # were already selected for this day in the owner's zone, and converting
-        # again would move a 23:30 event into tomorrow on the label while
-        # leaving it in today's cell.
-        stamp = datetime.fromisoformat(value)
-    except ValueError:
+    stamp = local(value, zone)
+    if stamp is None:
         return ""
     if time_format == "24h":
         return f"{stamp.hour:02d}:{stamp.minute:02d}"
@@ -216,21 +279,32 @@ def month_grid(day: str) -> list[list[str]]:
 
 def _day_items(
     events: list[dict[str, Any]], day: str, *, time_format: str,
+    zone: ZoneInfo | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
     """One cell's chips, all-day first then by clock, and what was dropped."""
     on_day = [e for e in events if e.get("day") == day]
     on_day.sort(key=lambda e: (
         # All-day events lead: they are the day's frame, and a timed event reads
-        # as an entry within it. Then by start, then by title so two events at
-        # the same minute have an order rather than the query's.
+        # as an entry within it. Then by the INSTANT the start names — never by
+        # the string, which is a different order the moment two events carry
+        # different offsets (see `instant`, and the same argument spelled out in
+        # `calendar.ts::startOrder`). Then by title, so two events at the same
+        # minute have an order rather than the query's.
         0 if e.get("all_day") else 1,
-        e.get("start") or "",
+        instant(e.get("start"), zone),
         (e.get("summary") or "").lower(),
     ))
     items = [{
         "text": plain(e.get("summary")),
-        "time": fmt_time(e.get("start"), all_day=bool(e.get("all_day")),
-                         time_format=time_format),
+        # No clock on a continuation. Days 2..N of a span carry the SAME start,
+        # so printing it says a conference begins at 09:00 on the Wednesday as
+        # well as the Monday. The app draws the clock only on the first day
+        # (`!e.cont` in CalendarView) and a marker on the rest; the frame says
+        # the same thing by leaving the time empty, which every renderer
+        # already handles because an all-day event has none either.
+        "time": "" if e.get("continued") else fmt_time(
+            e.get("start"), all_day=bool(e.get("all_day")),
+            time_format=time_format, zone=zone),
         "all_day": bool(e.get("all_day")),
         "source": e.get("source"),
         # A span's later days. The frontend's `bucketByDay` lists a week-long
@@ -243,6 +317,7 @@ def _day_items(
 
 def build_calendar(
     *, day: str, events: list[dict[str, Any]], language: str, time_format: str,
+    zone: ZoneInfo | None = None,
 ) -> dict[str, Any]:
     """The month grid mode."""
     anchor = date.fromisoformat(day)
@@ -251,7 +326,8 @@ def build_calendar(
     for row in month_grid(day):
         cells = []
         for key in row:
-            items, hidden = _day_items(events, key, time_format=time_format)
+            items, hidden = _day_items(events, key, time_format=time_format,
+                                       zone=zone)
             cells.append({
                 "day": key,
                 "label": str(int(key[8:10])),
@@ -339,7 +415,7 @@ def build_habits(
 
 def build_frame(
     *, display: dict[str, Any], day: str, generated_at: str,
-    language: str, time_format: str,
+    language: str, time_format: str, zone: ZoneInfo | None = None,
     sources: list[dict[str, Any]] | None = None,
     events: list[dict[str, Any]] | None = None,
     rows: list[dict[str, Any]] | None = None,
@@ -376,6 +452,7 @@ def build_frame(
         )
     else:
         frame["calendar"] = build_calendar(
-            day=day, events=events or [], language=language, time_format=time_format,
+            day=day, events=events or [], language=language,
+            time_format=time_format, zone=zone,
         )
     return frame
