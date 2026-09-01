@@ -292,6 +292,8 @@
 
 .display-day {
   display: flex; flex-direction: column; height: 100%;
+  /* For `.display-day__probe`, which hangs out of flow inside it. */
+  position: relative;
   /* The gap is vertical, so it scales with the panel's HEIGHT — the same
      reason the type below does. A portrait panel sized off `vw` put the next
      section's label hard against the last row of the one above it. */
@@ -330,13 +332,31 @@
   display: flex; flex-direction: column; gap: 4px;
   min-height: 0; overflow: hidden;
 }
-.display-day__label {
-  margin: 0; font-size: clamp(11px, 1.7vh, 18px);
-  display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
+.display-day__label { margin: 0; font-size: clamp(11px, 1.7vh, 18px); }
+
+/* The box `measureRows` measures: everything the two sections have to share.
+   `flex: 1` so its height IS the space available rather than the height of what
+   is already in it, and `min-height: 0` so it can actually shrink inside the
+   column above it. */
+.display-day__body {
+  flex: 1; min-height: 0; overflow: hidden;
+  display: flex; flex-direction: column; gap: clamp(8px, 1.8vh, 22px);
 }
+
+/* The section `measureRows` measures. Out of flow so it costs no space, and
+   `visibility: hidden` rather than `display: none` because a display:none
+   element has no box to measure — which is the entire job. */
+.display-day__probe {
+  position: absolute; left: 0; right: 0; top: 0;
+  visibility: hidden; pointer-events: none;
+}
+
 /* Mono and untracked, like every other count in the app and like
    `.display-cal__more` — a number to be read, not a label to be scanned. */
-.display-day__more { font-family: var(--d-mono); letter-spacing: 0; color: var(--d-muted); }
+.display-day__more {
+  margin: 0; font-family: var(--d-mono); letter-spacing: 0; color: var(--d-muted);
+  font-size: clamp(10px, 1.5vh, 15px);
+}
 
 .display-day__rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
 .display-row {

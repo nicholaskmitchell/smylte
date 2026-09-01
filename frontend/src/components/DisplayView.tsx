@@ -341,11 +341,90 @@ function CalendarFace({ frame }: { frame: DisplayFrame }) {
   )
 }
 
+/** How many rows of each section fit, and what that leaves uncounted.
+ *
+ * The habits face's twin of `measureRoom`, and it exists for the same reason:
+ * `overflow: hidden` stops rows painting over the next heading, but a section
+ * that quietly shows the first four of eleven is the lie this whole feature
+ * refuses elsewhere — "the first eight of forty", as the frame module puts it.
+ *
+ * The ALLOCATION mirrors `render.py::section`, deliberately: habits first,
+ * today with what is left, one combined "+N", and no heading over an empty
+ * block. The two surfaces must agree about the same day. What is NOT shared is
+ * the geometry — every size in display.css is a `clamp()` against the viewport,
+ * so the browser measures its own boxes rather than carrying the renderer's
+ * numbers, exactly as the month grid does.
+ */
+export function measureRows(
+  body: HTMLElement, habits: number, tasks: number, hidden: number,
+): { habits: number; tasks: number; missed: number } | null {
+  const probe = body.querySelector('.display-day__probe') as HTMLElement | null
+  const probeRow = probe?.querySelector('.display-row') as HTMLElement | null
+  if (!probe || !probeRow) return null
+  const rowH = probeRow.getBoundingClientRect().height
+  // The heading and the gap under it: whatever a section costs before its
+  // first row.
+  const head = probe.getBoundingClientRect().height - rowH
+  const free = body.clientHeight
+  const gap = parseFloat(getComputedStyle(body).rowGap) || 0
+  if (rowH <= 0 || free <= 0) return null
+
+  let cursor = 0
+  const plan = (rows: number, rest: number) => {
+    if (!rows) return 0
+    const fits = Math.max(0, Math.floor((free - (cursor + head)) / rowH))
+    let shown = Math.min(rows, fits)
+    // Spend the last row on the count rather than on one more line the reader
+    // cannot know is the last — but never the ONLY row, which would leave a
+    // heading standing over nothing.
+    if ((rows > shown || rest) && shown > 1 && shown === fits) shown -= 1
+    if (shown <= 0) return 0
+    cursor += head + shown * rowH + gap
+    return shown
+  }
+  const h = plan(habits, tasks + hidden)
+  const t = plan(tasks, 0)
+  return { habits: h, tasks: t, missed: (habits - h) + (tasks - t) + hidden }
+}
+
+/** `measureRows` against the live body, re-run when the panel resizes. */
+function useRowRoom(
+  body: React.RefObject<HTMLDivElement | null>,
+  habits: number, tasks: number, hidden: number,
+) {
+  const [room, setRoom] = useState<ReturnType<typeof measureRows>>(null)
+  useLayoutEffect(() => {
+    const measure = () => {
+      const el = body.current
+      if (!el) return
+      const next = measureRows(el, habits, tasks, hidden)
+      if (next) setRoom(next)
+    }
+    measure()
+    // Feature-detected for the same reason `useCellRoom` is: on a kiosk webview
+    // without one, `new ResizeObserver` throws inside the layout effect and
+    // takes the whole page with it.
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(measure)
+    if (body.current) ro.observe(body.current)
+    return () => ro.disconnect()
+  }, [body, habits, tasks, hidden])
+  return room
+}
+
 function HabitsFace({ frame }: { frame: DisplayFrame }) {
   const block = frame.habits!
   const { counts } = block
   const nothing = block.habits.length === 0 && block.tasks.length === 0
   const finished = counts.habits_done > 0 || counts.tasks_done > 0
+  const bodyRef = useRef<HTMLDivElement>(null)
+  const capped = block.habits_hidden + block.tasks_hidden
+  const room = useRowRoom(bodyRef, block.habits.length, block.tasks.length, capped)
+  // `null` is "not measured yet" — everything renders for one frame and is
+  // corrected on the layout effect before paint, as on the month grid.
+  const habitRows = room ? block.habits.slice(0, room.habits) : block.habits
+  const taskRows = room ? block.tasks.slice(0, room.tasks) : block.tasks
+  const missed = room ? room.missed : capped
   return (
     <div className="display-day">
       <header className="display-day__head">
@@ -368,50 +447,60 @@ function HabitsFace({ frame }: { frame: DisplayFrame }) {
         </div>
       )}
 
-      {block.habits.length > 0 ? (
-        <section className="display-day__section">
-          <h2 className="display-label display-day__label">
-            {block.heading}
-            {/* What the frame's cap dropped, on the heading's own line — the
-                same place and the same reason as a calendar cell's "+N". A
-                section that quietly showed the first twenty of forty would be
-                claiming that was the day. */}
-            {block.habits_hidden > 0 ? (
-              <span className="display-day__more">+{block.habits_hidden}</span>
-            ) : null}
-          </h2>
+      <div className="display-day__body" ref={bodyRef}>
+        {/* The section `measureRows` measures: one heading and one row, out of
+            flow and invisible, but always present. Measuring a real row made
+            the measurement depend on its own answer — the same trap the month
+            grid's probe exists to avoid. */}
+        <div className="display-day__section display-day__probe" aria-hidden="true">
+          <h2 className="display-label display-day__label">{block.heading}</h2>
           <ul className="display-day__rows">
-            {block.habits.map((row, i) => (
-              <li key={`h-${i}`} className={`display-row${row.done ? ' is-done' : ''}`}>
-                {/* A ring, filled once it is done — never a tick inside the
-                    ring. A diagonal through a circle is the sign for "not
-                    allowed", and the first version of this read as though every
-                    kept habit were forbidden. */}
-                <span className="display-row__ring" aria-hidden="true" />
-                <span className="display-row__text">{row.text}</span>
-              </li>
-            ))}
+            <li className="display-row">
+              <span className="display-row__ring" />
+              <span className="display-row__text">Probe</span>
+            </li>
           </ul>
-        </section>
-      ) : null}
+        </div>
 
-      {block.tasks.length > 0 ? (
-        <section className="display-day__section">
-          <h2 className="display-label display-day__label">
-            {block.day_heading}
-            {block.tasks_hidden > 0 ? (
-              <span className="display-day__more">+{block.tasks_hidden}</span>
-            ) : null}
-          </h2>
-          <ul className="display-day__rows">
-            {block.tasks.map((row, i) => (
-              <li key={`t-${i}`} className={`display-row${row.done ? ' is-done' : ''}`}>
-                <span className="display-row__box" aria-hidden="true" />
-                <span className="display-row__text">{row.text}</span>
-              </li>
-            ))}
-          </ul>
-        </section>
+        {habitRows.length > 0 ? (
+          <section className="display-day__section">
+            <h2 className="display-label display-day__label">{block.heading}</h2>
+            <ul className="display-day__rows">
+              {habitRows.map((row, i) => (
+                <li key={`h-${i}`} className={`display-row${row.done ? ' is-done' : ''}`}>
+                  {/* A ring, filled once it is done — never a tick inside the
+                      ring. A diagonal through a circle is the sign for "not
+                      allowed", and the first version of this read as though every
+                      kept habit were forbidden. */}
+                  <span className="display-row__ring" aria-hidden="true" />
+                  <span className="display-row__text">{row.text}</span>
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
+
+        {taskRows.length > 0 ? (
+          <section className="display-day__section">
+            <h2 className="display-label display-day__label">{block.day_heading}</h2>
+            <ul className="display-day__rows">
+              {taskRows.map((row, i) => (
+                <li key={`t-${i}`} className={`display-row${row.done ? ' is-done' : ''}`}>
+                  <span className="display-row__box" aria-hidden="true" />
+                  <span className="display-row__text">{row.text}</span>
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
+      </div>
+
+      {/* ONE count for the whole face, not one per section — what the panel had
+          no room for plus what the frame had already capped away. The reader
+          wants a number, not the provenance of two, and `render.py` draws the
+          same single "+N" for the same reason. */}
+      {missed > 0 ? (
+        <p className="display-label display-day__more">+{missed}</p>
       ) : null}
 
       {nothing ? (

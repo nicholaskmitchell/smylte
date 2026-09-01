@@ -20,7 +20,7 @@
 
 import { describe, expect, it, beforeEach } from 'vitest'
 import { box, mount, viewport } from './test/browser-measure'
-import { measureRoom } from './components/DisplayView'
+import { measureRoom, measureRows } from './components/DisplayView'
 
 beforeEach(() => { document.body.innerHTML = '' })
 
@@ -303,6 +303,86 @@ describe('a cell draws only the chips that fit in it', () => {
         const last = [...overItems.querySelectorAll('.display-chip')].pop()!
         expect(box(last).bottom, `${w}x${h}: room is too conservative`)
           .toBeGreaterThan(box(overItems).bottom + 0.5)
+      }
+    })
+})
+
+// ── the habits face, held to the same promise as the month grid ─────────────
+
+const dayRow = (label: string) => `
+  <li class="display-row">
+    <span class="display-row__ring"></span>
+    <span class="display-row__text">${label}</span>
+  </li>`
+
+const daySection = (label: string, n: number, prefix: string) => n === 0 ? '' : `
+  <section class="display-day__section">
+    <h2 class="display-label display-day__label">${label}</h2>
+    <ul class="display-day__rows">${
+      Array.from({ length: n }, (_, i) => dayRow(`${prefix} ${i}`)).join('')}</ul>
+  </section>`
+
+const DAY = (habits: number, tasks: number) => `
+  <div class="display display--eink">
+    <div class="display-day">
+      <header class="display-day__head">
+        <h1 class="display-title display-day__title">Kitchen</h1>
+        <span class="display-title display-day__tally">1/9</span>
+      </header>
+      <div class="display-day__body" id="body">
+        <div class="display-day__section display-day__probe" aria-hidden="true">
+          <h2 class="display-label display-day__label">Habits</h2>
+          <ul class="display-day__rows">${dayRow('Probe')}</ul>
+        </div>
+        ${daySection('Habits', habits, 'Habit')}${daySection('Today', tasks, 'Task')}
+      </div>
+    </div>
+  </div>`
+
+describe('the habits face shows only the rows that fit, and counts the rest', () => {
+  const PANELS: Array<[number, number]> = [
+    [800, 480], [480, 800], [400, 300], [1024, 600],
+  ]
+
+  it.each(PANELS)('at %ix%i no row is cut and nothing goes uncounted',
+    async (w, h) => {
+      const HABITS = 9
+      const TASKS = 6
+      await viewport(w, h)
+      // Measured on a body with NO rows in it — the case that has to work, and
+      // the one a real chip could not measure.
+      const empty = await mount(DAY(0, 0))
+      const body = empty.querySelector('#body') as HTMLElement
+      // THE REAL FUNCTION. A copy of the allocation here would go on agreeing
+      // with itself while the page regressed.
+      const plan = measureRows(body, HABITS, TASKS, 0)!
+      expect(plan, `${w}x${h}: nothing measured`).not.toBeNull()
+
+      // Nothing is silently dropped: every row is either drawn or counted.
+      expect(plan.habits + plan.tasks + plan.missed).toBe(HABITS + TASKS)
+      // And it is not vacuously "draw nothing, count everything".
+      expect(plan.habits).toBeGreaterThan(0)
+
+      document.body.innerHTML = ''
+      await viewport(w, h)
+      const full = await mount(DAY(plan.habits, plan.tasks))
+      const shown = full.querySelector('#body') as HTMLElement
+      const rows = [...shown.querySelectorAll(
+        '.display-day__section:not(.display-day__probe) .display-row')]
+      expect(rows).toHaveLength(plan.habits + plan.tasks)
+      // The property: every row it promised is inside the box that clips them.
+      // Before this, the rows painted straight over the next section's heading
+      // and the tail ran off the panel with nothing saying so.
+      const bottom = box(shown).bottom
+      for (const [i, r] of rows.entries()) {
+        expect(box(r).bottom, `${w}x${h}: row ${i} is clipped`)
+          .toBeLessThanOrEqual(bottom + 0.5)
+      }
+      // No heading over an empty block, which is worse than no section at all.
+      for (const s of shown.querySelectorAll(
+        '.display-day__section:not(.display-day__probe)')) {
+        expect(s.querySelectorAll('.display-row').length,
+          `${w}x${h}: a heading with nothing under it`).toBeGreaterThan(0)
       }
     })
 })
