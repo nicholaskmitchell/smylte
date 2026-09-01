@@ -21,6 +21,7 @@ habits mode shows.
 """
 from __future__ import annotations
 
+import re
 from datetime import date, datetime, timedelta
 from typing import Any
 
@@ -87,6 +88,53 @@ _TEXT = {
 # truncated.
 MAX_ITEMS_PER_DAY = 20
 
+# The most characters of any one title a frame carries, and the only bound on
+# it anywhere. `MAX_ITEMS_PER_DAY` above bounds how MANY items a day carries;
+# nothing bounded how LONG one was, and the length is the dangerous half.
+#
+# Every string here is attacker-adjacent: Tasks.org, Thunderbird, jtx and the
+# owner's phone all write to the same Radicale collections, `ical/read.py::_text`
+# is `str(v)` with no cap, and the column is TEXT. So a SUMMARY is arbitrarily
+# long by construction, and it lands on a route with no session
+# (`/api/public/display/<token>.png`) that rasterizes it. Measured before this
+# bound existed: one 4,000-character summary on a grid-spanning event took 88
+# seconds of CPU per request and never got cheaper, because `render._fit` is
+# quadratic and `service._display_events` copies the summary into all 42 cells.
+# One request was enough; the rate limiter never came into it.
+#
+# 120 because a display is read from across a room and the renderer truncates to
+# what actually fits long before this — nothing legible survives past it.
+MAX_TEXT_CHARS = 120
+
+# C0, DEL, and the Unicode line/paragraph separators, replaced by a space.
+#
+# A newline is the one character in an event title that does not degrade
+# gracefully: Pillow's `textlength` REFUSES multiline text ("can't measure
+# length of multiline text"), so `render._fit` raised ValueError and every
+# `.png`, `.bmp` and `.bin` fetch for that display answered 500 — permanently,
+# for as long as the event existed, while the JSON frame kept working. And a
+# newline is ordinary in a SUMMARY: RFC 5545 escapes it as `\n` and every parser
+# unescapes it back. So it is normalised here, at the one edge all three
+# surfaces are built from, rather than guarded at each renderer.
+_CONTROL = re.compile(r"[\s\x00-\x1f\x7f\u2028\u2029]+")
+
+
+def plain(value: str | None, *, limit: int = MAX_TEXT_CHARS) -> str:
+    """Free text from a CalDAV client, made safe to draw and bounded.
+
+    A RUN of whitespace collapses to one space rather than each character
+    becoming its own, so the two surfaces agree: HTML already collapses runs, and
+    a panel that drew "Team    sync" where the browser page drew "Team sync"
+    would be one frame reading differently on the two screens it exists to keep
+    in step.
+    """
+    if not value:
+        return ""
+    # Cut AFTER collapsing, so the limit counts characters that will be drawn
+    # rather than the whitespace that was thrown away; strip again after, so a
+    # cut landing mid-gap does not leave a trailing space before the ellipsis.
+    return _CONTROL.sub(" ", value).strip()[:limit].strip()
+
 
 def text(language: str, key: str) -> str:
     """One of the few fixed words a display draws, in the owner's language."""
@@ -132,7 +180,7 @@ def assign_sources(sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
     needs_initial = len(sources) > len(TREATMENTS)
     out = []
     for i, src in enumerate(sources):
-        name = (src.get("name") or "").strip()
+        name = plain(src.get("name"))
         out.append({
             "id": src["id"],
             "name": name,
@@ -180,7 +228,7 @@ def _day_items(
         (e.get("summary") or "").lower(),
     ))
     items = [{
-        "text": (e.get("summary") or "").strip(),
+        "text": plain(e.get("summary")),
         "time": fmt_time(e.get("start"), all_day=bool(e.get("all_day")),
                          time_format=time_format),
         "all_day": bool(e.get("all_day")),
@@ -251,7 +299,7 @@ def build_habits(
     for row in rows:
         done = bool(row.get("done"))
         item = {
-            "text": (row.get("title") or "").strip(),
+            "text": plain(row.get("title")),
             "done": done,
             "kind": row.get("kind"),
             "source": row.get("source_id"),
@@ -264,12 +312,23 @@ def build_habits(
         "tasks_done": sum(1 for t in tasks if t["done"]),
         "tasks_total": len(tasks),
     }
+    shown_habits = [h for h in habits if not (hide_done_habits and h["done"])]
+    shown_tasks = [t for t in tasks if not (hide_done_tasks and t["done"])]
     return {
         "planned": planned,
         "heading": text(language, "habits"),
         "day_heading": text(language, "day"),
-        "habits": [h for h in habits if not (hide_done_habits and h["done"])],
-        "tasks": [t for t in tasks if not (hide_done_tasks and t["done"])],
+        # Capped, and the cap is counted — the same contract the month grid has
+        # had all along (`_day_items` and its `hidden`). This side had neither,
+        # so a day with forty rows sent forty: the rasterizer drew what fitted
+        # and the browser page let the tail run off the bottom of the panel with
+        # nothing on screen saying there was more. `MAX_ITEMS_PER_DAY` is the
+        # same bound because it is the same question — how much of a day a
+        # screen with no scroll can honestly claim to be showing.
+        "habits": shown_habits[:MAX_ITEMS_PER_DAY],
+        "tasks": shown_tasks[:MAX_ITEMS_PER_DAY],
+        "habits_hidden": max(0, len(shown_habits) - MAX_ITEMS_PER_DAY),
+        "tasks_hidden": max(0, len(shown_tasks) - MAX_ITEMS_PER_DAY),
         "counts": counts,
         "empty_text": text(language, "nothing"),
         "all_done_text": text(language, "all_done"),
@@ -297,7 +356,7 @@ def build_frame(
     language = language if language in _TEXT else "en"
     frame: dict[str, Any] = {
         "display": {
-            "name": display["name"],
+            "name": plain(display["name"]),
             "mode": display["mode"],
             "palette": display["palette"],
             "refresh_seconds": display["refresh_seconds"],

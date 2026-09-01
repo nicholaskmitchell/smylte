@@ -358,6 +358,12 @@ export interface DisplayHabits {
   day_heading: string
   habits: DisplayRow[]
   tasks: DisplayRow[]
+  /** What the frame's own cap dropped, per section — the habits-mode twin of a
+   *  calendar cell's `hidden`. A screen with no scroll cannot show forty rows,
+   *  and one that showed the first twenty without saying so would be claiming
+   *  that was the day. */
+  habits_hidden: number
+  tasks_hidden: number
   /** Counted BEFORE the done rows are hidden. With `hide_done_habits` on, the
    *  list empties as the day goes, and this is the only thing left that
    *  remembers there was anything on it. */

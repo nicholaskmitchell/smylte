@@ -54,6 +54,24 @@ _RAW_MEDIA = "application/octet-stream"
 # framebuffer (0.06ms against 1.3ms for a generator expression).
 _INVERT = bytes(255 - i for i in range(256))
 
+# The most pixels one render may cover, and the only bound on the AREA of an
+# image the public routes will draw.
+#
+# Each dimension was already capped at 4096, which sounds bounded and is not:
+# 4096×4096 is 16.7 million pixels, and on a colour display `.bmp` is three
+# bytes each. Measured before this bound existed — one unauthenticated GET,
+# roughly 200 bytes of request:
+#
+#     GET /api/public/display/<token>.bmp?w=4096&h=4096  ->  50,331,702 bytes
+#
+# ~100 MB of transient RSS per request with it, on a route that by design has
+# no session. 4 million covers every browserless panel that exists with room to
+# spare — the largest e-ink Waveshare sell is 13.3" at 1600×1200 (1.9M), and a
+# 2560×1440 colour panel is 3.7M — while cutting the worst case to a quarter.
+# Anything larger than this is a screen with a browser, which fetches the page
+# rather than the image.
+MAX_PIXELS = 4_000_000
+
 _FONT_DIR = os.path.join(os.path.dirname(__file__), "fonts")
 
 # The app's three type slots, by the names tokens.css gives them. A display is
@@ -105,8 +123,29 @@ def _font(role: str, size: int) -> ImageFont.FreeTypeFont:
     return ImageFont.truetype(_FACES[role], size)
 
 
+def _oneline(s: str) -> str:
+    """The first line of `s`. A guard, not a feature.
+
+    Pillow REFUSES to measure a string containing a newline — "can't measure
+    length of multiline text" — and `_label` measures ONE CHARACTER AT A TIME,
+    so there the string that blows up is the newline by itself. A newline in an
+    event title is ordinary: RFC 5545 escapes it and every parser unescapes it
+    back. Unguarded, one such title raised ValueError out of `render_frame`, and
+    every `.png`, `.bmp` and `.bin` fetch for that display answered 500 — for as
+    long as the event existed, while the JSON frame went on working.
+
+    `frame.plain` is the real fix and normalises this at the one edge all three
+    surfaces are built from. This is the half that does not depend on every
+    future caller of the renderer having gone through it: a panel drawing the
+    first line of a two-line title shows slightly less than it might; a 500
+    shows nothing at all.
+    """
+    return s.splitlines()[0] if ("\n" in s or "\r" in s) else s
+
+
 def _text_width(draw: ImageDraw.ImageDraw, s: str, font) -> int:
-    return int(draw.textlength(s, font=font))
+    """How wide `s` is in `font`. Newline-guarded — see `_oneline`."""
+    return int(draw.textlength(_oneline(s), font=font))
 
 
 def _label_width(
@@ -115,7 +154,7 @@ def _label_width(
     """What `_label` would occupy. Layout has to be decided before anything is
     drawn — see the cell loop, which must know whether a title will fit before
     it commits to a marker."""
-    text = text.upper()
+    text = _oneline(text).upper()
     if not text:
         return 0.0
     font = _font("mono", size)
@@ -145,7 +184,7 @@ def _label(
     quirk and it is visible at 0.12em on a wall.
     """
     width = _label_width(draw, text, size, track=track)
-    text = text.upper()
+    text = _oneline(text).upper()
     if not text:
         return 0.0
     font = _font("mono", size)
@@ -160,10 +199,20 @@ def _label(
 def _fit(draw: ImageDraw.ImageDraw, s: str, font, width: int) -> str:
     """`s`, shortened with an ellipsis until it fits `width`.
 
-    A binary search would be faster and is not worth it: the strings are event
-    titles, and the loop runs a handful of times on the few that overflow. What
-    matters is that it returns "" rather than a lone ellipsis when there is no
-    room at all — a column of "…" tells the reader nothing except that the
+    Binary search rather than dropping one character at a time, and this is not
+    a micro-optimisation. The obvious loop re-measures the WHOLE string on every
+    step, so it is quadratic in the title's length, and the title comes from
+    whatever CalDAV client wrote the event. Measured: 1,000 characters took
+    0.23s, 2,000 took 0.80s, 4,000 took 2.99s — and `_display_events` copies a
+    grid-spanning event's summary into all 42 cells, on a route with no session.
+    `frame.plain` now caps titles at `MAX_TEXT_CHARS`, which is the real fix;
+    this is the half that does not depend on every caller remembering.
+
+    The search is over prefix length: `lo` always fits, `hi` never does, so it
+    settles on the longest prefix that does — the same answer the character-wise
+    loop gave, in a handful of measurements rather than thousands. What still
+    matters most is that it returns "" rather than a lone ellipsis when there is
+    no room at all — a column of "…" tells the reader nothing except that the
     layout is wrong.
     """
     if not s:
@@ -173,9 +222,16 @@ def _fit(draw: ImageDraw.ImageDraw, s: str, font, width: int) -> str:
     ellipsis = "…"
     if _text_width(draw, ellipsis, font) > width:
         return ""
-    cut = s
-    while cut and _text_width(draw, cut + ellipsis, font) > width:
-        cut = cut[:-1]
+    # `s` itself does not fit (checked above), so neither does `s + ellipsis`:
+    # `hi` starts on a known-bad length and `lo` on a known-good one.
+    lo, hi = 0, len(s)
+    while hi - lo > 1:
+        mid = (lo + hi) // 2
+        if _text_width(draw, s[:mid] + ellipsis, font) <= width:
+            lo = mid
+        else:
+            hi = mid
+    cut = s[:lo]
     return (cut.rstrip() + ellipsis) if cut.strip() else ""
 
 
@@ -679,13 +735,25 @@ def _compose(
     seven-column month laid out landscape and then turned on its side — silently,
     with no error anywhere.
 
-    `force_mono` thresholds regardless of palette. It exists for `raw`, which is
-    a one-bit format by definition: the alternative is a format whose byte width
+    `force_mono` selects the EINK PALETTE, not merely a threshold at the end,
+    and the difference is the whole picture. It exists for `raw`, which is a
+    one-bit format by definition: the alternative is a format whose byte width
     depends on how the display happens to be configured, and a microcontroller
     that sized its buffer from the documentation would be handed 24-bit BGR —
     1,152,054 bytes at 800×480 against the 48,000 it allocated.
+
+    But thresholding a COLOUR render was only half of it, and the half that was
+    missing was the visible one. `_RULE` is (206, 204, 200) — luma 204, well
+    above the threshold — so on a display left on the default `color` palette
+    every column separator, every week rule and the header rule converted to
+    PAPER and vanished. What came back was floating text with nothing dividing
+    one day from the next: precisely the failure the separators exist to
+    prevent. `_marker` had the same shape of bug, filling in the calendar's own
+    colour and ignoring the treatment, so a light-coloured calendar lost its
+    chip mark entirely while `_plan_cell` had already reserved the width for it.
+    A one-bit target is an eink target; it takes the eink palette.
     """
-    eink = frame["display"].get("palette") == "eink"
+    eink = force_mono or frame["display"].get("palette") == "eink"
     colors = _EINK if eink else _COLOR
     # The canvas is the panel turned back the other way, so that layout happens
     # in the orientation a reader sees.
@@ -744,6 +812,13 @@ def render_frame(
         raise ValueError("rotation must be 0, 90, 180 or 270")
     if fmt not in ("png", "bmp", "raw"):
         raise ValueError("format must be png, bmp or raw")
+    if width * height > MAX_PIXELS:
+        # Refused here as well as at the route, so the bound holds for every
+        # caller rather than for the one that happens to be in front of it —
+        # the same reason `_fit` is not quadratic any more.
+        raise ValueError(
+            f"{width}×{height} is more than the {MAX_PIXELS:,} pixels a display "
+            "render may cover")
     if invert and fmt != "raw":
         # Refused rather than ignored. A caller asking for an inverted PNG and
         # getting a normal one back has no way to tell, and the failure shows up

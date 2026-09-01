@@ -26,7 +26,16 @@ const FETCH_TIMEOUT_MS = 20_000
 // nobody needs to be told about it, while twenty minutes of silence means the
 // screen is lying about the day. Real, but quiet — a hairline strip, not a
 // modal, because there is nobody standing there to dismiss one.
+//
+// A FLOOR, not the whole rule — see `staleAfter` below. Settings offers "Every
+// hour", and against a flat twenty minutes a display on that cadence was
+// reporting itself stale for forty minutes out of every healthy hour, which
+// teaches the one person who reads it to stop believing the strip.
 const STALE_AFTER_MS = 20 * 60_000
+
+// How many missed polls count as silence. Two and a half rather than two, so a
+// single late fetch does not trip it on the poll boundary.
+const STALE_POLLS = 2.5
 
 // How fast to try again before anything has ever been drawn. See the polling
 // loop for why this is not the configured interval.
@@ -116,7 +125,11 @@ export function DisplayView({ token }: { token: string }) {
   }, [frame])
 
   const palette = frame?.display.palette ?? 'color'
-  const stale = fetchedAt !== null && now - fetchedAt > STALE_AFTER_MS
+  // Scaled to the cadence this display actually polls at, floored at the
+  // absolute bound: "several polls" means something different at 60s and at an
+  // hour, and only the display knows which it is.
+  const staleAfter = Math.max(STALE_AFTER_MS, seconds * STALE_POLLS * 1_000)
+  const stale = fetchedAt !== null && now - fetchedAt > staleAfter
 
   return (
     <div className={`display display--${palette}`} data-mode={frame?.display.mode ?? 'calendar'}>
@@ -168,7 +181,7 @@ function Chip({ frame, item }: { frame: DisplayFrame; item: DisplayItem }) {
   )
 }
 
-/** How many chips fit in one cell, measured rather than guessed.
+/** How many chips fit in one cell of `grid`, or null if it cannot be measured.
  *
  * `overflow: hidden` alone is not enough here: it cuts the last chip through
  * the middle of its letters, which on a wall reads as a rendering fault rather
@@ -176,11 +189,51 @@ function Chip({ frame, item }: { frame: DisplayFrame; item: DisplayItem }) {
  * render.py's `room`), and the browser has to do the same arithmetic or the two
  * surfaces disagree about the same month.
  *
- * Measured from what is actually on screen — a rendered chip and a rendered day
- * number — because every size in display.css is a `clamp()` against the
- * viewport and a constant here would be wrong on the next panel. `null` means
- * "not measured yet", which renders everything for one frame and is corrected
- * on the layout effect before paint.
+ * Measured rather than derived from constants, because every size in display.css
+ * is a `clamp()` against the viewport and a number written here would be wrong
+ * on the next panel.
+ *
+ * Exported for `display.browser.test.tsx`, which renders the count this returns
+ * and then measures whether it actually fits. That test is the only place the
+ * arithmetic can be checked — under jsdom every box is 0×0 — and it has to call
+ * THIS function rather than restate it, or the copy is what stays correct.
+ */
+export function measureRoom(grid: HTMLElement): number | null {
+  // The PROBE, not whichever chip happens to be on screen. Measuring a real
+  // chip made the measurement depend on its own result: at `room === 0` no chip
+  // exists anywhere in the grid, so every later measure bailed out and `room`
+  // could never leave 0 — a wall showing day numbers and "+N" and no event text
+  // for the life of the page load. A month that simply began with no events had
+  // the mirror of it: nothing to measure, `room` stayed null, every cell
+  // rendered all twenty items and `overflow: hidden` cut the surplus mid-glyph
+  // until the month rolled over.
+  const probe = grid.querySelector('.display-cal__probe') as HTMLElement | null
+  const boxes = grid.querySelectorAll('.display-cal__items')
+  if (!probe || !boxes.length) return null
+  const chipH = probe.getBoundingClientRect().height
+  if (chipH <= 0) return null
+  // `.display-cal__items` is `flex: 1`, so its own height IS the space a cell
+  // gives its chips — no arithmetic over the cell's padding and the column gap,
+  // which is what the previous `- 4` was standing in for and got wrong by 4px.
+  // Measured in Chromium at 800×480 before this: the last chip `room` promised
+  // overflowed its box by 2.1px and was cut through the letters, which is the
+  // exact failure this function exists to prevent.
+  //
+  // The SMALLEST box across the grid, because they are not all equal: the today
+  // cell's knocked-out number is taller than a plain one, so a count taken from
+  // the first cell alone overflows on that one.
+  let free = Infinity
+  boxes.forEach(box => { free = Math.min(free, (box as HTMLElement).clientHeight) })
+  // n chips need n·chipH + (n−1)·gap, so n ≤ (free + gap) / (chipH + gap). The
+  // row gap was ignored entirely before, which over-counted again.
+  const gap = parseFloat(getComputedStyle(boxes[0]).rowGap) || 0
+  return Math.max(0, Math.floor((free + gap) / (chipH + gap)))
+}
+
+/** `measureRoom` against the live grid, re-run when the panel resizes.
+ *
+ * `null` means "not measured yet", which renders everything for one frame and
+ * is corrected on the layout effect before paint.
  */
 function useCellRoom(grid: React.RefObject<HTMLDivElement | null>, deps: unknown) {
   const [room, setRoom] = useState<number | null>(null)
@@ -188,14 +241,8 @@ function useCellRoom(grid: React.RefObject<HTMLDivElement | null>, deps: unknown
     const measure = () => {
       const el = grid.current
       if (!el) return
-      const chip = el.querySelector('.display-chip') as HTMLElement | null
-      const head = el.querySelector('.display-cal__daynum') as HTMLElement | null
-      const cell = el.querySelector('.display-cal__cell') as HTMLElement | null
-      if (!chip || !head || !cell) return
-      const chipH = chip.getBoundingClientRect().height
-      if (chipH <= 0) return
-      const free = cell.clientHeight - head.getBoundingClientRect().height - 4
-      setRoom(Math.max(0, Math.floor(free / chipH)))
+      const next = measureRoom(el)
+      if (next !== null) setRoom(next)
     }
     measure()
     // A wall panel does not resize, but a browser being set up in front of one
@@ -242,6 +289,17 @@ function CalendarFace({ frame }: { frame: DisplayFrame }) {
         ))}
       </div>
       <div className="display-cal__grid" ref={gridRef}>
+        {/* The chip `useCellRoom` measures. Out of flow and invisible, so it
+            costs no row and is never read aloud, but it is ALWAYS here — which
+            is the point: measuring a real chip made the measurement depend on
+            whether there were any chips, and the answer latched at zero. Its
+            content is representative rather than empty, since a chip's height
+            is its line box. */}
+        <div className="display-chip display-cal__probe" aria-hidden="true">
+          <span className="display-chip__mark" />
+          <span className="display-chip__time">00:00</span>
+          <span className="display-chip__text">Probe</span>
+        </div>
         {cal.weeks.map((week, w) => (
           <div className="display-cal__week" key={w}>
             {week.map(cell => {
@@ -312,7 +370,16 @@ function HabitsFace({ frame }: { frame: DisplayFrame }) {
 
       {block.habits.length > 0 ? (
         <section className="display-day__section">
-          <h2 className="display-label display-day__label">{block.heading}</h2>
+          <h2 className="display-label display-day__label">
+            {block.heading}
+            {/* What the frame's cap dropped, on the heading's own line — the
+                same place and the same reason as a calendar cell's "+N". A
+                section that quietly showed the first twenty of forty would be
+                claiming that was the day. */}
+            {block.habits_hidden > 0 ? (
+              <span className="display-day__more">+{block.habits_hidden}</span>
+            ) : null}
+          </h2>
           <ul className="display-day__rows">
             {block.habits.map((row, i) => (
               <li key={`h-${i}`} className={`display-row${row.done ? ' is-done' : ''}`}>
@@ -330,7 +397,12 @@ function HabitsFace({ frame }: { frame: DisplayFrame }) {
 
       {block.tasks.length > 0 ? (
         <section className="display-day__section">
-          <h2 className="display-label display-day__label">{block.day_heading}</h2>
+          <h2 className="display-label display-day__label">
+            {block.day_heading}
+            {block.tasks_hidden > 0 ? (
+              <span className="display-day__more">+{block.tasks_hidden}</span>
+            ) : null}
+          </h2>
           <ul className="display-day__rows">
             {block.tasks.map((row, i) => (
               <li key={`t-${i}`} className={`display-row${row.done ? ' is-done' : ''}`}>
