@@ -352,7 +352,7 @@ export function SettingsMenu({
         {section === 'displays' && (
           <>
             <div className="hintline">{tr('disp.intro')}</div>
-            <DisplaysSection onExpire={onExpire} />
+            <DisplaysSection onExpire={onExpire} archived={archivedCals} />
           </>
         )}
 

@@ -92,6 +92,11 @@ export const en = {
   'disp.panel': 'For a panel with no browser',
   'disp.panelHint': 'An e-ink panel driven by a microcontroller can fetch a ready-made image instead of running the page. Give it the panel’s pixels and how it is mounted.',
   'disp.panelSize': 'Panel size',
+  // Its own accessible name — the width field borrows the label above, the
+  // height field had nothing at all.
+  'disp.panelWidth': 'Panel width in pixels',
+  'disp.panelHeight': 'Panel height in pixels',
+  'disp.needOneSource': 'A display has to show at least one.',
   'disp.panelTooSmall': 'Too small for a month — seven columns don’t fit. This screen will say so instead of drawing one; habits + today reads fine at any size.',
   'disp.rotation': 'Rotation',
   'disp.imageHint': 'A microcontroller wants the .bin — the packed 1-bit framebuffer, written straight to the panel with no decoding at all (800×480 is exactly 48,000 bytes). Swap it for .png or .bmp if your board has an image library. All three answer 304 when nothing has changed, so the panel only repaints when there is something new.',
