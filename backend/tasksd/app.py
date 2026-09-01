@@ -1982,6 +1982,79 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def get_displays(request: Request):
         return await _run(_svc(request).list_displays)
 
+    # Registered ABOVE `/displays/{token}` for the reason the public suffix
+    # routes are: `{token}` is `[^/]+` and would swallow "preview.png" whole,
+    # answering 404 for a display nobody made. That bug has already shipped once
+    # in this file.
+    @api.api_route("/displays/preview.png", methods=["GET", "HEAD"])
+    async def get_display_preview(
+        request: Request,
+        mode: str = Query(default="calendar"),
+        palette: str = Query(default="color"),
+        w: int = Query(default=800, ge=100, le=4096),
+        h: int = Query(default=480, ge=100, le=4096),
+        rotate: int = Query(default=0),
+        hide_done_habits: bool = Query(default=True),
+        hide_done_tasks: bool = Query(default=True),
+    ):
+        """A display rendered for a panel nobody owns yet. Settings → Developer.
+
+        BEHIND THE SESSION, unlike everything else that draws a display, and
+        that is the point of it existing at all: checking a layout at eleven
+        panel sizes should not require minting eleven live tokens — each one a
+        credential that reaches this calendar without a session — and then
+        remembering to revoke them.
+
+        It writes nothing: no row, no token, no `last_seen_at`. And it renders
+        through exactly the same frame builder and rasterizer the token routes
+        use, so what is previewed is what would ship.
+        """
+        if rotate not in (0, 90, 180, 270):
+            raise HTTPException(422, "rotate must be 0, 90, 180 or 270")
+        if w * h > render.MAX_PIXELS:
+            raise HTTPException(
+                422,
+                f"{w}×{h} is more than the {render.MAX_PIXELS:,} pixels "
+                "a display render may cover")
+        try:
+            frame = await _run(_svc(request).preview_display_frame, {
+                "name": "Preview", "mode": mode, "palette": palette,
+                "rotation": rotate,
+                "hide_done_habits": hide_done_habits,
+                "hide_done_tasks": hide_done_tasks,
+            })
+        except ValueError as e:
+            raise HTTPException(422, str(e)) from None
+        body, media = await asyncio.to_thread(
+            render.render_frame, frame, width=w, height=h,
+            rotation=rotate, fmt="png")
+        return Response(
+            content=body, media_type=media,
+            # A preview is the account's own calendar drawn as a picture. It is
+            # behind the session and must not sit in a shared cache any more
+            # than the token routes' images do.
+            headers={"Cache-Control": "no-store, private"})
+
+    @api.get("/displays/preview")
+    async def get_display_preview_frame(
+        request: Request,
+        mode: str = Query(default="calendar"),
+        palette: str = Query(default="color"),
+        hide_done_habits: bool = Query(default=True),
+        hide_done_tasks: bool = Query(default=True),
+    ):
+        """The same preview as JSON, for the browser face and for reading the
+        numbers the picture cannot show — how many items a day carries, what the
+        frame capped away."""
+        try:
+            return await _run(_svc(request).preview_display_frame, {
+                "name": "Preview", "mode": mode, "palette": palette,
+                "hide_done_habits": hide_done_habits,
+                "hide_done_tasks": hide_done_tasks,
+            })
+        except ValueError as e:
+            raise HTTPException(422, str(e)) from None
+
     @api.post("/displays", status_code=201)
     async def post_display(request: Request, body: CreateDisplay):
         try:

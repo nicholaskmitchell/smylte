@@ -376,6 +376,13 @@ postcard, which is why the sync-failure alert names the collection and points at
 the log rather than carrying the error text.
 
 ## Displays (the passive screens)
+
+> **Previewing one without owning the panel.** Settings → Developer renders
+> every mode at the sizes real panels come in, through
+> `GET /api/displays/preview.png?mode=&palette=&w=&h=&rotate=` — authed, writes
+> nothing, creates no display and no token. Use it rather than minting a real
+> display to look at a layout: a display token is a bearer credential for the
+> calendar and every one you make is one to remember to revoke.
 A display is a screen with nothing to tap — a calendar in a hallway, today's
 habits in a kitchen. It is paired in **Settings → Displays**, which mints a
 token and gives you two URLs for it:

@@ -66,6 +66,7 @@ export const de: Catalogue = {
   'reminder.days': '{n} Tage vorher',
   'settings.section.notifications': 'Benachrichtigungen',
   'settings.section.displays': 'Anzeigen',
+  'settings.section.developer': 'Entwicklung',
 
   // Anzeigen — die passiven Bildschirme.
   'disp.intro': 'Eine Anzeige ist ein Bildschirm ohne Bedienung: ein Kalender im Flur, die Gewohnheiten von heute in der Küche — sie liest dieses Konto und schreibt nie hinein.',
@@ -107,6 +108,13 @@ export const de: Catalogue = {
   'disp.panel': 'Für ein Panel ohne Browser',
   'disp.panelHint': 'Ein E-Ink-Panel an einem Mikrocontroller kann ein fertiges Bild holen, statt die Seite auszuführen. Dazu die Pixel des Panels und seine Montage angeben.',
   'disp.panelSize': 'Panelgröße',
+
+  'dev.intro': 'Alle Anzeigemodi, gezeichnet in den Größen echter Panels. Nichts davon wird gespeichert, und es entsteht weder eine Anzeige noch ein Token.',
+  'dev.panels': 'Panels',
+  'dev.refresh': 'Neu zeichnen',
+  'dev.hideDone': 'Erledigtes ausblenden',
+  'dev.alt': '{panel}, {w} mal {h} Pixel',
+  'dev.hint': 'Jede Vorschau ist der echte Renderer in den Pixeln dieses Panels, verkleinert dargestellt. Die Größe neben einem E-Ink-Panel ist der gepackte Framebuffer, den es bekäme — das, was ein Mikrocontroller reservieren muss, bevor er ein Bild anfordern kann.',
   'disp.panelWidth': 'Panelbreite in Pixeln',
   'disp.panelHeight': 'Panelhöhe in Pixeln',
   'disp.needOneSource': 'Ein Display muss mindestens eines zeigen.',

@@ -469,6 +469,14 @@ endpoint, because every CI job in this repo is scoped to a directory and a new
 top-level one would otherwise ship with no check at all. See
 `firmware/README.md`.
 
+**Settings → Developer** draws every display mode at the sizes real panels come
+in — a 296×128 badge that cannot hold a month at all, the 800×480 the firmware
+example drives, a 1872×1404 10.3" — so a layout can be judged against hardware
+nobody in the room owns. It renders through the same frame builder and
+rasterizer the token routes use, so what is previewed is what would ship, and
+it is behind the session and writes nothing: checking a layout at ten panel
+sizes should not mean minting ten live tokens and remembering to revoke them.
+
 ## Develop
 
 ```bash
