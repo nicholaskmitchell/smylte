@@ -236,3 +236,131 @@ describe('<DisplaysSection>', () => {
     expect(screen.getByText(/getting shorter as the day goes/i)).toBeInTheDocument()
   })
 })
+
+// ── the allowlist, and the rollback ─────────────────────────────────────────
+//
+// Both decide what an unauthenticated display URL reaches, and both had exactly
+// one test apiece pointed at the input shape where the bug does not fire.
+
+/** Open the editor on the first row. With more than one display on screen
+ *  there is a "Set up" per row, so the first is named rather than assumed. */
+const openEditor = async () => {
+  const buttons = await screen.findAllByRole('button', { name: /set up/i })
+  await userEvent.click(buttons[0])
+}
+
+describe('the calendars a display is allowed to show', () => {
+  it('refuses to turn off the last one rather than writing "everything"', async () => {
+    // An emptied allowlist is indistinguishable from an unset one, and unset
+    // means EVERYTHING — so writing [] here would do the exact opposite of what
+    // the click says and light every chip the owner had just turned off.
+    m.displays.mockResolvedValue([{ ...DISPLAY, calendars: ['work'] }] as never)
+    mount()
+    await openEditor()
+    const work = await screen.findByRole('button', { name: 'Work', pressed: true })
+    expect(work).toBeDisabled()
+    await userEvent.click(work)
+    expect(m.patchDisplay).not.toHaveBeenCalled()
+  })
+
+  it('collapses to "everything" by set membership, not by length', async () => {
+    // An allowlist carrying an id that is no longer on offer — a calendar since
+    // deleted or archived — used to match the LENGTH of the offered set while
+    // excluding one of it. The click then turned that excluded calendar back
+    // on, and the chip stayed lit as though nothing had happened.
+    m.displays.mockResolvedValue([
+      { ...DISPLAY, calendars: ['gone-from-the-server'] },
+    ] as never)
+    m.patchDisplay.mockImplementation(async (_t, body) =>
+      ({ ...DISPLAY, ...body }) as never)
+    mount()
+    await openEditor()
+    // Both offered calendars are currently OFF: the stored allowlist holds one
+    // id, and it is not either of them.
+    expect(await screen.findByRole('button', { name: 'Work', pressed: false }))
+      .toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Home', pressed: false }))
+      .toBeInTheDocument()
+    // Turning Work ON makes the list two ids long — the same LENGTH as the two
+    // calendars on offer, which is what used to collapse it to [] and quietly
+    // turn Home on as well.
+    await userEvent.click(screen.getByRole('button', { name: 'Work' }))
+    expect(m.patchDisplay).toHaveBeenCalledWith('tok-hallway', {
+      calendars: ['gone-from-the-server', 'work'],
+    })
+    await waitFor(() => expect(
+      screen.getByRole('button', { name: 'Home' })).toHaveAttribute('aria-pressed', 'false'))
+  })
+
+  it('does not offer an archived calendar as a source', async () => {
+    // `api.calendars()` returns archived calendars — the backend never filters,
+    // which is what ArchivedCalendarsSection relies on — but the frame builder
+    // drops them. Offering one drew a chip lit up as something the wall panel
+    // was showing when it was not.
+    m.displays.mockResolvedValue([DISPLAY] as never)
+    render(<DisplaysSection onExpire={vi.fn()} archived={['home']} />)
+    await openEditor()
+    expect(await screen.findByRole('button', { name: 'Work' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Home' })).toBeNull()
+  })
+})
+
+describe('a write that the server refuses', () => {
+  it('puts the name back rather than leaving the refused value on screen', async () => {
+    // The draft used to live in `rows`, so the rollback snapshot was taken
+    // AFTER the keystrokes — restoring exactly the value the server had just
+    // refused, with no way back but a reload.
+    m.displays.mockResolvedValue([DISPLAY] as never)
+    m.patchDisplay.mockRejectedValue(new HttpError(422, 'no'))
+    mount()
+    await openEditor()
+    const field = await waitFor(() => screen.getByLabelText<HTMLInputElement>('Name', { selector: '#disp-name-tok-hallway' }))
+    await userEvent.clear(field)
+    await userEvent.type(field, 'Kitchen')
+    await userEvent.tab()
+    await waitFor(() => expect(m.patchDisplay).toHaveBeenCalled())
+    await waitFor(() => expect(field).toHaveValue('Hallway'))
+  })
+
+  it('puts an emptied name back instead of writing nothing and showing nothing',
+    async () => {
+      // Refusing the write was right; leaving the field and the list row blank
+      // while the server still held the old name was not. The name is what is
+      // drawn on the panel, so the owner was left believing they had wiped it.
+      m.displays.mockResolvedValue([DISPLAY] as never)
+      mount()
+      await openEditor()
+      const field = await waitFor(() => screen.getByLabelText<HTMLInputElement>('Name', { selector: '#disp-name-tok-hallway' }))
+      await userEvent.clear(field)
+      await userEvent.tab()
+      expect(m.patchDisplay).not.toHaveBeenCalled()
+      await waitFor(() => expect(field).toHaveValue('Hallway'))
+    })
+
+  it('rolls back only its own row, not every change made meanwhile', async () => {
+    // Restoring a snapshot of the whole array discarded anything else that
+    // landed while the write was in flight — including a delete.
+    const other: Display = { ...DISPLAY, token: 'tok-kitchen', name: 'Kitchen' }
+    m.displays.mockResolvedValue([DISPLAY, other] as never)
+    let release: (v: unknown) => void = () => {}
+    m.patchDisplay.mockImplementation(
+      () => new Promise((_ok, fail) => { release = () => fail(new HttpError(422, 'no')) }))
+    m.deleteDisplay.mockResolvedValue(null as never)
+    mount()
+    await openEditor()          // opens the FIRST row, Hallway
+    // Start a write on Hallway that will fail...
+    await userEvent.click(await screen.findByRole('button', { name: '0°' }))
+    // ...and delete Kitchen while it is still in flight.
+    await userEvent.click(screen.getByRole('button', { name: /^delete$/i }))
+    await userEvent.click(screen.getByRole('button', { name: /delete display/i }))
+    await waitFor(() => expect(m.deleteDisplay).toHaveBeenCalledWith('tok-hallway'))
+    expect(screen.queryByText('Hallway')).toBeNull()
+    // Now let the rotation fail. Its rollback must touch its own row only —
+    // restoring the whole array would bring the deleted display back, with its
+    // live token, on the one screen that can revoke one.
+    release(null)
+    await waitFor(() => expect(m.patchDisplay).toHaveBeenCalled())
+    expect(screen.queryByText('Hallway')).toBeNull()
+    expect(screen.getByText('Kitchen')).toBeInTheDocument()
+  })
+})
