@@ -2538,10 +2538,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             render.render_frame, frame, width=width, height=height,
             rotation=turn, fmt=fmt, invert=invert)
         etag = '"' + hashlib.sha256(body).hexdigest()[:32] + '"'
+        # `raw` is a one-bit framebuffer, which is to say an e-ink panel is
+        # asking — whatever the display happens to be CONFIGURED as. The stored
+        # interval is floored by the palette, so a display left on the default
+        # `color` was advising 60 seconds to glass Waveshare rate at 180 and
+        # document as damaged beyond repair below it. The firmware carries its
+        # own floor precisely because this header is advisory, but a server that
+        # advises a number it knows to be unsafe is not much of a defence.
+        seconds = frame["display"]["refresh_seconds"]
+        if fmt == "raw":
+            seconds = max(seconds, TaskService._REFRESH_MIN_EINK_S)
         headers = {
             "ETag": etag,
             "Cache-Control": "no-store, private",
-            "X-Display-Refresh-Seconds": str(frame["display"]["refresh_seconds"]),
+            "X-Display-Refresh-Seconds": str(seconds),
         }
         if fmt == "raw":
             # What the bytes ARE, so a device can refuse them rather than paint

@@ -52,6 +52,23 @@ EXPECT_FORMAT = "mono-hlsb"
 USE_TLS = True
 PORT = 443 if USE_TLS else 80
 
+# The certificate authority that signed your server's certificate, as a DER file
+# copied onto the board — and READ THIS BEFORE LEAVING IT EMPTY.
+#
+# MicroPython's `ssl.wrap_socket` defaults to `cert_reqs=CERT_NONE`, and
+# `server_hostname` only sets the SNI extension: it does not turn verification
+# on. So with no CA the handshake completes against ANY certificate, including
+# one an attacker minted a second ago. That protects TOKEN from someone passively
+# sniffing the air; it does not protect it from anyone able to answer for your
+# host — which on the wifi a wall panel lives on is the more realistic of the
+# two. TOKEN is the whole credential for your calendar.
+#
+# To verify: export the issuing CA in DER (`openssl x509 -in ca.pem -outform der
+# -out ca.der`), copy it to the board, and set this to "ca.der". The board's
+# clock has to be roughly right for a validity check to pass, so set it from NTP
+# at boot if you do this.
+CA_FILE = ""
+
 # The floor this device will not go below whatever the server says. The server
 # has its own e-ink floor, but `X-Display-Refresh-Seconds` is ADVISORY — a
 # firmware that trusted it blindly would be one misconfiguration away from
@@ -65,6 +82,14 @@ MIN_REFRESH_S = 180
 # that shows Tuesday until someone power-cycles it.
 SOCKET_TIMEOUT_S = 30
 WIFI_ATTEMPTS = 20
+
+# The other end of the refresh clamp. `X-Display-Refresh-Seconds` is a number
+# from the network, and `machine.lightsleep` takes a machine word: on the 32-bit
+# rp2 port a large enough value raises OverflowError, and that call is the one
+# statement in the loop that used to sit outside the try — so a single hostile
+# or mistyped header ended the program for good, with no reset and no retry, on
+# a board with nobody at a REPL. This is the server's own ceiling.
+MAX_REFRESH_S = 86_400
 
 
 def connect_wifi():
@@ -103,13 +128,20 @@ def fetch(buf, etag):
     addr = socket.getaddrinfo(HOST, PORT)[0][-1]
     sock = socket.socket()
     sock.settimeout(SOCKET_TIMEOUT_S)
+    stream = sock
     try:
         sock.connect(addr)
-        stream = ssl.wrap_socket(sock, server_hostname=HOST) if USE_TLS else sock
+        if USE_TLS:
+            stream = _tls(sock)
         request = (
             "GET " + (PATH_FMT % TOKEN) + " HTTP/1.1\r\n"
             "Host: " + HOST + "\r\n"
             "Connection: close\r\n"
+            # Asked for explicitly. RFC 9110 §12.5.3: an absent Accept-Encoding
+            # means ANY coding is acceptable, so a hop between here and the app
+            # is entitled to gzip the body — and 48,000 bytes of framebuffer
+            # would arrive as something this board has no inflater for.
+            "Accept-Encoding: identity\r\n"
         )
         if etag:
             # The line that stops the panel repainting for nothing.
@@ -127,6 +159,13 @@ def fetch(buf, etag):
 
         if status != 200:
             return status, headers, etag
+
+        # CHECKED BEFORE THE BODY IS READ, because the body is read straight
+        # into `epd.buffer` — the panel's live framebuffer. Refusing afterwards
+        # still leaves the mis-shaped frame sitting in the thing that gets
+        # clocked out to the glass on the next paint.
+        if not usable(headers):
+            return 0, headers, etag
 
         # Read until the buffer is FULL. `readinto` returns short reads — one
         # call is not one frame — and assuming otherwise is the classic bug
@@ -152,20 +191,48 @@ def fetch(buf, etag):
         sock.close()
 
 
-def usable(headers, body_len):
-    """Is this frame safe to put on the glass?
+def usable(headers):
+    """Is this response safe to read into the panel's framebuffer?
 
     Refusing is cheap and repainting a mis-shaped buffer is not: the failure
     shows up as diagonal garbage on a wall in another room, with nothing on the
     screen to say what went wrong.
+
+    Every check is on the HEADERS, so it can run before a single byte of body
+    reaches `epd.buffer`. The length one is the reason this function changed:
+    it used to compare `BUF_BYTES` to a `BUF_BYTES` the only call site passed
+    in, which is `x == x` and always true. The read loop guarantees 48,000
+    bytes came off the SOCKET, which is a different fact from 48,000 bytes of
+    framebuffer arriving — they part company the moment any hop re-frames the
+    body, and the documented deployment (Pico → Cloudflare edge → cloudflared →
+    Caddy → uvicorn) has three places that could.
     """
     return (
         headers.get("x-display-format") == EXPECT_FORMAT
         and headers.get("x-display-width") == str(WIDTH)
         and headers.get("x-display-height") == str(HEIGHT)
         and headers.get("x-display-stride") == str(STRIDE)
-        and body_len == BUF_BYTES
+        # A plain, un-recoded body of exactly the expected length. Chunked has
+        # no Content-Length and its framing is not stripped by this reader, so
+        # it would be painted as pixels.
+        and headers.get("content-length") == str(BUF_BYTES)
+        and "transfer-encoding" not in headers
+        and headers.get("content-encoding", "identity") == "identity"
     )
+
+
+def _tls(sock):
+    """TLS, verified if a CA was supplied and honestly unverified if not.
+
+    See `CA_FILE`: without one this stops a passive listener and nothing else.
+    """
+    if not CA_FILE:
+        return ssl.wrap_socket(sock, server_hostname=HOST)
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    ctx.verify_mode = ssl.CERT_REQUIRED
+    with open(CA_FILE, "rb") as f:
+        ctx.load_verify_locations(cadata=f.read())
+    return ctx.wrap_socket(sock, server_hostname=HOST)
 
 
 def main():
@@ -185,10 +252,16 @@ def main():
         try:
             status, headers, new_etag = fetch(buf, etag)
             # The server's interval is a request, never a permission: this panel
-            # will not refresh faster than its own floor whatever it is told.
-            wait = max(MIN_REFRESH_S,
-                       int(headers.get("x-display-refresh-seconds", MIN_REFRESH_S)))
-            if status == 200 and usable(headers, BUF_BYTES):
+            # will not refresh faster than its own floor whatever it is told,
+            # and never sleeps for longer than a machine word can hold — see
+            # MAX_REFRESH_S. A non-integer raises here and is caught below,
+            # leaving `wait` at the floor it was pre-assigned.
+            wait = min(MAX_REFRESH_S,
+                       max(MIN_REFRESH_S,
+                           int(headers.get("x-display-refresh-seconds",
+                                           MIN_REFRESH_S))))
+            # `usable` already ran, before a byte of it touched the buffer.
+            if status == 200:
                 epd.init()
                 epd.display(buf)
                 # Straight back to sleep. Waveshare are explicit that leaving
@@ -211,7 +284,16 @@ def main():
         # the board, which loses `etag` and makes every wake a full repaint. See
         # ../README.md for the deepsleep variant, which has to persist the ETag
         # to a file to be worth anything.
-        machine.lightsleep(wait * 1000)
+        #
+        # Guarded like everything else in this loop. It was the one statement
+        # outside the try, and it takes a number that came off the network — so
+        # an argument `mp_obj_get_int` cannot fit in a machine word raised
+        # OverflowError straight out of `main()` and the script simply ended.
+        # Everything else here is written to never die on a wall.
+        try:
+            machine.lightsleep(wait * 1000)
+        except Exception:
+            time.sleep(MIN_REFRESH_S)
 
 
 main()

@@ -204,3 +204,139 @@ def test_the_example_does_not_reach_for_the_conveniences_that_would_break_it(sou
     # deepsleep resets the board on rp2, which loses the ETag and makes every
     # wake a full repaint — the README documents the variant that persists it.
     assert "machine.lightsleep" in source
+
+
+# ── the example's own logic, actually executed ──────────────────────────────
+#
+# Everything above reads the file's constants. These run its FUNCTIONS: the
+# checks that decide whether a frame reaches the glass are pure — headers in,
+# bool out — so they can be exec'd under CPython even though the module around
+# them imports `machine`, `network` and Waveshare's driver.
+#
+# Worth the machinery because these are the safety checks. Before this file they
+# had no test at all, and one of them was `BUF_BYTES == BUF_BYTES`.
+
+@pytest.fixture(scope="module")
+def usable(source: str, constants: dict):
+    """The example's `usable`, bound to the example's own constants."""
+    tree = ast.parse(source)
+    fn = next((n for n in tree.body
+               if isinstance(n, ast.FunctionDef) and n.name == "usable"), None)
+    assert fn is not None, "the example no longer has a `usable`"
+    ns: dict = dict(constants)
+    exec(compile(ast.Module(body=[fn], type_ignores=[]), str(FIRMWARE), "exec"), ns)
+    return ns["usable"]
+
+
+def _headers(constants: dict, **over) -> dict:
+    good = {
+        "x-display-format": constants["EXPECT_FORMAT"],
+        "x-display-width": str(constants["WIDTH"]),
+        "x-display-height": str(constants["HEIGHT"]),
+        "x-display-stride": str(constants["STRIDE"]),
+        "content-length": str(constants["BUF_BYTES"]),
+    }
+    good.update(over)
+    return {k: v for k, v in good.items() if v is not None}
+
+
+def test_the_example_accepts_the_frame_the_route_really_sends(usable, constants, tmp_path):
+    """The anti-vacuity half: a refusal that refuses everything is not a check.
+
+    Built from the LIVE response rather than from a dict written here, so a
+    header the route stops sending fails this rather than passing it.
+    """
+    with TestClient(create_app(_api_settings(tmp_path))) as c:
+        c.post("/api/login", json={"username": "admin", "password": "testpass123"})
+        token = c.post("/api/displays",
+                       json={"name": "Panel", "palette": "eink",
+                             "panel_width": constants["WIDTH"],
+                             "panel_height": constants["HEIGHT"]}).json()["token"]
+        r = c.get(f"/api/public/display/{token}.bin")
+        assert r.status_code == 200
+        live = {k.lower(): v for k, v in r.headers.items()}
+        assert usable(live), "the example would refuse the frame the route sends"
+
+
+@pytest.mark.parametrize("bad", [
+    # A re-framed body. The read loop proves 48,000 bytes came off the SOCKET,
+    # which is not the same fact — and this is the check that used to be
+    # `BUF_BYTES == BUF_BYTES` and therefore always true.
+    {"content-length": "12345"},
+    {"content-length": None},
+    {"content-length": None, "transfer-encoding": "chunked"},
+    {"content-encoding": "gzip"},
+    # A panel of a different shape, or a server that changed its packing.
+    {"x-display-width": "600"},
+    {"x-display-height": "448"},
+    {"x-display-stride": "75"},
+    {"x-display-format": "mono-hlsb-inverted"},
+    {"x-display-format": None},
+])
+def test_the_example_refuses_a_frame_it_cannot_safely_paint(usable, constants, bad):
+    """Each of these would clock a mis-shaped buffer onto the glass — diagonal
+    garbage on a wall in another room, with nothing on screen to say why."""
+    assert not usable(_headers(constants, **bad))
+
+
+def test_the_example_never_sleeps_outside_the_range_its_hardware_allows(constants):
+    """The refresh clamp, evaluated as the example writes it.
+
+    `machine.lightsleep` takes a machine word and the value comes off the
+    network, so the ceiling is not tidiness: on the 32-bit rp2 port an
+    out-of-range argument raises OverflowError, and that call used to be the one
+    statement in the loop outside the try.
+    """
+    lo, hi = constants["MIN_REFRESH_S"], constants["MAX_REFRESH_S"]
+    assert lo >= TaskService._REFRESH_MIN_EINK_S
+    assert hi <= 86_400
+    clamp = lambda n: min(hi, max(lo, n))          # noqa: E731 — the source line
+    assert clamp(1) == lo and clamp(0) == lo and clamp(-99) == lo
+    assert clamp(10 ** 12) == hi
+    assert clamp(900) == 900
+    # And the source really is the expression this mirrors.
+    src = FIRMWARE.read_text(encoding="utf-8")
+    assert "min(MAX_REFRESH_S," in src and "max(MIN_REFRESH_S," in src
+    # ...inside the guarded region, which is the half that ends the program.
+    assert "try:\n            machine.lightsleep(wait * 1000)" in src
+
+
+def test_the_raw_route_never_advises_an_interval_the_glass_forbids(constants, tmp_path):
+    """`raw` IS an e-ink request, whatever the display is configured as.
+
+    The stored floor is keyed on the palette, and the schema defaults it to
+    `color` — so a panel fetching `.bin` was being advised 60 seconds for glass
+    rated at 180 and documented as damaged beyond repair below it.
+    """
+    with TestClient(create_app(_api_settings(tmp_path))) as c:
+        c.post("/api/login", json={"username": "admin", "password": "testpass123"})
+        token = c.post("/api/displays",
+                       json={"name": "Panel", "palette": "color",
+                             "refresh_seconds": 60,
+                             "panel_width": constants["WIDTH"],
+                             "panel_height": constants["HEIGHT"]}).json()["token"]
+        # The colour formats keep the owner's setting: an LCD has no such limit.
+        assert c.get(f"/api/public/display/{token}.png"
+                     ).headers["X-Display-Refresh-Seconds"] == "60"
+        raw = c.get(f"/api/public/display/{token}.bin")
+        assert int(raw.headers["X-Display-Refresh-Seconds"]) >= TaskService._REFRESH_MIN_EINK_S
+        # And the firmware would not go below its own floor anyway — the header
+        # is advice, which is exactly why it must not be bad advice.
+        assert constants["MIN_REFRESH_S"] >= TaskService._REFRESH_MIN_EINK_S
+
+
+def test_the_example_verifies_tls_when_it_is_given_a_ca_and_says_so_when_it_is_not(
+        source: str, constants: dict):
+    """MicroPython's `ssl.wrap_socket` does NOT verify by default.
+
+    `cert_reqs` defaults to CERT_NONE and `server_hostname` only sets SNI, so an
+    unconfigured handshake completes against any certificate at all. TOKEN is a
+    bearer credential for the owner's calendar, so the file has to either verify
+    or stop claiming that TLS protects it.
+    """
+    assert "CA_FILE" in constants
+    assert constants["CA_FILE"] == "", "a real path would be someone's own server"
+    assert "ssl.CERT_REQUIRED" in source and "load_verify_locations" in source
+    # And the honest caveat is there for the unset case, rather than the earlier
+    # claim that TLS alone kept the token safe.
+    assert "passive" in source.lower()

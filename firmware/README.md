@@ -33,7 +33,8 @@ under CPython.
 3. In Settings → Displays, make a display, set its **Screen** to *E-ink* and its
    **Panel size** to 800 × 480, and copy the URL it shows you.
 4. Edit the four constants at the top of `main.py` — `WIFI_SSID`,
-   `WIFI_PASSWORD`, `HOST`, `TOKEN`.
+   `WIFI_PASSWORD`, `HOST`, `TOKEN` — and read the TLS section below before
+   leaving `CA_FILE` empty.
 5. Copy `main.py` to the board. It runs on power-up.
 
 ## The wire format
@@ -56,12 +57,18 @@ If your controller's convention is the other way round — 0 for white — add
 on a board with 520 KB of RAM. The response says which it sent in
 `X-Display-Format`: `mono-hlsb` or `mono-hlsb-inverted`.
 
-**Check before you paint.** The response carries `X-Display-Width`,
-`X-Display-Height`, `X-Display-Stride` and `X-Display-Format`, and
-`Content-Length` must equal `stride × height`. `main.py` refuses a frame that
-disagrees with its own constants rather than clocking a mis-shaped buffer onto
-the glass — the failure mode is diagonal garbage on a wall in another room, with
-nothing on screen to say why.
+**Check before you paint, and check before you *read*.** The response carries
+`X-Display-Width`, `X-Display-Height`, `X-Display-Stride` and
+`X-Display-Format`, and `Content-Length` must equal `stride × height`.
+`main.py` compares all five against its own constants **before it reads a byte
+of the body**, because the body is read straight into `epd.buffer` — the
+panel's live framebuffer — and refusing afterwards leaves the mis-shaped frame
+sitting in the thing that gets clocked onto the glass. It also sends
+`Accept-Encoding: identity` and rejects a chunked or re-encoded body: RFC 9110
+§12.5.3 says an absent `Accept-Encoding` means any coding is acceptable, and a
+gzipped framebuffer is not something this board can undo. The failure mode all
+of this avoids is diagonal garbage on a wall in another room, with nothing on
+screen to say why.
 
 ## Two rules that are about the hardware
 
@@ -113,6 +120,27 @@ if new_etag != etag:
 
 Flash on these boards is rated in the tens of thousands of writes per sector, so
 the "only when it changes" is the part that matters.
+
+## The token, and what TLS here does and does not do
+
+`TOKEN` is a bearer credential for your calendar: anyone holding it can read
+everything the screen shows. `USE_TLS` is on by default, but **MicroPython does
+not verify certificates unless you tell it to** — `ssl.wrap_socket` defaults to
+`cert_reqs=CERT_NONE`, and `server_hostname` only sets the SNI extension. Left
+that way, the handshake succeeds against any certificate at all, so the token is
+protected from someone passively listening and not from anyone able to answer
+for your host. On the wifi a wall panel lives on, the second is the likelier of
+the two.
+
+To verify properly, export the issuing CA in DER and point `CA_FILE` at it:
+
+```sh
+openssl x509 -in ca.pem -outform der -out ca.der   # then copy ca.der to the board
+```
+
+`main.py` then builds an `SSLContext` with `CERT_REQUIRED`, which also checks
+the hostname. A validity check needs a roughly correct clock, so set the board's
+time from NTP at boot if you do this.
 
 ## Other hardware
 
