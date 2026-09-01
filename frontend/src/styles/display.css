@@ -392,3 +392,94 @@
 .display--color .display-row.is-done { color: var(--d-muted); }
 
 .display-day__empty { margin: 0; font-size: clamp(16px, 3.2vh, 34px); }
+
+/* ---- now + next mode ---------------------------------------------------- */
+
+/* The one face whose type is FITTED rather than clamped. Every other face here
+   sizes with `clamp()` against the viewport because it draws an unbounded
+   number of rows and a bigger panel should show more of them. This one draws
+   exactly two items whatever the panel is, so there is no "more" to spend the
+   pixels on — `fitNow` in DisplayView.tsx measures the largest size at which
+   the whole title fits and sets it inline, mirroring `render.py::_render_now`
+   so a browser panel and a bitmap panel put the same words at the same size.
+   The `clamp()` below is only what shows for the one frame before that lands. */
+
+.display-now {
+  display: flex; flex-direction: column; height: 100%;
+  padding: var(--d-pad); gap: clamp(6px, 1.4vh, 18px);
+}
+
+.display-now__head {
+  display: flex; align-items: baseline; justify-content: space-between;
+  gap: clamp(8px, 2vw, 24px);
+  border-bottom: 1px solid var(--d-rule); padding-bottom: clamp(4px, 0.9vh, 12px);
+}
+/* Truncated, so a long name cannot push the score off the panel — the same
+   thing `_render_now` does by `_fit`ting the name against the tally's width. */
+.display-now__name {
+  margin: 0; font-size: clamp(16px, 3.4vh, 40px); min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.display-now__tally { flex: none; font-size: clamp(16px, 3.4vh, 40px); }
+
+.display-now__preview { display: flex; flex-direction: column; gap: 2px; }
+.display-now__preview-title { margin: 0; font-size: clamp(10px, 1.6vh, 17px); }
+.display-now__preview-hint {
+  margin: 0; font-size: clamp(11px, 1.8vh, 19px); color: var(--d-muted);
+}
+.display--eink .display-now__preview-hint { font-weight: 400; }
+
+/* `min-height: 0` on both, or a flex item refuses to shrink below its content
+   and the title's own box stops being the space the fit search is measuring
+   against — which would make that search chase its own tail. */
+.display-now__main {
+  flex: 1; min-height: 0;
+  display: flex; flex-direction: column; justify-content: center;
+  gap: clamp(2px, 0.6vh, 8px);
+}
+.display-now__eyebrow {
+  margin: 0; flex: none; display: flex; align-items: center;
+  gap: clamp(4px, 0.8vw, 9px); font-size: clamp(9px, 1.4vh, 15px);
+}
+/* The kind mark at label size: a ring is a habit, a box is a row, the same
+   vocabulary the habits face uses. Never filled — the current item is by
+   construction the first one that is NOT done — and never headline-sized,
+   because an empty box that large reads as a control and this screen has none. */
+.display-now__mark { width: 0.85em; height: 0.85em; box-shadow: inset 0 0 0 1.5px var(--d-muted); }
+
+/* The flex item is the BOX; the clamped title is a plain block inside it. A
+   `-webkit-box` used directly as a flex item is blockified by Chromium and
+   `-webkit-line-clamp` silently stops working — measured: a title that should
+   have been cut at four lines rendered twelve, and `overflow: hidden` then cut
+   the last one through the middle of its letters, which on a wall reads as a
+   rendering fault rather than as "there is more". */
+.display-now__titlebox { min-height: 0; overflow: hidden; }
+
+.display-now__title {
+  margin: 0;
+  font-size: clamp(20px, 7vh, 120px); line-height: 1.24;
+  /* The safety net, not the mechanism: `fitNow` picks a size at which the
+     whole title fits, and this only bites at the floor, on a title too long
+     for the smallest panel. It clamps at the break it already made and puts
+     the ellipsis there — which is exactly what `_wrap` was made to do rather
+     than re-flowing, so the two surfaces break the same title the same way. */
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4;
+  overflow: hidden;
+}
+.display-now__est {
+  margin: 0; flex: none; color: var(--d-muted);
+  font-size: clamp(9px, 1.4vh, 15px);
+}
+
+.display-now__next { flex: none; }
+.display-now__next-label { margin: 0 0 clamp(2px, 0.5vh, 6px); font-size: clamp(9px, 1.4vh, 15px); }
+.display-now__next-text {
+  margin: 0; font-size: clamp(14px, 2.8vh, 30px); line-height: 1.25;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* Mono and untracked, like every other count the app draws. */
+.display-now__more {
+  margin: 0; flex: none; font-family: var(--d-mono); letter-spacing: 0;
+  color: var(--d-muted); font-size: clamp(10px, 1.5vh, 15px);
+}

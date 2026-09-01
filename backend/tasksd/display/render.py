@@ -196,6 +196,29 @@ def _label(
     return width
 
 
+def _label_size(
+    draw: ImageDraw.ImageDraw, text: str, size: int, width: float, *,
+    track: float = _TRACK_WIDE, floor: int = 8,
+) -> int:
+    """The largest size at or below `size` at which `_label` fits `width`.
+
+    `_label` measures nothing and refuses nothing — it sets whatever it is
+    handed, one tracked glyph at a time, straight off the right edge of the
+    panel if that is where the string ends. That has been survivable only
+    because every label so far was short and English.
+
+    It is not a user string that breaks it, it is a translated one: "NEXT" is
+    four characters and "ALS NÄCHSTES" is twelve, tracked at 0.12em, on a panel
+    that may be 296 pixels wide. Stepping the label DOWN a size rather than
+    truncating it, because a micro-label is a word and half a word is not a
+    smaller version of it — "ALS NÄCH…" says nothing "ALS NÄCHSTES" at 9px does
+    not say better.
+    """
+    while size > floor and _label_width(draw, text, size, track=track) > width:
+        size -= 1
+    return size
+
+
 def _fit(draw: ImageDraw.ImageDraw, s: str, font, width: int) -> str:
     """`s`, shortened with an ellipsis until it fits `width`.
 
@@ -233,6 +256,83 @@ def _fit(draw: ImageDraw.ImageDraw, s: str, font, width: int) -> str:
             hi = mid
     cut = s[:lo]
     return (cut.rstrip() + ellipsis) if cut.strip() else ""
+
+
+def _longest(draw: ImageDraw.ImageDraw, s: str, font, width: int) -> int:
+    """The longest prefix of `s` that fits `width`, in characters. At least 1.
+
+    `_fit`'s binary search without the ellipsis, for the case where a line is
+    being BROKEN rather than ended: the reader is going to see the rest of the
+    word on the next line, so an ellipsis there would claim something was cut
+    that was not. Logarithmic for the reason spelled out in `_fit` — the string
+    comes from whatever CalDAV client wrote it, and re-measuring the whole of it
+    per character is quadratic in its length.
+
+    The caller has already established that `s` itself does not fit, so `hi`
+    starts on a known-bad length.
+    """
+    lo, hi = 0, len(s)
+    while hi - lo > 1:
+        mid = (lo + hi) // 2
+        if _text_width(draw, s[:mid], font) <= width:
+            lo = mid
+        else:
+            hi = mid
+    # At least one character, or a width narrower than a single glyph would
+    # loop forever taking nothing off the front.
+    return max(1, lo)
+
+
+def _wrap(
+    draw: ImageDraw.ImageDraw, s: str, font, width: int, lines: int,
+) -> tuple[list[str], bool]:
+    """`s` broken over at most `lines` lines of `width`, the last ellipsised.
+
+    The month grid never needed this: a cell's chip is one line and `_fit` cuts
+    it. A headline is the opposite case — it is the ONE thing on the panel, it
+    has the full width, and cutting "Renew the buildings insurance" to "Renew
+    the…" on a screen with room for three lines throws away the sentence to
+    save nothing.
+
+    Broken at a space where there is one and mid-word where there is not, which
+    is what a title with a 40-character URL in it needs. Only the LAST line
+    carries an ellipsis, and it carries one only when something was actually
+    dropped — so a title that happens to fit exactly is not marked as truncated.
+
+    Returns the lines AND whether anything was dropped, because the caller sizes
+    the type by that answer: `_render_now` tries the biggest headline the panel
+    can hold and steps down until the whole title survives, which it cannot ask
+    about by looking for a trailing ellipsis — a title may legitimately end in
+    one.
+    """
+    s = _oneline(s).strip()
+    if not s or lines < 1 or width <= 0:
+        return [], bool(s)
+    rows: list[str] = []
+    rest = s
+    while rest and len(rows) < lines:
+        if _text_width(draw, rest, font) <= width:
+            rows.append(rest)
+            rest = ""
+            break
+        cut = _longest(draw, rest, font, width)
+        # Prefer the last space INSIDE the prefix. `rfind` from 1 so a line is
+        # never taken as empty, and `cut + 1` so a space sitting exactly on the
+        # break counts as a break rather than being carried to the next line.
+        space = rest.rfind(" ", 1, cut + 1)
+        take = space if space > 0 else cut
+        rows.append(rest[:take].rstrip())
+        rest = rest[take:].lstrip()
+    if rest and rows:
+        # It did not all fit, so the last DRAWN line takes the ellipsis. Pulling
+        # part of the dropped remainder back up onto it would use the width
+        # better and is deliberately not done: `-webkit-line-clamp`, which is
+        # how the browser face draws the same title, clamps at the break it
+        # already made and appends the ellipsis there. It cannot re-flow, so
+        # neither does this — the alternative is one frame breaking two ways on
+        # the two screens it exists to keep in step.
+        rows[-1] = _fit(draw, rows[-1] + "…", font, width)
+    return [r for r in rows if r], bool(rest)
 
 
 def _marker(
@@ -352,6 +452,15 @@ def _grid_scale(width: int, height: int) -> float:
     numbers are taken from — is 1.0 either way, so nothing there moves.
     """
     return max(0.75, min(2.6, min(height / 480, width / 800)))
+
+
+# The most lines the rolling face gives its headline. Four rather than three
+# because a portrait panel has the height for a fourth and stopping at three
+# left a 480×800 with a third of its glass empty; more than four and a "task"
+# is a paragraph, which is not what a screen read from a doorway is for.
+# `display.css` clamps to the same number — the two surfaces have to break the
+# same title the same way.
+NOW_MAX_LINES = 4
 
 
 # A month grid stops being a month grid somewhere, and it is worth saying so
@@ -743,6 +852,266 @@ def _render_habits(
         draw.text((pad, y), message, font=row_font, fill=colors["ink"])
 
 
+def _render_now(
+    img: Image.Image, frame: dict[str, Any], *, eink: bool, colors,
+) -> dict[str, int]:
+    """The rolling face: what you are on, what is after it, and how much is left.
+
+    Every other face answers "what is on today". This one answers "what now",
+    which is a different question and needs a different shape: one thing large
+    enough to read from the doorway, one thing under it so the next move is not
+    a surprise, and a number for the rest.
+
+    Nothing here cycles. The frame arrives with the cursor already on the first
+    unfinished row (`frame.build_now`), so ticking something off anywhere moves
+    it and the panel finds it moved on its next poll.
+
+    Returns what it actually drew — how many of the two items reached the glass
+    and what the counter said — so the honesty contract can be ASSERTED rather
+    than inferred from a byte comparison. `section()` in `_render_habits`
+    reports its drops for the same reason. `_compose` ignores the value.
+
+    This is also the one face whose type is FITTED rather than scaled, and the
+    reason is that its content is fixed. `_scale` exists because a bigger panel
+    should show more of an unbounded month rather than the same month louder —
+    but this face has exactly two items whatever the panel is, so there is no
+    "more" to spend the pixels on, and a headline set off the panel's height
+    left the bottom half of an 800×480 empty. So the headline takes the largest
+    size at which the WHOLE title still fits the space between the header and
+    the next item, and the panel is used.
+    """
+    draw = ImageDraw.Draw(img)
+    width, height = img.size
+    scale = _scale(height)
+    pad = int(20 * scale)
+    block = frame["now"]
+    counts = block["counts"]
+    current, following = block["current"], block["next"]
+
+    head_size = int(22 * scale)
+    head_font = _font("serif", head_size)
+    next_font = _font("sans", int(17 * scale))
+    note_font = _font("sans", int(12 * scale))
+    label_size = int(11 * scale)
+    label_h = int(16 * scale)
+
+    inner = width - 2 * pad
+    tally = f"{counts['done']}/{counts['total']}"
+
+    # ── what the panel can afford, settled before a pixel is drawn ────────────
+    #
+    # The same discipline `_render_habits.section` follows, and for the same
+    # reason: a heading with nothing under it says there is something there and
+    # then does not show it. The stakes are higher here, because this face is
+    # ONE sentence — a panel that spent its last line on a display's name and
+    # then clipped the task failed at the only thing it does.
+    head_h = int(head_size * 1.5) + int(10 * scale)
+    next_h = label_h + int(26 * scale) + int(10 * scale)
+    foot_h = int(18 * scale)
+    prev_h = 0 if block["planned"] else int(38 * scale)
+    est_h = int(18 * scale)
+
+    show_head = True
+    show_est = bool(current and current["estimate"])
+    show_next = following is not None
+
+    def spare_now() -> int:
+        """What the count would say, as things currently stand.
+
+        `remaining` is what the FRAME left behind `next`. A panel with no room
+        to draw `next` hides one MORE than that, and a screen saying "+5" while
+        six things wait is exactly the first-eight-of-forty lie this mode exists
+        to refuse — so the dropped row is added back here, where it is known.
+        `DisplayView.NowFace` does the same sum against its own measurement.
+        """
+        return block["remaining"] + (1 if (following and not show_next) else 0)
+
+    def foot_needed() -> bool:
+        """Is anything written on the last line?
+
+        The count, and ALSO the tally when the header went: it moves down here
+        rather than off the panel, and on a badge this line is then the only
+        thing left that says how much of the day is done. Dropping `next`
+        CREATES a count where there was none, so it cannot also take the line
+        that count needs — which is why this is asked rather than stored.
+        """
+        return spare_now() > 0 or not show_head
+
+    def fixed() -> int:
+        """Everything that is not the headline."""
+        return (prev_h + (head_h if show_head else 0)
+                + (next_h if show_next else 0)
+                + (foot_h if foot_needed() else 0)
+                + label_h + (est_h if show_est else 0))
+
+    budget = height - 2 * pad
+    # Conceded in this order, and the order is the argument. A display's name is
+    # the least of what this screen is for; the estimate is a refinement of the
+    # current item; the next item is the second half of the feature; the count
+    # is one short line and goes last. The CURRENT item is the mode and never
+    # gives way — it only ever gets fewer lines to say itself in.
+    for step in ("head", "est", "next"):
+        # One line of headline is the floor: below that there is no face left.
+        if fixed() + int(20 * scale) <= budget:
+            break
+        if step == "head":
+            show_head = False
+        elif step == "est":
+            show_est = False
+        elif step == "next":
+            show_next = False
+    # The count is never conceded, so it is not in that list. It is one short
+    # line, and it is the only thing on the face that speaks for the part of the
+    # day nobody can see.
+    spare = spare_now()
+    show_foot = foot_needed()
+
+    # Two different silences, told apart exactly as the habits face tells them
+    # apart: a day that had things on it and has none left is a finished day,
+    # and a day that never had any is an empty one. Only the first is a result.
+    #
+    # And the sentence is set in the SAME slot as a task, at the same fitted
+    # size — a day you finished should read from the doorway too. Drawn small in
+    # a corner it looked like an error message about an empty panel.
+    headline = (current["text"] if current else
+                block["all_done_text"] if counts["done"] else block["empty_text"])
+
+    room = max(int(16 * scale), budget - fixed())
+    # Descending, and the first size whose WHOLE headline fits wins. Stepping by
+    # 2px from a ceiling proportional to the panel: about a dozen probes on a
+    # 7.5" panel, each a handful of `textlength` calls on a string `frame.plain`
+    # has already capped at 120 characters.
+    ceiling = max(18, min(int(height * 0.30), int(width * 0.20)))
+    floor = max(14, int(15 * scale))
+    now_font = _font("serif", floor)
+    rows = _wrap(draw, headline, now_font, inner,
+                 max(1, min(NOW_MAX_LINES, room // int(floor * 1.24))))[0]
+    for size in range(ceiling, floor - 1, -2):
+        font = _font("serif", size)
+        lines = max(1, min(NOW_MAX_LINES, room // int(size * 1.24)))
+        wrapped, dropped = _wrap(draw, headline, font, inner, lines)
+        if wrapped and not dropped and len(wrapped) * int(size * 1.24) <= room:
+            now_font, rows = font, wrapped
+            break
+    # else: nothing showed it whole — a very long title on a very small panel.
+    # The floor-size wrap above stands and `_wrap` has ellipsised it, which is
+    # the honest end of the same rule the month grid's cells follow.
+    line_h = int(now_font.size * 1.24)
+
+    # ── drawing ──────────────────────────────────────────────────────────────
+    y = pad
+    if show_head:
+        # Lifted from the habits face, including the truncation: the name is cut
+        # to what is left after the score, so a long one cannot overprint it,
+        # and the width is reserved whether or not a score is drawn so the
+        # header does not reflow on a day with nothing on it.
+        tally_w = _text_width(draw, tally, head_font)
+        draw.text((pad, y),
+                  _fit(draw, frame["display"]["name"], head_font,
+                       inner - tally_w - int(12 * scale)),
+                  font=head_font, fill=colors["ink"])
+        if counts["total"]:
+            draw.text((width - pad - tally_w, y), tally,
+                      font=head_font, fill=colors["ink"])
+        rule = y + int(head_size * 1.45)
+        draw.line([(pad, rule), (width - pad, rule)], fill=colors["rule"], width=1)
+        y += head_h
+
+    if not block["planned"]:
+        # Nobody has opened today, so none of this is a plan — it is what
+        # opening one would derive. The label matters more on this face than on
+        # any other: "Now: fix the boiler" reads as a commitment, and the owner
+        # has not made one.
+        _label(draw, (pad, y), block["preview_text"],
+               _label_size(draw, block["preview_text"], label_size, inner,
+                           track=_TRACK_TIGHT),
+               colors["ink"], track=_TRACK_TIGHT)
+        draw.text((pad, y + int(16 * scale)),
+                  _fit(draw, block["preview_hint"], note_font, inner),
+                  font=note_font, fill=colors["muted"])
+        y += prev_h
+
+    # The headline is CENTRED in what is left between the header and the bottom
+    # block, not pinned under the rule. A title is one, two or four lines long
+    # depending on nothing the reader controls, and a face that hung it from the
+    # top left a third of a portrait panel blank under it. Centred, the panel
+    # reads as one composition at every length.
+    bottom = height - pad
+    if show_foot:
+        bottom -= foot_h
+    if show_next and following:
+        bottom -= next_h
+    stack = (label_h if current else 0) + len(rows) * line_h + (est_h if show_est else 0)
+    if bottom - y > stack:
+        y += (bottom - y - stack) // 2
+
+    if current:
+        # The eyebrow names the slot, and there is no slot when nothing is on:
+        # "NOW / All done" reads as a task called "All done".
+        #
+        # The kind mark rides on the eyebrow, not beside the headline. Beside a
+        # headline it has to be headline-sized to look deliberate, and an empty
+        # box that large on a screen with nothing to tap reads as a control —
+        # the one thing a display must never appear to offer. At label size it
+        # is a bullet, in the same vocabulary the habits face already uses: a
+        # ring is a habit, a box is a row. Never filled or ticked, because by
+        # construction the current item is the first one that is NOT done.
+        mark = int(label_size * 0.9)
+        if current["kind"] == "habit":
+            _habit_glyph(draw, pad, y + int(label_size * 0.15), mark, colors,
+                         done=False)
+        else:
+            draw.rectangle([pad, y + int(label_size * 0.15),
+                            pad + mark, y + int(label_size * 0.15) + mark],
+                           outline=colors["muted"], width=max(1, int(1.5 * scale)))
+        eyebrow = inner - mark - int(6 * scale)
+        _label(draw, (pad + mark + int(6 * scale), y), block["heading"],
+               _label_size(draw, block["heading"], label_size, eyebrow),
+               colors["muted"])
+        y += label_h
+    for row in rows:
+        draw.text((pad, y), row, font=now_font, fill=colors["ink"])
+        y += line_h
+    if current and show_est:
+        _label(draw, (pad, y + int(2 * scale)), current["estimate"],
+               label_size, colors["muted"], track=_TRACK_TIGHT)
+        # Advanced, or the next block's floor (`y + a gap`, below) is measured
+        # from the last line of the TITLE and the estimate ends up sitting in
+        # the gap that was meant to separate the two.
+        y += est_h
+
+    # The next item and the count are BOTTOM-anchored, so the face keeps its
+    # shape as the headline grows and shrinks with the title's length. A "next"
+    # that floated up under a one-word task and down under a three-line one
+    # would move between refreshes for a reason the reader cannot see.
+    foot_y = height - pad - int(12 * scale)
+    if show_foot:
+        parts = []
+        if not show_head and counts["total"]:
+            parts.append(tally)
+        if spare:
+            parts.append(f"+{spare}")
+        if parts:
+            # Mono and untracked, like every other count the app draws.
+            _label(draw, (pad, foot_y), "  ".join(parts), max(9, label_size),
+                   colors["muted"], track=0)
+
+    if show_next and following:
+        base = (foot_y if show_foot else height - pad) - next_h
+        base = max(y + int(14 * scale), base)
+        _label(draw, (pad, base), block["next_heading"],
+               _label_size(draw, block["next_heading"], label_size, inner),
+               colors["muted"])
+        draw.text((pad, base + label_h + int(4 * scale)),
+                  _fit(draw, following["text"], next_font, inner),
+                  font=next_font, fill=colors["ink"])
+
+    return {
+        "drawn": (1 if current else 0) + (1 if (show_next and following) else 0),
+        "counted": spare,
+    }
+
+
 def _compose(
     frame: dict[str, Any], *, width: int, height: int, rotation: int,
     force_mono: bool = False,
@@ -792,8 +1161,11 @@ def _compose(
         # Pillow wants a scalar. Flattening here rather than keeping a second
         # palette table means one definition of "ink".
         colors = {k: (0 if v == (0, 0, 0) else 255) for k, v in _EINK.items()}
-    if frame["display"]["mode"] == "habits":
+    mode = frame["display"]["mode"]
+    if mode == "habits":
         _render_habits(img, frame, eink=eink, colors=colors)
+    elif mode == "now":
+        _render_now(img, frame, eink=eink, colors=colors)
     else:
         _render_calendar(img, frame, eink=eink, colors=colors)
     if rotation:

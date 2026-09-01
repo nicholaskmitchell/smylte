@@ -4,7 +4,7 @@ Everything this module needs is handed in, which is what makes the whole content
 model unit-testable without a Radicale, and what keeps "what does the kitchen
 screen show on a Tuesday" a question with one answer rather than three.
 
-Two modes, because two are what a passive screen is actually good at:
+Three modes, because three are what a passive screen is actually good at:
 
   * `calendar` — the month, the way a paper wall calendar is the month. Not an
     agenda: an agenda is a thing you consult, and a wall calendar is a thing you
@@ -12,12 +12,19 @@ Two modes, because two are what a passive screen is actually good at:
   * `habits` — today's habits and today's rows, which is the other thing that
     earns a wall: a list short enough to read from the doorway, that gets
     shorter as the day goes.
+  * `now` — the one thing you are on, the one after it, and a count of the rest.
 
-There is no "tasks" mode. Every task view in the app is a query over a list that
-grows without bound, and a screen with no scroll and no input cannot honestly
-show one — it would show the first eight of forty and quietly imply that was all
-of them. The day plan is the bounded version of that question and is what the
-habits mode shows.
+There is still no "tasks" mode, and the argument against one has not weakened.
+Every task view in the app is a query over a list that grows without bound, and
+a screen with no scroll and no input cannot honestly show one — it would show
+the first eight of forty and quietly imply that was all of them. The day plan is
+the bounded version of that question, and the two modes that draw it are bounded
+in the two ways available: `habits` shows what fits and counts what it dropped,
+and `now` shows exactly two rows whether the day holds three items or thirty.
+
+`now` is deliberately not that refused list with a smaller cap. A capped list is
+a truncation the reader cannot see; two rows and a "+6" is the whole day, said in
+the only shape a screen with no scroll can say it in.
 """
 from __future__ import annotations
 
@@ -65,18 +72,20 @@ _TEXT = {
     "en": {
         "today": "Today", "nothing": "Nothing today", "no_events": "No events",
         "habits": "Habits", "day": "Today", "all_done": "All done",
+        "now": "Now", "next": "Next",
         "not_planned": "Today isn’t planned yet",
         "not_planned_hint": "This is what opening it would put on it.",
         "too_small": "This screen is too small for a month.",
-        "too_small_hint": "Set it to habits + today, or use a bigger panel.",
+        "too_small_hint": "Set it to now + next, or habits + today, or use a bigger panel.",
     },
     "de": {
         "today": "Heute", "nothing": "Heute nichts", "no_events": "Keine Termine",
         "habits": "Gewohnheiten", "day": "Heute", "all_done": "Alles erledigt",
+        "now": "Jetzt", "next": "Als Nächstes",
         "not_planned": "Heute ist noch nicht geplant",
         "not_planned_hint": "Das käme beim Öffnen darauf.",
         "too_small": "Dieser Bildschirm ist zu klein für einen Monat.",
-        "too_small_hint": "Auf Gewohnheiten + heute stellen oder ein größeres Panel nehmen.",
+        "too_small_hint": "Auf Jetzt + als Nächstes oder Gewohnheiten + heute stellen oder ein größeres Panel nehmen.",
     },
 }
 
@@ -229,6 +238,35 @@ def fmt_time(value: str | None, *, all_day: bool, time_format: str,
     # No space before the meridiem and no minutes on the hour: a wall display is
     # read at distance and every character costs width. "9 AM", "9:30 PM".
     return f"{hour} {suffix}" if stamp.minute == 0 else f"{hour}:{stamp.minute:02d} {suffix}"
+
+
+def fmt_duration(minutes: Any) -> str:
+    """An estimate in minutes as the app spells it, or "" for none.
+
+    A port of `frontend/src/time.ts::fmtDuration`, character for character —
+    "45m", "1h 30m", "2h" — for the same reason `fmt_time` is a port of that
+    file's clock rather than a second opinion about it. A day whose estimates
+    read "1h 30m" in the Today tab and "90 min" on the wall would be one app
+    disagreeing with itself about a number the owner typed once.
+
+    Language-independent by construction, which is why it takes no `language`:
+    the app draws the same two letters in both, and inventing a German form here
+    would be this module's only unlocalized string pretending to be localized.
+
+    Anything that is not a number is "". The value reaches here from a sidecar
+    column on a route with no session, and `round("soon")` is a TypeError that
+    would 500 every fetch of the display until the entry was edited.
+    """
+    if minutes is None:
+        return ""
+    try:
+        m = max(0, round(float(minutes)))
+    except (TypeError, ValueError):
+        return ""
+    hours, rest = divmod(m, 60)
+    if not hours:
+        return f"{rest}m"
+    return f"{hours}h {rest}m" if rest else f"{hours}h"
 
 
 def assign_sources(sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -413,6 +451,77 @@ def build_habits(
     }
 
 
+def build_now(
+    *, rows: list[dict[str, Any]], planned: bool, language: str,
+) -> dict[str, Any]:
+    """The rolling mode: the one you are on, the one after it, and a count.
+
+    `rows` are the same already-resolved day entries `build_habits` takes, in
+    the same plan order — so the queue on the wall is the order the owner put
+    the day in, and reordering Today reorders the panel. There is no second
+    sort here on purpose: a display that ranked the day by due date or priority
+    would be a fourth opinion about what to do next, held by the screen least
+    able to explain itself.
+
+    The cursor is simply the first row that is not done, which is what makes
+    this mode CYCLE without anything cycling it. A display takes no input and
+    writes nothing; completing a task in the app, on a phone or in another
+    CalDAV client moves the cursor here, and the panel picks it up on its next
+    poll. Nothing schedules that and nothing is animated — the frame is just a
+    different frame.
+
+    Done rows never reach the frame. In `habits` they are drawn struck through,
+    because that face is a tracker and the strike IS the record; here the record
+    is `counts`, and a finished item on a face whose whole claim is "this is
+    what you are on" would be reading out the past.
+
+    `remaining` is uncapped, and this is the one mode where that is safe.
+    `MAX_ITEMS_PER_DAY` exists because a body an ESP32 has to parse could
+    otherwise carry two hundred imported birthdays; this one carries at most two
+    items and an integer no matter how long the day is.
+    """
+    def item(row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "text": plain(row.get("title")),
+            "kind": row.get("kind"),
+            "source": row.get("source_id"),
+            # Formatted here, like every other string a display draws, so the
+            # two renderers cannot disagree about a duration. The raw number
+            # rides alongside it, as it does on a habits item: a board drawing
+            # the JSON itself can format its own minutes and cannot get them
+            # back out of "1h 30m".
+            "estimate": fmt_duration(row.get("estimate_minutes")),
+            "estimate_minutes": row.get("estimate_minutes"),
+        }
+
+    queue = [r for r in rows if not r.get("done")]
+    return {
+        "planned": planned,
+        "heading": text(language, "now"),
+        "next_heading": text(language, "next"),
+        "current": item(queue[0]) if queue else None,
+        "next": item(queue[1]) if len(queue) > 1 else None,
+        # What is behind `next`. NOT always the number a renderer draws: a panel
+        # too short for the next row hides one more than this, and both
+        # renderers add it back (`render._render_now`, `DisplayView.NowFace`).
+        # Carried this way rather than pre-summed because only the renderer
+        # knows what fitted — the same split the month grid has, where the frame
+        # caps and the cell counts what the cap and the layout dropped together.
+        "remaining": max(0, len(queue) - 2),
+        # Over EVERY row, done included — the score, exactly as the habits tally
+        # is, and for the same reason: with the finished items gone from the
+        # face this is all that remembers there were any.
+        "counts": {
+            "done": sum(1 for r in rows if r.get("done")),
+            "total": len(rows),
+        },
+        "empty_text": text(language, "nothing"),
+        "all_done_text": text(language, "all_done"),
+        "preview_text": text(language, "not_planned"),
+        "preview_hint": text(language, "not_planned_hint"),
+    }
+
+
 def build_frame(
     *, display: dict[str, Any], day: str, generated_at: str,
     language: str, time_format: str, zone: ZoneInfo | None = None,
@@ -444,13 +553,23 @@ def build_frame(
         "time_format": time_format,
         "sources": assign_sources(sources or []),
     }
-    if display["mode"] == "habits":
+    mode = display["mode"]
+    if mode == "habits":
         frame["habits"] = build_habits(
             rows=rows or [], planned=planned, language=language,
             hide_done_habits=bool(display["hide_done_habits"]),
             hide_done_tasks=bool(display["hide_done_tasks"]),
         )
+    elif mode == "now":
+        # `hide_done_*` is not read here, and that is not an oversight: this face
+        # has no done rows to hide. The two settings stay habits-only rather than
+        # growing a meaning for a mode they do not apply to.
+        frame["now"] = build_now(
+            rows=rows or [], planned=planned, language=language)
     else:
+        # The calendar is the fall-through as well as a mode, matching the
+        # schema's `DEFAULT 'calendar'`: a row carrying a mode this build does
+        # not know about draws a month rather than a blank panel.
         frame["calendar"] = build_calendar(
             day=day, events=events or [], language=language,
             time_format=time_format, zone=zone,

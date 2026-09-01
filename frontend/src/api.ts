@@ -257,7 +257,7 @@ export interface Display {
   updated_at: string
 }
 
-export type DisplayMode = 'calendar' | 'habits'
+export type DisplayMode = 'calendar' | 'habits' | 'now'
 export type DisplayPalette = 'color' | 'eink'
 
 export interface DisplayInput {
@@ -300,6 +300,7 @@ export interface DisplayFrame {
   sources: DisplaySource[]
   calendar?: DisplayCalendar       // mode === 'calendar'
   habits?: DisplayHabits           // mode === 'habits'
+  now?: DisplayNow                 // mode === 'now'
 }
 
 /** One calendar or list, and how it is told apart from the others.
@@ -382,6 +383,39 @@ export interface DisplayRow {
   done: boolean
   kind: 'task' | 'note' | 'habit'
   source: string | null
+  estimate_minutes: number | null
+}
+
+/** The rolling face: the one thing you are on, the one after it, and a count.
+ *
+ * Bounded by construction rather than by a cap — it carries two items whether
+ * today holds three or thirty — which is why it is the one block with no
+ * `*_hidden` field. What it does carry is `remaining`, and that is the number
+ * the frame knows; a panel too short to draw `next` hides one MORE than that
+ * and adds it back itself. See `NowFace` and render.py's `_render_now`, which
+ * do the same arithmetic against their own measurements.
+ */
+export interface DisplayNow {
+  planned: boolean                 // false = these rows are a preview
+  heading: string                  // "Now"
+  next_heading: string             // "Next"
+  current: DisplayNowItem | null   // null = nothing left, or nothing at all
+  next: DisplayNowItem | null
+  remaining: number                // open items behind `next`
+  // Over EVERY row, done included — the score, and the only thing on the face
+  // that remembers the finished items, which never appear on it.
+  counts: { done: number; total: number }
+  empty_text: string
+  all_done_text: string
+  preview_text: string
+  preview_hint: string
+}
+
+export interface DisplayNowItem {
+  text: string
+  kind: 'task' | 'note' | 'habit'
+  source: string | null
+  estimate: string                 // already formatted: "45m", "1h 30m", ""
   estimate_minutes: number | null
 }
 

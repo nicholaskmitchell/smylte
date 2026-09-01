@@ -62,6 +62,31 @@ const DAY: DisplayFrame = {
   },
 }
 
+const NOW: DisplayFrame = {
+  ...CAL,
+  display: { ...CAL.display, name: 'Desk', mode: 'now', palette: 'eink' },
+  calendar: undefined,
+  now: {
+    planned: true,
+    heading: 'Now',
+    next_heading: 'Next',
+    current: { text: 'Renew the insurance', kind: 'task', source: 'home',
+      estimate: '1h 30m', estimate_minutes: 90 },
+    next: { text: 'Email Sam', kind: 'task', source: 'work',
+      estimate: '', estimate_minutes: null },
+    remaining: 2,
+    counts: { done: 1, total: 5 },
+    empty_text: 'Nothing today',
+    all_done_text: 'All done',
+    preview_text: 'Today isn’t planned yet',
+    preview_hint: 'This is what opening it would put on it.',
+  },
+}
+
+/** A `now` frame with one block field replaced. */
+const now = (over: Partial<NonNullable<DisplayFrame['now']>>): DisplayFrame =>
+  ({ ...NOW, now: { ...NOW.now!, ...over } })
+
 beforeEach(() => { frameMock.mockReset() })
 afterEach(() => { vi.useRealTimers() })
 
@@ -301,5 +326,110 @@ describe('<DisplayView>', () => {
     render(<DisplayView token="tok" />)
     await screen.findByText('Stretch')
     expect(screen.getByText('+3')).toBeInTheDocument()
+  })
+})
+
+describe('<DisplayView> — the rolling face', () => {
+  it('draws the one thing you are on, the one after it, and the count', async () => {
+    frameMock.mockResolvedValue(NOW)
+    render(<DisplayView token="tok" />)
+    expect(await screen.findByText('Renew the insurance')).toBeInTheDocument()
+    expect(screen.getByText('Now')).toBeInTheDocument()
+    expect(screen.getByText('Next')).toBeInTheDocument()
+    expect(screen.getByText('Email Sam')).toBeInTheDocument()
+    expect(screen.getByText('1h 30m')).toBeInTheDocument()
+    // The count is what is behind the next item — the only part of the day the
+    // reader cannot see. Under jsdom every box is 0×0 so `fitNow` measures
+    // nothing and drops nothing, which is exactly the "everything fitted" case.
+    expect(screen.getByText('+2')).toBeInTheDocument()
+    // The score, and on this face it is the only thing that remembers the
+    // finished rows: they never appear on it at all.
+    expect(screen.getByText('1/5')).toBeInTheDocument()
+  })
+
+  it('never draws a row that is already done', async () => {
+    // The cursor is the frame's job (`build_now` sends only the two open rows),
+    // and this pins the face to it: nothing here filters, so a done row
+    // reaching the block would be drawn as the thing you are on.
+    frameMock.mockResolvedValue(NOW)
+    render(<DisplayView token="tok" />)
+    await screen.findByText('Renew the insurance')
+    expect(document.querySelector('.display-row.is-done')).toBeNull()
+  })
+
+  it('tells a finished day from an empty one', async () => {
+    frameMock.mockResolvedValue(now({
+      current: null, next: null, remaining: 0, counts: { done: 5, total: 5 } }))
+    const { unmount } = render(<DisplayView token="tok" />)
+    expect(await screen.findByText('All done')).toBeInTheDocument()
+    // No eyebrow: nothing is "now", and "Now / All done" reads as a task
+    // called All done.
+    expect(document.querySelector('.display-now__eyebrow')).toBeNull()
+    unmount()
+
+    frameMock.mockResolvedValue(now({
+      current: null, next: null, remaining: 0, counts: { done: 0, total: 0 } }))
+    render(<DisplayView token="tok" />)
+    expect(await screen.findByText('Nothing today')).toBeInTheDocument()
+  })
+
+  it('says so when the day is a preview nobody opened', async () => {
+    frameMock.mockResolvedValue(now({ planned: false }))
+    render(<DisplayView token="tok" />)
+    // It matters more here than on any other face: "Now: fix the boiler" on a
+    // day nobody opened reads as a commitment the owner has not made.
+    expect(await screen.findByText('Today isn’t planned yet')).toBeInTheDocument()
+    expect(screen.getByText('This is what opening it would put on it.'))
+      .toBeInTheDocument()
+  })
+
+  it('marks a habit differently from a task', async () => {
+    frameMock.mockResolvedValue(now({
+      current: { text: 'Stretch', kind: 'habit', source: null, estimate: '',
+        estimate_minutes: null } }))
+    render(<DisplayView token="tok" />)
+    await screen.findByText('Stretch')
+    expect(document.querySelector('.display-now__eyebrow .display-row__ring'))
+      .toBeTruthy()
+    expect(document.querySelector('.display-now__eyebrow .display-row__box'))
+      .toBeNull()
+  })
+
+  it('marks its headline and micro-labels for the editorial type', async () => {
+    frameMock.mockResolvedValue(NOW)
+    const { container } = render(<DisplayView token="tok" />)
+    await screen.findByText('Renew the insurance')
+    // Holds `display.browser.test.tsx`'s markup harness to the real JSX, the
+    // same job the two assertions above it do for the other faces.
+    for (const sel of ['.display-now__title', '.display-now__name', '.display-now__tally']) {
+      expect(container.querySelector(sel)!.className, sel).toContain('display-title')
+    }
+    for (const sel of ['.display-now__eyebrow', '.display-now__est',
+                       '.display-now__next-label', '.display-now__more']) {
+      expect(container.querySelector(sel)!.className, sel).toContain('display-label')
+    }
+    // The box the clamp lives in — without it `-webkit-line-clamp` is
+    // blockified away and the last line is cut through its letters.
+    expect(container.querySelector('.display-now__titlebox .display-now__title'))
+      .toBeTruthy()
+  })
+
+  it('renders a hostile title as inert text, never as markup', async () => {
+    frameMock.mockResolvedValue(now({
+      current: { text: '<img src=x onerror="window.__pwned=true">', kind: 'task',
+        source: null, estimate: '', estimate_minutes: null } }))
+    render(<DisplayView token="tok" />)
+    // A task title can be written by any CalDAV client on these collections.
+    expect(await screen.findByText('<img src=x onerror="window.__pwned=true">'))
+      .toBeInTheDocument()
+    expect((window as unknown as { __pwned?: boolean }).__pwned).toBeUndefined()
+  })
+
+  it('takes no input, exactly like the other two faces', async () => {
+    frameMock.mockResolvedValue(NOW)
+    const { container } = render(<DisplayView token="tok" />)
+    await screen.findByText('Renew the insurance')
+    expect(container.querySelectorAll('button, a, input, [tabindex], [role="button"]'))
+      .toHaveLength(0)
   })
 })
