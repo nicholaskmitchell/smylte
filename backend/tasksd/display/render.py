@@ -616,8 +616,18 @@ def _render_habits(
     note_font = _font("sans", int(12 * scale))
     label_size = int(11 * scale)
 
-    draw.text((pad, pad), frame["display"]["name"], font=title_font, fill=colors["ink"])
     counts = block["counts"]
+    # The name is TRUNCATED to what is left after the score, which the calendar
+    # face has always done for the same name and this one did not: a long name
+    # overprinted the tally and then ran off the panel. The width is reserved
+    # whether or not a score is drawn, so the header does not reflow depending
+    # on whether today has habits on it.
+    tally = f"{counts['habits_done']}/{counts['habits_total']}"
+    tally_w = _text_width(draw, tally, title_font)
+    draw.text((pad, pad),
+              _fit(draw, frame["display"]["name"], title_font,
+                   width - 2 * pad - tally_w - int(12 * scale)),
+              font=title_font, fill=colors["ink"])
     # The score, at the right of the header, in the SAME serif as the name it
     # sits beside — a headline and its figure, not a label. It is the whole
     # reason the counts are computed before the hiding: with `hide_done_habits`
@@ -660,21 +670,31 @@ def _render_habits(
         if not rows:
             return cursor, 0
         label_h = int(18 * scale)
-        # No dangling header. A section title with nothing under it is worse
-        # than no section at all: it says there is something there and then
-        # does not show it.
-        if cursor + label_h + row_h > height - pad:
-            return cursor, len(rows)
-        _label(draw, (pad, cursor), label, label_size, colors["muted"])
-        cursor += label_h
-        fits = max(0, int((height - pad - cursor) // row_h))
+        # DECIDED BEFORE THE LABEL IS DRAWN, all of it. A section title with
+        # nothing under it is worse than no section at all: it says there is
+        # something there and then does not show it.
+        #
+        # Checking only that one row would fit was not enough, because the rule
+        # below can then take that row back: a section with exactly one row that
+        # fits, and anything queued behind it, spent its only line on the
+        # counter and drew the heading over an empty block — the precise thing
+        # this guard exists to prevent. So the row list is settled first and the
+        # heading is drawn only if something survives to sit under it.
+        fits = max(0, int((height - pad - (cursor + label_h)) // row_h))
         shown = rows[:fits]
         dropped = len(rows) - len(shown)
-        if (dropped or rest) and shown and len(shown) == fits:
+        if (dropped or rest) and len(shown) > 1 and len(shown) == fits:
             # Spend the last row on the count rather than on one more line the
             # reader cannot know is the last.
             shown = shown[:-1]
             dropped += 1
+        if not shown:
+            # Nothing drawn, and every row reported — the caller sums both
+            # sections into the one "+N", so the count survives the section
+            # not being drawn at all.
+            return cursor, len(rows)
+        _label(draw, (pad, cursor), label, label_size, colors["muted"])
+        cursor += label_h
         for row in shown:
             gy = cursor + int(2 * scale)
             if habit:
@@ -698,11 +718,15 @@ def _render_habits(
             cursor += row_h
         return cursor + int(10 * scale), dropped
 
+    # `*_hidden` is what the FRAME already capped away before the renderer saw
+    # it (see frame.MAX_ITEMS_PER_DAY). It counts toward the same "+N": the
+    # reader wants one number, not the provenance of two.
+    hidden_tasks = block.get("tasks_hidden", 0)
     y, missed = section(block["heading"], block["habits"], habit=True,
-                        cursor=y, rest=len(block["tasks"]))
+                        cursor=y, rest=len(block["tasks"]) + hidden_tasks)
     y, missed_tasks = section(block["day_heading"], block["tasks"], habit=False,
                               cursor=y, rest=0)
-    missed += missed_tasks
+    missed += missed_tasks + block.get("habits_hidden", 0) + hidden_tasks
     if missed:
         # Mono and untracked, like every other count the app draws. Placed on
         # the last line the panel has room for, which is why the sections give

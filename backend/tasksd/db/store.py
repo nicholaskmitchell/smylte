@@ -9,6 +9,7 @@ delete-and-recreate survival requirement).
 from __future__ import annotations
 
 import json
+import logging
 import re
 import sqlite3
 from contextlib import contextmanager
@@ -16,6 +17,8 @@ from pathlib import Path
 
 from ..dav.client import CollectionInfo, Item
 from ..ical.read import TaskFields
+
+log = logging.getLogger(__name__)
 
 _SCHEMA = (Path(__file__).parent / "schema.sql").read_text(encoding="utf-8")
 
@@ -1939,9 +1942,21 @@ def touch_display(conn: sqlite3.Connection, token: str) -> None:
     therefore both cheap (one UPDATE, no read back) and unconditional about
     the reply: the caller does not check it, because a panel on the wall going
     blank over a failed timestamp would be the tail wagging the dog.
+
+    Which is why the write is SWALLOWED rather than merely unchecked. The
+    docstring has always promised this and the code did not deliver it: this is
+    the one write on an otherwise entirely read-only path, `display_frame` calls
+    it as its last act, and nothing anywhere in tasksd catches `sqlite3.Error`
+    — app.py registers handlers for seven exception types and none of them is a
+    database error. So a locked or full database turned a fully-built frame into
+    a 500, on the route with no session, for a timestamp nobody reads but the
+    settings screen.
     """
-    conn.execute(
-        "UPDATE displays SET last_seen_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') "
-        "WHERE token=?",
-        (token,),
-    )
+    try:
+        conn.execute(
+            "UPDATE displays SET last_seen_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') "
+            "WHERE token=?",
+            (token,),
+        )
+    except sqlite3.Error:
+        log.warning("could not stamp last_seen_at for a display", exc_info=True)

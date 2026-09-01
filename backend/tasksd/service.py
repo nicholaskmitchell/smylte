@@ -2714,11 +2714,22 @@ class TaskService:
             # 39px column, and a screen that draws seven of those looks broken
             # rather than misconfigured. Null when there is nothing to judge:
             # no size set, or a mode that has no grid to not fit.
+            #
+            # Asked about the canvas the grid is LAID OUT on, which for a
+            # quarter turn is the panel transposed — `_compose` builds
+            # `(height, width)` at 90 and 270 so the month is laid out the way a
+            # reader sees it and rotated at the end. Asking about the raw
+            # framebuffer instead let Settings call a portrait-mounted 4.2"
+            # panel fine and the panel itself then draw "This screen is too
+            # small for a month", which is the one disagreement this shared
+            # predicate exists to prevent.
             "panel_too_small": (
                 None if row["mode"] != "calendar"
                 or not row["panel_width"] or not row["panel_height"]
                 else not display_render.month_grid_fits(
-                    row["panel_width"], row["panel_height"])
+                    *((row["panel_height"], row["panel_width"])
+                      if row["rotation"] in (90, 270)
+                      else (row["panel_width"], row["panel_height"])))
             ),
             "enabled": bool(row["enabled"]),
             "last_seen_at": row["last_seen_at"],
