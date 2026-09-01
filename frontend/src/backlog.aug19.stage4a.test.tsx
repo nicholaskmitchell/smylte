@@ -410,7 +410,11 @@ describe('2026-08-19 — the calendar grid', () => {
     // the shared beforeEach clears the user, so it has to be set or every write
     // is a silent no-op — which would make this test pass against the bug.
     setCacheUser('someone')
-    cacheEvents('2026-03-01', '2026-04-12',
+    // The window CalendarView actually asks for: the six-week grid
+    // (2026-03-01 .. 2026-04-11), one exclusive day, and two days of slack at
+    // each end so a zone conversion cannot move an event outside it. The mirror
+    // is keyed by that pair, so the seed has to spell the same one.
+    cacheEvents('2026-02-27', '2026-04-14',
       [ev({ uid: 'cached', id: 'cached', summary: 'From the mirror' })])
 
     openCalendar()

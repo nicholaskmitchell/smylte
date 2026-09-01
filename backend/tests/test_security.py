@@ -144,6 +144,21 @@ def test_every_api_route_requires_auth(make_app):
     public = {
         "/api/login", "/api/logout", "/api/me",
         "/api/public/booking/{token}", "/api/public/booking/{token}/book",
+        # The displays. Token-gated rather than session-gated, deliberately and
+        # for the same reason the booking pages are: the device on the other end
+        # is a screen on a wall with no session and no way to acquire one. Each
+        # answers 404 to an unknown token rather than 401, because "there is no
+        # such display" is the only thing a caller holding a revoked URL should
+        # learn — a 401 would tell them the token used to be real.
+        #
+        # Listed here one path at a time on purpose. A prefix rule
+        # (`startswith("/api/public/")`) would exempt every future route that
+        # happened to be filed under that path, which is the opposite of what
+        # this sweep is for.
+        "/api/public/display/{token}",
+        "/api/public/display/{token}.png",
+        "/api/public/display/{token}.bmp",
+        "/api/public/display/{token}.bin",
     }
     app = make_app()
     checked = 0

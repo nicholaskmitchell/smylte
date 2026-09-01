@@ -29,6 +29,8 @@ from .dav import xml as davxml
 from .dav.client import DavClient
 from .dav.errors import NotFound as DavNotFound
 from .db import store
+from .display import frame as display_frame_mod
+from .display import render as display_render
 from .ical import PRIORITY, UNSET, EventEdit, TaskEdit, blocks_time, recur
 from .sync import SyncEngine, SyncStats
 
@@ -2628,6 +2630,449 @@ class TaskService:
         with self._lock:
             return [dict(r) for r in store.bookings_created_since(self._conn, stamp)]
 
+    # ── displays (the passive screens) ────────────────────────────────────────
+    #
+    # CRUD shaped exactly like the booking links above, because the two are the
+    # same kind of object: a row whose primary key is a token that reaches data
+    # without a session. `display_frame` is the one addition, and it is the only
+    # method here a token can reach.
+    #
+    # Every route into this section is READ-ONLY about the account's data. That
+    # is not a convention to be careful about — it is the feature. A display
+    # takes no input, so there is no write for a token to reach even if one
+    # leaked, and the single write anywhere in the path (`touch_display`) writes
+    # a timestamp onto the display's own row.
+    _DISPLAY_MODES = ("calendar", "habits")
+    _DISPLAY_PALETTES = ("color", "eink")
+    # Under a minute is not a refresh rate, it is a fault: a browser page doing
+    # it is just heat. A day is the ceiling only in the sense that a display
+    # asking for longer can simply be pointed at its own timer — the frame
+    # reports what it was told and nothing enforces it on a device.
+    _REFRESH_MIN_S = 60
+    _REFRESH_MAX_S = 86_400
+    # An EINK panel has a floor its glass imposes, and it is three minutes.
+    # Waveshare's own documentation for these screens says to set the refresh
+    # interval to at least 180 seconds, and to sleep or power the panel down
+    # between refreshes — "otherwise the screen will remain in a high voltage
+    # state for a long time, which will damage the e-Paper and cannot be
+    # repaired". A minute was on offer here, which on that hardware is the app
+    # recommending its own destruction.
+    #
+    # It is not a preference and so it is not a preference to set. A colour
+    # display — an old tablet, an LCD in a hallway — has none of this and keeps
+    # the 60s floor, because none of it is true of a backlight.
+    _REFRESH_MIN_EINK_S = 180
+
+    @staticmethod
+    def _refresh_floor(palette: str | None) -> int:
+        return (TaskService._REFRESH_MIN_EINK_S if palette == "eink"
+                else TaskService._REFRESH_MIN_S)
+
+    def list_displays(self) -> list[dict[str, Any]]:
+        with self._lock:
+            return [self._display_dto(r) for r in store.list_displays(self._conn)]
+
+    def list_displays_one(self, token: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = store.get_display(self._conn, token)
+            return None if row is None else self._display_dto(row)
+
+    @staticmethod
+    def _display_dto(row, *, with_token: bool = True) -> dict[str, Any]:
+        """One display, as the settings screen sees it.
+
+        The token IS returned here, unlike the notification bot token beside it,
+        and the difference is what each one is FOR. A bot token is a credential
+        the owner never needs to see again once it is stored; a display token is
+        a URL they have to be able to read off the screen and type into a panel,
+        and re-issuing it is the only alternative to showing it. It is therefore
+        exactly as secret as the settings page it is drawn on.
+        """
+        dto = {
+            "name": row["name"],
+            "mode": row["mode"],
+            "palette": row["palette"],
+            "calendars": json.loads(row["calendars"] or "[]"),
+            "lists": json.loads(row["lists"] or "[]"),
+            "hide_done_habits": bool(row["hide_done_habits"]),
+            "hide_done_tasks": bool(row["hide_done_tasks"]),
+            # Clamped to the palette's floor on the way OUT, which is the
+            # safety net rather than the policy. A display stored at 60s before
+            # the eink floor existed would otherwise go on telling a panel to
+            # refresh every minute forever; no migration reaches a row nobody
+            # edits, and this does. The write path above is what makes the
+            # number the owner sees agree with it.
+            "refresh_seconds": max(
+                row["refresh_seconds"],
+                TaskService._refresh_floor(row["palette"])),
+            "panel_width": row["panel_width"],
+            "panel_height": row["panel_height"],
+            "rotation": row["rotation"],
+            # Whether a month grid is worth drawing at the panel size the owner
+            # gave. Answered by the RENDERER's own predicate rather than by
+            # arithmetic repeated here or in the browser — a 2.9" panel is a
+            # 39px column, and a screen that draws seven of those looks broken
+            # rather than misconfigured. Null when there is nothing to judge:
+            # no size set, or a mode that has no grid to not fit.
+            #
+            # Asked about the canvas the grid is LAID OUT on, which for a
+            # quarter turn is the panel transposed — `_compose` builds
+            # `(height, width)` at 90 and 270 so the month is laid out the way a
+            # reader sees it and rotated at the end. Asking about the raw
+            # framebuffer instead let Settings call a portrait-mounted 4.2"
+            # panel fine and the panel itself then draw "This screen is too
+            # small for a month", which is the one disagreement this shared
+            # predicate exists to prevent.
+            "panel_too_small": (
+                None if row["mode"] != "calendar"
+                or not row["panel_width"] or not row["panel_height"]
+                else not display_render.month_grid_fits(
+                    *((row["panel_height"], row["panel_width"])
+                      if row["rotation"] in (90, 270)
+                      else (row["panel_width"], row["panel_height"])))
+            ),
+            "enabled": bool(row["enabled"]),
+            "last_seen_at": row["last_seen_at"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+        if with_token:
+            dto["token"] = row["token"]
+        return dto
+
+    def _normalize_display_fields(
+        self, fields: dict[str, Any], existing: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Validate/canonicalize display fields. Raises ValueError (routes → 422).
+
+        `existing` is the display as it stands, for a PATCH: some rules depend
+        on the row this write is landing on rather than on the write alone —
+        see the refresh floor, which is a property of the palette the display
+        ends up with.
+        """
+        out = dict(fields)
+        if "name" in out:
+            out["name"] = (out["name"] or "").strip()
+            if not out["name"]:
+                raise ValueError("a display needs a name")
+        for key, allowed in (("mode", self._DISPLAY_MODES),
+                             ("palette", self._DISPLAY_PALETTES)):
+            if key in out and out[key] not in allowed:
+                raise ValueError(f"{key} must be one of {', '.join(allowed)}")
+        for key in ("calendars", "lists"):
+            if key in out:
+                ids = out[key] or []
+                if not isinstance(ids, list) or any(not isinstance(i, str) for i in ids):
+                    raise ValueError(f"{key} must be a list of collection ids")
+                # Stored as given rather than resolved to hrefs. A display may
+                # legitimately name a collection that does not exist yet or has
+                # gone away — the same tolerance `hidden_calendars` has — and
+                # resolving here would turn a rename on the wire into a display
+                # that silently shows everything.
+                out[key] = json.dumps(ids)
+        # The floor depends on what the display will BE once this write lands,
+        # not on what it is now — flipping a screen to eink is exactly the write
+        # that has to start respecting the panel's own limit.
+        palette = out.get("palette") or (existing or {}).get("palette") or "color"
+        floor = self._refresh_floor(palette)
+        if "refresh_seconds" in out:
+            seconds = int(out["refresh_seconds"])
+            if not floor <= seconds <= self._REFRESH_MAX_S:
+                raise ValueError(
+                    f"refresh_seconds must be between {floor} and "
+                    f"{self._REFRESH_MAX_S}")
+            out["refresh_seconds"] = seconds
+        elif "palette" in out and existing:
+            # Switching an existing display to eink, without saying anything
+            # about its interval. Refusing the write would be refusing a change
+            # the owner DID make because of a value they did not touch, so the
+            # interval comes up to the floor as part of the same write and the
+            # DTO reports it — Settings shows 3 minutes the moment the palette
+            # flips, rather than a 422 about a field that is not on screen.
+            if (existing.get("refresh_seconds") or 0) < floor:
+                out["refresh_seconds"] = floor
+        for key in ("panel_width", "panel_height"):
+            if key in out and out[key] is not None:
+                px = int(out[key])
+                # The floor is legibility and the ceiling is memory: the image
+                # renderer allocates width×height, and an unbounded pair here is
+                # an out-of-memory on an authenticated route.
+                if not 100 <= px <= 4096:
+                    raise ValueError(f"{key} must be between 100 and 4096 pixels")
+                out[key] = px
+        if "rotation" in out:
+            if int(out["rotation"]) not in (0, 90, 180, 270):
+                raise ValueError("rotation must be 0, 90, 180 or 270")
+            out["rotation"] = int(out["rotation"])
+        for key in ("hide_done_habits", "hide_done_tasks", "enabled"):
+            if key in out:
+                out[key] = int(bool(out[key]))
+        return out
+
+    def create_display(self, fields: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            token = secrets.token_urlsafe(32)
+            store.create_display(
+                self._conn, token, self._normalize_display_fields(fields))
+        self._publish({"type": "display_created", "display": token})
+        return self.list_displays_one(token)
+
+    def update_display(self, token: str, fields: dict[str, Any]) -> dict[str, Any] | None:
+        with self._lock:
+            # Read the row FIRST: the refresh floor is a property of the palette
+            # the display ends up with, and a PATCH that flips it to eink says
+            # nothing about the interval it is about to make illegal.
+            current = store.get_display(self._conn, token)
+            if current is None:
+                return None
+            row = store.update_display(
+                self._conn, token,
+                self._normalize_display_fields(fields, dict(current)))
+            if row is None:
+                return None
+        self._publish({"type": "display_updated", "display": token})
+        return self.list_displays_one(token)
+
+    def rotate_display_token(self, token: str) -> dict[str, Any] | None:
+        """Re-key a display whose URL got out, keeping the display itself."""
+        with self._lock:
+            row = store.rotate_display_token(
+                self._conn, token, secrets.token_urlsafe(32))
+            if row is None:
+                return None
+            dto = self._display_dto(row)
+        self._publish({"type": "display_updated", "display": dto["token"]})
+        return dto
+
+    def delete_display(self, token: str) -> bool:
+        with self._lock:
+            ok = store.delete_display(self._conn, token)
+        if ok:
+            self._publish({"type": "display_deleted", "display": token})
+        return ok
+
+    def display_frame(self, token: str) -> dict[str, Any] | None:
+        """Everything one display shows, right now. The only call a token reaches.
+
+        None for an unknown OR a disabled display, deliberately collapsed into
+        one answer: the route turns both into the same 404, so switching a
+        display off is indistinguishable from never having made it. The
+        alternative — 403 for disabled — tells whoever holds a revoked URL that
+        it used to be real, which is the one fact they can act on.
+
+        NOTHING here opens a day. `open_day(create=False)` is a pure read and
+        `preview_day` writes nothing at all, so a screen on a wall polling every
+        five minutes cannot manufacture a plan the owner never made. That is not
+        an optimisation: the day plan is worth keeping only while it records
+        what was actually intended, and a panel in a hallway intends nothing.
+        The same rule the MCP connector is held to, for the same reason.
+        """
+        with self._lock:
+            row = store.get_display(self._conn, token)
+            if row is None or not row["enabled"]:
+                return None
+            display = self._display_dto(row, with_token=False)
+            frame = self._build_display_frame(display)
+            # Last, and inside the lock: a display that got its frame is a
+            # display that was seen. It is deliberately not awaited on, checked
+            # or allowed to fail the read — see `store.touch_display`.
+            store.touch_display(self._conn, token)
+        return frame
+
+    def _build_display_frame(self, display: dict[str, Any]) -> dict[str, Any]:
+        """The frame one display's settings produce. Caller holds the lock.
+
+        Shared by the token route and by the developer preview, so the thing
+        being previewed is the thing that ships rather than a second renderer
+        that agrees with it today.
+        """
+        settings = store.get_settings(self._conn)
+        day = self._today()
+        language = settings.get("language") or "en"
+        time_format = settings.get("time_format") or "12h"
+        # ONE zone for the whole display. `_today` above already reads it — the
+        # grid's own "today" has always been the owner's day — so an event
+        # bucketed by anything else would be placed against a grid drawn in a
+        # different zone. None means the process's own, exactly as in `_due_day`
+        # and `_today`, which is why an account whose server is not in its own
+        # zone wants `home_timezone` set.
+        zone = self._home_tz()
+        if display["mode"] == "habits":
+            sources, rows, planned = self._display_day_rows(day, display)
+            events = None
+        else:
+            sources, events = self._display_events(day, display, zone)
+            rows, planned = None, True
+        return display_frame_mod.build_frame(
+            display=display, day=day, generated_at=_stamp(),
+            language=language, time_format=time_format, zone=zone,
+            sources=sources, events=events, rows=rows, planned=planned,
+        )
+
+    def preview_display_frame(self, fields: dict[str, Any]) -> dict[str, Any]:
+        """A frame for a display that does not exist.
+
+        For Settings → Developer, which draws every mode at every panel size so
+        a layout can be checked against hardware nobody in the room owns.
+        Making that use a real display would mean minting a live token — a
+        credential that reaches this calendar with no session — in order to look
+        at a layout, and then remembering to revoke it.
+
+        So this is authed, takes the settings directly, and WRITES NOTHING: no
+        row, no token, no `last_seen_at`. It reaches the same data the owner is
+        already looking at on the screen that called it.
+
+        The fields go through `_normalize_display_fields`, so a preview cannot
+        ask for anything a real display could not be set to — including an
+        interval under the e-ink floor.
+        """
+        settings = self._normalize_display_fields(dict(fields), existing=None)
+        display = {
+            "name": settings.get("name") or "Preview",
+            "mode": settings.get("mode") or "calendar",
+            "palette": settings.get("palette") or "color",
+            "calendars": settings.get("calendars") or [],
+            "lists": settings.get("lists") or [],
+            "hide_done_habits": bool(settings.get("hide_done_habits", True)),
+            "hide_done_tasks": bool(settings.get("hide_done_tasks", True)),
+            "refresh_seconds": settings.get("refresh_seconds") or 300,
+            "rotation": settings.get("rotation") or 0,
+        }
+        with self._lock:
+            return self._build_display_frame(display)
+
+    def _display_calendars(self, display: dict[str, Any]) -> list:
+        """The collections one display draws from, honouring its allowlist.
+
+        Empty means everything, matching `hidden_calendars`: a display made in
+        March should show a calendar made in April without being edited. The
+        account's ARCHIVED calendars are excluded either way — archiving is the
+        owner saying a calendar is not part of their present, and a screen on
+        the wall is as present as it gets.
+        """
+        wanted = set(display["calendars"])
+        archived = set(store.get_settings(self._conn).get("archived_calendars") or [])
+        out = []
+        for row in store.get_collections(self._conn):
+            if "VEVENT" not in (row["components"] or ""):
+                continue
+            slug = _slug(row["href"])
+            if wanted and slug not in wanted:
+                continue
+            if slug in archived:
+                continue
+            out.append(row)
+        return out
+
+    def _display_events(
+        self, day: str, display: dict[str, Any], zone: ZoneInfo | None,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """The month grid's events, one record per day each one covers.
+
+        A span is listed on every day it touches, exactly as `bucketByDay` does
+        in the frontend: a conference that ran Monday to Friday is on the wall
+        all week or it is misinformation by Tuesday. The walk is clipped to the
+        grid at both ends, because another CalDAV client can trivially write an
+        event that runs for years and stepping a day at a time to reach its
+        DTEND would build records nothing draws.
+        """
+        grid = display_frame_mod.month_grid(day)
+        first, last = grid[0][0], grid[-1][-1]
+        # The QUERY window is wider than the grid; the DRAWN range below is not.
+        #
+        # `get_events_in_range` gates on a lexicographic compare of the stored
+        # ISO string, so it selects by the day a value SPELLS while the bucketing
+        # below places it by the day it means in the owner's zone. Those differ
+        # by up to the offset gap, and the legal range runs from UTC+14
+        # (Pacific/Kiritimati) to UTC-12 — 26 hours, which is two calendar days,
+        # not one. Two days of slack at each end therefore covers every offset
+        # that exists; the walk is still clamped to `first`/`last`, so nothing
+        # outside the grid can be drawn and the extra rows cost only the
+        # candidates they add.
+        window_start = (date.fromisoformat(first) - timedelta(days=2)).isoformat()
+        window_end = (date.fromisoformat(last) + timedelta(days=3)).isoformat()
+        sources, out = [], []
+        for row in self._display_calendars(display):
+            href = row["href"]
+            sources.append({
+                "id": _slug(href),
+                "name": row["displayname"] or _slug(href),
+                "color": row["color"],
+            })
+            for ev in self.events_in_range(href, window_start, window_end):
+                start_day = _event_day(
+                    ev.get("start"), is_date=bool(ev.get("start_is_date")),
+                    zone=zone)
+                if not start_day:
+                    continue
+                end_day = _event_last_day(ev, start_day, zone=zone)
+                cursor = max(start_day, first)
+                stop = min(end_day, last)
+                while cursor <= stop:
+                    out.append({
+                        "day": cursor,
+                        "summary": ev.get("summary"),
+                        "start": ev.get("start"),
+                        "all_day": bool(ev.get("all_day")),
+                        "source": _slug(href),
+                        "continued": cursor != start_day,
+                    })
+                    cursor = (date.fromisoformat(cursor) + timedelta(days=1)).isoformat()
+        return sources, out
+
+    def _display_day_rows(
+        self, day: str, display: dict[str, Any]
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], bool]:
+        """Today's rows with every title resolved, and whether they are real.
+
+        A task entry is a POINTER — the day plan stores no title and no done
+        flag for one, because the VTODO is the single truth for both — so the
+        join happens here, once, the same way `mcp/api.py::_entries_with_tasks`
+        does it for the connector.
+
+        Dropped and rolled rows are left out. They are exactly what a day's
+        RECORD needs and exactly what a wall does not: "I decided against this"
+        is a thing to read in the look-back, not a line on a screen in the
+        kitchen that can never be acknowledged.
+        """
+        plan = self.open_day(day, create=False)
+        planned = bool(plan["planned"])
+        entries = plan["entries"] if planned else self.preview_day(day)
+        wanted = set(display["lists"])
+        # One read for every collection's name, not one per row: a day of twenty
+        # entries would otherwise be twenty queries under the lock, on the app's
+        # most frequently polled call.
+        named = {r["href"]: (r["displayname"] or _slug(r["href"]))
+                 for r in store.get_collections(self._conn)}
+        names: dict[str, str] = {}
+        out = []
+        for entry in entries:
+            if entry.get("dropped_at") or entry.get("rolled_to"):
+                continue
+            kind = entry["kind"]
+            title, done = entry.get("title"), bool(entry.get("done_at"))
+            source_id = entry.get("list")
+            if kind == "task":
+                if wanted and source_id not in wanted:
+                    continue
+                href = self.resolve_list(source_id, component="VTODO") if source_id else None
+                item = store.get_item(self._conn, href, entry["uid"]) if href else None
+                if item is None:
+                    # The task has left the wire — completed and purged by
+                    # another client, or its list deleted. The entry outlives it
+                    # by design (there is no FK), but a row with no title is a
+                    # blank line on a wall, so it is dropped rather than drawn.
+                    continue
+                title, done = item["summary"], item["status"] in ("COMPLETED", "CANCELLED")
+                names.setdefault(href, named.get(href) or source_id)
+            out.append({
+                "kind": kind, "title": title, "done": done,
+                "source_id": source_id if kind == "task" else None,
+                "estimate_minutes": entry.get("estimate_minutes"),
+            })
+        sources = [{"id": _slug(h), "name": n, "color": None} for h, n in names.items()]
+        return sources, out, planned
+
     # ── app settings (account-synced) ─────────────────────────────────────────
     def get_settings(self) -> dict[str, Any]:
         with self._lock:
@@ -2639,6 +3084,111 @@ class TaskService:
         # Notify other open tabs/devices so the change syncs live.
         self._publish({"type": "settings_updated"})
         return settings
+
+
+
+def _event_day(value: str | None, *, is_date: bool, zone: ZoneInfo | None) -> str:
+    """The calendar day an event's DTSTART falls on IN THE OWNER'S ZONE, or "".
+
+    The same rule `_due_day` applies to a task's DUE, and for the same reason —
+    the frontend's `dayKey` hands the value to `Date` and reads LOCAL components
+    back, so an event another CalDAV client cached as
+    `2026-09-01T02:00:00+00:00` is September 1st in UTC and August 31st on a
+    screen in New York. Taking the string's own first ten characters put it in
+    a different cell on the wall than in the app's calendar tab, and printed a
+    different clock beside it.
+
+    Two shapes are deliberately NOT converted, exactly as in `_due_day`, because
+    converting them would invent an instant the wire never named:
+
+      * a DATE-valued DTSTART — what an all-day event is on the wire. It is
+        already a bare calendar day.
+      * a floating datetime — naive local wall time, which `dayKey` also reads
+        as-is. Its day is the day it already spells.
+
+    `zone` is keyword-only and REQUIRED, matching `_due_day`. It has no default
+    on purpose: `None` is a legitimate value meaning "the process's own zone",
+    so a call site that forgot to thread the zone would be indistinguishable
+    from one that meant it — and the only symptom would be a span's two ends
+    resolved in two different zones.
+    """
+    if not value:
+        return ""
+    if is_date or "T" not in value:
+        return value[:10]
+    try:
+        stamp = datetime.fromisoformat(value)
+    except ValueError:
+        return value[:10]
+    if stamp.tzinfo is None:
+        return stamp.date().isoformat()
+    try:
+        # `astimezone(zone)` with zone=None converts to the process's local
+        # zone, which is exactly the unset-`home_timezone` fallback — the same
+        # one `_today` takes, so the grid and the chips inside it agree.
+        return stamp.astimezone(zone).date().isoformat()
+    except (OverflowError, OSError):
+        # A value near datetime.min/max overflows here rather than raising
+        # ValueError above. This runs on a route with no session, where an
+        # unhandled exception is a 500 on every fetch of that display.
+        return value[:10]
+
+
+def _local_midnight(value: str, zone: ZoneInfo | None) -> bool:
+    """Does `value` land exactly on midnight in the owner's zone?
+
+    Ports `calendar.ts::endIsExclusive`, which tests
+    `parseDate(e.end).getHours() === 0 && getMinutes() === 0` — the CONVERTED
+    local clock, not the characters. Reading `end[11:16] == "00:00"` off the
+    string called a DTEND of `2026-08-31T00:00:00+02:00` midnight, when in UTC
+    it is 22:00 on the 30th and only Berlin sees midnight; the two surfaces then
+    disagreed about whether the span spills into another day.
+    """
+    stamp = _event_stamp(value, zone)
+    return stamp is not None and stamp.hour == 0 and stamp.minute == 0
+
+
+def _event_stamp(value: str, zone: ZoneInfo | None) -> datetime | None:
+    """`value` as a datetime in the owner's zone, or None if it is not one."""
+    try:
+        stamp = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if stamp.tzinfo is None:
+        return stamp
+    try:
+        return stamp.astimezone(zone)
+    except (OverflowError, OSError):
+        return None
+
+
+def _event_last_day(ev: dict[str, Any], start_day: str, *,
+                    zone: ZoneInfo | None) -> str:
+    """The last day an event is visible on. Ports `calendar.ts::lastDayOf`.
+
+    DTEND is EXCLUSIVE for an all-day event (RFC 5545 §3.6.1), and a timed event
+    that ends at exactly midnight does not spill into the next day — both are
+    the same rule from the reader's side: an event ends on the last day it has
+    time on. Getting this wrong draws a Friday-to-Sunday trip through Monday.
+
+    Both ends resolve in the SAME zone. Threading it to the day but not to the
+    midnight test, or to DTSTART but not DTEND, is the subtle way to get this
+    wrong: an event 16:00–22:00 on the 31st in New York, cached as
+    `…T20:00:00+00:00`–`…T02:00:00+00:00`, would start on the 31st and end on
+    the 1st, and the wall would draw a continuation chip on a day the event
+    never touched.
+    """
+    end = ev.get("end")
+    if not end:
+        return start_day
+    end_day = _event_day(end, is_date=bool(ev.get("end_is_date")), zone=zone)
+    if not end_day:
+        return start_day
+    exclusive = bool(ev.get("end_is_date")) or (
+        "T" in end and _local_midnight(end, zone))
+    if exclusive:
+        end_day = (date.fromisoformat(end_day) - timedelta(days=1)).isoformat()
+    return max(end_day, start_day)
 
 
 # Fields where -1 means CLEAR rather than a value. The same sentinel the day

@@ -21,6 +21,11 @@ import '@testing-library/jest-dom/vitest'
 import '../styles/fonts.css'
 import '../styles/tokens.css'
 import '../styles/app.css'
+// The display page's own sheet, last, as main.tsx loads it. It is here because
+// what it asserts cannot be asserted anywhere else: a display is drawn in the
+// app's three typefaces, and "which face won" is a question about the cascade
+// and about `document.fonts`, neither of which jsdom has.
+import '../styles/display.css'
 
 afterEach(() => {
   // index.html's pre-paint script does not run in this project — vitest browser
