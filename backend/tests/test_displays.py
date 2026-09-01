@@ -539,6 +539,169 @@ def test_a_bigger_panel_shows_more_rather_than_the_same_thing_louder():
         < R._font("sans", int(12 * R._scale(825))).size
 
 
+def test_a_month_grid_refuses_a_panel_it_cannot_be_read_on():
+    """A 2.9" panel is 296×128 — a 39px column, four characters wide.
+
+    Seven of those is not a small month grid, it is a smear, and a screen
+    rendering a smear looks BROKEN rather than misconfigured, so the owner has
+    no way to know what to do. The predicate is exported and the service uses
+    the same one, so Settings can say it at the moment the size is typed.
+    """
+    # The panels people actually mount, and the verdict each one gets.
+    assert R.month_grid_fits(800, 480)          # Waveshare 7.5", the reference
+    assert R.month_grid_fits(400, 300)          # Waveshare 4.2", cramped but real
+    assert R.month_grid_fits(600, 800)          # a portrait Kindle
+    assert not R.month_grid_fits(296, 128)      # Waveshare 2.9"
+    assert not R.month_grid_fits(250, 122)      # Waveshare 2.13"
+
+    from PIL import Image
+    import io
+
+    body, _ = R.render_frame(_frame(), width=296, height=128, fmt="png")
+    img = Image.open(io.BytesIO(body))
+    assert img.size == (296, 128)
+    # It still draws — a blank panel is no more use than a smeared one — but
+    # what it draws is a sentence naming the mode that does fit.
+    ink = sum(1 for px in img.convert("L").tobytes() if px < 128)
+    assert ink > 0
+
+
+def test_a_narrow_column_spends_its_width_on_the_event_not_the_clock():
+    """The failure a portrait panel found.
+
+    `_scale` reads the panel's HEIGHT, which is right for a headline and wrong
+    for seven columns. On a 600×800 Kindle that inflated the type past what the
+    column could hold: every cell drew its clock and then had no room left, so
+    the month came out as a grid of bare times with nothing saying what any of
+    them were.
+    """
+    # The grid's scale is bound by the column, so a tall narrow panel does not
+    # inflate the small tier past it.
+    assert R._grid_scale(800, 480) == 1.0                 # the reference, unmoved
+    assert R._grid_scale(600, 800) < R._scale(800)
+    assert R._grid_scale(1200, 825) > 1.0                 # a big panel still grows
+
+    day = DAY
+    frame = F.build_frame(
+        display=_display_row(), day=day, generated_at="t", language="en",
+        time_format="24h",
+        sources=[{"id": "a", "name": "Work", "color": None}],
+        events=[{"day": day, "summary": "Dentist", "start": f"{day}T14:30:00",
+                 "all_day": False, "source": "a", "continued": False}])
+    wide, _ = R.render_frame(frame, width=800, height=480, fmt="png")
+    narrow, _ = R.render_frame(frame, width=600, height=800, fmt="png")
+    # Both draw something for that day; the narrow one differs because it made a
+    # different trade, not because it gave up.
+    assert wide != narrow
+    assert len(narrow) > 0
+
+
+def _plan(width: float, items, initial: str = "") -> tuple[list, int]:
+    """`_plan_cell` at a given column width, with the fonts an 800×480 uses."""
+    from PIL import Image, ImageDraw
+
+    draw = ImageDraw.Draw(Image.new("L", (10, 10), 255))
+    item_font, time_font = R._font("sans", 12), R._font("mono", 10)
+    return R._plan_cell(
+        draw, items, {"a": {"treatment": "solid", "initial": initial}},
+        room=len(items), avail=width, item_font=item_font, time_font=time_font,
+        initial_size=11, gap=max(4, int(item_font.size * 0.6)))
+
+
+def _item(text: str, time: str = "") -> dict:
+    return {"text": text, "time": time, "all_day": not time, "source": "a",
+            "continued": False}
+
+
+def test_a_row_is_never_drawn_as_a_marker_with_nothing_beside_it():
+    """The orphan the first version left on every narrow column.
+
+    The marker and the clock were drawn, and only then was the title measured —
+    so a title with no room left a bullet and a bare "14:30" saying nothing. A
+    row that cannot say what it is belongs in the "+N", not on the panel.
+
+    Tested here rather than through a rendered panel because it cannot be
+    reached through one: `month_grid_fits` refuses the sizes narrow enough to
+    make it happen, which is the belt to this brace.
+    """
+    planned, dropped = _plan(6, [_item("Dentist", "14:30"), _item("Lunch")])
+    assert planned == []
+    assert dropped == 2, "a row that could not be drawn was not counted"
+
+
+def test_a_clock_gives_up_its_space_when_the_event_would_have_none():
+    """The failure a portrait panel found, at the level it is decided.
+
+    A clock is fixed-width mono and it goes first, so on a narrow column it eats
+    the title whole. On a 600×800 Kindle every cell rendered its time and then
+    had no room left — a month of bare clocks with nothing saying what any of
+    them were.
+    """
+    wide, _ = _plan(200, [_item("Dentist", "14:30")])
+    assert wide[0][1] == "14:30", "a wide column should keep the clock"
+    assert wide[0][2] == "Dentist"
+
+    narrow, _ = _plan(64, [_item("Dentist", "14:30")])
+    # The trade: "Dentist" with no time beats "14:30 …" with no event.
+    assert narrow[0][1] == "", "the clock kept its space and starved the title"
+    assert narrow[0][2] == "Dentist"
+
+
+def test_a_title_is_truncated_rather_than_dropped_while_it_still_says_something():
+    planned, dropped = _plan(90, [_item("Quarterly planning workshop", "13:00")])
+    assert dropped == 0
+    assert planned[0][2].endswith("…") and len(planned[0][2]) > 3
+
+
+def test_a_calendars_initial_is_paid_for_out_of_the_row_it_marks():
+    """With more calendars than treatments every chip carries a letter, and that
+    letter costs width the title would otherwise have had. It has to come out of
+    the same budget, or the row overruns its column."""
+    without, _ = _plan(80, [_item("Dentist", "14:30")])
+    with_letter, _ = _plan(80, [_item("Dentist", "14:30")], initial="W")
+    assert len(with_letter[0][2]) <= len(without[0][2])
+
+
+def test_the_clock_and_the_title_do_not_touch():
+    """Measured, because it shipped wrong: at the small end the gap after the
+    clock was one space wide and "10:00" ran into "1:1 with Sam" as
+    "10:001:1 with…" — one word, on a screen read from across a room."""
+    from PIL import Image, ImageDraw
+
+    draw = ImageDraw.Draw(Image.new("L", (10, 10), 255))
+    for width, height in ((400, 300), (648, 480), (800, 480), (1200, 825)):
+        small = R._item_scale(R._grid_scale(width, height))
+        item = R._font("sans", int(12 * small))
+        gap = max(4, int(item.size * 0.6))
+        # Comfortably more than the space it would take in running text — a mono
+        # field abutting a sans one needs more air than two words of one face.
+        assert gap > draw.textlength(" ", font=item) * 1.5, f"{width}x{height}"
+
+
+def test_a_habits_face_says_how_many_rows_it_could_not_show():
+    """A 2.9" panel fits two rows of seven.
+
+    A screen that quietly showed two and said nothing is the same lie as a task
+    list showing the first eight of forty — which is the thing this feature
+    refuses to do everywhere else.
+    """
+    from PIL import Image
+    import io
+
+    rows = [{"kind": "habit", "title": f"Habit {i}", "done": False} for i in range(4)]
+    rows += [{"kind": "task", "title": f"Task {i}", "done": False} for i in range(4)]
+    frame = F.build_frame(
+        display=_display_row(mode="habits"), day=DAY, generated_at="t",
+        language="en", time_format="24h", rows=rows, planned=True)
+
+    tiny, _ = R.render_frame(frame, width=296, height=128, fmt="png")
+    roomy, _ = R.render_frame(frame, width=800, height=600, fmt="png")
+    assert tiny != roomy
+    # The tiny one drew a counter it did not need at the roomy size, and no
+    # section header with nothing under it.
+    assert Image.open(io.BytesIO(tiny)).size == (296, 128)
+
+
 def test_the_same_frame_renders_the_same_bytes():
     # Everything a panel does NOT repaint rests on this: the routes hash the
     # body for the ETag, and a renderer that varied run to run would flash the

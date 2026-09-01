@@ -390,6 +390,24 @@ token and gives you two URLs for it:
   `.bmp` exists because those boards' display libraries read a bitmap and have
   no decompressor. There is also `/api/public/display/<token>` on its own, which
   returns the frame as JSON for firmware that would rather draw it itself.
+  Size it before you parse it on a microcontroller: a typical month is ~30 KB,
+  and the frame's own per-day cap puts the worst case near 130 KB, which is
+  more than an ESP32 will comfortably hold alongside a JSON document tree. The
+  image endpoints exist precisely so that board does not have to.
+
+**Panel sizes.** The month grid needs seven readable columns, so it has a
+minimum — about **360×260** — and `render.py::month_grid_fits` is the one place
+that decides. Below it the image endpoint draws a sentence saying so and naming
+the mode that does fit, rather than seven columns of overlapping ink, and
+Settings says the same thing beside the size field the moment you type it.
+Tested against the panels people actually mount: a 4.2" (400×300) clears it and
+reads; a 2.9" (296×128) does not. Habits + today has no such floor — it fits
+whatever it can and counts the rest.
+
+A **portrait** panel is worth a word. The grid's type is sized by the column,
+not by the panel's height, because seven columns is what binds it; and where a
+column is too narrow to hold a clock and an event, the clock is dropped so the
+row can say *what* rather than *when*. Both are automatic.
 
 **Both image formats and the JSON answer 304 to a matching `If-None-Match`.**
 Honour it in your firmware: a full eink refresh flashes the panel and takes the
@@ -414,6 +432,13 @@ clearly labelled PREVIEW of what opening it would derive and writes nothing —
 the same rule the MCP connector is held to, for the same reason: the day plan is
 worth keeping only while it records what was actually intended, and a panel in a
 hallway intends nothing.
+
+**Greyscale panels are not a separate palette yet.** A 4- or 16-level grey
+panel (a Kindle, a reMarkable, an Inkplate in greyscale mode) gets either the
+1-bit render, which throws away levels it has, or the colour one, which it has
+to dither itself. Both work; neither uses the hardware well. Same for the
+7-colour ACeP and Spectra panels, which receive full sRGB and map it to their
+own fixed palette. Pick `eink` for these today.
 
 The server-side renderer needs **Pillow** (`requirements.txt`), which is what
 rasterizes the three typefaces vendored under `backend/tasksd/display/fonts/` —

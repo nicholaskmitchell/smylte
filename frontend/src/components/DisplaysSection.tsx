@@ -297,6 +297,13 @@ export function DisplaysSection({ onExpire }: { onExpire: () => void }) {
                           { panel_height: Number(e.target.value) || 0 })} />
                     </span>
                   </div>
+                  {d.panel_too_small ? (
+                    // Said HERE, beside the size that caused it, at the moment
+                    // it is typed. The panel itself says the same thing when it
+                    // renders, but finding out there means walking to the other
+                    // room to read it.
+                    <div className="hintline" role="alert">{tr('disp.panelTooSmall')}</div>
+                  ) : null}
                   <div className="menu-row">
                     <label>{tr('disp.rotation')}</label>
                     <button className="menu-toggle"

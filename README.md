@@ -251,6 +251,18 @@ shapes keep cycling underneath. The grid is a fixed six weeks even in a month
 five would hold, since a layout that changed height on the 1st would flash the
 whole panel for no new information.
 
+**Small panels are told, not smeared.** The month grid needs seven readable
+columns and so it has a floor — roughly 360×260. Under it the panel draws a
+sentence saying it is too small and naming the mode that does fit, and Settings
+says the same beside the size field the moment you type it, because the
+alternative is finding out on a wall in another room. Above it the grid is sized
+by the *column* rather than by the panel's height, which is what a portrait
+screen needs: seven columns of a 600px-wide Kindle are narrow whatever its
+height, and a clock that cannot leave room for the event beside it is dropped so
+the row says *what* rather than *when*. Habits + today has no floor at all — it
+shows what fits and counts the rest, down to a 2.9" panel showing one line and
+"+6".
+
 Two ways to drive one, because two kinds of hardware turn up. **A browser** —
 a Pi in kiosk mode, an old tablet, a Boox — opens `/display/<token>` and renders
 the page. **A panel with no browser** — an ESP32 with a Waveshare screen

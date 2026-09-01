@@ -90,6 +90,7 @@ export const en = {
   'disp.panel': 'For a panel with no browser',
   'disp.panelHint': 'An e-ink panel driven by a microcontroller can fetch a ready-made image instead of running the page. Give it the panel’s pixels and how it is mounted.',
   'disp.panelSize': 'Panel size',
+  'disp.panelTooSmall': 'Too small for a month — seven columns don’t fit. This screen will say so instead of drawing one; habits + today reads fine at any size.',
   'disp.rotation': 'Rotation',
   'disp.imageHint': 'Add .bmp instead of .png for boards whose display library reads a bitmap. Both answer 304 when nothing has changed, so the panel only repaints when there is something new.',
   'disp.enabled': 'Connected',

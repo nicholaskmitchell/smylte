@@ -30,6 +30,10 @@ const face = (el: Element) =>
 const CAL = (palette: 'color' | 'eink') => `
   <div class="display display--${palette}">
     <div class="display-cal">
+      <div class="display-cal__toosmall">
+        <p class="display-title display-cal__toosmall-title">Too small for a month.</p>
+        <p class="display-cal__toosmall-hint">Set it to habits + today.</p>
+      </div>
       <header class="display-cal__head">
         <h1 class="display-title display-cal__title">August 2026</h1>
         <span class="display-label display-cal__name">Hallway</span>
@@ -52,7 +56,7 @@ const CAL = (palette: 'color' | 'eink') => `
               </div>
             </div>
           </div>
-          <div class="display-cal__cell is-outside">
+          <div class="display-cal__cell is-outside" id="outside-cell">
             <div class="display-cal__daynum">
               <span class="display-title display-cal__num" id="outside">31</span>
             </div>
@@ -158,6 +162,36 @@ describe('the display is drawn in the app’s own type', () => {
       // things that survive thresholding.
       expect(inside.color).toBe(outside.color)
       expect(parseFloat(outside.fontSize)).toBeLessThan(parseFloat(inside.fontSize))
+    })
+
+  it('swaps the month for a sentence only on a screen no phone ever is',
+    async () => {
+      // A 2.9" panel: 296×128. Seven columns of 39px is a smear, and the
+      // browser version of it was six empty slivers with no day numbers, which
+      // reads as broken rather than as misconfigured.
+      await viewport(296, 128)
+      let host = await mount(CAL('eink'))
+      expect(getComputedStyle(host.querySelector('.display-cal__grid')!).display)
+        .toBe('none')
+      expect(getComputedStyle(host.querySelector('.display-cal__toosmall')!).display)
+        .toBe('block')
+
+      // A 4.2" panel renders a real month and must not be caught...
+      document.body.innerHTML = ''
+      await viewport(400, 300)
+      host = await mount(CAL('eink'))
+      expect(getComputedStyle(host.querySelector('.display-cal__grid')!).display)
+        .not.toBe('none')
+
+      // ...and neither must a phone. The owner checking their hallway display
+      // from bed should get the month, not a lecture about panel sizes.
+      for (const [w, h] of [[360, 780], [390, 844], [667, 375]]) {
+        document.body.innerHTML = ''
+        await viewport(w, h)
+        host = await mount(CAL('eink'))
+        expect(getComputedStyle(host.querySelector('.display-cal__toosmall')!).display,
+          `${w}x${h}`).toBe('none')
+      }
     })
 
   it('takes no input, in the cascade rather than only in the JSX', async () => {

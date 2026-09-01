@@ -23,7 +23,7 @@ const DISPLAY: Display = {
   token: 'tok-hallway', name: 'Hallway', mode: 'calendar', palette: 'color',
   calendars: [], lists: [], hide_done_habits: true, hide_done_tasks: true,
   refresh_seconds: 300, panel_width: null, panel_height: null, rotation: 0,
-  enabled: true, last_seen_at: null,
+  panel_too_small: null, enabled: true, last_seen_at: null,
   created_at: '2026-08-01T10:00:00Z', updated_at: '2026-08-01T10:00:00Z',
 }
 
@@ -147,6 +147,25 @@ describe('<DisplaysSection>', () => {
       expect(m.patchDisplay).not.toHaveBeenCalled()
       await userEvent.tab()
       expect(m.patchDisplay).toHaveBeenCalledWith('tok-hallway', { panel_width: 800 })
+    })
+
+  it('warns when the panel is too small for the month it is set to show',
+    async () => {
+      // Answered by the renderer, never recomputed here — a 2.9" panel is a
+      // 39px column and seven of those is a smear. Said beside the size field,
+      // because the alternative is finding out on a wall in another room.
+      m.displays.mockResolvedValue(
+        [{ ...DISPLAY, panel_width: 296, panel_height: 128, panel_too_small: true }] as never)
+      const { unmount } = mount()
+      await userEvent.click(await screen.findByRole('button', { name: /set up/i }))
+      expect(screen.getByRole('alert')).toHaveTextContent(/too small for a month/i)
+      unmount()
+
+      // And stays quiet when there is nothing to judge.
+      m.displays.mockResolvedValue([DISPLAY] as never)
+      mount()
+      await userEvent.click(await screen.findByRole('button', { name: /set up/i }))
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument()
     })
 
   it('adds a display and opens it, because a new one is useless unpaired',

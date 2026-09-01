@@ -247,6 +247,10 @@ export interface Display {
   panel_width: number | null       // the server-rendered image's pixels
   panel_height: number | null
   rotation: 0 | 90 | 180 | 270
+  /** Whether a month grid is worth drawing at this panel size — answered by
+   *  the renderer's own predicate, never recomputed here. Null when there is
+   *  nothing to judge: no size set, or a mode with no grid to not fit. */
+  panel_too_small: boolean | null
   enabled: boolean
   last_seen_at: string | null      // null = never fetched a frame
   created_at: string
@@ -318,6 +322,13 @@ export interface DisplayCalendar {
   title: string                    // "August 2026", already localized
   weekday_names: string[]          // Sunday-first, matching the app's own grid
   weeks: DisplayCell[][]           // always six rows, so the layout never moves
+  /** What to say on a screen too small to hold seven columns. In the frame
+   *  rather than in either renderer, because both have to say it and in the
+   *  owner's language — the image endpoint when the panel fails
+   *  `month_grid_fits`, this page under the one media query that matches a
+   *  panel and never a phone. */
+  too_small_text: string
+  too_small_hint: string
 }
 
 export interface DisplayCell {

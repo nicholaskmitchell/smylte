@@ -35,6 +35,7 @@ from typing import Any
 
 from PIL import Image, ImageDraw, ImageFont
 
+
 _FONT_DIR = os.path.join(os.path.dirname(__file__), "fonts")
 
 # The app's three type slots, by the names tokens.css gives them. A display is
@@ -90,6 +91,20 @@ def _text_width(draw: ImageDraw.ImageDraw, s: str, font) -> int:
     return int(draw.textlength(s, font=font))
 
 
+def _label_width(
+    draw: ImageDraw.ImageDraw, text: str, size: int, *, track: float = _TRACK_WIDE,
+) -> float:
+    """What `_label` would occupy. Layout has to be decided before anything is
+    drawn — see the cell loop, which must know whether a title will fit before
+    it commits to a marker."""
+    text = text.upper()
+    if not text:
+        return 0.0
+    font = _font("mono", size)
+    return (sum(draw.textlength(c, font=font) for c in text)
+            + size * track * (len(text) - 1))
+
+
 def _label(
     draw: ImageDraw.ImageDraw, xy: tuple[float, float], text: str, size: int,
     fill, *, track: float = _TRACK_WIDE, right: float | None = None,
@@ -111,12 +126,12 @@ def _label(
     measured naively sits one gap short of its edge; browsers have the same
     quirk and it is visible at 0.12em on a wall.
     """
+    width = _label_width(draw, text, size, track=track)
     text = text.upper()
     if not text:
         return 0.0
     font = _font("mono", size)
     gap = size * track
-    width = sum(draw.textlength(c, font=font) for c in text) + gap * (len(text) - 1)
     x = (right - width) if right is not None else xy[0]
     for char in text:
         draw.text((x, xy[1]), char, font=font, fill=fill)
@@ -247,6 +262,100 @@ def _item_scale(scale: float) -> float:
     return 1.0 + (scale - 1.0) * 0.55
 
 
+def _grid_scale(width: int, height: int) -> float:
+    """The scale a MONTH GRID's small tier is drawn at.
+
+    `_scale` reads the panel's height, which is right for a headline and wrong
+    for a seven-column grid: what bounds a cell's text is the COLUMN, and a
+    column is a seventh of the width. A portrait panel has a large height and a
+    narrow column, so height alone inflated the type past what the column could
+    hold — measured on a 600×800 Kindle, every cell rendered its clock and then
+    had no room left for the event, so the month came out as a grid of bare
+    times with nothing to say what any of them were.
+
+    Taking the smaller of the two ratios makes the binding dimension the one
+    that decides. 800×480 — the common 7.5" panel, and the reference both
+    numbers are taken from — is 1.0 either way, so nothing there moves.
+    """
+    return max(0.75, min(2.6, min(height / 480, width / 800)))
+
+
+# A month grid stops being a month grid somewhere, and it is worth saying so
+# rather than drawing seven columns of overlapping ink. These are the smallest
+# cell a day can be drawn in and still be read: measured against the panels
+# people actually mount, a 4.2" (400×300) clears both and reads fine, while a
+# 2.9" (296×128) gives a 39px column — four characters — and is hopeless.
+_MIN_COL_W = 46
+_MIN_ROW_H = 26
+
+
+def month_grid_fits(width: int, height: int) -> bool:
+    """Is a month grid worth drawing on a panel this size?
+
+    THE predicate, exported so there is one of it. `_render_calendar` asks it
+    before drawing and answers a panel that fails with a sentence instead; the
+    service asks it so Settings can say so at the moment the owner types the
+    size in, which is the useful moment — finding out on the wall means walking
+    to the other room. A copy of this arithmetic in TypeScript would be a
+    second opinion about the same question, and the two would drift.
+
+    The geometry is `_render_calendar`'s, kept deliberately in step with it: the
+    same padding, the same header, the same six rows.
+    """
+    scale = _scale(height)
+    pad = int(16 * scale)
+    grid_top = pad + int(38 * scale) + int(18 * scale)
+    col_w = (width - 2 * pad) / 7
+    row_h = (height - grid_top - pad) / 6
+    return col_w >= _MIN_COL_W and row_h >= _MIN_ROW_H
+
+
+def _plan_cell(
+    draw: ImageDraw.ImageDraw, items: list[dict], treatments: dict, *,
+    room: int, avail: float, item_font, time_font, initial_size: int, gap: int,
+) -> tuple[list[tuple[dict, str, str]], int]:
+    """What one day's cell can actually show. Returns the rows and how many were
+    dropped.
+
+    Every decision about a row is made HERE, before a single pixel of it is
+    drawn, and that ordering is the whole point. Drawing the marker and the
+    clock first and then discovering the title had no room left an ORPHAN: a
+    bullet and a bare "10:00" with nothing saying what it was. On a narrow
+    column that was every row on the panel.
+
+    A clock also has to earn its place. It is fixed-width mono and it goes
+    first, so on a narrow column it eats the title whole; when what would be
+    left cannot hold a readable title, the time is dropped and the row spends
+    its width on words instead. "Dentist" with no time beats "14:30 …" with no
+    event.
+
+    Split out of the drawing loop so both of those rules can be tested on their
+    own. Through a rendered panel they cannot be: `month_grid_fits` refuses the
+    sizes narrow enough to make the orphan case reachable, which is the belt to
+    this brace and makes the brace invisible from outside.
+    """
+    # Six characters of title, which is about where a truncated event stops
+    # being worth the row it costs.
+    min_title = draw.textlength("nnnnnn", font=item_font)
+    planned: list[tuple[dict, str, str]] = []
+    for item in items[:room]:
+        src = treatments.get(item["source"], {})
+        room_w = avail
+        if src.get("initial"):
+            room_w -= _label_width(draw, src["initial"], initial_size, track=0) + gap
+        stamp = item["time"]
+        stamp_w = (_text_width(draw, stamp, time_font) + gap) if stamp else 0
+        if stamp and room_w - stamp_w < min_title:
+            stamp, stamp_w = "", 0
+        text = _fit(draw, item["text"], item_font, int(room_w - stamp_w))
+        if not text:
+            # Not even an ellipsis fits. A marker on its own says nothing; the
+            # row is worth more inside the "+N".
+            continue
+        planned.append((src, stamp, text))
+    return planned, len(items) - len(planned)
+
+
 def _render_calendar(
     img: Image.Image, frame: dict[str, Any], *, eink: bool, colors,
 ) -> None:
@@ -270,7 +379,8 @@ def _render_calendar(
     # distinction inside one type system rather than reaching for a second face
     # to say "not this month".
     outside_font = _font("serif", int(12 * scale))
-    small = _item_scale(scale)
+    # The small tier is bound by the column, not by the panel's height.
+    small = _item_scale(_grid_scale(width, height))
     item_font = _font("sans", int(12 * small))
     time_font = _font("mono", int(10 * small))
     label_size = int(11 * scale)
@@ -295,6 +405,25 @@ def _render_calendar(
     grid_h = height - grid_top - pad
     row_h = grid_h / 6
 
+    if not month_grid_fits(width, height):
+        # A 2.9" panel is 296×128: a 39px column, four characters wide. Seven of
+        # those is not a small month grid, it is a smear — and a screen that
+        # renders a smear looks broken rather than misconfigured, so the owner
+        # has no way to know what to do about it. This says it instead, in the
+        # one place they will see it, and names the mode that DOES fit a panel
+        # this size.
+        message = cal["too_small_text"]
+        hint = cal["too_small_hint"]
+        note = _font("sans", max(10, int(13 * scale)))
+        hint_font = _font("sans", max(9, int(11 * scale)))
+        draw.text((pad, grid_top + int(6 * scale)),
+                  _fit(draw, message, note, width - 2 * pad),
+                  font=note, fill=colors["ink"])
+        draw.text((pad, grid_top + int(6 * scale) + int(16 * scale)),
+                  _fit(draw, hint, hint_font, width - 2 * pad),
+                  font=hint_font, fill=colors["muted"])
+        return
+
     for i, label in enumerate(cal["weekday_names"]):
         _label(draw, (pad + col_w * i + int(4 * scale), top + int(3 * scale)),
                label, label_size, colors["muted"])
@@ -314,6 +443,15 @@ def _render_calendar(
 
     item_h = int(15 * small)
     marker_size = int(7 * small)
+    # The space between the clock and the title, and between a calendar's
+    # initial and what follows it. Proportional to the type rather than a flat
+    # 4px, which at the small end came out as ONE SPACE WIDTH — measured on a
+    # 648×480 panel, "10:00" and "1:1 with Sam" rendered as "10:001:1 with…"
+    # and read as a single word. A mono field abutting a sans one needs more
+    # air than two words of the same face do, and a title that starts with a
+    # digit needs it badly. app.css spends ~0.7em on the same seam
+    # (`.task-meta`'s flex gap at its font size).
+    field_gap = max(4, int(item_font.size * 0.6))
     for r, week in enumerate(cal["weeks"]):
         y = grid_top + row_h * r
         draw.line([(pad, y), (width - pad, y)], fill=colors["rule"], width=1)
@@ -350,8 +488,13 @@ def _render_calendar(
             item_top = cy + int(21 * scale)
             room = max(0, int((row_h - (item_top - y) - 2 * scale) // item_h))
             items = cell["items"]
-            shown = items[:room]
-            spare = len(items) - len(shown) + cell["hidden"]
+
+            planned, dropped = _plan_cell(
+                draw, items, treatments, room=room,
+                avail=col_w - (cx - x) - marker_size - int(4 * small) - 4 * small,
+                item_font=item_font, time_font=time_font,
+                initial_size=int(11 * small), gap=field_gap)
+            spare = dropped + cell["hidden"]
             if spare > 0:
                 # The counter goes on the DAY NUMBER's line, at the right of the
                 # cell, rather than taking an item line of its own. A month grid
@@ -365,31 +508,24 @@ def _render_calendar(
                 _label(draw, (0, cy + int(4 * scale)), f"+{spare}",
                        int(10 * scale), colors["muted"], track=0,
                        right=x + col_w - 4 * scale)
-            for i, item in enumerate(shown):
+            for i, (src, stamp, text) in enumerate(planned):
                 iy = item_top + i * item_h
-                src = treatments.get(item["source"], {})
-                _marker(draw, cx, iy + int(3 * scale), marker_size,
+                _marker(draw, cx, iy + int(3 * small), marker_size,
                         treatment=src.get("treatment", "solid"),
                         color=src.get("color") or _ACCENT, eink=eink, colors=colors)
-                tx = cx + marker_size + int(4 * scale)
-                room_w = int(col_w - (tx - x) - 4 * scale)
+                tx = cx + marker_size + int(4 * small)
+                if src.get("initial"):
+                    tx += _label(draw, (tx, iy + int(1 * small)), src["initial"],
+                                 int(11 * small), colors["ink"], track=0) + field_gap
                 # The clock leads the title, in mono — the app sets every time
                 # it draws in mono (`.task-meta .due`), and here it also buys
                 # tabular figures, so the times line up down the column instead
                 # of ragging. A wall calendar is read for WHEN before WHAT, and
                 # a fixed left edge is what makes the column scannable.
-                if src.get("initial"):
-                    tx += _label(draw, (tx, iy + int(1 * small)), src["initial"],
-                                 int(11 * small), colors["ink"], track=0) + int(3 * small)
-                if item["time"]:
-                    stamp = item["time"]
+                if stamp:
                     draw.text((tx, iy), stamp, font=time_font, fill=colors["ink"])
-                    used = _text_width(draw, stamp, time_font) + int(4 * small)
-                    tx += used
-                    room_w -= used
-                text = _fit(draw, item["text"], item_font, room_w)
-                if text:
-                    draw.text((tx, iy), text, font=item_font, fill=colors["ink"])
+                    tx += _text_width(draw, stamp, time_font) + field_gap
+                draw.text((tx, iy), text, font=item_font, fill=colors["ink"])
 
 
 def _render_habits(
@@ -435,14 +571,37 @@ def _render_habits(
     row_h = int(28 * scale)
     glyph = int(15 * scale)
 
-    def section(label: str, rows: list[dict], *, habit: bool, cursor: int) -> int:
+    def section(
+        label: str, rows: list[dict], *, habit: bool, cursor: int, rest: int,
+    ) -> tuple[int, int]:
+        """Draw one block, and report how many rows never made it onto the panel.
+
+        `rest` is what is queued BEHIND this section — the other block's rows —
+        because the counter has to speak for the whole face, not for one block.
+        A 2.9" panel fits two rows of seven, and a screen that quietly showed
+        two and said nothing is the same lie as a task list that shows the first
+        eight of forty. That is the thing this feature refuses to do elsewhere;
+        it should not do it here either.
+        """
         if not rows:
-            return cursor
+            return cursor, 0
+        label_h = int(18 * scale)
+        # No dangling header. A section title with nothing under it is worse
+        # than no section at all: it says there is something there and then
+        # does not show it.
+        if cursor + label_h + row_h > height - pad:
+            return cursor, len(rows)
         _label(draw, (pad, cursor), label, label_size, colors["muted"])
-        cursor += int(18 * scale)
-        for row in rows:
-            if cursor + row_h > height - pad:
-                break
+        cursor += label_h
+        fits = max(0, int((height - pad - cursor) // row_h))
+        shown = rows[:fits]
+        dropped = len(rows) - len(shown)
+        if (dropped or rest) and shown and len(shown) == fits:
+            # Spend the last row on the count rather than on one more line the
+            # reader cannot know is the last.
+            shown = shown[:-1]
+            dropped += 1
+        for row in shown:
             gy = cursor + int(2 * scale)
             if habit:
                 _habit_glyph(draw, pad, gy, glyph, colors, done=row["done"])
@@ -463,10 +622,19 @@ def _render_habits(
                 draw.line([(tx, mid), (tx + _text_width(draw, text, row_font), mid)],
                           fill=colors["ink"], width=max(1, int(1.5 * scale)))
             cursor += row_h
-        return cursor + int(10 * scale)
+        return cursor + int(10 * scale), dropped
 
-    y = section(block["heading"], block["habits"], habit=True, cursor=y)
-    y = section(block["day_heading"], block["tasks"], habit=False, cursor=y)
+    y, missed = section(block["heading"], block["habits"], habit=True,
+                        cursor=y, rest=len(block["tasks"]))
+    y, missed_tasks = section(block["day_heading"], block["tasks"], habit=False,
+                              cursor=y, rest=0)
+    missed += missed_tasks
+    if missed:
+        # Mono and untracked, like every other count the app draws. Placed on
+        # the last line the panel has room for, which is why the sections give
+        # one up when they overflow.
+        _label(draw, (pad, min(y, height - pad - int(14 * scale))),
+               f"+{missed}", max(9, int(11 * scale)), colors["muted"], track=0)
 
     if not block["habits"] and not block["tasks"]:
         # Two different silences, and they are worth telling apart: a day that

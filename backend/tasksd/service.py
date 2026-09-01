@@ -30,6 +30,7 @@ from .dav.client import DavClient
 from .dav.errors import NotFound as DavNotFound
 from .db import store
 from .display import frame as display_frame_mod
+from .display import render as display_render
 from .ical import PRIORITY, UNSET, EventEdit, TaskEdit, blocks_time, recur
 from .sync import SyncEngine, SyncStats
 
@@ -2684,6 +2685,18 @@ class TaskService:
             "panel_width": row["panel_width"],
             "panel_height": row["panel_height"],
             "rotation": row["rotation"],
+            # Whether a month grid is worth drawing at the panel size the owner
+            # gave. Answered by the RENDERER's own predicate rather than by
+            # arithmetic repeated here or in the browser — a 2.9" panel is a
+            # 39px column, and a screen that draws seven of those looks broken
+            # rather than misconfigured. Null when there is nothing to judge:
+            # no size set, or a mode that has no grid to not fit.
+            "panel_too_small": (
+                None if row["mode"] != "calendar"
+                or not row["panel_width"] or not row["panel_height"]
+                else not display_render.month_grid_fits(
+                    row["panel_width"], row["panel_height"])
+            ),
             "enabled": bool(row["enabled"]),
             "last_seen_at": row["last_seen_at"],
             "created_at": row["created_at"],
