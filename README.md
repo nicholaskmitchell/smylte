@@ -195,10 +195,10 @@ test any fifth rule has to pass. Setup — and the systemd egress rule it needs,
 which is the easy step to miss — is in `docs/DEPLOY.md`.
 
 **Displays.** A display is a screen with nothing to tap — the calendar in the
-hallway, today's habits in the kitchen. It shows one of two things and accepts
-no input, which is the specification rather than a limitation: there is no
-session, no control and nothing focusable anywhere on the page, and the only
-call its URL reaches is one read.
+hallway, today's habits in the kitchen, the thing you are on at your desk. It
+shows one of three things and accepts no input, which is the specification
+rather than a limitation: there is no session, no control and nothing focusable
+anywhere on the page, and the only call its URL reaches is one read.
 
 **The month**, drawn the way a paper wall calendar is drawn — six fixed weeks,
 Sunday-first like the app's own grid, every day placed relative to the days
@@ -208,10 +208,25 @@ earns a wall: a list short enough to read from the doorway that gets *shorter as
 the day goes*, because a completed habit leaves the screen. That is on by
 default and off in a switch, and the count in the corner is taken before the
 hiding — with the list emptying as the day goes, "4 / 5" is the only thing left
-that remembers there was anything on it. There is deliberately no plain "tasks"
-mode: every task view in the app is a query over a list that grows without
-bound, and a screen with no scroll would show the first eight of forty while
-implying that was all of them.
+that remembers there was anything on it.
+
+Or **now + next**, which is the same day asked a different question: not what is
+on it, but what to do about it. One thing, in the largest type the panel can
+hold — the first row of today's plan that is not done — the one after it in
+small, and a count of everything behind that. It **cycles as things get
+finished**, and nothing cycles it: a display writes nothing and takes no input,
+so ticking a task off on a phone, in the app, or in any other CalDAV client
+moves the cursor and the panel finds it moved on its next poll. The plan's order
+is the queue, so reordering today in the Today tab reorders the wall. The honest
+caveat is on the settings screen rather than buried here — it moves on the
+panel's *next refresh*, which on e-ink is never sooner than three minutes.
+
+There is still deliberately no plain "tasks" mode, and the argument against one
+has not weakened: every task view in the app is a query over a list that grows
+without bound, and a screen with no scroll would show the first eight of forty
+while implying that was all of them. Now + next is not that list with a smaller
+cap. A capped list is a truncation the reader cannot see; two rows and a "+6" is
+the whole day, said in the only shape a screen with no scroll can say it in.
 
 **A display never opens a day.** On a day nobody has opened it shows a clearly
 labelled preview of what opening it would derive, and writes nothing — the same
@@ -259,9 +274,13 @@ alternative is finding out on a wall in another room. Above it the grid is sized
 by the *column* rather than by the panel's height, which is what a portrait
 screen needs: seven columns of a 600px-wide Kindle are narrow whatever its
 height, and a clock that cannot leave room for the event beside it is dropped so
-the row says *what* rather than *when*. Habits + today has no floor at all — it
-shows what fits and counts the rest, down to a 2.9" panel showing one line and
-"+6".
+the row says *what* rather than *when*. The other two modes have no floor at all
+— habits + today shows what fits and counts the rest, down to a 2.9" panel
+showing one line and "+6", and now + next is the mode a 2.9" panel is actually
+*for*: one item, one line, one number. Its type is the one thing on a display
+that is fitted rather than scaled, because it is the one face whose content is
+fixed — two items whether the day holds three or thirty — so a bigger panel has
+no "more" to spend its pixels on and spends them on the headline instead.
 
 Three ways to drive one, because three kinds of hardware turn up. **A browser**
 — a Pi in kiosk mode, an old tablet, a Boox — opens `/display/<token>` and

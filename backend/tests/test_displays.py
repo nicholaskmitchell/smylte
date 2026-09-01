@@ -189,6 +189,137 @@ def test_habit_counts_are_taken_before_the_done_rows_are_hidden():
     assert len(kept["habits"]) == 2 and len(kept["tasks"]) == 2
 
 
+NOW_ROWS = [
+    {"kind": "habit", "title": "Stretch", "done": True, "estimate_minutes": 10},
+    {"kind": "task", "title": "Renew the insurance", "done": False,
+     "source_id": "work", "estimate_minutes": 90},
+    {"kind": "task", "title": "Email Sam", "done": False, "source_id": "work"},
+    {"kind": "task", "title": "Groceries", "done": False, "source_id": "home"},
+]
+
+
+def _now(rows=None, planned=True, language="en"):
+    return F.build_now(rows=NOW_ROWS if rows is None else rows,
+                       planned=planned, language=language)
+
+
+def test_the_cursor_is_the_first_row_that_is_not_done():
+    block = _now()
+    assert block["current"]["text"] == "Renew the insurance"
+    assert block["next"]["text"] == "Email Sam"
+    # A done row is not drawn as the thing you are on, and is not drawn at all:
+    # this face's record of it is `counts`, not a struck-through line.
+    assert "Stretch" not in repr(block["current"]) + repr(block["next"])
+
+
+def test_the_cursor_moves_when_the_row_ahead_of_it_is_finished():
+    """What "it cycles on complete" actually is: the same rows, re-derived.
+
+    Nothing schedules this and nothing animates it. A display writes nothing and
+    takes no input; ticking a task off in the app, on a phone or in another
+    CalDAV client changes what `build_now` computes, and the panel finds it
+    changed on its next poll.
+    """
+    before = _now()["current"]["text"]
+    after = _now([{**r, "done": r["done"] or r["title"] == before}
+                  for r in NOW_ROWS])
+    assert before == "Renew the insurance"
+    assert after["current"]["text"] == "Email Sam"
+    assert after["next"]["text"] == "Groceries"
+    assert after["remaining"] == 0
+
+
+def test_a_habit_and_a_task_share_one_queue_and_keep_their_kind():
+    block = _now([
+        {"kind": "habit", "title": "Stretch", "done": False},
+        {"kind": "task", "title": "Invoice", "done": False},
+    ])
+    # Plan order, not tasks-then-habits: the wall shows the day the owner
+    # ordered, and a habit is a thing you are "currently on" like anything else.
+    assert block["current"]["kind"] == "habit"
+    assert block["next"]["kind"] == "task"
+
+
+def test_the_count_is_what_is_behind_the_next_row():
+    assert _now()["remaining"] == 1
+    assert _now(NOW_ROWS[:2])["remaining"] == 0
+    # Uncapped, deliberately: `MAX_ITEMS_PER_DAY` bounds a body an ESP32 has to
+    # parse, and this block carries two items whatever the day holds.
+    long_day = [{"kind": "task", "title": f"T{i}", "done": False}
+                for i in range(F.MAX_ITEMS_PER_DAY * 3)]
+    assert _now(long_day)["remaining"] == F.MAX_ITEMS_PER_DAY * 3 - 2
+
+
+def test_the_score_is_taken_over_every_row_including_the_done_ones():
+    """The twin of the habits tally, and the same argument.
+
+    The finished rows never appear on this face at all, so `counts` is the only
+    thing left that remembers there were any.
+    """
+    assert _now()["counts"] == {"done": 1, "total": 4}
+
+
+def test_a_finished_day_is_told_apart_from_an_empty_one():
+    done = _now([{**r, "done": True} for r in NOW_ROWS])
+    assert done["current"] is None and done["counts"]["done"] == 4
+    empty = _now([])
+    assert empty["current"] is None and empty["counts"] == {"done": 0, "total": 0}
+    # The renderers pick between the two by that count; both strings ride along
+    # in the owner's language, as every other word a display draws does.
+    assert done["all_done_text"] and empty["empty_text"]
+
+
+def test_an_estimate_reaches_the_renderers_as_words_and_as_minutes():
+    block = _now()
+    assert block["current"]["estimate"] == "1h 30m"
+    assert block["current"]["estimate_minutes"] == 90
+    # Unset is "" rather than a missing key, so no renderer has to test for one.
+    assert block["next"]["estimate"] == ""
+
+
+@pytest.mark.parametrize("minutes,expected", [
+    (None, ""), (0, "0m"), (45, "45m"), (60, "1h"), (90, "1h 30m"), (120, "2h"),
+    # The wire's clear sentinel for a day entry's estimate, which must never
+    # reach a wall as "-1m".
+    (-1, "0m"),
+    # Anything that is not a number at all. This lands on a route with no
+    # session, where a TypeError is a 500 on every fetch of that display.
+    ("soon", ""), ({}, ""),
+])
+def test_fmt_duration_is_the_apps_own_answer_about_a_duration(minutes, expected):
+    """A port of `frontend/src/time.ts::fmtDuration`, not a second opinion.
+
+    A day whose estimates read "1h 30m" in the Today tab and "90 min" on the
+    wall would be one product disagreeing with itself about a number the owner
+    typed once.
+    """
+    assert F.fmt_duration(minutes) == expected
+
+
+def test_a_now_title_is_bounded_and_normalised_like_every_other_string():
+    block = _now([{"kind": "task", "title": "a\nb\t  c" + "x" * 4000, "done": False}])
+    text = block["current"]["text"]
+    assert len(text) <= F.MAX_TEXT_CHARS
+    # A newline is the one character that does not degrade gracefully: Pillow
+    # refuses to measure multiline text, and every image fetch for that display
+    # answered 500 for as long as the task existed.
+    assert "\n" not in text and "\t" not in text
+    assert text.startswith("a b c")
+
+
+def test_a_now_frame_says_when_its_rows_are_only_a_preview():
+    """A display never opens a day, so on an unopened one these rows do not
+    exist yet — and "Now: fix the boiler" reads as a commitment nobody made."""
+    assert _now(planned=False)["planned"] is False
+    assert _now()["planned"] is True
+
+
+def test_the_now_face_speaks_the_owners_language():
+    assert _now()["heading"] == "Now" and _now()["next_heading"] == "Next"
+    de = _now(language="de")
+    assert de["heading"] == "Jetzt" and de["next_heading"] == "Als Nächstes"
+
+
 def test_the_frame_never_carries_the_token():
     frame = F.build_frame(display=_display_row(), day=DAY, generated_at="t",
                           language="en", time_format="24h", events=[])
@@ -272,23 +403,58 @@ def test_fetching_a_frame_stamps_last_seen_and_writes_nothing_else(svc):
     assert svc._conn.execute("SELECT COUNT(*) c FROM day_plan").fetchone()["c"] == before
 
 
-def test_a_display_never_opens_a_day(svc):
+@pytest.mark.parametrize("mode", ["habits", "now"])
+def test_a_display_never_opens_a_day(svc, mode):
     """The rule the whole feature hangs on.
 
     A screen in a hallway intends nothing, and the day plan is worth keeping
     only while it records what was actually intended. So a panel polling every
     five minutes for a year must never leave a single opened day behind.
+
+    Parametrized over both modes that read the day, because the rule is about
+    the READ and a second mode reaching the same rows is exactly how it would
+    have been broken.
     """
     _seed_task(svc._conn, LIST_A, "t1", "Invoice", due=DAY)
-    made = svc.create_display({"name": "Kitchen", "mode": "habits"})
+    made = svc.create_display({"name": "Kitchen", "mode": mode})
     for _ in range(5):
         frame = svc.display_frame(made["token"])
     assert store.day_is_opened(svc._conn, DAY) is False
     assert store.get_day_entries(svc._conn, DAY) == []
     # The rows are still shown — as a PREVIEW, labelled as one, so the screen
     # never claims a commitment the owner has not made.
-    assert frame["habits"]["planned"] is False
-    assert [r["text"] for r in frame["habits"]["tasks"]] == ["Invoice"]
+    assert frame[mode]["planned"] is False
+    if mode == "habits":
+        assert [r["text"] for r in frame["habits"]["tasks"]] == ["Invoice"]
+    else:
+        assert frame["now"]["current"]["text"] == "Invoice"
+
+
+def test_the_two_day_faces_read_exactly_the_same_rows(svc):
+    """`now` and `habits` are two shapes of one question, so they take one
+    reader. A `now` display routed to the month's events instead would draw an
+    empty face off a frame with no rows in it."""
+    _seed_task(svc._conn, LIST_A, "t1", "Invoice", due=DAY)
+    _seed_task(svc._conn, LIST_A, "t2", "Renew", due=DAY)
+    svc.open_day(DAY, create=True)
+    day = svc.create_display({"name": "Kitchen", "mode": "habits"})
+    now = svc.create_display({"name": "Desk", "mode": "now"})
+    rows = [r["text"] for r in svc.display_frame(day["token"])["habits"]["tasks"]]
+    block = svc.display_frame(now["token"])["now"]
+    assert rows[:2] == [block["current"]["text"], block["next"]["text"]]
+    assert block["counts"]["total"] == len(rows)
+
+
+def test_the_now_queue_is_scoped_by_the_lists_allowlist(svc):
+    """The only thing narrowing what a `now` token reaches. An allowlist that
+    silently reached everything would put a task from a list the owner did not
+    give this screen at the top of it, in the largest type on the panel."""
+    _seed_task(svc._conn, LIST_A, "t1", "Invoice", due=DAY)
+    svc.open_day(DAY, create=True)
+    made = svc.create_display({"name": "Desk", "mode": "now",
+                               "lists": ["no-such-list"]})
+    block = svc.display_frame(made["token"])["now"]
+    assert block["current"] is None and block["counts"]["total"] == 0
 
 
 def test_an_opened_day_reads_as_planned(svc):
@@ -436,8 +602,13 @@ def test_the_frame_reports_the_accounts_clock_and_language(svc):
 
 # ── the renderer ────────────────────────────────────────────────────────────
 
-def _frame(mode="calendar", palette="eink", **over):
+def _frame(mode="calendar", palette="eink", rows=None, **over):
     display = _display_row(mode=mode, palette=palette, **over)
+    if mode == "now":
+        return F.build_frame(
+            display=display, day=DAY, generated_at="t", language="en",
+            time_format="24h", planned=True,
+            rows=NOW_ROWS if rows is None else rows)
     if mode == "habits":
         return F.build_frame(
             display=display, day=DAY, generated_at="t", language="en",
@@ -452,7 +623,7 @@ def _frame(mode="calendar", palette="eink", **over):
                  "all_day": False, "source": "a", "continued": False}])
 
 
-@pytest.mark.parametrize("mode", ["calendar", "habits"])
+@pytest.mark.parametrize("mode", ["calendar", "habits", "now"])
 def test_an_eink_render_is_one_bit_deep(mode):
     from PIL import Image
     import io
@@ -791,6 +962,194 @@ def test_a_habits_face_says_how_many_rows_it_could_not_show():
     # The tiny one drew a counter it did not need at the roomy size, and no
     # section header with nothing under it.
     assert Image.open(io.BytesIO(tiny)).size == (296, 128)
+
+
+# ── the rolling face ────────────────────────────────────────────────────────
+
+def _draw():
+    """A throwaway canvas, for the text helpers that only need to measure."""
+    from PIL import Image, ImageDraw
+    return ImageDraw.Draw(Image.new("L", (10, 10), 255))
+
+
+
+def _now_png(width, height, **kw):
+    return R.render_frame(_frame("now", **kw), width=width, height=height,
+                          fmt="png")[0]
+
+
+@pytest.mark.parametrize("size", [(296, 128), (400, 300), (800, 480),
+                                  (480, 800), (1872, 1404)])
+def test_the_now_face_needs_no_panel_floor_at_all(size):
+    """The month grid refuses a panel it cannot be read on; this one never has
+    to. It is one line of text, and it is what `too_small_hint` sends a badge
+    to — so a size that made it raise, or made it draw the too-small sentence,
+    would leave the smallest panels with no mode that works."""
+    body = _now_png(*size)
+    assert body[:8] == b"\x89PNG\r\n\x1a\n"
+    from PIL import Image
+    import io
+    assert Image.open(io.BytesIO(body)).size == size
+
+
+def test_a_bigger_panel_sets_the_headline_bigger_rather_than_the_same_size():
+    """This face's content is FIXED — two items whatever the panel is — so
+    unlike a month it has no "more" to spend extra pixels on. Sized off `_scale`
+    alone it left the bottom half of an 800x480 empty."""
+    from PIL import Image
+    import io
+
+    def ink_rows(w, h):
+        img = Image.open(io.BytesIO(_now_png(w, h))).convert("L")
+        px = img.load()
+        return sum(1 for y in range(h) if any(px[x, y] == 0 for x in range(w)))
+
+    # Proportionally more of the taller panel carries ink, not the same band of
+    # it with white underneath.
+    assert ink_rows(800, 480) / 480 > ink_rows(800, 240) / 240 * 0.9
+    assert ink_rows(800, 480) > ink_rows(800, 240) * 1.5
+
+
+@pytest.mark.parametrize("size", [(240, 72), (296, 128), (400, 300),
+                                  (800, 480), (1872, 1404)])
+@pytest.mark.parametrize("open_rows", [1, 2, 3, 8, 40])
+def test_nothing_open_is_ever_silently_left_off_the_now_face(size, open_rows):
+    """The honesty contract, on the face that most needs it.
+
+    `remaining` is what the FRAME left behind `next`. A panel with no room to
+    draw `next` hides one MORE than that, and a screen saying "+5" while six
+    things wait is exactly the first-eight-of-forty lie this mode exists to
+    refuse — so the renderer adds the dropped row back itself.
+
+    Asserted as the property rather than by comparing bytes: every open item is
+    either DRAWN or COUNTED, at every panel size, however long the day is.
+    """
+    from PIL import Image
+
+    rows = [{"kind": "task", "title": f"Task number {i}", "done": False}
+            for i in range(open_rows)]
+    frame = _frame("now", rows=rows)
+    width, height = size
+    img = Image.new("L", size, 255)
+    drew = R._render_now(img, frame, eink=True,
+                         colors={k: 0 if v == (0, 0, 0) else 255
+                                 for k, v in R._EINK.items()})
+    assert drew["drawn"] + drew["counted"] == open_rows
+    # And not vacuously "draw nothing, count everything": the current item is
+    # the mode and is never what gives way.
+    assert drew["drawn"] >= 1
+
+
+def test_a_panel_too_short_for_the_next_row_counts_it_instead():
+    """The half of the contract above that only a cramped panel exercises."""
+    from PIL import Image
+
+    rows = [{"kind": "task", "title": f"Task number {i}", "done": False}
+            for i in range(6)]
+    frame = _frame("now", rows=rows)
+    colors = {k: 0 if v == (0, 0, 0) else 255 for k, v in R._EINK.items()}
+    roomy = R._render_now(Image.new("L", (800, 480), 255), frame,
+                          eink=True, colors=colors)
+    cramped = R._render_now(Image.new("L", (240, 72), 255), frame,
+                            eink=True, colors=colors)
+    assert roomy == {"drawn": 2, "counted": 4}
+    # The frame's own number is 4 either way; the panel that could not draw the
+    # next row says 5, because five things are waiting behind what it drew.
+    assert frame["now"]["remaining"] == 4
+    assert cramped == {"drawn": 1, "counted": 5}
+
+
+def test_a_long_title_wraps_rather_than_being_cut_after_three_words():
+    """`_fit` truncates one line, which is right for a chip in a month cell and
+    wrong for the one headline on the panel: cutting "Renew the buildings
+    insurance" to "Renew the..." on a screen with room for three lines throws
+    away the sentence to save nothing."""
+    from PIL import Image
+    import io
+
+    title = "Renew the buildings insurance before the renewal date"
+    one_word = [{"kind": "task", "title": "Renew", "done": False}]
+    long = [{"kind": "task", "title": title, "done": False}]
+
+    def ink_rows(rows):
+        img = Image.open(io.BytesIO(_now_png(800, 480, rows=rows))).convert("L")
+        px = img.load()
+        return sum(1 for y in range(480) if any(px[x, y] == 0 for x in range(800)))
+
+    # The long title occupies several lines rather than one truncated one.
+    assert ink_rows(long) > ink_rows(one_word)
+
+
+def test_a_headline_no_size_can_hold_is_ellipsised_rather_than_overrun():
+    draw = _draw()
+    font = R._font("serif", 40)
+    rows, dropped = R._wrap(draw, "x" * 400, font, 300, 2)
+    assert dropped is True and len(rows) == 2
+    assert rows[-1].endswith("…")
+    for row in rows:
+        assert R._text_width(draw, row, font) <= 300
+
+
+def test_wrap_breaks_on_a_space_where_there_is_one_and_mid_word_where_there_is_not():
+    draw = _draw()
+    font = R._font("sans", 20)
+    rows, dropped = R._wrap(draw, "alpha beta gamma delta", font, 90, 4)
+    assert dropped is False
+    # Words are kept whole where they fit, so no line starts mid-word.
+    assert " ".join(rows) == "alpha beta gamma delta"
+
+    # An unbroken token has to be split somewhere, or one line would overrun.
+    rows, _ = R._wrap(draw, "a" * 60, font, 90, 3)
+    assert len(rows) > 1
+
+
+def test_wrap_terminates_on_a_width_narrower_than_one_glyph():
+    """`_longest` returns at least one character precisely so this cannot spin:
+    a width that takes nothing off the front would loop forever, on a route
+    with no session."""
+    rows, dropped = R._wrap(_draw(), "hello world", R._font("sans", 20), 3, 2)
+    assert dropped is True and len(rows) <= 2
+
+
+def test_a_newline_in_a_title_does_not_500_the_now_image():
+    """Every text-measuring helper has to go through `_oneline`: Pillow refuses
+    to measure multiline text, and one such title made every `.png`, `.bmp` and
+    `.bin` fetch for that display answer 500 for as long as it existed."""
+    rows = [{"kind": "task", "title": "Renew\nthe insurance", "done": False}]
+    assert _now_png(800, 480, rows=rows)[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_a_long_display_name_does_not_overprint_the_now_faces_score():
+    a = _now_png(400, 300, name="Kitchen")
+    b = _now_png(400, 300, name="K" * 200)
+    # It renders at all, and it renders differently — the name was cut to what
+    # was left after the tally rather than drawn straight over it.
+    assert a != b and b[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_the_now_face_says_all_done_only_when_something_was_done():
+    """Two different silences, and only one of them has earned anything."""
+    done = _frame("now", rows=[{"kind": "task", "title": "Invoice", "done": True}])
+    empty = _frame("now", rows=[])
+    assert done["now"]["counts"]["done"] == 1
+    assert empty["now"]["counts"] == {"done": 0, "total": 0}
+    # Both render, and they do not render the same thing.
+    a = R.render_frame(done, width=800, height=480, fmt="png")[0]
+    b = R.render_frame(empty, width=800, height=480, fmt="png")[0]
+    assert a != b
+
+
+@pytest.mark.parametrize("label,size", [("german", 11), ("tiny", 6)])
+def test_a_micro_label_that_would_not_fit_steps_down_instead_of_running_off(
+        label, size):
+    """`_label` measures nothing and refuses nothing — it sets whatever it is
+    handed, one tracked glyph at a time, straight off the right edge. It is not
+    a user string that breaks it, it is a translated one: "NEXT" is four
+    characters and "ALS NÄCHSTES" is twelve."""
+    draw = _draw()
+    chosen = R._label_size(draw, "Als Nächstes", size, 60.0)
+    assert chosen <= size
+    assert R._label_width(draw, "Als Nächstes", chosen) <= 60.0 or chosen == 8
 
 
 def test_the_same_frame_renders_the_same_bytes():
@@ -1357,6 +1716,92 @@ def test_the_habits_lists_allowlist_actually_scopes_what_the_token_reaches(api):
     assert frame["habits"]["counts"]["tasks_total"] == 0
 
 
+def test_the_rolling_mode_is_reachable_through_the_api(api):
+    """The request models carry their own `Literal` of the modes, separately
+    from `_DISPLAY_MODES`. A mode added to the service and not to those two is
+    a 422 on every write of it — a whole feature with no way in."""
+    made = api.post("/api/displays", json={"name": "Desk", "mode": "now"})
+    assert made.status_code == 201 and made.json()["mode"] == "now"
+    token = made.json()["token"]
+    assert api.patch(f"/api/displays/{token}",
+                     json={"mode": "habits"}).status_code == 200
+    assert api.patch(f"/api/displays/{token}",
+                     json={"mode": "now"}).json()["mode"] == "now"
+    # And the enum is still an enum.
+    assert api.post("/api/displays",
+                    json={"name": "X", "mode": "agenda"}).status_code == 422
+    # A month has a floor and this mode does not, so nothing is judged too
+    # small for it — the reason a badge has a mode at all.
+    api.patch(f"/api/displays/{token}",
+              json={"panel_width": 296, "panel_height": 128})
+    assert api.get("/api/displays").json()[0]["panel_too_small"] is None
+
+
+@pytest.mark.parametrize("suffix,media", [
+    ("", "application/json"), (".png", "image/png"), (".bmp", "image/bmp"),
+    (".bin", "application/octet-stream"),
+])
+def test_every_public_route_serves_a_rolling_display(api, suffix, media):
+    made = api.post("/api/displays",
+                    json={"name": "Desk", "mode": "now", "palette": "eink",
+                          "panel_width": 800, "panel_height": 480}).json()
+    api.cookies.clear()
+    r = api.get(f"/api/public/display/{made['token']}{suffix}")
+    assert r.status_code == 200
+    assert r.headers["content-type"].split(";")[0] == media
+    if suffix == ".bin":
+        # One bit by construction: the framebuffer the panel already holds.
+        assert len(r.content) == 800 * 480 // 8
+    if suffix == "":
+        assert "now" in r.json() and "calendar" not in r.json()
+        # The token is never echoed into a body that lands in every cache and
+        # every firmware log that prints its own response.
+        assert made["token"] not in r.text
+
+
+def test_a_rolling_display_repaints_only_when_what_it_draws_moves(svc):
+    """The whole reason ticking something off does not cost a panel flash.
+
+    The ETag hashes the frame minus `generated_at` (and `DisplayView.stableOf`
+    diffs the same way), so a poll that finds the same current item, the same
+    next item and the same numbers is a 304 — and a full e-ink refresh flashes
+    the panel for the better part of a second. This is the half that says the
+    frame ITSELF is stable across polls and moves when the cursor does; the
+    304 is asserted on the route.
+
+    It is also what "it cycles on complete" means end to end: the display has
+    no write to reach, so the only thing that can move the cursor is a
+    completion made somewhere else.
+    """
+    _seed_task(svc._conn, LIST_A, "t1", "Renew", due=DAY)
+    _seed_task(svc._conn, LIST_A, "t2", "Invoice", due=DAY)
+    _seed_task(svc._conn, LIST_A, "t3", "Groceries", due=DAY)
+    svc.open_day(DAY, create=True)
+    made = svc.create_display({"name": "Desk", "mode": "now"})
+
+    def poll():
+        frame = svc.display_frame(made["token"])
+        return {k: v for k, v in frame.items() if k != "generated_at"}
+
+    before = poll()
+    # Nothing changed between two polls, so nothing on the panel would move.
+    assert poll() == before
+    current = before["now"]["current"]["text"]
+
+    # Ticked off on the VTODO, which is the single truth about a task's
+    # doneness — a phone, Tasks.org, jtx, the app itself. The display reaches no
+    # write of any kind, so this is the ONLY way its cursor can move, and the
+    # day entry is a pointer that stores no done flag of its own.
+    uid = {"Renew": "t1", "Invoice": "t2", "Groceries": "t3"}[current]
+    svc._conn.execute("UPDATE items SET status='COMPLETED' WHERE uid=?", (uid,))
+    after = poll()
+    assert after != before
+    assert after["now"]["current"]["text"] != current
+    assert after["now"]["counts"]["done"] == 1
+    # And it settles again: the next poll after a move is another 304.
+    assert poll() == after
+
+
 def test_the_eink_refresh_migration_raises_a_stored_interval_and_leaves_colour(tmp_path):
     """The one piece of code in the app that silently rewrites a setting the
     owner chose, and it ran on every startup with nothing asserting it."""
@@ -1490,7 +1935,7 @@ def test_the_preview_route_is_not_swallowed_by_the_token_route(api):
     assert r.headers["Cache-Control"] == "no-store, private"
 
 
-@pytest.mark.parametrize("mode", ["calendar", "habits"])
+@pytest.mark.parametrize("mode", ["calendar", "habits", "now"])
 @pytest.mark.parametrize("palette", ["color", "eink"])
 @pytest.mark.parametrize("size", [(296, 128), (400, 300), (800, 480), (1600, 1200)])
 def test_the_preview_draws_every_mode_at_every_panel(api, mode, palette, size):

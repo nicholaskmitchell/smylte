@@ -15,7 +15,7 @@
 // scrolling and the way out, so this renders only the list and its controls.
 
 import { useEffect, useMemo, useState } from 'react'
-import { api, type Display, type DisplayInput, type List } from '../api'
+import { api, type Display, type DisplayInput, type DisplayMode, type List } from '../api'
 import { makeGuard } from '../util'
 import { fmtWhen } from '../time'
 import { useTimeFormat } from '../timeformat'
@@ -34,6 +34,12 @@ const REFRESH_CHOICES = {
   eink: [180, 300, 900, 3600],
 } as const
 const ROTATIONS = [0, 90, 180, 270] as const
+
+// The order the mode control cycles in, which is also the order they are worth
+// hanging on a wall in: the month is what most people mount one for, habits is
+// what earns a kitchen, and now + next is the one that fits a panel too small
+// for either.
+const DISPLAY_MODES: readonly DisplayMode[] = ['calendar', 'habits', 'now']
 
 /** What is being typed into a row's text fields, before it is written.
  *
@@ -264,11 +270,25 @@ export function DisplaysSection(
                   <div className="menu-row">
                     <label>{tr('disp.mode')}</label>
                     <button className="menu-toggle"
-                      onClick={() => void patch(d.token,
-                        { mode: d.mode === 'calendar' ? 'habits' : 'calendar' })}>
+                      onClick={() => {
+                        // Cycled, exactly as rotation and the refresh interval
+                        // are cycled two rows below — one `.menu-toggle`
+                        // showing the current value. A mode this build does not
+                        // know (an older row, an API write) is not a missing
+                        // catalogue key here: `indexOf` returns -1 and the next
+                        // press lands on the first mode, which is the same
+                        // recovery the refresh button already offers.
+                        const i = DISPLAY_MODES.indexOf(d.mode)
+                        void patch(d.token,
+                          { mode: DISPLAY_MODES[(i + 1) % DISPLAY_MODES.length] })
+                      }}>
                       {tr(`disp.mode.${d.mode}`)}
                     </button>
                   </div>
+
+                  {d.mode === 'now' ? (
+                    <div className="hintline">{tr('disp.modeNowHint')}</div>
+                  ) : null}
 
                   <div className="menu-row">
                     <label>{tr('disp.palette')}</label>
