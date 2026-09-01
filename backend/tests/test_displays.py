@@ -1177,3 +1177,138 @@ def test_the_display_page_is_served_as_the_spa_shell(api, tmp_path):
     for path in (f"/display/{token}", f"/display/{token}/"):
         r = api.get(path)
         assert r.status_code == 404 and "frontend not built" in r.text
+
+
+# ── what a CalDAV client can write, and what the panel does with it ──────────
+#
+# Every string in a frame is attacker-adjacent: Tasks.org, Thunderbird, jtx and
+# the owner's phone all write to the same Radicale collections, and it lands on
+# a route with no session that rasterizes it. These are the two properties that
+# were missing, both found by an adversarial sweep of this branch and both
+# reproduced end-to-end before being fixed.
+
+def test_a_newline_in_a_title_does_not_500_the_image_routes(api):
+    """A newline is ordinary in a SUMMARY and used to be fatal.
+
+    Pillow REFUSES to measure multiline text, so `_fit` raised ValueError out of
+    `render_frame` and every image fetch for that display answered 500 — for as
+    long as the event existed, while the JSON frame kept working. Asserted
+    through the real routes because that is where the 500 was.
+    """
+    token = api.post("/api/displays",
+                     json={"name": "Hall\nway", "palette": "color",
+                           "panel_width": 800, "panel_height": 480}).json()["token"]
+    api.cookies.clear()
+    for suffix in ("", ".png", ".bmp", ".bin"):
+        assert api.get(f"/api/public/display/{token}{suffix}").status_code == 200, suffix
+
+
+def test_control_characters_are_normalised_out_of_the_frame():
+    """`plain` is the one edge all three surfaces are built from."""
+    assert F.plain("Stand\nup") == "Stand up"
+    assert F.plain("a\r\nb") == "a b"
+    # A RUN collapses to ONE space rather than each character becoming its own,
+    # so the panel and the browser page — which collapses runs itself — draw the
+    # same frame the same way.
+    assert F.plain("Team \t\n  sync") == "Team sync"
+    assert F.plain("  padded  ") == "padded"
+    assert F.plain(None) == "" and F.plain("") == ""
+    # It is a normaliser, not a sanitiser of legitimate text.
+    assert F.plain("Ünïcode — fine") == "Ünïcode — fine"
+
+
+def test_item_text_is_bounded_wherever_it_enters_the_frame():
+    """The length bound, at all four points free text gets in.
+
+    `MAX_ITEMS_PER_DAY` bounds how MANY items a day carries; nothing bounded how
+    LONG one was, and the length is the dangerous half — see `MAX_TEXT_CHARS`.
+    """
+    long = "x" * 5_000
+    frame = F.build_frame(
+        display=_display_row(name=long), day=DAY, generated_at="t",
+        language="en", time_format="24h",
+        sources=[{"id": "a", "name": long, "color": "#3B82F6"}],
+        events=[{"day": DAY, "summary": long, "start": f"{DAY}T09:00:00",
+                 "all_day": False, "source": "a", "continued": False}])
+    assert len(frame["display"]["name"]) == F.MAX_TEXT_CHARS
+    assert len(frame["sources"][0]["name"]) == F.MAX_TEXT_CHARS
+    drawn = [i for wk in frame["calendar"]["weeks"] for c in wk for i in c["items"]]
+    assert drawn and all(len(i["text"]) == F.MAX_TEXT_CHARS for i in drawn)
+
+    habits = F.build_frame(
+        display=_display_row(mode="habits"), day=DAY, generated_at="t",
+        language="en", time_format="24h", planned=True,
+        rows=[{"kind": "habit", "title": long, "done": False}])
+    assert len(habits["habits"]["habits"][0]["text"]) == F.MAX_TEXT_CHARS
+
+
+def test_fit_is_not_quadratic_in_the_length_it_is_handed():
+    """The half that does not depend on every caller going through `plain`.
+
+    The character-at-a-time loop re-measured the WHOLE string on every step:
+    1,000 characters took 0.23s, 4,000 took 2.99s, and `_display_events` copies
+    a grid-spanning event's summary into all 42 cells. A wall clock rather than
+    a call count because the call count is the mechanism, not the property.
+    """
+    import time
+    from PIL import Image, ImageDraw
+
+    draw = ImageDraw.Draw(Image.new("L", (200, 40), 255))
+    font = R._font("sans", 14)
+    start = time.perf_counter()
+    out = R._fit(draw, "A" * 100_000, font, 80)
+    assert time.perf_counter() - start < 1.0, "still superlinear in title length"
+    assert out.endswith("…") and len(out) < 100
+
+    # And it still answers exactly what the loop it replaced answered.
+    for text in ("short", "a title far too long for the space it has", "Küchendienst"):
+        for width in (0, 3, 10, 25, 60, 140, 400):
+            got = R._fit(draw, text, font, width)
+            if got not in ("", text):
+                assert got.endswith("…")
+                assert R._text_width(draw, got, font) <= width
+
+
+def test_the_public_render_is_bounded_by_area_and_not_only_by_side(api):
+    """Each side being capped at 4096 is not the AREA being capped.
+
+    4096×4096 is 16.7 million pixels and `.bmp` on a colour display is three
+    bytes each: one ~200-byte unauthenticated request came back with 50,331,702
+    bytes before this bound existed.
+    """
+    token = api.post("/api/displays", json={"name": "Big", "palette": "color"}).json()["token"]
+    api.cookies.clear()
+    # A real panel is unaffected — this is every browserless screen that exists.
+    assert api.get(f"/api/public/display/{token}.bmp?w=1600&h=1200").status_code == 200
+    for suffix in (".png", ".bmp", ".bin"):
+        r = api.get(f"/api/public/display/{token}{suffix}?w=4096&h=4096")
+        assert r.status_code == 422, suffix
+    # And the renderer refuses it too, so the bound is not one caller's habit.
+    with pytest.raises(ValueError, match="pixels"):
+        R.render_frame(_frame(), width=4096, height=4096, fmt="png")
+
+
+def test_raw_takes_the_eink_palette_whatever_the_display_is_configured_as():
+    """`.bin` is a one-bit format, so it is drawn in one-bit colours.
+
+    Thresholding a COLOUR render was only half of it, and the half that was
+    missing was the visible one: `_RULE` is (206, 204, 200), luma 204, so every
+    column separator, week rule and header rule converted to PAPER and vanished
+    on a display left on the default `color` palette. The length was right and
+    the picture was a month with no grid — which is why asserting the byte
+    COUNT, as the earlier test did, could not see it.
+    """
+    colour = R.render_frame(_frame(palette="color"), width=800, height=480, fmt="raw")[0]
+    eink = R.render_frame(_frame(palette="eink"), width=800, height=480, fmt="raw")[0]
+    assert colour == eink, "raw still depends on how the display is configured"
+    # Not vacuously equal because both are blank: a month grid is mostly paper,
+    # but its rules alone are thousands of ink pixels.
+    ink = sum(8 - bin(byte).count("1") for byte in colour)
+    assert ink > 5_000, f"only {ink} ink pixels — the grid is missing"
+    # The other two formats keep their palette, which is the whole reason `raw`
+    # needed saying separately.
+    from PIL import Image
+    import io
+    assert Image.open(io.BytesIO(
+        R.render_frame(_frame(palette="color"), width=800, height=480,
+                       fmt="png")[0])).mode == "RGB"

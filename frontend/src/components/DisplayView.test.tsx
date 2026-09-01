@@ -52,6 +52,8 @@ const DAY: DisplayFrame = {
     tasks: [
       { text: 'Invoice', done: false, kind: 'task', source: 'work', estimate_minutes: null },
     ],
+    habits_hidden: 0,
+    tasks_hidden: 0,
     counts: { habits_done: 1, habits_total: 2, tasks_done: 0, tasks_total: 1 },
     empty_text: 'Nothing today',
     all_done_text: 'All done',
@@ -97,7 +99,7 @@ describe('<DisplayView>', () => {
     for (const sel of ['.display-cal__name', '.display-cal__weekday', '.display-cal__more']) {
       expect(container.querySelector(sel)!.className, sel).toContain('display-label')
     }
-    expect(container.querySelector('.display-chip__time')).toBeInTheDocument()
+    expect(container.querySelector('.display-cal__items .display-chip__time')).toBeInTheDocument()
   })
 
   it('marks the habits face the same way', async () => {
@@ -143,7 +145,7 @@ describe('<DisplayView>', () => {
     frameMock.mockResolvedValue(CAL)
     const { rerender } = render(<DisplayView token="tok" />)
     await screen.findByText('Standup')
-    const mark = document.querySelector('.display-chip__mark') as HTMLElement
+    const mark = document.querySelector('.display-cal__items .display-chip__mark') as HTMLElement
     expect(mark.style.background).toBeTruthy()
 
     // On a panel one bit deep a colour is either black or invisible depending
@@ -155,9 +157,9 @@ describe('<DisplayView>', () => {
     await waitFor(() => {
       expect(document.querySelector('.display--eink')).toBeTruthy()
     })
-    const inkMark = document.querySelector('.display-chip__mark') as HTMLElement
+    const inkMark = document.querySelector('.display-cal__items .display-chip__mark') as HTMLElement
     expect(inkMark.style.background).toBe('')
-    expect(document.querySelector('.display-chip--solid')).toBeTruthy()
+    expect(document.querySelector('.display-cal__items .display-chip--solid')).toBeTruthy()
   })
 
   it('draws habits and today, with the tally counted before the hiding', async () => {
@@ -265,5 +267,39 @@ describe('<DisplayView>', () => {
     expect(frameMock).toHaveBeenCalledTimes(2)
     await act(async () => { vi.advanceTimersByTime(60_000) })
     expect(frameMock).toHaveBeenCalledTimes(3)
+  })
+
+  it('measures staleness against the cadence, not against a flat 20 minutes',
+    async () => {
+      // Settings offers "Every hour". Against a flat threshold a display on
+      // that cadence reported itself stale for forty minutes out of every
+      // healthy hour — which teaches the one person who reads the strip to
+      // stop believing it.
+      vi.useFakeTimers()
+      frameMock.mockResolvedValue({
+        ...CAL, display: { ...CAL.display, refresh_seconds: 3600 },
+      })
+      render(<DisplayView token="tok" />)
+      await act(async () => { await Promise.resolve() })
+      // Half an hour in, one poll has not even come due yet.
+      await act(async () => { vi.advanceTimersByTime(30 * 60_000) })
+      expect(screen.queryByText('Not updated recently')).toBeNull()
+
+      // And it still says so eventually: silence past several polls is real.
+      frameMock.mockRejectedValue(new Error('offline'))
+      await act(async () => { vi.advanceTimersByTime(3 * 60 * 60_000) })
+      expect(screen.getByText('Not updated recently')).toBeInTheDocument()
+    })
+
+  it('says how many rows the frame itself had to drop', async () => {
+    // The habits-mode twin of a calendar cell's "+N". Without it a section
+    // showed the first twenty of forty and implied that was the day.
+    frameMock.mockResolvedValue({
+      ...DAY,
+      habits: { ...DAY.habits!, habits_hidden: 3, tasks_hidden: 0 },
+    })
+    render(<DisplayView token="tok" />)
+    await screen.findByText('Stretch')
+    expect(screen.getByText('+3')).toBeInTheDocument()
   })
 })

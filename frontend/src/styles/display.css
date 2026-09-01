@@ -161,7 +161,12 @@
 /* Six rows, always — even in a month five would hold. A grid that changed
    height on the 1st would repaint the whole panel for no new information, which
    on eink is a visible full-screen flash. */
-.display-cal__grid { flex: 1; display: grid; grid-template-rows: repeat(6, 1fr); min-height: 0; }
+/* `position: relative` is for `.display-cal__probe`, which hangs out of flow
+   inside this box — see there. */
+.display-cal__grid {
+  flex: 1; display: grid; grid-template-rows: repeat(6, 1fr);
+  min-height: 0; position: relative;
+}
 .display-cal__week {
   display: grid; grid-template-columns: repeat(7, 1fr);
   border-top: 1px solid var(--d-rule-strong); min-height: 0;
@@ -202,7 +207,25 @@
   padding: 0 5px; margin-left: -3px;
 }
 
-.display-cal__items { display: flex; flex-direction: column; gap: 1px; min-height: 0; overflow: hidden; }
+/* `flex: 1` so the box is the SPACE a cell gives its chips rather than the
+   height of the chips already in it. `useCellRoom` measures this box directly;
+   deriving it from the cell instead meant doing the cell's padding and the
+   column gap by hand, which was wrong by 4px and cut the last chip through its
+   letters. Visually identical — the chips are top-aligned either way. */
+.display-cal__items {
+  display: flex; flex-direction: column; gap: 1px;
+  flex: 1; min-height: 0; overflow: hidden;
+}
+
+/* The chip `useCellRoom` measures, and the only element on this page that is
+   drawn to be looked at by code rather than by a person. Out of flow, so it
+   adds no row to the six-row grid; `visibility: hidden` rather than
+   `display: none` because a display:none element has no box and cannot be
+   measured at all, which is the entire job. */
+.display-cal__probe {
+  position: absolute; top: 0; left: 0; width: 100%;
+  visibility: hidden; pointer-events: none;
+}
 
 /* A screen too small to hold seven columns, in the browser. The bound is
    deliberately narrow AND short together: 296×128 is a 2.9" panel and is
@@ -298,8 +321,22 @@
 .display-day__preview-hint { margin: 0; font-size: clamp(12px, 1.9vh, 20px); color: var(--d-muted); }
 .display--eink .display-day__preview-hint { font-weight: 400; }
 
-.display-day__section { display: flex; flex-direction: column; gap: 4px; min-height: 0; }
-.display-day__label { margin: 0; font-size: clamp(11px, 1.7vh, 18px); }
+/* `overflow: hidden` is the one that matters. A section shrinks when the panel
+   is shorter than its rows — `min-height: 0` allows that — but its rows do not
+   shrink with it, so without this they painted straight OUT of the box and over
+   the next section's heading: habit rows on top of the word "Today". Clipped,
+   the tail is cut instead, and the "+N" on the heading says how much. */
+.display-day__section {
+  display: flex; flex-direction: column; gap: 4px;
+  min-height: 0; overflow: hidden;
+}
+.display-day__label {
+  margin: 0; font-size: clamp(11px, 1.7vh, 18px);
+  display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
+}
+/* Mono and untracked, like every other count in the app and like
+   `.display-cal__more` — a number to be read, not a label to be scanned. */
+.display-day__more { font-family: var(--d-mono); letter-spacing: 0; color: var(--d-muted); }
 
 .display-day__rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
 .display-row {

@@ -20,6 +20,7 @@
 
 import { describe, expect, it, beforeEach } from 'vitest'
 import { box, mount, viewport } from './test/browser-measure'
+import { measureRoom } from './components/DisplayView'
 
 beforeEach(() => { document.body.innerHTML = '' })
 
@@ -202,4 +203,106 @@ describe('the display is drawn in the app’s own type', () => {
     // itself does not accept a pointer.
     expect(getComputedStyle(host.querySelector('.display')!).pointerEvents).toBe('none')
   })
+})
+
+// ── how many chips fit, measured against what actually fits ──────────────────
+//
+// `useCellRoom` decides this, and the browser tier is the only place it can be
+// checked: under jsdom every box is 0×0, so the arithmetic would be asserted
+// against nothing. Raw markup rather than the component, as everywhere else in
+// this file — the class names are held to the real JSX by `DisplayView.test.tsx`.
+
+const chipMarkup = (label: string) => `
+  <div class="display-chip display-chip--solid">
+    <span class="display-chip__mark"></span>
+    <span class="display-chip__time">09:00</span>
+    <span class="display-chip__text">${label}</span>
+  </div>`
+
+/** A full six-week grid with `n` chips in its first cell. */
+const MONTH = (n: number, today = false) => `
+  <div class="display display--eink">
+    <div class="display-cal">
+      <header class="display-cal__head">
+        <h1 class="display-title display-cal__title">August 2026</h1>
+      </header>
+      <div class="display-cal__weekdays">${
+        ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+          .map(d => `<span class="display-label display-cal__weekday">${d}</span>`).join('')}
+      </div>
+      <div class="display-cal__grid" id="grid">
+        <div class="display-chip display-cal__probe" aria-hidden="true">
+          <span class="display-chip__mark"></span>
+          <span class="display-chip__time">00:00</span>
+          <span class="display-chip__text">Probe</span>
+        </div>
+        ${Array.from({ length: 6 }, (_, w) => `
+          <div class="display-cal__week">${
+            Array.from({ length: 7 }, (_, d) => `
+              <div class="display-cal__cell${today && w === 0 && d === 0 ? ' is-today' : ''}">
+                <div class="display-cal__daynum">
+                  <span class="display-title display-cal__num">${w * 7 + d + 1}</span>
+                </div>
+                <div class="display-cal__items">${
+                  w === 0 && d === 0 ? Array.from({ length: n }, (_, i) => chipMarkup(`Standup ${i}`)).join('') : ''
+                }</div>
+              </div>`).join('')}
+          </div>`).join('')}
+      </div>
+    </div>
+  </div>`
+
+describe('a cell draws only the chips that fit in it', () => {
+  // Real panel sizes, portrait and landscape, plus the today cell — whose
+  // knocked-out day number is taller than a plain one, so a count taken from
+  // the first cell alone overflows on it.
+  const PANELS: Array<[number, number]> = [
+    [800, 480], [800, 600], [1024, 758], [600, 800], [1280, 800], [480, 800],
+  ]
+
+  it.each(PANELS)('at %ix%i the last chip is not cut through its letters',
+    async (w, h) => {
+      for (const today of [false, true]) {
+        document.body.innerHTML = ''
+        await viewport(w, h)
+        // Measured on a grid with NO chips in it, which is the case that used
+        // to be unmeasurable: `measure()` needed a rendered chip to read a
+        // height from, so at room 0 — or in a month that simply began with no
+        // events — there was nothing to measure and the count latched.
+        const empty = await mount(MONTH(0, today))
+        const grid = empty.querySelector('#grid') as HTMLElement
+        expect(box(grid).h, 'no layout — this is not a browser').toBeGreaterThan(0)
+        // THE REAL FUNCTION, imported from the component. A copy of the
+        // arithmetic here would go on passing while the page regressed.
+        const room = measureRoom(grid)!
+        // A panel this size has room for events; a count of 0 here would make
+        // every assertion below vacuous.
+        expect(room, `${w}x${h}: no room measured at all`).toBeGreaterThan(0)
+
+        document.body.innerHTML = ''
+        await viewport(w, h)
+        const full = await mount(MONTH(room, today))
+        const items = full.querySelector('.display-cal__items') as HTMLElement
+        const chips = [...items.querySelectorAll('.display-chip')]
+        expect(chips).toHaveLength(room)
+        // The property, and the one the old `- 4` broke: every chip the count
+        // promised is fully inside the box that clips it. Measured in Chromium
+        // before the fix, the last one overflowed by 2.1px at 800×480 — a cut
+        // through the middle of the letters, which on a wall reads as a
+        // rendering fault rather than as "there is more".
+        const bottom = box(items).bottom
+        for (const [i, chip] of chips.entries()) {
+          expect(box(chip).bottom, `${w}x${h} today=${today}: chip ${i} of ${room} is clipped`)
+            .toBeLessThanOrEqual(bottom + 0.5)
+        }
+        // And it is not simply under-counting: one more would NOT have fitted.
+        document.body.innerHTML = ''
+        await viewport(w, h)
+        const over = await mount(MONTH(room + 1, today))
+        const overItems = over.querySelector('.display-cal__items') as HTMLElement
+        const last = [...overItems.querySelectorAll('.display-chip')].pop()!
+        expect(box(last).bottom, `${w}x${h}: room is too conservative`)
+          .toBeGreaterThan(box(overItems).bottom + 0.5)
+      }
+    })
 })

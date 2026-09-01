@@ -2520,6 +2520,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 422,
                 "this display has no panel size — set one in Settings, or pass "
                 "?w=&h= with the panel's pixels")
+        if width * height > render.MAX_PIXELS:
+            # Each dimension being bounded is not the area being bounded:
+            # 4096×4096 is 16.7 million pixels, and `.bmp` on a colour display
+            # is three bytes each — one ~200-byte request came back with
+            # 50,331,702 bytes, on a route that by design has no session.
+            raise HTTPException(
+                422,
+                f"{width}×{height} is more than the {render.MAX_PIXELS:,} pixels "
+                "a display render may cover")
         if palette:
             frame = {**frame, "display": {**frame["display"], "palette": palette}}
         turn = rotate if rotate is not None else frame["display"].get("rotation", 0)
