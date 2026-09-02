@@ -15,6 +15,10 @@ public sealed class SetupForm : Form
     private readonly TextBox _password = new() { UseSystemPasswordChar = true };
     private readonly TextBox _folder = new();
     private readonly TextBox _token = new() { UseSystemPasswordChar = true };
+    /// The same choice the Appearance section offers, here too because this
+    /// dialog is reachable without the app running — and because a client that
+    /// cannot start is exactly when you might want its icon back.
+    private readonly ComboBox _icon = new() { DropDownStyle = ComboBoxStyle.DropDownList };
     private readonly Label _status = new();
     private readonly Button _test = new() { Text = "Test connection" };
     private readonly Button _save = new() { Text = "Save", DialogResult = DialogResult.None };
@@ -32,9 +36,9 @@ public sealed class SetupForm : Form
         MaximizeBox = false;
         MinimizeBox = false;
         AutoScaleMode = AutoScaleMode.Font;
-        ClientSize = new Size(580, 400);
+        ClientSize = new Size(580, 440);
 
-        try { Icon = new Icon(typeof(SetupForm), "app.ico"); }
+        try { Icon = IconLibrary.Load(IconLibrary.Parse(settings.IconChoice)) ?? Icon; }
         catch (Exception) { /* icon is cosmetic; never block setup on it */ }
 
         _server.Text = settings.ServerUrl;
@@ -42,6 +46,19 @@ public sealed class SetupForm : Form
         _password.Text = settings.GetPassword();
         _folder.Text = settings.DataFolder;
         _token.Text = settings.GitHubToken;
+
+        // Display text to enum name, in the order the Appearance section lists
+        // them. Auto leads because it is the default and the only one that keeps
+        // up with the Windows theme on its own.
+        _icon.Items.AddRange(new object[]
+        {
+            "Follow the Windows theme", "Cream plate", "Ink plate", "Accent plate", "Bare mark",
+        });
+        _icon.SelectedIndex = IconLibrary.Parse(settings.IconChoice) switch
+        {
+            IconChoice.Paper => 1, IconChoice.Ink => 2, IconChoice.Accent => 3,
+            IconChoice.Mark => 4, _ => 0,
+        };
 
         var browse = new Button { Text = "Browse…" };
         browse.Click += (_, _) => PickFolder();
@@ -53,6 +70,7 @@ public sealed class SetupForm : Form
         Row(2, "Password", _password);
         Row(3, "Data folder", _folder, browse);
         Row(4, "GitHub token", _token);
+        Row(5, "App icon", _icon);
 
         Controls.Add(new Label
         {
@@ -60,20 +78,20 @@ public sealed class SetupForm : Form
                  + "https://radicale.nicholaskmitchell.com.\n"
                  + "The password is stored encrypted for your Windows account, never in the clear.\n"
                  + "A GitHub token is optional — only useful if update checks hit a rate limit.",
-            Location = new Point(24, 232),
+            Location = new Point(24, 272),
             Size = new Size(532, 60),
             ForeColor = SystemColors.GrayText,
         });
 
-        _status.Location = new Point(24, 300);
+        _status.Location = new Point(24, 340);
         _status.Size = new Size(532, 40);
         Controls.Add(_status);
 
-        _test.Location = new Point(24, 352);
+        _test.Location = new Point(24, 392);
         _test.Size = new Size(130, 30);
-        _save.Location = new Point(346, 352);
+        _save.Location = new Point(346, 392);
         _save.Size = new Size(100, 30);
-        _cancel.Location = new Point(456, 352);
+        _cancel.Location = new Point(456, 392);
         _cancel.Size = new Size(100, 30);
         Controls.Add(_test);
         Controls.Add(_save);
@@ -83,7 +101,7 @@ public sealed class SetupForm : Form
         CancelButton = _cancel;
     }
 
-    private void Row(int index, string label, TextBox field, Button? trailing = null)
+    private void Row(int index, string label, Control field, Button? trailing = null)
     {
         var y = 24 + index * 40;
         Controls.Add(new Label
@@ -175,6 +193,11 @@ public sealed class SetupForm : Form
         Result.SetPassword(_password.Text);
         Result.DataFolder = _folder.Text.Trim();
         Result.GitHubToken = _token.Text.Trim();
+        Result.IconChoice = (_icon.SelectedIndex switch
+        {
+            1 => IconChoice.Paper, 2 => IconChoice.Ink, 3 => IconChoice.Accent,
+            4 => IconChoice.Mark, _ => IconChoice.Auto,
+        }).ToString();
 
         try
         {

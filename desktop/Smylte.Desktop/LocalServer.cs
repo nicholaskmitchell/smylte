@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 
 namespace Smylte.Desktop;
@@ -162,6 +163,8 @@ public sealed class LocalServer : IDisposable
             if (path.StartsWith("/api/", StringComparison.Ordinal)
                 || path.Equals("/api", StringComparison.Ordinal))
                 await ProxyAsync(ctx).ConfigureAwait(false);
+            else if (path.StartsWith("/desktop/", StringComparison.Ordinal))
+                await DesktopAsync(ctx, path).ConfigureAwait(false);
             else
                 ServeStatic(ctx, path);
         }
@@ -181,6 +184,94 @@ public sealed class LocalServer : IDisposable
         {
             try { ctx.Response.Close(); } catch (Exception) { /* client already gone */ }
         }
+    }
+
+    // ── the desktop bridge ──────────────────────────────────────────────────
+
+    /// Set by MainForm. Null in any context that has no window to talk to, in
+    /// which case /desktop/* answers 404 — which is also what the SPA sees when
+    /// it is running in a real browser against the deployed server, and is how
+    /// it knows not to offer the desktop-only settings at all.
+    public IDesktopBridge? Bridge { get; set; }
+
+    /// Host controls the page is allowed to drive: which app icon the window
+    /// wears, and what colour its caption bar is.
+    ///
+    /// This is the only route that is neither a proxied API call nor a file off
+    /// disk, so it gets its own guards rather than inheriting either one's.
+    /// HttpListener is bound to localhost already; `IsLocal` restates that, and
+    /// the Origin check keeps a page on some other origin — anything the webview
+    /// might be navigated to — from driving the window it is displayed in. Both
+    /// are cheap, and the alternative is an open control channel on a fixed
+    /// well-known port on the user's machine.
+    private async Task DesktopAsync(HttpListenerContext ctx, string path)
+    {
+        var bridge = Bridge;
+        if (bridge is null) { TrySetStatus(ctx, 404); return; }
+        if (!ctx.Request.IsLocal) { TrySetStatus(ctx, 403); return; }
+
+        var origin = ctx.Request.Headers["Origin"];
+        if (!string.IsNullOrEmpty(origin)
+            && !string.Equals(origin, Origin, StringComparison.OrdinalIgnoreCase))
+        {
+            TrySetStatus(ctx, 403);
+            return;
+        }
+
+        if (path == "/desktop/state" && ctx.Request.HttpMethod == "GET")
+        {
+            await WriteJsonAsync(ctx, bridge.State()).ConfigureAwait(false);
+            return;
+        }
+
+        if (ctx.Request.HttpMethod != "POST") { TrySetStatus(ctx, 405); return; }
+
+        JsonElement body;
+        try
+        {
+            using var reader = new StreamReader(ctx.Request.InputStream, Encoding.UTF8);
+            var text = await reader.ReadToEndAsync().ConfigureAwait(false);
+            body = JsonDocument.Parse(text).RootElement;
+        }
+        catch (Exception)
+        {
+            TrySetStatus(ctx, 400);
+            return;
+        }
+
+        switch (path)
+        {
+            case "/desktop/appearance":
+                bridge.Appearance(Str(body, "background"));
+                break;
+            case "/desktop/icon":
+                bridge.Icon(Str(body, "choice"), Bool(body, "startMenuShortcut"));
+                break;
+            default:
+                TrySetStatus(ctx, 404);
+                return;
+        }
+        await WriteJsonAsync(ctx, bridge.State()).ConfigureAwait(false);
+    }
+
+    private static string? Str(JsonElement o, string name) =>
+        o.ValueKind == JsonValueKind.Object && o.TryGetProperty(name, out var v)
+        && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+
+    private static bool Bool(JsonElement o, string name) =>
+        o.ValueKind == JsonValueKind.Object && o.TryGetProperty(name, out var v)
+        && v.ValueKind == JsonValueKind.True;
+
+    private static async Task WriteJsonAsync(HttpListenerContext ctx, string json)
+    {
+        var bytes = Encoding.UTF8.GetBytes(json);
+        ctx.Response.StatusCode = 200;
+        ctx.Response.ContentType = "application/json; charset=utf-8";
+        ctx.Response.ContentLength64 = bytes.Length;
+        // Never cached: it is live host state, and the SPA re-reads it to decide
+        // whether the desktop-only settings exist at all.
+        ctx.Response.Headers["Cache-Control"] = "no-store";
+        await ctx.Response.OutputStream.WriteAsync(bytes).ConfigureAwait(false);
     }
 
     // ── proxy ───────────────────────────────────────────────────────────────
