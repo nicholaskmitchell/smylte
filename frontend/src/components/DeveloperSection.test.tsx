@@ -51,6 +51,13 @@ describe('<DeveloperSection>', () => {
     await userEvent.click(screen.getByRole('button', { name: /the month/i }))
     for (const img of shots()) expect(paramsOf(img).get('mode')).toBe('habits')
 
+    // Three modes, cycled by one control, so the preview grid reaches all of
+    // them — a mode nobody can select here ships with no panel-size coverage.
+    await userEvent.click(screen.getByRole('button', { name: /habits \+ today/i }))
+    for (const img of shots()) expect(paramsOf(img).get('mode')).toBe('now')
+    await userEvent.click(screen.getByRole('button', { name: /now \+ next/i }))
+    for (const img of shots()) expect(paramsOf(img).get('mode')).toBe('calendar')
+
     await userEvent.click(screen.getByRole('button', { name: /e-ink/i }))
     for (const img of shots()) expect(paramsOf(img).get('palette')).toBe('color')
 

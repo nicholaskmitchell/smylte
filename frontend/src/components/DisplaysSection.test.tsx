@@ -220,6 +220,47 @@ describe('<DisplaysSection>', () => {
         .toBeInTheDocument()
     })
 
+  it('cycles through all three modes and writes the one it lands on', async () => {
+    m.displays.mockResolvedValue([DISPLAY] as never)
+    mount()
+    await userEvent.click(await screen.findByRole('button', { name: /set up/i }))
+    // One `.menu-toggle` showing the current value, cycled — the same control
+    // the rotation and the refresh interval beside it already are. A mode that
+    // could not be reached here would be a feature with no way in.
+    await userEvent.click(screen.getByRole('button', { name: /the month/i }))
+    expect(m.patchDisplay).toHaveBeenCalledWith('tok-hallway', { mode: 'habits' })
+
+    m.displays.mockResolvedValue([{ ...DISPLAY, mode: 'habits' }] as never)
+    cleanup()
+    mount()
+    await userEvent.click(await screen.findByRole('button', { name: /set up/i }))
+    await userEvent.click(screen.getByRole('button', { name: /habits \+ today/i }))
+    expect(m.patchDisplay).toHaveBeenCalledWith('tok-hallway', { mode: 'now' })
+
+    m.displays.mockResolvedValue([{ ...DISPLAY, mode: 'now' }] as never)
+    cleanup()
+    mount()
+    await userEvent.click(await screen.findByRole('button', { name: /set up/i }))
+    // And back round: three values, not a one-way door.
+    await userEvent.click(screen.getByRole('button', { name: /now \+ next/i }))
+    expect(m.patchDisplay).toHaveBeenCalledWith('tok-hallway', { mode: 'calendar' })
+  })
+
+  it('states what the rolling mode costs, beside the interval it costs it in', async () => {
+    m.displays.mockResolvedValue([{ ...DISPLAY, mode: 'now' }] as never)
+    const { unmount } = mount()
+    await userEvent.click(await screen.findByRole('button', { name: /set up/i }))
+    // The honest caveat, on the screen where the choice is made rather than in
+    // a README: this face moves on the panel's next refresh, not on the tick.
+    expect(screen.getByText(/on this screen’s next refresh/i)).toBeInTheDocument()
+    unmount()
+
+    m.displays.mockResolvedValue([DISPLAY] as never)
+    mount()
+    await userEvent.click(await screen.findByRole('button', { name: /set up/i }))
+    expect(screen.queryByText(/on this screen’s next refresh/i)).not.toBeInTheDocument()
+  })
+
   it('offers the habits-only toggles only on a habits display', async () => {
     m.displays.mockResolvedValue([DISPLAY] as never)
     const { unmount } = mount()
@@ -234,6 +275,17 @@ describe('<DisplaysSection>', () => {
     // The setting the whole habit-tracker idea rests on, and the reason it is
     // stated next to the switch.
     expect(screen.getByText(/getting shorter as the day goes/i)).toBeInTheDocument()
+    cleanup()
+
+    // And not on a `now` display: that face has no done rows to hide — they are
+    // simply behind the cursor — so the switch would be a control over nothing.
+    m.displays.mockResolvedValue([{ ...DISPLAY, mode: 'now' }] as never)
+    mount()
+    await userEvent.click(await screen.findByRole('button', { name: /set up/i }))
+    expect(screen.queryByText(/hide habits once done/i)).not.toBeInTheDocument()
+    // It IS offered lists, because its queue is scoped by the same allowlist
+    // the habits face is.
+    expect(screen.getByText(/which lists/i)).toBeInTheDocument()
   })
 })
 

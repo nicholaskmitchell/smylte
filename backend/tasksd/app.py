@@ -485,7 +485,7 @@ class CreateDisplay(BaseModel):
     """
 
     name: XmlSafeText = Field(min_length=1, max_length=100)
-    mode: Literal["calendar", "habits"] = "calendar"
+    mode: Literal["calendar", "habits", "now"] = "calendar"
     palette: Literal["color", "eink"] = "color"
     # Allowlists of collection ids. Empty is "everything", the default, and a
     # real value that clears the set — see `_normalize_display_fields`.
@@ -504,7 +504,7 @@ class CreateDisplay(BaseModel):
 
 class EditDisplay(BaseModel):
     name: XmlSafeText | None = Field(default=None, min_length=1, max_length=100)
-    mode: Literal["calendar", "habits"] | None = None
+    mode: Literal["calendar", "habits", "now"] | None = None
     palette: Literal["color", "eink"] | None = None
     calendars: list[str] | None = Field(default=None, max_length=64)
     lists: list[str] | None = Field(default=None, max_length=64)

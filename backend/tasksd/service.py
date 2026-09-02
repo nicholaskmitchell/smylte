@@ -2642,7 +2642,7 @@ class TaskService:
     # takes no input, so there is no write for a token to reach even if one
     # leaked, and the single write anywhere in the path (`touch_display`) writes
     # a timestamp onto the display's own row.
-    _DISPLAY_MODES = ("calendar", "habits")
+    _DISPLAY_MODES = ("calendar", "habits", "now")
     _DISPLAY_PALETTES = ("color", "eink")
     # Under a minute is not a refresh rate, it is a fault: a browser page doing
     # it is just heat. A day is the ceiling only in the sense that a display
@@ -2897,7 +2897,11 @@ class TaskService:
         # and `_today`, which is why an account whose server is not in its own
         # zone wants `home_timezone` set.
         zone = self._home_tz()
-        if display["mode"] == "habits":
+        # `habits` and `now` are two faces of the same question — what is on
+        # today — so they take the same rows, from the same reader, honouring the
+        # same list allowlist. Only the shape of the answer differs, and that is
+        # decided in `frame.build_frame` rather than here.
+        if display["mode"] in ("habits", "now"):
             sources, rows, planned = self._display_day_rows(day, display)
             events = None
         else:

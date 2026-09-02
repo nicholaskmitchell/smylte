@@ -20,7 +20,7 @@
 
 import { describe, expect, it, beforeEach } from 'vitest'
 import { box, mount, viewport } from './test/browser-measure'
-import { measureRoom, measureRows } from './components/DisplayView'
+import { fitNow, measureRoom, measureRows } from './components/DisplayView'
 
 beforeEach(() => { document.body.innerHTML = '' })
 
@@ -385,4 +385,136 @@ describe('the habits face shows only the rows that fit, and counts the rest', ()
           `${w}x${h}: a heading with nothing under it`).toBeGreaterThan(0)
       }
     })
+})
+
+// ── the rolling face, which fits its type instead of clamping it ────────────
+
+const NOW = (title: string, opts: { next?: boolean; est?: boolean } = {}) => `
+  <div class="display display--eink">
+    <div class="display-now" id="root">
+      <header class="display-now__head">
+        <h1 class="display-title display-now__name">Kitchen</h1>
+        <span class="display-title display-now__tally">1/5</span>
+      </header>
+      <div class="display-now__main">
+        <p class="display-label display-now__eyebrow">
+          <span class="display-row__box display-now__mark"></span>Now
+        </p>
+        <div class="display-now__titlebox">
+          <p class="display-title display-now__title" id="title">${title}</p>
+        </div>
+        ${opts.est === false ? '' : '<p class="display-label display-now__est">1h 30m</p>'}
+      </div>
+      ${opts.next === false ? '' : `
+      <div class="display-now__next">
+        <p class="display-label display-now__next-label">Next</p>
+        <p class="display-now__next-text">Email Sam about the contract</p>
+      </div>`}
+      <p class="display-label display-now__more">+2</p>
+    </div>
+  </div>`
+
+describe('the rolling face fits its headline to the panel', () => {
+  const PANELS: Array<[number, number]> = [
+    [800, 480], [480, 800], [400, 300], [1024, 600], [296, 128],
+  ]
+  const LONG = 'Renew the buildings insurance before the renewal date'
+
+  it.each(PANELS)('at %ix%i the headline it chose actually fits its box',
+    async (w, h) => {
+      await viewport(w, h)
+      const host = await mount(NOW(LONG))
+      const root = host.querySelector('#root') as HTMLElement
+      // THE REAL FUNCTION. A copy of the search here would go on agreeing with
+      // itself while the page regressed.
+      const fit = fitNow(root)!
+      expect(fit, `${w}x${h}: nothing measured`).not.toBeNull()
+
+      const title = host.querySelector('#title') as HTMLElement
+      const box = host.querySelector('.display-now__titlebox') as HTMLElement
+      title.style.fontSize = `${fit.size}px`
+      await new Promise(requestAnimationFrame)
+      // The property: what it promised is inside the box that clips it. The
+      // headline is the mode — a clipped one is the whole face failing.
+      expect(title.scrollHeight, `${w}x${h}: the headline overflows its box`)
+        .toBeLessThanOrEqual(box.clientHeight + 1)
+      // And not vacuously small: a face that answered 14px everywhere would
+      // pass the line above and waste every panel bigger than a badge.
+      if (h >= 300) expect(fit.size).toBeGreaterThan(14)
+    })
+
+  it('spends a bigger panel on bigger type, not on more of nothing', async () => {
+    await viewport(400, 300)
+    const small = fitNow((await mount(NOW(LONG))).querySelector('#root') as HTMLElement)!
+    document.body.innerHTML = ''
+    await viewport(800, 480)
+    const big = fitNow((await mount(NOW(LONG))).querySelector('#root') as HTMLElement)!
+    expect(big.size).toBeGreaterThan(small.size)
+  })
+
+  it('a short title is set larger than a long one in the same box', async () => {
+    await viewport(800, 480)
+    const long = fitNow((await mount(NOW(LONG))).querySelector('#root') as HTMLElement)!
+    document.body.innerHTML = ''
+    await viewport(800, 480)
+    const short = fitNow((await mount(NOW('Stretch'))).querySelector('#root') as HTMLElement)!
+    expect(short.size).toBeGreaterThan(long.size)
+  })
+
+  it('concedes the name, then the estimate, then the next item — never the headline',
+    async () => {
+      // The order is the argument, and `render.py::_render_now` concedes the
+      // same three in the same order so the two surfaces drop the same things
+      // on the same panel. Asserted as an invariant rather than as an outcome
+      // at one size: what a given panel can hold is layout, but "the next item
+      // never goes while the display's name is still on screen" is the rule.
+      for (const [w, h] of [[800, 480], [400, 300], [296, 128], [240, 80]]) {
+        document.body.innerHTML = ''
+        await viewport(w, h)
+        const fit = fitNow(
+          (await mount(NOW(LONG))).querySelector('#root') as HTMLElement)!
+        if (!fit.est) expect(fit.head, `${w}x${h}`).toBe(false)
+        if (!fit.next) expect(fit.est, `${w}x${h}`).toBe(false)
+      }
+    })
+
+  it('drops the next item on a panel with no room for it at all', async () => {
+    // The case `NowFace` adds one to the count for. If nothing can ever reach
+    // it the count's +1 branch is dead code, so it is pinned here.
+    await viewport(240, 80)
+    const fit = fitNow((await mount(NOW(LONG))).querySelector('#root') as HTMLElement)!
+    expect(fit.next).toBe(false)
+  })
+
+  it('is set in the app’s own three typefaces, like every other face', async () => {
+    await viewport(800, 480)
+    const host = await mount(NOW('Stretch'))
+    expect(face(host.querySelector('.display-now__title')!)).toBe('Fraunces')
+    expect(face(host.querySelector('.display-now__name')!)).toBe('Fraunces')
+    expect(face(host.querySelector('.display-now__eyebrow')!)).toBe('JetBrains Mono')
+    expect(face(host.querySelector('.display-now__next-text')!)).toBe('Inter')
+    // The count is mono and UNTRACKED — a number to be read, not a label to be
+    // scanned, the same rule `.display-day__more` follows.
+    const more = host.querySelector('.display-now__more')!
+    expect(face(more)).toBe('JetBrains Mono')
+    expect(getComputedStyle(more).letterSpacing).toBe('normal')
+  })
+})
+
+describe('the rolling face keeps its last-resort ellipsis', () => {
+  it('clamps a title too long for the smallest panel instead of cutting it', async () => {
+    // `fitNow` picks a size at which the whole title fits, so this only bites
+    // on a title no size can hold. It has to bite: `-webkit-line-clamp` does
+    // not survive being a flex item, and when it stopped working the tail ran
+    // past the box and `overflow: hidden` cut it through the letters — which on
+    // a wall reads as a rendering fault, not as "there is more".
+    await viewport(400, 300)
+    const host = await mount(NOW(
+      'Renew the buildings insurance before the renewal date '.repeat(6)))
+    const title = host.querySelector('#title') as HTMLElement
+    title.style.fontSize = '30px'
+    await new Promise(requestAnimationFrame)
+    const lines = Math.round(title.offsetHeight / (30 * 1.24))
+    expect(lines, 'the line clamp is not applying').toBeLessThanOrEqual(4)
+  })
 })

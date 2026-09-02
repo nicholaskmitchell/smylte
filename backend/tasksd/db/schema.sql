@@ -522,9 +522,12 @@ CREATE INDEX IF NOT EXISTS idx_notification_deliveries_claimed
 CREATE TABLE IF NOT EXISTS displays (
     token       TEXT PRIMARY KEY,          -- secrets.token_urlsafe(32); the URL key
     name        TEXT NOT NULL,             -- "Hallway", "Kitchen" — for the owner only
-    -- calendar | habits. What the screen is FOR, and the only two the app
-    -- claims to draw well. A TEXT rather than an INTEGER enum so the DB reads
-    -- like the API; unknown values are refused at the service, never here.
+    -- calendar | habits | now. What the screen is FOR, and the only three the
+    -- app claims to draw well. A TEXT rather than an INTEGER enum so the DB
+    -- reads like the API; unknown values are refused at the service, never
+    -- here — which is also why adding `now` needed no migration, and why a row
+    -- holding a mode this build does not know falls through to the default it
+    -- is already declared with.
     mode        TEXT NOT NULL DEFAULT 'calendar',
     -- color | eink. NOT a theme: it decides whether the frame may use colour at
     -- all, and an eink frame is authored in pure black and white with no alpha,
