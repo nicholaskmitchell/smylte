@@ -1,3 +1,5 @@
+using System.Runtime.InteropServices;
+
 namespace Smylte.Desktop;
 
 internal static class Program
@@ -6,9 +8,31 @@ internal static class Program
     /// get their own client, with their own DPAPI-scoped credentials.
     private const string InstanceMutex = @"Local\SmylteDesktopSingleInstance";
 
+    /// What the taskbar groups windows by and what a pin records. Without an
+    /// explicit one Windows derives an internal ID from the process by
+    /// heuristics it does not document and an application cannot read back;
+    /// Microsoft's own guidance is that an explicit ID "is the only way to
+    /// guarantee an exact user experience" and that setting one is "strongly
+    /// recommended".
+    ///
+    /// No version segment, deliberately. The ID is the app's identity across
+    /// upgrades, so a bump would present the new build as a different
+    /// application and orphan an existing pin.
+    internal const string AppUserModelId = "NicholasKMitchell.Smylte";
+
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode, PreserveSig = false)]
+    private static extern void SetCurrentProcessExplicitAppUserModelID(string appId);
+
     [STAThread]
     private static void Main(string[] args)
     {
+        // First statement in the process: the docs require this before the
+        // application presents any UI, and the "already running" branch below
+        // can show a MessageBox. Cosmetic if it fails — an unreadable taskbar
+        // grouping is not worth refusing to start over.
+        try { SetCurrentProcessExplicitAppUserModelID(AppUserModelId); }
+        catch (Exception) { /* identity is a nicety; launching is not */ }
+
         // `Smylte.exe --setup` reopens configuration without having to lose the
         // installed build — the way to change server or credentials later, and
         // what desktop/README.md tells the user to run.

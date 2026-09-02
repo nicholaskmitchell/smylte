@@ -46,6 +46,25 @@ public sealed class Settings
     public string ClientDigest { get; set; } = "";
     public string ClientDigestStamp { get; set; } = "";
 
+    /// Which app icon the window wears: Auto, Paper, Ink, Accent or Mark.
+    /// Parsed leniently by IconLibrary — an unknown value falls back to Auto
+    /// rather than refusing to start, because this is a cosmetic field that a
+    /// hand-edited settings.json can easily get wrong.
+    public string IconChoice { get; set; } = "Auto";
+
+    /// Opt-in. Writes a Start-menu shortcut carrying the chosen icon and this
+    /// app's AppUserModelID, which is the only supported way to reach the
+    /// GROUPED taskbar button — the window's own icon never drives it. Off by
+    /// default because the client otherwise installs nothing anywhere, and
+    /// desktop/README.md makes a point of that.
+    public bool StartMenuShortcut { get; set; }
+
+    /// The last background the web app reported, as #RRGGBB, so the caption bar
+    /// is already themed on the next launch instead of flashing the system
+    /// default until the SPA has booted and pushed its colour over the bridge.
+    /// Empty means "never reported" — leave the frame to Windows.
+    public string TitleBarColor { get; set; } = "";
+
     public int WindowWidth { get; set; } = 1280;
     public int WindowHeight { get; set; } = 860;
     public bool WindowMaximized { get; set; }
