@@ -13,6 +13,37 @@
     <AssemblyVersion>1.0.0.0</AssemblyVersion>
     <FileVersion>1.0.0.0</FileVersion>
 
+    <!-- These are the strings Windows shows ABOUT the exe, and with neither set
+         it had nothing to show: SmartScreen's warning named no publisher at all
+         and Explorer's Details tab was blank. The exe is unsigned and this does
+         not change that — the warning still appears — but an unsigned binary
+         that says who wrote it and what it is reads differently from one that
+         says nothing. -->
+    <Company>Nicholas K. Mitchell</Company>
+    <Product>Smylte</Product>
+
+    <!-- The WinForms source generator's default is SystemAware, which this
+         project was inheriting silently by not setting the property.
+         System-aware means the process asks the primary monitor for its DPI once
+         at startup; on any monitor at a different scale factor, Windows
+         bitmap-stretches the whole window — frame, title bar, and title-bar icon
+         — rather than letting it redraw. On a mixed-DPI desk that is a blurry
+         window no icon work can fix, and it is a second, independent cause of
+         "this doesn't look like a Windows app".
+
+         Verified safe to set here specifically: SetHighDpiMode silently fails if
+         an application manifest already declares dpiAware, and this project has
+         no app.manifest and declares none. Program.Main also already calls
+         ApplicationConfiguration.Initialize() before creating any window, which
+         is the ordering SetProcessDpiAwarenessContext requires — it was moved
+         ahead of the single-instance check for the MessageBox there, and that
+         happens to be exactly what this needs too.
+
+         Worth re-checking by hand when this changes: WebView2 can briefly
+         disagree about scale while a window is dragged between monitors, and
+         SetupForm is a FixedDialog with a hard-coded ClientSize(580, 400). -->
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+
     <!-- Self-contained single file: the target machine needs no .NET install.
          Not trimmed — WinForms reflects over its own types, and trimming it is a
          reliable way to produce an exe that starts and then dies on a dialog.

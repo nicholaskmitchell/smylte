@@ -99,6 +99,39 @@ it carries the runtime — that is what lets the exe run on a machine with no .N
 installed. A framework-dependent build is 1.4 MB but needs the .NET Desktop
 Runtime installed separately, which Windows does not ship.
 
+## The icon
+
+`app.ico` is generated, not drawn. Rebuild it after any change to
+`frontend/public/favicon.svg` — which is the only place the "S." monogram is
+authored — with:
+
+```bash
+cd backend && python -m dev.build_app_icon   # needs Pillow
+```
+
+That script also re-emits `frontend/public/apple-touch-icon.png`, and carries
+the reasoning for everything below. CI never runs it; the binaries are
+committed, and what CI does instead is assert they are correct
+(`Smylte.Desktop.Tests/AppIconTests.cs`).
+
+Two things about it are worth knowing before changing it.
+
+**The Windows icon is deliberately not the favicon.** iOS takes a full-bleed
+opaque square and masks, rounds and insets it itself; Windows does none of that
+and composites whatever the file holds, literally. So the cream plate that the
+web and iOS assets keep is drawn in full on a taskbar, where it fails on both
+themes at once — 1.05:1 against the light one, 13.98:1 against the dark. A
+Win32 `.ico` holds exactly one image per size and has no light/dark variant
+mechanism, and burnt orange is the only brand colour that clears 3:1 on both,
+so the desktop mark is the letter itself in `--accent`, on transparency.
+
+**Fifteen sizes, and three of them are drawn differently.** Windows asks for 14
+distinct sizes across its three request bands, and Fraunces' hairlines go
+sub-pixel below about 34px — so 16, 20 and 24 are not downscales of the 256, and
+below 24 the period becomes a whole-pixel square. The generator prints the four
+floors (stroke, aperture, period, the gap between letter and period) at every
+size and refuses to write a file that misses one.
+
 ## Tests
 
 ```
@@ -115,6 +148,13 @@ file resolver's path-traversal guard and the cookie rewriting — and the two wa
 a failed update used to cost someone a working client. If either covered file
 ever takes a Windows-only dependency this project stops compiling, which is the
 intended failure: they are meant to be portable logic.
+
+It also asserts `app.ico` itself, by parsing the bytes rather than the image
+(`System.Drawing` throws off Windows, and this project runs everywhere). That is
+worth a test because the failure is silent from both ends: a bad regeneration is
+swallowed by the deliberate `catch` around the icon load in `MainForm` and
+`SetupForm`, so the window quietly falls back to the stock WinForms icon while
+Explorer still shows the stamped one.
 
 ## How it fits together
 
