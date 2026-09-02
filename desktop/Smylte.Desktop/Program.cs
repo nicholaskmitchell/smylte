@@ -18,7 +18,7 @@ internal static class Program
     /// No version segment, deliberately. The ID is the app's identity across
     /// upgrades, so a bump would present the new build as a different
     /// application and orphan an existing pin.
-    private const string AppUserModelId = "NicholasKMitchell.Smylte";
+    internal const string AppUserModelId = "NicholasKMitchell.Smylte";
 
     [DllImport("shell32.dll", CharSet = CharSet.Unicode, PreserveSig = false)]
     private static extern void SetCurrentProcessExplicitAppUserModelID(string appId);

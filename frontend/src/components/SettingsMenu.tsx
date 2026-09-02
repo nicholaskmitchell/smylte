@@ -26,6 +26,7 @@ import { ArchivedCalendarsSection } from './ArchivedCalendarsSection'
 import { ConnectionsSection } from './ConnectionsSection'
 import { DisplaysSection } from './DisplaysSection'
 import { DeveloperSection } from './DeveloperSection'
+import { DesktopSection } from './DesktopSection'
 import { TabsSection } from './TabsSection'
 import { CapacitySection } from './CapacitySection'
 import { NotificationsSection } from './NotificationsSection'
@@ -269,6 +270,7 @@ export function SettingsMenu({
               color token, the corner radius, the text scale and the type
               families — and saves what you make as a named theme.
             </div>
+            <DesktopSection />
           </>
         )}
 

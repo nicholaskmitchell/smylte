@@ -7,6 +7,7 @@ import './styles/display.css'
 import { App } from './App'
 import { BookingPage } from './components/BookingPage'
 import { DisplayView } from './components/DisplayView'
+import { startCaptionSync } from './desktop'
 
 // /book/<token> is the public client-booking page: no session, no login — the
 // branch happens before mount so the authed shell (and its /api/me call) never
@@ -18,6 +19,12 @@ const booking = location.pathname.match(/^\/book\/([A-Za-z0-9_-]+)\/?$/)
 // has no session and never will, so the authed shell would show a wall panel a
 // login form. The token pattern is `token_urlsafe`'s alphabet, as above.
 const display = location.pathname.match(/^\/display\/([A-Za-z0-9_-]+)\/?$/)
+
+// Keep the Windows client's caption bar in step with the theme. A no-op in a
+// browser, where /desktop/appearance does not exist — and started here rather
+// than inside App so the booking and display routes get it too: a wall panel
+// and a booking page have themes as much as the app does.
+startCaptionSync()
 
 createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

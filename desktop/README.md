@@ -61,9 +61,11 @@ lives in the web build.
 
 | Path | What |
 | --- | --- |
-| `%APPDATA%\Smylte\settings.json` | Server URL, username, encrypted password, optional GitHub token, data folder, port, window size |
+| `%APPDATA%\Smylte\settings.json` | Server URL, username, encrypted password, optional GitHub token, data folder, port, window size, icon choice, title-bar colour |
 | `<data folder>\web\` | The downloaded web build |
 | `<data folder>\profile\` | WebView2 profile — cookies, localStorage |
+| `%APPDATA%\Smylte\icon.ico` | Only with the Start-menu shortcut on: the chosen icon, since a shortcut needs an icon *file* |
+| `…\Start Menu\Programs\Smylte.lnk` | Only with that toggle on; removed again when it is turned off |
 
 The data folder defaults to `%LOCALAPPDATA%\Smylte` and is chosen on first run.
 
@@ -122,8 +124,44 @@ and composites whatever the file holds, literally. So the cream plate that the
 web and iOS assets keep is drawn in full on a taskbar, where it fails on both
 themes at once — 1.05:1 against the light one, 13.98:1 against the dark. A
 Win32 `.ico` holds exactly one image per size and has no light/dark variant
-mechanism, and burnt orange is the only brand colour that clears 3:1 on both,
-so the desktop mark is the letter itself in `--accent`, on transparency.
+mechanism, and burnt orange is the only brand colour that clears 3:1 on both —
+so the icon compiled into the exe is an accent plate, and it is rounded, which
+the editorial system's `border-radius: 0` otherwise forbids. Both are deliberate
+departures: that file is what Explorer, a pinned entry and a desktop shortcut
+get, and none of them can follow the theme.
+
+**You can change it, within limits.** Settings → Appearance in the app, or the
+`--setup` dialog, offers five choices: follow the Windows theme (the default),
+or a cream, ink, accent or unplated mark. Following the theme is possible only
+at runtime — a `.ico` holds one image per size and has no light/dark variant
+mechanism outside MSIX — which is why the plated options exist at all.
+
+The limits are worth stating, because the surface most people mean is the one
+that does not follow:
+
+| Surface | Follows the setting |
+| --- | --- |
+| Title bar, Alt-Tab, Task Manager | Yes, immediately |
+| Taskbar button | Only with "Combine taskbar buttons: Never", or the shortcut below |
+| Explorer, desktop, pinned entry, Start | No — those read the compiled icon |
+
+On the Windows 11 default the taskbar shows a *grouped* button, and [its icon
+comes from a Start-menu shortcut, then a desktop shortcut, then the exe][chen]
+— never the window's own. So Appearance has a **Start menu shortcut** toggle,
+off by default, which writes one carrying the chosen icon and this app's
+AppUserModelID. It is the only thing that reaches that button, and it is opt-in
+because the client otherwise installs nothing anywhere.
+
+[chen]: https://devblogs.microsoft.com/oldnewthing/20150812-00/?p=91831
+
+**The title bar follows the app's theme too.** The strip with the minimise,
+maximise and close buttons belongs to the desktop window manager, not to the
+app, and `DwmSetWindowAttribute` is the only supported way in. On Windows 11
+(22000+) it takes an arbitrary colour, so the caption is painted the app's own
+`--bg` — a custom theme carries through to the frame. On Windows 10 the OS
+offers only light or dark, and the app picks whichever the theme is nearer. The
+colour is remembered between launches so the frame does not flash the system
+default while the web app boots.
 
 **Fifteen sizes, and three of them are drawn differently.** Windows asks for 14
 distinct sizes across its three request bands, and Fraunces' hairlines go
