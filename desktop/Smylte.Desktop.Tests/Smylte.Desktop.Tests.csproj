@@ -31,6 +31,11 @@
     <Compile Include="../Smylte.Desktop/LocalServer.cs" />
     <Compile Include="../Smylte.Desktop/Updater.cs" />
     <Compile Include="../Smylte.Desktop/Settings.cs" />
+    <!-- The icon comes in as bytes rather than as a linked source file, so
+         AppIconTests asserts on the identical blob <ApplicationIcon> stamps into
+         the exe. LogicalName pins the resource name: without it, the linked path
+         would decide it. -->
+    <EmbeddedResource Include="../Smylte.Desktop/app.ico" LogicalName="app.ico" />
   </ItemGroup>
 
   <ItemGroup>
