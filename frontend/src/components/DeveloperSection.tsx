@@ -17,7 +17,8 @@
 import { useMemo, useState } from 'react'
 import { useI18n } from '../i18n'
 
-type Mode = 'calendar' | 'habits'
+type Mode = 'calendar' | 'habits' | 'now'
+const MODES: readonly Mode[] = ['calendar', 'habits', 'now']
 type Palette = 'color' | 'eink'
 
 /** Panels that exist, with the sizes they actually are.
@@ -79,7 +80,7 @@ export function DeveloperSection() {
       <div className="menu-row">
         <label>{tr('disp.mode')}</label>
         <button className="menu-toggle"
-          onClick={() => setMode((m) => (m === 'calendar' ? 'habits' : 'calendar'))}>
+          onClick={() => setMode((m) => MODES[(MODES.indexOf(m) + 1) % MODES.length])}>
           {tr(`disp.mode.${mode}`)}
         </button>
       </div>

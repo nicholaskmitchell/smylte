@@ -149,6 +149,7 @@ export function DisplayView({ token }: { token: string }) {
         <>
           {frame.calendar ? <CalendarFace frame={frame} /> : null}
           {frame.habits ? <HabitsFace frame={frame} /> : null}
+          {frame.now ? <NowFace frame={frame} /> : null}
           {stale ? <div className="display-label display__stale">Not updated recently</div> : null}
         </>
       )}
@@ -509,6 +510,253 @@ function HabitsFace({ frame }: { frame: DisplayFrame }) {
         // one. Only the first has earned anything.
         <p className="display-day__empty">
           {finished ? block.all_done_text : block.empty_text}
+        </p>
+      ) : null}
+    </div>
+  )
+}
+
+// ── the rolling face ─────────────────────────────────────────────────────────
+
+/** The most lines the headline gets. Mirrors `render.NOW_MAX_LINES`; the two
+ *  surfaces have to break the same title the same way. */
+const NOW_MAX_LINES = 4
+
+/** The type size for a rolling face's headline, and whether the next block fits.
+ *
+ * This is the one face whose type is FITTED rather than clamped against the
+ * viewport, and the reason is that its content is fixed. Every other face here
+ * sizes with `clamp()` because it draws an unbounded number of rows and a
+ * bigger panel should show MORE of them; this one draws exactly two items
+ * whatever the panel is, so there is no "more" to spend the pixels on. A title
+ * set at a viewport-derived size left the bottom half of an 800×480 empty.
+ *
+ * `render.py::_render_now` searches the same way — largest size at which the
+ * WHOLE title still fits, stepping down from a ceiling proportional to the
+ * panel — so a browser panel and a bitmap panel put the same words at the same
+ * size. That is why this measures rather than reading a number out of the
+ * stylesheet: the number would be a second opinion.
+ *
+ * The `next` answer is not cosmetic. `remaining` counts what the FRAME left
+ * behind the next item; a panel that then cannot draw that item is hiding one
+ * more, and a screen saying "+5" while eight things wait is the first-eight-of-
+ * forty lie this mode exists to refuse. So the caller adds it back.
+ *
+ * Exported for `display.browser.test.tsx`, which renders what this returns and
+ * then measures whether it actually fits. Under jsdom every box is 0×0, so that
+ * test is the only place the arithmetic can be checked — and it has to call
+ * THIS function rather than restate it, or the copy is what stays correct.
+ */
+export function fitNow(
+  root: HTMLElement,
+): { size: number; head: boolean; est: boolean; next: boolean } | null {
+  const main = root.querySelector('.display-now__main') as HTMLElement | null
+  const title = root.querySelector('.display-now__title') as HTMLElement | null
+  if (!main || !title) return null
+  if (root.clientHeight <= 0) return null
+  const floor = 14
+  const needed = floor * 1.24
+
+  const eyebrow = root.querySelector('.display-now__eyebrow') as HTMLElement | null
+  const est = root.querySelector('.display-now__est') as HTMLElement | null
+
+  // The optional parts, in the order they are conceded — and the order is the
+  // argument. A display's name is the least of what this screen is for; the
+  // estimate qualifies the current item; the next item is the second half of
+  // the feature. `render.py::_render_now` concedes the same three in the same
+  // order, so a browser panel and a bitmap panel of the same size drop the same
+  // things. The headline never goes: it is the mode.
+  const parts = ([
+    ['head', root.querySelector('.display-now__head')],
+    ['est', est],
+    ['next', root.querySelector('.display-now__next')],
+  ] as Array<['head' | 'est' | 'next', HTMLElement | null]>)
+
+  /** The height the title actually has to live in.
+   *
+   *  Computed rather than read off the title's own box, because the title is
+   *  NOT a flex item: it sits inside `.display-now__titlebox` so that
+   *  `-webkit-line-clamp` survives. A `-webkit-box` used directly as a flex
+   *  item is blockified and the clamp silently stops working — measured in
+   *  Chromium, a title that should have been cut at four lines rendered
+   *  twelve — and the clamp is the ellipsis this face falls back on when even
+   *  the floor size will not fit. */
+  const roomFor = () => {
+    const gap = parseFloat(getComputedStyle(main).rowGap) || 0
+    const others = [eyebrow, est].filter(
+      (el): el is HTMLElement => !!el && el.style.display !== 'none')
+    return main.clientHeight
+      - others.reduce((n, el) => n + el.offsetHeight, 0)
+      - gap * others.length
+  }
+
+  // This function OWNS their `display`, and it starts every pass by putting
+  // them all back. React renders all three whenever the data has them, which
+  // keeps this idempotent: measuring a DOM that a previous pass had already
+  // stripped would find nothing left to concede, report everything as fitting,
+  // and flip back and forth on every resize.
+  const shown = { head: true, est: true, next: true }
+  for (const [, el] of parts) if (el) el.style.display = ''
+  for (const [key, el] of parts) {
+    // Read first: hiding one grows the box, and reading it here forces the
+    // reflow that makes the next question meaningful.
+    if (roomFor() >= needed) break
+    if (!el) continue
+    el.style.display = 'none'
+    shown[key] = false
+  }
+  const room = roomFor()
+
+  // The same ceiling `_render_now` takes, and it reads the WIDTH as well as the
+  // height: a portrait panel has height to spare and a narrow column, which is
+  // the mistake `_grid_scale` was written to fix on the month face.
+  const ceiling = Math.max(18, Math.min(root.clientHeight * 0.30,
+                                        root.clientWidth * 0.20))
+  // Measured with the clamp OFF, or the search would settle on a size whose
+  // first four lines fit and whose fifth was quietly cut — which is the
+  // truncation this face exists not to hide.
+  const clamp = title.style.webkitLineClamp
+  title.style.webkitLineClamp = 'unset'
+  let size = floor
+  for (let s = Math.floor(ceiling); s >= floor; s -= 2) {
+    title.style.fontSize = `${s}px`
+    if (title.scrollHeight <= Math.min(room, NOW_MAX_LINES * s * 1.24) + 1) {
+      size = s
+      break
+    }
+  }
+  // Restored: React owns the size, and leaving the probe's last values on the
+  // node would show a frame at the wrong one before the state lands.
+  title.style.fontSize = ''
+  title.style.webkitLineClamp = clamp
+  return { size, ...shown }
+}
+
+/** `fitNow` against the live face, re-run when the panel resizes. */
+function useNowFit(root: React.RefObject<HTMLDivElement | null>, deps: unknown) {
+  const [fit, setFit] = useState<ReturnType<typeof fitNow>>(null)
+  useLayoutEffect(() => {
+    const measure = () => {
+      const el = root.current
+      if (!el) return
+      const got = fitNow(el)
+      if (got) setFit(got)
+    }
+    measure()
+    // Feature-detected for the same reason the other two hooks are: on a kiosk
+    // webview without one, `new ResizeObserver` throws inside the layout effect
+    // and takes the whole page with it.
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(measure)
+    if (root.current) ro.observe(root.current)
+    return () => ro.disconnect()
+  }, [root, deps])
+  return fit
+}
+
+function NowFace({ frame }: { frame: DisplayFrame }) {
+  const block = frame.now!
+  const { counts, current, next } = block
+  const rootRef = useRef<HTMLDivElement>(null)
+  // `null` is "not measured yet" — the face renders at the floor for one frame
+  // and is corrected on the layout effect before paint, as on the other two.
+  const fit = useNowFit(rootRef, block)
+  // What the frame left behind `next`, plus the `next` this panel could not
+  // draw. `render.py::_render_now` does the same sum against its own budget,
+  // and it is not cosmetic: `remaining` is what the FRAME hid, and a screen
+  // saying "+5" while six things wait is the first-eight-of-forty lie this mode
+  // exists to refuse.
+  //
+  // All three optional parts stay in the DOM whatever `fit` says — `fitNow`
+  // hides them itself, and needs them there to measure against on the next
+  // pass. Only the count reads its answer.
+  const spare = block.remaining + (next !== null && fit && !fit.next ? 1 : 0)
+
+  return (
+    <div className="display-now" ref={rootRef}>
+      {frame.display.name || counts.total > 0 ? (
+        <header className="display-now__head">
+          <h1 className="display-title display-now__name">{frame.display.name}</h1>
+          {counts.total > 0 ? (
+            // The score, and on this face it is the only thing that remembers
+            // the finished items: they never appear on it at all.
+            <span className="display-title display-now__tally">
+              {counts.done}/{counts.total}
+            </span>
+          ) : null}
+        </header>
+      ) : null}
+
+      {block.planned ? null : (
+        // Nobody has opened today, so none of this is a plan — it is what
+        // opening one would derive. The label matters more here than on any
+        // other face: "Now: fix the boiler" reads as a commitment, and the
+        // owner has not made one.
+        <div className="display-now__preview">
+          <p className="display-label display-now__preview-title">{block.preview_text}</p>
+          <p className="display-now__preview-hint">{block.preview_hint}</p>
+        </div>
+      )}
+
+      <div className="display-now__main">
+        {current ? (
+          <p className="display-label display-now__eyebrow">
+            {/* The kind mark rides on the eyebrow rather than beside the
+                headline. Beside a headline it has to be headline-sized to look
+                deliberate, and an empty box that large on a screen with nothing
+                to tap reads as a control — the one thing a display must never
+                appear to offer. At label size it is a bullet, in the vocabulary
+                the habits face already uses: a ring is a habit, a box is a row.
+                Never filled, because by construction the current item is the
+                first one that is NOT done. */}
+            <span
+              className={current.kind === 'habit'
+                ? 'display-row__ring display-now__mark'
+                : 'display-row__box display-now__mark'}
+              aria-hidden="true" />
+            {block.heading}
+          </p>
+        ) : null}
+        {/* The box, and the title inside it. Two elements rather than one
+            because `-webkit-line-clamp` does not survive being a flex item —
+            Chromium blockifies it and the clamp stops working, silently. The
+            box is the flex item; the title is a plain block child of it. */}
+        <div className="display-now__titlebox">
+          <p className="display-title display-now__title"
+            style={fit ? { fontSize: `${fit.size}px` } : undefined}>
+            {/* Two different silences, worth telling apart: a day that had
+                things on it and has none left is a finished day, and a day that
+                never had any is an empty one. Set in the same slot at the same
+                size as a task, because a day you finished should read from the
+                doorway too. */}
+            {current ? current.text
+              : counts.done ? block.all_done_text : block.empty_text}
+          </p>
+        </div>
+        {current && current.estimate ? (
+          <p className="display-label display-now__est">{current.estimate}</p>
+        ) : null}
+      </div>
+
+      {next ? (
+        <div className="display-now__next">
+          <p className="display-label display-now__next-label">{block.next_heading}</p>
+          <p className="display-now__next-text">{next.text}</p>
+        </div>
+      ) : null}
+
+      {/* Mono and untracked, like every other count the app draws. The tally
+          rides here only when the header that would normally carry it was the
+          part this panel conceded — on a badge it is then the only thing left
+          that says how much of the day is done. `_render_now` writes the same
+          line, in the same order, for the same reason. */}
+      {spare > 0 || (fit && !fit.head && counts.total > 0) ? (
+        <p className="display-label display-now__more">
+          {[
+            ...(fit && !fit.head && counts.total > 0
+              ? [`${counts.done}/${counts.total}`] : []),
+            ...(spare > 0 ? [`+${spare}`] : []),
+          ].join('  ')}
         </p>
       ) : null}
     </div>
