@@ -31,11 +31,16 @@
     <Compile Include="../Smylte.Desktop/LocalServer.cs" />
     <Compile Include="../Smylte.Desktop/Updater.cs" />
     <Compile Include="../Smylte.Desktop/Settings.cs" />
+    <!-- LocalServer serves the desktop bridge, so it needs the contract. A bare
+         interface with no Windows dependency, which is why linking it here does
+         not cost this project its portable TFM. -->
+    <Compile Include="../Smylte.Desktop/IDesktopBridge.cs" />
     <!-- The icon comes in as bytes rather than as a linked source file, so
          AppIconTests asserts on the identical blob <ApplicationIcon> stamps into
          the exe. LogicalName pins the resource name: without it, the linked path
          would decide it. -->
     <EmbeddedResource Include="../Smylte.Desktop/app.ico" LogicalName="app.ico" />
+    <EmbeddedResource Include="../Smylte.Desktop/icons/*.ico" LogicalName="%(Filename)%(Extension)" />
   </ItemGroup>
 
   <ItemGroup>

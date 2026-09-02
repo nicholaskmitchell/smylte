@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Text.Json;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 
@@ -9,7 +11,7 @@ namespace Smylte.Desktop;
 /// WebView2 is Edge's engine, already present on Windows 10 and 11, so this is
 /// not a bundled browser — it is the one the machine already has, hosted in a
 /// native window that owns the server's lifetime and shuts it down on close.
-public sealed class MainForm : Form
+public sealed class MainForm : Form, IDesktopBridge
 {
     private readonly Settings _settings;
     private readonly WebView2 _web = new() { Dock = DockStyle.Fill, Visible = false };
@@ -35,8 +37,7 @@ public sealed class MainForm : Form
         ClientSize = new Size(settings.WindowWidth, settings.WindowHeight);
         if (settings.WindowMaximized) WindowState = FormWindowState.Maximized;
 
-        try { Icon = new Icon(typeof(MainForm), "app.ico"); }
-        catch (Exception) { /* cosmetic */ }
+        ApplyIcon();
 
         BuildNotice();
 
@@ -140,6 +141,7 @@ public sealed class MainForm : Form
                 _settings.Port = _server.Port;
                 _settings.Save();
             }
+            _server.Bridge = this;
             _server.Start();
 
             var environment = await CoreWebView2Environment
@@ -167,6 +169,103 @@ public sealed class MainForm : Form
         {
             Fail(ex.Message, offerSetup: true);
         }
+    }
+
+    // ── window dressing ─────────────────────────────────────────────────────
+
+    /// WM_SETTINGCHANGE with "ImmersiveColorSet" is how Windows announces that
+    /// the light/dark setting moved. Only Auto cares — it is the mode whose
+    /// answer depends on the taskbar — but re-resolving unconditionally is a
+    /// no-op for the fixed choices and saves a special case.
+    private const int WmSettingChange = 0x001A;
+
+    protected override void WndProc(ref Message m)
+    {
+        base.WndProc(ref m);
+        if (m.Msg == WmSettingChange && m.LParam != IntPtr.Zero
+            && Marshal.PtrToStringAuto(m.LParam) == "ImmersiveColorSet")
+        {
+            ApplyIcon();
+        }
+    }
+
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        // The caption cannot be painted before there is a window to paint. The
+        // colour comes from settings rather than from the page, because the page
+        // has not loaded yet — this is what stops the frame flashing the system
+        // default on every launch until the SPA boots and reports its --bg.
+        ApplyChrome(_settings.TitleBarColor);
+    }
+
+    private void ApplyIcon()
+    {
+        // Cosmetic, all the way down: a missing or unreadable icon costs the
+        // monogram, never the window.
+        try { Icon = IconLibrary.Load(IconLibrary.Parse(_settings.IconChoice)) ?? Icon; }
+        catch (Exception) { /* cosmetic */ }
+    }
+
+    private void ApplyChrome(string? background)
+    {
+        try
+        {
+            var colour = WindowChrome.ParseHex(background);
+            if (colour is null) WindowChrome.Reset(Handle);
+            else WindowChrome.Apply(Handle, colour.Value);
+        }
+        catch (Exception) { /* cosmetic */ }
+    }
+
+    // ── IDesktopBridge ──────────────────────────────────────────────────────
+    //
+    // Every one of these arrives on an HttpListener thread, so each hops to the
+    // UI thread before touching a window. `State` is the exception and has to
+    // be: it returns a value, so it cannot fire-and-forget, and it reads only
+    // the settings object.
+
+    string IDesktopBridge.State()
+    {
+        var choice = IconLibrary.Parse(_settings.IconChoice);
+        return JsonSerializer.Serialize(new
+        {
+            available = true,
+            choice = choice.ToString(),
+            // What Auto currently resolves to, so the settings UI can show the
+            // live answer rather than the word "Auto" and nothing else.
+            resolved = IconLibrary.Resolve(choice).ToString(),
+            systemUsesLightTheme = IconLibrary.SystemUsesLightTheme(),
+            startMenuShortcut = _settings.StartMenuShortcut,
+            // Windows 10 can only do light or dark; an arbitrary caption colour
+            // is Windows 11 22000+. The page uses this to say which it will get
+            // instead of promising a colour the OS will ignore.
+            captionColour = Environment.OSVersion.Version.Build >= 22000,
+        });
+    }
+
+    void IDesktopBridge.Appearance(string? background)
+    {
+        BeginInvoke(() =>
+        {
+            var value = WindowChrome.ParseHex(background) is null ? "" : background!;
+            if (value == _settings.TitleBarColor) return;
+            _settings.TitleBarColor = value;
+            _settings.Save();
+            ApplyChrome(value);
+        });
+    }
+
+    void IDesktopBridge.Icon(string? choice, bool startMenuShortcut)
+    {
+        BeginInvoke(() =>
+        {
+            _settings.IconChoice = IconLibrary.Parse(choice).ToString();
+            _settings.StartMenuShortcut = startMenuShortcut;
+            _settings.Save();
+            ApplyIcon();
+            ShellShortcut.Sync(_settings);
+        });
     }
 
     /// Trade the stored credentials for a session cookie and hand it to the
