@@ -1433,6 +1433,15 @@ class TaskService:
             # different things for a day to remember. Same one-change rule as
             # the columns above — this line and the ALTER ship together.
             "rolled_to": row["rolled_to"],
+            # Seconds a focus session actually spent on this row, or null when
+            # no session ever did — a measurement, kept apart from the estimate
+            # above, which is a guess. Same one-change rule as the columns
+            # above: this line and store.init_db's ALTER ship together.
+            "worked_seconds": row["worked_seconds"],
+            # Whether a focus session stops at the estimate (true), runs until
+            # the row is ticked (false), or follows the account's default (null,
+            # "not said"). Same one-change rule.
+            "capped": None if row["capped"] is None else bool(row["capped"]),
             "created_at": row["created_at"],
         }
 
@@ -1710,6 +1719,11 @@ class TaskService:
                 # hand-written spelling of `_day_entry_dto` and the docstring
                 # promises callers ONE entry shape.
                 "rolled_to": None,
+                # Both null in a preview, for the reason `rolled_to` is: a row
+                # that does not exist has not been worked and has had nothing
+                # decided about it. Present for the one-shape promise above.
+                "worked_seconds": None,
+                "capped": None,
                 "created_at": None,
             }
             for f in pending
@@ -2310,9 +2324,10 @@ class TaskService:
         self, day: str, entry_id: str, *,
         done: bool | None = None, dropped: bool | None = None,
         position: float | None = None, estimate_minutes: int | None = None,
+        capped: bool | None = None,
     ) -> dict[str, Any] | None:
-        """Tick, drop or reposition one entry. None for an entry_id this day does
-        not have (the route turns that into a 404).
+        """Tick, drop, reposition, estimate or cap one entry. None for an
+        entry_id this day does not have (the route turns that into a 404).
 
         Dropping stamps a column; it never deletes the row. "I did not do this"
         is the single most useful thing a past day can tell you, and a DELETE
@@ -2348,6 +2363,18 @@ class TaskService:
             fields["estimate_minutes"] = (
                 None if estimate_minutes < 0 else int(estimate_minutes)
             )
+        if capped is not None:
+            # A statement about how this row will be WORKED, so it belongs to a
+            # day that can still be worked: refused on a day that has run, the
+            # same fence `set_day_ritual` keeps and for the same reason — a cap
+            # written afterwards describes nothing that happened. The route
+            # maps the ValueError to 422, as it does for `done` on a task.
+            if not self._ritual_writable(day):
+                raise ValueError(
+                    f"{day} has already happened, so whether to stop at the "
+                    f"estimate cannot be decided for it any more"
+                )
+            fields["capped"] = 1 if capped else 0
         with self._lock:
             # Read before write, because the rule below needs the entry's KIND —
             # and this is also the 404 check now. Nothing can land in between:

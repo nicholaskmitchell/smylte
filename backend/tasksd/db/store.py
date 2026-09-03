@@ -146,6 +146,18 @@ def init_db(conn: sqlite3.Connection) -> None:
         # exactly what "nobody moved this" means — nothing to backfill. Same
         # one-change rule as the two above: `_day_entry_dto` reads this key.
         conn.execute("ALTER TABLE day_plan ADD COLUMN rolled_to TEXT")
+    if "worked_seconds" not in day_cols:
+        # NULL on every entry written before focus sessions existed, which is
+        # exactly what "never worked in a session" means — nothing to backfill,
+        # and no number that could be backfilled without inventing a
+        # measurement. Same one-change rule as the columns above and the same
+        # mechanical reason: `_day_entry_dto` reads this key.
+        conn.execute("ALTER TABLE day_plan ADD COLUMN worked_seconds INTEGER")
+    if "capped" not in day_cols:
+        # NULL is "not said" and falls back to the account's default when it is
+        # read, so an un-upgraded plan behaves exactly as one whose owner never
+        # touched the switch. Same one-change rule: `_day_entry_dto` reads it.
+        conn.execute("ALTER TABLE day_plan ADD COLUMN capped INTEGER")
     side_cols = {r["name"] for r in conn.execute("PRAGMA table_info(sidecar)")}
     if "notify_minutes_before" not in side_cols:
         # NULL on every item written before per-item reminders existed, which is
@@ -962,7 +974,7 @@ def insert_day_entry(
 
 
 _DAY_ENTRY_FIELDS = {
-    "done_at", "dropped_at", "position", "estimate_minutes", "rolled_to",
+    "done_at", "dropped_at", "position", "estimate_minutes", "rolled_to", "capped",
 }
 
 
@@ -1002,6 +1014,31 @@ def update_day_entry(
         )
         if not cur.rowcount:
             return None
+    return find_day_entry(conn, day, entry_id=entry_id)
+
+
+def add_worked_seconds(
+    conn: sqlite3.Connection, day: str, entry_id: str, delta: int
+) -> sqlite3.Row | None:
+    """Credit `delta` seconds of focus time to one entry; None for an entry_id
+    this day does not have.
+
+    An INCREMENT rather than a value, and deliberately not a member of
+    `_DAY_ENTRY_FIELDS`: the figure is measured by the server from a session's
+    phase anchors, never handed in by a client as a total, so there must be no
+    route through which a whole number can arrive. COALESCE because NULL is the
+    column's honest starting state ("never worked") and NULL + 30 is NULL.
+    Clamped at zero on the way in: a negative credit would be a way to un-work
+    a row, which nothing has a reason to do.
+    """
+    delta = max(0, int(delta))
+    cur = conn.execute(
+        "UPDATE day_plan SET worked_seconds = COALESCE(worked_seconds, 0) + ? "
+        "WHERE day=? AND entry_id=?",
+        (delta, day, entry_id),
+    )
+    if not cur.rowcount:
+        return None
     return find_day_entry(conn, day, entry_id=entry_id)
 
 
