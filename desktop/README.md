@@ -61,7 +61,7 @@ lives in the web build.
 
 | Path | What |
 | --- | --- |
-| `%APPDATA%\Smylte\settings.json` | Server URL, username, encrypted password, optional GitHub token, data folder, port, window size, icon choice, title-bar colour |
+| `%APPDATA%\Smylte\settings.json` | Server URL, username, encrypted password, optional GitHub token, data folder, port, window size, icon choice, title-bar colour, and the floating focus window's position, size and pin |
 | `<data folder>\web\` | The downloaded web build |
 | `<data folder>\profile\` | WebView2 profile — cookies, localStorage |
 | `%APPDATA%\Smylte\icon.ico` | Only with the Start-menu shortcut on: the chosen icon, since a shortcut needs an icon *file* |
@@ -197,14 +197,43 @@ Explorer still shows the stamped one.
 ## How it fits together
 
 ```
-Program.cs      single instance, first-run setup, then the window
-SetupForm.cs    server address, credentials, data folder
-MainForm.cs     the WebView2 window; owns the server's lifetime
-LocalServer.cs  static files from disk + /api reverse proxy
-Updater.cs      reads the rolling release, swaps in a new web build
-Session.cs      probes a server, and trades credentials for a cookie
-Settings.cs     %APPDATA% JSON, with DPAPI over the password
+Program.cs        single instance, first-run setup, then the window
+SetupForm.cs      server address, credentials, data folder
+MainForm.cs       the WebView2 window; owns the server's lifetime, and the
+                  floating one's
+FloatForm.cs      the floating focus window: a second WebView2, frameless,
+                  moved by its page and resized from its own six-pixel ring
+LocalServer.cs    static files from disk + /api reverse proxy + /desktop/*
+IDesktopBridge.cs what the page may ask of the window — served at /desktop/*
+WindowChrome.cs   the caption bar and frame colour, via DwmSetWindowAttribute
+IconLibrary.cs    the five icon choices, and what Auto resolves to
+ShellShortcut.cs  the opt-in Start-menu shortcut
+Updater.cs        reads the rolling release, swaps in a new web build
+Session.cs        probes a server, and trades credentials for a cookie
+Settings.cs       %APPDATA% JSON, with DPAPI over the password
 ```
+
+## The floating window
+
+The focus surface — the clock and the row you are on — can float: the
+**Float** control on it opens a small frameless window above everything else
+and sends the main window to the taskbar, so the clock stays in view while you
+work in whatever you are actually working in. It is the same page at a small
+size, in the same WebView2 profile with the same session, so the two windows
+agree to the second and either can be closed without the other losing anything.
+Drag it by its body, resize it from its edges, pin it or let it fall behind
+(the **pin** in its corner; remembered), and **Dock** it — or press Escape, or
+Alt+F4 — to bring the main window back. It has no taskbar button of its own;
+Alt-Tab lists it, and the main window's own button is always there.
+
+Two things about it are worth knowing. The drag is the page's, not the
+window's: WebView2 123 and later move the window from regions the page marks
+as draggable, and a runtime older than that is asked to move it through the
+same local bridge the icon setting uses — `FloatNativeDrag: false` in
+`settings.json` forces the second path if the first ever misbehaves. And the
+exe has to be new enough to have the window at all: the web build updates
+itself on every launch, the exe does not, and a web build that knows about
+floating against an exe that does not simply shows no Float control.
 
 The piece to be careful with is the proxy in `LocalServer.cs`. `/api/events` is
 a Server-Sent Events stream and every live update in the app rides on it, so the

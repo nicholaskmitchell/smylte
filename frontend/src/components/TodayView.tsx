@@ -608,9 +608,15 @@ export function rowDone(e: DayEntry, task: Task | undefined, live: boolean): boo
   return !!task?.completed_at && dayKey(task.completed_at) === e.day
 }
 
-export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalendars = [] }: {
+export function TodayView({
+  rev, onExpire, hiddenCalendars = [], archivedCalendars = [], onStartWorking,
+}: {
   rev: number
   onExpire: () => void
+  /** The way into the focus surface. Optional, because the header only offers
+   *  it where App can honour it: a dashboard module or a test rendering this
+   *  view on its own has nowhere to send the click. */
+  onStartWorking?: () => void
   // Read-only here, exactly as on the Home dashboard: the calendar strip honours
   // the Calendar tab's visibility choices, and that tab stays the sole owner of
   // editing (and pruning) these sets.
@@ -1318,6 +1324,8 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
       estimate_minutes: null,
       // A row that has just been added has not been moved anywhere.
       rolled_to: null,
+      // …nor worked, nor told whether to stop at an estimate it does not have.
+      worked_seconds: null, capped: null,
       created_at: new Date().toISOString(),
     }
     setPlan((p) => (p && p.day === on
@@ -1373,6 +1381,8 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
       estimate_minutes: null,
       // A row that has just been added has not been moved anywhere.
       rolled_to: null,
+      // …nor worked, nor told whether to stop at an estimate it does not have.
+      worked_seconds: null, capped: null,
       created_at: new Date().toISOString(),
     }
     setPlan((p) => (p && p.day === on
@@ -2061,8 +2071,8 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
     () => (dragId ? dayRows.findIndex((r) => r.entry_id === dragId) : -1),
     [dragId, dayRows])
 
-  const renderRow = (e: DayEntry) => (
-    <TodayRow key={e.entry_id} entry={e} task={taskFor(e)} tasksLoaded={loaded}
+  const rowFor = (e: DayEntry, worked = false) => (
+    <TodayRow key={e.entry_id} entry={e} task={taskFor(e)} tasksLoaded={loaded} worked={worked}
       color={colorOf(e.list)} onToggleTask={toggle} onToggleEntry={toggleEntry}
       onDrop={drop} onEstimate={setEstimate}
       // A past day hands out no controls at all: see the header. The flag says
@@ -2123,6 +2133,10 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
       }}
       onDragEndRow={() => { setDragId(null); setOverId(null) }} />
   )
+  const renderRow = (e: DayEntry) => rowFor(e)
+  // The look-back's rows carry the one column a live list does not: what a
+  // focus session actually spent on each, beside what it was estimated at.
+  const renderReviewRow = (e: DayEntry) => rowFor(e, true)
 
   return (
     <div className="content">
@@ -2206,6 +2220,19 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
             {mode === 'review' ? tr('today.modePlan') : tr('today.modeReview')}
           </button>
         )}
+        {/* THE WAY IN TO WORKING THE DAY: the focus surface, which takes this
+            plan as its queue. Today only and the planning mode only — a review
+            is a record, and a record is not something to start. Absent rather
+            than disabled on a past day, like every other control here. The
+            word is the accessible name on every screen; on a phone the header
+            is already full and the button shows a glyph instead (app.css). */}
+        {isToday && mode === 'plan' && onStartWorking && (
+          <button type="button" className="btn ghost today-focus" onClick={onStartWorking}
+            aria-label={tr('today.startWorking')} title={tr('today.startWorking')}>
+            <span className="today-focus__word">{tr('today.startWorking')}</span>
+            <span className="today-focus__glyph mono" aria-hidden="true">▶</span>
+          </button>
+        )}
         {/* THE WAY IN TO THE SHUTDOWN, and deliberately not a band. The
             planning nudge is a band because the morning is when a plan is worth
             prompting for; a band offering to close the day would be on screen
@@ -2250,8 +2277,15 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
             broken every one of them. */}
         {isToday && (
           <button type="button" className="btn ghost today-habits-open"
-            aria-haspopup="dialog" onClick={() => setSheet(true)}>
-            <span className="mono" aria-hidden="true">↻</span> {tr('today.habits')}
+            aria-haspopup="dialog" aria-label={tr('today.habits')}
+            onClick={() => setSheet(true)}>
+            {/* The word is in a span so the narrowest phones can drop it and
+                keep the glyph (app.css, 359px): four controls need 323px of a
+                320px phone's 292, measured, and this is the one already
+                carrying a glyph. `aria-label` is what keeps the name "Habits"
+                once the word is gone. */}
+            <span className="mono" aria-hidden="true">↻</span>
+            <span className="today-habits-open__word"> {tr('today.habits')}</span>
           </button>
         )}
       </div>
@@ -2655,7 +2689,7 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
               styleOf={eventStyle} />
           </>
         ) : (
-          <LookBack review={review} offPlan={offPlan} renderRow={renderRow}
+          <LookBack review={review} offPlan={offPlan} renderRow={renderReviewRow}
             reflection={plan?.day === day ? plan.reflection : null}
             colorOf={colorOf} live={isToday} />
         )}
@@ -2952,7 +2986,7 @@ function EstimateCell({ minutes, readOnly, label, onChange }: {
 
 function TodayRow({
   entry, task, tasksLoaded, color, count, readOnly, onToggleTask, onToggleEntry, onDrop,
-  onEstimate,
+  onEstimate, worked = false,
   draggable = false, dragging = false, dragOver = false, dragBelow = false,
   onDragRow, onDragOverRow, onDropRow, onDragEndRow,
 }: {
@@ -2977,6 +3011,11 @@ function TodayRow({
   onDrop: (e: DayEntry) => Promise<void>
   /** Set or clear how long this is expected to take. Null clears. */
   onEstimate: (e: DayEntry, minutes: number | null) => Promise<void>
+  /** Paint the time a focus session actually spent on this row, beside what it
+   *  was estimated at. A REVIEW column: the look-back is where a measurement
+   *  belongs next to a guess, and a live list already has a number on every
+   *  row — a second one would be a score on a screen that keeps none. */
+  worked?: boolean
   /** This row may be picked up and moved. Decided by the caller — see the
    *  three conditions there; the row only wears the result. */
   draggable?: boolean
@@ -3231,6 +3270,18 @@ function TodayRow({
       <EstimateCell minutes={entry.estimate_minutes} readOnly={readOnly}
         label={title || tr('today.thisEntry')}
         onChange={(next) => void onEstimate(entry, next)} />
+      {/* Always painted when asked for, empty when nothing was measured — the
+          same lesson as the due cell: a column that appears only sometimes
+          makes every cell before it move. Minutes, like the estimate beside
+          it, and never a ratio of the two. */}
+      {worked && (
+        <span className="today-worked mono"
+          title={entry.worked_seconds
+            ? tr('today.worked', { amount: fmtDuration(Math.round(entry.worked_seconds / 60)) })
+            : undefined}>
+          {entry.worked_seconds ? fmtDuration(Math.round(entry.worked_seconds / 60)) : ''}
+        </span>
+      )}
       {/* ALWAYS rendered, empty when the row has no due date — the same lesson
           as the kind column on the left. A cell that appears only sometimes
           makes every cell BEFORE it move: with this conditional, an estimate on

@@ -22,6 +22,19 @@ vi.mock('./api', async (importOriginal) => {
 
 const m = vi.mocked(api)
 
+// The Windows client's bridge: a browser here, so nothing desktop-only renders
+// — except `isFloatWindow`, which stays real and reads the query string, so a
+// test can put the shell in the floating window by address alone.
+vi.mock('./desktop', async (importOriginal) => {
+  const mod = await importOriginal<typeof import('./desktop')>()
+  return {
+    ...mod,
+    readState: vi.fn(async () => null),
+    floatWindow: vi.fn(async () => null), dockWindow: vi.fn(async () => null),
+    pinWindow: vi.fn(async () => null), dragWindow: vi.fn(async () => null),
+  }
+})
+
 /** Open settings and, when a section is named, drill into it.
  *
  * The nav items are `role="tab"`, not buttons — which is also what keeps the
@@ -34,6 +47,9 @@ const openSettings = async (section?: string) => {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  // The focus surface is an ADDRESS; a test that pushed it must not leave the
+  // next one booting into it.
+  history.replaceState(null, '', '/')
   document.documentElement.dataset.theme = 'light'
   document.documentElement.removeAttribute('style')
   localStorage.clear()
@@ -830,5 +846,57 @@ describe('<App> a slow settings read', () => {
       'these settings keys are applied with no `keep` guard, so a read that '
       + 'lands after the user changed them silently reverts the gesture')
       .toEqual([])
+  })
+})
+
+describe('the focus surface', () => {
+  it('is reached by its own address, and left by the back control', async () => {
+    m.focus.mockResolvedValue(null)
+    history.replaceState(null, '', '/focus')
+    render(<App />)
+    await screen.findByRole('button', { name: 'Back to today' })
+    // Full-bleed: no tab strip, no gear.
+    expect(screen.queryByRole('button', { name: 'Settings' })).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Back to today' }))
+    expect(await screen.findByRole('button', { name: 'Settings' })).toBeInTheDocument()
+    expect(location.pathname).toBe('/')
+  })
+
+  it('is entered from Today, and the browser\'s back gesture leaves it', async () => {
+    m.focus.mockResolvedValue(null)
+    render(<App />)
+    await userEvent.click(await screen.findByRole('button', { name: 'Today' }))
+    await userEvent.click(await screen.findByRole('button', { name: 'Start working' }))
+    expect(await screen.findByRole('button', { name: 'Back to today' })).toBeInTheDocument()
+    expect(location.pathname).toBe('/focus')
+    await act(async () => {
+      history.back()
+      // jsdom fires popstate for history.back(); give it a turn.
+      await new Promise((r) => setTimeout(r, 0))
+    })
+    expect(await screen.findByRole('button', { name: 'Settings' })).toBeInTheDocument()
+  })
+})
+
+describe('the floating window', () => {
+  it('is the focus surface by address, with Dock as its way out and no shell at all', async () => {
+    m.focus.mockResolvedValue(null)
+    history.replaceState(null, '', '/focus?float=1')
+    render(<App />)
+    expect(await screen.findByRole('button', { name: 'Dock' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Back to today' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Settings' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Today' })).not.toBeInTheDocument()
+  })
+
+  it('boots a /focus load into the focus shell, never through the tab strip', async () => {
+    // A cold load — the floating window's whole life — used to paint the tab
+    // strip for the one /api/me round trip. Held here: the strip must not
+    // appear while the session is still being asked about.
+    m.me.mockReturnValue(new Promise(() => {}))
+    history.replaceState(null, '', '/focus')
+    render(<App />)
+    expect(screen.queryByRole('button', { name: 'Today' })).not.toBeInTheDocument()
+    expect(document.querySelector('.focus[aria-busy="true"]')).not.toBeNull()
   })
 })

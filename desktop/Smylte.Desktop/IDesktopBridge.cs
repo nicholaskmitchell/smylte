@@ -22,4 +22,28 @@ public interface IDesktopBridge
     /// Choose the window icon, and whether to keep a Start-menu shortcut — the
     /// one lever that reaches the grouped taskbar button.
     void Icon(string? choice, bool startMenuShortcut);
+
+    // ── the floating focus window ─────────────────────────────────────────
+    //
+    // Four verbs rather than one "window(action)" call, so the interface stays
+    // a list of things the page may ask for and the string dispatch lives in
+    // LocalServer, where it is tested. Every one is answered with State(), which
+    // carries `floating`, `pinned` and `nativeDrag` for the page to reconcile.
+
+    /// Open the focus surface in its own small window, on top of other windows,
+    /// and send this one to the taskbar. Called again while it is open, it
+    /// brings the floating window forward instead.
+    void Float();
+
+    /// Close the floating window and bring this one back to where it was.
+    void Dock();
+
+    /// Whether the floating window stays above other windows. Remembered.
+    void Pin(bool onTop);
+
+    /// Start a native move of the floating window from a press on its page.
+    /// The FALLBACK: the page normally marks itself `app-region: drag` and the
+    /// WebView2 runtime moves the window itself; this is for a runtime too old
+    /// to do that, and it only works while the mouse button is still down.
+    void Drag();
 }

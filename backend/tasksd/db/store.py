@@ -146,6 +146,18 @@ def init_db(conn: sqlite3.Connection) -> None:
         # exactly what "nobody moved this" means — nothing to backfill. Same
         # one-change rule as the two above: `_day_entry_dto` reads this key.
         conn.execute("ALTER TABLE day_plan ADD COLUMN rolled_to TEXT")
+    if "worked_seconds" not in day_cols:
+        # NULL on every entry written before focus sessions existed, which is
+        # exactly what "never worked in a session" means — nothing to backfill,
+        # and no number that could be backfilled without inventing a
+        # measurement. Same one-change rule as the columns above and the same
+        # mechanical reason: `_day_entry_dto` reads this key.
+        conn.execute("ALTER TABLE day_plan ADD COLUMN worked_seconds INTEGER")
+    if "capped" not in day_cols:
+        # NULL is "not said" and falls back to the account's default when it is
+        # read, so an un-upgraded plan behaves exactly as one whose owner never
+        # touched the switch. Same one-change rule: `_day_entry_dto` reads it.
+        conn.execute("ALTER TABLE day_plan ADD COLUMN capped INTEGER")
     side_cols = {r["name"] for r in conn.execute("PRAGMA table_info(sidecar)")}
     if "notify_minutes_before" not in side_cols:
         # NULL on every item written before per-item reminders existed, which is
@@ -906,6 +918,69 @@ def set_day_ritual(
     return get_day_ritual(conn, day)
 
 
+# ── focus sessions ───────────────────────────────────────────────────────────
+
+_FOCUS_FIELDS = {
+    "phase", "phase_length_s", "phase_elapsed_s", "running_since",
+    "intervals_done", "entry_id", "passed", "started_at", "ended_at",
+}
+
+
+def get_focus_session(conn: sqlite3.Connection, day: str) -> sqlite3.Row | None:
+    """The day's session, ended or not, or None if none was ever started."""
+    return conn.execute("SELECT * FROM focus_session WHERE day=?", (day,)).fetchone()
+
+
+def put_focus_session(
+    conn: sqlite3.Connection, day: str, **fields: object,
+) -> sqlite3.Row:
+    """Start a day's session as a WHOLE row, replacing any earlier one.
+
+    REPLACE rather than upsert because starting again is a fresh session — the
+    passed list, the interval count and `started_at` all begin over — while the
+    time already credited to rows lives on day_plan and is untouched by this.
+    `started_at` is the caller's to pass: the service stamps every column of a
+    transition from the one instant it read, and a row whose start came from
+    SQLite's clock while its anchor came from the service's would carry two
+    ideas of when "now" was.
+    """
+    bad = set(fields) - _FOCUS_FIELDS
+    if bad:
+        raise ValueError(f"unknown focus session fields: {bad}")
+    cols = ", ".join(["day", *fields])
+    marks = ", ".join("?" for _ in range(len(fields) + 1))
+    # The column names are vetted against _FOCUS_FIELDS above — not attacker
+    # input; the values are bound.
+    conn.execute(
+        f"INSERT OR REPLACE INTO focus_session ({cols}) VALUES ({marks})",  # nosec B608
+        (day, *fields.values()),
+    )
+    row = get_focus_session(conn, day)
+    assert row is not None
+    return row
+
+
+def update_focus_session(
+    conn: sqlite3.Connection, day: str, **fields: object,
+) -> sqlite3.Row | None:
+    """Move a session on; None for a day with no session. An explicit None
+    VALUE clears the column (that is how the clock is stopped), so the caller
+    passes exactly the fields it means to change."""
+    bad = set(fields) - _FOCUS_FIELDS
+    if bad:
+        raise ValueError(f"unknown focus session fields: {bad}")
+    if fields:
+        assignments = ", ".join(f"{k}=?" for k in fields)
+        cur = conn.execute(
+            f"UPDATE focus_session SET {assignments}, "  # nosec B608
+            "updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE day=?",
+            (*fields.values(), day),
+        )
+        if not cur.rowcount:
+            return None
+    return get_focus_session(conn, day)
+
+
 def day_is_opened(conn: sqlite3.Connection, day: str) -> bool:
     return conn.execute(
         "SELECT 1 FROM day_plan_opened WHERE day=?", (day,)
@@ -962,7 +1037,7 @@ def insert_day_entry(
 
 
 _DAY_ENTRY_FIELDS = {
-    "done_at", "dropped_at", "position", "estimate_minutes", "rolled_to",
+    "done_at", "dropped_at", "position", "estimate_minutes", "rolled_to", "capped",
 }
 
 
@@ -1002,6 +1077,31 @@ def update_day_entry(
         )
         if not cur.rowcount:
             return None
+    return find_day_entry(conn, day, entry_id=entry_id)
+
+
+def add_worked_seconds(
+    conn: sqlite3.Connection, day: str, entry_id: str, delta: int
+) -> sqlite3.Row | None:
+    """Credit `delta` seconds of focus time to one entry; None for an entry_id
+    this day does not have.
+
+    An INCREMENT rather than a value, and deliberately not a member of
+    `_DAY_ENTRY_FIELDS`: the figure is measured by the server from a session's
+    phase anchors, never handed in by a client as a total, so there must be no
+    route through which a whole number can arrive. COALESCE because NULL is the
+    column's honest starting state ("never worked") and NULL + 30 is NULL.
+    Clamped at zero on the way in: a negative credit would be a way to un-work
+    a row, which nothing has a reason to do.
+    """
+    delta = max(0, int(delta))
+    cur = conn.execute(
+        "UPDATE day_plan SET worked_seconds = COALESCE(worked_seconds, 0) + ? "
+        "WHERE day=? AND entry_id=?",
+        (delta, day, entry_id),
+    )
+    if not cur.rowcount:
+        return None
     return find_day_entry(conn, day, entry_id=entry_id)
 
 

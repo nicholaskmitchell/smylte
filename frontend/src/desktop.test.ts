@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { readState, setIcon, startCaptionSync } from './desktop'
+import {
+  dockWindow, dragWindow, floatWindow, isFloatWindow, pinWindow, readState, setIcon,
+  startCaptionSync,
+} from './desktop'
 
 // The load-bearing property of the desktop bridge is what it does when there is
 // no desktop: nothing at all, and quietly. Everything under /desktop/ exists
@@ -57,5 +60,39 @@ describe('setIcon', () => {
     expect(path).toBe('/desktop/icon')
     expect(JSON.parse((init as RequestInit).body as string))
       .toEqual({ choice: 'Mark', startMenuShortcut: true })
+  })
+})
+
+describe('the floating window', () => {
+  it('posts each verb on the one route, the pin with its flag', async () => {
+    const fetchMock = respond({ available: true, floating: true, pinned: false })
+    vi.stubGlobal('fetch', fetchMock)
+    await floatWindow()
+    await dockWindow()
+    await dragWindow()
+    expect(await pinWindow(false)).toMatchObject({ floating: true, pinned: false })
+    const bodies = fetchMock.mock.calls.map(([path, init]) =>
+      [path, JSON.parse((init as RequestInit).body as string)])
+    expect(bodies).toEqual([
+      ['/desktop/window', { action: 'float' }],
+      ['/desktop/window', { action: 'dock' }],
+      ['/desktop/window', { action: 'drag' }],
+      ['/desktop/window', { action: 'pin', pinned: false }],
+    ])
+  })
+
+  it('answers null from a client that has no such window, like every other route', async () => {
+    // An exe older than the feature 404s the route; the page must read that
+    // as "not here" rather than as a state to paint.
+    vi.stubGlobal('fetch', respond({}, false))
+    expect(await floatWindow()).toBeNull()
+  })
+
+  it('knows whether this document is the floating one from the query string', () => {
+    history.replaceState(null, '', '/focus?float=1')
+    expect(isFloatWindow()).toBe(true)
+    history.replaceState(null, '', '/focus')
+    expect(isFloatWindow()).toBe(false)
+    history.replaceState(null, '', '/')
   })
 })

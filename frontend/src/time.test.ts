@@ -1,8 +1,26 @@
 import { describe, expect, it } from 'vitest'
 import {
-  DEFAULT_TIME_FORMAT, fmtClock, fmtDue, fmtDuration, fmtWhen, inputLang, isTimeFormat,
-  nextTimeFormat, timeFormatKey,
+  DEFAULT_TIME_FORMAT, fmtClock, fmtCountdown, fmtDue, fmtDuration, fmtWhen, inputLang,
+  isTimeFormat, nextTimeFormat, timeFormatKey,
 } from './time'
+
+describe('fmtCountdown', () => {
+  it('spells minutes and seconds, and hours only once there are any', () => {
+    expect(fmtCountdown(1499)).toBe('24:59')
+    expect(fmtCountdown(7)).toBe('0:07')
+    expect(fmtCountdown(60)).toBe('1:00')
+    expect(fmtCountdown(3723)).toBe('1:02:03')
+    expect(fmtCountdown(3600)).toBe('1:00:00')
+  })
+
+  it('floors rather than rounds, and never goes below zero', () => {
+    // A second the phase no longer has must not be shown; a phase past its end
+    // reads 0:00 rather than a negative clock.
+    expect(fmtCountdown(0.6)).toBe('0:00')
+    expect(fmtCountdown(-3)).toBe('0:00')
+    expect(fmtCountdown(0)).toBe('0:00')
+  })
+})
 
 // The suite runs under a fixed TZ (vite.config sets it) and these assertions
 // only ever look at the clock part, so a floating local datetime reads back as

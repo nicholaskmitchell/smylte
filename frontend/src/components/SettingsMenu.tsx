@@ -29,6 +29,8 @@ import { DeveloperSection } from './DeveloperSection'
 import { DesktopSection } from './DesktopSection'
 import { TabsSection } from './TabsSection'
 import { CapacitySection } from './CapacitySection'
+import { FocusSection } from './FocusSection'
+import type { FocusSettings } from '../focus'
 import { NotificationsSection } from './NotificationsSection'
 import type { Trigger } from '../notifications'
 
@@ -43,6 +45,7 @@ const SECTIONS = [
   { id: 'appearance', label: 'settings.section.appearance' },
   { id: 'calendar', label: 'settings.section.calendar' },
   { id: 'tasks', label: 'settings.section.tasks' },
+  { id: 'focus', label: 'settings.section.focus' },
   { id: 'notifications', label: 'settings.section.notifications' },
   { id: 'displays', label: 'settings.section.displays' },
   { id: 'developer', label: 'settings.section.developer' },
@@ -61,6 +64,7 @@ export function SettingsMenu({
   calFit, onToggleCalFit,
   archivedCals, onArchivedCalsChange,
   showCompleted, onToggleShowCompleted,
+  focus, onFocusChange,
   notifyEnabled, onNotifyEnabledChange,
   notifyChatId, onNotifyChatIdChange,
   notifyTokenSet, notifyBotId, onNotifyTokenChange,
@@ -97,6 +101,9 @@ export function SettingsMenu({
   onArchivedCalsChange: (next: string[]) => void
   showCompleted: boolean
   onToggleShowCompleted: () => void
+  /** The focus clock, every key present (see `sanitizeFocusSettings`). */
+  focus: FocusSettings
+  onFocusChange: (patch: Partial<FocusSettings>) => void
   notifyEnabled: boolean
   onNotifyEnabledChange: (next: boolean) => void
   notifyChatId: string
@@ -327,6 +334,13 @@ export function SettingsMenu({
               Whether completed tasks stay in the main view. The sidebar's
               “View completed” works either way.
             </div>
+          </>
+        )}
+
+        {section === 'focus' && (
+          <>
+            <div className="hintline">{tr('settings.focus.intro')}</div>
+            <FocusSection value={focus} onChange={onFocusChange} />
           </>
         )}
 

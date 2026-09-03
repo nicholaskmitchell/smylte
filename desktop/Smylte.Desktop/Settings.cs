@@ -69,6 +69,30 @@ public sealed class Settings
     public int WindowHeight { get; set; } = 860;
     public bool WindowMaximized { get; set; }
 
+    /// The floating focus window. Position and size are physical pixels of the
+    /// monitor it was last on, the convention WindowWidth/Height already keep,
+    /// with the DPI they were recorded at beside them so a restore on a
+    /// differently scaled monitor rescales rather than landing off by the
+    /// ratio. A width of 0 means never opened, so the default size applies;
+    /// an off-screen rectangle (a monitor that is gone) falls back the same way.
+    public int FloatX { get; set; } = -1;
+    public int FloatY { get; set; } = -1;
+    public int FloatWidth { get; set; }
+    public int FloatHeight { get; set; }
+    public int FloatDpi { get; set; }
+
+    /// Whether the floating window stays above other windows. On by default:
+    /// a floating clock that opens behind the thing you are working in is not
+    /// floating.
+    public bool FloatPinned { get; set; } = true;
+
+    /// An escape hatch with no UI, for a hand-edited settings.json only. True
+    /// lets the WebView2 runtime move the window from the page's own drag
+    /// regions; false routes every drag through the bridge instead. Exists
+    /// because CI cannot open a window, so the native path is proven only on
+    /// real machines — and one where it misbehaves should not be stuck.
+    public bool FloatNativeDrag { get; set; } = true;
+
     [JsonIgnore]
     public bool IsConfigured =>
         !string.IsNullOrWhiteSpace(ServerUrl) && !string.IsNullOrWhiteSpace(DataFolder);
