@@ -364,6 +364,21 @@ CREATE TABLE IF NOT EXISTS day_plan (
     -- tomorrow by the automatic rule, and the owner would find two of it.
     -- A column added by store.init_db on existing DBs.
     rolled_to       TEXT,
+    -- Seconds actually WORKED on this row by focus intervals, credited by the
+    -- server from a session's phase anchors as it moves — never from a
+    -- client's own count. NULL is "never worked in a session", which is a
+    -- different fact from 0 and is kept: a look-back that showed "0m worked"
+    -- on a row nobody ever started would be inventing a measurement. Seconds
+    -- rather than minutes because a capped row advances at exactly its
+    -- estimate, and a minute-rounded figure would fire up to thirty seconds
+    -- early or late. A column added by store.init_db on existing DBs.
+    worked_seconds  INTEGER,
+    -- Whether a focus session stops crediting this row at its estimate (1),
+    -- keeps it until it is ticked (0), or follows the account's default (NULL,
+    -- "not said" — the same tri-state `day_ritual.capacity_minutes` keeps). On
+    -- the ENTRY because it is a statement about how this row will be worked on
+    -- this day. A column added by store.init_db on existing DBs.
+    capped          INTEGER,
     created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     PRIMARY KEY (day, entry_id)
 );

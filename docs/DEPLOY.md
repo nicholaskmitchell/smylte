@@ -540,7 +540,8 @@ Back up **both**:
   and **`bookings`** (every scheduling-link config plus client names/emails/
   notes — this exists nowhere on the wire), **`day_plan`** plus
   **`day_plan_opened`** (the Today tab's whole record: what the owner added to a
-  day by hand, what they ticked, how long they expected each thing to take, what
+  day by hand, what they ticked, how long they expected each thing to take and
+  how long a focus session actually spent on it, what
   they moved to another day, what they dropped rather than did, and which days
   were opened at all), **`day_ritual`** (what the owner SAID about each day —
   how long they were willing to work, when they started it, when they shut it

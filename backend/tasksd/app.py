@@ -388,6 +388,11 @@ class PatchDayEntry(BaseModel):
     # for). The floor is -1 exactly so the clear sentinel is the only negative
     # that can arrive; the service turns it into NULL and nothing else may.
     estimate_minutes: int | None = Field(default=None, ge=-1, le=1440)
+    # Whether a focus session stops crediting this row at its estimate. Tri-state
+    # like `done`: None is "not sent", and False is a real value ("until it is
+    # ticked"). Refused on a day that has run — the service raises, and the
+    # route's ValueError arm answers 422.
+    capped: bool | None = None
 
 
 # A habit's `days`: "" (every day) or a comma list of mon,tue,wed,thu,fri,sat,sun.
@@ -1720,12 +1725,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             dto = await _run(
                 _svc(request).patch_day_entry, _check_day(day), entry_id,
                 done=body.done, dropped=body.dropped, position=body.position,
-                estimate_minutes=body.estimate_minutes,
+                estimate_minutes=body.estimate_minutes, capped=body.capped,
             )
         except ValueError as e:
             # `done` on a TASK entry: a task's doneness is its VTODO STATUS, not
             # a column here. 422 rather than 404 — the entry exists, the field
-            # does not apply to it.
+            # does not apply to it. `capped` on a day that has run lands here
+            # too, for the same reason a capacity does on PATCH /day/{day}.
             raise HTTPException(422, str(e)) from None
         if dto is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown day entry {entry_id}")
