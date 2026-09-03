@@ -281,6 +281,54 @@ def _stamp() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
+# The focus clock's defaults, and the bounds a stored value is clamped to on
+# the way out. `frontend/src/focus.ts::DEFAULT_FOCUS` is a mirror of this table
+# and the two have to agree, for the reason `display/frame.py::fmt_duration`
+# mirrors `fmtDuration`: a client that painted "25:00" while the server started
+# a phase of a different length would be one app disagreeing with itself about
+# the one number on the screen. The bounds are the edge model's
+# (`app.SettingsPatch`), restated here because a settings blob is hand-editable
+# and a phase of zero seconds would end before it began.
+FOCUS_DEFAULTS: dict[str, Any] = {
+    "focus_interval_minutes": 25,
+    "focus_break_minutes": 5,
+    "focus_long_break_minutes": 15,
+    "focus_long_break_every": 4,
+    "focus_auto_continue": False,
+    "focus_cap_default": False,
+    "focus_chime": True,
+    "focus_notify": False,
+}
+_FOCUS_BOUNDS: dict[str, tuple[int, int]] = {
+    "focus_interval_minutes": (1, 180),
+    "focus_break_minutes": (1, 60),
+    "focus_long_break_minutes": (1, 120),
+    "focus_long_break_every": (0, 12),
+}
+
+
+def focus_settings(blob: dict[str, Any]) -> dict[str, Any]:
+    """The focus keys of a settings blob, every one present and sane.
+
+    Ints are clamped to their bounds, and anything that is not an int — JSON
+    `true` included, which is an int subclass and would otherwise read as one
+    minute, the same trap `_effective_capacity` guards against — falls back to
+    the default. A bool takes only a real bool. Pure, so the rule can be
+    tested without a service behind it.
+    """
+    out: dict[str, Any] = {}
+    for key, default in FOCUS_DEFAULTS.items():
+        value = blob.get(key)
+        if isinstance(default, bool):
+            out[key] = value if isinstance(value, bool) else default
+        elif isinstance(value, int) and not isinstance(value, bool):
+            lo, hi = _FOCUS_BOUNDS[key]
+            out[key] = min(hi, max(lo, value))
+        else:
+            out[key] = default
+    return out
+
+
 class TaskService:
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -1534,6 +1582,10 @@ class TaskService:
         if isinstance(default, int) and not isinstance(default, bool) and default >= 0:
             return default
         return None
+
+    def _focus_settings(self) -> dict[str, Any]:
+        """The account's focus clock, defaults filled and bounds applied."""
+        return focus_settings(store.get_settings(self._conn))
 
     def open_day(self, day: str, *, create: bool) -> dict[str, Any]:
         """The plan for a day, optionally building it if it has never been built.

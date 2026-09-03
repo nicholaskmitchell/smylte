@@ -792,6 +792,30 @@ class SettingsPatch(BaseModel):
     day_capacity_minutes: int | None = Field(default=None, ge=-1, le=1440)
     day_capacity_by_weekday: dict[str, int] | None = Field(default=None, max_length=7)
 
+    # ── focus ─────────────────────────────────────────────────────────────────
+    # The pomodoro clock the Focus surface runs: how long an interval, a break
+    # and the long break are, how often the long one comes round (0 = never),
+    # whether the clock rolls straight into the next phase or waits to be told,
+    # whether a row stops at its estimate unless it says otherwise, and the two
+    # ways an interval's end reaches the owner. An absent key is the default in
+    # `service.FOCUS_DEFAULTS`, which the frontend's `DEFAULT_FOCUS` mirrors. A
+    # session freezes the lengths it started with, so changing one here moves
+    # the NEXT phase and never the one already running.
+    #
+    # Bounded for the reason every int in this model is, and the floors are not
+    # cosmetic either: a zero-length interval would end the moment it began, and
+    # a session left to roll on would spin through the day's rows in a second.
+    # No -1 sentinel here — there is nothing to clear, since an absent key
+    # already means the default, and a stored value is only ever replaced.
+    focus_interval_minutes: int | None = Field(default=None, ge=1, le=180)
+    focus_break_minutes: int | None = Field(default=None, ge=1, le=60)
+    focus_long_break_minutes: int | None = Field(default=None, ge=1, le=120)
+    focus_long_break_every: int | None = Field(default=None, ge=0, le=12)
+    focus_auto_continue: bool | None = None
+    focus_cap_default: bool | None = None
+    focus_chime: bool | None = None
+    focus_notify: bool | None = None
+
     # ── notifications ─────────────────────────────────────────────────────────
     # Which rules are on, as a SPARSE override map: an absent key means that
     # rule's own default (notify/rules.py::trigger_enabled). Not four booleans
