@@ -174,6 +174,7 @@ const bool = (v: unknown): boolean => v === true
 const num = (v: unknown): number => (typeof v === 'number' && isFinite(v) ? v : 0)
 const numOrNull = (v: unknown): number | null =>
   typeof v === 'number' && isFinite(v) ? v : null
+const boolOrNull = (v: unknown): boolean | null => (typeof v === 'boolean' ? v : null)
 const strs = (v: unknown): string[] =>
   Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []
 
@@ -323,6 +324,11 @@ export function sanitizeDayEntry(v: unknown): DayEntry | null {
     habit_id: orNull(o.habit_id),
     rolled_to: orNull(o.rolled_to),
     estimate_minutes: numOrNull(o.estimate_minutes),
+    worked_seconds: numOrNull(o.worked_seconds),
+    // Tri-state, and the null must survive the mirror: a row that never said
+    // follows the account's default, and a blob that turned that into `false`
+    // would pin every row to "until done" for the length of one fetch.
+    capped: boolOrNull(o.capped),
     // `orderEntries` tie-breaks on this with `localeCompare`, so it has to be a
     // string whatever the blob says — a null here would throw while sorting the
     // day. '' is the earliest value there is, so a row that arrived without a
