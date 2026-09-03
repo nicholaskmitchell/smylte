@@ -247,6 +247,30 @@ public sealed class LocalServer : IDisposable
             case "/desktop/icon":
                 bridge.Icon(Str(body, "choice"), Bool(body, "startMenuShortcut"));
                 break;
+            case "/desktop/window":
+                // The floating focus window. An action the host does not know,
+                // or a `pin` without a boolean to pin to, is a 400 rather than a
+                // silent no-op: the page reconciles from the State() this
+                // answers with, and a request that changed nothing must not
+                // read as one that did.
+                switch (Str(body, "action"))
+                {
+                    case "float": bridge.Float(); break;
+                    case "dock": bridge.Dock(); break;
+                    case "drag": bridge.Drag(); break;
+                    case "pin":
+                        if (BoolOrNull(body, "pinned") is not { } onTop)
+                        {
+                            TrySetStatus(ctx, 400);
+                            return;
+                        }
+                        bridge.Pin(onTop);
+                        break;
+                    default:
+                        TrySetStatus(ctx, 400);
+                        return;
+                }
+                break;
             default:
                 TrySetStatus(ctx, 404);
                 return;
@@ -261,6 +285,19 @@ public sealed class LocalServer : IDisposable
     private static bool Bool(JsonElement o, string name) =>
         o.ValueKind == JsonValueKind.Object && o.TryGetProperty(name, out var v)
         && v.ValueKind == JsonValueKind.True;
+
+    /// A JSON boolean, or null for anything else — for a field where "absent"
+    /// and "false" must not read the same, as `Bool` above lets them.
+    private static bool? BoolOrNull(JsonElement o, string name)
+    {
+        if (o.ValueKind != JsonValueKind.Object || !o.TryGetProperty(name, out var v)) return null;
+        return v.ValueKind switch
+        {
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            _ => null,
+        };
+    }
 
     private static async Task WriteJsonAsync(HttpListenerContext ctx, string json)
     {

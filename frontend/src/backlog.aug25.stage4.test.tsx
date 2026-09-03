@@ -103,7 +103,7 @@ const dayEntry = (o: Partial<DayEntry> = {}): DayEntry => ({
   entry_id: 'e1', day: today(), kind: 'note', list: null, uid: null,
   title: 'Water the plants', source: 'user', position: 1,
   done_at: null, dropped_at: null, habit_id: null, estimate_minutes: null,
-  rolled_to: null, created_at: '2026-08-21T08:00:00.000Z', ...o,
+  rolled_to: null, worked_seconds: null, capped: null, created_at: '2026-08-21T08:00:00.000Z', ...o,
 })
 
 const plan = (entries: DayEntry[] = [], day = today(), o: Partial<DayPlan> = {}): DayPlan => ({

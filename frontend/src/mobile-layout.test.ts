@@ -272,7 +272,7 @@ describe('the word-bearing buttons in the Today header', () => {
   // button and not knowing this rule exists, and a test naming only the three
   // that exist today would not catch that either — but it does catch a rule
   // being dropped, and it puts the reason somewhere a grep will find it.
-  const HEADER_BUTTONS = ['.today-review', '.today-habits-open', '.today-shutdown']
+  const HEADER_BUTTONS = ['.today-review', '.today-habits-open', '.today-shutdown', '.today-focus']
 
   it('all opt out of baseline alignment and of shrinking', () => {
     for (const sel of HEADER_BUTTONS) {

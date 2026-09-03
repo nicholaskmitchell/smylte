@@ -1,3 +1,6 @@
+using System.Net;
+using System.Net.Http.Headers;
+using System.Text;
 using Smylte.Desktop;
 using Xunit;
 
@@ -249,5 +252,124 @@ public sealed class LocalServerCspTests : IDisposable
         // policy present, so a duplicate is indistinguishable from a deliberate
         // tightening.
         Assert.Single(document.Headers.GetValues("Content-Security-Policy"));
+    }
+}
+
+
+/// The desktop bridge as the page reaches it: /desktop/* on the local server.
+///
+/// The bridge's IMPLEMENTATION is a window and cannot run here, but its
+/// contract can — the route parsing, the guards and the answer — against a
+/// fake that records what it was asked. This is where the floating window's
+/// `/desktop/window` route is proven, since the form behind it is only ever
+/// compiled on a Windows runner and only ever seen on a real machine.
+///
+/// Started, like the CSP tests above, because a route is a response. A free
+/// port distinct from theirs, so the two classes can run side by side.
+public sealed class LocalServerBridgeTests : IDisposable
+{
+    private readonly string _dir = Directory.CreateTempSubdirectory("smylte-bridge").FullName;
+    private readonly LocalServer _server;
+    private readonly FakeBridge _bridge = new();
+
+    private sealed class FakeBridge : IDesktopBridge
+    {
+        public readonly List<string> Calls = new();
+        public string State() => "{\"available\":true,\"floating\":false,\"pinned\":true}";
+        public void Appearance(string? background) => Calls.Add($"appearance:{background}");
+        public void Icon(string? choice, bool startMenuShortcut) => Calls.Add($"icon:{choice}:{startMenuShortcut}");
+        public void Float() => Calls.Add("float");
+        public void Dock() => Calls.Add("dock");
+        public void Pin(bool onTop) => Calls.Add($"pin:{onTop}");
+        public void Drag() => Calls.Add("drag");
+    }
+
+    public LocalServerBridgeTests()
+    {
+        var root = Path.Combine(_dir, "web");
+        Directory.CreateDirectory(root);
+        File.WriteAllText(Path.Combine(root, "index.html"), "<!doctype html>");
+        _server = new LocalServer(root, "https://tasks.example.test", 48411) { Bridge = _bridge };
+        _server.Start();
+    }
+
+    public void Dispose()
+    {
+        _server.Dispose();
+        try { Directory.Delete(_dir, recursive: true); } catch (IOException) { }
+    }
+
+    private async Task<HttpResponseMessage> PostAsync(string path, string json, string? origin = null)
+    {
+        using var http = new HttpClient();
+        using var req = new HttpRequestMessage(HttpMethod.Post, $"{_server.Origin}{path}")
+        {
+            Content = new StringContent(json, Encoding.UTF8, "application/json"),
+        };
+        if (origin is not null) req.Headers.TryAddWithoutValidation("Origin", origin);
+        return await http.SendAsync(req);
+    }
+
+    [Fact]
+    public async Task TheWindowRouteReachesTheBridgeAndAnswersWithItsState()
+    {
+        using var res = await PostAsync("/desktop/window", "{\"action\":\"pin\",\"pinned\":false}");
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        Assert.Equal(_bridge.State(), await res.Content.ReadAsStringAsync());
+        Assert.True(res.Headers.CacheControl?.NoStore, "host state must never be cached");
+
+        foreach (var action in new[] { "float", "dock", "drag" })
+        {
+            using var r = await PostAsync("/desktop/window", $"{{\"action\":\"{action}\"}}");
+            Assert.Equal(HttpStatusCode.OK, r.StatusCode);
+        }
+        Assert.Equal(new[] { "pin:False", "float", "dock", "drag" }, _bridge.Calls);
+    }
+
+    [Fact]
+    public async Task AnActionTheHostDoesNotKnowIsRefusedAndNothingIsCalled()
+    {
+        using var unknown = await PostAsync("/desktop/window", "{\"action\":\"explode\"}");
+        Assert.Equal(HttpStatusCode.BadRequest, unknown.StatusCode);
+        // `pin` with nothing to pin to, and with a string where a boolean goes:
+        // both are 400, not "pinned: false".
+        using var bare = await PostAsync("/desktop/window", "{\"action\":\"pin\"}");
+        Assert.Equal(HttpStatusCode.BadRequest, bare.StatusCode);
+        using var stringy = await PostAsync("/desktop/window", "{\"action\":\"pin\",\"pinned\":\"yes\"}");
+        Assert.Equal(HttpStatusCode.BadRequest, stringy.StatusCode);
+        using var junk = await PostAsync("/desktop/window", "not json");
+        Assert.Equal(HttpStatusCode.BadRequest, junk.StatusCode);
+        Assert.Empty(_bridge.Calls);
+    }
+
+    [Fact]
+    public async Task ThePageOnAnotherOriginCannotDriveTheWindow()
+    {
+        using var res = await PostAsync("/desktop/window", "{\"action\":\"float\"}", origin: "https://evil.example");
+        Assert.Equal(HttpStatusCode.Forbidden, res.StatusCode);
+        Assert.Empty(_bridge.Calls);
+        // The page's own origin is fine, in either case.
+        using var ok = await PostAsync("/desktop/window", "{\"action\":\"float\"}", origin: _server.Origin.ToUpperInvariant());
+        Assert.Equal(HttpStatusCode.OK, ok.StatusCode);
+    }
+
+    [Fact]
+    public async Task TheRouteIsPostOnlyAndAbsentWithoutAWindow()
+    {
+        using var http = new HttpClient();
+        using var get = await http.GetAsync($"{_server.Origin}/desktop/window");
+        Assert.Equal(HttpStatusCode.MethodNotAllowed, get.StatusCode);
+
+        using var state = await http.GetAsync($"{_server.Origin}/desktop/state");
+        Assert.Equal(HttpStatusCode.OK, state.StatusCode);
+        Assert.Equal(_bridge.State(), await state.Content.ReadAsStringAsync());
+
+        // In a real browser these paths reach the deployed server and 404; with
+        // no window behind the local one they answer the same, which is how the
+        // page tells the two apart.
+        _server.Bridge = null;
+        using var gone = await PostAsync("/desktop/window", "{\"action\":\"float\"}");
+        Assert.Equal(HttpStatusCode.NotFound, gone.StatusCode);
+        Assert.Empty(_bridge.Calls);
     }
 }

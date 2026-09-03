@@ -844,6 +844,55 @@ def test_an_estimate_is_set_and_cleared_on_the_entry(svc):
     assert svc.patch_day_entry(DAY, eid, estimate_minutes=-1)["estimate_minutes"] is None
 
 
+def test_a_cap_is_a_tri_state_on_the_entry(svc):
+    """Not said, stop at the estimate, or run until ticked — three answers, and
+    the first is the one an untouched row gives. It reads back as a real
+    boolean or None, never as the 0/1 the column stores, and an empty patch
+    leaves it alone: None on the way in is "not sent", not "clear"."""
+    today = _today()
+    svc.open_day(today, create=True)
+    dto = svc.add_day_entry(today, entry_id="n1", kind="note", title="Write it up")
+    assert dto["capped"] is None
+    assert svc.patch_day_entry(today, "n1", capped=True)["capped"] is True
+    assert svc.patch_day_entry(today, "n1", capped=False)["capped"] is False
+    assert svc.patch_day_entry(today, "n1")["capped"] is False
+
+
+def test_a_cap_cannot_be_decided_for_a_day_that_has_run(svc):
+    """The same fence `set_day_ritual` keeps: a cap is how a row WILL be worked,
+    and a day that has happened has no will left in it. Refused rather than
+    recorded, the record untouched by the attempt — and the other fields on the
+    same PATCH path are not fenced by this: dropping a row off a past day is
+    still allowed, exactly as before."""
+    plan = svc.open_day(DAY, create=True)
+    eid = plan["entries"][0]["entry_id"]
+    with pytest.raises(ValueError) as caught:
+        svc.patch_day_entry(DAY, eid, capped=True)
+    assert "already happened" in str(caught.value)
+    assert svc.open_day(DAY, create=False)["entries"][0]["capped"] is None
+    assert svc.patch_day_entry(DAY, eid, dropped=True)["dropped_at"]
+
+
+def test_worked_seconds_are_credited_never_assigned(svc):
+    """The column starts NULL — "never worked", a different fact from 0 — and
+    only ever grows by an increment the server computed. There is no field a
+    client could send to set it, which is what `_DAY_ENTRY_FIELDS` not listing
+    it enforces; and a negative credit is clamped rather than subtracted,
+    because nothing has a reason to un-work a row."""
+    today = _today()
+    svc.open_day(today, create=True)
+    dto = svc.add_day_entry(today, entry_id="n1", kind="note", title="Write it up")
+    assert dto["worked_seconds"] is None
+    assert store.add_worked_seconds(svc._conn, today, "n1", 90)["worked_seconds"] == 90
+    assert store.add_worked_seconds(svc._conn, today, "n1", 30)["worked_seconds"] == 120
+    assert store.add_worked_seconds(svc._conn, today, "n1", -500)["worked_seconds"] == 120
+    assert store.add_worked_seconds(svc._conn, today, "nope", 10) is None
+    with pytest.raises(ValueError):
+        store.update_day_entry(svc._conn, today, "n1", worked_seconds=5)
+    entries = svc.open_day(today, create=False)["entries"]
+    assert next(e for e in entries if e["entry_id"] == "n1")["worked_seconds"] == 120
+
+
 def test_estimating_a_task_teaches_the_task_for_next_time(svc):
     plan = svc.open_day(DAY, create=True)
     entry = next(e for e in plan["entries"] if e["uid"] == "due-today")
@@ -951,6 +1000,45 @@ def test_estimating_a_note_teaches_no_task(svc):
     task_entry = _entry_id(svc.open_day(DAY, create=False), "due-today")
     svc.patch_day_entry(DAY, task_entry, estimate_minutes=25)
     assert store.get_sidecar(svc._conn, LIST_A, "due-today")["estimated_minutes"] == 25
+
+
+def test_an_older_database_gains_the_focus_columns(tmp_path):
+    """The two ALTERs a focus session needs, on the same rule as the three before
+    them: `_day_entry_dto` reads both keys, sqlite3.Row answers IndexError for a
+    column the query did not return, and IndexError is a 500 on every read of
+    every day. Hand-built rather than captured, like the estimate test below,
+    so it keeps testing the upgrade rather than a fixture that ages out."""
+    conn = store.connect(str(tmp_path / "old.db"))
+    conn.executescript(
+        """CREATE TABLE day_plan (
+               day              TEXT NOT NULL,
+               entry_id         TEXT NOT NULL,
+               kind             TEXT NOT NULL,
+               collection_href  TEXT,
+               uid              TEXT,
+               title            TEXT,
+               source           TEXT NOT NULL,
+               habit_id         TEXT,
+               position         REAL,
+               estimate_minutes INTEGER,
+               done_at          TEXT,
+               dropped_at       TEXT,
+               rolled_to        TEXT,
+               created_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+               PRIMARY KEY (day, entry_id)
+           );
+           INSERT INTO day_plan (day, entry_id, kind, title, source)
+           VALUES ('2026-08-21', 'legacy', 'note', 'Written before focus', 'user');"""
+    )
+    store.init_db(conn)
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(day_plan)")}
+    assert {"worked_seconds", "capped"} <= cols
+    row = store.find_day_entry(conn, "2026-08-21", entry_id="legacy")
+    assert row["worked_seconds"] is None and row["capped"] is None
+    # And the legacy row reads through the DTO — which is the whole point.
+    dto = TaskService._day_entry_dto(row)
+    assert dto["worked_seconds"] is None and dto["capped"] is None
+    conn.close()
 
 
 def test_an_older_database_gains_the_estimate_columns(tmp_path):
@@ -1307,7 +1395,8 @@ def test_a_day_nobody_planned_still_has_every_key(mcp_api):
                 "reflection"):
         assert out[key] is None, key
     assert out["totals"] == {
-        "planned_minutes": 0, "done_minutes": 0, "unestimated": 0}
+        "planned_minutes": 0, "done_minutes": 0, "unestimated": 0,
+        "worked_minutes": 0}
     for bucket in ("chosen", "carried", "derived", "habits", "other", "moved",
                    "dropped"):
         assert out[bucket] == [], bucket

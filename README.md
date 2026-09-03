@@ -132,6 +132,45 @@ finished record** — read-only end to end, because a log you can fill in
 afterwards is a scorecard. Reading a day never creates one: only today can be
 opened, which is what keeps the record honest about what was actually intended.
 
+**Working the day.** Today's header has a *Start working* button, and it opens
+`/focus`: the display's now + next face brought inside the app and given a
+clock. One thing, in the largest type the screen holds — the first open row of
+the plan — the one after it in small, a count of what is behind that, and a
+pomodoro interval the row rides: 25 minutes on, 5 off, a longer rest every
+fourth, all of it in Settings → Focus. A row either **stops at its estimate**,
+in which case the surface sets it aside the moment its worked time reaches the
+figure and moves on, mid-interval if need be — or **runs until done**, in
+which case it stays until you tick it or say *not now*. The choice is per row,
+with a default in Settings, and the default is *until done*: the app never
+moves you off a thing you did not ask to be moved off. When the queue is dry
+it says so, counts what was set aside, and offers another round over those.
+Escape, or the back gesture, is the way out; the session keeps running.
+
+Three things hold it up, and each is a rule rather than a feature. **The
+server keeps anchors, not counters.** It never ticks; it stores when the
+current run of a phase began and how much was banked before it, and every
+transition settles first, crediting the time since the anchor to the row —
+*clamped to what the phase has left*. That is why two windows show the same
+second, why a refresh loses nothing, and why closing the laptop mid-interval
+and opening it tomorrow credits the rest of that one interval and not the
+night. **The server names the row.** Ticking it anywhere — in Today, on a
+phone, in Thunderbird — moves the cursor, and the surface follows. **A clock
+that ran out while nobody was there waits.** Rolling straight into the next
+phase is a setting, and it means a live screen rolling on; a session found
+past its end after lunch says so and asks, whatever the setting says.
+
+It refuses two things on purpose. It never opens a day — Today is the only
+opener, exactly as the dashboard and the connector are held to — so a cold
+load of `/focus` on an unplanned day points you at Today rather than planning
+one for you. And it records one number and no others: each row's *worked*
+time, which the look-back shows beside the estimate in the same unit and never
+as a ratio, a streak or a colour. Nothing here scores the day either. A chime,
+made on the device rather than shipped, and a browser notification, asked for
+only from a click, are each a switch in Settings; the notification is silent
+because the chime is the sound. The connector reads the same figure as
+`worked_minutes` beside `planned_minutes`, the one measured number next to two
+guesses.
+
 **Notifications.** Optional, off until you turn them on, and Telegram-only for
 now. Four things earn a message, and the list is short on purpose: Smylte
 already holds everything you will come looking for, so a notification has to be
@@ -441,15 +480,18 @@ backend/
                 + the display fonts build (build_display_fonts.py)
 frontend/
   src/
-    components/ TodayView, TasksView, CalendarView, SchedulingView, HomeView,
-                BookingPage, DisplayView, Sidebar, Login, TaskModal,
-                AppearancePanel, ArchivedCalendarsSection, DisplaysSection
+    components/ TodayView, FocusView, TasksView, CalendarView, SchedulingView,
+                HomeView, BookingPage, DisplayView, Sidebar, Login, TaskModal,
+                AppearancePanel, ArchivedCalendarsSection, DisplaysSection,
+                FocusSection
     api.ts      typed, same-origin API client (+ SSE subscribe)
     App.tsx     shell: tabs, settings, theme, live-refresh
     appearance.ts  token allowlist + validation, apply/reset, theme import/export
     dashboard.ts   Home grid math (pack/move/resize) — pure, unit-tested
     daytext.ts     reading one typed line ("gym at 7") — pure, unit-tested
     order.ts       the one task sort — total, so array order can't leak through
+    focus.ts       the focus clock, derived from the server's anchors — pure, unit-tested
+    chime.ts, notify.ts  a tone made on the device, and a browser notification
     time.ts        every clock the app draws, 12- or 24-hour
     styles/     design tokens + app.css + display.css (the wall screens, which
                 deliberately do NOT read the appearance override layer)
@@ -472,6 +514,13 @@ load from local disk instead of over the network, and that installing is one
 `.exe` that keeps itself current: CI publishes the built SPA to a rolling
 release, and the client picks it up on the next launch. API calls still go to
 the server, so nothing about CalDAV latency changes. See `desktop/README.md`.
+
+The one thing the client draws that the browser cannot is the **floating focus
+window**: the clock and the row you are on, in a small frameless window above
+everything else while the app itself waits in the taskbar. Drag it by its body,
+resize it from its edges, pin it or let it fall behind, dock it to bring the
+app back. It is the same `/focus` page at a small size, in the same session, so
+it and the app agree to the second.
 
 ## Panel firmware
 

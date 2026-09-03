@@ -62,7 +62,7 @@ const entry = (o: Partial<DayEntry> = {}): DayEntry => ({
   entry_id: 'e1', day: today(), kind: 'note', list: null, uid: null,
   title: 'Water the plants', source: 'user', position: 1,
   done_at: null, dropped_at: null, habit_id: null, estimate_minutes: null,
-  rolled_to: null,
+  rolled_to: null, worked_seconds: null, capped: null,
   created_at: '2026-08-21T08:00:00.000Z', ...o,
 })
 
@@ -4240,5 +4240,50 @@ describe('the Today tab stylesheet', () => {
       offenders.push(`${prop}: ${value}`)
     }
     expect(offenders).toEqual([])
+  })
+})
+
+describe('Start working', () => {
+  it('is offered on today, in the planning mode, when there is somewhere to go', async () => {
+    m.openDay.mockResolvedValue(plan([entry({ title: 'Water the plants' })]))
+    const onStart = vi.fn()
+    render(
+      <DataProvider rev={0} onExpire={vi.fn()}>
+        <TodayView rev={0} onExpire={vi.fn()} onStartWorking={onStart} />
+      </DataProvider>,
+    )
+    await screen.findByText('Water the plants')
+    await userEvent.click(screen.getByRole('button', { name: 'Start working' }))
+    expect(onStart).toHaveBeenCalledTimes(1)
+    // Not in a review: a record is not something to start.
+    await userEvent.click(screen.getByRole('button', { name: 'Review' }))
+    expect(screen.queryByRole('button', { name: 'Start working' })).not.toBeInTheDocument()
+  })
+
+  it('is absent on a day that has happened, and absent without a way in', async () => {
+    m.day.mockImplementation(async (d) => plan([entry({ day: d, title: 'Yesterday' })], d))
+    const user = setup()   // no `onStartWorking`
+    expect(screen.queryByRole('button', { name: 'Start working' })).not.toBeInTheDocument()
+    await user.click(await screen.findByRole('button', { name: 'Previous day' }))
+    await screen.findByText('Yesterday')
+    expect(screen.queryByRole('button', { name: 'Start working' })).not.toBeInTheDocument()
+  })
+})
+
+describe('what was worked', () => {
+  it('shows beside the estimate in a review, and nowhere on the live list', async () => {
+    m.openDay.mockResolvedValue(plan([
+      entry({ title: 'Water the plants', estimate_minutes: 25, worked_seconds: 31 * 60 }),
+      entry({ entry_id: 'e2', title: 'Invoice', position: 2 }),
+    ]))
+    const user = setup()
+    await screen.findByText('Water the plants')
+    expect(screen.queryByText('31m')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Review' }))
+    expect(await screen.findByText('31m')).toBeInTheDocument()
+    expect(screen.getByTitle('31m worked')).toBeInTheDocument()
+    // A row never worked keeps its (empty) cell, so the column holds.
+    const cells = document.querySelectorAll('.today-worked')
+    expect(cells).toHaveLength(2)
   })
 })

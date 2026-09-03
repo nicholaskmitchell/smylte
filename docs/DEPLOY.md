@@ -540,7 +540,8 @@ Back up **both**:
   and **`bookings`** (every scheduling-link config plus client names/emails/
   notes — this exists nowhere on the wire), **`day_plan`** plus
   **`day_plan_opened`** (the Today tab's whole record: what the owner added to a
-  day by hand, what they ticked, how long they expected each thing to take, what
+  day by hand, what they ticked, how long they expected each thing to take and
+  how long a focus session actually spent on it, what
   they moved to another day, what they dropped rather than did, and which days
   were opened at all), **`day_ritual`** (what the owner SAID about each day —
   how long they were willing to work, when they started it, when they shut it
@@ -548,7 +549,10 @@ Back up **both**:
   prose in this database that exists nowhere else), and **`habits`** (the rules
   that put entries on a day — they are never PUT to Radicale and carry no RRULE,
   so the wire has no copy; losing them stops every habit recurring, though the
-  occurrences already in `day_plan` keep their titles and stay readable), and
+  occurrences already in `day_plan` keep their titles and stay readable),
+  **`focus_session`** (the day being worked against a clock — which row, which
+  phase, and the anchor the clock runs from; losing it loses a running clock
+  and never the time already credited, which lives on `day_plan`), and
   **`notification_deliveries`** (what has already been said out loud — the
   record that stops a notification arriving twice; a restore without it re-sends
   whatever still falls inside the scheduler's catch-up window), and

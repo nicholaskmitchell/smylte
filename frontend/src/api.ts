@@ -574,6 +574,16 @@ export interface DayEntry {
   // row is what its day counts, which is what stops re-estimating something in
   // March from rewriting what January's plan said it would take.
   estimate_minutes: number | null
+  /** Seconds a focus session actually spent on this row, or null when no
+   *  session ever did. A MEASUREMENT beside the guess above, credited by the
+   *  server from the session's phase anchors and never sent by a client — the
+   *  PATCH body has no field for it on purpose. Null is "never worked", which
+   *  is a different fact from 0 and is kept. */
+  worked_seconds: number | null
+  /** Whether a focus session stops crediting this row at its estimate (true),
+   *  keeps it until it is ticked (false), or follows the account's default
+   *  (null, "not said" — the same tri-state `capacity_minutes` keeps). */
+  capped: boolean | null
   created_at: string
 }
 
@@ -654,6 +664,61 @@ export interface PatchDayEntryBody {
    *  already means "not asked about". The backend bounds this at [-1, 1440], so
    *  -1 is the only negative that can arrive. */
   estimate_minutes?: number
+  /** Stop at the estimate (true) or run until ticked (false). Refused on a
+   *  day that has run — a cap is how a row WILL be worked. */
+  capped?: boolean
+}
+
+// ── focus (working the day's queue against a clock) ──────────────────────────
+//
+// The session is ANCHORS, NOT COUNTERS. The server never ticks: it stores when
+// the current run of the phase started and how much of the phase was already
+// banked, and every transition settles first — credits the clamped time since
+// the anchor, then does what it was asked. The client derives the seconds it
+// paints from those two numbers and the wall clock (`focus.ts`), which is why
+// two windows agree and why a laptop closed overnight cannot inflate a row.
+
+export type FocusPhase = 'focus' | 'break' | 'long_break'
+
+export interface FocusSession {
+  day: string
+  phase: FocusPhase
+  /** Frozen at phase start from the settings of that moment. */
+  phase_length_s: number
+  /** Settled seconds in this phase — banked by a pause, a pass, a sync. */
+  phase_elapsed_s: number
+  /** The anchor: when the current run began, or null while paused, halted at
+   *  the end of a phase, or ended. */
+  running_since: string | null
+  /** Completed focus phases; drives the long-break cadence. */
+  intervals_done: number
+  /** The day-plan row being credited, or null when the queue is empty. THE
+   *  SERVER'S ANSWER: the surface paints this row and never substitutes its
+   *  own idea of "current". */
+  entry_id: string | null
+  /** Rows set aside this session — a cap spent, or "not now". */
+  passed: string[]
+  started_at: string
+  ended_at: string | null
+  updated_at: string
+}
+
+export interface FocusClockBody {
+  action: 'pause' | 'resume' | 'next' | 'sync' | 'end'
+  /** With `next`: what the caller believes the phase is. A stale expectation is
+   *  answered with the state there is and writes nothing — two windows that
+   *  both see an interval end must not advance it twice. */
+  expect_phase?: FocusPhase
+  expect_intervals?: number
+  /** "Keep going": straight into the next interval, the finished one counted. */
+  skip_break?: boolean
+}
+
+export interface FocusCursorBody {
+  action: 'pass' | 'select' | 'again'
+  /** `pass` names the row it means to set aside (a no-op if it is no longer
+   *  current); `select` names the open row to jump to. */
+  entry_id?: string
 }
 
 // ── habits (the repeating spine of a day) ──────────────────────────────────
@@ -792,6 +857,17 @@ export interface Settings {
    *  days on two paths. See `capacity.ts`. */
   day_capacity_minutes?: number
   day_capacity_by_weekday?: Record<string, number>
+  // The focus clock. Absent means the default in `focus.ts::DEFAULT_FOCUS`,
+  // which mirrors the server's FOCUS_DEFAULTS; a session freezes the lengths
+  // it started with, so a change here moves the next phase, never the running one.
+  focus_interval_minutes?: number
+  focus_break_minutes?: number
+  focus_long_break_minutes?: number
+  focus_long_break_every?: number      // 0 = never a long break
+  focus_auto_continue?: boolean        // roll straight on at an interval's end
+  focus_cap_default?: boolean          // rows stop at their estimate unless they say otherwise
+  focus_chime?: boolean
+  focus_notify?: boolean
   /** Which notification rules are on, as a SPARSE override map: an absent rule
    *  means that rule's own default (all four ship on). Sparse rather than four
    *  booleans because a rule added later would otherwise be governed by
@@ -998,6 +1074,19 @@ export const api = {
       `/api/day/${day}/entries/${encodeURIComponent(entryId)}/roll`, { to }),
   patchDayEntry: (day: string, entryId: string, body: PatchDayEntryBody) =>
     j<DayEntry>('PATCH', `/api/day/${day}/entries/${encodeURIComponent(entryId)}`, body),
+
+  // the focus session (working the day's queue against a clock)
+  //
+  // `{day}` is the client's, like every day route, so the server does not guess
+  // "today" for a browser in another zone. `focus` is a pure read and answers
+  // null for a day with no session; `startFocus` never opens a day (422 on one
+  // nobody planned — Today is the only opener, as it is for the dashboard).
+  focus: (day: string) => j<FocusSession | null>('GET', `/api/focus/${day}`),
+  startFocus: (day: string) => j<FocusSession>('POST', `/api/focus/${day}/start`),
+  focusClock: (day: string, body: FocusClockBody) =>
+    j<FocusSession>('POST', `/api/focus/${day}/clock`, body),
+  focusCursor: (day: string, body: FocusCursorBody) =>
+    j<FocusSession>('POST', `/api/focus/${day}/cursor`, body),
 
   // habits (the rules that put entries on a day)
   //

@@ -24,6 +24,17 @@ export type DesktopState = {
   /// only be told light or dark. The section says which, rather than promising
   /// a colour the OS will quietly ignore.
   captionColour: boolean
+  /// The floating focus window. OPTIONAL, and the optionality is the
+  /// compatibility rule: the web build updates itself on every launch and the
+  /// exe does not, so a page that knows about floating routinely runs inside a
+  /// client that does not. Such a client answers without these keys, and every
+  /// float control is gated on `floating !== undefined`.
+  floating?: boolean
+  pinned?: boolean
+  /// Whether the runtime moves the floating window from the page's own drag
+  /// regions (`app-region: drag`), or the page has to ask the bridge on every
+  /// press. Only meaningful inside the floating window.
+  nativeDrag?: boolean
 }
 
 async function call(path: string, body?: unknown): Promise<DesktopState | null> {
@@ -46,6 +57,20 @@ export const readState = () => call('/desktop/state')
 
 export const setIcon = (choice: IconChoice, startMenuShortcut: boolean) =>
   call('/desktop/icon', { choice, startMenuShortcut })
+
+// The floating focus window. Four verbs on one route, each answered with the
+// fresh host state so the control that asked can reconcile from it.
+export const floatWindow = () => call('/desktop/window', { action: 'float' })
+export const dockWindow = () => call('/desktop/window', { action: 'dock' })
+export const pinWindow = (pinned: boolean) => call('/desktop/window', { action: 'pin', pinned })
+export const dragWindow = () => call('/desktop/window', { action: 'drag' })
+
+/// Whether THIS document is the floating window. The host opens it at
+/// `/focus?float=1`, and this is the one place in the app that reads the query
+/// string: the surface is the same either way, and the flag only decides which
+/// way out it offers (Dock rather than Back) and which alerts it owns.
+export const isFloatWindow = () =>
+  new URLSearchParams(location.search).get('float') === '1'
 
 /// Push the app's current background to the host, so the caption bar matches.
 ///

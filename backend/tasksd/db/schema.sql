@@ -5,7 +5,8 @@
 --     derived projection of what is on the wire. Delete them, full-resync, and
 --     you get byte-identical application state back (invariant #1).
 --   * SIDECAR tables (sidecar, list_settings, completions, attachments,
---     day_plan, day_plan_opened, day_ritual, habits, notification_deliveries)
+--     day_plan, day_plan_opened, day_ritual, habits, focus_session,
+--     notification_deliveries)
 --     hold app-only state that
 --     exists NOWHERE on the wire (kanban column, manual sort, pins, per-list
 --     settings, the day's plan, which days were opened at all, what the owner
@@ -364,6 +365,21 @@ CREATE TABLE IF NOT EXISTS day_plan (
     -- tomorrow by the automatic rule, and the owner would find two of it.
     -- A column added by store.init_db on existing DBs.
     rolled_to       TEXT,
+    -- Seconds actually WORKED on this row by focus intervals, credited by the
+    -- server from a session's phase anchors as it moves — never from a
+    -- client's own count. NULL is "never worked in a session", which is a
+    -- different fact from 0 and is kept: a look-back that showed "0m worked"
+    -- on a row nobody ever started would be inventing a measurement. Seconds
+    -- rather than minutes because a capped row advances at exactly its
+    -- estimate, and a minute-rounded figure would fire up to thirty seconds
+    -- early or late. A column added by store.init_db on existing DBs.
+    worked_seconds  INTEGER,
+    -- Whether a focus session stops crediting this row at its estimate (1),
+    -- keeps it until it is ticked (0), or follows the account's default (NULL,
+    -- "not said" — the same tri-state `day_ritual.capacity_minutes` keeps). On
+    -- the ENTRY because it is a statement about how this row will be worked on
+    -- this day. A column added by store.init_db on existing DBs.
+    capped          INTEGER,
     created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     PRIMARY KEY (day, entry_id)
 );
@@ -403,6 +419,34 @@ CREATE TABLE IF NOT EXISTS day_ritual (
     committed_at     TEXT,               -- the planning ritual was finished
     shutdown_at      TEXT,               -- the shutdown ritual was finished
     reflection       TEXT,               -- a sentence or two on how it went
+    updated_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+-- A focus session: the day being worked against a clock, one row per day.
+--
+-- ANCHORS, NOT COUNTERS. The server never ticks. What it keeps is when the
+-- current run of the phase started and how much of the phase had already been
+-- settled before that run, and every transition settles first — credits the
+-- clamped time since the anchor, then does whatever it was asked. That is the
+-- whole reason a clock in two windows agrees to the second, and the reason a
+-- laptop closed overnight cannot record eight hours on one row: a phase can
+-- credit at most its own length, however long nobody was there.
+--
+-- Sidecar-class like day_plan and for the same reason — the wire has no
+-- vocabulary for "I am twelve minutes into the memo" — and listed in the file
+-- header and in docs/DEPLOY.md's backup section. Losing it loses a running
+-- clock, never the time already credited, which lives on day_plan.
+CREATE TABLE IF NOT EXISTS focus_session (
+    day              TEXT PRIMARY KEY,   -- YYYY-MM-DD, the day being worked
+    phase            TEXT NOT NULL,      -- focus | break | long_break
+    phase_length_s   INTEGER NOT NULL,   -- frozen at phase start from settings
+    phase_elapsed_s  INTEGER NOT NULL DEFAULT 0,  -- settled seconds in this phase
+    running_since    TEXT,               -- the anchor; NULL = paused, halted or ended
+    intervals_done   INTEGER NOT NULL DEFAULT 0,  -- completed focus phases (long-break cadence)
+    entry_id         TEXT,               -- the day_plan row being credited; NULL = queue empty
+    passed           TEXT NOT NULL DEFAULT '[]',  -- JSON list of entry_ids set aside this session
+    started_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    ended_at         TEXT,               -- stamped by End; the row stays
     updated_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 

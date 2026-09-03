@@ -38,7 +38,7 @@ const event = (o: Partial<CalEvent> = {}): CalEvent => ({
 const dayEntry = (o: Partial<DayEntry> = {}): DayEntry => ({
   entry_id: 'e1', day: '2026-08-21', kind: 'note', list: null, uid: null,
   title: 'Water the plants', source: 'user', position: 1,
-  done_at: null, dropped_at: null, habit_id: null, rolled_to: null,
+  done_at: null, dropped_at: null, habit_id: null, rolled_to: null, worked_seconds: null, capped: null,
   estimate_minutes: null, created_at: '2026-08-21T08:00:00.000Z', ...o,
 })
 
@@ -364,6 +364,14 @@ describe('the day plan', () => {
     expect(sanitizeDayEntry({ ...dayEntry(), kind: '' })).toBeNull()
     expect(sanitizeDayEntry({ ...dayEntry(), day: null })).toBeNull()
     expect(sanitizeDayEntry({ ...dayEntry(), source: undefined })).toBeNull()
+    // The focus fields ride the mirror, and `capped`'s null is a real answer
+    // ("follow the default") that must not be flattened to false.
+    const worked = sanitizeDayEntry({ ...dayEntry(), worked_seconds: 600, capped: true })
+    expect(worked?.worked_seconds).toBe(600)
+    expect(worked?.capped).toBe(true)
+    expect(sanitizeDayEntry({ ...dayEntry(), capped: null })?.capped).toBeNull()
+    expect(sanitizeDayEntry({ ...dayEntry(), capped: 'yes', worked_seconds: 'lots' }))
+      .toMatchObject({ capped: null, worked_seconds: null })
   })
 
   it('rebuilds every field to its own type', () => {
