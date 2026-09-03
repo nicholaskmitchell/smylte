@@ -2277,8 +2277,15 @@ export function TodayView({
             broken every one of them. */}
         {isToday && (
           <button type="button" className="btn ghost today-habits-open"
-            aria-haspopup="dialog" onClick={() => setSheet(true)}>
-            <span className="mono" aria-hidden="true">↻</span> {tr('today.habits')}
+            aria-haspopup="dialog" aria-label={tr('today.habits')}
+            onClick={() => setSheet(true)}>
+            {/* The word is in a span so the narrowest phones can drop it and
+                keep the glyph (app.css, 359px): four controls need 323px of a
+                320px phone's 292, measured, and this is the one already
+                carrying a glyph. `aria-label` is what keeps the name "Habits"
+                once the word is gone. */}
+            <span className="mono" aria-hidden="true">↻</span>
+            <span className="today-habits-open__word"> {tr('today.habits')}</span>
           </button>
         )}
       </div>

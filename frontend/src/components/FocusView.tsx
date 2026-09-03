@@ -35,6 +35,9 @@ import { readCachedDayPlan } from '../cache'
 import { playChime, unlockChime } from '../chime'
 import { useTaskData } from '../data'
 import {
+  dockWindow, dragWindow, floatWindow, pinWindow, readState, type DesktopState,
+} from '../desktop'
+import {
   capReached, clockOf, currentFinished, elapsedIn, isCapped, nextPhase, queueOf, wasAway,
   workedNow, type FocusSettings,
 } from '../focus'
@@ -46,7 +49,9 @@ import { useTimeFormat } from '../timeformat'
 import { makeGuard, textDir } from '../util'
 import { entryTitle } from './TodayView'
 
-export function FocusView({ rev, focusRev, onExpire, onLeave, settings }: {
+export function FocusView({
+  rev, focusRev, onExpire, onLeave, settings, floating = false,
+}: {
   /** Bumped by App on every data change the server publishes; re-reads the day. */
   rev: number
   /** Bumped on `focus_updated` alone; re-reads the session. Kept apart from
@@ -56,6 +61,12 @@ export function FocusView({ rev, focusRev, onExpire, onLeave, settings }: {
   onExpire: () => void
   onLeave: () => void
   settings: FocusSettings
+  /** This document IS the desktop client's floating window. It changes two
+   *  things and no more: the way out is Dock rather than Back (a cold load has
+   *  no history to go back through, and "back" from a floating clock means
+   *  the main window), and it owns the end of an interval — the main window,
+   *  minimised behind it, stays silent. */
+  floating?: boolean
 }) {
   const { locale, t: tr } = useI18n()
   const tf = useTimeFormat()
@@ -64,7 +75,53 @@ export function FocusView({ rev, focusRev, onExpire, onLeave, settings }: {
   const guard = useMemo(() => makeGuard(() => expire.current()), [])
   const { tasks, loaded, toggle } = useTaskData()
   const today = useToday()
-  useEscape(onLeave)
+
+  // ── the Windows client, if this is running in one ───────────────────────
+  //
+  // `readState` answers null everywhere the host bridge does not exist, which
+  // in a browser is everywhere, so every control below is absent there. Read
+  // again whenever this window comes forward: the main window learns that the
+  // floating one was docked at the moment it is restored and activated.
+  const [desktop, setDesktop] = useState<DesktopState | null>(null)
+  useEffect(() => {
+    let mounted = true
+    const read = () => { void readState().then((s) => { if (mounted) setDesktop(s) }) }
+    read()
+    window.addEventListener('focus', read)
+    document.addEventListener('visibilitychange', read)
+    return () => {
+      mounted = false
+      window.removeEventListener('focus', read)
+      document.removeEventListener('visibilitychange', read)
+    }
+  }, [])
+  // The gate for every float control. An exe older than the feature answers
+  // without the key, and offers nothing rather than a control that 404s.
+  const canFloat = desktop?.floating !== undefined
+  const floated = !!desktop?.floating
+  const pinned = desktop?.pinned ?? true
+  const reconcile = useCallback((answer: Promise<DesktopState | null>) => {
+    void answer.then((s) => { if (s) setDesktop(s) })
+  }, [])
+  const dock = useCallback(() => reconcile(dockWindow()), [reconcile])
+  const showFloat = useCallback(() => reconcile(floatWindow()), [reconcile])
+  const togglePin = useCallback(() => {
+    const next = !pinned
+    setDesktop((d) => (d ? { ...d, pinned: next } : d))
+    reconcile(pinWindow(next))
+  }, [pinned, reconcile])
+  // Only wired when the runtime cannot move the window from the page's own
+  // drag regions. A press on a control is that control's; a touch is not a
+  // drag; and no pointer capture, because the native move loop takes the
+  // mouse and this document simply never sees the release.
+  const onDrag = useCallback((e: React.PointerEvent) => {
+    if (e.button !== 0 || e.pointerType === 'touch') return
+    if ((e.target as Element).closest('button, a, input, select, textarea, [contenteditable]')) return
+    e.preventDefault()
+    void dragWindow()
+  }, [])
+
+  useEscape(floating ? dock : onLeave)
 
   // ── the day and the session ────────────────────────────────────────────
   const [plan, setPlan] = useState<DayPlan | null>(() => readCachedDayPlan(today))
@@ -258,8 +315,14 @@ export function FocusView({ rev, focusRev, onExpire, onLeave, settings }: {
     if (!session || !live || !clock || !clock.over) return
     const key = `${session.phase}:${session.intervals_done}`
     if (ended.current === key) return
+    // Marked BEFORE the two early returns, and that order is load-bearing for
+    // the second: a main window that skipped the mark while a floating one
+    // owned the alert would chime minutes late on docking, the moment its
+    // `desktop` state changed and this effect ran again over a phase that had
+    // already ended.
     ended.current = key
     if (away) return
+    if (!floating && floated) return
     const focusEnded = session.phase === 'focus'
     if (settings.chime) playChime(focusEnded ? 'focus' : 'break')
     if (settings.notify) {
@@ -268,7 +331,7 @@ export function FocusView({ rev, focusRev, onExpire, onLeave, settings }: {
         current ? entryTitle(current, currentTask, loaded, tr) : '')
     }
     if (settings.autoContinue) next(false)
-  }, [away, clock, current, currentTask, live, loaded, next, session, settings, tr])
+  }, [away, clock, current, currentTask, floated, floating, live, loaded, next, session, settings, tr])
 
   // The tab's title carries the clock, so a tab behind another still says
   // where the interval stands — the same lever DisplayView pulls for a panel's
@@ -422,7 +485,9 @@ export function FocusView({ rev, focusRev, onExpire, onLeave, settings }: {
   }
 
   return (
-    <div className="focus" data-state={state} data-phase={session?.phase ?? ''}>
+    <div className="focus" data-state={state} data-phase={session?.phase ?? ''}
+      data-float={floating ? '' : undefined}
+      onPointerDown={floating && desktop?.nativeDrag === false ? onDrag : undefined}>
       <header className="focus-head">
         <span className="label">{tr('focus.title')}</span>
         {live && session && (
@@ -436,9 +501,40 @@ export function FocusView({ rev, focusRev, onExpire, onLeave, settings }: {
             {tr('focus.tally', { done: liveTotal - openAll, total: liveTotal })}
           </span>
         )}
-        <button type="button" className="btn ghost focus-back" onClick={onLeave}>
-          {tr('focus.back')}
-        </button>
+        {floating ? (
+          <>
+            <button type="button" className="btn ghost focus-pin" aria-pressed={pinned}
+              aria-label={tr(pinned ? 'focus.unpin' : 'focus.pin')}
+              title={tr(pinned ? 'focus.unpin' : 'focus.pin')} onClick={togglePin}>
+              {pinned ? '●' : '○'}
+            </button>
+            <button type="button" className="btn ghost focus-back" onClick={dock}>
+              {tr('focus.dock')}
+            </button>
+          </>
+        ) : (
+          <>
+            {/* The Windows client only, and only an exe that has the window:
+                absent everywhere else, never disabled. While the floating
+                window is up, main offers to bring it forward or to dock it. */}
+            {canFloat && !floated && (
+              <button type="button" className="btn ghost focus-float" onClick={showFloat}>
+                {tr('focus.float')}
+              </button>
+            )}
+            {canFloat && floated && (
+              <>
+                <button type="button" className="btn ghost focus-float" onClick={showFloat}>
+                  {tr('focus.showFloat')}
+                </button>
+                <button type="button" className="btn ghost" onClick={dock}>{tr('focus.dock')}</button>
+              </>
+            )}
+            <button type="button" className="btn ghost focus-back" onClick={onLeave}>
+              {tr('focus.back')}
+            </button>
+          </>
+        )}
       </header>
       <main className="focus-main">{body}</main>
       {live && current && (

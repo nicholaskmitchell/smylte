@@ -299,8 +299,8 @@ const TODAY_HEAD = `
         <span class="today-focus__word">Start working</span>
         <span class="today-focus__glyph mono" aria-hidden="true">&#9654;</span></button>
       <button type="button" class="btn ghost today-shutdown">Shut down</button>
-      <button type="button" class="btn ghost today-habits-open">
-        <span class="mono">&#8635;</span> Habits</button>
+      <button type="button" class="btn ghost today-habits-open" aria-label="Habits">
+        <span class="mono">&#8635;</span><span class="today-habits-open__word"> Habits</span></button>
     </div>
   </div></div></div>`
 
@@ -378,5 +378,105 @@ describe('the Today header keeps its actions together on a phone', () => {
         </div>
       </div></div></div>`)
     expect(getComputedStyle(host.querySelector('.spacer')!).display).not.toBe('none')
+  })
+})
+
+// ── the floating window ──────────────────────────────────────────────────────
+//
+// The Windows client opens /focus?float=1 in a window that is 420×280 to begin
+// with and 320×200 at its floor, and draws a six-pixel ring around the page —
+// so the page's viewport is 408×268 down to 308×188. The float rules in app.css
+// concede NEXT, then the qualifier line, then the title's second line as the
+// height runs out, by media query, because here the viewport IS the window.
+// The class names are held to the JSX by FocusView.test.tsx; this file holds
+// the numbers.
+const FLOAT_FACE = (over = false) => `
+  <div class="focus" data-float="" data-state="${over ? 'over' : 'running'}" data-phase="focus">
+    <header class="focus-head">
+      <span class="label">Focus</span>
+      <span class="focus-head__interval">Interval 3</span>
+      <span class="spacer"></span>
+      <span class="focus-head__tally">2 / 8 done</span>
+      <button type="button" class="btn ghost focus-pin" aria-pressed="true">&#9679;</button>
+      <button type="button" class="btn ghost focus-back">Dock</button>
+    </header>
+    <main class="focus-main">
+      <div class="focus-phase" role="status">${over ? 'Interval over' : 'Focus'}</div>
+      <div class="focus-clock">${over ? '0:00' : '24:59'}</div>
+      <div class="focus-now">
+        <div class="focus-now__eyebrow">Now</div>
+        <h1 class="focus-now__title">Draft the quarterly memo for the board and both of the auditors</h1>
+        <div class="focus-now__meta">
+          <span>25m est</span><span>12m worked</span>
+          <button type="button" class="focus-cap">Until done</button>
+        </div>
+        <div class="focus-actions">
+          <button type="button" class="btn">Done</button>
+          <button type="button" class="btn ghost">Not now</button>
+          ${over
+            ? '<button type="button" class="btn ghost">Take a break</button>'
+              + '<button type="button" class="btn ghost">Keep going</button>'
+            : '<button type="button" class="btn ghost">Pause</button>'}
+        </div>
+      </div>
+      <div class="focus-next">
+        <div class="focus-now__eyebrow">Next</div>
+        <div class="focus-next__text"><button type="button" class="focus-pick">Invoice Friday</button></div>
+        <div class="focus-next__more">+6 behind that</div>
+      </div>
+    </main>
+  </div>`
+
+describe('the floating window fits its face', () => {
+  const shown = (el: Element | null) => !!el && getComputedStyle(el).display !== 'none'
+  const fits = (host: HTMLElement) => {
+    const main = host.querySelector('.focus-main') as HTMLElement
+    expect(main.scrollHeight, `the face overflows: ${main.scrollHeight} in ${main.clientHeight}`)
+      .toBeLessThanOrEqual(main.clientHeight + 1)
+  }
+
+  it('holds the whole face at its opening size', async () => {
+    await viewport(408, 268)
+    const host = await mount(FLOAT_FACE())
+    fits(host)
+    expect(shown(host.querySelector('.focus-next'))).toBe(true)
+    expect(shown(host.querySelector('.focus-now__meta'))).toBe(true)
+    expect(box(host.querySelector('.focus-head')!).h).toBeLessThanOrEqual(40)
+  })
+
+  it('concedes NEXT, then the qualifier line, then the second line of the title', async () => {
+    await viewport(408, 230)
+    let host = await mount(FLOAT_FACE())
+    fits(host)
+    expect(shown(host.querySelector('.focus-next'))).toBe(false)
+    expect(shown(host.querySelector('.focus-now__meta'))).toBe(true)
+
+    document.body.innerHTML = ''
+    await viewport(408, 200)
+    host = await mount(FLOAT_FACE())
+    fits(host)
+    expect(shown(host.querySelector('.focus-now__meta'))).toBe(false)
+
+    document.body.innerHTML = ''
+    await viewport(308, 188)
+    host = await mount(FLOAT_FACE())
+    fits(host)
+    // One line of title at the floor: the box is one line-height tall.
+    const title = box(host.querySelector('.focus-now__title')!)
+    expect(title.h).toBeLessThanOrEqual(15 * 1.12 + 2)
+  })
+
+  it('keeps the four-button row of an ended interval inside the window', async () => {
+    for (const [w, h] of [[408, 268], [308, 188]] as const) {
+      document.body.innerHTML = ''
+      await viewport(w, h)
+      const host = await mount(FLOAT_FACE(true))
+      fits(host)
+      for (const btn of host.querySelectorAll('.focus-actions .btn')) {
+        const b = box(btn)
+        expect(b.right, `${btn.textContent} runs past the right edge at ${w}×${h}`).toBeLessThanOrEqual(w + 0.5)
+        expect(b.bottom, `${btn.textContent} runs past the bottom at ${w}×${h}`).toBeLessThanOrEqual(h + 0.5)
+      }
+    }
   })
 })

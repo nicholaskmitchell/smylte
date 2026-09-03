@@ -37,6 +37,7 @@ import { HomeView } from './components/HomeView'
 import { TodayView } from './components/TodayView'
 import { FocusView } from './components/FocusView'
 import { DEFAULT_FOCUS, sanitizeFocusSettings, type FocusSettings } from './focus'
+import { isFloatWindow } from './desktop'
 import { DEFAULT_LANGUAGE, deviceLanguage, isLanguage, type Language } from './lang'
 import { I18nProvider } from './i18n'
 import { translate } from './i18n/index'
@@ -162,6 +163,10 @@ export function App() {
   // session and this one has everything: theme, language, settings, the SSE
   // subscription. Both spellings, like the server route that serves it.
   const [focusOpen, setFocusOpen] = useState(() => isFocusPath(location.pathname))
+  // This document is the desktop client's floating window. State rather than
+  // a module constant so a test can vary it; read once, because the host
+  // never navigates the window anywhere else.
+  const [floating] = useState(() => isFloatWindow())
   const [focus, setFocus] = useState<FocusSettings>(DEFAULT_FOCUS)
   // A SECOND revision counter, for settings alone. `rev` drives the task and
   // event refetch, and bumping it on a preference change is the request storm
@@ -1055,9 +1060,16 @@ export function App() {
     // the boot markup away and mount a fresh tree — losing the very frame this
     // exists to paint (and any click already in flight against it).
     <div className="shell">
-      {focusOpen && !booting ? (
-        <FocusView rev={rev} focusRev={focusRev} onExpire={onExpire} onLeave={leaveFocus}
-          settings={focus} />
+      {focusOpen ? (
+        // A cold load of /focus — the floating window's whole life — must not
+        // flash the tab strip for the one /api/me round trip: at 408px wide
+        // that is the phone strip, in a window that will never show it. The
+        // shell's root element is unchanged, so the reconciliation argument
+        // above still holds.
+        booting
+          ? <div className="focus" aria-busy="true" />
+          : <FocusView rev={rev} focusRev={focusRev} onExpire={onExpire} onLeave={leaveFocus}
+              settings={focus} floating={floating} />
       ) : (<>
       <div className="topbar">
         <span className="brand">Smylte<span className="dot">.</span></span>

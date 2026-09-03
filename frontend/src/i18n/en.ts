@@ -846,6 +846,12 @@ export const en = {
   'focus.ended': 'Ended at {time}',
   'focus.notify.focusOver': 'Interval over',
   'focus.notify.breakOver': 'Break over',
+  // the Windows client's floating window
+  'focus.float': 'Float',
+  'focus.dock': 'Dock',
+  'focus.showFloat': 'Show the window',
+  'focus.pin': 'Keep on top',
+  'focus.unpin': 'Let it fall behind',
   'today.minutesFor': 'Minutes for {entry}',
   'today.thisEntry': 'this entry',
   'today.entry': 'entry',

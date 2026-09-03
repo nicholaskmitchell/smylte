@@ -2447,7 +2447,18 @@
 @media (max-width: 720px) {
   .today-focus__word { display: none; }
   .today-focus__glyph { display: inline; }
-  .today-focus { padding: 7px 9px; }
+  .today-focus { padding: 9px 9px; }   /* the siblings' height, narrower */
+}
+/* The narrowest phones. Measured in Chromium at 320px: Review 74, the glyph
+   27, Shut down 97, Habits 89 and three 12px gaps come to 323 of the 292 the
+   row has, and Habits wrapped alone onto a fourth line — the exact shape the
+   mobile block above was written to end. Habits already carries a glyph, so
+   at this width it keeps that and drops its word, the way Start working
+   does at 720; Review and Shut down keep theirs, being the two with nothing
+   else to say it. 261 of 292 after. */
+@media (max-width: 359px) {
+  .today-habits-open__word { display: none; }
+  .today-habits-open { padding: 9px 9px; }
 }
 
 /* What a focus session actually spent on a row, in the look-back only, sized
@@ -2462,3 +2473,63 @@
    three-digit figure. */
 .focus-set-field { display: inline-flex; align-items: center; gap: 8px; }
 .focus-set-input { width: 64px; text-align: right; }
+
+/* ---- the floating window (the Windows client, /focus?float=1) -----------
+   The same surface at a small size: 420×280 to open, 320×200 at the floor,
+   minus the six-pixel ring the window draws around the page. Everything the
+   full face does at a laptop's size is done here in fewer pixels, and what
+   does not fit is conceded in the display's order — NEXT first, then the
+   qualifier line, then the title's second line — by height, because in this
+   window the viewport IS the window. The arithmetic (body line-height 1.5,
+   buttons ~1.2, clock 1, title 1.12): header ≈ 36px; the face needs
+   130 + clock + title, with the clock clamp(32, 16vh, 56) and the title two
+   lines of clamp(15, 6.5vh, 22). At 408×268 that is 212 in 220. The full
+   face holds to 257px of height, NEXT goes below that, the qualifier below
+   213, the second title line below 193; 188 is the floor with a line to
+   spare. layout.browser.test.tsx pins these in Chromium.
+
+   The whole page is a drag region and its controls are not: WebView2 123+
+   answers the hit-test itself from `app-region`, so the window moves without
+   a round trip; nothing here selects, since a press is a grab. */
+.focus[data-float] {
+  user-select: none; -webkit-user-select: none;
+  -webkit-app-region: drag; app-region: drag;
+}
+.focus[data-float] button, .focus[data-float] a, .focus[data-float] input,
+.focus[data-float] select, .focus[data-float] textarea {
+  -webkit-app-region: no-drag; app-region: no-drag;
+}
+.focus[data-float] .focus-head { padding: 6px 10px; gap: 8px; }
+.focus[data-float] .focus-head .btn { padding: 4px 8px; }
+.focus[data-float] .focus-main { padding: 6px 12px; gap: 4px; max-width: none; }
+.focus[data-float] .focus-clock { font-size: clamp(32px, 16vh, 56px); }
+.focus[data-float] .focus-now { gap: 4px; }
+.focus[data-float] .focus-now__title { font-size: clamp(15px, 6.5vh, 22px); -webkit-line-clamp: 2; }
+.focus[data-float] .focus-actions { margin-top: 4px; }
+.focus[data-float] .focus-actions .btn { padding: 6px 10px; }
+.focus[data-float] .focus-next {
+  flex-direction: row; align-items: baseline; gap: 8px; padding-top: 6px;
+}
+.focus[data-float] .focus-next__text { flex: 1; min-width: 0; font-size: calc(13px * var(--fs-scale)); }
+.focus[data-float] .focus-foot,
+.focus[data-float][data-state="away"] .focus-hint { display: none; }
+@media (max-height: 256px) {
+  .focus[data-float] .focus-next { display: none; }
+}
+@media (max-height: 212px) {
+  .focus[data-float] .focus-now__meta { display: none; }
+  /* An ended interval offers four buttons, which is two rows at the floor's
+     width. The clock reads 0:00 under a label that already says the interval
+     is over, so it is the thing to concede: the row of ways on is the
+     content, and the number is not. */
+  .focus[data-float][data-state="over"] .focus-clock,
+  .focus[data-float][data-state="away"] .focus-clock { display: none; }
+}
+@media (max-height: 192px) {
+  .focus[data-float] .focus-now__title { -webkit-line-clamp: 1; }
+  .focus[data-float] .focus-main { justify-content: flex-start; overflow-y: auto; }
+}
+@media (max-width: 359px) {
+  .focus[data-float] .focus-head__tally { display: none; }
+  .focus[data-float] .focus-actions .btn { padding: 5px 8px; font-size: calc(10px * var(--fs-scale)); }
+}
