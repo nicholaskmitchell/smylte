@@ -2449,3 +2449,16 @@
   .today-focus__glyph { display: inline; }
   .today-focus { padding: 7px 9px; }
 }
+
+/* What a focus session actually spent on a row, in the look-back only, sized
+   and coloured exactly as the estimate it sits beside — a measurement next to
+   a guess, in the same unit, and never a ratio of the two. */
+.today-worked {
+  font-family: var(--mono); font-size: calc(11px * var(--fs-scale));
+  color: var(--fg-muted); flex: none; min-width: 42px; text-align: right;
+}
+
+/* Settings → Focus: a number and its unit on one line, the input sized to a
+   three-digit figure. */
+.focus-set-field { display: inline-flex; align-items: center; gap: 8px; }
+.focus-set-input { width: 64px; text-align: right; }
