@@ -34,6 +34,9 @@ const openSettings = async (section?: string) => {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  // The focus surface is an ADDRESS; a test that pushed it must not leave the
+  // next one booting into it.
+  history.replaceState(null, '', '/')
   document.documentElement.dataset.theme = 'light'
   document.documentElement.removeAttribute('style')
   localStorage.clear()
@@ -830,5 +833,34 @@ describe('<App> a slow settings read', () => {
       'these settings keys are applied with no `keep` guard, so a read that '
       + 'lands after the user changed them silently reverts the gesture')
       .toEqual([])
+  })
+})
+
+describe('the focus surface', () => {
+  it('is reached by its own address, and left by the back control', async () => {
+    m.focus.mockResolvedValue(null)
+    history.replaceState(null, '', '/focus')
+    render(<App />)
+    await screen.findByRole('button', { name: 'Back to today' })
+    // Full-bleed: no tab strip, no gear.
+    expect(screen.queryByRole('button', { name: 'Settings' })).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Back to today' }))
+    expect(await screen.findByRole('button', { name: 'Settings' })).toBeInTheDocument()
+    expect(location.pathname).toBe('/')
+  })
+
+  it('is entered from Today, and the browser\'s back gesture leaves it', async () => {
+    m.focus.mockResolvedValue(null)
+    render(<App />)
+    await userEvent.click(await screen.findByRole('button', { name: 'Today' }))
+    await userEvent.click(await screen.findByRole('button', { name: 'Start working' }))
+    expect(await screen.findByRole('button', { name: 'Back to today' })).toBeInTheDocument()
+    expect(location.pathname).toBe('/focus')
+    await act(async () => {
+      history.back()
+      // jsdom fires popstate for history.back(); give it a turn.
+      await new Promise((r) => setTimeout(r, 0))
+    })
+    expect(await screen.findByRole('button', { name: 'Settings' })).toBeInTheDocument()
   })
 })

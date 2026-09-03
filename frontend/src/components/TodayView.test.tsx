@@ -4242,3 +4242,30 @@ describe('the Today tab stylesheet', () => {
     expect(offenders).toEqual([])
   })
 })
+
+describe('Start working', () => {
+  it('is offered on today, in the planning mode, when there is somewhere to go', async () => {
+    m.openDay.mockResolvedValue(plan([entry({ title: 'Water the plants' })]))
+    const onStart = vi.fn()
+    render(
+      <DataProvider rev={0} onExpire={vi.fn()}>
+        <TodayView rev={0} onExpire={vi.fn()} onStartWorking={onStart} />
+      </DataProvider>,
+    )
+    await screen.findByText('Water the plants')
+    await userEvent.click(screen.getByRole('button', { name: 'Start working' }))
+    expect(onStart).toHaveBeenCalledTimes(1)
+    // Not in a review: a record is not something to start.
+    await userEvent.click(screen.getByRole('button', { name: 'Review' }))
+    expect(screen.queryByRole('button', { name: 'Start working' })).not.toBeInTheDocument()
+  })
+
+  it('is absent on a day that has happened, and absent without a way in', async () => {
+    m.day.mockImplementation(async (d) => plan([entry({ day: d, title: 'Yesterday' })], d))
+    const user = setup()   // no `onStartWorking`
+    expect(screen.queryByRole('button', { name: 'Start working' })).not.toBeInTheDocument()
+    await user.click(await screen.findByRole('button', { name: 'Previous day' }))
+    await screen.findByText('Yesterday')
+    expect(screen.queryByRole('button', { name: 'Start working' })).not.toBeInTheDocument()
+  })
+})

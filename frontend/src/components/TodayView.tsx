@@ -608,9 +608,15 @@ export function rowDone(e: DayEntry, task: Task | undefined, live: boolean): boo
   return !!task?.completed_at && dayKey(task.completed_at) === e.day
 }
 
-export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalendars = [] }: {
+export function TodayView({
+  rev, onExpire, hiddenCalendars = [], archivedCalendars = [], onStartWorking,
+}: {
   rev: number
   onExpire: () => void
+  /** The way into the focus surface. Optional, because the header only offers
+   *  it where App can honour it: a dashboard module or a test rendering this
+   *  view on its own has nowhere to send the click. */
+  onStartWorking?: () => void
   // Read-only here, exactly as on the Home dashboard: the calendar strip honours
   // the Calendar tab's visibility choices, and that tab stays the sole owner of
   // editing (and pruning) these sets.
@@ -2208,6 +2214,19 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
             aria-pressed={mode === 'review'}
             onClick={() => setMode((m) => (m === 'plan' ? 'review' : 'plan'))}>
             {mode === 'review' ? tr('today.modePlan') : tr('today.modeReview')}
+          </button>
+        )}
+        {/* THE WAY IN TO WORKING THE DAY: the focus surface, which takes this
+            plan as its queue. Today only and the planning mode only — a review
+            is a record, and a record is not something to start. Absent rather
+            than disabled on a past day, like every other control here. The
+            word is the accessible name on every screen; on a phone the header
+            is already full and the button shows a glyph instead (app.css). */}
+        {isToday && mode === 'plan' && onStartWorking && (
+          <button type="button" className="btn ghost today-focus" onClick={onStartWorking}
+            aria-label={tr('today.startWorking')} title={tr('today.startWorking')}>
+            <span className="today-focus__word">{tr('today.startWorking')}</span>
+            <span className="today-focus__glyph mono" aria-hidden="true">▶</span>
           </button>
         )}
         {/* THE WAY IN TO THE SHUTDOWN, and deliberately not a band. The

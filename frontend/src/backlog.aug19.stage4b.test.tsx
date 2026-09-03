@@ -1235,6 +1235,10 @@ describe('aug19 leftovers — every dialog answers Escape at the window', () => 
       // CalendarView's EventModal and its move-scope prompt. Escape is driven by
       // modal-contract.test.tsx's source sweep; the scrim guard likewise.
       'CalendarView',
+      // The focus surface: not a dialog but a full-bleed page with one way
+      // out, and Escape is that way. FocusView.test.tsx's 'leaves on an Escape
+      // dispatched at the window'.
+      'FocusView',
     ])
     const missing = users.filter((u) => !covered.has(u))
     expect(missing,
