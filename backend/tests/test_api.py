@@ -193,6 +193,32 @@ def test_session_length_is_an_allowlist(client):
     assert client.put("/api/settings", json={"session_ttl_s": None}).status_code == 200
 
 
+def test_focus_settings_round_trip_and_are_bounded(client):
+    """The eight keys the Focus surface reads. Ints carry bounds because an
+    unbounded one reaches SQLite as an OverflowError — a 500 — and because the
+    floors mean something: a zero-length interval ends before it begins. And a
+    refused write leaves the stored value alone, like every other 422 here."""
+    ok = {
+        "focus_interval_minutes": 50, "focus_break_minutes": 10,
+        "focus_long_break_minutes": 30, "focus_long_break_every": 0,
+        "focus_auto_continue": True, "focus_cap_default": True,
+        "focus_chime": False, "focus_notify": True,
+    }
+    r = client.put("/api/settings", json=ok)
+    assert r.status_code == 200, r.text
+    for key, value in ok.items():
+        assert r.json()[key] == value
+    for key, bad in (
+        ("focus_interval_minutes", 0), ("focus_interval_minutes", 181),
+        ("focus_break_minutes", 61), ("focus_long_break_minutes", 0),
+        ("focus_long_break_every", -1), ("focus_long_break_every", 13),
+        ("focus_chime", "yes"),
+    ):
+        r = client.put("/api/settings", json={key: bad})
+        assert r.status_code == 422, f"{key}={bad!r} was accepted: {r.text}"
+    assert client.get("/api/settings").json()["focus_interval_minutes"] == 50
+
+
 def test_shortening_the_session_ends_the_one_already_open(_scratch_up, tmp_path):
     """The point of the setting, and the part a stateless token makes awkward.
 
