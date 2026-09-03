@@ -22,6 +22,19 @@ vi.mock('./api', async (importOriginal) => {
 
 const m = vi.mocked(api)
 
+// The Windows client's bridge: a browser here, so nothing desktop-only renders
+// — except `isFloatWindow`, which stays real and reads the query string, so a
+// test can put the shell in the floating window by address alone.
+vi.mock('./desktop', async (importOriginal) => {
+  const mod = await importOriginal<typeof import('./desktop')>()
+  return {
+    ...mod,
+    readState: vi.fn(async () => null),
+    floatWindow: vi.fn(async () => null), dockWindow: vi.fn(async () => null),
+    pinWindow: vi.fn(async () => null), dragWindow: vi.fn(async () => null),
+  }
+})
+
 /** Open settings and, when a section is named, drill into it.
  *
  * The nav items are `role="tab"`, not buttons — which is also what keeps the
@@ -862,5 +875,28 @@ describe('the focus surface', () => {
       await new Promise((r) => setTimeout(r, 0))
     })
     expect(await screen.findByRole('button', { name: 'Settings' })).toBeInTheDocument()
+  })
+})
+
+describe('the floating window', () => {
+  it('is the focus surface by address, with Dock as its way out and no shell at all', async () => {
+    m.focus.mockResolvedValue(null)
+    history.replaceState(null, '', '/focus?float=1')
+    render(<App />)
+    expect(await screen.findByRole('button', { name: 'Dock' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Back to today' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Settings' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Today' })).not.toBeInTheDocument()
+  })
+
+  it('boots a /focus load into the focus shell, never through the tab strip', async () => {
+    // A cold load — the floating window's whole life — used to paint the tab
+    // strip for the one /api/me round trip. Held here: the strip must not
+    // appear while the session is still being asked about.
+    m.me.mockReturnValue(new Promise(() => {}))
+    history.replaceState(null, '', '/focus')
+    render(<App />)
+    expect(screen.queryByRole('button', { name: 'Today' })).not.toBeInTheDocument()
+    expect(document.querySelector('.focus[aria-busy="true"]')).not.toBeNull()
   })
 })

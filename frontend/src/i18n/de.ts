@@ -919,6 +919,12 @@ export const de: Catalogue = {
   'focus.ended': 'Beendet um {time}',
   'focus.notify.focusOver': 'Intervall vorbei',
   'focus.notify.breakOver': 'Pause vorbei',
+  // das schwebende Fenster des Windows-Clients
+  'focus.float': 'Abkoppeln',
+  'focus.dock': 'Andocken',
+  'focus.showFloat': 'Fenster zeigen',
+  'focus.pin': 'Immer im Vordergrund',
+  'focus.unpin': 'Darf nach hinten',
   'today.minutesFor': 'Minuten für {entry}',
   'today.thisEntry': 'dieser Eintrag',
   'today.entry': 'Eintrag',

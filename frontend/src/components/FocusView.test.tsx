@@ -25,6 +25,18 @@ vi.mock('../notify', () => ({
   showNotify: vi.fn(() => true), notifyPermission: vi.fn(() => 'granted'),
   requestNotify: vi.fn(async () => 'granted'),
 }))
+// The Windows client's bridge. Null everywhere by default — a browser — so
+// the suite above never sees a float control; the floating cases below hand
+// it a host to talk to.
+vi.mock('../desktop', () => ({
+  readState: vi.fn(async () => null),
+  floatWindow: vi.fn(async () => null),
+  dockWindow: vi.fn(async () => null),
+  pinWindow: vi.fn(async () => null),
+  dragWindow: vi.fn(async () => null),
+  isFloatWindow: vi.fn(() => false),
+}))
+import { dockWindow, dragWindow, floatWindow, pinWindow, readState } from '../desktop'
 
 const m = vi.mocked(api)
 
@@ -58,11 +70,12 @@ const FOUR = [
   entry({ entry_id: 'n4', title: 'Filing', position: 4 }),
 ]
 
-function show(settings = DEFAULT_FOCUS) {
+function show(settings = DEFAULT_FOCUS, floating = false) {
   const onLeave = vi.fn()
   render(
     <DataProvider rev={0} onExpire={vi.fn()}>
-      <FocusView rev={0} focusRev={0} onExpire={vi.fn()} onLeave={onLeave} settings={settings} />
+      <FocusView rev={0} focusRev={0} onExpire={vi.fn()} onLeave={onLeave} settings={settings}
+        floating={floating} />
     </DataProvider>,
   )
   return { onLeave, user: userEvent.setup({ advanceTimers: vi.advanceTimersByTime }) }
@@ -84,6 +97,7 @@ beforeEach(() => {
   m.focusCursor.mockResolvedValue(session({ entry_id: 'n2', passed: ['n1'] }))
   m.startFocus.mockResolvedValue(session())
   m.patchDayEntry.mockImplementation(async (_d, id, body) => entry({ entry_id: id, ...body }))
+  vi.mocked(readState).mockResolvedValue(null)
 })
 afterEach(() => {
   cleanup()
@@ -237,5 +251,86 @@ describe('<FocusView>', () => {
     await user.click(screen.getByRole('button', { name: 'Go round again' }))
     expect(m.focusCursor).toHaveBeenCalledWith(today(), { action: 'again' })
     expect(await screen.findByRole('heading', { name: 'Memo' })).toBeInTheDocument()
+  })
+})
+
+describe('the floating window', () => {
+  const host = (over: Record<string, unknown>) =>
+    vi.mocked(readState).mockResolvedValue({
+      available: true, choice: 'Auto', resolved: 'Ink', systemUsesLightTheme: true,
+      startMenuShortcut: false, captionColour: true, ...over,
+    })
+
+  it('as the floating document, offers Dock and the pin and never Back, and Escape docks', async () => {
+    host({ floating: true, pinned: true, nativeDrag: true })
+    const { onLeave, user } = show(DEFAULT_FOCUS, true)
+    await screen.findByRole('heading', { name: 'Memo' })
+    expect(await screen.findByRole('button', { name: 'Dock' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Back to today' })).not.toBeInTheDocument()
+    const pin = await screen.findByRole('button', { name: 'Let it fall behind' })
+    expect(pin).toHaveAttribute('aria-pressed', 'true')
+    await user.click(pin)
+    expect(pinWindow).toHaveBeenCalledWith(false)
+    // Optimistic: the label flips at once, before the host has answered.
+    expect(screen.getByRole('button', { name: 'Keep on top' })).toHaveAttribute('aria-pressed', 'false')
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(dockWindow).toHaveBeenCalledTimes(1)
+    expect(onLeave).not.toHaveBeenCalled()
+  })
+
+  it('as the main window beside a floating one, stays silent when the interval ends', async () => {
+    host({ floating: true, pinned: true })
+    m.focus.mockResolvedValue(session({}, 1500))
+    show({ ...DEFAULT_FOCUS, autoContinue: true, notify: true })
+    await screen.findByRole('heading', { name: 'Memo' })
+    // The float owns the end of the interval; this window offers the way to it.
+    expect(await screen.findByRole('button', { name: 'Show the window' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Dock' })).toBeInTheDocument()
+    tick(2)
+    expect(playChime).not.toHaveBeenCalled()
+    expect(showNotify).not.toHaveBeenCalled()
+    expect(m.focusClock).not.toHaveBeenCalled()
+    await userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+      .click(screen.getByRole('button', { name: 'Show the window' }))
+    expect(floatWindow).toHaveBeenCalledTimes(1)
+  })
+
+  it('offers Float only inside a client that has the window', async () => {
+    host({ floating: false, pinned: true })
+    const { user } = show()
+    await user.click(await screen.findByRole('button', { name: 'Float' }))
+    expect(floatWindow).toHaveBeenCalledTimes(1)
+    cleanup()
+    // A browser: no bridge at all.
+    vi.mocked(readState).mockResolvedValue(null)
+    show()
+    await screen.findByRole('heading', { name: 'Memo' })
+    expect(screen.queryByRole('button', { name: 'Float' })).not.toBeInTheDocument()
+    cleanup()
+    // An exe older than the feature: a bridge whose state has never heard of
+    // floating. Nothing is offered, because the route it would post to 404s.
+    host({})
+    show()
+    await screen.findByRole('heading', { name: 'Memo' })
+    await screen.findByRole('button', { name: 'Back to today' })
+    expect(screen.queryByRole('button', { name: 'Float' })).not.toBeInTheDocument()
+  })
+
+  it('drags through the bridge only when the runtime cannot, and never from a control', async () => {
+    host({ floating: true, pinned: true, nativeDrag: false })
+    show(DEFAULT_FOCUS, true)
+    await screen.findByRole('button', { name: 'Dock' })
+    fireEvent.pointerDown(screen.getByText('25:00'), { button: 0, pointerType: 'mouse' })
+    expect(dragWindow).toHaveBeenCalledTimes(1)
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Done' }), { button: 0, pointerType: 'mouse' })
+    fireEvent.pointerDown(screen.getByText('25:00'), { button: 2, pointerType: 'mouse' })
+    expect(dragWindow).toHaveBeenCalledTimes(1)
+    cleanup()
+    vi.mocked(dragWindow).mockClear()
+    host({ floating: true, pinned: true, nativeDrag: true })
+    show(DEFAULT_FOCUS, true)
+    await screen.findByRole('button', { name: 'Dock' })
+    fireEvent.pointerDown(screen.getByText('25:00'), { button: 0, pointerType: 'mouse' })
+    expect(dragWindow).not.toHaveBeenCalled()
   })
 })
