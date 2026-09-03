@@ -371,6 +371,30 @@ class RollEntry(BaseModel):
     to: str = Field(min_length=1, max_length=10)
 
 
+class FocusClock(BaseModel):
+    """Move the focus clock. `expect_phase` / `expect_intervals` ride with
+    `next` so two windows that both see an interval end cannot advance it
+    twice: the server answers the state it has if the expectation is stale,
+    and writes nothing. `skip_break` is "keep going" — straight into the next
+    interval, the finished one still counted."""
+
+    action: Literal["pause", "resume", "next", "sync", "end"]
+    expect_phase: Literal["focus", "break", "long_break"] | None = None
+    expect_intervals: int | None = Field(default=None, ge=0, le=100_000)
+    skip_break: bool = False
+
+
+class FocusCursor(BaseModel):
+    """Move the focus cursor. `pass` names the row it means to set aside, so a
+    second window asking about a row that has already moved on is a no-op
+    rather than a skip of the row that came next; `select` names the open row
+    to jump to; `again` brings every set-aside row back. Same bound on the id
+    as `CreateDayEntry.entry_id`, since it is one."""
+
+    action: Literal["pass", "select", "again"]
+    entry_id: str | None = Field(default=None, min_length=1, max_length=64)
+
+
 class PatchDayEntry(BaseModel):
     # Tri-state on purpose: None means "not sent", and false is a real value
     # (un-tick, un-drop). The service only writes the fields that arrive.
@@ -1761,6 +1785,53 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown day entry {entry_id}")
         return dto
 
+    # -- focus (working the day against a clock) --
+    #
+    # App-only state like the day plan, so SQL under the service lock. `{day}`
+    # is the client's, like every /day/{day} route, and for the same reason: the
+    # server does not guess "today" for a browser in another zone. Refusals —
+    # a day that has run, a day nobody planned, a row that is not open — are the
+    # service's ValueErrors and land as 422, exactly as they do on PATCH /day.
+    # "No session" is the one 404: the day exists, the session does not.
+    @api.get("/focus/{day}")
+    async def get_focus(request: Request, day: str):
+        """The day's session, ended or not — or null. A pure read."""
+        return await _run(_svc(request).get_focus, _check_day(day))
+
+    @api.post("/focus/{day}/start")
+    async def post_focus_start(request: Request, day: str):
+        try:
+            return await _run(_svc(request).start_focus, _check_day(day))
+        except ValueError as e:
+            raise HTTPException(422, str(e)) from None
+
+    @api.post("/focus/{day}/clock")
+    async def post_focus_clock(request: Request, day: str, body: FocusClock):
+        try:
+            dto = await _run(
+                _svc(request).focus_clock, _check_day(day), body.action,
+                expect_phase=body.expect_phase, expect_intervals=body.expect_intervals,
+                skip_break=body.skip_break,
+            )
+        except ValueError as e:
+            raise HTTPException(422, str(e)) from None
+        if dto is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"no focus session on {day}")
+        return dto
+
+    @api.post("/focus/{day}/cursor")
+    async def post_focus_cursor(request: Request, day: str, body: FocusCursor):
+        try:
+            dto = await _run(
+                _svc(request).focus_cursor, _check_day(day), body.action,
+                entry_id=body.entry_id,
+            )
+        except ValueError as e:
+            raise HTTPException(422, str(e)) from None
+        if dto is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"no focus session on {day}")
+        return dto
+
     # -- habits (the rules that put entries on a day) --
     #
     # A habit is app-only state and never reaches Radicale, so these four are
@@ -2820,6 +2891,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.add_api_route(
         "/display/{token}/", display_spa, methods=["GET", "HEAD"],
         include_in_schema=False,
+    )
+
+    # -- the focus surface: the SPA shell again, for the same mechanical reason --
+    #
+    # `/focus` is the one full-page route that HAS a session: it is the app,
+    # entered with no tab strip, so a second window (the desktop client's
+    # floating one) can load it directly. main.tsx does not branch on it — App
+    # reads the path and renders the surface inside the authed shell — but the
+    # mount below still only maps real files, so without this the URL is a
+    # bare JSON 404 on a cold load. Both spellings, like the two above.
+    @app.api_route("/focus", methods=["GET", "HEAD"], include_in_schema=False)
+    async def focus_spa():
+        index = os.path.join(settings.static_dir, "index.html")
+        if not os.path.isfile(index):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "frontend not built")
+        return FileResponse(index)
+
+    app.add_api_route(
+        "/focus/", focus_spa, methods=["GET", "HEAD"], include_in_schema=False,
     )
 
     # -- remote MCP server + its OAuth authorization server (opt-in) --

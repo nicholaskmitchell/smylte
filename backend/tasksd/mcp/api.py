@@ -1247,6 +1247,13 @@ class McpApi:
             "planned_minutes": sum(e["estimate_minutes"] or 0 for e in live),
             "done_minutes": sum(e["estimate_minutes"] or 0 for e in live if done(e)),
             "unestimated": sum(1 for e in live if e["estimate_minutes"] is None),
+            # MEASURED, where the two above are guesses: what a focus session
+            # actually credited to the day's rows, in the unit the estimates
+            # are in. Over live rows like the others, and 0 rather than null
+            # on a day never worked against a clock — the model reads it beside
+            # `planned_minutes`, and a null there is a hole in a sum.
+            "worked_minutes": sum(
+                round((e.get("worked_seconds") or 0) / 60) for e in live),
         }
 
     def plan_day(self, *, day=None, list_id=None, uid=None, title=None,

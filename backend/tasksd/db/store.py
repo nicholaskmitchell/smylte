@@ -918,6 +918,69 @@ def set_day_ritual(
     return get_day_ritual(conn, day)
 
 
+# ── focus sessions ───────────────────────────────────────────────────────────
+
+_FOCUS_FIELDS = {
+    "phase", "phase_length_s", "phase_elapsed_s", "running_since",
+    "intervals_done", "entry_id", "passed", "started_at", "ended_at",
+}
+
+
+def get_focus_session(conn: sqlite3.Connection, day: str) -> sqlite3.Row | None:
+    """The day's session, ended or not, or None if none was ever started."""
+    return conn.execute("SELECT * FROM focus_session WHERE day=?", (day,)).fetchone()
+
+
+def put_focus_session(
+    conn: sqlite3.Connection, day: str, **fields: object,
+) -> sqlite3.Row:
+    """Start a day's session as a WHOLE row, replacing any earlier one.
+
+    REPLACE rather than upsert because starting again is a fresh session — the
+    passed list, the interval count and `started_at` all begin over — while the
+    time already credited to rows lives on day_plan and is untouched by this.
+    `started_at` is the caller's to pass: the service stamps every column of a
+    transition from the one instant it read, and a row whose start came from
+    SQLite's clock while its anchor came from the service's would carry two
+    ideas of when "now" was.
+    """
+    bad = set(fields) - _FOCUS_FIELDS
+    if bad:
+        raise ValueError(f"unknown focus session fields: {bad}")
+    cols = ", ".join(["day", *fields])
+    marks = ", ".join("?" for _ in range(len(fields) + 1))
+    # The column names are vetted against _FOCUS_FIELDS above — not attacker
+    # input; the values are bound.
+    conn.execute(
+        f"INSERT OR REPLACE INTO focus_session ({cols}) VALUES ({marks})",  # nosec B608
+        (day, *fields.values()),
+    )
+    row = get_focus_session(conn, day)
+    assert row is not None
+    return row
+
+
+def update_focus_session(
+    conn: sqlite3.Connection, day: str, **fields: object,
+) -> sqlite3.Row | None:
+    """Move a session on; None for a day with no session. An explicit None
+    VALUE clears the column (that is how the clock is stopped), so the caller
+    passes exactly the fields it means to change."""
+    bad = set(fields) - _FOCUS_FIELDS
+    if bad:
+        raise ValueError(f"unknown focus session fields: {bad}")
+    if fields:
+        assignments = ", ".join(f"{k}=?" for k in fields)
+        cur = conn.execute(
+            f"UPDATE focus_session SET {assignments}, "  # nosec B608
+            "updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE day=?",
+            (*fields.values(), day),
+        )
+        if not cur.rowcount:
+            return None
+    return get_focus_session(conn, day)
+
+
 def day_is_opened(conn: sqlite3.Connection, day: str) -> bool:
     return conn.execute(
         "SELECT 1 FROM day_plan_opened WHERE day=?", (day,)
