@@ -1395,7 +1395,8 @@ def test_a_day_nobody_planned_still_has_every_key(mcp_api):
                 "reflection"):
         assert out[key] is None, key
     assert out["totals"] == {
-        "planned_minutes": 0, "done_minutes": 0, "unestimated": 0}
+        "planned_minutes": 0, "done_minutes": 0, "unestimated": 0,
+        "worked_minutes": 0}
     for bucket in ("chosen", "carried", "derived", "habits", "other", "moved",
                    "dropped"):
         assert out[bucket] == [], bucket

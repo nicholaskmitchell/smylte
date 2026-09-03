@@ -281,6 +281,38 @@ def _stamp() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
+def _stamp_at(moment: datetime) -> str:
+    """`_stamp` for a moment already in hand — the focus clock takes `now` once
+    per transition and writes the same instant into every column it touches,
+    so two stamps from one call cannot disagree by a millisecond."""
+    return moment.astimezone(timezone.utc).isoformat(
+        timespec="milliseconds").replace("+00:00", "Z")
+
+
+def _parse_stamp(value: str) -> datetime:
+    """The inverse of `_stamp`: an aware UTC datetime from what the column holds."""
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def _passed_list(value: Any) -> list[str]:
+    """The set-aside list off its JSON column. Anything that is not a list of
+    strings — a hand-edited row, a NULL from an older schema — reads as empty
+    rather than raising on every read of the session."""
+    try:
+        parsed = json.loads(value) if isinstance(value, str) else value
+    except ValueError:
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [p for p in parsed if isinstance(p, str)]
+
+
+def _focus_now() -> datetime:
+    """The focus clock's idea of now. A seam, so a test can move the clock
+    without sleeping through a pomodoro; production reads the wall clock."""
+    return datetime.now(timezone.utc)
+
+
 # The focus clock's defaults, and the bounds a stored value is clamped to on
 # the way out. `frontend/src/focus.ts::DEFAULT_FOCUS` is a mirror of this table
 # and the two have to agree, for the reason `display/frame.py::fmt_duration`
@@ -3103,24 +3135,59 @@ class TaskService:
                     cursor = (date.fromisoformat(cursor) + timedelta(days=1)).isoformat()
         return sources, out
 
-    def _display_day_rows(
-        self, day: str, display: dict[str, Any]
-    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], bool]:
-        """Today's rows with every title resolved, and whether they are real.
+    def _resolved_day_rows(self, day: str) -> tuple[list[dict[str, Any]], bool]:
+        """Today's live rows with every task's title and doneness resolved off
+        its VTODO, in plan order — and whether they are real or a preview.
 
-        A task entry is a POINTER — the day plan stores no title and no done
-        flag for one, because the VTODO is the single truth for both — so the
-        join happens here, once, the same way `mcp/api.py::_entries_with_tasks`
-        does it for the connector.
+        THE ONE RULE for "what is on the day, and is it done", shared by the
+        wall display and the focus session so the two cannot disagree about a
+        row. A task entry is a POINTER — the day plan stores no title and no
+        done flag for one, because the VTODO is the single truth for both — so
+        the join happens here, once, the same way `mcp/api.py::_entries_with_tasks`
+        does it for the connector. COMPLETED and CANCELLED both count as done:
+        neither is work left to do.
 
-        Dropped and rolled rows are left out. They are exactly what a day's
-        RECORD needs and exactly what a wall does not: "I decided against this"
-        is a thing to read in the look-back, not a line on a screen in the
-        kitchen that can never be acknowledged.
+        Three kinds of row are left out, each for its own reason. Dropped and
+        rolled rows are exactly what a day's RECORD needs and exactly what a
+        queue does not — "I decided against this" is a thing to read in the
+        look-back, not a line to work. And a task row whose VTODO has left the
+        wire — completed and purged by another client, or its list deleted —
+        outlives the task by design (there is no FK), but a row with no title
+        is a blank line on a wall and an unnamed thing to focus on, so it is
+        skipped rather than shown.
+
+        Each row is the entry DTO plus `title` (resolved), `done` (resolved)
+        and `href` (the task's collection, or None).
         """
         plan = self.open_day(day, create=False)
         planned = bool(plan["planned"])
         entries = plan["entries"] if planned else self.preview_day(day)
+        out = []
+        for entry in entries:
+            if entry.get("dropped_at") or entry.get("rolled_to"):
+                continue
+            row = dict(entry)
+            row["done"] = bool(entry.get("done_at"))
+            row["href"] = None
+            if entry["kind"] == "task":
+                source_id = entry.get("list")
+                href = self.resolve_list(source_id, component="VTODO") if source_id else None
+                item = store.get_item(self._conn, href, entry["uid"]) if href else None
+                if item is None:
+                    continue
+                row["title"] = item["summary"]
+                row["done"] = item["status"] in ("COMPLETED", "CANCELLED")
+                row["href"] = href
+            out.append(row)
+        return out, planned
+
+    def _display_day_rows(
+        self, day: str, display: dict[str, Any]
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], bool]:
+        """Today's rows as a wall draws them: `_resolved_day_rows` narrowed to
+        the display's list allowlist and reduced to what a frame carries, plus
+        the sources the chips are keyed by."""
+        rows, planned = self._resolved_day_rows(day)
         wanted = set(display["lists"])
         # One read for every collection's name, not one per row: a day of twenty
         # entries would otherwise be twenty queries under the lock, on the app's
@@ -3129,32 +3196,334 @@ class TaskService:
                  for r in store.get_collections(self._conn)}
         names: dict[str, str] = {}
         out = []
-        for entry in entries:
-            if entry.get("dropped_at") or entry.get("rolled_to"):
-                continue
-            kind = entry["kind"]
-            title, done = entry.get("title"), bool(entry.get("done_at"))
-            source_id = entry.get("list")
+        for row in rows:
+            kind = row["kind"]
+            source_id = row.get("list")
             if kind == "task":
                 if wanted and source_id not in wanted:
                     continue
-                href = self.resolve_list(source_id, component="VTODO") if source_id else None
-                item = store.get_item(self._conn, href, entry["uid"]) if href else None
-                if item is None:
-                    # The task has left the wire — completed and purged by
-                    # another client, or its list deleted. The entry outlives it
-                    # by design (there is no FK), but a row with no title is a
-                    # blank line on a wall, so it is dropped rather than drawn.
-                    continue
-                title, done = item["summary"], item["status"] in ("COMPLETED", "CANCELLED")
-                names.setdefault(href, named.get(href) or source_id)
+                names.setdefault(row["href"], named.get(row["href"]) or source_id)
             out.append({
-                "kind": kind, "title": title, "done": done,
+                "kind": kind, "title": row["title"], "done": row["done"],
                 "source_id": source_id if kind == "task" else None,
-                "estimate_minutes": entry.get("estimate_minutes"),
+                "estimate_minutes": row.get("estimate_minutes"),
             })
         sources = [{"id": _slug(h), "name": n, "color": None} for h, n in names.items()]
         return sources, out, planned
+
+    # ── focus: working the day's queue against a clock ────────────────────────
+    #
+    # The session is ANCHORS, NOT COUNTERS (schema.sql says why beside the
+    # table). Every public method here does the same three things in the same
+    # order — settle the running phase up to `now`, clamped to the phase's
+    # remaining length; do what it was asked; write back and publish only if
+    # something changed — and the settle is where the honesty lives: a phase
+    # can credit at most its own length to a row, so a laptop closed overnight
+    # records exactly one interval on the memo and not eight hours.
+    #
+    # The queue is the day's own order — habit rows first, then the rest, each
+    # in plan order, which is the order the Today tab paints — and the cursor
+    # is the row the session names as long as that row is still open. The
+    # client paints what the server names and never substitutes its own idea
+    # of "current": a tick on a phone moves the cursor here on the next
+    # transition, and the surface asks for one (`sync`) when it sees the row it
+    # was showing has been finished elsewhere.
+
+    _FOCUS_PHASE_KEY = {
+        "focus": "focus_interval_minutes",
+        "break": "focus_break_minutes",
+        "long_break": "focus_long_break_minutes",
+    }
+
+    @staticmethod
+    def _focus_dto(row) -> dict[str, Any]:
+        return {
+            "day": row["day"],
+            "phase": row["phase"],
+            "phase_length_s": row["phase_length_s"],
+            "phase_elapsed_s": row["phase_elapsed_s"],
+            "running_since": row["running_since"],
+            "intervals_done": row["intervals_done"],
+            "entry_id": row["entry_id"],
+            "passed": _passed_list(row["passed"]),
+            "started_at": row["started_at"],
+            "ended_at": row["ended_at"],
+            "updated_at": row["updated_at"],
+        }
+
+    def _focus_load(self, day: str) -> dict[str, Any] | None:
+        row = store.get_focus_session(self._conn, day)
+        if row is None:
+            return None
+        s = {k: row[k] for k in row.keys()}
+        s["passed"] = _passed_list(s["passed"])
+        return s
+
+    @staticmethod
+    def _focus_snapshot(s: dict[str, Any]) -> tuple:
+        return (
+            s["phase"], s["phase_length_s"], s["phase_elapsed_s"], s["running_since"],
+            s["intervals_done"], s["entry_id"], tuple(s["passed"]), s["ended_at"],
+        )
+
+    def _focus_store(self, day: str, before: tuple, s: dict[str, Any]):
+        """Write the session back if it moved; either way, return the row."""
+        if self._focus_snapshot(s) == before:
+            return store.get_focus_session(self._conn, day)
+        return store.update_focus_session(
+            self._conn, day,
+            phase=s["phase"], phase_length_s=s["phase_length_s"],
+            phase_elapsed_s=s["phase_elapsed_s"], running_since=s["running_since"],
+            intervals_done=s["intervals_done"], entry_id=s["entry_id"],
+            passed=json.dumps(s["passed"]), ended_at=s["ended_at"],
+        )
+
+    @staticmethod
+    def _focus_complete(s: dict[str, Any]) -> bool:
+        return s["phase_elapsed_s"] >= s["phase_length_s"]
+
+    def _focus_settle(
+        self, day: str, s: dict[str, Any], now: datetime, *, keep_running: bool = False,
+    ) -> int:
+        """Credit the running phase up to `now` and stop the clock — or, with
+        `keep_running`, re-anchor it at `now` so the clock carries on with the
+        time so far banked. Returns the seconds credited to a ROW, which is
+        zero on a break, on a paused session, and on an empty queue.
+
+        THE CLAMP IS THE WHOLE FEATURE. The time since the anchor is capped at
+        what the phase has left, so a phase credits at most its own length
+        however long ago the anchor was set: closing the laptop mid-interval
+        and coming back tomorrow credits the rest of that one interval and
+        nothing more. There is no other guard against an inflated figure and
+        there does not need to be.
+        """
+        since = s["running_since"]
+        if not since:
+            return 0
+        elapsed = max(0, int((now - _parse_stamp(since)).total_seconds()))
+        room = max(0, s["phase_length_s"] - s["phase_elapsed_s"])
+        delta = min(elapsed, room)
+        s["phase_elapsed_s"] += delta
+        s["running_since"] = (
+            _stamp_at(now) if keep_running and not self._focus_complete(s) else None
+        )
+        credited = 0
+        if s["phase"] == "focus" and s["entry_id"] and delta > 0:
+            if store.add_worked_seconds(self._conn, day, s["entry_id"], delta) is not None:
+                credited = delta
+        return credited
+
+    def _focus_queue(self, day: str, s: dict[str, Any]) -> list[str]:
+        """The open rows this session could work, in the order it would: habit
+        rows first, then the rest, each in plan order; done and set-aside rows
+        skipped. No second sort — the plan's order is the queue, exactly as
+        `display/frame.py::build_now` has it, so reordering Today reorders the
+        surface."""
+        rows, _planned = self._resolved_day_rows(day)
+        passed = set(s["passed"])
+        live = [r for r in rows if not r["done"] and r["entry_id"] not in passed]
+        habits = [r["entry_id"] for r in live if r["kind"] == "habit"]
+        rest = [r["entry_id"] for r in live if r["kind"] != "habit"]
+        return habits + rest
+
+    def _focus_cursor(self, day: str, s: dict[str, Any]) -> str | None:
+        queue = self._focus_queue(day, s)
+        if s["entry_id"] in queue:
+            return s["entry_id"]
+        return queue[0] if queue else None
+
+    def _focus_next_phase(
+        self, s: dict[str, Any], now: datetime, *, skip_break: bool,
+    ) -> None:
+        """Finish the phase and start the next one, from `now`. Lengths are
+        read from settings at THIS moment and frozen onto the row, so a
+        preference changed mid-phase moves the next phase and never the one
+        running. A long break comes round every N focus phases; N of 0 means
+        never; and `skip_break` ("keep going") still counts the interval."""
+        settings = self._focus_settings()
+        if s["phase"] == "focus":
+            s["intervals_done"] += 1
+            every = settings["focus_long_break_every"]
+            if skip_break:
+                phase = "focus"
+            elif every > 0 and s["intervals_done"] % every == 0:
+                phase = "long_break"
+            else:
+                phase = "break"
+        else:
+            phase = "focus"
+        s["phase"] = phase
+        s["phase_length_s"] = 60 * settings[self._FOCUS_PHASE_KEY[phase]]
+        s["phase_elapsed_s"] = 0
+        s["running_since"] = _stamp_at(now)
+
+    def get_focus(self, day: str) -> dict[str, Any] | None:
+        """The day's session, ended or not, or None. A pure read."""
+        day = day_key(day)
+        with self._lock:
+            row = store.get_focus_session(self._conn, day)
+        return self._focus_dto(row) if row else None
+
+    def start_focus(self, day: str) -> dict[str, Any]:
+        """Begin working the day: a fresh session in its first focus phase,
+        running from now, pointed at the first open row.
+
+        Refused on a day that has run, on the ritual's own fence — a day is
+        worked while it is running. And refused on a day nobody has planned: a
+        session never opens a day, for the same reason a display and the
+        connector never do (`_display_day_rows`, `mcp/api.py::_writable_day`)
+        — the plan is worth keeping only while it records what was actually
+        intended, and a clock intends nothing. Open it in Today first.
+
+        Idempotent over a live session: a second Start — the other window, a
+        retried request — returns the session that is running rather than
+        resetting it. Only an ENDED session is replaced.
+        """
+        day = day_key(day)
+        if not self._ritual_writable(day):
+            raise ValueError(
+                f"{day} has already happened; a day is worked while it is running"
+            )
+        now = _focus_now()
+        with self._lock:
+            existing = store.get_focus_session(self._conn, day)
+            if existing is not None and not existing["ended_at"]:
+                return self._focus_dto(existing)
+            entries = store.get_day_entries(self._conn, day)
+            if not (store.day_is_opened(self._conn, day) or entries):
+                raise ValueError(f"{day} is not planned yet — open it in Today first")
+            settings = self._focus_settings()
+            store.put_focus_session(
+                self._conn, day,
+                phase="focus",
+                phase_length_s=60 * settings["focus_interval_minutes"],
+                phase_elapsed_s=0,
+                running_since=_stamp_at(now),
+                intervals_done=0,
+                entry_id=None,
+                passed="[]",
+                started_at=_stamp_at(now),
+                ended_at=None,
+            )
+            s = self._focus_load(day)
+            assert s is not None
+            row = store.update_focus_session(
+                self._conn, day, entry_id=self._focus_cursor(day, s))
+            dto = self._focus_dto(row)
+        self._publish({"type": "focus_updated", "day": day})
+        return dto
+
+    def focus_clock(
+        self, day: str, action: str, *,
+        expect_phase: str | None = None, expect_intervals: int | None = None,
+        skip_break: bool = False,
+    ) -> dict[str, Any] | None:
+        """Move the clock: pause, resume, next (finish this phase and start the
+        one after), sync (bank the time so far and re-find the cursor, clock
+        still running), or end. None for a day with no session.
+
+        `next` takes what the caller EXPECTS the phase to be, and does nothing
+        if the session has moved on — two windows both see an interval end and
+        both ask for the next phase, and the second must not skip a break. A
+        no-op writes nothing and publishes nothing, exactly as an empty PATCH
+        on a day entry does; the other window learns nothing it did not know.
+
+        An ended session takes no clock action at all: it is the record of a
+        session, and Start is the way to a new one.
+        """
+        day = day_key(day)
+        now = _focus_now()
+        with self._lock:
+            s = self._focus_load(day)
+            if s is None:
+                return None
+            before = self._focus_snapshot(s)
+            credited = 0
+            if s["ended_at"]:
+                pass
+            elif action == "pause":
+                credited = self._focus_settle(day, s, now)
+            elif action == "resume":
+                if not s["running_since"] and not self._focus_complete(s):
+                    s["running_since"] = _stamp_at(now)
+            elif action == "next":
+                stale = (
+                    (expect_phase is not None and expect_phase != s["phase"])
+                    or (expect_intervals is not None
+                        and expect_intervals != s["intervals_done"])
+                )
+                if not stale:
+                    credited = self._focus_settle(day, s, now)
+                    self._focus_next_phase(s, now, skip_break=skip_break)
+                    s["entry_id"] = self._focus_cursor(day, s)
+            elif action == "sync":
+                credited = self._focus_settle(day, s, now, keep_running=True)
+                s["entry_id"] = self._focus_cursor(day, s)
+            elif action == "end":
+                credited = self._focus_settle(day, s, now)
+                s["ended_at"] = _stamp_at(now)
+            else:
+                raise ValueError(f"unknown clock action {action!r}")
+            row = self._focus_store(day, before, s)
+            dto = self._focus_dto(row)
+            moved = self._focus_snapshot(s) != before
+        if moved:
+            self._publish({"type": "focus_updated", "day": day})
+        if credited:
+            self._publish({"type": "day_updated", "day": day})
+        return dto
+
+    def focus_cursor(
+        self, day: str, action: str, *, entry_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Move the cursor: pass (set the current row aside — its cap spent, or
+        "not now"), select (jump to an open row), or again (bring every
+        set-aside row back). None for a day with no session.
+
+        `pass` names the row it means to set aside and is a no-op if that row
+        is no longer current — two windows both see a cap reached and both
+        ask, and the second must not set aside the row that came next. The
+        clock keeps running through all three: passing a row is not a pause.
+        """
+        day = day_key(day)
+        now = _focus_now()
+        with self._lock:
+            s = self._focus_load(day)
+            if s is None:
+                return None
+            before = self._focus_snapshot(s)
+            credited = 0
+            if s["ended_at"]:
+                pass
+            elif action == "pass":
+                if entry_id is not None and entry_id == s["entry_id"]:
+                    credited = self._focus_settle(day, s, now, keep_running=True)
+                    if entry_id not in s["passed"]:
+                        s["passed"].append(entry_id)
+                    s["entry_id"] = self._focus_cursor(day, s)
+            elif action == "select":
+                if not entry_id:
+                    raise ValueError("select needs the entry_id of an open row")
+                rows, _planned = self._resolved_day_rows(day)
+                if entry_id not in {r["entry_id"] for r in rows if not r["done"]}:
+                    raise ValueError(f"{entry_id} is not an open row on {day}")
+                credited = self._focus_settle(day, s, now, keep_running=True)
+                s["passed"] = [p for p in s["passed"] if p != entry_id]
+                s["entry_id"] = entry_id
+            elif action == "again":
+                credited = self._focus_settle(day, s, now, keep_running=True)
+                s["passed"] = []
+                s["entry_id"] = self._focus_cursor(day, s)
+            else:
+                raise ValueError(f"unknown cursor action {action!r}")
+            row = self._focus_store(day, before, s)
+            dto = self._focus_dto(row)
+            moved = self._focus_snapshot(s) != before
+        if moved:
+            self._publish({"type": "focus_updated", "day": day})
+        if credited:
+            self._publish({"type": "day_updated", "day": day})
+        return dto
 
     # ── app settings (account-synced) ─────────────────────────────────────────
     def get_settings(self) -> dict[str, Any]:

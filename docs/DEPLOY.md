@@ -549,7 +549,10 @@ Back up **both**:
   prose in this database that exists nowhere else), and **`habits`** (the rules
   that put entries on a day — they are never PUT to Radicale and carry no RRULE,
   so the wire has no copy; losing them stops every habit recurring, though the
-  occurrences already in `day_plan` keep their titles and stay readable), and
+  occurrences already in `day_plan` keep their titles and stay readable),
+  **`focus_session`** (the day being worked against a clock — which row, which
+  phase, and the anchor the clock runs from; losing it loses a running clock
+  and never the time already credited, which lives on `day_plan`), and
   **`notification_deliveries`** (what has already been said out loud — the
   record that stops a notification arriving twice; a restore without it re-sends
   whatever still falls inside the scheduler's catch-up window), and
