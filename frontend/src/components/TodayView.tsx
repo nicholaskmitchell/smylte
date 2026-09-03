@@ -2071,8 +2071,8 @@ export function TodayView({
     () => (dragId ? dayRows.findIndex((r) => r.entry_id === dragId) : -1),
     [dragId, dayRows])
 
-  const renderRow = (e: DayEntry) => (
-    <TodayRow key={e.entry_id} entry={e} task={taskFor(e)} tasksLoaded={loaded}
+  const rowFor = (e: DayEntry, worked = false) => (
+    <TodayRow key={e.entry_id} entry={e} task={taskFor(e)} tasksLoaded={loaded} worked={worked}
       color={colorOf(e.list)} onToggleTask={toggle} onToggleEntry={toggleEntry}
       onDrop={drop} onEstimate={setEstimate}
       // A past day hands out no controls at all: see the header. The flag says
@@ -2133,6 +2133,10 @@ export function TodayView({
       }}
       onDragEndRow={() => { setDragId(null); setOverId(null) }} />
   )
+  const renderRow = (e: DayEntry) => rowFor(e)
+  // The look-back's rows carry the one column a live list does not: what a
+  // focus session actually spent on each, beside what it was estimated at.
+  const renderReviewRow = (e: DayEntry) => rowFor(e, true)
 
   return (
     <div className="content">
@@ -2678,7 +2682,7 @@ export function TodayView({
               styleOf={eventStyle} />
           </>
         ) : (
-          <LookBack review={review} offPlan={offPlan} renderRow={renderRow}
+          <LookBack review={review} offPlan={offPlan} renderRow={renderReviewRow}
             reflection={plan?.day === day ? plan.reflection : null}
             colorOf={colorOf} live={isToday} />
         )}
@@ -2975,7 +2979,7 @@ function EstimateCell({ minutes, readOnly, label, onChange }: {
 
 function TodayRow({
   entry, task, tasksLoaded, color, count, readOnly, onToggleTask, onToggleEntry, onDrop,
-  onEstimate,
+  onEstimate, worked = false,
   draggable = false, dragging = false, dragOver = false, dragBelow = false,
   onDragRow, onDragOverRow, onDropRow, onDragEndRow,
 }: {
@@ -3000,6 +3004,11 @@ function TodayRow({
   onDrop: (e: DayEntry) => Promise<void>
   /** Set or clear how long this is expected to take. Null clears. */
   onEstimate: (e: DayEntry, minutes: number | null) => Promise<void>
+  /** Paint the time a focus session actually spent on this row, beside what it
+   *  was estimated at. A REVIEW column: the look-back is where a measurement
+   *  belongs next to a guess, and a live list already has a number on every
+   *  row — a second one would be a score on a screen that keeps none. */
+  worked?: boolean
   /** This row may be picked up and moved. Decided by the caller — see the
    *  three conditions there; the row only wears the result. */
   draggable?: boolean
@@ -3254,6 +3263,18 @@ function TodayRow({
       <EstimateCell minutes={entry.estimate_minutes} readOnly={readOnly}
         label={title || tr('today.thisEntry')}
         onChange={(next) => void onEstimate(entry, next)} />
+      {/* Always painted when asked for, empty when nothing was measured — the
+          same lesson as the due cell: a column that appears only sometimes
+          makes every cell before it move. Minutes, like the estimate beside
+          it, and never a ratio of the two. */}
+      {worked && (
+        <span className="today-worked mono"
+          title={entry.worked_seconds
+            ? tr('today.worked', { amount: fmtDuration(Math.round(entry.worked_seconds / 60)) })
+            : undefined}>
+          {entry.worked_seconds ? fmtDuration(Math.round(entry.worked_seconds / 60)) : ''}
+        </span>
+      )}
       {/* ALWAYS rendered, empty when the row has no due date — the same lesson
           as the kind column on the left. A cell that appears only sometimes
           makes every cell BEFORE it move: with this conditional, an estimate on

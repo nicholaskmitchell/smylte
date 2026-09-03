@@ -1,4 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
+import { DEFAULT_FOCUS } from '../focus'
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { createRef } from 'react'
@@ -28,7 +29,7 @@ beforeEach(() => {
   m.mcpConnections.mockResolvedValue([])
 })
 
-const SECTIONS = ['General', 'Appearance', 'Calendar', 'Tasks', 'Notifications', 'Account']
+const SECTIONS = ['General', 'Appearance', 'Calendar', 'Tasks', 'Focus', 'Notifications', 'Account']
 
 function show(over: Partial<Parameters<typeof SettingsMenu>[0]> = {}) {
   const onClose = vi.fn()
@@ -44,6 +45,7 @@ function show(over: Partial<Parameters<typeof SettingsMenu>[0]> = {}) {
     calFit="dynamic" onToggleCalFit={vi.fn()}
     archivedCals={[]} onArchivedCalsChange={vi.fn()}
     showCompleted={false} onToggleShowCompleted={vi.fn()}
+    focus={DEFAULT_FOCUS} onFocusChange={vi.fn()}
     notifyEnabled={false} onNotifyEnabledChange={vi.fn()}
     notifyChatId="" onNotifyChatIdChange={vi.fn()}
     notifyTokenSet={false} notifyBotId="" onNotifyTokenChange={vi.fn()}
@@ -104,6 +106,10 @@ describe('<SettingsMenu> on a desktop', () => {
 
     await userEvent.click(nav('Tasks'))
     expect(within(panel()).getByRole('button', { name: /Hidden|Shown/ })).toBeInTheDocument()
+
+    await userEvent.click(nav('Focus'))
+    expect(within(panel()).getByLabelText('Interval')).toBeInTheDocument()
+    expect(within(panel()).getByLabelText('When an interval ends')).toHaveTextContent('Wait for me')
 
     await userEvent.click(nav('Account'))
     expect(within(panel()).getByRole('button', { name: 'How long to stay signed in' })).toBeInTheDocument()

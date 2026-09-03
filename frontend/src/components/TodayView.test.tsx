@@ -4269,3 +4269,21 @@ describe('Start working', () => {
     expect(screen.queryByRole('button', { name: 'Start working' })).not.toBeInTheDocument()
   })
 })
+
+describe('what was worked', () => {
+  it('shows beside the estimate in a review, and nowhere on the live list', async () => {
+    m.openDay.mockResolvedValue(plan([
+      entry({ title: 'Water the plants', estimate_minutes: 25, worked_seconds: 31 * 60 }),
+      entry({ entry_id: 'e2', title: 'Invoice', position: 2 }),
+    ]))
+    const user = setup()
+    await screen.findByText('Water the plants')
+    expect(screen.queryByText('31m')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Review' }))
+    expect(await screen.findByText('31m')).toBeInTheDocument()
+    expect(screen.getByTitle('31m worked')).toBeInTheDocument()
+    // A row never worked keeps its (empty) cell, so the column holds.
+    const cells = document.querySelectorAll('.today-worked')
+    expect(cells).toHaveLength(2)
+  })
+})

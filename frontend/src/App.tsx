@@ -1109,6 +1109,7 @@ export function App() {
             calFit={calFit} onToggleCalFit={toggleCalFit}
             archivedCals={archivedCals} onArchivedCalsChange={changeArchivedCals}
             showCompleted={showCompleted} onToggleShowCompleted={toggleShowCompleted}
+            focus={focus} onFocusChange={changeFocus}
             notifyEnabled={notifyEnabled} onNotifyEnabledChange={changeNotifyEnabled}
             notifyChatId={notifyChatId} onNotifyChatIdChange={changeNotifyChatId}
             notifyTokenSet={notifyTokenSet} notifyBotId={notifyBotId}
