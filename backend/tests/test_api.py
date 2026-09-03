@@ -212,7 +212,10 @@ def test_focus_settings_round_trip_and_are_bounded(client):
         ("focus_interval_minutes", 0), ("focus_interval_minutes", 181),
         ("focus_break_minutes", 61), ("focus_long_break_minutes", 0),
         ("focus_long_break_every", -1), ("focus_long_break_every", 13),
-        ("focus_chime", "yes"),
+        # Not "yes": pydantic reads yes/no/on/off (and 0/1) as booleans, the same
+        # leniency every other bool setting here has. A word it does not know is
+        # the refusal this test is after.
+        ("focus_chime", "maybe"),
     ):
         r = client.put("/api/settings", json={key: bad})
         assert r.status_code == 422, f"{key}={bad!r} was accepted: {r.text}"
