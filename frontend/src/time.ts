@@ -147,3 +147,18 @@ export function fmtDuration(minutes: number): string {
   if (!h) return `${rest}m`
   return rest ? `${h}h ${rest}m` : `${h}h`
 }
+
+/** A clock counting down (or up): "24:59", "0:07", and "1:02:03" past an
+ *  hour. Seconds, because this is the one clock in the app that is watched
+ *  rather than read — a pomodoro at "25m" tells you nothing about whether it
+ *  is moving. Whole seconds, floored: a display that rounded 0.6s to "0:01"
+ *  would show a second the phase no longer has. Negative input is clamped —
+ *  a phase past its end reads 0:00, never "-0:03". */
+export function fmtCountdown(seconds: number): string {
+  const total = Math.max(0, Math.floor(seconds))
+  const h = Math.floor(total / 3600)
+  const m = Math.floor((total % 3600) / 60)
+  const s = total % 60
+  const mm = h ? String(m).padStart(2, '0') : String(m)
+  return `${h ? `${h}:` : ''}${mm}:${String(s).padStart(2, '0')}`
+}

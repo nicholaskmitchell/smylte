@@ -1318,6 +1318,8 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
       estimate_minutes: null,
       // A row that has just been added has not been moved anywhere.
       rolled_to: null,
+      // …nor worked, nor told whether to stop at an estimate it does not have.
+      worked_seconds: null, capped: null,
       created_at: new Date().toISOString(),
     }
     setPlan((p) => (p && p.day === on
@@ -1373,6 +1375,8 @@ export function TodayView({ rev, onExpire, hiddenCalendars = [], archivedCalenda
       estimate_minutes: null,
       // A row that has just been added has not been moved anywhere.
       rolled_to: null,
+      // …nor worked, nor told whether to stop at an estimate it does not have.
+      worked_seconds: null, capped: null,
       created_at: new Date().toISOString(),
     }
     setPlan((p) => (p && p.day === on
