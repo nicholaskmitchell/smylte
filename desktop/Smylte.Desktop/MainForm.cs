@@ -25,6 +25,18 @@ public sealed class MainForm : Form, IDesktopBridge
     private readonly Panel _notice = new() { Dock = DockStyle.Top, Height = 36, Visible = false };
 
     private LocalServer? _server;
+    /// Kept, where it used to be a local: the floating window's WebView2 shares
+    /// it, and two views on one environment are what share the profile and so
+    /// the session cookie.
+    private CoreWebView2Environment? _environment;
+
+    private FloatForm? _float;
+    // Read by State() off the listener thread, written on the UI thread.
+    private volatile bool _floating;
+    private volatile bool _nativeDrag;
+    /// Where to put this window back when the floating one is docked.
+    private FormWindowState _stateBeforeFloat = FormWindowState.Normal;
+    private bool _closing;
 
     public MainForm(Settings settings)
     {
@@ -144,13 +156,32 @@ public sealed class MainForm : Form, IDesktopBridge
             _server.Bridge = this;
             _server.Start();
 
-            var environment = await CoreWebView2Environment
-                .CreateAsync(userDataFolder: _settings.BrowserProfile)
+            _environment = await CoreWebView2Environment
+                .CreateAsync(
+                    userDataFolder: _settings.BrowserProfile,
+                    options: new CoreWebView2EnvironmentOptions
+                    {
+                        // The floating focus window plays a chime at the end of
+                        // an interval, and a browser refuses audio no gesture in
+                        // THAT document asked for — a window nobody has clicked
+                        // in would stay silent. Environment-wide, because
+                        // options are fixed when the environment is made; the
+                        // only effect on this window is that its chime works
+                        // before anything is pressed too.
+                        AdditionalBrowserArguments = "--autoplay-policy=no-user-gesture-required",
+                    })
                 .ConfigureAwait(true);
-            await _web.EnsureCoreWebView2Async(environment).ConfigureAwait(true);
+            await _web.EnsureCoreWebView2Async(_environment).ConfigureAwait(true);
 
             _web.CoreWebView2.Settings.IsStatusBarEnabled = false;
             _web.CoreWebView2.Settings.AreDefaultContextMenusEnabled = true;
+            // Unhandled, a page's request to notify is refused outright. The
+            // focus surface asks only from a click and only with its setting on.
+            _web.CoreWebView2.PermissionRequested += (_, e) =>
+            {
+                if (e.PermissionKind == CoreWebView2PermissionKind.Notifications)
+                    e.State = CoreWebView2PermissionState.Allow;
+            };
 
             await SeedSessionAsync().ConfigureAwait(true);
 
@@ -223,7 +254,15 @@ public sealed class MainForm : Form, IDesktopBridge
     // Every one of these arrives on an HttpListener thread, so each hops to the
     // UI thread before touching a window. `State` is the exception and has to
     // be: it returns a value, so it cannot fire-and-forget, and it reads only
-    // the settings object.
+    // the settings object and two flags written under the UI thread.
+    //
+    // Two kinds of hop. `Appearance` and `Icon` BeginInvoke — nothing waits on
+    // them. `Float`, `Dock` and `Pin` Invoke, and have to: LocalServer answers
+    // every bridge call with State(), and the page reconciles its pin toggle
+    // and its Float/Dock controls from that answer, so an answer written before
+    // the UI thread had run would say the old thing and the toggle would snap
+    // back. `Drag` BeginInvokes, because it returns nothing and the press it
+    // answers is already a few milliseconds old.
 
     string IDesktopBridge.State()
     {
@@ -241,7 +280,70 @@ public sealed class MainForm : Form, IDesktopBridge
             // is Windows 11 22000+. The page uses this to say which it will get
             // instead of promising a colour the OS will ignore.
             captionColour = Environment.OSVersion.Version.Build >= 22000,
+            // The floating focus window. Absent from an older exe's answer,
+            // which is how a newer web build knows not to offer it.
+            floating = _floating,
+            pinned = _settings.FloatPinned,
+            // Whether the runtime moves the window from the page's own drag
+            // regions, or the page has to ask the bridge for every drag.
+            nativeDrag = _nativeDrag,
         });
+    }
+
+    void IDesktopBridge.Float()
+    {
+        Invoke(() =>
+        {
+            if (_environment is null || _server is null || _closing) return;
+            if (_float is null || _float.IsDisposed)
+            {
+                _stateBeforeFloat = WindowState == FormWindowState.Minimized
+                    ? FormWindowState.Normal : WindowState;
+                _float = new FloatForm(
+                    _settings, _environment, _server.Origin + "/focus?float=1",
+                    nativeDragReady: ready => _nativeDrag = ready);
+                _float.FormClosed += (_, _) => OnDocked();
+                _float.Show();
+                _floating = true;
+            }
+            // Float, then minimise, then activate — in that order, so focus
+            // lands on the floating window rather than on whatever the taskbar
+            // hands it to when this one drops.
+            WindowState = FormWindowState.Minimized;
+            _float.Activate();
+        });
+    }
+
+    void IDesktopBridge.Dock()
+    {
+        // Every way the floating window closes — this, Escape on its page,
+        // Alt+F4 — ends in FormClosed, so OnDocked is the one restore path.
+        Invoke(() => _float?.Close());
+    }
+
+    void IDesktopBridge.Pin(bool onTop)
+    {
+        Invoke(() =>
+        {
+            _settings.FloatPinned = onTop;
+            try { _settings.Save(); } catch (Exception) { /* cosmetic */ }
+            if (_float is { IsDisposed: false }) _float.TopMost = onTop;
+        });
+    }
+
+    void IDesktopBridge.Drag()
+    {
+        BeginInvoke(() => _float?.BeginDrag());
+    }
+
+    private void OnDocked()
+    {
+        _float = null;
+        _floating = false;
+        _nativeDrag = false;
+        if (_closing) return;
+        WindowState = _stateBeforeFloat;
+        Activate();
     }
 
     void IDesktopBridge.Appearance(string? background)
@@ -253,6 +355,8 @@ public sealed class MainForm : Form, IDesktopBridge
             _settings.TitleBarColor = value;
             _settings.Save();
             ApplyChrome(value);
+            // The floating window's ring is the same colour, and follows.
+            if (_float is { IsDisposed: false }) _float.ApplyChrome(value);
         });
     }
 
@@ -325,6 +429,13 @@ public sealed class MainForm : Form, IDesktopBridge
 
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
+        // The floating window goes first, and OnDocked must not restore this
+        // one on the way out: Application.Run ends when THIS form closes, and a
+        // top-level window left behind would keep the process alive with no
+        // taskbar button to find it by.
+        _closing = true;
+        if (_float is { IsDisposed: false }) _float.Close();
+
         // Only a restored window has a size worth remembering; a maximized one
         // would otherwise record the screen and never shrink back.
         if (WindowState == FormWindowState.Normal)
