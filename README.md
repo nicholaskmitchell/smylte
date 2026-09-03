@@ -515,6 +515,13 @@ load from local disk instead of over the network, and that installing is one
 release, and the client picks it up on the next launch. API calls still go to
 the server, so nothing about CalDAV latency changes. See `desktop/README.md`.
 
+The one thing the client draws that the browser cannot is the **floating focus
+window**: the clock and the row you are on, in a small frameless window above
+everything else while the app itself waits in the taskbar. Drag it by its body,
+resize it from its edges, pin it or let it fall behind, dock it to bring the
+app back. It is the same `/focus` page at a small size, in the same session, so
+it and the app agree to the second.
+
 ## Panel firmware
 
 `firmware/` is a worked MicroPython example: a **Pico 2 W** and a **Waveshare
