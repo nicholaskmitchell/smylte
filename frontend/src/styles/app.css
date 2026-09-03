@@ -2350,3 +2350,102 @@
 .dev-panel__size, .dev-panel__bytes { font-size: 11px; }
 .dev-panel__bytes::before { content: '· '; }
 
+/* ---- the focus surface (/focus) -------------------------------------------
+   The display's rolling face, made interactive and brought inside the app: the
+   same anatomy — eyebrow, one headline, an estimate line, NEXT and a count —
+   drawn in the app's own tokens rather than display.css's fixed palette,
+   because this is a surface the owner sits in front of and tunes, not a poster
+   across a room. `position: fixed` and no scroll: two rows and a clock are the
+   whole content whatever the day holds, which is what a screen with nothing to
+   scroll can honestly say. */
+.focus {
+  position: fixed; inset: 0; display: flex; flex-direction: column;
+  background: var(--bg); color: var(--fg); overflow: hidden;
+  font-variant-numeric: tabular-nums;
+}
+.focus-head {
+  display: flex; align-items: center; gap: 12px;
+  padding: 14px var(--gutter); border-bottom: 1px solid var(--rule-faint);
+}
+.focus-head .label { flex: none; }
+.focus-head__interval, .focus-head__tally {
+  font-family: var(--mono); font-size: calc(11px * var(--fs-scale)); color: var(--fg-faint);
+  white-space: nowrap;
+}
+.focus-back { flex: none; }
+.focus-main {
+  flex: 1; min-height: 0; display: flex; flex-direction: column; justify-content: center;
+  gap: clamp(12px, 3vh, 28px); padding: clamp(16px, 4vh, 48px) var(--gutter);
+  max-width: 880px; width: 100%; margin: 0 auto; box-sizing: border-box;
+}
+.focus-phase {
+  font-family: var(--mono); font-size: calc(11px * var(--fs-scale));
+  text-transform: var(--label-case); letter-spacing: calc(0.1em * var(--tracking));
+  color: var(--fg-faint);
+}
+.focus[data-state="over"] .focus-phase, .focus[data-state="away"] .focus-phase { color: var(--accent); }
+/* The one number on the screen. Fraunces at its display cut — the reverse of
+   the eink rule in display.css, and for the reverse reason: this is a laptop,
+   the hairlines survive, and a clock this size is the whole point of the page. */
+.focus-clock {
+  font-family: var(--serif); font-weight: 500; font-variation-settings: "opsz" 144;
+  font-size: clamp(56px, 18vw, 168px); line-height: 1; letter-spacing: -0.02em;
+}
+.focus[data-state="paused"] .focus-clock,
+.focus[data-phase="break"] .focus-clock,
+.focus[data-phase="long_break"] .focus-clock { color: var(--fg-muted); }
+.focus-now { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.focus-now__eyebrow {
+  font-family: var(--mono); font-size: calc(10px * var(--fs-scale));
+  text-transform: var(--label-case); letter-spacing: calc(0.1em * var(--tracking));
+  color: var(--fg-faint);
+}
+.focus-now__title {
+  margin: 0; font-family: var(--serif); font-weight: 500; letter-spacing: -0.01em;
+  font-size: clamp(24px, 5vw, 56px); line-height: 1.12; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden;
+}
+/* On a break the row is not being worked: it steps back a shade, and the
+   eyebrow over it says "Up next" rather than "Now". */
+.focus[data-phase="break"] .focus-now__title,
+.focus[data-phase="long_break"] .focus-now__title { color: var(--fg-muted); }
+.focus-now__meta {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px;
+  font-family: var(--mono); font-size: calc(11px * var(--fs-scale)); color: var(--fg-muted);
+}
+/* The cap is a reading that is also a switch: dotted underline, the app's
+   convention for "press to change what this says". */
+.focus-cap, .focus-pick {
+  background: none; border: 0; padding: 0; cursor: pointer; font: inherit; color: inherit;
+  text-align: left;
+}
+.focus-cap { color: var(--fg-faint); text-decoration: underline dotted; text-underline-offset: 3px; }
+@media (hover: hover) { .focus-cap:hover, .focus-pick:hover { color: var(--accent); } }
+.focus-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+.focus-next {
+  display: flex; flex-direction: column; gap: 4px; min-width: 0;
+  padding-top: clamp(8px, 2vh, 18px); border-top: 1px solid var(--rule-faint);
+}
+.focus-next__text {
+  font-size: calc(15px * var(--fs-scale));
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.focus-next__more { font-family: var(--mono); font-size: calc(11px * var(--fs-scale)); color: var(--fg-faint); }
+.focus-foot {
+  display: flex; align-items: center; gap: 8px;
+  padding: 12px var(--gutter); border-top: 1px solid var(--rule-faint);
+}
+.focus-empty { margin: 0; font-family: var(--serif); font-size: clamp(20px, 3vw, 32px); font-weight: 500; }
+.focus-hint { margin: 0; font-size: calc(13px * var(--fs-scale)); color: var(--fg-muted); line-height: 1.4; max-width: 48ch; }
+
+/* The way in, in Today's header. Same rule as its three siblings (`.today-review`
+   et al.) and for the same reason. Below 720px the header is full — three
+   words already use 284 of 362px, measured — so the button keeps its word for
+   the accessible name and shows a glyph, the shape `.today-nav`'s arrows have. */
+.today-focus { flex: none; align-self: center; }
+.today-focus__glyph { display: none; }
+@media (max-width: 720px) {
+  .today-focus__word { display: none; }
+  .today-focus__glyph { display: inline; }
+  .today-focus { padding: 7px 9px; }
+}

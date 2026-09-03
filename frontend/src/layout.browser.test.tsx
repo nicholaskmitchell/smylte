@@ -295,6 +295,9 @@ const TODAY_HEAD = `
       <span class="spacer"></span>
       <span class="content-sub today-count">3 open &middot; 5 on the day</span>
       <button type="button" class="btn ghost today-review">Review</button>
+      <button type="button" class="btn ghost today-focus" aria-label="Start working">
+        <span class="today-focus__word">Start working</span>
+        <span class="today-focus__glyph mono" aria-hidden="true">&#9654;</span></button>
       <button type="button" class="btn ghost today-shutdown">Shut down</button>
       <button type="button" class="btn ghost today-habits-open">
         <span class="mono">&#8635;</span> Habits</button>

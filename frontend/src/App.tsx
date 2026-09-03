@@ -35,6 +35,8 @@ import { CalendarView } from './components/CalendarView'
 import { SchedulingView } from './components/SchedulingView'
 import { HomeView } from './components/HomeView'
 import { TodayView } from './components/TodayView'
+import { FocusView } from './components/FocusView'
+import { DEFAULT_FOCUS, sanitizeFocusSettings, type FocusSettings } from './focus'
 import { DEFAULT_LANGUAGE, deviceLanguage, isLanguage, type Language } from './lang'
 import { I18nProvider } from './i18n'
 import { translate } from './i18n/index'
@@ -50,6 +52,8 @@ import { SettingsMenu } from './components/SettingsMenu'
 // disk mirror's last-known-good data out of reach from the very screen that had
 // nothing else to show.
 type Auth = 'loading' | 'in' | 'out' | 'offline'
+
+const isFocusPath = (path: string) => path.replace(/\/+$/, '') === '/focus'
 
 // How long boot waits for `/api/me` before calling it unreachable. A half-open
 // socket neither resolves nor rejects, and this one call decides whether the app
@@ -143,6 +147,22 @@ export function App() {
   // which is what this used to be the only way to set.
   const [sessionTtl, setSessionTtl] = useState<number | null>(null)
   const [rev, setRev] = useState(0)
+  // A THIRD counter, for the focus session alone. A clock transition publishes
+  // `focus_updated` every few minutes for as long as a session runs, and
+  // routing that through `rev` would refetch every list, task and calendar
+  // window in every open tab each time — the request storm `settingsRev`
+  // exists to keep preferences out of. FocusView re-reads the session on this
+  // and the day on `rev`.
+  const [focusRev, setFocusRev] = useState(0)
+  // Whether the focus surface is up. Read off the URL, so /focus is a real
+  // address — a second window (the desktop client's floating one, a follow-up)
+  // can open it cold — and entered from Today by pushing that address, so the
+  // back gesture leaves it. It lives INSIDE the authed shell rather than
+  // branching in main.tsx the way /book and /display do, because those have no
+  // session and this one has everything: theme, language, settings, the SSE
+  // subscription. Both spellings, like the server route that serves it.
+  const [focusOpen, setFocusOpen] = useState(() => isFocusPath(location.pathname))
+  const [focus, setFocus] = useState<FocusSettings>(DEFAULT_FOCUS)
   // A SECOND revision counter, for settings alone. `rev` drives the task and
   // event refetch, and bumping it on a preference change is the request storm
   // the SSE handler's early return was added to stop — but dropping the event
@@ -403,6 +423,12 @@ export function App() {
         if (keep('day_capacity_by_weekday')) {
           setDayCapacityByWeekday(sanitizeCapacityByWeekday(s.day_capacity_by_weekday))
         }
+        // Eight keys read as one value, and held back as one: a gesture on any
+        // of them while this read was in flight keeps the whole group local
+        // until the next `settings_updated` refetch, which carries the newer
+        // truth in full. Simpler than merging key by key, and the window is
+        // one round trip.
+        if (FOCUS_SETTING_KEYS.every(keep)) setFocus(sanitizeFocusSettings(s))
         if (keep('home_timezone') && typeof s.home_timezone === 'string') setHomeTz(s.home_timezone)
         // Re-validated on the way in, like every other value off the wire: the
         // settings blob is one hand-editable JSON document, and an unknown rule
@@ -549,6 +575,26 @@ export function App() {
     'day_capacity_by_weekday',
   ] as const
 
+  const FOCUS_SETTING_KEYS = [
+    'focus_interval_minutes', 'focus_break_minutes', 'focus_long_break_minutes',
+    'focus_long_break_every', 'focus_auto_continue', 'focus_cap_default',
+    'focus_chime', 'focus_notify',
+  ] as const
+
+  const changeFocus = useCallback((patch: Partial<FocusSettings>) => {
+    setFocus((cur) => ({ ...cur, ...patch }))
+    const out: Settings = {}
+    if (patch.interval !== undefined) out.focus_interval_minutes = patch.interval
+    if (patch.brk !== undefined) out.focus_break_minutes = patch.brk
+    if (patch.longBrk !== undefined) out.focus_long_break_minutes = patch.longBrk
+    if (patch.longEvery !== undefined) out.focus_long_break_every = patch.longEvery
+    if (patch.autoContinue !== undefined) out.focus_auto_continue = patch.autoContinue
+    if (patch.capDefault !== undefined) out.focus_cap_default = patch.capDefault
+    if (patch.chime !== undefined) out.focus_chime = patch.chime
+    if (patch.notify !== undefined) out.focus_notify = patch.notify
+    if (Object.keys(out).length) saveSettings(out)
+  }, [])
+
   const saveSettings = useCallback((patch: Settings) => {
     writeLog.current.push(...Object.keys(patch))
     if (settingsFailed.current) {
@@ -629,6 +675,25 @@ export function App() {
   const changeTabOrder = useCallback((next: Tab[]) => {
     setTabOrder(next)
     saveSettings({ tab_order: next })
+  }, [])
+
+  // In and out of the focus surface. Entering PUSHES, so the browser's own back
+  // gesture is the way out and a reload lands where it was; leaving pops that
+  // entry when it is ours, and otherwise (a cold load of /focus) replaces it, so
+  // Back never bounces the owner into the surface they just left.
+  const enterFocus = useCallback(() => {
+    history.pushState({ focus: true }, '', '/focus')
+    setFocusOpen(true)
+  }, [])
+  const leaveFocus = useCallback(() => {
+    if ((history.state as { focus?: boolean } | null)?.focus) { history.back(); return }
+    history.replaceState(null, '', '/')
+    setFocusOpen(false)
+  }, [])
+  useEffect(() => {
+    const onPop = () => setFocusOpen(isFocusPath(location.pathname))
+    window.addEventListener('popstate', onPop)
+    return () => window.removeEventListener('popstate', onPop)
   }, [])
 
   const changeStartTab = useCallback((next: TabStart) => {
@@ -899,6 +964,12 @@ export function App() {
         armSettingsRefetch()
         return
       }
+      if (type === 'focus_updated') {
+        // The session moved — a pause, a phase, a row set aside. The surface
+        // re-reads the session and nothing else; see `focusRev`.
+        setFocusRev((r) => r + 1)
+        return
+      }
       clearTimeout(timer)
       timer = setTimeout(() => setRev((r) => r + 1), 250)
     }, onExpire)
@@ -984,6 +1055,10 @@ export function App() {
     // the boot markup away and mount a fresh tree — losing the very frame this
     // exists to paint (and any click already in flight against it).
     <div className="shell">
+      {focusOpen && !booting ? (
+        <FocusView rev={rev} focusRev={focusRev} onExpire={onExpire} onLeave={leaveFocus}
+          settings={focus} />
+      ) : (<>
       <div className="topbar">
         <span className="brand">Smylte<span className="dot">.</span></span>
         {/* The strip SCROLLS on a phone (see app.css), which means the tab you
@@ -1081,13 +1156,15 @@ export function App() {
         // asked over the archived calendars too would re-fan-out over every
         // calendar on each switch between the two tabs.
         <TodayView rev={rev} onExpire={onExpire}
-          hiddenCalendars={hiddenCals} archivedCalendars={archivedCals} />
+          hiddenCalendars={hiddenCals} archivedCalendars={archivedCals}
+          onStartWorking={enterFocus} />
       )}
       {!booting && tab === 'home' && (
         <HomeView rev={rev} onExpire={onExpire}
           layout={dashboard} onLayoutChange={changeDashboard}
           hiddenCalendars={hiddenCals} archivedCalendars={archivedCals} />
       )}
+      </>)}
       {appearanceOpen && (
         <AppearancePanel appearance={appearance} onChange={changeAppearance}
           mode={theme === 'dark' ? 'dark' : 'light'} onMode={changeTheme}
