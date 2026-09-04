@@ -244,6 +244,15 @@ export function App() {
     return () => { setErrorNotifier(null); clearTimeout(toastTimer.current) }
   }, [showToast])
 
+  // The document's own language, kept in step with the one the strings are in.
+  // index.html ships `<html lang="en">` and nothing else ever wrote it, so a
+  // German UI was announced with an English voice and hyphenated by English
+  // rules (WCAG 3.1.1). The same choice the I18nProvider below makes: the
+  // device's language while signed out, the account's once a session resolves.
+  useEffect(() => {
+    document.documentElement.lang = auth === 'out' ? deviceLanguage() : language
+  }, [auth, language])
+
   // Bumped by the Retry button and by a recovery signal, to re-run boot.
   const [bootTry, setBootTry] = useState(0)
   const retryBoot = useCallback(() => setBootTry((n) => n + 1), [])
@@ -321,7 +330,19 @@ export function App() {
   useEffect(() => {
     // A sign-out clears the restore latch, so signing back in (which never
     // remounts this component) opens where the account says again.
-    if (auth !== 'in') { tabRestored.current = false; return }
+    if (auth !== 'in') {
+      tabRestored.current = false
+      // OFFLINE is a read that was never issued, and it has to arm the same
+      // guard a read that failed does. The shell renders in full here — the
+      // gear, every view, the Home board — over shipped defaults, and the
+      // guard only ever flipped inside the read's `.catch`; a merge-class
+      // gesture (move a tab, type a weekday capacity, drag a module) then PUT
+      // a value built from those defaults over the account's real one the
+      // moment the server was reachable again. Reset on the 'in' branch below,
+      // which is the only path a successful read can arrive by.
+      if (auth === 'offline') settingsFailed.current = true
+      return
+    }
     settingsFailed.current = false
     // Where the write log stands as this read is ISSUED. Anything appended
     // after this point is a preference the user changed while the read was in
@@ -600,6 +621,15 @@ export function App() {
     if (Object.keys(out).length) saveSettings(out)
   }, [])
 
+  // The translator, read at CALL time. `saveSettings` is captured once by the
+  // `useCallback(..., [])` change handlers below and held for the life of the
+  // app — the same reason `settingsFailed` is a ref — and `language` is the
+  // default until the settings read lands, so a `tr` closed over here was
+  // `translate('en', …)` for good: a German account saw its save-failure toast
+  // in English. A ref cannot go stale.
+  const trRef = useRef(tr)
+  trRef.current = tr
+
   const saveSettings = useCallback((patch: Settings) => {
     writeLog.current.push(...Object.keys(patch))
     if (settingsFailed.current) {
@@ -607,7 +637,7 @@ export function App() {
       if (held.length) {
         patch = Object.fromEntries(
           Object.entries(patch).filter(([k]) => !held.includes(k as never))) as Settings
-        showToast(tr('app.settingsNotLoaded'))
+        showToast(trRef.current('app.settingsNotLoaded'))
       }
       if (!Object.keys(patch).length) return
     }
@@ -621,9 +651,11 @@ export function App() {
       // rejection from a server we *did* reach is what the user needs to know.
       // The server's own words ride along untranslated — see i18n/index.ts on
       // why server text is out of scope — inside a sentence that is not.
-      if (e instanceof HttpError) showToast(tr('app.settingsSaveFailed', { error: e.message }))
+      if (e instanceof HttpError) {
+        showToast(trRef.current('app.settingsSaveFailed', { error: e.message }))
+      }
     }).finally(() => { writesInFlight.current -= 1 })
-  }, [showToast, tr])
+  }, [showToast])
 
   // The settings a repeated gesture writes: an appearance slider fires onChange
   // on every step (a drag across one range is up to 56 of them), a dashboard
@@ -920,7 +952,32 @@ export function App() {
     let timer: ReturnType<typeof setTimeout> | undefined
     let settingsTimer: ReturnType<typeof setTimeout> | undefined
     let settingsWaits = 0
+    // Hoisted out of the `settings_updated` branch because 'reconnect' needs it
+    // too — see below.
+    const armSettingsRefetch = () => {
+      settingsTimer = setTimeout(() => {
+        const busy = Object.keys(pendingPatch.current).length > 0
+          || writesInFlight.current > 0
+        if (busy && settingsWaits < 20) { settingsWaits += 1; armSettingsRefetch(); return }
+        settingsWaits = 0
+        setSettingsRev((r) => r + 1)
+      }, 250)
+    }
     const unsubscribe = subscribe((type) => {
+      // A RECONNECT is both kinds of change. `subscribe` emits it on the first
+      // `onopen` after a drop because the server replays nothing: every event
+      // published while the stream was down is gone, and the reconnect stands
+      // in for all of them — which has to include a `settings_updated` from
+      // another device. Treating it as a data change only left this tab holding
+      // whatever the blob said before the lid closed, and the next list-shaped
+      // gesture wrote that stale array back whole (the shallow-merge loss the
+      // `settings_updated` branch below describes), except through a window the
+      // live stream never saw. So: re-read the settings AND fall through to the
+      // `rev` bump.
+      if (type === 'reconnect') {
+        clearTimeout(settingsTimer)
+        armSettingsRefetch()
+      }
       if (type === 'settings_updated') {
         // Re-read the SETTINGS — but never bump `rev`, which is what the bare
         // early return here was protecting: one appearance-slider drag would
@@ -957,15 +1014,6 @@ export function App() {
         // cannot silence the refetch for good; a refetch that does race a write
         // is a flicker, and the trailing write still wins.
         clearTimeout(settingsTimer)
-        const armSettingsRefetch = () => {
-          settingsTimer = setTimeout(() => {
-            const busy = Object.keys(pendingPatch.current).length > 0
-              || writesInFlight.current > 0
-            if (busy && settingsWaits < 20) { settingsWaits += 1; armSettingsRefetch(); return }
-            settingsWaits = 0
-            setSettingsRev((r) => r + 1)
-          }, 250)
-        }
         armSettingsRefetch()
         return
       }
@@ -1085,9 +1133,17 @@ export function App() {
             and `block: 'nearest'` so this never scrolls the PAGE vertically —
             the default is 'start', which would drag the whole view. */}
         <div className="tabs" ref={tabsRef}>
+          {/* `aria-current="page"`, not `role="tab"`: the strip IS the app's
+              page-level navigation — each tab is a whole view, and Focus is a
+              real address beside them — and the class alone told assistive
+              tech nothing, so a screen reader heard five identical buttons
+              with no way to tell which view was open. (SettingsMenu's nav is
+              the tablist; keeping the strip as buttons is also what keeps
+              its *Tasks* apart from that nav's *Tasks* by role.) */}
           {tabOrder.map((t) => (
             <button key={t} className={`tab ${tab === t ? 'active' : ''}`}
               ref={t === tab ? activeTabRef : undefined}
+              aria-current={tab === t ? 'page' : undefined}
               onClick={() => changeTab(t)}>
               {tr(TAB_LABELS[t])}
             </button>

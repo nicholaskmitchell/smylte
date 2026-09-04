@@ -57,9 +57,11 @@ export const en = {
   'reminder.aria': 'How long before this to send a reminder',
   'reminder.none': "Don't notify",
   'reminder.atTime': 'At the time',
-  'reminder.minutes': '{n} minutes before',
-  'reminder.hours': '{n} hours before',
-  'reminder.days': '{n} days before',
+  // Plural records, keyed on `{n}`: `reminderLabel` passes the count as `n`,
+  // and `translate` reads `n` for the category when no `count` is given.
+  'reminder.minutes': { one: '{n} minute before', other: '{n} minutes before' },
+  'reminder.hours': { one: '{n} hour before', other: '{n} hours before' },
+  'reminder.days': { one: '{n} day before', other: '{n} days before' },
   'settings.section.notifications': 'Notifications',
   'settings.section.displays': 'Displays',
   'settings.section.developer': 'Developer',
@@ -506,7 +508,7 @@ export const en = {
   'module.quick_add': 'Quick add',
   'module.quick_add.blurb': 'Drop a task straight onto a list.',
   'home.title': 'Home',
-  'home.moduleCount': '{count} modules',
+  'home.moduleCount': { one: '{count} module', other: '{count} modules' },
   'home.arrangeHint': 'Drag to move · corner to resize',
   'home.addModule': 'Add module',
   'home.resetLayout': 'Reset layout',
@@ -994,4 +996,35 @@ export const en = {
   'home.planEmpty': 'Nothing on today yet. Plan it from the Today tab.',
   'home.planUncheck': 'Uncheck {entry}',
   'home.planCheck': 'Check {entry}',
+  // ── 2026-09-03 sweep — fe-a (shell, Focus, Home) ─────────────────────────
+  // A task row whose LIST failed to load. Not "gone": the server still names
+  // and credits the task; this client simply could not read the list it is in.
+  'today.taskUnavailable': 'Task in a list that couldn’t load',
+  // The Focus surface's own read failed — the day or the session. Retryable,
+  // like `today.readFailed` one surface over.
+  'focus.readFailed': 'Couldn’t load the focus surface.',
+  // The dashboard's scheduling modules over a failed fetch: short copy for a
+  // card, but the same rule as `sched.loadFailed` — never the empty state.
+  'home.linksFailed': 'Couldn’t load your booking links — they’re still live.',
+  'home.bookingsFailed': 'Couldn’t load your bookings.',
+  // ── 2026-09-03 sweep — the priority picker's choices ────────────────────────
+  // The option TEXT for api.ts's PRIORITIES; the option value stays the wire word.
+  'priority.none': 'None',
+  'priority.low': 'Low',
+  'priority.medium': 'Medium',
+  'priority.high': 'High',
+  // ── 2026-09-03 sweep — fe-b1 (the Today tab) ─────────────────────────────
+  // A PAST day's read failed. `today.readFailed` says "today", and it is the
+  // one error line on the tab, under a heading that reads "Look back".
+  'today.readFailedDay': 'Couldn’t read this day.',
+  // The shutdown's first step over a day every row was moved or dropped from:
+  // not "0 of 0 done" and not "Nothing on today", both of which describe a day
+  // that had nothing on it.
+  'shut.nothingLeft': 'Nothing left on today — what was on it was moved to another day or taken off the plan.',
+  // ── 2026-09-03 sweep — the display page's own three strings, and the
+  //    imported-theme fallback name (fe-c) ─────────────────────────────────
+  'display.stale': 'Not updated recently',
+  'display.gone': 'This display is no longer connected.',
+  'display.goneHint': 'Pair it again from Settings → Displays.',
+  'appear.importedTheme': 'Imported theme',
 } as const

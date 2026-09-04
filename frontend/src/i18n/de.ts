@@ -73,9 +73,9 @@ export const de: Catalogue = {
   'reminder.aria': 'Wie lange vorher eine Erinnerung geschickt wird',
   'reminder.none': 'Nicht erinnern',
   'reminder.atTime': 'Zum Zeitpunkt',
-  'reminder.minutes': '{n} Minuten vorher',
-  'reminder.hours': '{n} Stunden vorher',
-  'reminder.days': '{n} Tage vorher',
+  'reminder.minutes': { one: '{n} Minute vorher', other: '{n} Minuten vorher' },
+  'reminder.hours': { one: '{n} Stunde vorher', other: '{n} Stunden vorher' },
+  'reminder.days': { one: '{n} Tag vorher', other: '{n} Tage vorher' },
   'settings.section.notifications': 'Benachrichtigungen',
   'settings.section.displays': 'Anzeigen',
   'settings.section.developer': 'Entwicklung',
@@ -554,7 +554,7 @@ export const de: Catalogue = {
   'module.quick_add': 'Schnell hinzufügen',
   'module.quick_add.blurb': 'Eine Aufgabe direkt auf eine Liste werfen.',
   'home.title': 'Start',
-  'home.moduleCount': '{count} Module',
+  'home.moduleCount': { one: '{count} Modul', other: '{count} Module' },
   'home.arrangeHint': 'Ziehen zum Verschieben · Ecke zum Skalieren',
   'home.addModule': 'Modul hinzufügen',
   'home.resetLayout': 'Layout zurücksetzen',
@@ -1076,4 +1076,23 @@ export const de: Catalogue = {
   'home.planEmpty': 'Heute steht noch nichts an. Plan ihn im Heute-Tab.',
   'home.planUncheck': '{entry} abhaken rückgängig',
   'home.planCheck': '{entry} abhaken',
+  // ── 2026-09-03 sweep — fe-a (shell, Focus, Home) ─────────────────────────
+  'today.taskUnavailable': 'Aufgabe aus einer Liste, die nicht geladen werden konnte',
+  'focus.readFailed': 'Die Fokus-Ansicht konnte nicht geladen werden.',
+  'home.linksFailed': 'Deine Buchungslinks konnten nicht geladen werden — sie sind weiter aktiv.',
+  'home.bookingsFailed': 'Deine Buchungen konnten nicht geladen werden.',
+  // ── 2026-09-03 sweep — the priority picker's choices ────────────────────────
+  'priority.none': 'Keine',
+  'priority.low': 'Niedrig',
+  'priority.medium': 'Mittel',
+  'priority.high': 'Hoch',
+  // ── 2026-09-03 sweep — fe-b1 (the Today tab) ─────────────────────────────
+  'today.readFailedDay': 'Dieser Tag konnte nicht gelesen werden.',
+  'shut.nothingLeft': 'Auf heute ist nichts mehr übrig — was drauf war, wurde auf einen anderen Tag verschoben oder vom Plan genommen.',
+  // ── 2026-09-03 sweep — die drei eigenen Texte der Anzeigeseite und der
+  //    Name eines importierten Designs ohne Namen (fe-c) ────────────────────
+  'display.stale': 'Länger nicht aktualisiert',
+  'display.gone': 'Diese Anzeige ist nicht mehr verbunden.',
+  'display.goneHint': 'Verbinde sie neu unter Einstellungen → Anzeigen.',
+  'appear.importedTheme': 'Importiertes Design',
 }

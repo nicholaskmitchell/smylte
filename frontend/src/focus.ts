@@ -144,16 +144,30 @@ function taskIndex(tasks: Task[]): Map<string, Task> {
   return m
 }
 
+/** No list failed: the default, so a caller with nothing to report — and every
+ *  pure-function test — passes nothing. */
+const NO_FAILED_LISTS: ReadonlySet<string> = new Set()
+
 /** Whether a row is finished, by the rule the server applies when it moves the
  *  cursor (`_resolved_day_rows`): a note or habit by its own stamp; a task by
  *  its VTODO — done OR cancelled, since neither is work left to do; and a task
  *  row whose task is gone once the tasks have loaded, because there is nothing
  *  left to work. Before they load a task row is open, which is the direction a
- *  loading gap may be wrong in — the surface must not sync off a blank. */
-function finished(e: DayEntry, byKey: Map<string, Task>, tasksLoaded: boolean): boolean {
+ *  loading gap may be wrong in — the surface must not sync off a blank.
+ *
+ *  A task from a list in `failedLists` is the same gap, list by list. The
+ *  fan-out is `allSettled`, so one list answering 500 leaves its tasks OUT of
+ *  the array while `loaded` flips true — and "gone once loaded" then counted
+ *  every task on that list as done: the surface printed "All done." over open
+ *  work, offered End, and sent a `sync` off a client-only misjudgement. A row
+ *  whose list did not load is UNKNOWN, and unknown is open. */
+function finished(
+  e: DayEntry, byKey: Map<string, Task>, tasksLoaded: boolean,
+  failedLists: ReadonlySet<string>,
+): boolean {
   if (e.kind !== 'task') return !!e.done_at
   const task = byKey.get(keyOf(e.list, e.uid))
-  if (!task) return tasksLoaded
+  if (!task) return tasksLoaded && !failedLists.has(e.list ?? '')
   return rowDone(e, task, true) || task.cancelled
 }
 
@@ -176,12 +190,14 @@ export interface FocusQueue {
  *  being worked and drive a write off that disagreement. */
 export function queueOf(
   entries: DayEntry[], tasks: Task[], tasksLoaded: boolean, s: FocusSession | null,
+  /** Ids of the lists whose fetch failed — `TaskData.taskListsFailed`. */
+  failedLists: ReadonlySet<string> = NO_FAILED_LISTS,
 ): FocusQueue {
   const byKey = taskIndex(tasks)
   const passed = new Set(s?.passed ?? [])
   const live = orderEntries(entries).filter((e) =>
     !e.dropped_at && !e.rolled_to && !passed.has(e.entry_id)
-    && !finished(e, byKey, tasksLoaded))
+    && !finished(e, byKey, tasksLoaded, failedLists))
   const ordered = [
     ...live.filter((e) => e.kind === 'habit'),
     ...live.filter((e) => e.kind !== 'habit'),
@@ -203,12 +219,13 @@ export function queueOf(
  *  a disagreement about which row comes NEXT never reaches here. */
 export function currentFinished(
   entries: DayEntry[], tasks: Task[], tasksLoaded: boolean, s: FocusSession | null,
+  failedLists: ReadonlySet<string> = NO_FAILED_LISTS,
 ): boolean {
   if (!s?.entry_id) return false
   const e = entries.find((x) => x.entry_id === s.entry_id)
   if (!e) return true
   if (e.dropped_at || e.rolled_to) return true
-  return finished(e, taskIndex(tasks), tasksLoaded)
+  return finished(e, taskIndex(tasks), tasksLoaded, failedLists)
 }
 
 // ── the cap ────────────────────────────────────────────────────────────────
