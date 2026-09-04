@@ -588,6 +588,31 @@ describe('2026-09-03 — the Home scheduling modules when their fetch fails', ()
   })
 })
 
+describe('2026-09-03 — the Home bookings module with links in two zones', () => {
+  // ── HomeView.tsx:833 — `BookingList` sorted by `a.start.localeCompare(b.start)`;
+  //    `start` carries each link's own offset, so the text order is not the
+  //    clock order. Found by the verifier of the store-side finding
+  //    (list_bookings ordered by the same string) and fixed on both sides. ────
+  it('lists them in clock order, not string order', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    vi.setSystemTime(new Date('2026-09-01T12:00:00Z'))
+    const booking = (id: string, name: string, start: string) => ({
+      id, link: 'l', link_title: null, event_uid: id, calendar: 'c1', name,
+      email: 'x@example.com', notes: null, start, end: start, created_at: start,
+    })
+    m.schedulingBookings.mockResolvedValue([
+      // 09:00 in Los Angeles is 16:00Z; 10:00 in Berlin is 08:00Z — earlier.
+      booking('la', 'Los Angeles', '2026-09-02T09:00:00-07:00'),
+      booking('be', 'Berlin', '2026-09-02T10:00:00+02:00'),
+    ])
+    showHome([{ id: 'b', kind: 'bookings', x: 0, y: 0, w: 6, h: 6 }])
+    await screen.findByText('Berlin')
+    const names = Array.from(document.querySelectorAll('.dash-task-title')).map((n) => n.textContent)
+    expect(names).toEqual(['Berlin', 'Los Angeles'])
+    vi.useRealTimers()
+  })
+})
+
 describe('2026-09-03 — the mini calendar across a month boundary', () => {
   // ── HomeView.tsx:192 — `days` is memoised on `rev` alone, which moves only
   //    when the server publishes a change; a dashboard left open overnight on a
