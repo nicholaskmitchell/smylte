@@ -52,7 +52,7 @@ from .dav.errors import DavError
 from .dav.errors import NotFound as DavNotFound
 from .dav.xml import XML_SAFE_PATTERN_SCALAR, clean_color
 from .ical.read import normalize_offset
-from .ical import EventEdit, TaskEdit, rrule_from_spec
+from .ical import PRIORITY, EventEdit, TaskEdit, rrule_from_spec
 from .csp import CSPMiddleware, policy_for_index
 from .limits import BodySizeLimitMiddleware
 from .scheduling import SlotTaken
@@ -103,6 +103,19 @@ CollectionName = Annotated[
 # No length bound here: the callers set their own, which differ per field.
 XmlSafeText = Annotated[str, Field(pattern=XML_SAFE_PATTERN_SCALAR)]
 
+# An opaque identifier a client hands back — a collection id, a UID, a
+# `list\0uid` task key, a day name in a booking link's availability. Bounded
+# for one reason that is easy to miss: pydantic refuses a lone surrogate
+# (`"\ud800"`) only for a `str` that carries a constraint, because that is what
+# routes it through the Rust conversion. A bare `str`, a `list[str]` element or
+# a `dict[str, str]` value is accepted verbatim. For the settings blob the write
+# then LANDS — the store escapes with `ensure_ascii=True` — and every later GET
+# and PUT of /api/settings dies in Starlette's renderer with UnicodeEncodeError
+# until the poisoned key is overwritten wholesale. The same class the models
+# below guard against for non-finite floats, and the same shape of fix: a
+# constraint at the edge. dav/xml.py documents the reliance this makes true.
+Id = Annotated[str, Field(min_length=1, max_length=512)]
+
 
 class CreateList(BaseModel):
     name: CollectionName
@@ -122,7 +135,7 @@ _MAX_REORDER_LISTS = 1_000
 
 class ReorderLists(BaseModel):
     # every shown collection, in the new order
-    ids: list[str] = Field(max_length=_MAX_REORDER_LISTS)
+    ids: list[Id] = Field(max_length=_MAX_REORDER_LISTS)
 
 
 # A reorder carries every task on the account, so the bound is "more tasks than
@@ -132,8 +145,8 @@ _MAX_REORDER_TASKS = 20_000
 
 
 class ReorderEntry(BaseModel):
-    list: str                         # the list id the task lives in
-    uid: str
+    list: Id                          # the list id the task lives in
+    uid: Id
 
 
 class ReorderTasks(BaseModel):
@@ -168,7 +181,7 @@ class CreateTask(BaseModel):
     due: str | None = None            # ISO date or datetime
     start: str | None = None
     tags: list[XmlSafeText] | None = None
-    parent: str | None = None         # parent task UID (subtask/checklist item)
+    parent: Id | None = None          # parent task UID (subtask/checklist item)
     client_id: str | None = None      # idempotency: a replayed create reuses the slug
     # "Notify me this many minutes before." App-only (a sidecar column, not a
     # VALARM — see the schema comment), so it is applied after the wire create
@@ -233,7 +246,7 @@ class EditTask(BaseModel):
     start: str | None = None
     tags: list[XmlSafeText] | None = None
     status: str | None = None         # NEEDS-ACTION|IN-PROCESS|COMPLETED|CANCELLED
-    parent: str | None = None         # parent task UID; explicit null unparents
+    parent: Id | None = None          # parent task UID; explicit null unparents
 
 
 class Sidecar(BaseModel):
@@ -256,6 +269,22 @@ class Sidecar(BaseModel):
     # Bounded at a week: past that the reminder is about a different day than
     # the one it names, and an unbounded int reaches SQLite as an OverflowError,
     # outside the taxonomy this module maps.
+    notify_minutes_before: int | None = Field(default=None, ge=-1, le=10080)
+
+
+class EventReminder(BaseModel):
+    """The one app-only field an event carries. Its own model rather than
+    `Sidecar`, because every other field there is a task's — a kanban column
+    or a manual sort order on an event would be accepted and then mean
+    nothing.
+
+    Module-level like every sibling, and not by taste: this file has
+    `from __future__ import annotations`, so a route's `body: EventReminder`
+    is the STRING "EventReminder", which FastAPI resolves against the
+    endpoint's module globals. Defined inside `create_app` it resolved to
+    nothing, the parameter silently registered as a required QUERY parameter
+    named `body`, and every call to the route — any JSON, any uid — answered
+    422 before the handler ran."""
     notify_minutes_before: int | None = Field(default=None, ge=-1, le=10080)
 
 
@@ -310,7 +339,7 @@ class EditEvent(Repeat):
 
 
 class MoveEvent(BaseModel):
-    calendar: str                     # destination calendar id
+    calendar: Id                      # destination calendar id
 
 
 class CreateDayEntry(BaseModel):
@@ -479,10 +508,10 @@ class EditHabit(BaseModel):
 class CreateBookingLink(BaseModel):
     title: XmlSafeText = Field(min_length=1, max_length=200)
     description: XmlSafeText | None = Field(default=None, max_length=2000)
-    calendar: str                                     # calendar id or href
+    calendar: Id                                      # calendar id or href
     duration_minutes: int = Field(default=30, ge=5, le=480)
     timezone: str = Field(min_length=1, max_length=64)   # IANA name
-    availability: dict[str, list[str]] = Field(default_factory=dict)
+    availability: dict[Id, list[Id]] = Field(default_factory=dict)
     show_busy: bool = False
     buffer_minutes: int = Field(default=0, ge=0, le=240)
     min_notice_hours: int = Field(default=24, ge=0, le=720)
@@ -493,10 +522,10 @@ class CreateBookingLink(BaseModel):
 class EditBookingLink(BaseModel):
     title: XmlSafeText | None = Field(default=None, min_length=1, max_length=200)
     description: XmlSafeText | None = Field(default=None, max_length=2000)
-    calendar: str | None = None
+    calendar: Id | None = None
     duration_minutes: int | None = Field(default=None, ge=5, le=480)
     timezone: str | None = Field(default=None, min_length=1, max_length=64)
-    availability: dict[str, list[str]] | None = None
+    availability: dict[Id, list[Id]] | None = None
     show_busy: bool | None = None
     buffer_minutes: int | None = Field(default=None, ge=0, le=240)
     min_notice_hours: int | None = Field(default=None, ge=0, le=720)
@@ -518,8 +547,8 @@ class CreateDisplay(BaseModel):
     palette: Literal["color", "eink"] = "color"
     # Allowlists of collection ids. Empty is "everything", the default, and a
     # real value that clears the set — see `_normalize_display_fields`.
-    calendars: list[str] = Field(default_factory=list, max_length=64)
-    lists: list[str] = Field(default_factory=list, max_length=64)
+    calendars: list[Id] = Field(default_factory=list, max_length=64)
+    lists: list[Id] = Field(default_factory=list, max_length=64)
     hide_done_habits: bool = True
     hide_done_tasks: bool = True
     refresh_seconds: int = Field(default=300, ge=60, le=86_400)
@@ -535,8 +564,8 @@ class EditDisplay(BaseModel):
     name: XmlSafeText | None = Field(default=None, min_length=1, max_length=100)
     mode: Literal["calendar", "habits", "now"] | None = None
     palette: Literal["color", "eink"] | None = None
-    calendars: list[str] | None = Field(default=None, max_length=64)
-    lists: list[str] | None = Field(default=None, max_length=64)
+    calendars: list[Id] | None = Field(default=None, max_length=64)
+    lists: list[Id] | None = Field(default=None, max_length=64)
     hide_done_habits: bool | None = None
     hide_done_tasks: bool | None = None
     refresh_seconds: int | None = Field(default=None, ge=60, le=86_400)
@@ -577,7 +606,7 @@ class TaskGroup(BaseModel):
     # membership set (render order still comes from the global list order).
     id: str = Field(min_length=1, max_length=64)
     name: str = Field(min_length=1, max_length=120)
-    lists: list[str] = Field(default_factory=list)
+    lists: list[Id] = Field(default_factory=list)
 
 
 # ── appearance customization ────────────────────────────────────────────────
@@ -615,6 +644,15 @@ def _clean_tokens(raw: dict[str, str]) -> dict[str, str]:
             continue
         v = value.strip()
         if not v or len(v) > _MAX_TOKEN_VALUE or _TOKEN_VALUE_BAD.search(v):
+            continue
+        # `dict[str, str]` values reach here unconstrained, so pydantic has not
+        # refused a lone surrogate (see `Id`), and Python `re` matches through
+        # one happily. A value that cannot be encoded cannot be rendered back
+        # either — it 500ed every later GET /api/settings — and this map filters
+        # rather than rejects, so it is dropped like any other unusable token.
+        try:
+            v.encode("utf-8")
+        except UnicodeEncodeError:
             continue
         out[key] = v
     return out
@@ -712,22 +750,22 @@ class SettingsPatch(BaseModel):
     # Ids of calendars the user has hidden in the calendar view. Empty/absent
     # means every calendar is visible (the default) — an empty list is a real
     # value that clears the set, since the store merge only skips None.
-    hidden_calendars: list[str] | None = None
+    hidden_calendars: list[Id] | None = None
     # Ids of calendars the user has archived: hidden from the calendar view but
     # NOT deleted on the wire (the collection stays intact on Radicale, so its
     # events are still viewable and it can be restored). Like hidden_calendars,
     # an empty list is a real value that clears the set.
-    archived_calendars: list[str] | None = None
+    archived_calendars: list[Id] | None = None
     # Ids of task lists hidden from the combined "All lists" view — the tasks
     # analogue of hidden_calendars. A focused single-list view ignores this set;
     # it only filters the merged view. Empty is a real value (all lists shown).
-    hidden_lists: list[str] | None = None
+    hidden_lists: list[Id] | None = None
     # Named groupings of task lists shown in the tasks sidebar (see TaskGroup).
     # The whole array is replaced on each write; an empty list clears grouping.
     task_groups: list[TaskGroup] | None = None
     # Ids of task groups the user has collapsed in the sidebar (member lists
     # hidden from the rail until expanded). Empty means every group is expanded.
-    collapsed_groups: list[str] | None = None
+    collapsed_groups: list[Id] | None = None
     # `taskKey`s — `list\0uid` — of tasks whose subtasks are folded away in the
     # tasks view. Not bare UIDs: a CalDAV UID is unique per COLLECTION, so the
     # same one can live in two lists and each copy folds independently. Bare
@@ -736,7 +774,7 @@ class SettingsPatch(BaseModel):
     # Nesting is arbitrarily deep, so this is how a large tree stays readable;
     # empty means everything is expanded. Pruned client-side against the tasks
     # on hand.
-    collapsed_tasks: list[str] | None = None
+    collapsed_tasks: list[Id] | None = None
     # How long a login lasts before it has to be repeated, in seconds. Only the
     # values in _SESSION_TTLS are accepted. Absent means the deployment's own
     # TASKS_SESSION_TTL, which is what this used to be the only way to set.
@@ -772,7 +810,7 @@ class SettingsPatch(BaseModel):
     # made. Tasks on the calendar are an overlay on a view that did not have
     # them, so nothing appears until a list is opted in. Empty is the default
     # and also a real value (clears the set).
-    calendar_task_lists: list[str] | None = None
+    calendar_task_lists: list[Id] | None = None
     # Whether completed/cancelled tasks stay on the calendar. Absent means the
     # default (hidden), matching show_completed_tasks; False is a real value.
     calendar_show_done_tasks: bool | None = None
@@ -1012,6 +1050,22 @@ def _check_status(value: str | None, allowed: tuple[str, ...]) -> str | None:
     return v
 
 
+def _check_priority(value: str | None) -> str | None:
+    """The documented `none|low|medium|high`, or 422.
+
+    `priority_from_label` is `PRIORITY.get(label, 0)`, so anything else meant
+    "none": a typo on PATCH rewrote a task the owner had marked high to
+    PRIORITY:0 on the wire and answered 200. `status` on the same model is
+    refused here and the MCP schema pins an enum, so this was the one door that
+    accepted junk. Case-folded like `_check_status`, for the same reason."""
+    if value is None:
+        return None
+    v = value.strip().lower()
+    if v not in PRIORITY:
+        raise HTTPException(422, f"priority must be one of {', '.join(PRIORITY)}")
+    return v
+
+
 def _parse_datelike(s: str | None) -> date | datetime | None:
     if s is None:
         return None
@@ -1031,7 +1085,7 @@ def _edit_from_create(req: CreateTask) -> TaskEdit | None:
     if req.notes is not None:
         kw["description"] = req.notes
     if req.priority is not None:
-        kw["priority"] = priority_from_label(req.priority)
+        kw["priority"] = priority_from_label(_check_priority(req.priority))
     if req.due is not None:
         kw["due"] = _parse_datelike(req.due)
     if req.start is not None:
@@ -1049,7 +1103,7 @@ def _edit_from_patch(req: EditTask) -> TaskEdit:
     if "notes" in fs:
         kw["description"] = req.notes
     if "priority" in fs:
-        kw["priority"] = priority_from_label(req.priority)
+        kw["priority"] = priority_from_label(_check_priority(req.priority))
     if "due" in fs:
         kw["due"] = _parse_datelike(req.due)        # explicit null clears it
     if "start" in fs:
@@ -1652,13 +1706,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown task {uid}")
         fields = {k: v for k, v in body.model_dump().items() if v is not None}
         return await _run(_svc(request).set_sidecar, href, uid, **fields)
-
-    class EventReminder(BaseModel):
-        """The one app-only field an event carries. Its own model rather than
-        `Sidecar`, because every other field there is a task's — a kanban column
-        or a manual sort order on an event would be accepted and then mean
-        nothing."""
-        notify_minutes_before: int | None = Field(default=None, ge=-1, le=10080)
 
     @api.put("/calendars/{cal_id}/events/{uid}/reminder")
     async def put_event_reminder(request: Request, cal_id: str, uid: str,
@@ -2365,6 +2412,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # away by its own counter rather than spending from the shared pool, or
         # one address could empty the budget for everyone.
         if not hash_budget.take():
+            # No hash ran, so this was not a guess: hand the reservation back.
+            # Without this a drained bucket charged the caller a failure per
+            # refusal, and the bucket is drained by the ATTACKER — ~6 wrong
+            # guesses a minute over rotating /64s keep it dry indefinitely.
+            # The owner, retrying their CORRECT password as the header told
+            # them to, hit their fifth refusal and `attempt()` locked their key
+            # for 900 s: the fifteen-minute wall HashBudget exists to prevent,
+            # outliving the attacker stopping. `release` is the shape for this
+            # (reserve up front, release when the outcome did not happen), and
+            # the booking routes already use it that way.
+            authenticator.limiter.release(key)
             raise HTTPException(
                 status.HTTP_429_TOO_MANY_REQUESTS,
                 "too many attempts, try later",
