@@ -272,11 +272,7 @@ export function SettingsMenu({
                 {tr('settings.appearance.customize')}
               </button>
             </div>
-            <div className="hintline">
-              Customize opens the full editor over the design system — every
-              color token, the corner radius, the text scale and the type
-              families — and saves what you make as a named theme.
-            </div>
+            <div className="hintline">{tr('settings.appearance.hint')}</div>
             <DesktopSection />
           </>
         )}
@@ -298,11 +294,7 @@ export function SettingsMenu({
                 {tr(calendarFitKey(calFit))}
               </button>
             </div>
-            <div className="hintline">
-              A fixed calendar window fits the whole month in the pane: every week
-              is the same height, and a day with more than fits collapses into
-              “+N more”. Dynamic lets a busy week grow and the grid scroll.
-            </div>
+            <div className="hintline">{tr('settings.calendarFit.hint')}</div>
 
             <div className="menu-head">{tr('settings.archivedCalendars')}</div>
             </>)}
@@ -310,12 +302,7 @@ export function SettingsMenu({
               onChange={onArchivedCalsChange} onExpire={onExpire}
               viewing={viewingCal} onViewing={setViewingCal} />
             {!viewingCal && (
-              <div className="hintline">
-                Archiving hides a calendar without deleting it. Lists and
-                calendars live on the Radicale CalDAV server — changes there show
-                up in every connected client, but an archive is Smylte's own and
-                the collection stays on the wire.
-              </div>
+              <div className="hintline">{tr('settings.archived.hint')}</div>
             )}
           </>
         )}
@@ -330,10 +317,7 @@ export function SettingsMenu({
                   ? 'settings.completedTasks.shown' : 'settings.completedTasks.hidden')}
               </button>
             </div>
-            <div className="hintline">
-              Whether completed tasks stay in the main view. The sidebar's
-              “View completed” works either way.
-            </div>
+            <div className="hintline">{tr('settings.completedTasks.hint')}</div>
           </>
         )}
 
@@ -389,10 +373,7 @@ export function SettingsMenu({
                 {tr(sessionKey(sessionTtl))}
               </button>
             </div>
-            <div className="hintline">
-              A shorter sign-in applies at once, on this device and any other. A
-              longer one starts from your next sign-in.
-            </div>
+            <div className="hintline">{tr('settings.session.hint')}</div>
 
             <div className="menu-head">{tr('settings.connectedApps')}</div>
             <ConnectionsSection onExpire={onExpire} />

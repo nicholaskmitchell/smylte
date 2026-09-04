@@ -134,7 +134,15 @@ function MinutesRow({ id, label, value, bounds, unit, zero, onCommit }: {
           min={bounds[0]} max={bounds[1]} value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onBlur={commit}
-          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commit() } }} />
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') { e.preventDefault(); commit() }
+            // Escape abandons the edit. It does NOT close the settings sheet
+            // from under a half-typed number — `useEscape` is bound to the
+            // window and would unmount the panel before any blur could commit,
+            // so the propagation stop is what keeps "45" from vanishing. The
+            // capacity field in the same panel has had this branch all along.
+            if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setDraft(String(value)) }
+          }} />
         <span className="hintline">{zero && value === 0 ? zero : unit}</span>
       </span>
     </div>

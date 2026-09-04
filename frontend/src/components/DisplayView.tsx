@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { api, type DisplayFrame, type DisplayItem, type DisplaySource } from '../api'
+import { deviceLanguage, isLanguage } from '../lang'
+import { translate } from '../i18n/index'
 
 // The page at /display/<token>: a screen on a wall.
 //
@@ -14,6 +16,13 @@ import { api, type DisplayFrame, type DisplayItem, type DisplaySource } from '..
 // string already rendered in the owner's language and clock setting, because the
 // same frame is rasterized server-side for panels with no browser, and two
 // formatters would drift. See backend tasksd/display/frame.py.
+//
+// The three strings this page authors ITSELF — the stale strip and the two
+// lines of the gone card — are states the frame cannot describe, and they take
+// the frame's language too: `translate` and `deviceLanguage` are the same
+// React-free leaves BookingPage borrows, not the authed shell's provider. A
+// German household's hallway panel used to say "Heute", "Gewohnheiten" and then
+// "Not updated recently" across the bottom.
 
 // How long a fetch may hang before the timer gives up on it. A wall panel is
 // usually on wifi at the edge of its range, and a half-open socket that never
@@ -131,14 +140,20 @@ export function DisplayView({ token }: { token: string }) {
   const staleAfter = Math.max(STALE_AFTER_MS, seconds * STALE_POLLS * 1_000)
   const stale = fetchedAt !== null && now - fetchedAt > staleAfter
 
+  // The owner's language, from the last frame this screen drew. `gone` does
+  // not clear the frame, so a display that was paired once still knows it; a
+  // 404 on the very first fetch has nothing better than the device's own.
+  const lang = frame && isLanguage(frame.language) ? frame.language : deviceLanguage()
+  const tr = (key: string) => translate(lang, key)
+
   return (
     <div className={`display display--${palette}`} data-mode={frame?.display.mode ?? 'calendar'}>
       {gone ? (
         // The one message this page will ever show instead of content, and it
         // is addressed to whoever walks up to the screen — not to a developer.
         <div className="display__gone">
-          <p className="display-title display__gone-title">This display is no longer connected.</p>
-          <p className="display__gone-hint">Pair it again from Settings → Displays.</p>
+          <p className="display-title display__gone-title">{tr('display.gone')}</p>
+          <p className="display__gone-hint">{tr('display.goneHint')}</p>
         </div>
       ) : !frame ? (
         // Deliberately blank rather than a spinner. A spinner on a wall panel
@@ -150,7 +165,7 @@ export function DisplayView({ token }: { token: string }) {
           {frame.calendar ? <CalendarFace frame={frame} /> : null}
           {frame.habits ? <HabitsFace frame={frame} /> : null}
           {frame.now ? <NowFace frame={frame} /> : null}
-          {stale ? <div className="display-label display__stale">Not updated recently</div> : null}
+          {stale ? <div className="display-label display__stale">{tr('display.stale')}</div> : null}
         </>
       )}
     </div>
@@ -625,9 +640,17 @@ export function fitNow(
       break
     }
   }
-  // Restored: React owns the size, and leaving the probe's last values on the
-  // node would show a frame at the wrong one before the state lands.
-  title.style.fontSize = ''
+  // LEFT ON THE NODE at the size chosen, not cleared for React to rewrite.
+  // Clearing it worked only while the fit VALUE changed: the ResizeObserver's
+  // initial notification re-runs this in the same frame as the first pass,
+  // and when it returns the same number React diffs `{fontSize:'80px'}`
+  // against `{fontSize:'80px'}`, writes nothing, and the node is left with no
+  // inline size — the headline painted at the stylesheet's 7vh fallback,
+  // 33.6px at 800x480 where the fit said 80, the bottom half of the panel
+  // empty. Measured in Chromium; `backlog.sep03.display.browser.test.tsx`
+  // pins it. `NowFace` still writes the same value through its style prop, so
+  // the two agree by construction and a frame never shows a probe size.
+  title.style.fontSize = `${size}px`
   title.style.webkitLineClamp = clamp
   return { size, ...shown }
 }
@@ -643,13 +666,22 @@ function useNowFit(root: React.RefObject<HTMLDivElement | null>, deps: unknown) 
       if (got) setFit(got)
     }
     measure()
+    // Once more when the webfont lands. The first pass usually runs on
+    // fallback metrics — Fraunces loads lazily, when a rule first matches —
+    // and a size fitted for Georgia is a few px wrong for the face that then
+    // paints. Nothing else refires on a font swap: the box does not resize.
+    // `document.fonts` is absent under jsdom, hence the guard.
+    let alive = true
+    if (typeof document !== 'undefined' && document.fonts?.ready) {
+      void document.fonts.ready.then(() => { if (alive) measure() })
+    }
     // Feature-detected for the same reason the other two hooks are: on a kiosk
     // webview without one, `new ResizeObserver` throws inside the layout effect
     // and takes the whole page with it.
-    if (typeof ResizeObserver === 'undefined') return
+    if (typeof ResizeObserver === 'undefined') return () => { alive = false }
     const ro = new ResizeObserver(measure)
     if (root.current) ro.observe(root.current)
-    return () => ro.disconnect()
+    return () => { alive = false; ro.disconnect() }
   }, [root, deps])
   return fit
 }
