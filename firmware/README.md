@@ -99,6 +99,17 @@ real pressure. Two consequences visible in the code:
   paints as a calendar torn across the middle. If the stream ends early the
   frame is discarded and the ETag is *not* saved, so the next poll refetches.
 
+## Wifi drops
+
+The join is not for life. On the rp2/cyw43 port the station does **not**
+re-associate on its own once the access point goes away — after a router reboot
+or a channel change `wlan.isconnected()` stays `False` until something calls
+`connect()` again. So the loop checks the link at the top of every cycle and
+calls `connect_wifi()` again when it is down, which retries for a while and then
+`machine.reset()`s the board if the network stays gone. Between the drop and the
+re-join the panel keeps showing the last good frame, which is the whole
+advantage of e-paper; what it must never do is keep showing it forever.
+
 ## Deep sleep
 
 `main.py` uses `machine.lightsleep`, which retains RAM — so the ETag survives as

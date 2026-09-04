@@ -332,7 +332,24 @@ def _todays_events(s: Sweep) -> list[tuple[datetime, str, bool]]:
     out: list[tuple[datetime, str, bool]] = []
     for occ in _occurrences(s, start_of_day, end_of_day):
         if occ.get("all_day"):
-            out.append((start_of_day, occ.get("summary") or "(untitled)", True))
+            # Filtered like the timed branch below, which this one was not:
+            # `_occurrences` widens the SQL window by a day each side and
+            # leaves the precise cut to the caller, and an all-day row was
+            # appended unconditionally — so yesterday's (with the DTEND every
+            # client writes), tomorrow's and the day after's all landed under
+            # today's headline and in its count. A DATE start parses to local
+            # midnight; DTEND is exclusive and absent means one day. The
+            # overlap test rather than "starts today" keeps a three-day trip
+            # in the digest on its middle day, which is when the owner most
+            # wants reminding of it.
+            first = _instant(occ, s)
+            if first is None:
+                continue
+            first = first.astimezone(s.tz) if s.tz else first
+            last = _instant({"start": occ.get("end")}, s) if occ.get("end") else None
+            last = (last.astimezone(s.tz) if s.tz else last) if last else first + timedelta(days=1)
+            if first < end_of_day and last > start_of_day:
+                out.append((start_of_day, occ.get("summary") or "(untitled)", True))
             continue
         when = _instant(occ, s)
         if when is not None and start_of_day <= when.astimezone(s.tz) < end_of_day:

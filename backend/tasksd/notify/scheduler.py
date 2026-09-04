@@ -53,6 +53,39 @@ LEDGER_RETENTION = timedelta(days=30)
 _URGENCY = {"item_reminder": 0, "event_starting": 1, "daily_digest": 2}
 
 
+def loud_deliveries_since(conn, stamp: str) -> int:
+    """How many BUZZES have gone out since `stamp` — the count behind the ceiling.
+
+    Not `store.loud_notifications_since`, which counts every `silent=0` row and
+    disagrees with the in-sweep counter below in two ways. A loud send Telegram
+    refused settles as `ok=0, silent=0` and was charged on every later sweep,
+    although `_dispatch` charges a buzz only `if outcome.ok` — eight refusals
+    silenced the day. That half is fixed here: a row counts when it went out,
+    or when it is claimed and not yet settled (a crash mid-send, read as SENT
+    the way the store does, because erring quieter is the right direction for a
+    noise ceiling to be wrong in).
+
+    The other half is NOT fixed here, and knowingly. A batch settles one row per
+    OCCASION and `_batches` promises "only the delivery is combined", so the
+    07:30 morning message — four occasions, one buzz — still spends four of the
+    eight slots on every later sweep. Charging it once needs the ledger to say
+    which rows one message carried, and no existing column can say so honestly:
+    `silent` is how the owner sees what the ceiling swallowed (Settings shows
+    it), `settled_at` collides across separate sends within a millisecond, and
+    the keys are the claim's identity. The fix is a per-delivery column in
+    `notification_deliveries` — Telegram's `message_id`, which `SendResult`
+    already carries — written by `settle_notification` and counted here with
+    `COUNT(DISTINCT ...)`; see the strict xfail in
+    tests/test_backlog_sep03_mcp_notify.py, which turns green the day it lands.
+    """
+    row = conn.execute(
+        "SELECT COUNT(*) FROM notification_deliveries "
+        "WHERE claimed_at >= ? AND silent = 0 AND (ok = 1 OR settled_at IS NULL)",
+        (stamp,),
+    ).fetchone()
+    return int(row[0]) if row else 0
+
+
 @dataclass
 class SweepResult:
     considered: int = 0
@@ -217,7 +250,7 @@ class Notifier:
         # every message in this sweep count ITSELF against the ceiling — which
         # silenced the eighth message of the day rather than the ninth, and
         # silenced both of a pair when only the second should have been.
-        loud_today = self._svc.notifications(store.loud_notifications_since, midnight)
+        loud_today = self._svc.notifications(loud_deliveries_since, midnight)
 
         # Then claim, all of it, under the lock. Anything already said drops out
         # here and never reaches the transport.

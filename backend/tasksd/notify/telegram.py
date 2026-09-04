@@ -196,6 +196,24 @@ class TelegramSender:
         for attempt in range(1, self._max_attempts + 1):
             try:
                 resp = self._http.post(url, json=payload)
+            except httpx.InvalidURL as exc:
+                # NOT an `HTTPError` in httpx 0.28, so the arm below did not
+                # catch it — and it is raised for any non-printable ASCII in
+                # the URL, i.e. for a token pasted with an interior tab or
+                # newline. That escaped `send()`'s "never raises" contract at
+                # the worst moment: `_dispatch` had already claimed every
+                # pending row, so each sweep claimed the day's digest and died,
+                # the rows stayed unsettled (read as SENT) and were never
+                # delivered, and the test-send endpoint answered a 500 instead
+                # of the sentence it exists to give. Permanent: the same string
+                # fails the same way until it is retyped, so say that.
+                return SendResult(
+                    False,
+                    error=_redact(
+                        f"the bot token contains a character that cannot go in "
+                        f"a URL ({exc}); paste it again", self._token),
+                    attempts=attempt, permanent=True,
+                )
             except httpx.HTTPError as exc:
                 # Connection reset, DNS, timeout — transient by nature, and the
                 # exception text carries the URL (and so the token).
