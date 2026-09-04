@@ -78,6 +78,34 @@ def _as_dt(value: date | datetime | None) -> datetime | None:
     return datetime.combine(value, time_of_day.min)
 
 
+def _in_zone(value: date | datetime | None, zone) -> datetime | None:
+    """`_as_dt`, resolved in the OWNER's zone when they have set one.
+
+    `_as_dt` flattens to the SERVER's wall clock, which in the ordinary Docker
+    deployment is UTC while the owner is somewhere else. `find_free_time` built
+    its 09:00-17:00 window and placed every event in that frame — a floating
+    10:30 (this app's own writes, the owner's wall clock everywhere else in the
+    app) and a foreign 15:00Z sat five hours apart when they were really
+    adjacent, the window covered 04:00-12:00 Chicago, and the answer was naive
+    text a model read as the owner's hours. Closed findings #24/#163 fixed the
+    same server-vs-owner frame for `list_tasks`; this is the events half.
+
+    Same rule as `due.instant_in`: a naive value is the owner's wall clock and
+    is given `zone`; an aware one keeps its instant and is re-expressed in
+    `zone`; an all-day value is midnight in `zone`. The result is AWARE, so
+    `isoformat()` carries the offset — a slot that says `-05:00` cannot be
+    misread. With no zone set this is `_as_dt`, naive and server-local, which is
+    what every existing test on this path pins.
+    """
+    if zone is None:
+        return _as_dt(value)
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.astimezone(zone) if value.tzinfo else value.replace(tzinfo=zone)
+    return datetime.combine(value, time_of_day.min, tzinfo=zone)
+
+
 # `fullmatch` at the call site, not `match`: `$` also matches before a trailing
 # newline. The caller's `.strip()` happens to cover this one today — which is
 # exactly why it is worth fixing at the pattern, where the guarantee belongs.
@@ -328,7 +356,7 @@ def _not_found(message: str):
         raise ToolError(message) from None
 
 
-def _event_order(row: dict) -> tuple:
+def _event_order(row: dict, zone=None) -> tuple:
     """Sort key for a merged event list: INSTANT first, then a total tie-break.
 
     This used to be `(row["start"] or "", row["summary"] or "")` — a lexical
@@ -347,6 +375,12 @@ def _event_order(row: dict) -> tuple:
     An unreadable or absent start sorts last rather than raising — these rows
     come off the wire from other clients. uid and recurrence_id complete the
     order so it is total, the way `_intrinsic_order` is.
+
+    `zone` is the owner's, the same one `_in_display_order` sorts tasks by. A
+    floating start is the owner's wall clock, and read as the server's it
+    landed on the wrong instant by the whole offset — so with the process in
+    UTC and the owner in Chicago, a floating 10:30 (15:30Z) sorted BEFORE a
+    foreign 15:00Z. `_instant_in` is the one resolution rule for that.
     """
     raw = row.get("start")
     when = None
@@ -356,10 +390,10 @@ def _event_order(row: dict) -> tuple:
         except ToolError:
             parsed = None
         if parsed is not None:
-            when = _as_dt(parsed)
+            when = _instant_in(parsed, zone)
     return (
         when is None,                       # undated / unreadable last
-        when or datetime.min,   # naive, matching `_as_dt`'s output
+        when if when is not None else 0.0,
         row.get("summary") or "",
         row.get("uid") or "",
         row.get("recurrence_id") or "",
@@ -392,7 +426,11 @@ class McpApi:
         rather than break every task listing. Read through whatever the service
         exposes, so a stub without settings still works.
         """
-        getter = getattr(self._svc, "get_settings", None)
+        # `getattr` on the service too, not just on its settings: `find_free_time`
+        # is exercised in places over a bare `McpApi.__new__` with `list_events`
+        # stubbed, and "no service at all" degrades the same way as "a service
+        # with no settings".
+        getter = getattr(getattr(self, "_svc", None), "get_settings", None)
         if getter is None:
             return None
         try:
@@ -672,7 +710,8 @@ class McpApi:
         rows: list[dict] = []
         for href in self._event_calendars(calendar_id):
             rows.extend(self._svc.events_in_range(href, s.isoformat(), e.isoformat()))
-        rows.sort(key=_event_order)
+        zone = self._home_zone()
+        rows.sort(key=lambda row: _event_order(row, zone))
         return rows
 
     def get_event(self, calendar_id, uid):
@@ -849,12 +888,17 @@ class McpApi:
         usually means "this day is spoken for", and reporting the day as wide
         open because the event carries no times would be actively misleading.
         """
-        s, e, sd, ed = self._range(start, end)
+        s, e, _, _ = self._range(start, end)
         open_from = _hhmm(day_start, field="day_start")
         open_to = _hhmm(day_end, field="day_end")
         if open_to <= open_from:
             raise ToolError("day_end must be later than day_start.")
         span = timedelta(minutes=max(5, int(minutes)))
+        # The OWNER's zone, for the window, the events and the answer alike —
+        # see `_in_zone`. Everything below is either aware in `zone` or, with
+        # none set, naive and server-local; never a mix.
+        zone = self._home_zone()
+        sd, ed = _in_zone(s, zone), _in_zone(e, zone)
 
         busy: list[tuple[datetime, datetime]] = []
         for event in self.list_events(start, end, calendar_id):
@@ -870,10 +914,10 @@ class McpApi:
             if event.get("busy") is False:
                 continue
             raw_start = _parse_dt(event.get("start"), field="start")
-            b_start = _as_dt(raw_start)
+            b_start = _in_zone(raw_start, zone)
             if b_start is None:
                 continue
-            b_end = _as_dt(_parse_dt(event.get("end"), field="end"))
+            b_end = _in_zone(_parse_dt(event.get("end"), field="end"), zone)
             if b_end is None:
                 # DURATION is the other half of the pair — an event carries one
                 # or the other, never both — so it has to be read before any
@@ -905,23 +949,34 @@ class McpApi:
                 #   nominal-> added to that local WALL CLOCK afterwards.
                 #
                 # `advance` does this split too, but it can only do it correctly
-                # given a value carrying a real zone, and nothing here has one:
-                # `normalize_offset` has already re-expressed the start as UTC,
-                # and `.astimezone()` yields a FIXED OFFSET rather than a zone,
-                # so nominal arithmetic on either cannot see a transition. Hence
-                # the split is done here, against `split_duration`, which is the
-                # same decomposition `advance` uses.
+                # given a value carrying a real zone, and with no home zone set
+                # nothing here has one: `normalize_offset` has already
+                # re-expressed the start as UTC, and `.astimezone()` yields a
+                # FIXED OFFSET rather than a zone, so nominal arithmetic on
+                # either cannot see a transition. Hence the split is done here,
+                # against `split_duration`, which is the same decomposition
+                # `advance` uses.
                 #
                 # Checked both ways round: `P1D` from 09:00 the day before the
                 # fall-back must end 09:00 the next day (25 real hours), and
                 # `PT2H` from 01:30 before the spring-forward must end 04:30
                 # (2 real hours). `P1DT2H` needs both halves at once.
+                #
+                # The exact half goes onto the INSTANT — the start re-expressed
+                # in UTC, where there are no transitions — and the result is
+                # brought back into the working frame before the nominal half
+                # is added to its wall clock. An aware start names its own
+                # instant; a floating one has only the frame `_in_zone` gave
+                # it, the owner's zone or the server's with none set.
                 parts = split_duration(event.get("duration"))
                 length = parse_duration(event.get("duration"))
                 if parts is not None:
                     nominal, exact = parts
-                    b_end = _as_dt(raw_start + exact if isinstance(raw_start, datetime)
-                                   else raw_start) + nominal
+                    anchor = (raw_start if isinstance(raw_start, datetime) and raw_start.tzinfo
+                              else b_start)
+                    if anchor.tzinfo is None:
+                        anchor = anchor.astimezone()
+                    b_end = _in_zone(anchor.astimezone(timezone.utc) + exact, zone) + nominal
                 elif length:
                     # Unparseable text but a usable total: no worse off than the
                     # plain addition this replaced.
@@ -945,9 +1000,11 @@ class McpApi:
 
         free: list[dict] = []
         day = sd.date()
-        while datetime.combine(day, time_of_day.min) < ed:
-            window_start = max(datetime.combine(day, open_from), sd)
-            window_end = min(datetime.combine(day, open_to), ed)
+        # `isoformat` below carries the offset whenever `zone` is set, so a slot
+        # reads `2026-09-08T11:00-05:00`: the owner's hour, and provably so.
+        while datetime.combine(day, time_of_day.min, tzinfo=zone) < ed:
+            window_start = max(datetime.combine(day, open_from, tzinfo=zone), sd)
+            window_end = min(datetime.combine(day, open_to, tzinfo=zone), ed)
             cursor = window_start
             for b_start, b_end in merged:
                 if b_end <= cursor or b_start >= window_end:
@@ -1341,6 +1398,21 @@ class McpApi:
                 "Pass move_to on its own. Moving an entry to another day is "
                 "already an answer about it — done and dropped are the other "
                 "two, and a row cannot carry more than one."
+            )
+        if move_to is not None and (position is not None or estimate_minutes is not None):
+            # Not a contradiction, but a value with nowhere to land: the roll
+            # branch below returns the stamped SOURCE row and never reaches
+            # `patch_day_entry`, so an estimate or position sent alongside was
+            # applied to neither day and the call still reported success —
+            # "move it to Thursday and call it 30 minutes" came back with the
+            # old 10. The house rule is that a stated field is applied or the
+            # call is refused, never silently dropped; and a position on the
+            # source day is meaningless for a row that has just left it, while
+            # the target row has its own entry_id to set either on.
+            raise ToolError(
+                "Pass move_to on its own. The row that arrives on the other day "
+                "has its own entry_id — call smylte_review_day for that day and "
+                "set estimate_minutes or position on it there."
             )
         resolved = self._day_or_today(day)
         # NOT `_writable_day`, which would refuse the whole call: this tool has
