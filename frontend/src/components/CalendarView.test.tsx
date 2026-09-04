@@ -258,10 +258,13 @@ describe('recurrence scope', () => {
     await user.click(await screen.findByText(label))
 
     await waitFor(() => expect(m.patchEvent).toHaveBeenCalled())
-    expect(body('patchEvent')).toMatchObject({
-      scope, recurrence_id: '2026-03-09T09:00:00',
-      start: '2026-03-09T09:00', end: '2026-03-09T09:30',
-    })
+    expect(body('patchEvent')).toMatchObject({ scope, recurrence_id: '2026-03-09T09:00:00' })
+    // Since the 2026-09-03 sweep an untouched slot is not restated: the modal's
+    // pickers are a lossy round trip for anything the app did not write itself
+    // (a TZID, seconds), and the backend seeds an override's DTSTART from the
+    // slot the anchor names. Only a moved time rides on the body.
+    expect(body('patchEvent')).not.toHaveProperty('start')
+    expect(body('patchEvent')).not.toHaveProperty('end')
   })
 
   it.each([
@@ -338,7 +341,11 @@ describe('all-day end conversion', () => {
 
     await user.click(screen.getByText('Save'))
     await waitFor(() => expect(m.patchEvent).toHaveBeenCalled())
-    expect(body('patchEvent')).toMatchObject({ start: '2026-03-07', end: '2026-03-10' })
+    // A save that never touched the pickers sends no dates at all (2026-09-03
+    // sweep), so the inclusive picker cannot be written back as-is by accident.
+    // The exclusive conversion on a REAL change is the next case.
+    expect(body('patchEvent')).not.toHaveProperty('start')
+    expect(body('patchEvent')).not.toHaveProperty('end')
   })
 
   it('keeps an all-day span the same length when only the start moves', async () => {
@@ -390,9 +397,12 @@ describe('DURATION-only events', () => {
     setField('Title', 'Renamed')
     await user.click(screen.getByText('Save'))
     await waitFor(() => expect(m.patchEvent).toHaveBeenCalled())
-    expect(body('patchEvent')).toMatchObject({
-      summary: 'Renamed', start: '2026-03-02T09:00', end: '2026-03-02T10:30',
-    })
+    // Preserved by not being sent: since the 2026-09-03 sweep a save that never
+    // touched the pickers carries no start or end, so the DURATION the author
+    // wrote is left exactly as it is rather than re-expressed as a DTEND.
+    expect(body('patchEvent')).toMatchObject({ summary: 'Renamed' })
+    expect(body('patchEvent')).not.toHaveProperty('start')
+    expect(body('patchEvent')).not.toHaveProperty('end')
   })
 
   it('sends no end at all when the span cannot be derived', async () => {

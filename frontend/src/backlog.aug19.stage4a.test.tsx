@@ -678,9 +678,11 @@ describe('2026-08-19 — the calendar grid', () => {
 
     await user.click(screen.getByText('Save'))
     await waitFor(() => expect(m.patchEvent).toHaveBeenCalled())
-    expect(patchBody()).toMatchObject({
-      start: '2026-03-02T20:00', end: '2026-03-03T00:00',
-    })
+    // The picker assertion above is the control. On the wire, a tick-and-untick
+    // is no change at all, and since the 2026-09-03 sweep an unchanged time is
+    // not restated — the event keeps its own times by never being asked to.
+    expect(patchBody()).not.toHaveProperty('start')
+    expect(patchBody()).not.toHaveProperty('end')
   })
 })
 

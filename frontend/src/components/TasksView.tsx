@@ -9,6 +9,7 @@ import {
 import { fmtClock, fmtDue, inputLang } from '../time'
 import { sortByCompletion, sortTasks, taskKey } from '../order'
 import { useTimeFormat } from '../timeformat'
+import { useToday } from '../hooks'
 import { AddMultipleModal } from './AddMultipleModal'
 import { dateOut, TaskModal } from './TaskModal'
 import { Sidebar } from './Sidebar'
@@ -442,7 +443,14 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
     return Array.from({ length: span }, (_, i) => addDays(start, i))
   }, [anchor, view, span])
 
-  const todayKey = ymd(new Date())
+  // Through `useToday`, not `ymd(new Date())` read once per render: nothing
+  // re-renders this tab at midnight on its own (the provider changes only on an
+  // SSE rev bump, which an idle account never produces), so a 3-day view left
+  // open overnight kept the `today` accent, the "Today" label and the overdue
+  // pool on yesterday's column. Home and Focus already rolled over via the
+  // hook. The `anchor` the columns are laid out from stays as it is — only the
+  // IDENTITY of today moves, so the columns do not jump under the reader.
+  const todayKey = useToday()
   const dueDay = (t: Task) => (t.due ? dayKey(t.due) : null)
   // The dedicated "View completed" pane: every done/cancelled top-level task
   // (respecting hidden lists via `done`), most-recent due first, undated last.
@@ -938,7 +946,16 @@ function DayCard({ task, showDate, dot, onToggle, onOpen, onDrag }: {
       <div className={`pri-bar ${priClass}`} />
       <button className={`check ${task.completed ? 'on' : ''}`} title={tr('tasks.toggleComplete')}
         onClick={() => onToggle(task)}>✓</button>
-      <div className="day-card-body" onClick={() => onOpen(task)}>
+      {/* The role/tabIndex/keydown trio the calendar's task chip has: this is
+          the card's only route to the editor, and a plain div with onClick
+          left the check button as the sole thing a keyboard could reach. */}
+      <div className="day-card-body" role="button" tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key !== 'Enter' && e.key !== ' ') return
+          e.preventDefault()
+          onOpen(task)
+        }}
+        onClick={() => onOpen(task)}>
         <div className="day-card-title">
           {dot !== undefined && <span className="list-dot" style={dot ? { background: dot } : undefined} />}
           {task.summary || tr('common.untitled')}
@@ -1001,7 +1018,19 @@ function TaskRow({ task, depth = 0, dot, progress, collapsed, onCollapse,
       )}
       <button className={`check ${task.completed ? 'on' : ''}`} title={tr('tasks.toggleComplete')}
         onClick={() => onToggle(task)}>✓</button>
-      <div className="task-body" style={{ cursor: 'pointer' }} onClick={() => onOpen(task)}>
+      {/* Keyboard-openable, like the calendar's chips and DayPopover's rows.
+          Tabbing through a row reached the twisty, the checkbox, "+ sub" and
+          "✕" — every control but the one that opens the task, and for an
+          undated task this row is the only place in the app it can be opened
+          from at all. The closed month-grid finding named `.task-body` as the
+          same shape; its fix stopped at the calendar. */}
+      <div className="task-body" style={{ cursor: 'pointer' }} role="button" tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key !== 'Enter' && e.key !== ' ') return
+          e.preventDefault()
+          onOpen(task)
+        }}
+        onClick={() => onOpen(task)}>
         <div className="task-title">
           {dot !== undefined && <span className="list-dot" style={dot ? { background: dot } : undefined} />}
           {label} {task.cancelled && <span className="chip">{tr('tasks.wontDo')}</span>}
