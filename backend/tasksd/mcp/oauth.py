@@ -304,14 +304,16 @@ class OAuthServer:
         client_id = secrets.token_urlsafe(24)
         secret_plain = None if auth_method == "none" else secrets.token_urlsafe(32)
         name = body.get("client_name")
+        # Truncated AND made encodable, once: it is stored, then read back and
+        # rendered on the consent screen and the connections list, and echoed
+        # in the registration response below.
+        safe_name = wire_safe(name)[:200] if isinstance(name, str) else None
         now = self._now()
         store.create_oauth_client(
             conn,
             client_id=client_id,
             client_secret_hash=sha256_hex(secret_plain) if secret_plain else None,
-            # Truncated AND made encodable: it is stored, then read back and
-            # rendered on the consent screen and the connections list.
-            client_name=wire_safe(name)[:200] if isinstance(name, str) else None,
+            client_name=safe_name,
             redirect_uris=clean,
             scope=scope_str(requested),
             now=now,
@@ -325,8 +327,12 @@ class OAuthServer:
             "token_endpoint_auth_method": auth_method,
             "scope": scope_str(requested),
         }
-        if isinstance(name, str):
-            out["client_name"] = str(name)[:200]
+        if safe_name is not None:
+            # The STORED value, not the caller's: `json.loads` hands a lone
+            # surrogate back verbatim, and echoing it here raised in Starlette's
+            # renderer AFTER the row had committed — a 500 for a client that now
+            # exists and whose id the caller never learns.
+            out["client_name"] = safe_name
         if secret_plain:
             # The only time this value exists in the clear. Never expires — a
             # confidential client that loses it re-registers.
@@ -506,6 +512,13 @@ class OAuthServer:
         code = form.get("code") or ""
         if not code:
             raise OAuthError("invalid_request", "code is required")
+        # A `resource` on the exchange is optional, but if sent it must agree
+        # with what the code was bound to. Checked BEFORE the code is consumed:
+        # `take_oauth_code` deletes the row, so a client that sent a malformed
+        # or wrong resource lost its one-shot code to the refusal and had to
+        # restart the whole flow for what is a readable `invalid_target`.
+        if form.get("resource"):
+            self._check_resource(form.get("resource"))
         row = store.take_oauth_code(conn, sha256_hex(code), now=self._now())
         if row is None:
             raise OAuthError("invalid_grant", "the code is unknown, used or expired")
@@ -526,10 +539,6 @@ class OAuthServer:
         if not hmac.compare_digest(digest.encode(), row["code_challenge"].encode()):
             raise OAuthError("invalid_grant", "code_verifier does not match the challenge")
 
-        # A `resource` on the exchange is optional, but if sent it must agree
-        # with what the code was bound to.
-        if form.get("resource"):
-            self._check_resource(form.get("resource"))
         return self._issue_pair(conn, client_id=client["client_id"], scope=row["scope"],
                                 resource=row["resource"], family_id=secrets.token_hex(16))
 
@@ -736,11 +745,27 @@ class OAuthServer:
                              f"resource must be {self.mcp_url}", redirectable=redirectable)
 
 
+# Three helpers below call `urlsplit` on wholly caller-supplied strings, and
+# CPython's urlsplit RAISES: ValueError("Invalid IPv6 URL") for an unmatched `[`
+# in the netloc, and ValueError("netloc ... contains invalid characters under
+# NFKC normalization") for a fullwidth solidus or `@` in the host. The routes
+# catch only OAuthError, so each was a bare 500 — on registration, on the
+# unthrottled GET /oauth/authorize, and on the token exchange. Same class as
+# the `compare_digest` TypeError fixed one statement earlier in
+# `_redirect_allowed`; each caller answers what a wrong-but-parseable value
+# already gets.
+
+
 def _canonical_resource(value: str) -> str:
     """Normalise a resource identifier for comparison. Scheme and host are
     case-insensitive per RFC 3986, and the spec asks clients to accept either
     case for robustness; a trailing slash is dropped for the same reason."""
-    parts = urlsplit(value.strip())
+    try:
+        parts = urlsplit(value.strip())
+    except ValueError:
+        # Unparseable is a resource that cannot be this server's: the caller
+        # gets the same `invalid_target` a wrong one gets, from `_check_resource`.
+        return ""
     return urlunsplit(
         (parts.scheme.lower(), parts.netloc.lower(), parts.path.rstrip("/"), "", "")
     )
@@ -750,7 +775,10 @@ def _check_redirect_uri(uri: str) -> str:
     """A registrable redirect URI: HTTPS, or a loopback address for a native
     client (RFC 8252). Anything else — http to a real host, a custom scheme, a
     fragment — is refused at registration so it can never be redirected to."""
-    parts = urlsplit(uri.strip())
+    try:
+        parts = urlsplit(uri.strip())
+    except ValueError:
+        raise OAuthError("invalid_redirect_uri", "redirect_uri is not a valid URL") from None
     if parts.fragment:
         raise OAuthError("invalid_redirect_uri", "redirect_uri must not carry a fragment")
     host = (parts.hostname or "").lower()
@@ -783,7 +811,12 @@ def _redirect_allowed(presented: str, registered: list[str]) -> bool:
         # and app.py:1316.
         if hmac.compare_digest(presented.encode(), candidate.encode()):
             return True
-    p = urlsplit(presented)
+    try:
+        p = urlsplit(presented)
+    except ValueError:
+        # Not an exact match and not parseable: not registered, which is the
+        # readable answer, rather than a ValueError escaping the GET.
+        return False
     host = (p.hostname or "").lower()
     if p.scheme != "http" or host not in ("localhost", "127.0.0.1", "::1"):
         return False

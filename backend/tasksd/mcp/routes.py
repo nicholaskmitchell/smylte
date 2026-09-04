@@ -51,6 +51,26 @@ _PUBLIC_JSON = {
     "Cache-Control": "public, max-age=300",
 }
 
+# The headers every server-rendered page here carries — the consent screen,
+# its wrong-password re-render, and the notice pages. ONE dict, because the
+# retry used to set only the first two and `CSPMiddleware` then filled in the
+# SPA policy, which carries `form-action 'self'`. csp.py's comment held that
+# the redirect after a form POST is not governed by form-action; Chromium
+# enforces it against the redirect target (Firefox does not — MDN documents the
+# split), so a correct password typed on the retry page reached the server,
+# minted the code, and the browser then refused the 303 to the client's
+# callback. The 60 s code was lost and only a fresh start from the client
+# worked. This policy has no `form-action`, and form-action does not fall back
+# to `default-src`, so the redirect is free — while `default-src 'none'` still
+# means no script, no image and no frame on the page where the owner types
+# their password. X-Frame-Options: the page is ours and frames nothing; a
+# clickjacked approval button would be a real problem.
+_PAGE_HEADERS = {
+    "Cache-Control": "no-store",
+    "X-Frame-Options": "DENY",
+    "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'",
+}
+
 
 def _oauth_error(exc: OAuthError) -> JSONResponse:
     body = {"error": exc.error}
@@ -235,11 +255,7 @@ def register(app, *, settings, authenticator, client_ip, run, login_hashes, hash
             return _authorize_failure(exc, dict(request.query_params))
         return HTMLResponse(
             _consent_page(req, oauth.sign_request(req), issuer=issuer),
-            headers={"Cache-Control": "no-store",
-                     # The consent page is ours and frames nothing; a clickjacked
-                     # approval button would be a real problem.
-                     "X-Frame-Options": "DENY",
-                     "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'"},
+            headers=_PAGE_HEADERS,
         )
 
     @app.post("/oauth/authorize", include_in_schema=False)
@@ -269,7 +285,7 @@ def register(app, *, settings, authenticator, client_ip, run, login_hashes, hash
                 "That sign-in form expired",
                 "Consent forms are only good for a few minutes. Start the "
                 "connection again from your client.",
-            ), status_code=400)
+            ), status_code=400, headers=_PAGE_HEADERS)
 
         if form.get("action") != "approve":
             return RedirectResponse(
@@ -301,7 +317,7 @@ def register(app, *, settings, authenticator, client_ip, run, login_hashes, hash
                     "This application asked for write access only, so limiting "
                     "it to read-only would leave it unable to do anything. "
                     "Start again and approve it in full, or decline it.",
-                ), status_code=400)
+                ), status_code=400, headers=_PAGE_HEADERS)
 
         # The password budget is spent HERE — one unit per password actually
         # verified — and reserved before the await, which is the property
@@ -313,6 +329,16 @@ def register(app, *, settings, authenticator, client_ip, run, login_hashes, hash
         # each time. Charged at the same point for the same reason — a decline
         # never reaches here, so declining still costs nothing.
         if not hash_budget.take():
+            # No hash ran, so this was not a guess: hand the password-budget
+            # reservation back, as /api/login does. The bucket is drained by an
+            # attacker rotating addresses, so without this the OWNER's correct
+            # password — retried every 10 s as the header says — burned through
+            # `consent_limiter` and met its 900 s lockout. That is the
+            # fifteen-minute wall HashBudget was chosen over a counter to
+            # prevent. Not the refund the comment above declines: a decline
+            # never reaches here, and this releases ONE reservation for a
+            # password that was never looked at.
+            consent_limiter.release(limiter_key(client_ip(request)))
             raise HTTPException(
                 status.HTTP_429_TOO_MANY_REQUESTS, "too many attempts, try later",
                 headers={"Retry-After": str(hash_budget.retry_after())},
@@ -345,7 +371,9 @@ def register(app, *, settings, authenticator, client_ip, run, login_hashes, hash
                               grant=form.get("grant") or "full",
                               error="That username or password was not right."),
                 status_code=401,
-                headers={"Cache-Control": "no-store", "X-Frame-Options": "DENY"},
+                # The SAME headers as the first render — see _PAGE_HEADERS for
+                # what the SPA policy did to the retry's redirect.
+                headers=_PAGE_HEADERS,
             )
         consent_limiter.record_success(limiter_key(client_ip(request)))
         # A verified password costs nothing globally — see HashBudget.
@@ -384,7 +412,7 @@ def register(app, *, settings, authenticator, client_ip, run, login_hashes, hash
             )
         return HTMLResponse(
             _notice_page("That connection request was refused", exc.description or exc.error),
-            status_code=exc.status,
+            status_code=exc.status, headers=_PAGE_HEADERS,
         )
 
     # ── token + revocation ───────────────────────────────────────────────────
@@ -562,8 +590,13 @@ label { display: block; margin-bottom: 12px; }
 label:not(.choice) > span { display: block; margin-bottom: 5px;
   font: 500 10px/1 ui-monospace, monospace; letter-spacing: 0.1em;
   text-transform: uppercase; color: #8a7f72; }
+/* 16px, not the body's 15: the floor the SPA enforces on every .input under
+   720px so iOS Safari does not zoom the page on focus (app.css calls it "the
+   third time this exact regression has shipped"). This is the page where the
+   owner types their password from the Claude mobile app. */
 input[type=text], input[type=password] { width: 100%; padding: 9px 11px;
-  border: 1px solid #d6cec2; background: #fff; color: inherit; font: inherit; }
+  border: 1px solid #d6cec2; background: #fff; color: inherit; font: inherit;
+  font-size: 16px; }
 input:focus { outline: 2px solid #d9480f; outline-offset: -1px; }
 .choice { display: flex; gap: 10px; align-items: flex-start; margin-bottom: 14px;
   padding: 11px 13px; border: 1px solid #e4ded5; }
@@ -583,8 +616,14 @@ input:focus { outline: 2px solid #d9480f; outline-offset: -1px; }
    (Cancel left, Connect right) is preserved here; the cost is that Tab
    reaches Connect before Cancel. */
 .actions { display: flex; flex-direction: row-reverse; gap: 10px; margin-top: 20px; }
-button { flex: 1; padding: 10px 14px; border: 1px solid #1a1714; background: #1a1714;
-  color: #faf8f5; font: 500 14px/1 inherit; cursor: pointer; }
+/* Longhands, not `font: 500 14px/1 inherit`: `inherit` is a CSS-wide keyword
+   and not a legal family name, so that shorthand was invalid and dropped
+   whole — the two buttons rendered in Arial at 13.33px, the only elements on
+   the page outside its own font stack. 44px is the touch-target minimum for
+   the two controls the whole flow turns on. */
+button { flex: 1; min-height: 44px; padding: 10px 14px; border: 1px solid #1a1714;
+  background: #1a1714; color: #faf8f5; font-family: inherit; font-weight: 500;
+  font-size: 14px; line-height: 1; cursor: pointer; }
 button.ghost { background: none; color: #1a1714; border-color: #d6cec2; }
 .err { border: 1px solid #c0392b; color: #c0392b; padding: 9px 12px; margin: 0 0 16px;
   font-size: 14px; }
@@ -598,6 +637,10 @@ button.ghost { background: none; color: #1a1714; border-color: #d6cec2; }
   strong { color: #ece7e0; }
   input[type=text], input[type=password] { background: #14120f; border-color: #443d35; color: inherit; }
   .choice { border-color: #332e28; }
+  /* Never overridden before: #6b6157 on the #1c1917 card was 2.89:1, on the
+     two sentences that explain Full access vs Read-only — the text the trust
+     decision is made from. Same tone `p` uses here, 7.3:1. */
+  .choice em { color: #b8b0a6; }
   button { background: #ece7e0; color: #14120f; border-color: #ece7e0; }
   button.ghost { background: none; color: #ece7e0; border-color: #443d35; }
   .foot { border-color: #332e28; }
