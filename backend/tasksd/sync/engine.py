@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from icalendar import Calendar
 
 from .. import ical
+from ..ical.read import unfold
 from ..dav.client import CollectionInfo, DavClient
 from ..dav.errors import (Conflict, DavError, InvalidSyncToken, MalformedResponse,
                           NotFound, PreconditionFailed)
@@ -33,19 +34,30 @@ from ..db.store import tx as _tx
 
 log = logging.getLogger("tasksd.sync")
 
-# Unfolded UID lines, read textually. Only used for a resource whose extraction
-# already failed: we still need to know which UIDs it claims so the resync sweep
-# does not conclude they left the server. Deliberately cheap and forgiving — the
-# body we cannot parse is exactly the one we cannot ask nicely.
-_UID_RE = re.compile(rb"^UID:(.+?)\r?$", re.MULTILINE)
+# UID lines, read textually. Only used for a resource whose extraction already
+# failed: we still need to know which UIDs it claims so the resync sweep does
+# not conclude they left the server. Deliberately cheap and forgiving — the body
+# we cannot parse is exactly the one we cannot ask nicely.
+#
+# Matched against LOGICAL lines, after `unfold`. The scan used to run over the
+# raw bytes one physical line at a time, and RFC 5545 §3.1 folds content lines
+# at 75 octets — icalendar on our own writes, and Radicale on every read, so it
+# does not matter which client wrote it. A UID past ~71 characters (Outlook's
+# `040000008200E00074C5B7101A82E008...` is over a hundred) therefore arrived as
+# `UID:<71 chars>\r\n <rest>`, the match captured the first line only, and the
+# truncated string equalled no cached uid: the guard swept the live item in the
+# one case it exists for. The optional parameter group is cheap tolerance for a
+# `UID;X-FOO=bar:...` a foreign client may write.
+_UID_RE = re.compile(r"^UID(?:;[^:]*)?:(.*)$")
 
 
 def _uids_in(raw: bytes | None) -> set[str]:
-    return {
-        m.group(1).decode("utf-8", "replace").strip()
-        for m in _UID_RE.finditer(raw or b"")
-        if m.group(1).strip()
-    }
+    out: set[str] = set()
+    for line in unfold(raw or b""):
+        m = _UID_RE.match(line)
+        if m and m.group(1).strip():
+            out.add(m.group(1).strip())
+    return out
 
 
 def _restamp_uid(raw: bytes, uid: str) -> bytes:
@@ -72,9 +84,13 @@ class SyncStats:
     collection_href: str
     upserted: int = 0
     removed: int = 0
-    skipped: int = 0                  # malformed resources left uncached this pass
+    skipped: int = 0                  # resources left uncached this pass (malformed or unread)
     full_resync: bool = False
     last_error: str | None = None     # recorded in sync_state.last_error
+    # Of `skipped`, the hrefs whose bytes never arrived (a GET in the per-href
+    # fallback failed in transport). Unlike a malformed body, these are worth
+    # asking for again, so a pass that has any holds its sync token.
+    unread: int = 0
 
 
 def _is_synced_collection(ci: CollectionInfo) -> bool:
@@ -146,7 +162,7 @@ class SyncEngine:
 
     def _apply_incremental(self, collection_href: str, result) -> SyncStats:
         stats = SyncStats(collection_href)
-        bodies = self._multiget(collection_href, [i.href for i in result.changed])
+        bodies = self._multiget(collection_href, [i.href for i in result.changed], stats)
         with _tx(self.conn):
             for item in bodies:
                 if self._upsert_body(collection_href, item, stats):
@@ -156,7 +172,13 @@ class SyncEngine:
                 if uid:
                     store.orphan_sidecar(self.conn, collection_href, uid)
                     stats.removed += 1
-            store.set_sync_token(self.conn, collection_href, result.token,
+            # A href whose GET failed in the fallback is a change we never saw.
+            # Keeping the token we asked with makes the next REPORT list it
+            # again; everything cached this pass stays cached, and the deletions
+            # above are idempotent on replay. See `_get_each`.
+            token = (store.get_sync_token(self.conn, collection_href)
+                     if stats.unread else result.token)
+            store.set_sync_token(self.conn, collection_href, token,
                                  error=stats.last_error)
         return stats
 
@@ -166,7 +188,7 @@ class SyncEngine:
         wire = {i.href: i.etag for i in result.changed}
         known = store.known_etags(self.conn, collection_href)
         to_fetch = [h for h, etag in wire.items() if known.get(h) != etag]
-        bodies = self._multiget(collection_href, to_fetch)
+        bodies = self._multiget(collection_href, to_fetch, stats)
         skipped_uids: set[str] = set()
         with _tx(self.conn):
             for item in bodies:
@@ -187,8 +209,19 @@ class SyncEngine:
                 store.delete_item_by_href(self.conn, collection_href, href)
                 store.orphan_sidecar(self.conn, collection_href, uid)
                 stats.removed += 1
-            store.set_sync_token(self.conn, collection_href, result.token, full=True,
-                                 error=stats.last_error)
+            # An unread href is still on the wire (so the sweep above kept its
+            # row, if any, at its old etag) but was never cached. Recording NO
+            # token — rather than a fresh one — makes the next pass a full
+            # resync again, whose etag comparison re-selects exactly that href;
+            # and it is not a completed full resync, so `last_full_resync_at`
+            # is not stamped. The error still lands in sync_state so the
+            # collection reads as unhealthy meanwhile. See `_get_each`.
+            if stats.unread:
+                store.set_sync_token(self.conn, collection_href, None,
+                                     error=stats.last_error)
+            else:
+                store.set_sync_token(self.conn, collection_href, result.token,
+                                     full=True, error=stats.last_error)
             # gc_orphans is the only permanent deletion of non-derivable state in
             # the app — pins, kanban column, manual order, which no resync can
             # rebuild. Never run it off an incomplete enumeration, and only over
@@ -293,7 +326,8 @@ class SyncEngine:
             return False
         return True
 
-    def _multiget(self, collection_href: str, hrefs: list[str]) -> list:
+    def _multiget(self, collection_href: str, hrefs: list[str],
+                  stats: SyncStats | None = None) -> list:
         out: list = []
         for i in range(0, len(hrefs), self.batch):
             batch = hrefs[i : i + self.batch]
@@ -312,12 +346,37 @@ class SyncEngine:
                 # and silently stops receiving any change from any client.
                 log.warning("multiget failed for %s (%d hrefs), refetching "
                             "singly: %s", collection_href, len(batch), e)
-                out.extend(self._get_each(batch))
+                out.extend(self._get_each(batch, stats))
         return out
 
-    def _get_each(self, hrefs: list[str]) -> list:
+    def _get_each(self, hrefs: list[str], stats: SyncStats | None) -> list:
         """Per-href GET fallback. A missing href is skipped the way multiget
-        skips it; anything else unreadable is left for `_upsert_body` to log."""
+        skips it; a body that arrives but cannot be read is left for
+        `_upsert_body` to log.
+
+        Any other `DavError` — a read timeout, a connection reset during a
+        Radicale restart, a 5xx, a 401 mid-batch — is a href whose bytes we do
+        NOT have. This used to log it and move on, which on the main path would
+        be unthinkable: a transport failure in `multiget` propagates and the
+        pass is retried next poll. Here it was swallowed, counted nowhere, and
+        the pass then committed and advanced the sync token past the change.
+        `_apply_incremental` only ever asks for what changed since the stored
+        token, so the resource was not requested again until its etag next
+        moved: the meeting the owner had just moved on their phone kept its old
+        hour in the calendar, the day view and the public booking page's busy
+        set indefinitely, and `sync_state.last_error` stayed NULL so neither
+        `sync_health` nor the notifier's stale-sync rule had anything to say.
+        On a cold rebuild the resource was never cached at all, and with
+        `stats.skipped` untouched `gc_orphans` still ran off that enumeration.
+
+        Re-raising would restore the main-path contract but recreate the wedge
+        this fallback exists to break, for a resource the server permanently
+        errors on. So the failure is recorded the way a malformed body is —
+        counted in `skipped` (which gates `gc_orphans`) and named in
+        `last_error` — and additionally in `unread`, on which the two commit
+        sites HOLD the token so the href is asked for again next pass. With no
+        `stats` to record against the error propagates, as on the main path.
+        """
         out: list = []
         for href in hrefs:
             try:
@@ -325,7 +384,12 @@ class SyncEngine:
             except NotFound:
                 continue
             except DavError as e:
-                log.warning("skipping unreadable resource %s: %s", href, e)
+                if stats is None:
+                    raise
+                log.warning("could not read resource %s, will retry next pass: %s", href, e)
+                stats.skipped += 1
+                stats.unread += 1
+                stats.last_error = f"unreadable resource {href}: {e}"
         return out
 
     # ── write path ───────────────────────────────────────────────────────────
