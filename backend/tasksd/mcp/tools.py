@@ -297,7 +297,14 @@ def build_tools(api) -> dict[str, Tool]:
         "smylte_search_tasks", "Search tasks",
         "Full-text search over task titles, notes and tags, across every list. "
         "Searches tasks only — use smylte_list_events for calendar entries.",
-        _obj({"query": {"type": "string", "minLength": 1},
+        # `maxLength` is load-bearing, not tidiness. POST /mcp accepts a 1 MB
+        # body and `store.search` turns every whitespace token into an FTS5
+        # prefix phrase whose MATCH cost is quadratic in the term count — on an
+        # EMPTY table, 40k terms took 3 s and the ~500k that fit the body cap
+        # took nine minutes, under the one global service lock, from a grant
+        # holding only mcp:read. 200 characters is more search than anyone
+        # types and is refused by `check_arguments` before the lock is taken.
+        _obj({"query": {"type": "string", "minLength": 1, "maxLength": 200},
               "limit": _LIMIT, "offset": _OFFSET}, ["query"]),
     )
     def _search_tasks(query, limit=None, offset=None):
@@ -568,7 +575,9 @@ def build_tools(api) -> dict[str, Tool]:
                         "Send this entry to this day, 'YYYY-MM-DD'. Creates a "
                         "row there and stamps this one with where it went; "
                         "nothing is deleted. Forward only, and never for a "
-                        "habit occurrence."},
+                        "habit occurrence. Pass it ON ITS OWN: combined with "
+                        "any other field the call is refused, because the row "
+                        "that arrives has its own entry_id to set them on."},
         }, ["entry_id"]),
         scope=SCOPE_WRITE, read_only=False, idempotent=True,
     )
@@ -799,7 +808,9 @@ def build_tools(api) -> dict[str, Tool]:
         "smylte_find_free_time", "Find free time",
         "Free gaps of at least `minutes`, computed across every calendar (or "
         "one). Useful before proposing a meeting time. Considers only the given "
-        "hours of each day, 09:00-17:00 by default.",
+        "hours of each day, 09:00-17:00 by default. Hours are the owner's own "
+        "(their home timezone), and each slot carries that zone's offset when "
+        "one is set.",
         _obj({
             "start": {"type": "string", "description": "Range start, 'YYYY-MM-DD'."},
             "end": {"type": "string", "description": "Range end, exclusive."},

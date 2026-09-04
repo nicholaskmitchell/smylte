@@ -461,8 +461,25 @@ class TaskService:
         with self._lock:
             if self._closed:
                 return []
-            self._engine.discover()
-            collections_changed = self._engine.last_discovery_changed
+            try:
+                self._engine.discover()
+                collections_changed = self._engine.last_discovery_changed
+            except Exception as e:  # noqa: BLE001
+                # Discovery is the sweep's FIRST network call, so an outage
+                # that starts after boot used to raise out of here on every
+                # pass, before the per-collection loop — the only place a
+                # running app ever calls `store.set_sync_error`. Nothing was
+                # recorded, `sync_health()` stayed empty, and the notifier's
+                # sync_stalled rule — the one written for "everything on
+                # screen looks normal and the data is simply frozen" — could
+                # not fire for the commonest freeze there is. Only a restart
+                # during the outage (bootstrap, which guards this call the
+                # same way) ever told the owner. Falling through to the loop
+                # rather than returning: each collection's own sync then
+                # records its own failure, and if discovery alone is broken
+                # while the collections still answer, the items keep syncing.
+                log.warning("discovery failed: %s; syncing the cached collections", e)
+                collections_changed = False
             hrefs = [r["href"] for r in store.get_collections(self._conn)]
         stats: list[SyncStats] = []
         for href in hrefs:
@@ -1039,16 +1056,56 @@ class TaskService:
                 # A time change with "all events" moves the whole series by the
                 # same offset (the master edit below never touches times).
                 self._engine.shift_event(href, uid, recurrence_id, edit)
+            elif (scope == "all" and recurrence_id and edit.dtend is not UNSET
+                    and self._is_recurring(href, uid)):
+                # An END-only change anchored on an occurrence is a series
+                # reschedule too ("extend every standup to 11:00"), and the
+                # master edit below cannot be allowed to take it: it writes the
+                # OCCURRENCE's absolute end as the master DTEND, so a weekly
+                # 10:00-10:30 series from January became a series of
+                # eight-month-long events — 39 September occurrences instead
+                # of 4, and a booking page that showed the owner busy for the
+                # rest of the year. `_check_event_span` waves it through
+                # because the master DTSTART really is before that end.
+                # `shift_series` measures its delta from the new START and has
+                # no way to express "same slot, new duration" without it, so
+                # the honest answer is a refusal that names what to send. The
+                # SPA always pairs the two; the HTTP PATCH and
+                # `smylte_update_event` are the callers that can reach this.
+                raise ValueError(
+                    "changing only the end of a whole series needs its start too: "
+                    "pass start (the occurrence's current start) with end, or use "
+                    "scope='this' to change one occurrence"
+                )
             else:
                 self._engine.edit_event(href, uid, edit)
         self._publish({"type": "event_updated", "list": _slug(href), "uid": uid})
         return self.get_event(href, uid)
 
+    def _is_recurring(self, href: str, uid: str) -> bool:
+        """Whether the cached resource repeats (an RRULE or an RDATE). Called
+        under the lock. An unknown item is simply "not recurring" here — the
+        engine is the one that reports it, with the KeyError the routes map."""
+        row = store.get_item(self._conn, href, uid)
+        return bool(row is not None and row["has_rrule"])
+
     def move_event(self, src_href: str, dst_href: str, uid: str) -> dict[str, Any] | None:
         if src_href == dst_href:
             return self.get_event(src_href, uid)
         with self._lock:
+            # The sidecar is keyed on (collection_href, uid), and the engine
+            # orphans the SOURCE row as part of the move — so the event's
+            # reminder, which is deliberately app-only (no VALARM, see
+            # schema.sql) and therefore restored by nothing on the wire, stayed
+            # behind on a row GC would delete a week later while the
+            # destination started with none. Read before the move, written
+            # after `_refresh_from_wire` has cached the destination row, since
+            # `set_sidecar` only writes for an item that exists there.
+            prior = store.get_sidecar(self._conn, src_href, uid)
+            lead = prior["notify_minutes_before"] if prior is not None else None
             self._engine.move_event(src_href, dst_href, uid)
+            if lead is not None:
+                store.set_sidecar(self._conn, dst_href, uid, notify_minutes_before=lead)
         # Both calendars changed: gone from one, appeared in the other.
         self._publish({"type": "event_deleted", "list": _slug(src_href), "uid": uid})
         self._publish({"type": "event_created", "list": _slug(dst_href), "uid": uid})
@@ -1075,10 +1132,20 @@ class TaskService:
             names = {r["href"]: r["displayname"] for r in store.get_collections(self._conn)}
             return [self._link_dto(r, counts, names) for r in rows]
 
-    @staticmethod
-    def _link_dto(row, counts: dict[str, int], names: dict[str, str]) -> dict[str, Any]:
+    def _public_page_url(self, path: str) -> str | None:
+        """An absolute URL for a token-addressed page, or None when this
+        deployment has not said what its origin is. `public_url` is the one
+        configured statement of that origin (normalized, no trailing slash);
+        a URL built off the Host header would be whatever the caller sent."""
+        origin = self.settings.public_url
+        return f"{origin}{path}" if origin else None
+
+    def _link_dto(self, row, counts: dict[str, int], names: dict[str, str]) -> dict[str, Any]:
         return {
             "token": row["token"],
+            # The page a visitor opens, absolute, for a client that has to put
+            # it on a clipboard and has nothing but the token otherwise.
+            "url": self._public_page_url(f"/book/{row['token']}"),
             "title": row["title"],
             "description": row["description"],
             "calendar": _slug(row["calendar_href"]),
@@ -1422,7 +1489,14 @@ class TaskService:
         if asked.tzinfo is None or found.tzinfo is None:
             return None
         if asked.astimezone(timezone.utc) != found.astimezone(timezone.utc):
-            return None
+            # Raised HERE, not left to the caller: `book_slot` reads None as
+            # "no prior booking" and goes on to a fresh create, and the
+            # engine's `_put_new` treats a 412 whose occupant carries our own
+            # UID as success without writing — so the ledger gained a row, the
+            # link's ceiling was charged and the visitor got a 201 for a time
+            # no event occupies, while the calendar kept the orphan at the old
+            # one. Their earlier booking did land; that is the honest answer.
+            raise ValueError("client_id already used")
         # In the LINK's zone, the way the ordinary path writes it. The cached
         # row holds whatever the wire said (this app writes bookings in UTC), and
         # a confirmation that named the same instant in a different offset would
@@ -2002,7 +2076,17 @@ class TaskService:
         filter. Skipping an empty day to reach an older one would resurrect
         entries the owner already left behind once.
         """
-        first = (date.fromisoformat(day) - timedelta(days=_CARRY_LOOKBACK_DAYS)).isoformat()
+        start = date.fromisoformat(day)
+        # Saturated at the calendar's floor rather than subtracted blindly:
+        # `day_key` admits any real date, and for one within the look-back of
+        # 0001-01-01 the subtraction is an OverflowError — not a ValueError, so
+        # `_check_day` did not map it and POST /api/day/{day}/open answered 500
+        # where every other bad day key answers 422. The same clamp
+        # `review_day` makes at the ceiling.
+        first = (
+            (start - timedelta(days=_CARRY_LOOKBACK_DAYS)).isoformat()
+            if start.toordinal() > _CARRY_LOOKBACK_DAYS else date.min.isoformat()
+        )
         planned = store.get_day_range(self._conn, first, day)   # `day` is exclusive
         if not planned:
             return []
@@ -2380,6 +2464,16 @@ class TaskService:
             # request away. The day still reports planned=true, through the
             # entries arm of `_day_plan_dto`.
             #
+            # A stated estimate also TEACHES the task, exactly as
+            # `patch_day_entry` does for one typed later: the sidecar is the
+            # only "what it took last time" there is, and `smylte_plan_day` —
+            # the one shipped caller that states an estimate on create — promises
+            # the next day starts from it. It used to hold only if the number
+            # arrived through a PATCH or a retried plan. `set_sidecar` carries
+            # the live-item guard, so a vanished task teaches nothing.
+            if kind == "task" and estimate_minutes is not None and href and uid:
+                store.set_sidecar(
+                    self._conn, href, uid, estimated_minutes=int(estimate_minutes))
             # One statement, so no `tx`: the connection is in autocommit (see
             # store.tx) and a lone INSERT is atomic by itself.
             row = store.insert_day_entry(

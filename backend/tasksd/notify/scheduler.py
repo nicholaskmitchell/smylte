@@ -56,31 +56,31 @@ _URGENCY = {"item_reminder": 0, "event_starting": 1, "daily_digest": 2}
 def loud_deliveries_since(conn, stamp: str) -> int:
     """How many BUZZES have gone out since `stamp` — the count behind the ceiling.
 
-    Not `store.loud_notifications_since`, which counts every `silent=0` row and
-    disagrees with the in-sweep counter below in two ways. A loud send Telegram
-    refused settles as `ok=0, silent=0` and was charged on every later sweep,
-    although `_dispatch` charges a buzz only `if outcome.ok` — eight refusals
-    silenced the day. That half is fixed here: a row counts when it went out,
-    or when it is claimed and not yet settled (a crash mid-send, read as SENT
-    the way the store does, because erring quieter is the right direction for a
-    noise ceiling to be wrong in).
+    Two things the ledger's row count gets wrong, both in the direction of
+    silencing a meeting alert on a day that barely interrupted anyone.
 
-    The other half is NOT fixed here, and knowingly. A batch settles one row per
-    OCCASION and `_batches` promises "only the delivery is combined", so the
-    07:30 morning message — four occasions, one buzz — still spends four of the
-    eight slots on every later sweep. Charging it once needs the ledger to say
-    which rows one message carried, and no existing column can say so honestly:
-    `silent` is how the owner sees what the ceiling swallowed (Settings shows
-    it), `settled_at` collides across separate sends within a millisecond, and
-    the keys are the claim's identity. The fix is a per-delivery column in
-    `notification_deliveries` — Telegram's `message_id`, which `SendResult`
-    already carries — written by `settle_notification` and counted here with
-    `COUNT(DISTINCT ...)`; see the strict xfail in
-    tests/test_backlog_sep03_mcp_notify.py, which turns green the day it lands.
+    A loud send Telegram refused settles `ok=0, silent=0`. Charged per row it
+    spent a slot on every later sweep although `_dispatch` charges a buzz only
+    `if outcome.ok` — eight refusals silenced the day. A row counts here when it
+    went out, or when it is claimed and not yet settled (a crash mid-send, read
+    as SENT because erring quieter is the right direction for a noise ceiling
+    to be wrong in).
+
+    A batch settles one row per OCCASION and `_batches` promises "only the
+    delivery is combined" — but the 07:30 morning message (four occasions, one
+    buzz) used to spend four of the eight slots. The ledger now records which
+    delivery each row rode in (`message_id`, the transport's own id), so a
+    combined message is one buzz here however many occasions it carried. A row
+    with no id — settled before the column existed, or by a transport that
+    returned none — counts alone, which is the per-row charge it always had.
     """
     row = conn.execute(
-        "SELECT COUNT(*) FROM notification_deliveries "
-        "WHERE claimed_at >= ? AND silent = 0 AND (ok = 1 OR settled_at IS NULL)",
+        "SELECT COUNT(DISTINCT CASE WHEN ok = 1 AND message_id IS NOT NULL "
+        "                          THEN message_id END) "
+        "     + COALESCE(SUM(CASE WHEN (ok = 1 AND message_id IS NULL) "
+        "                          OR settled_at IS NULL THEN 1 ELSE 0 END), 0) "
+        "FROM notification_deliveries "
+        "WHERE claimed_at >= ? AND silent = 0",
         (stamp,),
     ).fetchone()
     return int(row[0]) if row else 0
@@ -280,6 +280,7 @@ class Notifier:
                 self._svc.notifications(
                     store.settle_notification, p.trigger, p.dedupe_key,
                     ok=outcome.ok, silent=silent, error=outcome.error,
+                    message_id=outcome.message_id,
                 )
 
     @staticmethod

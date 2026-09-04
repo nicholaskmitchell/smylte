@@ -362,12 +362,6 @@ def _meeting_svc(db, uid: str, start: str):
                    events=[_event(start, summary=f"Meeting {uid}", uid=uid)])
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="OPEN: charging a batch once needs a per-delivery column in "
-           "notification_deliveries (Telegram's message_id, written by "
-           "store.settle_notification) — see scheduler.loud_deliveries_since",
-)
 def test_one_batched_buzz_spends_one_slot_of_the_daily_ceiling(db):
     """`MAX_LOUD_PER_DAY` is "the ceiling on notifications that BUZZ" and
     `_batches` promises "only the delivery is combined" — but the persisted
@@ -377,14 +371,15 @@ def test_one_batched_buzz_spends_one_slot_of_the_daily_ceiling(db):
     owner only a handful of times — the very thing the urgency order exists to
     prevent.
 
-    STILL OPEN, as a strict xfail in the house idiom: the ledger has no column
-    that can say which rows one message carried without lying somewhere else —
-    `silent` is the field Settings shows the owner as "what the ceiling
-    swallowed", `settled_at` collides across separate sends in the same
-    millisecond, and the keys are the claim's identity — so the honest fix is a
-    `message_id` column, which lives in store.py. The other half of the same
-    accounting (failed sends spending slots) is fixed and pinned below. This
-    test goes red (XPASS) the day the column lands, and the marker comes off."""
+    Written first as a strict xfail: the ledger had no column that could say
+    which rows one message carried without lying somewhere else — `silent` is
+    the field Settings shows the owner as "what the ceiling swallowed",
+    `settled_at` collides across separate sends in the same millisecond, and
+    the keys are the claim's identity. The honest fix was a `message_id`
+    column (the transport's own id, written by `store.settle_notification` for
+    every row of a batch) and a count of DISTINCT ids; it landed in the same
+    sweep and the marker came off. The other half of the same accounting
+    (failed sends spending slots) is pinned below."""
     sender = StubSender()
     n = Notifier(_morning_tier(db), sender, "555", log=NullLog(), token="env-token")
     assert n.sweep(MORNING).sent == 4 and len(sender.sent) == 1, "one buzz, four rows"
