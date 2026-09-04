@@ -72,7 +72,24 @@ def due_parts(raw, zone) -> tuple[float, float] | None:
     value = parse_datelike(raw)
     if value is None:
         return None
-    due_at = instant_in(value, zone)
+    # Soft ALL the way through, not only in the parse. `9999-12-31` is a
+    # perfectly readable "someday" deadline another client can write (and the
+    # SPA's own date picker accepts), and it is the one date whose next day
+    # cannot be represented: the addition raises OverflowError, and with no
+    # home zone `instant_in`'s `.astimezone()` raises ValueError first. Either
+    # escaped the sort key `smylte_list_tasks` applies to every row, so one
+    # such task took the tool down for the whole account, and the daily digest
+    # and task_overdue rules that share this function silently stopped. An
+    # instant that cannot be resolved reads as "no deadline"; a day-end that
+    # cannot be represented saturates at a day past the deadline, which is
+    # close enough at the end of the calendar and, above all, is a number.
+    try:
+        due_at = instant_in(value, zone)
+    except (OverflowError, ValueError):
+        return None
     if isinstance(value, datetime):
         return due_at, due_at
-    return due_at, instant_in(value + timedelta(days=1), zone)
+    try:
+        return due_at, instant_in(value + timedelta(days=1), zone)
+    except (OverflowError, ValueError):
+        return due_at, due_at + 24 * 3600.0
