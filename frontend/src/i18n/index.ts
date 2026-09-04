@@ -37,7 +37,9 @@ export type Message = string | Plural
 export type Catalogue = Readonly<Record<string, Message>>
 
 /** Values for a message's `{placeholders}`. `count` additionally selects the
- *  plural category, which is why it is typed apart from the rest. */
+ *  plural category, which is why it is typed apart from the rest. A numeric `n`
+ *  does the same job when no `count` is given — see `translate`; it stays in
+ *  the general record because a few callers pass a formatted string under it. */
 export type Vars = Readonly<Record<string, string | number>> & { count?: number }
 
 export const CATALOGUES: Readonly<Record<Language, Catalogue>> = { en, de }
@@ -67,7 +69,14 @@ export function translate(lang: Language, key: string, vars?: Vars): string {
     // `Intl.PluralRules` decides the category, not arithmetic here: "1" is not
     // the only thing that takes a singular in every language, and the whole
     // point of asking the platform is not to encode that belief.
-    const n = vars?.count ?? 0
+    //
+    // `count` first, then `n`: the catalogue carries its counts under both
+    // names (`{count} modules`, `{n} hours before`), and a plural record keyed
+    // on `{n}` used to be unreachable — the category came from a `count` the
+    // caller never passed, so "1 hours before" shipped in every reminder
+    // picker. Reading `n` here fixes every such key at once without renaming
+    // the placeholder in every caller.
+    const n = vars?.count ?? (typeof vars?.n === 'number' ? vars.n : 0)
     const cat = new Intl.PluralRules(lang).select(n)
     text = msg[cat] ?? msg.other
   } else {

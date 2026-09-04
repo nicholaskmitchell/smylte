@@ -224,6 +224,12 @@ export interface BookingLink {
   booking_count: number
   created_at: string
   updated_at: string
+  /** The absolute public URL — `${TASKS_PUBLIC_URL}/book/{token}` — when the
+   *  deployment has one configured, else null. The server's, not this page's:
+   *  inside the Windows client `location.origin` is the loopback server the
+   *  SPA is served from, and a link built from it worked on that machine and
+   *  nowhere else. Optional because an older server omits the field. */
+  url?: string | null
 }
 
 /** A passive screen on a wall. Takes no input; shows one of two things.
