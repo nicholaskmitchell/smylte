@@ -828,9 +828,13 @@ function BookingList({ bookings, failed }: { bookings: Booking[]; failed: boolea
   const tr = useT()
   const { locale } = useI18n()
   const tf = useTimeFormat()
+  // Ordered by the INSTANT, not the string: `start` carries each link's own
+  // offset, so with links in two zones the text order is not the clock order
+  // — "09:00-07:00" sorts before "10:00+02:00" and lists nine hours later.
+  // The server's list_bookings sorts the same way (finding of the same sweep).
   const upcoming = bookings
     .filter((b) => new Date(b.start).getTime() >= Date.now())
-    .sort((a, b) => a.start.localeCompare(b.start))
+    .sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime())
     .slice(0, 20)
   if (failed) return <p className="dash-empty" role="status">{tr('home.bookingsFailed')}</p>
   if (!upcoming.length) return <p className="dash-empty">{tr('home.noBookings')}</p>
