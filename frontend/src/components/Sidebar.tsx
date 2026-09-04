@@ -1,5 +1,6 @@
 import {
-  useEffect, useRef, useState, type CSSProperties, type DragEvent, type KeyboardEvent, type ReactNode,
+  useCallback, useEffect, useRef, useState,
+  type CSSProperties, type DragEvent, type KeyboardEvent, type ReactNode,
 } from 'react'
 import { clientId, type List, type TaskGroup } from '../api'
 import { cssColor } from '../util'
@@ -149,6 +150,26 @@ export function Sidebar({ kind, items, sel = '', countOf, onSelect, onItems, api
   // the full desktop layout — groups, per-row edit, add — so everything the
   // desktop rail can do (rename, recolor, delete, group) is reachable on touch.
   const [drawerOpen, setDrawerOpen] = useState(false)
+  const closeDrawer = useCallback(() => {
+    setDrawerOpen(false); setAdding(false); setAddingGroup(false)
+  }, [])
+  // The modal contract the edit modal below already keeps — Escape, a modal
+  // role, and a scrim that closes on a press AND a release. The finding that
+  // gave EditModal all three ended "do the same for the mobile drawer", and
+  // that half was never applied: the drawer is a dialog over the add form and
+  // the group inputs, its scrim closed on a bare click (so a text drag-select
+  // that began in a field and finished on the dim strip threw the name away),
+  // and Escape closed nothing. `drawerOpen` gates it so the desktop rail, which
+  // renders no drawer, does not answer the key on EditModal's behalf.
+  useEscape(useCallback(() => { if (drawerOpen) closeDrawer() }, [drawerOpen, closeDrawer]))
+  const drawerPress = useRef(false)
+
+  // What `items` holds NOW, for the rollbacks below. `onItems` is the
+  // provider's plain setter (no functional form), and a write that fails has
+  // to land its correction on whatever the array holds by then — an SSE
+  // refresh, another client's delete — not on the render that started it.
+  const itemsRef = useRef(items)
+  itemsRef.current = items
 
   // An in-flight guard, the way the booking-link editor already has one. The
   // form keeps its input mounted, focused and holding the typed name for the
@@ -174,20 +195,33 @@ export function Sidebar({ kind, items, sel = '', countOf, onSelect, onItems, api
   }
 
   // Rename/recolor/delete paint immediately (the modal closes at once); the
-  // request settles behind, and a failure restores the previous items.
+  // request settles behind, and a failure restores the row it touched.
+  //
+  // THE ROW, not a snapshot of the array. `const prev = items; onItems(prev)`
+  // also reverted anything that landed while the write was out — the SSE
+  // refetch that follows any published change replaces `lists` wholesale, so a
+  // rename failing after another client deleted a collection resurrected it,
+  // `loadKey` changed, the task fan-out re-ran for a list that no longer exists
+  // and the "Couldn't load" banner named it. Booking links and the task reorder
+  // closed this same shape ("Only the positions are remembered"); this file
+  // kept it.
   const save = async (id: string, body: { name?: string; color?: string | null }) => {
     setEditing(null)
-    const prev = items
+    const original = items.find((l) => l.id === id)
     onItems(items.map((l) => (l.id === id
       ? { ...l, name: body.name ?? l.name, color: body.color === undefined ? l.color : body.color }
       : l)))
     const updated = await api.update(id, body)
-    if (!updated) onItems(prev)
+    // A row that is gone by now was deleted for real meanwhile; nothing to put back.
+    if (!updated && original) {
+      onItems(itemsRef.current.map((l) => (l.id === id ? original : l)))
+    }
   }
 
   const remove = async (id: string) => {
     setEditing(null)
-    const prev = items
+    const original = items.find((l) => l.id === id)
+    const at = items.findIndex((l) => l.id === id)     // where to restore it on failure
     const prevGroups = groups
     const left = items.filter((l) => l.id !== id)
     onItems(left)
@@ -202,12 +236,20 @@ export function Sidebar({ kind, items, sel = '', countOf, onSelect, onItems, api
       // server by App, so only restoring `items` brought the list back
       // ungrouped — with the loss already persisted, and nothing left to
       // undo it from.
-      onItems(prev)
+      //
+      // Re-inserted where it was, and only if nothing has put it back already
+      // — data.tsx's `remove` is the precedent.
+      const cur = itemsRef.current
+      if (original && !cur.some((l) => l.id === id)) {
+        const next = cur.slice()
+        next.splice(at < 0 ? next.length : Math.min(at, next.length), 0, original)
+        onItems(next)
+      }
       if (regrouped) onGroupsChange!(prevGroups!)
     }
   }
 
-  const drop = (targetId: string) => {
+  const drop = async (targetId: string) => {
     if (!dragId || dragId === targetId) return
     const ids = items.map((l) => l.id)
     const from = ids.indexOf(dragId)
@@ -217,7 +259,19 @@ export function Sidebar({ kind, items, sel = '', countOf, onSelect, onItems, api
     const [moved] = next.splice(from, 1)
     next.splice(to, 0, moved)
     onItems(next)                       // optimistic; server confirms via SSE
-    api.reorder(next.map((l) => l.id))
+    // …on success. A PROPPATCH that fails publishes nothing, so no rev bump
+    // arrives to refetch, and the guard's toast sat over a rail still showing
+    // the order the server had refused — until the next unrelated event.
+    // Every other optimistic write here rolls back; this one discarded the
+    // promise. Only the POSITIONS are put back, keyed by id over whatever the
+    // array holds by then, so a rename or an arrival that landed meanwhile
+    // survives; a row the old order never saw keeps its place at the end.
+    if ((await api.reorder(next.map((l) => l.id))) === undefined) {
+      const pos = new Map(ids.map((id, i) => [id, i]))
+      const cur = itemsRef.current
+      const rank = (l: List) => pos.get(l.id) ?? ids.length + cur.indexOf(l)
+      onItems(cur.slice().sort((a, b) => rank(a) - rank(b)))
+    }
   }
 
   // ── visibility helpers ────────────────────────────────────────────────────
@@ -298,7 +352,13 @@ export function Sidebar({ kind, items, sel = '', countOf, onSelect, onItems, api
         onDragStart={(e: DragEvent) => { setDragId(l.id); e.dataTransfer.effectAllowed = 'move' }}
         // stopPropagation so a drop ON a row reorders only — it must not also
         // reach the enclosing group/ungrouped drop target (membership change).
-        onDragOver={(e: DragEvent) => { e.preventDefault(); e.stopPropagation(); setOverId(l.id); setOverGroup(null) }}
+        // Gated on `dragId` like the group and ungrouped zones below: without
+        // it a task row dragged from the list view, or a file from the desktop,
+        // lit every list it crossed as a drop target, and `drop()` then did nothing.
+        onDragOver={(e: DragEvent) => {
+          if (!dragId) return
+          e.preventDefault(); e.stopPropagation(); setOverId(l.id); setOverGroup(null)
+        }}
         onDragLeave={() => setOverId((o) => (o === l.id ? null : o))}
         onDrop={(e: DragEvent) => { e.preventDefault(); e.stopPropagation(); drop(l.id); setDragId(null); setOverId(null); setOverGroup(null) }}
         onDragEnd={() => { setDragId(null); setOverId(null); setOverGroup(null) }}
@@ -431,7 +491,6 @@ export function Sidebar({ kind, items, sel = '', countOf, onSelect, onItems, api
     const summary = total === 0
       ? tr('side.noneYet')
       : canToggle ? tr('side.shownOf', { shown: shownCount, total }) : `${total}`
-    const closeDrawer = () => { setDrawerOpen(false); setAdding(false); setAddingGroup(false) }
     return (
       <>
         <div className="side-mobilebar">
@@ -458,8 +517,13 @@ export function Sidebar({ kind, items, sel = '', countOf, onSelect, onItems, api
         </div>
 
         {drawerOpen && (
-          <div className="overlay drawer-overlay" onClick={closeDrawer}>
-            <div className="side drawer" role="dialog" aria-label={tr(words.manage)}
+          <div className="overlay drawer-overlay"
+            onMouseDown={(e) => { drawerPress.current = e.target === e.currentTarget }}
+            onClick={(e) => {
+              if (e.target === e.currentTarget && drawerPress.current) closeDrawer()
+              drawerPress.current = false
+            }}>
+            <div className="side drawer" role="dialog" aria-modal="true" aria-label={tr(words.manage)}
               onClick={(e) => e.stopPropagation()}>
               <div className="side-head">
                 <span className="label">{tr(words.heading)}</span>
@@ -680,12 +744,24 @@ function ColorRow({ color, onPick }: { color: string | null; onPick: (c: string 
 
   return (
     <div className="color-row">
+      {/* `onMouseDown` cancelled so a press here never moves focus. AddForm
+          closes an EMPTY form when focus leaves it, and tells "left it" from
+          "went to the colour row" by `relatedTarget` — which WebKit leaves
+          null, because Safari (macOS and iOS) does not focus a <button> on
+          click and blurs the field on mousedown instead. On the phone drawer,
+          where this form is the only way to add a collection, "tap the colour,
+          then type the name" dismissed the form and the colour with it. Not
+          moving focus is the fix in every engine; Tab still reaches the
+          buttons, and in EditModal keeping focus in the name field is harmless. */}
       <button className={`color-dot none ${color === null ? 'on' : ''}`}
         title={tr('side.noColor')}
+        onMouseDown={(e) => e.preventDefault()}
         onClick={() => onPick(null)}>✕</button>
       {SWATCHES.map((c) => (
         <button key={c} className={`color-dot ${isSwatch(c) ? 'on' : ''}`}
-          style={{ background: c }} title={c} onClick={() => onPick(c)} />
+          style={{ background: c }} title={c}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => onPick(c)} />
       ))}
       {/* The escape hatch past the presets. Native rather than a drawn picker:
           it is the browser's own dialog, so it brings a hex field and an

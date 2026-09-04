@@ -919,6 +919,7 @@ describe('2026-08-25 — the event editor', () => {
       start: '2026-03-07T09:00:00', end: null, duration: 'P1D',
     })])
     const dialog = await openEvent(user)
+    expect(within(dialog).getByLabelText('End')).toHaveValue('2026-03-08T09:00')
 
     const title = within(dialog).getByLabelText('Title')
     await user.clear(title)
@@ -926,7 +927,11 @@ describe('2026-08-25 — the event editor', () => {
     await user.click(within(dialog).getByText('Save'))
 
     await waitFor(() => expect(m.patchEvent).toHaveBeenCalled())
-    expect(patchBody().end).toBe('2026-03-08T09:00')
+    // The wire half changed shape in the 2026-09-03 sweep: a rename no longer
+    // carries the times at all, so the derived end cannot reach the server on a
+    // save that never touched it — the DURATION stays as its author wrote it.
+    // The seeded picker value above is what this case still pins.
+    expect(patchBody()).not.toHaveProperty('end')
   })
 
   // The table the suggested fix asks for, and the half neither the pin nor the

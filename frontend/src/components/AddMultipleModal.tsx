@@ -188,7 +188,11 @@ export const FIELDS: readonly FieldSpec[] = [
     render: (v, set, { disabled, t, scope }) => (
       <select className="input" aria-label={scope(t('field.priority'))} value={v.priority} disabled={disabled}
         onChange={(e) => set({ priority: e.target.value })}>
-        {PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
+        {/* The VALUE stays the wire vocabulary; the TEXT comes from the
+            catalogue, like every other fixed-vocabulary select in the app. The
+            raw strings read "none / low / medium / high" under German, beside
+            a label that said "Priorität". */}
+        {PRIORITIES.map((p) => <option key={p} value={p}>{t(`priority.${p}`)}</option>)}
       </select>
     ),
   },
