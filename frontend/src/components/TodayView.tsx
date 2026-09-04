@@ -1480,6 +1480,11 @@ export function TodayView({
   // Keyed on the LINE, because that is what the box puts back and therefore what
   // the user retries. A different line is a different task and mints its own id.
   const retry = useRef<{ line: string; cid: string; task?: Task } | null>(null)
+  // What the box holds NOW, for the code that runs after a round trip: the
+  // `text` a `commit` closed over is the line it sent, not whatever has been
+  // typed in the meantime.
+  const typing = useRef(text)
+  typing.current = text
 
   const commit = async () => {
     const raw = text.trim()
@@ -1488,6 +1493,14 @@ export function TodayView({
     // trip finishes, which is the whole bargain of a frictionless add. The text
     // goes back on failure (as the dashboard's quick add does), so a rejected
     // line is never simply lost.
+    //
+    // The pin goes back WITH it. It is a statement about this line — "make it
+    // a note" said of "call mum at 6" — and a line put back without it is
+    // re-read by the parser alone, so the retry Enter authors the other kind:
+    // a real VTODO with a deadline that the owner pressed a button to refuse,
+    // or a note for a line whose task already landed, which strands that task
+    // on no day and never consults `retry.current.task` at all.
+    const was = pinned
     setText('')
     setPinned(null)
     const on = day
@@ -1500,8 +1513,16 @@ export function TodayView({
     const ok = willBe === 'task'
       ? await addParsedTask(on, listId, parsed, reads, raw)
       : await addNote(on, raw)
-    if (!ok) setText(raw)
-    else retry.current = null
+    if (ok) { retry.current = null; return }
+    // Only into an EMPTY box — the same rule the habits sheet's add keeps. The
+    // box cleared on the press precisely so the next line could be typed while
+    // this one was out, and a slow rejection landing the old line over the
+    // half-typed new one is a loss the toast never mentioned. The pin follows
+    // the same gate, because a pin without its line would attach to whatever
+    // is being typed instead.
+    if (typing.current) return
+    setText(raw)
+    setPinned(was)
   }
 
   /**
@@ -1987,20 +2008,36 @@ export function TodayView({
    *  work is a judgement the app does not get to make on the owner's behalf —
    *  lunch and the dentist are on the same calendar as the standup. So the
    *  collision is made visible and the arithmetic is left alone. */
-  const meetingMinutes = useMemo(() => todaysEvents.reduce((n, ev) => {
-    // An all-day event is a LABEL on the day, not a claim on its hours — "Anna's
-    // birthday" is not eight hours of meeting — so it is skipped rather than
-    // counted as the whole day and swamping the figure.
-    if (ev.all_day || !ev.start || !ev.end) return n
-    // Through `parseDate`, like every other reader of an event's times in this
-    // app: a bare date and a datetime are different shapes, and `new Date()`
-    // reads the first as UTC midnight, which is the previous day for anyone west
-    // of it.
-    const start = parseDate(ev.start).getTime()
-    const end = parseDate(ev.end).getTime()
-    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return n
-    return n + Math.round((end - start) / 60000)
-  }, 0), [todaysEvents])
+  const meetingMinutes = useMemo(() => {
+    // The day's own bounds, local midnight to local midnight, through the same
+    // `addDays` every other day-key arithmetic here uses — so a 23- or 25-hour
+    // day on a DST edge is measured as the day it is.
+    const dayStart = new Date(`${day}T00:00`).getTime()
+    const dayEnd = addDays(new Date(`${day}T00:00`), 1).getTime()
+    return todaysEvents.reduce((n, ev) => {
+      // An all-day event is a LABEL on the day, not a claim on its hours — "Anna's
+      // birthday" is not eight hours of meeting — so it is skipped rather than
+      // counted as the whole day and swamping the figure.
+      if (ev.all_day || !ev.start || !ev.end) return n
+      // Through `parseDate`, like every other reader of an event's times in this
+      // app: a bare date and a datetime are different shapes, and `new Date()`
+      // reads the first as UTC midnight, which is the previous day for anyone west
+      // of it.
+      const start = parseDate(ev.start).getTime()
+      const end = parseDate(ev.end).getTime()
+      if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return n
+      // CLIPPED to the day. `bucketByDay` lists a span on every day it covers
+      // and keeps the whole event's times on the continuation rows — right for
+      // the strip, which paints the event, and wrong for a figure whose docstring
+      // says "on this day": an offsite from yesterday 09:00 to tomorrow 17:00
+      // read as 56h of calendar on the middle day, and an on-call block from
+      // 22:00 to 02:00 charged its whole four hours to both days it touches.
+      const s = Math.max(start, dayStart)
+      const e = Math.min(end, dayEnd)
+      if (e <= s) return n
+      return n + Math.round((e - s) / 60000)
+    }, 0)
+  }, [todaysEvents, day])
 
   const capacity = plan && plan.day === day ? plan.capacity : null
   const over = capacity != null && planned > capacity
@@ -2312,8 +2349,12 @@ export function TodayView({
       )}
 
       {calErrors.length > 0 && (
+        // Same banner, same KEY, as HomeView — the words were the same only in
+        // English while this one was a literal, and a German account saw an
+        // English sentence in the middle of its Today tab whenever a calendar
+        // failed to load.
         <div className="cal-partial" role="status">
-          Couldn&rsquo;t load {calErrors.join(', ')} &mdash; some events may be missing.
+          {tr('home.calPartial', { cals: calErrors.join(', ') })}
         </div>
       )}
 
@@ -2492,6 +2533,13 @@ export function TodayView({
         <ShutdownRitual
           day={day} entries={entries} offPlan={offPlan}
           planned={planned} done={entries.length - openCount}
+          // Off `allEntries`, the one array that still holds a decided row:
+          // `entries` filters a moved or dropped row out by design, so from the
+          // live rows alone a day everything was moved off is indistinguishable
+          // from a day everything was done on. The stamps are the record of the
+          // decision, and they are what survive closing the dialog, switching
+          // tabs, or a reload.
+          decidedBefore={(allEntries ?? []).filter((e) => e.rolled_to || e.dropped_at).length}
           doneMinutes={doneMinutes} unestimated={unestimated}
           shutdownAt={plan?.day === day ? plan.shutdown_at : null}
           reflection={plan?.day === day ? plan.reflection : null}
@@ -2568,6 +2616,32 @@ export function TodayView({
       )}
 
       <div className="scroll">
+        {/* The day is UNKNOWN, which is neither "empty" nor "loading". Every
+            other render of the day is gated on `entries !== null`, so without
+            this the tab showed its furniture over a blank space and said
+            nothing about why. Retry re-runs the read; `rev` cannot, because it
+            only moves when the server publishes a change.
+
+            ABOVE the plan/review branch, not inside its first arm, which is
+            where it was: a past day always takes the second arm, and so does
+            today once Review is pressed — and `LookBack` renders nothing at all
+            for a day that never read (`review === null`). So a 502 on a past
+            day painted "Look back" over an empty scroll with the transient
+            toast as the only signal and no way back short of stepping the
+            picker away and back. The read effect sets `dayError` for every day
+            alike; this is the one place that shows it, so it has to sit where
+            every day passes through.
+
+            Two sentences, because the string is about the day it names:
+            "Couldn't read today" under a heading that says "Look back" would
+            be its own small lie. */}
+        {dayError && (
+          <p className="empty" role="status">
+            {isToday ? tr('today.readFailed') : tr('today.readFailedDay')}{' '}
+            <button type="button" className="today-linkish"
+              onClick={() => setDayTry((n) => n + 1)}>{tr('today.tryAgain')}</button>
+          </p>
+        )}
         {/* `reviewing`, not `!isToday`. A finished day has always taken the
             second arm; today now takes it too when the owner asks. `LookBack`
             is handed exactly what it was before and is reused verbatim — it is
@@ -2597,18 +2671,6 @@ export function TodayView({
                 holding three habits and nothing else is not a day with nothing
                 on it, and saying so under a visible list of habits would
                 contradict the screen it is printed on. */}
-            {/* The day is UNKNOWN, which is neither "empty" nor "loading". Every
-                other render of the day is gated on `entries !== null`, so
-                without this the tab showed its furniture over a blank space and
-                said nothing about why. Retry re-runs the read; `rev` cannot,
-                because it only moves when the server publishes a change. */}
-            {dayError && (
-              <p className="empty" role="status">
-                {tr('today.readFailed')}{' '}
-                <button type="button" className="today-linkish"
-                  onClick={() => setDayTry((n) => n + 1)}>{tr('today.tryAgain')}</button>
-              </p>
-            )}
             {entries !== null && entries.length === 0 && (
               <p className="empty">
                 {tr('today.emptyBefore')}
@@ -3607,6 +3669,27 @@ function HabitEditRow({ habit, pending = false, onPatch, onDelete }: {
     if (!t) { setName(habit.title); return }
     if (t !== habit.title) onPatch({ title: t })
   }
+
+  // Committed on UNMOUNT as well as on blur — the third field with the shape
+  // `ReflectStep` and `CapacityStep` were fixed for, and for the same reason:
+  // the sheet's `useEscape(onClose)` unmounts this row, and browsers fire no
+  // blur for a focused element removed from the DOM, so a rename typed and then
+  // Escaped was never sent. The ✕ and the scrim were always safe: their
+  // mousedown blurs the field first. The effect ADDS a path; blur and Enter
+  // still commit.
+  //
+  // Read through refs so the cleanup runs once and sees the LAST draft against
+  // the LAST title. The title matters as much as the draft: a rename that blur
+  // already sent is painted onto `habit.title` optimistically, so the ordinary
+  // type-tab-close sends one PATCH and not a second copy of it from here. An
+  // empty draft sends nothing, which is blur's answer too.
+  const latest = useRef({ name, title: habit.title, onPatch })
+  latest.current = { name, title: habit.title, onPatch }
+  useEffect(() => () => {
+    const { name, title, onPatch } = latest.current
+    const t = name.trim()
+    if (t && t !== title) onPatch({ title: t })
+  }, [])
 
   const toggleDay = (d: string) => {
     const next = new Set(on)

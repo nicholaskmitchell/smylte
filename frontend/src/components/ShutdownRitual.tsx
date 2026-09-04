@@ -44,8 +44,8 @@ const ROLL_DAYS = 14
 
 export function ShutdownRitual({
   day, entries, offPlan, planned, done, doneMinutes, unestimated, shutdownAt,
-  reflection, renderRow, colorOf, isDone, titleOf, onRoll, onDrop, onReflect,
-  onShutdown, onClose,
+  reflection, decidedBefore = 0, renderRow, colorOf, isDone, titleOf, onRoll, onDrop,
+  onReflect, onShutdown, onClose,
 }: {
   day: string
   /** The day's live rows, in reading order. */
@@ -57,6 +57,11 @@ export function ShutdownRitual({
   doneMinutes: number
   /** How many rows are finished. */
   done: number
+  /** How many of the day's rows its RECORD already shows as moved to another
+   *  day or taken off the plan — the rows `entries` no longer holds. Read at
+   *  mount: it is what makes "decided, not done" survive this dialog closing,
+   *  a tab switch, or a reload, none of which the in-session count below can. */
+  decidedBefore?: number
   /** How many rows carry no estimate — what the minutes are silent about. */
   unestimated: number
   shutdownAt: string | null
@@ -98,7 +103,16 @@ export function ShutdownRitual({
   //
   // Held HERE rather than in `FollowsStep`, which unmounts when the owner steps
   // forward: a counter inside it would reset on Back and tell the lie again.
-  const [decided, setDecided] = useState(0)
+  //
+  // SEEDED from the record, because this dialog unmounts too. The owner who
+  // moved everything to tomorrow, closed, and came back at nine to add a
+  // reflection — "allowed and expected", `DoneStep` says — reopened onto a
+  // counter at zero and was told, twice, that everything was done. The stamps
+  // that say otherwise (`rolled_to`, `dropped_at`) are on the wire and outlive
+  // any session; `decidedBefore` is their count. Read ONCE, at mount: a roll
+  // made here stamps the record optimistically as well as bumping this, and
+  // reading the prop live would count it twice.
+  const [decided, setDecided] = useState(decidedBefore)
   const decide = <T extends unknown[]>(fn: (...a: T) => void) => (...a: T) => {
     setDecided((n) => n + 1)
     fn(...a)
@@ -125,6 +139,7 @@ export function ShutdownRitual({
         {step === 0 && (
           <DoneStep entries={entries} offPlan={offPlan} planned={planned}
             done={done} doneMinutes={doneMinutes} unestimated={unestimated}
+            decided={decided}
             shutdownAt={shutdownAt} renderRow={renderRow} colorOf={colorOf} />
         )}
         {step === 1 && (
@@ -158,13 +173,16 @@ export function ShutdownRitual({
 
 /** Step one: what happened. */
 function DoneStep({ entries, offPlan, planned, done, doneMinutes, unestimated,
-  shutdownAt, renderRow, colorOf }: {
+  decided, shutdownAt, renderRow, colorOf }: {
   entries: DayEntry[]
   offPlan: Task[]
   planned: number
   done: number
   doneMinutes: number
   unestimated: number
+  /** Rows moved or dropped — see the parent. What tells an emptied day from an
+   *  empty one. */
+  decided: number
   shutdownAt: string | null
   renderRow: (e: DayEntry) => ReactNode
   colorOf: (listId: string | null) => string | null
@@ -172,6 +190,13 @@ function DoneStep({ entries, offPlan, planned, done, doneMinutes, unestimated,
   const tr = useT()
   const { locale } = useI18n()
   const tf = useTimeFormat()
+  // A day whose every row was moved or dropped. `entries` holds none of them
+  // by design, so the count below would read "0 of 0 done" over "Nothing on
+  // today" — the record of a day nothing was ever on, printed for a day the
+  // owner just decided about row by row. One sentence that says what happened
+  // instead, and the count line is left out: "0 of 0" is true of the live rows
+  // and false of the day.
+  const emptied = entries.length === 0 && decided > 0
   return (
     <div className="plan-body plan-scroll">
       {shutdownAt && (
@@ -188,18 +213,22 @@ function DoneStep({ entries, offPlan, planned, done, doneMinutes, unestimated,
           call and says why: a surface that grades you is a surface you stop
           opening, and this is the one you would be opening at the end of a hard
           day. */}
-      <p className="plan-hint">
-        {tr('shut.doneCount', { done, total: entries.length })}
-        {planned > 0 && tr('shut.plannedOf', {
-          done: fmtDuration(doneMinutes), planned: fmtDuration(planned),
-        })}
-        {/* What the minutes are SILENT about, in the same words the day's own
-            strip and the planning ritual use. Without it a day whose finished
-            rows happened to be the unestimated ones reads "0m of 1h 20m
-            planned" and looks like a day nothing happened on — which is the
-            exact verdict this step is written to avoid. */}
-        {planned > 0 && unestimated > 0 && tr('shut.unestimated', { count: unestimated })}
-      </p>
+      {emptied ? (
+        <p className="plan-hint">{tr('shut.nothingLeft')}</p>
+      ) : (
+        <p className="plan-hint">
+          {tr('shut.doneCount', { done, total: entries.length })}
+          {planned > 0 && tr('shut.plannedOf', {
+            done: fmtDuration(doneMinutes), planned: fmtDuration(planned),
+          })}
+          {/* What the minutes are SILENT about, in the same words the day's own
+              strip and the planning ritual use. Without it a day whose finished
+              rows happened to be the unestimated ones reads "0m of 1h 20m
+              planned" and looks like a day nothing happened on — which is the
+              exact verdict this step is written to avoid. */}
+          {planned > 0 && unestimated > 0 && tr('shut.unestimated', { count: unestimated })}
+        </p>
+      )}
       {entries.length > 0 && (
         <ul className="today-list">{entries.map(renderRow)}</ul>
       )}
@@ -227,7 +256,9 @@ function DoneStep({ entries, offPlan, planned, done, doneMinutes, unestimated,
           </ul>
         </>
       )}
-      {entries.length === 0 && offPlan.length === 0 && (
+      {/* "Nothing on today" is for a day that had nothing on it. An emptied
+          day has its own sentence above. */}
+      {entries.length === 0 && offPlan.length === 0 && !emptied && (
         <p className="empty">{tr('shut.nothingAtAll')}</p>
       )}
     </div>
