@@ -404,6 +404,24 @@ describe('the Today header the phone rules aim at', () => {
     expect(allMobile, 'there is no 44px tap area on the row controls at all')
       .toMatch(/\.today-row button::after[^{}]*\{[^{}]*width:\s*44px/)
   })
+
+  it('the tab strip and the settings gear get the same tap area', () => {
+    // 2026-09-03 sweep: the strip's tabs were ~29px tall on the phone and the
+    // gear beside them 30px — the two controls every session starts with, at
+    // two-thirds of the standard this file set for the Today row. Same
+    // pseudo-element device, for the same reason: the bar's height must not
+    // change, so the tab's own box is left alone.
+    expect(allMobile, 'the tabs have no 44px tap area')
+      .toMatch(/\.tab::after[^{}]*\{[^{}]*width:\s*44px/)
+    expect(allMobile, 'the gear has no 44px tap area')
+      .toMatch(/\.topbar \.icon-btn::after[^{}]*\{[^{}]*width:\s*44px/)
+    expect(ruleFor('.tab', allMobile), 'the ::after has no positioned parent')
+      .toMatch(/position:\s*relative/)
+    // The strip scrolls sideways, and a scroll container clips on both axes —
+    // without this room the tap area is cut back to the tab's own box.
+    expect(ruleFor('.tabs', allMobile), 'the strip has no vertical room for the tap area')
+      .toMatch(/padding:\s*8px 0/)
+  })
 })
 
 describe('the iOS 16px floor covers every control that carries .input', () => {
@@ -424,6 +442,18 @@ describe('the iOS 16px floor covers every control that carries .input', () => {
       expect(allMobile, `${sel} has no mobile font-size floor`).toMatch(re)
     }
   })
+
+  it('and the two <select>s that never carried .input have a floor of their own', () => {
+    // The 2026-09-03 sweep. Every floor above is qualified by `.input`, and
+    // the Language picker (SettingsMenu) and the reminder field (ReminderField,
+    // in both modals) are `<select class="menu-toggle">` — 11px at 390px,
+    // measured, beside `select.input` siblings at 16px. iOS zooms for a select
+    // as it does for an input. Element-qualified so it outranks `.menu-toggle`
+    // by specificity rather than by which block comes last; the browser tier
+    // measures the computed size.
+    expect(allMobile, 'select.menu-toggle has no mobile font-size floor')
+      .toMatch(/select\.menu-toggle\s*\{[^{}]*font-size:\s*max\(\s*16px/)
+  })
 })
 
 describe('a foreign-authored title cannot scroll the pane sideways', () => {
@@ -433,6 +463,21 @@ describe('a foreign-authored title cannot scroll the pane sideways', () => {
     // computes `overflow-x` to `auto` too — so the overflow becomes sideways
     // scrolling of the whole pane, dragging the month grid off screen with it.
     for (const sel of ['.task-title', '.today-title', '.agenda-ev']) {
+      expect(ruleFor(sel), `${sel} has no wrap guard`).toMatch(/overflow-wrap:\s*(anywhere|break-word)/)
+    }
+  })
+
+  it('and so can every other sink of text someone else wrote', () => {
+    // The 2026-09-03 sweep: the fix above was pinned to the three selectors it
+    // named and the mechanism was left on four more. `.sched-booking .who` and
+    // `.notes` are the visitor's name and notes from the anonymous booking
+    // form (200 and 2000 chars, no space required) inside the same `.scroll`;
+    // measured at 390px, a 200-character name gave it scrollWidth 1414.
+    // `.booking-desc` and `.conn-name` are owner-approved text in their own
+    // scrollers, the same shape for one declaration each. The browser tier
+    // (`backlog.sep03.browser.test.tsx`) measures the width; this pins the
+    // declaration is still there.
+    for (const sel of ['.sched-booking .who', '.sched-booking .notes', '.booking-desc', '.conn-name']) {
       expect(ruleFor(sel), `${sel} has no wrap guard`).toMatch(/overflow-wrap:\s*(anywhere|break-word)/)
     }
   })
@@ -519,6 +564,19 @@ describe('the phone gets the whole unsafe area accounted for', () => {
     // `.shell` is 100dvh under viewport-fit=cover, so a flat `bottom: 24px` put
     // the app's only error channel inside the home-indicator band.
     expect(ruleFor('.toast')).toMatch(/bottom:\s*calc\([^)]*env\(safe-area-inset-bottom\)/)
+  })
+
+  it('the Focus surface reads all four insets itself', () => {
+    // The 2026-09-03 sweep. `.focus` is `position: fixed; inset: 0`, so the
+    // horizontal insets `.shell` applies never reach it, and it was the one
+    // edge-to-edge surface whose footer — End session, the only button on it —
+    // read no bottom inset at all. `env()` is 0 in headless Chromium, so this
+    // is the pin for the declaration; the browser tier checks via the CSSOM
+    // that no other matching rule can win those paddings.
+    expect(ruleFor('.focus')).toMatch(/padding-left:\s*env\(safe-area-inset-left\)/)
+    expect(ruleFor('.focus')).toMatch(/padding-right:\s*env\(safe-area-inset-right\)/)
+    expect(ruleFor('.focus-head')).toMatch(/padding-top:\s*calc\([^)]*env\(safe-area-inset-top\)/)
+    expect(ruleFor('.focus-foot')).toMatch(/padding-bottom:\s*calc\([^)]*env\(safe-area-inset-bottom\)/)
   })
 
   it('the content gutter is a token the mobile block re-declares', () => {

@@ -149,9 +149,11 @@
 .side-item:hover .side-edit { opacity: 1; }
 .side-item .side-edit:hover { color: var(--accent); }
 .side-item.drag-over { box-shadow: inset 0 2px 0 var(--accent); }
-/* visibility mode: a hidden calendar dims its label; the swatch (inline) hollows */
-.side-item.cal-hidden .name,
-.side-item.cal-hidden .count { opacity: .45; }
+/* visibility mode: a hidden calendar mutes its label; the swatch (inline)
+   hollows. The row IS the checkbox that shows the calendar again, so it dims
+   by token: an `opacity: .45` on the name and count put them at 2.9:1 and
+   1.6:1 on the rail. The count already wears `--fg-faint` and stays as it is. */
+.side-item.cal-hidden .name { color: var(--fg-muted); }
 .side-item[role="checkbox"]:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .side-add { display: flex; gap: 6px; padding: 8px 12px; border-top: 1px solid var(--rule); }
 /* The new-collection form is the one .side-add that is more than a single
@@ -657,7 +659,14 @@
 /* ---- modal / panel ---- */
 .overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.32);
   display: flex; align-items: center; justify-content: center; z-index: 100; padding: 20px; }
+/* Height-bound at every width, not only under the phone breakpoint. The
+   breakpoint is a WIDTH, and a phone on its side is 844px wide by 390 tall:
+   it takes these desktop rules, and a centred 700px form in a 390px viewport
+   put the title above the screen and Save below it with nothing that scrolls
+   (`.overlay` is fixed). The 40px is the overlay's padding on both sides; the
+   phone block below re-caps this at 92dvh for the sheet. */
 .modal { background: var(--bg-elev); border: 1px solid var(--rule); width: 520px; max-width: 100%;
+  max-height: calc(100dvh - 40px); overflow-y: auto;
   box-shadow: var(--shadow-lg); padding: 18px; display: flex; flex-direction: column; gap: 12px; }
 .modal-head { display: flex; align-items: baseline; justify-content: space-between; }
 .modal-title { font-family: var(--serif); font-size: calc(18px * var(--fs-scale)); font-weight: 500; }
@@ -782,9 +791,26 @@
   .tabs {
     flex: 1 1 auto; min-width: 0;
     overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch;
+    /* `overflow-x: auto` makes the strip clip on BOTH axes (a non-visible
+       overflow on one axis forces the other to auto), which would cut the tabs'
+       44px `::after` below back to the 29px box it was meant to enlarge — the
+       browser pin caught exactly that. The strip is given the vertical room
+       and takes it back with a negative margin, so the tap areas fit inside
+       its padding box and the bar's height does not move. */
+    padding: 8px 0; margin: -8px 0;
   }
   .tabs::-webkit-scrollbar { display: none; }
-  .tab { flex: none; padding: 6px 8px 8px; }
+  /* A 44px hit area on the strip's tabs and the settings gear WITHOUT growing
+     the bar: the tab's own box stays ~29px so the topbar's height is unchanged,
+     and the same centred `::after` the Today row controls use catches the
+     touch. Tabs are wider than 44px and 2px apart, so the areas never overlap;
+     the gear is the one `.icon-btn` in the bar. `aria-current` is set by App. */
+  .tab { flex: none; padding: 6px 8px 8px; position: relative; }
+  .tab::after, .topbar .icon-btn::after {
+    content: ''; position: absolute; top: 50%; left: 50%;
+    width: 44px; height: 44px; transform: translate(-50%, -50%);
+  }
+  .topbar .icon-btn { position: relative; }
   .topbar .spacer { flex: none; }
   .brand { font-size: calc(19px * var(--fs-scale)); }
   .menu { right: 14px; }
@@ -999,6 +1025,15 @@
      load-bearing: a text scale below 1 would drop under 16px and bring the
      zoom-on-focus back, so this one size only ever scales up. */
   .input { font-size: max(16px, calc(16px * var(--fs-scale))); }
+  /* The same floor for the two pickers that are a <select> without `.input`:
+     the Language picker (SettingsMenu) and the reminder field (ReminderField,
+     in the task and event modals). iOS applies the zoom heuristic to a select
+     exactly as to an input, and `.menu-toggle` is 11px. Qualified by element
+     — (0,1,1) against `.menu-toggle`'s (0,1,0) — so it wins wherever the next
+     `.menu-toggle` fence lands, which is how the three floors before it were
+     lost. The BUTTON toggles beside these keep their size: nothing zooms for a
+     button. */
+  select.menu-toggle { font-size: max(16px, calc(16px * var(--fs-scale))); }
 
   /* calendar: compact grid, title fills the header, agenda holds the detail */
   .cal-head { gap: 8px; padding-top: 10px; padding-bottom: 10px; }
@@ -1062,7 +1097,14 @@
   width: 340px; max-width: 100%; border: 1px solid var(--rule); background: var(--bg-elev);
   padding: 14px 16px; display: flex; flex-direction: column; gap: 6px;
 }
-.sched-card.off { opacity: 0.6; }
+/* An off link steps back by TOKEN, not by an opacity on the card. The card is
+   not inert — it holds the toggle that turns the link back on and its Edit and
+   Copy buttons — and an `opacity: 0.6` over tokens that are themselves alpha
+   tints put those at 1.9:1 and 2.3:1, under the 3:1 `--fg-faint` was raised
+   to clear. The title drops to muted and the outline goes dashed, so the state
+   reads without colour and every control keeps the ratio its token has. */
+.sched-card.off { border-style: dashed; }
+.sched-card.off .sched-card-title { color: var(--fg-muted); }
 .sched-card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
 .sched-card-title { font-family: var(--serif); font-size: calc(17px * var(--fs-scale)); font-weight: 500; min-width: 0;
   overflow-wrap: break-word; }
@@ -1086,12 +1128,16 @@
   padding: 10px 0; border-bottom: 1px solid var(--rule-faint);
 }
 .sched-booking .when { font-size: calc(11px * var(--fs-scale)); color: var(--fg-muted); min-width: 150px; }
-.sched-booking .who { font-size: calc(14px * var(--fs-scale)); }
+/* `.who` and `.notes` are the visitor's own text from the anonymous booking
+   form — up to 200 and 2000 characters, no space required. The same wrap guard
+   `.task-title` carries: a spaceless token is one unbreakable word, and in a
+   `.scroll` it becomes sideways scrolling of the whole pane. */
+.sched-booking .who { font-size: calc(14px * var(--fs-scale)); min-width: 0; overflow-wrap: anywhere; }
 .sched-booking .who .email { color: var(--fg-muted); font-size: calc(12px * var(--fs-scale)); margin-left: 6px; }
 .sched-booking .via { font-family: var(--mono); font-size: calc(10px * var(--fs-scale)); text-transform: var(--label-case);
   letter-spacing: calc(0.06em * var(--tracking)); color: var(--fg-faint); }
 .sched-booking .notes { flex-basis: 100%; font-size: calc(12px * var(--fs-scale)); color: var(--fg-muted);
-  white-space: pre-wrap; }
+  white-space: pre-wrap; min-width: 0; overflow-wrap: anywhere; }
 
 /* create/edit modal: weekly availability editor */
 .sched-modal { width: 620px; }
@@ -1153,7 +1199,8 @@
 }
 .booking-title { font-family: var(--serif); font-size: calc(28px * var(--fs-scale)); font-weight: 500; margin: 0;
   letter-spacing: -0.01em; }
-.booking-desc { margin: 0; font-size: calc(14px * var(--fs-scale)); color: var(--fg-muted); white-space: pre-wrap; }
+.booking-desc { margin: 0; font-size: calc(14px * var(--fs-scale)); color: var(--fg-muted); white-space: pre-wrap;
+  overflow-wrap: anywhere; }
 .booking-lead { margin: 0; font-family: var(--serif); font-size: calc(17px * var(--fs-scale)); }
 .booking-meta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .booking-tz { font-family: var(--mono); font-size: calc(10px * var(--fs-scale)); color: var(--fg-faint);
@@ -1314,7 +1361,10 @@
   background: none; border: 0; width: 100%; cursor: pointer;
 }
 .mini-day:disabled { cursor: default; }
-.mini-day.dim { color: var(--fg-faint); opacity: 0.5; }
+/* Faint alone. A dim day that carries events is a live button (HomeView),
+   and the extra `opacity: 0.5` the contrast fix for these cells prescribed
+   dropping had stayed behind, halving the raised token back to 1.7:1. */
+.mini-day.dim { color: var(--fg-faint); }
 .mini-day.today { color: var(--bg); background: var(--accent); }
 /* a busy day carries its calendars' colors beneath the number, so "has events"
    survives the today highlight instead of competing with it */
@@ -1649,7 +1699,7 @@
 }
 .conn:last-child { border-bottom: 0; }
 .conn-main { flex: 1; min-width: 0; }
-.conn-name { font-weight: 600; }
+.conn-name { font-weight: 600; overflow-wrap: anywhere; }
 .conn-meta {
   display: flex; align-items: center; gap: 8px; margin-top: 3px; flex-wrap: wrap;
   font-size: calc(12px * var(--fs-scale)); color: var(--fg-faint);
@@ -1683,10 +1733,17 @@
   padding: 10px 0 2px; border-top: 1px solid var(--rule-faint);
 }
 .disp-picks { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 2px; }
-/* An unselected calendar keeps its outline and loses its fill, so "off" is a
-   state the chip is IN rather than a chip that has gone missing. */
-.disp-picks .chip { cursor: pointer; opacity: 0.45; }
-.disp-picks .chip.is-on { opacity: 1; }
+/* The same shape as `.habit-day`, the other pressable chip: an unselected
+   calendar is the outline and the faint token, a selected one the accent
+   fill — so "off" is a state the chip is IN rather than a chip that has gone
+   missing. `background: none` is load-bearing: these are <button>s, and a
+   button brings the user agent's grey face with it, which under the dark
+   theme was a light box around light text (1.0:1, measured). Tokens rather
+   than an opacity: the off chips are the list of what can still be added,
+   each an enabled `aria-pressed` button, and `opacity: 0.45` over the muted
+   token put their names at 1.8:1. */
+.disp-picks .chip { background: none; cursor: pointer; color: var(--fg-faint); }
+.disp-picks .chip.is-on { background: var(--accent); border-color: var(--accent); color: var(--bg); }
 .disp-url {
   display: flex; align-items: center; gap: 8px; margin: 4px 0;
   padding: 8px 10px; background: var(--paper); border: 1px solid var(--rule);
@@ -2355,17 +2412,29 @@
    same anatomy — eyebrow, one headline, an estimate line, NEXT and a count —
    drawn in the app's own tokens rather than display.css's fixed palette,
    because this is a surface the owner sits in front of and tunes, not a poster
-   across a room. `position: fixed` and no scroll: two rows and a clock are the
-   whole content whatever the day holds, which is what a screen with nothing to
-   scroll can honestly say. */
+   across a room. `position: fixed`: two rows and a clock are the whole content
+   whatever the day holds, and on any screen taller than a phone on its side
+   there is nothing to scroll. Where there is — a landscape phone is 390px
+   tall, and the clock alone is 152 of it — `.focus-main` scrolls (below),
+   because the alternative was the phase label under the header and the NEXT
+   picker under the footer, unclickable, with `overflow: hidden` here
+   foreclosing any way to reach them.
+
+   Being fixed, this box escapes `.shell`'s horizontal safe-area padding and
+   has to read the insets itself, as every other edge-to-edge surface does:
+   in landscape the notch sits over the Back button otherwise, and the footer
+   below sits under the home indicator. */
 .focus {
   position: fixed; inset: 0; display: flex; flex-direction: column;
   background: var(--bg); color: var(--fg); overflow: hidden;
   font-variant-numeric: tabular-nums;
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
 }
 .focus-head {
   display: flex; align-items: center; gap: 12px;
   padding: 14px var(--gutter); border-bottom: 1px solid var(--rule-faint);
+  padding-top: calc(14px + env(safe-area-inset-top));
 }
 .focus-head .label { flex: none; }
 .focus-head__interval, .focus-head__tally {
@@ -2373,8 +2442,15 @@
   white-space: nowrap;
 }
 .focus-back { flex: none; }
+/* `safe center`: centred while the face fits, start-aligned once it does not,
+   so the overflow is all at the bottom where `overflow-y: auto` can reach it.
+   Plain `center` on a column that overflows spills equally both ways and the
+   top half is unreachable by any scroll — measured at 844x390, the phase
+   label at y=-9 and the clock under the header row. The bare `center` before
+   it is the fallback for an engine without the keyword. */
 .focus-main {
   flex: 1; min-height: 0; display: flex; flex-direction: column; justify-content: center;
+  justify-content: safe center; overflow-y: auto;
   gap: clamp(12px, 3vh, 28px); padding: clamp(16px, 4vh, 48px) var(--gutter);
   max-width: 880px; width: 100%; margin: 0 auto; box-sizing: border-box;
 }
@@ -2431,9 +2507,14 @@
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .focus-next__more { font-family: var(--mono); font-size: calc(11px * var(--fs-scale)); color: var(--fg-faint); }
+/* The inset as well as the padding: this is the surface's bottom edge under
+   `viewport-fit=cover`, and End session is the one button on it. Same shape
+   as `.modal`, `.toast` and `.dash-stack`. The float window hides this footer
+   (below), so nothing there changes. */
 .focus-foot {
   display: flex; align-items: center; gap: 8px;
   padding: 12px var(--gutter); border-top: 1px solid var(--rule-faint);
+  padding-bottom: calc(12px + env(safe-area-inset-bottom));
 }
 .focus-empty { margin: 0; font-family: var(--serif); font-size: clamp(20px, 3vw, 32px); font-weight: 500; }
 .focus-hint { margin: 0; font-size: calc(13px * var(--fs-scale)); color: var(--fg-muted); line-height: 1.4; max-width: 48ch; }
