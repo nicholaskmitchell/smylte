@@ -640,7 +640,12 @@ export function serializeTheme(theme: CustomTheme): string {
  * anything malformed *inside* a valid theme is dropped rather than rejected, so
  * a file written against a newer token set still imports what it can.
  */
-export function parseTheme(text: string, id: string): CustomTheme | null {
+export function parseTheme(text: string, id: string,
+  // What a file with no name is called in the picker. The caller passes the
+  // translated word (`appear.importedTheme`); this module is React-free and
+  // has no language, so the English literal stays only as the default.
+  fallbackName = 'Imported theme',
+): CustomTheme | null {
   let raw: unknown
   try { raw = JSON.parse(text) } catch { return null }
   if (!raw || typeof raw !== 'object') return null
@@ -651,7 +656,7 @@ export function parseTheme(text: string, id: string): CustomTheme | null {
   if (!Object.keys(light).length && !Object.keys(dark).length) return null
   return {
     id,
-    name: (typeof o.name === 'string' && o.name.trim() ? o.name : 'Imported theme')
+    name: (typeof o.name === 'string' && o.name.trim() ? o.name : fallbackName)
       .slice(0, MAX_NAME_LEN),
     base: o.base === 'dark' ? 'dark' : 'light',
     light,

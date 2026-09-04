@@ -163,6 +163,14 @@ export function NotificationsSection({
             if (!token.trim()) return
             onTokenChange(token.trim())
             setToken('')
+          }}
+          onKeyDown={(e) => {
+            // Escape DISCARDS the pasted token, visibly, and keeps the sheet
+            // open. Without the propagation stop `useEscape` on the window
+            // unmounted the panel first, no blur ever fired, and the token was
+            // gone with `tokenSet` still reading false — the same silent loss
+            // the time fields below already guard against.
+            if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setToken('') }
           }} />
       </div>
       <div className="hintline">
@@ -246,29 +254,61 @@ export function NotificationsSection({
 
       <div className="menu-row">
         <label htmlFor="notif-task-lead">{tr('notif.taskLead')}</label>
-        <input className="input notif-lead" id="notif-task-lead" type="number"
-          min={MIN_EVENT_LEAD_MINUTES} max={1440} step={1}
-          value={taskLead}
-          onChange={(e) => {
-            const n = Number(e.target.value)
-            if (Number.isFinite(n)) onTaskLeadChange(n)
-          }} />
+        <LeadField id="notif-task-lead" value={taskLead}
+          min={MIN_EVENT_LEAD_MINUTES} max={1440} onCommit={onTaskLeadChange} />
       </div>
       <div className="hintline">{tr('notif.taskLead.hint')}</div>
 
       <div className="menu-row">
         <label htmlFor="notif-lead">{tr('notif.eventLead')}</label>
-        <input className="input notif-lead" id="notif-lead" type="number"
-          min={MIN_EVENT_LEAD_MINUTES} max={MAX_EVENT_LEAD_MINUTES} step={1}
-          value={eventLead}
-          onChange={(e) => {
-            const n = Number(e.target.value)
-            if (Number.isFinite(n)) onEventLeadChange(n)
-          }} />
+        <LeadField id="notif-lead" value={eventLead}
+          min={MIN_EVENT_LEAD_MINUTES} max={MAX_EVENT_LEAD_MINUTES} onCommit={onEventLeadChange} />
       </div>
       <div className="hintline">{tr('notif.eventLead.hint')}</div>
 
       <div className="hintline">{tr('notif.ceiling.hint')}</div>
     </>
+  )
+}
+
+/** A lead in whole minutes, held as a draft and committed on blur or Enter.
+ *
+ *  Not on every keystroke, which is what these two fields did: App clamps the
+ *  value at the 3-minute floor BEFORE writing it back into the controlled
+ *  prop, so the first digit of 10, 15, 20 or 25 was rewritten to 3 before the
+ *  second digit arrived, and "15" persisted as 35. The Duration field in
+ *  SchedulingView had the identical defect, closed the same way; `MinutesRow`
+ *  in FocusSection is the same shape two sections up. The clamp itself stays
+ *  App's — this only decides WHEN it is asked. */
+function LeadField({ id, value, min, max, onCommit }: {
+  id: string
+  value: number
+  min: number
+  max: number
+  onCommit: (next: number) => void
+}) {
+  const [draft, setDraft] = useState(String(value))
+  useEffect(() => { setDraft(String(value)) }, [value])
+  const commit = () => {
+    const n = Math.round(Number(draft))
+    // An emptied or unreadable field snaps back rather than committing 0,
+    // which the clamp would turn into the floor without anyone asking for it.
+    if (draft.trim() === '' || !Number.isFinite(n)) { setDraft(String(value)); return }
+    const clamped = Math.min(max, Math.max(min, n))
+    setDraft(String(clamped))
+    if (clamped !== value) onCommit(clamped)
+  }
+  return (
+    <input className="input notif-lead" id={id} type="number" inputMode="numeric"
+      min={min} max={max} step={1} value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') { e.preventDefault(); commit() }
+        // Escape abandons the edit and does NOT close the settings sheet from
+        // under it — `useEscape` is bound to the window, as the time fields
+        // above and CapacityField already allow for.
+        if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setDraft(String(value)) }
+      }} />
   )
 }

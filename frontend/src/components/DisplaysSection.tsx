@@ -101,10 +101,26 @@ export function DisplaysSection(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // `adding` bounds flight, as `saving` does for a booking link and `creating`
+  // for a sidebar list. Without it a second Enter during the round trip — which
+  // under the service lock can be seconds — POSTed a second display with the
+  // same name, and every POST mints a fresh token that reads the whole calendar
+  // without a session. Two rows called "Kitchen" are indistinguishable, so the
+  // one deleted as the duplicate could be the one the panel was paired to.
+  const [adding, setAdding] = useState(false)
   const add = async () => {
     const trimmed = name.trim()
-    if (!trimmed) return
-    const made = await guard(() => api.createDisplay({ name: trimmed }))
+    if (!trimmed || adding) return
+    setAdding(true)
+    // Cleared in a `finally` rather than on failure only: unlike the booking
+    // link modal, this section stays mounted after a success, and its Add
+    // button has to come back for the next display.
+    let made: Display | undefined
+    try {
+      made = await guard(() => api.createDisplay({ name: trimmed }))
+    } finally {
+      setAdding(false)
+    }
     if (!made) return
     setRows((r) => [...r, made])
     setName('')
@@ -194,6 +210,14 @@ export function DisplaysSection(
     setDrafts((x) => ({ ...x, [token]: { ...x[token], ...part } }))
   const clearDraft = (token: string) =>
     setDrafts((x) => { const { [token]: _drop, ...rest } = x; return rest })
+  /** Escape on a blur-committed field: drop the draft, visibly, and keep the
+   *  sheet open. `useEscape` is bound to the window and unmounts the whole
+   *  settings panel; a removed element never blurs, so without the propagation
+   *  stop a half-typed name or panel size was simply gone. */
+  const escapeReverts = (token: string) => (e: React.KeyboardEvent) => {
+    if (e.key !== 'Escape') return
+    e.preventDefault(); e.stopPropagation(); clearDraft(token)
+  }
 
   const toggleId = (current: string[], id: string): string[] =>
     current.includes(id) ? current.filter((x) => x !== id) : [...current, id]
@@ -264,7 +288,8 @@ export function DisplaysSection(
                         // the panel itself.
                         if (!next || next === d.name) return clearDraft(d.token)
                         void patch(d.token, { name: next })
-                      }} />
+                      }}
+                      onKeyDown={escapeReverts(d.token)} />
                   </div>
 
                   <div className="menu-row">
@@ -318,7 +343,7 @@ export function DisplaysSection(
                       {(REFRESH_CHOICES[d.palette] as readonly number[])
                         .includes(d.refresh_seconds)
                         ? tr(`disp.refresh.${d.refresh_seconds}`)
-                        : tr('disp.refresh.seconds', { n: String(d.refresh_seconds) })}
+                        : tr('disp.refresh.seconds', { n: d.refresh_seconds })}
                     </button>
                   </div>
                   {d.palette === 'eink' ? (
@@ -413,7 +438,8 @@ export function DisplaysSection(
                         value={drafts[d.token]?.panel_width ?? (d.panel_width ?? '')}
                         onChange={(e) => setDraft(d.token, { panel_width: e.target.value })}
                         onBlur={(e) => void patch(d.token,
-                          { panel_width: Number(e.target.value) || 0 })} />
+                          { panel_width: Number(e.target.value) || 0 })}
+                        onKeyDown={escapeReverts(d.token)} />
                       <span aria-hidden="true">×</span>
                       {/* Its own accessible name. The width field borrows the
                           "Panel size" label through `htmlFor`; this one had
@@ -426,7 +452,8 @@ export function DisplaysSection(
                         value={drafts[d.token]?.panel_height ?? (d.panel_height ?? '')}
                         onChange={(e) => setDraft(d.token, { panel_height: e.target.value })}
                         onBlur={(e) => void patch(d.token,
-                          { panel_height: Number(e.target.value) || 0 })} />
+                          { panel_height: Number(e.target.value) || 0 })}
+                        onKeyDown={escapeReverts(d.token)} />
                     </span>
                   </div>
                   {d.panel_too_small ? (
@@ -498,7 +525,7 @@ export function DisplaysSection(
           aria-label={tr('disp.name')}
           onChange={(e) => setName(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') void add() }} />
-        <button className="btn" onClick={() => void add()} disabled={!name.trim()}>
+        <button className="btn" onClick={() => void add()} disabled={!name.trim() || adding}>
           {tr('disp.addButton')}
         </button>
       </div>

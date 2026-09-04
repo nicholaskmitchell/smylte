@@ -47,11 +47,28 @@ export function ConnectionsSection({ onExpire }: {
 
   // Painted immediately: the request settles behind, and a failure puts the row
   // back rather than leaving the list claiming a disconnection that never landed.
+  //
+  // ONE ROW goes back, where it was — not a snapshot of the whole array as it
+  // looked when the call started. That snapshot carried every other grant that
+  // was still listed at the time, so a second Disconnect confirmed while the
+  // first DELETE was in flight (seconds, under the service lock) came back as
+  // "connected, read and write" when the first one failed — a revoked grant
+  // shown live on the only screen that shows which applications hold access.
+  // DisplaysSection.remove in the same panel was rewritten this way earlier.
   const disconnect = async (id: string) => {
-    const prev = rows
+    const at = rows.findIndex((x) => x.family_id === id)
+    const before = rows[at]
     setRows((r) => r.filter((x) => x.family_id !== id))
     setConfirming(null)
-    if (await guard(() => api.mcpDisconnect(id)) === undefined) setRows(prev)
+    if (await guard(() => api.mcpDisconnect(id)) !== undefined) return
+    if (before) {
+      setRows((r) => {
+        if (r.some((x) => x.family_id === id)) return r
+        const next = [...r]
+        next.splice(Math.min(at, next.length), 0, before)
+        return next
+      })
+    }
   }
 
   const what = (scope: string) => {
