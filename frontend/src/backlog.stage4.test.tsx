@@ -254,7 +254,10 @@ describe('stage 4 — booking-link editor', () => {
     // The half nothing asserted: the published link has to appear in the list,
     // with its real token. With the old `{}` stand-in this rendered a card keyed
     // `undefined` showing `/book/undefined`, and the suite passed anyway.
-    expect(await screen.findByText('/book/tok-new')).toBeInTheDocument()
+    // (The card shows the server's absolute `url` when the DTO carries one —
+    // the 2026-09-03 sweep, SchedulingView.tsx `publicUrl` — and this fixture
+    // always has.)
+    expect(await screen.findByText('https://x/book/tok-new')).toBeInTheDocument()
 
     fireEvent.keyDown(window, { key: 'Escape' })
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())

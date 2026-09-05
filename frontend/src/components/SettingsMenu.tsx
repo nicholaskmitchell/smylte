@@ -167,6 +167,7 @@ export function SettingsMenu({
   // exactly and this is the last hand-rolled copy. Its own suite covers all
   // three levels (agenda -> section -> closed) and is the control.
   useEscape(back)
+  const sheetPress = useRef(false)
 
   const tr = useT()
   const active = SECTIONS.find((s) => s.id === section)!
@@ -272,11 +273,7 @@ export function SettingsMenu({
                 {tr('settings.appearance.customize')}
               </button>
             </div>
-            <div className="hintline">
-              Customize opens the full editor over the design system — every
-              color token, the corner radius, the text scale and the type
-              families — and saves what you make as a named theme.
-            </div>
+            <div className="hintline">{tr('settings.appearance.hint')}</div>
             <DesktopSection />
           </>
         )}
@@ -298,11 +295,7 @@ export function SettingsMenu({
                 {tr(calendarFitKey(calFit))}
               </button>
             </div>
-            <div className="hintline">
-              A fixed calendar window fits the whole month in the pane: every week
-              is the same height, and a day with more than fits collapses into
-              “+N more”. Dynamic lets a busy week grow and the grid scroll.
-            </div>
+            <div className="hintline">{tr('settings.calendarFit.hint')}</div>
 
             <div className="menu-head">{tr('settings.archivedCalendars')}</div>
             </>)}
@@ -310,12 +303,7 @@ export function SettingsMenu({
               onChange={onArchivedCalsChange} onExpire={onExpire}
               viewing={viewingCal} onViewing={setViewingCal} />
             {!viewingCal && (
-              <div className="hintline">
-                Archiving hides a calendar without deleting it. Lists and
-                calendars live on the Radicale CalDAV server — changes there show
-                up in every connected client, but an archive is Smylte's own and
-                the collection stays on the wire.
-              </div>
+              <div className="hintline">{tr('settings.archived.hint')}</div>
             )}
           </>
         )}
@@ -330,10 +318,7 @@ export function SettingsMenu({
                   ? 'settings.completedTasks.shown' : 'settings.completedTasks.hidden')}
               </button>
             </div>
-            <div className="hintline">
-              Whether completed tasks stay in the main view. The sidebar's
-              “View completed” works either way.
-            </div>
+            <div className="hintline">{tr('settings.completedTasks.hint')}</div>
           </>
         )}
 
@@ -389,10 +374,7 @@ export function SettingsMenu({
                 {tr(sessionKey(sessionTtl))}
               </button>
             </div>
-            <div className="hintline">
-              A shorter sign-in applies at once, on this device and any other. A
-              longer one starts from your next sign-in.
-            </div>
+            <div className="hintline">{tr('settings.session.hint')}</div>
 
             <div className="menu-head">{tr('settings.connectedApps')}</div>
             <ConnectionsSection onExpire={onExpire} />
@@ -430,7 +412,15 @@ export function SettingsMenu({
   // the width.
   if (isMobile) {
     return (
-      <div className="overlay set-overlay" onClick={onClose}>
+      <div className="overlay set-overlay"
+        // The press/release pair every other scrim carries (TaskModal's comment
+        // has the mechanism): a drag-select that began in a field and let go on
+        // the scrim used to close the sheet over a half-typed token or size.
+        onMouseDown={(e) => { sheetPress.current = e.target === e.currentTarget }}
+        onClick={(e) => {
+          if (e.target === e.currentTarget && sheetPress.current) onClose()
+          sheetPress.current = false
+        }}>
         <div ref={panelRef} className="settings-menu set-sheet" data-view={view}
           role="dialog" aria-modal="true" aria-label={tr('app.settings')}
           onClick={(e) => e.stopPropagation()}>

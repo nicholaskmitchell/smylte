@@ -53,6 +53,39 @@ LEDGER_RETENTION = timedelta(days=30)
 _URGENCY = {"item_reminder": 0, "event_starting": 1, "daily_digest": 2}
 
 
+def loud_deliveries_since(conn, stamp: str) -> int:
+    """How many BUZZES have gone out since `stamp` — the count behind the ceiling.
+
+    Two things the ledger's row count gets wrong, both in the direction of
+    silencing a meeting alert on a day that barely interrupted anyone.
+
+    A loud send Telegram refused settles `ok=0, silent=0`. Charged per row it
+    spent a slot on every later sweep although `_dispatch` charges a buzz only
+    `if outcome.ok` — eight refusals silenced the day. A row counts here when it
+    went out, or when it is claimed and not yet settled (a crash mid-send, read
+    as SENT because erring quieter is the right direction for a noise ceiling
+    to be wrong in).
+
+    A batch settles one row per OCCASION and `_batches` promises "only the
+    delivery is combined" — but the 07:30 morning message (four occasions, one
+    buzz) used to spend four of the eight slots. The ledger now records which
+    delivery each row rode in (`message_id`, the transport's own id), so a
+    combined message is one buzz here however many occasions it carried. A row
+    with no id — settled before the column existed, or by a transport that
+    returned none — counts alone, which is the per-row charge it always had.
+    """
+    row = conn.execute(
+        "SELECT COUNT(DISTINCT CASE WHEN ok = 1 AND message_id IS NOT NULL "
+        "                          THEN message_id END) "
+        "     + COALESCE(SUM(CASE WHEN (ok = 1 AND message_id IS NULL) "
+        "                          OR settled_at IS NULL THEN 1 ELSE 0 END), 0) "
+        "FROM notification_deliveries "
+        "WHERE claimed_at >= ? AND silent = 0",
+        (stamp,),
+    ).fetchone()
+    return int(row[0]) if row else 0
+
+
 @dataclass
 class SweepResult:
     considered: int = 0
@@ -217,7 +250,7 @@ class Notifier:
         # every message in this sweep count ITSELF against the ceiling — which
         # silenced the eighth message of the day rather than the ninth, and
         # silenced both of a pair when only the second should have been.
-        loud_today = self._svc.notifications(store.loud_notifications_since, midnight)
+        loud_today = self._svc.notifications(loud_deliveries_since, midnight)
 
         # Then claim, all of it, under the lock. Anything already said drops out
         # here and never reaches the transport.
@@ -247,6 +280,7 @@ class Notifier:
                 self._svc.notifications(
                     store.settle_notification, p.trigger, p.dedupe_key,
                     ok=outcome.ok, silent=silent, error=outcome.error,
+                    message_id=outcome.message_id,
                 )
 
     @staticmethod

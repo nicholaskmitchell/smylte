@@ -5,8 +5,10 @@ import {
   api, clientId, uidFor, type CalEvent, type EventScope, type List, type Task,
 } from '../api'
 import { useCalendarData, useTaskData } from '../data'
-import { useEscape } from '../hooks'
-import { cssColor, dayKey, makeGuard, pad, sameValue, textDir, toLocalInput, ymd } from '../util'
+import { useEscape, useToday } from '../hooks'
+import {
+  cssColor, dayKey, hasZone, instantFromLocal, makeGuard, pad, sameValue, textDir, toLocalInput, ymd,
+} from '../util'
 import { fmtClock, inputLang } from '../time'
 import { useTimeFormat } from '../timeformat'
 import {
@@ -614,7 +616,13 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
     reorder: (ids: string[]) => guard(() => api.reorderCalendars(ids)),
   }
 
-  const todayKey = ymd(new Date())
+  // Through `useToday`, not `ymd(new Date())` read once per render: nothing
+  // re-renders this tab at midnight on its own (the provider changes only on an
+  // SSE rev bump, which an idle account never produces), so a grid left open
+  // overnight kept yesterday's accent pill and the "New event" button below
+  // prefilled yesterday's date. Home's mini month already rolled over via the
+  // hook; the full grid was the inconsistent one.
+  const todayKey = useToday()
   const lastKey = ymd(days[41])            // final visible day, for resize grips (and dropOnDay's clamp)
   // Where new events land by default: the first shown (non-hidden) calendar,
   // among those not archived; else the first visible one.
@@ -1111,8 +1119,21 @@ function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete,
   // What actually goes on the wire: end never precedes start, and an all-day
   // range converts back from the inclusive picker to an exclusive DTEND.
   const clampedEnd = endVal < startVal ? startVal : endVal
-  const startOut = startVal
-  const endOut = allDay ? shiftYmd(clampedEnd, 1) : clampedEnd
+  // A timed value goes as the picker's naive local string — which is what the
+  // app's own writes are — UNLESS the property it replaces was anchored to a
+  // zone by another CalDAV client, in which case the instant goes instead so
+  // the server can put it back in that zone. `toLocalInput` reduced
+  // `DTSTART;TZID=Europe/Berlin:20260810T093000` to the viewer's 03:30, and
+  // sending that back naive dropped the TZID and moved the standup six hours in
+  // Berlin's own terms. TaskModal's `dateOut` and calendar.ts's `shiftIso` had
+  // this rule for DUE and for the drag path; the editor was the outlier.
+  const asWire = (local: string, original: string | null | undefined) =>
+    (!allDay && hasZone(original))
+      ? instantFromLocal(local.slice(0, 10), local.slice(11, 16))
+      : local
+  const startOut = asWire(startVal, e?.start)
+  // A DURATION-only event derives its end from a start that may be zoned.
+  const endOut = allDay ? shiftYmd(clampedEnd, 1) : asWire(clampedEnd, e?.end ?? e?.start)
 
   // Sent only when they actually differ from what the event holds. `commit`
   // used to include `tags` on EVERY save, so an edit that only changed the title
@@ -1157,11 +1178,21 @@ function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete,
       onReminderChange?.(e.uid, reminder === null ? NO_REMINDER : reminder)
     }
     const details = { summary, location, description, ...tagFields(), ...busyFields() }
+    // Only when a picker or the all-day toggle actually moved. A save that never
+    // touched them has no business restating DTSTART/DTEND: the round trip
+    // through the local pickers is lossy for anything the app did not write
+    // itself (a zone, a DURATION, seconds), and the backend writes whatever
+    // arrives. Invariant #2 — the same discipline `tagFields` and `busyFields`
+    // keep above. The recurring "All events" branch always gated on this; the
+    // other three sent the times on every save, so a rename rewrote them.
+    //
     // An event whose span we could not reconstruct sends no end at all, so the
     // stored DTEND/DURATION is left exactly as its author wrote it.
-    const times = endUnknown
-      ? { start: startOut }
-      : { start: startOut, end: endOut }
+    const times = !timeChanged
+      ? {}
+      : endUnknown
+        ? { start: startOut }
+        : { start: startOut, end: endOut }
     if (recurring && scope === 'all') {
       // A changed time plus recurrence_id tells the server to shift the whole
       // series by the same offset (EXDATEs and overrides move along). Untouched

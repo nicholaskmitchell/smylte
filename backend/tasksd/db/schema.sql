@@ -536,6 +536,12 @@ CREATE TABLE IF NOT EXISTS notification_deliveries (
     -- The bot token travels in the request path, so an unredacted httpx error
     -- string here would be a plaintext credential in every backup of this file.
     error       TEXT,
+    -- Which DELIVERY carried this occasion: Telegram's message_id, NULL for a
+    -- row that never settled as sent or whose transport returned none. One
+    -- batched message settles one row per occasion, and the daily loud ceiling
+    -- counts BUZZES, not rows — so the ceiling counts distinct values here
+    -- (scheduler.loud_deliveries_since), and a row without one counts alone.
+    message_id  INTEGER,
     PRIMARY KEY (trigger, dedupe_key, channel)
 );
 CREATE INDEX IF NOT EXISTS idx_notification_deliveries_claimed

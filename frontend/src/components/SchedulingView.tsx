@@ -78,9 +78,16 @@ export function SchedulingView({ rev, onExpire }: { rev: number; onExpire: () =>
     return bookings.filter((b) => new Date(b.end).getTime() >= now)
   }, [bookings])
 
+  // The server's absolute URL when it names one, this origin otherwise. Inside
+  // the Windows client `location.origin` is `http://localhost:<port>` — the
+  // loopback server the SPA is served from, which proxies only /api — so the
+  // one way the owner had to hand a client the link produced a URL that opened
+  // on that machine and nowhere else. See `BookingLink.url`.
+  const publicUrl = (l: BookingLink) => l.url ?? `${location.origin}/book/${l.token}`
+
   const copyLink = async (l: BookingLink) => {
     try {
-      await navigator.clipboard.writeText(`${location.origin}/book/${l.token}`)
+      await navigator.clipboard.writeText(publicUrl(l))
       setCopied(l.token)
       setTimeout(() => setCopied((c) => (c === l.token ? null : c)), 1600)
     } catch {
@@ -196,7 +203,9 @@ export function SchedulingView({ rev, onExpire }: { rev: number; onExpire: () =>
                 </div>
                 <div className="sched-card-meta">
                   {tr('sched.bookingCount', { count: l.booking_count })} ·{' '}
-                  <span className="mono">/book/{l.token}</span>
+                  {/* The whole address when the server names it, so it can be
+                      read off the card when the clipboard is unavailable. */}
+                  <span className="mono">{l.url ?? `/book/${l.token}`}</span>
                 </div>
                 <div className="sched-card-actions">
                   <button className="btn ghost" onClick={() => copyLink(l)}>
@@ -324,7 +333,16 @@ function LinkModal({ link, cals, onClose, onSave, onDelete }: {
   const modalTitle = link ? tr('sched.editLink') : tr('sched.newLinkTitle')
   const [title, setTitle] = useState(link?.title ?? '')
   const [description, setDescription] = useState(link?.description ?? '')
-  const [calendar, setCalendar] = useState(link?.calendar ?? cals[0]?.id ?? '')
+  // A link flagged `calendar_missing` still carries the deleted id, which
+  // matches no option — React then selected the first option in the DOM while
+  // state (and the PATCH) kept the deleted slug, so Save was refused with a
+  // 404 naming an id nowhere on screen; and with one calendar left, re-picking
+  // the one already shown fires no change, so the link could not be repointed
+  // from here at all. The editor now seeds what it shows. The SERVER's flag
+  // decides, not membership in `cals`: a calendars fetch that failed or is
+  // still in flight must not blank a link's perfectly good calendar.
+  const [calendar, setCalendar] = useState(() =>
+    (link && !link.calendar_missing ? link.calendar : cals[0]?.id ?? ''))
   // Held as a STRING while the user types — see the Duration input for why.
   const [duration, setDuration] = useState(String(link?.duration_minutes ?? 30))
   const [tz, setTz] = useState(

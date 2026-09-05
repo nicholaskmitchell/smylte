@@ -75,8 +75,11 @@ public sealed class MainForm : Form, IDesktopBridge
     }
 
     /// Shown when the published exe is a different binary from this one. The
-    /// client cannot replace itself while running, so the honest thing is to say
-    /// so and link to the download rather than pretend it is handled.
+    /// client cannot overwrite itself while running, but it can rename itself
+    /// aside and start the replacement (Updater.ReplaceClientAsync), so the
+    /// strip offers to do exactly that. Only when that refuses — an exe in a
+    /// folder this user cannot write, a release with no digest to check the
+    /// download against — does it fall back to the download page.
     private void BuildNotice()
     {
         _notice.BackColor = Color.FromArgb(255, 244, 214);
@@ -107,6 +110,7 @@ public sealed class MainForm : Form, IDesktopBridge
             Dock = DockStyle.Right,
             Width = 100,
             FlatStyle = FlatStyle.Flat,
+            Visible = false,   // the fallback, shown once Update has refused
         };
         download.Click += (_, _) =>
         {
@@ -120,6 +124,44 @@ public sealed class MainForm : Form, IDesktopBridge
             }
         };
 
+        var update = new Button
+        {
+            Text = "Update",
+            Dock = DockStyle.Right,
+            Width = 100,
+            FlatStyle = FlatStyle.Flat,
+        };
+        update.Click += async (_, _) =>
+        {
+            update.Enabled = false;
+            dismiss.Enabled = false;
+            var progress = new Progress<string>(text => message.Text = text);
+            try
+            {
+                var exe = await Updater
+                    .ReplaceClientAsync(_settings, progress, CancellationToken.None)
+                    .ConfigureAwait(true);
+                message.Text = "Restarting…";
+                // The new file is in place; this process is still the old image.
+                // Start the new one and tell it whom to wait for, then leave.
+                Process.Start(new ProcessStartInfo(exe)
+                {
+                    Arguments = $"{Updater.AfterUpdateFlag} {Environment.ProcessId}",
+                    UseShellExecute = true,
+                    WorkingDirectory = Path.GetDirectoryName(exe) ?? "",
+                });
+                Close();
+            }
+            catch (Exception ex)
+            {
+                // Say what refused, and offer the way that always works.
+                message.Text = $"Couldn’t update in place ({ex.Message}) — download it instead.";
+                update.Visible = false;
+                download.Visible = true;
+                dismiss.Enabled = true;
+            }
+        };
+
         // The same inversion, inside the strip, and the comment here used to state
         // the mechanism backwards: `Controls.Add` appends, so the LAST control
         // added has the highest index and is docked FIRST — which is exactly what
@@ -128,10 +170,10 @@ public sealed class MainForm : Form, IDesktopBridge
         // end rather than beside it.
         //
         // Fill FIRST, so the buttons consume their widths from the right before
-        // the label is given the remainder. `download` before `dismiss` keeps
-        // "Not now" on the outside, which is the layout the old comment
-        // described and did not produce.
+        // the label is given the remainder. The action buttons before `dismiss`
+        // keep "Not now" on the outside.
         _notice.Controls.Add(message);
+        _notice.Controls.Add(update);
         _notice.Controls.Add(download);
         _notice.Controls.Add(dismiss);
     }
@@ -236,6 +278,14 @@ public sealed class MainForm : Form, IDesktopBridge
         // monogram, never the window.
         try { Icon = IconLibrary.Load(IconLibrary.Parse(_settings.IconChoice)) ?? Icon; }
         catch (Exception) { /* cosmetic */ }
+        // The Start-menu shortcut carries the same icon as a FILE, resolved at
+        // write time — so with Auto it was written for the taskbar of that
+        // moment and never followed a theme flip: the window and Alt-Tab went
+        // Paper on a dark taskbar while the grouped taskbar button stayed Ink.
+        // Sync is best-effort and a no-op with the toggle off, and this is the
+        // one place every icon change passes through (construction, the theme
+        // broadcast, the settings bridge), so the shortcut follows from here.
+        ShellShortcut.Sync(_settings);
     }
 
     private void ApplyChrome(string? background)
@@ -367,8 +417,7 @@ public sealed class MainForm : Form, IDesktopBridge
             _settings.IconChoice = IconLibrary.Parse(choice).ToString();
             _settings.StartMenuShortcut = startMenuShortcut;
             _settings.Save();
-            ApplyIcon();
-            ShellShortcut.Sync(_settings);
+            ApplyIcon();   // re-syncs the shortcut too
         });
     }
 

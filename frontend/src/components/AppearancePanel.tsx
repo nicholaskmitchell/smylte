@@ -184,7 +184,8 @@ export function AppearancePanel({ appearance, onChange, mode, onMode, onClose }:
   }
 
   const importTheme = async (file: File) => {
-    const parsed = parseTheme(await file.text(), clientId().slice(0, 16))
+    const parsed = parseTheme(await file.text(), clientId().slice(0, 16),
+      tr('appear.importedTheme'))
     if (!parsed) { window.alert(tr('appear.notATheme')); return }
     if (themes.length >= MAX_THEMES) { window.alert(tr(AT_CAP, { max: MAX_THEMES })); return }
     onChange({ active: parsed.id, themes: [...themes, parsed] })

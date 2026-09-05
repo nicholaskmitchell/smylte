@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
+import { contrast } from './test/contrast'
 
 // Both files are read as text rather than imported: index.html is not a module,
 // and `?raw` on a stylesheet returns an empty string under this suite's
@@ -73,6 +74,67 @@ describe('shipped defaults', () => {
     for (const token of TOKEN_NAMES) {
       expect(token in light, `${token} is not declared in :root`).toBe(true)
     }
+  })
+})
+
+// ── the contrast the shipped tokens must keep ───────────────────────────────
+// 2026-09-03 sweep, test gap. Two closed findings (docs/AUDIT.md: "--fg-faint
+// is 2.30:1 against the shipped light background" and "--fg-faint carries real
+// text at 2.3:1") raised the token to clear WCAG's 3:1 floor, and the second
+// asked for "a contrast assertion to that same test so the token cannot drift
+// back". Nothing computed a ratio: the mirror tests above only hold DEFAULTS to
+// tokens.css, so reverting BOTH files to `rgba(20, 19, 26, 0.36)` passed the
+// whole suite. This is the number, measured the way the findings measured it —
+// sRGB compositing, WCAG 2.x luminance, the WORST of the three backgrounds a
+// token is painted over — for every block tokens.css ships.
+//
+// Only the bars every block clears TODAY are asserted, because a pin is a
+// drift guard and not a new finding: `--fg-faint` at 3.0 (it is UI-component
+// colour as well as caption colour), `--fg-muted` at AA text (4.5), and the
+// three semantic colours at the 3.0 non-text floor. Light `--accent` and
+// `--ok` measure 3.6–4.3 on `--paper` and so do NOT clear AA text; that is a
+// palette decision recorded separately, not something this test settles.
+
+describe('shipped contrast', () => {
+  const BLOCKS: Array<[string, string]> = [
+    ['light', ':root'],
+    ['dark', ':root[data-theme="dark"]'],
+    ['workspace light', ':root[data-preset="workspace"]'],
+    ['workspace dark', ':root[data-preset="workspace"][data-theme="dark"]'],
+  ]
+  const BACKGROUNDS = ['--bg', '--bg-elev', '--paper']
+
+  /** The lowest ratio a token reaches over any of the three backgrounds. */
+  const worst = (block: Record<string, string>, token: string) =>
+    Math.min(...BACKGROUNDS.map((bg) => contrast(block[token], block[bg])))
+
+  it.each(BLOCKS)('%s: --fg-faint clears 3:1 on every background it is painted over',
+    (_name, selector) => {
+      const block = parseBlock(tokensCss, selector)
+      // The value the two findings fixed was 2.30 (light) and 2.75 (dark).
+      expect(worst(block, '--fg-faint')).toBeGreaterThanOrEqual(3.0)
+    })
+
+  it.each(BLOCKS)('%s: --fg-muted is AA text on every background', (_name, selector) => {
+    const block = parseBlock(tokensCss, selector)
+    expect(worst(block, '--fg-muted')).toBeGreaterThanOrEqual(4.5)
+  })
+
+  it.each(BLOCKS)('%s: the semantic colours clear the non-text floor', (_name, selector) => {
+    const block = parseBlock(tokensCss, selector)
+    for (const token of ['--accent', '--warn', '--ok']) {
+      expect(worst(block, token), token).toBeGreaterThanOrEqual(3.0)
+    }
+  })
+
+  it('reads every syntax tokens.css uses, so a token it cannot parse fails loudly', () => {
+    // The helper's own vacuity guard: an unparseable colour throws rather than
+    // composites to black, which would pass every ratio above by accident.
+    expect(contrast('#FFFFFF', '#000000')).toBeCloseTo(21, 1)
+    // The value the two findings measured: 0.36 alpha over the light --bg.
+    expect(contrast('rgba(20, 19, 26, 0.36)', '#FBFAF7')).toBeCloseTo(2.30, 1)
+    expect(contrast('oklch(0.60 0.19 42)', '#FFFFFF')).toBeGreaterThan(4)
+    expect(() => contrast('var(--fg)', '#FFFFFF')).toThrow()
   })
 })
 

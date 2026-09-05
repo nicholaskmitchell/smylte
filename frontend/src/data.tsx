@@ -103,6 +103,12 @@ export interface TaskData {
    *  comment gives: a pane that is short and does not say so is a confident lie
    *  about the account. */
   taskListErrors: string[]
+  /** The same lists by ID — the key a day-plan row joins on. A task row from
+   *  one of these is UNKNOWN, not gone: the server still names and credits the
+   *  task, this client just could not read the list it is in. `focus.ts` and
+   *  the Home plan module read this so such a row is never counted finished or
+   *  called orphan off the absence of a task that was never fetched. */
+  taskListsFailed: string[]
   /** Re-run the task fan-out. The effect keys on `loadKey`/`rev`, and `rev`
    *  only moves when the SERVER publishes a change — so on an idle account a
    *  failed fetch had no way back short of reloading the page. */
@@ -229,12 +235,43 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
   keyRef.current = loadKey
   const fetchToken = useRef(0)
   const invalidateFetches = () => { fetchToken.current += 1 }
-  const [listErrors, setListErrors] = useState<string[]>([])
+  const [listErrors, setListErrors] = useState<List[]>([])
+  // Memoised: both arrays sit in a context value that is rebuilt every render,
+  // and consumers put them in effect dependency lists.
+  const listErrorNames = useMemo(() => listErrors.map((l) => l.name), [listErrors])
+  const listErrorIds = useMemo(() => listErrors.map((l) => l.id), [listErrors])
   // The retry's own signal. `rev` cannot serve: it moves only when the server
   // publishes a change, so on an idle account a failed fan-out had nothing to
   // re-issue it.
   const [taskNonce, setTaskNonce] = useState(0)
   const reloadTasks = useCallback(() => setTaskNonce((n) => n + 1), [])
+
+  // The three facts that decide whether a discarded fan-out has to be
+  // re-issued by hand. A fan-out is dropped whenever a write invalidates it;
+  // if that write LANDS, the server publishes and the SSE `rev` bump refetches,
+  // so nothing is owed. If it FAILS, nothing is published and nothing else will
+  // ask again. Re-issued only once every write is settled, so a burst of
+  // writes is one refetch and a fan-out is never re-issued into the flight of
+  // a write that would only drop it again. The commit path clears all three.
+  const droppedFetch = useRef(false)
+  const failedWrite = useRef(false)
+  const writesInFlight = useRef(0)
+  const reissueIfOrphaned = () => {
+    if (!droppedFetch.current || !failedWrite.current || writesInFlight.current > 0) return
+    droppedFetch.current = false
+    failedWrite.current = false
+    reloadTasks()
+  }
+  /** `guard`, counted. Every optimistic write below goes through this so the
+   *  bookkeeping above cannot be forgotten by one of them. */
+  const write = async <T,>(fn: () => Promise<T>): Promise<T | undefined> => {
+    writesInFlight.current += 1
+    const out = await guard(fn)
+    writesInFlight.current -= 1
+    if (out === undefined) failedWrite.current = true
+    reissueIfOrphaned()
+    return out
+  }
 
   // Waits for the real lists rather than fanning out over the cached ones: a
   // seeded id may name a list deleted in another client, and a 404 per stale
@@ -265,14 +302,27 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
       const failed = lists
         .filter((l, i) => per[i].status === 'rejected'
           || !Array.isArray((per[i] as PromiseFulfilledResult<Task[]>).value))
-        .map((l) => l.name)
       // An AuthError anywhere is the SESSION, not one list: let it out to
       // `guard` so the app routes to the login card rather than reporting the
       // whole account as a set of broken lists.
       const auth = per.find((r) => r.status === 'rejected'
         && (r as PromiseRejectedResult).reason instanceof AuthError)
       if (auth) throw (auth as PromiseRejectedResult).reason
-      if (token !== fetchToken.current || key !== keyRef.current) return
+      if (token !== fetchToken.current || key !== keyRef.current) {
+        // Superseded by a write. The write's own SSE `rev` bump re-issues this
+        // once the server has published the change — but a write that FAILS
+        // publishes nothing, and this was the only fan-out for this `rev`. So
+        // the drop is remembered, and re-issued the moment it is known that no
+        // replacement is coming (see `reissueIfOrphaned`). Without that, the
+        // pre-fetch array — on a cold boot the disk mirror, up to 14 days old —
+        // stayed painted as the live account with `loaded` true, no error and
+        // no retry, on an idle account indefinitely.
+        droppedFetch.current = true
+        reissueIfOrphaned()
+        return
+      }
+      droppedFetch.current = false
+      failedWrite.current = false
       // Only when SOMETHING landed, the lesson the calendar path already
       // carries: writing `[]` for a fan-out where every list failed replaces
       // rows that are still on screen with a blank pane, which is a worse blank
@@ -396,7 +446,7 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
         return undefined
       }
       invalidateFetches()          // a refetch may have started while we waited
-      const t = await guard(() => api.createTask(listId, { ...body, client_id: cid }))
+      const t = await write(() => api.createTask(listId, { ...body, client_id: cid }))
       if (!t) { setTasks((ts) => ts.filter((x) => x.uid !== uid)); return undefined }
       settleCreate(uid, key, t)
       return t
@@ -509,46 +559,56 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
     invalidateFetches()
     setTasks((ts) => [...ts, ...items.map((it, i) => draftTask(uids[i], it.listId, it.body))])
     const failed: number[] = []
-    for (let i = 0; i < items.length; i++) {
-      try {
-        const created = await api.createTask(
-          items[i].listId, { ...items[i].body, client_id: cids[i] })
-        settleCreate(uids[i], key, created)
-        // AWAITED, but its failure is not this row's failure.
-        //
-        // The create has landed and been painted; a transient failure on the
-        // follow-up correction must not mark the row failed, which would keep it
-        // in the composer and have the user add it a second time. That is what
-        // the inner catch is for.
-        //
-        // It must NOT be detached, though: `createMany` resolving is what closes
-        // AddMultipleModal, so a correction still in flight lands on a task the
-        // user can already see and act on — ticking its box, or deleting it —
-        // and `settleCreate` then writes the server's older DTO back over them.
-        // Awaiting keeps the whole batch inside the modal, which is where it was
-        // before this was moved.
+    // The whole batch is ONE write as far as the dropped-fan-out bookkeeping
+    // goes: it bypasses `guard` (nine toasts for nine rows), so it settles the
+    // same three facts by hand in `finally` — see `write`.
+    writesInFlight.current += 1
+    try {
+      for (let i = 0; i < items.length; i++) {
         try {
-          const fixed = await reconcileReplay(items[i].listId, items[i].body, created)
-          if (fixed !== created) settleCreate(uids[i], key, fixed)
+          const created = await api.createTask(
+            items[i].listId, { ...items[i].body, client_id: cids[i] })
+          settleCreate(uids[i], key, created)
+          // AWAITED, but its failure is not this row's failure.
+          //
+          // The create has landed and been painted; a transient failure on the
+          // follow-up correction must not mark the row failed, which would keep it
+          // in the composer and have the user add it a second time. That is what
+          // the inner catch is for.
+          //
+          // It must NOT be detached, though: `createMany` resolving is what closes
+          // AddMultipleModal, so a correction still in flight lands on a task the
+          // user can already see and act on — ticking its box, or deleting it —
+          // and `settleCreate` then writes the server's older DTO back over them.
+          // Awaiting keeps the whole batch inside the modal, which is where it was
+          // before this was moved.
+          try {
+            const fixed = await reconcileReplay(items[i].listId, items[i].body, created)
+            if (fixed !== created) settleCreate(uids[i], key, fixed)
+          } catch (e) {
+            console.error(e)
+          }
         } catch (e) {
+          if (e instanceof AuthError) {
+            // Session died mid-batch. Drop every stand-in that can no longer land
+            // and hand the rest back as failures, so nothing is left painted.
+            const rest = uids.slice(i)
+            setTasks((ts) => ts.filter((x) => !rest.includes(x.uid)))
+            onExpire()
+            return [...failed, ...items.map((_, n) => n).filter((n) => n >= i)]
+          }
           console.error(e)
+          failed.push(i)
+          setTasks((ts) => ts.filter((x) => x.uid !== uids[i]))
         }
-      } catch (e) {
-        if (e instanceof AuthError) {
-          // Session died mid-batch. Drop every stand-in that can no longer land
-          // and hand the rest back as failures, so nothing is left painted.
-          const rest = uids.slice(i)
-          setTasks((ts) => ts.filter((x) => !rest.includes(x.uid)))
-          onExpire()
-          return [...failed, ...items.map((_, n) => n).filter((n) => n >= i)]
-        }
-        console.error(e)
-        failed.push(i)
-        setTasks((ts) => ts.filter((x) => x.uid !== uids[i]))
+        onProgress(i + 1)
       }
-      onProgress(i + 1)
+      return failed
+    } finally {
+      writesInFlight.current -= 1
+      if (failed.length) failedWrite.current = true
+      reissueIfOrphaned()
     }
-    return failed
   }
 
   const addSub = (parent: string, summary: string) => {
@@ -567,7 +627,7 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
     patchLocal(t, {
       completed: done, cancelled: false, status: done ? 'COMPLETED' : 'NEEDS-ACTION',
     })
-    settle(await guard(() => api.complete(t.list, t.uid, done)), t)
+    settle(await write(() => api.complete(t.list, t.uid, done)), t)
   }
 
   const remove = async (t: Task) => {
@@ -576,7 +636,7 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
     const key = loadKey
     invalidateFetches()
     setTasks((ts) => ts.filter((x) => taskKey(x) !== gone))
-    if ((await guard(() => api.deleteTask(t.list, t.uid))) === undefined && key === keyRef.current) {
+    if ((await write(() => api.deleteTask(t.list, t.uid))) === undefined && key === keyRef.current) {
       setTasks((ts) => {
         if (ts.some((x) => taskKey(x) === gone)) return ts
         const next = ts.slice()
@@ -604,7 +664,7 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
     }
     invalidateFetches()
     patchLocal(t, opt)
-    settle(await guard(() => api.patchTask(t.list, t.uid, patch)), t)
+    settle(await write(() => api.patchTask(t.list, t.uid, patch)), t)
   }
 
   const setReminder = async (t: Task, minutes: number) => {
@@ -612,7 +672,7 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
     // the clear sentinel on the wire and `null` is what the DTO carries for it.
     patchLocal(t, { notify_minutes_before: minutes < 0 ? null : minutes })
     invalidateFetches()
-    settle(await guard(() => api.setTaskReminder(t.list, t.uid, minutes)), t)
+    settle(await write(() => api.setTaskReminder(t.list, t.uid, minutes)), t)
   }
 
   // Repair, once per row, the subtasks written before `uidFor` existed: their
@@ -715,7 +775,7 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
     // one's position on a failed reorder.
     const before = new Map(tasks.map((t) => [taskKey(t), t.sort_order ?? null]))
     setTasks(next)
-    const ok = await guard(() =>
+    const ok = await write(() =>
       api.reorderTasks(placed.map((t) => ({ list: t.list, uid: t.uid }))))
     // The guard has already raised the toast; put the old positions back rather
     // than leaving the UI claiming a move that never landed.
@@ -730,7 +790,7 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
   const value: TaskData = {
     lists: ordered, serverOrderedLists: lists, tasks, listsLoaded, listsOk, loaded, setLists,
     create, createMany, addSub, toggle, remove, saveDetail, setReminder, reorder,
-    taskListErrors: listErrors, reloadTasks,
+    taskListErrors: listErrorNames, taskListsFailed: listErrorIds, reloadTasks,
   }
   return <TaskCtx.Provider value={value}>{children}</TaskCtx.Provider>
 }

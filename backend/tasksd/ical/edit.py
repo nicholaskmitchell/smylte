@@ -136,6 +136,38 @@ def _set_int(todo: Todo, key: str, value: int | None) -> None:
         todo.add(key, int(value))
 
 
+# RFC 5545 §3.3.8: INTEGER is a signed 32-bit value, and icalendar enforces it
+# on write. A SEQUENCE has to fit, whatever the resource arrived carrying.
+_SEQUENCE_MAX = 2**31 - 1
+
+
+def _next_sequence(comp) -> int:
+    """The SEQUENCE every write stamps: the current one plus one.
+
+    Read with the tolerance `read._int` has, and for the same reason. The
+    sync-stall finding taught the read path to treat an out-of-range or
+    non-numeric SEQUENCE as absent, so a foreign resource carrying
+    `SEQUENCE:99999999999999999999` or `SEQUENCE:abc` syncs, caches, and shows
+    in the UI. Every writer then did `int(comp.get("SEQUENCE", 0)) + 1`: the
+    first raised inside icalendar ("outside the RFC 5545 range"), the second
+    inside `int()` (a `vBroken`), and even a legitimate `SEQUENCE:2147483647`
+    raised on the +1. The routes map ValueError to 422, so the owner saw
+    icalendar's internal message on every rename, drag, complete, "delete this
+    occurrence" and "this and following" — the resource was permanently
+    uneditable through the app, and only whole-resource delete (which parses
+    nothing) still worked. A value that is not a sequence number counts as none,
+    and the ceiling is held rather than wrapped: a bump other clients would read
+    as going backwards is worse than one they cannot see.
+    """
+    try:
+        n = int(comp.get("SEQUENCE", 0))
+    except (TypeError, ValueError):
+        n = 0
+    if n < 0:
+        n = 0
+    return min(n + 1, _SEQUENCE_MAX)
+
+
 def _set_datelike(todo: Todo, key: str, value: date | datetime | None) -> None:
     """Write a DUE/DTSTART/DTEND, keeping the zone the property already had.
 
@@ -252,7 +284,7 @@ def apply_changes(raw: bytes | str, edit: TaskEdit, *, now: datetime | None = No
     todo.add("LAST-MODIFIED", now)
     _replace(todo, "DTSTAMP")
     todo.add("DTSTAMP", now)
-    _set_int(todo, "SEQUENCE", int(todo.get("SEQUENCE", 0)) + 1)
+    _set_int(todo, "SEQUENCE", _next_sequence(todo))
 
     return cal.to_ical()
 
@@ -531,7 +563,7 @@ def _stamp(event: Event, now: datetime) -> None:
     event.add("LAST-MODIFIED", now)
     _replace(event, "DTSTAMP")
     event.add("DTSTAMP", now)
-    _set_int(event, "SEQUENCE", int(event.get("SEQUENCE", 0)) + 1)
+    _set_int(event, "SEQUENCE", _next_sequence(event))
 
 
 def _check_event_span(event: Event, edit: EventEdit) -> None:
@@ -1507,7 +1539,7 @@ def shift_series(
     # amount nobody asked for. Measured: an anchor from an unrelated resource
     # moved every occurrence back four hours and left the series otherwise
     # intact, so nothing about the result said it had happened.
-    _require_addressable(cal, master, anchor)
+    _require_addressable(cal, master, anchor, whole_series=True)
 
     base = override.get("DTSTART").dt if override is not None and override.get("DTSTART") else anchor
     # A foreign client may have given this occurrence's override a different
@@ -1720,7 +1752,8 @@ def _partition_datelist(event: Event, key: str, anchor, *, keep_before: bool) ->
     )
 
 
-def _require_addressable(cal: Calendar, master: Event, anchor) -> None:
+def _require_addressable(cal: Calendar, master: Event, anchor, *,
+                         whole_series: bool = False) -> None:
     """Refuse an anchor that names no occurrence of this resource.
 
     `split_series` has demanded this since the stale-anchor finding recorded on
@@ -1752,14 +1785,34 @@ def _require_addressable(cal: Calendar, master: Event, anchor) -> None:
     for it, however it got there), the master's own DTSTART, and — via
     `_require_occurrence` — an RDATE. Everything else is priced by the rule, on
     that function's terms, including its allow-when-unprobeable policy.
+
+    The DTSTART shape is per caller, which `whole_series` says. It is right for
+    `shift_series` unconditionally: scope='all' with a `recurrence_id` on a
+    one-off is a plain reschedule, and the anchor is only the base the delta is
+    measured from. For the two per-occurrence writers it is right only when the
+    resource REPEATS, and this used to accept it before asking. On a plain
+    event whose only "occurrence" is its DTSTART, `exclude_occurrence` wrote an
+    `EXDATE` beside no rule and `apply_occurrence_override` appended a
+    RECURRENCE-ID component — both PUT fine, the route answered 204/200, the
+    MCP tool reported `{"deleted": uid, "scope": "this"}` — and every Smylte
+    read then showed the untouched master, because `has_rrule` is derived from
+    RRULE/RDATE alone and `find_component` never picks an override. The stray
+    EXDATE also survived a later "make it repeat" and silently ate the new
+    series' first occurrence. Other CalDAV clients may honour what Smylte
+    ignores, so the same UID could show two titles indefinitely.
     """
     if _find_override(cal, anchor) is not None:
         return
+    rule = _rrule_dict(master)
+    repeats = rule is not None or bool(_datelist_values(master, "RDATE"))
     dtstart = master.get("DTSTART")
     if dtstart is not None and hasattr(dtstart, "dt") and _same_instant(dtstart.dt, anchor):
-        return
-    rule = _rrule_dict(master)
-    if rule is None and not _datelist_values(master, "RDATE"):
+        if repeats or whole_series:
+            return
+        # `_require_occurrence`'s sentence, which for a per-occurrence scope on a
+        # one-off is exactly the advice: the edit the caller wants IS scope='all'.
+        raise ValueError("this event does not repeat; use scope='all'")
+    if not repeats:
         # `_require_occurrence`'s wording for a non-repeating event tells the
         # caller to use scope='all'. Two of the three callers here ARE a
         # per-occurrence scope, and the third IS scope='all' — so that sentence
