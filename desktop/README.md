@@ -42,11 +42,17 @@ rolling release has changed. If it has, it downloads and swaps it in; if the
 network is unreachable it just runs the copy it already has. So a push to `main`
 reaches the desktop on the next start, with nothing to redeploy by hand.
 
-The **exe itself** does not replace itself — that needs a second process to
-overwrite a running binary, which is deliberately out of scope. It does notice,
-though: the same release check compares the published `Smylte.exe` against the
-running one and shows a strip along the top of the window with a download link
-when they differ. "Not now" hides it until the next launch.
+The **exe itself** updates from a strip along the top of the window. The same
+release check compares the published `Smylte.exe` against the running one, and
+when they differ the strip offers **Update**: the client downloads the new exe
+beside itself, checks it against the SHA-256 GitHub publishes for the asset,
+renames the running file aside (Windows allows that; it does not allow
+overwriting it), moves the new one into its place, starts it, and exits. The new
+client waits for the old process to leave before taking the single-instance
+lock, then deletes the retired file. If any of that refuses — the exe sits in a
+folder this user cannot write, the release states no digest to check against —
+the strip says why and offers the download page instead. "Not now" hides it
+until the next launch.
 
 That strip means the *window* changed, not the app. CI publishes a new
 `Smylte.exe` only when `desktop/Smylte.Desktop` changed since the one on the
