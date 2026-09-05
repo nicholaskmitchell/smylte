@@ -48,6 +48,15 @@ though: the same release check compares the published `Smylte.exe` against the
 running one and shows a strip along the top of the window with a download link
 when they differ. "Not now" hides it until the next launch.
 
+That strip means the *window* changed, not the app. CI publishes a new
+`Smylte.exe` only when `desktop/Smylte.Desktop` changed since the one on the
+release was built (the release notes record which tree that was); a push that
+touches only the web app or the server replaces `smylte-web.zip` and leaves the
+exe alone, so the next launch swaps the web build in and shows no strip. It used
+to re-upload the exe on every push, and a self-contained bundle is never the same
+bytes twice — so every push looked like a new client, and downloading it changed
+nothing.
+
 That comparison is by content hash, not a version number, because a version
 number has to be remembered and a forgotten bump would ship a client nobody is
 told about. It costs nothing extra — GitHub publishes a SHA-256 for every release

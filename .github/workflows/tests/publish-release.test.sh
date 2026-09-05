@@ -18,8 +18,15 @@ set -uo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 WORKFLOW="$HERE/../desktop-release.yml"
+REPO=$(cd "$HERE/../../.." && pwd)
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
+
+# The step decides whether to re-publish the exe by comparing the client's
+# source tree at HEAD with the one recorded on the release, so it runs `git`
+# against this checkout — from the repository root, as the release job does.
+cd "$REPO"
+CLIENT_TREE=$(git rev-parse "HEAD:desktop/Smylte.Desktop")
 
 python3 - "$WORKFLOW" "$WORK/publish.sh" <<'PY'
 import sys, yaml, pathlib
@@ -41,10 +48,27 @@ run_case() {
     export GITHUB_REPOSITORY=nicholaskmitchell/smylte
     _STUB=$(mktemp -d)
     : "${FAIL_PROBE_TIMES:=0}" "${API_ANSWER:=present}" "${FAIL_UPLOAD_TIMES:=0}"
-    : "${FAIL_EDIT_TIMES:=0}" "${FAIL_CREATE_TIMES:=0}" "${EDIT_WRITES_SHA:=1}"
+    : "${FAIL_EDIT_TIMES:=0}" "${FAIL_CREATE_TIMES:=0}" "${EDIT_WRITES_SHA:=1}" "${EDIT_DROPS_TREE:=0}"
+    # What the release already holds: its asset names, and the client source
+    # tree its notes record (empty = a release from before that line existed).
+    : "${ASSETS:=smylte-web.zip Smylte.exe}" "${PUBLISHED_TREE:=}"
 
     # Starts stale, the way the real release did after the 503.
-    echo "Rolling desktop build from 0000000000000000." > "$_STUB/body"
+    {
+      echo "Rolling desktop build from 0000000000000000."
+      [ -n "$PUBLISHED_TREE" ] && echo "Client source tree: $PUBLISHED_TREE"
+    } > "$_STUB/body"
+
+    # The notes the step passes to `gh release edit/create --notes`, so the
+    # stub's release carries what the step wrote and the post-conditions read
+    # back exactly what the real API would hand them.
+    _notes_arg() {
+      while [ "$#" -gt 1 ]; do
+        [ "$1" = --notes ] && { printf '%s\n' "$2"; return 0; }
+        shift
+      done
+      return 1
+    }
 
     # Silent, like the real one — a chatty stub would hide a stdout bug.
     sleep() { :; }
@@ -71,25 +95,34 @@ run_case() {
         "api repos/nicholaskmitchell/smylte/releases/tags/desktop-latest")
           _probe "api tags" && { echo '{"tag_name":"desktop-latest"}'; return 0; }; return 1 ;;
         "release view")
-          # --json is the post-condition read; bare is an existence probe.
+          # --json reads the release (assets, or the body for the decision and
+          # the post-condition); bare is an existence probe.
+          if [[ "$*" == *"--json assets"* ]]; then printf '%s\n' $ASSETS; return 0; fi
           if [[ "$*" == *--json* ]]; then cat "$_STUB/body"; return 0; fi
           _probe "release view" || return 1
           echo desktop-latest; return 0 ;;
         "release upload")
-          n=$(_bump upload); echo "  [gh] release upload (call $n)" >&2
+          # The files are in the trace: which of them went up IS the behaviour
+          # under test for the exe cases.
+          n=$(_bump upload); echo "  [gh] release upload (call $n): ${*:3}" >&2
           [ "$n" -le "$FAIL_UPLOAD_TIMES" ] && { echo "gh: HTTP 503" >&2; return 1; }
           return 0 ;;
         "release edit")
           n=$(_bump edit); echo "  [gh] release edit (call $n)" >&2
           [ "$n" -le "$FAIL_EDIT_TIMES" ] && { echo "gh: HTTP 503" >&2; return 1; }
-          [ "$EDIT_WRITES_SHA" = 1 ] && echo "Rolling desktop build from ${GITHUB_SHA}." > "$_STUB/body"
+          # EDIT_DROPS_TREE: the notes land without the tree line — a half-
+          # updated release of the other kind, one the NEXT run would read as
+          # "unrecorded" and re-upload the exe over.
+          if [ "$EDIT_WRITES_SHA" = 1 ]; then
+            _notes_arg "$@" | { [ "$EDIT_DROPS_TREE" = 1 ] && grep -v 'Client source tree' || cat; } > "$_STUB/body"
+          fi
           return 0 ;;
         "release create")
-          n=$(_bump create); echo "  [gh] release create (call $n)" >&2
+          n=$(_bump create); echo "  [gh] release create (call $n): ${*:3}" >&2
           [ "$n" -le "$FAIL_CREATE_TIMES" ] && { echo "gh: HTTP 503" >&2; return 1; }
           # What the real API says when the tag is already there.
           [ "$API_ANSWER" = present ] && { echo "gh: Validation Failed: already_exists (HTTP 422)" >&2; return 1; }
-          echo "Rolling desktop build from ${GITHUB_SHA}." > "$_STUB/body"
+          _notes_arg "$@" > "$_STUB/body"
           return 0 ;;
         *) echo "  [gh] UNSTUBBED: $*" >&2; return 127 ;;
       esac
@@ -130,6 +163,22 @@ case_is "notes that miss the commit fail the job"        1 'half-updated' EDIT_W
 # sends the step into `gh release create`, which dies with already_exists.
 case_is "a transient probe does not become a create"     0 'release upload' FAIL_PROBE_TIMES=2
 case_is "a dead probe fails rather than guessing"        1 'EXIT|503' FAIL_PROBE_TIMES=99
+
+# ── which files go up ───────────────────────────────────────────────────────
+# The exe is a self-contained bundle that is never the same bytes twice, and
+# the client tells "a new client" by digest — so re-uploading it on every push
+# told every Windows user to download 69 MB that changed nothing. The web zip
+# goes up every run; the exe only when desktop/Smylte.Desktop differs from what
+# the published exe was built from, which the notes record.
+ZIP='artifacts/web/smylte-web\.zip'
+EXE='artifacts/client/Smylte\.exe'
+case_is "an unchanged client is not re-published"        0 "release upload \(call 1\): desktop-latest $ZIP --clobber" PUBLISHED_TREE="$CLIENT_TREE"
+case_is "notes that lose the tree line fail the job"    1 'do not record the client source tree' EDIT_DROPS_TREE=1
+case_is "a changed client is published"                  0 "release upload \(call 1\): desktop-latest $ZIP $EXE --clobber" PUBLISHED_TREE=0123456789abcdef0123456789abcdef01234567
+case_is "a release from before the tree was recorded gets the exe once" 0 "release upload .*$EXE"
+case_is "a release missing the exe gets it even when the tree matches"  0 "release upload .*$EXE" PUBLISHED_TREE="$CLIENT_TREE" ASSETS=smylte-web.zip
+case_is "a forced dispatch publishes the client regardless"             0 "release upload .*$EXE" PUBLISHED_TREE="$CLIENT_TREE" CLIENT_PUBLISH=force
+case_is "a first release carries both"                   0 "release create \(call 1\): desktop-latest $ZIP $EXE" API_ANSWER=absent
 
 echo
 echo "$pass passed, $fail failed"
