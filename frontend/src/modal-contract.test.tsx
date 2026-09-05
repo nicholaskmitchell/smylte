@@ -35,6 +35,11 @@ function code(src: string): string {
 const count = (src: string, re: RegExp) => (src.match(re) ?? []).length
 
 /** Component sources that render a scrim, as [name, code]. */
+// `overlay[" ]`, not `overlay"`: a scrim with a modifier class — the mobile
+// management drawer's `overlay drawer-overlay`, the settings sheet's `overlay
+// set-overlay` — is still a scrim, and matching the bare name exactly is how
+// both of those kept a click-to-close over a form while this test stayed green
+// (2026-09-03 sweep).
 async function overlayComponents(): Promise<[string, string][]> {
   const out: [string, string][] = []
   for (const [path, load] of Object.entries(sources)) {
@@ -42,7 +47,7 @@ async function overlayComponents(): Promise<[string, string][]> {
     // quotes a scrim's markup is not a scrim.
     if (/\.test\.tsx$/.test(path)) continue
     const src = code(await load())
-    if (/className="overlay"/.test(src)) {
+    if (/className="overlay[" ]/.test(src)) {
       out.push([path.split('/').pop()!.replace('.tsx', ''), src])
     }
   }
@@ -72,7 +77,7 @@ describe('every dialog keeps the whole modal contract', () => {
   it('answers Escape — once per scrim, not once per file', async () => {
     const short: string[] = []
     for (const [name, src] of await overlayComponents()) {
-      const scrims = count(src, /className="overlay"/g)
+      const scrims = count(src, /className="overlay[" ]/g)
       const escapes = count(src, /\buseEscape\s*\(/g)
       if (escapes < scrims) short.push(`${name} (${scrims} scrim(s), ${escapes} useEscape)`)
     }
@@ -84,7 +89,7 @@ describe('every dialog keeps the whole modal contract', () => {
   it('declares a dialog role for every scrim', async () => {
     const short: string[] = []
     for (const [name, src] of await overlayComponents()) {
-      const scrims = count(src, /className="overlay"/g)
+      const scrims = count(src, /className="overlay[" ]/g)
       const roles = count(src, /role="dialog"/g)
       if (roles < scrims) short.push(`${name} (${scrims} scrim(s), ${roles} role="dialog")`)
     }
@@ -101,7 +106,7 @@ describe('every dialog keeps the whole modal contract', () => {
     // Every scrim in the file is checked, not just the first one to match.
     const bare: string[] = []
     for (const [name, src] of await overlayComponents()) {
-      for (const m of src.matchAll(/className="overlay"/g)) {
+      for (const m of src.matchAll(/className="overlay[" ]/g)) {
         const after = src.slice(m.index!, m.index! + 240)
         const down = after.indexOf('onMouseDown=')
         const up = after.indexOf('onClick=')

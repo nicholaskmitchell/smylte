@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -232,21 +233,31 @@ describe('<Sidebar> group dividers', () => {
 // ── a failed delete has to put back everything it took ──────────────────────
 
 describe('<Sidebar> a delete that fails', () => {
-  const withGroups = (over: {
+  // `items` are STATE here, fed back through `onItems` the way the provider's
+  // `setLists` is. Since the 2026-09-03 sweep a failed delete re-inserts only
+  // the row it removed, into whatever the array holds by then — a fixed prop
+  // would never show the removal, so the rollback would find the row still
+  // present and rightly leave it alone.
+  function GroupsHost(over: {
     api?: { create: unknown; update: unknown; remove: unknown; reorder: unknown }
     onItems?: (next: List[]) => void
     onGroupsChange?: (next: TaskGroup[]) => void
     groups?: TaskGroup[]
-  }) => (
-    <Sidebar kind="list"
-      items={[list('work', 'Work'), list('home', 'Home')]}
-      countOf={(l) => l.open_count} onItems={over.onItems ?? (() => {})}
-      api={(over.api ?? noopApi) as typeof noopApi}
-      hiddenIds={new Set()} onHiddenChange={() => {}}
-      groups={over.groups ?? [{ id: 'g1', name: 'Focus', lists: ['work', 'home'] }]}
-      onGroupsChange={over.onGroupsChange ?? (() => {})}
-      collapsedGroups={[]} onCollapsedGroupsChange={() => {}} />
-  )
+  }) {
+    const [items, setItems] = useState([list('work', 'Work'), list('home', 'Home')])
+    return (
+      <Sidebar kind="list"
+        items={items}
+        countOf={(l) => l.open_count}
+        onItems={(next) => { over.onItems?.(next); setItems(next) }}
+        api={(over.api ?? noopApi) as typeof noopApi}
+        hiddenIds={new Set()} onHiddenChange={() => {}}
+        groups={over.groups ?? [{ id: 'g1', name: 'Focus', lists: ['work', 'home'] }]}
+        onGroupsChange={over.onGroupsChange ?? (() => {})}
+        collapsedGroups={[]} onCollapsedGroupsChange={() => {}} />
+    )
+  }
+  const withGroups = (over: Parameters<typeof GroupsHost>[0]) => <GroupsHost {...over} />
 
   const deleteHome = async () => {
     await userEvent.click(screen.getByRole('button', { name: 'Edit Home' }))

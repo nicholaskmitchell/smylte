@@ -340,3 +340,36 @@ def test_the_example_verifies_tls_when_it_is_given_a_ca_and_says_so_when_it_is_n
     # And the honest caveat is there for the unset case, rather than the earlier
     # claim that TLS alone kept the token safe.
     assert "passive" in source.lower()
+
+
+def test_the_loop_re_joins_wifi_after_a_drop_rather_than_polling_a_dead_link(source: str):
+    """2026-09-03 sweep. `connect_wifi()` was called exactly once, before
+    `while True:`, and its return value was discarded. On the rp2/cyw43 port the
+    STA interface does not re-associate on its own after the access point goes
+    away (cyw43_ctrl.c clears the join state on DISASSOC and never retries), so
+    after a router reboot every `fetch()` raised at `getaddrinfo`, the
+    `except Exception:` swallowed it, and the panel showed the last frame until
+    someone cut the power — the exact failure SOCKET_TIMEOUT_S's own comment says
+    this file avoids. `connect_wifi` already carries the self-heal (retries, then
+    `machine.reset()`); it was simply unreachable after boot.
+
+    Read out of the AST like the constants: the loop body must check the link
+    and call `connect_wifi` again, and `main` must keep the `wlan` object the
+    check is made on. No existing test looked inside the loop at all.
+    """
+    tree = ast.parse(source, str(FIRMWARE))
+    main = next(n for n in ast.walk(tree)
+                if isinstance(n, ast.FunctionDef) and n.name == "main")
+    loop = next(n for n in ast.walk(main) if isinstance(n, ast.While))
+
+    kept = [n for n in ast.walk(main)
+            if isinstance(n, ast.Assign) and isinstance(n.value, ast.Call)
+            and isinstance(n.value.func, ast.Name) and n.value.func.id == "connect_wifi"]
+    assert kept, "main() discards what connect_wifi() returns, so nothing can ask it later"
+
+    in_loop = list(ast.walk(loop))
+    assert any(isinstance(n, ast.Attribute) and n.attr == "isconnected" for n in in_loop), \
+        "the loop never asks whether the link is still up"
+    assert any(isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+               and n.func.id == "connect_wifi" for n in in_loop), \
+        "the loop never re-joins: connect_wifi's retry-then-reset path is unreachable after boot"

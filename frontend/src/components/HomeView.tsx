@@ -143,7 +143,9 @@ export function HomeView({ rev, onExpire, layout, onLayoutChange,
   // ── data ─────────────────────────────────────────────────────────────────
   // The same lists and tasks the Tasks pane holds — one fetch, not two, and it
   // survives the tab switch that used to send both views back to an empty array.
-  const { lists, tasks, loaded, create, toggle } = useTaskData()
+  const {
+    lists, tasks, loaded, create, toggle, taskListErrors, taskListsFailed, reloadTasks,
+  } = useTaskData()
   // The mini calendar reads the same calendars and window the Calendar tab
   // does, so opening one after the other costs no second fan-out.
   const { cals, eventsFor, requestWindow, windowErrors } = useCalendarData()
@@ -189,7 +191,12 @@ export function HomeView({ rev, onExpire, layout, onLayoutChange,
 
   // The mini calendar's six-week grid. Fetching and rendering share this array,
   // so the days either side of the month can never be dotless for want of data.
-  const days = useMemo(() => monthGrid(new Date()), [rev])
+  // Keyed on the day as well as on `rev`: `rev` moves only when the server
+  // publishes a change, so a dashboard left open across a month boundary on a
+  // quiet account kept last month's grid — `useToday` re-rendered it at
+  // midnight, but a re-render does not recompute a memo whose deps stood still,
+  // and the fetch window below is cut from this same array.
+  const days = useMemo(() => monthGrid(new Date()), [rev, todayKey])
   const archived = useMemo(() => new Set(archivedCalendars), [archivedCalendars])
   const hidden = useMemo(() => new Set(hiddenCalendars), [hiddenCalendars])
   const archivedKey = archivedCalendars.join(',')
@@ -233,8 +240,15 @@ export function HomeView({ rev, onExpire, layout, onLayoutChange,
   // other fetch in this app carries this guard (`useTaskData`'s token ref,
   // `fetchWindow`'s per-window generation); this one was the last without it.
   const schedToken = useRef(0)
+  // Whether the last batch FAILED. `makeGuard` swallows a 502, a 429 or a
+  // timeout into a toast and resolves undefined, so neither setter above ran
+  // and the two modules printed "No booking links yet." / "No upcoming
+  // bookings." over an account with live links — the confident lie the
+  // Scheduling tab's `failed` flag exists to stop, and the mini calendar next
+  // to them reports through `home.calPartial`. Same rule, same shape.
+  const [schedFailed, setSchedFailed] = useState(false)
   useEffect(() => {
-    if (!needsSched) { setLinks([]); setBookings([]); return }
+    if (!needsSched) { setLinks([]); setBookings([]); setSchedFailed(false); return }
     const mine = ++schedToken.current
     const guard = makeGuard(onExpire)
     guard(async () => {
@@ -244,7 +258,8 @@ export function HomeView({ rev, onExpire, layout, onLayoutChange,
       const bs = await api.schedulingBookings()
       if (mine !== schedToken.current) return
       setBookings(bs)
-    })
+      return true
+    }).then((ok) => { if (mine === schedToken.current) setSchedFailed(!ok) })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rev, needsSched])
 
@@ -266,8 +281,10 @@ export function HomeView({ rev, onExpire, layout, onLayoutChange,
 
   const body = (m: DashboardModule) => (
     <ModuleBody kind={m.kind} tasks={tasks} lists={lists} days={days} byDay={byDay}
-      calErrors={calErrors}
-      links={links} bookings={bookings} colorOf={colorOf} eventColor={eventColor}
+      calErrors={calErrors} taskErrors={taskListErrors} failedLists={taskListsFailed}
+      reloadTasks={reloadTasks}
+      links={links} bookings={bookings} schedFailed={schedFailed}
+      colorOf={colorOf} eventColor={eventColor}
       onExpire={onExpire} loaded={loaded} create={create}
       plan={planForToday} onPlan={setPlan} toggleTask={toggle} tasksLoaded={loaded} />
   )
@@ -378,8 +395,9 @@ export function HomeView({ rev, onExpire, layout, onLayoutChange,
 
 // ── module bodies ──────────────────────────────────────────────────────────
 
-function ModuleBody({ kind, tasks, lists, days, byDay, calErrors, links, bookings, colorOf,
-  eventColor, onExpire, loaded, create, plan, onPlan, toggleTask, tasksLoaded }: {
+function ModuleBody({ kind, tasks, lists, days, byDay, calErrors, taskErrors, failedLists,
+  reloadTasks, links, bookings, schedFailed, colorOf, eventColor, onExpire, loaded, create,
+  plan, onPlan, toggleTask, tasksLoaded }: {
   kind: ModuleKind
   tasks: Task[]
   lists: List[]
@@ -387,8 +405,14 @@ function ModuleBody({ kind, tasks, lists, days, byDay, calErrors, links, booking
   byDay: Map<string, DayEv[]>
   /** Calendars whose fetch failed for this window, by name. */
   calErrors: string[]
+  /** Task lists whose fetch failed, by name — and by id, for the plan rows. */
+  taskErrors: string[]
+  failedLists: string[]
+  reloadTasks: () => void
   links: BookingLink[]
   bookings: Booking[]
+  /** The scheduling batch failed: neither list is evidence about the account. */
+  schedFailed: boolean
   colorOf: (listId: string) => string | null
   eventColor: (e: CalEvent) => string | null
   onExpire: () => void
@@ -411,19 +435,26 @@ function ModuleBody({ kind, tasks, lists, days, byDay, calErrors, links, booking
   // a local comparator that put undated tasks at the opposite end from the one
   // TasksView used, so the same task sat in a different place on each tab.
 
+  // The task modules all read the one array, so they are all short by the
+  // same lists when one fails; each says so rather than printing an empty
+  // state over a fetch that did not land.
+  const partial = taskErrors.length > 0
+    ? <TasksPartial lists={taskErrors} onRetry={reloadTasks} /> : null
+
   switch (kind) {
     case 'today':
       return <TaskList items={sortTasks(open.filter((t) => t.due && dayKey(t.due) === today))}
-        colorOf={colorOf} empty={tr('home.emptyToday')} loaded={loaded} />
+        colorOf={colorOf} empty={tr('home.emptyToday')} loaded={loaded} partial={partial} />
     case 'overdue':
       return <TaskList items={sortTasks(open.filter((t) => isOverdue(t.due, t.due_is_date)))}
-        colorOf={colorOf} empty={tr('home.emptyOverdue')} overdue loaded={loaded} />
+        colorOf={colorOf} empty={tr('home.emptyOverdue')} overdue loaded={loaded}
+        partial={partial} />
     case 'upcoming': {
       const end = ymd(addDays(new Date(), 7))
       return <TaskList
         items={sortTasks(open
           .filter((t) => t.due && dayKey(t.due) > today && dayKey(t.due) <= end))}
-        colorOf={colorOf} empty={tr('home.emptyUpcoming')} loaded={loaded} />
+        colorOf={colorOf} empty={tr('home.emptyUpcoming')} loaded={loaded} partial={partial} />
     }
     case 'completed': {
       // Most recently finished first, by the COMPLETED stamp the wire has always
@@ -433,17 +464,19 @@ function ModuleBody({ kind, tasks, lists, days, byDay, calErrors, links, booking
       // view, which had the same block written out a second time.
       const done = tops.filter((t) => t.completed || t.cancelled)
       return <TaskList items={sortByCompletion(done).slice(0, 40)}
-        colorOf={colorOf} empty={tr('home.emptyCompleted')} done loaded={loaded} />
+        colorOf={colorOf} empty={tr('home.emptyCompleted')} done loaded={loaded}
+        partial={partial} />
     }
     case 'day_plan':
       return <DayPlanList plan={plan} tasks={tasks} tasksLoaded={tasksLoaded}
+        failedLists={failedLists} partial={partial}
         colorOf={colorOf} onExpire={onExpire} onPlan={onPlan} toggleTask={toggleTask} />
     case 'mini_calendar':
       return <MiniCalendar days={days} byDay={byDay} eventColor={eventColor} failed={calErrors} />
     case 'booking_links':
-      return <LinkList links={links} />
+      return <LinkList links={links} failed={schedFailed} />
     case 'bookings':
-      return <BookingList bookings={bookings} />
+      return <BookingList bookings={bookings} failed={schedFailed} />
     case 'quick_add':
       return <QuickAddModule lists={lists} create={create} />
     default:
@@ -451,13 +484,27 @@ function ModuleBody({ kind, tasks, lists, days, byDay, calErrors, links, booking
   }
 }
 
-function TaskList({ items, colorOf, empty, overdue, done, loaded }: {
+/** The `.cal-partial` banner TasksView renders, for a card: which lists are
+ *  missing, and the retry the data layer offers. */
+function TasksPartial({ lists, onRetry }: { lists: string[]; onRetry: () => void }) {
+  const tr = useT()
+  return (
+    <div className="cal-partial" role="status">
+      {tr('tasks.partial', { lists: lists.join(', ') })}{' '}
+      <button type="button" className="btn ghost" onClick={onRetry}>{tr('common.retry')}</button>
+    </div>
+  )
+}
+
+function TaskList({ items, colorOf, empty, overdue, done, loaded, partial }: {
   items: Task[]
   colorOf: (listId: string) => string | null
   empty: string
   overdue?: boolean
   done?: boolean
   loaded?: boolean
+  /** The short-pane banner, when a list failed; null otherwise. */
+  partial?: React.ReactNode
 }) {
   const tr = useT()
   const { locale } = useI18n()
@@ -469,8 +516,13 @@ function TaskList({ items, colorOf, empty, overdue, done, loaded }: {
   // one failed request used to leave every module here blank permanently, with
   // no empty state and no error.
   if (!loaded && !items.length) return null
-  if (!items.length) return <p className="dash-empty">{empty}</p>
+  // A list that failed is not an absence: the banner stands in for the empty
+  // copy, which would otherwise be a confident statement about rows this
+  // module never received.
+  if (!items.length) return partial ?? <p className="dash-empty">{empty}</p>
   return (
+    <>
+    {partial}
     <ul className="dash-tasks">
       {items.map((t) => {
         const c = colorOf(t.list)
@@ -487,6 +539,7 @@ function TaskList({ items, colorOf, empty, overdue, done, loaded }: {
         )
       })}
     </ul>
+    </>
   )
 }
 
@@ -506,10 +559,15 @@ function TaskList({ items, colorOf, empty, overdue, done, loaded }: {
  * task row reads its doneness off the task NOW rather than off a completion
  * stamp that has to fall on the right day.
  */
-function DayPlanList({ plan, tasks, tasksLoaded, colorOf, onExpire, onPlan, toggleTask }: {
+function DayPlanList({ plan, tasks, tasksLoaded, failedLists, partial, colorOf, onExpire, onPlan,
+  toggleTask }: {
   plan: DayPlan | null
   tasks: Task[]
   tasksLoaded: boolean
+  /** Ids of the lists whose fetch failed: a task row from one is unknown, not
+   *  gone — the same distinction `focus.ts` draws for the Focus queue. */
+  failedLists: string[]
+  partial?: React.ReactNode
   colorOf: (listId: string) => string | null
   onExpire: () => void
   onPlan: (next: DayPlan | null | ((p: DayPlan | null) => DayPlan | null)) => void
@@ -554,11 +612,18 @@ function DayPlanList({ plan, tasks, tasksLoaded, colorOf, onExpire, onPlan, togg
   const rows = orderEntries(plan.entries.filter((e) => !e.dropped_at))
   if (!rows.length) return <p className="dash-empty">{tr('home.planEmpty')}</p>
   return (
+    <>
+    {partial}
     <ul className="dash-tasks">
       {rows.map((e) => {
         const task = taskFor(e)
         const done = rowDone(e, task, true)
-        const title = entryTitle(e, task, tasksLoaded, tr)
+        // A task row whose LIST failed to load is not "no longer in your
+        // lists" — the server still names it; this client could not read it.
+        // Its title says that instead, and its tick is disabled for the same
+        // reason an orphan's is: there is no task here to write to.
+        const unavailable = e.kind === 'task' && !task && failedLists.includes(e.list ?? '')
+        const title = unavailable ? tr('today.taskUnavailable') : entryTitle(e, task, tasksLoaded, tr)
         // A task entry whose task is gone can still be read, but not ticked:
         // there is nothing left to tick. Disabled rather than absent, so the
         // row keeps the column every other row has.
@@ -592,6 +657,7 @@ function DayPlanList({ plan, tasks, tasksLoaded, colorOf, onExpire, onPlan, togg
         )
       })}
     </ul>
+    </>
   )
 }
 
@@ -739,8 +805,10 @@ function MiniCalendar({ days, byDay, eventColor, failed = [] }: {
   )
 }
 
-function LinkList({ links }: { links: BookingLink[] }) {
+function LinkList({ links, failed }: { links: BookingLink[]; failed: boolean }) {
   const tr = useT()
+  // Never the empty copy over a failed fetch — see `schedFailed`.
+  if (failed) return <p className="dash-empty" role="status">{tr('home.linksFailed')}</p>
   if (!links.length) return <p className="dash-empty">{tr('home.noLinks')}</p>
   return (
     <ul className="dash-tasks">
@@ -756,14 +824,19 @@ function LinkList({ links }: { links: BookingLink[] }) {
   )
 }
 
-function BookingList({ bookings }: { bookings: Booking[] }) {
+function BookingList({ bookings, failed }: { bookings: Booking[]; failed: boolean }) {
   const tr = useT()
   const { locale } = useI18n()
   const tf = useTimeFormat()
+  // Ordered by the INSTANT, not the string: `start` carries each link's own
+  // offset, so with links in two zones the text order is not the clock order
+  // — "09:00-07:00" sorts before "10:00+02:00" and lists nine hours later.
+  // The server's list_bookings sorts the same way (finding of the same sweep).
   const upcoming = bookings
     .filter((b) => new Date(b.start).getTime() >= Date.now())
-    .sort((a, b) => a.start.localeCompare(b.start))
+    .sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime())
     .slice(0, 20)
+  if (failed) return <p className="dash-empty" role="status">{tr('home.bookingsFailed')}</p>
   if (!upcoming.length) return <p className="dash-empty">{tr('home.noBookings')}</p>
   return (
     <ul className="dash-tasks">

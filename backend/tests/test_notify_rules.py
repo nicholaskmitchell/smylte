@@ -6,6 +6,8 @@ methods, and the point of these tests is the PREDICATE, not the query behind it.
 """
 from __future__ import annotations
 
+import itertools
+
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -71,6 +73,9 @@ class StubSvc:
 
 class StubSender:
     configured = True
+    # One counter for every instance, as one bot has one id sequence per chat:
+    # a test that builds a sender per sweep must not hand two sends the same id.
+    _ids = itertools.count(1)
 
     def __init__(self, ok=True):
         self.sent = []
@@ -79,11 +84,14 @@ class StubSender:
         # and is adopted per sweep rather than per process.
         self.token = "stub-token"
 
-
     def send(self, chat_id, text, *, silent=False, **kw):
         self.sent.append({"text": text, "silent": silent, "chat_id": chat_id})
         from tasksd.notify.telegram import SendResult
-        return SendResult(self._ok, message_id=1 if self._ok else None,
+        # A fresh id per message, as Telegram hands out: the ledger now records
+        # which delivery each occasion rode in, and the daily loud ceiling
+        # counts distinct ids — a stub that answered `1` for every send would
+        # collapse a whole day into one buzz.
+        return SendResult(self._ok, message_id=next(self._ids) if self._ok else None,
                           error=None if self._ok else "HTTP 502: Bad Gateway")
 
 

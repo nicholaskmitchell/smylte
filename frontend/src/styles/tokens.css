@@ -258,6 +258,10 @@ select.input { appearance: none; -webkit-appearance: none; cursor: pointer; }
   display: inline-flex; align-items: center; gap: 4px;
   font-family: var(--mono); font-size: calc(10px * var(--fs-scale)); letter-spacing: calc(0.04em * var(--tracking));
   color: var(--fg-muted); border: 1px solid var(--rule); padding: 2px 6px;
+  /* A chip is sometimes a <button> (the display picker), and a button with no
+     background declared wears the user agent's ButtonFace — a light grey box
+     under the dark theme, measured at 1.01:1 against its own faint text. */
+  background: none;
 }
 
 /* Tags as chips. A category may contain a comma, so it cannot be edited as one

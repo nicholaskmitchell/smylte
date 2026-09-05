@@ -146,6 +146,11 @@ public static class Updater
     /// number has to be remembered — a forgotten bump would silently ship a client
     /// nobody is told about. A digest cannot be forgotten.
     ///
+    /// What makes a digest an honest signal is the other end: desktop-release.yml
+    /// re-publishes the exe only when desktop/Smylte.Desktop changed, because a
+    /// self-contained bundle is never the same bytes twice and uploading it on
+    /// every push made every push look like a new client.
+    ///
     /// Every uncertain path returns false. A missing digest field, an unreadable
     /// exe, an unexpected format: none of those are evidence of being out of date,
     /// and a false alarm here sends someone to re-download 69 MB for nothing.
@@ -226,28 +231,59 @@ public static class Updater
         return doc.RootElement.Clone();   // the JsonDocument is about to be disposed
     }
 
+    /// Fetch one release asset to `destination`, saying how far along it is.
+    private static async Task DownloadAssetAsync(
+        Settings settings, long assetId, string destination, string what,
+        IProgress<string> log, CancellationToken ct)
+    {
+        using var http = MakeClient(settings);
+        using var req = new HttpRequestMessage(HttpMethod.Get,
+            $"https://api.github.com/repos/{Owner}/{Repo}/releases/assets/{assetId}");
+        // The asset endpoint (rather than browser_download_url) is what makes
+        // this work unchanged whether the repository is public or private.
+        req.Headers.Accept.ParseAdd("application/octet-stream");
+
+        using var resp = await http
+            .SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+        resp.EnsureSuccessStatusCode();
+
+        var total = resp.Content.Headers.ContentLength;
+        var source = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+        await using (source.ConfigureAwait(false))
+        await using (var file = File.Create(destination))
+        {
+            // Progress by the megabyte: the exe is ~69 MB and a label that says
+            // "Downloading…" for a minute reads as hung.
+            var buffer = new byte[1 << 16];
+            long done = 0, shown = 0;
+            int n;
+            while ((n = await source.ReadAsync(buffer, ct).ConfigureAwait(false)) > 0)
+            {
+                await file.WriteAsync(buffer.AsMemory(0, n), ct).ConfigureAwait(false);
+                done += n;
+                if (done - shown >= 4 << 20)
+                {
+                    shown = done;
+                    log.Report(ProgressText(what, done, total));
+                }
+            }
+        }
+    }
+
+    internal static string ProgressText(string what, long done, long? total)
+    {
+        var mb = done >> 20;
+        return total is { } t
+            ? $"{what} {mb} of {Math.Max(1, t >> 20)} MB"
+            : $"{what} {mb} MB";
+    }
+
     private static async Task DownloadAndSwapAsync(
         Settings settings, long assetId, IProgress<string> log, CancellationToken ct)
     {
         var zipPath = Path.Combine(Path.GetTempPath(), $"smylte-web-{assetId}.zip");
-
-        using (var http = MakeClient(settings))
-        using (var req = new HttpRequestMessage(HttpMethod.Get,
-                   $"https://api.github.com/repos/{Owner}/{Repo}/releases/assets/{assetId}"))
-        {
-            // The asset endpoint (rather than browser_download_url) is what makes
-            // this work unchanged whether the repository is public or private.
-            req.Headers.Accept.ParseAdd("application/octet-stream");
-
-            using var resp = await http
-                .SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
-            resp.EnsureSuccessStatusCode();
-
-            var source = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
-            await using (source.ConfigureAwait(false))
-            await using (var file = File.Create(zipPath))
-                await source.CopyToAsync(file, ct).ConfigureAwait(false);
-        }
+        await DownloadAssetAsync(settings, assetId, zipPath, "Downloading the latest build…", log, ct)
+            .ConfigureAwait(false);
 
         log.Report("Installing…");
 
@@ -276,5 +312,108 @@ public static class Updater
 
         if (Directory.Exists(previous)) Directory.Delete(previous, recursive: true);
         try { File.Delete(zipPath); } catch (Exception) { /* temp file; not worth failing over */ }
+    }
+
+    // ── replacing the client itself ─────────────────────────────────────────
+    //
+    // A running exe cannot be overwritten on Windows, but it CAN be renamed —
+    // the image stays mapped under its new name. So the new client is
+    // downloaded beside the old one, checked against the digest the release
+    // publishes, the running file is moved aside, the new one takes its path,
+    // and the new one is started with the old process's id so it can wait for
+    // it to exit before taking the single-instance mutex. The old file is
+    // deleted on that next start, once nothing is executing it.
+
+    /// What the launched client is told, so it waits for this one to leave.
+    public const string AfterUpdateFlag = "--after-update";
+
+    /// Download the published exe, verify it and swap it into this exe's path.
+    /// Returns the path to start. Throws with a sentence for the strip when
+    /// anything along the way refuses; nothing is changed until the download
+    /// has been checked, and a failed swap puts the old file back.
+    public static async Task<string> ReplaceClientAsync(
+        Settings settings, IProgress<string> log, CancellationToken ct)
+    {
+        var exe = Environment.ProcessPath;
+        if (exe is null || !File.Exists(exe))
+            throw new InvalidOperationException("This client cannot find its own exe to replace.");
+
+        log.Report("Checking the release…");
+        var release = await FetchReleaseAsync(settings, ct).ConfigureAwait(false);
+        if (FindAsset(release, ClientAssetName) is not { } asset)
+            throw new InvalidOperationException($"The {Tag} release has no {ClientAssetName}.");
+        // Refused rather than trusted: an unverifiable binary is not swapped in.
+        var digest = PublishedDigest(asset)
+            ?? throw new InvalidOperationException(
+                "The release states no digest for the client, so a download could not be checked.");
+
+        var staged = StagedClientPath(exe);
+        var id = asset.GetProperty("id").GetInt64();
+        await DownloadAssetAsync(settings, id, staged, "Downloading the new client…", log, ct)
+            .ConfigureAwait(false);
+
+        if (!DigestMatches(staged, digest))
+        {
+            try { File.Delete(staged); } catch (Exception) { /* best effort */ }
+            throw new InvalidOperationException(
+                "The downloaded client did not match the digest the release publishes; nothing was changed.");
+        }
+
+        log.Report("Installing…");
+        SwapClient(exe, staged);
+        return exe;
+    }
+
+    /// "sha256:<hex>" as the release states it, or null when it does not.
+    internal static string? PublishedDigest(JsonElement asset)
+    {
+        if (!asset.TryGetProperty("digest", out var field)) return null;
+        if (field.ValueKind != JsonValueKind.String) return null;
+        var value = field.GetString();
+        return value is { Length: > 7 } && value.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase)
+            ? value
+            : null;
+    }
+
+    /// Is the file's SHA-256 the one the release published?
+    internal static bool DigestMatches(string path, string published)
+    {
+        using var stream = File.OpenRead(path);
+        var actual = "sha256:" + Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
+        return string.Equals(actual, published, StringComparison.OrdinalIgnoreCase);
+    }
+
+    internal static string StagedClientPath(string exe) => exe + ".new";
+    internal static string RetiredClientPath(string exe) => exe + ".old";
+
+    /// Move the running file aside and the staged one into its place. A failure
+    /// on the second move puts the first back, so the path never ends up empty.
+    internal static void SwapClient(string exe, string staged)
+    {
+        var retired = RetiredClientPath(exe);
+        if (File.Exists(retired)) File.Delete(retired);
+        File.Move(exe, retired);
+        try
+        {
+            File.Move(staged, exe);
+        }
+        catch (Exception)
+        {
+            if (!File.Exists(exe) && File.Exists(retired)) File.Move(retired, exe);
+            throw;
+        }
+    }
+
+    /// Delete what a previous replacement left beside the exe. Best effort:
+    /// the retired file is deletable only once the process that ran it has
+    /// exited, which is why the launched client waits for that first.
+    internal static void RemoveStaleClient(string? exe)
+    {
+        if (exe is null) return;
+        foreach (var stale in new[] { RetiredClientPath(exe), StagedClientPath(exe) })
+        {
+            try { if (File.Exists(stale)) File.Delete(stale); }
+            catch (Exception) { /* still held, or read-only; the next start tries again */ }
+        }
     }
 }

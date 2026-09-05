@@ -129,6 +129,17 @@ class McpServer:
         # `notifications/initialized` and cancellation, and a stateless server
         # has nothing to do for either — but it must not reply.
         is_notification = "id" not in message
+        # `or {}` below substitutes a dict only for a FALSY value. A truthy list,
+        # string or number reached `params.get(...)`, raised AttributeError, and
+        # the generic handler turned a caller's shape error into a logged
+        # traceback plus -32603 INTERNAL_ERROR — an error class the client is
+        # entitled to retry, for a request that can never succeed. Every sibling
+        # shape error here (`arguments`, `name`, the id) is a readable
+        # INVALID_PARAMS/INVALID_REQUEST without a traceback; so is this.
+        params = message.get("params")
+        if params is not None and not isinstance(params, dict):
+            return None if is_notification else _error(
+                rid, INVALID_PARAMS, "params must be an object")
 
         try:
             if method == "initialize":

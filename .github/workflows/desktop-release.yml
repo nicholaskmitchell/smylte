@@ -11,6 +11,16 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      client:
+        description: >-
+          Whether to re-publish Smylte.exe. `auto` (the default, and what a push
+          does) publishes it only when desktop/Smylte.Desktop changed since the
+          exe on the release was built; `force` publishes it regardless — for a
+          change that lives outside that tree, such as the .NET version below.
+        type: choice
+        options: [auto, force]
+        default: auto
 
 # The release tag is ROLLING — every run overwrites the same assets — so two
 # pushes in quick succession race, and the slower (older) build can land last and
@@ -120,6 +130,8 @@ jobs:
       - name: Publish the rolling release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Empty on a push (no inputs), which the step reads as `auto`.
+          CLIENT_PUBLISH: ${{ inputs.client }}
         # Upload --clobber onto the existing release rather than delete-and-recreate,
         # so there is never a window where a client checking for updates finds no
         # release at all.
@@ -178,15 +190,63 @@ jobs:
             return 1
           }
 
+          RELEASE_STATE=$(retry release_state)
+
+          # The web build is published on every run; the exe only when the
+          # client's SOURCE changed. A self-contained single-file bundle is not
+          # the same bytes twice — the runtime pack and SDK float on `8.0.x`
+          # and the bundle carries its own stamps — so re-uploading it on every
+          # push gave every push a new digest, and the client (which compares
+          # the published digest with its own, Updater.cs) told everyone a new
+          # client was available on a README commit. Downloading it changed
+          # nothing, because nothing about the window had changed; the web
+          # build the client had already swapped in was the whole update.
+          #
+          # The key is the tree hash of desktop/Smylte.Desktop at HEAD — every
+          # source file, the csproj and the icons, and nothing else — recorded
+          # in the release notes as "Client source tree" so the next run can
+          # read what the published exe was built from. `git rev-parse` reads
+          # it off the checkout; a depth-1 clone has HEAD's trees.
+          CLIENT_TREE=$(git rev-parse "HEAD:desktop/Smylte.Desktop")
+
+          # Why the exe is being published this run, or empty for "it is not".
+          client_reason() {
+            if [ "${CLIENT_PUBLISH:-auto}" = force ]; then
+              echo "forced by workflow_dispatch"; return 0
+            fi
+            if [ "$RELEASE_STATE" != present ]; then
+              echo "first release"; return 0
+            fi
+            local names published
+            names=$(retry gh release view desktop-latest --json assets --jq '.assets[].name') || return 1
+            if ! printf '%s\n' "$names" | grep -qx 'Smylte.exe'; then
+              echo "the release has no Smylte.exe"; return 0
+            fi
+            published=$(retry gh release view desktop-latest --json body --jq .body \
+              | sed -n 's/.*Client source tree: \([0-9a-f]\{40\}\).*/\1/p' | head -1) || return 1
+            if [ "$published" != "$CLIENT_TREE" ]; then
+              echo "client source changed (${published:-unrecorded} -> ${CLIENT_TREE})"; return 0
+            fi
+            echo ""
+          }
+
+          CLIENT_REASON=$(client_reason)
+          FILES="artifacts/web/smylte-web.zip"
+          if [ -n "$CLIENT_REASON" ]; then
+            echo "Publishing Smylte.exe: ${CLIENT_REASON}"
+            FILES="$FILES artifacts/client/Smylte.exe"
+          else
+            echo "Smylte.exe is unchanged (client source tree ${CLIENT_TREE}); not re-published"
+          fi
+
           NOTES="Rolling desktop build from ${GITHUB_SHA}.
 
           \`Smylte.exe\` is the Windows client — download it once; it keeps its own
-          copy of the web build up to date from this release on each launch.
-          \`smylte-web.zip\` is that web build, and is what the client downloads."
+          copy of the web build up to date from this release on each launch, and
+          the exe here is replaced only when the client itself changed.
+          \`smylte-web.zip\` is that web build, and is what the client downloads.
 
-          FILES="artifacts/web/smylte-web.zip artifacts/client/Smylte.exe"
-
-          RELEASE_STATE=$(retry release_state)
+          Client source tree: ${CLIENT_TREE}"
 
           if [ "$RELEASE_STATE" = present ]; then
             # Assets first, notes second, and the order matters. If this step dies
@@ -212,5 +272,12 @@ jobs:
           BODY=$(retry gh release view desktop-latest --json body --jq .body)
           if ! printf '%s' "$BODY" | grep -q "$GITHUB_SHA"; then
             echo "::error::desktop-latest notes do not name ${GITHUB_SHA}; the release is half-updated"
+            exit 1
+          fi
+          # And the tree the exe was built from, since the next run's decision
+          # not to re-publish reads it back from here: notes without it would
+          # make the following push upload the exe again, for nothing.
+          if ! printf '%s' "$BODY" | grep -q "Client source tree: ${CLIENT_TREE}"; then
+            echo "::error::desktop-latest notes do not record the client source tree ${CLIENT_TREE}"
             exit 1
           fi

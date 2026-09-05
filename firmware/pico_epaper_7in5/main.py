@@ -236,7 +236,8 @@ def _tls(sock):
 
 
 def main():
-    connect_wifi()
+    # Kept, not discarded: the loop below asks it whether the link is still up.
+    wlan = connect_wifi()
     epd = EPD_7in5()
     # Allocated ONCE, for the life of the program. `epd.buffer` is the driver's
     # own `bytearray(WIDTH * HEIGHT // 8)` behind its MONO_HLSB FrameBuffer, and
@@ -250,6 +251,15 @@ def main():
     while True:
         wait = MIN_REFRESH_S
         try:
+            # The join is not for life. On the rp2/cyw43 port the station does
+            # not re-associate on its own once the access point goes away — a
+            # router reboot at 03:00 leaves `isconnected()` False for good —
+            # and without this line every fetch below raised at `getaddrinfo`,
+            # was swallowed, and the panel showed Tuesday until someone cut the
+            # power. `connect_wifi` already retries and resets the board when
+            # the network stays gone; it just has to be reachable after boot.
+            if not wlan.isconnected():
+                wlan = connect_wifi()
             status, headers, new_etag = fetch(buf, etag)
             # The server's interval is a request, never a permission: this panel
             # will not refresh faster than its own floor whatever it is told,

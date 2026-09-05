@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 
 namespace Smylte.Desktop;
@@ -46,6 +47,23 @@ internal static class Program
         var wantsSetup = args.Any(a =>
             a.Equals("--setup", StringComparison.OrdinalIgnoreCase) ||
             a.Equals("/setup", StringComparison.OrdinalIgnoreCase));
+
+        // `Smylte.exe --after-update <pid>` is how a client the updater just
+        // swapped in is started: by the client it replaces, which is still
+        // running and still holds the single-instance mutex. Wait for it to
+        // leave before asking for the mutex, or this launch would be refused as
+        // a second instance — and only then can the retired file be deleted,
+        // since a running image cannot be. Bounded: a process that will not
+        // exit is not a reason to never start.
+        var afterUpdate = Array.IndexOf(args, Updater.AfterUpdateFlag);
+        if (afterUpdate >= 0 && afterUpdate + 1 < args.Length
+            && int.TryParse(args[afterUpdate + 1], out var previousPid))
+        {
+            try { Process.GetProcessById(previousPid).WaitForExit(30_000); }
+            catch (ArgumentException) { /* already gone */ }
+            catch (Exception) { /* cannot watch it; carry on */ }
+        }
+        Updater.RemoveStaleClient(Environment.ProcessPath);
 
         // Ahead of the mutex check now, because the "already running" branch can
         // show a dialog: SetCompatibleTextRenderingDefault has to run before the

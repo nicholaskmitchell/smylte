@@ -13,6 +13,7 @@ import logging
 import re
 import sqlite3
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 
 from ..dav.client import CollectionInfo, Item
@@ -24,6 +25,8 @@ _SCHEMA = (Path(__file__).parent / "schema.sql").read_text(encoding="utf-8")
 
 # C0 control bytes, stripped from search terms (see `search`).
 _CTRL = re.compile(r"[\x00-\x1f\x7f]")
+# The most terms one MATCH may carry — see `search`.
+_MAX_SEARCH_TERMS = 32
 
 
 @contextmanager
@@ -82,6 +85,13 @@ def init_db(conn: sqlite3.Connection) -> None:
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(collections)")}
     if "ord" not in cols:
         conn.execute("ALTER TABLE collections ADD COLUMN ord INTEGER")
+    ledger_cols = {r["name"] for r in conn.execute("PRAGMA table_info(notification_deliveries)")}
+    if "message_id" not in ledger_cols:
+        # NULL on every row settled before this column, and a NULL counts as
+        # its own delivery in the loud ceiling — the same per-row charge those
+        # rows always carried, so an upgrade changes nothing about a day
+        # already in progress.
+        conn.execute("ALTER TABLE notification_deliveries ADD COLUMN message_id INTEGER")
     tok_cols = {r["name"] for r in conn.execute("PRAGMA table_info(oauth_tokens)")}
     if "cv" not in tok_cols:
         # Grants issued before this column read '' and are refused on first use,
@@ -764,7 +774,26 @@ def list_bookings(
         params.append(after)
     if where:
         q += " WHERE " + " AND ".join(where)
-    return list(conn.execute(q + " ORDER BY start_at", params))
+    rows = list(conn.execute(q + " ORDER BY start_at", params))
+    # Ordered by INSTANT, not by the string. `start_at` is written with the
+    # link's own offset (schema.sql), so `ORDER BY start_at` alone compares
+    # wall clocks: a 09:00-07:00 booking (16:00Z) listed before a 10:00+02:00
+    # one (08:00Z) in Settings > Bookings and on the first page of
+    # `smylte_list_bookings`, and one link's own rows swapped across a
+    # fall-back. Stable, so equal instants keep the SQL order; a value that
+    # cannot be parsed (there should be none, but the column is TEXT) sorts
+    # after every one that can, by its string.
+    return sorted(rows, key=lambda r: _instant_key(r["start_at"]))
+
+
+def _instant_key(value) -> tuple:
+    try:
+        dt = datetime.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return (1, str(value or ""))
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return (0, dt.timestamp())
 
 
 def bookings_created_since(conn: sqlite3.Connection, stamp: str) -> list[sqlite3.Row]:
@@ -1186,7 +1215,16 @@ def find_day_entry(
     else:
         raise ValueError("find_day_entry needs entry_id, collection_href+uid, or title")
     if entry_id is None:
-        where.append("dropped_at IS NULL")
+        # A ROLLED row is decided about exactly like a dropped one. Without the
+        # second filter, rolling tomorrow's copy back to today "landed" on
+        # today's inert rolled-away row and stamped the copy too, so both rows
+        # carried `rolled_to` and the work was live on no day; and re-adding a
+        # task the day rolled away answered with the inert row and inserted
+        # nothing, while the same re-add after a DROP inserts a fresh live row.
+        # A retried roll still lands once: the target's copy is live, so this
+        # finds it. The snapshot dedupes on every existing row, rolled ones
+        # included, so a day is not re-proposed a task it already holds.
+        where.append("dropped_at IS NULL AND rolled_to IS NULL")
     return conn.execute(
         # Every fragment above is a literal in this function — not caller input.
         f"SELECT * FROM day_plan WHERE {' AND '.join(where)} "  # nosec B608
@@ -1295,8 +1333,23 @@ def search(conn: sqlite3.Connection, query: str) -> list[sqlite3.Row]:
     scheme was supposed to make safe. Control bytes are never meaningful search
     text, so they are dropped, and a term that was nothing but control bytes
     drops with them (leaving no terms at all is an empty result, not a malformed
-    MATCH)."""
-    terms = [t for t in (_CTRL.sub("", t) for t in query.split()) if t]
+    MATCH).
+
+    The term COUNT is bounded here too, not only at the doors. FTS5's cost for
+    a conjunction of prefix phrases is quadratic in how many there are — on an
+    EMPTY items table 10k terms took 0.09 s, 40k 3.0 s and the ~500k that fit a
+    1 MB /mcp body nine minutes, every millisecond of it under the global
+    service lock. The MCP schema now caps the query's length and the HTTP twin
+    is bounded by the request line, but a limit that lives only in the callers
+    is one new caller away from not existing. Repeated tokens are folded first
+    (`"a "*500000` is ONE term), then the first `_MAX_SEARCH_TERMS` distinct
+    ones are kept: every term narrows a conjunction, so dropping the tail
+    returns a superset of what the full query would — a benign degradation on
+    a search nobody types, where refusing would be a 500 on the HTTP route
+    that maps no error for it."""
+    terms = list(dict.fromkeys(
+        t for t in (_CTRL.sub("", t) for t in query.split()) if t
+    ))[:_MAX_SEARCH_TERMS]
     if not terms:
         return []
     match = " ".join('"{}"*'.format(t.replace('"', '""')) for t in terms)
@@ -1505,6 +1558,7 @@ def settle_notification(
     ok: bool,
     silent: bool = False,
     error: str | None = None,
+    message_id: int | None = None,
 ) -> None:
     """Record how a claimed send turned out.
 
@@ -1512,12 +1566,17 @@ def settle_notification(
     and httpx puts the URL in its exception text, so an unredacted string here is
     a plaintext credential in every backup of this file. `notify.telegram`
     redacts on the way out; this function is not the place to start trusting it.
+
+    `message_id` names the DELIVERY the occasion rode in — the transport's id
+    for the message, shared by every row of a batch. It is what lets the daily
+    loud ceiling charge one combined message once (scheduler.loud_deliveries_since).
     """
     conn.execute(
         "UPDATE notification_deliveries SET "
-        "settled_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'), ok=?, silent=?, error=? "
+        "settled_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'), ok=?, silent=?, error=?, "
+        "message_id=? "
         "WHERE trigger=? AND dedupe_key=? AND channel=?",
-        (1 if ok else 0, 1 if silent else 0, error, trigger, dedupe_key, channel),
+        (1 if ok else 0, 1 if silent else 0, error, message_id, trigger, dedupe_key, channel),
     )
 
 
@@ -1569,24 +1628,6 @@ def recent_notifications(conn: sqlite3.Connection, *, limit: int = 50) -> list[d
     return [dict(r) for r in rows]
 
 
-def loud_notifications_since(conn: sqlite3.Connection, stamp: str) -> int:
-    """How many BUZZING notifications have been claimed since `stamp`.
-
-    The count behind the daily ceiling. Served by
-    `idx_notification_deliveries_claimed`.
-
-    Approximate at exactly one margin, and knowingly: `silent` is stamped by
-    `settle_notification`, so a row claimed and not yet settled reads `silent=0`
-    and counts as loud. Rows settle within seconds of being claimed, so the error
-    is at most one message and it errs toward QUIETER, which is the right
-    direction for a noise ceiling to be wrong in.
-    """
-    row = conn.execute(
-        "SELECT COUNT(*) FROM notification_deliveries "
-        "WHERE claimed_at >= ? AND silent = 0",
-        (stamp,),
-    ).fetchone()
-    return int(row[0]) if row else 0
 
 
 def gc_notifications(conn: sqlite3.Connection, *, before: str) -> int:

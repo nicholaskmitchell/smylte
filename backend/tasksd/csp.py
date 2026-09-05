@@ -75,8 +75,12 @@ def build_policy(script_hashes: list[str]) -> str:
         "base-uri 'none'",
         "object-src 'none'",
         "frame-ancestors 'none'",
-        # The MCP consent screen posts to /oauth/authorize; it then REDIRECTS to
-        # the client's callback, which form-action does not govern.
+        # The MCP consent screen posts to /oauth/authorize and then REDIRECTS
+        # to the client's callback — and Chromium enforces form-action against
+        # that redirect target (Firefox does not; MDN documents the split). So
+        # this policy must never reach the consent flow: every HTML answer there
+        # carries its own header (mcp/routes.py `_PAGE_HEADERS`), which this
+        # middleware then leaves alone.
         "form-action 'self'",
         # No data:/blob: — nothing in the app builds one (checked). The theme
         # export makes a blob URL for `<a download>`, which is a download rather

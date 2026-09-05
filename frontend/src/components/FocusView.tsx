@@ -73,8 +73,11 @@ export function FocusView({
   const expire = useRef(onExpire)
   expire.current = onExpire
   const guard = useMemo(() => makeGuard(() => expire.current()), [])
-  const { tasks, loaded, toggle } = useTaskData()
+  const { tasks, loaded, toggle, taskListErrors, taskListsFailed, reloadTasks } = useTaskData()
   const today = useToday()
+  // The lists whose fetch failed, as the set `focus.ts` reads. A task row from
+  // one of them is unknown rather than finished — see `finished` there.
+  const failedLists = useMemo(() => new Set(taskListsFailed), [taskListsFailed])
 
   // ── the Windows client, if this is running in one ───────────────────────
   //
@@ -131,25 +134,46 @@ export function FocusView({
   const [session, setSession] = useState<FocusSession | null | undefined>(undefined)
   const planToken = useRef(0)
   const sessionToken = useRef(0)
+  // Whether either read FAILED, and the retry's own signal. `guard` swallows a
+  // non-401 failure into a six-second toast and resolves undefined, after which
+  // `planTried` stayed false and `session` stayed undefined — both of which the
+  // render below turns into `body = null`. The owner was left with "Focus" and
+  // "Back to today" over an empty page until some SSE event happened to bump
+  // `rev` or `focusRev`, which on an idle account is never; nothing on the
+  // surface could ask again. The shape TodayView's `dayError`/`dayTry` take,
+  // and for the same reason: a blank pane is not an error state.
+  const [readFailed, setReadFailed] = useState(false)
+  const [tries, setTries] = useState(0)
+  const retry = useCallback(() => { setReadFailed(false); setTries((n) => n + 1) }, [])
 
   useEffect(() => {
     const mine = ++planToken.current
     void guard(async () => {
-      const p = await api.day(today)
-      if (mine !== planToken.current) return
-      setPlan(p ?? null)
-      setPlanTried(true)
+      try {
+        const p = await api.day(today)
+        if (mine !== planToken.current) return
+        setPlan(p ?? null)
+        setPlanTried(true)
+      } catch (e) {
+        if (mine === planToken.current) setReadFailed(true)
+        throw e
+      }
     })
-  }, [today, rev, guard])
+  }, [today, rev, tries, guard])
 
   useEffect(() => {
     const mine = ++sessionToken.current
     void guard(async () => {
-      const s = await api.focus(today)
-      if (mine !== sessionToken.current) return
-      setSession(s ?? null)
+      try {
+        const s = await api.focus(today)
+        if (mine !== sessionToken.current) return
+        setSession(s ?? null)
+      } catch (e) {
+        if (mine === sessionToken.current) setReadFailed(true)
+        throw e
+      }
     })
-  }, [today, focusRev, guard])
+  }, [today, focusRev, tries, guard])
 
   // The tick. One a second, whatever the state: the cost is a re-render of a
   // surface with two rows on it.
@@ -163,11 +187,12 @@ export function FocusView({
   const entries = useMemo(
     () => (plan && plan.day === today ? plan.entries : []), [plan, today])
   const queue = useMemo(
-    () => queueOf(entries, tasks, loaded, session ?? null), [entries, tasks, loaded, session])
+    () => queueOf(entries, tasks, loaded, session ?? null, failedLists),
+    [entries, tasks, loaded, session, failedLists])
   // The tally counts EVERY open row, set-aside ones included: "3 / 8 done" is a
   // fact about the day, and setting a row aside did not do it.
-  const openAll = useMemo(() => queueOf(entries, tasks, loaded, null).open.length,
-    [entries, tasks, loaded])
+  const openAll = useMemo(() => queueOf(entries, tasks, loaded, null, failedLists).open.length,
+    [entries, tasks, loaded, failedLists])
   const liveTotal = useMemo(
     () => entries.filter((e) => !e.dropped_at && !e.rolled_to).length, [entries])
   const current = queue.current
@@ -175,7 +200,21 @@ export function FocusView({
     ? tasks.find((t) => t.list === current.list && t.uid === current.uid) : undefined
   const live = !!session && !session.ended_at
   const clock = session ? clockOf(session, now) : null
-  const away = !!session && live && wasAway(session, now)
+  // The phase whose end this window ANNOUNCED — bell rung, notification shown
+  // — on a visible document. `wasAway` is a pure function of the anchor's age,
+  // and the server never clears `running_since` when a phase merely runs out,
+  // so on a live screen with auto-continue off the label flipped from
+  // "Interval over" to "Interval over · you were away" ninety seconds after
+  // the bell, to an owner who had heard it and was still reading. Away is a
+  // fact about how the end was experienced, not about how long the owner then
+  // takes to press a button, so it is decided once, at the end. The signal is
+  // the document's visibility at that moment and NOT the effect's own firing:
+  // a throttled background tab fires the effect too, and that owner really
+  // was somewhere else.
+  const [announced, setAnnounced] = useState<string | null>(null)
+  const phaseKey = session
+    ? `${session.started_at}:${session.phase}:${session.intervals_done}` : null
+  const away = !!session && live && wasAway(session, now) && announced !== phaseKey
   const onBreak = !!session && session.phase !== 'focus'
 
   // ── writes ─────────────────────────────────────────────────────────────
@@ -265,15 +304,23 @@ export function FocusView({
   }, [current, currentTask, guard, today, toggle])
 
   const setCap = useCallback(async (entryId: string, capped: boolean) => {
+    // The value from BEFORE the paint, for the failure arm. The settle used to
+    // read `e.capped` off the plan it was mapping over — the plan after the
+    // optimistic paint — so a failed PATCH wrote the optimistic value back
+    // over itself and no rollback happened; the cap effect below then passed
+    // the row at its estimate on a preference the server had refused. Every
+    // sibling of this shape (TodayView's `toggleEntry`, `setEstimate`; the Home
+    // plan module) captures the old value in the closure, as this now does.
+    const prev = plan?.entries.find((e) => e.entry_id === entryId)?.capped ?? null
     setPlan((p) => (p && p.day === today
       ? { ...p, entries: p.entries.map((e) => (e.entry_id === entryId ? { ...e, capped } : e)) }
       : p))
     const dto = await guard(() => api.patchDayEntry(today, entryId, { capped }))
     setPlan((p) => (p && p.day === today
       ? { ...p, entries: p.entries.map((e) => (e.entry_id === entryId
-        ? { ...e, capped: dto ? dto.capped : e.capped } : e)) }
+        ? { ...e, capped: dto ? dto.capped : prev } : e)) }
       : p))
-  }, [guard, today])
+  }, [guard, plan, today])
 
   // ── the effects that make it roll ──────────────────────────────────────
   //
@@ -289,12 +336,15 @@ export function FocusView({
   const synced = useRef<string | null>(null)
   useEffect(() => {
     if (!session || !live || !planTried) return
-    if (!currentFinished(entries, tasks, loaded, session)) { synced.current = null; return }
+    if (!currentFinished(entries, tasks, loaded, session, failedLists)) {
+      synced.current = null
+      return
+    }
     const key = `${session.entry_id}:${rev}`
     if (synced.current === key) return
     synced.current = key
     sync()
-  }, [entries, tasks, loaded, session, live, planTried, rev, sync])
+  }, [entries, tasks, loaded, session, live, planTried, rev, sync, failedLists])
 
   // A capped row has used its estimate: set it aside and move on, mid-interval.
   const capped = useRef<string | null>(null)
@@ -323,6 +373,9 @@ export function FocusView({
     ended.current = key
     if (away) return
     if (!floating && floated) return
+    // Announced here, on a visible document: this is what keeps the label at
+    // "over" past the grace. Hidden, it stays unlatched and `wasAway` decides.
+    if (document.visibilityState !== 'hidden') setAnnounced(phaseKey)
     const focusEnded = session.phase === 'focus'
     if (settings.chime) playChime(focusEnded ? 'focus' : 'break')
     if (settings.notify) {
@@ -331,7 +384,8 @@ export function FocusView({
         current ? entryTitle(current, currentTask, loaded, tr) : '')
     }
     if (settings.autoContinue) next(false)
-  }, [away, clock, current, currentTask, floated, floating, live, loaded, next, session, settings, tr])
+  }, [away, clock, current, currentTask, floated, floating, live, loaded, next, phaseKey, session,
+    settings, tr])
 
   // The tab's title carries the clock, so a tab behind another still says
   // where the interval stands — the same lever DisplayView pulls for a panel's
@@ -352,11 +406,31 @@ export function FocusView({
         : tr(session.phase === 'focus' ? 'focus.phase.focus'
           : session.phase === 'break' ? 'focus.phase.break' : 'focus.phase.longBreak')
 
-  const title = (e: typeof current) => (e ? entryTitle(e, e === current ? currentTask
-    : tasks.find((t) => t.list === e.list && t.uid === e.uid), loaded, tr) : '')
+  // `entryTitle` says "no longer in your lists" for a task row with no task
+  // once the tasks have loaded — true of a deleted task, false of one whose
+  // list failed to load. That row gets its own line.
+  const title = (e: typeof current) => {
+    if (!e) return ''
+    const t = e === current ? currentTask : tasks.find((x) => x.list === e.list && x.uid === e.uid)
+    if (e.kind === 'task' && !t && failedLists.has(e.list ?? '')) return tr('today.taskUnavailable')
+    return entryTitle(e, t, loaded, tr)
+  }
 
   let body: React.ReactNode
-  if (!planTried && !plan) {
+  if (readFailed && ((!planTried && !plan) || session === undefined)) {
+    // Only while the failure is what is keeping the surface blank: a day read
+    // that failed AFTER a cached plan painted, or a session refetch that failed
+    // over a session already on screen, keeps what it has, and the toast has
+    // already said the rest.
+    body = (
+      <>
+        <p className="focus-empty" role="alert">{tr('focus.readFailed')}</p>
+        <div className="focus-actions">
+          <button type="button" className="btn" onClick={retry}>{tr('common.retry')}</button>
+        </div>
+      </>
+    )
+  } else if (!planTried && !plan) {
     body = null
   } else if (!plan || !plan.planned) {
     body = (
@@ -536,7 +610,20 @@ export function FocusView({
           </>
         )}
       </header>
-      <main className="focus-main">{body}</main>
+      <main className="focus-main">
+        {/* The pane is short and says so, the way TasksView does: a task row
+            from one of these lists is painted as unknown, not done, and this
+            is what tells the owner why its title is a placeholder. */}
+        {taskListErrors.length > 0 && (
+          <div className="cal-partial" role="status">
+            {tr('tasks.partial', { lists: taskListErrors.join(', ') })}{' '}
+            <button type="button" className="btn ghost" onClick={reloadTasks}>
+              {tr('common.retry')}
+            </button>
+          </div>
+        )}
+        {body}
+      </main>
       {live && current && (
         <footer className="focus-foot">
           <span className="spacer" />
