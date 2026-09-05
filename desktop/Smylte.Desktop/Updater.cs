@@ -146,6 +146,11 @@ public static class Updater
     /// number has to be remembered — a forgotten bump would silently ship a client
     /// nobody is told about. A digest cannot be forgotten.
     ///
+    /// What makes a digest an honest signal is the other end: desktop-release.yml
+    /// re-publishes the exe only when desktop/Smylte.Desktop changed, because a
+    /// self-contained bundle is never the same bytes twice and uploading it on
+    /// every push made every push look like a new client.
+    ///
     /// Every uncertain path returns false. A missing digest field, an unreadable
     /// exe, an unexpected format: none of those are evidence of being out of date,
     /// and a false alarm here sends someone to re-download 69 MB for nothing.
