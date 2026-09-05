@@ -278,6 +278,14 @@ public sealed class MainForm : Form, IDesktopBridge
         // monogram, never the window.
         try { Icon = IconLibrary.Load(IconLibrary.Parse(_settings.IconChoice)) ?? Icon; }
         catch (Exception) { /* cosmetic */ }
+        // The Start-menu shortcut carries the same icon as a FILE, resolved at
+        // write time — so with Auto it was written for the taskbar of that
+        // moment and never followed a theme flip: the window and Alt-Tab went
+        // Paper on a dark taskbar while the grouped taskbar button stayed Ink.
+        // Sync is best-effort and a no-op with the toggle off, and this is the
+        // one place every icon change passes through (construction, the theme
+        // broadcast, the settings bridge), so the shortcut follows from here.
+        ShellShortcut.Sync(_settings);
     }
 
     private void ApplyChrome(string? background)
@@ -409,8 +417,7 @@ public sealed class MainForm : Form, IDesktopBridge
             _settings.IconChoice = IconLibrary.Parse(choice).ToString();
             _settings.StartMenuShortcut = startMenuShortcut;
             _settings.Save();
-            ApplyIcon();
-            ShellShortcut.Sync(_settings);
+            ApplyIcon();   // re-syncs the shortcut too
         });
     }
 

@@ -1,11 +1,11 @@
 # Audit backlog
 
-**4 open, all by decision or deferral — see the 2026-09-03 sweep.** Every
-other finding in this file is closed: the 81 that sweep fixed, all five stages
+**3 open, all by decision — see the 2026-09-03 sweep.** Every
+other finding in this file is closed: the 82 that sweep fixed, all five stages
 of the 2026-08-25 sweep, the one its own remediation turned up (marked
 `· found in remediation`), and every finding from every earlier sweep. Three
 more were filed under the newest sweep's *Filed during remediation*; one of
-those is still open, so `grep -c` below says 5.
+those is still open, so `grep -c` below says 4.
 
 Two of them close on REVIEW rather than on a fix, and say so: the stage 5
 test-gap entries had correct subjects and missing coverage, so what landed is
@@ -95,7 +95,7 @@ below was made against code the agent had actually executed; the verifiers were
 told to refute, and their notes travel with each finding. Grounded against every
 earlier section of this file through a one-line-per-finding index of it.
 
-**81 closed, 4 open.** Both HIGHs were reproduced by hand with a runnable probe
+**82 closed, 3 open.** Both HIGHs were reproduced by hand with a runnable probe
 before they were touched — a 1 MB search from a read-only grant measured
 quadratic under the global lock, and a rename in the event editor watched
 stripping a Berlin event of its TZID and moving it six hours — and so was the
@@ -109,12 +109,13 @@ against the tree before it, in six new files: `test_backlog_sep03_http.py`,
 fix — test gaps whose subjects were correct — and say so where they are ticked;
 each of those tests was run against a mutation before it was trusted.
 
-The four that stay open are not defects the sweep failed to fix. Three are
+The three that stay open are not defects the sweep failed to fix. They are
 decisions that belong to the owner and are written up as such where they sit:
 the light-theme accent palette (a change to the shipped design), a size cap on a
 foreign CalDAV resource (an event with a large inline attachment would stop
 appearing at all), and a pinned dependency lock (a change to how every install
-happens). The fourth is one line of C# for a Windows build this box cannot make.
+happens). A fourth, a few lines of C#, was deferred for want of a .NET SDK on the
+remediation box and closed once one was installed there.
 
 Two things the remediation turned up on its own, both fixed alongside: the
 display picker's chips are `<button>`s over a `.chip` rule with no background,
@@ -3504,7 +3505,7 @@ the box is visible at install time.
 
 **Open — needs a decision.** A pinned lock file changes how every install happens (CI, setup.sh, the interpreter-rebuild recipe in DEPLOY.md) and adds a scheduled audit; left for the owner to choose between a lock and a `pip freeze` diff printed at install time.
 
-#### [ ] The Start-menu shortcut is only re-synced from the settings toggle, so with icon=Auto the grouped taskbar button keeps the plate for the previous Windows theme — the code's own comment says MainForm re-syncs on every icon apply, and it does not
+#### [x] The Start-menu shortcut is only re-synced from the settings toggle, so with icon=Auto the grouped taskbar button keeps the plate for the previous Windows theme — the code's own comment says MainForm re-syncs on every icon apply, and it does not
 `desktop/Smylte.Desktop/MainForm.cs:233` · **low** · rendering · minor
 
 `ShellShortcut.Sync` is called from exactly one place: `IDesktopBridge.Icon`
@@ -3553,7 +3554,7 @@ cheap, and a no-op when the toggle is off), or at least from the WM_SETTINGCHANG
 branch and once after construction. Correct the ShellShortcut.cs comment if the
 launch-time sync is deliberately omitted.
 
-**Open — deferred.** A C# change that cannot be compiled or run on the box this sweep was remediated from; the fix (re-sync the shortcut whenever the effective icon changes, not only from the settings toggle) is a few lines for the next Windows build.
+**Fixed.** `ApplyIcon()` now calls `ShellShortcut.Sync` — it is the one place every icon change passes through (construction, the ImmersiveColorSet broadcast, the settings bridge), so the shortcut's icon file follows a theme flip the way the window does. Deferred at first for want of a .NET SDK on the remediation box; compiled there once one was installed, and it needs a Windows run to watch the taskbar button change.
 
 
 
