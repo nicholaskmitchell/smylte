@@ -665,3 +665,23 @@ def test_a_booking_link_carries_its_absolute_url_when_the_deployment_knows_its_o
 def test_a_booking_link_has_no_url_when_the_origin_is_not_configured(svc):
     link = svc.list_booking_links_one(_make_link(svc))
     assert "url" in link and link["url"] is None
+
+
+# ── the display DTO: the same absolute URL, for the same client ─────────────
+
+def test_a_display_carries_its_absolute_url_when_the_deployment_knows_its_origin():
+    """Filed during remediation: the display row had the defect "Copy link" was
+    fixed for — inside the Windows client `location.origin` is localhost. The
+    url rides only with the token, since a frame must not carry its credential."""
+    s = TaskService(_settings(public_url="https://tasks.example.test"))
+    try:
+        d = s.create_display({"name": "Hallway", "mode": "calendar"})
+        assert d["url"] == f"https://tasks.example.test/display/{d['token']}"
+        assert "url" not in s.display_frame(d["token"])["display"]
+    finally:
+        s.close()
+
+
+def test_a_display_has_no_url_when_the_origin_is_not_configured(svc):
+    d = svc.create_display({"name": "Hallway", "mode": "calendar"})
+    assert "url" in d and d["url"] is None

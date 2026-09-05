@@ -342,6 +342,17 @@ describe('2026-09-03 — the display page in German', () => {
     expect(screen.getByText(/Einstellungen → Anzeigen/)).toBeInTheDocument()
   })
 
+  // ── filed during remediation — the frame's language never reached the
+  //    document, so index.html's `lang="en"` stood over a German panel ───────
+  it('writes the frame\'s language onto the document', async () => {
+    vi.useFakeTimers()
+    document.documentElement.lang = 'en'
+    m.publicDisplayFrame.mockResolvedValue(CAL_DE)
+    render(<DisplayView token="tok" />)
+    await act(async () => { await Promise.resolve() })
+    expect(document.documentElement.lang).toBe('de')
+  })
+
   it('CONTROL: an English frame reads exactly what it read before', async () => {
     vi.useFakeTimers()
     m.publicDisplayFrame.mockResolvedValue({ ...CAL_DE, language: 'en' })
@@ -441,5 +452,32 @@ describe('2026-09-03 — disconnecting one MCP grant while another is in flight'
     // server-side, and the old code showed it as connected read/write.
     expect(await screen.findByText('App A')).toBeInTheDocument()
     expect(screen.queryByText('App B')).toBeNull()
+  })
+})
+
+// ── the display's own absolute URL, for the Windows client ──────────────────
+
+describe('2026-09-03 — a display row inside the Windows client', () => {
+  beforeEach(() => {
+    m.calendars.mockResolvedValue([{ id: 'work', name: 'Work' }] as never)
+    m.lists.mockResolvedValue([{ id: 'inbox', name: 'Inbox' }] as never)
+  })
+
+  // The same defect "Copy link" had: `location.origin` is http://localhost:<port>
+  // in the exe, so the URL on the row and on the clipboard opened nowhere else.
+  // The server now names the page when it knows its origin; the row prefers it.
+  it('shows and copies the absolute URL the server names', async () => {
+    m.displays.mockResolvedValue([{ ...DISPLAY, url: 'https://x.example/display/tok-hallway' }] as never)
+    render(<DisplaysSection onExpire={vi.fn()} />)
+    await userEvent.click(await screen.findByRole('button', { name: /set up/i }))
+    expect(screen.getByText('https://x.example/display/tok-hallway')).toBeInTheDocument()
+    expect(screen.queryByText(`${location.origin}/display/tok-hallway`)).toBeNull()
+  })
+
+  it('CONTROL: falls back to this origin when the server names none', async () => {
+    m.displays.mockResolvedValue([DISPLAY] as never)
+    render(<DisplaysSection onExpire={vi.fn()} />)
+    await userEvent.click(await screen.findByRole('button', { name: /set up/i }))
+    expect(screen.getByText(`${location.origin}/display/tok-hallway`)).toBeInTheDocument()
   })
 })

@@ -145,6 +145,10 @@ export function DisplayView({ token }: { token: string }) {
   // 404 on the very first fetch has nothing better than the device's own.
   const lang = frame && isLanguage(frame.language) ? frame.language : deviceLanguage()
   const tr = (key: string) => translate(lang, key)
+  // Onto the document too, as the app shell does for the account language:
+  // index.html ships `lang="en"`, and a German panel left it there for
+  // assistive tech and hyphenation to read as English.
+  useEffect(() => { document.documentElement.lang = lang }, [lang])
 
   return (
     <div className={`display display--${palette}`} data-mode={frame?.display.mode ?? 'calendar'}>

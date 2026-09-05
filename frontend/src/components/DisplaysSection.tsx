@@ -179,7 +179,10 @@ export function DisplaysSection(
     }
   }
 
-  const urlFor = (d: Display) => `${location.origin}/display/${d.token}`
+  // The server's absolute url when it knows its origin — inside the Windows
+  // client `location.origin` is http://localhost:<port>, a page only that
+  // machine can open. Same rule as the booking link's "Copy link".
+  const urlFor = (d: Display) => d.url ?? `${location.origin}/display/${d.token}`
   // The format that matches the screen. An e-ink panel driven by a
   // microcontroller wants `.bin` — the packed framebuffer, which it writes
   // straight to its glass — and handing it the `.png` instead means asking a

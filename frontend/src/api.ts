@@ -242,6 +242,10 @@ export interface BookingLink {
  */
 export interface Display {
   token: string
+  /** The page a panel opens, absolute, when the deployment has said what its
+   *  origin is (TASKS_PUBLIC_URL); null otherwise. The Windows client serves
+   *  the app from localhost, so `location.origin` is the wrong origin there. */
+  url?: string | null
   name: string
   mode: DisplayMode
   palette: DisplayPalette
