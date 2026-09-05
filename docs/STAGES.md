@@ -4,7 +4,7 @@
 findings, and the map from a finding to the test that pins it.
 
 Four sweeps have been staged this way. The **2026-09-03** one is at the top and
-is closed but for the four decisions and one filed follow-up its section in
+is closed but for the three decisions and one filed follow-up its section in
 `docs/AUDIT.md` names; the three before it are CLOSED. The **2026-08-25** one
 is next. The **2026-08-19** and **2026-08-16** backlogs under it are both closed
 and kept as the record of how the harness behaved in practice — the latter's "Two
@@ -18,12 +18,12 @@ open. Each stage section is kept in place with what remediation taught appended
 to it, which is the part worth reading — the pins are in the repo, the reasoning
 is only here.
 
-# Sweep — 2026-09-03 · ✅ CLOSED (4 by decision, 1 follow-up open)
+# Sweep — 2026-09-03 · ✅ CLOSED (3 by decision, 1 follow-up open)
 
-85 findings survived verification; **81 are fixed**, each with a regression test
-confirmed to fail against the tree before its fix, plus two more the remediation
-turned up and fixed alongside. The four that stay open are written up as
-decisions or a deferral in `docs/AUDIT.md`, and one ical-layer defect filed
+85 findings survived verification; **82 are fixed**, each with a regression test
+confirmed to fail against the tree before its fix (the one C# fix compiled but
+awaits a Windows run), plus two more the remediation turned up and fixed
+alongside. The three that stay open are written up as decisions in `docs/AUDIT.md`, and one ical-layer defect filed
 during remediation is open there too.
 
 This sweep was not staged in five passes the way the earlier ones were: the
