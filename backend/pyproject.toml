@@ -14,10 +14,11 @@ markers = [
     # behaviour, written and confirmed to fail BEFORE the fix — originally as
     # `xfail(strict=True)`, so CI stayed green while the bug was open and went
     # red the moment it was fixed and the pin needed reclassifying. The backlog
-    # from the 2026-08-16 and 2026-08-19 sweeps is closed and carries no marker:
-    # those are ordinary regression tests that must stay green. The 2026-08-25
-    # sweep is OPEN and its pins DO carry `xfail(strict=True)` — see
-    # `test_backlog_aug25_*.py`. Run one stage with `pytest -m stage2`, or the
+    # from every sweep to date is closed and carries no marker: those are
+    # ordinary regression tests that must stay green (`test_backlog_aug25_*.py`
+    # was the last to carry `xfail(strict=True)` while open; the 2026-09-03
+    # sweep's `test_backlog_sep03_*.py` were fixed as they were pinned). Run
+    # one stage with `pytest -m stage2`, or the
     # whole backlog itemised with `pytest -m backlog -rxX`; see docs/STAGES.md.
     "backlog: a regression test for a finding from an audit sweep (docs/AUDIT.md)",
     "stage1: crash paths — untrusted input reaching an unhandled exception",
