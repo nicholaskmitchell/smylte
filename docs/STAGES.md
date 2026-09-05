@@ -3,8 +3,10 @@
 `docs/AUDIT.md` is the evidence. This file is the plan for closing those
 findings, and the map from a finding to the test that pins it.
 
-Three sweeps have been staged this way, and all three are CLOSED. The
-**2026-08-25** one is at the top. The **2026-08-19** and **2026-08-16** backlogs under it are both closed
+Four sweeps have been staged this way. The **2026-09-03** one is at the top and
+is closed but for the four decisions and one filed follow-up its section in
+`docs/AUDIT.md` names; the three before it are CLOSED. The **2026-08-25** one
+is next. The **2026-08-19** and **2026-08-16** backlogs under it are both closed
 and kept as the record of how the harness behaved in practice — the latter's "Two
 strengths of pin" and "Ordering" notes are the reason the later pins are shaped
 the way they are.
@@ -15,6 +17,59 @@ is an ordinary regression test that must stay green, and `docs/AUDIT.md` reads 0
 open. Each stage section is kept in place with what remediation taught appended
 to it, which is the part worth reading — the pins are in the repo, the reasoning
 is only here.
+
+# Sweep — 2026-09-03 · ✅ CLOSED (4 by decision, 1 follow-up open)
+
+85 findings survived verification; **81 are fixed**, each with a regression test
+confirmed to fail against the tree before its fix, plus two more the remediation
+turned up and fixed alongside. The four that stay open are written up as
+decisions or a deferral in `docs/AUDIT.md`, and one ical-layer defect filed
+during remediation is open there too.
+
+This sweep was not staged in five passes the way the earlier ones were: the
+findings were split by FILE OWNERSHIP into nine disjoint groups and remediated
+in parallel, each group writing its pin first, watching it fail, fixing, and
+running the suites its files touch. The stage markers are still on every
+backend test (`-m stage1` … `stage5` work as before), but the file boundary is
+the group, not the stage.
+
+| group | pins |
+|---|---|
+| HTTP gate + OAuth | `backend/tests/test_backlog_sep03_http.py` (14) |
+| service, store, due | `backend/tests/test_backlog_sep03_service.py` (26) |
+| sync engine + iCalendar edit | `backend/tests/test_backlog_sep03_sync_ical.py` (10) |
+| MCP adapter, notifier, firmware | `backend/tests/test_backlog_sep03_mcp_notify.py` (12) + `test_firmware_example.py` (1) |
+| app shell, Focus, Home, Scheduling | `frontend/src/backlog.sep03.shell.test.tsx` (26) |
+| Today | `frontend/src/backlog.sep03.today.test.tsx` (19) |
+| Calendar, Tasks, Sidebar | `frontend/src/backlog.sep03.tasks-calendar.test.tsx` (18) |
+| Settings, display page | `frontend/src/backlog.sep03.settings.test.tsx` (22) + `appearance.test.ts` (13 contrast cases) + `backlog.sep03.display.browser.test.tsx` |
+| stylesheets | `frontend/src/backlog.sep03.browser.test.tsx` (18, real Chromium) + `mobile-layout.test.ts` |
+
+Six findings closed on REVIEW rather than on a fix — test gaps whose subjects
+were correct — and each of those tests was run against a mutation before it was
+trusted, as the 2026-08-25 stage 5 did. One pin was written as a strict
+`xfail` mid-remediation (the loud ceiling charging a batch per row) because the
+fix needed a column in a file another group owned; the column landed in the
+same branch and the marker came off, so no `xfail(strict=True)` remains anywhere.
+
+## What this remediation taught
+
+**The shared scratch server is shared.** Two verifiers' probes left an
+unexpandable series and fifty "Renew passport" tasks on the scratch Radicale,
+and every booking-slot test then computed zero free slots — twelve failures that
+reproduced on a pristine tree. A full run needs a wiped `collections/` first;
+`scratch/reset.sh` is the four lines.
+
+**A pseudo-element hit area is clipped by a scroll container.** The tab strip's
+44px `::after` measured 29px in Chromium because `.tabs` is `overflow-x: auto`,
+and a non-visible overflow on one axis clips the other. The browser pin caught
+it before it shipped; the strip is given vertical room and takes it back with a
+negative margin. Reading the CSS would have said the rule was there.
+
+**A stub that answers the same id every time collapses a day into one buzz.**
+The distinct-delivery count is only as honest as the ids; the test sender now
+hands out a fresh id per send, from one counter shared across instances, the way
+one bot has one sequence per chat.
 
 # Sweep — 2026-08-25 · ✅ CLOSED
 
