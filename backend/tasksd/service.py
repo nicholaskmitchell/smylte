@@ -2882,8 +2882,7 @@ class TaskService:
             row = store.get_display(self._conn, token)
             return None if row is None else self._display_dto(row)
 
-    @staticmethod
-    def _display_dto(row, *, with_token: bool = True) -> dict[str, Any]:
+    def _display_dto(self, row, *, with_token: bool = True) -> dict[str, Any]:
         """One display, as the settings screen sees it.
 
         The token IS returned here, unlike the notification bot token beside it,
@@ -2943,6 +2942,11 @@ class TaskService:
         }
         if with_token:
             dto["token"] = row["token"]
+            # The page a panel opens, absolute — the Windows client serves the
+            # app from localhost and has nothing but the token otherwise. The
+            # same rule as the booking link's `url`, and absent with the token
+            # for the same reason: a frame must not carry its own credential.
+            dto["url"] = self._public_page_url(f"/display/{row['token']}")
         return dto
 
     def _normalize_display_fields(

@@ -167,6 +167,7 @@ export function SettingsMenu({
   // exactly and this is the last hand-rolled copy. Its own suite covers all
   // three levels (agenda -> section -> closed) and is the control.
   useEscape(back)
+  const sheetPress = useRef(false)
 
   const tr = useT()
   const active = SECTIONS.find((s) => s.id === section)!
@@ -411,7 +412,15 @@ export function SettingsMenu({
   // the width.
   if (isMobile) {
     return (
-      <div className="overlay set-overlay" onClick={onClose}>
+      <div className="overlay set-overlay"
+        // The press/release pair every other scrim carries (TaskModal's comment
+        // has the mechanism): a drag-select that began in a field and let go on
+        // the scrim used to close the sheet over a half-typed token or size.
+        onMouseDown={(e) => { sheetPress.current = e.target === e.currentTarget }}
+        onClick={(e) => {
+          if (e.target === e.currentTarget && sheetPress.current) onClose()
+          sheetPress.current = false
+        }}>
         <div ref={panelRef} className="settings-menu set-sheet" data-view={view}
           role="dialog" aria-modal="true" aria-label={tr('app.settings')}
           onClick={(e) => e.stopPropagation()}>
