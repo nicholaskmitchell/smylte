@@ -2894,6 +2894,80 @@ class TaskService:
             self._publish({"type": "day_updated", "day": day})
         return dto
 
+    def completions_in(self, from_day: str, to_day: str) -> dict[str, list[dict[str, Any]]]:
+        """Tasks finished in [from_day, to_day), bucketed by the day they were
+        finished. `to_day` is EXCLUSIVE, like every other window in this service.
+
+        THE ONE PLACE this is computed, and it is here rather than in the
+        connector for the reason `due.py` exists: the look-back asked it, the
+        weekly count asks it, and the SPA reads the answer — three readers of
+        "what did I finish" is three chances to give the owner a different
+        number for the same week, on the same screen. `mcp/api.py` calls this
+        rather than keeping the copy it used to have.
+
+        WHAT COUNTS IS THE COMPLETED STAMP, and only that. A task with no stamp
+        has no day to be filed under — plenty of clients write STATUS and no
+        COMPLETED — so it is left out rather than guessed at, and one that will
+        not parse is dropped for the same reason. A CANCELLED task is not a
+        completion either: it never gets a stamp (`ical/edit.py` writes one only
+        for COMPLETED), so it falls out here without a clause of its own.
+
+        Bucketed in the owner's zone, the same rule `_due_day` applies to a
+        deadline, so "finished on the 21st" means one thing everywhere.
+
+        Bounded like `day_range`, and against the same constant: this walks
+        every task in every list, and an unbounded window is an unbounded scan
+        under the global lock.
+        """
+        start, end = day_key(from_day), day_key(to_day)
+        span = (date.fromisoformat(end) - date.fromisoformat(start)).days
+        if span > DAY_RANGE_MAX_DAYS:
+            raise ValueError(f"range is bounded to {DAY_RANGE_MAX_DAYS} days, asked for {span}")
+        zone = self._home_tz()
+        out: dict[str, list[dict[str, Any]]] = {}
+        for col in self.list_lists():
+            for t in self.list_tasks(col["href"], include_done=True):
+                stamp = t.get("completed_at")
+                if not stamp:
+                    continue
+                try:
+                    when = datetime.fromisoformat(stamp)
+                except ValueError:
+                    continue
+                if when.tzinfo is not None and zone is not None:
+                    when = when.astimezone(zone)
+                key = when.date().isoformat()
+                if not (start <= key < end):
+                    continue
+                out.setdefault(key, []).append({
+                    "list": t["list"], "uid": t["uid"], "summary": t["summary"],
+                    "completed_at": stamp,
+                })
+        return out
+
+    def completed_counts(self, from_day: str, to_day: str) -> dict[str, Any]:
+        """How many tasks were finished on each day of [from_day, to_day), and
+        in total.
+
+        TASKS ONLY, deliberately — not the notes and habit occurrences a day
+        also holds. Habits already have their own weekly count, and the app's
+        stated position is that a habit is never coloured as a failure; folding
+        habit ticks into a productivity number is exactly that colouring, and it
+        would also let the figure go up on a day nothing was finished. Notes are
+        Smylte-only jots. What is left is the one number every client agrees on,
+        which is what makes it worth showing at all.
+
+        Days with nothing are ABSENT rather than zero, like `day_range`'s
+        unplanned days: the caller draws a week and knows which days it asked
+        for, and a dict of zeroes is the same information said longer.
+        """
+        by_day = self.completions_in(from_day, to_day)
+        days = {d: len(rows) for d, rows in by_day.items()}
+        return {
+            "from": day_key(from_day), "to": day_key(to_day),
+            "days": days, "total": sum(days.values()),
+        }
+
     def day_range(self, from_day: str, to_day: str) -> list[dict[str, Any]]:
         """Every planned day in [from_day, to_day), oldest first. `to_day` is
         EXCLUSIVE, like the calendar window bounds elsewhere in this service.

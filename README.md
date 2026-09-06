@@ -134,6 +134,23 @@ three weeks, and moving it onto the day is an act you perform. Nothing is hidden
 it is still on its list, still marked overdue everywhere overdue is shown, and
 still one press away.
 
+**And past a few days it stops being offered at all, and is asked about.** Three
+days by default, in Settings → Tasks, and 0 turns it off. A task that late has
+been read and skipped every morning it sat there, and each of those readings cost
+more than deciding would have — so the strip gives it a heading of its own and
+two answers instead of an add button: **a new date**, or **park it**. Adding it
+to the day is deliberately not among them, because it is the answer that has
+already failed: putting the task on today leaves its deadline where it is, so
+tomorrow it is late again and one day staler. Only a new date ends that, and it
+ends it everywhere rather than in this one strip.
+
+It never hides anything, and this is worth saying plainly: the Tasks tab shows
+every task it always did, the Home Overdue module still lists all of them — it
+just says how many are waiting on a decision — and nothing about the deadline
+changes until you change it. "Stops appearing" means stops being offered as
+ordinary work, not stops existing. A list you cannot trust to show your tasks is
+worse than a long one.
+
 A day holds three kinds of row, and the tab says which is which — a filled
 square is a **task** (a real VTODO on a list, so it reaches Tasks.org,
 Thunderbird and your phone), a hollow one is a **note** (text that lives only
@@ -195,6 +212,21 @@ running, and the `‹` `›` picker steps back a fortnight. **A past day is a
 finished record** — read-only end to end, because a log you can fill in
 afterwards is a scorecard. Reading a day never creates one: only today can be
 opened, which is what keeps the record honest about what was actually intended.
+
+**What you finished this week** is one number, and until now nothing anywhere
+said it. Every count in the app describes a day, and a day is exactly the unit
+that makes a week of real work look like nothing much. It sits in the Today
+header beside the day's own count, and as a Home module with the last few weeks
+under it so the figure has a shape — 23 means nothing on its own. The connector
+answers it too, as `smylte_review_week`.
+
+It counts **tasks**, by the `COMPLETED` stamp on the wire, so a task ticked in
+Tasks.org counts exactly as one ticked here and the number answers for weeks
+before any of this existed. Not notes, and **not habits**: habits have their own
+weekly count and this app never colours one as a failure, so folding them in
+would make a productivity figure that can rise on a day nothing was finished.
+There is no target, nothing to compare it against, and no colour on it. It is a
+number, said once.
 
 **Working the day.** Today's header has a *Start working* button, and it opens
 `/focus`: the display's now + next face brought inside the app and given a
@@ -462,9 +494,10 @@ match `tokens.css`.
 
 **Connect it to Claude.** Settings → Account → Connected apps, once
 `TASKS_MCP_ENABLED=true`, exposes a remote **MCP server** at `/mcp` that Claude
-(or any MCP client) can be pointed at as a custom connector — around thirty
-tools over lists, tasks, subtasks, search, tags, calendars, events including the
-recurrence scopes, free/busy, booking links, and the day plan.
+(or any MCP client) can be pointed at as a custom connector — around forty
+tools over lists, tasks (including parking one), subtasks, search, tags,
+calendars, events including the recurrence scopes, free/busy, booking links, the
+day plan and the week's finished count.
 
 The day tools are read-only about *whether a day exists*: a connector can see
 today, put something on it, estimate it, send it to another day, tick a note and

@@ -107,6 +107,9 @@ export function App() {
   // Default true, matching the server's own default for an absent key: a
   // parent with nothing left in it is finished.
   const [autoCloseParents, setAutoCloseParents] = useState(true)
+  // Mirrors `TodayView`'s STALE_OVERDUE_DAYS, which is where the number is
+  // argued for; this is the account's override of it.
+  const [staleOverdue, setStaleOverdue] = useState(3)
   const [timeFormat, setTimeFormat] = useState<TimeFormat>(DEFAULT_TIME_FORMAT)
   const [language, setLanguage] = useState<Language>(DEFAULT_LANGUAGE)
   // App's own translator rather than `useT()`, because App is what RENDERS the
@@ -428,6 +431,13 @@ export function App() {
         }
         if (keep('auto_close_parents') && typeof s.auto_close_parents === 'boolean') {
           setAutoCloseParents(s.auto_close_parents)
+        }
+        // Guarded like every other number read out of the blob, which is
+        // hand-editable: finite, whole, and inside the bounds the server takes.
+        if (keep('stale_overdue_days') && typeof s.stale_overdue_days === 'number'
+            && Number.isFinite(s.stale_overdue_days)
+            && s.stale_overdue_days >= 0 && s.stale_overdue_days <= 90) {
+          setStaleOverdue(Math.round(s.stale_overdue_days))
         }
         if (keep('show_completed_tasks') && typeof s.show_completed_tasks === 'boolean') {
           setShowCompleted(s.show_completed_tasks)
@@ -822,6 +832,14 @@ export function App() {
     saveSettings({ auto_close_parents: next })
   }, [autoCloseParents])
 
+  // How many days late is late enough to be asked about. A value the owner
+  // typed rather than a toggle, so it is NOT in MERGED_SETTINGS: it carries its
+  // own new value rather than reading the old one.
+  const changeStaleOverdue = useCallback((next: number) => {
+    setStaleOverdue(next)
+    saveSettings({ stale_overdue_days: next })
+  }, [])
+
   const changeCalTaskLists = useCallback((next: string[]) => {
     setCalTaskLists(next)
     saveSettings({ calendar_task_lists: next })
@@ -1196,6 +1214,7 @@ export function App() {
             showCompleted={showCompleted} onToggleShowCompleted={toggleShowCompleted}
             autoCloseParents={autoCloseParents}
             onToggleAutoCloseParents={toggleAutoCloseParents}
+            staleOverdue={staleOverdue} onStaleOverdueChange={changeStaleOverdue}
             focus={focus} onFocusChange={changeFocus}
             notifyEnabled={notifyEnabled} onNotifyEnabledChange={changeNotifyEnabled}
             notifyChatId={notifyChatId} onNotifyChatIdChange={changeNotifyChatId}
@@ -1245,10 +1264,11 @@ export function App() {
         // calendar on each switch between the two tabs.
         <TodayView rev={rev} onExpire={onExpire}
           hiddenCalendars={hiddenCals} archivedCalendars={archivedCals}
+          staleOverdueDays={staleOverdue}
           onStartWorking={enterFocus} />
       )}
       {!booting && tab === 'home' && (
-        <HomeView rev={rev} onExpire={onExpire}
+        <HomeView rev={rev} onExpire={onExpire} staleOverdueDays={staleOverdue}
           layout={dashboard} onLayoutChange={changeDashboard}
           hiddenCalendars={hiddenCals} archivedCalendars={archivedCals} />
       )}

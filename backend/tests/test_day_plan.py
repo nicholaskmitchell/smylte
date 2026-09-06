@@ -1965,3 +1965,79 @@ def test_work_taken_off_the_day_is_not_counted_against_the_commitment(svc):
     svc.set_day_ritual(day, committed=False)
     svc.patch_day_entry(day, extra["entry_id"], dropped=True)
     assert svc.set_day_ritual(day, committed=True)["committed_over_minutes"] is None
+
+
+# ── what was finished in a week ──────────────────────────────────────────────
+
+def _finished(svc_, uid: str, day: str, hour: str = "12") -> None:
+    """A completed task carrying a real COMPLETED stamp on `day`."""
+    _seed_task(svc_._conn, LIST_A, uid, f"Did {uid}", due=day, status="COMPLETED",
+               completed_at=f"{day.replace('-', '')}T{hour}0000Z")
+
+
+def test_the_week_counts_completions_by_their_own_stamp(svc):
+    """The one number every client agrees on. A task ticked in Tasks.org counts
+    exactly as one ticked here, because what is counted is the COMPLETED
+    property the wire carries rather than anything Smylte recorded about the
+    day — which is also why this answers for weeks before any of the day-plan
+    machinery existed."""
+    counts = svc.completed_counts("2026-08-17", "2026-08-24")   # Mon..Sun
+    assert counts == {"from": "2026-08-17", "to": "2026-08-24", "days": {}, "total": 0}
+
+    _finished(svc, "a", "2026-08-18")
+    _finished(svc, "b", "2026-08-18", hour="15")
+    _finished(svc, "c", "2026-08-21")
+    counts = svc.completed_counts("2026-08-17", "2026-08-24")
+    # Days with nothing are ABSENT rather than zero — the caller drew the week
+    # and knows which days it asked for.
+    assert counts["days"] == {"2026-08-18": 2, "2026-08-21": 1}
+    assert counts["total"] == 3
+
+
+def test_a_completion_without_a_stamp_is_not_counted(svc):
+    """Plenty of clients write STATUS:COMPLETED and no COMPLETED property, so
+    such a task has no day to be filed under. Guessing one — from the due date,
+    say — would put work in a week it may not have happened in, and the number
+    is only worth showing because it is not a guess.
+
+    A CANCELLED task falls out through the same door rather than a clause of its
+    own: cancelling is not completing, so `ical/edit.py` writes no stamp."""
+    _seed_task(svc._conn, LIST_A, "nostamp", "Ticked elsewhere", due="2026-08-18",
+               status="COMPLETED")
+    _seed_task(svc._conn, LIST_A, "declined", "Won't do", due="2026-08-18",
+               status="CANCELLED")
+    assert svc.completed_counts("2026-08-17", "2026-08-24")["total"] == 0
+
+
+def test_the_window_is_half_open_like_every_other_one(svc):
+    """`to` is exclusive, the same as `day_range` and the calendar bounds. A week
+    that included both Mondays would count one day twice across two weeks."""
+    _finished(svc, "sun", "2026-08-23")
+    _finished(svc, "mon", "2026-08-24")
+    week = svc.completed_counts("2026-08-17", "2026-08-24")
+    assert week["days"] == {"2026-08-23": 1} and week["total"] == 1
+
+
+def test_the_week_is_bounded_like_the_day_range(svc):
+    """It walks every task in every list, so an unbounded window is an unbounded
+    scan under the global lock — the same reason `day_range` is bounded, and
+    against the same constant."""
+    with pytest.raises(ValueError):
+        svc.completed_counts("2020-01-01", "2026-01-01")
+
+
+def test_the_connector_answers_a_week_from_any_day_in_it(mcp_api, svc):
+    """A model holding "last Tuesday" should not have to do calendar arithmetic
+    to ask about the week containing it — and the week starts on MONDAY, which
+    every other Monday-first convention in this app (`_WEEKDAYS`, `HABIT_DAYS`,
+    the booking availability map, the SPA's `weekStartOf`) requires it to."""
+    _finished(svc, "mon", "2026-08-17")
+    _finished(svc, "sun", "2026-08-23")
+    _finished(svc, "next", "2026-08-24")
+
+    from_wednesday = mcp_api.review_week(week="2026-08-19")
+    assert from_wednesday["from"] == "2026-08-17" and from_wednesday["to"] == "2026-08-24"
+    assert from_wednesday["total"] == 2, "Monday and Sunday are the same week"
+    # Asked from the Monday itself, the answer is the same week rather than the
+    # one before it.
+    assert mcp_api.review_week(week="2026-08-17") == from_wednesday

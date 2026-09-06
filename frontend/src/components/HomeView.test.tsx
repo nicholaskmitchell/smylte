@@ -587,3 +587,70 @@ describe('scheduling modules', () => {
     expect(screen.queryByText('Stale link')).not.toBeInTheDocument()
   })
 })
+
+describe('<HomeView> what was finished this week', () => {
+  it('shows the number, with the weeks behind it for shape', async () => {
+    // The complaint this answers: nothing anywhere said what a WEEK added up
+    // to. Every count in the app describes one day, and a day is exactly the
+    // unit that makes a week of real work look like nothing much.
+    //
+    // The earlier weeks are there so the figure has a shape — 23 means nothing
+    // on its own. Not a chart, and nothing marked high or low: the app does not
+    // score days, and a week is only days.
+    m.completedCounts.mockImplementation(async (from) => ({
+      from, to: from, days: {}, total: { 0: 23, 1: 18, 2: 31, 3: 9 }[
+        [...Array(4).keys()].find((i) => from === weekStart(-i)) ?? 0] ?? 0,
+    }))
+    setup([{ id: 'm1', kind: 'week', x: 0, y: 0, w: 4, h: 3 }])
+
+    expect(await screen.findByText('23')).toBeInTheDocument()
+    expect(screen.getByText('this week')).toBeInTheDocument()
+    expect(screen.getByText('18')).toBeInTheDocument()
+    expect(screen.getByText('last week')).toBeInTheDocument()
+    expect(screen.getByText('3 weeks ago')).toBeInTheDocument()
+  })
+
+  it('says nothing at all until the read lands', async () => {
+    // A "0 this week" painted over a fetch in flight is the wrong answer at the
+    // one moment the question is worth asking — and unlike the task modules a
+    // bare number cannot carry a "some of this failed" banner, which is why it
+    // is its own request rather than a filter over the shared array.
+    // Every one of the four held: the module waits on all of them, so releasing
+    // one would be testing a state it never renders.
+    const held: ((v: import('../api').CompletedCounts) => void)[] = []
+    m.completedCounts.mockImplementation(() => new Promise((r) => { held.push(r) }))
+    setup([{ id: 'm1', kind: 'week', x: 0, y: 0, w: 4, h: 3 }])
+
+    await screen.findByText('Finished this week')      // the module's own title
+    await waitFor(() => expect(held).toHaveLength(4))
+    expect(screen.queryByText('this week')).not.toBeInTheDocument()
+    act(() => held.forEach((r) => r({ from: '', to: '', days: {}, total: 0 })))
+    expect(await screen.findByText('this week')).toBeInTheDocument()
+  })
+
+  it('asks for Monday-first weeks, matching the server and the Today tab', async () => {
+    // `_WEEKDAYS`, `HABIT_DAYS`, the booking availability map and the Today
+    // tab's `weekStartOf` are all Monday-first. A week that began on Sunday
+    // here would put one day of every count in the wrong week — silently, and
+    // only for accounts that look at weekends.
+    m.completedCounts.mockResolvedValue({ from: '', to: '', days: {}, total: 0 })
+    setup([{ id: 'm1', kind: 'week', x: 0, y: 0, w: 4, h: 3 }])
+    await waitFor(() => expect(m.completedCounts).toHaveBeenCalledTimes(4))
+
+    for (const [from, to] of m.completedCounts.mock.calls) {
+      expect(new Date(`${from}T00:00`).getDay()).toBe(1)   // 1 = Monday
+      // Half-open, like every other window in this app: a week that included
+      // both Mondays would count one day in two weeks.
+      expect(new Date(`${to}T00:00`).getTime() - new Date(`${from}T00:00`).getTime())
+        .toBe(7 * 86_400_000)
+    }
+  })
+})
+
+/** The Monday `n` weeks from this one, as a day key. */
+function weekStart(n: number): string {
+  const d = new Date()
+  d.setDate(d.getDate() - ((d.getDay() + 6) % 7) + 7 * n)
+  const p = (x: number) => String(x).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+}

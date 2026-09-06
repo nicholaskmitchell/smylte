@@ -665,6 +665,19 @@ export interface DayPlan {
  *  asked about", and the falsy values are real (`committed: false` re-opens a
  *  day begun by mistake). Refused entirely on a past day, with one day of
  *  grace, because a capacity is a plan and a shutdown is a boundary. */
+/** What was finished in a window, as counts. */
+export interface CompletedCounts {
+  /** The window asked for, echoed. `to` is EXCLUSIVE. */
+  from: string
+  to: string
+  /** Day key → how many tasks carry a COMPLETED stamp on it. A day with
+   *  nothing is ABSENT rather than 0: the caller drew the window and knows
+   *  which days it asked for, and a map of zeroes is the same fact said
+   *  longer. */
+  days: Record<string, number>
+  total: number
+}
+
 export interface PatchDayBody {
   /** Minutes, or **-1 to clear** — the same sentinel and the same reason as
    *  `PatchDayEntryBody.estimate_minutes`: 0 is a real capacity ("not working
@@ -873,6 +886,10 @@ export interface Settings {
   // step of. Absent means ON. The one preference here that writes to the
   // calendar server on the owner's behalf, which is why it is refusable.
   auto_close_parents?: boolean
+  // How many days past its deadline a task must be before the day stops
+  // offering it as ordinary work and asks for a decision. Absent means 3;
+  // 0 turns the group off. Never hides a task from any list.
+  stale_overdue_days?: number
   time_format?: TimeFormat         // 12- or 24-hour clock across the app (see time.ts); default '12h'
   // The language the app is shown in, and the locale it formats dates with
   // (see lang.ts). Account-synced like every other display preference here —
@@ -1114,6 +1131,11 @@ export const api = {
   // Planned days in [from, to), `to` EXCLUSIVE and the span bounded to 190 days
   // server-side (a wider one answers 422). Days never opened are simply absent,
   // so an empty array means "nothing planned in there".
+  /** How many tasks were finished on each day of [from, to) — `to` EXCLUSIVE.
+   *  A count rather than the rows: three surfaces draw the number and none of
+   *  them wants the tasks. Days with nothing are ABSENT, not zero. */
+  completedCounts: (from: string, to: string) =>
+    j<CompletedCounts>('GET', `/api/completed?from=${from}&to=${to}`),
   days: (from: string, to: string) =>
     j<DayPlan[]>('GET', `/api/day?from=${from}&to=${to}`),
   addDayEntry: (day: string, body: CreateDayEntryBody) =>

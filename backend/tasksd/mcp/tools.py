@@ -676,6 +676,31 @@ def build_tools(api) -> dict[str, Tool]:
     # ── calendars and events ─────────────────────────────────────────────────
 
     @tool(
+        "smylte_review_week", "What was finished in a week",
+        "How many tasks the owner finished in a week — the total, and a count "
+        "per day. Pass any day in the week; defaults to this one. Weeks start "
+        "on MONDAY.\n\n"
+        "This is the cheap answer to \"what did I get done\". "
+        "smylte_review_day with from + to returns the same week in full — every "
+        "bucket, every entry, the task behind each row — which is the right "
+        "call when the question is about what happened, and the wrong one when "
+        "it is about how much.\n\n"
+        "TASKS ONLY. Notes and habit occurrences are not counted: habits have "
+        "their own weekly count and the app deliberately never scores one as a "
+        "failure, so folding them in here would make this a number that can go "
+        "up on a day nothing was finished. A day with nothing finished is "
+        "ABSENT from `days` rather than present as 0.\n\n"
+        "It counts completions, not intentions, and it is not a target. There "
+        "is nothing to compare it against and the owner has set no goal — "
+        "report the number, and do not congratulate or admonish them for it.",
+        _obj({"week": {**_DAY, "description":
+                       "Any day in the week to count, 'YYYY-MM-DD'. Defaults to "
+                       "the week containing today, in the owner's timezone."}}),
+    )
+    def _review_week(week=None):
+        return api.review_week(week=week)
+
+    @tool(
         "smylte_list_calendars", "List calendars",
         "Every calendar, with its colour and event count. The other event tools "
         "need a calendar id from here.",

@@ -1071,4 +1071,34 @@ export const en = {
   //    Read back afterwards. A fact about the day, not a mark against it —
   //    nothing on the look-back scores anything.
   'today.committedOver': 'Started {amount} over what you said you would work.',
+  // ── work late enough to need a decision rather than another offer ──────────
+  //    The heading is the ask. Nothing here calls it a failure or counts how
+  //    long it has been: the row exists to end a loop, not to report on it.
+  'today.sug.triage': 'Waiting on a decision',
+  'today.triage.today': 'Due today',
+  'today.triage.newDate': 'A new date for {task}',
+  'today.triage.park': 'Park it',
+  'settings.staleOverdue': 'Ask about work this many days late',
+  'settings.staleOverdue.hint': 'Past this, a task stops being offered to your '
+    + 'day as ordinary work and is asked about instead: give it a new date, or '
+    + 'park it. It is never hidden — the Tasks tab still shows everything. Set '
+    + 'it to 0 to turn this off.',
+  'settings.staleOverdue.off': 'Off. Overdue work is offered to your day like '
+    + 'anything else, however long it has been waiting.',
+  'home.overdueWaiting': {
+    one: '{count} has been waiting long enough to need a decision.',
+    other: '{count} have been waiting long enough to need a decision.',
+  },
+  // ── what you finished this week ────────────────────────────────────────────
+  //    A number and no verdict. There is nothing to compare it against on
+  //    purpose: no target, no goal, nothing marked good or bad.
+  'module.week': 'Finished this week',
+  'module.week.blurb': 'How many tasks you have completed, week by week.',
+  'module.week.thisWeek': 'this week',
+  'module.week.lastWeek': 'last week',
+  'module.week.weeksAgo': '{n} weeks ago',
+  'today.weekFinished': {
+    one: '{count} finished this week',
+    other: '{count} finished this week',
+  },
 } as const

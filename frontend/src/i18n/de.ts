@@ -1132,4 +1132,30 @@ export const de: Catalogue = {
   'today.addWhenOver': '· schon {amount} drüber',
   'today.sugWouldBeOver': '+{amount} drüber',
   'today.committedOver': 'Mit {amount} mehr gestartet, als du arbeiten wolltest.',
+  // ── Arbeit, die alt genug ist für eine Entscheidung statt eines Angebots ───
+  'today.sug.triage': 'Wartet auf eine Entscheidung',
+  'today.triage.today': 'Heute fällig',
+  'today.triage.newDate': 'Ein neues Datum für {task}',
+  'today.triage.park': 'Zurückstellen',
+  'settings.staleOverdue': 'Nach wie vielen Tagen Verzug nachfragen',
+  'settings.staleOverdue.hint': 'Danach wird eine Aufgabe deinem Tag nicht mehr '
+    + 'als gewöhnliche Arbeit angeboten, sondern erfragt: neues Datum oder '
+    + 'zurückstellen. Versteckt wird nie etwas — im Aufgaben-Tab steht weiterhin '
+    + 'alles. Mit 0 schaltest du das ab.',
+  'settings.staleOverdue.off': 'Aus. Überfälliges wird deinem Tag angeboten wie '
+    + 'alles andere, egal wie lange es schon wartet.',
+  'home.overdueWaiting': {
+    one: '{count} wartet lange genug, um eine Entscheidung zu brauchen.',
+    other: '{count} warten lange genug, um eine Entscheidung zu brauchen.',
+  },
+  // ── Was du diese Woche geschafft hast ──────────────────────────────────────
+  'module.week': 'Diese Woche erledigt',
+  'module.week.blurb': 'Wie viele Aufgaben du abgeschlossen hast, Woche für Woche.',
+  'module.week.thisWeek': 'diese Woche',
+  'module.week.lastWeek': 'letzte Woche',
+  'module.week.weeksAgo': 'vor {n} Wochen',
+  'today.weekFinished': {
+    one: '{count} diese Woche erledigt',
+    other: '{count} diese Woche erledigt',
+  },
 }

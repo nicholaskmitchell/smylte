@@ -6,7 +6,9 @@ import {
 } from '../api'
 import { useIsMobile, useToday } from '../hooks'
 import { useCalendarData, useTaskData, type TaskData } from '../data'
-import { cssColor, makeGuard, addDays, dayKey, isOverdue, textDir, ymd } from '../util'
+import {
+  cssColor, makeGuard, addDays, dayKey, daysPastDue, isOverdue, textDir, ymd,
+} from '../util'
 import { fmtDue, fmtDuration } from '../time'
 import { sortByCompletion, sortTasks, taskKey } from '../order'
 import { useTimeFormat } from '../timeformat'
@@ -34,7 +36,7 @@ interface DragState {
 }
 
 export function HomeView({ rev, onExpire, layout, onLayoutChange,
-  hiddenCalendars = [], archivedCalendars = [] }: {
+  hiddenCalendars = [], archivedCalendars = [], staleOverdueDays = 3 }: {
   rev: number
   onExpire: () => void
   /** The owner's arrangement, or NULL when they have never made one. The two
@@ -47,6 +49,10 @@ export function HomeView({ rev, onExpire, layout, onLayoutChange,
   // tab stays the sole owner of editing (and pruning) these sets.
   hiddenCalendars?: string[]
   archivedCalendars?: string[]
+  /** Days past a deadline before the Today tab asks about a task rather than
+   *  offering it. Only the Overdue module reads it, and only to say how many
+   *  of the rows it is already showing are in that state. */
+  staleOverdueDays?: number
 }) {
   const tr = useT()
   const isMobile = useIsMobile()
@@ -286,7 +292,8 @@ export function HomeView({ rev, onExpire, layout, onLayoutChange,
       links={links} bookings={bookings} schedFailed={schedFailed}
       colorOf={colorOf} eventColor={eventColor}
       onExpire={onExpire} loaded={loaded} create={create}
-      plan={planForToday} onPlan={setPlan} toggleTask={toggle} tasksLoaded={loaded} />
+      plan={planForToday} onPlan={setPlan} toggleTask={toggle} tasksLoaded={loaded}
+      staleOverdueDays={staleOverdueDays} rev={rev} />
   )
 
   // ── mobile: a plain stack ────────────────────────────────────────────────
@@ -397,7 +404,7 @@ export function HomeView({ rev, onExpire, layout, onLayoutChange,
 
 function ModuleBody({ kind, tasks, lists, days, byDay, calErrors, taskErrors, failedLists,
   reloadTasks, links, bookings, schedFailed, colorOf, eventColor, onExpire, loaded, create,
-  plan, onPlan, toggleTask, tasksLoaded }: {
+  plan, onPlan, toggleTask, tasksLoaded, staleOverdueDays = 3, rev }: {
   kind: ModuleKind
   tasks: Task[]
   lists: List[]
@@ -424,6 +431,12 @@ function ModuleBody({ kind, tasks, lists, days, byDay, calErrors, taskErrors, fa
   onPlan: (next: DayPlan | null | ((p: DayPlan | null) => DayPlan | null)) => void
   toggleTask: TaskData['toggle']
   tasksLoaded: boolean
+  /** Days past a deadline before the Today tab asks about a task rather than
+   *  offering it. Read here only to COUNT them — this module lists everything
+   *  either way. Defaulted so a module rendered without it still draws. */
+  staleOverdueDays?: number
+  /** The live-update counter, for the one module that fetches on its own. */
+  rev: number
 }) {
   const tr = useT()
   const today = ymd(new Date())
@@ -447,10 +460,24 @@ function ModuleBody({ kind, tasks, lists, days, byDay, calErrors, taskErrors, fa
     case 'today':
       return <TaskList items={sortTasks(open.filter((t) => t.due && dayKey(t.due) === today))}
         colorOf={colorOf} empty={tr('home.emptyToday')} loaded={loaded} partial={partial} />
-    case 'overdue':
-      return <TaskList items={sortTasks(open.filter((t) => isOverdue(t.due, t.due_is_date)))}
+    case 'overdue': {
+      const late = sortTasks(open.filter((t) => isOverdue(t.due, t.due_is_date)))
+      // The module goes on listing every one of them — a summary that hid rows
+      // would be the thing the Today tab is careful not to do — and says how
+      // many of them the day has stopped offering and started asking about.
+      // Counted here rather than passed down, off the same `daysPastDue` the
+      // strip uses, so the two surfaces cannot disagree about which rows those
+      // are. Measured against TODAY, which is the only day this tab has.
+      const waiting = staleOverdueDays > 0
+        ? late.filter((t) => (daysPastDue(t.due, t.due_is_date, today) ?? 0) > staleOverdueDays)
+        : []
+      return <TaskList items={late}
+        note={waiting.length ? tr('home.overdueWaiting', { count: waiting.length }) : undefined}
         colorOf={colorOf} empty={tr('home.emptyOverdue')} overdue loaded={loaded}
         partial={partial} />
+    }
+    case 'week':
+      return <WeekDone onExpire={onExpire} rev={rev} />
     case 'upcoming': {
       const end = ymd(addDays(new Date(), 7))
       return <TaskList
@@ -498,10 +525,77 @@ function TasksPartial({ lists, onRetry }: { lists: string[]; onRetry: () => void
   )
 }
 
-function TaskList({ items, colorOf, empty, overdue, done, loaded, partial }: {
+/**
+ * How much was finished this week, and the few before it.
+ *
+ * ITS OWN READ rather than a filter over the shared task array, unlike every
+ * other module here — and the difference is honesty rather than convenience.
+ * The task modules all draw from one fetch and each says so when a list of it
+ * failed (`partial`), but a bare NUMBER cannot carry that banner: it would
+ * simply be low, and low is a perfectly plausible number. One request that
+ * either lands or does not is the only shape a single figure can be told
+ * truthfully in.
+ *
+ * Counting is also the server's job here for a second reason: `review_week` on
+ * the connector answers the same question, and two implementations of "what did
+ * I finish" is two chances to give different numbers for one week.
+ *
+ * FOUR WEEKS, and no more. The point of the earlier ones is that the current
+ * number has a shape — 23 means nothing on its own — and four is enough to see
+ * one. It is not a chart and not a trend: no axis, no colour, nothing marked
+ * high or low, because this app does not score days and a week is only days.
+ */
+function WeekDone({ onExpire, rev }: { onExpire: () => void; rev: number }) {
+  const tr = useT()
+  const guard = makeGuard(onExpire)
+  const [weeks, setWeeks] = useState<{ start: string; total: number }[] | null>(null)
+  useEffect(() => {
+    // Monday-first, matching the server's own weeks and the Today tab's
+    // `weekStartOf`. `getDay()` is 0=Sunday, so `+6 % 7` shifts it.
+    const now = new Date()
+    const monday = addDays(now, -((now.getDay() + 6) % 7))
+    let live = true
+    void Promise.all([0, 1, 2, 3].map((back) => {
+      const from = ymd(addDays(monday, -7 * back))
+      const to = ymd(addDays(monday, -7 * back + 7))
+      return guard(() => api.completedCounts(from, to)).then((r) => ({ start: from, total: r?.total ?? 0 }))
+    })).then((rows) => { if (live) setWeeks(rows) })
+    return () => { live = false }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rev])
+
+  // Nothing until it lands — the same discipline `TaskList` keeps. A zero shown
+  // over a fetch in flight is the wrong answer to the one question this module
+  // exists for.
+  if (!weeks) return null
+  const [thisWeek, ...earlier] = weeks
+  return (
+    <div className="dash-week">
+      <p className="dash-week-figure">
+        <span className="dash-week-n">{thisWeek.total}</span>
+        <span className="dash-week-label">{tr('module.week.thisWeek')}</span>
+      </p>
+      <ul className="dash-week-past">
+        {earlier.map((w, i) => (
+          <li key={w.start}>
+            <span className="mono">{w.total}</span>
+            <span className="dash-week-ago">
+              {tr(i === 0 ? 'module.week.lastWeek' : 'module.week.weeksAgo', { n: i + 1 })}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
+function TaskList({ items, colorOf, empty, overdue, done, loaded, partial, note }: {
   items: Task[]
   colorOf: (listId: string) => string | null
   empty: string
+  /** One line above the rows. The module still lists everything — this only
+   *  says something about part of it. */
+  note?: string
   overdue?: boolean
   done?: boolean
   loaded?: boolean
@@ -525,6 +619,7 @@ function TaskList({ items, colorOf, empty, overdue, done, loaded, partial }: {
   return (
     <>
     {partial}
+    {note && <p className="dash-note">{note}</p>}
     <ul className="dash-tasks">
       {items.map((t) => {
         const c = colorOf(t.list)

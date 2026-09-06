@@ -278,8 +278,16 @@ function PickStep({ suggestions, colorOf, onAddTask }: {
   // Leftovers first, and reworded. The rest keep the order and the labels the
   // day itself gives them, so nothing here is a second opinion about what
   // matters — only about what to look at first.
-  const leftovers = suggestions.find((g) => g.key === LEFTOVER_KEY)
-  const rest = suggestions.filter((g) => g.key !== LEFTOVER_KEY)
+  // TRIAGE IS NOT OFFERED HERE, and that is the one place this step second-
+  // guesses the strip. Step two asks "what are you doing today", and a task
+  // that has been late long enough to need a decision is not an answer to that
+  // question — it is a different question, with different controls, and the
+  // strip renders those. Offering the row without them would put the one answer
+  // that has already failed (add it to today) in front of the owner inside a
+  // flow that is meant to be about choosing.
+  const offerable = suggestions.filter((g) => g.key !== 'triage')
+  const leftovers = offerable.find((g) => g.key === LEFTOVER_KEY)
+  const rest = offerable.filter((g) => g.key !== LEFTOVER_KEY)
   const groups = leftovers
     ? [{ ...leftovers, label: tr('plan.leftovers') }, ...rest]
     : rest

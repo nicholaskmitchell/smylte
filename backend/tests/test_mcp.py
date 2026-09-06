@@ -278,6 +278,19 @@ def test_the_connector_parks_and_un_parks_without_calling_it_done(mcp):
     _call(mcp, token, "smylte_delete_list", {"list_id": list_id})
 
 
+def test_the_connector_answers_the_week_with_a_number(mcp):
+    """The cheap answer to "what did I get done". `smylte_review_day` with
+    from + to returns the same week in full — every bucket, every entry, the
+    task behind each row — and builds the whole task index to do it; asking it
+    seven days\u2019 worth to arrive at one integer is the expensive way to answer
+    the cheapest question the owner has."""
+    token = _connect(mcp)["access_token"]
+    out = _call(mcp, token, "smylte_review_week", {"week": "2026-08-19"})["structuredContent"]
+    # Monday-first and half-open, which every other week in this app is.
+    assert out["from"] == "2026-08-17" and out["to"] == "2026-08-24"
+    assert isinstance(out["total"], int) and isinstance(out["days"], dict)
+
+
 def test_a_tool_failure_is_an_answer_not_a_crash(mcp):
     """A model can act on a sentence; it can do nothing with a 500."""
     token = _connect(mcp)["access_token"]

@@ -296,10 +296,10 @@ import {
   readCachedDayPlan, readCachedDayRange, readCachedHabits,
 } from '../cache'
 import {
-  addDays, cssColor, dayKey, isOverdue, makeGuard, msUntilMidnight, parseDate,
+  addDays, cssColor, dayKey, daysPastDue, isOverdue, makeGuard, msUntilMidnight, parseDate,
   textDir, ymd,
 } from '../util'
-import { fmtClock, fmtDue, fmtDuration } from '../time'
+import { fmtClock, fmtDue, fmtDuration, inputLang } from '../time'
 import { useI18n } from '../i18n'
 import { habitDayLabel } from '../names'
 import { useTimeFormat } from '../timeformat'
@@ -307,6 +307,7 @@ import { sortByCompletion, sortTasks, taskKey } from '../order'
 import { bucketByDay, eventKey, monthGrid, type DayEv } from '../calendar'
 import { parseEntry, type ParsedEntry } from '../daytext'
 import { AgendaEvent } from './DayPopover'
+import { DateTimeInput } from './DateTimeInput'
 import { PlanRitual } from './PlanRitual'
 import { ShutdownRitual } from './ShutdownRitual'
 import { useT } from '../i18n'
@@ -355,6 +356,23 @@ const LOOKBACK_DAYS = 14
  *  someone is getting to, while one nobody has touched in three weeks has
  *  stopped being live, which is the only thing worth interrupting the day for. */
 const STALE_DAYS = 21
+
+/** How many days past its deadline a task has to be before the day stops
+ *  offering it as ordinary work and asks for a decision about it instead.
+ *  The fallback when the account has said nothing; the setting overrides it,
+ *  and 0 turns the group off entirely.
+ *
+ *  Three, and the number is a judgement call in the same shape as the constants
+ *  above it. It has to be long enough that an ordinary slip does not trip it —
+ *  something due Friday and picked up Monday was never a problem — and short
+ *  enough that the decision is still cheap to make, which is the whole point:
+ *  a task eleven days late has been read and skipped eleven times, and every
+ *  one of those readings cost more than deciding would have.
+ *
+ *  It never hides anything. The Tasks pane shows every task it always did; this
+ *  only changes which heading the DAY offers one under, and what it offers to
+ *  do about it. */
+const STALE_OVERDUE_DAYS = 3
 
 /** How many of a suggestion group's tasks are shown before the rest are put
  *  behind one press.
@@ -610,6 +628,7 @@ export function rowDone(e: DayEntry, task: Task | undefined, live: boolean): boo
 
 export function TodayView({
   rev, onExpire, hiddenCalendars = [], archivedCalendars = [], onStartWorking,
+  staleOverdueDays = STALE_OVERDUE_DAYS,
 }: {
   rev: number
   onExpire: () => void
@@ -622,6 +641,11 @@ export function TodayView({
   // editing (and pruning) these sets.
   hiddenCalendars?: string[]
   archivedCalendars?: string[]
+  /** How many days past its deadline a task must be before the strip asks for a
+   *  decision rather than offering it. 0 turns the group off; the default is
+   *  `STALE_OVERDUE_DAYS`. Threaded from settings by App, like every other
+   *  account preference this view honours. */
+  staleOverdueDays?: number
 }) {
   const { lang, locale, t: tr } = useI18n()
   // A STABLE guard, so it can sit in an effect's dependency list honestly
@@ -633,7 +657,7 @@ export function TodayView({
   const guard = useMemo(() => makeGuard(() => expire.current()), [])
 
   const tf = useTimeFormat()
-  const { lists, tasks, loaded, create, toggle } = useTaskData()
+  const { lists, tasks, loaded, create, toggle, saveDetail, park } = useTaskData()
 
   // ── the day, and the rollover that keeps it honest ───────────────────────
   //
@@ -947,6 +971,33 @@ export function TodayView({
    * decision the day recorded, not a failure to act on one, so counting it as a
    * miss would be the same lie pointing the other way.
    */
+  // ── how much got finished this week ──────────────────────────────────────
+  //
+  // ITS OWN READ, and not derived from the fortnight of plans already in hand.
+  // A day plan records what was PLANNED; a completion is a fact about the task,
+  // stamped on the wire, and most weeks hold work finished off-plan entirely.
+  // Counting the day rows would report the app's opinion of the week rather
+  // than the week.
+  //
+  // `null` until it lands, which the header reads as "say nothing" — a "0 this
+  // week" painted over a fetch in flight is the wrong answer at the one moment
+  // the question is worth asking.
+  const [weekDone, setWeekDone] = useState<number | null>(null)
+  useEffect(() => {
+    // The week the DAY ON SCREEN falls in, not the live one, so stepping the
+    // look-back back a fortnight answers for that week rather than for this
+    // one. `weekStartOf` is the single place the Monday-first convention is
+    // applied on this side; the server applies its own, and the two agree
+    // because both are Monday-first by the same argument.
+    const from = weekStartOf(day)
+    const to = ymd(addDays(new Date(`${from}T00:00`), 7))
+    let live = true
+    setWeekDone(null)
+    void guard(() => api.completedCounts(from, to))
+      .then((r) => { if (live && r) setWeekDone(r.total) })
+    return () => { live = false }
+  }, [day, rev, guard])
+
   const habitWeek = useMemo(() => {
     const byDay = new Map<string, DayEntry[]>()
     for (const p of recentPlans) {
@@ -1369,6 +1420,26 @@ export function TodayView({
     sendTask(on, paintTask(on, t.list, t.uid), t.list, t.uid),
   [paintTask, sendTask])
 
+  /**
+   * Give a task a new all-day deadline. The triage group's first answer.
+   *
+   * A DEADLINE and not a plan row, which is the distinction the whole group
+   * turns on: adding the task to today would leave its DUE where it is, so
+   * tomorrow it is late again and staler, under this same heading. Only a new
+   * date ends that, and it ends it everywhere at once — the Tasks pane, the
+   * Home module, the digest — rather than in this one strip.
+   *
+   * All-day, as a bare `YYYY-MM-DD`. This is a decision about WHICH DAY, taken
+   * on a screen that is about days; a time of day would be a second question
+   * nobody asked, and the editor is where a timed deadline is set.
+   *
+   * Through `saveDetail`, so it paints immediately and reconciles like every
+   * other write in the app — and so it is the same PATCH the editor makes,
+   * rather than a second path to the same field.
+   */
+  const reschedule = useCallback(
+    (t: Task, to: string) => saveDetail(t, { due: to }), [saveDetail])
+
   /** Put a note on `on`. Same optimistic shape as `addTask`. */
   const addNote = useCallback(async (on: string, title: string): Promise<boolean> => {
     token.current += 1
@@ -1741,6 +1812,25 @@ export function TodayView({
     // straight into the DOM and swaps its own wording in for the leftovers —
     // and one of these carries an interpolated number besides.
     group('today', tr('today.sug.today'), (t) => !!t.due && dayKey(t.due) === day)
+    // AHEAD OF "Overdue", so precedence takes the stale ones out of it. A task
+    // this late has been read and skipped every morning it sat there, and each
+    // of those readings cost more than deciding would have — so it is not
+    // offered as work any more. It is asked about, and the row carries the two
+    // answers instead of an add button (see the render).
+    //
+    // Nothing is hidden by this. The Tasks pane still shows it, the Home
+    // Overdue module still lists it, and it is still marked overdue everywhere
+    // overdue is marked; what changes is which heading the DAY offers it under.
+    // A list you cannot trust to show your tasks is worse than a long one.
+    //
+    // `staleOverdueDays === 0` is the off switch, and it has to be checked here
+    // rather than in the predicate: `group()` walks its matches into `offered`
+    // whether or not it renders them, so a group that matched everything and
+    // showed nothing would swallow the whole overdue list.
+    if (staleOverdueDays > 0) {
+      group('triage', tr('today.sug.triage'),
+        (t) => (daysPastDue(t.due, t.due_is_date, day) ?? 0) > staleOverdueDays)
+    }
     group('overdue', tr('today.sug.overdue'), (t) => isOverdue(t.due, t.due_is_date))
     // Tomorrow, out of the seven-day block and under its own heading. It is the
     // one future day a plan for today is routinely about — the thing you pull
@@ -1794,7 +1884,7 @@ export function TodayView({
       return !!touched && dayKey(touched) <= stale
     })
     return groups
-  }, [tasks, onDay, day, isToday, recentlyChosen, tr])
+  }, [tasks, onDay, day, isToday, recentlyChosen, staleOverdueDays, tr])
 
   // ── the look-back ────────────────────────────────────────────────────────
 
@@ -2239,6 +2329,19 @@ export function TodayView({
               ? tr('today.countOpen', { open: openCount, total: entries.length })
               : tr('today.countDone',
                 { done: entries.length - openCount, total: entries.length })}
+          </span>
+        )}
+        {/* WHAT THE WEEK ADDS UP TO, which nothing anywhere said before. The
+            count beside it describes one day, and a day is exactly the unit
+            that makes a week of real work look like nothing much.
+
+            Only once it is known: a header that showed "0 this week" while the
+            read was still in flight would be answering the question wrongly at
+            the one moment the answer matters most. And no target, no
+            comparison, no colour — the same rule the look-back keeps. */}
+        {weekDone !== null && (
+          <span className="today-week mono">
+            {tr('today.weekFinished', { count: weekDone })}
           </span>
         )}
         {/* THE WAY IN TO A REVIEW OF TODAY, and the whole of it: this is a
@@ -2798,11 +2901,22 @@ export function TodayView({
             <div className="label section-label">{g.label}</div>
             <ul className="today-list">
               {shown.map((t) => (
-                <li key={taskKey(t)} className="today-row today-sug">
-                  <button type="button" className="today-plus"
-                    aria-label={tr('today.addToToday',
-                      { task: t.summary || tr('common.untitled') })}
-                    onClick={() => void addTask(day, t)}>+</button>
+                <li key={taskKey(t)}
+                  className={`today-row today-sug ${g.key === 'triage' ? 'today-triage' : ''}`}>
+                  {/* NO ADD BUTTON ON A TRIAGE ROW, and its absence is the
+                      point rather than a styling choice. Offering "+" beside a
+                      task eleven days late is offering the answer that has
+                      already failed ten times; the two controls at the end of
+                      the row are the ones that end the loop. The leading slot
+                      keeps its width so the rows still read as one column. */}
+                  {g.key === 'triage' ? (
+                    <span className="today-plus today-plus-empty" aria-hidden="true">!</span>
+                  ) : (
+                    <button type="button" className="today-plus"
+                      aria-label={tr('today.addToToday',
+                        { task: t.summary || tr('common.untitled') })}
+                      onClick={() => void addTask(day, t)}>+</button>
+                  )}
                   {/* The same column the day's rows keep, in its task face:
                       a suggestion is a task, and one left edge has to run down
                       the whole screen or the groups stop reading as one list. */}
@@ -2836,6 +2950,43 @@ export function TodayView({
                       {tr('today.sugWouldBeOver', {
                         amount: fmtDuration(planned + t.estimated_minutes - capacity),
                       })}
+                    </span>
+                  )}
+                  {/* TWO ANSWERS, AND BOTH OF THEM END IT. That is the whole
+                      test a control on this row has to pass, and it is why
+                      "add it to today" is not among them: putting a task on
+                      the day leaves its deadline where it is, so tomorrow it
+                      is late again, in this same group, one day staler. It is
+                      the answer that has already failed every morning the row
+                      sat there.
+
+                      A NEW DATE says when it is actually happening and clears
+                      the lateness by construction. PARKING says it is not
+                      happening now and takes it out of the way honestly —
+                      which is the answer that did not exist at all until there
+                      was somewhere neutral to put things, and the reason
+                      nothing ever left this list before.
+
+                      "Today" is the same date field's commonest value, given
+                      its own press because it is the one this screen is about.
+                      Every one of them is a single action. */}
+                  {g.key === 'triage' && (
+                    <span className="today-triage-actions">
+                      <button type="button" className="btn ghost"
+                        onClick={() => void reschedule(t, day)}>
+                        {tr('today.triage.today')}
+                      </button>
+                      <DateTimeInput type="date" className="input today-triage-date"
+                        lang={inputLang(tf, lang)}
+                        aria-label={tr('today.triage.newDate',
+                          { task: t.summary || tr('common.untitled') })}
+                        value="" onChange={(e) => {
+                          if (e.target.value) void reschedule(t, e.target.value)
+                        }} />
+                      <button type="button" className="btn ghost"
+                        onClick={() => void park(t, true)}>
+                        {tr('today.triage.park')}
+                      </button>
                     </span>
                   )}
                 </li>
