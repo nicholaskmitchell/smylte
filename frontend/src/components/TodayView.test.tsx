@@ -822,6 +822,37 @@ describe('<TodayView> suggestions', () => {
     expect(add('Someday')).not.toBeInTheDocument()
   })
 
+  it('leaves an overdue task in the strip until it is chosen', async () => {
+    // THE HALF OF THE NARROWED DERIVATION THE OWNER ACTUALLY SEES. The backend
+    // stopped putting overdue work on the day (`service._snapshot_for`), and
+    // this is what that buys: the task is offered, the day stays empty until
+    // somebody says otherwise, and pressing + is the act that puts it there.
+    //
+    // The offer is only ever as good as the exclusion behind it — `free` drops
+    // whatever the day already holds — so this also pins the pair. A change that
+    // put overdue rows back on the day would take them OUT of the strip, and
+    // both halves would move together without either being noticed alone.
+    m.tasks.mockResolvedValue([task({ uid: 'a', summary: 'Bingo', due: inDays(-11) })])
+    m.openDay.mockResolvedValue(plan([]))
+    m.addDayEntry.mockImplementation(async (_d, b) => entry({
+      entry_id: b.entry_id, kind: 'task', list: 'l1', uid: 'a', title: null,
+    }))
+    const user = setup()
+
+    const offer = await screen.findByRole('button', { name: 'Add Bingo to today' })
+    expect(rowTitles()).toEqual([])
+
+    await user.click(offer)
+    await waitFor(() => expect(rowTitles()).toEqual(['Bingo']))
+    // Chosen, not derived: it carries into tomorrow, which is the whole
+    // difference between a decision and a proposal.
+    expect(m.addDayEntry).toHaveBeenCalledWith(
+      today(), expect.objectContaining({ kind: 'task', uid: 'a', list: 'l1' }),
+    )
+    // And once it is on the day it is no longer offered — one row, one button.
+    expect(screen.queryByRole('button', { name: 'Add Bingo to today' })).not.toBeInTheDocument()
+  })
+
   it('gives tomorrow its own heading, out of the seven-day block', async () => {
     // Tomorrow is the one future day a plan for today is routinely about — the
     // thing pulled forward because this afternoon is free, or looked at to
