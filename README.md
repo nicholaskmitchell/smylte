@@ -81,11 +81,21 @@ calendars' colors, and a day opens a read-only list of its events.
 **Today.** The one surface that holds state of its own. Every other task view
 renders a *query* — "what is due today", recomputed on every paint, so the list
 moves under you all day. This one renders a *snapshot*: the first time you open
-a day the backend freezes what it held — what is due, what is late, what you
+a day the backend freezes what it held — what is due that day, and what you
 left unfinished on your last planned day — and from then on the day is
 something you arrange rather than something that arranges itself. A task list
 grows without bound and a day does not, and the commitment step is the part
 worth keeping.
+
+**What is already late is offered, not placed.** A deadline you set for today is
+a commitment you made, and the day is entitled to hold you to it. A deadline you
+have already missed is a decision you have *not* made yet, and putting it back on
+every morning makes that decision for you — badly, by deferring it another day at
+the cost of a row you read and skip. So an overdue task appears in the strip
+underneath the day, alongside what is due tomorrow and what has sat untouched for
+three weeks, and moving it onto the day is an act you perform. Nothing is hidden:
+it is still on its list, still marked overdue everywhere overdue is shown, and
+still one press away.
 
 A day holds three kinds of row, and the tab says which is which — a filled
 square is a **task** (a real VTODO on a list, so it reaches Tasks.org,

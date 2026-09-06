@@ -1706,15 +1706,17 @@ class TaskService:
         were actually planned.
 
         With create=True on a day that has never been opened, the snapshot is
-        built once: what is due that day, what is already late, and what was
-        left unfinished on the last day that had a plan. Afterwards the MARKER —
+        built once: what is due that day, and what was left unfinished on the
+        last day that had a plan. What is already LATE is deliberately not among
+        them — `_snapshot_for`'s docstring gives the argument, and the suggestion
+        strip is where an overdue task is offered instead. Afterwards the MARKER —
         and only the marker — makes this a read like any other, so re-opening
         never re-snapshots and never resurrects an entry the owner dropped.
 
         Entries already on the day do NOT stand in for the marker. They used to:
         the day's first hand-add called `mark_day_opened`, and short-circuiting
         on `entries` meant a day whose first write was an add never got its
-        snapshot at all — due-today, overdue and carried rows suppressed for
+        snapshot at all — due-today and carried rows suppressed for
         that day forever, from a client that offers the add box before the open
         has even answered. So the snapshot merges into what is there instead,
         skipping anything the day already holds (`_snapshot_for`).
@@ -1728,7 +1730,7 @@ class TaskService:
         is untouched. Four cases, in full:
 
           * no marker, not past    — the full snapshot (habits first, then
-                                     due-today, overdue, carried) and the marker.
+                                     due-today, then carried) and the marker.
           * no marker, day in past — the same snapshot MINUS the habits: the
                                      tasks still derive (they are read off the
                                      wire and assert nothing about that day), but
@@ -1806,8 +1808,11 @@ class TaskService:
         """What opening `day` WOULD put on it, without opening it.
 
         The same derivation `open_day(create=True)` inserts — habits first, then
-        due that day, then already late, then unfinished from the last planned
-        day — run and thrown away. `_snapshot_for` writes nothing itself, so this
+        due that day, then unfinished from the last planned day — run and thrown
+        away. What is already late is in none of them, here for the same reason
+        it is in no open: `_snapshot_for` derives it nowhere, so a preview that
+        showed it would describe a day the open it stands in for would not
+        produce. `_snapshot_for` writes nothing itself, so this
         costs one read and cannot leave a trace. A PAST day previews no habits,
         for the same reason opening one mints none (`_habit_entries_for`): a
         preview that showed them would describe a day the open it stands in for
@@ -1825,8 +1830,8 @@ class TaskService:
         open — a FIRST open, which is the one this previews and the only one it
         speaks for. On a day that has ALREADY been planned this is not a forecast
         of the next open and does not claim to be: `_snapshot_for` re-derives
-        due-today and overdue from the wire as it stands now, while a re-open of
-        a marked day tops up habits and nothing else. Probed: open a day, then
+        due-today from the wire as it stands now, while a re-open of a marked day
+        tops up habits and nothing else. Probed: open a day, then
         give a task a DUE on it, and the preview names a task no open will ever
         add. (A habit created after the open does appear on both, because the
         top-up runs this same `_habit_entries_for`.)
@@ -1896,13 +1901,29 @@ class TaskService:
         has to MERGE with those rows rather than land beside them. Nothing here
         is proposed for a task or a note the day already carries.
 
-        Order is habits, then due-today, then overdue, then carried — what the
-        owner does every day, the day's own work, what is already late behind it,
-        and yesterday's leftovers last. A PAST day gets no habits at all and so
-        leads with due-today; `_habit_entries_for` makes that call, not this
-        function.
+        Order is habits, then due-today, then carried — what the owner does every
+        day, the day's own work, and yesterday's leftovers last. A PAST day gets
+        no habits at all and so leads with due-today; `_habit_entries_for` makes
+        that call, not this function.
 
-        Within each task group the sort key is (due, summary, collection_href,
+        WHAT IS ALREADY LATE IS NOT DERIVED, and that is the point of the
+        function rather than an omission. A deadline you set for today is a
+        commitment you made and the day is entitled to hold you to it; a deadline
+        you have already missed is a decision you have NOT made yet, and putting
+        it back on every morning makes the decision for you — badly, by deferring
+        it another day at the cost of a row you read and skip. So an overdue task
+        is offered rather than placed: `TodayView`'s suggestion strip picks it up
+        the moment it is not on the day (its groups are built over the tasks the
+        day does not already hold), and choosing it is then an act the owner
+        performs. Nothing is lost — the task is still on its list, still overdue
+        everywhere overdue is shown, and still one press from the day.
+
+        The carry is untouched, and it is worth saying why it does not quietly
+        put the same rows back. `_carry_into` takes only `source="user"` rows, so
+        a task the OWNER chose yesterday and did not finish still follows them;
+        one that merely landed on yesterday by derivation never did.
+
+        Within the task group the sort key is (due, summary, collection_href,
         uid), which is total — a UID is unique per COLLECTION, not globally
         (invariant #4), so the href has to be in the key for two lists holding
         the same UID to have a defined order — and a total key is what makes the
@@ -1913,7 +1934,6 @@ class TaskService:
         # zone.
         home = self._home_tz()
         due_today: list[Any] = []
-        overdue: list[Any] = []
         for col in store.get_collections(self._conn):
             if "VTODO" not in (col["components"] or ""):
                 continue
@@ -1934,12 +1954,17 @@ class TaskService:
                 key = _due_day(it["due"], is_date=bool(it["due_is_date"]), zone=home)
                 if not key:
                     continue            # undated work is chosen, never snapshotted
-                if key == day:
-                    due_today.append(it)
-                elif key < day:
-                    overdue.append(it)
-        # Habits lead the snapshot, ahead of due-today and overdue: they are what
-        # the owner decided to do EVERY day, so they read first, before whatever
+                # `!=` rather than a second bucket for `key < day`: what is
+                # already late is offered by the suggestion strip, never placed
+                # (see the docstring). An EQUALITY test also means a task due
+                # next Tuesday and one that was due last Tuesday are refused by
+                # the same line, which is the honest shape — neither is this
+                # day's work until the owner says it is.
+                if key != day:
+                    continue
+                due_today.append(it)
+        # Habits lead the snapshot, ahead of due-today: they are what the owner
+        # decided to do EVERY day, so they read first, before whatever
         # merely happens to fall due. Empty for a past day — this call is the
         # ONLY habit-minting path a first open has, so the refusal inside it is
         # what keeps `POST /api/day/2020-01-01/open` from writing today's rules
@@ -1960,9 +1985,8 @@ class TaskService:
         # the exact text as a note's identity on a day, so the carry below does
         # too.
         note_titles: set[str] = {r["title"] for r in existing if r["kind"] == "note"}
-        for group in (due_today, overdue):
-            for it in sorted(group, key=_snapshot_order):
-                self._append_task_entry(out, seen, it["collection_href"], it["uid"], "auto")
+        for it in sorted(due_today, key=_snapshot_order):
+            self._append_task_entry(out, seen, it["collection_href"], it["uid"], "auto")
         for row in self._carry_into(day):
             # Explicit per-kind dispatch, ending in a `continue` rather than in a
             # task. This was "note, and EVERYTHING ELSE IS A TASK", which is a
@@ -2034,10 +2058,10 @@ class TaskService:
         piece of work, moved" — while a derived row passes nothing and falls
         back to what the task itself remembers.
 
-        The dedupe is what stops a task appearing twice on the same day: an
-        overdue task the owner also carried forward by hand qualifies under both
-        rules, and two rows for one task means two checkboxes that disagree
-        about whether it is done. (collection_href, uid) is the identity of a
+        The dedupe is what stops a task appearing twice on the same day: a task
+        due today that the owner also chose on the last planned day qualifies
+        under both rules, and two rows for one task means two checkboxes that
+        disagree about whether it is done. (collection_href, uid) is the identity of a
         task everywhere in this app — a UID is unique per COLLECTION, not
         globally (invariant #4) — so the same UID in two lists is two entries,
         deliberately.
@@ -2059,12 +2083,26 @@ class TaskService:
         """Rows from the most recent prior plan that should follow the owner
         into `day`. Called under the lock.
 
-        Only source=user entries carry. An auto entry re-derives itself from the
-        wire every morning (it is still due, or still late, so the snapshot
-        picks it up again), and a carried entry deliberately carries exactly
-        once: a task the owner chose on Monday and then ignored on Tuesday has
-        been declined, and following them all week is how a plan turns into a
-        list nobody reads.
+        Only source=user entries carry, and a carried entry deliberately carries
+        exactly once: a task the owner chose on Monday and then ignored on
+        Tuesday has been declined, and following them all week is how a plan
+        turns into a list nobody reads.
+
+        AN AUTO ENTRY DOES NOT CARRY, and the reason for that changed when
+        overdue work stopped being derived. It used to be redundancy — the task
+        was still due or still late, so the next morning's snapshot picked it up
+        again, and carrying it as well would have given one task two rows on one
+        day. Now nothing picks it up: a task due yesterday is overdue today, and
+        `_snapshot_for` derives only what is due on the day itself. So the row
+        neither follows the owner into today nor reappears on it; the suggestion
+        strip offers it, with everything else that is late.
+
+        That is the intended shape rather than a hole left by the change. An auto
+        entry is a proposal the DAY made and the owner did not act on, and
+        carrying it would be the day making the same proposal a second time
+        without being asked — which is the behaviour narrowing the derivation
+        exists to stop. Anything the owner actually CHOSE is source="user" and
+        still follows them, so no decision is dropped by this rule.
 
         Done and dropped entries stay behind, and a task entry whose task is no
         longer an open VTODO stays behind too — completed elsewhere, cancelled,
@@ -2458,8 +2496,8 @@ class TaskService:
             # Adding to a day does NOT mark it opened. The marker means "the
             # automatic snapshot has been built", and writing it here suppressed
             # that snapshot forever: `open_day` short-circuits on the marker, so
-            # a day whose first write was a hand-add never got its due-today,
-            # overdue or carried rows at all — and the shipped client offers the
+            # a day whose first write was a hand-add never got its due-today
+            # or carried rows at all — and the shipped client offers the
             # add box whether or not the open succeeded, so that was one failed
             # request away. The day still reports planned=true, through the
             # entries arm of `_day_plan_dto`.
