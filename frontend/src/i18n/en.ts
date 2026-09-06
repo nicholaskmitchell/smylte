@@ -1078,7 +1078,7 @@ export const en = {
   'today.triage.today': 'Due today',
   'today.triage.newDate': 'A new date for {task}',
   'today.triage.park': 'Park it',
-  'settings.staleOverdue': 'Ask about work this many days late',
+  'settings.staleOverdue': 'Ask about work more than this many days late',
   'settings.staleOverdue.hint': 'Past this, a task stops being offered to your '
     + 'day as ordinary work and is asked about instead: give it a new date, or '
     + 'park it. It is never hidden — the Tasks tab still shows everything. Set '

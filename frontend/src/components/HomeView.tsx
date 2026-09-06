@@ -14,7 +14,7 @@ import { sortByCompletion, sortTasks, taskKey } from '../order'
 import { useTimeFormat } from '../timeformat'
 import { bucketByDay, monthGrid, type DayEv } from '../calendar'
 import { DayPopover } from './DayPopover'
-import { entryTitle, orderEntries, rowDone } from './TodayView'
+import { entryTitle, orderEntries, rowDone, STALE_OVERDUE_DAYS } from './TodayView'
 import { readCachedDayPlan } from '../cache'
 import { useI18n, useT } from '../i18n'
 import { weekdayNames } from '../names'
@@ -36,7 +36,7 @@ interface DragState {
 }
 
 export function HomeView({ rev, onExpire, layout, onLayoutChange,
-  hiddenCalendars = [], archivedCalendars = [], staleOverdueDays = 3 }: {
+  hiddenCalendars = [], archivedCalendars = [], staleOverdueDays = STALE_OVERDUE_DAYS }: {
   rev: number
   onExpire: () => void
   /** The owner's arrangement, or NULL when they have never made one. The two
@@ -404,7 +404,7 @@ export function HomeView({ rev, onExpire, layout, onLayoutChange,
 
 function ModuleBody({ kind, tasks, lists, days, byDay, calErrors, taskErrors, failedLists,
   reloadTasks, links, bookings, schedFailed, colorOf, eventColor, onExpire, loaded, create,
-  plan, onPlan, toggleTask, tasksLoaded, staleOverdueDays = 3, rev }: {
+  plan, onPlan, toggleTask, tasksLoaded, staleOverdueDays = STALE_OVERDUE_DAYS, rev }: {
   kind: ModuleKind
   tasks: Task[]
   lists: List[]
@@ -462,14 +462,27 @@ function ModuleBody({ kind, tasks, lists, days, byDay, calErrors, taskErrors, fa
         colorOf={colorOf} empty={tr('home.emptyToday')} loaded={loaded} partial={partial} />
     case 'overdue': {
       const late = sortTasks(open.filter((t) => isOverdue(t.due, t.due_is_date)))
+      // The tasks today's plan already holds, so the count below asks the same
+      // question TodayView's triage group does. `plan` is this tab's read-only
+      // copy of today; when it has not landed the set is empty, which
+      // over-counts by at most the rows on the day and never hides a row.
+      const onTodaysPlan = new Set(
+        (plan?.entries ?? [])
+          .filter((e) => e.kind === 'task' && e.list && e.uid && !e.dropped_at && !e.rolled_to)
+          .map((e) => `${e.list}\u0000${e.uid}`))
       // The module goes on listing every one of them — a summary that hid rows
       // would be the thing the Today tab is careful not to do — and says how
       // many of them the day has stopped offering and started asking about.
       // Counted here rather than passed down, off the same `daysPastDue` the
       // strip uses, so the two surfaces cannot disagree about which rows those
       // are. Measured against TODAY, which is the only day this tab has.
+      // Over the rows the DAY DOES NOT ALREADY HOLD, which is what TodayView's
+      // triage group is built over (`free`). Counting all of them let this
+      // module claim a decision was owed on something already sitting on
+      // today's plan — a number pointing at a group that does not contain it.
       const waiting = staleOverdueDays > 0
-        ? late.filter((t) => (daysPastDue(t.due, t.due_is_date, today) ?? 0) > staleOverdueDays)
+        ? late.filter((t) => !onTodaysPlan.has(taskKey(t))
+            && (daysPastDue(t.due, t.due_is_date, today) ?? 0) > staleOverdueDays)
         : []
       return <TaskList items={late}
         note={waiting.length ? tr('home.overdueWaiting', { count: waiting.length }) : undefined}
@@ -540,11 +553,15 @@ function TasksPartial({ lists, onRetry }: { lists: string[]; onRetry: () => void
  * the connector answers the same question, and two implementations of "what did
  * I finish" is two chances to give different numbers for one week.
  *
- * FOUR WEEKS, and no more. The point of the earlier ones is that the current
+ * FOUR WEEKS (`WEEKS_SHOWN`), and no more. The point of the earlier ones is
+ * that the current
  * number has a shape — 23 means nothing on its own — and four is enough to see
  * one. It is not a chart and not a trend: no axis, no colour, nothing marked
  * high or low, because this app does not score days and a week is only days.
  */
+/** How many weeks the module shows, this one included. */
+const WEEKS_SHOWN = 4
+
 function WeekDone({ onExpire, rev }: { onExpire: () => void; rev: number }) {
   const tr = useT()
   const guard = makeGuard(onExpire)
@@ -555,11 +572,34 @@ function WeekDone({ onExpire, rev }: { onExpire: () => void; rev: number }) {
     const now = new Date()
     const monday = addDays(now, -((now.getDay() + 6) % 7))
     let live = true
-    void Promise.all([0, 1, 2, 3].map((back) => {
-      const from = ymd(addDays(monday, -7 * back))
-      const to = ymd(addDays(monday, -7 * back + 7))
-      return guard(() => api.completedCounts(from, to)).then((r) => ({ start: from, total: r?.total ?? 0 }))
-    })).then((rows) => { if (live) setWeeks(rows) })
+    // ONE REQUEST FOR THE WHOLE SPAN, not one per week. The route answers with
+    // a per-day map over whatever window it is given, so four weeks is four
+    // weeks of one read rather than four reads — and each of those reads is a
+    // scan of every completed task in the account, on an effect that re-runs on
+    // every SSE bump (any tick, drag or add anywhere in the app).
+    const from = ymd(addDays(monday, -7 * (WEEKS_SHOWN - 1)))
+    const to = ymd(addDays(monday, 7))
+    void guard(() => api.completedCounts(from, to)).then((r) => {
+      if (!live) return
+      // `?? 0` HERE WOULD BE THE ONE THING THIS MODULE MUST NOT DO. `makeGuard`
+      // answers `undefined` for every failure, not just an expired session, so
+      // a network blip or a 500 would render "0 this week" — and low is a
+      // perfectly plausible number, which is exactly why the header above says
+      // a bare figure can only be told truthfully by a request that either
+      // lands or does not. Nothing back means the module says nothing (the
+      // sibling fetch in TodayView keeps the same rule).
+      if (!r) { setWeeks(null); return }
+      // Bucketed here rather than asked for per week: a day absent from `days`
+      // is a day with nothing, which sums to the same 0 without a round trip.
+      setWeeks(Array.from({ length: WEEKS_SHOWN }, (_, back) => {
+        const start = ymd(addDays(monday, -7 * back))
+        const end = ymd(addDays(monday, -7 * back + 7))
+        const total = Object.entries(r.days)
+          .filter(([d]) => d >= start && d < end)
+          .reduce((n, [, c]) => n + c, 0)
+        return { start, total }
+      }))
+    })
     return () => { live = false }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rev])

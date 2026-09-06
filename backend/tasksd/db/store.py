@@ -1395,6 +1395,35 @@ def get_items(conn: sqlite3.Connection, collection_href: str) -> list[sqlite3.Ro
     )
 
 
+def completed_tasks(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Every VTODO carrying a COMPLETED stamp, as the four columns a completion
+    needs: which list, which task, what it was called, and when.
+
+    FOUR COLUMNS AND NOT `SELECT *`, which is the whole reason this exists
+    beside `get_items`. Counting completions used to go through
+    `service.list_tasks`, which builds a full DTO per task — categories, the
+    sidecar, the children map, and a `raw_ics` BLOB materialised for every row
+    in every list. That was affordable while the only caller was a connector
+    tool somebody asked a question of; it is not on a path the SPA polls, and
+    the dashboard asks on every task tick.
+
+    The `completed IS NOT NULL` filter does most of the work: a stamp is the
+    only thing that gives a completion a day to belong to, so the rows without
+    one were being read and discarded. A CANCELLED task never gets a stamp
+    (`ical/edit.py` writes one only for COMPLETED), so won't-do work falls out
+    here without a clause of its own.
+
+    Every list at once, because the caller wants a total across the account and
+    a query per collection would put the fan-out back.
+    """
+    return list(
+        conn.execute(
+            "SELECT collection_href, uid, summary, completed FROM items "
+            "WHERE component='VTODO' AND completed IS NOT NULL"
+        )
+    )
+
+
 def get_events_in_range(
     conn: sqlite3.Connection, collection_href: str, start_iso: str, end_iso: str
 ) -> list[sqlite3.Row]:

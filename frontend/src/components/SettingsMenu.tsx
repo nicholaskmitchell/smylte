@@ -192,7 +192,16 @@ export function SettingsMenu({
       el.value = String(staleOverdue)
       return
     }
-    const next = Math.max(0, Math.min(90, Math.round(n)))
+    // A NEGATIVE snaps back rather than clamping to 0, because 0 is the OFF
+    // switch and `Math.max(0, …)` reached it silently: `<input min={0}>` does
+    // not stop -5 being typed, so blurring disabled the triage group without
+    // anyone choosing to. Only a value at least 0 is a value; above the ceiling
+    // is a number out of range, which the server's own bound clamps.
+    if (n < 0) {
+      el.value = String(staleOverdue)
+      return
+    }
+    const next = Math.min(90, Math.round(n))
     el.value = String(next)
     if (next !== staleOverdue) onStaleOverdueChange(next)
   }
@@ -360,8 +369,13 @@ export function SettingsMenu({
                   would PUT a settings blob per digit and briefly store "1" on
                   the way to "14". Escape restores and stops there, so the key
                   that abandons a field does not also close the sheet. */}
+              {/* No `key` on the value: remounting on every commit dropped
+                  focus out of the field the moment Enter was pressed. The
+                  element keeps its own text and `commitStale` writes the
+                  accepted value back into it, which is what a controlled-enough
+                  field needs without being re-created. */}
               <input id="set-stale-overdue" className="input menu-num" type="number"
-                min={0} max={90} defaultValue={staleOverdue} key={staleOverdue}
+                min={0} max={90} defaultValue={staleOverdue}
                 onBlur={(e) => commitStale(e.currentTarget)}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') commitStale(e.currentTarget)

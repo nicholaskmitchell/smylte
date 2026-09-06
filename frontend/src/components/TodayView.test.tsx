@@ -1728,11 +1728,13 @@ describe('<TodayView> the planning ritual', () => {
       today(), { committed: true }))
   })
 
-  it('offers trimming as the other answer, and goes where trimming happens', async () => {
-    // The alternative has to be a CHOICE rather than a toll. A second button
-    // that only dismissed the warning would be an acknowledgement — a press
-    // that changes nothing about the day — so this one goes back to the step
-    // where things are picked, which is where a day gets shorter.
+  it('offers trimming as the other answer, and leaves the flow to do it', async () => {
+    // The alternative has to be a CHOICE rather than a toll, and it has to land
+    // somewhere a day can actually get shorter. Step 1 is where things are
+    // PICKED — it only makes the day longer — and this step already has the
+    // rows and their drop controls on it, so there is nowhere inside the ritual
+    // to go. Closing it puts the owner on the day with the same controls and no
+    // dialog over them, and commits nothing.
     m.openDay.mockResolvedValue(unplanned(
       [entry({ title: 'Too much', estimate_minutes: 480 })], 300))
     const user = setup()
@@ -1742,7 +1744,9 @@ describe('<TodayView> the planning ritual', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Next' }))
 
     await user.click(within(dialog).getByRole('button', { name: 'Trim something' }))
-    expect(within(dialog).getByText('What are you doing?')).toBeInTheDocument()
+    await waitFor(() => expect(
+      screen.queryByRole('dialog', { name: 'Plan your day' })).not.toBeInTheDocument())
+    expect(screen.getByText('Too much')).toBeInTheDocument()
     expect(m.patchDay).not.toHaveBeenCalled()
   })
 

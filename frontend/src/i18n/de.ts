@@ -1137,7 +1137,7 @@ export const de: Catalogue = {
   'today.triage.today': 'Heute fällig',
   'today.triage.newDate': 'Ein neues Datum für {task}',
   'today.triage.park': 'Zurückstellen',
-  'settings.staleOverdue': 'Nach wie vielen Tagen Verzug nachfragen',
+  'settings.staleOverdue': 'Ab mehr als wie vielen Tagen Verzug nachfragen',
   'settings.staleOverdue.hint': 'Danach wird eine Aufgabe deinem Tag nicht mehr '
     + 'als gewöhnliche Arbeit angeboten, sondern erfragt: neues Datum oder '
     + 'zurückstellen. Versteckt wird nie etwas — im Aufgaben-Tab steht weiterhin '
