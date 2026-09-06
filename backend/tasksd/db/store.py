@@ -191,6 +191,18 @@ def init_db(conn: sqlite3.Connection) -> None:
         # reads `s["parked_at"]`, and that line without this one is a 500 on
         # every read of every task. Ship them together, ALTER first.
         conn.execute("ALTER TABLE sidecar ADD COLUMN parked_at TEXT")
+    ritual_cols = {r["name"] for r in conn.execute("PRAGMA table_info(day_ritual)")}
+    if "committed_over_minutes" not in ritual_cols:
+        # NULL on every day committed before the app recorded this, which is the
+        # same NULL a day committed inside its capacity gets — "there is no
+        # over-commitment to record here". Nothing to backfill: the plan those
+        # days held has moved on, and computing it now would be inventing a
+        # figure for a decision taken against numbers nobody has any more.
+        #
+        # Same one-change rule as the sidecar and day_plan blocks: this column
+        # and `service._day_plan_dto`'s line reading it ship together, ALTER
+        # first, or every read of every day is a 500.
+        conn.execute("ALTER TABLE day_ritual ADD COLUMN committed_over_minutes INTEGER")
     habit_cols = {r["name"] for r in conn.execute("PRAGMA table_info(habits)")}
     if "estimate_minutes" not in habit_cols:
         # Habits written before estimates keep NULL, and their occurrences are
@@ -888,7 +900,8 @@ def get_day_entries(conn: sqlite3.Connection, day: str) -> list[sqlite3.Row]:
 
 
 _DAY_RITUAL_FIELDS = {
-    "capacity_minutes", "committed_at", "shutdown_at", "reflection",
+    "capacity_minutes", "committed_at", "committed_over_minutes",
+    "shutdown_at", "reflection",
 }
 
 

@@ -1809,6 +1809,13 @@ class TaskService:
             "capacity_minutes": ritual["capacity_minutes"] if ritual else None,
             "capacity": self._effective_capacity(day, ritual, settings=settings),
             "committed_at": ritual["committed_at"] if ritual else None,
+            # How far over the stated capacity the plan ran when it was
+            # committed, or null — never committed, no capacity stated, or
+            # committed inside it, which are one answer here: nothing to record.
+            # See `set_day_ritual`, which computes it, and `schema.sql` for why
+            # the number is kept at all.
+            "committed_over_minutes": (
+                ritual["committed_over_minutes"] if ritual else None),
             "shutdown_at": ritual["shutdown_at"] if ritual else None,
             "reflection": ritual["reflection"] if ritual else None,
             "entries": [self._day_entry_dto(r) for r in entries],
@@ -2457,8 +2464,6 @@ class TaskService:
             fields["capacity_minutes"] = (
                 None if capacity_minutes < 0 else int(capacity_minutes)
             )
-        if committed is not None:
-            fields["committed_at"] = _stamp() if committed else None
         if shutdown is not None:
             fields["shutdown_at"] = _stamp() if shutdown else None
         if reflection is not None:
@@ -2466,6 +2471,18 @@ class TaskService:
             # written" has one representation.
             fields["reflection"] = reflection.strip() or None
         with self._lock:
+            # Committing is settled INSIDE the lock, because how far over the
+            # plan ran is a fact about the day as it stands at this instant and
+            # reading the entries outside would race a write from another tab.
+            if committed is not None:
+                fields["committed_at"] = _stamp() if committed else None
+                # Cleared alongside the stamp when a commit is undone: a day
+                # that is no longer committed has no commitment to have been
+                # over, and leaving the number would make the look-back describe
+                # a decision that was taken back.
+                fields["committed_over_minutes"] = (
+                    self._over_at_commit(day) if committed else None
+                )
             # The written row is deliberately not read back here: `_day_plan_dto`
             # reads the ritual itself, and an empty `fields` writes nothing at
             # all (see `store.set_day_ritual`) so there may be no row to read.
@@ -2478,6 +2495,42 @@ class TaskService:
         if fields:
             self._publish({"type": "day_updated", "day": day})
         return dto
+
+    def _over_at_commit(self, day: str) -> int | None:
+        """How many minutes past the day's capacity its plan runs, or None when
+        there is nothing to record. Called under the lock.
+
+        None covers two different days and says the same about both: no capacity
+        stated, and a plan inside the one that was. An account that has never
+        said how long it works is told nothing at all — the one thing this
+        feature must not get wrong is inventing a working day for somebody — so
+        it cannot be over by definition.
+
+        THE SUM IS THE ONE THE TAB SHOWS (`TodayView`'s `planned`): every live
+        row's estimate, done rows included. That is deliberate and it differs
+        from `notify/rules.py::_eval_capacity_overcommitted`, which leaves done
+        rows out. Both are right about their own question — that rule asks how
+        much is still ahead of you, this asks how full the day was — and this
+        one has to match the screen, because the number being recorded is the
+        number the owner was looking at when they pressed the button. Recording
+        a different one would make the log disagree with what it is a log of.
+
+        Dropped and rolled rows are out, on both sides: taking something off the
+        day, or sending it to Thursday, is how a day gets back under its
+        capacity, and a total that kept counting them would make the two
+        controls that help do nothing.
+        """
+        capacity = self._effective_capacity(day)
+        if capacity is None:
+            return None
+        planned = sum(
+            row["estimate_minutes"] or 0
+            for row in store.get_day_entries(self._conn, day)
+            if not row["dropped_at"] and not row["rolled_to"]
+        )
+        # Strictly greater, the same boundary the tab draws: a plan that exactly
+        # fills the day is not over it.
+        return planned - capacity if planned > capacity else None
 
     def roll_entry(self, day: str, entry_id: str, to_day: str) -> dict[str, Any] | None:
         """Move one entry to another day. None for an entry_id this day lacks.

@@ -139,7 +139,8 @@ def test_reading_a_never_opened_day_writes_nothing(svc):
         # day, because an account that never stated one must not be told it has
         # overcommitted against a number it never gave.
         "capacity_minutes": None, "capacity": None,
-        "committed_at": None, "shutdown_at": None, "reflection": None,
+        "committed_at": None, "committed_over_minutes": None,
+        "shutdown_at": None, "reflection": None,
     }
     assert _count(svc, "day_plan") == 0
     assert _count(svc, "day_plan_opened") == 0
@@ -1362,7 +1363,8 @@ def test_routes_round_trip_a_day(client):
         # matters. An account that never stated one must not be told it has
         # overcommitted against a number it never gave.
         "capacity_minutes": None, "capacity": None,
-        "committed_at": None, "shutdown_at": None, "reflection": None,
+        "committed_at": None, "committed_over_minutes": None,
+        "shutdown_at": None, "reflection": None,
     }
 
     opened = client.post(f"/api/day/{day}/open")
@@ -1877,3 +1879,89 @@ def test_review_day_saturates_at_the_last_representable_day(mcp_api):
     # The day before still answers the same way, so the clamp did not change the
     # ordinary case into the boundary one.
     assert mcp_api.review_day(day="9999-12-30") is not None
+
+
+# ── committing a day that runs long ──────────────────────────────────────────
+#
+# All of these run on the LIVE day: `set_day_ritual` refuses a past one, since a
+# capacity, a start and a shutdown are statements about a day you can still act
+# on. `_seed_due_on` gives that day a deadline so the snapshot has a row to
+# estimate.
+
+
+def _committing(svc_, *, capacity=None, minutes=None):
+    """A live day with one estimated row, ready to be committed. Returns the day
+    key and the entry_id, so a caller can move the row afterwards."""
+    day = _live()
+    _seed_due_on(svc_, day)
+    plan = svc_.open_day(day, create=True)
+    entry_id = _entry_id(plan, "live-a")
+    if minutes is not None:
+        svc_.patch_day_entry(day, entry_id, estimate_minutes=minutes)
+    if capacity is not None:
+        svc_.set_day_ritual(day, capacity_minutes=capacity)
+    return day, entry_id
+
+
+def test_committing_an_overfull_day_records_how_far_over_it_was(svc):
+    """The app's position is that a plan NEVER BLOCKS — it records a decision
+    rather than enforcing one. That sentence is only true if the decision is
+    actually recorded, and until now nothing was: the tab said the day ran long
+    and then the day forgot it had.
+
+    Computed server-side from the entries it holds, so it cannot be a figure the
+    client made up, and by the sum the tab shows, so it is the figure the owner
+    was looking at when they pressed the button."""
+    day, _ = _committing(svc, capacity=120, minutes=200)
+    committed = svc.set_day_ritual(day, committed=True)
+    assert committed["committed_at"]
+    assert committed["committed_over_minutes"] == 80
+
+
+def test_a_day_committed_inside_its_capacity_records_nothing(svc):
+    """Null for a day with nothing to record, and it has to be — a zero would be
+    a different claim ("committed exactly at the line") and the look-back would
+    have to draw it."""
+    day, entry_id = _committing(svc, capacity=120, minutes=60)
+    assert svc.set_day_ritual(day, committed=True)["committed_over_minutes"] is None
+
+    # And exactly at the line is not over. Strictly greater, the same boundary
+    # the tab draws.
+    svc.set_day_ritual(day, committed=False)
+    svc.patch_day_entry(day, entry_id, estimate_minutes=120)
+    assert svc.set_day_ritual(day, committed=True)["committed_over_minutes"] is None
+
+
+def test_an_account_with_no_capacity_can_never_be_recorded_as_over(svc):
+    """The one thing this feature must not get wrong. An account that has never
+    said how long it works is told nothing at all, so there is no number to be
+    over — inventing an eight-hour day for somebody and then recording that they
+    exceeded it would be the app scoring a day against a figure nobody gave."""
+    day, _ = _committing(svc, minutes=900)
+    assert svc.set_day_ritual(day, committed=True)["committed_over_minutes"] is None
+
+
+def test_undoing_a_commit_clears_what_it_recorded(svc):
+    """A day that is no longer committed has no commitment to have been over.
+    Leaving the number would make the look-back describe a decision that was
+    taken back."""
+    day, _ = _committing(svc, capacity=120, minutes=200)
+    assert svc.set_day_ritual(day, committed=True)["committed_over_minutes"] == 80
+
+    undone = svc.set_day_ritual(day, committed=False)
+    assert undone["committed_at"] is None and undone["committed_over_minutes"] is None
+
+
+def test_work_taken_off_the_day_is_not_counted_against_the_commitment(svc):
+    """Dropping something, or sending it to Thursday, is how a day gets back
+    under its capacity. A total that kept counting it would make the two
+    controls that help do nothing — the owner would trim the day and commit it
+    recorded as over anyway."""
+    day, _ = _committing(svc, capacity=120, minutes=100)
+    extra = svc.add_day_entry(day, entry_id=uuid.uuid4().hex, kind="note",
+                              title="Also this", estimate_minutes=100)
+    assert svc.set_day_ritual(day, committed=True)["committed_over_minutes"] == 80
+
+    svc.set_day_ritual(day, committed=False)
+    svc.patch_day_entry(day, extra["entry_id"], dropped=True)
+    assert svc.set_day_ritual(day, committed=True)["committed_over_minutes"] is None

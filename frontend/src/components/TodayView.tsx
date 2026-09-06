@@ -2472,6 +2472,24 @@ export function TodayView({
                         ?? tr('today.yourLists'),
                     })}
               </span>
+              {/* SAID BEFORE ENTER, which is the whole of what this line adds:
+                  the load strip below already says the day is over, and by the
+                  time it is read the thing has been added. Here it is attached
+                  to the control that would add another one.
+                  
+                  It reports the day as it STANDS and does not project. A line
+                  being typed has no estimate yet — the task does not exist — so
+                  there is no honest total to promise, and inventing one would
+                  be worse than saying nothing. The suggestion strip is where a
+                  projection is possible, because those tasks already exist and
+                  may remember what they take. */}
+              {over && (
+                <span className="today-chip-over">
+                  {tr('today.addWhenOver', {
+                    amount: fmtDuration(planned - capacity!),
+                  })}
+                </span>
+              )}
             </p>
           )}
 
@@ -2757,6 +2775,7 @@ export function TodayView({
         ) : (
           <LookBack review={review} offPlan={offPlan} renderRow={renderReviewRow}
             reflection={plan?.day === day ? plan.reflection : null}
+            committedOver={plan?.day === day ? plan.committed_over_minutes : null}
             colorOf={colorOf} live={isToday} />
         )}
 
@@ -2800,6 +2819,25 @@ export function TodayView({
                       {fmtDue(t.due, t.due_is_date, tf, locale)}
                     </span>
                   )}
+                  {/* WHAT ADDING IT WOULD COST, on the button that would add it.
+                      Only where both halves are actually known: the task has to
+                      remember an estimate (`sidecar.estimated_minutes`, which is
+                      what the row would be created with) and the day has to have
+                      a capacity to be measured against. Otherwise there is
+                      nothing to say and the row says nothing rather than
+                      guessing — the same rule the add box above follows.
+
+                      The consequence is named only when it IS one: an addition
+                      the day still absorbs is not worth a warning, and a strip
+                      that flagged every row would stop meaning anything. */}
+                  {capacity != null && t.estimated_minutes != null
+                    && planned + t.estimated_minutes > capacity && (
+                    <span className="today-sug-over mono">
+                      {tr('today.sugWouldBeOver', {
+                        amount: fmtDuration(planned + t.estimated_minutes - capacity),
+                      })}
+                    </span>
+                  )}
                 </li>
               ))}
             </ul>
@@ -2832,7 +2870,8 @@ export function TodayView({
  * arrives with `readOnly` already set by its caller, and nothing else in this
  * subtree is a control. See the header for why that matters.
  */
-function LookBack({ review, offPlan, reflection, renderRow, colorOf, live = false }: {
+function LookBack({ review, offPlan, reflection, renderRow, colorOf, live = false,
+  committedOver = null }: {
   /** The day's live rows grouped by origin, plus the dropped ones, in reading
    *  order — or `null` while the read is still in flight. */
   review: Array<{ key: string; label: string; rows: DayEntry[] }> | null
@@ -2848,6 +2887,9 @@ function LookBack({ review, offPlan, reflection, renderRow, colorOf, live = fals
    *  read the same way, which is the point of reusing this component rather
    *  than writing a second one that could describe a day differently. */
   live?: boolean
+  /** How far over the stated capacity the plan ran WHEN IT WAS COMMITTED, or
+   *  null — never committed, no capacity stated, or committed inside it. */
+  committedOver?: number | null
 }) {
   const { locale, t: tr } = useI18n()
   const tf = useTimeFormat()
@@ -2872,6 +2914,19 @@ function LookBack({ review, offPlan, reflection, renderRow, colorOf, live = fals
           <div className="label section-label">{tr('today.howItWent')}</div>
           <p className="today-reflection-text" dir={textDir(reflection)}>{reflection}</p>
         </section>
+      )}
+      {/* The other half of "it records a decision rather than enforcing one":
+          the day said it would run long, the owner committed it anyway, and
+          this is where that shows up afterwards.
+
+          Stated once, in words, with no colour and nothing to compare it to.
+          Nothing on this screen scores a day — there is no percentage, no
+          streak and no colour on the numbers — and a day knowingly started over
+          its capacity is a fact about it, not a mark against it. */}
+      {committedOver != null && (
+        <p className="today-committed-over">
+          {tr('today.committedOver', { amount: fmtDuration(committedOver) })}
+        </p>
       )}
       {review.map((g) => (
         <section key={g.key}>

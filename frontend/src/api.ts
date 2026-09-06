@@ -642,6 +642,17 @@ export interface DayPlan {
   capacity: number | null
   /** The planning ritual was finished. */
   committed_at: string | null
+  /** How far OVER the stated capacity the plan ran at the moment it was
+   *  committed, in minutes — or null, which covers three days that mean the
+   *  same thing here: never committed, committed with no capacity stated, and
+   *  committed inside it.
+   *
+   *  The other half of "the plan never blocks, it records a decision": the tab
+   *  names the act at the moment it is taken (an overfull day commits under a
+   *  button that says so) and this is the record that outlives the press.
+   *  Server-computed, so it cannot be a number this client made up, and by the
+   *  same sum the tab shows, so it is the figure the owner was looking at. */
+  committed_over_minutes: number | null
   /** The shutdown ritual was finished. */
   shutdown_at: string | null
   /** A sentence or two on how the day went, written at shutdown. */

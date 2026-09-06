@@ -81,6 +81,38 @@ export function isOverdue(iso: string | null, isDate = false): boolean {
   return d.getTime() < Date.now()
 }
 
+/**
+ * How many whole days late a deadline is, measured against the day key `day`,
+ * or null when it is not late at all.
+ *
+ * TWO RULES ON PURPOSE, and they are not redundant. Whether something is late
+ * comes from `isOverdue` — the instant rule, which gives an all-day deadline
+ * its whole day — so nothing can be counted here that the rest of the app does
+ * not already call overdue. How late is a DAY-KEY subtraction, which is
+ * coarser, and that is the right currency: "more than three days past due" is
+ * not a claim about seventy-two hours, and a threshold that flipped at some
+ * hour of the morning would be a rule nobody could predict.
+ *
+ * `day` is a parameter rather than today, for the reason every other date
+ * function here takes one: the reading has to be decidable without the wall
+ * clock, and the Today tab already steps its own day back and forth.
+ */
+export function daysPastDue(
+  iso: string | null, isDate: boolean, day: string,
+): number | null {
+  if (!isOverdue(iso, isDate)) return null
+  const due = dayKey(iso!)
+  if (!due || due >= day) return null
+  // Through Date rather than by subtracting the strings, so a month or year
+  // boundary is arithmetic rather than a special case. Both parsed as LOCAL
+  // midnight — the `${key}T00:00` spelling this file buckets by everywhere —
+  // and rounded, because a day containing a DST transition is 23 or 25 hours
+  // long and a floor would report it as one day fewer twice a year.
+  const ms = new Date(`${day}T00:00`).getTime() - new Date(`${due}T00:00`).getTime()
+  if (!Number.isFinite(ms)) return null
+  return Math.round(ms / 86_400_000)
+}
+
 export function pad(n: number): string {
   return String(n).padStart(2, '0')
 }
