@@ -101,7 +101,7 @@ const plan = (entries: DayEntry[] = [], day = today(), o: Partial<DayPlan> = {})
   ({
     day, planned: true, entries,
     capacity_minutes: null, capacity: null,
-    committed_at: null, shutdown_at: null, reflection: null, ...o,
+    committed_at: null, committed_over_minutes: null, shutdown_at: null, reflection: null, ...o,
   })
 
 /** A promise left in flight, and the function that lands it.
@@ -1182,6 +1182,39 @@ describe('<TodayView> suggestions', () => {
 
 // ── the calendar strip ──────────────────────────────────────────────────────
 
+describe('<TodayView> a day committed over its capacity', () => {
+  it('says so in the look-back, once, without scoring it', async () => {
+    // The other half of "it records a decision rather than enforcing one": the
+    // day said it would run long, the owner started it anyway, and this is
+    // where that shows up afterwards.
+    //
+    // Nothing on this screen scores a day — no percentage, no streak, no colour
+    // on the numbers — so this is one sentence and no comparison. It is a fact
+    // about the day, not a mark against it.
+    m.day.mockImplementation(async (d) => plan(
+      [entry({ entry_id: 'e1', day: d, title: 'A thing', source: 'user' })],
+      d, { committed_over_minutes: 80, capacity: 300, capacity_minutes: 300 }))
+    const user = setup()
+    await user.click(await screen.findByRole('button', { name: 'Previous day' }))
+
+    expect(await screen.findByText(
+      'Started 1h 20m over what you said you would work.')).toBeInTheDocument()
+  })
+
+  it('says nothing for a day committed inside its capacity', async () => {
+    // Null covers three different days — never committed, no capacity stated,
+    // committed inside it — and on all three there is nothing to report.
+    m.day.mockImplementation(async (d) => plan(
+      [entry({ entry_id: 'e1', day: d, title: 'A thing', source: 'user' })], d))
+    const user = setup()
+    await user.click(await screen.findByRole('button', { name: 'Previous day' }))
+
+    await screen.findByText('A thing')
+    expect(screen.queryByText(/over what you said you would work/))
+      .not.toBeInTheDocument()
+  })
+})
+
 describe('<TodayView> the calendar', () => {
   it('reports a calendar whose events did not load', async () => {
     // `fetchWindow` uses allSettled, so a failed calendar never rejects, never
@@ -1535,9 +1568,12 @@ describe('<TodayView> the planning ritual', () => {
     expect(document.querySelector('.plan-hint.warn')).not.toBeNull()
   })
 
-  it('states the overcommitment at the moment of committing, and commits anyway', async () => {
-    // It records a decision rather than enforcing one. A warning that stopped
-    // you would be a tool arguing with a call it has no standing to make.
+  it('names the overcommitment on the button, and commits anyway', async () => {
+    // It records a decision rather than enforcing one, so this is still ONE
+    // PRESS — but the press says what it is. "Start the day" on a day three
+    // hours over is a button that does not describe its own outcome, and the
+    // warning underneath it was the only thing that did, read after the
+    // decision rather than as part of it.
     m.openDay.mockResolvedValue(unplanned(
       [entry({ title: 'Too much', estimate_minutes: 480 })], 300))
     m.patchDay.mockImplementation(async (d) => plan([], d, { committed_at: `${d}T08:00:00Z` }))
@@ -1549,6 +1585,49 @@ describe('<TodayView> the planning ritual', () => {
 
     expect(within(dialog).getByText(/3h more than you said you would work/))
       .toBeInTheDocument()
+    // Not offered as "Start the day" at all: the unqualified name is gone while
+    // the day is over, which is what stops the two readings coexisting.
+    expect(within(dialog).queryByRole('button', { name: 'Start the day' }))
+      .not.toBeInTheDocument()
+    await user.click(within(dialog).getByRole('button', { name: 'Start it anyway' }))
+    await waitFor(() => expect(m.patchDay).toHaveBeenCalledWith(
+      today(), { committed: true }))
+  })
+
+  it('offers trimming as the other answer, and goes where trimming happens', async () => {
+    // The alternative has to be a CHOICE rather than a toll. A second button
+    // that only dismissed the warning would be an acknowledgement — a press
+    // that changes nothing about the day — so this one goes back to the step
+    // where things are picked, which is where a day gets shorter.
+    m.openDay.mockResolvedValue(unplanned(
+      [entry({ title: 'Too much', estimate_minutes: 480 })], 300))
+    const user = setup()
+    await user.click(await screen.findByRole('button', { name: 'Plan my day' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Plan your day' })
+    await user.click(within(dialog).getByRole('button', { name: 'Next' }))
+    await user.click(within(dialog).getByRole('button', { name: 'Next' }))
+
+    await user.click(within(dialog).getByRole('button', { name: 'Trim something' }))
+    expect(within(dialog).getByText('What are you doing?')).toBeInTheDocument()
+    expect(m.patchDay).not.toHaveBeenCalled()
+  })
+
+  it('leaves the ordinary commit alone when the day fits', async () => {
+    // The gate exists only where there is something to name. A day inside its
+    // capacity commits under the button it always had, and an account that has
+    // never stated a capacity is told nothing at all — the one thing this
+    // feature must not get wrong.
+    m.openDay.mockResolvedValue(unplanned(
+      [entry({ title: 'Enough', estimate_minutes: 60 })], 300))
+    m.patchDay.mockImplementation(async (d) => plan([], d, { committed_at: `${d}T08:00:00Z` }))
+    const user = setup()
+    await user.click(await screen.findByRole('button', { name: 'Plan my day' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Plan your day' })
+    await user.click(within(dialog).getByRole('button', { name: 'Next' }))
+    await user.click(within(dialog).getByRole('button', { name: 'Next' }))
+
+    expect(within(dialog).queryByRole('button', { name: 'Start it anyway' }))
+      .not.toBeInTheDocument()
     await user.click(within(dialog).getByRole('button', { name: 'Start the day' }))
     await waitFor(() => expect(m.patchDay).toHaveBeenCalledWith(
       today(), { committed: true }))
@@ -2003,6 +2082,58 @@ describe('<TodayView> the shutdown ritual', () => {
 describe('<TodayView> how full the day is', () => {
   const withCapacity = (entries: DayEntry[], capacity: number | null) =>
     plan(entries, today(), { capacity, capacity_minutes: capacity })
+
+  it('says the day is already over before Enter, not after', async () => {
+    // THE COMPLAINT THIS ANSWERS: the load strip below already said the day was
+    // over, and by the time it was read the thing had been added. Here the
+    // sentence is attached to the control that would add another one.
+    //
+    // It reports the day as it STANDS and does not project. A line being typed
+    // has no estimate — the task does not exist yet — so there is no honest
+    // total to promise, and inventing one would be worse than saying nothing.
+    m.openDay.mockResolvedValue(withCapacity(
+      [entry({ title: 'Too much', estimate_minutes: 480 })], 300))
+    const user = setup()
+    await screen.findByText('Too much')
+
+    await user.type(screen.getByRole('textbox', { name: 'Add to today' }), 'One more thing')
+    expect(fateChip()).toHaveTextContent('already 3h over')
+  })
+
+  it('says nothing in the add box on a day that fits', async () => {
+    // The clause is only worth having where there is something to say. A box
+    // that carried it always would stop meaning anything, and an account with
+    // no capacity is told nothing at all — the rule the whole feature turns on.
+    m.openDay.mockResolvedValue(withCapacity(
+      [entry({ title: 'Enough', estimate_minutes: 60 })], 300))
+    const user = setup()
+    await screen.findByText('Enough')
+
+    await user.type(screen.getByRole('textbox', { name: 'Add to today' }), 'One more thing')
+    expect(fateChip()).not.toHaveTextContent('over')
+  })
+
+  it('says what adding a suggestion would cost, on the button that adds it', async () => {
+    // The strip CAN project where the add box cannot: these tasks exist and may
+    // remember what they take, so the number is read rather than guessed.
+    m.tasks.mockResolvedValue([
+      task({ uid: 'a', summary: 'Big one', due: today(), estimated_minutes: 90 }),
+      task({ uid: 'b', summary: 'Small one', due: today(), estimated_minutes: 5 }),
+      task({ uid: 'c', summary: 'Unmeasured', due: today() }),
+    ])
+    m.openDay.mockResolvedValue(withCapacity(
+      [entry({ title: 'Booked', estimate_minutes: 250 })], 300))
+    setup()
+    const row = async (name: string) => (await screen.findByRole(
+      'button', { name: `Add ${name} to today` })).closest('.today-row')!
+
+    // 250 + 90 is 40 over; 250 + 5 still fits, and an addition the day absorbs
+    // is not worth a warning.
+    expect(await row('Big one')).toHaveTextContent('+40m over')
+    expect(await row('Small one')).not.toHaveTextContent('over')
+    // Nothing remembered, nothing promised.
+    expect(await row('Unmeasured')).not.toHaveTextContent('over')
+  })
 
   it('says nothing at all when no capacity has ever been given', async () => {
     // THE CASE THAT MATTERS MOST. An account that has not stated a capacity

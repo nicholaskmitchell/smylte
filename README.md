@@ -156,10 +156,27 @@ long today is, what goes on it, and how long each thing takes. Say the length
 either way — "until 6pm" or "5h" — and Settings holds a default per weekday for
 the days you do not want to think about it. From then on the day says how full
 it is, and when the plan runs past what you said you would work it says so in
-words, *before* the day starts. It never blocks: it records a decision rather
-than enforcing one. An account that has never stated a capacity is told nothing
-at all, because inventing an eight-hour day for someone is the one thing this
-must not do.
+words, *before* the day starts. An account that has never stated a capacity is
+told nothing at all, because inventing an eight-hour day for someone is the one
+thing this must not do.
+
+**It never blocks: it records a decision rather than enforcing one** — and both
+halves of that sentence are now true. Committing an overfull day is still one
+press, but never an unlabelled one: the button reads *Start it anyway*, with
+*Trim something* beside it going back to the step where a day gets shorter.
+Naming the act is not the same as refusing it, and it is the difference between
+a warning read after the decision and one read as part of it. The add box says
+the same thing a moment earlier — if the day is already over, the line under
+what you are typing says by how much — and a task in the strip that remembers
+how long it takes says what adding it would cost, on the button that would add
+it. Neither guesses: a line being typed has no estimate, so nothing is
+projected from it.
+
+And the day remembers. How far over it was at the moment you committed is
+recorded on the day and read back once in the look-back, in words. No colour, no
+comparison, nothing scored — a day knowingly started over is a fact about it,
+not a mark against it. Recording it is what makes "records a decision" mean
+something rather than merely say something.
 
 **Shutting it down** is the matching three steps at the other end: what
 happened, what follows you, and a line about how it went. Each unfinished row

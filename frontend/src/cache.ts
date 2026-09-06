@@ -362,6 +362,10 @@ export function sanitizeDayPlan(v: unknown): DayPlan | null {
     // number it never gave. `numOrNull` says exactly that for a missing field.
     capacity: numOrNull(o.capacity),
     committed_at: orNull(o.committed_at),
+    // Absent from anything this cache wrote before the app recorded it, which
+    // `numOrNull` renders as null — the same null a day committed inside its
+    // capacity gets, and the same thing it means there: nothing to record.
+    committed_over_minutes: numOrNull(o.committed_over_minutes),
     shutdown_at: orNull(o.shutdown_at),
     reflection: orNull(o.reflection),
     entries: rows.slice(0, MAX_ROWS)

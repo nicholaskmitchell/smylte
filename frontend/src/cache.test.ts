@@ -45,7 +45,8 @@ const dayEntry = (o: Partial<DayEntry> = {}): DayEntry => ({
 
 const dayPlan = (o: Partial<DayPlan> = {}): DayPlan => ({
   day: '2026-08-21', planned: true, capacity_minutes: null, capacity: null,
-  committed_at: null, shutdown_at: null, reflection: null, entries: [], ...o,
+  committed_at: null, committed_over_minutes: null,
+  shutdown_at: null, reflection: null, entries: [], ...o,
 })
 
 const habit = (o: Partial<Habit> = {}): Habit => ({

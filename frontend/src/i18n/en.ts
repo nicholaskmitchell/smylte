@@ -1059,4 +1059,16 @@ export const en = {
     + 'the task itself is completed too. A step you have marked won’t-do counts '
     + 'as nothing left to do; a parked one does not, since it is still coming back. '
     + 'This writes a real completion, so it shows up in your other calendar apps.',
+
+  // ── an overfull day, named at the moment it is committed ───────────────────
+  //    Nothing here is a refusal. `plan.commitAnyway` is one press, exactly as
+  //    `plan.start` was — what changed is that the press says what it is, so
+  //    the warning is no longer the only thing on screen that does.
+  'plan.trim': 'Trim something',
+  'plan.commitAnyway': 'Start it anyway',
+  'today.addWhenOver': '· already {amount} over',
+  'today.sugWouldBeOver': '+{amount} over',
+  //    Read back afterwards. A fact about the day, not a mark against it —
+  //    nothing on the look-back scores anything.
+  'today.committedOver': 'Started {amount} over what you said you would work.',
 } as const

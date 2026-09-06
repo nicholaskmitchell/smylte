@@ -143,7 +143,25 @@ export function PlanRitual({
             // flow that refused to advance would be the wizard this is not.
             <button className="btn ghost" onClick={() => setStep(step + 1)}>{tr('plan.skip')}</button>
           )}
-          {last ? (
+          {last && over ? (
+            // TWO NAMED ANSWERS RATHER THAN ONE UNNAMED ONE, and this is still
+            // not a block: committing is one press either way. What changes is
+            // that the press SAYS WHAT IT IS. "Start" on a day 80 minutes over
+            // is a button that does not describe its own outcome, and the
+            // warning underneath it was the only thing that did — read after
+            // the decision rather than as part of it.
+            //
+            // Trimming goes back to the step where things are picked, because
+            // that is where the day gets shorter; a button that only dismissed
+            // the warning would be an acknowledgement, which is a toll rather
+            // than a choice.
+            <>
+              <button className="btn ghost" onClick={() => setStep(1)}>
+                {tr('plan.trim')}
+              </button>
+              <button className="btn" onClick={onCommit}>{tr('plan.commitAnyway')}</button>
+            </>
+          ) : last ? (
             <button className="btn" onClick={onCommit}>
               {committedAt ? tr('plan.done') : tr('plan.start')}
             </button>
@@ -152,10 +170,13 @@ export function PlanRitual({
           )}
         </div>
 
-        {/* Said at the moment of committing, in words, and it never blocks —
-            the button beside it does exactly what it says whether or not this
-            is here. A warning that stopped you would be a tool arguing with a
-            decision it does not have the standing to make. */}
+        {/* Said at the moment of committing, in words, and it still never
+            blocks — the buttons beside it do exactly what they say, and one of
+            them commits. What this no longer is is the ONLY thing naming the
+            over-commitment: the primary button names it too, so the decision is
+            made with its consequence attached rather than beside it. A warning
+            that stopped you would be a tool arguing with a decision it does not
+            have the standing to make; one the button contradicts is worse. */}
         {last && over && (
           <p className="plan-warn" role="status">
             {tr('plan.warn', { amount: fmtDuration(planned - capacity!) })}

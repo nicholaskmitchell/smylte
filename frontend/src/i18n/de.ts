@@ -1125,4 +1125,11 @@ export const de: Catalogue = {
     + 'auf „wird nichts“ gesetzt hast, zählt als nichts mehr zu tun; ein '
     + 'zurückgestellter nicht, denn er kommt ja wieder. Das schreibt eine echte '
     + 'Erledigung und ist damit auch in deinen anderen Kalender-Apps zu sehen.',
+
+  // ── Ein zu voller Tag, benannt im Moment der Zusage ────────────────────────
+  'plan.trim': 'Etwas streichen',
+  'plan.commitAnyway': 'Trotzdem starten',
+  'today.addWhenOver': '· schon {amount} drüber',
+  'today.sugWouldBeOver': '+{amount} drüber',
+  'today.committedOver': 'Mit {amount} mehr gestartet, als du arbeiten wolltest.',
 }

@@ -444,6 +444,30 @@ CREATE TABLE IF NOT EXISTS day_ritual (
     day              TEXT PRIMARY KEY,   -- YYYY-MM-DD, the local calendar day
     capacity_minutes INTEGER,            -- what the owner said they would work
     committed_at     TEXT,               -- the planning ritual was finished
+    -- How far OVER the stated capacity the plan ran at the moment it was
+    -- committed, in minutes, or NULL — which covers three different days and
+    -- means the same thing on all of them: never committed, committed with no
+    -- capacity stated, or committed inside it. In every one of those there is
+    -- no over-commitment to record.
+    --
+    -- Recorded because the app's position is that the plan NEVER BLOCKS: it
+    -- records a decision rather than enforcing one. That sentence is only true
+    -- if the decision is actually recorded somewhere. The tab names the act at
+    -- the moment it is taken — an overfull day commits under a button that says
+    -- "Commit anyway" rather than "Start" — and this is the other half, the
+    -- record that outlives the press.
+    --
+    -- Computed SERVER-SIDE from the entries it already holds rather than sent
+    -- by the client, so it cannot be a number the client made up, and by the
+    -- same sum the tab shows (`TodayView`'s `planned`, which counts done rows)
+    -- so it is the figure the owner was actually looking at. That differs from
+    -- `notify/rules.py::_eval_capacity_overcommitted`, which excludes done rows
+    -- — a legitimate difference, since one asks "how full is the day" and the
+    -- other "how much is still ahead of you".
+    --
+    -- Nothing scores anything with it. The look-back states it once, in words,
+    -- with no colour and no comparison to another day.
+    committed_over_minutes INTEGER,
     shutdown_at      TEXT,               -- the shutdown ritual was finished
     reflection       TEXT,               -- a sentence or two on how it went
     updated_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))

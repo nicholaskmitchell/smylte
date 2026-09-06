@@ -270,7 +270,7 @@ const entry = (o: Partial<import('../api').DayEntry> = {}): import('../api').Day
 const dayPlan = (entries: import('../api').DayEntry[] = [], day = today()) =>
   ({
     day, planned: true, entries, capacity_minutes: null, capacity: null,
-    committed_at: null, shutdown_at: null, reflection: null,
+    committed_at: null, committed_over_minutes: null, shutdown_at: null, reflection: null,
   } as import('../api').DayPlan)
 
 const PLAN_MODULE: DashboardModule[] = [{ id: 'x', kind: 'day_plan', x: 0, y: 0, w: 6, h: 6 }]

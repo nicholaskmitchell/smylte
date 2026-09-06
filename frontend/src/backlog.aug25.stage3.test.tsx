@@ -121,7 +121,7 @@ const dayEntry = (o: Partial<DayEntry> = {}): DayEntry => ({
 
 const plan = (entries: DayEntry[] = [], day = today(), o: Partial<DayPlan> = {}): DayPlan => ({
   day, planned: true, entries, capacity_minutes: null, capacity: null,
-  committed_at: null, shutdown_at: null, reflection: null, ...o,
+  committed_at: null, committed_over_minutes: null, shutdown_at: null, reflection: null, ...o,
 })
 
 let errSpy: ReturnType<typeof vi.spyOn>

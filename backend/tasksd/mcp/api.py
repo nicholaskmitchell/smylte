@@ -312,7 +312,7 @@ def _in_display_order(tasks: list[dict], zone=None) -> list[dict]:
 #: sometimes true, and the first day without a plan is where they find out.
 _NO_DAY_FACTS = {
     "capacity_minutes": None, "capacity": None, "committed_at": None,
-    "shutdown_at": None, "reflection": None,
+    "committed_over_minutes": None, "shutdown_at": None, "reflection": None,
 }
 
 
@@ -1297,6 +1297,13 @@ class McpApi:
             "capacity_minutes": plan["capacity_minutes"],
             "capacity": plan["capacity"],
             "committed_at": plan["committed_at"],
+            # How far over the capacity the plan ran when the owner committed
+            # it, or null. Worth reporting for the reason the capacity itself
+            # is: a model that can see the owner knowingly started a day 80
+            # minutes over has the one piece of context that should stop it
+            # proposing an eleventh thing. It is a record, not a score — do not
+            # read it back to them as a failure.
+            "committed_over_minutes": plan["committed_over_minutes"],
             "shutdown_at": plan["shutdown_at"],
             "reflection": plan["reflection"],
         }
