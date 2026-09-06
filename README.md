@@ -64,6 +64,21 @@ a flag that cleared on Smylte's own write but not on a foreign one would leave
 two tasks in the same state disagreeing about it. Bringing something back is an
 act, exactly as setting it aside was.
 
+**Ticking the last step finishes the thing it is a step of.** A parent with
+every step done is finished, and leaving it open is how a list fills with rows
+nobody can act on — no work in them, just something to read past. The test is
+"nothing left", not "everything done": a step marked won't-do is not happening,
+so it leaves nothing to do either, while a *parked* step does not close its
+parent, because parked work is still coming back. It walks up, so finishing the
+last box can close a checklist and the thing that checklist was a step of.
+
+It fires only on a write made here — another client ticking the last box changes
+nothing, since a sync engine that wrote back would turn every incoming change
+into an outgoing one, a full resync included. And it is the one preference in
+this app that writes to the calendar server on your behalf: the close is a real
+completion, in Tasks.org and Thunderbird within a sync. So it is a switch in
+Settings → Tasks, on by default, rather than a rule.
+
 **Calendar.** Month grid across multiple calendars, each with a visibility
 toggle and non-destructive **archive** (hide without deleting; restore from
 Settings → Calendar). Events support all-day and timed spans, drag to move or

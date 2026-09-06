@@ -31,7 +31,7 @@ export const en = {
   'tabs.lastUsed': 'Last used tab',
   'tabs.moveLeft': 'Move {tab} left',
   'tabs.moveRight': 'Move {tab} right',
-  'tabs.hint': 'The order here is the order across the top. \u201CLast used tab\u201D '
+  'tabs.hint': 'The order here is the order across the top. “Last used tab” '
     + 'reopens wherever you left off, on every device signed into this account.',
 
   // ── settings ─────────────────────────────────────────────────────────────
@@ -212,7 +212,7 @@ export const en = {
   'notif.trigger.notShutDown.hint': 'Habit-forming rather than informative: it '
     + 'tells you nothing you do not know. Only for a day you actually planned.',
   'notif.trigger.habitsLeft': 'Habits left today',
-  'notif.trigger.habitsLeft.hint': 'The app\u2019s position is that a habit is never '
+  'notif.trigger.habitsLeft.hint': 'The app’s position is that a habit is never '
     + 'coloured as a failure and nothing here scores your day, and this sits '
     + 'awkwardly with both. It names what is left and nothing else — no streak, '
     + 'no percentage, no count of misses.',
@@ -1044,7 +1044,19 @@ export const en = {
   'tasks.unpark': 'Bring it back',
   'tasks.parkHint': 'Sets it aside without finishing it. It leaves your lists and your day, and comes back whenever you want it.',
   'tasks.parkedHint': 'Set aside. Bringing it back puts it in your lists and your day again, exactly as it was.',
-  'tasks.wontDoAction': 'Won\u2019t do',
-  'side.viewParked': '\u23f8 View parked',
+  'tasks.wontDoAction': 'Won’t do',
+  'side.viewParked': '⏸ View parked',
   'side.viewParkedShort': 'View parked',
+
+  // ── closing a parent that has nothing left in it ───────────────────────────
+  //    Worded as what it DOES rather than as "auto-complete": the owner is
+  //    agreeing to a write that reaches their other CalDAV clients, so the hint
+  //    says that plainly rather than describing it as a display convenience.
+  'settings.autoCloseParents': 'Finish a checklist with its last step',
+  'settings.autoCloseParents.on': 'On',
+  'settings.autoCloseParents.off': 'Off',
+  'settings.autoCloseParents.hint': 'When you tick the last open step of a task, '
+    + 'the task itself is completed too. A step you have marked won’t-do counts '
+    + 'as nothing left to do; a parked one does not, since it is still coming back. '
+    + 'This writes a real completion, so it shows up in your other calendar apps.',
 } as const

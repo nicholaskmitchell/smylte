@@ -1096,23 +1096,33 @@ export const de: Catalogue = {
   'display.goneHint': 'Verbinde sie neu unter Einstellungen → Anzeigen.',
   'appear.importedTheme': 'Importiertes Design',
 
-  // ── Zur\u00fcckgestellt: die neutrale vierte Antwort ────────────────────────
-  'tasks.parked': 'Zur\u00fcckgestellt',
-  'tasks.parkedChip': 'zur\u00fcckgestellt',
+  // ── Zurückgestellt: die neutrale vierte Antwort ────────────────────────
+  'tasks.parked': 'Zurückgestellt',
+  'tasks.parkedChip': 'zurückgestellt',
   'tasks.parkedCount': {
-    one: '{count} zur\u00fcckgestellt',
-    other: '{count} zur\u00fcckgestellt',
+    one: '{count} zurückgestellt',
+    other: '{count} zurückgestellt',
   },
-  'tasks.noParked': 'Nichts zur\u00fcckgestellt.',
+  'tasks.noParked': 'Nichts zurückgestellt.',
   'tasks.parkedOn': 'seit {when}',
-  'tasks.park': 'Zur\u00fcckstellen',
+  'tasks.park': 'Zurückstellen',
   'tasks.unpark': 'Wieder aufnehmen',
-  // Kein satzinitiales \u201eSie\u201c f\u00fcr die Aufgabe: `i18n.test.ts` pr\u00fcft auf formelle
-  // Anrede und kann das Pronomen nicht vom \u201eSie\u201c unterscheiden \u2014 der Test hat
+  // Kein satzinitiales „Sie“ für die Aufgabe: `i18n.test.ts` prüft auf formelle
+  // Anrede und kann das Pronomen nicht vom „Sie“ unterscheiden — der Test hat
   // recht, dass hier keins stehen soll, wenn auch aus dem falschen Grund.
-  'tasks.parkHint': 'Legt sie beiseite, ohne sie abzuschlie\u00dfen. Damit verschwindet sie aus deinen Listen und deinem Tag und kommt zur\u00fcck, wann immer du willst.',
+  'tasks.parkHint': 'Legt sie beiseite, ohne sie abzuschließen. Damit verschwindet sie aus deinen Listen und deinem Tag und kommt zurück, wann immer du willst.',
   'tasks.parkedHint': 'Beiseitegelegt. Beim Wiederaufnehmen steht sie wieder in deinen Listen und in deinem Tag, genau wie zuvor.',
   'tasks.wontDoAction': 'Wird nichts',
-  'side.viewParked': '\u23f8 Zur\u00fcckgestellte anzeigen',
-  'side.viewParkedShort': 'Zur\u00fcckgestellte anzeigen',
+  'side.viewParked': '⏸ Zurückgestellte anzeigen',
+  'side.viewParkedShort': 'Zurückgestellte anzeigen',
+
+  // ── Eine Aufgabe schließen, in der nichts mehr offen ist ──
+  'settings.autoCloseParents': 'Checkliste mit dem letzten Schritt abschließen',
+  'settings.autoCloseParents.on': 'An',
+  'settings.autoCloseParents.off': 'Aus',
+  'settings.autoCloseParents.hint': 'Wenn du den letzten offenen Schritt einer '
+    + 'Aufgabe abhakst, wird auch die Aufgabe selbst erledigt. Ein Schritt, den du '
+    + 'auf „wird nichts“ gesetzt hast, zählt als nichts mehr zu tun; ein '
+    + 'zurückgestellter nicht, denn er kommt ja wieder. Das schreibt eine echte '
+    + 'Erledigung und ist damit auch in deinen anderen Kalender-Apps zu sehen.',
 }

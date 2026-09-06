@@ -783,6 +783,19 @@ class SettingsPatch(BaseModel):
     # Absent means the default (hidden); False is a real value the merge keeps,
     # so an explicit "show" survives. The "View completed" button ignores this.
     show_completed_tasks: bool | None = None
+    # Whether ticking the last open step of a checklist also completes the task
+    # it is a step of. Absent means ON — a parent with nothing left in it is
+    # finished, and leaving it open is how a list accumulates rows nobody can
+    # act on.
+    #
+    # A switch at all, unlike most of this app's opinions, because this is the
+    # one preference here that writes to the CALENDAR SERVER on the owner's
+    # behalf: the close is a real VTODO completion, visible in Tasks.org, jtx
+    # Board and Thunderbird within a sync. A default that reaches other people's
+    # clients has to be refusable. It only ever fires on a write made through
+    # this app; another client ticking the last child changes nothing here (see
+    # `service._close_finished_parents`).
+    auto_close_parents: bool | None = None
     # 12- or 24-hour clock for every time the app renders. Absent means "12h",
     # which is what the app did before this was settable. Only the app's own
     # displays follow it: the public booking page is rendered for visitors who

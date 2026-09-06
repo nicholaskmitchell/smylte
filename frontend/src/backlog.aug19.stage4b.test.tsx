@@ -1168,6 +1168,7 @@ describe('aug19 leftovers — every dialog answers Escape at the window', () => 
       calFit="dynamic" onToggleCalFit={vi.fn()}
       archivedCals={[]} onArchivedCalsChange={vi.fn()}
       showCompleted={false} onToggleShowCompleted={vi.fn()}
+      autoCloseParents={true} onToggleAutoCloseParents={vi.fn()}
       focus={DEFAULT_FOCUS} onFocusChange={vi.fn()}
       notifyEnabled={false} onNotifyEnabledChange={vi.fn()}
       notifyChatId="" onNotifyChatIdChange={vi.fn()}

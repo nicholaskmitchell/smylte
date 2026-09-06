@@ -1193,3 +1193,129 @@ def test_task_reorder_rejects_a_bad_body(client):
     # An empty order is a no-op, not an error: it is what an account with no
     # tasks at all would send.
     assert client.post("/api/tasks/reorder", json={"items": []}).status_code == 200
+
+
+def test_a_parent_closes_when_its_last_step_is_ticked(client):
+    """A parent with every step done is finished, and leaving it open is how a
+    list accumulates rows nobody can act on: no work in them, just something to
+    read and skip.
+
+    It closes properly rather than cosmetically — STATUS, the COMPLETED stamp
+    and 100% together, which is what `ical/edit.py` couples — so the other
+    CalDAV clients on these collections see a finished task rather than an
+    open one at 100%."""
+    lid = _list(client)["id"]
+    mk = lambda s, **kw: client.post(  # noqa: E731
+        f"/api/lists/{lid}/tasks", json={"summary": s, **kw}).json()
+    trip = mk("Trip")
+    flight = mk("Book flight", parent=trip["uid"])
+    pack = mk("Pack", parent=trip["uid"])
+
+    client.post(f"/api/lists/{lid}/tasks/{flight['uid']}/complete")
+    assert client.get(f"/api/lists/{lid}/tasks/{trip['uid']}").json()["completed"] is False
+
+    client.post(f"/api/lists/{lid}/tasks/{pack['uid']}/complete")
+    closed = client.get(f"/api/lists/{lid}/tasks/{trip['uid']}").json()
+    assert closed["completed"] is True
+    assert closed["completed_at"], "a close is a real completion, stamp and all"
+    assert closed["percent_complete"] == 100
+
+
+def test_a_declined_step_leaves_nothing_to_do_but_a_parked_one_does_not(client):
+    """The predicate is "nothing left", not "everything done".
+
+    A CANCELLED step is not happening, so it leaves nothing to do and the parent
+    can close. A PARKED one is still intended — just not now — so it does not,
+    and the parent stays open. That difference is the whole reason the parked
+    state was worth adding: it is the answer that does NOT mean the work is
+    settled, and a rule that closed over it would file "later" as "done"."""
+    lid = _list(client)["id"]
+    mk = lambda s, **kw: client.post(  # noqa: E731
+        f"/api/lists/{lid}/tasks", json={"summary": s, **kw}).json()
+    trip = mk("Trip")
+    flight = mk("Book flight", parent=trip["uid"])
+    italian = mk("Learn Italian", parent=trip["uid"])
+
+    client.post(f"/api/lists/{lid}/tasks/{italian['uid']}/park")
+    client.post(f"/api/lists/{lid}/tasks/{flight['uid']}/complete")
+    assert client.get(f"/api/lists/{lid}/tasks/{trip['uid']}").json()["completed"] is False
+
+    # Un-park it and decline it instead, and the same last tick now closes.
+    client.post(f"/api/lists/{lid}/tasks/{italian['uid']}/park?parked=false")
+    client.post(f"/api/lists/{lid}/tasks/{italian['uid']}/cancel")
+    assert client.get(f"/api/lists/{lid}/tasks/{trip['uid']}").json()["completed"] is True
+
+
+def test_closing_a_parent_closes_its_own_parent(client):
+    """The walk goes up, because closing a parent can finish the thing IT is a
+    step of. Stopping at one level would leave the grandparent as the row this
+    change exists to remove."""
+    lid = _list(client)["id"]
+    mk = lambda s, **kw: client.post(  # noqa: E731
+        f"/api/lists/{lid}/tasks", json={"summary": s, **kw}).json()
+    move = mk("Move house")
+    packing = mk("Packing", parent=move["uid"])
+    boxes = mk("Buy boxes", parent=packing["uid"])
+
+    client.post(f"/api/lists/{lid}/tasks/{boxes['uid']}/complete")
+    assert client.get(f"/api/lists/{lid}/tasks/{packing['uid']}").json()["completed"] is True
+    assert client.get(f"/api/lists/{lid}/tasks/{move['uid']}").json()["completed"] is True
+
+
+def test_a_task_with_no_steps_is_never_closed_by_this(client):
+    """`len(kids) == 0` is not "all done". Without the at-least-one test every
+    ordinary task would close the moment anything edited it."""
+    lid = _list(client)["id"]
+    alone = client.post(f"/api/lists/{lid}/tasks", json={"summary": "Alone"}).json()
+    client.patch(f"/api/lists/{lid}/tasks/{alone['uid']}", json={"summary": "Still alone"})
+    assert client.get(f"/api/lists/{lid}/tasks/{alone['uid']}").json()["completed"] is False
+
+
+def test_the_owner_can_refuse_to_have_parents_closed_for_them(client):
+    """The one preference in this app that writes to the CALENDAR SERVER on the
+    owner's behalf — the close is a real completion, visible in Tasks.org and
+    Thunderbird — so it has to be refusable. Default on, because a parent with
+    nothing left in it is finished."""
+    lid = _list(client)["id"]
+    mk = lambda s, **kw: client.post(  # noqa: E731
+        f"/api/lists/{lid}/tasks", json={"summary": s, **kw}).json()
+    try:
+        assert client.put("/api/settings", json={"auto_close_parents": False}).status_code == 200
+        trip = mk("Trip")
+        only = mk("The one step", parent=trip["uid"])
+        client.post(f"/api/lists/{lid}/tasks/{only['uid']}/complete")
+        assert client.get(f"/api/lists/{lid}/tasks/{trip['uid']}").json()["completed"] is False
+    finally:
+        # The `client` fixture is session-scoped and the settings blob outlives
+        # this test, so a stored False would silently disable the behaviour for
+        # every test that runs after it.
+        client.put("/api/settings", json={"auto_close_parents": True})
+
+
+def test_a_related_to_ring_terminates_instead_of_looping(client):
+    """`RELATED-TO` is free text with no existence check on either side of the
+    wire, so a ring is something another client can write — and this walk runs
+    on the write path, under the global service lock. It has to terminate on one
+    rather than climb forever.
+
+    Two tasks pointing at each other is the smallest ring, and it is reachable
+    through this app's own API: nothing refuses a parent that is already a
+    descendant.
+
+    TERMINATION IS THE PROPERTY, not a particular outcome. What happens here is
+    that A closes — its only child is B, and B is done, so "nothing left in it"
+    is satisfied and the rule applies as written — and then the climb stops
+    because A's own parent is the task the walk started from. That is a
+    defensible answer for an indefensible structure, and it is reached in two
+    steps rather than in a loop under the lock, which is the whole point."""
+    lid = _list(client)["id"]
+    a = client.post(f"/api/lists/{lid}/tasks", json={"summary": "A"}).json()
+    b = client.post(f"/api/lists/{lid}/tasks",
+                    json={"summary": "B", "parent": a["uid"]}).json()
+    assert client.patch(f"/api/lists/{lid}/tasks/{a['uid']}",
+                        json={"parent": b["uid"]}).status_code == 200
+
+    # It returns at all, which on a ring is the assertion that matters.
+    done = client.post(f"/api/lists/{lid}/tasks/{b['uid']}/complete")
+    assert done.status_code == 200 and done.json()["completed"] is True
+    assert client.get(f"/api/lists/{lid}/tasks/{a['uid']}").json()["completed"] is True
