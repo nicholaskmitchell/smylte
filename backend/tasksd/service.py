@@ -130,6 +130,18 @@ _RRULE_TOKENS = frozenset({
 # `_habit_minting_allowed` for why it is not zero.
 _HABIT_MINT_GRACE_DAYS = 1
 
+# How far up a RELATED-TO chain one completion may close parents.
+#
+# A bound rather than a recursion to the root, and it is a safety rail rather
+# than a judgement about how deep a checklist should be. `RELATED-TO` is free
+# text with no existence check on either side of the wire, so another client can
+# write a chain of any length — or a ring — and this walk runs under the global
+# service lock on the write path. The `seen` set in `_close_finished_parents`
+# catches a cycle; this catches a chain long enough to be pathological without
+# being one. Eight is far past any real nesting: the SPA renders a tree, but a
+# checklist inside a checklist inside a checklist is already unusual.
+_CLOSE_PARENT_DEPTH = 8
+
 
 def normalize_habit_days(value: str | None) -> str:
     """Validate a habit's `days` and return its canonical spelling. Raises
@@ -852,8 +864,110 @@ class TaskService:
     def edit_task(self, href: str, uid: str, edit: TaskEdit) -> dict[str, Any] | None:
         with self._lock:
             self._engine.edit_task(href, uid, edit)
+            closed = self._close_finished_parents(href, uid)
         self._publish({"type": "task_updated", "list": _slug(href), "uid": uid})
+        # One event per parent this edit closed, and they are needed rather than
+        # tidy: the SPA reconciles a write by replacing the ROW it wrote, so
+        # without these the parent stays open on screen until something else
+        # forces a refetch, and the owner sees a checklist that is finished
+        # under a parent that is not.
+        for parent_uid in closed:
+            self._publish({"type": "task_updated", "list": _slug(href), "uid": parent_uid})
         return self.get_task(href, uid)
+
+    def _close_finished_parents(self, href: str, uid: str) -> list[str]:
+        """Complete any ancestor of `uid` that has nothing left in it. Called
+        under the lock; returns the uids closed, innermost first.
+
+        A parent with every step ticked is finished, and leaving it open is how
+        a list keeps items nobody can act on: there is no work left in it, only
+        a row to notice and skip. Closing it is the one change here that shrinks
+        the list at zero cost to the record.
+
+        THE PREDICATE IS "NOTHING LEFT", not "everything done". Every child must
+        be COMPLETED **or CANCELLED** — a step declined is a step that is not
+        happening, so it leaves nothing to do either. That deliberately differs
+        from `_task_dto`'s `done_kids`, which counts only COMPLETED, and the two
+        answer different questions: that number is a PROGRESS percentage, where
+        counting a declined step as work done would flatter it, and this one
+        asks whether anything remains. (The client's `progressOf` has always
+        counted cancelled children as done — a pre-existing divergence, and not
+        one this widens.)
+
+        A PARKED child blocks the close, and it does so for free rather than by
+        a clause of its own: parking does not touch STATUS, so a parked child is
+        still NEEDS-ACTION and fails the test above. That is the right answer —
+        parking is setting aside, not settling, so the work is still intended
+        and the parent is not finished — and it is worth stating precisely
+        because the free version is the one that stays correct. A child that is
+        both COMPLETED and parked (parking survives completion by design) is
+        settled, and a clause reading the flag directly would have blocked on
+        it.
+
+        ONLY THIS PATH, never the sync engine. Another client ticking the last
+        child does not close the parent here, and that is deliberate: the sync
+        engine's job is to project the wire, and a projection that writes back
+        turns every incoming change into an outgoing one — including on a full
+        resync, where every task looks new. The owner ticking that same child in
+        this app gets the close; a foreign write does not.
+
+        It walks UP, because closing a parent can finish its own parent, and it
+        is bounded twice. `_CLOSE_PARENT_DEPTH` caps the climb, and a `seen` set
+        catches a cycle: `RELATED-TO` is free text with no existence check on
+        either side of the wire, so a ring is something another client can write
+        and this must terminate on it rather than loop under the global lock.
+        """
+        # Default ON — the absent key is the default, like every other setting
+        # here — but `is False` rather than a truth test, because the settings
+        # blob is hand-editable and a string or a number there must not be read
+        # as an instruction to stop writing to the owner's calendar server.
+        # Only the value the switch actually stores turns this off.
+        if store.get_settings(self._conn).get("auto_close_parents") is False:
+            return []
+        closed: list[str] = []
+        seen: set[str] = {uid}
+        child = store.get_item(self._conn, href, uid)
+        for _ in range(_CLOSE_PARENT_DEPTH):
+            parent_uid = child["related_parent"] if child is not None else None
+            if not parent_uid or parent_uid in seen:
+                return closed
+            seen.add(parent_uid)
+            parent = store.get_item(self._conn, href, parent_uid)
+            # A parent in ANOTHER list is not this parent — a UID is unique per
+            # collection (invariant #4) — and `related_parent` names no list, so
+            # a cross-list pointer resolves to nothing here and the climb stops.
+            if parent is None or parent["component"] != "VTODO":
+                return closed
+            if (parent["status"] or "") in ("COMPLETED", "CANCELLED"):
+                return closed      # already settled; its own parent is not ours to judge
+            if not self._nothing_left_in(href, parent_uid):
+                return closed
+            self._engine.edit_task(href, parent_uid, TaskEdit(status="COMPLETED"))
+            closed.append(parent_uid)
+            # Re-read rather than reusing `parent`: the edit rewrote the row, and
+            # the climb continues from what is now on it.
+            child = store.get_item(self._conn, href, parent_uid)
+        return closed
+
+    def _nothing_left_in(self, href: str, parent_uid: str) -> bool:
+        """Has `parent_uid` at least one child, and is none of them still open?
+        Called under the lock.
+
+        At least one, because a task with no subtasks is an ordinary task and
+        closing it the moment somebody edits it would be absurd — `len(kids)`
+        of zero is not "all done".
+
+        Open covers parked, without a clause for it: parking leaves STATUS
+        alone, so a parked child reads NEEDS-ACTION here. See
+        `_close_finished_parents`.
+        """
+        kids = [
+            it for it in store.get_items(self._conn, href)
+            if it["component"] == "VTODO" and it["related_parent"] == parent_uid
+        ]
+        return bool(kids) and all(
+            (kid["status"] or "") in ("COMPLETED", "CANCELLED") for kid in kids
+        )
 
     def complete_task(self, href: str, uid: str, *, done: bool = True) -> dict[str, Any] | None:
         return self.edit_task(href, uid, TaskEdit(status="COMPLETED" if done else "NEEDS-ACTION"))

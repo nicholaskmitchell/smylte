@@ -45,6 +45,7 @@ function show(over: Partial<Parameters<typeof SettingsMenu>[0]> = {}) {
     calFit="dynamic" onToggleCalFit={vi.fn()}
     archivedCals={[]} onArchivedCalsChange={vi.fn()}
     showCompleted={false} onToggleShowCompleted={vi.fn()}
+    autoCloseParents={true} onToggleAutoCloseParents={vi.fn()}
     focus={DEFAULT_FOCUS} onFocusChange={vi.fn()}
     notifyEnabled={false} onNotifyEnabledChange={vi.fn()}
     notifyChatId="" onNotifyChatIdChange={vi.fn()}
@@ -198,5 +199,43 @@ describe('<SettingsMenu> on a phone', () => {
 
     await userEvent.click(document.querySelector('.set-overlay')!)
     expect(onClose).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('<SettingsMenu> finishing a checklist with its last step', () => {
+  beforeEach(() => stubMatchMedia(false))
+
+  it('offers the one preference here that writes to the calendar server', async () => {
+    // Every other switch in this app changes what the OWNER sees. This one
+    // completes a real VTODO on their behalf, which reaches Tasks.org and
+    // Thunderbird within a sync — so it has to be refusable, and the hint has
+    // to say that rather than describing it as a display convenience.
+    const onToggle = vi.fn()
+    const user = userEvent.setup()
+    show({ autoCloseParents: true, onToggleAutoCloseParents: onToggle })
+    await user.click(nav('Tasks'))
+
+    // Named by its <label htmlFor>, not by its own text — which is the point of
+    // the pairing: a screen reader reads what the switch is FOR, and
+    // `aria-pressed` carries which way it is set.
+    const toggle = screen.getByRole('button', { name: 'Finish a checklist with its last step' })
+    expect(toggle).toHaveAttribute('aria-pressed', 'true')
+    expect(toggle).toHaveTextContent('On')
+    expect(panel()).toHaveTextContent(/shows up in your other calendar apps/)
+
+    await user.click(toggle)
+    expect(onToggle).toHaveBeenCalled()
+  })
+
+  it('says Off when it is off, rather than only styling it', async () => {
+    // The state has to be readable, not just pressable: this is the switch that
+    // decides whether the app writes to somebody's calendar server, and "which
+    // way is it set" must not be a question about a colour.
+    const user = userEvent.setup()
+    show({ autoCloseParents: false })
+    await user.click(nav('Tasks'))
+    const toggle = screen.getByRole('button', { name: 'Finish a checklist with its last step' })
+    expect(toggle).toHaveAttribute('aria-pressed', 'false')
+    expect(toggle).toHaveTextContent('Off')
   })
 })

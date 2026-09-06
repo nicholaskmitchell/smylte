@@ -63,7 +63,7 @@ export function SettingsMenu({
   homeTz, onToggleHomeTz,
   calFit, onToggleCalFit,
   archivedCals, onArchivedCalsChange,
-  showCompleted, onToggleShowCompleted,
+  showCompleted, onToggleShowCompleted, autoCloseParents, onToggleAutoCloseParents,
   focus, onFocusChange,
   notifyEnabled, onNotifyEnabledChange,
   notifyChatId, onNotifyChatIdChange,
@@ -101,6 +101,8 @@ export function SettingsMenu({
   onArchivedCalsChange: (next: string[]) => void
   showCompleted: boolean
   onToggleShowCompleted: () => void
+  autoCloseParents: boolean
+  onToggleAutoCloseParents: () => void
   /** The focus clock, every key present (see `sanitizeFocusSettings`). */
   focus: FocusSettings
   onFocusChange: (patch: Partial<FocusSettings>) => void
@@ -319,6 +321,15 @@ export function SettingsMenu({
               </button>
             </div>
             <div className="hintline">{tr('settings.completedTasks.hint')}</div>
+            <div className="menu-row">
+              <label htmlFor="set-autoclose">{tr('settings.autoCloseParents')}</label>
+              <button className="menu-toggle" id="set-autoclose"
+                onClick={onToggleAutoCloseParents} aria-pressed={autoCloseParents}>
+                {tr(autoCloseParents
+                  ? 'settings.autoCloseParents.on' : 'settings.autoCloseParents.off')}
+              </button>
+            </div>
+            <div className="hintline">{tr('settings.autoCloseParents.hint')}</div>
           </>
         )}
 
