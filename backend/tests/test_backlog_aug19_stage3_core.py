@@ -89,14 +89,14 @@ class _StubService:
     def list_lists(self):
         return [{"href": h} for h in self._tasks]
 
-    def list_tasks(self, href, *, include_done=True):
+    def list_tasks(self, href, *, include_done=True, include_parked=True):
         return list(self._tasks[href])
 
 
 def _task(uid, *, due=None, sort_order=None, summary=None):
     return {"uid": uid, "summary": summary or uid, "due": due,
             "sort_order": sort_order, "priority": None, "tags": [],
-            "completed": False, "cancelled": False}
+            "completed": False, "cancelled": False, "parked": False}
 
 
 # The connector's own app, with no session cookie anywhere — the same shape

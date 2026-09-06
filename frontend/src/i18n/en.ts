@@ -1027,4 +1027,24 @@ export const en = {
   'display.gone': 'This display is no longer connected.',
   'display.goneHint': 'Pair it again from Settings → Displays.',
   'appear.importedTheme': 'Imported theme',
+
+  // ── parked: the neutral fourth answer ──────────────────────────────────────
+  //    Not done, not abandoned. The wording matters more than usual here — the
+  //    whole reason this state exists is that "cancelled" reads as a verdict,
+  //    so nothing in it may sound like failure or like finishing.
+  'tasks.parked': 'Parked',
+  'tasks.parkedChip': 'parked',
+  'tasks.parkedCount': {
+    one: '{count} parked',
+    other: '{count} parked',
+  },
+  'tasks.noParked': 'Nothing parked.',
+  'tasks.parkedOn': 'since {when}',
+  'tasks.park': 'Park it',
+  'tasks.unpark': 'Bring it back',
+  'tasks.parkHint': 'Sets it aside without finishing it. It leaves your lists and your day, and comes back whenever you want it.',
+  'tasks.parkedHint': 'Set aside. Bringing it back puts it in your lists and your day again, exactly as it was.',
+  'tasks.wontDoAction': 'Won\u2019t do',
+  'side.viewParked': '\u23f8 View parked',
+  'side.viewParkedShort': 'View parked',
 } as const

@@ -42,6 +42,28 @@ something the sort keys can express: undated and unprioritised, they come out in
 title order, which is an order nobody chose. One drag writes the whole sequence,
 the same one the top-level rows use.
 
+**A task can also be parked**, which is the fourth answer and the only neutral
+one. iCalendar gives a task three: needs action, done, and cancelled — and
+cancelled reads as a verdict, so it never gets used, and nothing ever leaves the
+list. Parking is "not now": the task leaves the lists, the day's automatic rows,
+the open counts and the digest, and it comes back exactly as it was whenever you
+want it. It is not done and is never reported as done, on any surface.
+
+It lives in the app-only sidecar rather than on the wire, and that is forced
+rather than preferred. There is no neutral fourth status in the spec, and an
+invented one — or an `X-` property — would be written verbatim onto collections
+Tasks.org, jtx Board and Thunderbird share, where all three would render it as
+nothing. So the honest cost is stated rather than hidden: **a task parked here
+still sits in those clients' lists.** Parking is a statement about which of your
+own views something appears in, which is what the sidecar is for — the same call
+the per-item reminder makes, for the same reason.
+
+Nothing clears it by itself. Completing a parked task, or reopening one, leaves
+it parked, because completion can arrive from a phone through the sync path and
+a flag that cleared on Smylte's own write but not on a foreign one would leave
+two tasks in the same state disagreeing about it. Bringing something back is an
+act, exactly as setting it aside was.
+
 **Calendar.** Month grid across multiple calendars, each with a visibility
 toggle and non-destructive **archive** (hide without deleting; restore from
 Settings → Calendar). Events support all-day and timed spans, drag to move or

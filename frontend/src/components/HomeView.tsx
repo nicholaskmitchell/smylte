@@ -430,7 +430,9 @@ function ModuleBody({ kind, tasks, lists, days, byDay, calErrors, taskErrors, fa
   // Top-level only, mirroring the Tasks pane — a dashboard card is a summary,
   // and subtasks read as duplicates without their parent for context.
   const tops = tasks.filter((t) => !t.parent)
-  const open = tops.filter((t) => !t.completed && !t.cancelled)
+  // Parked work is off the plate, so it is out of Today, Overdue and Upcoming
+  // alike — a dashboard card is a summary of what is live.
+  const open = tops.filter((t) => !t.completed && !t.cancelled && !t.parked)
   // One order, shared with the Tasks pane (see order.ts). These used to sort by
   // a local comparator that put undated tasks at the opposite end from the one
   // TasksView used, so the same task sat in a different place on each tab.

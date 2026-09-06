@@ -371,8 +371,11 @@ def _todays_tasks(s: Sweep) -> tuple[list[str], list[str]]:
     now_epoch = s.now.timestamp()
     due_today: list[str] = []
     overdue: list[str] = []
+    # `include_parked=False`: a digest counting work the owner deliberately set
+    # aside would report a backlog they have already dealt with, every morning,
+    # which is the number the parking file exists to move.
     for lst in s.svc.list_lists():
-        for task in s.svc.list_tasks(lst["href"], include_done=False):
+        for task in s.svc.list_tasks(lst["href"], include_done=False, include_parked=False):
             parts = due_rules.due_parts(task.get("due"), s.tz)
             if parts is None:
                 continue
@@ -472,6 +475,14 @@ def _eval_item_reminder(s: Sweep) -> list[Pending]:
         if pending:
             out.append(pending)
 
+    # PARKED WORK IS STILL REMINDED ABOUT, and that is the one place in this
+    # module where it is. The README's rule for `item_reminder` is that a lead
+    # the owner set on one item "is you asking rather than the app guessing, and
+    # an explicit request outranks any bar the app would otherwise apply" —
+    # parking is a bar the app applies to its own views, not a withdrawal of a
+    # request. Setting something aside and having asked to be told about it are
+    # compatible ("not now, but tell me on the 3rd"), and the way to stop the
+    # reminder is to clear the reminder.
     for lst in s.svc.list_lists():
         for task in s.svc.list_tasks(lst["href"], include_done=False):
             lead = _reminder_lead(task.get("notify_minutes_before"))
@@ -646,8 +657,11 @@ def _eval_task_due_soon(s: Sweep) -> list[Pending]:
     """
     lead = task_lead(s.prefs)
     out: list[Pending] = []
+    # `include_parked=False`, unlike `_eval_item_reminder` above: this rule is
+    # the app guessing that a deadline is worth interrupting for, and a deadline
+    # on work the owner has set aside is the weakest guess it could make.
     for lst in s.svc.list_lists():
-        for task in s.svc.list_tasks(lst["href"], include_done=False):
+        for task in s.svc.list_tasks(lst["href"], include_done=False, include_parked=False):
             if task.get("has_rrule") or task.get("due_is_date"):
                 continue
             # An item carrying its own lead belongs to `item_reminder`; without

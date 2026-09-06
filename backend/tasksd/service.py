@@ -592,7 +592,19 @@ class TaskService:
         return None
 
     # ── task queries ─────────────────────────────────────────────────────────
-    def list_tasks(self, href: str, *, include_done: bool = True) -> list[dict[str, Any]]:
+    def list_tasks(
+        self, href: str, *, include_done: bool = True, include_parked: bool = True,
+    ) -> list[dict[str, Any]]:
+        """Every VTODO in one collection, as DTOs.
+
+        TWO FILTERS AND NOT ONE, because they answer different questions and a
+        caller usually wants a different answer to each. `include_done` is about
+        work that is over; `include_parked` is about work deliberately set aside,
+        which is not over and must not be reported as though it were. Both
+        default to True so a reader that has not thought about it sees
+        everything — the SPA fetches the lot and decides on screen, which is what
+        lets it offer a "Parked" view at all.
+        """
         with self._lock:
             items = [i for i in store.get_items(self._conn, href) if i["component"] == "VTODO"]
             cats = store.get_all_categories(self._conn, href)
@@ -601,6 +613,8 @@ class TaskService:
         dtos = [self._task_dto(it, cats, side, children) for it in items]
         if not include_done:
             dtos = [d for d in dtos if not (d["completed"] or d["cancelled"])]
+        if not include_parked:
+            dtos = [d for d in dtos if not d["parked"]]
         # Manual position first, then the due-then-summary order the SQL already
         # gave. Done here rather than in the query because the sidecar is
         # already in hand, so it costs no join.
@@ -702,6 +716,18 @@ class TaskService:
             # and what keeps the reminder rule quiet by default. See
             # notify/rules.py::_eval_item_reminder.
             "notify_minutes_before": s["notify_minutes_before"] if s else None,
+            # Set aside rather than finished or abandoned. Two keys and not one,
+            # for the reason `completed` and `completed_at` are two: the flag is
+            # what every filter tests, and the instant is a fact the flag cannot
+            # carry. See `schema.sql`'s `parked_at` for why this is app-only.
+            #
+            # ORTHOGONAL TO STATUS, deliberately. A parked task is still whatever
+            # the wire says it is, so nothing here is derived from `status` and
+            # nothing about parking changes it. Readers that mean "work I might
+            # do" ask for all three; readers that mean "finished" ask only the
+            # first two, and `park_task` says which is which.
+            "parked": bool(s["parked_at"]) if s else False,
+            "parked_at": s["parked_at"] if s else None,
             "has_rrule": bool(it["has_rrule"]),
             "href": it["href"],
             "etag": it["etag"],
@@ -835,6 +861,44 @@ class TaskService:
     def cancel_task(self, href: str, uid: str) -> dict[str, Any] | None:
         """Won't-do."""
         return self.edit_task(href, uid, TaskEdit(status="CANCELLED"))
+
+    def park_task(self, href: str, uid: str, *, parked: bool = True) -> dict[str, Any] | None:
+        """Set a task aside, or bring it back. App-only; the wire never sees it.
+
+        The fourth answer the task list needed. NEEDS-ACTION, COMPLETED and
+        CANCELLED were the whole vocabulary, and cancelling reads as a verdict —
+        so it never gets used, and nothing ever leaves. Parking is the neutral
+        one: not done, not abandoned, just not now.
+
+        A SIBLING OF `complete_task` AND `cancel_task` in shape but not in
+        mechanism, and the difference is the point. Those two write a STATUS to
+        Radicale; this writes a sidecar column, because RFC 5545 has no neutral
+        fourth status and inventing one would put a value three other clients
+        cannot read onto collections they share (`app.py::_TASK_STATUS` refuses
+        exactly that at the edge). `schema.sql`'s `parked_at` carries the whole
+        argument, including the cost: a task parked here still sits in
+        Tasks.org's list.
+
+        It goes to `store.set_sidecar` directly rather than through
+        `self.set_sidecar`, which runs `_clear_sentinels` — that pass exists for
+        the `-1`-means-clear convention the numeric sidecar fields use, and here
+        the value being written IS None whenever the owner un-parks.
+
+        NOTHING CLEARS THIS AUTOMATICALLY — not completing the task, not
+        reopening it, not another client ticking it off. That is a decision
+        rather than an omission: completion can arrive from Tasks.org or a
+        phone, through the sync path, and a flag cleared on Smylte's own write
+        but not on a foreign one would mean two tasks in the same state
+        disagreeing about it. Un-parking is an act, exactly like parking. The
+        combination is coherent anyway — a parked task that comes back
+        COMPLETED is the honest record that it got done regardless.
+        """
+        with self._lock:
+            store.set_sidecar(
+                self._conn, href, uid, parked_at=_stamp() if parked else None
+            )
+        self._publish({"type": "task_updated", "list": _slug(href), "uid": uid})
+        return self.get_task(href, uid)
 
     def delete_task(self, href: str, uid: str) -> None:
         with self._lock:
@@ -1937,12 +2001,26 @@ class TaskService:
         for col in store.get_collections(self._conn):
             if "VTODO" not in (col["components"] or ""):
                 continue
+            # One sidecar read per COLLECTION, hoisted out of the row loop for
+            # the reason `home` is hoisted out of the whole scan: it is the same
+            # answer for every row, and asking per task would be one query per
+            # task in every list under the global lock.
+            side = store.get_all_sidecar(self._conn, col["href"])
             # Every task in every list, raw_ics and all — the same read
             # `list_tasks` does on each render. Affordable HERE because the
             # opened marker makes it happen at most once per day, rather than
             # once per view of the day.
             for it in store.get_items(self._conn, col["href"]):
                 if it["component"] != "VTODO":
+                    continue
+                # Parked work is set aside, and a day that derived it anyway
+                # would be putting back exactly what the owner took out — the
+                # same failure narrowing the overdue rule fixed, with a worse
+                # excuse, since parking is an explicit act rather than a
+                # deadline slipping. `sqlite3.Row` has no `.get`, hence the
+                # two-step.
+                s = side.get(it["uid"])
+                if s is not None and s["parked_at"]:
                     continue
                 # Subtasks ride with their parent: a checklist item is not a
                 # separate thing to plan, and admitting them would let one
@@ -2144,6 +2222,16 @@ class TaskService:
                 if item is None or item["component"] != "VTODO":
                     continue
                 if (item["status"] or "") in ("COMPLETED", "CANCELLED"):
+                    continue
+                # Parked since it was planned. Following the owner into today
+                # would undo the setting-aside a day after they did it, which is
+                # the one thing parking has to be proof against — and unlike the
+                # tests above this is reversible, so the row comes back the
+                # moment they un-park it. One `get_sidecar` per surviving row
+                # rather than a per-collection read: this walks ONE prior day,
+                # which holds a handful of rows spread over any number of lists.
+                side = store.get_sidecar(self._conn, row["collection_href"], row["uid"])
+                if side is not None and side["parked_at"]:
                     continue
             out.append(row)
         return out

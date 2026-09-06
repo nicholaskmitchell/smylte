@@ -59,6 +59,17 @@ interface ReorderDrag {
 /** Done or won't-do — both take a task out of the active list. */
 const isDone = (t: Task) => t.completed || t.cancelled
 
+/** Set aside without being finished. NOT `isDone`, and keeping them apart is
+ *  the whole discipline of this state: a parked task must never be counted,
+ *  reported or drawn as work that got done. What it shares with a done task is
+ *  only that neither belongs in the active list — which is `isHidden` below. */
+const isParked = (t: Task) => t.parked
+
+/** Whatever the active list should not show: finished, declined, or set aside.
+ *  The three are different answers and the pane says which is which; this is
+ *  the one question that treats them alike. */
+const isHidden = (t: Task) => isDone(t) || isParked(t)
+
 /** The shape a bare client_id has, matching the backend's `_CLIENT_ID_RE`.
  *  Only a `parent` looking exactly like this is a candidate for the legacy
  *  reinterpretation below — a real uid always carries the `@tasksd` suffix. */
@@ -87,7 +98,7 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
   // Home reads the same copy rather than fanning out a second one.
   const {
     lists, serverOrderedLists, tasks, listsLoaded, listsOk, loaded, setLists,
-    create, createMany, addSub, toggle, remove, saveDetail, setReminder, reorder,
+    create, createMany, addSub, toggle, remove, saveDetail, setReminder, park, reorder,
     taskListErrors, reloadTasks,
   } = useTaskData()
   const [detail, setDetail] = useState<Task | null>(null)
@@ -100,6 +111,14 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
   // button flips this to show a dedicated pane of just the completed tasks,
   // regardless of the show-completed setting.
   const [completedOnly, setCompletedOnly] = useState(false)
+  // The same for parked work — its own pane rather than a mode inside the one
+  // above, because "finished" and "set aside" are the two answers this whole
+  // state exists to keep apart. Transient too: which pane is open is a place
+  // the owner is standing, not a preference worth following them around.
+  const [parkedOnly, setParkedOnly] = useState(false)
+  // One at a time. Both on would leave two headings and two counts describing
+  // one list, and the pane below can only be one of them.
+  const showCompletedPane = completedOnly && !parkedOnly
   // Multi-day views window from here: day3 starts on the anchor day itself,
   // week snaps to the anchor's Sunday (same week start as the calendar grid).
   const [anchor, setAnchor] = useState(() => new Date())
@@ -247,7 +266,12 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
   // beside it, already computed locally, had moved.
   const progressOf = (t: Task) => {
     const kids = kidsByParent.get(taskKey(t))
-    return kids ? { total: kids.length, done: kids.filter(isDone).length } : null
+    // Parked children leave BOTH sides of the fraction. A parked step is not
+    // done, so it cannot count in the numerator; and it is not a step of this
+    // job right now, so counting it in the denominator would make a parent
+    // read as permanently unfinished for work nobody intends to do.
+    const live = kids?.filter((k) => !isParked(k))
+    return live?.length ? { total: live.length, done: live.filter(isDone).length } : null
   }
 
   // A subtask reaches the DOM only underneath its own parent's row, so anything
@@ -363,8 +387,12 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
   // used to show them in raw array order — so a new task appeared at the bottom
   // and then jumped when the refetch replaced the array. `compareTasks` is a
   // total order, so the array's own order stops mattering entirely.
-  const active = sortTasks(tops.filter((t) => !t.completed && !t.cancelled))
-  const done = sortTasks(tops.filter((t) => t.completed || t.cancelled))
+  //
+  // `isHidden` and not `isDone`: parked work is neither active nor done, and
+  // it has its own pane. Putting it in `done` would file setting-aside under
+  // finishing, which is the exact conflation the state exists to break.
+  const active = sortTasks(tops.filter((t) => !isHidden(t)))
+  const done = sortTasks(tops.filter(isDone))
 
   // ── the runs a drag can happen inside ────────────────────────────────────
   //
@@ -488,8 +516,20 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
   // Most recently finished first — see `sortByCompletion`, shared with the Home
   // dashboard's module so the two panes cannot drift apart again.
   const completedTasks = sortByCompletion(completedTops)
+  // Parked rows, most recently set aside first. `parked_at` is what makes that
+  // orderable at all, and it is why the column is a timestamp: the pane a
+  // parking file most wants is "what did I put down lately".
+  //
+  // Top-level only and no children beneath them, unlike the completed pane. A
+  // parked parent's subtasks are not themselves parked — they are steps of work
+  // that is not happening right now — so listing them here would report a state
+  // they are not in, and `progressOf` already leaves parked children out of the
+  // fraction for the same reason.
+  const parkedTasks = shownTasks
+    .filter((t) => isParked(t) && !parentOf(t))
+    .sort((a, b) => (b.parked_at ?? '').localeCompare(a.parked_at ?? ''))
   const openOn = (key: string) =>
-    sortTasks(shownTasks.filter((t) => !t.completed && !t.cancelled && dueDay(t) === key))
+    sortTasks(shownTasks.filter((t) => !isHidden(t) && dueDay(t) === key))
   const doneOn = (key: string) =>
     sortTasks(shownTasks.filter((t) => (t.completed || t.cancelled) && dueDay(t) === key))
   // Overdue tasks pool in the today column — but only ones due before the
@@ -497,9 +537,9 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
   const firstKey = ymd(days[0])
   const overdue = sortTasks(shownTasks.filter((t) => {
     const d = dueDay(t)
-    return !t.completed && !t.cancelled && d !== null && d < todayKey && d < firstKey
+    return !isHidden(t) && d !== null && d < todayKey && d < firstKey
   }))
-  const undated = sortTasks(shownTasks.filter((t) => !t.completed && !t.cancelled && !t.due))
+  const undated = sortTasks(shownTasks.filter((t) => !isHidden(t) && !t.due))
 
   const fmtD = (d: Date) => d.toLocaleDateString(locale, { month: 'short', day: 'numeric' })
 
@@ -516,23 +556,29 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
         hiddenIds={hiddenSet} onHiddenChange={onHiddenListsChange}
         groups={groups} onGroupsChange={onGroupsChange}
         collapsedGroups={collapsedGroups} onCollapsedGroupsChange={onCollapsedGroupsChange}
-        completedActive={completedOnly} onToggleCompleted={() => setCompletedOnly((v) => !v)} />
+        completedActive={completedOnly}
+        onToggleCompleted={() => { setCompletedOnly((v) => !v); setParkedOnly(false) }}
+        parkedActive={parkedOnly}
+        onToggleParked={() => { setParkedOnly((v) => !v); setCompletedOnly(false) }} />
 
       <div className="content">
         <div className="content-head">
           <span className="content-title">
-            {completedOnly ? tr('tasks.completed') : tr('tasks.allLists')}
+            {showCompletedPane ? tr('tasks.completed')
+              : parkedOnly ? tr('tasks.parked') : tr('tasks.allLists')}
           </span>
           <span className="content-sub">
-            {completedOnly
+            {showCompletedPane
               ? tr('tasks.completedCount', { count: completedTasks.length })
+              : parkedOnly
+              ? tr('tasks.parkedCount', { count: parkedTasks.length })
               : view === 'list'
                 ? tr('tasks.openCount', { count: active.length })
                 : tr('tasks.range',
                   { from: fmtD(days[0]), to: fmtD(days[span - 1]) })}
           </span>
           <span className="spacer" />
-          {!completedOnly && view !== 'list' && (
+          {!completedOnly && !parkedOnly && view !== 'list' && (
             <div className="range-nav">
               <button className="icon-btn" title={tr('tasks.earlier')}
                 aria-label={tr('tasks.earlier')}
@@ -545,7 +591,7 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
                 onClick={() => setAnchor(addDays(days[0], span))}>›</button>
             </div>
           )}
-          {!completedOnly && (
+          {!completedOnly && !parkedOnly && (
             <div className="view-tabs" role="tablist" aria-label={tr('tasks.viewTabs')}>
               {VIEWS.map(([v, label]) => (
                 <button key={v} role="tab" aria-selected={view === v}
@@ -556,7 +602,7 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
           )}
         </div>
 
-        {completedOnly ? (
+        {showCompletedPane ? (
           <div className="scroll">
             {completedTasks.length === 0 && (
               <div className="empty">{tr('tasks.noCompleted')}</div>
@@ -565,6 +611,36 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
               <TaskGroup key={taskKey(t)} task={t} childrenOf={completedKids} dot={dotFor(t)}
                 progressOf={progressOf} isCollapsed={isCollapsed} onCollapse={setCollapsed}
                 onToggle={toggle} onRemove={remove} onOpen={setDetail} onAddSub={addSub} />
+            ))}
+          </div>
+        ) : parkedOnly ? (
+          <div className="scroll">
+            {parkedTasks.length === 0 && (
+              <div className="empty">{tr('tasks.noParked')}</div>
+            )}
+            {/* Rows rather than groups: a parked parent's steps are not parked
+                (see `parkedTasks`), so there is no sub-list to draw here. The
+                un-park button is the one control the pane needs — this is a
+                place to pick something back up, and everything else about the
+                task is a press away in the editor. */}
+            {parkedTasks.map((t) => (
+              <div className="task-row" key={taskKey(t)}>
+                <span className="list-dot"
+                  style={dotFor(t) ? { background: dotFor(t)! } : undefined} />
+                <button className="task-main" onClick={() => setDetail(t)}>
+                  <span className="task-title">{t.summary}</span>
+                </button>
+                <span className="task-meta">
+                  {t.parked_at && (
+                    <span className="due mono">
+                      {tr('tasks.parkedOn', { when: fmtD(new Date(t.parked_at)) })}
+                    </span>
+                  )}
+                </span>
+                <button className="btn ghost" onClick={() => void park(t, false)}>
+                  {tr('tasks.unpark')}
+                </button>
+              </div>
             ))}
           </div>
         ) : visibleLists.length === 0 ? (
@@ -667,6 +743,10 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
           onCreate={() => {}}
           onSave={(patch) => { saveDetail(detail, patch); setDetail(null) }}
           onReminderChange={(m) => { void setReminder(detail, m) }}
+          // Closes after either. Both answers take the row out of the pane
+          // behind the modal, so leaving it open would show the editor for
+          // something no longer on screen.
+          onPark={(next) => { void park(detail, next); setDetail(null) }}
           onDelete={() => { remove(detail); setDetail(null) }}
           onMultiple={() => {}} />
       )}
@@ -1034,6 +1114,10 @@ function TaskRow({ task, depth = 0, dot, progress, collapsed, onCollapse,
         <div className="task-title">
           {dot !== undefined && <span className="list-dot" style={dot ? { background: dot } : undefined} />}
           {label} {task.cancelled && <span className="chip">{tr('tasks.wontDo')}</span>}
+          {/* Its own chip beside won't-do rather than sharing one. They are the
+              two non-completions and the whole point is that they read
+              differently: one is a verdict, the other is "not now". */}
+          {task.parked && <span className="chip">{tr('tasks.parkedChip')}</span>}
         </div>
         {(task.due || progress || task.tags.length > 0) && (
           <div className="task-meta">

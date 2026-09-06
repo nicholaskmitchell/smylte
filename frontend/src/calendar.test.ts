@@ -361,7 +361,8 @@ describe('dragBody: resize', () => {
 describe('bucketTasksByDay', () => {
   const t = (o: Partial<Task> = {}): Task => ({
     uid: 't1', list: 'l1', summary: 'Task', notes: null, status: 'NEEDS-ACTION',
-    completed: false, cancelled: false, priority: null, priority_label: 'none',
+    completed: false, cancelled: false, parked: false, parked_at: null,
+  priority: null, priority_label: 'none',
     percent_complete: null, due: '2026-03-04', due_is_date: true,
     start: null, start_is_date: true, tags: [], parent: null, children: [],
     child_count: 0, completed_child_count: 0, derived_percent: null,

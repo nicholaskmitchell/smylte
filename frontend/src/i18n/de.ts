@@ -1095,4 +1095,24 @@ export const de: Catalogue = {
   'display.gone': 'Diese Anzeige ist nicht mehr verbunden.',
   'display.goneHint': 'Verbinde sie neu unter Einstellungen → Anzeigen.',
   'appear.importedTheme': 'Importiertes Design',
+
+  // ── Zur\u00fcckgestellt: die neutrale vierte Antwort ────────────────────────
+  'tasks.parked': 'Zur\u00fcckgestellt',
+  'tasks.parkedChip': 'zur\u00fcckgestellt',
+  'tasks.parkedCount': {
+    one: '{count} zur\u00fcckgestellt',
+    other: '{count} zur\u00fcckgestellt',
+  },
+  'tasks.noParked': 'Nichts zur\u00fcckgestellt.',
+  'tasks.parkedOn': 'seit {when}',
+  'tasks.park': 'Zur\u00fcckstellen',
+  'tasks.unpark': 'Wieder aufnehmen',
+  // Kein satzinitiales \u201eSie\u201c f\u00fcr die Aufgabe: `i18n.test.ts` pr\u00fcft auf formelle
+  // Anrede und kann das Pronomen nicht vom \u201eSie\u201c unterscheiden \u2014 der Test hat
+  // recht, dass hier keins stehen soll, wenn auch aus dem falschen Grund.
+  'tasks.parkHint': 'Legt sie beiseite, ohne sie abzuschlie\u00dfen. Damit verschwindet sie aus deinen Listen und deinem Tag und kommt zur\u00fcck, wann immer du willst.',
+  'tasks.parkedHint': 'Beiseitegelegt. Beim Wiederaufnehmen steht sie wieder in deinen Listen und in deinem Tag, genau wie zuvor.',
+  'tasks.wontDoAction': 'Wird nichts',
+  'side.viewParked': '\u23f8 Zur\u00fcckgestellte anzeigen',
+  'side.viewParkedShort': 'Zur\u00fcckgestellte anzeigen',
 }
