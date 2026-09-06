@@ -703,7 +703,7 @@ class DashboardModule(BaseModel):
     # out of this file and fails when the two disagree.
     kind: Literal[
         "today", "day_plan", "overdue", "upcoming", "mini_calendar",
-        "completed", "booking_links", "bookings", "quick_add",
+        "completed", "week", "booking_links", "bookings", "quick_add",
     ]
     x: int = Field(ge=0, le=11)
     y: int = Field(ge=0, le=200)
@@ -796,6 +796,20 @@ class SettingsPatch(BaseModel):
     # this app; another client ticking the last child changes nothing here (see
     # `service._close_finished_parents`).
     auto_close_parents: bool | None = None
+    # How many days past its deadline a task has to be before the day stops
+    # offering it as ordinary work and asks for a decision instead. Absent means
+    # 3; 0 turns it off.
+    #
+    # A DEFAULT rather than a "never said", unlike `day_capacity_minutes` above
+    # — so no -1 sentinel, because 0 is not a real threshold here, it is the
+    # off switch. Nothing about this invents anything on the owner's behalf: it
+    # changes which heading a task is offered under, never whether it exists.
+    #
+    # A scalar the owner typed, so an out-of-range value RAISES rather than being
+    # filtered, per this model's split: a map drops the entry it cannot read
+    # because one bad key must not take the theme and the layout down with it,
+    # while a number in a field is a mistake worth reporting.
+    stale_overdue_days: int | None = Field(default=None, ge=0, le=90)
     # 12- or 24-hour clock for every time the app renders. Absent means "12h",
     # which is what the app did before this was settable. Only the app's own
     # displays follow it: the public booking page is rendered for visitors who
@@ -1786,6 +1800,33 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         protects rather than being written out again here."""
         try:
             return await _run(_svc(request).day_range, _check_day(from_), _check_day(to))
+        except ValueError as e:
+            raise HTTPException(422, str(e)) from None
+
+    @api.get("/completed")
+    async def get_completed(
+        request: Request,
+        from_: str = Query(..., alias="from"),
+        to: str = Query(...),
+    ):
+        """How many tasks were finished on each day of [from, to) — `to`
+        EXCLUSIVE, like every other window here — and the total.
+
+        A COUNT rather than the rows, because the callers want the number: the
+        Home module draws it, the Today header states it, and shipping every
+        completed task of a week to say "23" would be the same read the tasks
+        pane already did.
+
+        `from`/`to` rather than a week parameter, so the caller decides what a
+        week is. The SPA has one convention for that (`weekStartOf`, Monday) and
+        the connector has to answer for whatever a person asked about; a week
+        baked in here would be a third opinion about where one begins.
+
+        Same span bound and the same 422 as the day range above, from the
+        service, for the same reason: this walks every task in every list."""
+        try:
+            return await _run(
+                _svc(request).completed_counts, _check_day(from_), _check_day(to))
         except ValueError as e:
             raise HTTPException(422, str(e)) from None
 

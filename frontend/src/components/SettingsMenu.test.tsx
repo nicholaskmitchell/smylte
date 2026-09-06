@@ -46,6 +46,7 @@ function show(over: Partial<Parameters<typeof SettingsMenu>[0]> = {}) {
     archivedCals={[]} onArchivedCalsChange={vi.fn()}
     showCompleted={false} onToggleShowCompleted={vi.fn()}
     autoCloseParents={true} onToggleAutoCloseParents={vi.fn()}
+    staleOverdue={3} onStaleOverdueChange={vi.fn()}
     focus={DEFAULT_FOCUS} onFocusChange={vi.fn()}
     notifyEnabled={false} onNotifyEnabledChange={vi.fn()}
     notifyChatId="" onNotifyChatIdChange={vi.fn()}
@@ -237,5 +238,64 @@ describe('<SettingsMenu> finishing a checklist with its last step', () => {
     const toggle = screen.getByRole('button', { name: 'Finish a checklist with its last step' })
     expect(toggle).toHaveAttribute('aria-pressed', 'false')
     expect(toggle).toHaveTextContent('Off')
+  })
+})
+
+describe('<SettingsMenu> asking about work that has waited', () => {
+  beforeEach(() => stubMatchMedia(false))
+
+  it('commits the threshold on blur, not on every keystroke', async () => {
+    // A PUT per digit would briefly store "1" on the way to "14", and each one
+    // is a settings write that reaches every other tab.
+    const onChange = vi.fn()
+    const user = userEvent.setup()
+    show({ staleOverdue: 3, onStaleOverdueChange: onChange })
+    await user.click(nav('Tasks'))
+
+    const field = screen.getByLabelText('Ask about work this many days late')
+    await user.clear(field)
+    await user.type(field, '14')
+    expect(onChange).not.toHaveBeenCalled()
+    await user.tab()
+    expect(onChange).toHaveBeenCalledWith(14)
+  })
+
+  it('clamps a number out of range rather than refusing it', async () => {
+    // A number field hands back a number or nothing, so "91" is a value out of
+    // range rather than a line this cannot read — and the bounds are the
+    // server's own, so a clamp here is what stops a 422 taking the whole
+    // settings write down with it.
+    const onChange = vi.fn()
+    const user = userEvent.setup()
+    show({ staleOverdue: 3, onStaleOverdueChange: onChange })
+    await user.click(nav('Tasks'))
+
+    const field = screen.getByLabelText('Ask about work this many days late')
+    await user.clear(field)
+    await user.type(field, '900')
+    await user.tab()
+    expect(onChange).toHaveBeenCalledWith(90)
+  })
+
+  it('snaps an emptied field back rather than reading it as off', async () => {
+    // 0 is the OFF switch and must only ever be reached deliberately. An empty
+    // field is somebody mid-edit, not somebody turning the feature off.
+    const onChange = vi.fn()
+    const user = userEvent.setup()
+    show({ staleOverdue: 3, onStaleOverdueChange: onChange })
+    await user.click(nav('Tasks'))
+
+    const field = screen.getByLabelText('Ask about work this many days late')
+    await user.clear(field)
+    await user.tab()
+    expect(onChange).not.toHaveBeenCalled()
+    expect(field).toHaveValue(3)
+  })
+
+  it('says what off means when it is off', async () => {
+    const user = userEvent.setup()
+    show({ staleOverdue: 0 })
+    await user.click(nav('Tasks'))
+    expect(panel()).toHaveTextContent(/Overdue work is offered to your day like anything else/)
   })
 })
