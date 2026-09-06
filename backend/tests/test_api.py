@@ -1041,6 +1041,104 @@ def test_a_sidecar_put_for_an_unknown_task_is_a_404_and_writes_nothing(client):
     assert sidecar_rows() == before
 
 
+def test_parking_a_task_sets_it_aside_without_touching_the_wire(client):
+    """The fourth answer the task list needed, and the two halves of what makes
+    it worth having.
+
+    It has to be REVERSIBLE and it has to leave the wire alone. Cancelling is
+    the only exit RFC 5545 offers and it reads as a verdict, so it never gets
+    used and nothing ever leaves; parking is neutral, which is the whole point.
+    And it is stored app-side, so the STATUS other CalDAV clients read is
+    untouched — a parked task is still NEEDS-ACTION to Tasks.org, which is the
+    stated cost of not inventing a status three clients cannot read."""
+    lid = _list(client)["id"]
+    t = client.post(f"/api/lists/{lid}/tasks", json={"summary": "Learn the harmonica"}).json()
+    assert t["parked"] is False and t["parked_at"] is None
+
+    parked = client.post(f"/api/lists/{lid}/tasks/{t['uid']}/park").json()
+    assert parked["parked"] is True and parked["parked_at"], "parking records WHEN"
+    # Untouched on the wire: not done, not cancelled, still NEEDS-ACTION. This
+    # is the assertion that fails the moment somebody reaches for a STATUS.
+    assert parked["status"] == "NEEDS-ACTION"
+    assert parked["completed"] is False and parked["cancelled"] is False
+
+    # Out of the default view, still there when asked for — the difference
+    # between a parking file and a bin.
+    open_uids = {x["uid"] for x in client.get(
+        f"/api/lists/{lid}/tasks?include_done=false").json()}
+    assert t["uid"] in open_uids, "the SPA fetches everything and filters on screen"
+    assert client.get(f"/api/lists/{lid}/tasks/{t['uid']}").json()["parked"] is True
+
+    back = client.post(f"/api/lists/{lid}/tasks/{t['uid']}/park?parked=false").json()
+    assert back["parked"] is False and back["parked_at"] is None
+
+
+def test_parked_work_leaves_the_open_count(client):
+    """The number the parking file exists to move. A sidebar badge that went on
+    counting work the owner set aside would report a backlog they have already
+    dealt with, which is the whole complaint parking answers.
+
+    `open_count` is computed in SQL over `items`, so this is also the pin on the
+    sidecar join that had to be added to it — the one query on the sidebar's
+    render path."""
+    lid = _list(client)["id"]
+    keep = client.post(f"/api/lists/{lid}/tasks", json={"summary": "Do this"}).json()
+    park = client.post(f"/api/lists/{lid}/tasks", json={"summary": "Not now"}).json()
+
+    def counts() -> dict:
+        return next(l for l in client.get("/api/lists").json() if l["id"] == lid)
+
+    assert counts()["open_count"] == 2
+    client.post(f"/api/lists/{lid}/tasks/{park['uid']}/park")
+    after = counts()
+    assert after["open_count"] == 1
+    # `task_count` is unmoved: the task did not go anywhere, and a list that
+    # under-reported what it holds would be lying about its own contents.
+    assert after["task_count"] == 2
+    # And it comes back, whole, on un-parking — nothing about this is a delete.
+    client.post(f"/api/lists/{lid}/tasks/{park['uid']}/park?parked=false")
+    assert counts()["open_count"] == 2
+    assert keep["uid"] and client.get(f"/api/lists/{lid}/tasks/{park['uid']}").json()["summary"] \
+        == "Not now"
+
+
+def test_parking_an_unknown_task_is_a_404_and_writes_nothing(client):
+    """The guard `put_sidecar` carries, for the reason it carries it: this route
+    writes the sidecar too, and `store.set_sidecar` refuses a uid `items` does
+    not hold by doing NOTHING. Without the check the route would answer 200 with
+    a `null` body where every sibling 404s, and a caller would be told work was
+    parked that never was."""
+    lid = _list(client)["id"]
+    svc = client.app.state.service
+
+    def sidecar_rows() -> int:
+        with svc._lock:
+            return svc._conn.execute("SELECT count(*) FROM sidecar").fetchone()[0]
+
+    before = sidecar_rows()
+    assert client.post(f"/api/lists/{lid}/tasks/no-such-uid/park").status_code == 404
+    assert sidecar_rows() == before
+
+
+def test_completing_a_parked_task_leaves_it_parked(client):
+    """Deliberate, and the reason is the sync path.
+
+    Completion can arrive from Tasks.org or a phone rather than from here, and a
+    flag cleared on Smylte's own write but not on a foreign one would leave two
+    tasks in the same state disagreeing about whether they are parked. So
+    nothing clears it automatically and un-parking is an act, exactly as parking
+    is. The combination reads fine: a parked task that comes back COMPLETED is
+    the honest record that it got done anyway."""
+    lid = _list(client)["id"]
+    t = client.post(f"/api/lists/{lid}/tasks", json={"summary": "Maybe later"}).json()
+    client.post(f"/api/lists/{lid}/tasks/{t['uid']}/park")
+
+    done = client.post(f"/api/lists/{lid}/tasks/{t['uid']}/complete").json()
+    assert done["completed"] is True and done["parked"] is True
+    reopened = client.post(f"/api/lists/{lid}/tasks/{t['uid']}/complete?done=false").json()
+    assert reopened["completed"] is False and reopened["parked"] is True
+
+
 def test_task_manual_reorder(client):
     # Manual order spans lists: the tasks pane is always the merged view, so a
     # position only means something if it is comparable between collections.

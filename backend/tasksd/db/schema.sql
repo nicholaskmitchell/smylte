@@ -149,6 +149,33 @@ CREATE TABLE IF NOT EXISTS sidecar (
     -- delete-and-recreate a foreign client's edit can look like, so a reminder
     -- the owner set does not evaporate because their phone rewrote the resource.
     notify_minutes_before  INTEGER,
+    -- When the owner PARKED this task, or NULL for the overwhelming majority,
+    -- which is what "still live" means. A parked task is set aside rather than
+    -- finished or abandoned: it leaves the default views, the day's derivation
+    -- and the open counts, and it comes back the moment it is un-parked.
+    --
+    -- Here rather than as a STATUS on the wire, and that is forced rather than
+    -- chosen. RFC 5545 gives VTODO four values and none of them is neutral —
+    -- CANCELLED is the only exit the spec offers and it reads as a verdict, so
+    -- it never gets used and nothing ever leaves the list, which is the whole
+    -- reason this column exists. An invented STATUS or an X- property would be
+    -- written verbatim onto collections Tasks.org, jtx Board and Thunderbird
+    -- share (see app.py's `_TASK_STATUS`, which rejects exactly that at the
+    -- edge), and they would each render it as unknown or ignore it — so parked
+    -- work would still look open over there while looking gone over here.
+    --
+    -- Sidecar-class is also the honest classification of what this IS. Parking
+    -- is a statement about which of the OWNER'S views a task appears in, not a
+    -- fact about the task, and `notify_minutes_before` above made the same call
+    -- for the same reason. The cost is stated rather than hidden: a task parked
+    -- in Smylte still sits in the other clients' lists.
+    --
+    -- A TIMESTAMP rather than a flag, matching `orphaned_at` here and
+    -- `done_at` / `dropped_at` / `rolled_to` on day_plan: WHEN something was set
+    -- aside is the question a parking file eventually gets asked, and a boolean
+    -- cannot answer it later. Nothing clears it automatically — see
+    -- service.park_task.
+    parked_at              TEXT,
     orphaned_at            TEXT,             -- set when UID leaves the wire; GC after 7 days
     updated_at             TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     PRIMARY KEY (collection_href, uid)

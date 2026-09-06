@@ -1649,6 +1649,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         href = await _href(request, list_id, component="VTODO")
         return await _run(_svc(request).cancel_task, href, uid)
 
+    @api.post("/lists/{list_id}/tasks/{uid}/park")
+    async def park_task(request: Request, list_id: str, uid: str,
+                        parked: bool = Query(True)):
+        # A verb beside /complete and /cancel rather than a field on the sidecar
+        # PUT, because parking is a lifecycle act and this is where lifecycle
+        # acts live — even though what it writes happens to be a sidecar column
+        # (service.park_task says why it has to be).
+        href = await _href(request, list_id, component="VTODO")
+        # The guard `put_sidecar` carries, for the reason it carries it: this
+        # writes the sidecar, `store.set_sidecar` quietly does nothing for a uid
+        # `items` does not hold, and without this the route would answer 200
+        # with a `null` body where every sibling 404s the same uid.
+        if not await _run(_svc(request).has_task, href, uid):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown task {uid}")
+        return await _run(_svc(request).park_task, href, uid, parked=parked)
+
     @api.delete("/lists/{list_id}/tasks/{uid}", status_code=204)
     async def delete_task(request: Request, list_id: str, uid: str):
         href = await _href(request, list_id, component="VTODO")

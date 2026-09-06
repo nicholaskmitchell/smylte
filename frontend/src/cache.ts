@@ -217,6 +217,11 @@ export function sanitizeTask(v: unknown): Task | null {
     // client's COMPLETED-less task produces, so `sortByCompletion` handles it.
     completed_at: orNull(o.completed_at),
     cancelled: bool(o.cancelled),
+    // Absent from anything this cache wrote before parking existed, which
+    // `bool` renders as false — "still live", the only answer that could be
+    // assumed without setting work aside on the owner's behalf.
+    parked: bool(o.parked),
+    parked_at: orNull(o.parked_at),
     priority: numOrNull(o.priority),
     priority_label: orNull(o.priority_label) ?? 'none',
     percent_complete: numOrNull(o.percent_complete),

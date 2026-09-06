@@ -1703,7 +1703,11 @@ export function TodayView({
     // item is not a separate thing to plan, and admitting subtasks would let
     // one parent task drag twenty rows onto the day (service.py's
     // `_snapshot_for` skips anything with a `related_parent` for that reason).
-    const open = tasks.filter((t) => !t.parent && !t.completed && !t.cancelled)
+    // Parked work is not offered either. The strip exists to hand back what
+    // the day did not take automatically; handing back what the owner
+    // deliberately set aside would make parking a one-day reprieve.
+    const open = tasks.filter(
+      (t) => !t.parent && !t.completed && !t.cancelled && !t.parked)
     const free = open.filter((t) => !onDay.has(taskKey(t)))
     // Measured from the day on screen, not from `new Date()`: after a rollover
     // the horizon has to move with the day, and the two are the same value on

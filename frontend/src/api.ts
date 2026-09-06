@@ -53,6 +53,26 @@ export interface Task {
   // ordering by it needs a fallback.
   completed_at: string | null
   cancelled: boolean
+  /** Set aside without being finished or abandoned — the fourth answer, and the
+   *  only neutral one. NEEDS-ACTION, COMPLETED and CANCELLED were the whole
+   *  vocabulary, and cancelling reads as a verdict, so nothing ever left.
+   *
+   *  ORTHOGONAL TO `status`, unlike `completed` and `cancelled` which are both
+   *  derived from it. A parked task is whatever the wire says it is, so all
+   *  three combinations occur and every one of them means something. Anything
+   *  asking "would I work on this" tests all three; anything asking "is this
+   *  finished" tests only the first two.
+   *
+   *  Sidecar, so Smylte-only, for the reason `notify_minutes_before` below is:
+   *  RFC 5545 has no neutral fourth VTODO status, and an invented one would go
+   *  verbatim onto collections Tasks.org, jtx Board and Thunderbird share and
+   *  read as nothing in all three. The cost is real and stated rather than
+   *  hidden: a task parked here still sits in their lists. */
+  parked: boolean
+  /** When it was parked, or null. Two fields for the reason `completed` and
+   *  `completed_at` are two: the flag is what filters test, the instant is a
+   *  fact the flag cannot carry. */
+  parked_at: string | null
   priority: number | null
   priority_label: string
   percent_complete: number | null
@@ -1053,6 +1073,12 @@ export const api = {
     j<Task>('POST', `/api/lists/${listId}/tasks/${encodeURIComponent(uid)}/complete?done=${done}`),
   cancel: (listId: string, uid: string) =>
     j<Task>('POST', `/api/lists/${listId}/tasks/${encodeURIComponent(uid)}/cancel`),
+  // Beside `complete` and `cancel` because parking is the third lifecycle
+  // answer, even though what it writes is a sidecar column rather than a STATUS
+  // (see `Task.parked`). Nothing about it reaches the calendar server.
+  park: (listId: string, uid: string, parked = true) =>
+    j<Task>('POST',
+      `/api/lists/${listId}/tasks/${encodeURIComponent(uid)}/park?parked=${parked}`),
   deleteTask: (listId: string, uid: string) =>
     j<null>('DELETE', `/api/lists/${listId}/tasks/${encodeURIComponent(uid)}`),
 

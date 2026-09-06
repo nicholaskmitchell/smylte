@@ -262,12 +262,19 @@ def build_tools(api) -> dict[str, Tool]:
         "smylte_list_tasks", "List tasks",
         "Tasks in one list, or across every list when list_id is omitted. "
         "Ordered the way the app shows them: manual position first, then due "
-        "date (undated last), then priority, then title.",
+        "date (undated last), then priority, then title.\n\n"
+        "PARKED tasks are left out unless asked for. Parked means the owner set "
+        "it aside — not finished, not abandoned, just not now — so it is not on "
+        "their plate and must not be reported as though it were. It is also not "
+        "done: never describe a parked task as completed.",
         _obj({
             "list_id": {**_LIST_ID,
                         "description": _LIST_ID["description"] + " Omit to span every list."},
             "include_done": {"type": "boolean", "default": False,
                              "description": "Include completed and cancelled tasks."},
+            "include_parked": {"type": "boolean", "default": False,
+                               "description": "Include tasks the owner has parked "
+                                              "(set aside without finishing)."},
             "due_before": {"type": "string",
                            "description": "Only tasks due strictly before this date "
                                           "('YYYY-MM-DD' or an ISO datetime)."},
@@ -279,9 +286,11 @@ def build_tools(api) -> dict[str, Tool]:
             "limit": _LIMIT, "offset": _OFFSET,
         }),
     )
-    def _list_tasks(list_id=None, include_done=False, due_before=None, due_after=None,
+    def _list_tasks(list_id=None, include_done=False, include_parked=False,
+                    due_before=None, due_after=None,
                     overdue_only=False, tag=None, limit=None, offset=None):
-        rows = api.list_tasks(list_id, include_done=include_done, due_before=due_before,
+        rows = api.list_tasks(list_id, include_done=include_done,
+                              include_parked=include_parked, due_before=due_before,
                               due_after=due_after, overdue_only=overdue_only, tag=tag)
         return page(rows, limit, offset, key="tasks")
 
@@ -377,6 +386,27 @@ def build_tools(api) -> dict[str, Tool]:
     )
     def _cancel_task(list_id, uid):
         return api.cancel_task(list_id, uid)
+
+    @tool(
+        "smylte_park_task", "Park a task, or bring it back",
+        "Set a task aside without finishing or abandoning it, or un-park one "
+        "with parked=false. A parked task leaves the owner's default views, "
+        "their day's automatic rows and their open counts, and comes back "
+        "unchanged the moment it is un-parked.\n\n"
+        "This is the RIGHT answer for \"not now\" and the wrong one for \"never\" "
+        "— smylte_cancel_task is won't-do, and it reads as a verdict, which is "
+        "why the owner needed a neutral option. Parking is NOT completing: never "
+        "report a parked task as done.\n\n"
+        "Smylte-only. Unlike completing or cancelling, this writes nothing to "
+        "the calendar server, so the owner's other apps — Tasks.org, "
+        "Thunderbird, their phone — will still show a parked task as open. Say "
+        "so if it matters to what they asked.",
+        _obj({"list_id": _LIST_ID, "uid": {"type": "string"},
+              "parked": {"type": "boolean", "default": True}}, ["list_id", "uid"]),
+        scope=SCOPE_WRITE, read_only=False, idempotent=True,
+    )
+    def _park_task(list_id, uid, parked=True):
+        return api.park_task(list_id, uid, parked=parked)
 
     @tool(
         "smylte_delete_task", "Delete a task",

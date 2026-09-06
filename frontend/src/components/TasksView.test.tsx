@@ -19,7 +19,8 @@ const m = vi.mocked(api)
 
 const task = (o: Partial<Task> = {}): Task => ({
   uid: 'u1', list: 'l1', summary: 'Ship it', notes: null, status: 'NEEDS-ACTION',
-  completed: false, cancelled: false, priority: null, priority_label: 'none',
+  completed: false, cancelled: false, parked: false, parked_at: null,
+  priority: null, priority_label: 'none',
   percent_complete: null, due: null, due_is_date: true, start: null, start_is_date: true,
   tags: [],
   parent: null, children: [], child_count: 0, completed_child_count: 0,
@@ -1808,5 +1809,70 @@ describe('<TasksView> completed pane', () => {
     await user.click(screen.getByRole('button', { name: 'Hide subtasks of Trip' }))
     expect(screen.queryByText('Book flight')).not.toBeInTheDocument()
     expect(screen.getByText('Trip')).toBeInTheDocument()
+  })
+})
+
+describe('<TasksView> parked work', () => {
+  beforeEach(() => {
+    m.lists.mockResolvedValue([list])
+    m.park.mockImplementation(async (_l, _u, parked) =>
+      task({ uid: 'harmonica', summary: 'Learn the harmonica',
+             parked, parked_at: parked ? '2026-09-01T09:00:00Z' : null }))
+  })
+
+  it('keeps parked work out of the active list without calling it done', async () => {
+    // THE WHOLE POINT OF THE STATE. Cancelling is the only exit RFC 5545 offers
+    // and it reads as a verdict, so nothing ever left the list. Parked has to
+    // clear the list the way done does WITHOUT being filed as done anywhere —
+    // it is not in the completed pane, and it does not wear the done styling.
+    m.tasks.mockResolvedValue([
+      task({ uid: 'live', summary: 'Ship it' }),
+      task({ uid: 'harmonica', summary: 'Learn the harmonica',
+             parked: true, parked_at: '2026-09-01T09:00:00Z' }),
+    ])
+    const { user } = setup()
+    await screen.findByText('Ship it')
+    expect(screen.queryByText('Learn the harmonica')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /view completed/i }))
+    expect(screen.queryByText('Learn the harmonica')).not.toBeInTheDocument()
+    expect(screen.getByText('No completed tasks.')).toBeInTheDocument()
+
+    // Its own pane, and a way back out of it in one press.
+    await user.click(screen.getByRole('button', { name: /view parked/i }))
+    expect(await screen.findByText('Learn the harmonica')).toBeInTheDocument()
+    expect(screen.getByText('1 parked')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Bring it back' }))
+    expect(m.park).toHaveBeenCalledWith('l1', 'harmonica', false)
+  })
+
+  it('parks from the editor and says what that means', async () => {
+    // The first status-shaped control the editor has ever had, so the wording
+    // is doing real work: the owner has to be able to tell it from Delete and
+    // from won't-do without trying it.
+    m.tasks.mockResolvedValue([task({ uid: 'harmonica', summary: 'Learn the harmonica' })])
+    const { user } = setup()
+    await user.click(await screen.findByText('Learn the harmonica'))
+
+    expect(screen.getByText(/Sets it aside without finishing it/)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Park it' }))
+    expect(m.park).toHaveBeenCalledWith('l1', 'harmonica', true)
+  })
+
+  it('leaves a parked step out of both halves of its parent progress', async () => {
+    // A parked child is not done, so it cannot count in the numerator; and it
+    // is not a step of this job right now, so counting it in the denominator
+    // would leave the parent reading as permanently unfinished for work nobody
+    // intends to do. One of three, one done, one parked, reads 1/2.
+    m.tasks.mockResolvedValue([
+      task({ uid: 'trip', summary: 'Trip' }),
+      task({ uid: 'a', summary: 'Book flight', parent: 'trip',
+             completed: true, status: 'COMPLETED' }),
+      task({ uid: 'b', summary: 'Pack', parent: 'trip' }),
+      task({ uid: 'c', summary: 'Learn Italian', parent: 'trip', parked: true }),
+    ])
+    setup()
+    expect(await screen.findByText('1/2')).toBeInTheDocument()
   })
 })

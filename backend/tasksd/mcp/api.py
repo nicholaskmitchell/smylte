@@ -500,8 +500,8 @@ class McpApi:
             return [self._href(list_id)]
         return [l["href"] for l in self._svc.list_lists()]
 
-    def list_tasks(self, list_id=None, *, include_done=False, due_before=None,
-                   due_after=None, overdue_only=False, tag=None):
+    def list_tasks(self, list_id=None, *, include_done=False, include_parked=False,
+                   due_before=None, due_after=None, overdue_only=False, tag=None):
         # The OWNER's zone, the same one `_in_display_order` sorts by at the foot
         # of this method. These two used to go through `_as_dt` — the server's
         # wall clock — so the same call sorted a task by one zone and filtered it
@@ -518,6 +518,12 @@ class McpApi:
         out = []
         for t in rows:
             if not include_done and (t["completed"] or t["cancelled"]):
+                continue
+            # Its own flag rather than a third clause on `include_done`: parked
+            # work is not finished, and a model told it was would report it to
+            # the owner as done. Hidden by default for the same reason done work
+            # is — "what is on my plate" must not include what was set aside.
+            if not include_parked and t["parked"]:
                 continue
             if tag and tag not in (t.get("tags") or []):
                 continue
@@ -668,6 +674,22 @@ class McpApi:
     def cancel_task(self, list_id, uid):
         with _not_found(f"No task {uid!r} in list {list_id!r}."):
             task = self._svc.cancel_task(self._href(list_id), uid)
+        if task is None:
+            raise ToolError(f"No task {uid!r} in list {list_id!r}.")
+        return task
+
+    def park_task(self, list_id, uid, *, parked=True):
+        href = self._href(list_id)
+        # `has_task` before the write, exactly as the HTTP route does and for the
+        # same reason: `store.set_sidecar` refuses a uid `items` does not hold by
+        # doing nothing, so without this a wrong uid would answer with a task
+        # rather than a not-found — and a model would report work parked that
+        # never was.
+        with _not_found(f"No task {uid!r} in list {list_id!r}."):
+            known = self._svc.has_task(href, uid)
+        if not known:
+            raise ToolError(f"No task {uid!r} in list {list_id!r}.")
+        task = self._svc.park_task(href, uid, parked=parked)
         if task is None:
             raise ToolError(f"No task {uid!r} in list {list_id!r}.")
         return task

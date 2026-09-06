@@ -229,6 +229,49 @@ def test_what_is_already_late_is_not_snapshotted_onto_the_day(svc):
     assert "late" not in _uids(svc.open_day(DAY, create=True))
 
 
+def test_parked_work_is_not_derived_onto_a_day(svc):
+    """Parking is an explicit act, and a day that derived the work anyway would
+    be putting back exactly what the owner took out — the morning after they
+    took it out, every morning.
+
+    Worse than the overdue case it sits beside, in fact: a deadline slipping is
+    something that happened TO them, and this is something they did."""
+    svc.park_task(LIST_A, "due-today", parked=True)
+    assert _uids(svc.open_day(DAY, create=True)) == []
+    # The preview says the same thing, since both run `_snapshot_for`: a
+    # connector must not describe a day differently from the app.
+    assert svc.preview_day(NEXT) == []
+
+    # And un-parking brings it back to the derivation — on a day that has not
+    # been snapshotted yet, since the marker is what makes an open happen once.
+    svc.park_task(LIST_A, "due-today", parked=False)
+    _seed_task(svc._conn, LIST_A, "due-next", "Ship the other thing", due=NEXT)
+    assert "due-next" in _uids(svc.open_day(NEXT, create=True))
+
+
+def test_parked_work_does_not_carry_into_the_next_day(svc):
+    """The other half, and the one the snapshot rule cannot cover.
+
+    A task the owner CHOSE on Monday carries into Tuesday by design — that is
+    the safety net for a decision they made and did not finish. Parking it on
+    Monday evening is them withdrawing that decision, so the net has to let go;
+    otherwise setting something aside would be undone a day after they did it,
+    which is the one thing parking has to be proof against.
+
+    Reversible, unlike done and dropped: un-park it and the ordinary rules
+    apply again."""
+    picked = svc.add_day_entry(PREV, entry_id=uuid.uuid4().hex, kind="task",
+                               list_id="work", uid="later")
+    assert picked["source"] == "user"
+    svc.park_task(LIST_A, "later", parked=True)
+
+    plan = svc.open_day(DAY, create=True)
+    assert "later" not in _uids(plan)
+    # The row on PREV is untouched — that day still records what was planned on
+    # it, exactly as it does for a task completed or deleted afterwards.
+    assert "later" in _uids(svc.open_day(PREV, create=False))
+
+
 def test_a_preview_of_a_day_leaves_out_what_is_late_too(svc):
     """The preview stands in for a FIRST OPEN, so it has to derive what that open
     would derive and nothing else.
