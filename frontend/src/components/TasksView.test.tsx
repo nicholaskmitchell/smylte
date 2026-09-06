@@ -19,7 +19,8 @@ const m = vi.mocked(api)
 
 const task = (o: Partial<Task> = {}): Task => ({
   uid: 'u1', list: 'l1', summary: 'Ship it', notes: null, status: 'NEEDS-ACTION',
-  completed: false, cancelled: false, priority: null, priority_label: 'none',
+  completed: false, cancelled: false, parked: false, parked_at: null,
+  priority: null, priority_label: 'none',
   percent_complete: null, due: null, due_is_date: true, start: null, start_is_date: true,
   tags: [],
   parent: null, children: [], child_count: 0, completed_child_count: 0,
@@ -1808,5 +1809,138 @@ describe('<TasksView> completed pane', () => {
     await user.click(screen.getByRole('button', { name: 'Hide subtasks of Trip' }))
     expect(screen.queryByText('Book flight')).not.toBeInTheDocument()
     expect(screen.getByText('Trip')).toBeInTheDocument()
+  })
+})
+
+describe('<TasksView> parked work', () => {
+  beforeEach(() => {
+    m.lists.mockResolvedValue([list])
+    m.park.mockImplementation(async (_l, _u, parked) =>
+      task({ uid: 'harmonica', summary: 'Learn the harmonica',
+             parked, parked_at: parked ? '2026-09-01T09:00:00Z' : null }))
+  })
+
+  it('keeps parked work out of the active list without calling it done', async () => {
+    // THE WHOLE POINT OF THE STATE. Cancelling is the only exit RFC 5545 offers
+    // and it reads as a verdict, so nothing ever left the list. Parked has to
+    // clear the list the way done does WITHOUT being filed as done anywhere —
+    // it is not in the completed pane, and it does not wear the done styling.
+    m.tasks.mockResolvedValue([
+      task({ uid: 'live', summary: 'Ship it' }),
+      task({ uid: 'harmonica', summary: 'Learn the harmonica',
+             parked: true, parked_at: '2026-09-01T09:00:00Z' }),
+    ])
+    const { user } = setup()
+    await screen.findByText('Ship it')
+    expect(screen.queryByText('Learn the harmonica')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /view completed/i }))
+    expect(screen.queryByText('Learn the harmonica')).not.toBeInTheDocument()
+    expect(screen.getByText('No completed tasks.')).toBeInTheDocument()
+
+    // Its own pane, and a way back out of it in one press.
+    await user.click(screen.getByRole('button', { name: /view parked/i }))
+    expect(await screen.findByText('Learn the harmonica')).toBeInTheDocument()
+    expect(screen.getByText('1 parked')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Bring it back' }))
+    expect(m.park).toHaveBeenCalledWith('l1', 'harmonica', false)
+  })
+
+  it('parks from the editor and says what that means', async () => {
+    // The first status-shaped control the editor has ever had, so the wording
+    // is doing real work: the owner has to be able to tell it from Delete and
+    // from won't-do without trying it.
+    m.tasks.mockResolvedValue([task({ uid: 'harmonica', summary: 'Learn the harmonica' })])
+    const { user } = setup()
+    await user.click(await screen.findByText('Learn the harmonica'))
+
+    expect(screen.getByText(/Sets it aside without finishing it/)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Park it' }))
+    expect(m.park).toHaveBeenCalledWith('l1', 'harmonica', true)
+  })
+
+  it('counts a parked step in the total, and never as done', async () => {
+    // The fraction has to agree with the rule the SERVER applies to the same
+    // three rows. `_nothing_left_in` counts a parked child as open and refuses
+    // to close the parent over it, because parked work is still coming back —
+    // so dropping it from the total here rendered "1/2" on a parent the backend
+    // was deliberately keeping open, and at "2/2" it would have read as
+    // finished under a rule that refuses to finish it.
+    //
+    // Three steps, one done, one open, one parked: 1/3.
+    m.tasks.mockResolvedValue([
+      task({ uid: 'trip', summary: 'Trip' }),
+      task({ uid: 'a', summary: 'Book flight', parent: 'trip',
+             completed: true, status: 'COMPLETED' }),
+      task({ uid: 'b', summary: 'Pack', parent: 'trip' }),
+      task({ uid: 'c', summary: 'Learn Italian', parent: 'trip', parked: true }),
+    ])
+    setup()
+    expect(await screen.findByText('1/3')).toBeInTheDocument()
+  })
+})
+
+describe('<TasksView> parked work, and what must not vanish with it', () => {
+  beforeEach(() => {
+    m.lists.mockResolvedValue([list])
+    m.park.mockImplementation(async (_l, uid, parked) => task({ uid, parked }))
+  })
+
+  it('promotes an open subtask when its parent is parked', async () => {
+    // THE HOLE `rendersUnder` LEFT. A subtask reaches the DOM only underneath
+    // its parent's row, so one whose parent is not rendered has to stand on its
+    // own — and a parked parent is not rendered, whatever `showCompleted` says.
+    // Asking only `isDone` left the child claiming a parent that was not on the
+    // screen, so it rendered nowhere: uncompletable, uneditable, undeletable,
+    // while the sidebar badge went on counting it.
+    //
+    // It is not in the Parked pane either — the child is not parked, only the
+    // parent is — which is what makes this a disappearance rather than a move.
+    m.tasks.mockResolvedValue([
+      task({ uid: 'trip', summary: 'Trip', parked: true, parked_at: '2026-09-01T09:00:00Z' }),
+      task({ uid: 'pack', summary: 'Pack', parent: 'trip' }),
+    ])
+    setup()
+    expect(await screen.findByText('Pack')).toBeInTheDocument()
+    // The parent is gone from the active list, which is the point of parking.
+    expect(screen.queryByText('Trip')).not.toBeInTheDocument()
+  })
+
+  it('keeps a parked step visible inside the checklist it belongs to', async () => {
+    // Under an OPEN parent a parked step still renders, with its chip. That is
+    // the same rule a completed step already follows — a checklist shows its
+    // steps and what state each is in — and it is what lets the step be
+    // un-parked from where it lives rather than from a separate pane.
+    m.tasks.mockResolvedValue([
+      task({ uid: 'trip', summary: 'Trip' }),
+      task({ uid: 'italian', summary: 'Learn Italian', parent: 'trip',
+             parked: true, parked_at: '2026-09-01T09:00:00Z' }),
+    ])
+    setup()
+    expect(await screen.findByText('Learn Italian')).toBeInTheDocument()
+    expect(screen.getByText('parked')).toBeInTheDocument()
+  })
+
+  it('keeps a parked subtask reachable when nothing renders its parent', async () => {
+    // The other half of the same hole, and the one that was real. With the
+    // parent completed and "show completed" off, nothing draws the parent — so
+    // the subtask is promoted to top level, where `isHidden` drops it from the
+    // active list. It is not done, so the completed pane will not have it
+    // either. Filtering the parked pane to top-level rows dropped exactly this
+    // case, and there was then nowhere at all to bring it back from.
+    m.tasks.mockResolvedValue([
+      task({ uid: 'trip', summary: 'Trip', completed: true, status: 'COMPLETED' }),
+      task({ uid: 'italian', summary: 'Learn Italian', parent: 'trip',
+             parked: true, parked_at: '2026-09-01T09:00:00Z' }),
+    ])
+    const { user } = setup()
+    await screen.findByRole('button', { name: /view parked/i })
+    expect(screen.queryByText('Learn Italian')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /view parked/i }))
+    expect(await screen.findByText('Learn Italian')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Bring it back' }))
+    expect(m.park).toHaveBeenCalledWith('l1', 'italian', false)
   })
 })

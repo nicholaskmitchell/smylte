@@ -1041,6 +1041,104 @@ def test_a_sidecar_put_for_an_unknown_task_is_a_404_and_writes_nothing(client):
     assert sidecar_rows() == before
 
 
+def test_parking_a_task_sets_it_aside_without_touching_the_wire(client):
+    """The fourth answer the task list needed, and the two halves of what makes
+    it worth having.
+
+    It has to be REVERSIBLE and it has to leave the wire alone. Cancelling is
+    the only exit RFC 5545 offers and it reads as a verdict, so it never gets
+    used and nothing ever leaves; parking is neutral, which is the whole point.
+    And it is stored app-side, so the STATUS other CalDAV clients read is
+    untouched — a parked task is still NEEDS-ACTION to Tasks.org, which is the
+    stated cost of not inventing a status three clients cannot read."""
+    lid = _list(client)["id"]
+    t = client.post(f"/api/lists/{lid}/tasks", json={"summary": "Learn the harmonica"}).json()
+    assert t["parked"] is False and t["parked_at"] is None
+
+    parked = client.post(f"/api/lists/{lid}/tasks/{t['uid']}/park").json()
+    assert parked["parked"] is True and parked["parked_at"], "parking records WHEN"
+    # Untouched on the wire: not done, not cancelled, still NEEDS-ACTION. This
+    # is the assertion that fails the moment somebody reaches for a STATUS.
+    assert parked["status"] == "NEEDS-ACTION"
+    assert parked["completed"] is False and parked["cancelled"] is False
+
+    # Out of the default view, still there when asked for — the difference
+    # between a parking file and a bin.
+    open_uids = {x["uid"] for x in client.get(
+        f"/api/lists/{lid}/tasks?include_done=false").json()}
+    assert t["uid"] in open_uids, "the SPA fetches everything and filters on screen"
+    assert client.get(f"/api/lists/{lid}/tasks/{t['uid']}").json()["parked"] is True
+
+    back = client.post(f"/api/lists/{lid}/tasks/{t['uid']}/park?parked=false").json()
+    assert back["parked"] is False and back["parked_at"] is None
+
+
+def test_parked_work_leaves_the_open_count(client):
+    """The number the parking file exists to move. A sidebar badge that went on
+    counting work the owner set aside would report a backlog they have already
+    dealt with, which is the whole complaint parking answers.
+
+    `open_count` is computed in SQL over `items`, so this is also the pin on the
+    sidecar join that had to be added to it — the one query on the sidebar's
+    render path."""
+    lid = _list(client)["id"]
+    keep = client.post(f"/api/lists/{lid}/tasks", json={"summary": "Do this"}).json()
+    park = client.post(f"/api/lists/{lid}/tasks", json={"summary": "Not now"}).json()
+
+    def counts() -> dict:
+        return next(l for l in client.get("/api/lists").json() if l["id"] == lid)
+
+    assert counts()["open_count"] == 2
+    client.post(f"/api/lists/{lid}/tasks/{park['uid']}/park")
+    after = counts()
+    assert after["open_count"] == 1
+    # `task_count` is unmoved: the task did not go anywhere, and a list that
+    # under-reported what it holds would be lying about its own contents.
+    assert after["task_count"] == 2
+    # And it comes back, whole, on un-parking — nothing about this is a delete.
+    client.post(f"/api/lists/{lid}/tasks/{park['uid']}/park?parked=false")
+    assert counts()["open_count"] == 2
+    assert keep["uid"] and client.get(f"/api/lists/{lid}/tasks/{park['uid']}").json()["summary"] \
+        == "Not now"
+
+
+def test_parking_an_unknown_task_is_a_404_and_writes_nothing(client):
+    """The guard `put_sidecar` carries, for the reason it carries it: this route
+    writes the sidecar too, and `store.set_sidecar` refuses a uid `items` does
+    not hold by doing NOTHING. Without the check the route would answer 200 with
+    a `null` body where every sibling 404s, and a caller would be told work was
+    parked that never was."""
+    lid = _list(client)["id"]
+    svc = client.app.state.service
+
+    def sidecar_rows() -> int:
+        with svc._lock:
+            return svc._conn.execute("SELECT count(*) FROM sidecar").fetchone()[0]
+
+    before = sidecar_rows()
+    assert client.post(f"/api/lists/{lid}/tasks/no-such-uid/park").status_code == 404
+    assert sidecar_rows() == before
+
+
+def test_completing_a_parked_task_leaves_it_parked(client):
+    """Deliberate, and the reason is the sync path.
+
+    Completion can arrive from Tasks.org or a phone rather than from here, and a
+    flag cleared on Smylte's own write but not on a foreign one would leave two
+    tasks in the same state disagreeing about whether they are parked. So
+    nothing clears it automatically and un-parking is an act, exactly as parking
+    is. The combination reads fine: a parked task that comes back COMPLETED is
+    the honest record that it got done anyway."""
+    lid = _list(client)["id"]
+    t = client.post(f"/api/lists/{lid}/tasks", json={"summary": "Maybe later"}).json()
+    client.post(f"/api/lists/{lid}/tasks/{t['uid']}/park")
+
+    done = client.post(f"/api/lists/{lid}/tasks/{t['uid']}/complete").json()
+    assert done["completed"] is True and done["parked"] is True
+    reopened = client.post(f"/api/lists/{lid}/tasks/{t['uid']}/complete?done=false").json()
+    assert reopened["completed"] is False and reopened["parked"] is True
+
+
 def test_task_manual_reorder(client):
     # Manual order spans lists: the tasks pane is always the merged view, so a
     # position only means something if it is comparable between collections.
@@ -1095,3 +1193,202 @@ def test_task_reorder_rejects_a_bad_body(client):
     # An empty order is a no-op, not an error: it is what an account with no
     # tasks at all would send.
     assert client.post("/api/tasks/reorder", json={"items": []}).status_code == 200
+
+
+def test_a_parent_closes_when_its_last_step_is_ticked(client):
+    """A parent with every step done is finished, and leaving it open is how a
+    list accumulates rows nobody can act on: no work in them, just something to
+    read and skip.
+
+    It closes properly rather than cosmetically — STATUS, the COMPLETED stamp
+    and 100% together, which is what `ical/edit.py` couples — so the other
+    CalDAV clients on these collections see a finished task rather than an
+    open one at 100%."""
+    lid = _list(client)["id"]
+    mk = lambda s, **kw: client.post(  # noqa: E731
+        f"/api/lists/{lid}/tasks", json={"summary": s, **kw}).json()
+    trip = mk("Trip")
+    flight = mk("Book flight", parent=trip["uid"])
+    pack = mk("Pack", parent=trip["uid"])
+
+    client.post(f"/api/lists/{lid}/tasks/{flight['uid']}/complete")
+    assert client.get(f"/api/lists/{lid}/tasks/{trip['uid']}").json()["completed"] is False
+
+    client.post(f"/api/lists/{lid}/tasks/{pack['uid']}/complete")
+    closed = client.get(f"/api/lists/{lid}/tasks/{trip['uid']}").json()
+    assert closed["completed"] is True
+    assert closed["completed_at"], "a close is a real completion, stamp and all"
+    assert closed["percent_complete"] == 100
+
+
+def test_a_declined_step_leaves_nothing_to_do_but_a_parked_one_does_not(client):
+    """The predicate is "nothing left", not "everything done".
+
+    A CANCELLED step is not happening, so it leaves nothing to do and the parent
+    can close. A PARKED one is still intended — just not now — so it does not,
+    and the parent stays open. That difference is the whole reason the parked
+    state was worth adding: it is the answer that does NOT mean the work is
+    settled, and a rule that closed over it would file "later" as "done"."""
+    lid = _list(client)["id"]
+    mk = lambda s, **kw: client.post(  # noqa: E731
+        f"/api/lists/{lid}/tasks", json={"summary": s, **kw}).json()
+    trip = mk("Trip")
+    flight = mk("Book flight", parent=trip["uid"])
+    italian = mk("Learn Italian", parent=trip["uid"])
+
+    client.post(f"/api/lists/{lid}/tasks/{italian['uid']}/park")
+    client.post(f"/api/lists/{lid}/tasks/{flight['uid']}/complete")
+    assert client.get(f"/api/lists/{lid}/tasks/{trip['uid']}").json()["completed"] is False
+
+    # Un-park it and decline it instead, and the same last tick now closes.
+    client.post(f"/api/lists/{lid}/tasks/{italian['uid']}/park?parked=false")
+    client.post(f"/api/lists/{lid}/tasks/{italian['uid']}/cancel")
+    assert client.get(f"/api/lists/{lid}/tasks/{trip['uid']}").json()["completed"] is True
+
+
+def test_closing_a_parent_closes_its_own_parent(client):
+    """The walk goes up, because closing a parent can finish the thing IT is a
+    step of. Stopping at one level would leave the grandparent as the row this
+    change exists to remove."""
+    lid = _list(client)["id"]
+    mk = lambda s, **kw: client.post(  # noqa: E731
+        f"/api/lists/{lid}/tasks", json={"summary": s, **kw}).json()
+    move = mk("Move house")
+    packing = mk("Packing", parent=move["uid"])
+    boxes = mk("Buy boxes", parent=packing["uid"])
+
+    client.post(f"/api/lists/{lid}/tasks/{boxes['uid']}/complete")
+    assert client.get(f"/api/lists/{lid}/tasks/{packing['uid']}").json()["completed"] is True
+    assert client.get(f"/api/lists/{lid}/tasks/{move['uid']}").json()["completed"] is True
+
+
+def test_a_task_with_no_steps_is_never_closed_by_this(client):
+    """`len(kids) == 0` is not "all done". Without the at-least-one test every
+    ordinary task would close the moment anything edited it."""
+    lid = _list(client)["id"]
+    alone = client.post(f"/api/lists/{lid}/tasks", json={"summary": "Alone"}).json()
+    client.patch(f"/api/lists/{lid}/tasks/{alone['uid']}", json={"summary": "Still alone"})
+    assert client.get(f"/api/lists/{lid}/tasks/{alone['uid']}").json()["completed"] is False
+
+
+def test_the_owner_can_refuse_to_have_parents_closed_for_them(client):
+    """The one preference in this app that writes to the CALENDAR SERVER on the
+    owner's behalf — the close is a real completion, visible in Tasks.org and
+    Thunderbird — so it has to be refusable. Default on, because a parent with
+    nothing left in it is finished."""
+    lid = _list(client)["id"]
+    mk = lambda s, **kw: client.post(  # noqa: E731
+        f"/api/lists/{lid}/tasks", json={"summary": s, **kw}).json()
+    try:
+        assert client.put("/api/settings", json={"auto_close_parents": False}).status_code == 200
+        trip = mk("Trip")
+        only = mk("The one step", parent=trip["uid"])
+        client.post(f"/api/lists/{lid}/tasks/{only['uid']}/complete")
+        assert client.get(f"/api/lists/{lid}/tasks/{trip['uid']}").json()["completed"] is False
+    finally:
+        # The `client` fixture is session-scoped and the settings blob outlives
+        # this test, so a stored False would silently disable the behaviour for
+        # every test that runs after it.
+        client.put("/api/settings", json={"auto_close_parents": True})
+
+
+def test_only_settling_a_step_closes_its_parent(client):
+    """The feature is "ticking the last step finishes the thing it is a step
+    of". It was "ANY edit to any child does", which is a different and much
+    worse thing.
+
+    Two ways in, both ordinary. The last box was ticked in Tasks.org, or with
+    the setting off, so the parent legitimately stands open — and renaming a
+    completed step here silently completed it on the calendar server. Or the
+    owner re-opened a parent that closed too eagerly, and the next text edit to
+    any child snapped it shut again, with no way to keep it open but turning
+    the setting off entirely.
+
+    An edit that does not settle the child is not the write the setting was
+    described as guarding, and the README says so in as many words."""
+    lid = _list(client)["id"]
+    mk = lambda s, **kw: client.post(  # noqa: E731
+        f"/api/lists/{lid}/tasks", json={"summary": s, **kw}).json()
+    trip = mk("Trip")
+    step = mk("Book flight", parent=trip["uid"])
+
+    # Settled by another route, so the parent is legitimately open with nothing
+    # left in it — exactly the state a foreign client's tick leaves behind.
+    client.post(f"/api/lists/{lid}/tasks/{step['uid']}/complete")
+    client.post(f"/api/lists/{lid}/tasks/{trip['uid']}/complete?done=false")
+    assert client.get(f"/api/lists/{lid}/tasks/{trip['uid']}").json()["completed"] is False
+
+    for patch in ({"summary": "Book the flight"}, {"notes": "BA 117"},
+                  {"priority": "high"}, {"due": "2026-12-01"}):
+        assert client.patch(
+            f"/api/lists/{lid}/tasks/{step['uid']}", json=patch).status_code == 200
+        assert client.get(f"/api/lists/{lid}/tasks/{trip['uid']}").json()["completed"] is False, (
+            f"editing {list(patch)[0]} on a settled step closed its parent"
+        )
+
+    # And the real trigger still works: re-settling the step closes it.
+    client.post(f"/api/lists/{lid}/tasks/{step['uid']}/complete?done=false")
+    client.post(f"/api/lists/{lid}/tasks/{step['uid']}/complete")
+    assert client.get(f"/api/lists/{lid}/tasks/{trip['uid']}").json()["completed"] is True
+
+
+def test_a_failed_close_does_not_fail_the_tick_it_rides_on(client):
+    """Closing a parent is a convenience; it is not allowed to take a real
+    completion down with it.
+
+    The parent's PUT used to propagate out of `edit_task` AFTER the child's own
+    write had landed, so a 412 or a timeout answered 500 with no
+    `task_updated` — and the SPA's `settle(undefined)` put the pre-tick row
+    back. The owner saw an error and an un-ticked box for a task that was
+    completed on the server, and no event was coming to correct it."""
+    lid = _list(client)["id"]
+    mk = lambda s, **kw: client.post(  # noqa: E731
+        f"/api/lists/{lid}/tasks", json={"summary": s, **kw}).json()
+    trip = mk("Trip")
+    step = mk("The one step", parent=trip["uid"])
+
+    svc = client.app.state.service
+    real = svc._engine.edit_task
+
+    def fail_for_the_parent(href, uid, edit):
+        if uid == trip["uid"]:
+            raise RuntimeError("Radicale said no")
+        return real(href, uid, edit)
+
+    with mock.patch.object(svc._engine, "edit_task", side_effect=fail_for_the_parent):
+        r = client.post(f"/api/lists/{lid}/tasks/{step['uid']}/complete")
+
+    assert r.status_code == 200, "the child's own write must still succeed"
+    assert r.json()["completed"] is True
+    # The parent simply did not close. The next tick will find the same
+    # siblings settled and try again.
+    assert client.get(f"/api/lists/{lid}/tasks/{trip['uid']}").json()["completed"] is False
+
+
+def test_a_related_to_ring_terminates_instead_of_looping(client):
+    """`RELATED-TO` is free text with no existence check on either side of the
+    wire, so a ring is something another client can write — and this walk runs
+    on the write path, under the global service lock. It has to terminate on one
+    rather than climb forever.
+
+    Two tasks pointing at each other is the smallest ring, and it is reachable
+    through this app's own API: nothing refuses a parent that is already a
+    descendant.
+
+    TERMINATION IS THE PROPERTY, not a particular outcome. What happens here is
+    that A closes — its only child is B, and B is done, so "nothing left in it"
+    is satisfied and the rule applies as written — and then the climb stops
+    because A's own parent is the task the walk started from. That is a
+    defensible answer for an indefensible structure, and it is reached in two
+    steps rather than in a loop under the lock, which is the whole point."""
+    lid = _list(client)["id"]
+    a = client.post(f"/api/lists/{lid}/tasks", json={"summary": "A"}).json()
+    b = client.post(f"/api/lists/{lid}/tasks",
+                    json={"summary": "B", "parent": a["uid"]}).json()
+    assert client.patch(f"/api/lists/{lid}/tasks/{a['uid']}",
+                        json={"parent": b["uid"]}).status_code == 200
+
+    # It returns at all, which on a ring is the assertion that matters.
+    done = client.post(f"/api/lists/{lid}/tasks/{b['uid']}/complete")
+    assert done.status_code == 200 and done.json()["completed"] is True
+    assert client.get(f"/api/lists/{lid}/tasks/{a['uid']}").json()["completed"] is True

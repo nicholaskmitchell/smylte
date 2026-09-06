@@ -182,6 +182,27 @@ def init_db(conn: sqlite3.Connection) -> None:
         # is a 500 on every read of every task AND every event. The reverse
         # order is inert.
         conn.execute("ALTER TABLE sidecar ADD COLUMN notify_minutes_before INTEGER")
+    if "parked_at" not in side_cols:
+        # NULL on every task written before parking existed, which reads as
+        # "still live" — the correct answer, and the only one that could be
+        # backfilled without setting aside work on the owner's behalf.
+        #
+        # The same one-change rule the block above states: `service._task_dto`
+        # reads `s["parked_at"]`, and that line without this one is a 500 on
+        # every read of every task. Ship them together, ALTER first.
+        conn.execute("ALTER TABLE sidecar ADD COLUMN parked_at TEXT")
+    ritual_cols = {r["name"] for r in conn.execute("PRAGMA table_info(day_ritual)")}
+    if "committed_over_minutes" not in ritual_cols:
+        # NULL on every day committed before the app recorded this, which is the
+        # same NULL a day committed inside its capacity gets — "there is no
+        # over-commitment to record here". Nothing to backfill: the plan those
+        # days held has moved on, and computing it now would be inventing a
+        # figure for a decision taken against numbers nobody has any more.
+        #
+        # Same one-change rule as the sidecar and day_plan blocks: this column
+        # and `service._day_plan_dto`'s line reading it ship together, ALTER
+        # first, or every read of every day is a 500.
+        conn.execute("ALTER TABLE day_ritual ADD COLUMN committed_over_minutes INTEGER")
     habit_cols = {r["name"] for r in conn.execute("PRAGMA table_info(habits)")}
     if "estimate_minutes" not in habit_cols:
         # Habits written before estimates keep NULL, and their occurrences are
@@ -621,7 +642,7 @@ def set_sidecar(conn: sqlite3.Connection, collection_href: str, uid: str, **fiel
     worse than the estimate not being remembered for next time.
     """
     allowed = {"kanban_column", "sort_order", "pinned", "estimated_minutes",
-               "repeat_from_completion", "notify_minutes_before"}
+               "repeat_from_completion", "notify_minutes_before", "parked_at"}
     bad = set(fields) - allowed
     if bad:
         raise ValueError(f"unknown sidecar fields: {bad}")
@@ -879,7 +900,8 @@ def get_day_entries(conn: sqlite3.Connection, day: str) -> list[sqlite3.Row]:
 
 
 _DAY_RITUAL_FIELDS = {
-    "capacity_minutes", "committed_at", "shutdown_at", "reflection",
+    "capacity_minutes", "committed_at", "committed_over_minutes",
+    "shutdown_at", "reflection",
 }
 
 
@@ -1373,6 +1395,35 @@ def get_items(conn: sqlite3.Connection, collection_href: str) -> list[sqlite3.Ro
     )
 
 
+def completed_tasks(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Every VTODO carrying a COMPLETED stamp, as the four columns a completion
+    needs: which list, which task, what it was called, and when.
+
+    FOUR COLUMNS AND NOT `SELECT *`, which is the whole reason this exists
+    beside `get_items`. Counting completions used to go through
+    `service.list_tasks`, which builds a full DTO per task — categories, the
+    sidecar, the children map, and a `raw_ics` BLOB materialised for every row
+    in every list. That was affordable while the only caller was a connector
+    tool somebody asked a question of; it is not on a path the SPA polls, and
+    the dashboard asks on every task tick.
+
+    The `completed IS NOT NULL` filter does most of the work: a stamp is the
+    only thing that gives a completion a day to belong to, so the rows without
+    one were being read and discarded. A CANCELLED task never gets a stamp
+    (`ical/edit.py` writes one only for COMPLETED), so won't-do work falls out
+    here without a clause of its own.
+
+    Every list at once, because the caller wants a total across the account and
+    a query per collection would put the fan-out back.
+    """
+    return list(
+        conn.execute(
+            "SELECT collection_href, uid, summary, completed FROM items "
+            "WHERE component='VTODO' AND completed IS NOT NULL"
+        )
+    )
+
+
 def get_events_in_range(
     conn: sqlite3.Connection, collection_href: str, start_iso: str, end_iso: str
 ) -> list[sqlite3.Row]:
@@ -1656,12 +1707,25 @@ def count_items(conn: sqlite3.Connection, collection_href: str | None = None) ->
 # reading the rows: the caller only ever wanted these integers, but got there by
 # materialising every column of every item — `raw_ics` BLOBs included — for every
 # collection, inside the global service lock, on every sidebar render.
+#
+# `open_count` reads the SIDECAR as well as the item, and has to: parked work is
+# set aside, so a badge that counted it would go on reporting a backlog the owner
+# has already dealt with — which is the one number the parking file exists to
+# move. The join is on the sidecar's own PRIMARY KEY, so it is an index lookup
+# per row rather than a scan, and it stays inside the single query this constant
+# exists to keep it as. Most tasks have no sidecar row at all; LEFT JOIN is what
+# makes their NULL read as "not parked".
+_COUNT_JOIN = """
+    FROM items LEFT JOIN sidecar
+      ON sidecar.collection_href = items.collection_href AND sidecar.uid = items.uid
+"""
 _COUNT_COLUMNS = """
     COUNT(*) AS total,
     SUM(component = 'VTODO') AS task_count,
     SUM(component = 'VEVENT') AS event_count,
     SUM(component = 'VTODO'
-        AND (status IS NULL OR status NOT IN ('COMPLETED', 'CANCELLED'))) AS open_count
+        AND (status IS NULL OR status NOT IN ('COMPLETED', 'CANCELLED'))
+        AND sidecar.parked_at IS NULL) AS open_count
 """
 
 
@@ -1682,11 +1746,15 @@ def collection_counts(conn: sqlite3.Connection) -> dict[str, dict[str, int]]:
     return {
         r["collection_href"]: _counts_row(r)
         for r in conn.execute(
-            # _COUNT_COLUMNS is a module constant — not attacker input. Shared
-            # with counts_for_collection so the bulk and single-collection paths
-            # cannot drift into disagreeing about what "open" means.
-            f"SELECT collection_href, {_COUNT_COLUMNS} "  # nosec B608
-            "FROM items GROUP BY collection_href"
+            # _COUNT_COLUMNS and _COUNT_JOIN are module constants — not attacker
+            # input. Shared with counts_for_collection so the bulk and
+            # single-collection paths cannot drift into disagreeing about what
+            # "open" means. `items.collection_href` is qualified because the
+            # sidecar join brings a second column of that name into scope, and
+            # an unqualified one is an "ambiguous column name" error rather than
+            # a wrong answer — noisy, but only at runtime.
+            f"SELECT items.collection_href AS collection_href, {_COUNT_COLUMNS} "  # nosec B608
+            f"{_COUNT_JOIN} GROUP BY items.collection_href"
         )
     }
 
@@ -1694,8 +1762,9 @@ def collection_counts(conn: sqlite3.Connection) -> dict[str, dict[str, int]]:
 def counts_for_collection(conn: sqlite3.Connection, collection_href: str) -> dict[str, int]:
     """The same four numbers for one collection, for the single-row callers."""
     row = conn.execute(
-        # _COUNT_COLUMNS is a module constant — not attacker input.
-        f"SELECT {_COUNT_COLUMNS} FROM items WHERE collection_href=?",  # nosec B608
+        # _COUNT_COLUMNS and _COUNT_JOIN are module constants — not attacker input.
+        f"SELECT {_COUNT_COLUMNS} {_COUNT_JOIN} "  # nosec B608
+        "WHERE items.collection_href=?",
         (collection_href,),
     ).fetchone()
     return _counts_row(row)

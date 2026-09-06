@@ -139,7 +139,8 @@ def test_reading_a_never_opened_day_writes_nothing(svc):
         # day, because an account that never stated one must not be told it has
         # overcommitted against a number it never gave.
         "capacity_minutes": None, "capacity": None,
-        "committed_at": None, "shutdown_at": None, "reflection": None,
+        "committed_at": None, "committed_over_minutes": None,
+        "shutdown_at": None, "reflection": None,
     }
     assert _count(svc, "day_plan") == 0
     assert _count(svc, "day_plan_opened") == 0
@@ -187,25 +188,101 @@ def test_an_opened_day_with_no_entries_is_still_planned(svc):
 
 # ── what the snapshot picks up ───────────────────────────────────────────────
 
-def test_snapshot_takes_due_today_and_overdue_as_auto(svc):
-    """The two automatic rules, and the four exclusions that go with them.
+def test_snapshot_takes_due_today_as_auto(svc):
+    """The one automatic rule, and the five exclusions that go with it.
 
-    Due-today and overdue are what the day is *about*; everything else has to
-    stay out, or the Today tab becomes a second copy of the task list. A
-    completed task is not work, a subtask rides with its parent (one parent
-    would otherwise drag its whole checklist in), a task due next week belongs
-    to next week, and undated work is something the owner picks rather than
-    something a snapshot decides for them."""
+    Due-today is what the day is *about*; everything else has to stay out, or
+    the Today tab becomes a second copy of the task list. A completed task is
+    not work, a subtask rides with its parent (one parent would otherwise drag
+    its whole checklist in), a task due next week belongs to next week, undated
+    work is something the owner picks rather than something a snapshot decides
+    for them — and what is ALREADY LATE is offered rather than placed, which is
+    the exclusion the test below states on its own."""
     plan = svc.open_day(DAY, create=True)
-    assert _uids(plan) == ["due-today", "late"]      # due-today first, then late
+    assert _uids(plan) == ["due-today"]
     assert {e["source"] for e in plan["entries"]} == {"auto"}
     assert all(e["kind"] == "task" for e in plan["entries"])
     # The list SHORT id, never the href — the client only ever holds short ids.
-    assert [e["list"] for e in plan["entries"]] == ["work", "home"]
+    assert [e["list"] for e in plan["entries"]] == ["work"]
     # A dense ascending sequence: every row of the snapshot gets a position, so
     # the day's order never rests on a tie-break.
-    assert [e["position"] for e in plan["entries"]] == [1.0, 2.0]
+    assert [e["position"] for e in plan["entries"]] == [1.0]
     assert all(e["done_at"] is None and e["dropped_at"] is None for e in plan["entries"])
+
+
+def test_what_is_already_late_is_not_snapshotted_onto_the_day(svc):
+    """A missed deadline is a decision the owner has not made yet.
+
+    Putting it back on every morning makes that decision for them — badly, by
+    deferring it another day at the cost of a row they read and skip. So the
+    snapshot leaves it alone and the app OFFERS it instead (the SPA's suggestion
+    strip is built over exactly the tasks the day does not already hold), which
+    is what makes choosing it an act rather than a default.
+
+    `late` is due 2026-08-19, two days before DAY, and is open. Under the old
+    rule it was the second row of every snapshot in this file."""
+    plan = svc.open_day(DAY, create=True)
+    assert "late" not in _uids(plan)
+    # Still open, still late, still on its list: nothing was hidden or written.
+    assert svc.get_task(LIST_B, "late")["completed"] is False
+    # And a re-open does not quietly bring it back — there is no second rule
+    # waiting behind the first.
+    assert "late" not in _uids(svc.open_day(DAY, create=True))
+
+
+def test_parked_work_is_not_derived_onto_a_day(svc):
+    """Parking is an explicit act, and a day that derived the work anyway would
+    be putting back exactly what the owner took out — the morning after they
+    took it out, every morning.
+
+    Worse than the overdue case it sits beside, in fact: a deadline slipping is
+    something that happened TO them, and this is something they did."""
+    svc.park_task(LIST_A, "due-today", parked=True)
+    assert _uids(svc.open_day(DAY, create=True)) == []
+    # The preview says the same thing, since both run `_snapshot_for`: a
+    # connector must not describe a day differently from the app.
+    assert svc.preview_day(NEXT) == []
+
+    # And un-parking brings it back to the derivation — on a day that has not
+    # been snapshotted yet, since the marker is what makes an open happen once.
+    svc.park_task(LIST_A, "due-today", parked=False)
+    _seed_task(svc._conn, LIST_A, "due-next", "Ship the other thing", due=NEXT)
+    assert "due-next" in _uids(svc.open_day(NEXT, create=True))
+
+
+def test_parked_work_does_not_carry_into_the_next_day(svc):
+    """The other half, and the one the snapshot rule cannot cover.
+
+    A task the owner CHOSE on Monday carries into Tuesday by design — that is
+    the safety net for a decision they made and did not finish. Parking it on
+    Monday evening is them withdrawing that decision, so the net has to let go;
+    otherwise setting something aside would be undone a day after they did it,
+    which is the one thing parking has to be proof against.
+
+    Reversible, unlike done and dropped: un-park it and the ordinary rules
+    apply again."""
+    picked = svc.add_day_entry(PREV, entry_id=uuid.uuid4().hex, kind="task",
+                               list_id="work", uid="later")
+    assert picked["source"] == "user"
+    svc.park_task(LIST_A, "later", parked=True)
+
+    plan = svc.open_day(DAY, create=True)
+    assert "later" not in _uids(plan)
+    # The row on PREV is untouched — that day still records what was planned on
+    # it, exactly as it does for a task completed or deleted afterwards.
+    assert "later" in _uids(svc.open_day(PREV, create=False))
+
+
+def test_a_preview_of_a_day_leaves_out_what_is_late_too(svc):
+    """The preview stands in for a FIRST OPEN, so it has to derive what that open
+    would derive and nothing else.
+
+    `preview_day` runs the same `_snapshot_for` and throws it away, so this holds
+    by construction — but the connector is the caller, it is the one caller with
+    no person watching it, and a preview that named a task no open would add is
+    exactly the kind of drift that is invisible until someone acts on it."""
+    preview = svc.preview_day(DAY)
+    assert [p["uid"] for p in preview if p["kind"] == "task"] == ["due-today"]
 
 
 def test_a_preview_entry_has_the_same_shape_as_a_real_one(svc):
@@ -306,12 +383,16 @@ def test_a_zoned_due_falls_back_to_the_servers_zone(svc, monkeypatch):
 
 def test_unfinished_user_entries_carry_into_the_next_day(svc):
     """Yesterday's deliberate choices follow the owner; yesterday's automatic
-    ones do not. An auto entry re-derives itself from the wire every morning (it
-    is still due, or still late), so carrying it as well would give the task two
-    rows on one day. A hand-added entry has no such second source — drop it and
-    the decision is simply lost."""
+    ones do not. A hand-added entry has no second source — drop it and the
+    decision is simply lost — while an auto entry is a proposal the DAY made,
+    and carrying one would be the day proposing the same thing twice without
+    being asked."""
+    # Due on PREV, so PREV's own snapshot derives it. There is no such task in
+    # the fixture on purpose: the fixture's `late` is due before PREV, and since
+    # the snapshot stopped deriving overdue work it lands on no day at all.
+    _seed_task(svc._conn, LIST_B, "due-prev", "Call the plumber", due=PREV)
     svc.open_day(PREV, create=True)
-    assert _uids(svc.open_day(PREV, create=False)) == ["late"]   # auto, from DUE
+    assert _uids(svc.open_day(PREV, create=False)) == ["due-prev"]   # auto, from DUE
     note = svc.add_day_entry(PREV, entry_id=uuid.uuid4().hex, kind="note",
                              title="Ring the bank")
     picked = svc.add_day_entry(PREV, entry_id=uuid.uuid4().hex, kind="task",
@@ -325,10 +406,27 @@ def test_unfinished_user_entries_carry_into_the_next_day(svc):
     # make one row that two days both claim (the primary key is (day, entry_id),
     # so the copy would collide the moment both days were written).
     assert {e["entry_id"] for e in carried}.isdisjoint({note["entry_id"], picked["entry_id"]})
-    # PREV's auto entry is not carried — it arrives on its own merits instead,
-    # as an overdue task, and exactly once.
-    assert _uids(plan).count("late") == 1
-    assert [e["source"] for e in plan["entries"] if e["uid"] == "late"] == ["auto"]
+
+
+def test_an_unactioned_auto_row_neither_carries_nor_re_derives(svc):
+    """The one consequence of narrowing the derivation that is worth stating in
+    a test rather than a comment.
+
+    A task due yesterday that the day proposed and the owner left alone is
+    overdue today. It does not carry (it was never chosen) and it is not derived
+    (it is not due today), so it is on NO day — the suggestion strip offers it,
+    and the owner decides. Under the old rule the snapshot picked it up again
+    every morning for as long as it stayed undone, which is the eleven-day
+    attention cost this change exists to remove.
+
+    The task is untouched by any of that: still open, still late, still on its
+    list. Nothing here deletes or hides work."""
+    _seed_task(svc._conn, LIST_B, "due-prev", "Call the plumber", due=PREV)
+    assert _uids(svc.open_day(PREV, create=True)) == ["due-prev"]
+
+    plan = svc.open_day(DAY, create=True)
+    assert "due-prev" not in _uids(plan)
+    assert svc.get_task(LIST_B, "due-prev")["completed"] is False
 
 
 def test_a_dropped_entry_is_kept_and_does_not_carry(svc):
@@ -344,7 +442,9 @@ def test_a_dropped_entry_is_kept_and_does_not_carry(svc):
 
     kept = svc.open_day(PREV, create=False)["entries"]
     assert [e["entry_id"] for e in kept].count(entry["entry_id"]) == 1
-    assert _count(svc, "day_plan") == 2          # the auto entry plus this one
+    # This one row and nothing else: PREV has no task due on it, and nothing
+    # overdue is derived any more, so the snapshot added none of its own.
+    assert _count(svc, "day_plan") == 1
 
     plan = svc.open_day(DAY, create=True)
     assert not [e for e in plan["entries"] if e["source"] == "carried"]
@@ -358,7 +458,7 @@ def test_a_hand_added_day_still_gets_its_snapshot(svc):
 
     `add_day_entry` used to mark the day opened, and `open_day` skipped the
     snapshot for any day that already held entries — so a single hand-added row
-    suppressed that day's due-today, overdue and carried entries permanently.
+    suppressed that day's due-today and carried entries permanently.
     The shipped client makes that an ordinary sequence rather than an exotic
     one: TodayView renders the add box whether or not the open call succeeded,
     so one failed request lost the day's automatic rows for good.
@@ -372,12 +472,12 @@ def test_a_hand_added_day_still_gets_its_snapshot(svc):
     assert _count(svc, "day_plan_opened") == 0
 
     plan = svc.open_day(DAY, create=True)
-    assert _uids(plan) == ["due-today", "late"]
-    assert [e["source"] for e in plan["entries"]] == ["user", "auto", "auto"]
+    assert _uids(plan) == ["due-today"]
+    assert [e["source"] for e in plan["entries"]] == ["user", "auto"]
     # The hand-added row keeps its place and its id: a snapshot arriving late
     # lands BEHIND the arrangement it is joining rather than renumbering it.
     assert plan["entries"][0]["entry_id"] == note["entry_id"]
-    assert [e["position"] for e in plan["entries"]] == [1.0, 2.0, 3.0]
+    assert [e["position"] for e in plan["entries"]] == [1.0, 2.0]
     # And exactly once: from here the marker is what answers, so the second open
     # is a read like any other.
     assert svc.open_day(DAY, create=True)["entries"] == plan["entries"]
@@ -394,7 +494,7 @@ def test_the_snapshot_does_not_duplicate_what_the_day_already_holds(svc):
     picked = svc.add_day_entry(DAY, entry_id=uuid.uuid4().hex, kind="task",
                                list_id="work", uid="due-today")
     plan = svc.open_day(DAY, create=True)
-    assert _uids(plan) == ["due-today", "late"]
+    assert _uids(plan) == ["due-today"]
     # The OWNER's row is the one that survives — same entry_id the client is
     # already holding, still source=user, so it still carries into tomorrow.
     kept = [e for e in plan["entries"] if e["uid"] == "due-today"][0]
@@ -403,12 +503,15 @@ def test_the_snapshot_does_not_duplicate_what_the_day_already_holds(svc):
     # A DROPPED row counts as present too. Re-proposing something the owner
     # dropped minutes earlier is exactly the resurrection the opened marker
     # exists to prevent — the row being dropped is not an invitation to add it
-    # back, it is the decision not to.
+    # back, it is the decision not to. Seeded due ON PREV, because the dedupe
+    # can only be shown against a row the snapshot would otherwise derive, and
+    # since overdue stopped deriving that means a deadline on the day itself.
+    _seed_task(svc._conn, LIST_B, "due-prev", "Call the plumber", due=PREV)
     gone = svc.add_day_entry(PREV, entry_id=uuid.uuid4().hex, kind="task",
-                             list_id="home", uid="late")
+                             list_id="home", uid="due-prev")
     svc.patch_day_entry(PREV, gone["entry_id"], dropped=True)
-    prev = svc.open_day(PREV, create=True)          # "late" is overdue on PREV
-    assert _uids(prev) == ["late"]
+    prev = svc.open_day(PREV, create=True)
+    assert _uids(prev) == ["due-prev"]
     assert prev["entries"][0]["dropped_at"]
 
 
@@ -1260,7 +1363,8 @@ def test_routes_round_trip_a_day(client):
         # matters. An account that never stated one must not be told it has
         # overcommitted against a number it never gave.
         "capacity_minutes": None, "capacity": None,
-        "committed_at": None, "shutdown_at": None, "reflection": None,
+        "committed_at": None, "committed_over_minutes": None,
+        "shutdown_at": None, "reflection": None,
     }
 
     opened = client.post(f"/api/day/{day}/open")
@@ -1359,6 +1463,24 @@ def _live_plus(n: int) -> str:
     return (date.today() + timedelta(days=n)).isoformat()
 
 
+def _seed_due_on(svc_, day: str) -> None:
+    """Two open tasks due ON `day`, so a snapshot of it has rows to work with.
+
+    The `svc` fixture's cast is dated around DAY, a fixed Friday in 2026, while
+    the connector tests below run against the REAL today — which every one of
+    those deadlines is long past. That was invisible for as long as the snapshot
+    derived overdue work, because the whole cast then landed on any live day.
+    It derives only what is due on the day itself now, so a live day has to be
+    given its own deadlines rather than inheriting the fixture's by lateness.
+
+    Deliberately NOT folded into the `svc` fixture: a fixture whose seeds move
+    with the wall clock is the thing this file's fixed day constants exist to
+    avoid, and only the handful of tests that need a live day should pay for it.
+    """
+    _seed_task(svc_._conn, LIST_A, "live-a", "Ship the thing", due=day)
+    _seed_task(svc_._conn, LIST_B, "live-b", "Call the plumber", due=day)
+
+
 @pytest.fixture
 def mcp_api(svc):
     return McpApi(svc)
@@ -1407,8 +1529,9 @@ def test_moved_work_is_not_reported_as_abandoned(mcp_api, svc):
     happening" are different answers, and a look-back that filed both under
     `dropped` would tell the owner they abandoned something they rescheduled."""
     day, target = _live(), _live_plus(1)
+    _seed_due_on(svc, day)
     plan = svc.open_day(day, create=True)
-    moved, declined = _entry_id(plan, "due-today"), _entry_id(plan, "late")
+    moved, declined = _entry_id(plan, "live-a"), _entry_id(plan, "live-b")
     svc.roll_entry(day, moved, target)
     svc.patch_day_entry(day, declined, dropped=True)
 
@@ -1430,8 +1553,9 @@ def test_the_totals_leave_out_what_was_decided_about(mcp_api, svc):
     is why the third number is reported beside the other two: "0m of 1h 20m"
     with no `unestimated` reads as a day nothing happened on."""
     day, target = _live(), _live_plus(1)
+    _seed_due_on(svc, day)
     plan = svc.open_day(day, create=True)
-    kept, moved = _entry_id(plan, "due-today"), _entry_id(plan, "late")
+    kept, moved = _entry_id(plan, "live-a"), _entry_id(plan, "live-b")
     svc.patch_day_entry(day, kept, estimate_minutes=45)
     svc.patch_day_entry(day, moved, estimate_minutes=90)
     before = mcp_api.review_day(day=day)["totals"]
@@ -1445,7 +1569,7 @@ def test_the_totals_leave_out_what_was_decided_about(mcp_api, svc):
         [e for e in plan["entries"] if e["entry_id"] not in (kept, moved)])
     # And it travelled with the work rather than being left behind.
     assert [e["estimate_minutes"] for e in svc.open_day(target, create=False)["entries"]
-            if e["uid"] == "late"] == [90]
+            if e["uid"] == "live-b"] == [90]
 
 
 def test_done_minutes_counts_only_what_was_finished_that_day(mcp_api, svc):
@@ -1468,8 +1592,9 @@ def test_done_minutes_counts_only_what_was_finished_that_day(mcp_api, svc):
     _seed_task(svc._conn, LIST_A, "did-before", "Finished earlier", due=day,
                status="COMPLETED", completed_at=f"{elsewhere.replace('-', '')}T120000Z")
 
+    _seed_due_on(svc, day)
     plan = svc.open_day(day, create=True)
-    svc.patch_day_entry(day, _entry_id(plan, "due-today"), estimate_minutes=45)
+    svc.patch_day_entry(day, _entry_id(plan, "live-a"), estimate_minutes=45)
     # Added by hand rather than looked for in the snapshot: a COMPLETED task is
     # correctly left out of the derived plan, and what is being tested here is a
     # row that IS on the day and was finished — which is what the owner ticking
@@ -1563,17 +1688,18 @@ def test_the_connector_moves_work_rather_than_dropping_and_re_adding(mcp_api, sv
     which files the row under `dropped` and reports it abandoned — losing the
     very distinction the bucket above exists to keep."""
     day, target = _live(), _live_plus(1)
+    _seed_due_on(svc, day)
     plan = svc.open_day(day, create=True)
-    entry_id = _entry_id(plan, "due-today")
+    entry_id = _entry_id(plan, "live-a")
     out = mcp_api.update_day_entry(entry_id, day=day, move_to=target)
 
     assert out["rolled_to"] == target and out["dropped_at"] is None
     landed = [e["uid"] for e in svc.open_day(target, create=False)["entries"]]
-    assert landed.count("due-today") == 1
+    assert landed.count("live-a") == 1
     # Backwards is refused: an entry appearing on a finished day is the forgery
     # every other rule here exists to prevent.
     with pytest.raises(ToolError):
-        mcp_api.update_day_entry(_entry_id(plan, "late"), day=day,
+        mcp_api.update_day_entry(_entry_id(plan, "live-b"), day=day,
                                  move_to="2020-01-01")
 
 
@@ -1581,9 +1707,10 @@ def test_moving_is_an_answer_and_will_not_be_combined_with_another(mcp_api, svc)
     """Applying both would file one row under two contradictory decisions in the
     same call, and whichever landed second would be the day's record of it."""
     day = _live()
+    _seed_due_on(svc, day)
     plan = svc.open_day(day, create=True)
     with pytest.raises(ToolError) as caught:
-        mcp_api.update_day_entry(_entry_id(plan, "due-today"), day=day,
+        mcp_api.update_day_entry(_entry_id(plan, "live-a"), day=day,
                                  move_to=_live_plus(1), dropped=True)
     assert "on its own" in str(caught.value)
 
@@ -1752,3 +1879,227 @@ def test_review_day_saturates_at_the_last_representable_day(mcp_api):
     # The day before still answers the same way, so the clamp did not change the
     # ordinary case into the boundary one.
     assert mcp_api.review_day(day="9999-12-30") is not None
+
+
+# ── committing a day that runs long ──────────────────────────────────────────
+#
+# All of these run on the LIVE day: `set_day_ritual` refuses a past one, since a
+# capacity, a start and a shutdown are statements about a day you can still act
+# on. `_seed_due_on` gives that day a deadline so the snapshot has a row to
+# estimate.
+
+
+def _committing(svc_, *, capacity=None, minutes=None):
+    """A live day with one estimated row, ready to be committed. Returns the day
+    key and the entry_id, so a caller can move the row afterwards."""
+    day = _live()
+    _seed_due_on(svc_, day)
+    plan = svc_.open_day(day, create=True)
+    entry_id = _entry_id(plan, "live-a")
+    if minutes is not None:
+        svc_.patch_day_entry(day, entry_id, estimate_minutes=minutes)
+    if capacity is not None:
+        svc_.set_day_ritual(day, capacity_minutes=capacity)
+    return day, entry_id
+
+
+def test_committing_an_overfull_day_records_how_far_over_it_was(svc):
+    """The app's position is that a plan NEVER BLOCKS — it records a decision
+    rather than enforcing one. That sentence is only true if the decision is
+    actually recorded, and until now nothing was: the tab said the day ran long
+    and then the day forgot it had.
+
+    Computed server-side from the entries it holds, so it cannot be a figure the
+    client made up, and by the sum the tab shows, so it is the figure the owner
+    was looking at when they pressed the button."""
+    day, _ = _committing(svc, capacity=120, minutes=200)
+    committed = svc.set_day_ritual(day, committed=True)
+    assert committed["committed_at"]
+    assert committed["committed_over_minutes"] == 80
+
+
+def test_a_day_committed_inside_its_capacity_records_nothing(svc):
+    """Null for a day with nothing to record, and it has to be — a zero would be
+    a different claim ("committed exactly at the line") and the look-back would
+    have to draw it."""
+    day, entry_id = _committing(svc, capacity=120, minutes=60)
+    assert svc.set_day_ritual(day, committed=True)["committed_over_minutes"] is None
+
+    # And exactly at the line is not over. Strictly greater, the same boundary
+    # the tab draws.
+    svc.set_day_ritual(day, committed=False)
+    svc.patch_day_entry(day, entry_id, estimate_minutes=120)
+    assert svc.set_day_ritual(day, committed=True)["committed_over_minutes"] is None
+
+
+def test_an_account_with_no_capacity_can_never_be_recorded_as_over(svc):
+    """The one thing this feature must not get wrong. An account that has never
+    said how long it works is told nothing at all, so there is no number to be
+    over — inventing an eight-hour day for somebody and then recording that they
+    exceeded it would be the app scoring a day against a figure nobody gave."""
+    day, _ = _committing(svc, minutes=900)
+    assert svc.set_day_ritual(day, committed=True)["committed_over_minutes"] is None
+
+
+def test_a_capacity_sent_with_the_commit_is_the_one_measured_against(svc):
+    """One PATCH carrying both a new capacity and the commit has to record the
+    over-minutes against the capacity it is CARRYING, not the one the day had a
+    moment earlier.
+
+    The SPA sends the two separately and never reaches this; the API takes them
+    together, and a record measured against a number the owner had already
+    replaced is exactly the kind of wrong this column exists to avoid being."""
+    day, _ = _committing(svc, capacity=480, minutes=200)
+    both = svc.set_day_ritual(day, capacity_minutes=120, committed=True)
+    assert both["capacity_minutes"] == 120
+    assert both["committed_over_minutes"] == 80, (
+        "the over-minutes were measured against the capacity being replaced"
+    )
+
+
+def test_a_capacity_on_its_own_still_announces_itself(svc):
+    """The capacity is written ahead of the commit now, out of the same field
+    map — so a PATCH carrying nothing else must still publish `day_updated`, or
+    every other tab holds a stale number until something unrelated moves it."""
+    day, _ = _committing(svc, minutes=30)
+    seen: list[dict] = []
+    svc._publish = seen.append          # noqa: SLF001 - the one hook a test has
+    svc.set_day_ritual(day, capacity_minutes=300)
+    assert [e for e in seen if e.get("type") == "day_updated"], seen
+
+
+def test_undoing_a_commit_clears_what_it_recorded(svc):
+    """A day that is no longer committed has no commitment to have been over.
+    Leaving the number would make the look-back describe a decision that was
+    taken back."""
+    day, _ = _committing(svc, capacity=120, minutes=200)
+    assert svc.set_day_ritual(day, committed=True)["committed_over_minutes"] == 80
+
+    undone = svc.set_day_ritual(day, committed=False)
+    assert undone["committed_at"] is None and undone["committed_over_minutes"] is None
+
+
+def test_work_taken_off_the_day_is_not_counted_against_the_commitment(svc):
+    """Dropping something, or sending it to Thursday, is how a day gets back
+    under its capacity. A total that kept counting it would make the two
+    controls that help do nothing — the owner would trim the day and commit it
+    recorded as over anyway."""
+    day, _ = _committing(svc, capacity=120, minutes=100)
+    extra = svc.add_day_entry(day, entry_id=uuid.uuid4().hex, kind="note",
+                              title="Also this", estimate_minutes=100)
+    assert svc.set_day_ritual(day, committed=True)["committed_over_minutes"] == 80
+
+    svc.set_day_ritual(day, committed=False)
+    svc.patch_day_entry(day, extra["entry_id"], dropped=True)
+    assert svc.set_day_ritual(day, committed=True)["committed_over_minutes"] is None
+
+
+# ── what was finished in a week ──────────────────────────────────────────────
+
+def _finished(svc_, uid: str, day: str, hour: str = "12") -> None:
+    """A completed task carrying a real COMPLETED stamp on `day`."""
+    _seed_task(svc_._conn, LIST_A, uid, f"Did {uid}", due=day, status="COMPLETED",
+               completed_at=f"{day.replace('-', '')}T{hour}0000Z")
+
+
+def test_the_week_counts_completions_by_their_own_stamp(svc):
+    """The one number every client agrees on. A task ticked in Tasks.org counts
+    exactly as one ticked here, because what is counted is the COMPLETED
+    property the wire carries rather than anything Smylte recorded about the
+    day — which is also why this answers for weeks before any of the day-plan
+    machinery existed."""
+    counts = svc.completed_counts("2026-08-17", "2026-08-24")   # Mon..Sun
+    assert counts == {"from": "2026-08-17", "to": "2026-08-24", "days": {}, "total": 0}
+
+    _finished(svc, "a", "2026-08-18")
+    _finished(svc, "b", "2026-08-18", hour="15")
+    _finished(svc, "c", "2026-08-21")
+    counts = svc.completed_counts("2026-08-17", "2026-08-24")
+    # Days with nothing are ABSENT rather than zero — the caller drew the week
+    # and knows which days it asked for.
+    assert counts["days"] == {"2026-08-18": 2, "2026-08-21": 1}
+    assert counts["total"] == 3
+
+
+def test_a_completion_falls_back_to_the_servers_zone_like_a_deadline(svc, monkeypatch):
+    """The twin of `test_a_zoned_due_falls_back_to_the_servers_zone`, and it has
+    to hold for the same reason: with no `home_timezone` the whole service takes
+    days in the process's own zone, and a completion that used a different rule
+    would file an evening's work under tomorrow while the deadline beside it
+    filed under today — on one screen, in one week.
+
+    `astimezone(None)` converting to process-local is what makes that one rule
+    rather than two, and it reads as an oversight, so it is pinned here as well
+    as commented. A `zone is not None` guard added in front of it is precisely
+    the plausible-looking change this catches.
+
+    The instant below is 20:30 on the 5th in New York and already the 6th in
+    UTC, so the zone is pinned rather than assumed: CI and the ordinary Docker
+    image both run in UTC, where the disagreement is invisible.
+    """
+    _seed_task(svc._conn, LIST_A, "evening", "Filed late", due="2026-09-05",
+               status="COMPLETED", completed_at="20260906T003000Z")
+    assert not svc.get_settings().get("home_timezone")
+
+    monkeypatch.setenv("TZ", "America/New_York")
+    time.tzset()
+    try:
+        got = svc.completed_counts("2026-08-31", "2026-09-07")["days"]
+    finally:
+        # The process zone back before the next test, as above: monkeypatch
+        # restores the VARIABLE and cannot make libc re-read it.
+        monkeypatch.undo()
+        time.tzset()
+    assert got == {"2026-09-05": 1}, (
+        f"with no home_timezone a completion was not filed in the server's own "
+        f"zone: {got}"
+    )
+
+
+def test_a_completion_without_a_stamp_is_not_counted(svc):
+    """Plenty of clients write STATUS:COMPLETED and no COMPLETED property, so
+    such a task has no day to be filed under. Guessing one — from the due date,
+    say — would put work in a week it may not have happened in, and the number
+    is only worth showing because it is not a guess.
+
+    A CANCELLED task falls out through the same door rather than a clause of its
+    own: cancelling is not completing, so `ical/edit.py` writes no stamp."""
+    _seed_task(svc._conn, LIST_A, "nostamp", "Ticked elsewhere", due="2026-08-18",
+               status="COMPLETED")
+    _seed_task(svc._conn, LIST_A, "declined", "Won't do", due="2026-08-18",
+               status="CANCELLED")
+    assert svc.completed_counts("2026-08-17", "2026-08-24")["total"] == 0
+
+
+def test_the_window_is_half_open_like_every_other_one(svc):
+    """`to` is exclusive, the same as `day_range` and the calendar bounds. A week
+    that included both Mondays would count one day twice across two weeks."""
+    _finished(svc, "sun", "2026-08-23")
+    _finished(svc, "mon", "2026-08-24")
+    week = svc.completed_counts("2026-08-17", "2026-08-24")
+    assert week["days"] == {"2026-08-23": 1} and week["total"] == 1
+
+
+def test_the_week_is_bounded_like_the_day_range(svc):
+    """It walks every task in every list, so an unbounded window is an unbounded
+    scan under the global lock — the same reason `day_range` is bounded, and
+    against the same constant."""
+    with pytest.raises(ValueError):
+        svc.completed_counts("2020-01-01", "2026-01-01")
+
+
+def test_the_connector_answers_a_week_from_any_day_in_it(mcp_api, svc):
+    """A model holding "last Tuesday" should not have to do calendar arithmetic
+    to ask about the week containing it — and the week starts on MONDAY, which
+    every other Monday-first convention in this app (`_WEEKDAYS`, `HABIT_DAYS`,
+    the booking availability map, the SPA's `weekStartOf`) requires it to."""
+    _finished(svc, "mon", "2026-08-17")
+    _finished(svc, "sun", "2026-08-23")
+    _finished(svc, "next", "2026-08-24")
+
+    from_wednesday = mcp_api.review_week(week="2026-08-19")
+    assert from_wednesday["from"] == "2026-08-17" and from_wednesday["to"] == "2026-08-24"
+    assert from_wednesday["total"] == 2, "Monday and Sunday are the same week"
+    # Asked from the Monday itself, the answer is the same week rather than the
+    # one before it.
+    assert mcp_api.review_week(week="2026-08-17") == from_wednesday

@@ -80,6 +80,11 @@ export interface TaskData {
    *  it through PATCH would PUT the VTODO back and move its etag, making every
    *  other CalDAV client re-fetch a resource that did not change. */
   setReminder: (t: Task, minutes: number) => Promise<void>
+  /** Set the task aside without finishing or abandoning it, or bring it back.
+   *  Its own call for the same reason `setReminder` is: parked is app-only, and
+   *  routing it through PATCH would PUT the VTODO back and move its etag, so
+   *  every other CalDAV client would re-fetch a resource that did not change. */
+  park: (t: Task, parked: boolean) => Promise<void>
   /** Move the task `from` to where `target` currently sits WITHIN `run`. Same
    *  gesture as the sidebar's list drag: dropping on a row below lands after
    *  it, above lands before it. Positions are assigned across every task on the
@@ -374,7 +379,7 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
   // combined view mixes tasks from several lists.
   const draftTask = (uid: string, listId: string, body: CreateTaskBody): Task => ({
     uid, list: listId, summary: body.summary, notes: body.notes ?? null, status: 'NEEDS-ACTION',
-    completed: false, cancelled: false,
+    completed: false, cancelled: false, parked: false, parked_at: null,
     // `priority` is the numeric iCal field the server derives; the rows render
     // `priority_label`, so the stand-in paints the right stripe right away and
     // the server's DTO fills the number in when it lands.
@@ -667,6 +672,16 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
     settle(await write(() => api.patchTask(t.list, t.uid, patch)), t)
   }
 
+  const park = async (t: Task, parked: boolean) => {
+    // Painted immediately and reconciled, like every write here. `parked_at` is
+    // painted as a placeholder rather than guessed at: the row disappears from
+    // the view on this tick anyway, and the server's stamp replaces it on
+    // settle. Only the flag decides anything.
+    patchLocal(t, { parked, parked_at: parked ? new Date().toISOString() : null })
+    invalidateFetches()
+    settle(await write(() => api.park(t.list, t.uid, parked)), t)
+  }
+
   const setReminder = async (t: Task, minutes: number) => {
     // Painted immediately like every other write here, then reconciled. -1 is
     // the clear sentinel on the wire and `null` is what the DTO carries for it.
@@ -789,7 +804,7 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
 
   const value: TaskData = {
     lists: ordered, serverOrderedLists: lists, tasks, listsLoaded, listsOk, loaded, setLists,
-    create, createMany, addSub, toggle, remove, saveDetail, setReminder, reorder,
+    create, createMany, addSub, toggle, remove, saveDetail, setReminder, park, reorder,
     taskListErrors: listErrorNames, taskListsFailed: listErrorIds, reloadTasks,
   }
   return <TaskCtx.Provider value={value}>{children}</TaskCtx.Provider>

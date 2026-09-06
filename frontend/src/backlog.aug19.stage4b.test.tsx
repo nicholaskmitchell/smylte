@@ -74,7 +74,8 @@ const m = vi.mocked(api)
 
 const task = (o: Partial<Task> = {}): Task => ({
   uid: 'u1', list: 'l1', summary: 'Ship it', notes: null, status: 'NEEDS-ACTION',
-  completed: false, cancelled: false, priority: null, priority_label: 'none',
+  completed: false, cancelled: false, parked: false, parked_at: null,
+  priority: null, priority_label: 'none',
   percent_complete: null, due: null, due_is_date: true, start: null, start_is_date: true,
   tags: [], parent: null, children: [], child_count: 0, completed_child_count: 0,
   derived_percent: null, pinned: false, sort_order: null,
@@ -1167,6 +1168,8 @@ describe('aug19 leftovers — every dialog answers Escape at the window', () => 
       calFit="dynamic" onToggleCalFit={vi.fn()}
       archivedCals={[]} onArchivedCalsChange={vi.fn()}
       showCompleted={false} onToggleShowCompleted={vi.fn()}
+      autoCloseParents={true} onToggleAutoCloseParents={vi.fn()}
+    staleOverdue={3} onStaleOverdueChange={vi.fn()}
       focus={DEFAULT_FOCUS} onFocusChange={vi.fn()}
       notifyEnabled={false} onNotifyEnabledChange={vi.fn()}
       notifyChatId="" onNotifyChatIdChange={vi.fn()}

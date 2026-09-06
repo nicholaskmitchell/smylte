@@ -42,7 +42,7 @@ export const dateOut = (date: string, time: string, original: string | null | un
  * it lands) and the footer offers the route to the bulk composer instead of
  * Delete.
  */
-export function TaskModal({ task, lists, defaultList, initialTitle, onClose, onCreate, onSave, onDelete, onMultiple, onReminderChange }: {
+export function TaskModal({ task, lists, defaultList, initialTitle, onClose, onCreate, onSave, onDelete, onMultiple, onReminderChange, onPark }: {
   task: Task | null
   lists: List[]
   defaultList: string
@@ -55,6 +55,17 @@ export function TaskModal({ task, lists, defaultList, initialTitle, onClose, onC
    *  PATCH body. Optional: a caller that has nowhere to put it simply does
    *  not offer the change rather than failing. */
   onReminderChange?: (minutes: number) => void
+  /** Set the task aside without finishing it, or bring it back. Its own
+   *  callback for the reason `onReminderChange` has one — parked is app-only
+   *  and does not belong in the PATCH body — and optional for the same reason
+   *  too: a caller with nowhere to put it does not offer the control.
+   *
+   *  This is the first status-shaped affordance the editor has ever had. Won't-do
+   *  sits beside it because the API has offered it since the beginning with no
+   *  way to reach it from the app at all, and the two only make sense as a
+   *  pair: parking is what the owner reaches for INSTEAD of cancelling, and a
+   *  choice with one option visible is not a choice. */
+  onPark?: (parked: boolean) => void
   onDelete: () => void
   onMultiple: (listId: string, summary: string) => void
 }) {
@@ -192,6 +203,26 @@ export function TaskModal({ task, lists, defaultList, initialTitle, onClose, onC
           <textarea id="task-notes" className="input" rows={3} value={notes}
             onChange={(e) => setNotes(e.target.value)} />
         </div>
+        {/* Not while creating: neither answer means anything about a task that
+            does not exist yet, and a form offering "not now" before the thing
+            has been written once is asking a question with no subject. */}
+        {!creating && onPark && (
+          <div className="modal-actions task-lifecycle">
+            <button className="btn ghost" onClick={() => onPark(!task.parked)}>
+              {tr(task.parked ? 'tasks.unpark' : 'tasks.park')}
+            </button>
+            {!task.cancelled && (
+              <button className="btn ghost"
+                onClick={() => onSave({ status: 'CANCELLED' })}>
+                {tr('tasks.wontDoAction')}
+              </button>
+            )}
+            <span className="spacer" />
+            <span className="hintline">
+              {tr(task.parked ? 'tasks.parkedHint' : 'tasks.parkHint')}
+            </span>
+          </div>
+        )}
         <div className="modal-actions">
           {creating ? (
             <button className="btn ghost" onClick={() => onMultiple(listId, summary)}>

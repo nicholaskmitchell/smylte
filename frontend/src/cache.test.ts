@@ -12,7 +12,8 @@ import type { CalEvent, DayEntry, DayPlan, Habit, List, Task } from './api'
 
 const task = (o: Partial<Task> = {}): Task => ({
   uid: 'u1', list: 'l1', summary: 'Ship it', notes: null, status: 'NEEDS-ACTION',
-  completed: false, cancelled: false, priority: null, priority_label: 'none',
+  completed: false, cancelled: false, parked: false, parked_at: null,
+  priority: null, priority_label: 'none',
   percent_complete: null, due: null, due_is_date: true, start: null, start_is_date: true,
   tags: [],
   parent: null, children: [], child_count: 0, completed_child_count: 0,
@@ -44,7 +45,8 @@ const dayEntry = (o: Partial<DayEntry> = {}): DayEntry => ({
 
 const dayPlan = (o: Partial<DayPlan> = {}): DayPlan => ({
   day: '2026-08-21', planned: true, capacity_minutes: null, capacity: null,
-  committed_at: null, shutdown_at: null, reflection: null, entries: [], ...o,
+  committed_at: null, committed_over_minutes: null,
+  shutdown_at: null, reflection: null, entries: [], ...o,
 })
 
 const habit = (o: Partial<Habit> = {}): Habit => ({

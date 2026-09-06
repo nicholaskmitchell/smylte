@@ -237,6 +237,60 @@ def test_tools_round_trip_real_data(mcp):
     _call(mcp, token, "smylte_delete_list", {"list_id": list_id})
 
 
+def test_the_connector_parks_and_un_parks_without_calling_it_done(mcp):
+    """A model needs the neutral answer as much as the owner does. Asked to
+    clear a backlog it would otherwise have exactly two verbs — complete, which
+    is a lie, and cancel, which is a verdict — and both are worse than leaving
+    the task alone.
+
+    The thing this pins hardest is that parked is NOT done: the DTO has to keep
+    saying `completed: false`, or a model reporting back to the owner will tell
+    them work is finished that is only set aside."""
+    token = _connect(mcp)["access_token"]
+    list_id = _call(mcp, token, "smylte_create_list",
+                    {"name": f"P-{uuid.uuid4().hex[:8]}"})["structuredContent"]["id"]
+    made = _call(mcp, token, "smylte_create_task",
+                 {"list_id": list_id, "summary": "Learn the harmonica"})["structuredContent"]
+
+    parked = _call(mcp, token, "smylte_park_task",
+                   {"list_id": list_id, "uid": made["uid"]})["structuredContent"]
+    assert parked["parked"] is True
+    assert parked["completed"] is False and parked["cancelled"] is False
+
+    total = lambda **extra: _call(  # noqa: E731
+        mcp, token, "smylte_list_tasks",
+        {"list_id": list_id, **extra})["structuredContent"]["total"]
+    assert total() == 0, "parked work is off the plate by default"
+    assert total(include_parked=True) == 1, "…and still reachable when asked for"
+    # NOT folded into include_done: a model given one flag for both would have
+    # to report set-aside work as finished to see it at all.
+    assert total(include_done=True) == 0
+
+    _call(mcp, token, "smylte_park_task",
+          {"list_id": list_id, "uid": made["uid"], "parked": False})
+    assert total() == 1
+
+    # An unknown uid is a not-found rather than a cheerful nothing — the sidecar
+    # write is a silent no-op for a uid `items` does not hold.
+    out = _call(mcp, token, "smylte_park_task", {"list_id": list_id, "uid": "nope"})
+    assert out["isError"] is True and "nope" in out["content"][0]["text"]
+
+    _call(mcp, token, "smylte_delete_list", {"list_id": list_id})
+
+
+def test_the_connector_answers_the_week_with_a_number(mcp):
+    """The cheap answer to "what did I get done". `smylte_review_day` with
+    from + to returns the same week in full — every bucket, every entry, the
+    task behind each row — and builds the whole task index to do it; asking it
+    seven days\u2019 worth to arrive at one integer is the expensive way to answer
+    the cheapest question the owner has."""
+    token = _connect(mcp)["access_token"]
+    out = _call(mcp, token, "smylte_review_week", {"week": "2026-08-19"})["structuredContent"]
+    # Monday-first and half-open, which every other week in this app is.
+    assert out["from"] == "2026-08-17" and out["to"] == "2026-08-24"
+    assert isinstance(out["total"], int) and isinstance(out["days"], dict)
+
+
 def test_a_tool_failure_is_an_answer_not_a_crash(mcp):
     """A model can act on a sentence; it can do nothing with a 500."""
     token = _connect(mcp)["access_token"]

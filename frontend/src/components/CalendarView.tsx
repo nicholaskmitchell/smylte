@@ -409,7 +409,7 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
   const taskColor = (listId: string) => taskLists.find((l) => l.id === listId)?.color ?? null
   const visibleTasks = useMemo(
     () => tasks.filter((t) =>
-      shownTaskLists.has(t.list) && (calShowDone || !(t.completed || t.cancelled))),
+      shownTaskLists.has(t.list) && (!t.parked && (calShowDone || !(t.completed || t.cancelled)))),
     [tasks, shownTaskLists, calShowDone],
   )
   const tasksByDay = useMemo(

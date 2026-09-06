@@ -53,7 +53,7 @@ const entry = (o: Partial<DayEntry> = {}): DayEntry => ({
 })
 const plan = (entries: DayEntry[], o: Partial<DayPlan> = {}): DayPlan => ({
   day: today(), planned: true, entries, capacity_minutes: null, capacity: null,
-  committed_at: null, shutdown_at: null, reflection: null, ...o,
+  committed_at: null, committed_over_minutes: null, shutdown_at: null, reflection: null, ...o,
 })
 /** A session anchored `agoS` seconds before the (fake) clock's now. */
 const session = (o: Partial<FocusSession> = {}, agoS = 0): FocusSession => ({
