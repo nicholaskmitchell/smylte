@@ -34,7 +34,7 @@ import { TasksView } from './components/TasksView'
 import { CalendarView } from './components/CalendarView'
 import { SchedulingView } from './components/SchedulingView'
 import { HomeView } from './components/HomeView'
-import { TodayView } from './components/TodayView'
+import { TodayView, STALE_OVERDUE_DAYS } from './components/TodayView'
 import { FocusView } from './components/FocusView'
 import { DEFAULT_FOCUS, sanitizeFocusSettings, type FocusSettings } from './focus'
 import { isFloatWindow } from './desktop'
@@ -107,9 +107,10 @@ export function App() {
   // Default true, matching the server's own default for an absent key: a
   // parent with nothing left in it is finished.
   const [autoCloseParents, setAutoCloseParents] = useState(true)
-  // Mirrors `TodayView`'s STALE_OVERDUE_DAYS, which is where the number is
-  // argued for; this is the account's override of it.
-  const [staleOverdue, setStaleOverdue] = useState(3)
+  // Seeded from `STALE_OVERDUE_DAYS`, which is where the number is argued for,
+  // rather than retyped: three copies of one default is how the Overdue module
+  // and the Today strip come to disagree about which rows are waiting.
+  const [staleOverdue, setStaleOverdue] = useState(STALE_OVERDUE_DAYS)
   const [timeFormat, setTimeFormat] = useState<TimeFormat>(DEFAULT_TIME_FORMAT)
   const [language, setLanguage] = useState<Language>(DEFAULT_LANGUAGE)
   // App's own translator rather than `useT()`, because App is what RENDERS the

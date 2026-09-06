@@ -1860,11 +1860,15 @@ describe('<TasksView> parked work', () => {
     expect(m.park).toHaveBeenCalledWith('l1', 'harmonica', true)
   })
 
-  it('leaves a parked step out of both halves of its parent progress', async () => {
-    // A parked child is not done, so it cannot count in the numerator; and it
-    // is not a step of this job right now, so counting it in the denominator
-    // would leave the parent reading as permanently unfinished for work nobody
-    // intends to do. One of three, one done, one parked, reads 1/2.
+  it('counts a parked step in the total, and never as done', async () => {
+    // The fraction has to agree with the rule the SERVER applies to the same
+    // three rows. `_nothing_left_in` counts a parked child as open and refuses
+    // to close the parent over it, because parked work is still coming back —
+    // so dropping it from the total here rendered "1/2" on a parent the backend
+    // was deliberately keeping open, and at "2/2" it would have read as
+    // finished under a rule that refuses to finish it.
+    //
+    // Three steps, one done, one open, one parked: 1/3.
     m.tasks.mockResolvedValue([
       task({ uid: 'trip', summary: 'Trip' }),
       task({ uid: 'a', summary: 'Book flight', parent: 'trip',
@@ -1873,6 +1877,70 @@ describe('<TasksView> parked work', () => {
       task({ uid: 'c', summary: 'Learn Italian', parent: 'trip', parked: true }),
     ])
     setup()
-    expect(await screen.findByText('1/2')).toBeInTheDocument()
+    expect(await screen.findByText('1/3')).toBeInTheDocument()
+  })
+})
+
+describe('<TasksView> parked work, and what must not vanish with it', () => {
+  beforeEach(() => {
+    m.lists.mockResolvedValue([list])
+    m.park.mockImplementation(async (_l, uid, parked) => task({ uid, parked }))
+  })
+
+  it('promotes an open subtask when its parent is parked', async () => {
+    // THE HOLE `rendersUnder` LEFT. A subtask reaches the DOM only underneath
+    // its parent's row, so one whose parent is not rendered has to stand on its
+    // own — and a parked parent is not rendered, whatever `showCompleted` says.
+    // Asking only `isDone` left the child claiming a parent that was not on the
+    // screen, so it rendered nowhere: uncompletable, uneditable, undeletable,
+    // while the sidebar badge went on counting it.
+    //
+    // It is not in the Parked pane either — the child is not parked, only the
+    // parent is — which is what makes this a disappearance rather than a move.
+    m.tasks.mockResolvedValue([
+      task({ uid: 'trip', summary: 'Trip', parked: true, parked_at: '2026-09-01T09:00:00Z' }),
+      task({ uid: 'pack', summary: 'Pack', parent: 'trip' }),
+    ])
+    setup()
+    expect(await screen.findByText('Pack')).toBeInTheDocument()
+    // The parent is gone from the active list, which is the point of parking.
+    expect(screen.queryByText('Trip')).not.toBeInTheDocument()
+  })
+
+  it('keeps a parked step visible inside the checklist it belongs to', async () => {
+    // Under an OPEN parent a parked step still renders, with its chip. That is
+    // the same rule a completed step already follows — a checklist shows its
+    // steps and what state each is in — and it is what lets the step be
+    // un-parked from where it lives rather than from a separate pane.
+    m.tasks.mockResolvedValue([
+      task({ uid: 'trip', summary: 'Trip' }),
+      task({ uid: 'italian', summary: 'Learn Italian', parent: 'trip',
+             parked: true, parked_at: '2026-09-01T09:00:00Z' }),
+    ])
+    setup()
+    expect(await screen.findByText('Learn Italian')).toBeInTheDocument()
+    expect(screen.getByText('parked')).toBeInTheDocument()
+  })
+
+  it('keeps a parked subtask reachable when nothing renders its parent', async () => {
+    // The other half of the same hole, and the one that was real. With the
+    // parent completed and "show completed" off, nothing draws the parent — so
+    // the subtask is promoted to top level, where `isHidden` drops it from the
+    // active list. It is not done, so the completed pane will not have it
+    // either. Filtering the parked pane to top-level rows dropped exactly this
+    // case, and there was then nowhere at all to bring it back from.
+    m.tasks.mockResolvedValue([
+      task({ uid: 'trip', summary: 'Trip', completed: true, status: 'COMPLETED' }),
+      task({ uid: 'italian', summary: 'Learn Italian', parent: 'trip',
+             parked: true, parked_at: '2026-09-01T09:00:00Z' }),
+    ])
+    const { user } = setup()
+    await screen.findByRole('button', { name: /view parked/i })
+    expect(screen.queryByText('Learn Italian')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /view parked/i }))
+    expect(await screen.findByText('Learn Italian')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Bring it back' }))
+    expect(m.park).toHaveBeenCalledWith('l1', 'italian', false)
   })
 })

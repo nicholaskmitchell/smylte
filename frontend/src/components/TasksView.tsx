@@ -266,12 +266,20 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
   // beside it, already computed locally, had moved.
   const progressOf = (t: Task) => {
     const kids = kidsByParent.get(taskKey(t))
-    // Parked children leave BOTH sides of the fraction. A parked step is not
-    // done, so it cannot count in the numerator; and it is not a step of this
-    // job right now, so counting it in the denominator would make a parent
-    // read as permanently unfinished for work nobody intends to do.
-    const live = kids?.filter((k) => !isParked(k))
-    return live?.length ? { total: live.length, done: live.filter(isDone).length } : null
+    // A parked child counts in the DENOMINATOR and never in the numerator, and
+    // the two halves have different reasons.
+    //
+    // Not done, obviously — parking is the answer that explicitly is not
+    // finishing. But it stays in the total, because the alternative contradicts
+    // the rule the server applies to the same three rows: `_nothing_left_in`
+    // counts a parked child as open and refuses to close the parent over it,
+    // since parked work is still coming back. Dropping it from the total here
+    // rendered "2/2" — visually finished — on a parent the backend was
+    // deliberately keeping open. One of the two had to give, and the server is
+    // right: the work is intended, just not now.
+    return kids?.length
+      ? { total: kids.length, done: kids.filter(isDone).length }
+      : null
   }
 
   // A subtask reaches the DOM only underneath its own parent's row, so anything
@@ -283,10 +291,20 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
   // ordinary path is a completed parent with an open subtask while "show
   // completed" is off (the default) — the parent lands in `done`, which isn't
   // rendered, and the subtask goes with it.
+  //
+  // A PARKED parent counts as absent too, and it has to: it is excluded from
+  // `active` by `isHidden` whatever `showCompleted` says, so a rule that only
+  // asked `isDone` left an OPEN subtask of a parked parent claiming to render
+  // under a row that is not on the screen — and it rendered nowhere at all,
+  // while the sidebar badge went on counting it. Exactly the failure the
+  // paragraph above describes, reached by parking rather than by completing.
+  // (It is not in the Parked pane either: the subtask is not parked, only its
+  // parent is.)
   const shownKeys = new Set(shownTasks.map(taskKey))
   const rendersUnder = (t: Task) => {
     const p = parentOf(t)
-    return p && shownKeys.has(taskKey(p)) && (showCompleted || !isDone(p)) ? p : undefined
+    return p && shownKeys.has(taskKey(p))
+      && (showCompleted || !isDone(p)) && !isParked(p) ? p : undefined
   }
   // A RELATED-TO loop — which nothing on either side of the wire prevents —
   // leaves every task in it with a rendered parent, so a plain "no parent here"
@@ -520,13 +538,16 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
   // orderable at all, and it is why the column is a timestamp: the pane a
   // parking file most wants is "what did I put down lately".
   //
-  // Top-level only and no children beneath them, unlike the completed pane. A
-  // parked parent's subtasks are not themselves parked — they are steps of work
-  // that is not happening right now — so listing them here would report a state
-  // they are not in, and `progressOf` already leaves parked children out of the
-  // fraction for the same reason.
+  // EVERY parked row, flat — not the top-level ones. A subtask can be parked on
+  // its own, and `!parentOf(t)` dropped exactly those: not here, not in the
+  // active list (`isHidden`), not in the completed pane. Invisible, and so
+  // impossible to bring back, which is the one thing this pane exists to do.
+  // Flat rather than nested for the same reason: a parked parent's steps are
+  // not themselves parked, so there is no sub-list to draw, and a parked step
+  // under a parked parent appearing as its own row is a redundancy — where the
+  // alternative is a hole.
   const parkedTasks = shownTasks
-    .filter((t) => isParked(t) && !parentOf(t))
+    .filter(isParked)
     .sort((a, b) => (b.parked_at ?? '').localeCompare(a.parked_at ?? ''))
   const openOn = (key: string) =>
     sortTasks(shownTasks.filter((t) => !isHidden(t) && dueDay(t) === key))

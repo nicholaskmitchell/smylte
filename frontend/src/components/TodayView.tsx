@@ -372,7 +372,7 @@ const STALE_DAYS = 21
  *  It never hides anything. The Tasks pane shows every task it always did; this
  *  only changes which heading the DAY offers one under, and what it offers to
  *  do about it. */
-const STALE_OVERDUE_DAYS = 3
+export const STALE_OVERDUE_DAYS = 3
 
 /** How many of a suggestion group's tasks are shown before the rest are put
  *  behind one press.
@@ -983,6 +983,9 @@ export function TodayView({
   // week" painted over a fetch in flight is the wrong answer at the one moment
   // the question is worth asking.
   const [weekDone, setWeekDone] = useState<number | null>(null)
+  /** Which day the figure on screen belongs to, so a refetch for the SAME
+   *  day can leave it standing while a change of day clears it. */
+  const dayOfWeekDone = useRef('')
   useEffect(() => {
     // The week the DAY ON SCREEN falls in, not the live one, so stepping the
     // look-back back a fortnight answers for that week rather than for this
@@ -992,7 +995,13 @@ export function TodayView({
     const from = weekStartOf(day)
     const to = ymd(addDays(new Date(`${from}T00:00`), 7))
     let live = true
-    setWeekDone(null)
+    // Blanked only when the DAY changes, not on every refetch. `rev` bumps on
+    // any task tick anywhere in the app, and clearing the figure each time made
+    // the header line vanish and reappear on the most common action in the
+    // product. A number that is one tick stale for a moment is better than one
+    // that flickers; a wrong DAY's number is not, hence the split.
+    setWeekDone((prev) => (dayOfWeekDone.current === day ? prev : null))
+    dayOfWeekDone.current = day
     void guard(() => api.completedCounts(from, to))
       .then((r) => { if (live && r) setWeekDone(r.total) })
     return () => { live = false }
@@ -1182,8 +1191,23 @@ export function TodayView({
     patchPlan(on, { committed_at: was?.committed_at ?? new Date().toISOString() })
     setRitual(false)
     const dto = await guard(() => api.patchDay(on, { committed: true }))
-    if (dto) patchPlan(on, { committed_at: dto.committed_at })
-    else if (was) patchPlan(on, { committed_at: was.committed_at })
+    // BOTH FIELDS, because committing now produces both. The over-minutes are
+    // computed server-side and cannot be painted optimistically, so settling
+    // only the stamp left the look-back's "Started Xm over" line missing until
+    // some later refetch — and missing for good if the SSE stream was down.
+    // Settle what this call produced, which is the discipline this file keeps
+    // everywhere else.
+    if (dto) {
+      patchPlan(on, {
+        committed_at: dto.committed_at,
+        committed_over_minutes: dto.committed_over_minutes,
+      })
+    } else if (was) {
+      patchPlan(on, {
+        committed_at: was.committed_at,
+        committed_over_minutes: was.committed_over_minutes,
+      })
+    }
   }, [day, guard, patchPlan, planFor])
 
   /**
@@ -2944,7 +2968,11 @@ export function TodayView({
                       The consequence is named only when it IS one: an addition
                       the day still absorbs is not worth a warning, and a strip
                       that flagged every row would stop meaning anything. */}
-                  {capacity != null && t.estimated_minutes != null
+                  {/* Never on a triage row: the comment below says "on the
+                      button that would add it", and a triage row deliberately
+                      has none — what it would cost is not the question being
+                      asked there. */}
+                  {g.key !== 'triage' && capacity != null && t.estimated_minutes != null
                     && planned + t.estimated_minutes > capacity && (
                     <span className="today-sug-over mono">
                       {tr('today.sugWouldBeOver', {

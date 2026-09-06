@@ -252,7 +252,7 @@ describe('<SettingsMenu> asking about work that has waited', () => {
     show({ staleOverdue: 3, onStaleOverdueChange: onChange })
     await user.click(nav('Tasks'))
 
-    const field = screen.getByLabelText('Ask about work this many days late')
+    const field = screen.getByLabelText('Ask about work more than this many days late')
     await user.clear(field)
     await user.type(field, '14')
     expect(onChange).not.toHaveBeenCalled()
@@ -270,7 +270,7 @@ describe('<SettingsMenu> asking about work that has waited', () => {
     show({ staleOverdue: 3, onStaleOverdueChange: onChange })
     await user.click(nav('Tasks'))
 
-    const field = screen.getByLabelText('Ask about work this many days late')
+    const field = screen.getByLabelText('Ask about work more than this many days late')
     await user.clear(field)
     await user.type(field, '900')
     await user.tab()
@@ -285,8 +285,25 @@ describe('<SettingsMenu> asking about work that has waited', () => {
     show({ staleOverdue: 3, onStaleOverdueChange: onChange })
     await user.click(nav('Tasks'))
 
-    const field = screen.getByLabelText('Ask about work this many days late')
+    const field = screen.getByLabelText('Ask about work more than this many days late')
     await user.clear(field)
+    await user.tab()
+    expect(onChange).not.toHaveBeenCalled()
+    expect(field).toHaveValue(3)
+  })
+
+  it('refuses a negative rather than clamping it onto the off switch', async () => {
+    // `<input min={0}>` does not stop -5 being typed, and `Math.max(0, …)`
+    // turned it into 0 — which is the OFF switch. Disabling the triage group is
+    // a decision, and it must not be reachable by mistyping a threshold.
+    const onChange = vi.fn()
+    const user = userEvent.setup()
+    show({ staleOverdue: 3, onStaleOverdueChange: onChange })
+    await user.click(nav('Tasks'))
+
+    const field = screen.getByLabelText('Ask about work more than this many days late')
+    await user.clear(field)
+    await user.type(field, '-5')
     await user.tab()
     expect(onChange).not.toHaveBeenCalled()
     expect(field).toHaveValue(3)

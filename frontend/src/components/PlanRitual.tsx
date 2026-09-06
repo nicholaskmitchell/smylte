@@ -143,7 +143,14 @@ export function PlanRitual({
             // flow that refused to advance would be the wizard this is not.
             <button className="btn ghost" onClick={() => setStep(step + 1)}>{tr('plan.skip')}</button>
           )}
-          {last && over ? (
+          {/* `!committedAt` as well as `over`: on a day ALREADY committed the
+              button is "Done" and closes, so an overfull committed day must
+              not offer "Start it anyway" again. Pressing it re-stamped
+              `committed_at` and recomputed `committed_over_minutes` from the
+              day as it stands NOW — overwriting the record of how far over it
+              was at the moment it was committed, which is the one thing that
+              number is for. */}
+          {last && over && !committedAt ? (
             // TWO NAMED ANSWERS RATHER THAN ONE UNNAMED ONE, and this is still
             // not a block: committing is one press either way. What changes is
             // that the press SAYS WHAT IT IS. "Start" on a day 80 minutes over
@@ -151,12 +158,18 @@ export function PlanRitual({
             // warning underneath it was the only thing that did — read after
             // the decision rather than as part of it.
             //
-            // Trimming goes back to the step where things are picked, because
-            // that is where the day gets shorter; a button that only dismissed
-            // the warning would be an acknowledgement, which is a toll rather
-            // than a choice.
+            // Trimming CLOSES the ritual rather than stepping inside it, and
+            // the two obvious alternatives are both wrong. Step 1 is where
+            // things are PICKED — it can only make the day longer — and this
+            // step is already the one with the rows, their drop controls and
+            // their estimate cells on it, so stepping anywhere is either
+            // backwards or nowhere. Leaving the flow puts the owner on the day
+            // itself with the same controls and no ritual over them, which is
+            // what "not yet, let me deal with this" actually means. A button
+            // that merely dismissed the warning would be an acknowledgement,
+            // which is a toll rather than a choice.
             <>
-              <button className="btn ghost" onClick={() => setStep(1)}>
+              <button className="btn ghost" onClick={onClose}>
                 {tr('plan.trim')}
               </button>
               <button className="btn" onClick={onCommit}>{tr('plan.commitAnyway')}</button>

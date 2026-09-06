@@ -72,9 +72,13 @@ so it leaves nothing to do either, while a *parked* step does not close its
 parent, because parked work is still coming back. It walks up, so finishing the
 last box can close a checklist and the thing that checklist was a step of.
 
-It fires only on a write made here — another client ticking the last box changes
-nothing, since a sync engine that wrote back would turn every incoming change
-into an outgoing one, a full resync included. And it is the one preference in
+It fires only when a write made here SETTLES a step — ticking it off, or
+marking it won't-do. Renaming a step, or editing its notes, does not close
+anything: an edit that is not a decision about the work is not the write this is
+about. Another client ticking the last box changes nothing either, since a sync
+engine that wrote back would turn every incoming change into an outgoing one, a
+full resync included. And a close that fails is just a close that did not
+happen — it never takes the tick it rode in on down with it. And it is the one preference in
 this app that writes to the calendar server on your behalf: the close is a real
 completion, in Tasks.org and Thunderbird within a sync. So it is a switch in
 Settings → Tasks, on by default, rather than a rule.
@@ -180,7 +184,8 @@ thing this must not do.
 **It never blocks: it records a decision rather than enforcing one** — and both
 halves of that sentence are now true. Committing an overfull day is still one
 press, but never an unlabelled one: the button reads *Start it anyway*, with
-*Trim something* beside it going back to the step where a day gets shorter.
+*Trim something* beside it, which closes the planner and leaves you on the day
+with the rows and their controls in front of you.
 Naming the act is not the same as refusing it, and it is the difference between
 a warning read after the decision and one read as part of it. The add box says
 the same thing a moment earlier — if the day is already over, the line under

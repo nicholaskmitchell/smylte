@@ -1292,6 +1292,79 @@ def test_the_owner_can_refuse_to_have_parents_closed_for_them(client):
         client.put("/api/settings", json={"auto_close_parents": True})
 
 
+def test_only_settling_a_step_closes_its_parent(client):
+    """The feature is "ticking the last step finishes the thing it is a step
+    of". It was "ANY edit to any child does", which is a different and much
+    worse thing.
+
+    Two ways in, both ordinary. The last box was ticked in Tasks.org, or with
+    the setting off, so the parent legitimately stands open — and renaming a
+    completed step here silently completed it on the calendar server. Or the
+    owner re-opened a parent that closed too eagerly, and the next text edit to
+    any child snapped it shut again, with no way to keep it open but turning
+    the setting off entirely.
+
+    An edit that does not settle the child is not the write the setting was
+    described as guarding, and the README says so in as many words."""
+    lid = _list(client)["id"]
+    mk = lambda s, **kw: client.post(  # noqa: E731
+        f"/api/lists/{lid}/tasks", json={"summary": s, **kw}).json()
+    trip = mk("Trip")
+    step = mk("Book flight", parent=trip["uid"])
+
+    # Settled by another route, so the parent is legitimately open with nothing
+    # left in it — exactly the state a foreign client's tick leaves behind.
+    client.post(f"/api/lists/{lid}/tasks/{step['uid']}/complete")
+    client.post(f"/api/lists/{lid}/tasks/{trip['uid']}/complete?done=false")
+    assert client.get(f"/api/lists/{lid}/tasks/{trip['uid']}").json()["completed"] is False
+
+    for patch in ({"summary": "Book the flight"}, {"notes": "BA 117"},
+                  {"priority": "high"}, {"due": "2026-12-01"}):
+        assert client.patch(
+            f"/api/lists/{lid}/tasks/{step['uid']}", json=patch).status_code == 200
+        assert client.get(f"/api/lists/{lid}/tasks/{trip['uid']}").json()["completed"] is False, (
+            f"editing {list(patch)[0]} on a settled step closed its parent"
+        )
+
+    # And the real trigger still works: re-settling the step closes it.
+    client.post(f"/api/lists/{lid}/tasks/{step['uid']}/complete?done=false")
+    client.post(f"/api/lists/{lid}/tasks/{step['uid']}/complete")
+    assert client.get(f"/api/lists/{lid}/tasks/{trip['uid']}").json()["completed"] is True
+
+
+def test_a_failed_close_does_not_fail_the_tick_it_rides_on(client):
+    """Closing a parent is a convenience; it is not allowed to take a real
+    completion down with it.
+
+    The parent's PUT used to propagate out of `edit_task` AFTER the child's own
+    write had landed, so a 412 or a timeout answered 500 with no
+    `task_updated` — and the SPA's `settle(undefined)` put the pre-tick row
+    back. The owner saw an error and an un-ticked box for a task that was
+    completed on the server, and no event was coming to correct it."""
+    lid = _list(client)["id"]
+    mk = lambda s, **kw: client.post(  # noqa: E731
+        f"/api/lists/{lid}/tasks", json={"summary": s, **kw}).json()
+    trip = mk("Trip")
+    step = mk("The one step", parent=trip["uid"])
+
+    svc = client.app.state.service
+    real = svc._engine.edit_task
+
+    def fail_for_the_parent(href, uid, edit):
+        if uid == trip["uid"]:
+            raise RuntimeError("Radicale said no")
+        return real(href, uid, edit)
+
+    with mock.patch.object(svc._engine, "edit_task", side_effect=fail_for_the_parent):
+        r = client.post(f"/api/lists/{lid}/tasks/{step['uid']}/complete")
+
+    assert r.status_code == 200, "the child's own write must still succeed"
+    assert r.json()["completed"] is True
+    # The parent simply did not close. The next tick will find the same
+    # siblings settled and try again.
+    assert client.get(f"/api/lists/{lid}/tasks/{trip['uid']}").json()["completed"] is False
+
+
 def test_a_related_to_ring_terminates_instead_of_looping(client):
     """`RELATED-TO` is free text with no existence check on either side of the
     wire, so a ring is something another client can write — and this walk runs

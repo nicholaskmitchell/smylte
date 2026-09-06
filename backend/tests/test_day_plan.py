@@ -1941,6 +1941,33 @@ def test_an_account_with_no_capacity_can_never_be_recorded_as_over(svc):
     assert svc.set_day_ritual(day, committed=True)["committed_over_minutes"] is None
 
 
+def test_a_capacity_sent_with_the_commit_is_the_one_measured_against(svc):
+    """One PATCH carrying both a new capacity and the commit has to record the
+    over-minutes against the capacity it is CARRYING, not the one the day had a
+    moment earlier.
+
+    The SPA sends the two separately and never reaches this; the API takes them
+    together, and a record measured against a number the owner had already
+    replaced is exactly the kind of wrong this column exists to avoid being."""
+    day, _ = _committing(svc, capacity=480, minutes=200)
+    both = svc.set_day_ritual(day, capacity_minutes=120, committed=True)
+    assert both["capacity_minutes"] == 120
+    assert both["committed_over_minutes"] == 80, (
+        "the over-minutes were measured against the capacity being replaced"
+    )
+
+
+def test_a_capacity_on_its_own_still_announces_itself(svc):
+    """The capacity is written ahead of the commit now, out of the same field
+    map — so a PATCH carrying nothing else must still publish `day_updated`, or
+    every other tab holds a stale number until something unrelated moves it."""
+    day, _ = _committing(svc, minutes=30)
+    seen: list[dict] = []
+    svc._publish = seen.append          # noqa: SLF001 - the one hook a test has
+    svc.set_day_ritual(day, capacity_minutes=300)
+    assert [e for e in seen if e.get("type") == "day_updated"], seen
+
+
 def test_undoing_a_commit_clears_what_it_recorded(svc):
     """A day that is no longer committed has no commitment to have been over.
     Leaving the number would make the look-back describe a decision that was
@@ -1992,6 +2019,41 @@ def test_the_week_counts_completions_by_their_own_stamp(svc):
     # and knows which days it asked for.
     assert counts["days"] == {"2026-08-18": 2, "2026-08-21": 1}
     assert counts["total"] == 3
+
+
+def test_a_completion_falls_back_to_the_servers_zone_like_a_deadline(svc, monkeypatch):
+    """The twin of `test_a_zoned_due_falls_back_to_the_servers_zone`, and it has
+    to hold for the same reason: with no `home_timezone` the whole service takes
+    days in the process's own zone, and a completion that used a different rule
+    would file an evening's work under tomorrow while the deadline beside it
+    filed under today — on one screen, in one week.
+
+    `astimezone(None)` converting to process-local is what makes that one rule
+    rather than two, and it reads as an oversight, so it is pinned here as well
+    as commented. A `zone is not None` guard added in front of it is precisely
+    the plausible-looking change this catches.
+
+    The instant below is 20:30 on the 5th in New York and already the 6th in
+    UTC, so the zone is pinned rather than assumed: CI and the ordinary Docker
+    image both run in UTC, where the disagreement is invisible.
+    """
+    _seed_task(svc._conn, LIST_A, "evening", "Filed late", due="2026-09-05",
+               status="COMPLETED", completed_at="20260906T003000Z")
+    assert not svc.get_settings().get("home_timezone")
+
+    monkeypatch.setenv("TZ", "America/New_York")
+    time.tzset()
+    try:
+        got = svc.completed_counts("2026-08-31", "2026-09-07")["days"]
+    finally:
+        # The process zone back before the next test, as above: monkeypatch
+        # restores the VARIABLE and cannot make libc re-read it.
+        monkeypatch.undo()
+        time.tzset()
+    assert got == {"2026-09-05": 1}, (
+        f"with no home_timezone a completion was not filed in the server's own "
+        f"zone: {got}"
+    )
 
 
 def test_a_completion_without_a_stamp_is_not_counted(svc):

@@ -864,7 +864,22 @@ class TaskService:
     def edit_task(self, href: str, uid: str, edit: TaskEdit) -> dict[str, Any] | None:
         with self._lock:
             self._engine.edit_task(href, uid, edit)
-            closed = self._close_finished_parents(href, uid)
+            # ONLY WHEN THIS EDIT SETTLED THE CHILD. The feature is "ticking the
+            # last step finishes the thing it is a step of", and without this
+            # test it was "any edit to any child does", which is a different and
+            # much worse thing: renaming a step that was already done — or
+            # touching its notes — completed the parent on the calendar server,
+            # a write the owner did not make and cannot see the cause of. Worse,
+            # a parent deliberately RE-OPENED after an eager close snapped shut
+            # again on the next text edit, with no way to keep it open but
+            # turning the setting off.
+            #
+            # `getattr` rather than a bare attribute read: `TaskEdit.status`
+            # defaults to the UNSET sentinel, and an edit that does not mention
+            # status must not be compared as though it set one.
+            settled = str(getattr(edit, "status", None) or "").upper() in (
+                "COMPLETED", "CANCELLED")
+            closed = self._close_finished_parents(href, uid) if settled else []
         self._publish({"type": "task_updated", "list": _slug(href), "uid": uid})
         # One event per parent this edit closed, and they are needed rather than
         # tidy: the SPA reconciles a write by replacing the ROW it wrote, so
@@ -942,7 +957,28 @@ class TaskService:
                 return closed      # already settled; its own parent is not ours to judge
             if not self._nothing_left_in(href, parent_uid):
                 return closed
-            self._engine.edit_task(href, parent_uid, TaskEdit(status="COMPLETED"))
+            # THE CLOSE MAY NOT FAIL THE WRITE IT RIDES ON. This PUTs to
+            # Radicale, and an error here — a 412, a timeout, the server down —
+            # used to propagate out of `edit_task` AFTER the child's own write
+            # had already landed. The route answered 500, no `task_updated` was
+            # published, and the SPA's `settle(undefined)` put the pre-tick row
+            # back: the owner saw an error and an un-ticked box for a task that
+            # was completed on the server, with no event coming to correct it.
+            #
+            # Closing a parent is a convenience. It is allowed to not happen —
+            # the next tick or edit will find the same siblings settled and try
+            # again — and it is not allowed to take a real completion down with
+            # it. Logged rather than swallowed silently, because a close that
+            # never succeeds is a broken feature and the log is the only place
+            # that would show.
+            try:
+                self._engine.edit_task(href, parent_uid, TaskEdit(status="COMPLETED"))
+            except Exception:
+                log.warning(
+                    "auto-close: could not complete parent %s in %s", parent_uid, href,
+                    exc_info=True,
+                )
+                return closed
             closed.append(parent_uid)
             # Re-read rather than reusing `parent`: the edit rewrote the row, and
             # the climb continues from what is now on it.
@@ -2474,6 +2510,18 @@ class TaskService:
             # Committing is settled INSIDE the lock, because how far over the
             # plan ran is a fact about the day as it stands at this instant and
             # reading the entries outside would race a write from another tab.
+            # THE CAPACITY LANDS FIRST, in its own write, and the ordering is
+            # the whole of what that buys. `_over_at_commit` reads the day's
+            # effective capacity, so computing it before the write measured a
+            # PATCH carrying both `capacity_minutes` and `committed: true`
+            # against the capacity the day had a moment ago. The SPA sends the
+            # two separately and never hit it; the API takes them together, and
+            # a record measured against a number the owner had already replaced
+            # is exactly the kind of wrong this column exists to avoid being.
+            wrote = bool(fields)
+            if "capacity_minutes" in fields:
+                store.set_day_ritual(
+                    self._conn, day, capacity_minutes=fields.pop("capacity_minutes"))
             if committed is not None:
                 fields["committed_at"] = _stamp() if committed else None
                 # Cleared alongside the stamp when a commit is undone: a day
@@ -2492,7 +2540,12 @@ class TaskService:
             dto = self._day_plan_dto(day, entries, opened)
         # Only when something was written — a PATCH with an empty body is a read,
         # and an event for it would have every other tab refetch for nothing.
-        if fields:
+        #
+        # `wrote` and not `fields`: the capacity is popped out of `fields` and
+        # written first (see above), so a PATCH carrying nothing else would have
+        # left `fields` empty and published no event at all — every other tab
+        # holding a stale capacity until something else moved.
+        if wrote:
             self._publish({"type": "day_updated", "day": day})
         return dto
 
@@ -2915,9 +2968,11 @@ class TaskService:
         Bucketed in the owner's zone, the same rule `_due_day` applies to a
         deadline, so "finished on the 21st" means one thing everywhere.
 
-        Bounded like `day_range`, and against the same constant: this walks
-        every task in every list, and an unbounded window is an unbounded scan
-        under the global lock.
+        Bounded like `day_range`, and against the same constant. The bound is
+        on the ANSWER rather than on the work: the scan is one indexed-ish query
+        over the tasks that carry a stamp at all (`store.completed_tasks`) and
+        does not grow with the window, so this is about how much a caller may
+        ask to be handed back, not about how much it costs to look.
         """
         start, end = day_key(from_day), day_key(to_day)
         span = (date.fromisoformat(end) - date.fromisoformat(start)).days
@@ -2925,24 +2980,41 @@ class TaskService:
             raise ValueError(f"range is bounded to {DAY_RANGE_MAX_DAYS} days, asked for {span}")
         zone = self._home_tz()
         out: dict[str, list[dict[str, Any]]] = {}
-        for col in self.list_lists():
-            for t in self.list_tasks(col["href"], include_done=True):
-                stamp = t.get("completed_at")
-                if not stamp:
-                    continue
-                try:
-                    when = datetime.fromisoformat(stamp)
-                except ValueError:
-                    continue
-                if when.tzinfo is not None and zone is not None:
-                    when = when.astimezone(zone)
-                key = when.date().isoformat()
-                if not (start <= key < end):
-                    continue
-                out.setdefault(key, []).append({
-                    "list": t["list"], "uid": t["uid"], "summary": t["summary"],
-                    "completed_at": stamp,
-                })
+        # `store.completed_tasks` rather than a DTO per task in every list. This
+        # is on a path the SPA polls — the dashboard's week module asks on every
+        # task tick — and building categories, the sidecar, the children map and
+        # a materialised `raw_ics` BLOB for every task in the account to arrive
+        # at a count was the cost of a question the connector used to ask once.
+        # Four columns, one query, and the rows without a stamp never leave SQL.
+        with self._lock:
+            rows = store.completed_tasks(self._conn)
+        for it in rows:
+            stamp = it["completed"]
+            if not stamp:
+                continue
+            try:
+                when = datetime.fromisoformat(stamp)
+            except ValueError:
+                continue
+            # `astimezone(zone)` with zone=None converts to the process's
+            # local zone, which is exactly the unset-`home_timezone`
+            # fallback — the same call `_due_day` makes, with the same
+            # comment, and NO second branch. A `zone is not None` guard here
+            # looked defensive and was a regression: it left an aware stamp
+            # in whatever offset it arrived in, so with no home zone set an
+            # evening completion filed under tomorrow while the deadline
+            # beside it filed under today.
+            if when.tzinfo is not None:
+                when = when.astimezone(zone)
+            key = when.date().isoformat()
+            if not (start <= key < end):
+                continue
+            out.setdefault(key, []).append({
+                # The list's SHORT id, as every other DTO in this service
+                # carries — `completed_tasks` hands back the href.
+                "list": _slug(it["collection_href"]), "uid": it["uid"],
+                "summary": it["summary"], "completed_at": stamp,
+            })
         return out
 
     def completed_counts(self, from_day: str, to_day: str) -> dict[str, Any]:
