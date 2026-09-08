@@ -684,8 +684,9 @@ Live at `https://radicale.nicholaskmitchell.com` behind a Cloudflare tunnel and
 a Caddy path split: `/dav*` → Radicale (device CalDAV sync), everything else →
 the app on `127.0.0.1:8080`. The app authenticates to Radicale as you over
 localhost; Radicale is never exposed except through `/dav`. Auto-deploys from
-`main` via `~/tasks-autopull.sh` (cron, every minute). Full runbook, systemd
-unit, and Caddy/cloudflared config in `docs/DEPLOY.md` and `deploy/`.
+`main` via `deploy/tasks-autopull.sh` on a one-minute cron (installed at
+`~/tasks-autopull.sh`). Full runbook, systemd unit, and Caddy/cloudflared config
+in `docs/DEPLOY.md` and `deploy/`.
 
 ## Disclosure
 
