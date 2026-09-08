@@ -94,6 +94,35 @@ Move the file rather than letting a fresh one be created: `tasks.db` holds the
 sidecar-class tables under **Backups** below, and those are the one part of it a
 resync cannot rebuild. Take the backup first.
 
+### Auto-deploy from `main`  **[PROD — cron + one sudoers rule]**
+
+`deploy/tasks-autopull.sh` is what keeps the Pi current: fetch, fast-forward
+only, reinstall backend deps if `requirements.txt` moved, rebuild the frontend
+if anything under `frontend/` did, restart the service. It refuses to do
+anything clever — a non-fast-forward pull is left alone for a human, and an
+`flock` means a slow rebuild cannot be overlapped by the next minute's run.
+
+It lives in the repo so the Corresponding Source the licence asks for includes
+the script that produces the running deployment, and it is *installed* rather
+than run from the tree:
+
+```bash
+cp ~/tasks/deploy/tasks-autopull.sh ~/tasks-autopull.sh   # re-copy after it changes
+chmod +x ~/tasks-autopull.sh
+# the restart needs one passwordless rule:
+echo "$(id -un) ALL=(root) NOPASSWD: /usr/bin/systemctl restart tasks.service" \
+  | sudo tee /etc/sudoers.d/tasks-autopull && sudo chmod 440 /etc/sudoers.d/tasks-autopull
+crontab -e     # * * * * * $HOME/tasks-autopull.sh
+```
+
+A copy rather than a symlink into the tree, deliberately: the script's own job
+is to `git pull` the directory it would be symlinked into, and a script that
+rewrites itself mid-run is a failure mode nobody wants to debug at one-minute
+intervals. The cost is that a change to it needs the copy repeating — which is
+why the line above says so.
+
+Progress and failures go to `~/tasks-autopull.log`.
+
 ## B. Public Caddy site (path split)  **[PROD — reload Caddy]**
 Append `~/tasks/deploy/Caddyfile.snippet` to `/etc/caddy/Caddyfile`, then:
 ```bash

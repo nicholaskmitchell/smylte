@@ -684,8 +684,9 @@ Live at `https://radicale.nicholaskmitchell.com` behind a Cloudflare tunnel and
 a Caddy path split: `/dav*` → Radicale (device CalDAV sync), everything else →
 the app on `127.0.0.1:8080`. The app authenticates to Radicale as you over
 localhost; Radicale is never exposed except through `/dav`. Auto-deploys from
-`main` via `~/tasks-autopull.sh` (cron, every minute). Full runbook, systemd
-unit, and Caddy/cloudflared config in `docs/DEPLOY.md` and `deploy/`.
+`main` via `deploy/tasks-autopull.sh` on a one-minute cron (installed at
+`~/tasks-autopull.sh`). Full runbook, systemd unit, and Caddy/cloudflared config
+in `docs/DEPLOY.md` and `deploy/`.
 
 ## Disclosure
 
@@ -693,3 +694,45 @@ Smylte was built with the assistance of AI coding tools — primarily
 Anthropic's Claude, via Claude Code. The design decisions, the review, and
 what ultimately ships are mine. Commits made with AI assistance carry a
 `Co-Authored-By` trailer, so the record lives in `git log`, not just here.
+
+## License
+
+Copyright © 2026 Nicholas K. Mitchell.
+
+Smylte is free software: you can redistribute it and/or modify it under the
+terms of the **GNU Affero General Public License** as published by the Free
+Software Foundation, either **version 3** of the License, or (at your option)
+any later version — SPDX `AGPL-3.0-or-later`. The full text is in
+[`LICENSE`](LICENSE).
+
+Affero rather than plain GPL, because the GPL's copyleft is triggered by
+*distribution*, and a hosted app never distributes anything. Someone could fork
+this, fix the recurrence handling, run it as a service and owe nobody the patch
+— the licence would never fire, because no copy ever changed hands. AGPL §13
+closes that: **run a modified copy where other people reach it over a network
+and you must offer them its source.** Smylte answers that itself in
+Settings → About, which links to the repository the running code came from. If
+you fork it, point that link at your fork — that is the whole obligation.
+
+The version also settles a dependency question. `vobject` is Apache-2.0 and
+`recurring-ical-events` is LGPL-3.0-or-later; neither is compatible with GPLv2,
+and both fit under v3.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE. See the GNU Affero General Public License for more details.
+
+**`firmware/` is the one exception, and it is MIT** (`firmware/LICENSE`). It is
+an example whose purpose is to be copied onto a board and changed, and §13 —
+the reason the rest of this is Affero — cannot fire on a panel that makes
+outbound requests and accepts no connections. The line is exactly the directory:
+the `.bin` route and the renderer behind it (`backend/tasksd/display/`) are the
+server and stay AGPL. Note that it buys less than it looks like: Waveshare's
+driver, which the example imports and this repo deliberately does not vendor, is
+GPL-3.0, so what runs on the board is a GPL-3.0 combined work either way. What
+MIT buys is lifting those sixty lines somewhere that driver is not.
+
+The three bundled typefaces are separate works and keep their own terms:
+Fraunces, Inter and JetBrains Mono are each under the SIL Open Font License 1.1,
+whose text ships beside them in `frontend/public/fonts/` and
+`backend/tasksd/display/fonts/`.

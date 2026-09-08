@@ -18,9 +18,9 @@ with the packed framebuffer the panel already wants, so the whole client is
 | Firmware | MicroPython for RP2350 (Pico 2 W build) |
 | Driver | Waveshare's own `Pico_ePaper-7.5.py`, copied onto the board as `epaper.py` |
 
-The driver is **not vendored here**. It is third-party code with its own licence
-and its own release cadence, and a stale copy in this repo would be worse than
-no copy — get it from
+The driver is **not vendored here**. It is third-party code under its own
+licence (GPL-3.0) and its own release cadence, and a stale copy in this repo
+would be worse than no copy — get it from
 [waveshareteam/Pico_ePaper_Code](https://github.com/waveshareteam/Pico_ePaper_Code).
 That is also why the contract test in `backend/tests/` parses this file rather
 than importing it: `epaper`, `machine`, `framebuf` and `network` do not exist
@@ -162,3 +162,38 @@ polarity (`?invert=1` if your driver wants 0 for white) and the stride at a widt
 that is not a multiple of eight — 250 pixels is 32 bytes a row, not 31.25, and a
 client that divides rather than reading `X-Display-Stride` shears its picture a
 little further on every row.
+
+## Licence
+
+**Everything in this directory is MIT** — `LICENSE` here — where the rest of
+Smylte is AGPL-3.0-or-later. The split is deliberate and it is narrow: only
+`firmware/` moves. The `.bin` route that serves the framebuffer and the
+renderer behind it (`backend/tasksd/display/`) are the server, and they stay
+AGPL.
+
+Two reasons, and the second is the real one.
+
+The AGPL's whole distinguishing feature is §13 — run a modified copy that
+people reach **over a network** and you owe them its source. A panel on a wall
+is a pure client: it makes outbound requests and nothing ever connects to it,
+so there is no remote interaction for §13 to fire on. Labelling this file with
+a clause that cannot apply to it says something untrue about what it is.
+
+And what it is, per the top of this page, is *an example, not a library and not
+a product*. Its value is being copied and changed — the section above is
+literally an invitation to port it to an ESP32 or an Inkplate. Sixty lines that
+somebody has to relicense their whole project to borrow are sixty lines nobody
+borrows.
+
+**What this does not do is hand you a permissive stack.** Waveshare's driver is
+GPL-3.0 and `main.py` imports it, so the thing actually running on your board is
+a GPL-3.0 combined work whatever the licence on this file says. What MIT buys is
+the right to lift *this* file somewhere the Waveshare driver is not — a
+different panel, a different driver, a framebuffer client on a Linux box. The
+interesting part here was never the `epd` calls; it is fetch-URL-to-raw-buffer,
+and that part is portable.
+
+One consequence worth stating for anyone tempted to make setup easier: because
+the driver is fetched by you rather than shipped by this repo, nobody here
+distributes that combined work. Vendor it, or publish a flash-ready image with
+both in it, and you are conveying GPL-3.0 code and take on its terms.
