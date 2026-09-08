@@ -125,6 +125,40 @@ describe('<SettingsMenu> on a desktop', () => {
   })
 })
 
+// ── about: the licence's own requirement, rendered ──────────────────────────
+
+describe('<SettingsMenu> → About', () => {
+  beforeEach(() => stubMatchMedia(false))
+
+  it('offers the source of the running version, as AGPL §13 asks', async () => {
+    // Not decoration. The licence obliges anyone running a modified copy over a
+    // network to offer its source to the people using it, and this link is the
+    // only place the app does that — a README is not something a person
+    // interacting with the server ever sees.
+    show()
+    await userEvent.click(nav('About'))
+    const link = within(panel()).getByRole('link', { name: /github\.com/ })
+    expect(link).toHaveAttribute('href', 'https://github.com/nicholaskmitchell/smylte')
+  })
+
+  it('shows the same address it links to', async () => {
+    // The failure this pins is a fork that repoints the href and leaves the
+    // visible text naming this repository — a link that lies about where the
+    // source is fails §13 more completely than no link, because it looks
+    // answered. The label is derived from the URL so the two cannot drift.
+    show()
+    await userEvent.click(nav('About'))
+    const link = within(panel()).getByRole('link', { name: /github\.com/ })
+    expect(link.getAttribute('href')).toContain(link.textContent!.trim())
+  })
+
+  it('names the licence it is offering the source under', async () => {
+    show()
+    await userEvent.click(nav('About'))
+    expect(within(panel()).getByText('AGPL-3.0-or-later')).toBeInTheDocument()
+  })
+})
+
 // ── phone: an index, then the section you tapped ────────────────────────────
 
 describe('<SettingsMenu> on a phone', () => {

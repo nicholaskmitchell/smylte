@@ -699,13 +699,27 @@ what ultimately ships are mine. Commits made with AI assistance carry a
 Copyright © 2026 Nicholas K. Mitchell.
 
 Smylte is free software: you can redistribute it and/or modify it under the
-terms of the GNU General Public License as published by the Free Software
-Foundation, either **version 2** of the License, or (at your option) any later
-version — SPDX `GPL-2.0-or-later`. The full text is in [`LICENSE`](LICENSE).
+terms of the **GNU Affero General Public License** as published by the Free
+Software Foundation, either **version 3** of the License, or (at your option)
+any later version — SPDX `AGPL-3.0-or-later`. The full text is in
+[`LICENSE`](LICENSE).
+
+Affero rather than plain GPL, because the GPL's copyleft is triggered by
+*distribution*, and a hosted app never distributes anything. Someone could fork
+this, fix the recurrence handling, run it as a service and owe nobody the patch
+— the licence would never fire, because no copy ever changed hands. AGPL §13
+closes that: **run a modified copy where other people reach it over a network
+and you must offer them its source.** Smylte answers that itself in
+Settings → About, which links to the repository the running code came from. If
+you fork it, point that link at your fork — that is the whole obligation.
+
+The version also settles a dependency question. `vobject` is Apache-2.0 and
+`recurring-ical-events` is LGPL-3.0-or-later; neither is compatible with GPLv2,
+and both fit under v3.
 
 This program is distributed in the hope that it will be useful, but WITHOUT ANY
 WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
-PARTICULAR PURPOSE. See the GNU General Public License for more details.
+PARTICULAR PURPOSE. See the GNU Affero General Public License for more details.
 
 The three bundled typefaces are separate works and keep their own terms:
 Fraunces, Inter and JetBrains Mono are each under the SIL Open Font License 1.1,
