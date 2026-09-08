@@ -1101,4 +1101,11 @@ export const en = {
     one: '{count} finished this week',
     other: '{count} finished this week',
   },
+  // ── about ─────────────────────────────────────────────────────────────────
+  //    AGPL §13's "prominently offer": the source of the version running here,
+  //    reachable from inside the app rather than only from the repository.
+  'settings.section.about': 'About',
+  'about.licence': 'Licence',
+  'about.source': 'Source code',
+  'about.hint': 'This is the source for the version running here. The licence asks anyone running a modified copy to offer its source to the people using it — this link is how Smylte does that, so point it at your own repository if you change anything.',
 } as const

@@ -1158,4 +1158,9 @@ export const de: Catalogue = {
     one: '{count} diese Woche erledigt',
     other: '{count} diese Woche erledigt',
   },
+  // ── Über ──────────────────────────────────────────────────────────────────
+  'settings.section.about': 'Über',
+  'about.licence': 'Lizenz',
+  'about.source': 'Quellcode',
+  'about.hint': 'Das ist der Quellcode der Version, die hier läuft. Die Lizenz verlangt, dass jeder, der eine geänderte Kopie betreibt, deren Quellcode den Nutzenden anbietet — dieser Link ist Smyltes Antwort darauf. Wenn du etwas änderst, lass ihn auf dein eigenes Repository zeigen.',
 }
