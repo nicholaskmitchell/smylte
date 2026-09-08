@@ -1,6 +1,6 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AuthError } from './api'
-import { addDays, cssColor, dayKey, hasZone, instantFromLocal, isOverdue, makeGuard, pad, parseDate, setErrorNotifier, textDir, toLocalInput, ymd } from './util'
+import { addDays, cssColor, dayKey, daysPastDue, hasZone, instantFromLocal, isOverdue, makeGuard, pad, parseDate, setErrorNotifier, textDir, toLocalInput, ymd } from './util'
 
 describe('parseDate', () => {
   it('parses date-only strings as LOCAL midnight, not UTC', () => {
@@ -197,5 +197,44 @@ describe('textDir', () => {
     expect(textDir('')).toBeUndefined()
     expect(textDir(null)).toBeUndefined()
     expect(textDir(undefined)).toBeUndefined()
+  })
+})
+
+describe('daysPastDue', () => {
+  // Fixed, so the reading is decidable without the wall clock — the same
+  // bargain every date function in this module strikes.
+  const DAY = '2026-09-06'
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(`${DAY}T09:00:00`))
+  })
+  afterEach(() => vi.useRealTimers())
+
+  it('counts whole days, not hours', () => {
+    // The threshold is a claim about days. One that flipped at some hour of the
+    // morning would be a rule nobody could predict from the row.
+    expect(daysPastDue('2026-09-03', true, DAY)).toBe(3)
+    expect(daysPastDue('2026-09-05', true, DAY)).toBe(1)
+  })
+
+  it('is null for anything the app does not already call overdue', () => {
+    // Lateness comes from `isOverdue` and nothing else, so this can never
+    // disagree with the badge on the same row.
+    expect(daysPastDue(null, true, DAY)).toBeNull()
+    expect(daysPastDue('2026-09-20', true, DAY)).toBeNull()
+    // Today's own deadline is not late, whichever shape it is in.
+    expect(daysPastDue(DAY, true, DAY)).toBeNull()
+    expect(daysPastDue(`${DAY}T08:00`, false, DAY)).toBeNull()
+  })
+
+  it('gives an all-day deadline its whole day before counting it', () => {
+    // `isOverdue`'s rule, inherited rather than restated: yesterday's all-day
+    // task became overdue at midnight and is one day late, not two.
+    expect(daysPastDue('2026-09-05', true, DAY)).toBe(1)
+  })
+
+  it('crosses a month boundary as arithmetic rather than as a special case', () => {
+    expect(daysPastDue('2026-08-30', true, DAY)).toBe(7)
   })
 })

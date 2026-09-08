@@ -262,12 +262,19 @@ def build_tools(api) -> dict[str, Tool]:
         "smylte_list_tasks", "List tasks",
         "Tasks in one list, or across every list when list_id is omitted. "
         "Ordered the way the app shows them: manual position first, then due "
-        "date (undated last), then priority, then title.",
+        "date (undated last), then priority, then title.\n\n"
+        "PARKED tasks are left out unless asked for. Parked means the owner set "
+        "it aside — not finished, not abandoned, just not now — so it is not on "
+        "their plate and must not be reported as though it were. It is also not "
+        "done: never describe a parked task as completed.",
         _obj({
             "list_id": {**_LIST_ID,
                         "description": _LIST_ID["description"] + " Omit to span every list."},
             "include_done": {"type": "boolean", "default": False,
                              "description": "Include completed and cancelled tasks."},
+            "include_parked": {"type": "boolean", "default": False,
+                               "description": "Include tasks the owner has parked "
+                                              "(set aside without finishing)."},
             "due_before": {"type": "string",
                            "description": "Only tasks due strictly before this date "
                                           "('YYYY-MM-DD' or an ISO datetime)."},
@@ -279,9 +286,11 @@ def build_tools(api) -> dict[str, Tool]:
             "limit": _LIMIT, "offset": _OFFSET,
         }),
     )
-    def _list_tasks(list_id=None, include_done=False, due_before=None, due_after=None,
+    def _list_tasks(list_id=None, include_done=False, include_parked=False,
+                    due_before=None, due_after=None,
                     overdue_only=False, tag=None, limit=None, offset=None):
-        rows = api.list_tasks(list_id, include_done=include_done, due_before=due_before,
+        rows = api.list_tasks(list_id, include_done=include_done,
+                              include_parked=include_parked, due_before=due_before,
                               due_after=due_after, overdue_only=overdue_only, tag=tag)
         return page(rows, limit, offset, key="tasks")
 
@@ -379,6 +388,27 @@ def build_tools(api) -> dict[str, Tool]:
         return api.cancel_task(list_id, uid)
 
     @tool(
+        "smylte_park_task", "Park a task, or bring it back",
+        "Set a task aside without finishing or abandoning it, or un-park one "
+        "with parked=false. A parked task leaves the owner's default views, "
+        "their day's automatic rows and their open counts, and comes back "
+        "unchanged the moment it is un-parked.\n\n"
+        "This is the RIGHT answer for \"not now\" and the wrong one for \"never\" "
+        "— smylte_cancel_task is won't-do, and it reads as a verdict, which is "
+        "why the owner needed a neutral option. Parking is NOT completing: never "
+        "report a parked task as done.\n\n"
+        "Smylte-only. Unlike completing or cancelling, this writes nothing to "
+        "the calendar server, so the owner's other apps — Tasks.org, "
+        "Thunderbird, their phone — will still show a parked task as open. Say "
+        "so if it matters to what they asked.",
+        _obj({"list_id": _LIST_ID, "uid": {"type": "string"},
+              "parked": {"type": "boolean", "default": True}}, ["list_id", "uid"]),
+        scope=SCOPE_WRITE, read_only=False, idempotent=True,
+    )
+    def _park_task(list_id, uid, parked=True):
+        return api.park_task(list_id, uid, parked=parked)
+
+    @tool(
         "smylte_delete_task", "Delete a task",
         "Delete a task from the server for good. Prefer smylte_complete_task or "
         "smylte_cancel_task unless it should genuinely vanish.",
@@ -435,6 +465,13 @@ def build_tools(api) -> dict[str, Tool]:
         "one per row, and null on a note or a habit, which name none.\n\n"
         "Takes no arguments on purpose — it is always today, in the owner's own "
         "timezone. Use smylte_review_day to look at any other day.\n\n"
+        "WHAT IS OVERDUE IS NOT HERE, and its absence is not an oversight. A "
+        "deadline the owner set for today is a commitment and lands on the day; "
+        "one they have already missed is a decision they have not made yet, so "
+        "the app offers it rather than placing it. Do not read an empty-looking "
+        "day as \"nothing is outstanding\" — call smylte_list_tasks with "
+        "overdue_only for that, and treat what comes back as work awaiting a "
+        "decision rather than work scheduled for today.\n\n"
         "It also reports WHAT THE OWNER SAID about today, all of it read-only "
         "here: `capacity` is how many minutes they are willing to work (null if "
         "they have never said, which is a real answer — do not assume eight "
@@ -592,8 +629,10 @@ def build_tools(api) -> dict[str, Tool]:
         "What was planned against what actually happened — one day, or a range "
         "with from + to (`to` is EXCLUSIVE). Live entries come back split by "
         "where they came from: `chosen` by the owner, `carried` from a previous "
-        "day, `derived` from what was due, `habits` for the occurrences a habit "
-        "rule scheduled, and `other`, a residual that is normally empty — "
+        "day, `derived` from what was due THAT DAY (never from what was already "
+        "late — the app does not put overdue work on a day), `habits` for the "
+        "occurrences a habit rule scheduled, and `other`, a residual that is "
+        "normally empty — "
         "anything in it carries its own `source` field saying what it is. "
         "`dropped` holds what was taken off the day, whatever put it there, and "
         "`moved` holds what was sent to ANOTHER day — each of those rows carries "
@@ -635,6 +674,31 @@ def build_tools(api) -> dict[str, Tool]:
         return api.review_day(day=day, from_day=rest.get("from"), to_day=rest.get("to"))
 
     # ── calendars and events ─────────────────────────────────────────────────
+
+    @tool(
+        "smylte_review_week", "What was finished in a week",
+        "How many tasks the owner finished in a week — the total, and a count "
+        "per day. Pass any day in the week; defaults to this one. Weeks start "
+        "on MONDAY.\n\n"
+        "This is the cheap answer to \"what did I get done\". "
+        "smylte_review_day with from + to returns the same week in full — every "
+        "bucket, every entry, the task behind each row — which is the right "
+        "call when the question is about what happened, and the wrong one when "
+        "it is about how much.\n\n"
+        "TASKS ONLY. Notes and habit occurrences are not counted: habits have "
+        "their own weekly count and the app deliberately never scores one as a "
+        "failure, so folding them in here would make this a number that can go "
+        "up on a day nothing was finished. A day with nothing finished is "
+        "ABSENT from `days` rather than present as 0.\n\n"
+        "It counts completions, not intentions, and it is not a target. There "
+        "is nothing to compare it against and the owner has set no goal — "
+        "report the number, and do not congratulate or admonish them for it.",
+        _obj({"week": {**_DAY, "description":
+                       "Any day in the week to count, 'YYYY-MM-DD'. Defaults to "
+                       "the week containing today, in the owner's timezone."}}),
+    )
+    def _review_week(week=None):
+        return api.review_week(week=week)
 
     @tool(
         "smylte_list_calendars", "List calendars",

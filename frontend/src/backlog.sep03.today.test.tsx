@@ -64,7 +64,8 @@ const cal: List = {
 
 const task = (o: Partial<Task> = {}): Task => ({
   uid: 'u1', list: 'l1', summary: 'Ship it', notes: null, status: 'NEEDS-ACTION',
-  completed: false, cancelled: false, priority: null, priority_label: 'none',
+  completed: false, cancelled: false, parked: false, parked_at: null,
+  priority: null, priority_label: 'none',
   percent_complete: null, due: null, due_is_date: true, start: null, start_is_date: true,
   tags: [], parent: null, children: [], child_count: 0, completed_child_count: 0,
   derived_percent: null, pinned: false, sort_order: null,
@@ -98,7 +99,7 @@ const calEvent = (o: Partial<CalEvent> = {}): CalEvent => ({
 const plan = (entries: DayEntry[] = [], day = today(), o: Partial<DayPlan> = {}): DayPlan => ({
   day, planned: true, entries,
   capacity_minutes: null, capacity: null,
-  committed_at: null, shutdown_at: null, reflection: null, ...o,
+  committed_at: null, committed_over_minutes: null, shutdown_at: null, reflection: null, ...o,
 })
 const withCapacity = (entries: DayEntry[], capacity: number) =>
   plan(entries, today(), { capacity, capacity_minutes: capacity })

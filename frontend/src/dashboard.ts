@@ -12,7 +12,7 @@ export const ROW_H = 44        // px per grid row; mirrored by --dash-row in app
 export const GAP = 12          // px between modules
 
 export type ModuleKind =
-  | 'today' | 'day_plan' | 'overdue' | 'upcoming' | 'mini_calendar'
+  | 'today' | 'day_plan' | 'overdue' | 'upcoming' | 'mini_calendar' | 'week'
   | 'completed' | 'booking_links' | 'bookings' | 'quick_add'
 
 export interface DashboardModule {
@@ -50,6 +50,10 @@ export const MODULE_SPECS: Record<ModuleKind, ModuleSpec> = {
   upcoming: { label: 'module.upcoming', blurb: 'module.upcoming.blurb', w: 4, h: 6, minW: 3, minH: 3 },
   mini_calendar: { label: 'module.mini_calendar', blurb: 'module.mini_calendar.blurb', w: 4, h: 6, minW: 3, minH: 5 },
   completed: { label: 'module.completed', blurb: 'module.completed.blurb', w: 4, h: 5, minW: 3, minH: 3 },
+  // One number and a few weeks of shape. Short, because that is all it is —
+  // a module that asked for more height would have to fill it with something,
+  // and there is deliberately nothing else to say about the figure.
+  week: { label: 'module.week', blurb: 'module.week.blurb', w: 4, h: 3, minW: 2, minH: 2 },
   booking_links: { label: 'module.booking_links', blurb: 'module.booking_links.blurb', w: 6, h: 5, minW: 3, minH: 3 },
   bookings: { label: 'module.bookings', blurb: 'module.bookings.blurb', w: 6, h: 5, minW: 3, minH: 3 },
   quick_add: { label: 'module.quick_add', blurb: 'module.quick_add.blurb', w: 4, h: 3, minW: 3, minH: 2 },

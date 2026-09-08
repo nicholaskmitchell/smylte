@@ -85,10 +85,29 @@ def published(monkeypatch, svc):
 
 def _open_with_notes(svc_, *titles: str) -> str:
     """Today, opened, with one note per title — n1, n2, … — positioned AHEAD
-    of whatever the snapshot carried (the fixture's overdue tasks). Negative
-    positions because the snapshot and a hand-add both number from 1, and a
-    tie is broken by `created_at`, which the snapshot wins."""
+    of the three tasks the snapshot derives. Negative positions because the
+    snapshot and a hand-add both number from 1, and a tie is broken by
+    `created_at`, which the snapshot wins.
+
+    The three tasks are re-dated onto today HERE, and that is the whole of what
+    this helper had to learn. The `svc` fixture dates its cast around a fixed
+    Friday in 2026, and these tests run on the real today — so the queue behind
+    the notes used to be the fixture's OVERDUE tasks, which the snapshot picked
+    up. It derives only what is due on the day itself now, so a live day gets
+    nothing from a fixture dated in the past.
+
+    Timed deadlines rather than dates, an hour apart, because `_snapshot_order`
+    sorts on the raw DUE string: that is what keeps the queue in the order these
+    tests assert — plumber, ship, next week — rather than in summary order,
+    which is what three same-day all-day deadlines would have produced."""
     today = _today()
+    for uid, href, summary, hour in (
+        ("late", LIST_B, "Call the plumber", 8),
+        ("due-today", LIST_A, "Ship the thing", 9),
+        ("later", LIST_A, "Next week's problem", 10),
+    ):
+        _seed_task(svc_._conn, href, uid, summary,
+                   due_utc=f"{today.replace('-', '')}T{hour:02d}0000Z")
     svc_.open_day(today, create=True)
     for i, title in enumerate(titles, 1):
         svc_.add_day_entry(today, entry_id=f"n{i}", kind="note", title=title)

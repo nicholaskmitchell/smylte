@@ -269,7 +269,7 @@ READ_TOOLS = frozenset({
     "smylte_get_task", "smylte_search_tasks", "smylte_list_tags",
     "smylte_list_events", "smylte_get_event", "smylte_find_free_time",
     "smylte_list_booking_links", "smylte_list_bookings",
-    "smylte_get_today", "smylte_review_day",
+    "smylte_get_today", "smylte_review_day", "smylte_review_week",
 })
 
 

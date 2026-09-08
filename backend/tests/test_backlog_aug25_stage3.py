@@ -237,7 +237,7 @@ class _ZonedStub:
     def list_lists(self):
         return [{"href": h} for h in self._tasks]
 
-    def list_tasks(self, href, *, include_done=True):
+    def list_tasks(self, href, *, include_done=True, include_parked=True):
         return list(self._tasks[href])
 
     def get_settings(self):
@@ -249,7 +249,8 @@ class _ZonedStub:
 
 def _task(uid: str, *, due: str | None) -> dict:
     return {"uid": uid, "summary": uid, "due": due, "sort_order": None,
-            "priority": None, "tags": [], "completed": False, "cancelled": False}
+            "priority": None, "tags": [], "completed": False, "cancelled": False,
+            "parked": False}
 
 
 @pytest.fixture

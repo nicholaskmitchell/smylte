@@ -312,7 +312,7 @@ def _in_display_order(tasks: list[dict], zone=None) -> list[dict]:
 #: sometimes true, and the first day without a plan is where they find out.
 _NO_DAY_FACTS = {
     "capacity_minutes": None, "capacity": None, "committed_at": None,
-    "shutdown_at": None, "reflection": None,
+    "committed_over_minutes": None, "shutdown_at": None, "reflection": None,
 }
 
 
@@ -500,8 +500,8 @@ class McpApi:
             return [self._href(list_id)]
         return [l["href"] for l in self._svc.list_lists()]
 
-    def list_tasks(self, list_id=None, *, include_done=False, due_before=None,
-                   due_after=None, overdue_only=False, tag=None):
+    def list_tasks(self, list_id=None, *, include_done=False, include_parked=False,
+                   due_before=None, due_after=None, overdue_only=False, tag=None):
         # The OWNER's zone, the same one `_in_display_order` sorts by at the foot
         # of this method. These two used to go through `_as_dt` — the server's
         # wall clock — so the same call sorted a task by one zone and filtered it
@@ -518,6 +518,12 @@ class McpApi:
         out = []
         for t in rows:
             if not include_done and (t["completed"] or t["cancelled"]):
+                continue
+            # Its own flag rather than a third clause on `include_done`: parked
+            # work is not finished, and a model told it was would report it to
+            # the owner as done. Hidden by default for the same reason done work
+            # is — "what is on my plate" must not include what was set aside.
+            if not include_parked and t["parked"]:
                 continue
             if tag and tag not in (t.get("tags") or []):
                 continue
@@ -668,6 +674,22 @@ class McpApi:
     def cancel_task(self, list_id, uid):
         with _not_found(f"No task {uid!r} in list {list_id!r}."):
             task = self._svc.cancel_task(self._href(list_id), uid)
+        if task is None:
+            raise ToolError(f"No task {uid!r} in list {list_id!r}.")
+        return task
+
+    def park_task(self, list_id, uid, *, parked=True):
+        href = self._href(list_id)
+        # `has_task` before the write, exactly as the HTTP route does and for the
+        # same reason: `store.set_sidecar` refuses a uid `items` does not hold by
+        # doing nothing, so without this a wrong uid would answer with a task
+        # rather than a not-found — and a model would report work parked that
+        # never was.
+        with _not_found(f"No task {uid!r} in list {list_id!r}."):
+            known = self._svc.has_task(href, uid)
+        if not known:
+            raise ToolError(f"No task {uid!r} in list {list_id!r}.")
+        task = self._svc.park_task(href, uid, parked=parked)
         if task is None:
             raise ToolError(f"No task {uid!r} in list {list_id!r}.")
         return task
@@ -1275,6 +1297,13 @@ class McpApi:
             "capacity_minutes": plan["capacity_minutes"],
             "capacity": plan["capacity"],
             "committed_at": plan["committed_at"],
+            # How far over the capacity the plan ran when the owner committed
+            # it, or null. Worth reporting for the reason the capacity itself
+            # is: a model that can see the owner knowingly started a day 80
+            # minutes over has the one piece of context that should stop it
+            # proposing an eleventh thing. It is a record, not a score — do not
+            # read it back to them as a failure.
+            "committed_over_minutes": plan["committed_over_minutes"],
             "shutdown_at": plan["shutdown_at"],
             "reflection": plan["reflection"],
         }
@@ -1644,34 +1673,53 @@ class McpApi:
             })
         return {"from": start, "to": end, "days": out} if ranged else out[0]
 
+    def review_week(self, *, week=None) -> dict:
+        """How many tasks the owner finished in a week: the total, and a count
+        per day.
+
+        THE NUMBER, not the rows. `smylte_review_day` already answers a range
+        with everything — every bucket, every entry, the task behind each one —
+        and it builds the whole task index to do it (measured at 6.6s over 180
+        days before that index was hoisted). Asking it seven days' worth to
+        arrive at one integer is the expensive way to answer the cheapest
+        question the owner has, which is why this exists rather than a note in
+        that tool's description.
+
+        MONDAY-FIRST, and it has to be said rather than assumed: `_WEEKDAYS` in
+        the service, `HABIT_DAYS` on the wire between the two, the booking
+        availability map and the SPA's `weekStartOf` are all Monday-first, and a
+        week that began on Sunday here would put one day of every count in the
+        wrong week — silently, and only for accounts that look at weekends.
+
+        `week` is ANY DAY IN THE WEEK rather than its Monday, because a model
+        holding "last Tuesday" should not have to do calendar arithmetic to ask
+        about the week containing it. Defaults to the week containing today, in
+        the owner's zone.
+
+        Tasks only — no notes, no habit occurrences. `service.completed_counts`
+        carries that argument; the short version is that habits have their own
+        weekly count and the app does not colour one as a failure.
+        """
+        anchor = date.fromisoformat(self._day_or_today(week))
+        start = anchor - timedelta(days=anchor.weekday())
+        # Saturated at the calendar's ceiling rather than added blindly, the
+        # same clamp `review_day` makes: `_day_or_today` accepts 9999-12-31, and
+        # a week starting inside seven days of it cannot represent its own end.
+        end = start + timedelta(days=7) if (date.max - start).days >= 7 else date.max
+        return self._svc.completed_counts(start.isoformat(), end.isoformat())
+
     def _completions_by_day(self, start: str, end: str) -> dict[str, list]:
         """Tasks finished in [start, end), bucketed by the day they were finished.
 
-        Bucketed with the same rule the snapshot uses — a stamp carrying a zone
-        is converted to the owner's before its day is taken — so "finished on the
-        21st" means the same thing here as it does everywhere else in this app. A
-        stamp that will not parse is dropped rather than guessed at, and a task
-        completed by a client that wrote no COMPLETED property simply has no day
-        to file it under.
+        A THIN FORWARD to `service.completions_in`, which is where the rule now
+        lives. It used to be spelled out here, which was fine while this was the
+        only caller; it is not any more — the SPA's weekly count reads the same
+        answer over HTTP — and two implementations of "what did I finish" is two
+        chances to tell the owner different numbers for the same week on two
+        screens. The same move `due.py` records for deadlines.
+
+        The rule itself is unchanged: the COMPLETED stamp and nothing else,
+        taken in the owner's zone, with an absent or unparseable stamp dropped
+        rather than guessed at.
         """
-        zone = self._home_zone()
-        out: dict[str, list] = {}
-        for href in self._task_lists(None):
-            for t in self._svc.list_tasks(href, include_done=True):
-                stamp = t.get("completed_at")
-                if not stamp:
-                    continue
-                try:
-                    when = datetime.fromisoformat(stamp)
-                except ValueError:
-                    continue
-                if when.tzinfo is not None:
-                    when = when.astimezone(zone)
-                key = when.date().isoformat()
-                if not (start <= key < end):
-                    continue
-                out.setdefault(key, []).append({
-                    "list": t["list"], "uid": t["uid"], "summary": t["summary"],
-                    "completed_at": stamp,
-                })
-        return out
+        return self._svc.completions_in(start, end)

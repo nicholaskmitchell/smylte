@@ -49,7 +49,8 @@ const cal: List = {
 
 const task = (o: Partial<Task> = {}): Task => ({
   uid: 'u1', list: 'l1', summary: 'Ship it', notes: null, status: 'NEEDS-ACTION',
-  completed: false, cancelled: false, priority: null, priority_label: 'none',
+  completed: false, cancelled: false, parked: false, parked_at: null,
+  priority: null, priority_label: 'none',
   percent_complete: null, due: null, due_is_date: true, start: null, start_is_date: true,
   tags: [], parent: null, children: [], child_count: 0, completed_child_count: 0,
   derived_percent: null, pinned: false, sort_order: null,
@@ -100,7 +101,7 @@ const plan = (entries: DayEntry[] = [], day = today(), o: Partial<DayPlan> = {})
   ({
     day, planned: true, entries,
     capacity_minutes: null, capacity: null,
-    committed_at: null, shutdown_at: null, reflection: null, ...o,
+    committed_at: null, committed_over_minutes: null, shutdown_at: null, reflection: null, ...o,
   })
 
 /** A promise left in flight, and the function that lands it.
@@ -172,6 +173,11 @@ beforeEach(() => {
   // that is not about them sees the surface exactly as it was before they
   // existed.
   m.days.mockResolvedValue([])
+  // Its own request, so its own default. Without this a `mockResolvedValue`
+  // set by one test leaks into the next as a header line saying "N finished
+  // this week" — which is a second thing on screen matching /this week/.
+  m.completedCounts.mockImplementation(async (from, to) => (
+    { from, to, days: {}, total: 0 }))
   m.habits.mockResolvedValue([])
   m.createHabit.mockImplementation(async (body) =>
     habit({ id: 'hb-new', title: body.title, days: body.days ?? '' }))
@@ -822,6 +828,40 @@ describe('<TodayView> suggestions', () => {
     expect(add('Someday')).not.toBeInTheDocument()
   })
 
+  it('leaves an overdue task in the strip until it is chosen', async () => {
+    // THE HALF OF THE NARROWED DERIVATION THE OWNER ACTUALLY SEES. The backend
+    // stopped putting overdue work on the day (`service._snapshot_for`), and
+    // this is what that buys: the task is offered, the day stays empty until
+    // somebody says otherwise, and pressing + is the act that puts it there.
+    //
+    // The offer is only ever as good as the exclusion behind it — `free` drops
+    // whatever the day already holds — so this also pins the pair. A change that
+    // put overdue rows back on the day would take them OUT of the strip, and
+    // both halves would move together without either being noticed alone.
+    // TWO days late, not eleven: past the stale threshold a task stops being
+    // offered at all and is asked about instead, which is a different group
+    // with different controls. This one is about the ordinary overdue case.
+    m.tasks.mockResolvedValue([task({ uid: 'a', summary: 'Bingo', due: inDays(-2) })])
+    m.openDay.mockResolvedValue(plan([]))
+    m.addDayEntry.mockImplementation(async (_d, b) => entry({
+      entry_id: b.entry_id, kind: 'task', list: 'l1', uid: 'a', title: null,
+    }))
+    const user = setup()
+
+    const offer = await screen.findByRole('button', { name: 'Add Bingo to today' })
+    expect(rowTitles()).toEqual([])
+
+    await user.click(offer)
+    await waitFor(() => expect(rowTitles()).toEqual(['Bingo']))
+    // Chosen, not derived: it carries into tomorrow, which is the whole
+    // difference between a decision and a proposal.
+    expect(m.addDayEntry).toHaveBeenCalledWith(
+      today(), expect.objectContaining({ kind: 'task', uid: 'a', list: 'l1' }),
+    )
+    // And once it is on the day it is no longer offered — one row, one button.
+    expect(screen.queryByRole('button', { name: 'Add Bingo to today' })).not.toBeInTheDocument()
+  })
+
   it('gives tomorrow its own heading, out of the seven-day block', async () => {
     // Tomorrow is the one future day a plan for today is routinely about — the
     // thing pulled forward because this afternoon is free, or looked at to
@@ -1149,6 +1189,165 @@ describe('<TodayView> suggestions', () => {
 })
 
 // ── the calendar strip ──────────────────────────────────────────────────────
+
+describe('<TodayView> a day committed over its capacity', () => {
+  it('says so in the look-back, once, without scoring it', async () => {
+    // The other half of "it records a decision rather than enforcing one": the
+    // day said it would run long, the owner started it anyway, and this is
+    // where that shows up afterwards.
+    //
+    // Nothing on this screen scores a day — no percentage, no streak, no colour
+    // on the numbers — so this is one sentence and no comparison. It is a fact
+    // about the day, not a mark against it.
+    m.day.mockImplementation(async (d) => plan(
+      [entry({ entry_id: 'e1', day: d, title: 'A thing', source: 'user' })],
+      d, { committed_over_minutes: 80, capacity: 300, capacity_minutes: 300 }))
+    const user = setup()
+    await user.click(await screen.findByRole('button', { name: 'Previous day' }))
+
+    expect(await screen.findByText(
+      'Started 1h 20m over what you said you would work.')).toBeInTheDocument()
+  })
+
+  it('says nothing for a day committed inside its capacity', async () => {
+    // Null covers three different days — never committed, no capacity stated,
+    // committed inside it — and on all three there is nothing to report.
+    m.day.mockImplementation(async (d) => plan(
+      [entry({ entry_id: 'e1', day: d, title: 'A thing', source: 'user' })], d))
+    const user = setup()
+    await user.click(await screen.findByRole('button', { name: 'Previous day' }))
+
+    await screen.findByText('A thing')
+    expect(screen.queryByText(/over what you said you would work/))
+      .not.toBeInTheDocument()
+  })
+})
+
+describe('<TodayView> work that has waited long enough to need a decision', () => {
+  const late = (days: number, o: Partial<Task> = {}) =>
+    task({ uid: `u${days}`, summary: `${days} days late`, due: inDays(-days), ...o })
+
+  it('asks about it instead of offering it, past the threshold', async () => {
+    // THE ELEVEN-DAY PROBLEM. Something four days late has been read and
+    // skipped four mornings, and every one of those readings cost more than
+    // deciding would have. So past the line it stops being offered as work.
+    //
+    // Precedence, not a second listing: it comes OUT of "Overdue", because one
+    // task under two headings is two answers for one row.
+    m.tasks.mockResolvedValue([late(11), late(1)])
+    setup()
+    await screen.findByText('11 days late')
+
+    const under = (name: string) => screen.getByText(name)
+      .closest('section')?.querySelector('.section-label')?.textContent
+    expect(under('11 days late')).toBe('Waiting on a decision')
+    expect(under('1 days late')).toBe('Overdue')
+    // And the answer that failed every one of those mornings is not offered.
+    expect(screen.queryByRole('button', { name: 'Add 11 days late to today' }))
+      .not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Add 1 days late to today' }))
+      .toBeInTheDocument()
+  })
+
+  it('gives it a date rather than a place on the day', async () => {
+    // Adding it to today would leave the DEADLINE where it is, so tomorrow it
+    // is late again and staler — the answer that has already failed. Only a new
+    // date ends it, and it ends it everywhere rather than in this one strip.
+    m.tasks.mockResolvedValue([late(11)])
+    m.patchTask.mockImplementation(async () => task({ uid: 'u11', due: today() }))
+    const user = setup()
+    await screen.findByText('11 days late')
+
+    await user.click(screen.getByRole('button', { name: 'Due today' }))
+    expect(m.patchTask).toHaveBeenCalledWith('l1', 'u11', { due: today() })
+    // Not a day-plan write: the row's problem was its deadline.
+    expect(m.addDayEntry).not.toHaveBeenCalled()
+  })
+
+  it('parks it as the other answer, and the row goes', async () => {
+    // The answer that did not exist until there was somewhere neutral to put
+    // things — and the reason nothing ever left this list before.
+    m.tasks.mockResolvedValue([late(11)])
+    m.park.mockImplementation(async () => task({ uid: 'u11', parked: true }))
+    const user = setup()
+    await screen.findByText('11 days late')
+
+    await user.click(screen.getByRole('button', { name: 'Park it' }))
+    expect(m.park).toHaveBeenCalledWith('l1', 'u11', true)
+    await waitFor(() =>
+      expect(screen.queryByText('11 days late')).not.toBeInTheDocument())
+  })
+
+  it('offers a date of your own, not only today', async () => {
+    m.tasks.mockResolvedValue([late(11)])
+    m.patchTask.mockImplementation(async () => task({ uid: 'u11', due: inDays(4) }))
+    setup()
+    await screen.findByText('11 days late')
+
+    // `fireEvent.change` rather than typing: a `type=date` field in jsdom takes
+    // a whole value, and typing into its segments is a browser behaviour this
+    // environment does not have.
+    fireEvent.change(screen.getByLabelText('A new date for 11 days late'),
+      { target: { value: inDays(4) } })
+    await waitFor(() => expect(m.patchTask)
+      .toHaveBeenCalledWith('l1', 'u11', { due: inDays(4) }))
+  })
+
+  it('is off at zero, and everything late is offered again', async () => {
+    // The off switch has to be checked where the group is BUILT, not in its
+    // predicate: `group()` walks its matches into the `offered` set whether or
+    // not it renders them, so a group that matched everything and showed
+    // nothing would swallow the whole overdue list.
+    m.tasks.mockResolvedValue([late(11)])
+    render(
+      <DataProvider rev={0} onExpire={vi.fn()}>
+        <TodayView rev={0} onExpire={vi.fn()} staleOverdueDays={0} />
+      </DataProvider>,
+    )
+    expect(await screen.findByRole('button', { name: 'Add 11 days late to today' }))
+      .toBeInTheDocument()
+    expect(screen.queryByText('Waiting on a decision')).not.toBeInTheDocument()
+  })
+})
+
+describe('<TodayView> the week behind the day', () => {
+  it('states what the week adds up to, beside the day it is describing', async () => {
+    // A day is exactly the unit that makes a week of real work look like
+    // nothing much, and the count next to this one only ever described a day.
+    m.completedCounts.mockResolvedValue({ from: '', to: '', days: {}, total: 23 })
+    setup()
+    expect(await screen.findByText('23 finished this week')).toBeInTheDocument()
+  })
+
+  it('says nothing while the read is still in flight', async () => {
+    // "0 finished this week" over a fetch in flight is the wrong answer at the
+    // one moment the question is worth asking.
+    m.completedCounts.mockImplementation(() => new Promise(() => {}))
+    setup()
+    await screen.findByRole('button', { name: 'Habits' })
+    expect(screen.queryByText(/finished this week/)).not.toBeInTheDocument()
+  })
+
+  it('answers for the week the day on screen falls in', async () => {
+    // Stepping the look-back back a fortnight has to answer for THAT week. The
+    // header describes the day being read, and so does this.
+    m.completedCounts.mockResolvedValue({ from: '', to: '', days: {}, total: 5 })
+    const user = setup()
+    await waitFor(() => expect(m.completedCounts).toHaveBeenCalled())
+    const first = m.completedCounts.mock.calls[0][0]
+
+    await user.click(screen.getByRole('button', { name: 'Previous day' }))
+    await waitFor(() => expect(m.completedCounts.mock.calls.length).toBeGreaterThan(1))
+    // Monday-first, and a full seven days — `weekStartOf`'s convention, which
+    // the server shares.
+    for (const [from, to] of m.completedCounts.mock.calls) {
+      expect(new Date(`${from}T00:00`).getDay()).toBe(1)
+      expect(new Date(`${to}T00:00`).getTime() - new Date(`${from}T00:00`).getTime())
+        .toBe(7 * 86_400_000)
+    }
+    expect(first).toBe(weekStartOf(today()))
+  })
+})
 
 describe('<TodayView> the calendar', () => {
   it('reports a calendar whose events did not load', async () => {
@@ -1503,9 +1702,12 @@ describe('<TodayView> the planning ritual', () => {
     expect(document.querySelector('.plan-hint.warn')).not.toBeNull()
   })
 
-  it('states the overcommitment at the moment of committing, and commits anyway', async () => {
-    // It records a decision rather than enforcing one. A warning that stopped
-    // you would be a tool arguing with a call it has no standing to make.
+  it('names the overcommitment on the button, and commits anyway', async () => {
+    // It records a decision rather than enforcing one, so this is still ONE
+    // PRESS — but the press says what it is. "Start the day" on a day three
+    // hours over is a button that does not describe its own outcome, and the
+    // warning underneath it was the only thing that did, read after the
+    // decision rather than as part of it.
     m.openDay.mockResolvedValue(unplanned(
       [entry({ title: 'Too much', estimate_minutes: 480 })], 300))
     m.patchDay.mockImplementation(async (d) => plan([], d, { committed_at: `${d}T08:00:00Z` }))
@@ -1517,6 +1719,53 @@ describe('<TodayView> the planning ritual', () => {
 
     expect(within(dialog).getByText(/3h more than you said you would work/))
       .toBeInTheDocument()
+    // Not offered as "Start the day" at all: the unqualified name is gone while
+    // the day is over, which is what stops the two readings coexisting.
+    expect(within(dialog).queryByRole('button', { name: 'Start the day' }))
+      .not.toBeInTheDocument()
+    await user.click(within(dialog).getByRole('button', { name: 'Start it anyway' }))
+    await waitFor(() => expect(m.patchDay).toHaveBeenCalledWith(
+      today(), { committed: true }))
+  })
+
+  it('offers trimming as the other answer, and leaves the flow to do it', async () => {
+    // The alternative has to be a CHOICE rather than a toll, and it has to land
+    // somewhere a day can actually get shorter. Step 1 is where things are
+    // PICKED — it only makes the day longer — and this step already has the
+    // rows and their drop controls on it, so there is nowhere inside the ritual
+    // to go. Closing it puts the owner on the day with the same controls and no
+    // dialog over them, and commits nothing.
+    m.openDay.mockResolvedValue(unplanned(
+      [entry({ title: 'Too much', estimate_minutes: 480 })], 300))
+    const user = setup()
+    await user.click(await screen.findByRole('button', { name: 'Plan my day' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Plan your day' })
+    await user.click(within(dialog).getByRole('button', { name: 'Next' }))
+    await user.click(within(dialog).getByRole('button', { name: 'Next' }))
+
+    await user.click(within(dialog).getByRole('button', { name: 'Trim something' }))
+    await waitFor(() => expect(
+      screen.queryByRole('dialog', { name: 'Plan your day' })).not.toBeInTheDocument())
+    expect(screen.getByText('Too much')).toBeInTheDocument()
+    expect(m.patchDay).not.toHaveBeenCalled()
+  })
+
+  it('leaves the ordinary commit alone when the day fits', async () => {
+    // The gate exists only where there is something to name. A day inside its
+    // capacity commits under the button it always had, and an account that has
+    // never stated a capacity is told nothing at all — the one thing this
+    // feature must not get wrong.
+    m.openDay.mockResolvedValue(unplanned(
+      [entry({ title: 'Enough', estimate_minutes: 60 })], 300))
+    m.patchDay.mockImplementation(async (d) => plan([], d, { committed_at: `${d}T08:00:00Z` }))
+    const user = setup()
+    await user.click(await screen.findByRole('button', { name: 'Plan my day' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Plan your day' })
+    await user.click(within(dialog).getByRole('button', { name: 'Next' }))
+    await user.click(within(dialog).getByRole('button', { name: 'Next' }))
+
+    expect(within(dialog).queryByRole('button', { name: 'Start it anyway' }))
+      .not.toBeInTheDocument()
     await user.click(within(dialog).getByRole('button', { name: 'Start the day' }))
     await waitFor(() => expect(m.patchDay).toHaveBeenCalledWith(
       today(), { committed: true }))
@@ -1971,6 +2220,58 @@ describe('<TodayView> the shutdown ritual', () => {
 describe('<TodayView> how full the day is', () => {
   const withCapacity = (entries: DayEntry[], capacity: number | null) =>
     plan(entries, today(), { capacity, capacity_minutes: capacity })
+
+  it('says the day is already over before Enter, not after', async () => {
+    // THE COMPLAINT THIS ANSWERS: the load strip below already said the day was
+    // over, and by the time it was read the thing had been added. Here the
+    // sentence is attached to the control that would add another one.
+    //
+    // It reports the day as it STANDS and does not project. A line being typed
+    // has no estimate — the task does not exist yet — so there is no honest
+    // total to promise, and inventing one would be worse than saying nothing.
+    m.openDay.mockResolvedValue(withCapacity(
+      [entry({ title: 'Too much', estimate_minutes: 480 })], 300))
+    const user = setup()
+    await screen.findByText('Too much')
+
+    await user.type(screen.getByRole('textbox', { name: 'Add to today' }), 'One more thing')
+    expect(fateChip()).toHaveTextContent('already 3h over')
+  })
+
+  it('says nothing in the add box on a day that fits', async () => {
+    // The clause is only worth having where there is something to say. A box
+    // that carried it always would stop meaning anything, and an account with
+    // no capacity is told nothing at all — the rule the whole feature turns on.
+    m.openDay.mockResolvedValue(withCapacity(
+      [entry({ title: 'Enough', estimate_minutes: 60 })], 300))
+    const user = setup()
+    await screen.findByText('Enough')
+
+    await user.type(screen.getByRole('textbox', { name: 'Add to today' }), 'One more thing')
+    expect(fateChip()).not.toHaveTextContent('over')
+  })
+
+  it('says what adding a suggestion would cost, on the button that adds it', async () => {
+    // The strip CAN project where the add box cannot: these tasks exist and may
+    // remember what they take, so the number is read rather than guessed.
+    m.tasks.mockResolvedValue([
+      task({ uid: 'a', summary: 'Big one', due: today(), estimated_minutes: 90 }),
+      task({ uid: 'b', summary: 'Small one', due: today(), estimated_minutes: 5 }),
+      task({ uid: 'c', summary: 'Unmeasured', due: today() }),
+    ])
+    m.openDay.mockResolvedValue(withCapacity(
+      [entry({ title: 'Booked', estimate_minutes: 250 })], 300))
+    setup()
+    const row = async (name: string) => (await screen.findByRole(
+      'button', { name: `Add ${name} to today` })).closest('.today-row')!
+
+    // 250 + 90 is 40 over; 250 + 5 still fits, and an addition the day absorbs
+    // is not worth a warning.
+    expect(await row('Big one')).toHaveTextContent('+40m over')
+    expect(await row('Small one')).not.toHaveTextContent('over')
+    // Nothing remembered, nothing promised.
+    expect(await row('Unmeasured')).not.toHaveTextContent('over')
+  })
 
   it('says nothing at all when no capacity has ever been given', async () => {
     // THE CASE THAT MATTERS MOST. An account that has not stated a capacity
@@ -3358,7 +3659,12 @@ describe('<TodayView> the weekly count', () => {
     await screen.findByText('Read')
     // A Monday morning has nothing to report. "0 of 1 this week" is a
     // scoreboard opened on the first play.
-    expect(screen.queryByText(/this week/)).not.toBeInTheDocument()
+    //
+    // Matched on the habit count's own SHAPE — "n of m this week" — rather than
+    // on the words alone: the header carries a second, unrelated "this week"
+    // now (what was finished), and a bare /this week/ would pass or fail on
+    // whichever of the two happened to be on screen.
+    expect(screen.queryByText(/\d+ of \d+ this week/)).not.toBeInTheDocument()
   })
 
   it('starts reporting at the second occurrence', async () => {

@@ -217,6 +217,11 @@ export function sanitizeTask(v: unknown): Task | null {
     // client's COMPLETED-less task produces, so `sortByCompletion` handles it.
     completed_at: orNull(o.completed_at),
     cancelled: bool(o.cancelled),
+    // Absent from anything this cache wrote before parking existed, which
+    // `bool` renders as false — "still live", the only answer that could be
+    // assumed without setting work aside on the owner's behalf.
+    parked: bool(o.parked),
+    parked_at: orNull(o.parked_at),
     priority: numOrNull(o.priority),
     priority_label: orNull(o.priority_label) ?? 'none',
     percent_complete: numOrNull(o.percent_complete),
@@ -357,6 +362,10 @@ export function sanitizeDayPlan(v: unknown): DayPlan | null {
     // number it never gave. `numOrNull` says exactly that for a missing field.
     capacity: numOrNull(o.capacity),
     committed_at: orNull(o.committed_at),
+    // Absent from anything this cache wrote before the app recorded it, which
+    // `numOrNull` renders as null — the same null a day committed inside its
+    // capacity gets, and the same thing it means there: nothing to record.
+    committed_over_minutes: numOrNull(o.committed_over_minutes),
     shutdown_at: orNull(o.shutdown_at),
     reflection: orNull(o.reflection),
     entries: rows.slice(0, MAX_ROWS)

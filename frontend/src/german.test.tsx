@@ -43,7 +43,7 @@ beforeEach(() => {
   m.mcpConnections.mockResolvedValue([])
   m.day.mockResolvedValue({
     day: '2026-08-28', planned: false, entries: [], capacity_minutes: null,
-    capacity: null, committed_at: null, shutdown_at: null, reflection: null,
+    capacity: null, committed_at: null, committed_over_minutes: null, shutdown_at: null, reflection: null,
   })
   m.days.mockResolvedValue([])
   m.habits.mockResolvedValue([])
@@ -136,7 +136,7 @@ describe('the app in German', () => {
     m.day.mockResolvedValue({
       day: new Date().toISOString().slice(0, 10), planned: true,
       entries: [], capacity_minutes: null, capacity: null,
-      committed_at: null, shutdown_at: null, reflection: null,
+      committed_at: null, committed_over_minutes: null, shutdown_at: null, reflection: null,
     })
     const { container } = render(<App />)
     await waitFor(() => expect(screen.getByRole('button', { name: 'Aufgaben' }))

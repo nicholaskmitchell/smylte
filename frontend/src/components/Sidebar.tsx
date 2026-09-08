@@ -82,7 +82,7 @@ const WORDS: Record<CollectionKind, {
 export function Sidebar({ kind, items, sel = '', countOf, onSelect, onItems, api,
   collapsed, onToggle, allLabel, hiddenIds, onHiddenChange, onArchive, archivedIds,
   groups, onGroupsChange, collapsedGroups, onCollapsedGroupsChange,
-  completedActive, onToggleCompleted, extra }: {
+  completedActive, onToggleCompleted, parkedActive, onToggleParked, extra }: {
   kind: CollectionKind
   items: List[]
   sel?: string
@@ -119,6 +119,13 @@ export function Sidebar({ kind, items, sel = '', countOf, onSelect, onItems, api
   // `completedActive` reflects whether that pane is currently showing.
   completedActive?: boolean
   onToggleCompleted?: () => void
+  // Parked view (opt-in, Tasks only): the same footer treatment for the other
+  // pane that holds tasks the active list does not show. A SECOND button rather
+  // than a mode inside the first, because "finished" and "set aside" are the
+  // two answers this state exists to keep apart, and one control cycling
+  // between them would make the owner press through one to reach the other.
+  parkedActive?: boolean
+  onToggleParked?: () => void
   // A second, foreign section under the collections — the Calendar tab's task
   // lists. It is rendered rather than described because those rows are not this
   // sidebar's `items`: they are a different kind of collection, borrowed for
@@ -464,11 +471,21 @@ export function Sidebar({ kind, items, sel = '', countOf, onSelect, onItems, api
     </>
   )
 
-  const completedFooter = onToggleCompleted && (
-    <button className={`side-completed ${completedActive ? 'active' : ''}`}
-      aria-pressed={completedActive} onClick={onToggleCompleted}>
-      {completedActive ? tr('side.backToTasks') : tr('side.viewCompleted')}
-    </button>
+  const completedFooter = (onToggleCompleted || onToggleParked) && (
+    <>
+      {onToggleCompleted && (
+        <button className={`side-completed ${completedActive ? 'active' : ''}`}
+          aria-pressed={completedActive} onClick={onToggleCompleted}>
+          {completedActive ? tr('side.backToTasks') : tr('side.viewCompleted')}
+        </button>
+      )}
+      {onToggleParked && (
+        <button className={`side-completed ${parkedActive ? 'active' : ''}`}
+          aria-pressed={parkedActive} onClick={onToggleParked}>
+          {parkedActive ? tr('side.backToTasks') : tr('side.viewParked')}
+        </button>
+      )}
+    </>
   )
 
   const editModal = editing && (
@@ -505,11 +522,17 @@ export function Sidebar({ kind, items, sel = '', countOf, onSelect, onItems, api
             <span className="mb-summary">{summary}</span>
             <span className="mb-caret" aria-hidden="true">▾</span>
           </button>
-          {completedFooter && (
+          {onToggleCompleted && (
             <button className={`side-mobile-completed ${completedActive ? 'active' : ''}`}
               title={completedActive
                 ? tr('side.backToTasksShort') : tr('side.viewCompletedShort')}
               aria-pressed={completedActive} onClick={onToggleCompleted}>✓</button>
+          )}
+          {onToggleParked && (
+            <button className={`side-mobile-completed ${parkedActive ? 'active' : ''}`}
+              title={parkedActive
+                ? tr('side.backToTasksShort') : tr('side.viewParkedShort')}
+              aria-pressed={parkedActive} onClick={onToggleParked}>⏸</button>
           )}
           <button className="side-mobile-add" title={tr(words.new)}
             aria-label={tr(words.new)}
@@ -600,6 +623,12 @@ export function Sidebar({ kind, items, sel = '', countOf, onSelect, onItems, api
             title={completedActive
               ? tr('side.backToTasksShort') : tr('side.viewCompletedShort')}
             aria-pressed={completedActive} onClick={onToggleCompleted}>✓</button>
+        )}
+        {onToggleParked && (
+          <button className={`icon-btn side-completed-rail ${parkedActive ? 'active' : ''}`}
+            title={parkedActive
+              ? tr('side.backToTasksShort') : tr('side.viewParkedShort')}
+            aria-pressed={parkedActive} onClick={onToggleParked}>⏸</button>
         )}
       </div>
     )

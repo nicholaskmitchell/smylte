@@ -42,6 +42,47 @@ something the sort keys can express: undated and unprioritised, they come out in
 title order, which is an order nobody chose. One drag writes the whole sequence,
 the same one the top-level rows use.
 
+**A task can also be parked**, which is the fourth answer and the only neutral
+one. iCalendar gives a task three: needs action, done, and cancelled — and
+cancelled reads as a verdict, so it never gets used, and nothing ever leaves the
+list. Parking is "not now": the task leaves the lists, the day's automatic rows,
+the open counts and the digest, and it comes back exactly as it was whenever you
+want it. It is not done and is never reported as done, on any surface.
+
+It lives in the app-only sidecar rather than on the wire, and that is forced
+rather than preferred. There is no neutral fourth status in the spec, and an
+invented one — or an `X-` property — would be written verbatim onto collections
+Tasks.org, jtx Board and Thunderbird share, where all three would render it as
+nothing. So the honest cost is stated rather than hidden: **a task parked here
+still sits in those clients' lists.** Parking is a statement about which of your
+own views something appears in, which is what the sidecar is for — the same call
+the per-item reminder makes, for the same reason.
+
+Nothing clears it by itself. Completing a parked task, or reopening one, leaves
+it parked, because completion can arrive from a phone through the sync path and
+a flag that cleared on Smylte's own write but not on a foreign one would leave
+two tasks in the same state disagreeing about it. Bringing something back is an
+act, exactly as setting it aside was.
+
+**Ticking the last step finishes the thing it is a step of.** A parent with
+every step done is finished, and leaving it open is how a list fills with rows
+nobody can act on — no work in them, just something to read past. The test is
+"nothing left", not "everything done": a step marked won't-do is not happening,
+so it leaves nothing to do either, while a *parked* step does not close its
+parent, because parked work is still coming back. It walks up, so finishing the
+last box can close a checklist and the thing that checklist was a step of.
+
+It fires only when a write made here SETTLES a step — ticking it off, or
+marking it won't-do. Renaming a step, or editing its notes, does not close
+anything: an edit that is not a decision about the work is not the write this is
+about. Another client ticking the last box changes nothing either, since a sync
+engine that wrote back would turn every incoming change into an outgoing one, a
+full resync included. And a close that fails is just a close that did not
+happen — it never takes the tick it rode in on down with it. And it is the one preference in
+this app that writes to the calendar server on your behalf: the close is a real
+completion, in Tasks.org and Thunderbird within a sync. So it is a switch in
+Settings → Tasks, on by default, rather than a rule.
+
 **Calendar.** Month grid across multiple calendars, each with a visibility
 toggle and non-destructive **archive** (hide without deleting; restore from
 Settings → Calendar). Events support all-day and timed spans, drag to move or
@@ -81,11 +122,38 @@ calendars' colors, and a day opens a read-only list of its events.
 **Today.** The one surface that holds state of its own. Every other task view
 renders a *query* — "what is due today", recomputed on every paint, so the list
 moves under you all day. This one renders a *snapshot*: the first time you open
-a day the backend freezes what it held — what is due, what is late, what you
+a day the backend freezes what it held — what is due that day, and what you
 left unfinished on your last planned day — and from then on the day is
 something you arrange rather than something that arranges itself. A task list
 grows without bound and a day does not, and the commitment step is the part
 worth keeping.
+
+**What is already late is offered, not placed.** A deadline you set for today is
+a commitment you made, and the day is entitled to hold you to it. A deadline you
+have already missed is a decision you have *not* made yet, and putting it back on
+every morning makes that decision for you — badly, by deferring it another day at
+the cost of a row you read and skip. So an overdue task appears in the strip
+underneath the day, alongside what is due tomorrow and what has sat untouched for
+three weeks, and moving it onto the day is an act you perform. Nothing is hidden:
+it is still on its list, still marked overdue everywhere overdue is shown, and
+still one press away.
+
+**And past a few days it stops being offered at all, and is asked about.** Three
+days by default, in Settings → Tasks, and 0 turns it off. A task that late has
+been read and skipped every morning it sat there, and each of those readings cost
+more than deciding would have — so the strip gives it a heading of its own and
+two answers instead of an add button: **a new date**, or **park it**. Adding it
+to the day is deliberately not among them, because it is the answer that has
+already failed: putting the task on today leaves its deadline where it is, so
+tomorrow it is late again and one day staler. Only a new date ends that, and it
+ends it everywhere rather than in this one strip.
+
+It never hides anything, and this is worth saying plainly: the Tasks tab shows
+every task it always did, the Home Overdue module still lists all of them — it
+just says how many are waiting on a decision — and nothing about the deadline
+changes until you change it. "Stops appearing" means stops being offered as
+ordinary work, not stops existing. A list you cannot trust to show your tasks is
+worse than a long one.
 
 A day holds three kinds of row, and the tab says which is which — a filled
 square is a **task** (a real VTODO on a list, so it reaches Tasks.org,
@@ -109,10 +177,28 @@ long today is, what goes on it, and how long each thing takes. Say the length
 either way — "until 6pm" or "5h" — and Settings holds a default per weekday for
 the days you do not want to think about it. From then on the day says how full
 it is, and when the plan runs past what you said you would work it says so in
-words, *before* the day starts. It never blocks: it records a decision rather
-than enforcing one. An account that has never stated a capacity is told nothing
-at all, because inventing an eight-hour day for someone is the one thing this
-must not do.
+words, *before* the day starts. An account that has never stated a capacity is
+told nothing at all, because inventing an eight-hour day for someone is the one
+thing this must not do.
+
+**It never blocks: it records a decision rather than enforcing one** — and both
+halves of that sentence are now true. Committing an overfull day is still one
+press, but never an unlabelled one: the button reads *Start it anyway*, with
+*Trim something* beside it, which closes the planner and leaves you on the day
+with the rows and their controls in front of you.
+Naming the act is not the same as refusing it, and it is the difference between
+a warning read after the decision and one read as part of it. The add box says
+the same thing a moment earlier — if the day is already over, the line under
+what you are typing says by how much — and a task in the strip that remembers
+how long it takes says what adding it would cost, on the button that would add
+it. Neither guesses: a line being typed has no estimate, so nothing is
+projected from it.
+
+And the day remembers. How far over it was at the moment you committed is
+recorded on the day and read back once in the look-back, in words. No colour, no
+comparison, nothing scored — a day knowingly started over is a fact about it,
+not a mark against it. Recording it is what makes "records a decision" mean
+something rather than merely say something.
 
 **Shutting it down** is the matching three steps at the other end: what
 happened, what follows you, and a line about how it went. Each unfinished row
@@ -131,6 +217,21 @@ running, and the `‹` `›` picker steps back a fortnight. **A past day is a
 finished record** — read-only end to end, because a log you can fill in
 afterwards is a scorecard. Reading a day never creates one: only today can be
 opened, which is what keeps the record honest about what was actually intended.
+
+**What you finished this week** is one number, and until now nothing anywhere
+said it. Every count in the app describes a day, and a day is exactly the unit
+that makes a week of real work look like nothing much. It sits in the Today
+header beside the day's own count, and as a Home module with the last few weeks
+under it so the figure has a shape — 23 means nothing on its own. The connector
+answers it too, as `smylte_review_week`.
+
+It counts **tasks**, by the `COMPLETED` stamp on the wire, so a task ticked in
+Tasks.org counts exactly as one ticked here and the number answers for weeks
+before any of this existed. Not notes, and **not habits**: habits have their own
+weekly count and this app never colours one as a failure, so folding them in
+would make a productivity figure that can rise on a day nothing was finished.
+There is no target, nothing to compare it against, and no colour on it. It is a
+number, said once.
 
 **Working the day.** Today's header has a *Start working* button, and it opens
 `/focus`: the display's now + next face brought inside the app and given a
@@ -398,9 +499,10 @@ match `tokens.css`.
 
 **Connect it to Claude.** Settings → Account → Connected apps, once
 `TASKS_MCP_ENABLED=true`, exposes a remote **MCP server** at `/mcp` that Claude
-(or any MCP client) can be pointed at as a custom connector — around thirty
-tools over lists, tasks, subtasks, search, tags, calendars, events including the
-recurrence scopes, free/busy, booking links, and the day plan.
+(or any MCP client) can be pointed at as a custom connector — around forty
+tools over lists, tasks (including parking one), subtasks, search, tags,
+calendars, events including the recurrence scopes, free/busy, booking links, the
+day plan and the week's finished count.
 
 The day tools are read-only about *whether a day exists*: a connector can see
 today, put something on it, estimate it, send it to another day, tick a note and

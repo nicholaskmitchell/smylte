@@ -31,7 +31,7 @@ export const en = {
   'tabs.lastUsed': 'Last used tab',
   'tabs.moveLeft': 'Move {tab} left',
   'tabs.moveRight': 'Move {tab} right',
-  'tabs.hint': 'The order here is the order across the top. \u201CLast used tab\u201D '
+  'tabs.hint': 'The order here is the order across the top. “Last used tab” '
     + 'reopens wherever you left off, on every device signed into this account.',
 
   // ── settings ─────────────────────────────────────────────────────────────
@@ -212,7 +212,7 @@ export const en = {
   'notif.trigger.notShutDown.hint': 'Habit-forming rather than informative: it '
     + 'tells you nothing you do not know. Only for a day you actually planned.',
   'notif.trigger.habitsLeft': 'Habits left today',
-  'notif.trigger.habitsLeft.hint': 'The app\u2019s position is that a habit is never '
+  'notif.trigger.habitsLeft.hint': 'The app’s position is that a habit is never '
     + 'coloured as a failure and nothing here scores your day, and this sits '
     + 'awkwardly with both. It names what is left and nothing else — no streak, '
     + 'no percentage, no count of misses.',
@@ -1027,4 +1027,78 @@ export const en = {
   'display.gone': 'This display is no longer connected.',
   'display.goneHint': 'Pair it again from Settings → Displays.',
   'appear.importedTheme': 'Imported theme',
+
+  // ── parked: the neutral fourth answer ──────────────────────────────────────
+  //    Not done, not abandoned. The wording matters more than usual here — the
+  //    whole reason this state exists is that "cancelled" reads as a verdict,
+  //    so nothing in it may sound like failure or like finishing.
+  'tasks.parked': 'Parked',
+  'tasks.parkedChip': 'parked',
+  'tasks.parkedCount': {
+    one: '{count} parked',
+    other: '{count} parked',
+  },
+  'tasks.noParked': 'Nothing parked.',
+  'tasks.parkedOn': 'since {when}',
+  'tasks.park': 'Park it',
+  'tasks.unpark': 'Bring it back',
+  'tasks.parkHint': 'Sets it aside without finishing it. It leaves your lists and your day, and comes back whenever you want it.',
+  'tasks.parkedHint': 'Set aside. Bringing it back puts it in your lists and your day again, exactly as it was.',
+  'tasks.wontDoAction': 'Won’t do',
+  'side.viewParked': '⏸ View parked',
+  'side.viewParkedShort': 'View parked',
+
+  // ── closing a parent that has nothing left in it ───────────────────────────
+  //    Worded as what it DOES rather than as "auto-complete": the owner is
+  //    agreeing to a write that reaches their other CalDAV clients, so the hint
+  //    says that plainly rather than describing it as a display convenience.
+  'settings.autoCloseParents': 'Finish a checklist with its last step',
+  'settings.autoCloseParents.on': 'On',
+  'settings.autoCloseParents.off': 'Off',
+  'settings.autoCloseParents.hint': 'When you tick the last open step of a task, '
+    + 'the task itself is completed too. A step you have marked won’t-do counts '
+    + 'as nothing left to do; a parked one does not, since it is still coming back. '
+    + 'This writes a real completion, so it shows up in your other calendar apps.',
+
+  // ── an overfull day, named at the moment it is committed ───────────────────
+  //    Nothing here is a refusal. `plan.commitAnyway` is one press, exactly as
+  //    `plan.start` was — what changed is that the press says what it is, so
+  //    the warning is no longer the only thing on screen that does.
+  'plan.trim': 'Trim something',
+  'plan.commitAnyway': 'Start it anyway',
+  'today.addWhenOver': '· already {amount} over',
+  'today.sugWouldBeOver': '+{amount} over',
+  //    Read back afterwards. A fact about the day, not a mark against it —
+  //    nothing on the look-back scores anything.
+  'today.committedOver': 'Started {amount} over what you said you would work.',
+  // ── work late enough to need a decision rather than another offer ──────────
+  //    The heading is the ask. Nothing here calls it a failure or counts how
+  //    long it has been: the row exists to end a loop, not to report on it.
+  'today.sug.triage': 'Waiting on a decision',
+  'today.triage.today': 'Due today',
+  'today.triage.newDate': 'A new date for {task}',
+  'today.triage.park': 'Park it',
+  'settings.staleOverdue': 'Ask about work more than this many days late',
+  'settings.staleOverdue.hint': 'Past this, a task stops being offered to your '
+    + 'day as ordinary work and is asked about instead: give it a new date, or '
+    + 'park it. It is never hidden — the Tasks tab still shows everything. Set '
+    + 'it to 0 to turn this off.',
+  'settings.staleOverdue.off': 'Off. Overdue work is offered to your day like '
+    + 'anything else, however long it has been waiting.',
+  'home.overdueWaiting': {
+    one: '{count} has been waiting long enough to need a decision.',
+    other: '{count} have been waiting long enough to need a decision.',
+  },
+  // ── what you finished this week ────────────────────────────────────────────
+  //    A number and no verdict. There is nothing to compare it against on
+  //    purpose: no target, no goal, nothing marked good or bad.
+  'module.week': 'Finished this week',
+  'module.week.blurb': 'How many tasks you have completed, week by week.',
+  'module.week.thisWeek': 'this week',
+  'module.week.lastWeek': 'last week',
+  'module.week.weeksAgo': '{n} weeks ago',
+  'today.weekFinished': {
+    one: '{count} finished this week',
+    other: '{count} finished this week',
+  },
 } as const

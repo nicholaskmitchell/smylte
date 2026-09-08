@@ -130,6 +130,18 @@ _RRULE_TOKENS = frozenset({
 # `_habit_minting_allowed` for why it is not zero.
 _HABIT_MINT_GRACE_DAYS = 1
 
+# How far up a RELATED-TO chain one completion may close parents.
+#
+# A bound rather than a recursion to the root, and it is a safety rail rather
+# than a judgement about how deep a checklist should be. `RELATED-TO` is free
+# text with no existence check on either side of the wire, so another client can
+# write a chain of any length — or a ring — and this walk runs under the global
+# service lock on the write path. The `seen` set in `_close_finished_parents`
+# catches a cycle; this catches a chain long enough to be pathological without
+# being one. Eight is far past any real nesting: the SPA renders a tree, but a
+# checklist inside a checklist inside a checklist is already unusual.
+_CLOSE_PARENT_DEPTH = 8
+
 
 def normalize_habit_days(value: str | None) -> str:
     """Validate a habit's `days` and return its canonical spelling. Raises
@@ -592,7 +604,19 @@ class TaskService:
         return None
 
     # ── task queries ─────────────────────────────────────────────────────────
-    def list_tasks(self, href: str, *, include_done: bool = True) -> list[dict[str, Any]]:
+    def list_tasks(
+        self, href: str, *, include_done: bool = True, include_parked: bool = True,
+    ) -> list[dict[str, Any]]:
+        """Every VTODO in one collection, as DTOs.
+
+        TWO FILTERS AND NOT ONE, because they answer different questions and a
+        caller usually wants a different answer to each. `include_done` is about
+        work that is over; `include_parked` is about work deliberately set aside,
+        which is not over and must not be reported as though it were. Both
+        default to True so a reader that has not thought about it sees
+        everything — the SPA fetches the lot and decides on screen, which is what
+        lets it offer a "Parked" view at all.
+        """
         with self._lock:
             items = [i for i in store.get_items(self._conn, href) if i["component"] == "VTODO"]
             cats = store.get_all_categories(self._conn, href)
@@ -601,6 +625,8 @@ class TaskService:
         dtos = [self._task_dto(it, cats, side, children) for it in items]
         if not include_done:
             dtos = [d for d in dtos if not (d["completed"] or d["cancelled"])]
+        if not include_parked:
+            dtos = [d for d in dtos if not d["parked"]]
         # Manual position first, then the due-then-summary order the SQL already
         # gave. Done here rather than in the query because the sidecar is
         # already in hand, so it costs no join.
@@ -702,6 +728,18 @@ class TaskService:
             # and what keeps the reminder rule quiet by default. See
             # notify/rules.py::_eval_item_reminder.
             "notify_minutes_before": s["notify_minutes_before"] if s else None,
+            # Set aside rather than finished or abandoned. Two keys and not one,
+            # for the reason `completed` and `completed_at` are two: the flag is
+            # what every filter tests, and the instant is a fact the flag cannot
+            # carry. See `schema.sql`'s `parked_at` for why this is app-only.
+            #
+            # ORTHOGONAL TO STATUS, deliberately. A parked task is still whatever
+            # the wire says it is, so nothing here is derived from `status` and
+            # nothing about parking changes it. Readers that mean "work I might
+            # do" ask for all three; readers that mean "finished" ask only the
+            # first two, and `park_task` says which is which.
+            "parked": bool(s["parked_at"]) if s else False,
+            "parked_at": s["parked_at"] if s else None,
             "has_rrule": bool(it["has_rrule"]),
             "href": it["href"],
             "etag": it["etag"],
@@ -826,8 +864,146 @@ class TaskService:
     def edit_task(self, href: str, uid: str, edit: TaskEdit) -> dict[str, Any] | None:
         with self._lock:
             self._engine.edit_task(href, uid, edit)
+            # ONLY WHEN THIS EDIT SETTLED THE CHILD. The feature is "ticking the
+            # last step finishes the thing it is a step of", and without this
+            # test it was "any edit to any child does", which is a different and
+            # much worse thing: renaming a step that was already done — or
+            # touching its notes — completed the parent on the calendar server,
+            # a write the owner did not make and cannot see the cause of. Worse,
+            # a parent deliberately RE-OPENED after an eager close snapped shut
+            # again on the next text edit, with no way to keep it open but
+            # turning the setting off.
+            #
+            # `getattr` rather than a bare attribute read: `TaskEdit.status`
+            # defaults to the UNSET sentinel, and an edit that does not mention
+            # status must not be compared as though it set one.
+            settled = str(getattr(edit, "status", None) or "").upper() in (
+                "COMPLETED", "CANCELLED")
+            closed = self._close_finished_parents(href, uid) if settled else []
         self._publish({"type": "task_updated", "list": _slug(href), "uid": uid})
+        # One event per parent this edit closed, and they are needed rather than
+        # tidy: the SPA reconciles a write by replacing the ROW it wrote, so
+        # without these the parent stays open on screen until something else
+        # forces a refetch, and the owner sees a checklist that is finished
+        # under a parent that is not.
+        for parent_uid in closed:
+            self._publish({"type": "task_updated", "list": _slug(href), "uid": parent_uid})
         return self.get_task(href, uid)
+
+    def _close_finished_parents(self, href: str, uid: str) -> list[str]:
+        """Complete any ancestor of `uid` that has nothing left in it. Called
+        under the lock; returns the uids closed, innermost first.
+
+        A parent with every step ticked is finished, and leaving it open is how
+        a list keeps items nobody can act on: there is no work left in it, only
+        a row to notice and skip. Closing it is the one change here that shrinks
+        the list at zero cost to the record.
+
+        THE PREDICATE IS "NOTHING LEFT", not "everything done". Every child must
+        be COMPLETED **or CANCELLED** — a step declined is a step that is not
+        happening, so it leaves nothing to do either. That deliberately differs
+        from `_task_dto`'s `done_kids`, which counts only COMPLETED, and the two
+        answer different questions: that number is a PROGRESS percentage, where
+        counting a declined step as work done would flatter it, and this one
+        asks whether anything remains. (The client's `progressOf` has always
+        counted cancelled children as done — a pre-existing divergence, and not
+        one this widens.)
+
+        A PARKED child blocks the close, and it does so for free rather than by
+        a clause of its own: parking does not touch STATUS, so a parked child is
+        still NEEDS-ACTION and fails the test above. That is the right answer —
+        parking is setting aside, not settling, so the work is still intended
+        and the parent is not finished — and it is worth stating precisely
+        because the free version is the one that stays correct. A child that is
+        both COMPLETED and parked (parking survives completion by design) is
+        settled, and a clause reading the flag directly would have blocked on
+        it.
+
+        ONLY THIS PATH, never the sync engine. Another client ticking the last
+        child does not close the parent here, and that is deliberate: the sync
+        engine's job is to project the wire, and a projection that writes back
+        turns every incoming change into an outgoing one — including on a full
+        resync, where every task looks new. The owner ticking that same child in
+        this app gets the close; a foreign write does not.
+
+        It walks UP, because closing a parent can finish its own parent, and it
+        is bounded twice. `_CLOSE_PARENT_DEPTH` caps the climb, and a `seen` set
+        catches a cycle: `RELATED-TO` is free text with no existence check on
+        either side of the wire, so a ring is something another client can write
+        and this must terminate on it rather than loop under the global lock.
+        """
+        # Default ON — the absent key is the default, like every other setting
+        # here — but `is False` rather than a truth test, because the settings
+        # blob is hand-editable and a string or a number there must not be read
+        # as an instruction to stop writing to the owner's calendar server.
+        # Only the value the switch actually stores turns this off.
+        if store.get_settings(self._conn).get("auto_close_parents") is False:
+            return []
+        closed: list[str] = []
+        seen: set[str] = {uid}
+        child = store.get_item(self._conn, href, uid)
+        for _ in range(_CLOSE_PARENT_DEPTH):
+            parent_uid = child["related_parent"] if child is not None else None
+            if not parent_uid or parent_uid in seen:
+                return closed
+            seen.add(parent_uid)
+            parent = store.get_item(self._conn, href, parent_uid)
+            # A parent in ANOTHER list is not this parent — a UID is unique per
+            # collection (invariant #4) — and `related_parent` names no list, so
+            # a cross-list pointer resolves to nothing here and the climb stops.
+            if parent is None or parent["component"] != "VTODO":
+                return closed
+            if (parent["status"] or "") in ("COMPLETED", "CANCELLED"):
+                return closed      # already settled; its own parent is not ours to judge
+            if not self._nothing_left_in(href, parent_uid):
+                return closed
+            # THE CLOSE MAY NOT FAIL THE WRITE IT RIDES ON. This PUTs to
+            # Radicale, and an error here — a 412, a timeout, the server down —
+            # used to propagate out of `edit_task` AFTER the child's own write
+            # had already landed. The route answered 500, no `task_updated` was
+            # published, and the SPA's `settle(undefined)` put the pre-tick row
+            # back: the owner saw an error and an un-ticked box for a task that
+            # was completed on the server, with no event coming to correct it.
+            #
+            # Closing a parent is a convenience. It is allowed to not happen —
+            # the next tick or edit will find the same siblings settled and try
+            # again — and it is not allowed to take a real completion down with
+            # it. Logged rather than swallowed silently, because a close that
+            # never succeeds is a broken feature and the log is the only place
+            # that would show.
+            try:
+                self._engine.edit_task(href, parent_uid, TaskEdit(status="COMPLETED"))
+            except Exception:
+                log.warning(
+                    "auto-close: could not complete parent %s in %s", parent_uid, href,
+                    exc_info=True,
+                )
+                return closed
+            closed.append(parent_uid)
+            # Re-read rather than reusing `parent`: the edit rewrote the row, and
+            # the climb continues from what is now on it.
+            child = store.get_item(self._conn, href, parent_uid)
+        return closed
+
+    def _nothing_left_in(self, href: str, parent_uid: str) -> bool:
+        """Has `parent_uid` at least one child, and is none of them still open?
+        Called under the lock.
+
+        At least one, because a task with no subtasks is an ordinary task and
+        closing it the moment somebody edits it would be absurd — `len(kids)`
+        of zero is not "all done".
+
+        Open covers parked, without a clause for it: parking leaves STATUS
+        alone, so a parked child reads NEEDS-ACTION here. See
+        `_close_finished_parents`.
+        """
+        kids = [
+            it for it in store.get_items(self._conn, href)
+            if it["component"] == "VTODO" and it["related_parent"] == parent_uid
+        ]
+        return bool(kids) and all(
+            (kid["status"] or "") in ("COMPLETED", "CANCELLED") for kid in kids
+        )
 
     def complete_task(self, href: str, uid: str, *, done: bool = True) -> dict[str, Any] | None:
         return self.edit_task(href, uid, TaskEdit(status="COMPLETED" if done else "NEEDS-ACTION"))
@@ -835,6 +1011,44 @@ class TaskService:
     def cancel_task(self, href: str, uid: str) -> dict[str, Any] | None:
         """Won't-do."""
         return self.edit_task(href, uid, TaskEdit(status="CANCELLED"))
+
+    def park_task(self, href: str, uid: str, *, parked: bool = True) -> dict[str, Any] | None:
+        """Set a task aside, or bring it back. App-only; the wire never sees it.
+
+        The fourth answer the task list needed. NEEDS-ACTION, COMPLETED and
+        CANCELLED were the whole vocabulary, and cancelling reads as a verdict —
+        so it never gets used, and nothing ever leaves. Parking is the neutral
+        one: not done, not abandoned, just not now.
+
+        A SIBLING OF `complete_task` AND `cancel_task` in shape but not in
+        mechanism, and the difference is the point. Those two write a STATUS to
+        Radicale; this writes a sidecar column, because RFC 5545 has no neutral
+        fourth status and inventing one would put a value three other clients
+        cannot read onto collections they share (`app.py::_TASK_STATUS` refuses
+        exactly that at the edge). `schema.sql`'s `parked_at` carries the whole
+        argument, including the cost: a task parked here still sits in
+        Tasks.org's list.
+
+        It goes to `store.set_sidecar` directly rather than through
+        `self.set_sidecar`, which runs `_clear_sentinels` — that pass exists for
+        the `-1`-means-clear convention the numeric sidecar fields use, and here
+        the value being written IS None whenever the owner un-parks.
+
+        NOTHING CLEARS THIS AUTOMATICALLY — not completing the task, not
+        reopening it, not another client ticking it off. That is a decision
+        rather than an omission: completion can arrive from Tasks.org or a
+        phone, through the sync path, and a flag cleared on Smylte's own write
+        but not on a foreign one would mean two tasks in the same state
+        disagreeing about it. Un-parking is an act, exactly like parking. The
+        combination is coherent anyway — a parked task that comes back
+        COMPLETED is the honest record that it got done regardless.
+        """
+        with self._lock:
+            store.set_sidecar(
+                self._conn, href, uid, parked_at=_stamp() if parked else None
+            )
+        self._publish({"type": "task_updated", "list": _slug(href), "uid": uid})
+        return self.get_task(href, uid)
 
     def delete_task(self, href: str, uid: str) -> None:
         with self._lock:
@@ -1631,6 +1845,13 @@ class TaskService:
             "capacity_minutes": ritual["capacity_minutes"] if ritual else None,
             "capacity": self._effective_capacity(day, ritual, settings=settings),
             "committed_at": ritual["committed_at"] if ritual else None,
+            # How far over the stated capacity the plan ran when it was
+            # committed, or null — never committed, no capacity stated, or
+            # committed inside it, which are one answer here: nothing to record.
+            # See `set_day_ritual`, which computes it, and `schema.sql` for why
+            # the number is kept at all.
+            "committed_over_minutes": (
+                ritual["committed_over_minutes"] if ritual else None),
             "shutdown_at": ritual["shutdown_at"] if ritual else None,
             "reflection": ritual["reflection"] if ritual else None,
             "entries": [self._day_entry_dto(r) for r in entries],
@@ -1706,15 +1927,17 @@ class TaskService:
         were actually planned.
 
         With create=True on a day that has never been opened, the snapshot is
-        built once: what is due that day, what is already late, and what was
-        left unfinished on the last day that had a plan. Afterwards the MARKER —
+        built once: what is due that day, and what was left unfinished on the
+        last day that had a plan. What is already LATE is deliberately not among
+        them — `_snapshot_for`'s docstring gives the argument, and the suggestion
+        strip is where an overdue task is offered instead. Afterwards the MARKER —
         and only the marker — makes this a read like any other, so re-opening
         never re-snapshots and never resurrects an entry the owner dropped.
 
         Entries already on the day do NOT stand in for the marker. They used to:
         the day's first hand-add called `mark_day_opened`, and short-circuiting
         on `entries` meant a day whose first write was an add never got its
-        snapshot at all — due-today, overdue and carried rows suppressed for
+        snapshot at all — due-today and carried rows suppressed for
         that day forever, from a client that offers the add box before the open
         has even answered. So the snapshot merges into what is there instead,
         skipping anything the day already holds (`_snapshot_for`).
@@ -1728,7 +1951,7 @@ class TaskService:
         is untouched. Four cases, in full:
 
           * no marker, not past    — the full snapshot (habits first, then
-                                     due-today, overdue, carried) and the marker.
+                                     due-today, then carried) and the marker.
           * no marker, day in past — the same snapshot MINUS the habits: the
                                      tasks still derive (they are read off the
                                      wire and assert nothing about that day), but
@@ -1806,8 +2029,11 @@ class TaskService:
         """What opening `day` WOULD put on it, without opening it.
 
         The same derivation `open_day(create=True)` inserts — habits first, then
-        due that day, then already late, then unfinished from the last planned
-        day — run and thrown away. `_snapshot_for` writes nothing itself, so this
+        due that day, then unfinished from the last planned day — run and thrown
+        away. What is already late is in none of them, here for the same reason
+        it is in no open: `_snapshot_for` derives it nowhere, so a preview that
+        showed it would describe a day the open it stands in for would not
+        produce. `_snapshot_for` writes nothing itself, so this
         costs one read and cannot leave a trace. A PAST day previews no habits,
         for the same reason opening one mints none (`_habit_entries_for`): a
         preview that showed them would describe a day the open it stands in for
@@ -1825,8 +2051,8 @@ class TaskService:
         open — a FIRST open, which is the one this previews and the only one it
         speaks for. On a day that has ALREADY been planned this is not a forecast
         of the next open and does not claim to be: `_snapshot_for` re-derives
-        due-today and overdue from the wire as it stands now, while a re-open of
-        a marked day tops up habits and nothing else. Probed: open a day, then
+        due-today from the wire as it stands now, while a re-open of a marked day
+        tops up habits and nothing else. Probed: open a day, then
         give a task a DUE on it, and the preview names a task no open will ever
         add. (A habit created after the open does appear on both, because the
         top-up runs this same `_habit_entries_for`.)
@@ -1896,13 +2122,29 @@ class TaskService:
         has to MERGE with those rows rather than land beside them. Nothing here
         is proposed for a task or a note the day already carries.
 
-        Order is habits, then due-today, then overdue, then carried — what the
-        owner does every day, the day's own work, what is already late behind it,
-        and yesterday's leftovers last. A PAST day gets no habits at all and so
-        leads with due-today; `_habit_entries_for` makes that call, not this
-        function.
+        Order is habits, then due-today, then carried — what the owner does every
+        day, the day's own work, and yesterday's leftovers last. A PAST day gets
+        no habits at all and so leads with due-today; `_habit_entries_for` makes
+        that call, not this function.
 
-        Within each task group the sort key is (due, summary, collection_href,
+        WHAT IS ALREADY LATE IS NOT DERIVED, and that is the point of the
+        function rather than an omission. A deadline you set for today is a
+        commitment you made and the day is entitled to hold you to it; a deadline
+        you have already missed is a decision you have NOT made yet, and putting
+        it back on every morning makes the decision for you — badly, by deferring
+        it another day at the cost of a row you read and skip. So an overdue task
+        is offered rather than placed: `TodayView`'s suggestion strip picks it up
+        the moment it is not on the day (its groups are built over the tasks the
+        day does not already hold), and choosing it is then an act the owner
+        performs. Nothing is lost — the task is still on its list, still overdue
+        everywhere overdue is shown, and still one press from the day.
+
+        The carry is untouched, and it is worth saying why it does not quietly
+        put the same rows back. `_carry_into` takes only `source="user"` rows, so
+        a task the OWNER chose yesterday and did not finish still follows them;
+        one that merely landed on yesterday by derivation never did.
+
+        Within the task group the sort key is (due, summary, collection_href,
         uid), which is total — a UID is unique per COLLECTION, not globally
         (invariant #4), so the href has to be in the key for two lists holding
         the same UID to have a defined order — and a total key is what makes the
@@ -1913,16 +2155,29 @@ class TaskService:
         # zone.
         home = self._home_tz()
         due_today: list[Any] = []
-        overdue: list[Any] = []
         for col in store.get_collections(self._conn):
             if "VTODO" not in (col["components"] or ""):
                 continue
+            # One sidecar read per COLLECTION, hoisted out of the row loop for
+            # the reason `home` is hoisted out of the whole scan: it is the same
+            # answer for every row, and asking per task would be one query per
+            # task in every list under the global lock.
+            side = store.get_all_sidecar(self._conn, col["href"])
             # Every task in every list, raw_ics and all — the same read
             # `list_tasks` does on each render. Affordable HERE because the
             # opened marker makes it happen at most once per day, rather than
             # once per view of the day.
             for it in store.get_items(self._conn, col["href"]):
                 if it["component"] != "VTODO":
+                    continue
+                # Parked work is set aside, and a day that derived it anyway
+                # would be putting back exactly what the owner took out — the
+                # same failure narrowing the overdue rule fixed, with a worse
+                # excuse, since parking is an explicit act rather than a
+                # deadline slipping. `sqlite3.Row` has no `.get`, hence the
+                # two-step.
+                s = side.get(it["uid"])
+                if s is not None and s["parked_at"]:
                     continue
                 # Subtasks ride with their parent: a checklist item is not a
                 # separate thing to plan, and admitting them would let one
@@ -1934,12 +2189,17 @@ class TaskService:
                 key = _due_day(it["due"], is_date=bool(it["due_is_date"]), zone=home)
                 if not key:
                     continue            # undated work is chosen, never snapshotted
-                if key == day:
-                    due_today.append(it)
-                elif key < day:
-                    overdue.append(it)
-        # Habits lead the snapshot, ahead of due-today and overdue: they are what
-        # the owner decided to do EVERY day, so they read first, before whatever
+                # `!=` rather than a second bucket for `key < day`: what is
+                # already late is offered by the suggestion strip, never placed
+                # (see the docstring). An EQUALITY test also means a task due
+                # next Tuesday and one that was due last Tuesday are refused by
+                # the same line, which is the honest shape — neither is this
+                # day's work until the owner says it is.
+                if key != day:
+                    continue
+                due_today.append(it)
+        # Habits lead the snapshot, ahead of due-today: they are what the owner
+        # decided to do EVERY day, so they read first, before whatever
         # merely happens to fall due. Empty for a past day — this call is the
         # ONLY habit-minting path a first open has, so the refusal inside it is
         # what keeps `POST /api/day/2020-01-01/open` from writing today's rules
@@ -1960,9 +2220,8 @@ class TaskService:
         # the exact text as a note's identity on a day, so the carry below does
         # too.
         note_titles: set[str] = {r["title"] for r in existing if r["kind"] == "note"}
-        for group in (due_today, overdue):
-            for it in sorted(group, key=_snapshot_order):
-                self._append_task_entry(out, seen, it["collection_href"], it["uid"], "auto")
+        for it in sorted(due_today, key=_snapshot_order):
+            self._append_task_entry(out, seen, it["collection_href"], it["uid"], "auto")
         for row in self._carry_into(day):
             # Explicit per-kind dispatch, ending in a `continue` rather than in a
             # task. This was "note, and EVERYTHING ELSE IS A TASK", which is a
@@ -2034,10 +2293,10 @@ class TaskService:
         piece of work, moved" — while a derived row passes nothing and falls
         back to what the task itself remembers.
 
-        The dedupe is what stops a task appearing twice on the same day: an
-        overdue task the owner also carried forward by hand qualifies under both
-        rules, and two rows for one task means two checkboxes that disagree
-        about whether it is done. (collection_href, uid) is the identity of a
+        The dedupe is what stops a task appearing twice on the same day: a task
+        due today that the owner also chose on the last planned day qualifies
+        under both rules, and two rows for one task means two checkboxes that
+        disagree about whether it is done. (collection_href, uid) is the identity of a
         task everywhere in this app — a UID is unique per COLLECTION, not
         globally (invariant #4) — so the same UID in two lists is two entries,
         deliberately.
@@ -2059,12 +2318,26 @@ class TaskService:
         """Rows from the most recent prior plan that should follow the owner
         into `day`. Called under the lock.
 
-        Only source=user entries carry. An auto entry re-derives itself from the
-        wire every morning (it is still due, or still late, so the snapshot
-        picks it up again), and a carried entry deliberately carries exactly
-        once: a task the owner chose on Monday and then ignored on Tuesday has
-        been declined, and following them all week is how a plan turns into a
-        list nobody reads.
+        Only source=user entries carry, and a carried entry deliberately carries
+        exactly once: a task the owner chose on Monday and then ignored on
+        Tuesday has been declined, and following them all week is how a plan
+        turns into a list nobody reads.
+
+        AN AUTO ENTRY DOES NOT CARRY, and the reason for that changed when
+        overdue work stopped being derived. It used to be redundancy — the task
+        was still due or still late, so the next morning's snapshot picked it up
+        again, and carrying it as well would have given one task two rows on one
+        day. Now nothing picks it up: a task due yesterday is overdue today, and
+        `_snapshot_for` derives only what is due on the day itself. So the row
+        neither follows the owner into today nor reappears on it; the suggestion
+        strip offers it, with everything else that is late.
+
+        That is the intended shape rather than a hole left by the change. An auto
+        entry is a proposal the DAY made and the owner did not act on, and
+        carrying it would be the day making the same proposal a second time
+        without being asked — which is the behaviour narrowing the derivation
+        exists to stop. Anything the owner actually CHOSE is source="user" and
+        still follows them, so no decision is dropped by this rule.
 
         Done and dropped entries stay behind, and a task entry whose task is no
         longer an open VTODO stays behind too — completed elsewhere, cancelled,
@@ -2106,6 +2379,16 @@ class TaskService:
                 if item is None or item["component"] != "VTODO":
                     continue
                 if (item["status"] or "") in ("COMPLETED", "CANCELLED"):
+                    continue
+                # Parked since it was planned. Following the owner into today
+                # would undo the setting-aside a day after they did it, which is
+                # the one thing parking has to be proof against — and unlike the
+                # tests above this is reversible, so the row comes back the
+                # moment they un-park it. One `get_sidecar` per surviving row
+                # rather than a per-collection read: this walks ONE prior day,
+                # which holds a handful of rows spread over any number of lists.
+                side = store.get_sidecar(self._conn, row["collection_href"], row["uid"])
+                if side is not None and side["parked_at"]:
                     continue
             out.append(row)
         return out
@@ -2217,8 +2500,6 @@ class TaskService:
             fields["capacity_minutes"] = (
                 None if capacity_minutes < 0 else int(capacity_minutes)
             )
-        if committed is not None:
-            fields["committed_at"] = _stamp() if committed else None
         if shutdown is not None:
             fields["shutdown_at"] = _stamp() if shutdown else None
         if reflection is not None:
@@ -2226,6 +2507,30 @@ class TaskService:
             # written" has one representation.
             fields["reflection"] = reflection.strip() or None
         with self._lock:
+            # Committing is settled INSIDE the lock, because how far over the
+            # plan ran is a fact about the day as it stands at this instant and
+            # reading the entries outside would race a write from another tab.
+            # THE CAPACITY LANDS FIRST, in its own write, and the ordering is
+            # the whole of what that buys. `_over_at_commit` reads the day's
+            # effective capacity, so computing it before the write measured a
+            # PATCH carrying both `capacity_minutes` and `committed: true`
+            # against the capacity the day had a moment ago. The SPA sends the
+            # two separately and never hit it; the API takes them together, and
+            # a record measured against a number the owner had already replaced
+            # is exactly the kind of wrong this column exists to avoid being.
+            wrote = bool(fields)
+            if "capacity_minutes" in fields:
+                store.set_day_ritual(
+                    self._conn, day, capacity_minutes=fields.pop("capacity_minutes"))
+            if committed is not None:
+                fields["committed_at"] = _stamp() if committed else None
+                # Cleared alongside the stamp when a commit is undone: a day
+                # that is no longer committed has no commitment to have been
+                # over, and leaving the number would make the look-back describe
+                # a decision that was taken back.
+                fields["committed_over_minutes"] = (
+                    self._over_at_commit(day) if committed else None
+                )
             # The written row is deliberately not read back here: `_day_plan_dto`
             # reads the ritual itself, and an empty `fields` writes nothing at
             # all (see `store.set_day_ritual`) so there may be no row to read.
@@ -2235,9 +2540,50 @@ class TaskService:
             dto = self._day_plan_dto(day, entries, opened)
         # Only when something was written — a PATCH with an empty body is a read,
         # and an event for it would have every other tab refetch for nothing.
-        if fields:
+        #
+        # `wrote` and not `fields`: the capacity is popped out of `fields` and
+        # written first (see above), so a PATCH carrying nothing else would have
+        # left `fields` empty and published no event at all — every other tab
+        # holding a stale capacity until something else moved.
+        if wrote:
             self._publish({"type": "day_updated", "day": day})
         return dto
+
+    def _over_at_commit(self, day: str) -> int | None:
+        """How many minutes past the day's capacity its plan runs, or None when
+        there is nothing to record. Called under the lock.
+
+        None covers two different days and says the same about both: no capacity
+        stated, and a plan inside the one that was. An account that has never
+        said how long it works is told nothing at all — the one thing this
+        feature must not get wrong is inventing a working day for somebody — so
+        it cannot be over by definition.
+
+        THE SUM IS THE ONE THE TAB SHOWS (`TodayView`'s `planned`): every live
+        row's estimate, done rows included. That is deliberate and it differs
+        from `notify/rules.py::_eval_capacity_overcommitted`, which leaves done
+        rows out. Both are right about their own question — that rule asks how
+        much is still ahead of you, this asks how full the day was — and this
+        one has to match the screen, because the number being recorded is the
+        number the owner was looking at when they pressed the button. Recording
+        a different one would make the log disagree with what it is a log of.
+
+        Dropped and rolled rows are out, on both sides: taking something off the
+        day, or sending it to Thursday, is how a day gets back under its
+        capacity, and a total that kept counting them would make the two
+        controls that help do nothing.
+        """
+        capacity = self._effective_capacity(day)
+        if capacity is None:
+            return None
+        planned = sum(
+            row["estimate_minutes"] or 0
+            for row in store.get_day_entries(self._conn, day)
+            if not row["dropped_at"] and not row["rolled_to"]
+        )
+        # Strictly greater, the same boundary the tab draws: a plan that exactly
+        # fills the day is not over it.
+        return planned - capacity if planned > capacity else None
 
     def roll_entry(self, day: str, entry_id: str, to_day: str) -> dict[str, Any] | None:
         """Move one entry to another day. None for an entry_id this day lacks.
@@ -2458,8 +2804,8 @@ class TaskService:
             # Adding to a day does NOT mark it opened. The marker means "the
             # automatic snapshot has been built", and writing it here suppressed
             # that snapshot forever: `open_day` short-circuits on the marker, so
-            # a day whose first write was a hand-add never got its due-today,
-            # overdue or carried rows at all — and the shipped client offers the
+            # a day whose first write was a hand-add never got its due-today
+            # or carried rows at all — and the shipped client offers the
             # add box whether or not the open succeeded, so that was one failed
             # request away. The day still reports planned=true, through the
             # entries arm of `_day_plan_dto`.
@@ -2600,6 +2946,99 @@ class TaskService:
         if fields:
             self._publish({"type": "day_updated", "day": day})
         return dto
+
+    def completions_in(self, from_day: str, to_day: str) -> dict[str, list[dict[str, Any]]]:
+        """Tasks finished in [from_day, to_day), bucketed by the day they were
+        finished. `to_day` is EXCLUSIVE, like every other window in this service.
+
+        THE ONE PLACE this is computed, and it is here rather than in the
+        connector for the reason `due.py` exists: the look-back asked it, the
+        weekly count asks it, and the SPA reads the answer — three readers of
+        "what did I finish" is three chances to give the owner a different
+        number for the same week, on the same screen. `mcp/api.py` calls this
+        rather than keeping the copy it used to have.
+
+        WHAT COUNTS IS THE COMPLETED STAMP, and only that. A task with no stamp
+        has no day to be filed under — plenty of clients write STATUS and no
+        COMPLETED — so it is left out rather than guessed at, and one that will
+        not parse is dropped for the same reason. A CANCELLED task is not a
+        completion either: it never gets a stamp (`ical/edit.py` writes one only
+        for COMPLETED), so it falls out here without a clause of its own.
+
+        Bucketed in the owner's zone, the same rule `_due_day` applies to a
+        deadline, so "finished on the 21st" means one thing everywhere.
+
+        Bounded like `day_range`, and against the same constant. The bound is
+        on the ANSWER rather than on the work: the scan is one indexed-ish query
+        over the tasks that carry a stamp at all (`store.completed_tasks`) and
+        does not grow with the window, so this is about how much a caller may
+        ask to be handed back, not about how much it costs to look.
+        """
+        start, end = day_key(from_day), day_key(to_day)
+        span = (date.fromisoformat(end) - date.fromisoformat(start)).days
+        if span > DAY_RANGE_MAX_DAYS:
+            raise ValueError(f"range is bounded to {DAY_RANGE_MAX_DAYS} days, asked for {span}")
+        zone = self._home_tz()
+        out: dict[str, list[dict[str, Any]]] = {}
+        # `store.completed_tasks` rather than a DTO per task in every list. This
+        # is on a path the SPA polls — the dashboard's week module asks on every
+        # task tick — and building categories, the sidecar, the children map and
+        # a materialised `raw_ics` BLOB for every task in the account to arrive
+        # at a count was the cost of a question the connector used to ask once.
+        # Four columns, one query, and the rows without a stamp never leave SQL.
+        with self._lock:
+            rows = store.completed_tasks(self._conn)
+        for it in rows:
+            stamp = it["completed"]
+            if not stamp:
+                continue
+            try:
+                when = datetime.fromisoformat(stamp)
+            except ValueError:
+                continue
+            # `astimezone(zone)` with zone=None converts to the process's
+            # local zone, which is exactly the unset-`home_timezone`
+            # fallback — the same call `_due_day` makes, with the same
+            # comment, and NO second branch. A `zone is not None` guard here
+            # looked defensive and was a regression: it left an aware stamp
+            # in whatever offset it arrived in, so with no home zone set an
+            # evening completion filed under tomorrow while the deadline
+            # beside it filed under today.
+            if when.tzinfo is not None:
+                when = when.astimezone(zone)
+            key = when.date().isoformat()
+            if not (start <= key < end):
+                continue
+            out.setdefault(key, []).append({
+                # The list's SHORT id, as every other DTO in this service
+                # carries — `completed_tasks` hands back the href.
+                "list": _slug(it["collection_href"]), "uid": it["uid"],
+                "summary": it["summary"], "completed_at": stamp,
+            })
+        return out
+
+    def completed_counts(self, from_day: str, to_day: str) -> dict[str, Any]:
+        """How many tasks were finished on each day of [from_day, to_day), and
+        in total.
+
+        TASKS ONLY, deliberately — not the notes and habit occurrences a day
+        also holds. Habits already have their own weekly count, and the app's
+        stated position is that a habit is never coloured as a failure; folding
+        habit ticks into a productivity number is exactly that colouring, and it
+        would also let the figure go up on a day nothing was finished. Notes are
+        Smylte-only jots. What is left is the one number every client agrees on,
+        which is what makes it worth showing at all.
+
+        Days with nothing are ABSENT rather than zero, like `day_range`'s
+        unplanned days: the caller draws a week and knows which days it asked
+        for, and a dict of zeroes is the same information said longer.
+        """
+        by_day = self.completions_in(from_day, to_day)
+        days = {d: len(rows) for d, rows in by_day.items()}
+        return {
+            "from": day_key(from_day), "to": day_key(to_day),
+            "days": days, "total": sum(days.values()),
+        }
 
     def day_range(self, from_day: str, to_day: str) -> list[dict[str, Any]]:
         """Every planned day in [from_day, to_day), oldest first. `to_day` is

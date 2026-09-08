@@ -143,7 +143,38 @@ export function PlanRitual({
             // flow that refused to advance would be the wizard this is not.
             <button className="btn ghost" onClick={() => setStep(step + 1)}>{tr('plan.skip')}</button>
           )}
-          {last ? (
+          {/* `!committedAt` as well as `over`: on a day ALREADY committed the
+              button is "Done" and closes, so an overfull committed day must
+              not offer "Start it anyway" again. Pressing it re-stamped
+              `committed_at` and recomputed `committed_over_minutes` from the
+              day as it stands NOW — overwriting the record of how far over it
+              was at the moment it was committed, which is the one thing that
+              number is for. */}
+          {last && over && !committedAt ? (
+            // TWO NAMED ANSWERS RATHER THAN ONE UNNAMED ONE, and this is still
+            // not a block: committing is one press either way. What changes is
+            // that the press SAYS WHAT IT IS. "Start" on a day 80 minutes over
+            // is a button that does not describe its own outcome, and the
+            // warning underneath it was the only thing that did — read after
+            // the decision rather than as part of it.
+            //
+            // Trimming CLOSES the ritual rather than stepping inside it, and
+            // the two obvious alternatives are both wrong. Step 1 is where
+            // things are PICKED — it can only make the day longer — and this
+            // step is already the one with the rows, their drop controls and
+            // their estimate cells on it, so stepping anywhere is either
+            // backwards or nowhere. Leaving the flow puts the owner on the day
+            // itself with the same controls and no ritual over them, which is
+            // what "not yet, let me deal with this" actually means. A button
+            // that merely dismissed the warning would be an acknowledgement,
+            // which is a toll rather than a choice.
+            <>
+              <button className="btn ghost" onClick={onClose}>
+                {tr('plan.trim')}
+              </button>
+              <button className="btn" onClick={onCommit}>{tr('plan.commitAnyway')}</button>
+            </>
+          ) : last ? (
             <button className="btn" onClick={onCommit}>
               {committedAt ? tr('plan.done') : tr('plan.start')}
             </button>
@@ -152,10 +183,13 @@ export function PlanRitual({
           )}
         </div>
 
-        {/* Said at the moment of committing, in words, and it never blocks —
-            the button beside it does exactly what it says whether or not this
-            is here. A warning that stopped you would be a tool arguing with a
-            decision it does not have the standing to make. */}
+        {/* Said at the moment of committing, in words, and it still never
+            blocks — the buttons beside it do exactly what they say, and one of
+            them commits. What this no longer is is the ONLY thing naming the
+            over-commitment: the primary button names it too, so the decision is
+            made with its consequence attached rather than beside it. A warning
+            that stopped you would be a tool arguing with a decision it does not
+            have the standing to make; one the button contradicts is worse. */}
         {last && over && (
           <p className="plan-warn" role="status">
             {tr('plan.warn', { amount: fmtDuration(planned - capacity!) })}
@@ -257,8 +291,16 @@ function PickStep({ suggestions, colorOf, onAddTask }: {
   // Leftovers first, and reworded. The rest keep the order and the labels the
   // day itself gives them, so nothing here is a second opinion about what
   // matters — only about what to look at first.
-  const leftovers = suggestions.find((g) => g.key === LEFTOVER_KEY)
-  const rest = suggestions.filter((g) => g.key !== LEFTOVER_KEY)
+  // TRIAGE IS NOT OFFERED HERE, and that is the one place this step second-
+  // guesses the strip. Step two asks "what are you doing today", and a task
+  // that has been late long enough to need a decision is not an answer to that
+  // question — it is a different question, with different controls, and the
+  // strip renders those. Offering the row without them would put the one answer
+  // that has already failed (add it to today) in front of the owner inside a
+  // flow that is meant to be about choosing.
+  const offerable = suggestions.filter((g) => g.key !== 'triage')
+  const leftovers = offerable.find((g) => g.key === LEFTOVER_KEY)
+  const rest = offerable.filter((g) => g.key !== LEFTOVER_KEY)
   const groups = leftovers
     ? [{ ...leftovers, label: tr('plan.leftovers') }, ...rest]
     : rest

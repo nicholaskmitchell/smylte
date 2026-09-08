@@ -296,10 +296,10 @@ import {
   readCachedDayPlan, readCachedDayRange, readCachedHabits,
 } from '../cache'
 import {
-  addDays, cssColor, dayKey, isOverdue, makeGuard, msUntilMidnight, parseDate,
+  addDays, cssColor, dayKey, daysPastDue, isOverdue, makeGuard, msUntilMidnight, parseDate,
   textDir, ymd,
 } from '../util'
-import { fmtClock, fmtDue, fmtDuration } from '../time'
+import { fmtClock, fmtDue, fmtDuration, inputLang } from '../time'
 import { useI18n } from '../i18n'
 import { habitDayLabel } from '../names'
 import { useTimeFormat } from '../timeformat'
@@ -307,6 +307,7 @@ import { sortByCompletion, sortTasks, taskKey } from '../order'
 import { bucketByDay, eventKey, monthGrid, type DayEv } from '../calendar'
 import { parseEntry, type ParsedEntry } from '../daytext'
 import { AgendaEvent } from './DayPopover'
+import { DateTimeInput } from './DateTimeInput'
 import { PlanRitual } from './PlanRitual'
 import { ShutdownRitual } from './ShutdownRitual'
 import { useT } from '../i18n'
@@ -355,6 +356,23 @@ const LOOKBACK_DAYS = 14
  *  someone is getting to, while one nobody has touched in three weeks has
  *  stopped being live, which is the only thing worth interrupting the day for. */
 const STALE_DAYS = 21
+
+/** How many days past its deadline a task has to be before the day stops
+ *  offering it as ordinary work and asks for a decision about it instead.
+ *  The fallback when the account has said nothing; the setting overrides it,
+ *  and 0 turns the group off entirely.
+ *
+ *  Three, and the number is a judgement call in the same shape as the constants
+ *  above it. It has to be long enough that an ordinary slip does not trip it —
+ *  something due Friday and picked up Monday was never a problem — and short
+ *  enough that the decision is still cheap to make, which is the whole point:
+ *  a task eleven days late has been read and skipped eleven times, and every
+ *  one of those readings cost more than deciding would have.
+ *
+ *  It never hides anything. The Tasks pane shows every task it always did; this
+ *  only changes which heading the DAY offers one under, and what it offers to
+ *  do about it. */
+export const STALE_OVERDUE_DAYS = 3
 
 /** How many of a suggestion group's tasks are shown before the rest are put
  *  behind one press.
@@ -610,6 +628,7 @@ export function rowDone(e: DayEntry, task: Task | undefined, live: boolean): boo
 
 export function TodayView({
   rev, onExpire, hiddenCalendars = [], archivedCalendars = [], onStartWorking,
+  staleOverdueDays = STALE_OVERDUE_DAYS,
 }: {
   rev: number
   onExpire: () => void
@@ -622,6 +641,11 @@ export function TodayView({
   // editing (and pruning) these sets.
   hiddenCalendars?: string[]
   archivedCalendars?: string[]
+  /** How many days past its deadline a task must be before the strip asks for a
+   *  decision rather than offering it. 0 turns the group off; the default is
+   *  `STALE_OVERDUE_DAYS`. Threaded from settings by App, like every other
+   *  account preference this view honours. */
+  staleOverdueDays?: number
 }) {
   const { lang, locale, t: tr } = useI18n()
   // A STABLE guard, so it can sit in an effect's dependency list honestly
@@ -633,7 +657,7 @@ export function TodayView({
   const guard = useMemo(() => makeGuard(() => expire.current()), [])
 
   const tf = useTimeFormat()
-  const { lists, tasks, loaded, create, toggle } = useTaskData()
+  const { lists, tasks, loaded, create, toggle, saveDetail, park } = useTaskData()
 
   // ── the day, and the rollover that keeps it honest ───────────────────────
   //
@@ -947,6 +971,42 @@ export function TodayView({
    * decision the day recorded, not a failure to act on one, so counting it as a
    * miss would be the same lie pointing the other way.
    */
+  // ── how much got finished this week ──────────────────────────────────────
+  //
+  // ITS OWN READ, and not derived from the fortnight of plans already in hand.
+  // A day plan records what was PLANNED; a completion is a fact about the task,
+  // stamped on the wire, and most weeks hold work finished off-plan entirely.
+  // Counting the day rows would report the app's opinion of the week rather
+  // than the week.
+  //
+  // `null` until it lands, which the header reads as "say nothing" — a "0 this
+  // week" painted over a fetch in flight is the wrong answer at the one moment
+  // the question is worth asking.
+  const [weekDone, setWeekDone] = useState<number | null>(null)
+  /** Which day the figure on screen belongs to, so a refetch for the SAME
+   *  day can leave it standing while a change of day clears it. */
+  const dayOfWeekDone = useRef('')
+  useEffect(() => {
+    // The week the DAY ON SCREEN falls in, not the live one, so stepping the
+    // look-back back a fortnight answers for that week rather than for this
+    // one. `weekStartOf` is the single place the Monday-first convention is
+    // applied on this side; the server applies its own, and the two agree
+    // because both are Monday-first by the same argument.
+    const from = weekStartOf(day)
+    const to = ymd(addDays(new Date(`${from}T00:00`), 7))
+    let live = true
+    // Blanked only when the DAY changes, not on every refetch. `rev` bumps on
+    // any task tick anywhere in the app, and clearing the figure each time made
+    // the header line vanish and reappear on the most common action in the
+    // product. A number that is one tick stale for a moment is better than one
+    // that flickers; a wrong DAY's number is not, hence the split.
+    setWeekDone((prev) => (dayOfWeekDone.current === day ? prev : null))
+    dayOfWeekDone.current = day
+    void guard(() => api.completedCounts(from, to))
+      .then((r) => { if (live && r) setWeekDone(r.total) })
+    return () => { live = false }
+  }, [day, rev, guard])
+
   const habitWeek = useMemo(() => {
     const byDay = new Map<string, DayEntry[]>()
     for (const p of recentPlans) {
@@ -1131,8 +1191,23 @@ export function TodayView({
     patchPlan(on, { committed_at: was?.committed_at ?? new Date().toISOString() })
     setRitual(false)
     const dto = await guard(() => api.patchDay(on, { committed: true }))
-    if (dto) patchPlan(on, { committed_at: dto.committed_at })
-    else if (was) patchPlan(on, { committed_at: was.committed_at })
+    // BOTH FIELDS, because committing now produces both. The over-minutes are
+    // computed server-side and cannot be painted optimistically, so settling
+    // only the stamp left the look-back's "Started Xm over" line missing until
+    // some later refetch — and missing for good if the SSE stream was down.
+    // Settle what this call produced, which is the discipline this file keeps
+    // everywhere else.
+    if (dto) {
+      patchPlan(on, {
+        committed_at: dto.committed_at,
+        committed_over_minutes: dto.committed_over_minutes,
+      })
+    } else if (was) {
+      patchPlan(on, {
+        committed_at: was.committed_at,
+        committed_over_minutes: was.committed_over_minutes,
+      })
+    }
   }, [day, guard, patchPlan, planFor])
 
   /**
@@ -1368,6 +1443,26 @@ export function TodayView({
   const addTask = useCallback((on: string, t: Task): Promise<boolean> =>
     sendTask(on, paintTask(on, t.list, t.uid), t.list, t.uid),
   [paintTask, sendTask])
+
+  /**
+   * Give a task a new all-day deadline. The triage group's first answer.
+   *
+   * A DEADLINE and not a plan row, which is the distinction the whole group
+   * turns on: adding the task to today would leave its DUE where it is, so
+   * tomorrow it is late again and staler, under this same heading. Only a new
+   * date ends that, and it ends it everywhere at once — the Tasks pane, the
+   * Home module, the digest — rather than in this one strip.
+   *
+   * All-day, as a bare `YYYY-MM-DD`. This is a decision about WHICH DAY, taken
+   * on a screen that is about days; a time of day would be a second question
+   * nobody asked, and the editor is where a timed deadline is set.
+   *
+   * Through `saveDetail`, so it paints immediately and reconciles like every
+   * other write in the app — and so it is the same PATCH the editor makes,
+   * rather than a second path to the same field.
+   */
+  const reschedule = useCallback(
+    (t: Task, to: string) => saveDetail(t, { due: to }), [saveDetail])
 
   /** Put a note on `on`. Same optimistic shape as `addTask`. */
   const addNote = useCallback(async (on: string, title: string): Promise<boolean> => {
@@ -1703,7 +1798,11 @@ export function TodayView({
     // item is not a separate thing to plan, and admitting subtasks would let
     // one parent task drag twenty rows onto the day (service.py's
     // `_snapshot_for` skips anything with a `related_parent` for that reason).
-    const open = tasks.filter((t) => !t.parent && !t.completed && !t.cancelled)
+    // Parked work is not offered either. The strip exists to hand back what
+    // the day did not take automatically; handing back what the owner
+    // deliberately set aside would make parking a one-day reprieve.
+    const open = tasks.filter(
+      (t) => !t.parent && !t.completed && !t.cancelled && !t.parked)
     const free = open.filter((t) => !onDay.has(taskKey(t)))
     // Measured from the day on screen, not from `new Date()`: after a rollover
     // the horizon has to move with the day, and the two are the same value on
@@ -1737,6 +1836,25 @@ export function TodayView({
     // straight into the DOM and swaps its own wording in for the leftovers —
     // and one of these carries an interpolated number besides.
     group('today', tr('today.sug.today'), (t) => !!t.due && dayKey(t.due) === day)
+    // AHEAD OF "Overdue", so precedence takes the stale ones out of it. A task
+    // this late has been read and skipped every morning it sat there, and each
+    // of those readings cost more than deciding would have — so it is not
+    // offered as work any more. It is asked about, and the row carries the two
+    // answers instead of an add button (see the render).
+    //
+    // Nothing is hidden by this. The Tasks pane still shows it, the Home
+    // Overdue module still lists it, and it is still marked overdue everywhere
+    // overdue is marked; what changes is which heading the DAY offers it under.
+    // A list you cannot trust to show your tasks is worse than a long one.
+    //
+    // `staleOverdueDays === 0` is the off switch, and it has to be checked here
+    // rather than in the predicate: `group()` walks its matches into `offered`
+    // whether or not it renders them, so a group that matched everything and
+    // showed nothing would swallow the whole overdue list.
+    if (staleOverdueDays > 0) {
+      group('triage', tr('today.sug.triage'),
+        (t) => (daysPastDue(t.due, t.due_is_date, day) ?? 0) > staleOverdueDays)
+    }
     group('overdue', tr('today.sug.overdue'), (t) => isOverdue(t.due, t.due_is_date))
     // Tomorrow, out of the seven-day block and under its own heading. It is the
     // one future day a plan for today is routinely about — the thing you pull
@@ -1790,7 +1908,7 @@ export function TodayView({
       return !!touched && dayKey(touched) <= stale
     })
     return groups
-  }, [tasks, onDay, day, isToday, recentlyChosen, tr])
+  }, [tasks, onDay, day, isToday, recentlyChosen, staleOverdueDays, tr])
 
   // ── the look-back ────────────────────────────────────────────────────────
 
@@ -2237,6 +2355,19 @@ export function TodayView({
                 { done: entries.length - openCount, total: entries.length })}
           </span>
         )}
+        {/* WHAT THE WEEK ADDS UP TO, which nothing anywhere said before. The
+            count beside it describes one day, and a day is exactly the unit
+            that makes a week of real work look like nothing much.
+
+            Only once it is known: a header that showed "0 this week" while the
+            read was still in flight would be answering the question wrongly at
+            the one moment the answer matters most. And no target, no
+            comparison, no colour — the same rule the look-back keeps. */}
+        {weekDone !== null && (
+          <span className="today-week mono">
+            {tr('today.weekFinished', { count: weekDone })}
+          </span>
+        )}
         {/* THE WAY IN TO A REVIEW OF TODAY, and the whole of it: this is a
             render-level switch over data already in hand, so pressing it issues
             no request of any kind. `mode` is deliberately absent from the read
@@ -2468,6 +2599,24 @@ export function TodayView({
                         ?? tr('today.yourLists'),
                     })}
               </span>
+              {/* SAID BEFORE ENTER, which is the whole of what this line adds:
+                  the load strip below already says the day is over, and by the
+                  time it is read the thing has been added. Here it is attached
+                  to the control that would add another one.
+                  
+                  It reports the day as it STANDS and does not project. A line
+                  being typed has no estimate yet — the task does not exist — so
+                  there is no honest total to promise, and inventing one would
+                  be worse than saying nothing. The suggestion strip is where a
+                  projection is possible, because those tasks already exist and
+                  may remember what they take. */}
+              {over && (
+                <span className="today-chip-over">
+                  {tr('today.addWhenOver', {
+                    amount: fmtDuration(planned - capacity!),
+                  })}
+                </span>
+              )}
             </p>
           )}
 
@@ -2753,6 +2902,7 @@ export function TodayView({
         ) : (
           <LookBack review={review} offPlan={offPlan} renderRow={renderReviewRow}
             reflection={plan?.day === day ? plan.reflection : null}
+            committedOver={plan?.day === day ? plan.committed_over_minutes : null}
             colorOf={colorOf} live={isToday} />
         )}
 
@@ -2775,11 +2925,22 @@ export function TodayView({
             <div className="label section-label">{g.label}</div>
             <ul className="today-list">
               {shown.map((t) => (
-                <li key={taskKey(t)} className="today-row today-sug">
-                  <button type="button" className="today-plus"
-                    aria-label={tr('today.addToToday',
-                      { task: t.summary || tr('common.untitled') })}
-                    onClick={() => void addTask(day, t)}>+</button>
+                <li key={taskKey(t)}
+                  className={`today-row today-sug ${g.key === 'triage' ? 'today-triage' : ''}`}>
+                  {/* NO ADD BUTTON ON A TRIAGE ROW, and its absence is the
+                      point rather than a styling choice. Offering "+" beside a
+                      task eleven days late is offering the answer that has
+                      already failed ten times; the two controls at the end of
+                      the row are the ones that end the loop. The leading slot
+                      keeps its width so the rows still read as one column. */}
+                  {g.key === 'triage' ? (
+                    <span className="today-plus today-plus-empty" aria-hidden="true">!</span>
+                  ) : (
+                    <button type="button" className="today-plus"
+                      aria-label={tr('today.addToToday',
+                        { task: t.summary || tr('common.untitled') })}
+                      onClick={() => void addTask(day, t)}>+</button>
+                  )}
                   {/* The same column the day's rows keep, in its task face:
                       a suggestion is a task, and one left edge has to run down
                       the whole screen or the groups stop reading as one list. */}
@@ -2794,6 +2955,66 @@ export function TodayView({
                   {t.due && (
                     <span className={`today-due mono ${g.key === 'overdue' ? 'overdue' : ''}`}>
                       {fmtDue(t.due, t.due_is_date, tf, locale)}
+                    </span>
+                  )}
+                  {/* WHAT ADDING IT WOULD COST, on the button that would add it.
+                      Only where both halves are actually known: the task has to
+                      remember an estimate (`sidecar.estimated_minutes`, which is
+                      what the row would be created with) and the day has to have
+                      a capacity to be measured against. Otherwise there is
+                      nothing to say and the row says nothing rather than
+                      guessing — the same rule the add box above follows.
+
+                      The consequence is named only when it IS one: an addition
+                      the day still absorbs is not worth a warning, and a strip
+                      that flagged every row would stop meaning anything. */}
+                  {/* Never on a triage row: the comment below says "on the
+                      button that would add it", and a triage row deliberately
+                      has none — what it would cost is not the question being
+                      asked there. */}
+                  {g.key !== 'triage' && capacity != null && t.estimated_minutes != null
+                    && planned + t.estimated_minutes > capacity && (
+                    <span className="today-sug-over mono">
+                      {tr('today.sugWouldBeOver', {
+                        amount: fmtDuration(planned + t.estimated_minutes - capacity),
+                      })}
+                    </span>
+                  )}
+                  {/* TWO ANSWERS, AND BOTH OF THEM END IT. That is the whole
+                      test a control on this row has to pass, and it is why
+                      "add it to today" is not among them: putting a task on
+                      the day leaves its deadline where it is, so tomorrow it
+                      is late again, in this same group, one day staler. It is
+                      the answer that has already failed every morning the row
+                      sat there.
+
+                      A NEW DATE says when it is actually happening and clears
+                      the lateness by construction. PARKING says it is not
+                      happening now and takes it out of the way honestly —
+                      which is the answer that did not exist at all until there
+                      was somewhere neutral to put things, and the reason
+                      nothing ever left this list before.
+
+                      "Today" is the same date field's commonest value, given
+                      its own press because it is the one this screen is about.
+                      Every one of them is a single action. */}
+                  {g.key === 'triage' && (
+                    <span className="today-triage-actions">
+                      <button type="button" className="btn ghost"
+                        onClick={() => void reschedule(t, day)}>
+                        {tr('today.triage.today')}
+                      </button>
+                      <DateTimeInput type="date" className="input today-triage-date"
+                        lang={inputLang(tf, lang)}
+                        aria-label={tr('today.triage.newDate',
+                          { task: t.summary || tr('common.untitled') })}
+                        value="" onChange={(e) => {
+                          if (e.target.value) void reschedule(t, e.target.value)
+                        }} />
+                      <button type="button" className="btn ghost"
+                        onClick={() => void park(t, true)}>
+                        {tr('today.triage.park')}
+                      </button>
                     </span>
                   )}
                 </li>
@@ -2828,7 +3049,8 @@ export function TodayView({
  * arrives with `readOnly` already set by its caller, and nothing else in this
  * subtree is a control. See the header for why that matters.
  */
-function LookBack({ review, offPlan, reflection, renderRow, colorOf, live = false }: {
+function LookBack({ review, offPlan, reflection, renderRow, colorOf, live = false,
+  committedOver = null }: {
   /** The day's live rows grouped by origin, plus the dropped ones, in reading
    *  order — or `null` while the read is still in flight. */
   review: Array<{ key: string; label: string; rows: DayEntry[] }> | null
@@ -2844,6 +3066,9 @@ function LookBack({ review, offPlan, reflection, renderRow, colorOf, live = fals
    *  read the same way, which is the point of reusing this component rather
    *  than writing a second one that could describe a day differently. */
   live?: boolean
+  /** How far over the stated capacity the plan ran WHEN IT WAS COMMITTED, or
+   *  null — never committed, no capacity stated, or committed inside it. */
+  committedOver?: number | null
 }) {
   const { locale, t: tr } = useI18n()
   const tf = useTimeFormat()
@@ -2868,6 +3093,19 @@ function LookBack({ review, offPlan, reflection, renderRow, colorOf, live = fals
           <div className="label section-label">{tr('today.howItWent')}</div>
           <p className="today-reflection-text" dir={textDir(reflection)}>{reflection}</p>
         </section>
+      )}
+      {/* The other half of "it records a decision rather than enforcing one":
+          the day said it would run long, the owner committed it anyway, and
+          this is where that shows up afterwards.
+
+          Stated once, in words, with no colour and nothing to compare it to.
+          Nothing on this screen scores a day — there is no percentage, no
+          streak and no colour on the numbers — and a day knowingly started over
+          its capacity is a fact about it, not a mark against it. */}
+      {committedOver != null && (
+        <p className="today-committed-over">
+          {tr('today.committedOver', { amount: fmtDuration(committedOver) })}
+        </p>
       )}
       {review.map((g) => (
         <section key={g.key}>

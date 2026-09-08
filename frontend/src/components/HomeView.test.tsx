@@ -18,7 +18,8 @@ const m = vi.mocked(api)
 
 const task = (o: Partial<import('../api').Task> = {}): import('../api').Task => ({
   uid: 'u1', list: 'l1', summary: 'Ship it', notes: null, status: 'NEEDS-ACTION',
-  completed: false, cancelled: false, priority: null, priority_label: 'none',
+  completed: false, cancelled: false, parked: false, parked_at: null,
+  priority: null, priority_label: 'none',
   percent_complete: null, due: null, due_is_date: true, start: null, start_is_date: true,
   tags: [],
   parent: null, children: [], child_count: 0, completed_child_count: 0,
@@ -269,7 +270,7 @@ const entry = (o: Partial<import('../api').DayEntry> = {}): import('../api').Day
 const dayPlan = (entries: import('../api').DayEntry[] = [], day = today()) =>
   ({
     day, planned: true, entries, capacity_minutes: null, capacity: null,
-    committed_at: null, shutdown_at: null, reflection: null,
+    committed_at: null, committed_over_minutes: null, shutdown_at: null, reflection: null,
   } as import('../api').DayPlan)
 
 const PLAN_MODULE: DashboardModule[] = [{ id: 'x', kind: 'day_plan', x: 0, y: 0, w: 6, h: 6 }]
@@ -586,3 +587,83 @@ describe('scheduling modules', () => {
     expect(screen.queryByText('Stale link')).not.toBeInTheDocument()
   })
 })
+
+describe('<HomeView> what was finished this week', () => {
+  /** A per-day map putting `n` completions on the Monday `back` weeks ago. */
+  const onWeek = (back: number, n: number) => ({ [weekStart(-back)]: n })
+
+  it('shows the number, with the weeks behind it for shape', async () => {
+    // The complaint this answers: nothing anywhere said what a WEEK added up
+    // to. Every count in the app describes one day, and a day is exactly the
+    // unit that makes a week of real work look like nothing much.
+    //
+    // The earlier weeks are there so the figure has a shape — 23 means nothing
+    // on its own. Not a chart, and nothing marked high or low: the app does not
+    // score days, and a week is only days.
+    m.completedCounts.mockResolvedValue({
+      from: '', to: '', total: 81,
+      days: { ...onWeek(0, 23), ...onWeek(1, 18), ...onWeek(2, 31), ...onWeek(3, 9) },
+    })
+    setup([{ id: 'm1', kind: 'week', x: 0, y: 0, w: 4, h: 3 }])
+
+    expect(await screen.findByText('23')).toBeInTheDocument()
+    expect(screen.getByText('this week')).toBeInTheDocument()
+    expect(screen.getByText('18')).toBeInTheDocument()
+    expect(screen.getByText('last week')).toBeInTheDocument()
+    expect(screen.getByText('3 weeks ago')).toBeInTheDocument()
+  })
+
+  it('asks once for the whole span rather than once per week', async () => {
+    // Each of these reads scans every completed task in the account, and the
+    // effect re-runs on every SSE bump — any tick, drag or add anywhere in the
+    // app. Four requests per bump was four scans to answer one question the
+    // route already answers per day.
+    m.completedCounts.mockResolvedValue({ from: '', to: '', days: {}, total: 0 })
+    setup([{ id: 'm1', kind: 'week', x: 0, y: 0, w: 4, h: 3 }])
+    await waitFor(() => expect(m.completedCounts).toHaveBeenCalledTimes(1))
+
+    const [from, to] = m.completedCounts.mock.calls[0]
+    // Monday-first — `_WEEKDAYS`, `HABIT_DAYS`, the booking availability map
+    // and the Today tab's `weekStartOf` all are, and a week that began on
+    // Sunday here would put one day of every count in the wrong week.
+    expect(new Date(`${from}T00:00`).getDay()).toBe(1)
+    // Four whole weeks, half-open like every other window in this app: a span
+    // that included both end Mondays would count one day in two weeks.
+    expect(new Date(`${to}T00:00`).getTime() - new Date(`${from}T00:00`).getTime())
+      .toBe(28 * 86_400_000)
+    expect(to).toBe(weekStart(1))
+  })
+
+  it('says nothing at all until the read lands', async () => {
+    // A "0 this week" painted over a fetch in flight is the wrong answer at the
+    // one moment the question is worth asking — and unlike the task modules a
+    // bare number cannot carry a "some of this failed" banner.
+    let release: (v: import('../api').CompletedCounts) => void = () => {}
+    m.completedCounts.mockImplementation(() => new Promise((r) => { release = r }))
+    setup([{ id: 'm1', kind: 'week', x: 0, y: 0, w: 4, h: 3 }])
+
+    await screen.findByText('Finished this week')      // the module's own title
+    expect(screen.queryByText('this week')).not.toBeInTheDocument()
+    act(() => release({ from: '', to: '', days: {}, total: 0 }))
+    expect(await screen.findByText('this week')).toBeInTheDocument()
+  })
+
+  it('says nothing rather than zero when the read fails', async () => {
+    // `makeGuard` answers `undefined` for every failure, not just an expired
+    // session. Rendering 0 for a network blip is the module reporting a quiet
+    // week that did not happen.
+    m.completedCounts.mockResolvedValue(undefined as never)
+    setup([{ id: 'm1', kind: 'week', x: 0, y: 0, w: 4, h: 3 }])
+    await screen.findByText('Finished this week')
+    await waitFor(() => expect(m.completedCounts).toHaveBeenCalled())
+    expect(screen.queryByText('this week')).not.toBeInTheDocument()
+  })
+})
+
+/** The Monday `n` weeks from this one, as a day key. */
+function weekStart(n: number): string {
+  const d = new Date()
+  d.setDate(d.getDate() - ((d.getDay() + 6) % 7) + 7 * n)
+  const p = (x: number) => String(x).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+}

@@ -1095,4 +1095,67 @@ export const de: Catalogue = {
   'display.gone': 'Diese Anzeige ist nicht mehr verbunden.',
   'display.goneHint': 'Verbinde sie neu unter Einstellungen → Anzeigen.',
   'appear.importedTheme': 'Importiertes Design',
+
+  // ── Zurückgestellt: die neutrale vierte Antwort ────────────────────────
+  'tasks.parked': 'Zurückgestellt',
+  'tasks.parkedChip': 'zurückgestellt',
+  'tasks.parkedCount': {
+    one: '{count} zurückgestellt',
+    other: '{count} zurückgestellt',
+  },
+  'tasks.noParked': 'Nichts zurückgestellt.',
+  'tasks.parkedOn': 'seit {when}',
+  'tasks.park': 'Zurückstellen',
+  'tasks.unpark': 'Wieder aufnehmen',
+  // Kein satzinitiales „Sie“ für die Aufgabe: `i18n.test.ts` prüft auf formelle
+  // Anrede und kann das Pronomen nicht vom „Sie“ unterscheiden — der Test hat
+  // recht, dass hier keins stehen soll, wenn auch aus dem falschen Grund.
+  'tasks.parkHint': 'Legt sie beiseite, ohne sie abzuschließen. Damit verschwindet sie aus deinen Listen und deinem Tag und kommt zurück, wann immer du willst.',
+  'tasks.parkedHint': 'Beiseitegelegt. Beim Wiederaufnehmen steht sie wieder in deinen Listen und in deinem Tag, genau wie zuvor.',
+  'tasks.wontDoAction': 'Wird nichts',
+  'side.viewParked': '⏸ Zurückgestellte anzeigen',
+  'side.viewParkedShort': 'Zurückgestellte anzeigen',
+
+  // ── Eine Aufgabe schließen, in der nichts mehr offen ist ──
+  'settings.autoCloseParents': 'Checkliste mit dem letzten Schritt abschließen',
+  'settings.autoCloseParents.on': 'An',
+  'settings.autoCloseParents.off': 'Aus',
+  'settings.autoCloseParents.hint': 'Wenn du den letzten offenen Schritt einer '
+    + 'Aufgabe abhakst, wird auch die Aufgabe selbst erledigt. Ein Schritt, den du '
+    + 'auf „wird nichts“ gesetzt hast, zählt als nichts mehr zu tun; ein '
+    + 'zurückgestellter nicht, denn er kommt ja wieder. Das schreibt eine echte '
+    + 'Erledigung und ist damit auch in deinen anderen Kalender-Apps zu sehen.',
+
+  // ── Ein zu voller Tag, benannt im Moment der Zusage ────────────────────────
+  'plan.trim': 'Etwas streichen',
+  'plan.commitAnyway': 'Trotzdem starten',
+  'today.addWhenOver': '· schon {amount} drüber',
+  'today.sugWouldBeOver': '+{amount} drüber',
+  'today.committedOver': 'Mit {amount} mehr gestartet, als du arbeiten wolltest.',
+  // ── Arbeit, die alt genug ist für eine Entscheidung statt eines Angebots ───
+  'today.sug.triage': 'Wartet auf eine Entscheidung',
+  'today.triage.today': 'Heute fällig',
+  'today.triage.newDate': 'Ein neues Datum für {task}',
+  'today.triage.park': 'Zurückstellen',
+  'settings.staleOverdue': 'Ab mehr als wie vielen Tagen Verzug nachfragen',
+  'settings.staleOverdue.hint': 'Danach wird eine Aufgabe deinem Tag nicht mehr '
+    + 'als gewöhnliche Arbeit angeboten, sondern erfragt: neues Datum oder '
+    + 'zurückstellen. Versteckt wird nie etwas — im Aufgaben-Tab steht weiterhin '
+    + 'alles. Mit 0 schaltest du das ab.',
+  'settings.staleOverdue.off': 'Aus. Überfälliges wird deinem Tag angeboten wie '
+    + 'alles andere, egal wie lange es schon wartet.',
+  'home.overdueWaiting': {
+    one: '{count} wartet lange genug, um eine Entscheidung zu brauchen.',
+    other: '{count} warten lange genug, um eine Entscheidung zu brauchen.',
+  },
+  // ── Was du diese Woche geschafft hast ──────────────────────────────────────
+  'module.week': 'Diese Woche erledigt',
+  'module.week.blurb': 'Wie viele Aufgaben du abgeschlossen hast, Woche für Woche.',
+  'module.week.thisWeek': 'diese Woche',
+  'module.week.lastWeek': 'letzte Woche',
+  'module.week.weeksAgo': 'vor {n} Wochen',
+  'today.weekFinished': {
+    one: '{count} diese Woche erledigt',
+    other: '{count} diese Woche erledigt',
+  },
 }

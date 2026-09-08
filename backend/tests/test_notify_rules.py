@@ -51,8 +51,18 @@ class StubSvc:
     def list_lists(self):
         return [{"href": "/u/tasks/"}]
 
-    def list_tasks(self, href, *, include_done=True):
-        return list(self._tasks)
+    def list_tasks(self, href, *, include_done=True, include_parked=True):
+        # The filters are APPLIED rather than accepted and dropped. A stub that
+        # takes a flag and ignores it makes every rule here look like it asked
+        # the right question whether or not it did — and which rules pass
+        # `include_parked=False` is a real policy split (the digest does, the
+        # reminder the owner set on one item deliberately does not).
+        rows = list(self._tasks)
+        if not include_done:
+            rows = [t for t in rows if not (t.get("completed") or t.get("cancelled"))]
+        if not include_parked:
+            rows = [t for t in rows if not t.get("parked")]
+        return rows
 
     def bookings_created_since(self, stamp):
         return [b for b in self._bookings if (b.get("created_at") or "") >= stamp]
@@ -572,6 +582,46 @@ def test_nothing_overdue_says_nothing(db):
     svc = StubSvc(db, settings={"notify_digest_time": "07:30"},
                   tasks=[_task(due="2026-12-01", is_date=True)])
     assert R._eval_task_overdue(_sweep(svc, MORNING_UTC)) == []
+
+
+# ── what parking does, and does not, silence ─────────────────────────────────
+
+def test_parked_work_is_not_counted_at_the_owner(db):
+    """A digest that went on counting work the owner set aside would report a
+    backlog they have already dealt with, at 07:30, every morning. That number
+    is the one thing parking exists to move, so a rule the app decided to send —
+    the digest, and the overdue rule beside it — has to see the parking."""
+    tasks = [
+        {"summary": "Renew passport", "due": "2026-08-20", "due_is_date": True},
+        {"summary": "Learn the harmonica", "due": "2026-08-20", "due_is_date": True,
+         "parked": True},
+    ]
+    svc = StubSvc(db, settings={"notify_digest_time": "07:30", "time_format": "24h"},
+                  tasks=tasks)
+    text = R._eval_digest(_sweep(svc, datetime(2026, 8, 31, 11, 30, tzinfo=timezone.utc)))[0].text
+    assert "1 overdue" in text and "2 overdue" not in text
+
+    out = R._eval_task_overdue(_sweep(svc, MORNING_UTC))
+    assert out and out[0].text.startswith("1 task overdue.")
+    assert "harmonica" not in out[0].text
+
+
+def test_a_reminder_the_owner_set_still_fires_on_parked_work(db):
+    """THE ONE EXCEPTION, and it is the README's own rule rather than an
+    oversight: there is no blanket "task due soon" rule on purpose, and a lead
+    set on one item "is you asking rather than the app guessing, and an explicit
+    request outranks any bar the app would otherwise apply".
+
+    Parking is a bar the app applies to its own views. It is not a withdrawal of
+    a request the owner made, and the two are compatible in the obvious way —
+    "not now, but tell me on the 3rd". The way to stop the reminder is to clear
+    the reminder."""
+    now = datetime(2026, 8, 31, 13, 52, tzinfo=timezone.utc)   # 09:52 NY
+    task = _task(notify=10)
+    task["parked"] = True
+    svc = StubSvc(db, settings={"time_format": "24h"}, tasks=[task])
+    out = R._eval_item_reminder(_sweep(svc, now))
+    assert len(out) == 1 and "Renew passport" in out[0].text
 
 
 # ── day_unplanned ────────────────────────────────────────────────────────────
