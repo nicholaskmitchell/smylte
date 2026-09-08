@@ -693,3 +693,21 @@ Smylte was built with the assistance of AI coding tools — primarily
 Anthropic's Claude, via Claude Code. The design decisions, the review, and
 what ultimately ships are mine. Commits made with AI assistance carry a
 `Co-Authored-By` trailer, so the record lives in `git log`, not just here.
+
+## License
+
+Copyright © 2026 Nicholas K. Mitchell.
+
+Smylte is free software: you can redistribute it and/or modify it under the
+terms of the GNU General Public License as published by the Free Software
+Foundation, either **version 2** of the License, or (at your option) any later
+version — SPDX `GPL-2.0-or-later`. The full text is in [`LICENSE`](LICENSE).
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
+The three bundled typefaces are separate works and keep their own terms:
+Fraunces, Inter and JetBrains Mono are each under the SIL Open Font License 1.1,
+whose text ships beside them in `frontend/public/fonts/` and
+`backend/tasksd/display/fonts/`.
