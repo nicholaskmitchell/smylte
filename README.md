@@ -722,6 +722,16 @@ This program is distributed in the hope that it will be useful, but WITHOUT ANY
 WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
 PARTICULAR PURPOSE. See the GNU Affero General Public License for more details.
 
+**`firmware/` is the one exception, and it is MIT** (`firmware/LICENSE`). It is
+an example whose purpose is to be copied onto a board and changed, and §13 —
+the reason the rest of this is Affero — cannot fire on a panel that makes
+outbound requests and accepts no connections. The line is exactly the directory:
+the `.bin` route and the renderer behind it (`backend/tasksd/display/`) are the
+server and stay AGPL. Note that it buys less than it looks like: Waveshare's
+driver, which the example imports and this repo deliberately does not vendor, is
+GPL-3.0, so what runs on the board is a GPL-3.0 combined work either way. What
+MIT buys is lifting those sixty lines somewhere that driver is not.
+
 The three bundled typefaces are separate works and keep their own terms:
 Fraunces, Inter and JetBrains Mono are each under the SIL Open Font License 1.1,
 whose text ships beside them in `frontend/public/fonts/` and
