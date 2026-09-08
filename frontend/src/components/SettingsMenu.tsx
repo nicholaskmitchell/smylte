@@ -63,7 +63,8 @@ export function SettingsMenu({
   homeTz, onToggleHomeTz,
   calFit, onToggleCalFit,
   archivedCals, onArchivedCalsChange,
-  showCompleted, onToggleShowCompleted,
+  showCompleted, onToggleShowCompleted, autoCloseParents, onToggleAutoCloseParents,
+  staleOverdue, onStaleOverdueChange,
   focus, onFocusChange,
   notifyEnabled, onNotifyEnabledChange,
   notifyChatId, onNotifyChatIdChange,
@@ -101,6 +102,12 @@ export function SettingsMenu({
   onArchivedCalsChange: (next: string[]) => void
   showCompleted: boolean
   onToggleShowCompleted: () => void
+  autoCloseParents: boolean
+  onToggleAutoCloseParents: () => void
+  /** Days past a deadline before the Today strip asks for a decision about a
+   *  task rather than offering it. 0 turns that off. */
+  staleOverdue: number
+  onStaleOverdueChange: (next: number) => void
   /** The focus clock, every key present (see `sanitizeFocusSettings`). */
   focus: FocusSettings
   onFocusChange: (patch: Partial<FocusSettings>) => void
@@ -171,6 +178,33 @@ export function SettingsMenu({
 
   const tr = useT()
   const active = SECTIONS.find((s) => s.id === section)!
+  /** Read the stale-overdue field and store it, or put it back.
+   *
+   *  Clamped rather than refused, unlike the fields whose grammar can fail to
+   *  parse: a number input hands back a number or nothing, so "91" is a value
+   *  out of range rather than a sentence this cannot read, and the bounds are
+   *  the server's own (`SettingsPatch.stale_overdue_days`). An empty or
+   *  unreadable field snaps back to what is stored — never to 0, which is the
+   *  OFF switch and must only ever be reached deliberately. */
+  const commitStale = (el: HTMLInputElement) => {
+    const n = Number(el.value)
+    if (el.value.trim() === '' || !Number.isFinite(n)) {
+      el.value = String(staleOverdue)
+      return
+    }
+    // A NEGATIVE snaps back rather than clamping to 0, because 0 is the OFF
+    // switch and `Math.max(0, …)` reached it silently: `<input min={0}>` does
+    // not stop -5 being typed, so blurring disabled the triage group without
+    // anyone choosing to. Only a value at least 0 is a value; above the ceiling
+    // is a number out of range, which the server's own bound clamps.
+    if (n < 0) {
+      el.value = String(staleOverdue)
+      return
+    }
+    const next = Math.min(90, Math.round(n))
+    el.value = String(next)
+    if (next !== staleOverdue) onStaleOverdueChange(next)
+  }
   // What the title bar says. Beside a visible nav it would only be saying the
   // section's name twice, so on a desktop it stays "Settings".
   const title = viewingCal ? viewingCal.name
@@ -319,6 +353,41 @@ export function SettingsMenu({
               </button>
             </div>
             <div className="hintline">{tr('settings.completedTasks.hint')}</div>
+            <div className="menu-row">
+              <label htmlFor="set-autoclose">{tr('settings.autoCloseParents')}</label>
+              <button className="menu-toggle" id="set-autoclose"
+                onClick={onToggleAutoCloseParents} aria-pressed={autoCloseParents}>
+                {tr(autoCloseParents
+                  ? 'settings.autoCloseParents.on' : 'settings.autoCloseParents.off')}
+              </button>
+            </div>
+            <div className="hintline">{tr('settings.autoCloseParents.hint')}</div>
+            <div className="menu-row">
+              <label htmlFor="set-stale-overdue">{tr('settings.staleOverdue')}</label>
+              {/* A number the owner types, committed on blur and on Enter like
+                  every other one in this sheet — not on each keystroke, which
+                  would PUT a settings blob per digit and briefly store "1" on
+                  the way to "14". Escape restores and stops there, so the key
+                  that abandons a field does not also close the sheet. */}
+              {/* No `key` on the value: remounting on every commit dropped
+                  focus out of the field the moment Enter was pressed. The
+                  element keeps its own text and `commitStale` writes the
+                  accepted value back into it, which is what a controlled-enough
+                  field needs without being re-created. */}
+              <input id="set-stale-overdue" className="input menu-num" type="number"
+                min={0} max={90} defaultValue={staleOverdue}
+                onBlur={(e) => commitStale(e.currentTarget)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') commitStale(e.currentTarget)
+                  if (e.key === 'Escape') {
+                    e.stopPropagation()
+                    e.currentTarget.value = String(staleOverdue)
+                  }
+                }} />
+            </div>
+            <div className="hintline">
+              {tr(staleOverdue > 0 ? 'settings.staleOverdue.hint' : 'settings.staleOverdue.off')}
+            </div>
           </>
         )}
 

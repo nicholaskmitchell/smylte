@@ -49,7 +49,7 @@ class _Svc:
     def list_lists(self):
         return [{"href": h} for h in self._lists]
 
-    def list_tasks(self, href, *, include_done=True):
+    def list_tasks(self, href, *, include_done=True, include_parked=True):
         return list(self._tasks.get(href, []))
 
     def has_task(self, href, uid):
@@ -107,7 +107,7 @@ def test_tasks_across_all_lists_are_ordered_before_the_limit_applies():
     defines, uid tie-break included."""
     def _t(uid, due):
         return {"uid": uid, "due": due, "completed": False, "cancelled": False,
-                "tags": [], "summary": uid}
+                "parked": False, "tags": [], "summary": uid}
 
     api = McpApi(_Svc(
         lists=["/u/a/", "/u/b/"],

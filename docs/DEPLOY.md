@@ -536,7 +536,11 @@ outbound network is involved either way, so `IPAddressDeny=any` in
 Back up **both**:
 - `~/radicale/collections` — the source of truth (all `.ics`).
 - the app's **sidecar-class tables** from `/var/lib/tasks/tasks.db`:
-  `sidecar`, `list_settings`, `completions`, `attachments`, **`booking_links`**
+  **`sidecar`** (per-task app-only state: the manual order, pins, remembered
+  estimates, per-item reminder leads, and WHICH TASKS ARE PARKED — set aside
+  without being finished; losing it un-parks everything, and since parking is
+  deliberately not on the wire there is nothing to restore it from),
+  `list_settings`, `completions`, `attachments`, **`booking_links`**
   and **`bookings`** (every scheduling-link config plus client names/emails/
   notes — this exists nowhere on the wire), **`day_plan`** plus
   **`day_plan_opened`** (the Today tab's whole record: what the owner added to a
@@ -544,9 +548,10 @@ Back up **both**:
   how long a focus session actually spent on it, what
   they moved to another day, what they dropped rather than did, and which days
   were opened at all), **`day_ritual`** (what the owner SAID about each day —
-  how long they were willing to work, when they started it, when they shut it
-  down, and the line they wrote about how it went; the reflections are the only
-  prose in this database that exists nowhere else), and **`habits`** (the rules
+  how long they were willing to work, when they started it, how far over that
+  the plan ran at the moment they committed it, when they shut it down, and the
+  line they wrote about how it went; the reflections are the only prose in this
+  database that exists nowhere else), and **`habits`** (the rules
   that put entries on a day — they are never PUT to Radicale and carry no RRULE,
   so the wire has no copy; losing them stops every habit recurring, though the
   occurrences already in `day_plan` keep their titles and stay readable),

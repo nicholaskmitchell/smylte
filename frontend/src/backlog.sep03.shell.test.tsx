@@ -76,7 +76,8 @@ const today = () => ymd(new Date())
 
 const task = (o: Partial<Task> = {}): Task => ({
   uid: 'u1', list: 'l1', summary: 'Ship it', notes: null, status: 'NEEDS-ACTION',
-  completed: false, cancelled: false, priority: null, priority_label: 'none',
+  completed: false, cancelled: false, parked: false, parked_at: null,
+  priority: null, priority_label: 'none',
   percent_complete: null, due: null, due_is_date: true, start: null, start_is_date: true,
   tags: [], parent: null, children: [], child_count: 0, completed_child_count: 0,
   derived_percent: null, pinned: false, sort_order: null,
@@ -99,7 +100,7 @@ const entry = (o: Partial<DayEntry> = {}): DayEntry => ({
 })
 const plan = (entries: DayEntry[], o: Partial<DayPlan> = {}): DayPlan => ({
   day: today(), planned: true, entries, capacity_minutes: null, capacity: null,
-  committed_at: null, shutdown_at: null, reflection: null, ...o,
+  committed_at: null, committed_over_minutes: null, shutdown_at: null, reflection: null, ...o,
 })
 /** A session anchored `agoS` seconds before now. */
 const session = (o: Partial<FocusSession> = {}, agoS = 0): FocusSession => ({

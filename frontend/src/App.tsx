@@ -34,7 +34,7 @@ import { TasksView } from './components/TasksView'
 import { CalendarView } from './components/CalendarView'
 import { SchedulingView } from './components/SchedulingView'
 import { HomeView } from './components/HomeView'
-import { TodayView } from './components/TodayView'
+import { TodayView, STALE_OVERDUE_DAYS } from './components/TodayView'
 import { FocusView } from './components/FocusView'
 import { DEFAULT_FOCUS, sanitizeFocusSettings, type FocusSettings } from './focus'
 import { isFloatWindow } from './desktop'
@@ -104,6 +104,13 @@ export function App() {
   const [collapsedGroups, setCollapsedGroups] = useState<string[]>([])
   const [collapsedTasks, setCollapsedTasks] = useState<string[]>([])
   const [showCompleted, setShowCompleted] = useState(false)
+  // Default true, matching the server's own default for an absent key: a
+  // parent with nothing left in it is finished.
+  const [autoCloseParents, setAutoCloseParents] = useState(true)
+  // Seeded from `STALE_OVERDUE_DAYS`, which is where the number is argued for,
+  // rather than retyped: three copies of one default is how the Overdue module
+  // and the Today strip come to disagree about which rows are waiting.
+  const [staleOverdue, setStaleOverdue] = useState(STALE_OVERDUE_DAYS)
   const [timeFormat, setTimeFormat] = useState<TimeFormat>(DEFAULT_TIME_FORMAT)
   const [language, setLanguage] = useState<Language>(DEFAULT_LANGUAGE)
   // App's own translator rather than `useT()`, because App is what RENDERS the
@@ -423,6 +430,16 @@ export function App() {
         if (keep('collapsed_tasks') && Array.isArray(s.collapsed_tasks)) {
           setCollapsedTasks(s.collapsed_tasks.filter((x) => typeof x === 'string'))
         }
+        if (keep('auto_close_parents') && typeof s.auto_close_parents === 'boolean') {
+          setAutoCloseParents(s.auto_close_parents)
+        }
+        // Guarded like every other number read out of the blob, which is
+        // hand-editable: finite, whole, and inside the bounds the server takes.
+        if (keep('stale_overdue_days') && typeof s.stale_overdue_days === 'number'
+            && Number.isFinite(s.stale_overdue_days)
+            && s.stale_overdue_days >= 0 && s.stale_overdue_days <= 90) {
+          setStaleOverdue(Math.round(s.stale_overdue_days))
+        }
         if (keep('show_completed_tasks') && typeof s.show_completed_tasks === 'boolean') {
           setShowCompleted(s.show_completed_tasks)
         }
@@ -576,7 +593,8 @@ export function App() {
     'hidden_calendars', 'archived_calendars', 'hidden_lists', 'task_groups',
     'collapsed_groups', 'collapsed_tasks', 'dashboard', 'calendar_task_lists',
     'tab_order', 'session_ttl_s', 'home_timezone', 'appearance',
-    'sidebar_collapsed', 'show_completed_tasks', 'calendar_show_done_tasks',
+    'sidebar_collapsed', 'show_completed_tasks', 'auto_close_parents',
+    'calendar_show_done_tasks',
     'calendar_fit', 'time_format', 'language',
     // The trigger map is READ-MODIFY-WRITE — one toggle rebuilds the whole
     // object — so writing it after a failed read would replace the account's
@@ -804,6 +822,24 @@ export function App() {
     setShowCompleted(next)
     saveSettings({ show_completed_tasks: next })
   }, [showCompleted])
+
+  // Whether ticking the last step of a checklist closes the task it is a step
+  // of. On by default, and switchable because it is the one preference here
+  // that writes to the calendar server on the owner's behalf — the close is a
+  // real completion, visible in their other CalDAV clients.
+  const toggleAutoCloseParents = useCallback(() => {
+    const next = !autoCloseParents
+    setAutoCloseParents(next)
+    saveSettings({ auto_close_parents: next })
+  }, [autoCloseParents])
+
+  // How many days late is late enough to be asked about. A value the owner
+  // typed rather than a toggle, so it is NOT in MERGED_SETTINGS: it carries its
+  // own new value rather than reading the old one.
+  const changeStaleOverdue = useCallback((next: number) => {
+    setStaleOverdue(next)
+    saveSettings({ stale_overdue_days: next })
+  }, [])
 
   const changeCalTaskLists = useCallback((next: string[]) => {
     setCalTaskLists(next)
@@ -1177,6 +1213,9 @@ export function App() {
             calFit={calFit} onToggleCalFit={toggleCalFit}
             archivedCals={archivedCals} onArchivedCalsChange={changeArchivedCals}
             showCompleted={showCompleted} onToggleShowCompleted={toggleShowCompleted}
+            autoCloseParents={autoCloseParents}
+            onToggleAutoCloseParents={toggleAutoCloseParents}
+            staleOverdue={staleOverdue} onStaleOverdueChange={changeStaleOverdue}
             focus={focus} onFocusChange={changeFocus}
             notifyEnabled={notifyEnabled} onNotifyEnabledChange={changeNotifyEnabled}
             notifyChatId={notifyChatId} onNotifyChatIdChange={changeNotifyChatId}
@@ -1226,10 +1265,11 @@ export function App() {
         // calendar on each switch between the two tabs.
         <TodayView rev={rev} onExpire={onExpire}
           hiddenCalendars={hiddenCals} archivedCalendars={archivedCals}
+          staleOverdueDays={staleOverdue}
           onStartWorking={enterFocus} />
       )}
       {!booting && tab === 'home' && (
-        <HomeView rev={rev} onExpire={onExpire}
+        <HomeView rev={rev} onExpire={onExpire} staleOverdueDays={staleOverdue}
           layout={dashboard} onLayoutChange={changeDashboard}
           hiddenCalendars={hiddenCals} archivedCalendars={archivedCals} />
       )}

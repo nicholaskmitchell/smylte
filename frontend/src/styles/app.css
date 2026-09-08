@@ -86,6 +86,9 @@
 /* `.input` is `width: 100%`, which in a `.menu-row` swallows the row and wraps
    the label onto two lines. Cap it so the label keeps its own line. */
 .set-panel .menu-row .input { width: auto; max-width: min(220px, 60%); }
+/* A small number field in a settings row — a threshold in days, not a
+   sentence. Sized to its content so it does not read as a text box. */
+.set-panel .menu-row .menu-num { width: 5rem; }
 .settings-menu .arch-row, .settings-menu .conn,
 .settings-menu .notif-rule .menu-row { flex-wrap: wrap; row-gap: 6px; }
 .menu-head {
@@ -1319,6 +1322,32 @@
 
 /* module contents */
 .dash-empty { padding: 14px 12px; color: var(--fg-faint); font-size: calc(13px * var(--fs-scale)); margin: 0; }
+/* One line above a module's rows, saying something about part of what is
+   listed. The module still shows everything — this is never a filter. */
+.dash-note { padding: 8px 12px 0; margin: 0; color: var(--fg-muted);
+  font-size: calc(12px * var(--fs-scale)); }
+
+/* ---- what was finished this week ---------------------------------------
+   One number, large enough to read at a glance, with the weeks behind it small
+   so the figure has a shape rather than standing alone. Not a chart: no axis,
+   no colour, nothing marked high or low. This app does not score days and a
+   week is only days. */
+.dash-week { padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 8px; }
+.dash-week-figure { margin: 0; display: flex; align-items: baseline; gap: 8px; }
+.dash-week-n {
+  font-family: var(--serif); font-weight: 500; line-height: 1;
+  font-size: calc(34px * var(--fs-scale));
+}
+.dash-week-label { color: var(--fg-muted); font-size: calc(13px * var(--fs-scale)); }
+.dash-week-past { list-style: none; margin: 0; padding: 0; display: flex; gap: 14px; }
+.dash-week-past li { display: flex; align-items: baseline; gap: 5px; }
+.dash-week-past .mono { color: var(--fg-muted); }
+.dash-week-ago { color: var(--fg-faint); font-size: calc(11px * var(--fs-scale)); }
+
+/* The week's total in the Today header, beside the day's own count. Quiet: the
+   number next to it describes the work in front of the owner, and this one is
+   context rather than an instruction. */
+.today-week { color: var(--fg-faint); }
 .dash-tasks { list-style: none; margin: 0; padding: 0; }
 .dash-task {
   display: flex; align-items: baseline; gap: 8px; padding: 6px 12px;
@@ -1798,6 +1827,9 @@
    two and the half the old chip never said. Quieter than the kind: it is the
    consequence, read once and then known. */
 .today-chip-fate { color: var(--fg-faint); min-width: 0; overflow-wrap: anywhere; }
+/* Said BEFORE Enter, on the control that would make the day fuller. Warn-
+   coloured like the load strip's own over-line, and the words carry it too. */
+.today-chip-over { color: var(--warn); flex: none; }
 
 /* The controls under the chip — the kind swap and, when a task is being made
    and there is more than one list, the target picker. A row of its own rather
@@ -1867,6 +1899,16 @@
   line-height: 1.4;
 }
 .plan-actions { display: flex; align-items: center; gap: 8px; }
+
+/* The look-back's one line about a day that was started over its capacity.
+   Deliberately NOT warn-coloured, unlike every other over-capacity string in
+   this file: those are said while something can still be done about it, and
+   this is a record of a finished decision. Nothing on the look-back scores a
+   day, and a red number would be exactly that. */
+.today-committed-over {
+  margin: 0 0 10px; color: var(--fg-muted); line-height: 1.4;
+  font-size: calc(12px * var(--fs-scale));
+}
 
 /* ---- the shutdown ritual ------------------------------------------------
    The same frame as the planning one, on purpose: the two are a pair, and a
@@ -2025,6 +2067,31 @@
 /* A suggestion is something that is NOT on the day yet, so it reads a step
    quieter than the rows above it. */
 .today-sug .today-title { color: var(--fg-muted); }
+
+/* What adding one would cost, on the row that would add it. Warn-coloured, and
+   never the only carrier: the words say "over" too, because a colour does not
+   survive a screen reader, a greyscale shot or a custom theme. */
+.today-sug-over { color: var(--warn); flex: none; font-size: calc(11px * var(--fs-scale)); }
+
+/* ---- work that has waited long enough to need a decision ---------------
+   A triage row is not offered, it is ASKED about, so it keeps the column but
+   loses the add button. The leading glyph holds that column's width — a row
+   whose first cell simply vanished would break the one left edge the whole
+   strip reads down. */
+.today-plus-empty { color: var(--warn); text-align: center; }
+.today-triage-actions { display: flex; gap: 6px; align-items: center; flex: none; }
+.today-triage-actions .btn { padding: 3px 8px; font-size: calc(11px * var(--fs-scale)); }
+/* Narrow, because it holds one date and sits at the end of a row that already
+   has three controls on it. */
+.today-triage-date { width: auto; max-width: 9.5rem; padding: 2px 6px;
+  font-size: calc(11px * var(--fs-scale)); }
+/* The row wraps rather than squeezing its controls off-screen on a phone: three
+   answers at the end of a title that can be any length is more than one line
+   holds, and every one of them has to stay reachable. */
+@media (max-width: 720px) {
+  .today-triage { flex-wrap: wrap; }
+  .today-triage-actions { width: 100%; padding-left: 26px; }
+}
 
 /* ---- arranging the day -------------------------------------------------
    `.drag-over` is NOT a shared class in this stylesheet — every user of it
