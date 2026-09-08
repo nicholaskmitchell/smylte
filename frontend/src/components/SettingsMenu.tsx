@@ -50,9 +50,21 @@ const SECTIONS = [
   { id: 'displays', label: 'settings.section.displays' },
   { id: 'developer', label: 'settings.section.developer' },
   { id: 'account', label: 'settings.section.account' },
+  { id: 'about', label: 'settings.section.about' },
 ] as const
 
 type Section = (typeof SECTIONS)[number]['id']
+
+// AGPL §13 asks that a modified copy reachable over a network PROMINENTLY OFFER
+// its source to the people using it, and a link in the running app is the
+// customary way to answer. So it lives in the nav rather than in a README:
+// a README is not something a person interacting with the server ever sees.
+//
+// One constant, and the label is derived from it rather than written twice —
+// a fork that repoints the href and leaves the visible text naming this
+// repository would be worse than no link at all, and two strings are how that
+// happens. Change this line and both move.
+const SOURCE_URL = 'https://github.com/nicholaskmitchell/smylte'
 
 export function SettingsMenu({
   theme, onToggleTheme, onCustomizeAppearance,
@@ -451,6 +463,23 @@ export function SettingsMenu({
             <div className="menu-actions">
               <button className="btn ghost" onClick={onLogout}>{tr('settings.logout')}</button>
             </div>
+          </>
+        )}
+
+        {section === 'about' && (
+          <>
+            <div className="menu-row">
+              <label>{tr('about.licence')}</label>
+              <span className="menu-value">AGPL-3.0-or-later</span>
+            </div>
+            <div className="menu-row">
+              <label>{tr('about.source')}</label>
+              <a className="linklike" href={SOURCE_URL}
+                target="_blank" rel="noreferrer noopener">
+                {SOURCE_URL.replace(/^https?:\/\//, '')}
+              </a>
+            </div>
+            <div className="hintline">{tr('about.hint')}</div>
           </>
         )}
       </div>
