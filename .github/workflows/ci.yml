@@ -100,8 +100,8 @@ jobs:
       - run: npm ci
       # Playwright's browsers live outside node_modules, so `cache: npm` above
       # does not cover them. Keyed on the resolved playwright version, which is
-      # what decides the Chromium build.
-      - name: Chromium cache key
+      # what decides both browser builds.
+      - name: Browser cache key
         id: pw
         run: echo "v=$(node -p "require('playwright/package.json').version")" >> "$GITHUB_OUTPUT"
       - uses: actions/cache@v4
@@ -114,15 +114,20 @@ jobs:
       # The layout tier. jsdom computes no layout and the unit project runs with
       # `css: false`, so a mobile rule that loses the cascade is invisible to all
       # 1164 tests above — four have shipped dead that way, each one green here.
-      # This project renders the real stylesheets in real Chromium and measures.
+      # This project renders the real stylesheets in real browsers and measures.
+      #
+      # BOTH ENGINES. Chromium alone left WebKit untested, which is the engine
+      # every iPhone runs and the one this phone-first app is most used on —
+      # see the `instances` comment in vite.config.ts. WebKit is the slower
+      # install of the two; it is cached above with Chromium on the same key.
       #
       # No `if:` and no "required" env var, deliberately: `vitest run --project
       # browser` exits 1 both when the browser is missing and when the include
       # glob matches nothing, so the tier cannot go quietly missing the way the
       # scratch-Radicale tier could before SCRATCH_REQUIRED. A knob here would
       # have nothing to do.
-      - name: Install Chromium for the layout tier
-        run: npx playwright install --with-deps chromium
+      - name: Install Chromium and WebKit for the layout tier
+        run: npx playwright install --with-deps chromium webkit
       - name: Layout tests (real browser)
         run: npm run test:browser
       - run: npm run build

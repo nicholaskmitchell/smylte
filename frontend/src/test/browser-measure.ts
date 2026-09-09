@@ -30,7 +30,25 @@ export async function mount(html: string): Promise<HTMLElement> {
   const host = document.createElement('div')
   host.innerHTML = html
   document.body.appendChild(host)
+  // SETTLE, rather than await once. The paragraph above is a Chromium
+  // observation: there, one `ready` after the mount is enough. WebKit resolves
+  // `ready` while faces the just-mounted subtree asked for are still arriving
+  // and then puts `status` back to 'loading', so a single await measures
+  // fallback metrics there exactly as no await does in Chromium — silently, and
+  // differently depending on how fast the run is.
+  //
+  // Bounded rather than a `while`: a face that never resolves has to reach
+  // `layout.browser.test.tsx`'s vacuity guard as a failure, not hang the run.
+  // The first await is unconditional and that is load-bearing: in Chromium
+  // `status` is still 'loaded' the instant after `appendChild` — the lazy load
+  // has not started — so a loop guarded on `status !== 'loaded'` skips its body
+  // entirely and measures fallback metrics, which is the very failure the
+  // paragraph above describes. Await first, THEN settle.
   await document.fonts.ready
+  for (let i = 0; i < 20 && document.fonts.status !== 'loaded'; i++) {
+    await new Promise(requestAnimationFrame)
+    await document.fonts.ready
+  }
   await new Promise(requestAnimationFrame)
   return host
 }
