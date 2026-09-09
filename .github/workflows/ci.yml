@@ -99,15 +99,22 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
       # Playwright's browsers live outside node_modules, so `cache: npm` above
-      # does not cover them. Keyed on the resolved playwright version, which is
-      # what decides both browser builds.
+      # does not cover them. Keyed on the resolved playwright version AND on the
+      # set of browsers installed — the second half is not decoration. `actions/
+      # cache` does not save on an exact key hit, so when WebKit was added under
+      # the version-only key the job restored the old Chromium-only entry,
+      # downloaded WebKit, and then skipped the save: "Cache hit occurred on the
+      # primary key playwright-Linux-1.56.1, not saving cache." That is a fresh
+      # ~100MB download on every run, forever, and it is invisible because the
+      # job still passes. Naming the browsers means adding or dropping one is a
+      # new key, which is saved once and hit thereafter.
       - name: Browser cache key
         id: pw
         run: echo "v=$(node -p "require('playwright/package.json').version")" >> "$GITHUB_OUTPUT"
       - uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ steps.pw.outputs.v }}
+          key: playwright-${{ runner.os }}-${{ steps.pw.outputs.v }}-chromium-webkit
       - run: npm run typecheck
       - name: Unit + rendering tests (vitest, jsdom)
         run: npm test
