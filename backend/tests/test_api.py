@@ -1102,6 +1102,118 @@ def test_parked_work_leaves_the_open_count(client):
         == "Not now"
 
 
+def test_rescheduling_a_missed_deadline_remembers_the_one_it_left(client):
+    """The fact rescheduling used to destroy.
+
+    DUE is single-valued, so writing today's date onto a task that was promised
+    three weeks ago left nothing anywhere saying it had ever been promised — and
+    that is usually the more useful of the two dates, since it is the whole
+    difference between late and merely scheduled. Today's triage strip is built
+    around moving that date, so the one screen that exists to end the lateness
+    was also the one erasing the evidence of it.
+
+    STAMPED ONCE. The second reschedule does not overwrite the first, which is
+    what makes the column the ORIGINAL deadline rather than the previous hop: a
+    task pushed four times has slipped from the date it was actually promised
+    for, and that is the date worth keeping.
+
+    And nothing about it reaches Radicale — DUE on the wire is whatever the last
+    edit said, exactly as every other CalDAV client will read it."""
+    lid = _list(client)["id"]
+    t = client.post(f"/api/lists/{lid}/tasks", json={
+        "summary": "Renew the passport", "due": "2020-03-11",
+    }).json()
+    assert t["original_due"] is None, "nothing has been missed yet"
+
+    moved = client.patch(f"/api/lists/{lid}/tasks/{t['uid']}",
+                         json={"due": "2099-01-04"}).json()
+    assert moved["due"] == "2099-01-04"
+    assert moved["original_due"] == "2020-03-11"
+    assert moved["original_due_is_date"] is True
+    # Untouched on the wire: DUE is whatever the last edit said, which is what
+    # every other CalDAV client on this collection will read.
+    assert client.get(f"/api/lists/{lid}/tasks/{t['uid']}").json()["due"] == "2099-01-04"
+
+    again = client.patch(f"/api/lists/{lid}/tasks/{t['uid']}",
+                         json={"due": "2099-06-01"}).json()
+    assert again["original_due"] == "2020-03-11", "the FIRST miss, not the last"
+
+    # Clearing a deadline that has passed is a move off it too — and the one
+    # case where the remembered date is the only date left anywhere.
+    u = client.post(f"/api/lists/{lid}/tasks", json={
+        "summary": "Chase the invoice", "due": "2019-11-02",
+    }).json()
+    cleared = client.patch(f"/api/lists/{lid}/tasks/{u['uid']}",
+                           json={"due": None}).json()
+    assert cleared["due"] is None and cleared["original_due"] == "2019-11-02"
+
+
+def test_ordinary_planning_records_no_missed_deadline(client):
+    """The test that keeps the annotation meaning something.
+
+    Only a deadline that had already PASSED is remembered. Moving next month's
+    task to the month after is planning, not slipping, and stamping it would put
+    a note on every drag across the Tasks pane's day columns until the note said
+    nothing at all. Giving an undated task its first date moves it off nothing,
+    and an edit that never mentions the date is not a reschedule."""
+    lid = _list(client)["id"]
+    future = client.post(f"/api/lists/{lid}/tasks", json={
+        "summary": "Book the flights", "due": "2099-04-01",
+    }).json()
+    planned = client.patch(f"/api/lists/{lid}/tasks/{future['uid']}",
+                           json={"due": "2099-05-01"}).json()
+    assert planned["original_due"] is None
+
+    undated = client.post(f"/api/lists/{lid}/tasks", json={"summary": "Someday"}).json()
+    dated = client.patch(f"/api/lists/{lid}/tasks/{undated['uid']}",
+                         json={"due": "2020-01-01"}).json()
+    assert dated["original_due"] is None, "a first deadline is not a missed one"
+
+    # An overdue task renamed is still overdue and still due on the same day.
+    renamed = client.patch(f"/api/lists/{lid}/tasks/{dated['uid']}",
+                           json={"summary": "Someday, then"}).json()
+    assert renamed["original_due"] is None
+
+
+def test_a_remembered_deadline_can_be_forgotten(client):
+    """It has to be forgettable or the annotation is a one-way ratchet: correct
+    a date badly once and the task carries "originally due" for the rest of its
+    life with no way to take it back.
+
+    Forgetting is the ONLY edit the API offers on it. The date is a record of
+    something that happened, written by the server from the task's own history;
+    a settable field would let a missed deadline be invented, and the column
+    would stop being evidence of anything."""
+    lid = _list(client)["id"]
+    t = client.post(f"/api/lists/{lid}/tasks", json={
+        "summary": "Reply to Ana", "due": "2020-08-12T09:00",
+    }).json()
+    moved = client.patch(f"/api/lists/{lid}/tasks/{t['uid']}",
+                         json={"due": "2099-02-02"}).json()
+    assert moved["original_due"] == "2020-08-12T09:00:00"
+    assert moved["original_due_is_date"] is False, "a timed deadline is not all-day"
+
+    forgotten = client.put(f"/api/lists/{lid}/tasks/{t['uid']}/sidecar",
+                           json={"forget_original_due": True}).json()
+    assert forgotten["original_due"] is None
+    assert forgotten["original_due_is_date"] is False
+    # The deadline it now carries is untouched: forgetting is about the record,
+    # not about the date the task is actually working to.
+    assert forgotten["due"] == "2099-02-02"
+
+    # Forgetting drops the record; it is not an exemption from making another.
+    # The first move here records nothing — the task was sitting on a date that
+    # had not passed — and the second records the one it then missed.
+    client.patch(f"/api/lists/{lid}/tasks/{t['uid']}", json={"due": "2020-01-01"})
+    again = client.patch(f"/api/lists/{lid}/tasks/{t['uid']}",
+                         json={"due": "2099-03-03"}).json()
+    assert again["original_due"] == "2020-01-01"
+    # A sidecar write that does not mention it leaves it alone.
+    kept = client.put(f"/api/lists/{lid}/tasks/{t['uid']}/sidecar",
+                      json={"pinned": True}).json()
+    assert kept["original_due"] == "2020-01-01"
+
+
 def test_parking_an_unknown_task_is_a_404_and_writes_nothing(client):
     """The guard `put_sidecar` carries, for the reason it carries it: this route
     writes the sidecar too, and `store.set_sidecar` refuses a uid `items` does

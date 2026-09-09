@@ -23,6 +23,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from . import due as due_rules
 from . import scheduling
 from .config import Settings
 from .dav import xml as davxml
@@ -740,6 +741,18 @@ class TaskService:
             # first two, and `park_task` says which is which.
             "parked": bool(s["parked_at"]) if s else False,
             "parked_at": s["parked_at"] if s else None,
+            # THE DEADLINE THIS TASK WAS MOVED OFF, once it had already
+            # passed — null for everything that has never missed one. Rewriting
+            # DUE destroys the only record that the task was ever late, and
+            # that record is usually the more useful of the two dates; see
+            # `_deadline_being_missed`, which is the only thing that writes it.
+            #
+            # The pair, exactly as `due` / `due_is_date` above are a pair, so
+            # every renderer already knows what to do with it: `fmtDue` takes
+            # the instant and the all-day flag, and a remembered deadline shown
+            # as midnight would be a second answer about the same date.
+            "original_due": s["original_due"] if s else None,
+            "original_due_is_date": bool(s["original_due_is_date"]) if s else False,
             "has_rrule": bool(it["has_rrule"]),
             "href": it["href"],
             "etag": it["etag"],
@@ -863,7 +876,17 @@ class TaskService:
 
     def edit_task(self, href: str, uid: str, edit: TaskEdit) -> dict[str, Any] | None:
         with self._lock:
+            # READ BEFORE THE WRITE, WRITE AFTER IT. The deadline this edit is
+            # about to overwrite only exists until `_engine.edit_task` runs, so
+            # it has to be looked at first — and the sidecar must not be stamped
+            # until the wire write has actually landed, or a task whose PUT
+            # 412'd would carry a record of a reschedule that never happened.
+            missed = self._deadline_being_missed(href, uid, edit)
             self._engine.edit_task(href, uid, edit)
+            if missed is not None:
+                store.set_sidecar(self._conn, href, uid,
+                                  original_due=missed[0],
+                                  original_due_is_date=int(missed[1]))
             # ONLY WHEN THIS EDIT SETTLED THE CHILD. The feature is "ticking the
             # last step finishes the thing it is a step of", and without this
             # test it was "any edit to any child does", which is a different and
@@ -889,6 +912,75 @@ class TaskService:
         for parent_uid in closed:
             self._publish({"type": "task_updated", "list": _slug(href), "uid": parent_uid})
         return self.get_task(href, uid)
+
+    def _deadline_being_missed(
+        self, href: str, uid: str, edit: TaskEdit
+    ) -> tuple[str, bool] | None:
+        """The deadline `edit` is about to erase, when it is one worth keeping —
+        `(iso, is_date)`, matching `items.due` / `items.due_is_date`. Called
+        under the lock, before the write.
+
+        DUE is single-valued, so rescheduling is destructive by construction:
+        putting today's date on a task that was promised three weeks ago leaves
+        nothing, anywhere, saying it was ever promised. And "three weeks ago" is
+        usually the more useful of the two dates — it is the whole difference
+        between a task that is late and one that is merely scheduled. Today's
+        triage strip is built entirely around moving that date, so the one
+        screen that exists to end the lateness was also the one that erased the
+        evidence of it. This is what `schema.sql`'s `original_due` remembers.
+
+        FOUR TESTS, AND EACH RULES OUT A DIFFERENT WAY OF WRITING DOWN A
+        DEADLINE THAT WAS NEVER MISSED:
+
+        * The edit has to MENTION `due` at all. `TaskEdit` fields default to
+          UNSET, and a rename that never touched the date is not a reschedule.
+        * There has to BE an old deadline. Giving an undated task its first date
+          moves it off nothing.
+        * The old deadline has to have PASSED, by `due.due_parts` — the app's
+          own overdue rule, imported rather than restated, so this agrees with
+          the strip that offers the reschedule and with `util.ts::isOverdue`
+          that colours it. Moving next Friday's task to the Friday after is
+          ordinary planning; annotating it would put a note on every drag across
+          the Tasks pane's day columns until the note meant nothing.
+        * The value has to actually CHANGE, compared as parsed values rather
+          than as strings, so a re-save that reformats an unchanged deadline
+          ("09:00" for "09:00:00") is not read as a move.
+
+        And it never overwrites: `original_due` is the FIRST deadline missed,
+        not the previous one. A task pushed four times has slipped from its
+        original date, and a column tracking the last hop would answer a
+        question nobody asks while losing the one they do. Only an explicit
+        "forget it" (the sidecar route's `forget_original_due`) clears it.
+
+        ONLY THIS PATH, never the sync engine — the same rule
+        `_close_finished_parents` states, for the same reason. Tasks.org moving
+        a deadline is a projection of the wire, not a reschedule the owner made
+        here, and a sync that stamped would fill the column on every full
+        resync, where every task looks new. It is also what keeps recurring
+        VTODOs quiet: nothing in this app advances one
+        (docs/recurrence-findings.md), so a series stepping forward arrives
+        through sync and records nothing, while the owner deliberately moving an
+        overdue one from this app is a real reschedule and is remembered.
+
+        Nothing here can fail the edit it rides on. Every branch is a read of
+        the local cache, and the one parse involved is `due.parse_datelike`,
+        which is soft by contract because these values came off another
+        client's wire.
+        """
+        if edit.due is UNSET:
+            return None
+        it = store.get_item(self._conn, href, uid)
+        if it is None or not it["due"]:
+            return None
+        side = store.get_sidecar(self._conn, href, uid)
+        if side is not None and side["original_due"]:
+            return None
+        parts = due_rules.due_parts(it["due"], self._home_tz())
+        if parts is None or datetime.now(timezone.utc).timestamp() < parts[1]:
+            return None
+        if due_rules.parse_datelike(it["due"]) == edit.due:
+            return None
+        return it["due"], bool(it["due_is_date"])
 
     def _close_finished_parents(self, href: str, uid: str) -> list[str]:
         """Complete any ancestor of `uid` that has nothing left in it. Called

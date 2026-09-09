@@ -270,6 +270,18 @@ class Sidecar(BaseModel):
     # the one it names, and an unbounded int reaches SQLite as an OverflowError,
     # outside the taxonomy this module maps.
     notify_minutes_before: int | None = Field(default=None, ge=-1, le=10080)
+    # "Forget the deadline this task was moved off." A clear, named as the ACT,
+    # rather than a settable `original_due` — and that is the whole shape of the
+    # field on purpose. `original_due` is a RECORD of something that happened
+    # (see `schema.sql`, and `service._deadline_being_missed`, which is the only
+    # thing that writes it); a client that could put an arbitrary date there
+    # could write a missed deadline that never existed, and the column would
+    # stop being evidence of anything.
+    #
+    # It still needs to be forgettable, though, or the annotation is a one-way
+    # ratchet: correct a date badly once and the task carries "originally due"
+    # for the rest of its life with no way to take it back.
+    forget_original_due: bool | None = None
 
 
 class EventReminder(BaseModel):
@@ -1748,6 +1760,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not await _run(_svc(request).has_task, href, uid):
             raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown task {uid}")
         fields = {k: v for k, v in body.model_dump().items() if v is not None}
+        # Translated here rather than passed through: `store.set_sidecar` writes
+        # what it is given and vets the names it accepts, so `forget_original_due`
+        # would be refused as an unknown column — which is right. The request
+        # names an act; the columns it clears are this layer's business.
+        #
+        # A false is not a request to remember something (there is nothing this
+        # route could remember), so only a true does anything — the same reading
+        # `if v is not None` above gives every other field.
+        if fields.pop("forget_original_due", False):
+            fields["original_due"] = None
+            fields["original_due_is_date"] = 0
         return await _run(_svc(request).set_sidecar, href, uid, **fields)
 
     @api.put("/calendars/{cal_id}/events/{uid}/reminder")

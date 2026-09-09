@@ -415,6 +415,11 @@ export const de: Catalogue = {
   'taskModal.title': 'Titel',
   'taskModal.notes': 'Notizen',
   'taskModal.addMultiple': 'Mehrere hinzufügen',
+  // „Ursprünglich“, nicht „zuletzt“: der Wert wird beim ERSTEN Versäumnis
+  // gesetzt und danach nie überschrieben, nennt also auch nach vier
+  // Verschiebungen noch das Datum, für das die Aufgabe wirklich zugesagt war.
+  'taskModal.originalDue': 'Ursprünglich fällig am {date}',
+  'taskModal.forgetOriginalDue': 'Verwerfen',
   'common.delete': 'Löschen',
   'common.add': 'Hinzufügen',
   'common.save': 'Speichern',
@@ -1137,6 +1142,10 @@ export const de: Catalogue = {
   'today.triage.today': 'Heute fällig',
   'today.triage.newDate': 'Ein neues Datum für {task}',
   'today.triage.park': 'Zurückstellen',
+  // Dieselbe Aussage wie `taskModal.originalDue`, in der Breite, die eine Zeile
+  // dafür hat — kurz genug, um neben dem neuen Datum zu stehen, ohne die
+  // Schaltflächen einer Zeile auf dem Telefon aus dem Bild zu schieben.
+  'today.wasDue': 'war fällig am {date}',
   'settings.staleOverdue': 'Ab mehr als wie vielen Tagen Verzug nachfragen',
   'settings.staleOverdue.hint': 'Danach wird eine Aufgabe deinem Tag nicht mehr '
     + 'als gewöhnliche Arbeit angeboten, sondern erfragt: neues Datum oder '

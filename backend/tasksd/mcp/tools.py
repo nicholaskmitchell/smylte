@@ -296,7 +296,11 @@ def build_tools(api) -> dict[str, Tool]:
 
     @tool(
         "smylte_get_task", "Get one task",
-        "One task in full, including its subtasks, tags and notes.",
+        "One task in full, including its subtasks, tags and notes.\n\n"
+        "`original_due` is NOT the deadline. It is a deadline the task ALREADY "
+        "MISSED and was rescheduled off, kept because writing a new DUE would "
+        "otherwise erase the fact that it was ever late. `due` is the date the "
+        "task is working to now, and is the only one to report as its deadline.",
         _obj({"list_id": _LIST_ID, "uid": {"type": "string"}}, ["list_id", "uid"]),
     )
     def _get_task(list_id, uid):
