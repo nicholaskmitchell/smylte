@@ -657,15 +657,35 @@ describe('2026-09-03 — the tab strip and the settings gear on a phone', () => 
         expect(el.contains(at) || at === el, `${el.className} does not catch a touch ${dy}px off its centre`).toBe(true)
       }
     }
-    // The box itself is unchanged, so the bar stays the height the strip's
-    // scroll rule was measured against.
+    // The boxes themselves are unchanged, so the bar stays the height the
+    // strip's scroll rule was measured against.
+    //
+    // Three assertions, not one number, and the number this replaced was wrong
+    // twice over. It read `box(bar).h < 64`, raised from 56 to absorb an engine
+    // divergence — and BOTH halves of the comment justifying it were false.
+    // The divergence is not `.brand`: Fraunces measures 19px in Chromium and in
+    // WebKit alike. It is the GEAR — `.icon-btn` declares no `font-size`, so it
+    // inherits each engine's UA button default (13.33px against 16px) and comes
+    // out 32 against 36. And `min-height: 44px`, the regression the comment
+    // promised to catch, lands the bar at 65 rather than 69: the arithmetic used
+    // the desktop `.topbar` padding of 12px where the mobile block overrides it
+    // to 10px. The pin had 1px of margin against the one case it named, and 8px
+    // of slack to absorb 4px of divergence — so a whole band of real regressions
+    // passed. Measured green under `< 64` and red under `< 56`: `.tabs` margin
+    // halved to -4px (59/59), `.tabs` padding grown to 12px (59/59), the gear's
+    // padding raised to 10px (59/63), `.topbar` mobile padding to 14px (61/65).
+    //
+    // So: say the box model instead. The bar IS its tallest control plus its own
+    // 20px of mobile padding and 1px border — 32+21=53 in Chromium, 36+21=57 in
+    // WebKit, exactly, which is why the relation needs no per-engine number.
+    // Anything that grows the bar WITHOUT growing a control (the `.tabs`
+    // padding/margin pair, the bar's own padding) breaks it in both engines.
     expect(box(tab).h, 'the tab grew its own box').toBeLessThan(36)
-    // The ceiling is 64 rather than 56 because the two engines set this bar to
-    // different heights from the same rules — Chromium 53, WebKit 57 — and the
-    // difference is Fraunces italic's line box in `.brand`, not anything this
-    // test is about. 64 still catches what the pin exists for: the obvious
-    // wrong fix is `min-height: 44px` on `.tab` or the gear, and the bar's own
-    // 12px padding and 1px border put that at 69 in either engine.
-    expect(box(bar).h, 'the topbar grew').toBeLessThan(64)
+    // 38 is 2px over WebKit's 36 and 6 over Chromium's 32, and it is the only
+    // ceiling that catches a gear grown by the smallest wrong fix (padding
+    // 7px -> 10px: 38/42) in BOTH engines rather than in WebKit alone.
+    expect(box(gear).h, 'the gear grew its own box').toBeLessThan(38)
+    expect(box(bar).h, 'the topbar grew past its tallest control')
+      .toBeLessThanOrEqual(Math.max(box(tab).h, box(gear).h) + 21 + 1)
   })
 })
