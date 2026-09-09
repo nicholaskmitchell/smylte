@@ -716,7 +716,25 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
                 const hiddenCount = total - shownEvents.length - shownTasks.length
                 return (
                   <div key={key}
-                    className={`cal-cell ${inMonth ? '' : 'dim'} ${key === todayKey ? 'today' : ''} ${isMobile && key === focusDay ? 'focus' : ''} ${drag && overDay === key ? 'drag-over' : ''}`}
+                    className={`cal-cell ${inMonth ? '' : 'dim'} ${key === todayKey ? 'today' : ''} ${drag && overDay === key ? 'drag-over' : ''}`}
+                    // A DATA ATTRIBUTE, not the class list — and for the third
+                    // time in this file's history, for the same reason the dots
+                    // below carry `data-kind`. `.focus` is a GLOBAL rule:
+                    // app.css:2494 is the full-screen focus session, `position:
+                    // fixed; inset: 0` with an opaque `background: var(--bg)`.
+                    // A day cell wearing the bare class took the whole of it, so
+                    // on a phone the focused day — which starts as today —
+                    // became a viewport-sized panel painted over the topbar, the
+                    // weekday header, the other 41 cells and the agenda. The tab
+                    // rendered as one empty box with today's number in the
+                    // corner, which is precisely what it looked like.
+                    //
+                    // `.task` was called "the one bare class in app.css carrying
+                    // layout" when the dots were fixed. It was not: `.focus` is
+                    // another, and any element given one as a modifier picks the
+                    // whole rule up. `calendar.browser.test.tsx` measures this
+                    // now — jsdom cannot see it, which is why it shipped.
+                    data-focus={isMobile && key === focusDay ? '' : undefined}
                     role="gridcell"
                     aria-label={fmtCellLabel(d)}
                     // THE roving tabindex: exactly one cell is in the tab order

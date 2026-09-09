@@ -199,6 +199,29 @@ describe('localeFor', () => {
   it('is case-insensitive, as BCP-47 is', () => {
     expect(localeFor('de', ['DE-at'])).toBe('DE-at')
   })
+
+  it('refuses a tag Intl cannot parse, rather than handing it on to throw', () => {
+    // `navigator.languages` says what the user PREFERS; it does not promise
+    // every entry is a tag `Intl` can take. `en-US@posix` is the everyday
+    // counter-example — a Linux container reports exactly it — and it passes
+    // the base-subtag test, so before this it was returned verbatim.
+    //
+    // What that cost: `locale` reaches `weekdayNames` and `monthNames`, which
+    // construct a `DateTimeFormat` DURING RENDER. The RangeError unwound React
+    // from inside CalendarView and the whole tab went blank, no error boundary
+    // in between. Measured before the fix: `new Intl.DateTimeFormat('en-US@posix')`
+    // throws, and rendering the calendar under that locale rendered nothing.
+    expect(() => new Intl.DateTimeFormat('en-US@posix')).toThrow(RangeError)
+    expect(localeFor('en', ['en-US@posix'])).toBe('en')
+    expect(() => new Intl.DateTimeFormat(localeFor('en', ['en-US@posix']))).not.toThrow()
+  })
+
+  it('skips only the unusable tag, keeping a good one further down the list', () => {
+    // The fallback is to the bare language, not past the rest of the list: a
+    // device that offers a broken tag AND a usable one still gets its region.
+    expect(localeFor('en', ['en-US@posix', 'en-GB'])).toBe('en-GB')
+    expect(localeFor('de', ['de-DE@euro', 'de-AT'])).toBe('de-AT')
+  })
 })
 
 // ── the source, swept ────────────────────────────────────────────────────────
