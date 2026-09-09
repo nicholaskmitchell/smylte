@@ -49,6 +49,7 @@ const taskList: List = {
 const tsk = (o: Partial<Task> = {}): Task => ({
   uid: 't1', list: 'tl1', summary: 'Renew passport', notes: null, status: 'NEEDS-ACTION',
   completed: false, cancelled: false, parked: false, parked_at: null,
+  original_due: null, original_due_is_date: false,
   priority: null, priority_label: 'none',
   percent_complete: null, due: '2026-03-04', due_is_date: true,
   start: null, start_is_date: true, tags: [], parent: null, children: [],

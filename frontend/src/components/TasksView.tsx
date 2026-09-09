@@ -98,7 +98,8 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
   // Home reads the same copy rather than fanning out a second one.
   const {
     lists, serverOrderedLists, tasks, listsLoaded, listsOk, loaded, setLists,
-    create, createMany, addSub, toggle, remove, saveDetail, setReminder, park, reorder,
+    create, createMany, addSub, toggle, remove, saveDetail, setReminder, park,
+    forgetOriginalDue, reorder,
     taskListErrors, reloadTasks,
   } = useTaskData()
   const [detail, setDetail] = useState<Task | null>(null)
@@ -768,6 +769,21 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
           // behind the modal, so leaving it open would show the editor for
           // something no longer on screen.
           onPark={(next) => { void park(detail, next); setDetail(null) }}
+          // Does NOT close, unlike the two above, and the difference is the
+          // row: parking and deleting take it out of the pane behind the
+          // modal, so an editor left open would be showing something that is
+          // no longer there. Forgetting a remembered deadline moves nothing —
+          // it takes one line off this form — and closing the whole editor
+          // over it would throw away any unsaved edit in the fields above.
+          //
+          // The snapshot is patched to match what was just sent, because
+          // `detail` is a copy taken when the row was opened and nothing
+          // refreshes it while the modal is up. Same pair, same values, as the
+          // optimistic paint in `data.tsx`.
+          onForgetOriginalDue={() => {
+            void forgetOriginalDue(detail)
+            setDetail({ ...detail, original_due: null, original_due_is_date: false })
+          }}
           onDelete={() => { remove(detail); setDetail(null) }}
           onMultiple={() => {}} />
       )}

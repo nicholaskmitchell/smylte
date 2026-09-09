@@ -148,6 +148,20 @@ already failed: putting the task on today leaves its deadline where it is, so
 tomorrow it is late again and one day staler. Only a new date ends that, and it
 ends it everywhere rather than in this one strip.
 
+**A new date does not erase the old one.** DUE holds a single value, so
+rescheduling used to be destructive: pressing "Due today" on something eleven
+days late left nothing, anywhere, saying it had ever been late — and that date
+is usually the more useful of the two, since it is the whole difference between
+a task that is late and one that is merely scheduled. So the deadline a task is
+moved off is remembered, and the row carries it — "was due …", beside the date
+the task is working to now. It is stamped once and never rewritten, so a task
+pushed four times still names the day it was actually promised for, and it is
+recorded ONLY when the date being left had already passed — moving next Friday's
+work to the Friday after is planning, not slipping, and annotating that would
+make the note mean nothing. The task editor shows the same line and is the one
+place it can be forgotten. It lives in the app-only sidecar, so like parking it
+is Smylte's own and does not reach Tasks.org, jtx Board or Thunderbird.
+
 It never hides anything, and this is worth saying plainly: the Tasks tab shows
 every task it always did, the Home Overdue module still lists all of them — it
 just says how many are waiting on a decision — and nothing about the deadline

@@ -391,6 +391,12 @@ export const en = {
   'taskModal.title': 'Title',
   'taskModal.notes': 'Notes',
   'taskModal.addMultiple': 'Add multiple',
+  // The deadline a task was moved off after it had already passed. "Originally"
+  // rather than "previously" because that is what the field holds: it is
+  // stamped on the FIRST miss and never rewritten, so a task pushed four times
+  // still names the date it was actually promised for.
+  'taskModal.originalDue': 'Originally due {date}',
+  'taskModal.forgetOriginalDue': 'Forget that',
   'common.delete': 'Delete',
   'common.add': 'Add',
   'common.save': 'Save',
@@ -1078,6 +1084,10 @@ export const en = {
   'today.triage.today': 'Due today',
   'today.triage.newDate': 'A new date for {task}',
   'today.triage.park': 'Park it',
+  // The same fact as `taskModal.originalDue`, in the width a row has for it.
+  // Short enough to sit beside the date it replaced without pushing the
+  // controls off the end of a triage row on a phone.
+  'today.wasDue': 'was due {date}',
   'settings.staleOverdue': 'Ask about work more than this many days late',
   'settings.staleOverdue.hint': 'Past this, a task stops being offered to your '
     + 'day as ordinary work and is asked about instead: give it a new date, or '

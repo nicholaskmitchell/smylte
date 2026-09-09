@@ -227,6 +227,12 @@ export function sanitizeTask(v: unknown): Task | null {
     percent_complete: numOrNull(o.percent_complete),
     due: orNull(o.due),
     due_is_date: bool(o.due_is_date),
+    // Absent from anything this cache wrote before a rescheduled deadline was
+    // remembered, which `orNull` renders as null — "this one has not missed
+    // one". Nothing else could be assumed: the date a task was moved off is not
+    // recoverable from what is left on the row.
+    original_due: orNull(o.original_due),
+    original_due_is_date: bool(o.original_due_is_date),
     start: orNull(o.start),
     start_is_date: bool(o.start_is_date),
     tags: strs(o.tags),

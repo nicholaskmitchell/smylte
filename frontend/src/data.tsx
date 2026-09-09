@@ -85,6 +85,15 @@ export interface TaskData {
    *  routing it through PATCH would PUT the VTODO back and move its etag, so
    *  every other CalDAV client would re-fetch a resource that did not change. */
   park: (t: Task, parked: boolean) => Promise<void>
+  /** Forget the deadline this task was moved off, so nothing mentions it any
+   *  more. Its own call for the reason `park` and `setReminder` have theirs —
+   *  `original_due` is app-only, and a PATCH would PUT the VTODO back and move
+   *  its etag for a field the wire never carried.
+   *
+   *  A clear and nothing else: the date itself is a record of something that
+   *  happened, written once by the server, and a client able to SET one could
+   *  write a missed deadline that never existed. */
+  forgetOriginalDue: (t: Task) => Promise<void>
   /** Move the task `from` to where `target` currently sits WITHIN `run`. Same
    *  gesture as the sidebar's list drag: dropping on a row below lands after
    *  it, above lands before it. Positions are assigned across every task on the
@@ -386,6 +395,9 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
     priority: null, priority_label: body.priority || 'none',
     percent_complete: null, due: body.due ?? null,
     due_is_date: !!body.due && !body.due.includes('T'),
+    // A task being created has missed no deadline: it has only ever had the one
+    // it is being given. Nothing but the server ever writes this pair.
+    original_due: null, original_due_is_date: false,
     start: body.start ?? null, start_is_date: !!body.start && !body.start.includes('T'),
     tags: body.tags ?? [], parent: body.parent ?? null, children: [],
     child_count: 0, completed_child_count: 0, derived_percent: null,
@@ -682,6 +694,15 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
     settle(await write(() => api.park(t.list, t.uid, parked)), t)
   }
 
+  const forgetOriginalDue = async (t: Task) => {
+    // Painted immediately and reconciled, like every write here. Both halves of
+    // the pair are cleared on the optimistic row too: the flag alone would
+    // leave `original_due_is_date` describing a date that is no longer there.
+    patchLocal(t, { original_due: null, original_due_is_date: false })
+    invalidateFetches()
+    settle(await write(() => api.forgetOriginalDue(t.list, t.uid)), t)
+  }
+
   const setReminder = async (t: Task, minutes: number) => {
     // Painted immediately like every other write here, then reconciled. -1 is
     // the clear sentinel on the wire and `null` is what the DTO carries for it.
@@ -804,7 +825,8 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
 
   const value: TaskData = {
     lists: ordered, serverOrderedLists: lists, tasks, listsLoaded, listsOk, loaded, setLists,
-    create, createMany, addSub, toggle, remove, saveDetail, setReminder, park, reorder,
+    create, createMany, addSub, toggle, remove, saveDetail, setReminder, park,
+    forgetOriginalDue, reorder,
     taskListErrors: listErrorNames, taskListsFailed: listErrorIds, reloadTasks,
   }
   return <TaskCtx.Provider value={value}>{children}</TaskCtx.Provider>

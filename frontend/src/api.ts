@@ -78,6 +78,31 @@ export interface Task {
   percent_complete: number | null
   due: string | null
   due_is_date: boolean
+  /** The deadline this task was moved OFF, once that deadline had already
+   *  passed — and null for everything that has never missed one, which is
+   *  almost everything.
+   *
+   *  DUE holds one value, so rescheduling destroys the old one: putting today's
+   *  date on a task promised three weeks ago leaves nothing anywhere saying it
+   *  was ever promised, and that is usually the more useful of the two dates —
+   *  it is the difference between late and merely scheduled. Today's triage
+   *  strip is built around moving that date, so the screen that exists to end
+   *  the lateness was the one erasing the evidence of it.
+   *
+   *  Stamped ONCE, by the server, and only when the date being left had already
+   *  passed (`service._deadline_being_missed` — ordinary forward planning does
+   *  not annotate anything). Never overwritten afterwards, so it is the FIRST
+   *  deadline missed rather than the previous hop, and only `forgetOriginalDue`
+   *  clears it.
+   *
+   *  Sidecar, so Smylte-only and invisible to Tasks.org, jtx Board and
+   *  Thunderbird, for the reason `parked` above is: RFC 5545 has nowhere to put
+   *  a second deadline, and an X- property would reach those three as nothing. */
+  original_due: string | null
+  /** Whether that remembered deadline was all-day. The pair `due` /
+   *  `due_is_date` are, because `fmtDue` takes both — a remembered all-day
+   *  deadline rendered as a timed one would read as midnight. */
+  original_due_is_date: boolean
   start: string | null
   start_is_date: boolean
   tags: string[]
@@ -1111,6 +1136,14 @@ export const api = {
   park: (listId: string, uid: string, parked = true) =>
     j<Task>('POST',
       `/api/lists/${listId}/tasks/${encodeURIComponent(uid)}/park?parked=${parked}`),
+  /** Forget the deadline this task was moved off, so the row stops mentioning
+   *  it. A clear and nothing else: `original_due` is a record of something that
+   *  happened, and an endpoint that could SET one could write a missed deadline
+   *  that never existed. It is forgettable, though, or a badly corrected date
+   *  would annotate a task for the rest of its life. */
+  forgetOriginalDue: (listId: string, uid: string) =>
+    j<Task>('PUT', `/api/lists/${listId}/tasks/${encodeURIComponent(uid)}/sidecar`,
+      { forget_original_due: true }),
   deleteTask: (listId: string, uid: string) =>
     j<null>('DELETE', `/api/lists/${listId}/tasks/${encodeURIComponent(uid)}`),
 

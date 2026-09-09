@@ -1714,6 +1714,14 @@
    text input that happens to be a select. */
 .reminder-field { max-width: 200px; }
 .reminder-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+/* The deadline this task was moved off, and the one act offered on it. A row
+   rather than the stacked `.field` default: it is a sentence and its footnote,
+   not a label over a control. It wraps because the date can be long in some
+   locales and "Forget that" must never leave the dialog. */
+.original-due {
+  flex-direction: row; flex-wrap: wrap; align-items: baseline;
+  justify-content: space-between; gap: 4px 10px;
+}
 /* Inline "Remove it" inside a hintline: a link, not a button, because it sits
    mid-sentence and a button there would read as the section's main action. */
 .linklike {
@@ -2049,6 +2057,16 @@
   min-width: 52px; text-align: right;
 }
 .today-due.overdue { color: var(--warn); }
+
+/* THE DEADLINE THIS TASK WAS MOVED OFF, beside the one it now carries. Quieter
+   than `.today-due` and never warn-coloured: it is a fact about the past, not a
+   second thing to act on, and two orange dates on one row would read as two
+   alarms. No `min-width` either — unlike the cell above it is painted only on
+   the few rows that have one, so there is no column here to hold steady. */
+.today-was-due {
+  font-size: calc(11px * var(--fs-scale)); color: var(--fg-faint); flex: none;
+  white-space: nowrap;
+}
 
 /* Row controls: bare glyph buttons, like .task-actions. */
 .today-drop, .today-plus {
