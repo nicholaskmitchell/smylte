@@ -1584,8 +1584,14 @@ describe('aug19 stage 4b — the mobile breakpoint', () => {
       // (4) the first tap on another day FOCUSES it — it must not open the composer.
       fireEvent.click(cellFor('6'))
       expect(screen.queryByRole('dialog')).toBeNull()
-      expect(cellFor('6').classList.contains('focus')).toBe(true)
-      expect(cellFor('5').classList.contains('focus')).toBe(false)
+      // `data-focus`, where this read `classList.contains('focus')`: the marker
+      // moved off the class list because the bare class is the full-screen
+      // focus session (app.css:2494, `position: fixed; inset: 0`) and a day
+      // cell wearing it painted itself over the whole app on a phone. What is
+      // pinned here — the first tap moves the focus rather than opening the
+      // composer — is unchanged.
+      expect(cellFor('6').hasAttribute('data-focus')).toBe(true)
+      expect(cellFor('5').hasAttribute('data-focus')).toBe(false)
       expect(within(agenda()).getByText('Retro')).toBeInTheDocument()
 
       // (5) …and the second tap on the focused day opens it.

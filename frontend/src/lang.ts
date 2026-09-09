@@ -71,6 +71,37 @@ export function languageLabel(l: Language): string {
  * the ordered preference list and the second is only its head: a device set to
  * English with German second is exactly the account this setting exists for.
  */
+/** Whether `Intl` will actually accept this tag.
+ *
+ * `navigator.languages` is a list of what the USER prefers, not a promise that
+ * each entry is a tag `Intl` can parse. A POSIX-flavoured one — `en-US@posix`,
+ * which is what a Linux container reports and what some Android builds have
+ * shipped — passes the base-subtag test below and then throws `RangeError:
+ * Invalid language tag` in the first constructor it reaches.
+ *
+ * That matters here specifically because of where the answer goes. `locale` is
+ * handed to `weekdayNames` and `monthNames`, which build a `DateTimeFormat`
+ * DURING RENDER, and to the ~40 `toLocaleDateString` calls the sweep at the
+ * foot of `i18n.test.ts` requires. A throw in render is not a wrong date: React
+ * unwinds the tree and the tab goes blank, with no error boundary between it
+ * and the user. Degrading to the bare language is the whole of the damage this
+ * prevents — dates in the language's own default order rather than the
+ * device's region.
+ *
+ * The construction IS the check: there is no non-throwing test for this.
+ * `supportedLocalesOf` rejects a structurally invalid tag by throwing the same
+ * `RangeError`, so a try/catch is required either way. It runs once per
+ * `localeFor`, which the provider memoises on the language.
+ */
+function intlAccepts(tag: string): boolean {
+  try {
+    new Intl.DateTimeFormat(tag)
+    return true
+  } catch {
+    return false
+  }
+}
+
 export function localeFor(
   lang: Language,
   // A parameter so the rule is testable without a browser, and so the Windows
@@ -82,7 +113,10 @@ export function localeFor(
   for (const tag of preferred) {
     // The base subtag, case-insensitively: BCP-47 is case-insensitive and
     // `navigator.languages` is not guaranteed to be normalised.
-    if (typeof tag === 'string' && tag.toLowerCase().split('-')[0] === lang) return tag
+    // A tag Intl will not take is skipped rather than returned, so a list like
+    // ['en-US@posix', 'en-GB'] still finds the region it meant.
+    if (typeof tag === 'string' && tag.toLowerCase().split('-')[0] === lang
+      && intlAccepts(tag)) return tag
   }
   return lang
 }

@@ -355,7 +355,11 @@ describe('2026-09-03 — the event editor at a viewport wider than 720px but sho
     await viewport(390)
     const host = await mount(EVENT_EDITOR)
     const modal = host.querySelector<HTMLElement>('.modal')!
-    expect(getComputedStyle(modal).maxHeight).toBe(`${(0.92 * 844).toFixed(2)}px`)
+    // Parsed, not string-compared. What is under test is that `92dvh` resolves
+    // against the 844px viewport; how many decimals the engine prints is not
+    // part of that, and the two disagree — Chromium says '776.48px' where
+    // WebKit says '776.47998px'.
+    expect(parseFloat(getComputedStyle(modal).maxHeight)).toBeCloseTo(0.92 * 844, 1)
     expect(box(modal).bottom).toBe(844)
   })
 })
@@ -656,6 +660,12 @@ describe('2026-09-03 — the tab strip and the settings gear on a phone', () => 
     // The box itself is unchanged, so the bar stays the height the strip's
     // scroll rule was measured against.
     expect(box(tab).h, 'the tab grew its own box').toBeLessThan(36)
-    expect(box(bar).h, 'the topbar grew').toBeLessThan(56)
+    // The ceiling is 64 rather than 56 because the two engines set this bar to
+    // different heights from the same rules — Chromium 53, WebKit 57 — and the
+    // difference is Fraunces italic's line box in `.brand`, not anything this
+    // test is about. 64 still catches what the pin exists for: the obvious
+    // wrong fix is `min-height: 44px` on `.tab` or the gear, and the bar's own
+    // 12px padding and 1px border put that at 69 in either engine.
+    expect(box(bar).h, 'the topbar grew').toBeLessThan(64)
   })
 })

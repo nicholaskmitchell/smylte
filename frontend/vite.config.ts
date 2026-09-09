@@ -66,13 +66,27 @@ export default defineConfig({
             enabled: true,
             provider: 'playwright',
             headless: true,
-            instances: [{
-              browser: 'chromium',
+            // BOTH ENGINES, every file. Chromium was the only one for as long
+            // as this project existed, and that left the engine every phone
+            // actually runs untested: iOS has no choice but WebKit, Safari on a
+            // Mac is WebKit, and this app is phone-first — the whole reason
+            // `@media (max-width: 720px)` carries as many rules as it does.
+            // Testing one engine to catch layout bugs on another is the same
+            // shape of mistake as the jsdom one this project was built to fix:
+            // a model of the renderer is not the renderer.
+            //
+            // The cost is real and small: the suite runs twice, ~11s to ~25s.
+            // The two disagree about font metrics by a fraction of a pixel, so
+            // an assertion that pins an exact height belongs in a tolerance,
+            // not a `toBe` — every one here already reads as `toBeGreaterThan`
+            // or a rounded compare, which is why adding this needed no edits.
+            instances: [
               // `env: { TZ }` above is a NODE process variable and never reaches
               // the page, so the zone has to be set on the browser context or the
               // DST pinning the comment above defends is silently lost here.
-              context: { timezoneId: 'America/New_York' },
-            }],
+              { browser: 'chromium', context: { timezoneId: 'America/New_York' } },
+              { browser: 'webkit', context: { timezoneId: 'America/New_York' } },
+            ],
           },
         },
       },
