@@ -49,28 +49,6 @@ export function languageLabel(l: Language): string {
   return LANGUAGE_LABEL[l] ?? LANGUAGE_LABEL[DEFAULT_LANGUAGE]
 }
 
-/**
- * The BCP-47 tag to format dates, times and lists with.
- *
- * NOT simply the language tag, and the difference is the point. A date's ORDER,
- * its separators and its clock are regional, not linguistic: an English speaker
- * in London reads 28/08/2026 and one in Chicago reads 8/28/2026, and the app
- * has always got that right by passing `undefined` and letting the browser
- * answer. Replacing that with a bare `'en'` would quietly move every UK account
- * to American dates on the day this shipped — a regression for people who never
- * touched the setting.
- *
- * So the browser's own list is consulted FIRST and used whenever it agrees with
- * the chosen language: `de-AT` is kept for an Austrian who picks Deutsch, and
- * `en-GB` for a Londoner who leaves it at English. Only when the device has
- * nothing in that language does this fall back to the bare tag, which is the
- * honest answer — a German UI dated in American order is worse than one dated
- * in the language's own default.
- *
- * `navigator.languages` rather than `navigator.language` because the first is
- * the ordered preference list and the second is only its head: a device set to
- * English with German second is exactly the account this setting exists for.
- */
 /** Whether `Intl` will actually accept this tag.
  *
  * `navigator.languages` is a list of what the USER prefers, not a promise that
@@ -102,6 +80,28 @@ function intlAccepts(tag: string): boolean {
   }
 }
 
+/**
+ * The BCP-47 tag to format dates, times and lists with.
+ *
+ * NOT simply the language tag, and the difference is the point. A date's ORDER,
+ * its separators and its clock are regional, not linguistic: an English speaker
+ * in London reads 28/08/2026 and one in Chicago reads 8/28/2026, and the app
+ * has always got that right by passing `undefined` and letting the browser
+ * answer. Replacing that with a bare `'en'` would quietly move every UK account
+ * to American dates on the day this shipped — a regression for people who never
+ * touched the setting.
+ *
+ * So the browser's own list is consulted FIRST and used whenever it agrees with
+ * the chosen language: `de-AT` is kept for an Austrian who picks Deutsch, and
+ * `en-GB` for a Londoner who leaves it at English. Only when the device has
+ * nothing in that language does this fall back to the bare tag, which is the
+ * honest answer — a German UI dated in American order is worse than one dated
+ * in the language's own default.
+ *
+ * `navigator.languages` rather than `navigator.language` because the first is
+ * the ordered preference list and the second is only its head: a device set to
+ * English with German second is exactly the account this setting exists for.
+ */
 export function localeFor(
   lang: Language,
   // A parameter so the rule is testable without a browser, and so the Windows
