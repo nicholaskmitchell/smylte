@@ -176,6 +176,44 @@ CREATE TABLE IF NOT EXISTS sidecar (
     -- cannot answer it later. Nothing clears it automatically — see
     -- service.park_task.
     parked_at              TEXT,
+    -- THE DEADLINE THIS TASK WAS MOVED OFF, once it had already passed — and
+    -- NULL for everything that has never missed one, which is the overwhelming
+    -- majority.
+    --
+    -- Rescheduling an overdue task used to destroy the only record that it had
+    -- been due at all. DUE is a single-valued property: writing today's date
+    -- onto a task that was due three weeks ago leaves nothing anywhere saying
+    -- when it was actually promised, and "three weeks ago" is usually the more
+    -- important of the two dates — it is what makes the task late rather than
+    -- merely scheduled. Today's triage strip (`TodayView`'s "Waiting on a
+    -- decision") is built entirely around moving that date, so the one screen
+    -- that exists to end the lateness was also the one that erased the evidence
+    -- of it.
+    --
+    -- STAMPED ONCE AND NEVER OVERWRITTEN. It is the ORIGINAL deadline, not the
+    -- previous one: a task pushed four times has slipped from its first date,
+    -- and a column that tracked the last move would answer a question nobody
+    -- asks ("what was it yesterday") while losing the one they do.
+    --
+    -- ONLY WHEN THE DATE BEING LEFT HAD ALREADY PASSED. Moving a task that is
+    -- due next Friday to the Friday after is ordinary planning, and stamping it
+    -- would annotate every drag across the day columns in the Tasks pane until
+    -- the note meant nothing. A missed deadline is a different fact, and this
+    -- column holds only that one. `service.edit_task` applies the test with
+    -- `due.due_parts`, the app's own overdue rule, rather than a second one.
+    --
+    -- Sidecar-class for the reason `parked_at` above is: RFC 5545 has nowhere
+    -- to put this. An X- property would be written verbatim onto collections
+    -- Tasks.org, jtx Board and Thunderbird share and render as nothing in all
+    -- three, and the honest cost is stated rather than hidden — a deadline
+    -- Smylte remembers is a deadline only Smylte shows.
+    original_due           TEXT,
+    -- Whether that deadline was all-day, mirroring `items.due_is_date`, and a
+    -- column rather than a re-derivation from the string above. Every renderer
+    -- in the app already takes the pair (`time.ts::fmtDue(iso, isDate)`), and
+    -- the alternative — inferring it from the absence of a "T" — is exactly the
+    -- inference `items` declines to make one table over.
+    original_due_is_date   INTEGER NOT NULL DEFAULT 0,
     orphaned_at            TEXT,             -- set when UID leaves the wire; GC after 7 days
     updated_at             TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     PRIMARY KEY (collection_href, uid)

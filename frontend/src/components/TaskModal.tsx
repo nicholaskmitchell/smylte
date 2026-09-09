@@ -11,7 +11,7 @@ import { useRef, useState, type KeyboardEvent } from 'react'
 import { useEscape } from '../hooks'
 import type { CreateTaskBody, List, Task } from '../api'
 import { dayKey, hasZone, instantFromLocal, sameValue, toLocalInput } from '../util'
-import { inputLang } from '../time'
+import { fmtDue, inputLang } from '../time'
 import { useTimeFormat } from '../timeformat'
 import { blankValues, bodyFrom, FIELDS, type RowValues } from './AddMultipleModal'
 import { useI18n, useT } from '../i18n'
@@ -42,7 +42,7 @@ export const dateOut = (date: string, time: string, original: string | null | un
  * it lands) and the footer offers the route to the bulk composer instead of
  * Delete.
  */
-export function TaskModal({ task, lists, defaultList, initialTitle, onClose, onCreate, onSave, onDelete, onMultiple, onReminderChange, onPark }: {
+export function TaskModal({ task, lists, defaultList, initialTitle, onClose, onCreate, onSave, onDelete, onMultiple, onReminderChange, onPark, onForgetOriginalDue }: {
   task: Task | null
   lists: List[]
   defaultList: string
@@ -66,11 +66,26 @@ export function TaskModal({ task, lists, defaultList, initialTitle, onClose, onC
    *  pair: parking is what the owner reaches for INSTEAD of cancelling, and a
    *  choice with one option visible is not a choice. */
   onPark?: (parked: boolean) => void
+  /** Forget the deadline this task was moved off. Its own callback for the
+   *  reason `onPark` has one — `original_due` is app-only and does not belong
+   *  in the PATCH body — and optional for the same reason too: a caller with
+   *  nowhere to send it simply does not offer the control, and the date is
+   *  still shown.
+   *
+   *  Forgetting is the ONLY edit offered. The date is a record of something
+   *  that happened, written once by the server when a passed deadline was
+   *  rescheduled; a form field for it would let the owner type a missed
+   *  deadline that never existed, and the line would stop being evidence. But
+   *  it does have to be forgettable, or one badly corrected date annotates the
+   *  task for good. */
+  onForgetOriginalDue?: () => void
   onDelete: () => void
   onMultiple: (listId: string, summary: string) => void
 }) {
   const creating = task === null
-  const lang = inputLang(useTimeFormat(), useI18n().lang)
+  const { lang: uiLang, locale } = useI18n()
+  const tf = useTimeFormat()
+  const lang = inputLang(tf, uiLang)
   const tr = useT()
   const [summary, setSummary] = useState(task?.summary || initialTitle || '')
   const [notes, setNotes] = useState(task?.notes || '')
@@ -194,6 +209,37 @@ export function TaskModal({ task, lists, defaultList, initialTitle, onClose, onC
             </div>
           ))}
         </div>
+        {/* WHAT IT WAS PROMISED FOR, under the date field that replaced it.
+            `original_due` is the deadline this task was moved off after that
+            deadline had already passed — the fact rescheduling used to destroy,
+            because DUE holds one value and writing a new one leaves nothing
+            saying the old one was ever missed.
+
+            A LINE, NOT A FIELD. There is no control to edit it with, on
+            purpose: the server writes it once, from something that actually
+            happened, and a picker here would let a missed deadline be invented.
+            The only act offered is forgetting it.
+
+            Never while creating — a task that does not exist yet has missed
+            nothing — and suppressed when it matches what is in the date field,
+            which is what a deadline moved and moved back looks like. */}
+        {!creating && task.original_due && task.original_due !== task.due && (
+          <div className="field original-due">
+            <span className="hintline">
+              {tr('taskModal.originalDue', {
+                date: fmtDue(task.original_due, task.original_due_is_date, tf, locale),
+              })}
+            </span>
+            {/* A link rather than a button, the call `.linklike` exists for:
+                it finishes a line of prose and a button there would read as
+                this form's main action, which is Save. */}
+            {onForgetOriginalDue && (
+              <button className="linklike" onClick={onForgetOriginalDue}>
+                {tr('taskModal.forgetOriginalDue')}
+              </button>
+            )}
+          </div>
+        )}
         <div className="field reminder-row">
           <label className="label" htmlFor="task-reminder">{tr('reminder.label')}</label>
           <ReminderField id="task-reminder" value={reminder} onChange={setReminder} />

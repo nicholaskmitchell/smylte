@@ -2957,6 +2957,35 @@ export function TodayView({
                       {fmtDue(t.due, t.due_is_date, tf, locale)}
                     </span>
                   )}
+                  {/* WHAT IT WAS PROMISED FOR, beside what it is scheduled
+                      for now. `original_due` is the deadline this task was
+                      moved off after that deadline had already passed, and it
+                      is the fact rescheduling used to destroy: DUE holds one
+                      value, so pressing "Due today" on something three weeks
+                      late left nothing anywhere saying it had ever been late.
+                      The two answers this row offers END the lateness, which is
+                      the point of them — they should not also erase it.
+
+                      SHOWN ON EVERY GROUP, not only on triage. A task
+                      rescheduled here reappears under "Due today" on the same
+                      paint, and that is precisely the moment the owner needs to
+                      see that the old date survived the press; a chip that
+                      lived on the triage row alone would vanish at the instant
+                      it was reassuring.
+
+                      Suppressed when it matches the date beside it, which is
+                      what a deadline moved and then moved back looks like:
+                      two identical dates on one row say nothing twice. Compared
+                      as the strings the server sent, so a remembered all-day
+                      deadline and a timed one on the same day still read as the
+                      different answers they are. */}
+                  {t.original_due && t.original_due !== t.due && (
+                    <span className="today-was-due mono">
+                      {tr('today.wasDue', {
+                        date: fmtDue(t.original_due, t.original_due_is_date, tf, locale),
+                      })}
+                    </span>
+                  )}
                   {/* WHAT ADDING IT WOULD COST, on the button that would add it.
                       Only where both halves are actually known: the task has to
                       remember an estimate (`sidecar.estimated_minutes`, which is
