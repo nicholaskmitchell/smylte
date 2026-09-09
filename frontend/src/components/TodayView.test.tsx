@@ -50,6 +50,7 @@ const cal: List = {
 const task = (o: Partial<Task> = {}): Task => ({
   uid: 'u1', list: 'l1', summary: 'Ship it', notes: null, status: 'NEEDS-ACTION',
   completed: false, cancelled: false, parked: false, parked_at: null,
+  original_due: null, original_due_is_date: false,
   priority: null, priority_label: 'none',
   percent_complete: null, due: null, due_is_date: true, start: null, start_is_date: true,
   tags: [], parent: null, children: [], child_count: 0, completed_child_count: 0,
@@ -1291,6 +1292,37 @@ describe('<TodayView> work that has waited long enough to need a decision', () =
       { target: { value: inDays(4) } })
     await waitFor(() => expect(m.patchTask)
       .toHaveBeenCalledWith('l1', 'u11', { due: inDays(4) }))
+  })
+
+  it('keeps the deadline it was moved off, and says so beside the new one', async () => {
+    // The complaint the whole `original_due` pair answers: DUE holds one value,
+    // so pressing "Due today" on something eleven days late used to leave
+    // nothing anywhere saying it had ever been late. The two answers this row
+    // offers are meant to END the lateness; erasing the record of it was never
+    // part of the deal.
+    //
+    // Read off the row rather than the button, and on ANY group rather than
+    // triage alone: a rescheduled task reappears under "Due today" on the same
+    // paint, and that is exactly the moment the chip is doing its job.
+    m.tasks.mockResolvedValue([
+      task({ uid: 'u1', summary: 'Renew the passport', due: today(),
+             original_due: '2020-03-11', original_due_is_date: true }),
+    ])
+    setup()
+    await screen.findByText('Renew the passport')
+    expect(screen.getByText(/was due/)).toBeInTheDocument()
+  })
+
+  it('says nothing when the remembered deadline is the one it still carries', async () => {
+    // What a deadline moved and then moved back looks like. Two identical dates
+    // on one row say the same thing twice, so the row says it once.
+    m.tasks.mockResolvedValue([
+      task({ uid: 'u1', summary: 'Renew the passport', due: today(),
+             original_due: today(), original_due_is_date: true }),
+    ])
+    setup()
+    await screen.findByText('Renew the passport')
+    expect(screen.queryByText(/was due/)).not.toBeInTheDocument()
   })
 
   it('is off at zero, and everything late is offered again', async () => {

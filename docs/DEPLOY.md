@@ -566,9 +566,12 @@ Back up **both**:
 - `~/radicale/collections` — the source of truth (all `.ics`).
 - the app's **sidecar-class tables** from `/var/lib/tasks/tasks.db`:
   **`sidecar`** (per-task app-only state: the manual order, pins, remembered
-  estimates, per-item reminder leads, and WHICH TASKS ARE PARKED — set aside
+  estimates, per-item reminder leads, WHICH TASKS ARE PARKED — set aside
   without being finished; losing it un-parks everything, and since parking is
-  deliberately not on the wire there is nothing to restore it from),
+  deliberately not on the wire there is nothing to restore it from — and the
+  DEADLINES TASKS HAVE ALREADY MISSED, the date each was rescheduled off once
+  it had passed, which nothing else records: DUE holds only the date the task
+  is working to now, so losing this loses the fact that it was ever late),
   `list_settings`, `completions`, `attachments`, **`booking_links`**
   and **`bookings`** (every scheduling-link config plus client names/emails/
   notes — this exists nowhere on the wire), **`day_plan`** plus

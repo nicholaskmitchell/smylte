@@ -420,7 +420,12 @@ def test_an_older_database_gains_the_cache_and_token_columns(tmp_path):
     cols = lambda t: {r["name"] for r in conn.execute(f"PRAGMA table_info({t})")}  # noqa: E731
     assert "ord" in cols("collections")
     assert {"transp", "min_instant", "fts_rowid"} <= cols("items")
-    assert "notify_minutes_before" in cols("sidecar")
+    # The pair too, and both names rather than one: they ship under a single
+    # `if` (store.py reads `side_cols` once), so a half-applied migration would
+    # leave the flag missing on a database that has the date, and every
+    # remembered deadline would render as midnight.
+    assert {"notify_minutes_before", "parked_at",
+            "original_due", "original_due_is_date"} <= cols("sidecar")
     assert "cv" in cols("oauth_tokens")
 
     # The real readers, over the legacy rows — which is the whole point.
@@ -433,6 +438,11 @@ def test_an_older_database_gains_the_cache_and_token_columns(tmp_path):
         assert ev["notify_minutes_before"] is None
         task = svc._task_dto(store.get_item(conn, "/u/w/", "old-task"), cats, side, {})
         assert task["notify_minutes_before"] is None and task["pinned"] is True
+        # NULL on a legacy row is "this one has not missed a deadline" — the
+        # only answer available, since the date a task was moved off is not
+        # recoverable from anything left on the row.
+        assert task["original_due"] is None
+        assert task["original_due_is_date"] is False
     finally:
         svc.close()
     assert store.get_oauth_token(conn, "h1")["cv"] == ""

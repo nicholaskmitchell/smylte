@@ -191,6 +191,29 @@ def init_db(conn: sqlite3.Connection) -> None:
         # reads `s["parked_at"]`, and that line without this one is a 500 on
         # every read of every task. Ship them together, ALTER first.
         conn.execute("ALTER TABLE sidecar ADD COLUMN parked_at TEXT")
+    if "original_due" not in side_cols:
+        # NULL on every task written before this existed, which reads as "this
+        # one has not missed a deadline" — the correct answer, and the only one
+        # available: the date a task was moved off is not recoverable from
+        # anything the cache or the wire still holds, so there is nothing to
+        # backfill and nothing that could be guessed without inventing a missed
+        # promise.
+        #
+        # Two ALTERs and one `if`, because the two columns are one fact: a
+        # database that had the instant but not its all-day flag would render
+        # every remembered deadline as midnight. `side_cols` is read once above,
+        # so testing either name answers for both.
+        #
+        # The same one-change rule the blocks above state: `service._task_dto`
+        # reads `s["original_due"]`, sqlite3.Row raises IndexError for a column
+        # the query did not return, and IndexError is outside the taxonomy
+        # app.py maps — so those DTO lines without these ALTERs are a 500 on
+        # every read of every task. Ship them together, ALTER first.
+        conn.execute("ALTER TABLE sidecar ADD COLUMN original_due TEXT")
+        conn.execute(
+            "ALTER TABLE sidecar ADD COLUMN original_due_is_date "
+            "INTEGER NOT NULL DEFAULT 0"
+        )
     ritual_cols = {r["name"] for r in conn.execute("PRAGMA table_info(day_ritual)")}
     if "committed_over_minutes" not in ritual_cols:
         # NULL on every day committed before the app recorded this, which is the
@@ -642,7 +665,8 @@ def set_sidecar(conn: sqlite3.Connection, collection_href: str, uid: str, **fiel
     worse than the estimate not being remembered for next time.
     """
     allowed = {"kanban_column", "sort_order", "pinned", "estimated_minutes",
-               "repeat_from_completion", "notify_minutes_before", "parked_at"}
+               "repeat_from_completion", "notify_minutes_before", "parked_at",
+               "original_due", "original_due_is_date"}
     bad = set(fields) - allowed
     if bad:
         raise ValueError(f"unknown sidecar fields: {bad}")

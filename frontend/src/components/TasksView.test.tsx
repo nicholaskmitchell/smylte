@@ -20,6 +20,7 @@ const m = vi.mocked(api)
 const task = (o: Partial<Task> = {}): Task => ({
   uid: 'u1', list: 'l1', summary: 'Ship it', notes: null, status: 'NEEDS-ACTION',
   completed: false, cancelled: false, parked: false, parked_at: null,
+  original_due: null, original_due_is_date: false,
   priority: null, priority_label: 'none',
   percent_complete: null, due: null, due_is_date: true, start: null, start_is_date: true,
   tags: [],
@@ -1858,6 +1859,32 @@ describe('<TasksView> parked work', () => {
     expect(screen.getByText(/Sets it aside without finishing it/)).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Park it' }))
     expect(m.park).toHaveBeenCalledWith('l1', 'harmonica', true)
+  })
+
+  it('shows the deadline a task was moved off, and lets it be forgotten', async () => {
+    // The editor is where a task's dates live, so it is where the one it USED
+    // to have belongs. `original_due` is written by the server when a deadline
+    // that had already passed is rescheduled — the fact a single-valued DUE
+    // destroys — and this form only ever displays it: there is no picker for
+    // it, because a missed deadline that can be typed is not evidence of
+    // anything.
+    //
+    // Forgetting is the escape hatch, and it must not close the dialog: it
+    // takes one line off this form rather than moving the row behind it, and
+    // closing would throw away any unsaved edit in the fields above.
+    m.tasks.mockResolvedValue([task({
+      uid: 'passport', summary: 'Renew the passport', due: '2026-10-02',
+      original_due: '2020-03-11', original_due_is_date: true,
+    })])
+    const { user } = setup()
+    await user.click(await screen.findByText('Renew the passport'))
+
+    expect(screen.getByText(/Originally due/)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Forget that' }))
+    expect(m.forgetOriginalDue).toHaveBeenCalledWith('l1', 'passport')
+    expect(screen.getByRole('dialog', { name: 'Task' })).toBeInTheDocument()
+    await waitFor(() =>
+      expect(screen.queryByText(/Originally due/)).not.toBeInTheDocument())
   })
 
   it('counts a parked step in the total, and never as done', async () => {
