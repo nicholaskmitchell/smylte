@@ -2190,7 +2190,13 @@
 
 .today-list { list-style: none; margin: 0; padding: 0; }
 .today-row {
-  display: flex; align-items: flex-start; gap: 10px;
+  /* NAMED because a second rule needs the same number: the habit count, when it
+     drops onto a line of its own on a phone, is indented to the title's left
+     edge — which is two of these gaps plus the two columns before it. Two rules
+     agreeing on a hard-coded 10 is how the left edge on this tab has drifted
+     before. */
+  --today-row-gap: 10px;
+  display: flex; align-items: flex-start; gap: var(--today-row-gap);
   padding: var(--row-y) var(--gutter);
   border-bottom: 1px solid var(--rule-faint);
 }
@@ -2651,6 +2657,72 @@
    state for a colour to be tempted by. */
 .today-habit-count {
   font-size: calc(11px * var(--fs-scale)); color: var(--fg-faint); flex: none;
+}
+/* …AND ON A LINE OF ITS OWN ONCE THE ROW IS NARROW, because beside the title it
+   does not merely crowd it, it annihilates it.
+
+   `flex: none` is right on a desktop and catastrophic on a phone. The title is
+   `flex: 1 1 0%`, so its base is ZERO and it lives on whatever is left over —
+   and a cell that refuses to shrink takes its full natural width out of that
+   leftover first. Measured at 390px on the habit "Water the plants", which is
+   two ordinary words:
+
+     no count            title 156.2px, 1 line, row 54.8
+     "3 of 5 this week"  title  40.6px, 4 lines, row 110.8
+     "3 of 5 that week so far"  title 0px, 14 lines, row 335.8
+
+   Zero. Every character of the habit's name on a line of its own, a third of a
+   phone screen for one row — and the look-back's wording is the LONGER of the
+   two, so the screen where a whole week of rows is read is the screen that gets
+   it. "Take the medication with breakfast" comes out at 30 lines and 696px,
+   taller than the phone it is being read on. In German the same row also
+   overflows its own right edge by 59px, because there was never enough room for
+   both and nothing said which one should give.
+
+   Desktop is genuinely fine and is left alone: at 720px the longest of the four
+   strings still leaves the title 257px and one line. This is a phone rule
+   because it is a phone defect.
+
+   The fix says which one gives. The count goes UNDER the title rather than
+   beside it — the same shape `.task-meta` has kept in the Tasks tab since it was
+   written, and for the same reason: a row's metadata is not in competition with
+   the row's name. It keeps its whole sentence, the title keeps its whole width,
+   and a habit row costs one short line instead of thirteen.
+
+   `flex-wrap` on the ROW rather than on the count, because a flex item cannot
+   put itself on a new line. It changes nothing for a row without a count:
+   nothing else here has a basis that can force a break, and the one line that
+   used to overflow — the German row above — now has somewhere to put the
+   overflow instead of hanging off the edge.
+
+   `order` because the count is rendered BETWEEN the title and the estimate, and
+   a full-width item wraps everything after it too: without this the estimate,
+   the due date and the ✕ landed on a THIRD line and the row came out 113.8px
+   instead of 69.75. It moves the count visually to the end of the row so the
+   break falls after the cells rather than before them; the DOM order is
+   untouched, so a screen reader still meets the count where the markup puts it.
+
+   PADDING and not margin for the indent, so the count lines up under the title
+   rather than under the tick, and `box-sizing: border-box` (tokens.css) keeps
+   the 100% basis inside the line while it does. `transform: none` because the
+   rule that puts a cell on the title's first line has no meaning for a cell that
+   IS its own line — the same exception `.shut-row` takes, for the same reason. */
+@media (max-width: 720px) {
+  /* `:not(.shut-row)` on the gap alone, and it is not fussiness: the shutdown
+     ritual's row is the other wrapping row on this tab, its own `row-gap: 6px`
+     is already beaten by `.today-row`'s `gap` shorthand 120 lines below it, and
+     a bare rule here would quietly move that dialog too. This one is about a
+     meta line under a title and nothing else. 3px is what `.task-meta` takes
+     under `.task-title` in the Tasks tab — the same relationship, so the same
+     distance. */
+  .today-row { flex-wrap: wrap; }
+  .today-row:not(.shut-row) { row-gap: 3px; }
+  .today-habit-count {
+    order: 1; flex-basis: 100%;
+    padding-left: calc(var(--check-size) + var(--today-mark-w)
+      + 2 * var(--today-row-gap));
+    transform: none;
+  }
 }
 
 /* ---- the Today header's controls --------------------------------------
