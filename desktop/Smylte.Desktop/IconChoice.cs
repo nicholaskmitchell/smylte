@@ -72,4 +72,19 @@ public static class IconChoices
         IconChoice.Auto => systemUsesLightTheme ? ForLightShell : ForDarkShell,
         _ => choice,
     };
+
+    /// The sizes the freedesktop hicolor theme names, and the ones
+    /// `backend/dev/build_app_icon.py` emits for the GTK client.
+    ///
+    /// Here rather than in the Linux project so that three things can be held
+    /// to one list: the generator that writes the files, the client that
+    /// unpacks them, and the test that asserts they all exist. A size present
+    /// in two of the three is a missing icon at exactly one scale factor,
+    /// which nobody notices until a screenshot.
+    ///
+    /// Seven, where the Windows `.ico` carries fifteen. The extra eight are all
+    /// workarounds for Win32 lookup rules — a byte-wide width field, three
+    /// request bands to satisfy at once — that an icon theme does not have: it
+    /// takes the nearest size at or above what it wants and scales down.
+    public static readonly int[] FreedesktopSizes = { 16, 24, 32, 48, 64, 128, 256 };
 }
