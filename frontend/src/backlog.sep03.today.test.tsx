@@ -407,6 +407,7 @@ describe('2026-09-03 — the shutdown ritual after the owner came back', () => {
   const NOTHING_AT_ALL = 'Nothing on today, and nothing finished off-plan.'
 
   const open = async (user: ReturnType<typeof setup>) => {
+    await user.click(await screen.findByRole('button', { name: 'More actions' }))
     await user.click(await screen.findByRole('button', { name: 'Shut down' }))
     return screen.findByRole('dialog', { name: 'Shut down the day' })
   }
@@ -486,6 +487,7 @@ describe('2026-09-03 — the shutdown ritual after the owner came back', () => {
 
 describe('2026-09-03 — a habit rename closed with Escape', () => {
   const openSheet = async (user: ReturnType<typeof setup>) => {
+    await user.click(await screen.findByRole('button', { name: 'More actions' }))
     await user.click(await screen.findByRole('button', { name: 'Habits' }))
     return screen.findByRole('dialog', { name: 'Habits' })
   }

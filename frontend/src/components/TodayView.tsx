@@ -2191,9 +2191,62 @@ export function TodayView({
    *  Keyed by day so stepping the picker and coming back does not resurrect it
    *  on a day already waved away. */
   const [bandOff, setBandOff] = useState<string | null>(null)
+  /** The header's overflow popover is open.
+   *
+   *  Shut down and Habits live in here rather than in the header itself. The
+   *  header carried four named actions beside a title, a day nav, a date and
+   *  two counts, and on a phone that wrapped to three rows — 172px of an
+   *  844px screen, measured, before a single task row. Review and Start
+   *  working are the two you reach for daily and stay out; these two are
+   *  occasional and cost a tap.
+   *
+   *  Not persisted and not keyed by day: a menu is a gesture, not a setting. */
+  const [menu, setMenu] = useState(false)
+  /** The two halves of the outside-click test, exactly as App.tsx holds them
+   *  for the settings menu: a click inside EITHER the popover or the control
+   *  that opened it must not close it, and a `mousedown` anywhere else must. */
+  const menuRef = useRef<HTMLDivElement | null>(null)
+  const menuBtnRef = useRef<HTMLButtonElement | null>(null)
+  /** Escape closes the popover.
+   *
+   *  Memoised because `useEscape` keys its effect on the callback, so a fresh
+   *  closure every render would unbind and rebind the listener every render.
+   *  Unconditional, like every other hook: with the menu already closed this
+   *  is a no-op, and the two rituals answer the same key for themselves. */
+  useEscape(useCallback(() => setMenu(false), []))
+  useEffect(() => {
+    if (!menu) return
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node
+      if (menuRef.current?.contains(t) || menuBtnRef.current?.contains(t)) return
+      setMenu(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [menu])
+  /** …and it never outlives the day it was opened on. The two items inside are
+   *  `isToday`-gated, so stepping the picker back would otherwise leave an
+   *  empty popover standing over a screen headed "Look back". */
+  useEffect(() => { setMenu(false) }, [day])
   /** The screen is showing a record rather than a plan — because the day is
    *  finished, or because the owner asked for today's. */
   const reviewing = !isToday || mode === 'review'
+
+  /** The two halves of the day-shape strip, named because the strip paints when
+   *  EITHER holds and reading that off one boolean expression each is what
+   *  keeps the JSX legible.
+   *
+   *  `hasLoad`: there is a capacity to read the plan against, and a day read to
+   *  read. Without both there is no honest figure and no fraction to draw.
+   *
+   *  `nudging`: today, still being planned, not yet committed, and not waved
+   *  away for this day. `plan?.day === day` rather than `plan != null` because
+   *  the plan in hand may still be the previous day's while a read is in
+   *  flight, and offering to plan a day off another day's state is offering the
+   *  wrong day. */
+  const hasLoad = capacity != null && entries !== null
+  const nudging = isToday && mode === 'plan' && plan?.day === day
+    && !plan.committed_at && bandOff !== day
 
   /** Rows may be dragged into a new order.
    *
@@ -2294,14 +2347,34 @@ export function TodayView({
   const renderReviewRow = (e: DayEntry) => rowFor(e, true)
 
   return (
-    <div className="content">
+    // `today-pane`, and it is a SCOPING hook rather than a styling one. Three
+    // of the things this tab is built out of — `.section-label`, `.scroll`,
+    // `.quickadd` — are shared primitives that Tasks, Scheduling and the two
+    // rituals also wear, so tightening them for this screen alone needs a
+    // Today-only ancestor to hang them off. `:has()` would have done it without
+    // a class and is deliberately not used anywhere in these sheets (see the
+    // note beside `.color-dot.custom:focus-within`): a browser that cannot
+    // parse it drops the whole rule, and dropping a layout rule is worse than
+    // carrying a class name.
+    //
+    // It also settles, structurally, the bug this stylesheet has now shipped
+    // four times (app.css:1560-1620 documents three of them). The Today fence
+    // sits ~500 lines BELOW the `max-width: 720px` block, so a bare
+    // `.today-foo` rule written in that block loses to the fence on source
+    // order at equal specificity and silently never applies. Anything written
+    // as `.today-pane .today-foo` is (0,2,0) and cannot lose.
+    //
+    // The rituals render inside `.modal`, OUTSIDE this element, so they keep
+    // the shared roomier values — which is right: a dialog has room a tab does
+    // not.
+    <div className="content today-pane">
       {/* `today-head` because this header holds more than any other tab's — a
-          title, a two-button day nav, a date, a count and THREE named actions —
-          and on a phone that is a layout question the shared rule cannot
-          answer. Tasks has a title, a count and a view switcher; Calendar has a
-          title and a month nav. Naming it is what lets the mobile block put the
-          actions on one row here without touching the tabs that do not need
-          it. */}
+          title, a two-button day nav, a date, a count and TWO named actions
+          plus an overflow menu — and on a phone that is a layout question the
+          shared rule cannot answer. Tasks has a title, a count and a view
+          switcher; Calendar has a title and a month nav. Naming it is what lets
+          the mobile block put the actions on one row here without touching the
+          tabs that do not need it. */}
       <div className="content-head today-head">
         {/* The tab is Today; what is on the screen may not be. Renaming the
             title is the cheapest way to say which — a heading that still reads
@@ -2329,6 +2402,30 @@ export function TodayView({
           )}
         </div>
         <span className="content-sub">{heading}</span>
+        {/* WHAT THE WEEK ADDS UP TO, which nothing anywhere said before. The
+            count beside it describes one day, and a day is exactly the unit
+            that makes a week of real work look like nothing much.
+
+            Only once it is known: a header that showed "0 this week" while the
+            read was still in flight would be answering the question wrongly at
+            the one moment the answer matters most. And no target, no
+            comparison, no colour — the same rule the look-back keeps.
+
+            BEFORE the spacer, beside the date, rather than after the count
+            where it used to sit. Both are facts about the PERIOD rather than
+            about today's workload, so they belong together; the day's own
+            count goes with the actions on the other side.
+
+            It is not what shortened the phone header — at 390px the rows come
+            out the same either way — so this is a grouping decision and
+            nothing more. What shortened it was dropping the count's full-line
+            `flex-basis`, two buttons leaving for the overflow menu, and a
+            tighter header gap. See the mobile block in app.css. */}
+        {weekDone !== null && (
+          <span className="today-week mono">
+            {tr('today.weekFinished', { count: weekDone })}
+          </span>
+        )}
         <span className="spacer" />
         {entries !== null && (
           <span className="content-sub today-count">
@@ -2355,19 +2452,22 @@ export function TodayView({
                 { done: entries.length - openCount, total: entries.length })}
           </span>
         )}
-        {/* WHAT THE WEEK ADDS UP TO, which nothing anywhere said before. The
-            count beside it describes one day, and a day is exactly the unit
-            that makes a week of real work look like nothing much.
+        {/* THE ACTIONS, in a group of their own rather than as three children of
+            the header.
 
-            Only once it is known: a header that showed "0 this week" while the
-            read was still in flight would be answering the question wrongly at
-            the one moment the answer matters most. And no target, no
-            comparison, no colour — the same rule the look-back keeps. */}
-        {weekDone !== null && (
-          <span className="today-week mono">
-            {tr('today.weekFinished', { count: weekDone })}
-          </span>
-        )}
+            They used to be held together by giving the COUNT a full-line
+            `flex-basis` on a phone, which worked by spending a whole row on a
+            six-word figure. Without that they wrap after whichever one runs out
+            of room — and "runs out of room" is decided by font metrics, so
+            Chromium kept all three together at 360px and WebKit put Review on
+            the row above the other two. Measured, both engines, this harness.
+
+            A wrapper makes it structural: one flex item that moves whole. The
+            three can no longer be separated by a width, a language with longer
+            words, or an engine that rounds a fraction of a pixel the other way
+            — which is the same argument `.today-kind-mark` makes for being one
+            element instead of three call sites agreeing. */}
+        <div className="today-acts">
         {/* THE WAY IN TO A REVIEW OF TODAY, and the whole of it: this is a
             render-level switch over data already in hand, so pressing it issues
             no request of any kind. `mode` is deliberately absent from the read
@@ -2401,61 +2501,126 @@ export function TodayView({
             <span className="today-focus__glyph mono" aria-hidden="true">▶</span>
           </button>
         )}
-        {/* THE WAY IN TO THE SHUTDOWN, and deliberately not a band. The
-            planning nudge is a band because the morning is when a plan is worth
-            prompting for; a band offering to close the day would be on screen
-            from breakfast onwards, nagging about an evening that has not
-            arrived. A button is available the moment you want it and silent
-            until then.
+        {/* THE OVERFLOW, holding the two actions that are not daily.
 
-            `isToday` only, matching what the server will accept: `set_day_ritual`
-            refuses a shutdown on a day that has already happened, because a
-            shutdown performed on Thursday for Monday is not a record of Monday.
-            Absent rather than disabled, like every other control here.
+            The header used to carry four named buttons — Review, Start
+            working, Shut down, Habits — beside a title, a two-button day nav,
+            a date and two counts. Measured at 390px that wrapped to three rows
+            and 172px, a fifth of an iPhone 14's screen, spent before a single
+            task row on the one surface this app is opened on every morning.
 
-            The label does NOT change once the day is closed. The ritual is
-            re-enterable on purpose — an evening thought belongs in the same
-            reflection — and a header button that reported state would be the
-            third thing on this screen doing so. The ritual says it instead, on
-            the step where someone coming back would look. */}
+            The split is by FREQUENCY, not by importance. Review and Start
+            working are what you reach for on an ordinary day and they stay in
+            the header. Shutting the day down happens once, in the evening, and
+            editing a habit RULE happens rarely — both are worth a tap.
+
+            One `isToday` gate on the whole group rather than one per item,
+            because both items carried the same one and an empty popover is
+            worse than none. On a finished day there is nothing in here, so
+            there is no control either. */}
         {isToday && (
-          <button type="button" className="btn ghost today-shutdown"
-            aria-haspopup="dialog" onClick={() => setShutdown(true)}>
-            {tr('today.shutDown')}
-          </button>
-        )}
-        {/* The sheet edits RULES, and its whole feedback loop is that the
-            change shows up on the day behind it — creating a habit puts an
-            occurrence on the day the next time that day is OPENED. A past day
-            is never opened (see the read effect), so nothing done in here could
-            ever show on the day it was opened from: the control would be a
-            write surface offered from a screen that says it is a finished
-            record. It comes back the moment the owner does. */}
-        {/* A WORD, not a glyph. This was a bare `↻` carrying its name in
-            `aria-label` and `title` — which meant the only thing that ever said
-            "habits" to a sighted user was a tooltip, and a tooltip is a
-            desktop-only affordance: there is no hover on a phone, so on the
-            device a daily surface is most used on, the sole entry point to the
-            feature was an unexplained symbol.
+          <>
+            {/* Not `role="menu"`. That role comes with a keyboard contract —
+                arrow keys move between items, Home/End jump, typeahead selects
+                — and this app has no machinery for any of it. A role claimed
+                and not implemented tells a screen-reader user the control
+                works in a way it does not, which is worse than the plain
+                button-and-popover this actually is. `aria-expanded` is the
+                honest half and is what announces the state. */}
+            <button type="button" ref={menuBtnRef}
+              className="btn ghost today-menu-btn mono"
+              aria-haspopup="true" aria-expanded={menu}
+              aria-label={tr('today.moreActions')}
+              // THREE MIDDLE DOTS, not `⋯` (U+22EF). JetBrains Mono has no
+              // glyph for that codepoint, so it silently falls back to another
+              // family — measured at 20px advance against the font's own 24 at
+              // the same size, which is a character of a different width and
+              // weight sitting in a row of mono controls. U+00B7 is in the
+              // font, and the app already writes it in the day's own count.
+              onClick={() => setMenu((m) => !m)}>···</button>
+            {menu && (
+              // No scrim. A popover is dismissed by Escape, by an outside
+              // mousedown and by choosing something (see the handlers below),
+              // and `.overlay` would put a full-screen blocker over a tab you
+              // are only glancing at. It also keeps this clear of the modal
+              // contract's obligations — a scrim owes a `role="dialog"`, and a
+              // second dialog on this screen carrying the word "Habits" would
+              // collide with the habits sheet, which is already one.
+              <div className="today-menu" ref={menuRef}>
+                {/* THE WAY IN TO THE SHUTDOWN, and deliberately not a band. The
+                    planning nudge is a band because the morning is when a plan
+                    is worth prompting for; a band offering to close the day
+                    would be on screen from breakfast onwards, nagging about an
+                    evening that has not arrived. A control is available the
+                    moment you want it and silent until then.
 
-            The glyph stays, `aria-hidden`, beside the word rather than instead
-            of it — so the accessible name is exactly "Habits", which is what it
-            already was and what four suites match on exactly. Letting the ↻
-            into the name would have renamed the control to "↻ Habits" and
-            broken every one of them. */}
-        {isToday && (
-          <button type="button" className="btn ghost today-habits-open"
-            aria-haspopup="dialog" aria-label={tr('today.habits')}
-            onClick={() => setSheet(true)}>
-            {/* The word is in a span so the narrowest phones can drop it and
-                keep the glyph (app.css, 359px): four controls need 323px of a
-                320px phone's 292, measured, and this is the one already
-                carrying a glyph. `aria-label` is what keeps the name "Habits"
-                once the word is gone. */}
-            <span className="mono" aria-hidden="true">↻</span>
-            <span className="today-habits-open__word"> {tr('today.habits')}</span>
-          </button>
+                    `isToday` only (the group gate above), matching what the
+                    server will accept: `set_day_ritual` refuses a shutdown on a
+                    day that has already happened, because a shutdown performed
+                    on Thursday for Monday is not a record of Monday.
+
+                    The label does NOT change once the day is closed. The ritual
+                    is re-enterable on purpose — an evening thought belongs in
+                    the same reflection — and a control that reported state
+                    would be the third thing on this screen doing so. The ritual
+                    says it instead, on the step where someone coming back would
+                    look.
+
+                    `setMenu(false)` FIRST, and it is load-bearing rather than
+                    tidiness: the ritual's own confirm button is also called
+                    "Shut down" (`shut.shutDown`), so a popover left standing
+                    behind the open dialog would put two buttons of that name in
+                    the document and make every unscoped query for it
+                    ambiguous. Both setters land in one commit, so the two never
+                    coexist. */}
+                <button type="button" className="today-menu-item today-shutdown"
+                  aria-haspopup="dialog"
+                  onClick={() => { setMenu(false); setShutdown(true) }}>
+                  {/* AN EMPTY SLOT where the other item puts its glyph, so the
+                      two words start at the same x. Without it "Shut down"
+                      lined up with Habits' ↻ and Habits' own word sat 13px to
+                      the right of it — two rows, two left edges, in a menu two
+                      items long. It is the same answer `.today-check-gap`
+                      gives on a row with nothing to tick, for the same
+                      reason. */}
+                  <span className="today-menu-glyph" aria-hidden="true" />
+                  {tr('today.shutDown')}
+                </button>
+                {/* The sheet edits RULES, and its whole feedback loop is that
+                    the change shows up on the day behind it — creating a habit
+                    puts an occurrence on the day the next time that day is
+                    OPENED. A past day is never opened (see the read effect), so
+                    nothing done in here could ever show on the day it was
+                    opened from: the control would be a write surface offered
+                    from a screen that says it is a finished record. It comes
+                    back the moment the owner does.
+
+                    A WORD, not a glyph. This was a bare `↻` carrying its name
+                    in `aria-label` and `title` — which meant the only thing
+                    that ever said "habits" to a sighted user was a tooltip, and
+                    a tooltip is a desktop-only affordance: there is no hover on
+                    a phone, so on the device a daily surface is most used on,
+                    the sole entry point to the feature was an unexplained
+                    symbol. That is also why the four header controls did not
+                    simply become icons: it would have put all four back there.
+                    A menu keeps every word.
+
+                    The glyph stays, `aria-hidden`, beside the word rather than
+                    instead of it — so the accessible name is exactly "Habits",
+                    which is what it already was and what four suites match on
+                    exactly. Letting the ↻ into the name would have renamed the
+                    control to "↻ Habits" and broken every one of them. */}
+                <button type="button" className="today-menu-item today-habits-open"
+                  aria-haspopup="dialog" aria-label={tr('today.habits')}
+                  onClick={() => { setMenu(false); setSheet(true) }}>
+                  <span className="today-menu-glyph mono" aria-hidden="true">↻</span>
+                  <span>{tr('today.habits')}</span>
+                </button>
+              </div>
+            )}
+          </>
         )}
+        </div>
       </div>
 
       {/* `isToday` as well as `sheet`, and that is the WHOLE gate — the same
@@ -2653,28 +2818,6 @@ export function TodayView({
         </form>
       )}
 
-      {/* THE NUDGE, and the whole of the prompting. A band rather than a wizard
-          that opens itself: this tab is also the place you glance at to see
-          what is next, and a flow standing in front of that on every first
-          visit would be the thing people turn off in week two.
-          Only on today, only before the day has been started, and gone for the
-          session once waved away. */}
-      {isToday && mode === 'plan' && plan?.day === day && !plan.committed_at
-        && bandOff !== day && (
-        <div className="today-band">
-          <span className="today-band-text">
-            {capacity == null
-              ? tr('today.bandNoCapacity')
-              : tr('today.bandCapacity', { capacity: fmtDuration(capacity) })}
-          </span>
-          <button type="button" className="btn" onClick={() => setRitual(true)}>
-            {tr('today.planMyDay')}
-          </button>
-          <button type="button" className="icon-btn today-band-x"
-            aria-label={tr('today.notNow')} onClick={() => setBandOff(day)}>✕</button>
-        </div>
-      )}
-
       {/* Both rituals are gated on `entries !== null` as well as on the flag —
           a flow that opened over a day still being read would ask what follows
           you out of an empty list. */}
@@ -2713,52 +2856,99 @@ export function TodayView({
           onClose={() => setRitual(false)} />
       )}
 
-      {/* HOW FULL THE DAY IS. Present whenever the day has a capacity to be read
-          against — which is any day the owner, or their weekday default, has
-          given one — and absent entirely otherwise. An account that has never
-          stated a capacity sees nothing here at all, because there is no honest
-          number to put in it and inventing an eight-hour day for them is the
-          one thing this feature must not do.
+      {/* THE DAY'S SHAPE — how full it is, and the offer to plan it.
 
-          On the day itself rather than only inside the ritual, because the
-          moment it earns its keep is 2pm, when you are deciding whether to take
-          one more thing on — which is exactly when nobody is running a ritual. */}
-      {capacity != null && entries !== null && (
+          These were two stacked full-width blocks: a nudge band offering the
+          planning ritual, and a capacity strip under it. Both say something
+          about the shape of the same day, they were always adjacent, and
+          together they cost ~120px before a single task row. One strip says it
+          once.
+
+          The two halves keep their own gates, because they are not the same
+          question:
+
+            * THE FIGURE is present whenever the day has a capacity to be read
+              against — any day the owner, or their weekday default, has given
+              one — and absent entirely otherwise. An account that has never
+              stated a capacity sees no number at all, because there is no
+              honest one to put there and inventing an eight-hour day for them
+              is the one thing this feature must not do. It is on the day itself
+              rather than only inside the ritual, because the moment it earns
+              its keep is 2pm, when you are deciding whether to take one more
+              thing on — exactly when nobody is running a ritual.
+
+            * THE OFFER is only on today, only before the day has been started,
+              and gone for the session once waved away. A band rather than a
+              wizard that opens itself: this tab is also the place you glance at
+              to see what is next, and a flow standing in front of that on every
+              first visit is the thing people turn off in week two.
+
+          So the strip paints when EITHER holds, and a day with a capacity but
+          no offer, or an offer but no capacity, is a normal state rather than a
+          missing one. */}
+      {(hasLoad || nudging) && (
         <div className={`today-load ${over ? 'over' : ''}`}>
           <div className="today-load-line">
-            <span className="today-load-fig mono">
-              {tr('today.loadFigure',
-                { planned: fmtDuration(planned), capacity: fmtDuration(capacity) })}
-            </span>
-            {meetingMinutes > 0 && (
-              // Beside the figure, never inside it. See `meetingMinutes`.
-              <span className="today-load-cal mono">
-                {tr('today.loadCalendar', { amount: fmtDuration(meetingMinutes) })}
-              </span>
+            {hasLoad ? (
+              <>
+                <span className="today-load-fig mono">
+                  {tr('today.loadFigure',
+                    { planned: fmtDuration(planned), capacity: fmtDuration(capacity!) })}
+                </span>
+                {meetingMinutes > 0 && (
+                  // Beside the figure, never inside it. See `meetingMinutes`.
+                  <span className="today-load-cal mono">
+                    {tr('today.loadCalendar', { amount: fmtDuration(meetingMinutes) })}
+                  </span>
+                )}
+                {unestimated > 0 && (
+                  // What the total is silent about. Without this the number reads as
+                  // the whole day when it may be a third of it, and quietly under-
+                  // reporting is worse than not reporting.
+                  <span className="today-load-rest mono">
+                    {tr('today.loadUnestimated', { count: unestimated })}
+                  </span>
+                )}
+              </>
+            ) : (
+              // NO CAPACITY, so no figure and no bar — a sentence instead, in
+              // the band's own voice and size. This is the one thing the strip
+              // can honestly say about a day nobody has sized.
+              <span className="today-load-say">{tr('today.bandNoCapacity')}</span>
             )}
-            {unestimated > 0 && (
-              // What the total is silent about. Without this the number reads as
-              // the whole day when it may be a third of it, and quietly under-
-              // reporting is worse than not reporting.
-              <span className="today-load-rest mono">
-                {tr('today.loadUnestimated', { count: unestimated })}
-              </span>
+            {nudging && (
+              // The band's `today.bandCapacity` string is gone from both
+              // locales with this merge. It read "Plan your day — 6h to work
+              // with", which beside a figure already saying "4h30 of 6h" is
+              // the same fact twice on one line. When there IS no figure,
+              // `today.bandNoCapacity` above carries it instead.
+              <>
+                <button type="button" className="btn ghost today-load-plan"
+                  onClick={() => setRitual(true)}>
+                  {tr('today.planMyDay')}
+                </button>
+                <button type="button" className="icon-btn today-load-x"
+                  aria-label={tr('today.notNow')} onClick={() => setBandOff(day)}>✕</button>
+              </>
             )}
           </div>
-          {/* Decorative: the figure above already says it in words, and a bar
-              that announced itself would say the same thing twice to a screen
+          {/* Only where there is something to be a fraction OF. Decorative
+              besides: the figure above already says it in words, and a bar that
+              announced itself would say the same thing twice to a screen
               reader. */}
-          <div className="today-load-bar" aria-hidden="true">
-            <div className="today-load-fill"
-              style={{ width: `${Math.min(100, capacity ? (planned / capacity) * 100 : 0)}%` }} />
-          </div>
+          {hasLoad && (
+            <div className="today-load-bar" aria-hidden="true">
+              <div className="today-load-fill"
+                style={{ width: `${Math.min(100, capacity ? (planned / capacity) * 100 : 0)}%` }} />
+            </div>
+          )}
           {over && (
             // Said in WORDS as well as in colour, because the colour is the half
             // that does not survive a screen reader, a greyscale screenshot or a
             // custom theme. `role="status"` and not `alert`: this is a fact about
             // a day you can still change, not an error.
             <p className="today-load-over" role="status">
-              {tr('today.over', { amount: fmtDuration(planned - capacity) })}
+              {tr('today.over', { amount: fmtDuration(planned - capacity!) })}
             </p>
           )}
         </div>
@@ -2879,7 +3069,7 @@ export function TodayView({
                 explains what the feature IS costs a line and teaches something;
                 a blank section costs a line and teaches nothing. */}
             {habitRows.length === 0 && entries !== null && entries.length > 0 && (
-              <p className="empty today-quiet today-habits-hint">
+              <p className="today-quiet today-habits-hint">
                 {tr('today.habitsHint')}
                 <button type="button" className="today-linkish"
                   onClick={() => setSheet(true)}>{tr('today.setOneUp')}</button>.
@@ -3214,7 +3404,7 @@ function CalendarStrip({ events, day, loaded, styleOf }: {
   // of that: it asserts nothing.
   if (!loaded && !events.length) return null
   if (!events.length) {
-    return <p className="empty today-quiet">{tr('today.noCalendar')}</p>
+    return <p className="today-quiet">{tr('today.noCalendar')}</p>
   }
   return (
     <div className="today-agenda">
