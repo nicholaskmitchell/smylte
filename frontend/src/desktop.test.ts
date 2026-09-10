@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
-  dockWindow, dragWindow, floatWindow, isFloatWindow, pinWindow, readState, setIcon,
-  startCaptionSync,
+  dockWindow, dragWindow, floatWindow, isFloatWindow, pinWindow, platformOf, readState,
+  setIcon, startCaptionSync, type DesktopState,
 } from './desktop'
 
 // The load-bearing property of the desktop bridge is what it does when there is
@@ -34,6 +34,39 @@ describe('bridge detection', () => {
     }
     vi.stubGlobal('fetch', respond(state))
     expect(await readState()).toEqual(state)
+  })
+
+  it('carries the optional keys through untouched when the host sends them', async () => {
+    // Nothing here filters or defaults on the way in — the readers do that,
+    // each for its own key — so a host that grows a key reaches them all.
+    const state = {
+      available: true, choice: 'Mark', resolved: 'Mark', systemUsesLightTheme: false,
+      startMenuShortcut: true, captionColour: true,
+      floating: true, pinned: false, nativeDrag: false,
+      platform: 'linux', canPin: false,
+    }
+    vi.stubGlobal('fetch', respond(state))
+    expect(await readState()).toEqual(state)
+  })
+})
+
+describe('which host', () => {
+  const state = (over: Partial<DesktopState> = {}) => ({
+    available: true, choice: 'Auto', resolved: 'Ink', systemUsesLightTheme: true,
+    startMenuShortcut: false, captionColour: true, ...over,
+  } as DesktopState)
+
+  it('reads an absent platform as Windows', () => {
+    // The compatibility rule, asserted rather than described. The Windows
+    // client has never sent this key and never will; if absence meant anything
+    // else, every installed exe would start showing Linux wording the moment a
+    // new web build reached it — and the web build updates on every launch.
+    expect(platformOf(state())).toBe('windows')
+  })
+
+  it('reads the platform the host states', () => {
+    expect(platformOf(state({ platform: 'linux' }))).toBe('linux')
+    expect(platformOf(state({ platform: 'windows' }))).toBe('windows')
   })
 })
 

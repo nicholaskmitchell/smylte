@@ -278,6 +278,31 @@ describe('the floating window', () => {
     expect(onLeave).not.toHaveBeenCalled()
   })
 
+  it('offers no pin when the host says it cannot keep a window on top', async () => {
+    // Wayland: no protocol lets an ordinary client ask to stay above others,
+    // and GNOME implements no extension that would. The control is ABSENT
+    // rather than disabled or dead, and everything else about the window is
+    // unchanged — it still floats, still drags, still docks.
+    host({ floating: true, pinned: true, nativeDrag: false, canPin: false, platform: 'linux' })
+    show(DEFAULT_FOCUS, true)
+    await screen.findByRole('heading', { name: 'Memo' })
+    expect(await screen.findByRole('button', { name: 'Dock' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Keep on top' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Let it fall behind' })).not.toBeInTheDocument()
+  })
+
+  it('still offers the pin when the host says nothing about it', async () => {
+    // The control for the case above, and the one that matters most: the
+    // Windows client has never sent `canPin` and never will, so an absent key
+    // must read as YES. `=== true` here instead of `!== false` would take the
+    // pin away from every exe already installed the moment this web build
+    // reached it — and the web build updates itself on every launch.
+    host({ floating: true, pinned: true, nativeDrag: true })
+    show(DEFAULT_FOCUS, true)
+    await screen.findByRole('heading', { name: 'Memo' })
+    expect(await screen.findByRole('button', { name: 'Let it fall behind' })).toBeInTheDocument()
+  })
+
   it('as the main window beside a floating one, stays silent when the interval ends', async () => {
     host({ floating: true, pinned: true })
     m.focus.mockResolvedValue(session({}, 1500))
