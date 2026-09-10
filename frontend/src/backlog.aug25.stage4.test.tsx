@@ -744,6 +744,7 @@ describe('2026-08-25 — the shutdown ritual, step two', () => {
   }
 
   const openCarry = async (user: ReturnType<typeof setup>) => {
+    await user.click(await screen.findByRole('button', { name: 'More actions' }))
     await user.click(await screen.findByRole('button', { name: 'Shut down' }))
     const dialog = await screen.findByRole('dialog', { name: 'Shut down the day' })
     await user.click(within(dialog).getByRole('button', { name: 'Next' }))

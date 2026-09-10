@@ -1216,6 +1216,7 @@ describe('2026-08-25 — the shutdown ritual', () => {
   }
 
   const openReflect = async (user: ReturnType<typeof userEvent.setup>) => {
+    await user.click(await screen.findByRole('button', { name: 'More actions' }))
     await user.click(await screen.findByRole('button', { name: 'Shut down' }))
     const dialog = await screen.findByRole('dialog', { name: 'Shut down the day' })
     await user.click(within(dialog).getByRole('button', { name: 'Next' }))
