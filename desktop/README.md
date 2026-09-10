@@ -417,7 +417,10 @@ MainWindow.cs     the window, the header bar, the update strip — and the bridg
 FloatWindow.cs    the floating focus window: undecorated, on top, its own ring
 WebHost.cs        one WebKit session shared by both windows, and the cookie seed
 HeaderChrome.cs   the header bar's colour, as a stylesheet
-IconTheme.cs      unpacks the variants and names one; watches the XDG portal
+IconAssets.cs     unpacks the four variants into a private hicolor tree, so a
+                  window icon can be chosen by name
+ColourScheme.cs   is the desktop light or dark, over the XDG settings portal —
+                  and a signal when that changes
 DesktopEntry.cs   the opt-in applications-menu entry
 X11Window.cs      on top, out of the taskbar, and where — via libX11
 Notifications.cs  WebKit's notifications, re-raised as the desktop's
