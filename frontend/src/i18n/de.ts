@@ -65,6 +65,12 @@ export const de: Catalogue = {
   'settings.icon.autoLight': 'Windows ist derzeit hell, daher wird die tiefschwarze Platte verwendet.',
   'settings.icon.autoDark': 'Windows ist derzeit dunkel, daher wird die cremefarbene Platte verwendet.',
   'settings.icon.win10': 'Diese Windows-Version unterstützt nur eine helle oder dunkle Titelleiste, keine exakte Farbe.',
+  'settings.icon.auto.linux': 'Systemdesign folgen',
+  'settings.icon.shortcut.linux': 'Eintrag im Anwendungsmenü',
+  'settings.icon.hint.linux': 'Ändert Fenstersymbol, Alt-Tab und die Fensterübersicht sofort. Ein Eintrag nimmt Smylte in das Anwendungsraster und in die Suche auf, gibt dem Dock das richtige Symbol für ein laufendes Fenster und lässt Benachrichtigungen den App-Namen tragen.',
+  'settings.icon.autoLight.linux': 'Das System ist derzeit hell, daher wird die tiefschwarze Platte verwendet.',
+  'settings.icon.autoDark.linux': 'Das System ist derzeit dunkel, daher wird die cremefarbene Platte verwendet.',
+  'settings.float.noPin': 'Dies ist eine Wayland-Sitzung, in der ein Fenster nicht darum bitten kann, über anderen zu bleiben — daher bietet das schwebende Fenster keine Anheftung. Mit "Backend": "x11" in der settings.json kommt sie zurück.',
   'settings.section.calendar': 'Kalender',
   'settings.section.tasks': 'Aufgaben',
   'settings.section.focus': 'Fokus',
@@ -275,7 +281,7 @@ export const de: Catalogue = {
   'settings.clock.aria': '12- oder 24-Stunden-Anzeige',
   'settings.clock.hint': 'Die Uhrzeitanzeige gilt überall dort, wo die App '
     + 'selbst zeichnet. Datums- und Zeitfelder zeichnet der Browser — Chrome, '
-    + 'Edge und die Windows-App folgen dieser Einstellung, Firefox folgt '
+    + 'Edge und die Desktop-App folgen dieser Einstellung, Firefox folgt '
     + 'deinem System.',
   'clock.12h': '12 Stunden',
   'clock.24h': '24 Stunden',

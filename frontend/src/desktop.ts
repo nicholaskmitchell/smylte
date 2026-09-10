@@ -1,4 +1,4 @@
-// Talking to the Windows client the app may be running inside.
+// Talking to the desktop client the app may be running inside.
 //
 // The desktop build serves this SPA off local disk and answers a few extra
 // routes under /desktop/ that the deployed server does not have. That asymmetry
@@ -7,11 +7,19 @@
 // needs a user agent string or a build flag.
 //
 // Two things live behind it, and they exist because the window is not ours to
-// draw. The app icon and the caption bar — the strip carrying minimise,
-// maximise and close — belong to Windows, and the only way the page can
-// influence either is to ask the host to.
+// draw. The app icon and the title bar — the strip carrying minimise, maximise
+// and close — belong to the host, and the only way the page can influence
+// either is to ask it to.
+//
+// There are two hosts now, and the page is deliberately almost unable to tell
+// them apart: the routes, the bodies and the answers are identical, and the
+// only differences are the optional keys below. `platform` decides wording —
+// "Start menu" is not a thing on Linux — and `canPin` reports a capability one
+// of them does not always have. Everything else is the same contract.
 
 export type IconChoice = 'Auto' | 'Paper' | 'Ink' | 'Accent' | 'Mark'
+
+export type DesktopPlatform = 'windows' | 'linux'
 
 export type DesktopState = {
   available: true
@@ -24,6 +32,11 @@ export type DesktopState = {
   /// only be told light or dark. The section says which, rather than promising
   /// a colour the OS will quietly ignore.
   captionColour: boolean
+  /// Which host this is. OPTIONAL, and absent means Windows — the Windows
+  /// client has never sent it and never will, so reading its absence as
+  /// anything else would change what every installed exe means. Only wording
+  /// depends on it.
+  platform?: DesktopPlatform
   /// The floating focus window. OPTIONAL, and the optionality is the
   /// compatibility rule: the web build updates itself on every launch and the
   /// exe does not, so a page that knows about floating routinely runs inside a
@@ -35,7 +48,20 @@ export type DesktopState = {
   /// regions (`app-region: drag`), or the page has to ask the bridge on every
   /// press. Only meaningful inside the floating window.
   nativeDrag?: boolean
+  /// Whether the host can keep the floating window above other windows.
+  ///
+  /// ABSENT MEANS YES. The Windows client never sends it and neither does a
+  /// Linux client on X11; only a Wayland session sends `false`, because no
+  /// protocol lets an ordinary client ask to stay on top and GNOME implements
+  /// no extension that would. Every reader must therefore test `!== false`
+  /// rather than `=== true`, or a new web build would take the pin away from
+  /// every exe already installed.
+  canPin?: boolean
 }
+
+/// Which host, for the strings that differ. Absent is Windows — see the key.
+export const platformOf = (state: DesktopState): DesktopPlatform =>
+  state.platform ?? 'windows'
 
 async function call(path: string, body?: unknown): Promise<DesktopState | null> {
   try {

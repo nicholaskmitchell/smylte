@@ -49,6 +49,12 @@ export const en = {
   'settings.icon.autoLight': 'Windows is currently light, so the ink plate is in use.',
   'settings.icon.autoDark': 'Windows is currently dark, so the cream plate is in use.',
   'settings.icon.win10': 'This build of Windows only supports a light or dark title bar, not an exact colour.',
+  'settings.icon.auto.linux': 'Follow the system theme',
+  'settings.icon.shortcut.linux': 'Applications menu entry',
+  'settings.icon.hint.linux': 'Changes the window icon, Alt-Tab and the window switcher straight away. An entry adds Smylte to the applications grid and to search, gives the dash the right icon for a running window, and lets its notifications carry the app name.',
+  'settings.icon.autoLight.linux': 'The system is currently light, so the ink plate is in use.',
+  'settings.icon.autoDark.linux': 'The system is currently dark, so the cream plate is in use.',
+  'settings.float.noPin': 'This is a Wayland session, where a window cannot ask to stay above others, so the floating window offers no pin. Set "Backend": "x11" in settings.json to get it back.',
   'settings.section.calendar': 'Calendar',
   'settings.section.tasks': 'Tasks',
   'settings.section.focus': 'Focus',
@@ -856,7 +862,7 @@ export const en = {
   'focus.ended': 'Ended at {time}',
   'focus.notify.focusOver': 'Interval over',
   'focus.notify.breakOver': 'Break over',
-  // the Windows client's floating window
+  // the desktop client's floating window
   'focus.float': 'Float',
   'focus.dock': 'Dock',
   'focus.showFloat': 'Show the window',
