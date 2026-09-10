@@ -46,8 +46,10 @@ internal static class WindowChrome
 
         // Relative luminance, the same test the caption text has to pass. 0.5 is
         // deliberately blunt: the only decision it drives is black-or-white
-        // caption glyphs, and DWM offers nothing in between.
-        var dark = Luminance(background) < 0.5;
+        // caption glyphs, and DWM offers nothing in between. Theme.cs owns the
+        // arithmetic, because the Linux client asks the same question of the
+        // same `--bg` and the two must not be able to answer differently.
+        var dark = Theme.IsDark(background);
 
         var flag = dark ? 1 : 0;
         if (DwmSetWindowAttribute(hwnd, DwmwaUseImmersiveDarkMode, ref flag, sizeof(int)) != 0)
@@ -58,7 +60,7 @@ internal static class WindowChrome
         var caption = ToColorRef(background);
         DwmSetWindowAttribute(hwnd, DwmwaCaptionColor, ref caption, sizeof(int));
 
-        var text = ToColorRef(dark ? Color.FromArgb(0xF4, 0xF1, 0xE8) : Color.FromArgb(0x0E, 0x0E, 0x0C));
+        var text = ToColorRef(Theme.InkFor(background));
         DwmSetWindowAttribute(hwnd, DwmwaTextColor, ref text, sizeof(int));
 
         // The 1px frame, so the window does not sit in a light hairline on a
@@ -83,27 +85,8 @@ internal static class WindowChrome
     /// than an error.
     private static int ToColorRef(Color c) => c.R | (c.G << 8) | (c.B << 16);
 
-    private static double Luminance(Color c)
-    {
-        static double Channel(int v)
-        {
-            var s = v / 255.0;
-            return s <= 0.03928 ? s / 12.92 : Math.Pow((s + 0.055) / 1.055, 2.4);
-        }
-        return 0.2126 * Channel(c.R) + 0.7152 * Channel(c.G) + 0.0722 * Channel(c.B);
-    }
-
-    /// Parse `#RGB` / `#RRGGBB` from the web side. Returns null for anything
-    /// else — the bridge takes whatever the page sends, and the page's --bg can
-    /// be a user-authored theme value.
-    public static Color? ParseHex(string? hex)
-    {
-        if (string.IsNullOrWhiteSpace(hex)) return null;
-        var s = hex.Trim().TrimStart('#');
-        if (s.Length == 3) s = string.Concat(s[0], s[0], s[1], s[1], s[2], s[2]);
-        if (s.Length != 6 || !int.TryParse(s, System.Globalization.NumberStyles.HexNumber,
-                System.Globalization.CultureInfo.InvariantCulture, out var v))
-            return null;
-        return Color.FromArgb((v >> 16) & 0xFF, (v >> 8) & 0xFF, v & 0xFF);
-    }
+    /// Kept as a forwarder rather than deleted, because every caller here reads
+    /// `WindowChrome.ParseHex` and this file is the one they already know. The
+    /// implementation moved to Theme.cs so the Linux client can link it.
+    public static Color? ParseHex(string? hex) => Theme.ParseHex(hex);
 }

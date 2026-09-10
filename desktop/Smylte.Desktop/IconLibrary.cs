@@ -3,25 +3,6 @@ using Microsoft.Win32;
 
 namespace Smylte.Desktop;
 
-/// Which app icon the window wears, and how "Auto" decides.
-///
-/// The names match what `backend/dev/build_app_icon.py` emits and what the
-/// Appearance section sends over the bridge; they are persisted verbatim in
-/// settings.json, so renaming one silently resets everybody's choice.
-public enum IconChoice
-{
-    /// Follow the Windows taskbar theme: the plate that contrasts with it.
-    Auto,
-    /// Cream plate, ink letter, accent period — the web favicon's colours.
-    Paper,
-    /// Near-black plate, paper letter, accent period.
-    Ink,
-    /// Burnt-orange plate, paper letter, ink period. Also the compiled default.
-    Accent,
-    /// The letter alone on transparency, in accent. No plate.
-    Mark,
-}
-
 /// Loads the icon variants the exe carries, and picks one.
 ///
 /// **What this can and cannot change.** Setting `Form.Icon` reaches the title
@@ -43,13 +24,6 @@ public enum IconChoice
 /// whole reason the plated variants exist.
 public static class IconLibrary
 {
-    /// Light and dark are answered by the plate that contrasts with the taskbar,
-    /// not by the plate that matches it. On a dark taskbar the cream tile reads;
-    /// on a light one the near-black tile does. Measured, the reverse pairing
-    /// bottoms out near 1.0:1 — indistinguishable from the bar it sits on.
-    private const IconChoice ForLightTaskbar = IconChoice.Ink;
-    private const IconChoice ForDarkTaskbar = IconChoice.Paper;
-
     private static readonly Dictionary<IconChoice, string> Resources = new()
     {
         [IconChoice.Paper] = "icon-paper.ico",
@@ -58,8 +32,10 @@ public static class IconLibrary
         [IconChoice.Mark] = "icon-mark.ico",
     };
 
-    public static IconChoice Parse(string? value) =>
-        Enum.TryParse<IconChoice>(value, ignoreCase: true, out var choice) ? choice : IconChoice.Auto;
+    /// Forwarders, so every existing caller keeps reading `IconLibrary.Parse`
+    /// and `IconLibrary.Resolve`. The rules themselves live in IconChoices,
+    /// which the Linux client links; only the registry read below is Windows.
+    public static IconChoice Parse(string? value) => IconChoices.Parse(value);
 
     /// True when Windows is drawing the taskbar and system chrome light.
     ///
@@ -82,11 +58,8 @@ public static class IconLibrary
     }
 
     /// The choice `Auto` resolves to right now. Never returns Auto.
-    public static IconChoice Resolve(IconChoice choice) => choice switch
-    {
-        IconChoice.Auto => SystemUsesLightTheme() ? ForLightTaskbar : ForDarkTaskbar,
-        _ => choice,
-    };
+    public static IconChoice Resolve(IconChoice choice) =>
+        IconChoices.Resolve(choice, SystemUsesLightTheme());
 
     /// The icon for `choice`, or null if it cannot be loaded.
     ///
