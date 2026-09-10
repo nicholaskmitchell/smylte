@@ -369,6 +369,20 @@
    keeps a mixed list aligned. Adding it there would let a saved theme break the
    left edge this exists to hold. */
 :root { --today-mark-w: 13px; }
+/* THE HEIGHT OF ONE LINE of a Today row's title, and the third structural number
+   that screen's rows depend on. The other two say how WIDE the two columns down
+   the left are; this one says which line everything in a row sits on.
+
+   Derived rather than typed. `.today-title` takes its own `line-height` from it,
+   so the token and the line it names cannot come apart — a hand-copied 22.5px
+   would be right until the first time the title's size or the page's text scale
+   moved, and then wrong everywhere at once.
+
+   Structural and deliberately NOT themeable, exactly like the two above it. The
+   appearance editor reaches type sizes through `--fs-scale`, which this
+   multiplies; it does not reach the geometry that keeps a row's furniture on its
+   title's first line. */
+:root { --today-line: calc(15px * var(--fs-scale) * 1.5); }
 .check {
   width: var(--check-size); height: var(--check-size);
   flex: none; margin-top: 2px; border: 1px solid var(--fg-faint);
@@ -1882,6 +1896,34 @@
    than on `.content`, which is the scroll container's parent and would put the
    popover at the top of the pane instead of under the button that opened it. */
 .today-head { position: relative; }
+
+/* CENTRED, where `.content-head` puts its children on the BASELINE.
+
+   The baseline is right for a header that is a title and a label — Tasks and
+   Calendar are exactly that, and they keep it. It is wrong for this one, which
+   is a title, a two-button nav, three figures and three bordered buttons on one
+   row: a baseline hangs every word-bearing box off the 24px serif title's
+   baseline, and every box whose type is smaller than that then sits low. Every
+   control here already opted out of it one at a time — `.today-nav` and
+   `.today-acts` each carry an `align-self: center` with a comment saying so —
+   which left the three FIGURES as the only children still on the baseline, so
+   the date, the week's total and the day's count read 4.25px below the buttons
+   they share the row with. Measured in this harness at 1100px: figures centred
+   at 33.25, everything else at 29.
+
+   One declaration on the container rather than a fourth, fifth and sixth
+   `align-self`, because the next thing added to this header would have needed a
+   seventh. The two `align-self: center` declarations stay: they are now
+   belt-and-braces rather than the mechanism, and they are what the assertions in
+   `layout.browser.test.tsx` were written against.
+
+   Scoped to `.today-head`, so no other tab's header moves — the same argument
+   the mobile block makes for dropping the spacer here and nowhere else. It wins
+   over `.content-head`'s `align-items` on source order at equal specificity,
+   which is the arrangement every other `.today-head` declaration in this fence
+   already depends on (`padding`, above). */
+.today-head { align-items: center; }
+
 /* The week's total, beside the date. Quiet: the count on the other side of the
    header describes the work in front of the owner, and this one is context
    rather than an instruction.
@@ -2148,16 +2190,141 @@
 
 .today-list { list-style: none; margin: 0; padding: 0; }
 .today-row {
-  display: flex; align-items: center; gap: 10px;
+  /* NAMED because a second rule needs the same number: the habit count, when it
+     drops onto a line of its own on a phone, is indented to the title's left
+     edge — which is two of these gaps plus the two columns before it. Two rules
+     agreeing on a hard-coded 10 is how the left edge on this tab has drifted
+     before. */
+  --today-row-gap: 10px;
+  display: flex; align-items: flex-start; gap: var(--today-row-gap);
   padding: var(--row-y) var(--gutter);
   border-bottom: 1px solid var(--rule-faint);
 }
 .today-row:hover { background: var(--bg-elev); }
+
+/* EVERY CELL ON THE TITLE'S FIRST LINE, however many lines the title turns out
+   to be.
+
+   This row centred until now, which is the same thing on a one-line row and a
+   different thing entirely on a wrapped one: a title that took three lines put
+   the tick, the coloured kind square, the estimate, the due date and the ✕ in
+   the MIDDLE of the block. Measured at 390px on a three-line title, every cell
+   sat 33.75 down the title where the Tasks tab's equivalents sit at 10.5-12.5;
+   at 900px on two lines, 22.5. A whole line and a half out, on the tab this app
+   is opened on every morning and on the width most of it is read at.
+
+   THE WHOLE ROW rather than the tick and the square alone, which is the half
+   measure this started as and is worse than it sounds. `.task` puts its actions
+   on the first line too and drops its meta line BELOW the title — nothing a
+   Tasks row renders inline sits at a wrapped block's middle — so "like the Tasks
+   tab" means the row, not the left of it. Rendered, the half measure reads as
+   two records: the square beside line one, `25m  Aug 28` floating at the middle
+   of the block touching nothing, and the gap between them a function of how long
+   the title happens to be.
+
+   `flex-start` ALONE IS WRONG, and the phone is the counter-example: there
+   `.today-est` carries a 34px min-height for its tap target, taller than the
+   22.5px title, so the row's content box is 34px and the cross-start edge is
+   11.5px of slack away from the title's own middle. What `flex-start` DOES buy
+   is the anchor flexbox cannot otherwise express between siblings — it makes the
+   TITLE's box top the content box top, so "the first line" is finally a position
+   a rule can name. Each cell is then moved to the middle of that line by half a
+   line minus half its own height, written as a percentage OF THE ELEMENT so one
+   declaration serves six cells of six different heights at both widths with no
+   number to re-tune when one of them changes.
+
+   A TRANSLATE and not a margin, because a margin would grow the row. The cells
+   taller than one line — the estimate's 34px on a phone, the ✕'s 29px — have to
+   go on contributing their height or the row falls under what their 44px tap
+   boxes need between them. Measured: the translate changes no row height at
+   either width, single-line or wrapped; the only height this change costs is the
+   1.75px the phone rule below adds, and it says why.
+
+   THE COST, stated rather than buried, and it is on a phone only. That 11.5px of
+   slack used to be split evenly around the title by the centring; anchored to
+   the first line it all falls BELOW. A one-line phone row goes from 14.75px
+   above the title and 15.75 below to 10.75 and 21.5. Nothing is misaligned —
+   every cell is still exactly on the line — and single-line and wrapped rows now
+   share one rhythm where before they did not, but the band is no longer centred
+   between the rules. Removing the slack means taking the min-height off
+   `.today-est`, which is a documented tap-target remediation
+   (`backlog.aug25.stage4.browser.test.tsx`) and not this change's to undo.
+
+   The two cells that PAINT a box are the exceptions below, and say there why. */
+.today-row > *:not(.today-title) {
+  transform: translateY(calc(var(--today-line) / 2 - 50%));
+}
+/* The shutdown ritual's row wraps BY CONSTRUCTION — its question takes a line
+   and its three answers the next (see `.shut-row`) — so it has no first line
+   beside the furniture for the furniture to sit on, and its arms keep the
+   centring of the line they are actually on. Without this they rose into the
+   row gap. */
+.today-row.shut-row > * { transform: none; }
+
+/* ROOM ABOVE THE FIRST LINE FOR THE TAP BOX, and this is the cost of the rule
+   above rather than a separate finding.
+
+   On a phone every control in this row wears a 44x44 `::after` CENTRED ON
+   ITSELF (see the mobile block). While the row centred, that box was centred in
+   the row too and fitted inside it. On the first line it is centred at
+   `--row-y + --today-line / 2` = 20.25px down the row, so 22px of it wants to be
+   above that — 1.75px more than the row has. The overhang lands on the row
+   ABOVE, which owns those pixels, so the guideline is quietly not met: the hit
+   walk in `backlog.aug25.stage4.browser.test.tsx` measures the tick, the
+   estimate and the ✕ at 42px tall instead of 44, in BOTH engines, and at 40 once
+   the text scale is turned down.
+
+   Structural for ANY fix that puts these controls on the first line, so it is
+   answered here beside the rule that causes it rather than left to whoever next
+   runs that suite. `max()` so a preset that already clears the bar is never
+   shrunk. The cost is 1.75px on a phone row, which also returns some of the
+   air the change takes off the top of a single-line row.
+
+   Inside the fence and written as its own media block: the mobile block sits
+   ~700 lines above and `.today-row`'s `padding` shorthand is declared BELOW it,
+   so a rule written up there would need a qualifier to survive. This one wins on
+   source order, the way every other `.today-*` rule in this fence does. */
+@media (max-width: 720px) {
+  .today-row { padding-top: max(var(--row-y), calc(22px - var(--today-line) / 2)); }
+}
 /* Stands in for the checkbox on a row that has nothing to tick, and has to be
    exactly as wide as `.check` or the titles of a mixed list stop lining up. */
 .today-check-gap { width: var(--check-size); flex: none; }
+
+/* THE TICK, which needs its own arithmetic and cannot take the translate.
+
+   `.check` carries `margin-top: 2px`, and that margin belongs to `.task`, whose
+   row has always been `align-items: flex-start`: there it is what drops the tick
+   from the top of the row onto the first line of the title. This row is
+   flex-start now too — but its first line is NOT at the top of its content box
+   on a phone, because the estimate's tap-sized cell makes that box 34px. So the
+   offset is half a line minus half the control: 2.75px at the desktop size,
+   0.75px at the phone one, out of one expression reading the same token the
+   control is sized from. It replaces the plain `margin-top: 0` this rule carried
+   while the row still centred, and subsumes it — that rule was this arithmetic
+   with the wrapped case left out.
+
+   Still NOT fixed on `.check` itself, which would be the third row model's turn
+   to break: the margin is right where it was written, and every borrower
+   re-tunes it locally — `.day-card .check` takes 1px, `.dash-day-row .check` 0.
+
+   A MARGIN and not the translate above, because this control PAINTS a bordered
+   box and a transform is applied AFTER layout, so Chromium stops snapping that
+   border to the device grid: measured at 1x the tick's top and bottom edges came
+   out several shades lighter than the sides. A margin is laid out, so it snaps.
+   It costs the row no height — the control plus its margin is still shorter than
+   the title's line. */
+.today-row .check {
+  margin-top: calc(var(--today-line) / 2 - var(--check-size) / 2);
+  transform: none;
+}
 .today-title {
   flex: 1; min-width: 0; font-size: calc(15px * var(--fs-scale)); color: var(--fg);
+  /* DECLARED rather than inherited from `body`, so the token the rest of the row
+     is placed against and the line it names cannot come apart. It is the same
+     22.5px the inherited 1.5 already computed to; what is new is that it is now
+     the same 22.5px by construction. */
+  line-height: var(--today-line);
   overflow-wrap: anywhere;                  /* see `.task-title` */
 }
 .today-row.done .today-title { color: var(--fg-faint); text-decoration: line-through; }
@@ -2430,6 +2597,20 @@
    `.task` is the Tasks pane's row rule in this same global stylesheet, and a
    mark wearing it inherited that row's padding and grew into a 52px slab. */
 .today-kind-box { width: 7px; height: 7px; flex: none; box-sizing: border-box; }
+/* ONE TITLE LINE TALL, on this row only — which is what lets `flex-start` and
+   the column's own centring put all three faces on the first line without either
+   of them knowing how tall a face is. A task's 7px square, a note's bordered one
+   and a habit's ↻ line box are three different heights and land on one line by
+   construction rather than by three numbers agreeing, which is the same argument
+   the column itself was built on.
+
+   A HEIGHT and not the translate above, for the tick's reason: the note's face
+   is a 1px border, and a transform stops it snapping to the device grid.
+
+   Scoped to `.today-row`, so the dashboard's smaller borrowed copy is untouched
+   — `.dash-day-row .today-kind-mark` sets a size only and stays the last word on
+   it. */
+.today-row .today-kind-mark { height: var(--today-line); transform: none; }
 /* FILLED — a task, which lives on a list and reaches every other CalDAV client
    on the account. `--fg`, not `--fg-faint`: the inline style carries the list's
    own colour when it has one, and this is what shows when it does not. The old
@@ -2476,6 +2657,72 @@
    state for a colour to be tempted by. */
 .today-habit-count {
   font-size: calc(11px * var(--fs-scale)); color: var(--fg-faint); flex: none;
+}
+/* …AND ON A LINE OF ITS OWN ONCE THE ROW IS NARROW, because beside the title it
+   does not merely crowd it, it annihilates it.
+
+   `flex: none` is right on a desktop and catastrophic on a phone. The title is
+   `flex: 1 1 0%`, so its base is ZERO and it lives on whatever is left over —
+   and a cell that refuses to shrink takes its full natural width out of that
+   leftover first. Measured at 390px on the habit "Water the plants", which is
+   two ordinary words:
+
+     no count            title 156.2px, 1 line, row 54.8
+     "3 of 5 this week"  title  40.6px, 4 lines, row 110.8
+     "3 of 5 that week so far"  title 0px, 14 lines, row 335.8
+
+   Zero. Every character of the habit's name on a line of its own, a third of a
+   phone screen for one row — and the look-back's wording is the LONGER of the
+   two, so the screen where a whole week of rows is read is the screen that gets
+   it. "Take the medication with breakfast" comes out at 30 lines and 696px,
+   taller than the phone it is being read on. In German the same row also
+   overflows its own right edge by 59px, because there was never enough room for
+   both and nothing said which one should give.
+
+   Desktop is genuinely fine and is left alone: at 720px the longest of the four
+   strings still leaves the title 257px and one line. This is a phone rule
+   because it is a phone defect.
+
+   The fix says which one gives. The count goes UNDER the title rather than
+   beside it — the same shape `.task-meta` has kept in the Tasks tab since it was
+   written, and for the same reason: a row's metadata is not in competition with
+   the row's name. It keeps its whole sentence, the title keeps its whole width,
+   and a habit row costs one short line instead of thirteen.
+
+   `flex-wrap` on the ROW rather than on the count, because a flex item cannot
+   put itself on a new line. It changes nothing for a row without a count:
+   nothing else here has a basis that can force a break, and the one line that
+   used to overflow — the German row above — now has somewhere to put the
+   overflow instead of hanging off the edge.
+
+   `order` because the count is rendered BETWEEN the title and the estimate, and
+   a full-width item wraps everything after it too: without this the estimate,
+   the due date and the ✕ landed on a THIRD line and the row came out 113.8px
+   instead of 69.75. It moves the count visually to the end of the row so the
+   break falls after the cells rather than before them; the DOM order is
+   untouched, so a screen reader still meets the count where the markup puts it.
+
+   PADDING and not margin for the indent, so the count lines up under the title
+   rather than under the tick, and `box-sizing: border-box` (tokens.css) keeps
+   the 100% basis inside the line while it does. `transform: none` because the
+   rule that puts a cell on the title's first line has no meaning for a cell that
+   IS its own line — the same exception `.shut-row` takes, for the same reason. */
+@media (max-width: 720px) {
+  /* `:not(.shut-row)` on the gap alone, and it is not fussiness: the shutdown
+     ritual's row is the other wrapping row on this tab, its own `row-gap: 6px`
+     is already beaten by `.today-row`'s `gap` shorthand 120 lines below it, and
+     a bare rule here would quietly move that dialog too. This one is about a
+     meta line under a title and nothing else. 3px is what `.task-meta` takes
+     under `.task-title` in the Tasks tab — the same relationship, so the same
+     distance. */
+  .today-row { flex-wrap: wrap; }
+  .today-row:not(.shut-row) { row-gap: 3px; }
+  .today-habit-count {
+    order: 1; flex-basis: 100%;
+    padding-left: calc(var(--check-size) + var(--today-mark-w)
+      + 2 * var(--today-row-gap));
+    transform: none;
+  }
 }
 
 /* ---- the Today header's controls --------------------------------------
