@@ -264,27 +264,45 @@ describe('the Settings sheet on a phone', () => {
 describe('the word-bearing buttons in the Today header', () => {
   // `.content-head` aligns its children on the BASELINE, so a button holding a
   // word hangs off the title's baseline and sits proud of everything beside it
-  // unless it opts out — which is why two of these three carry a rule saying so
-  // in as many words. The third, `.today-shutdown`, shipped with no rule at all
-  // and sat 2.5px low (top 77 against 74.5) with a shrinkable flex.
+  // unless it opts out. `.today-shutdown` once shipped with no rule at all and
+  // sat 2.5px low (top 77 against 74.5) with a shrinkable flex.
   //
   // Pinned as a SET rather than one by one: the failure mode is adding a fourth
   // button and not knowing this rule exists, and a test naming only the three
   // that exist today would not catch that either — but it does catch a rule
   // being dropped, and it puts the reason somewhere a grep will find it.
-  const HEADER_BUTTONS = ['.today-review', '.today-habits-open', '.today-shutdown', '.today-focus']
+  //
+  // Shut down and Habits left this list when they left the header for the ⋯
+  // popover. They are not header buttons any more — they are rows in a menu
+  // (`.today-menu-item`), which is a block-level surface where neither baseline
+  // alignment nor flex shrinking can reach them.
+  const HEADER_BUTTONS = ['.today-review', '.today-focus', '.today-menu-btn']
 
-  it('all opt out of baseline alignment and of shrinking', () => {
-    for (const sel of HEADER_BUTTONS) {
-      const body = ruleFor(sel)
-      expect(body, `${sel} has no rule in app.css`).not.toBe('')
-      expect(body, `${sel} would sit proud of its siblings`).toMatch(/align-self:\s*center/)
-      expect(body, `${sel} can be shrunk by its neighbours`).toMatch(/flex:\s*none/)
-    }
+  it('sit in one group that opts out of baseline alignment and of shrinking', () => {
+    // The opt-out moved UP, to the wrapper. The three are one flex item to the
+    // header now (`.today-acts`) rather than three, which is what stops a width
+    // or an engine's font metrics separating them — WebKit put Review a row
+    // above the other two at 360px when they were siblings. So it is the group
+    // that must not sit on the baseline and must not shrink.
+    const group = ruleFor('.today-acts')
+    expect(group, '.today-acts has no rule in app.css').not.toBe('')
+    expect(group, '.today-acts would sit proud of the header\'s other children')
+      .toMatch(/align-self:\s*center/)
+    expect(group, '.today-acts can be shrunk by its neighbours').toMatch(/flex:\s*none/)
+  })
+
+  it('and none of the three can be shrunk inside it', () => {
+    // `.today-acts` is one item to the header and a CONTAINER to these. A
+    // button left shrinkable in here absorbs the whole shortfall alone and
+    // wraps its own label — which is what `.today-shutdown` did between 721 and
+    // 795px, standing 46px tall beside two 33px siblings.
+    const body = ruleFor('.today-menu-btn')
+    expect(body, 'the three actions have no shared `flex: none` rule').not.toBe('')
+    expect(body).toMatch(/flex:\s*none/)
   })
 
   it('and none of them adds its own margin, so the row spaces them evenly', () => {
-    // `.content-head` sets `gap: 12px`. `.today-habits-open` also carried
+    // `.content-head` sets `gap: 12px`. `.today-habits-open` once carried
     // `margin-left: 10px` — correct when it was added, where it was an
     // `.icon-btn` holding a bare glyph and the ONLY button in this header, and
     // the margin held it off the counts text. Review and Shut down were added in
@@ -301,11 +319,11 @@ describe('the word-bearing buttons in the Today header', () => {
   })
 
   it('is the full set of them that TodayView renders', () => {
-    // The vacuity guard: if a button is renamed the loop above still passes
-    // against two stale selectors. This checks the header actually renders each
+    // The vacuity guard: if a button is renamed the checks above still pass
+    // against stale selectors. This checks the header actually renders each
     // one, so a rename fails here instead of quietly narrowing the test.
     const src = read('src/components/TodayView.tsx')
-    for (const sel of HEADER_BUTTONS) {
+    for (const sel of [...HEADER_BUTTONS, '.today-acts']) {
       expect(src, `${sel} is no longer rendered`).toContain(sel.slice(1))
     }
   })
@@ -372,26 +390,43 @@ const allMobile = (() => {
 })()
 
 describe('the Today header the phone rules aim at', () => {
-  // The mobile fix is two rules scoped to `.today-head`, and the browser test
-  // that measures it mounts raw markup. Both are worthless if the component
-  // stops rendering the classes they name — so this is the tie between them,
-  // which is the job this file does for every other measured selector.
+  // The mobile fix is scoped to `.today-head`, and the browser test that
+  // measures it mounts raw markup. Both are worthless if the component stops
+  // rendering the classes they name — so this is the tie between them, which is
+  // the job this file does for every other measured selector.
   it('is named in the JSX, count and all', () => {
     const src = read('src/components/TodayView.tsx')
     expect(src, 'the Today header lost its own class, so the phone rules below '
       + 'match nothing').toMatch(/className="content-head today-head"/)
-    expect(src, 'the open/done count lost `today-count`, so nothing gives it a '
-      + 'line of its own and the three actions wrap apart again')
-      .toMatch(/className="content-sub today-count"/)
+    expect(src, 'the open/done count lost `today-count`, so the browser test '
+      + 'that measures the header\'s rows is measuring markup the app no '
+      + 'longer renders').toMatch(/className="content-sub today-count"/)
   })
 
-  it('has both phone rules, in a mobile block', () => {
+  it('has its phone rules, in a mobile block', () => {
     expect(allMobile, '`.today-head .spacer` is not dropped on a phone, so '
       + '`flex: 1` still claims the trailing space and forces a wrap')
       .toMatch(/\.today-head \.spacer\s*\{[^{}]*display:\s*none/)
-    expect(allMobile, 'the count has no full-line basis, so it shares a row '
-      + 'with the actions and pushes one of them onto the next')
-      .toMatch(/\.today-head \.today-count\s*\{[^{}]*flex-basis:\s*100%/)
+    // The count's `flex-basis: 100%` used to be pinned here beside the spacer
+    // rule. It is deliberately GONE: it existed because 161px of count plus
+    // four named actions could not share 362px, so the count was given a row of
+    // its own to stop the actions wrapping apart. The week's total moved up
+    // beside the date and two of the actions moved into the ⋯ popover, so what
+    // is left shares one row — and forcing a break now would buy back the row
+    // the rule was written to save. Asserted as an absence so it cannot creep
+    // back in with the finding it answers long gone.
+    expect(allMobile, 'the count is being forced onto a line of its own again; '
+      + 'the header is three controls wide now and they fit beside it')
+      .not.toMatch(/\.today-head \.today-count\s*\{[^{}]*flex-basis:\s*100%/)
+    // And the header's buttons keep a real touch height on a phone, undoing the
+    // compact size the fence gives them. Qualified with `.btn` because the
+    // fence sits ~1300 lines below the mobile block and declares the same
+    // property at equal specificity, so the bare form would never apply — the
+    // mistake this file has caught four times.
+    expect(allMobile, 'the Today header buttons stay at their compact ~29px on '
+      + 'a phone, under the 44px touch guideline this block enforces everywhere '
+      + 'else')
+      .toMatch(/\.btn\.today-review[^{}]*\{[^{}]*padding:\s*9px 13px/)
   })
 
   it('gives the row controls a tap area that costs no width', () => {
