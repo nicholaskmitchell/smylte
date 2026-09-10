@@ -473,6 +473,111 @@ describe("a Today row's cells sit on the title's first line", () => {
   })
 })
 
+// ── the habit count and the title it stands beside ──────────────────────────
+
+describe("a habit's week count never crowds out its own title", () => {
+  // `.today-habit-count` was `flex: none` and `.today-title` is `flex: 1 1 0%`.
+  // A zero-basis item lives on leftover space, and an item that refuses to
+  // shrink takes its natural width out of that leftover FIRST — so on a phone
+  // the count did not crowd the title, it annihilated it. Measured at 390px on
+  // the habit "Water the plants", which is two ordinary words:
+  //
+  //   no count                   title 156.2px, 1 line, row 54.8
+  //   "3 of 5 this week"         title  40.6px, 4 lines, row 110.8
+  //   "3 of 5 that week so far"  title     0px, 14 lines, row 335.8
+  //
+  // Zero, and the look-back's wording is the LONGER of the two — so the screen
+  // where a week of rows is read is the screen that got it. A four-word habit
+  // came out at 30 lines and 696px, taller than the phone reading it, and the
+  // German string overflowed the row's own right edge by 59px on top.
+  //
+  // The count goes under the title on a phone now, the shape `.task-meta` has
+  // always had in the Tasks tab. Desktop keeps it beside the title, where it
+  // has always fitted — which is why both widths are checked here.
+  const habitRow = (count: string, title: string) => `
+    <div class="shell"><div class="content today-pane"><ul class="today-list">
+      <li class="today-row">
+        <span class="today-check-gap"></span>
+        <span class="today-kind-mark" data-kind="habit">&#8635;</span>
+        <span class="today-title">${title}</span>
+        ${count ? `<span class="today-habit-count mono">${count}</span>` : ''}
+        <span class="today-est mono">15m</span><span class="today-due mono"></span>
+        <button class="today-drop">&#10005;</button></li>
+    </ul></div></div>`
+
+  // Every string a shipping locale can put here, longest last. German is not
+  // decoration: `weekCountThat` is 33 characters there against English's 23, and
+  // it is the one that overflowed.
+  const COUNTS = [
+    '3 of 5 this week',
+    '3 of 5 that week so far',
+    '3 von 5 in jener Woche bis dahin',
+  ]
+  const TITLE = 'Take the medication with breakfast'
+
+  it('keeps the full title width on a phone, whatever the count says', async () => {
+    await viewport(390)
+    // The same row with no count at all is the reference: the count must cost
+    // the title NOTHING horizontally, which is a stronger claim than "enough".
+    let host = await mount(habitRow('', TITLE))
+    const free = box(host.querySelector('.today-title')!).w
+    expect(free, 'the fixture stopped laying out').toBeGreaterThan(100)
+
+    for (const count of COUNTS) {
+      document.body.innerHTML = ''
+      host = await mount(habitRow(count, TITLE))
+      const row = host.querySelector('.today-row')!
+      const title = box(host.querySelector('.today-title')!)
+
+      expect(title.w, `"${count}" took ${(free - title.w).toFixed(1)}px off the title`)
+        .toBe(free)
+      // …and the row does not hang off its own right edge, which is what the
+      // German string did once there was no width left to take.
+      expect(row.scrollWidth - row.clientWidth,
+        `"${count}" overflows the row by ${row.scrollWidth - row.clientWidth}px`)
+        .toBeLessThanOrEqual(0)
+      // The count keeps its whole sentence — one line, not truncated. Wrapping
+      // it would have been the other way to stop the squeeze, and a worse one:
+      // this figure is a record, and half of one says nothing.
+      const c = box(host.querySelector('.today-habit-count')!)
+      const line = parseFloat(getComputedStyle(host.querySelector('.today-habit-count')!).lineHeight)
+      expect(Math.round(c.h / line), `"${count}" wrapped onto ${c.h / line} lines`).toBe(1)
+      // Indented to the title's left edge rather than the row's, so it reads as
+      // belonging to the title above it.
+      //
+      // Measured over the TEXT rather than the box, because the indent is
+      // `padding-left` — the element itself spans the row from the gutter, and
+      // its border box would answer 14 whatever the text did. A Range says
+      // where the ink starts, which is the thing being claimed, and it stays
+      // true if the indent is ever moved onto a margin instead.
+      const el = host.querySelector('.today-habit-count')!
+      const range = document.createRange()
+      range.selectNodeContents(el)
+      expect(+range.getBoundingClientRect().left.toFixed(1),
+        'the count does not line up under the title').toBe(title.left)
+    }
+  })
+
+  it('and leaves the desktop row alone, where it always fitted', async () => {
+    // The count sits BESIDE the title at 900px and always has: the longest
+    // string still leaves a two-word habit 437px and one line. A fix that put
+    // it under the title everywhere would have spent a row of height to solve a
+    // problem that only exists on a phone.
+    await viewport(900)
+    for (const count of COUNTS) {
+      document.body.innerHTML = ''
+      const host = await mount(habitRow(count, 'Water the plants'))
+      const title = box(host.querySelector('.today-title')!)
+      const c = box(host.querySelector('.today-habit-count')!)
+
+      expect(c.left, `"${count}" dropped below the title on a desktop`)
+        .toBeGreaterThan(title.left)
+      expect(Math.abs(((c.top + c.bottom) / 2) - ((title.top + title.bottom) / 2)),
+        'the count and the title are not on the same line').toBeLessThanOrEqual(1)
+    }
+  })
+})
+
 // ── the settings sheet on a phone ───────────────────────────────────────────
 
 describe('the settings sheet is reachable to its end on a phone', () => {
