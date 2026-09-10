@@ -144,11 +144,4 @@ internal static class IconAssets
             return false;
         }
     }
-
-    /// Does the binary actually carry the icons? False on a build where the
-    /// generator has not been run — which is a real state during development,
-    /// and one worth answering rather than crashing over.
-    internal static bool Available =>
-        typeof(IconAssets).Assembly.GetManifestResourceNames()
-            .Any(n => n.StartsWith("icons.", StringComparison.Ordinal));
 }
