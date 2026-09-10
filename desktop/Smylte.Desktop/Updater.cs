@@ -25,7 +25,20 @@ public static class Updater
     private const string Repo = "smylte";
     private const string Tag = "desktop-latest";
     private const string AssetName = "smylte-web.zip";
-    private const string ClientAssetName = "Smylte.exe";
+
+    /// The client binary for the OS this process is running on.
+    ///
+    /// One release carries both, because there is one web build and it is
+    /// platform-neutral — `smylte-web.zip` is the same bytes for everybody, and
+    /// splitting the release would mean two things to keep in step for no gain.
+    /// The client asset is the only per-platform half, and each client only
+    /// ever asks about its own: a Linux client comparing digests against
+    /// Smylte.exe would offer an update to a binary it cannot run.
+    internal const string WindowsClientAsset = "Smylte.exe";
+    internal const string LinuxClientAsset = "Smylte-linux-x86_64";
+
+    internal static string ClientAssetName =>
+        OperatingSystem.IsWindows() ? WindowsClientAsset : LinuxClientAsset;
 
     /// Where to send someone whose client is out of date. The release is rolling,
     /// so this link never changes and always has the current exe behind it.
@@ -323,6 +336,18 @@ public static class Updater
     // and the new one is started with the old process's id so it can wait for
     // it to exit before taking the single-instance mutex. The old file is
     // deleted on that next start, once nothing is executing it.
+    //
+    // ONE PATH ON BOTH SYSTEMS, for two different reasons, and the Linux reason
+    // is the stronger of the two. Linux would not need the rename at all — a
+    // rename over a running binary is legal there, because the running process
+    // holds the inode and only opening the file for WRITING is refused. But it
+    // does need the wait: the Linux client takes its single-instance slot as a
+    // D-Bus name, and a second process that starts while the first still owns
+    // that name does not become a second instance — it becomes a remote
+    // activation and merely raises the OLD window. An update that appears to do
+    // nothing is worse than one that fails, so `--after-update <pid>` is not
+    // Windows scaffolding carried along; it is what makes the Linux swap
+    // visible.
 
     /// What the launched client is told, so it waits for this one to leave.
     public const string AfterUpdateFlag = "--after-update";
@@ -359,6 +384,12 @@ public static class Updater
                 "The downloaded client did not match the digest the release publishes; nothing was changed.");
         }
 
+        // A downloaded file is 0644, and 0644 is not executable. Nothing else
+        // in the swap notices — the rename succeeds, the process starts the new
+        // client, and the exec fails with a message no user can act on. Set it
+        // before the file is anywhere anyone could run it from.
+        MakeExecutable(staged);
+
         log.Report("Installing…");
         SwapClient(exe, staged);
         return exe;
@@ -381,6 +412,18 @@ public static class Updater
         using var stream = File.OpenRead(path);
         var actual = "sha256:" + Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
         return string.Equals(actual, published, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// Give the staged client the mode a launcher needs. Windows has no such
+    /// concept and `File.SetUnixFileMode` throws there, so the guard is the
+    /// call, not an optimisation.
+    internal static void MakeExecutable(string path)
+    {
+        if (OperatingSystem.IsWindows()) return;
+        File.SetUnixFileMode(path,
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute |
+            UnixFileMode.GroupRead | UnixFileMode.GroupExecute |
+            UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
     }
 
     internal static string StagedClientPath(string exe) => exe + ".new";

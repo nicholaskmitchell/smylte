@@ -481,7 +481,23 @@ public sealed class LocalServer : IDisposable
             _root, relative.Replace('/', Path.DirectorySeparatorChar)));
 
         // Anything that climbed out of the web root is not ours to serve.
-        if (!full.StartsWith(_root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+        //
+        // ORDINAL, where this used to be OrdinalIgnoreCase. Case-insensitive is
+        // the NTFS rule, and applying it on a case-sensitive filesystem lets a
+        // request escape: with a root of `…/Smylte/web`, the path
+        // `/../WEB/secret.txt` resolves to `…/Smylte/WEB/secret.txt`, which is a
+        // genuinely different directory on Linux and which
+        // `StartsWith(…/Smylte/web/, OrdinalIgnoreCase)` accepts. The sibling
+        // case the tests already covered (`webby`) failed for a different
+        // reason — a longer name — so it never caught this one.
+        //
+        // What it costs on Windows: a request that reaches the same file through
+        // a differently cased root is now refused. That is not a regression
+        // worth keeping — the only way to write one is to climb out of the root
+        // and back in, which is what this guard exists to stop, and a refusal
+        // here falls through to the SPA's index.html exactly as every other
+        // traversal attempt already does.
+        if (!full.StartsWith(_root + Path.DirectorySeparatorChar, StringComparison.Ordinal))
             return null;
 
         return File.Exists(full) ? full : null;

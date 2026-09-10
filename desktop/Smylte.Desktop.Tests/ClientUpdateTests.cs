@@ -124,6 +124,69 @@ public sealed class ClientUpdateTests : IDisposable
         Updater.RemoveStaleClient(null);
     }
 
+    // ── which binary this client is asking about, and whether it can run ────
+
+    [Fact]
+    public void The_client_asks_about_the_asset_for_the_system_it_is_running_on()
+    {
+        // One rolling release carries both clients, because there is one web
+        // build and it is the same bytes for everybody. Each client must ask
+        // about its own half: a Linux client comparing its digest against
+        // Smylte.exe would offer an update to a binary it cannot execute, and
+        // would offer it forever, since the digests can never match.
+        Assert.Equal(
+            OperatingSystem.IsWindows() ? "Smylte.exe" : "Smylte-linux-x86_64",
+            Updater.ClientAssetName);
+
+        // Both names are asserted whichever runner this is on, so a rename on
+        // one platform cannot pass unnoticed on the other. They are also the
+        // strings desktop-release.yml uploads and greps for.
+        Assert.Equal("Smylte.exe", Updater.WindowsClientAsset);
+        Assert.Equal("Smylte-linux-x86_64", Updater.LinuxClientAsset);
+    }
+
+    [Fact]
+    public void A_staged_client_is_made_executable_before_it_takes_the_exe_path()
+    {
+        var staged = Write("Smylte.new", "the new client");
+        Updater.MakeExecutable(staged);
+
+        if (OperatingSystem.IsWindows())
+        {
+            // Windows has no mode bits and File.SetUnixFileMode throws there,
+            // so the whole of the assertion is that this did not blow up.
+            return;
+        }
+
+        var mode = File.GetUnixFileMode(staged);
+        // The bit that matters. A downloaded file is 0644, the swap succeeds,
+        // and the relaunch then fails with EACCES — an update that reports
+        // success and leaves a client that will not start.
+        Assert.True(mode.HasFlag(UnixFileMode.UserExecute));
+        Assert.True(mode.HasFlag(UnixFileMode.UserRead));
+        Assert.True(mode.HasFlag(UnixFileMode.UserWrite));
+        // And nothing beyond 0755: a world-WRITABLE binary that the client then
+        // executes on every launch would be a far worse bug than the one above.
+        Assert.False(mode.HasFlag(UnixFileMode.GroupWrite));
+        Assert.False(mode.HasFlag(UnixFileMode.OtherWrite));
+    }
+
+    [Fact]
+    public void The_swap_keeps_the_executable_bit_it_was_given()
+    {
+        // The two halves are separate calls, so this pins that the second does
+        // not undo the first — File.Move preserves the mode, but the ordering
+        // is the kind of thing a later edit reshuffles.
+        var exe = Write("Smylte", "old");
+        var staged = Write("Smylte.new", "new");
+        Updater.MakeExecutable(staged);
+        Updater.SwapClient(exe, staged);
+
+        Assert.Equal("new", File.ReadAllText(exe));
+        if (OperatingSystem.IsWindows()) return;
+        Assert.True(File.GetUnixFileMode(exe).HasFlag(UnixFileMode.UserExecute));
+    }
+
     [Fact]
     public void Progress_is_said_in_megabytes_with_the_total_when_known()
     {

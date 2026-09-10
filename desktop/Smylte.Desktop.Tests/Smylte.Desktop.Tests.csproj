@@ -35,6 +35,15 @@
          interface with no Windows dependency, which is why linking it here does
          not cost this project its portable TFM. -->
     <Compile Include="../Smylte.Desktop/IDesktopBridge.cs" />
+    <!-- The portable halves of two files that are otherwise Windows: the colour
+         arithmetic the host chrome decides from, the five icon names and the
+         contrast rule behind Auto, and the password protector. All three are
+         linked by the Linux client too, which is the point of splitting them —
+         and none of them had a test before, because until now they only ever
+         ran inside a WinForms process this suite cannot start. -->
+    <Compile Include="../Smylte.Desktop/Theme.cs" />
+    <Compile Include="../Smylte.Desktop/IconChoice.cs" />
+    <Compile Include="../Smylte.Desktop/PasswordProtector.cs" />
     <!-- The icon comes in as bytes rather than as a linked source file, so
          AppIconTests asserts on the identical blob <ApplicationIcon> stamps into
          the exe. LogicalName pins the resource name: without it, the linked path

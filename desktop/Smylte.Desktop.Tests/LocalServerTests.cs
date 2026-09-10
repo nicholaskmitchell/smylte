@@ -31,6 +31,13 @@ public sealed class LocalServerTests : IDisposable
         Directory.CreateDirectory(Path.Combine(_dir, "webby"));
         File.WriteAllText(Path.Combine(_dir, "webby", "secret.txt"), "also not yours");
 
+        // And a sibling that differs from the root only in CASE. On Linux this
+        // is a second directory; on Windows it aliases the first. Either way
+        // nothing may be served through it — see the test below for why the two
+        // filesystems make the same assertion for different reasons.
+        Directory.CreateDirectory(Path.Combine(_dir, "WEB"));
+        File.WriteAllText(Path.Combine(_dir, "WEB", "secret.txt"), "not yours either");
+
         // Never Start()ed: Resolve is pure path arithmetic and binding a port
         // would make the suite depend on what else is listening.
         _server = new LocalServer(_root, "https://tasks.example.test", 48231);
@@ -61,6 +68,36 @@ public sealed class LocalServerTests : IDisposable
         // lets through: "/tmp/x/webby/secret.txt" does start with "/tmp/x/web".
         // The separator in the comparison is what makes it fail.
         Assert.Null(_server.Resolve("/../webby/secret.txt"));
+    }
+
+    [Fact]
+    public void Resolve_refuses_a_sibling_that_differs_from_the_root_only_in_case()
+    {
+        // The guard used to compare OrdinalIgnoreCase, which is the NTFS rule
+        // applied to a path that may not be on NTFS. On a case-sensitive
+        // filesystem "…/Smylte/WEB/secret.txt" is a genuinely different
+        // directory and the check accepted it — a traversal, in the one place
+        // in this client where that is a security bug rather than a cosmetic
+        // one. The `webby` case above never caught it: that one fails on
+        // length, not on case.
+        //
+        // Non-vacuous on BOTH filesystems, which is the point of asserting it
+        // here rather than only on the Linux runner:
+        //   case-sensitive    WEB is a second directory, and serving out of it
+        //                     is the escape.
+        //   case-insensitive  WEB aliases web, so this reaches a real file
+        //                     through a spelling the guard was never meant to
+        //                     accept — still a refusal, for a weaker reason.
+        Assert.Null(_server.Resolve("/../WEB/secret.txt"));
+    }
+
+    [Fact]
+    public void Resolve_still_serves_the_root_through_its_own_spelling()
+    {
+        // The control for the case test above. Tightening the comparison must
+        // not cost the ordinary path, and "it refuses everything" would satisfy
+        // every traversal assertion in this file on its own.
+        Assert.NotNull(_server.Resolve("/index.html"));
     }
 
     // ── the control: ordinary requests still work ──────────────────────────

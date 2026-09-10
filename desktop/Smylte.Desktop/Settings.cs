@@ -1,17 +1,19 @@
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace Smylte.Desktop;
 
-/// Client configuration, in %APPDATA%\Smylte\settings.json.
+/// Client configuration, in `%APPDATA%\Smylte\settings.json` on Windows and
+/// `~/.config/Smylte/settings.json` on Linux — one line, `SpecialFolder.ApplicationData`,
+/// which .NET already maps to `$XDG_CONFIG_HOME`.
 ///
 /// The password is the only sensitive field and it is never written in the
-/// clear: DPAPI encrypts it against the current Windows user, so a copied
-/// settings.json is inert on another account or machine. Unprotect failing is
-/// therefore an expected outcome, not an error — it means the file was roamed,
-/// and the right response is to fall back to the app's own login screen.
+/// clear. PasswordProtector encrypts it against the current user — DPAPI on
+/// Windows, a key derived from a 0600 file beside this one on Linux — so a
+/// copied settings.json is inert on another account or machine. Failing to
+/// decrypt is therefore an expected outcome, not an error: it means the file
+/// was roamed, and the right response is to fall back to the app's own login
+/// screen.
 public sealed class Settings
 {
     public string ServerUrl { get; set; } = "";
@@ -91,7 +93,34 @@ public sealed class Settings
     /// regions; false routes every drag through the bridge instead. Exists
     /// because CI cannot open a window, so the native path is proven only on
     /// real machines — and one where it misbehaves should not be stuck.
+    ///
+    /// Linux ignores it and always reports `nativeDrag: false`: WebKitGTK has
+    /// no `app-region` support at all, so the bridge path is not a fallback
+    /// there, it is the only path.
     public bool FloatNativeDrag { get; set; } = true;
+
+    // ── Linux only ────────────────────────────────────────────────────────
+    //
+    // Read before GTK is touched and ignored entirely by the Windows client.
+    // Both are the same shape as FloatNativeDrag above: no UI, a hand-edited
+    // settings.json, and an escape hatch for a machine where the default is
+    // wrong — because the failures they address cannot be reproduced in CI.
+
+    /// `"x11"` or `"wayland"`. X11 is the default because three things the
+    /// floating window needs — staying above other windows, opening where it
+    /// was left, and keeping out of the taskbar — have no Wayland protocol an
+    /// ordinary client can use, and GNOME implements no extension that would
+    /// give them. Under XWayland all three work. The cost is that XWayland can
+    /// look soft on a fractionally scaled display, which is why this is a
+    /// setting and not a decision.
+    public string Backend { get; set; } = "x11";
+
+    /// Forces `WEBKIT_DISABLE_DMABUF_RENDERER=1`. WebKitGTK's DMA-BUF renderer
+    /// paints nothing at all on the NVIDIA proprietary driver — a window frame
+    /// around a white rectangle, with no error anywhere. The client already
+    /// sets the variable when it finds `/proc/driver/nvidia/version`; this is
+    /// for the machines that need it and do not look like that.
+    public bool DisableDmabufRenderer { get; set; }
 
     [JsonIgnore]
     public bool IsConfigured =>
@@ -103,7 +132,15 @@ public sealed class Settings
     [JsonIgnore]
     public string BrowserProfile => Path.Combine(DataFolder, "profile");
 
-    private static string Dir => Path.Combine(
+    /// `%APPDATA%\Smylte` on Windows; `$XDG_CONFIG_HOME/Smylte`, i.e.
+    /// `~/.config/Smylte`, on Linux — .NET already maps ApplicationData that
+    /// way, so this line needed no change to become XDG-correct.
+    ///
+    /// `internal` rather than `private` so PasswordProtector can put its key
+    /// file beside settings.json. It is the one directory this client owns per
+    /// user on both systems, and a second way of naming it would be a second
+    /// thing to keep in step.
+    internal static string Dir => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Smylte");
 
     private static string FilePath => Path.Combine(Dir, "settings.json");
@@ -136,24 +173,12 @@ public sealed class Settings
         File.WriteAllText(FilePath, JsonSerializer.Serialize(this, Json));
     }
 
-    public void SetPassword(string password)
-    {
-        if (string.IsNullOrEmpty(password)) { PasswordBlob = ""; return; }
-        PasswordBlob = Convert.ToBase64String(ProtectedData.Protect(
-            Encoding.UTF8.GetBytes(password), null, DataProtectionScope.CurrentUser));
-    }
+    // Both sides of the password now go through PasswordProtector, which picks
+    // DPAPI on Windows and a key derived from a 0600 file beside this one
+    // everywhere else. The signatures and the contract are unchanged — an empty
+    // string out of GetPassword still means "show the app's own login screen" —
+    // and a Windows blob written before that file existed still reads.
+    public void SetPassword(string password) => PasswordBlob = PasswordProtector.Protect(password);
 
-    public string GetPassword()
-    {
-        if (string.IsNullOrEmpty(PasswordBlob)) return "";
-        try
-        {
-            return Encoding.UTF8.GetString(ProtectedData.Unprotect(
-                Convert.FromBase64String(PasswordBlob), null, DataProtectionScope.CurrentUser));
-        }
-        catch (Exception)
-        {
-            return "";   // different user or machine; the web login screen takes over
-        }
-    }
+    public string GetPassword() => PasswordProtector.Unprotect(PasswordBlob);
 }
