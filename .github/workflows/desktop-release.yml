@@ -14,10 +14,11 @@ on:
     inputs:
       client:
         description: >-
-          Whether to re-publish Smylte.exe. `auto` (the default, and what a push
-          does) publishes it only when desktop/Smylte.Desktop changed since the
-          exe on the release was built; `force` publishes it regardless — for a
-          change that lives outside that tree, such as the .NET version below.
+          Whether to re-publish the client binaries. `auto` (the default, and
+          what a push does) publishes each only when the sources it is built
+          from changed since the copy on the release was built; `force`
+          publishes both regardless — for a change that lives outside those
+          trees, such as the .NET version below.
         type: choice
         options: [auto, force]
         default: auto
@@ -113,8 +114,54 @@ jobs:
           path: publish/Smylte.exe
           retention-days: 7
 
+  client-linux:
+    # ubuntu, and it needs no GTK to build. GirCore binds by dlopen at RUNTIME,
+    # so the only build-time dependency is the SDK — which is what lets this be
+    # an ordinary runner and not a container with a desktop stack in it.
+    runs-on: ubuntu-latest
+    steps:
+      # Same reasoning as `web` and `client`: NuGet restore and MSBuild run
+      # restored code, and the restored packages run build targets on the runner.
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      # The same gate the Windows client has, and it is not redundant: this leg
+      # runs the suite on a CASE-SENSITIVE filesystem, which is the only place
+      # LocalServer's traversal guard can be proven, and it takes the
+      # derived-key arm of PasswordProtector where the Windows leg takes DPAPI.
+      - name: Client unit tests
+        run: dotnet test desktop/Smylte.Desktop.Tests/Smylte.Desktop.Tests.csproj
+
+      - name: Publish
+        run: >
+          dotnet publish desktop/Smylte.Desktop.Linux/Smylte.Desktop.Linux.csproj
+          -c Release
+          -o publish-linux
+
+      # Whether GirCore's sonames resolve against a REAL WebKitGTK, which is
+      # the one thing about this client a runner can answer and the one that
+      # breaks silently: a binding that cannot find its library fails at the
+      # first call, long after the build is green. It does not prove the app
+      # renders — nothing without a compositor can — and the README does not
+      # claim it does.
+      - name: The bindings resolve against a real WebKitGTK
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libgtk-4-1 libwebkitgtk-6.0-4 libsoup-3.0-0
+          ./publish-linux/Smylte-linux-x86_64 --check
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: client-linux
+          path: publish-linux/Smylte-linux-x86_64
+          retention-days: 7
+
   release:
-    needs: [web, client]
+    needs: [web, client, client-linux]
     runs-on: ubuntu-latest
     # The one job that publishes, and the only one that needs to write. It runs
     # no dependency install code at all — its steps are `gh` calls over the
@@ -209,8 +256,25 @@ jobs:
           # it off the checkout; a depth-1 clone has HEAD's trees.
           CLIENT_TREE=$(git rev-parse "HEAD:desktop/Smylte.Desktop")
 
-          # Why the exe is being published this run, or empty for "it is not".
-          client_reason() {
+          # The Linux client needs a key over BOTH trees, because it LINKS the
+          # shared sources out of desktop/Smylte.Desktop rather than carrying
+          # its own — so a change to LocalServer.cs changes that binary and
+          # leaves HEAD:desktop/Smylte.Desktop.Linux untouched. Hashing the two
+          # tree hashes together gives one 40-hex value, which keeps the notes
+          # line and its scrape exactly the shape the Windows one already has.
+          LINUX_TREE=$(git rev-parse "HEAD:desktop/Smylte.Desktop.Linux")
+          LINUX_KEY=$(printf '%s %s\n' "$CLIENT_TREE" "$LINUX_TREE" | git hash-object --stdin)
+
+          # Why an asset is being published this run, or empty for "it is not".
+          #   $1  the asset's name on the release
+          #   $2  the key this run's build was made from
+          #   $3  the label the notes record that key under
+          #
+          # One function for both clients, because the decision is identical and
+          # two copies would drift — the exe's half is the one that has already
+          # been got wrong once.
+          publish_reason() {
+            local asset="$1" key="$2" label="$3"
             if [ "${CLIENT_PUBLISH:-auto}" = force ]; then
               echo "forced by workflow_dispatch"; return 0
             fi
@@ -219,18 +283,25 @@ jobs:
             fi
             local names published
             names=$(retry gh release view desktop-latest --json assets --jq '.assets[].name') || return 1
-            if ! printf '%s\n' "$names" | grep -qx 'Smylte.exe'; then
-              echo "the release has no Smylte.exe"; return 0
+            if ! printf '%s\n' "$names" | grep -qx "$asset"; then
+              echo "the release has no $asset"; return 0
             fi
             published=$(retry gh release view desktop-latest --json body --jq .body \
-              | sed -n 's/.*Client source tree: \([0-9a-f]\{40\}\).*/\1/p' | head -1) || return 1
-            if [ "$published" != "$CLIENT_TREE" ]; then
-              echo "client source changed (${published:-unrecorded} -> ${CLIENT_TREE})"; return 0
+              | sed -n "s/.*${label}: \([0-9a-f]\{40\}\).*/\1/p" | head -1) || return 1
+            if [ "$published" != "$key" ]; then
+              echo "source changed (${published:-unrecorded} -> ${key})"; return 0
             fi
             echo ""
           }
 
-          CLIENT_REASON=$(client_reason)
+          # The two labels share no words in the order that matters: the exe's
+          # scrape looks for "Client source tree" and the Linux one for "Linux
+          # client key", so neither pattern can read the other's line whichever
+          # order they appear in. A label like "Linux client source tree" would
+          # be one capital letter away from being caught by the exe's `.*`.
+          CLIENT_REASON=$(publish_reason "Smylte.exe" "$CLIENT_TREE" "Client source tree")
+          LINUX_REASON=$(publish_reason "Smylte-linux-x86_64" "$LINUX_KEY" "Linux client key")
+
           FILES="artifacts/web/smylte-web.zip"
           if [ -n "$CLIENT_REASON" ]; then
             echo "Publishing Smylte.exe: ${CLIENT_REASON}"
@@ -238,15 +309,27 @@ jobs:
           else
             echo "Smylte.exe is unchanged (client source tree ${CLIENT_TREE}); not re-published"
           fi
+          if [ -n "$LINUX_REASON" ]; then
+            echo "Publishing Smylte-linux-x86_64: ${LINUX_REASON}"
+            FILES="$FILES artifacts/client-linux/Smylte-linux-x86_64"
+          else
+            echo "Smylte-linux-x86_64 is unchanged (linux client key ${LINUX_KEY}); not re-published"
+          fi
 
           NOTES="Rolling desktop build from ${GITHUB_SHA}.
 
-          \`Smylte.exe\` is the Windows client — download it once; it keeps its own
-          copy of the web build up to date from this release on each launch, and
-          the exe here is replaced only when the client itself changed.
-          \`smylte-web.zip\` is that web build, and is what the client downloads.
+          \`Smylte.exe\` is the Windows client and \`Smylte-linux-x86_64\` the Linux
+          one — download one once; it keeps its own copy of the web build up to
+          date from this release on each launch, and the binary here is replaced
+          only when that client itself changed.
+          \`smylte-web.zip\` is that web build, and is what both clients download.
 
-          Client source tree: ${CLIENT_TREE}"
+          The Linux client needs GTK 4 and WebKitGTK 6 from your distribution
+          (\`sudo dnf install gtk4 webkitgtk6.0\` on Fedora) and \`chmod +x\` after
+          a manual download; it says so itself if either is missing.
+
+          Client source tree: ${CLIENT_TREE}
+          Linux client key: ${LINUX_KEY}"
 
           if [ "$RELEASE_STATE" = present ]; then
             # Assets first, notes second, and the order matters. If this step dies
@@ -274,10 +357,16 @@ jobs:
             echo "::error::desktop-latest notes do not name ${GITHUB_SHA}; the release is half-updated"
             exit 1
           fi
-          # And the tree the exe was built from, since the next run's decision
-          # not to re-publish reads it back from here: notes without it would
-          # make the following push upload the exe again, for nothing.
+          # And the keys each client was built from, since the next run's
+          # decision not to re-publish reads them back from here: notes without
+          # one would make the following push upload that binary again, for
+          # nothing. Both, because a half-written body is exactly the state this
+          # post-condition exists to catch.
           if ! printf '%s' "$BODY" | grep -q "Client source tree: ${CLIENT_TREE}"; then
             echo "::error::desktop-latest notes do not record the client source tree ${CLIENT_TREE}"
+            exit 1
+          fi
+          if ! printf '%s' "$BODY" | grep -q "Linux client key: ${LINUX_KEY}"; then
+            echo "::error::desktop-latest notes do not record the linux client key ${LINUX_KEY}"
             exit 1
           fi
