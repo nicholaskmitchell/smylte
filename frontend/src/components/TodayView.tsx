@@ -2422,7 +2422,17 @@ export function TodayView({
             `flex-basis`, two buttons leaving for the overflow menu, and a
             tighter header gap. See the mobile block in app.css. */}
         {weekDone !== null && (
-          <span className="today-week mono">
+          /* `.content-sub` FIRST, and it is not decoration: it is what makes
+             this the same micro-label the date and the count are — 11px mono,
+             the label case, the header's tracking. Without it the span took the
+             page's own 15px body type and this one figure read half again as
+             large as the two facts either side of it, in sentence case beside
+             their caps. The rule below in the fence has always described these
+             as "three `.content-sub` spans in a row" and the browser fixtures
+             in `layout.browser.test.tsx` have always mounted it with the class;
+             the component was the one place that never carried it, which is
+             exactly why nothing caught it. */
+          <span className="content-sub today-week mono">
             {tr('today.weekFinished', { count: weekDone })}
           </span>
         )}

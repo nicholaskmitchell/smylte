@@ -153,6 +153,66 @@ describe("the Today header's buttons sit on one line", () => {
       .toBe(+(focus.left - review.right).toFixed(1))
   })
 
+  it('and every figure in the row sits on the buttons\' centre line', async () => {
+    // `.content-head` aligns its children on the BASELINE, which is right for a
+    // header that is a title and a label and wrong for this one. Every CONTROL
+    // here had already opted out of it one at a time — `.today-nav` and
+    // `.today-acts` each carry an `align-self: center` — which left the three
+    // FIGURES as the only children still on it, hanging off the 24px serif
+    // title's baseline. Measured in this harness at 1100px before the fix:
+    // buttons and nav centred at 29, the date, the week's total and the day's
+    // count at 33.25 and 32.25 — a row whose text sits four pixels below the
+    // buttons it shares a line with.
+    //
+    // `.today-head { align-items: center }` is one declaration on the container
+    // rather than a fourth, fifth and sixth `align-self`, and it has to WIN
+    // over `.content-head`'s at equal specificity — which is the defect family
+    // this whole file exists for, and is why this is measured rather than read
+    // out of the stylesheet.
+    //
+    // At a width where the header is one row, so "the same centre line" is a
+    // question with an answer. Every visible child, rather than the three
+    // figures by name: what has to hold is that nothing in this header is left
+    // on the baseline, including whatever is added to it next.
+    await viewport(1200)
+    const host = await mount(TODAY_HEADER)
+    const head = host.querySelector('.content-head')!
+    const mid = (r: DOMRect) => (r.top + r.bottom) / 2
+    const band = mid(head.getBoundingClientRect())
+    const kids = [...head.children]
+      .filter((c) => getComputedStyle(c).display !== 'none')
+      .map((c) => ({ cls: c.className, r: c.getBoundingClientRect() }))
+      .filter((k) => k.r.height > 0)
+
+    expect(kids.length, 'the fixture stopped rendering the header').toBeGreaterThan(5)
+    for (const k of kids) {
+      expect(Math.abs(mid(k.r) - band),
+        `\`${k.cls}\` is centred at ${mid(k.r).toFixed(2)} against the header's `
+        + `${band.toFixed(2)} — it is still on the baseline`)
+        .toBeLessThanOrEqual(1)
+    }
+  })
+
+  it('and the three figures are one size, not two', async () => {
+    // `.today-week` colours the week's total and nothing else; `.content-sub`
+    // is what makes a header figure 11px mono in the label case. The component
+    // shipped the span as `today-week mono` alone, so it inherited the page's
+    // 15px body type and read half again as large as the date and the count
+    // either side of it.
+    //
+    // This fixture has always carried `content-sub`, which is exactly why the
+    // measured suite could not catch it — the class list is held to the JSX by
+    // `TodayView.test.tsx`, and this pins the consequence: the three figures
+    // are one type, whatever the cascade does to them.
+    await viewport(1200)
+    const host = await mount(TODAY_HEADER)
+    const size = (sel: string) => getComputedStyle(host.querySelector(sel)!).fontSize
+
+    expect(size('.today-week'), 'the week\'s total is not the date\'s size')
+      .toBe(size('.content-sub'))
+    expect(size('.today-count')).toBe(size('.content-sub'))
+  })
+
   it('and every wrapped row starts on the page gutter at 390px', async () => {
     // Below 720px `.content-head` wraps. `margin-left` on the last button put
     // its whole row 10px right of every other left edge in the header —
@@ -268,6 +328,253 @@ describe('the Today tab has one left edge on a phone', () => {
     expect([...new Set(edges.values())], 'the Today tab renders as a staircase: '
       + `${[...edges].map(([s, px]) => `${s} ${px}px`).join(', ')}`)
       .toHaveLength(1)
+  })
+})
+
+// ── one centre line across the two lists ────────────────────────────────────
+
+describe("a Today row's cells sit on the title's first line", () => {
+  // Reported by eye, in two rounds, and the second round is the interesting one.
+  //
+  // ROUND ONE was a pixel: `.check` carries `margin-top: 2px`, written for
+  // `.task`, whose row is `align-items: flex-start` and where the margin drops
+  // the tick from the top of the row onto the first line of the title. The
+  // Today row centred, so the margin was added to a box that was then centred
+  // WITH it, and the tick landed half the margin below the coloured square
+  // beside it. `.dash-day-row` met the same thing when the dashboard borrowed
+  // the control and neutralised it there; this row never did.
+  //
+  // ROUND TWO was a whole line and a half. On a WRAPPED title the centring put
+  // every cell in the middle of the block: measured at 390px on three lines,
+  // all of them 33.75 down the title against the Tasks tab's 10.5-12.5; at
+  // 900px on two lines, 22.5.
+  //
+  // The fix reopens what the row aligns on. `align-items: flex-start` is what
+  // makes the title's box top the content box top — the anchor flexbox cannot
+  // otherwise express between siblings — and each cell is then moved to the
+  // middle of that first line by half a line minus half its own height, as a
+  // percentage of itself so one declaration serves cells of six heights.
+  //
+  // THE WHOLE ROW moves, not the tick and square alone. `.task` puts its
+  // actions on the first line too and its meta line BELOW the title, so
+  // "like the Tasks tab" means the row. The half measure was built and
+  // rendered: it reads as two records, the square beside line one and
+  // `25m  Aug 28` floating at the middle of the block touching nothing.
+  //
+  // Measured with the REAL faces, which is not a detail: `.list-dot` is placed
+  // by `vertical-align: middle`, so where it lands is a fact about Inter's
+  // x-height. A rig that failed to load the self-hosted woff2 put it a whole
+  // pixel off and made the coloured square look like the defect when the tick
+  // was the thing out of place. The harness waits on `document.fonts` for
+  // exactly this reason.
+  const rows = (title: string) => `
+    <div class="shell"><div class="content today-pane"><ul class="today-list">
+      <li class="today-row">
+        <button class="check">&#10003;</button>
+        <span class="today-kind-mark" data-kind="task"><span class="today-kind-box"></span></span>
+        <span class="today-title">${title}</span>
+        <span class="today-est mono">25m</span><span class="today-due mono">Aug 28</span>
+        <button class="today-drop">&#10005;</button></li>
+    </ul></div></div>
+    <div class="shell"><div class="content">
+      <div class="task"><div class="pri-bar"></div><button class="check">&#10003;</button>
+        <div class="task-body"><div class="task-title">
+          <span class="list-dot"></span>${title}</div></div></div>
+    </div></div>`
+
+  const SHORT = 'Hxxg'
+  // Long enough to wrap at BOTH widths this runs at — the Today row spends
+  // width on its estimate and due cells, so it wraps sooner than the Tasks row
+  // does, and the assertions below never compare the two tabs' line counts.
+  const LONG = 'Hxxg the quarterly summary and send it round to everyone on the '
+    + 'team before the end of the week so that nobody is surprised by it later'
+
+  /** A box's centre, as an offset from the top of the title beside it — the two
+   *  lists are mounted one above the other, so absolute tops are not comparable
+   *  and offsets are. */
+  const off = (host: Element, sel: string, title: string) => {
+    const m = host.querySelector(sel)!.getBoundingClientRect()
+    const t = host.querySelector(title)!.getBoundingClientRect()
+    return +(((m.top + m.bottom) / 2) - t.top).toFixed(2)
+  }
+
+  // Both widths and both wrap states, because the four disagree about which
+  // element is tallest and that is the whole difficulty. At 390px `.today-est`
+  // carries a 34px min-height for its tap target, taller than the 22.5px title,
+  // so the row's content box is NOT the title's box — which is what makes
+  // `flex-start` alone the wrong fix and the per-cell offset necessary.
+  it.each([
+    [900, SHORT], [390, SHORT], [900, LONG], [390, LONG],
+  ])('every cell, at %ipx', async (w, title) => {
+    await viewport(w)
+    const host = await mount(rows(title))
+    const today = host.querySelector('.today-title')!
+    const line = parseFloat(getComputedStyle(today).lineHeight)
+
+    // The title's own first line, which is what every cell is held to. Not a
+    // pinned pixel: `--fs-scale` and a preset both move it, and the two engines
+    // disagree about font metrics in the last fraction.
+    const first = line / 2
+    for (const sel of ['.check', '.today-kind-box', '.today-est', '.today-due', '.today-drop']) {
+      expect(Math.abs(off(host, sel, '.today-title') - first),
+        `at ${w}px on a ${Math.round(today.getBoundingClientRect().height / line)}-line `
+        + `title, \`${sel}\` sits ${off(host, sel, '.today-title')} down the title, `
+        + `not on its first line at ${first}`)
+        .toBeLessThanOrEqual(0.5)
+    }
+
+    // …and the Tasks tab, which is the thing the report actually asked for.
+    // A comparison rather than a pinned number, and a loose one: the two tabs
+    // reach the first line by different routes — `.list-dot` rides it inline on
+    // Inter's x-height, the Today mark is placed on it — so they agree to about
+    // half a pixel, not exactly.
+    const tasksTitle = host.querySelector('.task-title')!
+    expect(getComputedStyle(today).fontSize).toBe(getComputedStyle(tasksTitle).fontSize)
+    expect(Math.abs(off(host, '.today-kind-box', '.today-title')
+      - off(host, '.list-dot', '.task-title')), 'the two tabs disagree about the mark')
+      .toBeLessThanOrEqual(1)
+  })
+
+  it('and the wrapped phone row keeps its 44px tap boxes', async () => {
+    // THE COST OF THE RULE ABOVE, and the reason `.today-row` grew 1.75px of
+    // top padding on a phone. The tap target is a 44x44 `::after` CENTRED ON
+    // ITS CONTROL. While the row centred, that box was centred in the row and
+    // fitted; on the first line it is centred 20.25px down, so 22px of it wants
+    // to be above that and the row had 9. The overhang lands on the row ABOVE,
+    // which owns those pixels, and the guideline is quietly not met.
+    //
+    // `backlog.aug25.stage4.browser.test.tsx` measures this properly and in
+    // both engines, and it went red at 42px — but only because its own fixture
+    // rows happen to be one line. The wrapped row is checked HERE, beside the
+    // rule that moved the controls, so the case that motivated the change is
+    // the case that is covered.
+    // A SPACER above the list, and it is load-bearing rather than tidiness: a
+    // row mounted flush against the top of the page has nothing above it, so
+    // the pixels a tap box would overhang into are off the document and
+    // `elementFromPoint` answers null there. The walk would then measure the
+    // clipping rather than the box, and pass or fail for the wrong reason. The
+    // real tab has a header above its first row; this stands in for it.
+    await viewport(390)
+    const host = await mount(`<div style="height:60px"></div>${rows(LONG)}`)
+    const el = host.querySelector<HTMLElement>('.today-row .check')!
+    const b = el.getBoundingClientRect()
+    const cx = b.left + b.width / 2
+    const cy = b.top + b.height / 2
+    const owns = (y: number) => document.elementFromPoint(cx, y) === el
+
+    expect(cy, 'the row is off the top of the page, so the walk below is vacuous')
+      .toBeGreaterThan(44)
+    let top = cy; let bot = cy
+    while (cy - top < 100 && owns(top - 1)) top -= 1
+    while (bot - cy < 100 && owns(bot + 1)) bot += 1
+    expect(Math.round(bot - top + 1),
+      'the tick on a wrapped phone row has less than a thumb of height')
+      .toBeGreaterThanOrEqual(44)
+  })
+})
+
+// ── the habit count and the title it stands beside ──────────────────────────
+
+describe("a habit's week count never crowds out its own title", () => {
+  // `.today-habit-count` was `flex: none` and `.today-title` is `flex: 1 1 0%`.
+  // A zero-basis item lives on leftover space, and an item that refuses to
+  // shrink takes its natural width out of that leftover FIRST — so on a phone
+  // the count did not crowd the title, it annihilated it. Measured at 390px on
+  // the habit "Water the plants", which is two ordinary words:
+  //
+  //   no count                   title 156.2px, 1 line, row 54.8
+  //   "3 of 5 this week"         title  40.6px, 4 lines, row 110.8
+  //   "3 of 5 that week so far"  title     0px, 14 lines, row 335.8
+  //
+  // Zero, and the look-back's wording is the LONGER of the two — so the screen
+  // where a week of rows is read is the screen that got it. A four-word habit
+  // came out at 30 lines and 696px, taller than the phone reading it, and the
+  // German string overflowed the row's own right edge by 59px on top.
+  //
+  // The count goes under the title on a phone now, the shape `.task-meta` has
+  // always had in the Tasks tab. Desktop keeps it beside the title, where it
+  // has always fitted — which is why both widths are checked here.
+  const habitRow = (count: string, title: string) => `
+    <div class="shell"><div class="content today-pane"><ul class="today-list">
+      <li class="today-row">
+        <span class="today-check-gap"></span>
+        <span class="today-kind-mark" data-kind="habit">&#8635;</span>
+        <span class="today-title">${title}</span>
+        ${count ? `<span class="today-habit-count mono">${count}</span>` : ''}
+        <span class="today-est mono">15m</span><span class="today-due mono"></span>
+        <button class="today-drop">&#10005;</button></li>
+    </ul></div></div>`
+
+  // Every string a shipping locale can put here, longest last. German is not
+  // decoration: `weekCountThat` is 33 characters there against English's 23, and
+  // it is the one that overflowed.
+  const COUNTS = [
+    '3 of 5 this week',
+    '3 of 5 that week so far',
+    '3 von 5 in jener Woche bis dahin',
+  ]
+  const TITLE = 'Take the medication with breakfast'
+
+  it('keeps the full title width on a phone, whatever the count says', async () => {
+    await viewport(390)
+    // The same row with no count at all is the reference: the count must cost
+    // the title NOTHING horizontally, which is a stronger claim than "enough".
+    let host = await mount(habitRow('', TITLE))
+    const free = box(host.querySelector('.today-title')!).w
+    expect(free, 'the fixture stopped laying out').toBeGreaterThan(100)
+
+    for (const count of COUNTS) {
+      document.body.innerHTML = ''
+      host = await mount(habitRow(count, TITLE))
+      const row = host.querySelector('.today-row')!
+      const title = box(host.querySelector('.today-title')!)
+
+      expect(title.w, `"${count}" took ${(free - title.w).toFixed(1)}px off the title`)
+        .toBe(free)
+      // …and the row does not hang off its own right edge, which is what the
+      // German string did once there was no width left to take.
+      expect(row.scrollWidth - row.clientWidth,
+        `"${count}" overflows the row by ${row.scrollWidth - row.clientWidth}px`)
+        .toBeLessThanOrEqual(0)
+      // The count keeps its whole sentence — one line, not truncated. Wrapping
+      // it would have been the other way to stop the squeeze, and a worse one:
+      // this figure is a record, and half of one says nothing.
+      const c = box(host.querySelector('.today-habit-count')!)
+      const line = parseFloat(getComputedStyle(host.querySelector('.today-habit-count')!).lineHeight)
+      expect(Math.round(c.h / line), `"${count}" wrapped onto ${c.h / line} lines`).toBe(1)
+      // Indented to the title's left edge rather than the row's, so it reads as
+      // belonging to the title above it.
+      //
+      // Measured over the TEXT rather than the box, because the indent is
+      // `padding-left` — the element itself spans the row from the gutter, and
+      // its border box would answer 14 whatever the text did. A Range says
+      // where the ink starts, which is the thing being claimed, and it stays
+      // true if the indent is ever moved onto a margin instead.
+      const el = host.querySelector('.today-habit-count')!
+      const range = document.createRange()
+      range.selectNodeContents(el)
+      expect(+range.getBoundingClientRect().left.toFixed(1),
+        'the count does not line up under the title').toBe(title.left)
+    }
+  })
+
+  it('and leaves the desktop row alone, where it always fitted', async () => {
+    // The count sits BESIDE the title at 900px and always has: the longest
+    // string still leaves a two-word habit 437px and one line. A fix that put
+    // it under the title everywhere would have spent a row of height to solve a
+    // problem that only exists on a phone.
+    await viewport(900)
+    for (const count of COUNTS) {
+      document.body.innerHTML = ''
+      const host = await mount(habitRow(count, 'Water the plants'))
+      const title = box(host.querySelector('.today-title')!)
+      const c = box(host.querySelector('.today-habit-count')!)
+
+      expect(c.left, `"${count}" dropped below the title on a desktop`)
+        .toBeGreaterThan(title.left)
+      expect(Math.abs(((c.top + c.bottom) / 2) - ((title.top + title.bottom) / 2)),
+        'the count and the title are not on the same line').toBeLessThanOrEqual(1)
+    }
   })
 })
 
