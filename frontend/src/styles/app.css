@@ -957,27 +957,56 @@
   .content-head { flex-wrap: wrap; row-gap: 8px; }
 
   /* THE TODAY HEADER, which is the one that does not fit.
-     It carries a title, a two-button day nav, a date, a count and three named
-     actions — Review, Shut down, Habits — and `flex-wrap` alone left them in
-     the worst possible arrangement. Measured in this harness at 390px before
-     this rule: 147px tall, over four lines, with `Habits` orphaned on a line of
-     its own under `Review` and `Shut down`. Two of the four lines were spent on
-     nothing: `.spacer` is `flex: 1`, so it claimed 81px of trailing space on the
-     title line and pushed everything after it down.
 
-     `.cal-head` has had the first half of this since the calendar was written
-     ("`.cal-head .spacer { display: none }`") — a header shorter than this one,
-     fixed years earlier. The Today tab is the phone-primary surface and never
-     got it.
+     `.spacer` is `flex: 1`, so on a wrapping header it claims all the trailing
+     space on the title line and pushes everything after it down — a whole row
+     spent on nothing. `.cal-head` has had this rule since the calendar was
+     written; the Today tab is the phone-primary surface and did not get it
+     until later.
 
-     Two rules, and they do different jobs. Dropping the spacer stops the
-     artificial break. Giving the count a full-line basis is what puts the three
-     actions TOGETHER: without it they wrap after whichever one runs out of
-     room, and 161px of count plus 260px of buttons cannot share 362px however
-     they are ordered. So the count takes the line it needs and the actions take
-     theirs — 284px of the 362 available, one row, in the order they are read. */
+     The COUNT used to take a full line of its own here as well
+     (`flex-basis: 100%`), and that rule is gone with the reason for it. It
+     existed because 161px of count plus four named actions could not share
+     362px however they were ordered, so the count was given its own row to
+     stop the actions wrapping apart from each other — which cost a whole row
+     to hold six words.
+
+     What holds them together now is `.today-acts`, a wrapper that makes the
+     three ONE flex item, so nothing can separate them and the count is free to
+     share a row again. Measured at 390px: 172px over four rows before,
+     124px over three after. */
   .today-head .spacer { display: none; }
-  .today-head .today-count { flex-basis: 100%; }
+
+  /* …and the header's buttons keep the size they SHIPPED at on a phone,
+     undoing the compact `7px 11px` the fence gives them for the desktop. The
+     compact size measures 30px tall and the shipped one 34px; neither reaches
+     the 44px touch guideline this block enforces elsewhere, and that gap is
+     older than this rule — what it must not do is widen it.
+
+     They are not swept into the 44px `::after` treatment below either, and
+     that is deliberate rather than an omission. It works for `.today-row`'s
+     controls because those are small glyphs far apart; header buttons sit at
+     the container's gap, where two 44px boxes centred on adjacent buttons
+     overlap — and `backlog.aug25.stage4.browser.test.tsx` asserts that no two
+     tap areas ever do. Growing the buttons themselves is the other way, and it
+     costs a row of the header on the tab this whole pass is about shortening.
+
+     Qualified with `.btn` — (0,2,0) — for the reason the font-size floor and
+     the row-control padding below both are: the Today fence sits ~1300 lines
+     BELOW this block and declares these at (0,1,0), so the bare form of this
+     rule would lose on source order and silently never apply. That mistake has
+     shipped four times in this file. */
+  .btn.today-review, .btn.today-focus, .btn.today-menu-btn { padding: 9px 13px; }
+
+  /* The header's own gap, down from `.content-head`'s 12px. On a phone this
+     header carries a title, a two-button nav, a date, the week's total, the
+     day's count and the actions group — six items, so the gap is spent five
+     times, and 12px of it is 60px of a 362px content box.
+
+     Measured at 390 with this rule: three rows at 124px, against four at 172px
+     before this pass. Without it the week and the count no longer share a row
+     and it is four again. */
+  .today-head { gap: 8px; }
   .undated-hint { padding: 8px 14px 0; }
 
   /* multi-day task views: swipeable full-height columns */
@@ -1347,10 +1376,6 @@
 .dash-week-past .mono { color: var(--fg-muted); }
 .dash-week-ago { color: var(--fg-faint); font-size: calc(11px * var(--fs-scale)); }
 
-/* The week's total in the Today header, beside the day's own count. Quiet: the
-   number next to it describes the work in front of the owner, and this one is
-   context rather than an instruction. */
-.today-week { color: var(--fg-faint); }
 .dash-tasks { list-style: none; margin: 0; padding: 0; }
 .dash-task {
   display: flex; align-items: baseline; gap: 8px; padding: 6px 12px;
@@ -1812,8 +1837,88 @@
 
    The two markers below are load-bearing. TodayView.test.tsx slices this file
    between them and fails on a literal colour, because a token discipline that
-   is only a convention is one hurried rule away from not holding. */
+   is only a convention is one hurried rule away from not holding.
+
+   TYPE TIERS, on the tab's own surface — five, and no others:
+
+     24px  the tab title (`.content-title`, serif)
+     15px  reading: a row's title, and the reflection read back on the look-back
+     13px  secondary prose: an empty state, an agenda row, a parse chip
+     11px  meta, always mono: figures, dates, estimates, counts, buttons
+     10px  the micro-label (`.label`, `.chip`)
+
+   It was eight, with 12, 13 and 14 all doing "secondary" — three sizes for one
+   job, chosen a rule at a time. There is no scale token behind these: this file
+   writes `calc(<literal>px * var(--fs-scale))` everywhere and one new idiom for
+   one tab would be worse than the literals, so the tiers are held by this
+   comment and by anyone reading it.
+
+   The DIALOGS in this fence — `.plan-*`, `.shut-*`, `.habit-*` — are
+   deliberately outside that list and keep 12px and 14px. They are a different
+   surface with different room, the same call `.today-pane` makes for the
+   spacing: a bottom sheet is not a strip of a tab. */
 /* today-tab:css:start */
+
+/* ---- the tab's own rhythm ----------------------------------------------
+   Everything full-width on this screen sits on one vertical step, and the step
+   is `--row-y` — the same 9px a task row is padded by. That is the point: the
+   chrome and the rows breathe alike, and a density preset that moves one moves
+   both. Before this the tab used ELEVEN different vertical values (4, 5, 6, 8,
+   9, 10, 11, 12, 14, 16 and 40), which is what "riddled with inconsistent
+   padding" looks like from the inside.
+
+   `.today-pane` scopes the three shared primitives — `.section-label`,
+   `.scroll` and, through `.today-add`, `.quickadd` — without reaching the
+   Tasks tab, Scheduling, or the two rituals, which render in `.modal` outside
+   this element and rightly keep the roomier shared values.
+
+   Horizontal is `var(--gutter)` everywhere, with no exceptions. Four blocks
+   had their own idea about it and each one broke the single left edge this
+   screen is read down. */
+.today-pane .section-label { padding: 9px var(--gutter) 3px; }
+.today-pane .scroll { padding-top: 2px; }
+.today-head { padding: 11px var(--gutter) 9px; }
+/* What `.today-menu` is absolutely positioned against. On the header rather
+   than on `.content`, which is the scroll container's parent and would put the
+   popover at the top of the pane instead of under the button that opened it. */
+.today-head { position: relative; }
+/* The week's total, beside the date. Quiet: the count on the other side of the
+   header describes the work in front of the owner, and this one is context
+   rather than an instruction.
+
+   In the fence rather than three hundred lines up among the `.dash-*` rules,
+   where it used to live. It is a Today class, and the token-discipline test at
+   the bottom of `TodayView.test.tsx` only reads what is between these two
+   markers — so out there it was the one rule on this tab nothing governed. */
+.today-week { color: var(--fg-faint); }
+
+/* A HAIRLINE BEFORE EACH FIGURE, and it is not decoration. This header carries
+   three `.content-sub` spans in a row — the date, the week's total and the
+   day's count — at identical 11px mono, identical tracking, identical
+   --fg-faint. At the container's gap they read as one run of text:
+   "FRIDAY, AUGUST 28 12 THIS WEEK 3 OPEN · 5 ON THE DAY".
+
+   On BOTH figures rather than on the week alone, which is where this started
+   and which only worked at the width it was checked at: the header wraps, so
+   which two of the three end up side by side depends on the viewport. On a
+   phone the date takes the first row and the collision is week-against-count;
+   on a desktop all three share a row and both boundaries need saying. Fixing
+   one is fixing the arrangement in front of you rather than the header.
+
+   A rule rather than a "·" through `content`: a separator in the content layer
+   is a character some screen readers read out, and this one says something
+   purely visual — that these are separate facts. It is the hairline vocabulary
+   the rest of this file divides things with.
+
+   PADDING and not margin, deliberately. Padding is inside the border box, so
+   the element's own left edge does not move — and when one of these leads a
+   wrapped row, that edge is the page gutter every other row on this tab is
+   read down. A margin would push it 8px past all of them, which is the exact
+   defect `.today-habits-open`'s old `margin-left` caused and which
+   `layout.browser.test.tsx` now checks on every row of the header. */
+.today-week, .today-count { border-left: 1px solid var(--rule); padding-left: 8px; }
+.today-add { padding-block: 9px; }
+
 .today-add { flex-wrap: wrap; }
 /* The reading of the typed line, under the box that produced it. Advisory
    only — Enter commits whether or not it has been looked at — so it is sized
@@ -1821,7 +1926,7 @@
 .today-chip {
   flex-basis: 100%; margin: 0;
   display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
-  font-size: calc(12px * var(--fs-scale)); color: var(--fg-muted);
+  font-size: calc(13px * var(--fs-scale)); color: var(--fg-muted);
 }
 .today-chip .label { color: var(--accent); }
 /* A summary is user text of any length and any script: let it wrap inside the
@@ -1855,25 +1960,6 @@
 /* Sized down from `.btn.ghost`: this sits under a caption, not beside the
    input, and at full button size it competes with Add for the eye. */
 .today-swap { font-size: calc(11px * var(--fs-scale)); padding: 3px 8px; }
-
-/* ---- the nudge ---------------------------------------------------------
-   A band, not a dialog that opens itself. This tab is also the place you glance
-   at to see what is next, and a flow standing in front of that every morning is
-   the thing people turn off. It recedes into the page rather than sitting on
-   top of it: --bg-elev and a hairline, no shadow, no accent fill. */
-.today-band {
-  display: flex; align-items: center; gap: 10px;
-  margin: 0 var(--gutter) 6px;
-  padding: 9px 12px;
-  background: var(--bg-elev); border: 1px solid var(--rule-faint);
-  border-radius: var(--radius);
-}
-.today-band-text {
-  flex: 1; min-width: 0;
-  font-size: calc(13px * var(--fs-scale)); color: var(--fg-muted);
-}
-.today-band .btn, .today-band .icon-btn { flex: none; }
-.today-band-x { color: var(--fg-faint); }
 
 /* ---- the planning ritual -----------------------------------------------
    `.modal` supplies the frame, the elevation and the corner radius, and under
@@ -1917,8 +2003,15 @@
    this is a record of a finished decision. Nothing on the look-back scores a
    day, and a red number would be exactly that. */
 .today-committed-over {
-  margin: 0 0 10px; color: var(--fg-muted); line-height: 1.4;
-  font-size: calc(12px * var(--fs-scale));
+  /* THE PAGE GUTTER, which this had none of. `margin: 0 0 10px` and no
+     horizontal padding at all, on a direct child of `.scroll` — which pads
+     `0` horizontally — so the one sentence about a day started over its
+     capacity rendered flush against the window edge, 26px left of every row on
+     the screen it sits on. It is the reason the left-edge guard in
+     `layout.browser.test.tsx` now names this class. */
+  margin: 0; padding: 0 var(--gutter) 9px;
+  color: var(--fg-muted); line-height: 1.4;
+  font-size: calc(13px * var(--fs-scale));
 }
 
 /* ---- the shutdown ritual ------------------------------------------------
@@ -1963,28 +2056,77 @@
    one field in this app that takes a paragraph break, and collapsing them would
    hand back something the owner did not write. */
 .today-reflection-text {
-  margin: 0; padding: 0 var(--gutter) 10px;
-  font-size: calc(14px * var(--fs-scale)); color: var(--fg);
+  margin: 0; padding: 0 var(--gutter) 9px;
+  /* THE READING TIER, not the caption tier it was in. This is the only
+     paragraph on this screen in the owner's own words — everything around it
+     is the machine's record of the same day — so it takes the size the rows
+     take rather than a step under it. */
+  font-size: calc(15px * var(--fs-scale)); color: var(--fg);
   line-height: 1.5; white-space: pre-wrap;
 }
 
-/* ---- how full the day is -----------------------------------------------
-   Present only on a day that HAS a capacity. There is no empty state here on
-   purpose: an account that has never stated one gets no strip at all, because
-   the alternative is putting a number on the screen that nobody gave. */
+/* ---- the day's shape ---------------------------------------------------
+   How full the day is, and the offer to plan it — one strip that was two
+   stacked full-width blocks. The nudge band sat directly above this and both
+   describe the same day; together they cost ~120px before a single row, and
+   the band was inset `9px 12px` — a hardcoded horizontal that put its text at
+   gutter+12px, 38px against every row's 26px on a desktop and 26px against
+   14px on a phone. The one edge this screen keeps was broken by the block
+   whose whole job was to be glanced at.
+
+   There is still no empty state: an account that has never stated a capacity
+   gets no figure and no bar, because the alternative is putting a number on
+   the screen that nobody gave. What it may get instead is the offer, with a
+   sentence saying so — see `.today-load-say`. */
 .today-load {
-  padding: 4px var(--gutter) 10px;
-  display: flex; flex-direction: column; gap: 5px;
+  padding: 0 var(--gutter) 9px;
+  display: flex; flex-direction: column; gap: 4px;
 }
+/* `center`, not `baseline`. The line now carries two controls beside its text,
+   and a button left on a text baseline sits proud of it — the same finding the
+   header's `align-self` rules record, one screen down. */
 .today-load-line {
-  display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px;
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
   font-size: calc(11px * var(--fs-scale));
 }
 .today-load-fig { color: var(--fg); }
 .today-load-cal, .today-load-rest { color: var(--fg-faint); }
+/* WHAT THE STRIP SAYS WHEN THERE IS NO FIGURE. A sentence rather than a
+   number, so it takes the secondary tier and the page's own family rather than
+   the mono the figures wear — this is prose, and mono at 11px is a
+   measurement. It is the band's old voice, kept, for the one state the band
+   was the only thing that covered. */
+.today-load-say {
+  flex: 1; min-width: 0;
+  font-family: var(--sans); font-size: calc(13px * var(--fs-scale));
+  color: var(--fg-muted);
+}
+/* The offer, pushed to the end of whatever the line already says. `auto` and
+   not a spacer element: the line wraps, and a spacer would take a whole row to
+   itself the moment it did. */
+.today-load-plan { margin-left: auto; }
+.today-load-plan, .today-load-x { flex: none; }
+/* Waving the offer away. `.today-band-x` until the band it belonged to was
+   merged into this strip — renamed rather than left, because a class named for
+   a deleted element is a false trail for whoever greps it next. */
+.today-load-x { color: var(--fg-faint); }
+/* GHOST, and sized down from `.btn`'s own `9px 13px`.
+
+   It was solid — inherited from the nudge band, where it was right: the band
+   was an elevated surface with its own border, and a solid button inside a
+   frame reads as that frame's action. There is no frame now. A solid fill
+   sitting straight on the page made the offer to plan the day the loudest
+   thing on a tab whose subject is the rows underneath it — measured by eye in
+   all four theme/preset combinations, it beat every task on the screen.
+
+   Ghost keeps it a button and lets the day win. The strip is read at a glance
+   besides, unlike the add box above it, so it does not need the weight a
+   control beside an input does. */
+.today-load-plan { padding: 5px 10px; }
 
 /* A 3px rule rather than a chart. The figure above already says it in words;
-   this is only the shape of it, for the glance that does not stop to read. */
+   this is only the shape of it, for the glance that does not stop to read.
+   Painted only when there IS a capacity to be a fraction of. */
 .today-load-bar {
   height: 3px; background: var(--rule-faint); overflow: hidden;
 }
@@ -2068,17 +2210,22 @@
   white-space: nowrap;
 }
 
-/* Row controls: bare glyph buttons, like .task-actions. */
+/* Row controls: bare glyph buttons, like .task-actions.
+
+   ONE SIZE for both. They were 12px and 15px — two glyph buttons occupying the
+   same slot at the end of the same row, at two sizes, for no reason either of
+   them recorded. What separates them is colour and meaning: `✕` is faint and
+   appears on hover, `+` is accent and is always there. */
 .today-drop, .today-plus {
   background: none; border: 0; cursor: pointer; flex: none; line-height: 1;
-  font-family: var(--mono); font-size: calc(12px * var(--fs-scale));
+  font-family: var(--mono); font-size: calc(13px * var(--fs-scale));
   color: var(--fg-faint); padding: 2px 4px;
 }
 .today-drop { opacity: 0; transition: opacity 0.12s; }
 .today-row:hover .today-drop,
 .today-drop:focus-visible { opacity: 1; }
 .today-drop:hover { color: var(--warn); }
-.today-plus { color: var(--accent); font-size: calc(15px * var(--fs-scale)); }
+.today-plus { color: var(--accent); }
 /* A touchscreen has no pointer to hover with, so a control revealed only on
    hover is simply unreachable there — the same gap the :active rules in
    tokens.css exist to close for buttons. Dropping a row is the one way to take
@@ -2111,7 +2258,14 @@
    holds, and every one of them has to stay reachable. */
 @media (max-width: 720px) {
   .today-triage { flex-wrap: wrap; }
-  .today-triage-actions { width: 100%; padding-left: 26px; }
+  /* `var(--gutter)`, which this said `26px` for — the DESKTOP gutter, written
+     as a literal inside the one block where the gutter is 14px. So the wrapped
+     control row was indented 12px past every other left edge on the phone it
+     only exists for. It aims at the row's own edge rather than at the title's:
+     the title's depends on the plus button's padding, which this same block
+     changes, and a number computed from three moving parts is the thing that
+     drifted here in the first place. */
+  .today-triage-actions { width: 100%; padding-left: var(--gutter); }
 }
 
 /* ---- arranging the day -------------------------------------------------
@@ -2192,12 +2346,21 @@
    their padding out to the page gutter, since they sit in a full-width pane
    here rather than inside a popover. */
 .today-agenda .agenda-ev {
-  padding: 8px var(--gutter); font-size: calc(14px * var(--fs-scale));
+  padding: 6px var(--gutter); font-size: calc(13px * var(--fs-scale));
 }
 
-/* A quieter `.empty`, for the place that reports "nothing here" INSIDE the page
-   rather than instead of it. Colour and family stay inherited from `.empty`. */
-.today-quiet { padding: 8px var(--gutter); font-size: calc(13px * var(--fs-scale)); }
+/* "Nothing here" reported INSIDE the page rather than instead of it.
+
+   It used to be written `class="empty today-quiet"` and inherit from `.empty`,
+   which meant every use overrode two of that rule's three declarations —
+   `40px` of padding down to `8px` and `14px` down to `13px` — to keep one. A
+   class layered on another purely to undo it is not a variant, and it was one
+   of the things that made this tab's spacing read as arbitrary. It stands on
+   its own now and the JSX drops the `empty`. */
+.today-quiet {
+  padding: 6px var(--gutter); color: var(--fg-faint);
+  font-size: calc(13px * var(--fs-scale));
+}
 
 /* ---- habits ------------------------------------------------------------
    The repeating spine of the day, in its own group above it. Everything here
@@ -2315,38 +2478,110 @@
   font-size: calc(11px * var(--fs-scale)); color: var(--fg-faint); flex: none;
 }
 
-/* Plan / Review, on today only. `align-self` for the reason `.today-nav` and
-   `.today-habits-open` have it — `.content-head` aligns on the baseline, and a
-   word-bearing button left to that sits proud of everything beside it.
-   `.btn.ghost` already carries the pressed look through `:active`; what says
-   which half you are on is the LABEL, which names the destination rather than
-   the current state, plus `aria-pressed` for anyone who cannot see it. */
-.today-review { flex: none; align-self: center; }
+/* ---- the Today header's controls --------------------------------------
+   Three of them now: Plan/Review, Start working, and the overflow that holds
+   Shut down and Habits. All three carry the same two declarations, and both
+   halves are load-bearing rather than decorative.
 
-/* The way in to the shutdown ritual, beside Review. Same rule as its two
-   siblings and for the same reason — it had NEITHER half, being the one
-   word-bearing button in this header that shipped without a rule of its own, so
-   it sat 2.5px below Review and Habits (measured: top 77 against their 74.5)
-   and kept a shrinkable `flex: 0 1 auto` where they are `none`. */
-.today-shutdown { flex: none; align-self: center; }
+   `align-self: center` because `.content-head` aligns its children on the
+   BASELINE. A word-bearing button left to that hangs off the title's baseline
+   and sits a few pixels proud of everything beside it — measured at 2.5px when
+   `.today-shutdown` shipped without a rule of its own.
 
-/* The way in to the sheet, in the tab header. Deliberately in the Today header
-   rather than in Settings: the moment you want to change a habit is the morning
-   you are looking at it.
-   `align-self` for the same reason `.today-nav` has it — `.content-head` aligns
-   on the BASELINE, and a button left to that hangs off the title's baseline and
-   sits proud of everything beside it. It was an `.icon-btn` holding a single
-   glyph, which is square enough not to show it; a `.btn` holding a word is not. */
-/* No `margin-left`. It carried 10px from the commit that added habits, where
-   this was an `.icon-btn` holding a bare glyph and the ONLY button in the
-   header — the margin separated it from the counts text beside it. Review and
-   Shut down were added in front of it later and were never given one, so the
-   row read 12px, 12px, 22px: two buttons at the container's `gap` and the third
-   pushed out past both. Below 720px `.content-head` wraps, and there the same
-   10px indented Habits' whole row 10px right of every other left edge in the
-   header. The container's `gap` is the only spacing now, which is what makes
-   the three read as one group. */
-.today-habits-open { flex: none; align-self: center; }
+   `flex: none` because the header's flexible element is the spacer; a button
+   that could shrink would crush its own label on a narrow screen.
+
+   And NONE of them declares a margin. Habits once carried `margin-left: 10px`
+   from the commit that added it, when it was the only button in the header and
+   the margin separated it from the counts. Buttons added in front of it later
+   never got one, so the row read 12px, 12px, 22px — two at the container's
+   `gap` and the third pushed out past both. The container's `gap` is the only
+   spacing here, which is what makes them read as one group. */
+.today-acts {
+  display: flex; align-items: center; gap: 8px;
+  flex: none; align-self: center;
+}
+/* …and inside it, none of the three may shrink either: `.today-acts` is one
+   flex item to the header, but it is a flex CONTAINER to these, and a button
+   left shrinkable absorbs any shortfall alone and wraps its own label. That is
+   what `.today-shutdown` did between 721 and 795px, at 46px tall beside two
+   33px siblings. `align-self` is the container's job now (`align-items: center`
+   above), so it is not repeated here. */
+.today-review, .today-focus, .today-menu-btn { flex: none; }
+
+/* SIZED DOWN from `.btn.ghost`'s own `9px 13px`. Three bordered ghost buttons
+   at full size beside a 24px serif title read as a toolbar the tab is wearing
+   rather than as the tab's own actions; the header is a place you glance at,
+   and the rows below it are the content. The mobile block puts the full size
+   back — see the note there, this is under the 44px touch guideline. */
+.today-review, .today-focus, .today-menu-btn { padding: 7px 11px; }
+
+/* THE OVERFLOW ITSELF. A bare ⋯, and it is the one control in this header that
+   carries no word — which is exactly the shape the Habits button was moved OUT
+   of, so it needs saying why it is right here and was wrong there. A glyph is
+   honest when it names a container rather than a destination: ⋯ promises
+   "there is more", and what the more IS is then written out in words one tap
+   later. `↻` promised a specific feature and named it nowhere a phone could
+   reach. `aria-label` carries `today.moreActions` for anyone who cannot see it.
+
+   NO `line-height: 1`, which is the obvious thing to write on a button holding
+   one glyph and is wrong here: `.btn` takes the page's 1.5 and its siblings are
+   30px tall, so a 1 put this one at 27 — measured — and a row of three buttons
+   two of which are the same height is the exact defect the tests around this
+   header exist to catch. */
+
+/* THE POPOVER. `.menu` is the settings one and cannot be reused as it stands:
+   it hardcodes `top: calc(100% + 6px); right: 24px; width: 300px`, all three
+   anchored to the topbar's gear. This takes its SURFACE — the elevated
+   background, the hairline, the shadow — and anchors itself to the Today
+   header instead, on the page gutter so its right edge lines up with the
+   content's.
+
+   `min-width` rather than a width: two items whose labels are a word each, in
+   whatever language the reader has, size themselves better than any number
+   would. `position: relative` on `.today-head` is what this resolves against —
+   declared beside it below rather than left to `.content`, which is the
+   scroll container's parent and would put the popover in the wrong place. */
+.today-menu {
+  position: absolute; top: calc(100% - 4px); right: var(--gutter); z-index: 50;
+  min-width: 168px; max-width: calc(100vw - 2 * var(--gutter));
+  background: var(--bg-elev); border: 1px solid var(--rule);
+  border-radius: var(--radius); box-shadow: var(--shadow);
+  padding: 4px; display: flex; flex-direction: column;
+}
+/* A row in the popover, not a button in a row of buttons: full width, left
+   aligned, no border of its own. The type is the header's own mono micro-label
+   so the menu reads as part of this tab rather than as a system menu.
+   `min-height` is the touch guideline, and it is met by the ROW rather than by
+   a 44px tap box the way `.today-row`'s controls are — a full-width row has the
+   height to spare, and two 44px boxes centred on adjacent rows would overlap. */
+.today-menu-item {
+  background: none; border: 0; border-radius: var(--radius); cursor: pointer;
+  display: flex; align-items: center; gap: 7px;
+  padding: 9px 11px; min-height: 44px; text-align: left; white-space: nowrap;
+  font-family: var(--mono); font-size: calc(11px * var(--fs-scale));
+  text-transform: var(--label-case); letter-spacing: calc(0.06em * var(--tracking));
+  color: var(--fg-muted); transition: color 0.15s, background 0.15s;
+}
+/* The leading column, one width for every item whatever it puts in it — an
+   empty span on Shut down, a ↻ on Habits. Fixed rather than left to the
+   content for the reason `.today-kind-mark` is: the content is a glyph whose
+   advance moves with whichever family the theme picks, and a column sized to
+   it would be a different width per theme. 13px is the same figure that column
+   uses, arrived at the same way, but it is written out rather than sharing
+   `--today-mark-w`: that token is documented as the width of a ROW's kind
+   mark, and a menu is not a row. */
+.today-menu-glyph {
+  width: 13px; flex: none; text-align: center; line-height: 1;
+}
+
+/* Guarded like every other control in this app: on a touchscreen there is no
+   pointer to leave, so a hover style survives the tap that opened the thing the
+   item leads to. `:active` gives touch the same feedback and releases it. */
+@media (hover: hover) {
+  .today-menu-item:hover { color: var(--fg); background: var(--paper); }
+}
+.today-menu-item:active { color: var(--fg); background: var(--paper); }
 
 /* A button that reads as a link, for the two places habits are offered in the
    middle of a sentence. It has to be a BUTTON — it opens a dialog, it goes
@@ -2607,28 +2842,28 @@
 .focus-empty { margin: 0; font-family: var(--serif); font-size: clamp(20px, 3vw, 32px); font-weight: 500; }
 .focus-hint { margin: 0; font-size: calc(13px * var(--fs-scale)); color: var(--fg-muted); line-height: 1.4; max-width: 48ch; }
 
-/* The way in, in Today's header. Same rule as its three siblings (`.today-review`
-   et al.) and for the same reason. Below 720px the header is full — three
-   words already use 284 of 362px, measured — so the button keeps its word for
-   the accessible name and shows a glyph, the shape `.today-nav`'s arrows have. */
-.today-focus { flex: none; align-self: center; }
+/* The way in, in Today's header. `flex: none; align-self: center` is declared
+   with its two siblings inside the Today fence; only the word/glyph swap is
+   here, beside the surface it opens.
+
+   Below 720px the header is tight enough that this button keeps its word for
+   the accessible name and shows a glyph instead, the shape `.today-nav`'s
+   arrows have. It stays even though the header lost a control to the overflow
+   menu: what that bought was the count sharing the actions' row rather than
+   taking one of its own, and spending it again on this word would put the
+   third row straight back. */
 .today-focus__glyph { display: none; }
 @media (max-width: 720px) {
   .today-focus__word { display: none; }
   .today-focus__glyph { display: inline; }
   .today-focus { padding: 9px 9px; }   /* the siblings' height, narrower */
 }
-/* The narrowest phones. Measured in Chromium at 320px: Review 74, the glyph
-   27, Shut down 97, Habits 89 and three 12px gaps come to 323 of the 292 the
-   row has, and Habits wrapped alone onto a fourth line — the exact shape the
-   mobile block above was written to end. Habits already carries a glyph, so
-   at this width it keeps that and drops its word, the way Start working
-   does at 720; Review and Shut down keep theirs, being the two with nothing
-   else to say it. 261 of 292 after. */
-@media (max-width: 359px) {
-  .today-habits-open__word { display: none; }
-  .today-habits-open { padding: 9px 9px; }
-}
+/* The 359px block that used to sit here is gone with the button it governed.
+   It dropped the word from `.today-habits-open` on the narrowest phones,
+   because at 320px four named actions needed 323px of the 292 the row has and
+   Habits wrapped alone onto a fourth line. Habits is a row in the overflow
+   menu now and the header is three controls wide, so there is no width left to
+   save — and the `__word` span it reached for has gone with it. */
 
 /* What a focus session actually spent on a row, in the look-back only, sized
    and coloured exactly as the estimate it sits beside — a measurement next to

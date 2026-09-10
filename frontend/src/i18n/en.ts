@@ -762,6 +762,9 @@ export const en = {
   'today.countDone': '{done} done · {total} on the day',
   'today.modePlan': 'Plan',
   'today.modeReview': 'Review',
+  // The header's overflow control. Its NAME rather than its glyph: the button
+  // paints a bare ⋯, so this is the only thing that ever says what it opens.
+  'today.moreActions': 'More actions',
   'today.shutDown': 'Shut down',
   'today.habits': 'Habits',
   'today.addAria': 'Add to today',
@@ -778,7 +781,6 @@ export const en = {
   'today.makeItTask': 'Make it a task',
   'today.listForNewTask': 'List for the new task',
   'today.bandNoCapacity': 'Plan your day — say how long it is, then what goes on it.',
-  'today.bandCapacity': 'Plan your day — {capacity} to work with.',
   'today.planMyDay': 'Plan my day',
   'today.notNow': 'Not now',
   'today.loadFigure': '{planned} of {capacity}',

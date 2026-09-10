@@ -427,7 +427,9 @@ describe('<TodayView> the day picker', () => {
     expect(await screen.findByLabelText('Add to today')).toBeInTheDocument()
     expect(await screen.findByRole('button', { name: 'Add Due today to today' }))
       .toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Habits' })).toBeInTheDocument()
+    // Habits is a row in the header's ⋯ popover now, so what is on the screen
+    // for today is the popover's trigger; the item itself is one tap in.
+    expect(screen.getByRole('button', { name: 'More actions' })).toBeInTheDocument()
 
     await back(user)
     await screen.findByText('Water the plants')
@@ -441,14 +443,18 @@ describe('<TodayView> the day picker', () => {
     expect(screen.queryByRole('button', { name: /^uncheck /i })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /^remove /i })).not.toBeInTheDocument()
     // The habits sheet writes rules, and its whole feedback loop is the day
-    // behind it — which a past day cannot show.
-    expect(screen.queryByRole('button', { name: 'Habits' })).not.toBeInTheDocument()
+    // behind it — which a past day cannot show. The whole ⋯ popover is gated
+    // the same way, so the TRIGGER is what has to be absent: asserting only
+    // that the item is missing would pass on any day, the item being one tap
+    // behind a control that is not there.
+    expect(screen.queryByRole('button', { name: 'More actions' })).not.toBeInTheDocument()
     // …and the heading says which of the two screens this is.
     expect(screen.getByText('Look back')).toBeInTheDocument()
   })
 
   it('leaves the habits sheet behind when the day moves', async () => {
     const user = setup()
+    await user.click(await screen.findByRole('button', { name: 'More actions' }))
     await user.click(await screen.findByRole('button', { name: 'Habits' }))
     expect(await screen.findByRole('dialog', { name: 'Habits' })).toBeInTheDocument()
 
@@ -1356,7 +1362,10 @@ describe('<TodayView> the week behind the day', () => {
     // one moment the question is worth asking.
     m.completedCounts.mockImplementation(() => new Promise(() => {}))
     setup()
-    await screen.findByRole('button', { name: 'Habits' })
+    // A sentinel for "the header has painted", nothing more — so it has to be
+    // something the header renders unconditionally on today, not something now
+    // behind the ⋯ popover.
+    await screen.findByRole('button', { name: 'More actions' })
     expect(screen.queryByText(/finished this week/)).not.toBeInTheDocument()
   })
 
@@ -1809,6 +1818,7 @@ describe('<TodayView> the planning ritual', () => {
 describe('<TodayView> the shutdown ritual', () => {
   /** Open the ritual and hand back the dialog. */
   const open = async (user: ReturnType<typeof setup>) => {
+    await user.click(await screen.findByRole('button', { name: 'More actions' }))
     await user.click(await screen.findByRole('button', { name: 'Shut down' }))
     return screen.findByRole('dialog', { name: 'Shut down the day' })
   }
@@ -1828,11 +1838,17 @@ describe('<TodayView> the shutdown ritual', () => {
     // prompting for. A band offering to close the day would be on screen from
     // breakfast onwards, nagging about an evening that has not arrived.
     m.openDay.mockResolvedValue(plan([entry({ title: 'Water the plants' })]))
-    setup()
+    const user = setup()
     await screen.findByText('Water the plants')
 
     expect(screen.queryByRole('dialog', { name: 'Shut down the day' })).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Shut down' })).toBeInTheDocument()
+    // Silent until asked, and now one tap in: the way to a shutdown is the
+    // header's ⋯ popover. Both halves are asserted — that the trigger is there,
+    // and that the item is behind it — because either alone would pass on a
+    // build where the other had gone.
+    expect(screen.getByRole('button', { name: 'More actions' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'More actions' }))
+    expect(await screen.findByRole('button', { name: 'Shut down' })).toBeInTheDocument()
   })
 
   it('is absent on a day that has already happened', async () => {
@@ -1842,6 +1858,10 @@ describe('<TodayView> the shutdown ritual', () => {
     const user = setup()
     await user.click(await screen.findByRole('button', { name: 'Previous day' }))
     await screen.findByText('Yesterday')
+    // The TRIGGER, not the item. Both of the popover's items are gated on
+    // today, so the popover goes with them — and asserting the item alone would
+    // pass on any day, it being one tap behind a control that is not rendered.
+    expect(screen.queryByRole('button', { name: 'More actions' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Shut down' })).not.toBeInTheDocument()
   })
 
@@ -2305,15 +2325,29 @@ describe('<TodayView> how full the day is', () => {
     expect(await row('Unmeasured')).not.toHaveTextContent('over')
   })
 
-  it('says nothing at all when no capacity has ever been given', async () => {
+  it('puts no number on a day whose capacity has never been given', async () => {
     // THE CASE THAT MATTERS MOST. An account that has not stated a capacity
-    // gets no strip, no total and no warning — because there is no honest
-    // number to put in one, and inventing an eight-hour day for them is the one
-    // thing this feature must not do.
+    // gets no total, no bar and no warning — because there is no honest number
+    // to put in one, and inventing an eight-hour day for them is the one thing
+    // this feature must not do.
+    //
+    // Asserted PART BY PART rather than as the absence of the strip, which is
+    // what this said when the planning nudge was a separate band stacked above
+    // it. The two are one strip now, so on a day like this the element is
+    // present carrying the offer alone — and `.today-load` being null would no
+    // longer mean "said nothing", it would mean "said nothing AND did not
+    // offer". Each thing that would be a claim about the day's size is named
+    // here instead, so the guarantee survives the two blocks being one.
     m.openDay.mockResolvedValue(plan([entry({ title: 'Water the plants', estimate_minutes: 30 })]))
     setup()
     await screen.findByText('Water the plants')
-    expect(document.querySelector('.today-load')).toBeNull()
+    expect(document.querySelector('.today-load-fig'), 'a figure over no capacity').toBeNull()
+    expect(document.querySelector('.today-load-bar'), 'a fraction of nothing').toBeNull()
+    expect(document.querySelector('.today-load-over'), 'over a capacity nobody gave').toBeNull()
+    expect(screen.queryByText(/of \d/), 'a total the owner never asked for').toBeNull()
+    // …and what it DOES say: the offer to state one, which is the only honest
+    // thing on the screen for this account.
+    expect(screen.getByRole('button', { name: 'Plan my day' })).toBeInTheDocument()
   })
 
   it('totals only the rows that carry an estimate', async () => {
@@ -2490,6 +2524,7 @@ describe('<TodayView> estimating a row', () => {
     m.openDay.mockResolvedValue(plan([entry({ title: 'Water the plants' })]))
     const user = setup()
     await screen.findByText('Water the plants')
+    await user.click(await screen.findByRole('button', { name: 'More actions' }))
     await user.click(screen.getByRole('button', { name: 'Habits' }))
     await screen.findByRole('dialog', { name: 'Habits' })
 
@@ -3288,7 +3323,12 @@ describe('<TodayView> finding habits', () => {
     // The control was a bare ↻ whose only human-readable name lived in `title`
     // — a tooltip, which does not exist on a touchscreen. So on a phone the one
     // entry point to the feature was an unexplained symbol.
-    setup()
+    // It is a row in the header's ⋯ popover now, and the guarantee is the same
+    // one: whatever surface it sits on, the word is on it. That is also the
+    // reason the four header controls did not simply become icons — it would
+    // have put every one of them back where this finding started.
+    const user = setup()
+    await user.click(await screen.findByRole('button', { name: 'More actions' }))
     const btn = await screen.findByRole('button', { name: 'Habits' })
     expect(btn.textContent).toContain('Habits')
     // The glyph is decorative and must stay OUT of the accessible name — this
@@ -3340,6 +3380,7 @@ describe('<TodayView> finding habits', () => {
     await user.click(await screen.findByRole('button', { name: 'Previous day' }))
     await screen.findByText('Yesterday')
 
+    expect(screen.queryByRole('button', { name: 'More actions' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Habits' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Set one up' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'set up a habit' })).not.toBeInTheDocument()
@@ -3747,6 +3788,7 @@ describe('<TodayView> the weekly count', () => {
 
 describe('<TodayView> the habits sheet', () => {
   const openSheet = async (user: ReturnType<typeof userEvent.setup>) => {
+    await user.click(await screen.findByRole('button', { name: 'More actions' }))
     await user.click(await screen.findByRole('button', { name: 'Habits' }))
     return screen.findByRole('dialog', { name: 'Habits' })
   }
@@ -4047,6 +4089,7 @@ describe('<TodayView> the disk mirror', () => {
     cacheHabits([habit({ id: 'hb1', title: 'Read' })])
     m.habits.mockReturnValue(held<Habit[]>().promise)
     const user = setup()
+    await user.click(await screen.findByRole('button', { name: 'More actions' }))
     await user.click(await screen.findByRole('button', { name: 'Habits' }))
     await screen.findByRole('dialog', { name: 'Habits' })
 
@@ -4229,6 +4272,7 @@ describe('<TodayView> painting a write before it lands', () => {
 
 describe('<TodayView> the habits sheet, before the server answers', () => {
   const openSheet = async (user: ReturnType<typeof userEvent.setup>) => {
+    await user.click(await screen.findByRole('button', { name: 'More actions' }))
     await user.click(await screen.findByRole('button', { name: 'Habits' }))
     return screen.findByRole('dialog', { name: 'Habits' })
   }
