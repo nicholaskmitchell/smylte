@@ -410,9 +410,22 @@ public sealed class MainForm : Form, IDesktopBridge
         });
     }
 
+    /// INVOKE, not BeginInvoke, and it belongs with Float/Dock/Pin above rather
+    /// than with Appearance below. LocalServer answers this POST with `State()`,
+    /// and the page reconciles its dropdown and its checkbox from that answer —
+    /// so a fire-and-forget dispatch returns the state as it was BEFORE the
+    /// choice landed, and the page dutifully sets the control back to what the
+    /// user just changed it from.
+    ///
+    /// It was BeginInvoke, and the symptom was a race: on Windows the posted
+    /// message usually ran before the listener thread got to State(), so the
+    /// answer was usually right. The GTK client made it deterministic — the
+    /// same code, reliably in the wrong order — which is how it was noticed at
+    /// all. `resolved` is the giveaway either way: only the host can compute
+    /// it, so a stale answer cannot be papered over on the page.
     void IDesktopBridge.Icon(string? choice, bool startMenuShortcut)
     {
-        BeginInvoke(() =>
+        Invoke(() =>
         {
             _settings.IconChoice = IconLibrary.Parse(choice).ToString();
             _settings.StartMenuShortcut = startMenuShortcut;

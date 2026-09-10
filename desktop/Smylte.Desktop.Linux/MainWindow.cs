@@ -310,6 +310,10 @@ internal sealed class MainWindow : IDesktopBridge
         });
     }
 
+    /// Post, deliberately: `State()` carries nothing this changes, and the page
+    /// throws the answer away (`void call(...)`). It also fires on every theme
+    /// change, so blocking a listener thread on the GTK thread for it would put
+    /// a round trip in the path of a colour the user is dragging.
     void IDesktopBridge.Appearance(string? background) => Post(() =>
     {
         var colour = Theme.ParseHex(background);
@@ -319,7 +323,12 @@ internal sealed class MainWindow : IDesktopBridge
         TrySave();
     });
 
-    void IDesktopBridge.Icon(string? choice, bool startMenuShortcut) => Post(() =>
+    /// Invoke, with Float/Dock/Pin — not Post. The page reconciles its dropdown
+    /// and its checkbox from this call's answer, and that answer is `State()`,
+    /// so the change has to have landed before it is read. Posted, the reply
+    /// carries the OLD choice and the page sets the control back to what the
+    /// user just changed it from.
+    void IDesktopBridge.Icon(string? choice, bool startMenuShortcut) => Invoke(() =>
     {
         _settings.IconChoice = IconChoices.Parse(choice).ToString();
         _settings.StartMenuShortcut = startMenuShortcut;

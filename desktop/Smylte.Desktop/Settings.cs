@@ -134,14 +134,49 @@ public sealed class Settings
 
     /// `%APPDATA%\Smylte` on Windows; `$XDG_CONFIG_HOME/Smylte`, i.e.
     /// `~/.config/Smylte`, on Linux — .NET already maps ApplicationData that
-    /// way, so this line needed no change to become XDG-correct.
+    /// way, so no second spelling is needed to be XDG-correct.
     ///
     /// `internal` rather than `private` so PasswordProtector can put its key
     /// file beside settings.json. It is the one directory this client owns per
     /// user on both systems, and a second way of naming it would be a second
     /// thing to keep in step.
-    internal static string Dir => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Smylte");
+    internal static string Dir => Path.Combine(ConfigHome, "Smylte");
+
+    /// `$XDG_CONFIG_HOME` / `%APPDATA%`, and `$XDG_DATA_HOME` / `%LOCALAPPDATA%`.
+    internal static string ConfigHome => Home(Environment.SpecialFolder.ApplicationData, ".config");
+    internal static string DataHome => Home(Environment.SpecialFolder.LocalApplicationData, ".local/share");
+
+    /// A user directory that is always ABSOLUTE, even on a machine where it does
+    /// not exist yet.
+    ///
+    /// `Environment.GetFolderPath(folder)` defaults to `SpecialFolderOption.None`,
+    /// which VERIFIES the directory and returns an EMPTY STRING when it is
+    /// missing or unreadable. Everything downstream then does
+    /// `Path.Combine("", "Smylte", "settings.json")` and writes a relative path —
+    /// so on a fresh account, a minimal container, or any user whose
+    /// `~/.config` no XDG application has created yet, the file holding the
+    /// encrypted password lands in whatever the working directory happened to
+    /// be. Silent, and impossible to notice from inside the app: it saves, it
+    /// loads, and it follows the user around by `cd`.
+    ///
+    /// Found by running the Linux client with XDG_DATA_HOME pointed at a
+    /// directory that did not exist, which is why it is fixed here rather than
+    /// only there — `%APPDATA%` always exists, so Windows was never going to
+    /// show this, but the line was the same line.
+    ///
+    /// `Create` asks for the directory to be made (0700 on Unix) and returns
+    /// the path. It can still come back empty if creation fails, so `$HOME` is
+    /// the floor beneath it, and the current directory beneath that — by then
+    /// there is nowhere better, and an absolute path is still better than a
+    /// relative one.
+    private static string Home(Environment.SpecialFolder folder, string fallback)
+    {
+        var path = Environment.GetFolderPath(folder, Environment.SpecialFolderOption.Create);
+        if (!string.IsNullOrEmpty(path)) return path;
+
+        var home = Environment.GetEnvironmentVariable("HOME");
+        return Path.GetFullPath(string.IsNullOrEmpty(home) ? fallback : Path.Combine(home, fallback));
+    }
 
     private static string FilePath => Path.Combine(Dir, "settings.json");
 
@@ -163,8 +198,7 @@ public sealed class Settings
 
     private static Settings Fresh() => new()
     {
-        DataFolder = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Smylte"),
+        DataFolder = Path.Combine(DataHome, "Smylte"),
     };
 
     public void Save()
