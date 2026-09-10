@@ -26,12 +26,13 @@ namespace Smylte.Desktop;
 /// nicety, and failing to write one must not cost anyone their window.
 internal static class DesktopEntry
 {
-    /// `$XDG_DATA_HOME/applications`, which is where a per-user entry goes.
-    /// .NET maps `LocalApplicationData` to `$XDG_DATA_HOME` (default
-    /// `~/.local/share`), so this is the one line that would otherwise need an
-    /// environment variable read.
-    private static string DataHome =>
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+    /// `$XDG_DATA_HOME`, which is where a per-user entry and its icons go.
+    ///
+    /// Through Settings rather than through `GetFolderPath` directly, because
+    /// the default overload returns an empty string for a directory that does
+    /// not exist yet — and a relative `applications/…​.desktop` is an entry no
+    /// launcher will ever find. See Settings.Home for the whole of it.
+    private static string DataHome => Settings.DataHome;
 
     /// The basename MUST equal the application id. Three things have to agree
     /// or the shell shows a running window under a generic icon: this filename,
