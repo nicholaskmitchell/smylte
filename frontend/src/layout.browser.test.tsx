@@ -153,6 +153,66 @@ describe("the Today header's buttons sit on one line", () => {
       .toBe(+(focus.left - review.right).toFixed(1))
   })
 
+  it('and every figure in the row sits on the buttons\' centre line', async () => {
+    // `.content-head` aligns its children on the BASELINE, which is right for a
+    // header that is a title and a label and wrong for this one. Every CONTROL
+    // here had already opted out of it one at a time — `.today-nav` and
+    // `.today-acts` each carry an `align-self: center` — which left the three
+    // FIGURES as the only children still on it, hanging off the 24px serif
+    // title's baseline. Measured in this harness at 1100px before the fix:
+    // buttons and nav centred at 29, the date, the week's total and the day's
+    // count at 33.25 and 32.25 — a row whose text sits four pixels below the
+    // buttons it shares a line with.
+    //
+    // `.today-head { align-items: center }` is one declaration on the container
+    // rather than a fourth, fifth and sixth `align-self`, and it has to WIN
+    // over `.content-head`'s at equal specificity — which is the defect family
+    // this whole file exists for, and is why this is measured rather than read
+    // out of the stylesheet.
+    //
+    // At a width where the header is one row, so "the same centre line" is a
+    // question with an answer. Every visible child, rather than the three
+    // figures by name: what has to hold is that nothing in this header is left
+    // on the baseline, including whatever is added to it next.
+    await viewport(1200)
+    const host = await mount(TODAY_HEADER)
+    const head = host.querySelector('.content-head')!
+    const mid = (r: DOMRect) => (r.top + r.bottom) / 2
+    const band = mid(head.getBoundingClientRect())
+    const kids = [...head.children]
+      .filter((c) => getComputedStyle(c).display !== 'none')
+      .map((c) => ({ cls: c.className, r: c.getBoundingClientRect() }))
+      .filter((k) => k.r.height > 0)
+
+    expect(kids.length, 'the fixture stopped rendering the header').toBeGreaterThan(5)
+    for (const k of kids) {
+      expect(Math.abs(mid(k.r) - band),
+        `\`${k.cls}\` is centred at ${mid(k.r).toFixed(2)} against the header's `
+        + `${band.toFixed(2)} — it is still on the baseline`)
+        .toBeLessThanOrEqual(1)
+    }
+  })
+
+  it('and the three figures are one size, not two', async () => {
+    // `.today-week` colours the week's total and nothing else; `.content-sub`
+    // is what makes a header figure 11px mono in the label case. The component
+    // shipped the span as `today-week mono` alone, so it inherited the page's
+    // 15px body type and read half again as large as the date and the count
+    // either side of it.
+    //
+    // This fixture has always carried `content-sub`, which is exactly why the
+    // measured suite could not catch it — the class list is held to the JSX by
+    // `TodayView.test.tsx`, and this pins the consequence: the three figures
+    // are one type, whatever the cascade does to them.
+    await viewport(1200)
+    const host = await mount(TODAY_HEADER)
+    const size = (sel: string) => getComputedStyle(host.querySelector(sel)!).fontSize
+
+    expect(size('.today-week'), 'the week\'s total is not the date\'s size')
+      .toBe(size('.content-sub'))
+    expect(size('.today-count')).toBe(size('.content-sub'))
+  })
+
   it('and every wrapped row starts on the page gutter at 390px', async () => {
     // Below 720px `.content-head` wraps. `margin-left` on the last button put
     // its whole row 10px right of every other left edge in the header —
@@ -268,6 +328,128 @@ describe('the Today tab has one left edge on a phone', () => {
     expect([...new Set(edges.values())], 'the Today tab renders as a staircase: '
       + `${[...edges].map(([s, px]) => `${s} ${px}px`).join(', ')}`)
       .toHaveLength(1)
+  })
+})
+
+// ── one centre line across the two lists ────────────────────────────────────
+
+describe("a Today row's furniture sits where the Tasks tab's does", () => {
+  // Reported by eye: the coloured squares on the Today tab are not centred the
+  // way the Tasks tab's are — and what was actually a pixel out was the TICK
+  // beside them, which is the bigger of the two marks and the one that made the
+  // pair read crooked.
+  //
+  // `.check` carries `margin-top: 2px`, written for `.task` — a row that is
+  // `align-items: flex-start`, where the margin is what drops the tick from the
+  // top of the row onto the first line of the title. `.today-row` CENTRES, so
+  // that margin is added to a box which is then centred WITH it, and the
+  // control lands half the margin below the middle of everything beside it, for
+  // a reason belonging to the other tab. `.dash-day-row` met this exactly when
+  // the dashboard borrowed the control for a centred row and neutralised it
+  // there; the Today tab never did.
+  //
+  // Measured in this harness at 900px, as an offset down a title line whose own
+  // cap-height centre is 10.5 and whose box centre is 11.25: Today's tick at
+  // 12.25 and mark at 11.25 before, both 11.25 after, against the Tasks tab's
+  // dot at 10.91 and tick at 10.5.
+  //
+  // Measured with the REAL faces, which is not a detail: `.list-dot` is placed
+  // by `vertical-align: middle`, so where it lands is a fact about Inter's
+  // x-height. A rig that failed to load the self-hosted woff2 put it a whole
+  // pixel off and made the mark look like the defect — the harness waits on
+  // `document.fonts` for exactly this reason.
+  //
+  // The assertion is a COMPARISON between the two tabs rather than a pinned
+  // number, because "the same as the Tasks tab" is the whole of the finding —
+  // and a pinned pixel would fail on the fraction the two engines disagree
+  // about in their font metrics.
+  //
+  // A title short enough not to WRAP, at every width this runs at, and the
+  // assertion below says so rather than trusting it. The two tabs genuinely
+  // diverge on a wrapped title — `.today-row` centres its furniture on the
+  // whole row, so a three-line title puts the tick and the square in the
+  // middle of the block, where the Tasks tab's stay on the first line, because
+  // `.list-dot` is INLINE in the title and `.task` aligns on `flex-start`.
+  // That is a difference in what the two rows are, not a pixel out of place,
+  // and changing it means changing what `.today-row` centres — which the
+  // estimate, the due date and the ✕ beside it were laid out around. Out of
+  // scope for this finding, and named here so the next person meets it as a
+  // decision rather than as this test having quietly never covered it.
+  const ROWS = `
+    <div class="shell"><div class="content today-pane"><ul class="today-list">
+      <li class="today-row">
+        <button class="check">&#10003;</button>
+        <span class="today-kind-mark" data-kind="task"><span class="today-kind-box"></span></span>
+        <span class="today-title">Hxxg</span>
+        <span class="today-est mono">25m</span><span class="today-due mono">Aug 28</span>
+        <button class="today-drop">&#10005;</button></li>
+    </ul></div></div>
+    <div class="shell"><div class="content">
+      <div class="task"><div class="pri-bar"></div><button class="check">&#10003;</button>
+        <div class="task-body"><div class="task-title">
+          <span class="list-dot"></span>Hxxg</div></div></div>
+    </div></div>`
+
+  /** A box's centre, as an offset from the top of the title line beside it —
+   *  the two lists are mounted one above the other, so absolute tops are not
+   *  comparable and offsets are. */
+  const off = (host: Element, mark: string, title: string) => {
+    const m = host.querySelector(mark)!.getBoundingClientRect()
+    const t = host.querySelector(title)!.getBoundingClientRect()
+    return +(((m.top + m.bottom) / 2) - t.top).toFixed(2)
+  }
+
+  // Desktop and phone: the mobile block gives every control in a Today row a
+  // 44px `::after` tap box and grows the estimate cell, which makes the row
+  // much taller than its title — the arrangement where "centred on what?" has
+  // two different answers.
+  it.each([900, 390])('the tick and the kind mark, at %ipx', async (w) => {
+    await viewport(w)
+    const host = await mount(ROWS)
+
+    // Same title, same type, so the line the two are measured against is the
+    // same one — a guard against the fixture drifting into comparing a 15px
+    // row with a 13px one.
+    const today = host.querySelector('.today-title')!
+    const tasks = host.querySelector('.task-title')!
+    expect(getComputedStyle(today).fontSize).toBe(getComputedStyle(tasks).fontSize)
+    // …and ONE LINE in both, which is what makes "how far down the title" the
+    // same question on both sides. See the note on the fixture: a wrapped title
+    // is a difference between the two rows rather than a misalignment, and a
+    // fixture that started wrapping would turn this into a test of that instead.
+    const line = parseFloat(getComputedStyle(today).lineHeight)
+    for (const [name, el] of [['Today', today], ['Tasks', tasks]] as const) {
+      expect(el.getBoundingClientRect().height,
+        `the ${name} fixture's title wrapped at ${w}px`).toBeLessThan(line * 1.5)
+    }
+
+    // THE SQUARE against the Tasks tab's dot, and this one holds on both sides
+    // of the fix — 11.25 against 10.91, by two different routes: the Today mark
+    // is centred in the line box, the Tasks dot is placed on Inter's x-height by
+    // `vertical-align: middle` and then lifted a pixel. It is here as the
+    // invariant the finding was reported against rather than as the thing that
+    // changed, and it is the one that would catch the tempting over-correction:
+    // adding `.list-dot`'s optical lift to a mark that is already centred takes
+    // this to 0.66 THE OTHER WAY and moves the square away from the tab it is
+    // supposed to match.
+    const mark = off(host, '.today-kind-box', '.today-title')
+    const dot = off(host, '.list-dot', '.task-title')
+    expect(Math.abs(mark - dot),
+      `the Today tab's square sits at ${mark} down its title where the Tasks `
+      + `tab's dot sits at ${dot}`).toBeLessThanOrEqual(0.75)
+
+    // THE TICK beside it, which is what was actually a pixel out. Held to the
+    // square in its OWN row rather than to the Tasks tab's tick: `--check-size`
+    // is 17px on a desktop and 21px on a phone, and the other tab's tick is
+    // placed from the TOP of a `flex-start` row, so where it lands there moves
+    // with the control's size (10.5 at 900px, 12.5 at 390px) while a centred one
+    // does not. "The two marks on this row share a centre line" is the same
+    // claim without the size dependency, and it is 1.0 before the fix and 0.0
+    // after at both widths.
+    const tick = off(host, '.today-row .check', '.today-title')
+    expect(Math.abs(tick - mark),
+      `the tick is at ${tick} and the square beside it at ${mark} — they do not `
+      + 'share a centre line').toBeLessThanOrEqual(0.5)
   })
 })
 

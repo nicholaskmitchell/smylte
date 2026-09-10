@@ -1882,6 +1882,34 @@
    than on `.content`, which is the scroll container's parent and would put the
    popover at the top of the pane instead of under the button that opened it. */
 .today-head { position: relative; }
+
+/* CENTRED, where `.content-head` puts its children on the BASELINE.
+
+   The baseline is right for a header that is a title and a label — Tasks and
+   Calendar are exactly that, and they keep it. It is wrong for this one, which
+   is a title, a two-button nav, three figures and three bordered buttons on one
+   row: a baseline hangs every word-bearing box off the 24px serif title's
+   baseline, and every box whose type is smaller than that then sits low. Every
+   control here already opted out of it one at a time — `.today-nav` and
+   `.today-acts` each carry an `align-self: center` with a comment saying so —
+   which left the three FIGURES as the only children still on the baseline, so
+   the date, the week's total and the day's count read 4.25px below the buttons
+   they share the row with. Measured in this harness at 1100px: figures centred
+   at 33.25, everything else at 29.
+
+   One declaration on the container rather than a fourth, fifth and sixth
+   `align-self`, because the next thing added to this header would have needed a
+   seventh. The two `align-self: center` declarations stay: they are now
+   belt-and-braces rather than the mechanism, and they are what the assertions in
+   `layout.browser.test.tsx` were written against.
+
+   Scoped to `.today-head`, so no other tab's header moves — the same argument
+   the mobile block makes for dropping the spacer here and nowhere else. It wins
+   over `.content-head`'s `align-items` on source order at equal specificity,
+   which is the arrangement every other `.today-head` declaration in this fence
+   already depends on (`padding`, above). */
+.today-head { align-items: center; }
+
 /* The week's total, beside the date. Quiet: the count on the other side of the
    header describes the work in front of the owner, and this one is context
    rather than an instruction.
@@ -2156,6 +2184,30 @@
 /* Stands in for the checkbox on a row that has nothing to tick, and has to be
    exactly as wide as `.check` or the titles of a mixed list stop lining up. */
 .today-check-gap { width: var(--check-size); flex: none; }
+
+/* THE TICK, off the OTHER tab's row model.
+
+   `.check` carries `margin-top: 2px`, and that margin belongs to `.task`, whose
+   row is `align-items: flex-start`: there it is what drops the tick from the top
+   of the row onto the first line of the title. THIS row centres, so the margin
+   is added to the box that is then centred WITH it, and the control lands half
+   the margin — a pixel — below the middle of everything beside it. The square
+   in the kind column next to it is centred properly, which is what made it
+   visible: a tick and a 7px mark, adjacent, a pixel out.
+
+   Measured in `layout.browser.test.tsx` at 900px, as an offset down a title
+   line whose own cap-height centre is 10.5 and whose box centre is 11.25: the tick at 12.25 and
+   the mark at 11.25 before, both 11.25 after, against the Tasks tab's 10.5 and
+   10.91. Everything on this row's left is inside three quarters of a pixel of
+   where the other list puts the same two things now, where the tick alone was
+   1.75px out.
+
+   `.dash-day-row` met this exactly when the dashboard borrowed the control for a
+   centred row, and neutralises it the same way with the same reasoning written
+   beside it — the Today tab was the centred row that never did. NOT fixed on
+   `.check` itself, which would be the third row model's turn to break: the
+   margin is right where it was written. */
+.today-row .check { margin-top: 0; }
 .today-title {
   flex: 1; min-width: 0; font-size: calc(15px * var(--fs-scale)); color: var(--fg);
   overflow-wrap: anywhere;                  /* see `.task-title` */
