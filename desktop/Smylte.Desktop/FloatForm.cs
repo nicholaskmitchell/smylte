@@ -257,42 +257,32 @@ public sealed class FloatForm : Form
         base.WndProc(ref m);
     }
 
-    /// Which edge or corner of the ring a client point is on, or HTCLIENT. The
-    /// inner rectangle is `DisplayRectangle` — the client area minus the
-    /// padding — so the answer is right at any DPI without a second constant.
-    /// Corners take three rings' width so they can actually be grabbed.
+    /// Which edge or corner of the ring a client point is on, or HTCLIENT.
+    ///
+    /// The arithmetic itself is FloatRing, shared with the Linux client, which
+    /// asks the same question from a gesture rather than from a message. This
+    /// end contributes the two things that are genuinely Win32: the coordinate
+    /// space (client, already DPI-scaled by `Padding`) and the HT* codes
+    /// WM_NCHITTEST wants back.
     private int HitRing(Point p)
     {
-        var inner = DisplayRectangle;
-        if (!ClientRectangle.Contains(p) || inner.Contains(p)) return HtClient;
-        var corner = Padding.Left * 3;
-        var left = p.X < inner.Left + corner;
-        var right = p.X >= inner.Right - corner;
-        var top = p.Y < inner.Top + corner;
-        var bottom = p.Y >= inner.Bottom - corner;
-        var onLeft = p.X < inner.Left;
-        var onRight = p.X >= inner.Right;
-        var onTop = p.Y < inner.Top;
-        var onBottom = p.Y >= inner.Bottom;
-        if (onTop || onBottom)
+        // Padding.Left rather than the logical constant, because WinForms has
+        // already scaled it for this monitor — the ring is six pixels at 100%
+        // and nine at 150%, and the hit test has to match what is drawn.
+        var edge = FloatRing.HitTest(ClientRectangle.Width, ClientRectangle.Height,
+            Padding.Left, p.X, p.Y);
+        return edge switch
         {
-            if (left) return onTop ? HtTopLeft : HtBottomLeft;
-            if (right) return onTop ? HtTopRight : HtBottomRight;
-            return onTop ? HtTop : HtBottom;
-        }
-        if (onLeft)
-        {
-            if (top) return HtTopLeft;
-            if (bottom) return HtBottomLeft;
-            return HtLeft;
-        }
-        if (onRight)
-        {
-            if (top) return HtTopRight;
-            if (bottom) return HtBottomRight;
-            return HtRight;
-        }
-        return HtClient;
+            RingEdge.Left => HtLeft,
+            RingEdge.Right => HtRight,
+            RingEdge.Top => HtTop,
+            RingEdge.Bottom => HtBottom,
+            RingEdge.TopLeft => HtTopLeft,
+            RingEdge.TopRight => HtTopRight,
+            RingEdge.BottomLeft => HtBottomLeft,
+            RingEdge.BottomRight => HtBottomRight,
+            _ => HtClient,
+        };
     }
 
     /// The fallback drag, for a runtime that cannot do `app-region: drag`. Only

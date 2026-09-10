@@ -352,6 +352,31 @@ public static class Updater
     /// What the launched client is told, so it waits for this one to leave.
     public const string AfterUpdateFlag = "--after-update";
 
+    /// The process id in `--after-update <pid>`, or null when the flag is
+    /// absent or malformed.
+    ///
+    /// Here rather than in either Program.cs because both clients parse it and
+    /// the parse has three ways to be wrong that all look alike from the
+    /// outside — the flag last with nothing after it, a non-numeric argument,
+    /// and the flag never passed at all. All three mean the same thing (do not
+    /// wait) and none of them is a reason to refuse to start.
+    public static int? AfterUpdatePid(string[] args)
+    {
+        var at = Array.IndexOf(args, AfterUpdateFlag);
+        if (at < 0 || at + 1 >= args.Length) return null;
+        return int.TryParse(args[at + 1], out var pid) ? pid : null;
+    }
+
+    /// Block until the client this one is replacing has exited, so its
+    /// single-instance claim is released. Bounded: a process that will not exit
+    /// is not a reason never to start.
+    public static void WaitForPreviousClient(int pid)
+    {
+        try { System.Diagnostics.Process.GetProcessById(pid).WaitForExit(30_000); }
+        catch (ArgumentException) { /* already gone */ }
+        catch (Exception) { /* cannot watch it; carry on */ }
+    }
+
     /// Download the published exe, verify it and swap it into this exe's path.
     /// Returns the path to start. Throws with a sentence for the strip when
     /// anything along the way refuses; nothing is changed until the download
