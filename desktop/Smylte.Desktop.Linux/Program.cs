@@ -79,6 +79,18 @@ internal static class Program
         if (Updater.AfterUpdatePid(args) is { } previous) Updater.WaitForPreviousClient(previous);
         Updater.RemoveStaleClient(Environment.ProcessPath);
 
+        // BEFORE Gtk(), and that is the point of it being its own path.
+        // Writing a desktop entry is file IO — it opens no window and needs no
+        // compositor — but `Gtk.Module.Initialize` calls `gtk_init`, which
+        // fails outright with "Failed to open display" over SSH or from a TTY.
+        // Which is exactly where somebody who wants a launcher without opening
+        // the app would be typing this.
+        foreach (var (flag, wanted) in new[] { ("--install", true), ("--uninstall", false) })
+        {
+            if (args.Any(a => a.Equals(flag, StringComparison.OrdinalIgnoreCase)))
+                return Install(settings, wanted);
+        }
+
         return Gtk(args, settings);
     }
 
@@ -99,6 +111,40 @@ internal static class Program
             return 1;
         }
         Console.WriteLine("All native libraries resolved.");
+        return 0;
+    }
+
+    /// `--install` / `--uninstall`: write or remove the desktop entry and the
+    /// icons it points at, and persist the same field the Appearance toggle
+    /// sets, so the two never disagree.
+    ///
+    /// Gio only — never Gtk. The colour scheme comes over D-Bus, which has
+    /// nothing to do with a display, and reading it is what lets `Auto` pick
+    /// the right plate for an entry that cannot follow a theme afterwards.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static int Install(Settings settings, bool wanted)
+    {
+        GLib.UnhandledException.SetHandler(ex => Log(settings, ex));
+        Gio.Module.Initialize();
+
+        settings.StartMenuShortcut = wanted;
+        try { settings.Save(); }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Could not save settings: {ex.Message}");
+            return 1;
+        }
+
+        if (!DesktopEntry.Sync(settings, IconAssets.Resolve(settings)))
+        {
+            Console.Error.WriteLine(
+                $"Could not write {DesktopEntry.Path}. Check that the directory is writable.");
+            return 1;
+        }
+
+        Console.WriteLine(wanted
+            ? $"Installed {DesktopEntry.Path}"
+            : $"Removed {DesktopEntry.Path}");
         return 0;
     }
 
@@ -139,22 +185,6 @@ internal static class Program
         var wantsSetup = args.Any(a =>
             a.Equals("--setup", StringComparison.OrdinalIgnoreCase) ||
             a.Equals("/setup", StringComparison.OrdinalIgnoreCase));
-
-        // `--install` and `--uninstall` write and remove the desktop entry
-        // without opening a window, for someone who would rather not go
-        // through Settings → Appearance to get a launcher. They persist the
-        // same field the toggle does, so the two never disagree.
-        foreach (var (flag, wanted) in new[] { ("--install", true), ("--uninstall", false) })
-        {
-            if (!args.Any(a => a.Equals(flag, StringComparison.OrdinalIgnoreCase))) continue;
-            settings.StartMenuShortcut = wanted;
-            try { settings.Save(); } catch (Exception) { /* reported below */ }
-            var ok = DesktopEntry.Sync(settings, IconAssets.Resolve(settings));
-            Console.WriteLine(ok
-                ? wanted ? $"Installed {DesktopEntry.Path}" : $"Removed {DesktopEntry.Path}"
-                : "Could not write the desktop entry; see the message above.");
-            return ok ? 0 : 1;
-        }
 
         var app = global::Gtk.Application.New(AppId, Gio.ApplicationFlags.HandlesCommandLine);
 

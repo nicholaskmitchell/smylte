@@ -23,12 +23,9 @@ namespace Smylte.Desktop;
 /// has to say a different thing on each platform.
 internal static class IconAssets
 {
-    /// Every size the generator emits, and the sizes freedesktop's hicolor
-    /// theme names. Fewer than Windows' fifteen: there is no `ICONDIRENTRY`
-    /// byte-width quirk here, no three request bands, and no 256-encodes-as-0
-    /// workaround — the theme picks the nearest size up and scales down, which
-    /// is exactly what the Windows `.ico` had to fake with extra frames.
-    internal static readonly int[] Sizes = { 16, 24, 32, 48, 64, 128, 256 };
+    /// Shared with the generator and the test suite — see
+    /// IconChoices.FreedesktopSizes for why the list lives there.
+    internal static int[] Sizes => IconChoices.FreedesktopSizes;
 
     /// The variant names as the generator spells them, lowercased from the
     /// IconChoice members. `Auto` is absent on purpose: it is never a file.

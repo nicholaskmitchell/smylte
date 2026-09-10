@@ -54,6 +54,12 @@
          would decide it. -->
     <EmbeddedResource Include="../Smylte.Desktop/app.ico" LogicalName="app.ico" />
     <EmbeddedResource Include="../Smylte.Desktop/icons/*.ico" LogicalName="%(Filename)%(Extension)" />
+    <!-- The same four variants as the GTK client carries them: loose PNGs at
+         the freedesktop sizes plus a scalable SVG. Prefixed, because
+         `accent-256.png` and `app.ico` are the same art and only the container
+         differs — a bare filename here would read as a second icon set. -->
+    <EmbeddedResource Include="../Smylte.Desktop.Linux/icons/*.png" LogicalName="linux.%(Filename)%(Extension)" />
+    <EmbeddedResource Include="../Smylte.Desktop.Linux/icons/*.svg" LogicalName="linux.%(Filename)%(Extension)" />
   </ItemGroup>
 
   <ItemGroup>
