@@ -27,6 +27,11 @@ trap 'rm -rf "$WORK"' EXIT
 # against this checkout — from the repository root, as the release job does.
 cd "$REPO"
 CLIENT_TREE=$(git rev-parse "HEAD:desktop/Smylte.Desktop")
+# Derived the same way the step derives it, from the same checkout, so a change
+# to how the key is composed fails here rather than silently re-publishing the
+# Linux binary on every push forever.
+LINUX_KEY=$(printf '%s %s\n' "$CLIENT_TREE" "$(git rev-parse "HEAD:desktop/Smylte.Desktop.Linux")" \
+  | git hash-object --stdin)
 
 python3 - "$WORKFLOW" "$WORK/publish.sh" <<'PY'
 import sys, yaml, pathlib
@@ -51,12 +56,14 @@ run_case() {
     : "${FAIL_EDIT_TIMES:=0}" "${FAIL_CREATE_TIMES:=0}" "${EDIT_WRITES_SHA:=1}" "${EDIT_DROPS_TREE:=0}"
     # What the release already holds: its asset names, and the client source
     # tree its notes record (empty = a release from before that line existed).
-    : "${ASSETS:=smylte-web.zip Smylte.exe}" "${PUBLISHED_TREE:=}"
+    : "${ASSETS:=smylte-web.zip Smylte.exe Smylte-linux-x86_64}" "${PUBLISHED_TREE:=}"
+    : "${PUBLISHED_LINUX_KEY:=}" "${EDIT_DROPS_LINUX_KEY:=0}"
 
     # Starts stale, the way the real release did after the 503.
     {
       echo "Rolling desktop build from 0000000000000000."
       [ -n "$PUBLISHED_TREE" ] && echo "Client source tree: $PUBLISHED_TREE"
+      [ -n "$PUBLISHED_LINUX_KEY" ] && echo "Linux client key: $PUBLISHED_LINUX_KEY"
     } > "$_STUB/body"
 
     # The notes the step passes to `gh release edit/create --notes`, so the
@@ -114,7 +121,10 @@ run_case() {
           # updated release of the other kind, one the NEXT run would read as
           # "unrecorded" and re-upload the exe over.
           if [ "$EDIT_WRITES_SHA" = 1 ]; then
-            _notes_arg "$@" | { [ "$EDIT_DROPS_TREE" = 1 ] && grep -v 'Client source tree' || cat; } > "$_STUB/body"
+            _notes_arg "$@" \
+              | { [ "$EDIT_DROPS_TREE" = 1 ] && grep -v 'Client source tree' || cat; } \
+              | { [ "$EDIT_DROPS_LINUX_KEY" = 1 ] && grep -v 'Linux client key' || cat; } \
+              > "$_STUB/body"
           fi
           return 0 ;;
         "release create")
@@ -172,13 +182,34 @@ case_is "a dead probe fails rather than guessing"        1 'EXIT|503' FAIL_PROBE
 # the published exe was built from, which the notes record.
 ZIP='artifacts/web/smylte-web\.zip'
 EXE='artifacts/client/Smylte\.exe'
-case_is "an unchanged client is not re-published"        0 "release upload \(call 1\): desktop-latest $ZIP --clobber" PUBLISHED_TREE="$CLIENT_TREE"
+LNX='artifacts/client-linux/Smylte-linux-x86_64'
+BOTH="PUBLISHED_TREE=$CLIENT_TREE PUBLISHED_LINUX_KEY=$LINUX_KEY"
+
+case_is "an unchanged client is not re-published"        0 "release upload \(call 1\): desktop-latest $ZIP --clobber" PUBLISHED_TREE="$CLIENT_TREE" PUBLISHED_LINUX_KEY="$LINUX_KEY"
 case_is "notes that lose the tree line fail the job"    1 'do not record the client source tree' EDIT_DROPS_TREE=1
-case_is "a changed client is published"                  0 "release upload \(call 1\): desktop-latest $ZIP $EXE --clobber" PUBLISHED_TREE=0123456789abcdef0123456789abcdef01234567
+case_is "a changed client is published"                  0 "release upload \(call 1\): desktop-latest $ZIP $EXE $LNX --clobber" PUBLISHED_TREE=0123456789abcdef0123456789abcdef01234567
 case_is "a release from before the tree was recorded gets the exe once" 0 "release upload .*$EXE"
-case_is "a release missing the exe gets it even when the tree matches"  0 "release upload .*$EXE" PUBLISHED_TREE="$CLIENT_TREE" ASSETS=smylte-web.zip
-case_is "a forced dispatch publishes the client regardless"             0 "release upload .*$EXE" PUBLISHED_TREE="$CLIENT_TREE" CLIENT_PUBLISH=force
-case_is "a first release carries both"                   0 "release create \(call 1\): desktop-latest $ZIP $EXE" API_ANSWER=absent
+case_is "a release missing the exe gets it even when the tree matches"  0 "release upload .*$EXE" PUBLISHED_TREE="$CLIENT_TREE" PUBLISHED_LINUX_KEY="$LINUX_KEY" ASSETS="smylte-web.zip Smylte-linux-x86_64"
+case_is "a forced dispatch publishes the client regardless"             0 "release upload .*$EXE" PUBLISHED_TREE="$CLIENT_TREE" PUBLISHED_LINUX_KEY="$LINUX_KEY" CLIENT_PUBLISH=force
+case_is "a first release carries all three"              0 "release create \(call 1\): desktop-latest $ZIP $EXE $LNX" API_ANSWER=absent
+
+# ── and the same decision for the Linux binary, taken separately ────────────
+# The two keys cover overlapping trees: the Linux client LINKS the shared
+# sources, so a change under desktop/Smylte.Desktop moves BOTH keys while a
+# change under desktop/Smylte.Desktop.Linux moves only its own. A single shared
+# key would get the second case wrong in the expensive direction — telling every
+# Windows user to download 69 MB because a GTK file moved.
+case_is "a changed Linux client is published without the exe" 0 "release upload \(call 1\): desktop-latest $ZIP $LNX --clobber" PUBLISHED_TREE="$CLIENT_TREE" PUBLISHED_LINUX_KEY=0123456789abcdef0123456789abcdef01234567
+case_is "a release missing the Linux binary gets it even when the key matches" 0 "release upload .*$LNX" PUBLISHED_TREE="$CLIENT_TREE" PUBLISHED_LINUX_KEY="$LINUX_KEY" ASSETS="smylte-web.zip Smylte.exe"
+case_is "a release from before the Linux key was recorded gets it once" 0 "release upload .*$LNX" PUBLISHED_TREE="$CLIENT_TREE"
+case_is "a forced dispatch publishes both clients"       0 "release upload \(call 1\): desktop-latest $ZIP $EXE $LNX --clobber" PUBLISHED_TREE="$CLIENT_TREE" PUBLISHED_LINUX_KEY="$LINUX_KEY" CLIENT_PUBLISH=force
+case_is "notes that lose the Linux key fail the job"     1 'do not record the linux client key' EDIT_DROPS_LINUX_KEY=1
+
+# The scrapes must not read each other'"'"'s line. Both labels are in the body and
+# both keys are correct, so the ONLY way this run publishes a binary is if one
+# pattern matched the other'"'"'s value — which is what a label like "Linux client
+# source tree" would have done to the exe'"'"'s `.*Client source tree` pattern.
+case_is "neither scrape reads the other label"           0 "release upload \(call 1\): desktop-latest $ZIP --clobber" PUBLISHED_TREE="$CLIENT_TREE" PUBLISHED_LINUX_KEY="$LINUX_KEY"
 
 echo
 echo "$pass passed, $fail failed"
