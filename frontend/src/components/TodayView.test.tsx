@@ -1357,6 +1357,24 @@ describe('<TodayView> the week behind the day', () => {
     expect(await screen.findByText('23 finished this week')).toBeInTheDocument()
   })
 
+  it('wears the same micro-label class the date and the count do', async () => {
+    // A CLASS assertion in a suite that computes no layout, and it is the only
+    // place this can be caught. `.content-sub` is what makes a header figure
+    // 11px mono in the label case; `.today-week` only colours it. The span
+    // shipped as `today-week mono` alone, so it took the page's 15px body type
+    // and this one figure read half again as large as the two facts either side
+    // of it — and the browser fixtures in `layout.browser.test.tsx` had always
+    // mounted it WITH `content-sub`, so the one suite that measures type could
+    // not see the difference. Nothing but the JSX itself can.
+    m.completedCounts.mockResolvedValue({ from: '', to: '', days: {}, total: 23 })
+    setup()
+    const week = await screen.findByText('23 finished this week')
+    expect(week).toHaveClass('content-sub')
+    // …and the same class carried by the day's own count beside it, so the two
+    // cannot drift apart again one at a time.
+    expect(await screen.findByText(/on the day/)).toHaveClass('content-sub')
+  })
+
   it('says nothing while the read is still in flight', async () => {
     // "0 finished this week" over a fetch in flight is the wrong answer at the
     // one moment the question is worth asking.
