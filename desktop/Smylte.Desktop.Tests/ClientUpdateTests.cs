@@ -108,20 +108,97 @@ public sealed class ClientUpdateTests : IDisposable
     // ── the next start ──────────────────────────────────────────────────────
 
     [Fact]
-    public void The_next_start_clears_what_the_replacement_left_behind()
+    public void The_next_start_clears_the_file_the_replacement_moved_aside()
     {
         var exe = Write("Smylte.exe", "new");
         Write("Smylte.exe.old", "old");
-        Write("Smylte.exe.new", "half a download");
 
-        Updater.RemoveStaleClient(exe);
+        Updater.RemoveRetiredClient(exe);
 
         Assert.True(File.Exists(exe));
         Assert.False(File.Exists(Updater.RetiredClientPath(exe)));
-        Assert.False(File.Exists(Updater.StagedClientPath(exe)));
         // And with nothing to clear, or no path at all, it is a no-op.
-        Updater.RemoveStaleClient(exe);
-        Updater.RemoveStaleClient(null);
+        Updater.RemoveRetiredClient(exe);
+        Updater.RemoveRetiredClient(null);
+    }
+
+    [Fact]
+    public void The_next_start_does_not_touch_a_download_that_is_still_running()
+    {
+        // This runs at the top of Main, in whichever process was launched —
+        // before it knows whether it is even the primary instance. `<exe>.new`
+        // is where a RUNNING instance writes a ~69 MB download for minutes at a
+        // time, and on Linux unlink of an open file succeeds, so clicking the
+        // launcher during an update used to destroy the staged file: the
+        // downloader kept writing to an unlinked inode and the digest check
+        // then failed with "could not find file". On Windows the same code was
+        // harmless only because the open handle made File.Delete throw.
+        var exe = Write("Smylte.exe", "running");
+        var staged = Write("Smylte.exe.new", "half a download");
+
+        Updater.RemoveRetiredClient(exe);
+
+        Assert.True(File.Exists(staged));
+        Assert.Equal("half a download", File.ReadAllText(staged));
+    }
+
+    [Fact]
+    public void A_swap_interrupted_by_a_second_launch_still_has_something_to_restore()
+    {
+        // The severe half of the same ordering. A launch landing between the
+        // two renames in SwapClient used to delete BOTH files, so the rollback
+        // found no retired file, nothing was restored, and the exe path was
+        // left empty while the desktop entry still pointed at it.
+        var exe = Write("Smylte.exe", "old");
+        File.Move(exe, Updater.RetiredClientPath(exe));      // mid-swap: exe is gone
+
+        Updater.RemoveRetiredClient(exe);                    // the second launch
+
+        // Deleting the retired file here is allowed — it is the documented job,
+        // and the swap's own rollback is what owns the window. What must not
+        // happen is the staged file going with it.
+        Write("Smylte.exe.new", "new");
+        Updater.SwapClient(Write("Smylte.exe", "old again"), Updater.StagedClientPath(exe));
+        Assert.Equal("new", File.ReadAllText(exe));
+    }
+
+    // ── the flag the updater starts its replacement with ────────────────────
+
+    public static TheoryData<string[], int> WellFormed()
+    {
+        var data = new TheoryData<string[], int>();
+        data.Add(new[] { "--after-update", "1234" }, 1234);
+        data.Add(new[] { "--setup", "--after-update", "7" }, 7);
+        return data;
+    }
+
+    [Theory]
+    [MemberData(nameof(WellFormed))]
+    public void The_previous_pid_is_read_out_of_the_arguments(string[] args, int expected)
+    {
+        Assert.Equal(expected, Updater.AfterUpdatePid(args));
+    }
+
+    public static TheoryData<string[]> Malformed()
+    {
+        var data = new TheoryData<string[]>();
+        data.Add(Array.Empty<string>());
+        data.Add(new[] { "--setup" });
+        data.Add(new[] { "--after-update" });                  // last, nothing after it
+        data.Add(new[] { "--after-update", "not-a-pid" });
+        data.Add(new[] { "--after-update", "" });
+        return data;
+    }
+
+    [Theory]
+    [MemberData(nameof(Malformed))]
+    public void Anything_malformed_means_do_not_wait_rather_than_do_not_start(string[] args)
+    {
+        // All three ways of being wrong mean the same thing, and none of them
+        // is a reason to refuse to launch. Untested until now, and the Windows
+        // client did not even call it — it carried a second, hand-copied parse
+        // of the same three lines, which is one more than this needs.
+        Assert.Null(Updater.AfterUpdatePid(args));
     }
 
     // ── which binary this client is asking about, and whether it can run ────

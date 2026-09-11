@@ -21,6 +21,14 @@ namespace Smylte.Desktop.Tests;
 ///
 /// These run on both runners. The Windows leg proves the fix costs nothing
 /// there; the Linux leg is the one that can actually go red.
+/// Shares a collection with the other class that moves the XDG variables.
+///
+/// xunit runs test CLASSES in parallel by default — each one is its own
+/// collection — and the environment is process-wide, so two classes pointing
+/// `XDG_CONFIG_HOME` at two different temp directories at the same time are a
+/// flake that reproduces about one run in three and never on the machine of
+/// whoever is looking. Naming the same collection is what serialises them.
+[Collection("xdg")]
 public sealed class SettingsPathTests : IDisposable
 {
     private readonly string _root = Directory.CreateTempSubdirectory("smylte-xdg").FullName;

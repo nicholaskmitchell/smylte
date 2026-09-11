@@ -472,16 +472,29 @@ public static class Updater
         }
     }
 
-    /// Delete what a previous replacement left beside the exe. Best effort:
-    /// the retired file is deletable only once the process that ran it has
-    /// exited, which is why the launched client waits for that first.
-    internal static void RemoveStaleClient(string? exe)
+    /// Delete the file a previous replacement moved aside. Best effort: the
+    /// retired file is deletable only once the process that ran it has exited,
+    /// which is why the launched client waits for that first.
+    ///
+    /// **The RETIRED file only, never the staged one.** `<exe>.new` is where a
+    /// running instance writes a ~69 MB download for minutes at a time, and
+    /// this runs at the top of Main in whichever process was launched — before
+    /// it knows whether it is even the primary instance. On Windows the
+    /// difference never showed: `File.Delete` on a file the downloader holds
+    /// open fails with a sharing violation. On Linux unlink succeeds, so
+    /// clicking the launcher while an update downloaded destroyed the staged
+    /// file (the downloader kept writing to an unlinked inode, and the digest
+    /// check then failed with "could not find file"), and a launch landing
+    /// between the two renames in SwapClient deleted BOTH files and left the
+    /// exe path empty with nothing for the rollback to restore.
+    ///
+    /// A staged file abandoned by a killed download is not leaked in exchange:
+    /// `DownloadAssetAsync` opens it with `File.Create`, which truncates.
+    internal static void RemoveRetiredClient(string? exe)
     {
         if (exe is null) return;
-        foreach (var stale in new[] { RetiredClientPath(exe), StagedClientPath(exe) })
-        {
-            try { if (File.Exists(stale)) File.Delete(stale); }
-            catch (Exception) { /* still held, or read-only; the next start tries again */ }
-        }
+        var retired = RetiredClientPath(exe);
+        try { if (File.Exists(retired)) File.Delete(retired); }
+        catch (Exception) { /* still held, or read-only; the next start tries again */ }
     }
 }

@@ -48,6 +48,14 @@
          shared by both clients and untestable while it lived inside a WinForms
          message loop. Every one of its failure modes is silent. -->
     <Compile Include="../Smylte.Desktop/FloatRing.cs" />
+    <!-- Setting an environment variable so that NATIVE code can read it, which
+         `Environment.SetEnvironmentVariable` does not do on Linux. The whole
+         X11 default rested on it, and the managed API reads its own write back
+         so nothing looked wrong. -->
+    <Compile Include="../Smylte.Desktop/NativeEnv.cs" />
+    <!-- The Exec line of the desktop entry. The rest of DesktopEntry is GTK and
+         the filesystem; this is the string function that was wrong. -->
+    <Compile Include="../Smylte.Desktop.Linux/DesktopEntryText.cs" />
     <!-- The icon comes in as bytes rather than as a linked source file, so
          AppIconTests asserts on the identical blob <ApplicationIcon> stamps into
          the exe. LogicalName pins the resource name: without it, the linked path

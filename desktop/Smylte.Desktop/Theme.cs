@@ -30,7 +30,18 @@ internal static class Theme
         if (string.IsNullOrWhiteSpace(hex)) return null;
         var s = hex.Trim().TrimStart('#');
         if (s.Length == 3) s = string.Concat(s[0], s[0], s[1], s[1], s[2], s[2]);
-        if (s.Length != 6 || !int.TryParse(s, System.Globalization.NumberStyles.HexNumber,
+        if (s.Length != 6) return null;
+
+        // Every character checked, because `NumberStyles.HexNumber` includes
+        // AllowLeadingWhite and AllowTrailingWhite: `"#  FFFF"` survives the
+        // Trim (the space is AFTER the hash), passes the length test at six,
+        // and parses as 0x00FFFF. The result was a colour the page never asked
+        // for rather than the null this documents — silently plausible, which
+        // is the worst shape for a wrong answer.
+        foreach (var c in s)
+            if (!char.IsAsciiHexDigit(c)) return null;
+
+        if (!int.TryParse(s, System.Globalization.NumberStyles.HexNumber,
                 System.Globalization.CultureInfo.InvariantCulture, out var v))
             return null;
         return Color.FromArgb((v >> 16) & 0xFF, (v >> 8) & 0xFF, v & 0xFF);

@@ -364,6 +364,92 @@ public sealed class LocalServerBridgeTests : IDisposable
     }
 
     [Fact]
+    public async Task TheIconRouteReachesTheBridgeAndAnswersWithItsState()
+    {
+        // Untested until now, on either platform — and it is the one bridge
+        // route whose argument decides whether a FILE in the user's home
+        // exists: the Start-menu shortcut on Windows, the desktop entry and its
+        // icon tree on Linux.
+        using var res = await PostAsync(
+            "/desktop/icon", "{\"choice\":\"Ink\",\"startMenuShortcut\":true}");
+
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        // The answer is State(), because the page reconciles the dropdown and
+        // the checkbox from it rather than from what it sent.
+        Assert.Equal(_bridge.State(), await res.Content.ReadAsStringAsync());
+        Assert.Equal(new[] { "icon:Ink:True" }, _bridge.Calls);
+    }
+
+    [Fact]
+    public async Task AnIconPostThatOmitsTheShortcutFlagIsRefusedRatherThanReadAsOff()
+    {
+        // `Bool` reads an absent key as false, so a POST carrying only
+        // `{"choice":"Ink"}` used to arrive at the host as
+        // `Icon("Ink", startMenuShortcut: false)` — which DELETES the user's
+        // launcher entry and its icons, and answers 200 so the page tickes the
+        // box off to match. Nothing in the app sends that shape; `setIcon`
+        // always passes both, which is why this is malformed rather than a
+        // request to turn the shortcut off.
+        //
+        // The same rule `pin` already followed, for the same reason: absent and
+        // false must not read the same on a field that changes something.
+        foreach (var body in new[]
+        {
+            "{\"choice\":\"Ink\"}",
+            "{}",
+            "{\"choice\":\"Ink\",\"startMenuShortcut\":\"yes\"}",
+            "{\"choice\":\"Ink\",\"startMenuShortcut\":null}",
+        })
+        {
+            using var res = await PostAsync("/desktop/icon", body);
+            Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
+        }
+        Assert.Empty(_bridge.Calls);
+    }
+
+    [Fact]
+    public async Task TheAppearanceRouteTakesWhateverTheThemeIsAndNeverRefuses()
+    {
+        // The opposite contract to the icon route above, deliberately: `--bg`
+        // can be a user-authored theme value, so the host parses it and hands
+        // the frame back to the system when it cannot — `Theme.ParseHex`
+        // returning null is the documented answer, not a 400. A refusal here
+        // would turn a bad custom theme into a failed request on every colour
+        // the user drags.
+        foreach (var body in new[]
+        {
+            "{\"background\":\"#0C0C10\"}",
+            "{\"background\":\"rebeccapurple\"}",
+            "{\"background\":\"\"}",
+            "{}",
+        })
+        {
+            using var res = await PostAsync("/desktop/appearance", body);
+            Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        }
+        Assert.Equal(
+            new[] { "appearance:#0C0C10", "appearance:rebeccapurple", "appearance:", "appearance:" },
+            _bridge.Calls);
+    }
+
+    [Fact]
+    public async Task TheIconAndAppearanceRoutesAreClosedToAnotherOriginToo()
+    {
+        // The window route has this test; these two did not, and they are
+        // reachable by exactly the same means.
+        using var icon = await PostAsync(
+            "/desktop/icon", "{\"choice\":\"Ink\",\"startMenuShortcut\":false}",
+            origin: "https://evil.example");
+        Assert.Equal(HttpStatusCode.Forbidden, icon.StatusCode);
+
+        using var appearance = await PostAsync(
+            "/desktop/appearance", "{\"background\":\"#000000\"}", origin: "https://evil.example");
+        Assert.Equal(HttpStatusCode.Forbidden, appearance.StatusCode);
+
+        Assert.Empty(_bridge.Calls);
+    }
+
+    [Fact]
     public async Task AnActionTheHostDoesNotKnowIsRefusedAndNothingIsCalled()
     {
         using var unknown = await PostAsync("/desktop/window", "{\"action\":\"explode\"}");

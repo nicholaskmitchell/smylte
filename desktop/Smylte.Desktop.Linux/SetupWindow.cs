@@ -111,9 +111,11 @@ internal sealed class SetupWindow
         _save.OnClicked += async (_, _) => await SaveAsync().ConfigureAwait(true);
         _cancel.OnClicked += (_, _) => _window.Close();
 
-        // The dialog shows no page, so it has no theme to apply — the frame is
-        // the system's, which is what Reset means.
-        HeaderChrome.Reset(_window.GetDisplay());
+        // Deliberately does NOT touch HeaderChrome. The CSS provider is one
+        // object for the whole display, so resetting it here to get a
+        // system-coloured dialog frame also stripped the main window's header
+        // and the float ring behind it. This dialog is an ordinary undecorated-
+        // by-nobody GTK window and the theme already styles it.
 
         _window.OnCloseRequest += (_, _) => { _done(_saved); return false; };
     }

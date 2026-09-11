@@ -32,6 +32,16 @@ internal sealed class MainWindow : IDesktopBridge
     private readonly UpdateBanner _banner;
     private readonly Gtk.Box _body = Gtk.Box.New(Gtk.Orientation.Vertical, 0);
 
+    /// The way back to setup when there is no page to offer one.
+    ///
+    /// Hidden while the app is running, because the SPA has its own Settings
+    /// and a second entry point would be noise. It appears the moment startup
+    /// has nothing to show: an unconfigured client whose first-run dialog was
+    /// cancelled used to sit on "Starting…" with no control anywhere and no
+    /// way back short of a terminal — on the one screen where the terminal is
+    /// the least likely thing the reader has open.
+    private readonly Gtk.Button _setupPrompt = Gtk.Button.NewWithLabel("Setup…");
+
     private WebHost? _host;
     private WebKit.WebView? _web;
     private LocalServer? _server;
@@ -43,6 +53,13 @@ internal sealed class MainWindow : IDesktopBridge
     /// so it must not read a stale cached value.
     private volatile bool _floating;
     private volatile bool _closing;
+
+    /// Which start is the current one. Bumped by every StartAsync and by every
+    /// Shutdown, and re-read after each await: a `--setup` save that lands
+    /// while a slow first start is still downloading the web build used to run
+    /// both to completion, and the loser left a LocalServer listening on a port
+    /// nothing would ever close while the page moved to a second origin.
+    private int _generation;
 
     /// The GTK thread's context, captured while on it. Every bridge call
     /// arrives on a listener thread and has to come back here.
@@ -57,6 +74,12 @@ internal sealed class MainWindow : IDesktopBridge
                   "MainWindow was built off the GTK thread; the bridge would have nowhere to post to.");
 
         _window = Gtk.ApplicationWindow.New(app);
+
+        // The first moment a real display exists. Everything that gates on X11
+        // — the pin the page is told about, the float window's remembered
+        // position, skip-taskbar — reads this, so it has to come from the
+        // display GDK opened rather than from the backend we asked for.
+        X11Window.Active = X11Window.DisplayIsX11(_window.GetDisplay());
         _window.SetTitle("Smylte");
         _window.SetDefaultSize(settings.WindowWidth, settings.WindowHeight);
         if (settings.WindowMaximized) _window.Maximize();
@@ -67,6 +90,9 @@ internal sealed class MainWindow : IDesktopBridge
         // set, so making it ours is what lets `Appearance` mean anything at
         // all. See HeaderChrome for the alternative that was rejected.
         _header.SetShowTitleButtons(true);
+        _setupPrompt.SetVisible(false);
+        _setupPrompt.OnClicked += (_, _) => OpenSetup();
+        _header.PackStart(_setupPrompt);
         _window.SetTitlebar(_header);
 
         _splash.SetVexpand(true);
@@ -100,6 +126,21 @@ internal sealed class MainWindow : IDesktopBridge
     /// navigation, or the app opens on its own login screen.
     public async Task StartAsync()
     {
+        var generation = ++_generation;
+
+        // Cleared here rather than in the close handler: Shutdown() latches it
+        // to mean "the main window is going away", and the setup-save path
+        // calls Shutdown() and then comes straight back here. Left latched, the
+        // next dock of the float window found `_closing` true, skipped
+        // presenting the main window, and left the user with nothing on screen.
+        _closing = false;
+        _setupPrompt.SetVisible(false);
+
+        // Built into locals and published to the fields only at the end, so a
+        // start this one has overtaken can dispose exactly what it made.
+        LocalServer? server = null;
+        WebHost? host = null;
+
         try
         {
             var progress = new Progress<string>(text => _splash.SetLabel(text));
@@ -107,36 +148,56 @@ internal sealed class MainWindow : IDesktopBridge
                 .EnsureWebAssetsAsync(_settings, progress, CancellationToken.None)
                 .ConfigureAwait(true);
 
-            _server = new LocalServer(_settings.WebRoot, _settings.ServerUrl, _settings.Port);
-            if (_server.Port != _settings.Port)
+            if (generation != _generation) return;
+
+            server = new LocalServer(_settings.WebRoot, _settings.ServerUrl, _settings.Port);
+            if (server.Port != _settings.Port)
             {
                 // Remembered, because localStorage is keyed by origin and the
                 // origin includes the port — a port that moved on every launch
                 // would throw away the offline cache and the saved theme.
-                _settings.Port = _server.Port;
+                _settings.Port = server.Port;
                 TrySave();
             }
-            _server.Bridge = this;
-            _server.Start();
+            server.Bridge = this;
+            server.Start();
 
-            _host = new WebHost(_settings);
+            host = new WebHost(_settings);
             IconAssets.Install(_settings, _window.GetDisplay());
 
-            _web = _host.NewView(chromeless: false);
-            _web.SetVexpand(true);
-            _stack.AddNamed(_web, "web");
-            Notifications.Attach(_web, _app, _settings);
+            var web = host.NewView(chromeless: false);
+            web.SetVexpand(true);
+            Notifications.Attach(web, _app, _settings);
 
-            await _host.SeedAsync(CancellationToken.None).ConfigureAwait(true);
+            await host.SeedAsync(CancellationToken.None).ConfigureAwait(true);
 
-            _web.LoadUri(_server.Origin + "/");
+            if (generation != _generation)
+            {
+                server.Dispose();
+                host.Dispose();
+                return;
+            }
+
+            _server = server;
+            _host = host;
+            _web = web;
+
+            _stack.AddNamed(web, "web");
+            web.LoadUri(server.Origin + "/");
             _stack.SetVisibleChildName("web");
             _banner.SetVisible(update.ClientOutdated);
+
+            // Handed over: the catch below cleans up what this start still
+            // owns, and past this line it owns nothing.
+            server = null;
+            host = null;
         }
         catch (Exception ex)
         {
+            server?.Dispose();
+            host?.Dispose();
             Program.Log(_settings, ex);
-            Fail(ex.Message);
+            if (generation == _generation) Fail(ex.Message);
         }
     }
 
@@ -147,6 +208,7 @@ internal sealed class MainWindow : IDesktopBridge
     {
         _splash.SetLabel(message + "\n\nOpen setup to change the server address.");
         _stack.SetVisibleChildName("splash");
+        _setupPrompt.SetVisible(true);
         OpenSetup();
     }
 
@@ -158,7 +220,18 @@ internal sealed class MainWindow : IDesktopBridge
         _setup = new SetupWindow(_app, _settings, saved =>
         {
             _setup = null;
-            if (!saved) return;
+            if (!saved)
+            {
+                // Cancelled. If there is nothing running behind the dialog,
+                // say so and leave a control that reopens it.
+                if (_server is null)
+                {
+                    _splash.SetLabel(
+                        "Smylte is not configured yet.\n\nOpen setup to name the server to use.");
+                    _setupPrompt.SetVisible(true);
+                }
+                return;
+            }
             // Everything downstream of the settings is rebuilt rather than
             // patched: the server URL, the port, the data folder and the
             // credentials each feed something constructed at startup, and
@@ -173,6 +246,11 @@ internal sealed class MainWindow : IDesktopBridge
     private void Shutdown()
     {
         _closing = true;
+
+        // Invalidates any start still in flight, so the one that is being torn
+        // down here cannot publish a server over the top of the next one.
+        _generation++;
+
         if (_float is { } floating) { _float = null; floating.Close(); }
 
         if (!_window.IsMaximized())
@@ -185,6 +263,19 @@ internal sealed class MainWindow : IDesktopBridge
 
         _server?.Dispose();
         _server = null;
+
+        // Unparented, not just forgotten. A GtkStack owns the children added to
+        // it, so a view merely dropped from the field stayed in the stack with
+        // its WebKitWebProcess alive — and since StartAsync adds the new one
+        // under the same name, the stack kept showing the DEAD page after a
+        // setup-driven restart. `--setup`, save, repeat: one leaked web process
+        // each time.
+        if (_web is { } web)
+        {
+            _web = null;
+            _stack.Remove(web);
+        }
+
         _host?.Dispose();
         _host = null;
     }
@@ -203,15 +294,21 @@ internal sealed class MainWindow : IDesktopBridge
         else HeaderChrome.Reset(_window.GetDisplay());
     }
 
-    private void ApplyIcon()
+    /// `authoritative` is the difference between the user having just answered
+    /// the question and this being a refresh.
+    ///
+    /// Follow, not Sync, on a refresh: this fires on every colour-scheme change
+    /// and on every start, from a settings copy that may be older than the file
+    /// on disk. Sync acts on `off` as an instruction to REMOVE, which is how a
+    /// launcher installed from a terminal while the app was open vanished by
+    /// itself. Follow only ever brings an existing entry up to date.
+    private void ApplyIcon(bool authoritative = false)
     {
         var resolved = IconAssets.Resolve(_settings);
         _window.SetIconName(IconAssets.IconName(resolved));
         _float?.SetIconName(IconAssets.IconName(resolved));
-        // The entry carries a COPY of the resolved variant, so a light/dark
-        // flip has to rewrite it — which is why this re-syncs rather than only
-        // running when the toggle changes.
-        DesktopEntry.Sync(_settings, resolved);
+        if (authoritative) DesktopEntry.Sync(_settings, resolved);
+        else DesktopEntry.Follow(_settings, resolved);
     }
 
     // ── the floating window ─────────────────────────────────────────────────
@@ -284,7 +381,11 @@ internal sealed class MainWindow : IDesktopBridge
             choice = choice.ToString(),
             resolved = IconChoices.Resolve(choice, light).ToString(),
             systemUsesLightTheme = light,
-            startMenuShortcut = _settings.StartMenuShortcut,
+            // The file, not the field. `--install` writes the entry from its
+            // own process while this one still holds the settings it loaded at
+            // startup, so the field can be stale in exactly the case the user
+            // is looking at the checkbox to find out.
+            startMenuShortcut = DesktopEntry.Installed,
 
             // Always true here, and not a version test the way it is on
             // Windows: this client draws its own header bar, so it takes an
@@ -333,7 +434,11 @@ internal sealed class MainWindow : IDesktopBridge
         _settings.IconChoice = IconChoices.Parse(choice).ToString();
         _settings.StartMenuShortcut = startMenuShortcut;
         TrySave();
-        ApplyIcon();
+        // The one call that may REMOVE the entry, because this is the one that
+        // is the user answering. LocalServer refuses the request outright when
+        // it carries no `startMenuShortcut`, so `false` here always means
+        // somebody unticked the box.
+        ApplyIcon(authoritative: true);
     });
 
     void IDesktopBridge.Float() => Invoke(OpenFloat);

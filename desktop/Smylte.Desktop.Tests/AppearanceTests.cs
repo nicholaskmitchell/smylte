@@ -38,12 +38,32 @@ public sealed class ThemeTests
     [InlineData("rgb(12, 12, 16)")]   // hand-written theme can reach here first
     [InlineData("#12345")]            // five digits
     [InlineData("#gggggg")]
+    [InlineData("#  FFFF")]           // see below
+    [InlineData("# 12 34")]
+    [InlineData("#\tFFFFF")]
     public void ParseHex_returns_null_for_anything_it_cannot_read(string? hex)
     {
         // Null is the contract, not an error: `IDesktopBridge.Appearance` documents
         // that an unparseable value hands the frame back to the OS. A throw here
         // would turn a user-authored theme into a crash.
         Assert.Null(Theme.ParseHex(hex));
+    }
+
+    [Fact]
+    public void ParseHex_does_not_read_a_space_as_a_zero()
+    {
+        // `NumberStyles.HexNumber` includes AllowLeadingWhite and
+        // AllowTrailingWhite, and the Trim only removes space OUTSIDE the hash.
+        // So "#  FFFF" survived the trim, passed the six-character length test
+        // with two spaces in it, and parsed as 0x00FFFF — cyan, a colour the
+        // page never sent.
+        //
+        // What makes it worth its own test rather than one more InlineData
+        // above: the SAME value without the spaces is correctly refused, so the
+        // failure is "adding whitespace turns a rejected value into an accepted
+        // wrong one", which reads as impossible until it is written down.
+        Assert.Null(Theme.ParseHex("#FFFF"));        // four digits: refused
+        Assert.Null(Theme.ParseHex("#  FFFF"));      // six characters: was cyan
     }
 
     [Fact]
@@ -105,6 +125,28 @@ public sealed class IconChoiceTests
         // settings.json is hand-editable and this field is cosmetic, so an
         // unknown value must not be able to stop the client starting. Stated as
         // deliberate in Settings.cs; asserted here.
+        Assert.Equal(IconChoice.Auto, IconChoices.Parse(value));
+    }
+
+    [Theory]
+    [InlineData("Paper,Ink")]        // 1 | 2 = 3, which IS Accent
+    [InlineData("Auto,Mark")]        // 0 | 4 = 4, which IS Mark
+    [InlineData("paper, ink")]
+    [InlineData("Mark,Accent,Paper")]
+    public void Parse_does_not_accept_a_list_of_names(string value)
+    {
+        // `Enum.TryParse` accepts a comma-separated list and ORs the members
+        // together — for an enum with no [Flags] attribute, which this one does
+        // not have. `Enum.IsDefined` then waves the result through because the
+        // number happens to name a real member. Measured:
+        //
+        //     Parse("Paper,Ink") -> Accent
+        //     Parse("Auto,Mark") -> Mark
+        //
+        // A settings.json naming two variants resolved confidently to a THIRD,
+        // which is the same failure the digit guard below exists to close and
+        // is not covered by it. Nothing writes this shape — the app persists
+        // `choice.ToString()` — so refusing it takes nothing away.
         Assert.Equal(IconChoice.Auto, IconChoices.Parse(value));
     }
 

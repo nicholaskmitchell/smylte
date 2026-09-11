@@ -349,7 +349,37 @@ def png(img: Image.Image) -> bytes:
     return blob
 
 
-def write_ico(frames: list[tuple[int, bytes]], path: str) -> None:
+STAGED: dict[str, bytes] = {}
+
+
+def stage(path: str, blob: bytes) -> bytes:
+    """Hold a finished file in memory until the whole run has passed its floors.
+
+    **Nothing reaches the working tree until `commit()`.** Every output here is
+    a committed binary that CI never regenerates, so the sequence that matters
+    is: edit a constant, run, read the error, `git commit -a`. Written eagerly,
+    the four floor violations the run just refused were already on disk and
+    indistinguishable in `git status` from a good regeneration — and no test
+    downstream measures the floors, so the rejected art shipped with a green
+    suite. Measured: `MARK_SCALE_PLATED = 5.2` exits non-zero and, before this,
+    left all 28 PNGs, four .ico files, four SVGs and apple-touch-icon.png
+    carrying the merged S-and-period art.
+
+    The same discipline the client uses on the other end — IconAssets.Unpack
+    writes a temp file and moves it — for the same reason.
+    """
+    STAGED[path] = blob
+    return blob
+
+
+def commit() -> None:
+    for path, blob in STAGED.items():
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as handle:
+            handle.write(blob)
+
+
+def pack_ico(frames: list[tuple[int, bytes]]) -> bytes:
     """Pack (size, png bytes) into an .ico. See the docstring for why by hand.
 
     Roslyn copies wPlanes/wBitCount verbatim out of the directory into the exe's
@@ -366,8 +396,7 @@ def write_ico(frames: list[tuple[int, bytes]], path: str) -> None:
         entries += struct.pack("<BBBBHHII", b, b, 0, 0, 1, 32, len(blob), offset)
         payloads += blob
         offset += len(blob)
-    with open(path, "wb") as fh:
-        fh.write(head + entries + payloads)
+    return head + entries + payloads
 
 
 def build_variant(s_path, period, name, plate, letter, dot, scale) -> list[tuple]:
@@ -390,7 +419,7 @@ def build_variant(s_path, period, name, plate, letter, dot, scale) -> list[tuple
             report.append((size, tier, floors(scale, offset, size, squared=tier == "C")))
     frames.sort(key=lambda f: -f[0])
     path = os.path.join(DESKTOP if name == "app.ico" else ICONS, name)
-    write_ico(frames, path)
+    stage(path, pack_ico(frames))
     return sorted(report, key=lambda r: -r[0]), path
 
 
@@ -436,7 +465,6 @@ def build_linux(s_path, period, stem, plate, letter, dot, scale) -> list[tuple]:
     LINUX_SIZES that no tier claims is a hard error rather than a silently
     unhinted raster.
     """
-    os.makedirs(LINUX, exist_ok=True)
     report = []
     for tier, sizes, target in TIERS:
         wanted = [size for size in LINUX_SIZES if size in sizes]
@@ -451,16 +479,15 @@ def build_linux(s_path, period, stem, plate, letter, dot, scale) -> list[tuple]:
             img = master.resize((size, size), Image.BOX)
             if tier == "C":
                 stamp_square_period(img, period, dot, scale, size)
-            with open(os.path.join(LINUX, f"{stem}-{size}.png"), "wb") as handle:
-                handle.write(png(img))
+            stage(os.path.join(LINUX, f"{stem}-{size}.png"), png(img))
             report.append((size, tier, floors(scale, offset, size, squared=tier == "C")))
 
     missing = set(LINUX_SIZES) - {size for size, _, _ in report}
     if missing:
         raise SystemExit(f"{stem}: {sorted(missing)} are in no tier; add them to TIERS")
 
-    with open(os.path.join(LINUX, f"{stem}.svg"), "w", encoding="utf-8") as handle:
-        handle.write(svg(s_path, period, plate, letter, dot, scale))
+    stage(os.path.join(LINUX, f"{stem}.svg"),
+          svg(s_path, period, plate, letter, dot, scale).encode("utf-8"))
 
     return sorted(report, key=lambda r: -r[0])
 
@@ -483,7 +510,9 @@ def build_touch(s_path, period, size: int = 180) -> None:
     (px, py), = place([(cx, cy)], centre, scale, size * ss)
     pr = r * scale * (size * ss) / CANVAS
     draw.ellipse((px - pr, py - pr, px + pr, py + pr), fill=ACCENT)
-    img.resize((size, size), Image.BOX).save(TOUCH, format="PNG", optimize=True)
+    buffer = io.BytesIO()
+    img.resize((size, size), Image.BOX).save(buffer, format="PNG", optimize=True)
+    stage(TOUCH, buffer.getvalue())
 
 
 def main() -> None:
@@ -500,7 +529,7 @@ def main() -> None:
     for name, stem, plate, letter, dot, scale in VARIANTS:
         report, path = build_variant(s_path, period, name, plate, letter, dot, scale)
         fill = 35.004 * scale / CANVAS * 100
-        print(f"{os.path.relpath(path, ROOT)}  {os.path.getsize(path) / 1024:.1f} KB, "
+        print(f"{os.path.relpath(path, ROOT)}  {len(STAGED[path]) / 1024:.1f} KB, "
               f"{len(report)} entries, mark {fill:.1f}% of canvas")
         print(f"  {'size':>5} {'tier':>4} {'thin':>7} {'aperture':>9} {'period':>7} {'gap':>7}")
         for size, tier, f in report:
@@ -514,9 +543,22 @@ def main() -> None:
         # is held to the same floors by the same call, so a second full table
         # would say nothing the first does not.
         linux = build_linux(s_path, period, stem, plate, letter, dot, scale)
-        for size, tier, f in linux:
-            bad += sum(1 for k in FLOORS if f[k] < FLOORS[k])
-        total = sum(os.path.getsize(os.path.join(LINUX, f"{stem}-{size}.png"))
+
+        # NOT counted a second time. Every size here is also a TIERS size and
+        # build_linux measures it with the same call and the same arguments, so
+        # each entry is a frame the table above has already counted — which is
+        # why the exit line said "6 floor violation(s)" under a table printing
+        # three `!`, the first number anyone checks it against. Asserted rather
+        # than assumed, so a future divergence is a hard error and not a
+        # silently unmeasured raster.
+        measured = {size: f for size, _, f in report}
+        for size, _, f in linux:
+            if f != measured[size]:
+                raise SystemExit(
+                    f"{stem}-{size}.png measures differently from the .ico frame "
+                    f"of the same size; the Linux pass is no longer covered by "
+                    f"the table above")
+        total = sum(len(STAGED[os.path.join(LINUX, f"{stem}-{size}.png")])
                     for size, _, _ in linux)
         print(f"  {os.path.relpath(LINUX, ROOT)}/{stem}-*.png + {stem}.svg  "
               f"{len(linux)} sizes, {total / 1024:.1f} KB")
@@ -524,9 +566,14 @@ def main() -> None:
 
     build_touch(s_path, period)
     print("floors: " + "  ".join(f"{k} >= {v:.2f}" for k, v in FLOORS.items()))
-    print(f"{os.path.relpath(TOUCH, ROOT)}  {os.path.getsize(TOUCH) / 1024:.1f} KB")
+    print(f"{os.path.relpath(TOUCH, ROOT)}  {len(STAGED[TOUCH]) / 1024:.1f} KB")
+
+    # BEFORE commit(), which is the whole point of staging: a run that refuses
+    # the art leaves the working tree exactly as it found it.
     if bad:
         raise SystemExit(f"{bad} floor violation(s); the art is not shippable")
+    commit()
+    print(f"wrote {len(STAGED)} files")
 
 
 if __name__ == "__main__":

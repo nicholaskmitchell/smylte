@@ -67,10 +67,40 @@ internal static class X11Window
         public long Data0, Data1, Data2, Data3, Data4;
     }
 
-    /// True when this process is actually talking X11. Set once, from the
-    /// backend the client asked GDK for in Program.Main — the only value that
-    /// can be right, because GDK is never asked to choose.
+    /// True when this process is actually talking X11.
+    ///
+    /// Set from the DISPLAY GDK opened, never from the GDK_BACKEND the client
+    /// asked for. Those differ whenever GDK declines the request — which, until
+    /// NativeEnv existed, was every single launch, because the request never
+    /// reached GDK at all. The client then believed it was on X11, told the
+    /// page `canPin: true`, and silently no-opped every call below.
     public static bool Active { get; set; }
+
+    [DllImport("libgobject-2.0.so.0")]
+    private static extern IntPtr g_type_name_from_instance(IntPtr instance);
+
+    /// Is this display GDK's X11 one?
+    ///
+    /// By type name rather than by calling `gdk_x11_display_get_xdisplay` and
+    /// checking for NULL: that function is guarded by `g_return_val_if_fail`,
+    /// so probing with it would log a GLib CRITICAL on every Wayland launch —
+    /// a scary line in the journal for a question that has a quiet answer.
+    public static bool DisplayIsX11(Gdk.Display? display)
+    {
+        try
+        {
+            if (display is null) return false;
+            var name = g_type_name_from_instance(display.Handle.DangerousGetHandle());
+            return name != IntPtr.Zero
+                && Marshal.PtrToStringUTF8(name) == "GdkX11Display";
+        }
+        catch (Exception)
+        {
+            // No GObject, or a display we cannot name. Assume not X11: the
+            // consequence is a missing pin, not a control that lies.
+            return false;
+        }
+    }
 
     /// Whether the window stays above other windows.
     public static void SetAbove(Gtk.Window window, bool above) =>

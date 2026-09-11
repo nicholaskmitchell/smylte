@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Runtime.InteropServices;
 
 namespace Smylte.Desktop;
@@ -55,15 +54,13 @@ internal static class Program
         // a second instance — and only then can the retired file be deleted,
         // since a running image cannot be. Bounded: a process that will not
         // exit is not a reason to never start.
-        var afterUpdate = Array.IndexOf(args, Updater.AfterUpdateFlag);
-        if (afterUpdate >= 0 && afterUpdate + 1 < args.Length
-            && int.TryParse(args[afterUpdate + 1], out var previousPid))
-        {
-            try { Process.GetProcessById(previousPid).WaitForExit(30_000); }
-            catch (ArgumentException) { /* already gone */ }
-            catch (Exception) { /* cannot watch it; carry on */ }
-        }
-        Updater.RemoveStaleClient(Environment.ProcessPath);
+        // Through Updater, not re-parsed here. The same three lines used to be
+        // written out twice — once here and once in the Linux client — and the
+        // copy that had a test was the one in Updater, which neither client
+        // called. Two implementations of "did the updater start me" that can
+        // drift is one more than this needs.
+        if (Updater.AfterUpdatePid(args) is { } previous) Updater.WaitForPreviousClient(previous);
+        Updater.RemoveRetiredClient(Environment.ProcessPath);
 
         // Ahead of the mutex check now, because the "already running" branch can
         // show a dialog: SetCompatibleTextRenderingDefault has to run before the

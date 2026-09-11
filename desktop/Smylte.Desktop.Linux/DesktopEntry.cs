@@ -44,10 +44,21 @@ internal static class DesktopEntry
 
     private static string IconRoot => System.IO.Path.Combine(DataHome, "icons");
 
-    /// Bring the entry in line with the settings. Safe to call on every change;
-    /// it rewrites rather than diffing, because the inputs (chosen icon,
-    /// resolved scheme, binary path) are all cheap to restate and a stale entry
-    /// is the failure this exists to avoid.
+    /// Is there an entry on disk right now?
+    ///
+    /// The file is the truth, not the setting, and the two can disagree:
+    /// `--install` runs in its own process (before GTK, so it works over SSH),
+    /// writes the entry and sets the field — while an instance that is already
+    /// open still holds the copy of settings.json it loaded at startup and
+    /// overwrites the field on its next save. Reporting the FILE to the page
+    /// means the Appearance checkbox tells the truth either way, and the next
+    /// thing the user changes there writes the truth back.
+    public static bool Installed => File.Exists(Path);
+
+    /// Bring the entry in line with the settings, in both directions.
+    ///
+    /// For the two callers that actually decide: the Appearance toggle and
+    /// `--install` / `--uninstall`. Everything else wants Follow.
     ///
     /// Returns whether the requested state was reached, so `--install` can say
     /// something true on the way out. Nothing else looks at the answer.
@@ -55,27 +66,15 @@ internal static class DesktopEntry
     {
         try
         {
-            if (!settings.StartMenuShortcut)
-            {
-                if (File.Exists(Path)) File.Delete(Path);
-                IconAssets.Remove(IconRoot, Program.AppId);
-                Refresh();
-                return true;
-            }
+            if (settings.StartMenuShortcut) return Write(resolved);
 
-            var exe = Environment.ProcessPath;
-            if (string.IsNullOrEmpty(exe)) return false;
-
-            // The RESOLVED choice, not the literal one. A desktop entry points
-            // at a static file, so `Auto` has to be answered now — the same
-            // wrinkle ShellShortcut has, and the same consequence: the entry
-            // does not follow a later light/dark flip until something calls
-            // Sync again, which is why the icon path re-syncs.
-            if (!IconAssets.Export(resolved, IconRoot, Program.AppId)) return false;
-
-            Directory.CreateDirectory(System.IO.Path.GetDirectoryName(Path)!);
-            File.WriteAllText(Path, Contents(exe), new UTF8Encoding(false));
-            Refresh();
+            var existed = File.Exists(Path);
+            if (existed) File.Delete(Path);
+            IconAssets.Remove(IconRoot, Program.AppId);
+            // Only when something was actually removed. Unconditionally, this
+            // rewrote ~/.local/share/applications/mimeinfo.cache on every
+            // launch of every user who had declined the launcher.
+            if (existed) Refresh(applications: true);
             return true;
         }
         catch (Exception)
@@ -86,46 +85,94 @@ internal static class DesktopEntry
         }
     }
 
-    private static string Contents(string exe) =>
-        $"""
-        [Desktop Entry]
-        Type=Application
-        Name=Smylte
-        Comment=Tasks and calendar
-        Exec="{exe}"
-        Icon={Program.AppId}
-        Terminal=false
-        Categories=Office;Calendar;ProjectManagement;
-        StartupNotify=true
-        StartupWMClass={Program.AppId}
-        X-GNOME-UsesNotifications=true
+    /// Keep an existing entry current, and never remove one.
+    ///
+    /// The entry carries a COPY of the resolved variant, so a light/dark flip
+    /// has to rewrite it — that is why the icon path calls this rather than
+    /// only running when the toggle changes. What it must NOT do is act on the
+    /// `off` half of a setting it did not read this second: this runs from
+    /// ApplyIcon, which fires on every colour-scheme change and on every start,
+    /// and a stale `false` there is what silently deleted a launcher somebody
+    /// had just installed from a terminal.
+    public static void Follow(Settings settings, IconChoice resolved)
+    {
+        try
+        {
+            if (settings.StartMenuShortcut || Installed) Write(resolved);
+        }
+        catch (Exception) { /* see Sync */ }
+    }
 
-        """;
+    private static bool Write(IconChoice resolved)
+    {
+        var exe = Environment.ProcessPath;
+        // CanWrite, not just a null check: a newline in the path cannot be
+        // represented on a `key=value` line whatever the escaping, and half an
+        // entry is worse than none.
+        if (exe is null || !DesktopEntryText.CanWrite(exe)) return false;
 
-    // Exec is quoted because a path can contain spaces, and it carries NO field
-    // code (%u, %f): this client registers no MIME type and no URL scheme, and
-    // a launcher that expands a field code the app cannot use is a launch that
-    // fails for a reason nobody can see.
+        // The RESOLVED choice, not the literal one. A desktop entry points
+        // at a static file, so `Auto` has to be answered now — the same
+        // wrinkle ShellShortcut has, and the same consequence: the entry
+        // does not follow a later light/dark flip until something calls
+        // this again, which is why the icon path re-syncs.
+        if (!IconAssets.Export(resolved, IconRoot, Program.AppId)) return false;
+
+        Directory.CreateDirectory(System.IO.Path.GetDirectoryName(Path)!);
+
+        // Compared before writing, so an unchanged entry does not restart the
+        // desktop database. This runs on every launch.
+        var contents = Contents(exe);
+        var changed = !File.Exists(Path) || File.ReadAllText(Path) != contents;
+        if (changed) File.WriteAllText(Path, contents, new UTF8Encoding(false));
+
+        Refresh(applications: changed);
+        return true;
+    }
+
+    internal static string Contents(string exe) =>
+        DesktopEntryText.Contents(exe, Program.AppId);
 
     /// Nudge the desktop into noticing. Both tools are optional and both are
     /// allowed to be missing — GNOME watches the applications directory itself,
     /// and these only shorten the wait on desktops that do not.
-    private static void Refresh()
+    ///
+    /// **Off the calling thread.** Two processes with a ten-second wait each is
+    /// up to twenty seconds, and every caller here is on the GTK thread: this
+    /// ran inside the MainWindow constructor and inside the bridge's `Icon`
+    /// handler, where it froze the window and — since the bridge answers on a
+    /// bounded wait — could make the page's own icon dropdown snap back.
+    ///
+    /// `applications` is false when the entry on disk did not change, which is
+    /// every launch of an installed client: rewriting mimeinfo.cache to say
+    /// what it already says is work nobody asked for.
+    private static void Refresh(bool applications)
     {
-        foreach (var (tool, argument) in new[]
+        var tools = new List<(string Tool, string Argument)>
         {
-            ("update-desktop-database", System.IO.Path.Combine(DataHome, "applications")),
-            ("gtk4-update-icon-cache", IconRoot),
-        })
+            // The THEME directory, not the search-path root. gtk4-update-icon-cache
+            // writes an icon-theme.cache beside an index.theme and refuses a
+            // directory that holds neither, so pointing it at `icons/` could
+            // never have succeeded — `icons/hicolor/` is the theme.
+            ("gtk4-update-icon-cache", System.IO.Path.Combine(IconRoot, "hicolor")),
+        };
+        if (applications)
+            tools.Insert(0, ("update-desktop-database",
+                System.IO.Path.Combine(DataHome, "applications")));
+
+        Task.Run(() =>
         {
-            try
+            foreach (var (tool, argument) in tools)
             {
-                var info = new ProcessStartInfo(tool) { UseShellExecute = false };
-                info.ArgumentList.Add(argument);
-                using var process = Process.Start(info);
-                process?.WaitForExit(10_000);
+                try
+                {
+                    var info = new ProcessStartInfo(tool) { UseShellExecute = false };
+                    info.ArgumentList.Add(argument);
+                    using var process = Process.Start(info);
+                    process?.WaitForExit(10_000);
+                }
+                catch (Exception) { /* not installed, and not needed */ }
             }
-            catch (Exception) { /* not installed, and not needed */ }
-        }
+        });
     }
 }

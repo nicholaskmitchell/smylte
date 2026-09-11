@@ -54,6 +54,9 @@ run_case() {
     _STUB=$(mktemp -d)
     : "${FAIL_PROBE_TIMES:=0}" "${API_ANSWER:=present}" "${FAIL_UPLOAD_TIMES:=0}"
     : "${FAIL_EDIT_TIMES:=0}" "${FAIL_CREATE_TIMES:=0}" "${EDIT_WRITES_SHA:=1}" "${EDIT_DROPS_TREE:=0}"
+    # The body fetch is the one call in the step whose failure the code is
+    # allowed to swallow, so it is the one that most needs a knob.
+    : "${FAIL_BODY_TIMES:=0}"
     # What the release already holds: its asset names, and the client source
     # tree its notes record (empty = a release from before that line existed).
     : "${ASSETS:=smylte-web.zip Smylte.exe Smylte-linux-x86_64}" "${PUBLISHED_TREE:=}"
@@ -105,7 +108,13 @@ run_case() {
           # --json reads the release (assets, or the body for the decision and
           # the post-condition); bare is an existence probe.
           if [[ "$*" == *"--json assets"* ]]; then printf '%s\n' $ASSETS; return 0; fi
-          if [[ "$*" == *--json* ]]; then cat "$_STUB/body"; return 0; fi
+          if [[ "$*" == *--json* ]]; then
+            # `bodyfetch`, not `body`: the counter and the release body would
+            # otherwise be the same file under $_STUB.
+            n=$(_bump bodyfetch); echo "  [gh] release view --json body (call $n)" >&2
+            [ "$n" -le "$FAIL_BODY_TIMES" ] && { echo "gh: HTTP 503" >&2; return 1; }
+            cat "$_STUB/body"; return 0
+          fi
           _probe "release view" || return 1
           echo desktop-latest; return 0 ;;
         "release upload")
@@ -138,8 +147,14 @@ run_case() {
       esac
     }
 
-    # `bash -e {0}` is the shell GitHub Actions runs a `run:` block with.
-    ( set -e; source "$WORK/publish.sh" )
+    # `bash -e {0}` is the shell GitHub Actions runs a `run:` block with —
+    # and `-e` is ALL of it. `-u` and `-o pipefail` are set above for the
+    # harness's own code and must be turned back off here, or the step under
+    # test runs stricter than the step that ships: with pipefail on, a scrape
+    # whose fetch failed is a failed assignment, and with it off — as in
+    # production — it is an empty string that reads as "unrecorded". That is a
+    # difference between red and green-and-wrong, and it hid exactly that bug.
+    ( set +u +o pipefail; set -e; source "$WORK/publish.sh" )
   )
 }
 
@@ -173,6 +188,17 @@ case_is "notes that miss the commit fail the job"        1 'half-updated' EDIT_W
 # sends the step into `gh release create`, which dies with already_exists.
 case_is "a transient probe does not become a create"     0 'release upload' FAIL_PROBE_TIMES=2
 case_is "a dead probe fails rather than guessing"        1 'EXIT|503' FAIL_PROBE_TIMES=99
+# The one call the step is allowed to swallow. `published=$(retry ... | sed |
+# head -1) || return 1` cannot fail — a pipeline's status is head's — so a
+# body fetch that 503s five times produced an empty key, which reads as
+# "unrecorded", which republishes BOTH binaries and exits 0. Everything else
+# about that run looks like a clean publish.
+# Ten, not 99: five attempts each for the two publish_reason fetches, and the
+# post-condition's own fetch left working. Failing that one too would make the
+# case pass for the wrong reason — `BODY=$(retry ...)` is a bare assignment and
+# dies under `set -e` whatever the decision above it did.
+case_is "a dead body fetch does not republish"          1 'giving up' \
+  FAIL_BODY_TIMES=10 PUBLISHED_TREE="$CLIENT_TREE" PUBLISHED_LINUX_KEY="$LINUX_KEY"
 
 # ── which files go up ───────────────────────────────────────────────────────
 # The exe is a self-contained bundle that is never the same bytes twice, and

@@ -245,7 +245,20 @@ public sealed class LocalServer : IDisposable
                 bridge.Appearance(Str(body, "background"));
                 break;
             case "/desktop/icon":
-                bridge.Icon(Str(body, "choice"), Bool(body, "startMenuShortcut"));
+                // `startMenuShortcut` is REQUIRED, for the same reason `pinned`
+                // is below: this field decides whether a file in the user's
+                // home exists, and `Bool` reads an absent key as false — so a
+                // POST that simply omitted it removed the Start-menu shortcut
+                // or the desktop entry and answered 200, which the page then
+                // reconciled its checkbox from. The page always sends it; a
+                // request that does not is malformed, not a request to turn it
+                // off.
+                if (BoolOrNull(body, "startMenuShortcut") is not { } shortcut)
+                {
+                    TrySetStatus(ctx, 400);
+                    return;
+                }
+                bridge.Icon(Str(body, "choice"), shortcut);
                 break;
             case "/desktop/window":
                 // The floating focus window. An action the host does not know,

@@ -65,6 +65,20 @@ public sealed class AppIconTests
     private readonly record struct Entry(int Size, int Planes, int BitCount, int Offset, int Length,
                                          byte ColorCount, byte Reserved, int RawHeight);
 
+    /// One frame's PNG payload, straight out of the container.
+    ///
+    /// Exposed for LinuxIconTests, which pins the loose rasters the GTK client
+    /// carries to the frames the .ico carries at the same size. The generator
+    /// makes both from one render with one set of arguments; nothing but a
+    /// comment said so, and a Linux emitter that quietly used a different
+    /// colour or a different reduce would have shipped with the suite green.
+    internal static byte[] Frame(string ico, int size)
+    {
+        var bytes = Bytes(ico);
+        var entry = Directory(bytes).Single(e => e.Size == size);
+        return bytes[entry.Offset..(entry.Offset + entry.Length)];
+    }
+
     private static List<Entry> Directory(byte[] ico)
     {
         Assert.Equal(0, BitConverter.ToUInt16(ico, 0));  // idReserved

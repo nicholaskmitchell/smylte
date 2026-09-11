@@ -54,12 +54,33 @@ internal static class HeaderChrome
             .float-ring {
                 background: {{bg}};
                 box-shadow: inset 0 0 0 1px {{edge}};
+                padding: 6px;
             }
+            /* The update strip. Without these three lines it had a class and
+               no rule anywhere, so it drew the GTK theme's own label colour on
+               top of the page's --bg — black on near-black under every dark
+               theme, which is the state the strip is most likely to be seen
+               in. It is chrome the host draws, so it is painted from the same
+               two colours the header bar is. */
+            .smylte-banner {
+                background: {{bg}};
+                color: {{fg}};
+                border-bottom: 1px solid {{edge}};
+                padding: 6px;
+            }
+            .smylte-banner label { color: {{fg}}; }
             """);
     }
 
     /// Hand the frame back to the theme, for before the page has said anything
-    /// — the setup dialog, and the moment before the SPA boots.
+    /// — the moment before the SPA boots.
+    ///
+    /// The provider is ONE object for the whole display, so this is not a
+    /// per-window call and must not be treated as one. The setup dialog used to
+    /// call it on open, which stripped the main window's header colour and the
+    /// float ring's frame along with its own — a dialog cannot "reset its own"
+    /// chrome when the chrome is shared. Only the main window calls this now,
+    /// and only before it has a colour to apply.
     public static void Reset(Gdk.Display display) => Load(display, "");
 
     private static void Load(Gdk.Display display, string css)

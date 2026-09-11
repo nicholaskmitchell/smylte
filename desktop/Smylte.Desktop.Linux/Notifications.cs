@@ -27,8 +27,19 @@ internal static class Notifications
 
                 var body = source.GetBody();
                 if (!string.IsNullOrEmpty(body)) notification.SetBody(body);
-                notification.SetIcon(Gio.ThemedIcon.New(
-                    IconAssets.IconName(IconAssets.Resolve(settings))));
+                // The APP ID, not the variant name. The suffixed names
+                // (`…Smylte-ink`) live in <DataFolder>/icons, which this
+                // process adds to its own GtkIconTheme search path and no
+                // notification daemon has ever heard of — gnome-shell, dunst
+                // and mako all resolve against $XDG_DATA_HOME/icons and
+                // $XDG_DATA_DIRS. The unsuffixed id is the one name the client
+                // writes there, and only when the desktop entry is installed,
+                // so this resolves in exactly the case where anything can.
+                //
+                // `g_themed_icon_new` has no fallback chain of its own, which
+                // is why an unresolvable name here was not "the desktop entry's
+                // icon instead" but an empty icon slot.
+                notification.SetIcon(Gio.ThemedIcon.New(Program.AppId));
 
                 // The tag, when the page sets one, is what makes a replacement
                 // replace rather than stack — the focus surface re-raises the

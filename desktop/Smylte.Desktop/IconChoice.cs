@@ -53,12 +53,26 @@ public static class IconChoices
     /// welded the enum's declaration ORDER into the persisted format, so
     /// inserting a variant would have silently rewritten those users' choice.
     ///
-    /// Nothing writes numbers — the app persists `choice.ToString()` — so this
-    /// takes nothing away from a settings.json this client produced.
+    /// The COMMA is the other half, and the digit check does not cover it.
+    /// `Enum.TryParse` accepts a comma-separated list and ORs the members
+    /// together even for an enum with no [Flags] — so `"Paper,Ink"` is 1|2 = 3,
+    /// which is `Accent`. A settings.json naming two variants resolved
+    /// confidently to a THIRD one, and `Enum.IsDefined` waves it through
+    /// because 3 is a real member. Measured:
+    ///
+    ///     Parse("Paper,Ink")         -> Accent
+    ///     Parse("Auto,Mark")         -> Mark
+    ///     Parse("Mark,Accent,Paper") -> Auto   (7 is undefined, so caught)
+    ///
+    /// Nothing writes either shape — the app persists `choice.ToString()` — so
+    /// refusing both takes nothing away from a settings.json this client wrote.
     public static IconChoice Parse(string? value)
     {
         var trimmed = value?.Trim();
-        if (string.IsNullOrEmpty(trimmed) || !char.IsAsciiLetter(trimmed[0])) return IconChoice.Auto;
+        if (string.IsNullOrEmpty(trimmed)) return IconChoice.Auto;
+        if (!char.IsAsciiLetter(trimmed[0])) return IconChoice.Auto;
+        if (trimmed.Contains(',')) return IconChoice.Auto;
+
         return Enum.TryParse<IconChoice>(trimmed, ignoreCase: true, out var choice)
             && Enum.IsDefined(choice)
             ? choice
