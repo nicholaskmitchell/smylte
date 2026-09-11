@@ -135,6 +135,7 @@ internal sealed class MainWindow : IDesktopBridge
         // presenting the main window, and left the user with nothing on screen.
         _closing = false;
         _setupPrompt.SetVisible(false);
+        _splash.SetLabel("Starting…");
 
         // Built into locals and published to the fields only at the end, so a
         // start this one has overtaken can dispose exactly what it made.
@@ -143,25 +144,38 @@ internal sealed class MainWindow : IDesktopBridge
 
         try
         {
-            var progress = new Progress<string>(text => _splash.SetLabel(text));
+            // Gated on the generation, evaluated at DELIVERY. Progress<T>
+            // captured the GTK context at construction, so the comparison runs
+            // on the GTK thread — and an abandoned download reporting
+            // "Downloading 40 MB…" over a live window's splash is the one way a
+            // loser could still be seen after this change.
+            var progress = new Progress<string>(text =>
+            {
+                if (generation == _generation) _splash.SetLabel(text);
+            });
             var update = await Updater
                 .EnsureWebAssetsAsync(_settings, progress, CancellationToken.None)
                 .ConfigureAwait(true);
 
             if (generation != _generation) return;
 
+            // CONSTRUCTED here, but not started and not persisted — see below.
+            // Constructing binds nothing: ChoosePort probes a port and releases
+            // it again, and Origin is computed from the number rather than from
+            // a listener. The known cost of the gap this opens: a foreign
+            // process can take the port between the probe and Start(), which is
+            // now a whole login away rather than microseconds. That surfaces as
+            // an HttpListenerException out of Start() and lands in the catch
+            // below with `server` still owned here — the same place it landed
+            // before, just later.
             server = new LocalServer(_settings.WebRoot, _settings.ServerUrl, _settings.Port);
-            if (server.Port != _settings.Port)
-            {
-                // Remembered, because localStorage is keyed by origin and the
-                // origin includes the port — a port that moved on every launch
-                // would throw away the offline cache and the saved theme.
-                _settings.Port = server.Port;
-                TrySave();
-            }
-            server.Bridge = this;
-            server.Start();
 
+            // WebHost's constructor may empty the cookie jar — see
+            // Settings.CookieServer. That is a file delete rather than a
+            // resource this start would hold, and both starts want the same
+            // one, so it is safe to do before knowing who wins. The CLAIM it
+            // records is persisted below, with everything else this start is
+            // only allowed to write once it has won.
             host = new WebHost(_settings);
             IconAssets.Install(_settings, _window.GetDisplay());
 
@@ -173,10 +187,41 @@ internal sealed class MainWindow : IDesktopBridge
 
             if (generation != _generation)
             {
+                // Disposed, not published — and this is the whole reason the
+                // listener is not bound yet. An overtaken start that had
+                // already called Start() would hold the port until it got
+                // here, which is past a login that can take twenty seconds;
+                // the next start's ChoosePort would walk past the taken port
+                // and PERSIST the moved one, so the SPA came back at a new
+                // origin with an empty localStorage. The fix for that is not a
+                // second owner for the listener, it is not acquiring one in the
+                // first place — an object with two owners is how the obvious
+                // version of this (`_starting`, disposed from Shutdown) turned
+                // a leak into a double dispose.
                 server.Dispose();
                 host.Dispose();
+                // Explicitly: GirCore pins the wrapper, so an unparented view
+                // is not reclaimed by GC. It spawns no web process (nothing
+                // loaded it), but the GObject and its ref on the shared
+                // NetworkSession live for the rest of the process.
+                web.Dispose();
                 return;
             }
+
+            // Past the check, so this start owns the process. Only NOW does
+            // anything outside this method change: the socket binds and the two
+            // settings decisions are written.
+            TrySave();
+            if (server.Port != _settings.Port)
+            {
+                // Remembered, because localStorage is keyed by origin and the
+                // origin includes the port — a port that moved on every launch
+                // would throw away the offline cache and the saved theme.
+                _settings.Port = server.Port;
+                TrySave();
+            }
+            server.Bridge = this;
+            server.Start();
 
             _server = server;
             _host = host;
@@ -214,24 +259,38 @@ internal sealed class MainWindow : IDesktopBridge
 
     public void Present() => _window.Present();
 
+    /// The empty state, for a client that has nothing to start.
+    ///
+    /// Set by the ONE caller that knows it — Program's activation path — rather
+    /// than re-derived when a dialog closes. StartAsync clears it on entry, so
+    /// there is exactly one writer in each direction.
+    public void ShowUnconfigured()
+    {
+        _splash.SetLabel("Smylte is not configured yet.\n\nOpen setup to name the server to use.");
+        _stack.SetVisibleChildName("splash");
+        _setupPrompt.SetVisible(true);
+    }
+
     public void OpenSetup()
     {
         if (_setup is { } open) { open.Present(); return; }
-        _setup = new SetupWindow(_app, _settings, saved =>
+        _setup = new SetupWindow(_app, _window, _settings, saved =>
         {
             _setup = null;
-            if (!saved)
-            {
-                // Cancelled. If there is nothing running behind the dialog,
-                // say so and leave a control that reopens it.
-                if (_server is null)
-                {
-                    _splash.SetLabel(
-                        "Smylte is not configured yet.\n\nOpen setup to name the server to use.");
-                    _setupPrompt.SetVisible(true);
-                }
-                return;
-            }
+            // Cancelled: write NOTHING. The branch that used to be here asked
+            // `_server is null` — "nothing is running right now" — and answered
+            // it with "this client was never configured". Those diverge on the
+            // most common path there is: the first launch after the first save
+            // runs Shutdown + StartAsync with no local web build yet, so a
+            // GitHub that cannot be reached throws rather than degrading, and
+            // Fail's true message was overwritten with "not configured yet".
+            // Byte-identical screens for two different problems, and the
+            // misdirection is self-confirming — Setup reopens prefilled and
+            // "Test connection" probes the user's own server, which answers.
+            //
+            // Nothing here knows why the dialog was opened. Program does, and
+            // it says so up front by calling ShowUnconfigured.
+            if (!saved) return;
             // Everything downstream of the settings is rebuilt rather than
             // patched: the server URL, the port, the data folder and the
             // credentials each feed something constructed at startup, and
@@ -253,10 +312,19 @@ internal sealed class MainWindow : IDesktopBridge
 
         if (_float is { } floating) { _float = null; floating.Close(); }
 
-        if (!_window.IsMaximized())
+        // The size guard is not paranoia. A destroyed GtkWindow answers 0x0,
+        // and this runs twice on one path: close the main window with the setup
+        // dialog open — the dialog is application-owned, so the process
+        // survives — then Save, and Shutdown() runs again against a window GTK
+        // has already torn down. 0x0 is persisted, SetDefaultSize(0, 0) on the
+        // next launch realises a 64x17 window (measured), and nothing but a
+        // hand-edit of settings.json gets it back.
+        var width = _window.GetWidth();
+        var height = _window.GetHeight();
+        if (!_window.IsMaximized() && width > 0 && height > 0)
         {
-            _settings.WindowWidth = _window.GetWidth();
-            _settings.WindowHeight = _window.GetHeight();
+            _settings.WindowWidth = width;
+            _settings.WindowHeight = height;
         }
         _settings.WindowMaximized = _window.IsMaximized();
         TrySave();
@@ -417,9 +485,21 @@ internal sealed class MainWindow : IDesktopBridge
     /// a round trip in the path of a colour the user is dragging.
     void IDesktopBridge.Appearance(string? background) => Post(() =>
     {
-        var colour = Theme.ParseHex(background);
-        _settings.TitleBarColor = colour is null ? "" : background!.Trim();
-        ApplyChrome(_settings.TitleBarColor);
+        // The same two steps MainForm has always taken, in the same order: a
+        // value the host cannot read normalises to empty — which hands the
+        // frame back to the system, as the interface documents — and then an
+        // unchanged value returns without writing anything.
+        //
+        // The early-out is not a micro-optimisation here. This fires on every
+        // colour the user drags, and it is a POST any process on loopback can
+        // send; without it, each one queued a closure on the GTK main loop that
+        // repainted two windows and wrote settings.json, for a colour that had
+        // not moved.
+        var value = Theme.ParseHex(background) is null ? "" : background!.Trim();
+        if (value == _settings.TitleBarColor) return;
+
+        _settings.TitleBarColor = value;
+        ApplyChrome(value);
         _float?.ApplyChrome();
         TrySave();
     });

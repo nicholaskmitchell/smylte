@@ -199,11 +199,42 @@ public sealed class LocalServer : IDisposable
     ///
     /// This is the only route that is neither a proxied API call nor a file off
     /// disk, so it gets its own guards rather than inheriting either one's.
-    /// HttpListener is bound to localhost already; `IsLocal` restates that, and
-    /// the Origin check keeps a page on some other origin — anything the webview
-    /// might be navigated to — from driving the window it is displayed in. Both
-    /// are cheap, and the alternative is an open control channel on a fixed
-    /// well-known port on the user's machine.
+    /// What each one actually buys, measured rather than assumed:
+    ///
+    /// **The PREFIX is what keeps this off the network**, not `IsLocal`. The
+    /// listener is registered as `http://localhost:{Port}/`, so HttpListener's
+    /// own prefix matcher answers 404 to `Host: evil.example` and even to
+    /// `Host: 127.0.0.1` before any of this code runs. That is what closes DNS
+    /// rebinding — the canonical remote attack on a fixed-port loopback control
+    /// channel — and it is why `localhost` rather than `+` or `127.0.0.1` in
+    /// the prefix is a security decision. `IsLocal` is NOT a loopback test: the
+    /// managed implementation compares the local and remote addresses, so it
+    /// answers true for a request arriving at the machine's own LAN address. It
+    /// is kept as the thing that would still exclude off-box callers if the
+    /// prefix ever widened.
+    ///
+    /// **A cross-origin PAGE cannot drive or read this.** Every verb is POST,
+    /// and a cross-site POST always carries an Origin, which the check below
+    /// rejects. A cross-origin GET of `/desktop/state` carries Origin too — it
+    /// is CORS-mode — so it is refused as well; the only shapes that omit
+    /// Origin are `no-cors`, and those come back opaque with status 0. What is
+    /// left for a page is a fingerprinting oracle: a `<script src>` fires
+    /// `onload` on the 200, which reveals that this port is a Smylte bridge and
+    /// nothing else.
+    ///
+    /// **An absent Origin on a mutating route is not a page.** Per the Fetch
+    /// standard a browser appends Origin to every request whose method is not
+    /// GET or HEAD, same-origin included — measured on WebKitGTK for all five
+    /// POST routes. So a POST with no Origin is curl, a scanner, or another
+    /// account on this machine, and it is refused. The GET above cannot ask for
+    /// the same thing, because a same-origin GET carries no Origin by spec.
+    ///
+    /// **It does not authenticate a local process.** HttpListener surfaces no
+    /// peer credential — a `/proc/net/tcp` lookup can recover a uid but only
+    /// best-effort, since the row is gone once the connection closes — so
+    /// anything local that sets the header reaches every verb. What that buys
+    /// is deliberately kept small: window chrome, and a launcher entry the user
+    /// can put back by re-ticking the box.
     private async Task DesktopAsync(HttpListenerContext ctx, string path)
     {
         var bridge = Bridge;
@@ -225,6 +256,14 @@ public sealed class LocalServer : IDisposable
         }
 
         if (ctx.Request.HttpMethod != "POST") { TrySetStatus(ctx, 405); return; }
+
+        // AFTER the method gate, and that placement is the whole point. Hoisting
+        // this above the `/desktop/state` early-out would 403 `readState`, which
+        // is a same-origin GET and therefore carries no Origin by spec — the
+        // desktop-only settings would stop rendering with no error anywhere.
+        // Keeping it here also leaves GET /desktop/window answering 405 rather
+        // than 403, which is what says "wrong method", not "wrong caller".
+        if (string.IsNullOrEmpty(origin)) { TrySetStatus(ctx, 403); return; }
 
         JsonElement body;
         try
@@ -553,8 +592,19 @@ public sealed class LocalServer : IDisposable
         }
     }
 
+    private bool _disposed;
+
+    /// Idempotent, and it has to be: the startup path has two places that may
+    /// own a server — the field and a local inside StartAsync — and the second
+    /// call landed in a catch block that then disposed it again, so an
+    /// ObjectDisposedException escaped a fire-and-forgotten Task and took the
+    /// rest of the cleanup with it. `_cts.Cancel()` after `_cts.Dispose()`
+    /// throws; nothing else here minds being called twice.
     public void Dispose()
     {
+        if (_disposed) return;
+        _disposed = true;
+
         _cts.Cancel();
         try { _listener.Stop(); } catch (Exception) { /* already stopped */ }
         try { _listener.Close(); } catch (Exception) { /* already closed */ }

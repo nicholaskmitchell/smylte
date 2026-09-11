@@ -56,6 +56,10 @@
     <!-- The Exec line of the desktop entry. The rest of DesktopEntry is GTK and
          the filesystem; this is the string function that was wrong. -->
     <Compile Include="../Smylte.Desktop.Linux/DesktopEntryText.cs" />
+    <!-- Write-only-if-different. It gates a process spawn with a ten-second
+         wait, so the branch that decides nothing happened is the branch worth
+         pinning. -->
+    <Compile Include="../Smylte.Desktop/FileSync.cs" />
     <!-- The icon comes in as bytes rather than as a linked source file, so
          AppIconTests asserts on the identical blob <ApplicationIcon> stamps into
          the exe. LogicalName pins the resource name: without it, the linked path

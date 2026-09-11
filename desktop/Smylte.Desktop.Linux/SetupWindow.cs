@@ -37,7 +37,7 @@ internal sealed class SetupWindow
 
     private bool _saved;
 
-    public SetupWindow(Gtk.Application app, Settings settings, Action<bool> done)
+    public SetupWindow(Gtk.Application app, Gtk.Window parent, Settings settings, Action<bool> done)
     {
         _settings = settings;
         _done = done;
@@ -46,7 +46,21 @@ internal sealed class SetupWindow
         _window.SetApplication(app);
         _window.SetTitle("Smylte setup");
         _window.SetDefaultSize(620, 480);
-        _window.SetModal(false);
+
+        // Transient AND modal, where this used to be a peer toplevel.
+        //
+        // Without SetTransientFor this dialog is a second top-level window of
+        // the application, so it outlives its parent: close the main window
+        // while it is open and the process stays alive with no main window,
+        // the launcher's next click lands on `existing.Present()` against a
+        // destroyed GtkWindow, and a Save then runs Shutdown() against that
+        // same corpse — which is how a 0x0 geometry reaches settings.json.
+        //
+        // Modal is what the Windows client already does (`ShowDialog(this)`),
+        // and the cost is the same there: the app behind the dialog cannot be
+        // used while it is open. Saving tears that app down anyway.
+        _window.SetTransientFor(parent);
+        _window.SetModal(true);
 
         _password.SetVisibility(false);
         _token.SetVisibility(false);

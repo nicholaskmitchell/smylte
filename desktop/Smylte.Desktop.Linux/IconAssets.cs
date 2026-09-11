@@ -95,15 +95,26 @@ internal static class IconAssets
     /// Write one variant's files out under `name`, for the desktop entry, which
     /// references an icon FILE rather than a resource and so needs the resolved
     /// choice materialised. Returns false if nothing could be written.
-    public static bool Export(IconChoice resolved, string root, string name)
+    /// `changed` reports whether any byte on disk actually moved.
+    ///
+    /// The caller uses it to decide whether to spawn `gtk4-update-icon-cache`,
+    /// which is a process with a ten-second wait. Without it that ran on every
+    /// launch, on every light/dark flip, and on every `/desktop/icon` POST —
+    /// always rewriting the same eight files and always refreshing a cache that
+    /// had nothing new in it.
+    public static bool Export(IconChoice resolved, string root, string name, out bool changed)
     {
         var wrote = false;
+        changed = false;
         foreach (var size in Sizes)
         {
             var target = Path.Combine(root, "hicolor", $"{size}x{size}", "apps", name + ".png");
-            if (Unpack(FileName(resolved, size), target)) wrote = true;
+            if (Unpack(FileName(resolved, size), target, out var moved)) wrote = true;
+            changed |= moved;
         }
-        Unpack(SvgName(resolved), Path.Combine(root, "hicolor", "scalable", "apps", name + ".svg"));
+        Unpack(SvgName(resolved),
+            Path.Combine(root, "hicolor", "scalable", "apps", name + ".svg"), out var svgMoved);
+        changed |= svgMoved;
         return wrote;
     }
 
@@ -121,27 +132,27 @@ internal static class IconAssets
         try { if (File.Exists(path)) File.Delete(path); } catch (Exception) { /* best effort */ }
     }
 
-    private static bool Unpack(string resource, string target)
+    /// Write one embedded resource out. `changed` is set when the bytes on
+    /// disk were not already the ones being written — see FileSync for why the
+    /// caller cares.
+    private static bool Unpack(string resource, string target, out bool changed)
     {
+        changed = false;
         try
         {
             using var stream = typeof(IconAssets).Assembly
                 .GetManifestResourceStream("icons." + resource);
             if (stream is null) return false;
 
-            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-
-            // Temp-then-move, because the shell may have the current file open
-            // and a half-written PNG is a broken icon rather than a missing one
-            // — the same reasoning ShellShortcut.WriteIcon states.
-            var temp = target + ".tmp";
-            using (var file = File.Create(temp)) stream.CopyTo(file);
-            File.Move(temp, target, overwrite: true);
-            return true;
+            using var buffer = new MemoryStream();
+            stream.CopyTo(buffer);
+            return FileSync.Write(buffer.ToArray(), target, out changed);
         }
         catch (Exception)
         {
             return false;
         }
     }
+
+    private static bool Unpack(string resource, string target) => Unpack(resource, target, out _);
 }

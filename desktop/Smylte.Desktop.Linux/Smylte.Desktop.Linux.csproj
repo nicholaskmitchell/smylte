@@ -67,6 +67,7 @@
     <Compile Include="../Smylte.Desktop/PasswordProtector.cs" />
     <Compile Include="../Smylte.Desktop/FloatRing.cs" />
     <Compile Include="../Smylte.Desktop/NativeEnv.cs" />
+    <Compile Include="../Smylte.Desktop/FileSync.cs" />
   </ItemGroup>
 
   <ItemGroup>
