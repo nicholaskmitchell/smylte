@@ -266,7 +266,7 @@ export const en = {
   'settings.clock.aria': '12- or 24-hour clock',
   'settings.clock.hint': 'The clock covers every time the app draws itself. '
     + 'Date and time pickers are drawn by the browser — Chrome, Edge and the '
-    + 'Windows app follow this setting, Firefox follows your system’s.',
+    + 'desktop app follow this setting, Firefox follows your system’s.',
   'clock.12h': '12-hour',
   'clock.24h': '24-hour',
 

@@ -178,7 +178,10 @@ public sealed class Settings
         return Path.GetFullPath(string.IsNullOrEmpty(home) ? fallback : Path.Combine(home, fallback));
     }
 
-    private static string FilePath => Path.Combine(Dir, "settings.json");
+    /// Internal rather than private so the test project can assert the mode
+    /// the file is written with and that a torn write cannot replace it. Both
+    /// are properties of the PATH, not of the object.
+    internal static string FilePath => Path.Combine(Dir, "settings.json");
 
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = true };
 
@@ -201,10 +204,94 @@ public sealed class Settings
         DataFolder = Path.Combine(DataHome, "Smylte"),
     };
 
+    /// Written 0600, and written atomically.
+    ///
+    /// TWO fixes to one line, both of which only bite on Linux. The mode,
+    /// first: this file holds the GitHub token IN THE CLEAR beside the
+    /// encrypted password, and the default umask makes it 0644 inside a 0755
+    /// `~/.config` — readable by every other account on the machine. On Windows
+    /// `%APPDATA%` is ACL'd to the user, which is why it never mattered there
+    /// and does the moment the client ships on Linux. PasswordProtector already
+    /// writes its key 0600; writing the token beside it world-readable made
+    /// that care pointless.
+    ///
+    /// And the replace: `WriteAllText` truncates in place, so a crash or a full
+    /// disk mid-write leaves a half-written file that `Load()` then discards as
+    /// corrupt — silently taking the server address, the username, the token
+    /// and the password with it. A temp file in the same directory followed by
+    /// a rename is atomic on both systems, so the file is either the old one or
+    /// the new one and never neither.
+    /// Make a directory only this account can enter, and narrow one that
+    /// already exists.
+    ///
+    /// Here rather than beside its caller because the caller is the GTK client's
+    /// WebHost, which cannot be linked into a test project without GirCore —
+    /// and this is precisely the kind of thing that has to be asserted rather
+    /// than reasoned about. `Directory.CreateDirectory(path)` takes no mode and
+    /// gives 0777 with the umask applied, which is 0755 nearly everywhere.
+    ///
+    /// What lives behind it: `<DataFolder>/profile/cookies.sqlite`, the cookie
+    /// jar WebKit persists. The app's proxy keeps `Max-Age` when it rewrites
+    /// `Set-Cookie` for the local origin, so the seven-day session cookie is on
+    /// disk there, and libsoup creates that file 0644. On a machine with a
+    /// second account that is a readable live credential — while the encrypted
+    /// password beside it is deliberately 0600. The directory is what actually
+    /// closes it: nobody else can traverse in, whatever the files inside say.
+    internal static void CreatePrivateDirectory(string path)
+    {
+        if (OperatingSystem.IsWindows()) { Directory.CreateDirectory(path); return; }
+
+        // The mode is applied AT creation, so there is no window in which the
+        // directory exists and is traversable.
+        Directory.CreateDirectory(path,
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+
+        // And narrowed when it is already there, which is the upgrade path for
+        // a profile an earlier build created 0755. CreateDirectory does not
+        // apply the mode to a directory that exists.
+        MakePrivate(path);
+    }
+
+    /// Narrow a file or directory that is already on disk, if it is there.
+    /// Best-effort: a path someone else owns is not a reason to refuse to run.
+    internal static void MakePrivate(string path)
+    {
+        if (OperatingSystem.IsWindows()) return;
+        try
+        {
+            if (Directory.Exists(path))
+                File.SetUnixFileMode(path,
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            else if (File.Exists(path))
+                File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
+        catch (Exception) { /* not ours to chmod; it still works */ }
+    }
+
     public void Save()
     {
         Directory.CreateDirectory(Dir);
-        File.WriteAllText(FilePath, JsonSerializer.Serialize(this, Json));
+        var temp = FilePath + ".tmp";
+        var json = JsonSerializer.Serialize(this, Json);
+
+        if (OperatingSystem.IsWindows())
+        {
+            File.WriteAllText(temp, json);
+        }
+        else
+        {
+            using var stream = new FileStream(temp, new FileStreamOptions
+            {
+                Mode = FileMode.Create,
+                Access = FileAccess.Write,
+                Share = FileShare.None,
+                UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite,
+            });
+            using var writer = new StreamWriter(stream);
+            writer.Write(json);
+        }
+
+        File.Move(temp, FilePath, overwrite: true);
     }
 
     // Both sides of the password now go through PasswordProtector, which picks

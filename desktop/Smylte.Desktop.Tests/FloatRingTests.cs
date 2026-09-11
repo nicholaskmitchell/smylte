@@ -20,6 +20,11 @@ public sealed class FloatRingTests
 {
     private const int W = 420, H = 280, R = 6;
 
+    /// The floor the floating window clamps to, so the sweep below covers
+    /// the smallest size a user can actually reach as well as the ones they
+    /// cannot.
+    private const int MinWidth = 320, MinHeight = 200;
+
     [Theory]
     // The four edges, sampled at the middle of each so no corner band applies.
     [InlineData(0, 140, RingEdge.Left)]
@@ -91,10 +96,56 @@ public sealed class FloatRingTests
         // is reachable through a hand-edited settings.json, and the clamp is
         // what stops the corner bands from overlapping into a state where
         // opposite edges both claim the same pixel.
-        var hit = FloatRing.HitTest(10, 8, R, 5, 4);
-        Assert.NotEqual(RingEdge.None, hit);
-        // Whatever it picks, it picks ONE thing and does not throw.
-        Assert.Contains(hit, Enum.GetValues<RingEdge>());
+        //
+        // **The assertion has to name a wrong answer.** This test used to end
+        // `Assert.Contains(hit, Enum.GetValues<RingEdge>())`, which is true of
+        // every possible return value — so the clamp it exists to defend could
+        // be deleted with the suite still green. The concrete failure is this:
+        // at 10x8 with a six-pixel ring, the corner band is 18 pixels wide and
+        // every pixel in the window is "near" BOTH the left edge and the right
+        // one. Left is tested first, so the top-RIGHT corner answers TopLeft
+        // and a drag there resizes the window from the opposite side.
+        Assert.Equal(RingEdge.TopRight, FloatRing.HitTest(10, 8, R, 9, 0));
+        Assert.Equal(RingEdge.BottomRight, FloatRing.HitTest(10, 8, R, 9, 7));
+        Assert.Equal(RingEdge.TopLeft, FloatRing.HitTest(10, 8, R, 0, 0));
+        Assert.Equal(RingEdge.BottomLeft, FloatRing.HitTest(10, 8, R, 0, 7));
+    }
+
+    [Theory]
+    [InlineData(10, 8)]
+    [InlineData(12, 12)]
+    [InlineData(20, 14)]
+    [InlineData(MinWidth, MinHeight)]
+    [InlineData(W, H)]
+    public void A_press_on_one_side_never_answers_the_other(int width, int height)
+    {
+        // The property the clamp holds, swept over every pixel: nothing on the
+        // right half may name a left edge, and nothing in the bottom half may
+        // name a top one — which is what makes a resize drag pull the border
+        // under the pointer rather than the one across the window.
+        //
+        // Per AXIS, and only where two rings fit in it. In a window narrower
+        // than twelve pixels the left and right bands genuinely overlap and one
+        // of them has to win; that degenerate case is pinned by the four
+        // explicit corners above rather than by a property that cannot hold.
+        // Every size a user can reach — the floor is 320x200 — satisfies both.
+        for (var x = 0; x < width; x++)
+        {
+            for (var y = 0; y < height; y++)
+            {
+                var name = FloatRing.HitTest(width, height, R, x, y).ToString();
+                if (width >= 2 * R)
+                {
+                    if (x >= (width + 1) / 2) Assert.DoesNotContain("Left", name);
+                    if (x < width / 2) Assert.DoesNotContain("Right", name);
+                }
+                if (height >= 2 * R)
+                {
+                    if (y >= (height + 1) / 2) Assert.DoesNotContain("Top", name);
+                    if (y < height / 2) Assert.DoesNotContain("Bottom", name);
+                }
+            }
+        }
     }
 
     [Theory]

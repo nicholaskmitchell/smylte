@@ -29,8 +29,10 @@ internal sealed class WebHost : IDisposable
 
         var profile = settings.BrowserProfile;
         var cache = Path.Combine(profile, "cache");
-        Directory.CreateDirectory(profile);
-        Directory.CreateDirectory(cache);
+        // Owner-only, for the reason Settings.CreatePrivateDirectory gives:
+        // cookies.sqlite lands in here and holds the live session cookie.
+        Settings.CreatePrivateDirectory(profile);
+        Settings.CreatePrivateDirectory(cache);
 
         Session = WebKit.NetworkSession.New(profile, cache);
 
@@ -39,8 +41,12 @@ internal sealed class WebHost : IDisposable
         // stored password is spent on every start. The file lands inside the
         // profile the user chose, beside localStorage, so "delete the data
         // folder" still means what it means on Windows.
-        Session.GetCookieManager().SetPersistentStorage(
-            Path.Combine(profile, "cookies.sqlite"), WebKit.CookiePersistentStorage.Sqlite);
+        var jar = Path.Combine(profile, "cookies.sqlite");
+        Session.GetCookieManager().SetPersistentStorage(jar, WebKit.CookiePersistentStorage.Sqlite);
+        // A no-op on a fresh profile — libsoup creates the jar lazily, so it
+        // is not there yet — and the upgrade path for one an earlier build
+        // left 0644. The 0700 directory above is what actually protects it.
+        Settings.MakePrivate(jar);
     }
 
     /// A view bound to the shared session, configured the way the Windows
@@ -82,6 +88,33 @@ internal sealed class WebHost : IDisposable
         };
 
         if (chromeless) view.OnContextMenu += (_, _) => true;
+
+        // `target="_blank"` — the About section's link to the source. Unhandled,
+        // WebKitGTK's `create` returns NULL and the click does nothing at all:
+        // no window, no error, no way for the page to know. WebView2's default
+        // for the same case is to open a window, so this is one of the few
+        // places where the SPA could tell the two hosts apart, and the symptom
+        // was a row that looked like dead text.
+        //
+        // The browser rather than a second WebView, because that is what the
+        // link means and a second in-app view would have no chrome to leave it
+        // with. Scheme-checked first: this handler takes a URI the PAGE chose,
+        // and `LaunchDefaultForUri` will happily hand a `file:` or a
+        // `whatever:` to whichever application claims it. Web links only.
+        view.OnCreate += (_, e) =>
+        {
+            try
+            {
+                var uri = e.NavigationAction.GetRequest().GetUri();
+                if (Uri.TryCreate(uri, UriKind.Absolute, out var parsed)
+                    && (parsed.Scheme == Uri.UriSchemeHttp || parsed.Scheme == Uri.UriSchemeHttps))
+                    Gio.Functions.AppInfoLaunchDefaultForUri(uri, null);
+            }
+            catch (Exception) { /* no handler installed; nothing to fall back to */ }
+
+            // Null, always: whatever happened above, no in-app window is made.
+            return null!;
+        };
 
         return view;
     }

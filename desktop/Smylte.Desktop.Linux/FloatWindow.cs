@@ -69,6 +69,15 @@ internal sealed class FloatWindow
         _web.SetVexpand(true);
         _web.SetHexpand(true);
 
+        // The focus surface is the ONE page that raises a notification — the
+        // end of an interval — and this is the window it is usually raised
+        // from, because the main window is minimised the moment this opens.
+        // Attached only to the main window's view, the permission was granted
+        // here and the notification then went nowhere: `show-notification`
+        // unhandled returns FALSE, and WebKitGTK's own presenter does not
+        // exist.
+        Notifications.Attach(_web, app, settings);
+
         // The ring is the window's own six pixels of frame: a box with padding,
         // styled by HeaderChrome from the same `--bg` the header bar gets, with
         // a one-pixel inset hairline so the window does not float in a shape
@@ -102,12 +111,20 @@ internal sealed class FloatWindow
 
     public void Open()
     {
-        Place();
+        Size();
         _window.Present();
         ApplyChrome();
-        // After Present, because both need a realised surface: an X11 window
-        // has no XID until it is mapped, and a state message sent before that
-        // goes to a window that does not exist yet.
+        // After Present, because all three need a realised surface: an X11
+        // window has no XID until it is mapped, and a state message sent before
+        // that goes to a window that does not exist yet.
+        //
+        // Restore() is here for that reason and not with Size(). It used to run
+        // before Present, where X11Window.Handles() found a null GdkSurface and
+        // returned false without a word — so the position the drag handler
+        // faithfully recorded on every move was written on every close and read
+        // back never. "Opens where you left it" is one of the three things this
+        // client defaults to X11 in order to have.
+        Restore();
         ApplyPinned();
         X11Window.SetSkipTaskbar(_window, true);
     }
@@ -239,16 +256,21 @@ internal sealed class FloatWindow
     /// on a differently scaled monitor is already the size its owner chose.
     /// `FloatDpi` is written as 0, which is the sentinel the Windows side
     /// already reads as "no rescale" — one field, two clients, no new branch.
-    private void Place()
+    private void Size()
     {
-        var width = _settings.FloatWidth > 0 ? _settings.FloatWidth : OpenWidth;
-        var height = _settings.FloatHeight > 0 ? _settings.FloatHeight : OpenHeight;
-        _window.SetDefaultSize(width, height);
+        _window.SetDefaultSize(RestoredWidth, RestoredHeight);
         _ring.SetSizeRequest(MinWidth, MinHeight);
+    }
 
+    private int RestoredWidth => _settings.FloatWidth > 0 ? _settings.FloatWidth : OpenWidth;
+    private int RestoredHeight => _settings.FloatHeight > 0 ? _settings.FloatHeight : OpenHeight;
+
+    /// Put it back where it was, once there is a window to move.
+    private void Restore()
+    {
         if (!X11Window.Active) return;                       // the compositor places it
         if (_settings.FloatX < 0 || _settings.FloatY < 0) return;
-        if (!OnAScreen(_settings.FloatX, _settings.FloatY, width, height)) return;
+        if (!OnAScreen(_settings.FloatX, _settings.FloatY, RestoredWidth, RestoredHeight)) return;
 
         X11Window.Move(_window, _settings.FloatX, _settings.FloatY);
     }

@@ -77,6 +77,80 @@ public sealed class LinuxIconTests
         }
     }
 
+    /// The palette, and which role each variant gives each colour. Straight out
+    /// of `VARIANTS` in `backend/dev/build_app_icon.py`, restated here rather
+    /// than derived so that a swap in the generator fails against this file
+    /// instead of agreeing with itself.
+    private static readonly byte[] Paper = [0xF4, 0xF1, 0xE8];
+    private static readonly byte[] Fg = [0x0E, 0x0E, 0x0C];
+    private static readonly byte[] Cream = [0xF3, 0xED, 0xE2];
+    private static readonly byte[] Ink = [0x1A, 0x18, 0x14];
+
+    public static TheoryData<string, byte[], byte[], byte[]> Roles()
+    {
+        var data = new TheoryData<string, byte[], byte[], byte[]>();
+        //                plate   letter  period
+        data.Add("accent", Accent, Paper, Fg);
+        data.Add("paper", Cream, Ink, Accent);
+        data.Add("ink", Fg, Paper, Accent);
+        return data;
+    }
+
+    [Theory]
+    [MemberData(nameof(Roles))]
+    public void Each_variant_paints_its_three_parts_the_colours_it_is_meant_to(
+        string stem, byte[] plate, byte[] letter, byte[] period)
+    {
+        // **What this replaced, and why.** The old test asked only whether an
+        // opaque pixel within 10 of #C75A26 existed anywhere in the raster —
+        // and for `accent` the PLATE is that colour and for `mark` the LETTER
+        // is, so for two of the four variants it could not fail. A generator
+        // that swapped letter and period, or painted the wrong plate, shipped
+        // green.
+        //
+        // Stated as areas instead, which is what actually distinguishes the
+        // three parts: the plate is most of the tile, the letter is a large
+        // minority of it, and the period is a few pixels. 128 only — big
+        // enough that the period is unambiguously more than a rounding error
+        // and the reduce has not yet blended anything away.
+        var counts = Counts(Png(stem, 128), 128);
+
+        var plateArea = Near(counts, plate);
+        var letterArea = Near(counts, letter);
+        var periodArea = Near(counts, period);
+
+        // Measured on the shipped art: plate 80.2%, letter 12.5%, period 2.6%,
+        // for all three variants to within a tenth of a point. The bounds sit
+        // well clear of those rather than against them.
+        Assert.True(plateArea > 0.50, $"{stem}: the plate covers {plateArea:P1}, not most of the tile");
+        Assert.True(letterArea > 0.05, $"{stem}: the letter covers {letterArea:P1}; is it the wrong colour?");
+        Assert.True(periodArea is > 0.0005 and < 0.08,
+            $"{stem}: the period covers {periodArea:P2}; is it the wrong colour?");
+
+        // The ordering is the part a swap breaks: the S is several times the
+        // area of the period beside it, so letter and dot exchanged inverts
+        // this even though both colours are still somewhere in the tile — which
+        // is exactly what the presence-only test this replaced could not see.
+        Assert.True(letterArea > periodArea * 3,
+            $"{stem}: the letter ({letterArea:P1}) is not clearly larger than the period ({periodArea:P2})");
+    }
+
+    [Fact]
+    public void The_bare_mark_is_accent_on_nothing()
+    {
+        // `mark` has no plate and paints letter and period the same colour, so
+        // it cannot be asserted by role the way the three plated variants are.
+        // What is true of it, and of none of the others: its opaque pixels are
+        // ALL accent.
+        var counts = Counts(Png("mark", 128), 128);
+        var accent = Near(counts, Accent);
+        var opaque = counts.Sum(c => c.Value) / (128.0 * 128.0);
+
+        Assert.True(opaque > 0.10, "mark-128.png is blank");
+        Assert.True(accent / opaque > 0.95,
+            $"only {accent / opaque:P0} of mark-128.png's opaque pixels are accent");
+    }
+
     [Theory]
     [MemberData(nameof(Variants))]
     public void The_accent_period_survives_at_every_size(string stem)
@@ -85,6 +159,10 @@ public sealed class LinuxIconTests
         // generator replaces the disc with a whole-pixel square precisely
         // because a reduced disc washes out — so this is the assertion that
         // says the hinting worked, at the sizes where it had to.
+        //
+        // Kept as a presence check across all seven sizes, on top of the role
+        // assertions above: those run at 128 only, and washing out is a
+        // small-size failure.
         foreach (var size in Expected)
         {
             var pixels = AppIconTests.Decode(Png(stem, size), size);
@@ -100,6 +178,68 @@ public sealed class LinuxIconTests
             }
             Assert.True(found, $"{stem}-{size}.png has no opaque pixel within 10 of #C75A26");
         }
+    }
+
+    public static TheoryData<string, string> Containers()
+    {
+        var data = new TheoryData<string, string>();
+        data.Add("accent", "app.ico");
+        data.Add("paper", "icon-paper.ico");
+        data.Add("ink", "icon-ink.ico");
+        data.Add("mark", "icon-mark.ico");
+        return data;
+    }
+
+    [Theory]
+    [MemberData(nameof(Containers))]
+    public void Every_raster_is_the_same_frame_the_ico_carries(string stem, string ico)
+    {
+        // The strongest thing that can be said about the Linux emitter, and
+        // until now nothing said it at all: the two outputs are the same art,
+        // so they must be the same BYTES. The generator renders one master per
+        // tier and resizes with the same call and the same arguments for both,
+        // which is stated in a comment and was asserted nowhere — so a Linux
+        // pass that drifted (a different tier offset, LANCZOS instead of BOX, a
+        // swapped letter and dot) would have shipped with the whole suite
+        // green, and the symptom would be an icon that looks subtly wrong in
+        // the dash and right in Explorer.
+        //
+        // Byte equality rather than pixel comparison because it is available:
+        // the .ico frames ARE PNGs, packed verbatim.
+        foreach (var size in IconChoices.FreedesktopSizes)
+            Assert.Equal(AppIconTests.Frame(ico, size), Png(stem, size));
+    }
+
+    /// Opaque pixels grouped by colour. Alpha >= 250 only — a fringe pixel is
+    /// a blend of two roles and belongs to neither.
+    private static Dictionary<int, int> Counts(byte[] png, int size)
+    {
+        var pixels = AppIconTests.Decode(png, size);
+        var counts = new Dictionary<int, int>();
+        for (var i = 0; i < pixels.Length; i += 4)
+        {
+            if (pixels[i + 3] < 250) continue;
+            var key = (pixels[i] << 16) | (pixels[i + 1] << 8) | pixels[i + 2];
+            counts[key] = counts.GetValueOrDefault(key) + 1;
+        }
+        return counts;
+    }
+
+    /// What fraction of the whole tile is within 10 of this colour. The
+    /// tolerance is the same one the accent check uses and covers the one or
+    /// two units a BOX reduce moves a flat fill.
+    private static double Near(Dictionary<int, int> counts, byte[] colour)
+    {
+        var total = 0;
+        foreach (var (key, count) in counts)
+        {
+            var distance = Math.Sqrt(
+                Math.Pow(((key >> 16) & 0xFF) - colour[0], 2) +
+                Math.Pow(((key >> 8) & 0xFF) - colour[1], 2) +
+                Math.Pow((key & 0xFF) - colour[2], 2));
+            if (distance <= 10) total += count;
+        }
+        return total / (128.0 * 128.0);
     }
 
     [Theory]

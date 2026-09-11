@@ -281,13 +281,22 @@ jobs:
             if [ "$RELEASE_STATE" != present ]; then
               echo "first release"; return 0
             fi
-            local names published
+            local names published body
             names=$(retry gh release view desktop-latest --json assets --jq '.assets[].name') || return 1
             if ! printf '%s\n' "$names" | grep -qx "$asset"; then
               echo "the release has no $asset"; return 0
             fi
-            published=$(retry gh release view desktop-latest --json body --jq .body \
-              | sed -n "s/.*${label}: \([0-9a-f]\{40\}\).*/\1/p" | head -1) || return 1
+            # Fetched, THEN scraped. `x=$(retry ... | sed | head -1) || return 1`
+            # reads as a guarded fetch and is not one: a pipeline's status is
+            # its LAST command's, and `head` succeeds on empty input. A run
+            # whose body fetch 503'd five times therefore came out with an empty
+            # key, which reads as "unrecorded" three lines down — so a dead API
+            # call republished both binaries and reported success. The test
+            # harness could not see it either, because it ran the step under
+            # `pipefail` and the workflow runs under `bash -e` alone.
+            body=$(retry gh release view desktop-latest --json body --jq .body) || return 1
+            published=$(printf '%s\n' "$body" \
+              | sed -n "s/.*${label}: \([0-9a-f]\{40\}\).*/\1/p" | head -1)
             if [ "$published" != "$key" ]; then
               echo "source changed (${published:-unrecorded} -> ${key})"; return 0
             fi

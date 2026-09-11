@@ -52,11 +52,29 @@ internal static class ColourScheme
             GLib.Variant.NewTuple(new[] { GLib.Variant.NewString(Namespace), GLib.Variant.NewString(Key) }),
             null, Gio.DBusCallFlags.None, 2000, null);
 
-        // Read returns (v) — a tuple holding a variant holding the u. Two
-        // unwraps, and getting the count wrong yields a plausible zero rather
-        // than an error, which is why they are spelled out rather than chained.
-        var tuple = reply.GetChildValue(0);
-        var boxed = tuple.GetVariant();
+        // **The portal nests the value TWICE**, and that is the documented
+        // reason `ReadOne` was added and this method deprecated: `Read` was
+        // meant to hand back one layer of variant and hands back two, so the
+        // reply is (v) holding a v holding the u. Unwrapping once left a
+        // variant where the uint was expected; `g_variant_get_uint32` then
+        // failed its type check, logged a GLib CRITICAL and returned 0 — which
+        // is not PreferDark, so every desktop in the world read as light and
+        // the catch that exists to supply that default was never reached.
+        //
+        // Unwrapped in a loop rather than exactly twice, because `ReadOne`
+        // nests once and a portal old enough to lack it nests twice, and this
+        // has to be right on both.
+        var boxed = reply.GetChildValue(0);
+        for (var depth = 0; depth < 4 && boxed.GetTypeString() == "v"; depth++)
+            boxed = boxed.GetVariant();
+
+        // Checked, not assumed. A shape this does not recognise throws, and the
+        // caller's catch turns that into the documented light default — which
+        // is the difference between defaulting and silently misreading.
+        if (boxed.GetTypeString() != "u")
+            throw new InvalidOperationException(
+                $"The settings portal answered {Key} with {boxed.GetTypeString()}, not a uint32.");
+
         return boxed.GetUint32();
     }
 

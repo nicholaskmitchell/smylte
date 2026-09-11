@@ -49,8 +49,12 @@ internal static class Program
         if (backend == "x11" && string.IsNullOrEmpty(Environment.GetEnvironmentVariable("DISPLAY")))
             backend = null;
 
+        // NativeEnv, not Environment.SetEnvironmentVariable — see that file.
+        // The managed API writes a dictionary the runtime keeps to itself; GDK
+        // reads getenv(3), so this asked for X11 and silently got whatever GDK
+        // would have chosen anyway.
         if (backend is "x11" or "wayland")
-            Environment.SetEnvironmentVariable("GDK_BACKEND", backend);
+            NativeEnv.Set("GDK_BACKEND", backend);
 
         // WebKitGTK's DMA-BUF renderer draws nothing at all on the NVIDIA
         // proprietary driver: the window and its header bar appear, the page
@@ -61,7 +65,7 @@ internal static class Program
         // is loaded — nouveau does not create it — which is exactly the
         // population that needs this.
         if (settings.DisableDmabufRenderer || File.Exists("/proc/driver/nvidia/version"))
-            Environment.SetEnvironmentVariable("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+            NativeEnv.Set("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
 
         var missing = NativeCheck.Missing();
         if (missing.Count > 0)
@@ -77,7 +81,7 @@ internal static class Program
         // would look like it did nothing at all. Only then can the retired file
         // be deleted.
         if (Updater.AfterUpdatePid(args) is { } previous) Updater.WaitForPreviousClient(previous);
-        Updater.RemoveStaleClient(Environment.ProcessPath);
+        Updater.RemoveRetiredClient(Environment.ProcessPath);
 
         // BEFORE Gtk(), and that is the point of it being its own path.
         // Writing a desktop entry is file IO — it opens no window and needs no
@@ -176,12 +180,17 @@ internal static class Program
         WebKit.Module.Initialize();
         Soup.Module.Initialize();
 
-        // What the backend actually turned out to be, which is the only thing
-        // that can answer whether the floating window may stay on top. Read
-        // back from the environment rather than from the setting, because the
-        // DISPLAY check above can have overruled it.
-        X11Window.Active = Environment.GetEnvironmentVariable("GDK_BACKEND") == "x11";
+        // X11Window.Active is NOT set here. The environment is a request; the
+        // display is the answer, and the two can differ — GDK ignores a backend
+        // it cannot open and picks another. MainWindow asks the display it
+        // actually got, because a capability flag derived from an intention is
+        // what told the page it could pin on a session where it could not.
 
+        // Not readonly, and that is the point: it is consumed by the first
+        // activation and cleared. Left set, it was re-read on every later
+        // activation — so after one `--setup` launch, every subsequent click on
+        // the launcher reopened the setup dialog over the running app for the
+        // rest of the session.
         var wantsSetup = args.Any(a =>
             a.Equals("--setup", StringComparison.OrdinalIgnoreCase) ||
             a.Equals("/setup", StringComparison.OrdinalIgnoreCase));
@@ -210,7 +219,9 @@ internal static class Program
             // window exists first because GTK owns the application lifetime and
             // a dialog with no window behind it would end the process when it
             // closed.
-            if (!settings.IsConfigured || wantsSetup) window.OpenSetup();
+            var setupNow = wantsSetup;
+            wantsSetup = false;
+            if (!settings.IsConfigured || setupNow) window.OpenSetup();
             else _ = window.StartAsync();
         };
 
@@ -226,7 +237,7 @@ internal static class Program
             // named `_`, so a discard here would bind to it and pass a
             // Gio.Application where an int belongs.
             var line = e.CommandLine.GetArguments(out int _) ?? Array.Empty<string>();
-            var setup = wantsSetup || line.Any(a =>
+            var setup = line.Any(a =>
                 a.Equals("--setup", StringComparison.OrdinalIgnoreCase) ||
                 a.Equals("/setup", StringComparison.OrdinalIgnoreCase));
             app.Activate();
