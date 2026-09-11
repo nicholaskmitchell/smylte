@@ -74,7 +74,7 @@ internal static class DesktopEntry
             // Only when something was actually removed. Unconditionally, this
             // rewrote ~/.local/share/applications/mimeinfo.cache on every
             // launch of every user who had declined the launcher.
-            if (existed) Refresh(applications: true);
+            if (existed) Refresh(applications: true, icons: true);
             return true;
         }
         catch (Exception)
@@ -116,7 +116,7 @@ internal static class DesktopEntry
         // wrinkle ShellShortcut has, and the same consequence: the entry
         // does not follow a later light/dark flip until something calls
         // this again, which is why the icon path re-syncs.
-        if (!IconAssets.Export(resolved, IconRoot, Program.AppId)) return false;
+        if (!IconAssets.Export(resolved, IconRoot, Program.AppId, out var iconsChanged)) return false;
 
         Directory.CreateDirectory(System.IO.Path.GetDirectoryName(Path)!);
 
@@ -126,7 +126,7 @@ internal static class DesktopEntry
         var changed = !File.Exists(Path) || File.ReadAllText(Path) != contents;
         if (changed) File.WriteAllText(Path, contents, new UTF8Encoding(false));
 
-        Refresh(applications: changed);
+        Refresh(applications: changed, icons: iconsChanged);
         return true;
     }
 
@@ -143,22 +143,24 @@ internal static class DesktopEntry
     /// handler, where it froze the window and — since the bridge answers on a
     /// bounded wait — could make the page's own icon dropdown snap back.
     ///
-    /// `applications` is false when the entry on disk did not change, which is
-    /// every launch of an installed client: rewriting mimeinfo.cache to say
-    /// what it already says is work nobody asked for.
-    private static void Refresh(bool applications)
+    /// Both flags are false on the overwhelmingly common call: an installed
+    /// client starting up, or following a light/dark flip, with nothing on disk
+    /// actually different. Rewriting mimeinfo.cache to say what it already says
+    /// and refreshing an icon cache with nothing new in it is two processes and
+    /// up to twenty seconds of waiting, per launch, for no change at all.
+    private static void Refresh(bool applications, bool icons)
     {
-        var tools = new List<(string Tool, string Argument)>
-        {
+        var tools = new List<(string Tool, string Argument)>();
+        if (applications)
+            tools.Add(("update-desktop-database",
+                System.IO.Path.Combine(DataHome, "applications")));
+        if (icons)
             // The THEME directory, not the search-path root. gtk4-update-icon-cache
             // writes an icon-theme.cache beside an index.theme and refuses a
             // directory that holds neither, so pointing it at `icons/` could
             // never have succeeded — `icons/hicolor/` is the theme.
-            ("gtk4-update-icon-cache", System.IO.Path.Combine(IconRoot, "hicolor")),
-        };
-        if (applications)
-            tools.Insert(0, ("update-desktop-database",
-                System.IO.Path.Combine(DataHome, "applications")));
+            tools.Add(("gtk4-update-icon-cache", System.IO.Path.Combine(IconRoot, "hicolor")));
+        if (tools.Count == 0) return;
 
         Task.Run(() =>
         {

@@ -443,6 +443,20 @@ public sealed class MainForm : Form, IDesktopBridge
     /// the app's own login screen do its job, which is exactly what it is for.
     private async Task SeedSessionAsync()
     {
+        // The jar belongs to whichever server last filled it, and nothing has
+        // ever emptied it. WebView2 keeps its cookies inside the user-data
+        // folder rather than in a file this code can delete, so the clear goes
+        // through the engine — before the login below, so a login that fails
+        // leaves no previous server's session behind for the proxy to relay.
+        // See Settings.CookieServer.
+        if (_settings.CookieJarIsForAnotherServer)
+        {
+            try { _web.CoreWebView2.CookieManager.DeleteAllCookies(); }
+            catch (Exception) { /* an engine that will not answer; the seed still runs */ }
+            _settings.ClaimCookieJar();
+            try { _settings.Save(); } catch (Exception) { /* claimed again next launch */ }
+        }
+
         var cookies = await Session
             .LoginAsync(_settings.ServerUrl, _settings.Username, _settings.GetPassword(),
                         CancellationToken.None)

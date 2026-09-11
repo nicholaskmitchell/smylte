@@ -159,6 +159,76 @@ public sealed class SettingsWriteTests : IDisposable
         Assert.False(mode.HasFlag(UnixFileMode.GroupRead));
     }
 
+    // ── the cookie jar and the server it belongs to ─────────────────────────
+
+    [Fact]
+    public void A_jar_filled_by_another_server_is_not_reused_for_this_one()
+    {
+        // The bug this closes needs no concurrency and is identical on both
+        // clients. Nothing has ever deleted a cookie, and the seed re-scopes
+        // every cookie the real server mints to domain `localhost` so the page
+        // can use it through the proxy — which means a session from server A
+        // and a session from server B are the same cookie as far as the jar is
+        // concerned. Point the client at a second server and the FIRST one's
+        // live `tasks_session` is what the proxy relays, on an ordinary launch,
+        // whenever the new login does not immediately replace it.
+        var settings = Settings.Load();
+        settings.ServerUrl = "https://first.invalid";
+        settings.ClaimCookieJar();
+
+        Assert.False(settings.CookieJarIsForAnotherServer);
+
+        settings.ServerUrl = "https://second.invalid";
+        Assert.True(settings.CookieJarIsForAnotherServer);
+
+        settings.ClaimCookieJar();
+        Assert.False(settings.CookieJarIsForAnotherServer);
+    }
+
+    [Theory]
+    [InlineData("https://x.invalid", "https://x.invalid/")]
+    [InlineData("https://x.invalid", "HTTPS://X.INVALID")]
+    [InlineData("https://x.invalid/", "  https://x.invalid  ")]
+    public void The_same_server_written_two_ways_is_one_server(string claimed, string configured)
+    {
+        // Otherwise a trailing slash the user did or did not type re-clears the
+        // jar on every launch, which costs a login round trip each time and
+        // would read as "the app keeps signing me out".
+        var settings = Settings.Load();
+        settings.ServerUrl = claimed;
+        settings.ClaimCookieJar();
+
+        settings.ServerUrl = configured;
+        Assert.False(settings.CookieJarIsForAnotherServer);
+    }
+
+    [Fact]
+    public void An_installation_that_predates_this_field_clears_its_jar_once()
+    {
+        // CookieServer is empty on every settings.json written before this
+        // existed, and an empty value means "we do not know whose jar that is".
+        // Unknown counts as stale: the safe direction, and nearly free, because
+        // the client re-seeds from the stored password on the next navigation.
+        var settings = Settings.Load();
+        settings.ServerUrl = "https://upgraded.invalid";
+
+        Assert.Equal("", settings.CookieServer);
+        Assert.True(settings.CookieJarIsForAnotherServer);
+    }
+
+    [Fact]
+    public void The_claim_survives_a_round_trip_through_settings_json()
+    {
+        // It is persisted, or the jar is cleared on every single launch.
+        var settings = Settings.Load();
+        settings.ServerUrl = "https://persisted.invalid";
+        settings.DataFolder = _root;
+        settings.ClaimCookieJar();
+        settings.Save();
+
+        Assert.False(Settings.Load().CookieJarIsForAnotherServer);
+    }
+
     [Fact]
     public void Narrowing_a_path_that_is_not_there_is_not_an_error()
     {

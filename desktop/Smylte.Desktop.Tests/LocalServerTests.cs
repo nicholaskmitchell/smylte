@@ -103,6 +103,50 @@ public sealed class LocalServerTests : IDisposable
     // ── the control: ordinary requests still work ──────────────────────────
 
     [Fact]
+    public void Disposing_twice_is_not_an_error()
+    {
+        // The startup path has two places that can own a server — the field
+        // and a local inside StartAsync — and until Dispose became idempotent
+        // the second call threw: `_cts.Cancel()` is the first statement and
+        // `_cts.Dispose()` the last, and Cancel-after-Dispose is an
+        // ObjectDisposedException. It landed in a catch block that disposed the
+        // same server again, so the exception escaped a fire-and-forgotten Task
+        // and took the rest of the cleanup with it.
+        var started = new LocalServer(_root, "https://tasks.example.test", 48731);
+        started.Start();
+        started.Dispose();
+        started.Dispose();
+
+        // And on one that was constructed and never started, which is the
+        // shape an overtaken start now disposes.
+        var idle = new LocalServer(_root, "https://tasks.example.test", 48732);
+        idle.Dispose();
+        idle.Dispose();
+    }
+
+    [Fact]
+    public void Constructing_a_server_does_not_take_the_port()
+    {
+        // Load-bearing for the startup ordering: MainWindow constructs a
+        // LocalServer before it knows whether it has been overtaken and only
+        // calls Start() once it has won. If constructing bound the socket, an
+        // overtaken start would hold the port across a twenty-second login and
+        // the next start would silently move to another one — persisting it,
+        // so the SPA came back at a new origin with an empty localStorage.
+        using var first = new LocalServer(_root, "https://tasks.example.test", 48741);
+        using var second = new LocalServer(_root, "https://tasks.example.test", 48741);
+
+        Assert.Equal(48741, first.Port);
+        Assert.Equal(48741, second.Port);
+
+        // And once one of them actually starts, the other would not have
+        // chosen it — which is what makes the ordering matter at all.
+        first.Start();
+        using var third = new LocalServer(_root, "https://tasks.example.test", 48741);
+        Assert.NotEqual(48741, third.Port);
+    }
+
+    [Fact]
     public void Resolve_returns_a_real_asset()
     {
         var hit = _server.Resolve("/assets/app.js");
@@ -336,6 +380,11 @@ public sealed class LocalServerBridgeTests : IDisposable
         try { Directory.Delete(_dir, recursive: true); } catch (IOException) { }
     }
 
+    /// Sends the page's own Origin unless told otherwise, because that is what
+    /// a browser does: per the Fetch standard, Origin is appended to every
+    /// request whose method is not GET or HEAD, same-origin included. Pass an
+    /// explicit origin to impersonate another page, or `""` to send none at
+    /// all — which is what curl does, and is now refused.
     private async Task<HttpResponseMessage> PostAsync(string path, string json, string? origin = null)
     {
         using var http = new HttpClient();
@@ -343,7 +392,8 @@ public sealed class LocalServerBridgeTests : IDisposable
         {
             Content = new StringContent(json, Encoding.UTF8, "application/json"),
         };
-        if (origin is not null) req.Headers.TryAddWithoutValidation("Origin", origin);
+        var value = origin ?? _server.Origin;
+        if (value.Length > 0) req.Headers.TryAddWithoutValidation("Origin", value);
         return await http.SendAsync(req);
     }
 
@@ -466,6 +516,46 @@ public sealed class LocalServerBridgeTests : IDisposable
     }
 
     [Fact]
+    public async Task AMutatingRouteRefusesARequestThatSendsNoOriginAtAll()
+    {
+        // The guard used to be "reject a WRONG Origin", which reads as a guard
+        // and is not one: absence was trust. Measured from a raw socket against
+        // the real file — no Origin, no Sec-Fetch-*, no User-Agent, HTTP/1.0 —
+        // pin, float, icon, appearance, dock and drag all executed.
+        //
+        // A browser cannot produce this shape on a POST. Fetch appends Origin
+        // to every request whose method is not GET or HEAD, same-origin
+        // included, so a POST with none is curl, a scanner, or another account
+        // on the machine.
+        foreach (var (path, body) in new[]
+        {
+            ("/desktop/window", "{\"action\":\"float\"}"),
+            ("/desktop/window", "{\"action\":\"pin\",\"pinned\":true}"),
+            ("/desktop/icon", "{\"choice\":\"Ink\",\"startMenuShortcut\":false}"),
+            ("/desktop/appearance", "{\"background\":\"#000000\"}"),
+        })
+        {
+            using var res = await PostAsync(path, body, origin: "");
+            Assert.Equal(HttpStatusCode.Forbidden, res.StatusCode);
+        }
+        Assert.Empty(_bridge.Calls);
+    }
+
+    [Fact]
+    public async Task TheReadOnlyStateRouteStillAnswersARequestWithNoOrigin()
+    {
+        // And it must, because the page cannot send one: a same-origin GET
+        // carries no Origin by spec. Requiring one here — the obvious next
+        // keystroke after the test above — would 403 `readState`, and every
+        // desktop-only control in the SPA would silently stop rendering.
+        using var http = new HttpClient();
+        using var res = await http.GetAsync($"{_server.Origin}/desktop/state");
+
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        Assert.Equal(_bridge.State(), await res.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
     public async Task ThePageOnAnotherOriginCannotDriveTheWindow()
     {
         using var res = await PostAsync("/desktop/window", "{\"action\":\"float\"}", origin: "https://evil.example");
@@ -480,6 +570,9 @@ public sealed class LocalServerBridgeTests : IDisposable
     public async Task TheRouteIsPostOnlyAndAbsentWithoutAWindow()
     {
         using var http = new HttpClient();
+        // 405, not 403 — the Origin requirement sits AFTER the method gate, so a
+        // wrong method still reads as a wrong method. Swap the two and this is
+        // the test that notices.
         using var get = await http.GetAsync($"{_server.Origin}/desktop/window");
         Assert.Equal(HttpStatusCode.MethodNotAllowed, get.StatusCode);
 

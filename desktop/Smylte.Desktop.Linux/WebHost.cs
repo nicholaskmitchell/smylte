@@ -42,11 +42,39 @@ internal sealed class WebHost : IDisposable
         // profile the user chose, beside localStorage, so "delete the data
         // folder" still means what it means on Windows.
         var jar = Path.Combine(profile, "cookies.sqlite");
+
+        // Before SetPersistentStorage, which is the only moment the file is
+        // ours to delete — after it, libsoup owns it. See Settings.CookieServer
+        // for what is being prevented: the seed re-scopes every cookie to
+        // domain `localhost`, so a session minted by one server is
+        // indistinguishable in the jar from one minted by another, and the
+        // proxy relays whatever the page sends.
+        if (settings.CookieJarIsForAnotherServer)
+        {
+            ClearJar(jar);
+            // Claimed in memory here and persisted by the caller. Unpersisted
+            // it simply clears again next launch, which costs nothing.
+            settings.ClaimCookieJar();
+        }
+
         Session.GetCookieManager().SetPersistentStorage(jar, WebKit.CookiePersistentStorage.Sqlite);
         // A no-op on a fresh profile — libsoup creates the jar lazily, so it
         // is not there yet — and the upgrade path for one an earlier build
         // left 0644. The 0700 directory above is what actually protects it.
         Settings.MakePrivate(jar);
+    }
+
+    /// SQLite's three files, not one. A `-wal` left beside a deleted database
+    /// is replayed into the next one, which would put the cookies straight back
+    /// — the failure mode that makes "just delete the file" wrong often enough
+    /// to be worth naming.
+    private static void ClearJar(string jar)
+    {
+        foreach (var path in new[] { jar, jar + "-wal", jar + "-shm", jar + "-journal" })
+        {
+            try { if (File.Exists(path)) File.Delete(path); }
+            catch (Exception) { /* the seed still runs; the worst case is the old behaviour */ }
+        }
     }
 
     /// A view bound to the shared session, configured the way the Windows

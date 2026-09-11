@@ -221,8 +221,27 @@ internal static class Program
             // closed.
             var setupNow = wantsSetup;
             wantsSetup = false;
-            if (!settings.IsConfigured || setupNow) window.OpenSetup();
-            else _ = window.StartAsync();
+
+            // This is the ONLY place that knows there is nothing to start, so
+            // it is the only place that says so. MainWindow used to re-derive
+            // it when the dialog closed, from `_server is null` — which also
+            // means "a start is still running" and "a start just failed", and
+            // answered both with "not configured yet".
+            if (!settings.IsConfigured)
+            {
+                window.ShowUnconfigured();
+                window.OpenSetup();
+                return;
+            }
+
+            // Configured: START, and open the dialog over the top when asked.
+            // Both halves, not one or the other — a cold `--setup` that only
+            // opened the dialog left nothing behind it, so cancelling sat on
+            // "Starting…" forever. This also makes a cold `--setup` behave
+            // exactly like one delivered to a running instance, which removes
+            // an asymmetry rather than adding one.
+            _ = window.StartAsync();
+            if (setupNow) window.OpenSetup();
         };
 
         // Where the Windows client tells a second launch "close it first, then

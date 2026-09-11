@@ -122,6 +122,48 @@ public sealed class Settings
     /// for the machines that need it and do not look like that.
     public bool DisableDmabufRenderer { get; set; }
 
+    /// Which server the browser profile's cookie jar currently holds a session
+    /// for. Empty means "we do not know", which is treated as "not this one".
+    ///
+    /// **The jar outlives the setting it was filled from.** Nothing in either
+    /// client has ever deleted a cookie: the profile directory is created once
+    /// and kept, and `SeedSessionAsync` / `WebHost.SeedAsync` re-scope every
+    /// cookie the real server mints to domain `localhost` so the page can use
+    /// it through the proxy. That re-scoping is what makes this a problem
+    /// rather than a curiosity — a cookie for `tasks.example.com` and a cookie
+    /// for a different server are the same cookie as far as the jar is
+    /// concerned, and the proxy relays whatever the page sends.
+    ///
+    /// So a user who points the client at a second server — a move, a rename,
+    /// a test instance — sends the FIRST server's live `tasks_session` to the
+    /// second one, on an ordinary single-threaded launch, whenever the new
+    /// login does not immediately replace it (blank credentials, a password
+    /// the new server rejects, a server that is down). It is the one thing in
+    /// this area with a real confidentiality shape, and it needs no race.
+    public string CookieServer { get; set; } = "";
+
+    /// Is the jar's session for a server other than the one configured now?
+    ///
+    /// An empty `CookieServer` counts as stale, which means every existing
+    /// installation clears its jar once on the upgrade that introduces this
+    /// field. That is the safe direction and it is nearly free: the client
+    /// seeds from the stored password on the very next navigation, so the only
+    /// people who see a login screen are the ones who never stored one.
+    [JsonIgnore]
+    public bool CookieJarIsForAnotherServer =>
+        !string.Equals(CookieServer, CanonicalServer(ServerUrl), StringComparison.OrdinalIgnoreCase);
+
+    /// Record that the jar now belongs to the configured server. Call it after
+    /// clearing, not before — a crash in between must leave the jar looking
+    /// stale rather than looking claimed.
+    public void ClaimCookieJar() => CookieServer = CanonicalServer(ServerUrl);
+
+    /// Compared rather than stored verbatim, so `https://x.test/` and
+    /// `https://X.test` are one server. Only the shape matters here; nothing
+    /// resolves this string.
+    private static string CanonicalServer(string? url) =>
+        (url ?? "").Trim().TrimEnd('/').ToLowerInvariant();
+
     [JsonIgnore]
     public bool IsConfigured =>
         !string.IsNullOrWhiteSpace(ServerUrl) && !string.IsNullOrWhiteSpace(DataFolder);

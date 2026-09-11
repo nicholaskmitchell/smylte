@@ -193,6 +193,14 @@ flag is delivered to the running instance over the same D-Bus name that makes
 the client single-instance. Same asymmetry behind a second plain launch, which
 raises the existing window instead of exiting silently.
 
+Cancelling the dialog also differs, and it is worth knowing which you are
+looking at. On Windows a cancelled first-run dialog ends the process. On Linux
+the window stays, showing either the reason the app could not start or — if it
+has never been configured — an empty state, with a **Setup…** button in the
+title bar that reopens the dialog. Either way the exception behind a failed
+start is written to `<data folder>/errors.log`, which is the thing to read when
+the message on screen is not enough.
+
 The Linux client takes two more flags, both of which write the applications-menu
 entry the Appearance toggle writes — they exist because a launcher is a
 reasonable thing to want without opening the app, and because they work over SSH
