@@ -159,6 +159,28 @@ jobs:
         # and the two ways a failed update used to cost someone a working build.
         run: dotnet test desktop/Smylte.Desktop.Tests/Smylte.Desktop.Tests.csproj
 
+  desktop-linux:
+    # The GTK client, for the same reason as the job above: it is compiled by CI
+    # and never on a user's machine, so without this a break would only surface
+    # when a release was cut.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - run: dotnet build desktop/Smylte.Desktop.Linux/Smylte.Desktop.Linux.csproj -c Release
+
+      - name: Client unit tests
+        # The SAME suite the Windows job runs, and running it twice is not
+        # waste. It is no longer platform-blind: this leg exercises the
+        # derived-key arm of PasswordProtector where that one takes DPAPI, and
+        # it is the only leg on a CASE-SENSITIVE filesystem — which is where
+        # LocalServer's traversal guard can actually be wrong.
+        run: dotnet test desktop/Smylte.Desktop.Tests/Smylte.Desktop.Tests.csproj
+
   workflows:
     # desktop-release.yml's publish step is the only code here that hands
     # something to the outside world, and it is shell that never runs on a PR —

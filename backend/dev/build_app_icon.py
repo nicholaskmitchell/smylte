@@ -97,6 +97,7 @@ ROOT = os.path.normpath(os.path.join(HERE, "..", ".."))
 SVG = os.path.join(ROOT, "frontend", "public", "favicon.svg")
 DESKTOP = os.path.join(ROOT, "desktop", "Smylte.Desktop")
 ICONS = os.path.join(DESKTOP, "icons")
+LINUX = os.path.join(ROOT, "desktop", "Smylte.Desktop.Linux", "icons")
 TOUCH = os.path.join(ROOT, "frontend", "public", "apple-touch-icon.png")
 
 # The design canvas the geometry below is expressed in, and the resolution every
@@ -123,11 +124,16 @@ MARK_SCALE_PLATED = 5.4   # 73.8%, leaving a 13% plate margin. See the docstring
 RADIUS_PCT = 12.0
 
 # (file, plate, letter, period, mark scale). plate=None means no plate.
+# One recipe, two containers. The second column is the Linux stem: the same four
+# variants are emitted as loose PNGs and an SVG under Smylte.Desktop.Linux/icons,
+# because GTK4 can only set a window icon by NAME and looks it up in an icon
+# theme — so the client unpacks these into its own hicolor tree and switches
+# between them with a string. The art is identical; only the packaging differs.
 VARIANTS = (
-    ("app.ico", ACCENT, PAPER, FG, MARK_SCALE_PLATED),
-    ("icon-paper.ico", CREAM, INK, ACCENT, MARK_SCALE_PLATED),
-    ("icon-ink.ico", FG, PAPER, ACCENT, MARK_SCALE_PLATED),
-    ("icon-mark.ico", None, ACCENT, ACCENT, MARK_SCALE_BARE),
+    ("app.ico", "accent", ACCENT, PAPER, FG, MARK_SCALE_PLATED),
+    ("icon-paper.ico", "paper", CREAM, INK, ACCENT, MARK_SCALE_PLATED),
+    ("icon-ink.ico", "ink", FG, PAPER, ACCENT, MARK_SCALE_PLATED),
+    ("icon-mark.ico", "mark", None, ACCENT, ACCENT, MARK_SCALE_BARE),
 )
 
 # Windows asks for 14 distinct sizes across its three request bands (title
@@ -156,6 +162,24 @@ THIN_U, APERTURE_U, GAP_U = 1.904, 7.870, 5.153
 PERIOD_U = 9.0   # the period's diameter, r=4.5
 
 FLOORS = {"thin": 1.00, "aperture": 2.00, "period": 3.00, "gap": 1.50}
+
+# What freedesktop's hicolor theme names, and every one of them is already in
+# TIERS above, so the Linux emitter needs no new seam and no new offset to solve.
+#
+# Seven sizes where Windows takes fifteen, and the missing eight are all
+# workarounds for Win32 rules that do not exist here: there is no
+# `ICONDIRENTRY.bWidth` byte to overflow, no 256-encodes-as-0 quirk, and no
+# three request bands to satisfy at once. An icon theme picks the nearest size
+# at or above what it wants and scales down, which is exactly what the extra
+# .ico frames were faking. 512 is deliberately absent — the SVG covers anything
+# above 256, and another size means another seam to re-check for nothing
+# visible.
+#
+# The same seven are spelled out in desktop/Smylte.Desktop/IconChoice.cs as
+# `FreedesktopSizes`, which the client unpacks and LinuxIconTests asserts
+# against; changing one without the other is a missing icon at one scale factor,
+# and that test is what catches it.
+LINUX_SIZES = (256, 128, 64, 48, 32, 24, 16)
 
 
 def parse_svg(path: str) -> tuple[str, tuple[float, float, float]]:
@@ -325,7 +349,37 @@ def png(img: Image.Image) -> bytes:
     return blob
 
 
-def write_ico(frames: list[tuple[int, bytes]], path: str) -> None:
+STAGED: dict[str, bytes] = {}
+
+
+def stage(path: str, blob: bytes) -> bytes:
+    """Hold a finished file in memory until the whole run has passed its floors.
+
+    **Nothing reaches the working tree until `commit()`.** Every output here is
+    a committed binary that CI never regenerates, so the sequence that matters
+    is: edit a constant, run, read the error, `git commit -a`. Written eagerly,
+    the four floor violations the run just refused were already on disk and
+    indistinguishable in `git status` from a good regeneration — and no test
+    downstream measures the floors, so the rejected art shipped with a green
+    suite. Measured: `MARK_SCALE_PLATED = 5.2` exits non-zero and, before this,
+    left all 28 PNGs, four .ico files, four SVGs and apple-touch-icon.png
+    carrying the merged S-and-period art.
+
+    The same discipline the client uses on the other end — IconAssets.Unpack
+    writes a temp file and moves it — for the same reason.
+    """
+    STAGED[path] = blob
+    return blob
+
+
+def commit() -> None:
+    for path, blob in STAGED.items():
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as handle:
+            handle.write(blob)
+
+
+def pack_ico(frames: list[tuple[int, bytes]]) -> bytes:
     """Pack (size, png bytes) into an .ico. See the docstring for why by hand.
 
     Roslyn copies wPlanes/wBitCount verbatim out of the directory into the exe's
@@ -342,8 +396,7 @@ def write_ico(frames: list[tuple[int, bytes]], path: str) -> None:
         entries += struct.pack("<BBBBHHII", b, b, 0, 0, 1, 32, len(blob), offset)
         payloads += blob
         offset += len(blob)
-    with open(path, "wb") as fh:
-        fh.write(head + entries + payloads)
+    return head + entries + payloads
 
 
 def build_variant(s_path, period, name, plate, letter, dot, scale) -> list[tuple]:
@@ -366,8 +419,77 @@ def build_variant(s_path, period, name, plate, letter, dot, scale) -> list[tuple
             report.append((size, tier, floors(scale, offset, size, squared=tier == "C")))
     frames.sort(key=lambda f: -f[0])
     path = os.path.join(DESKTOP if name == "app.ico" else ICONS, name)
-    write_ico(frames, path)
+    stage(path, pack_ico(frames))
     return sorted(report, key=lambda r: -r[0]), path
+
+
+def svg(s_path, period, plate, letter, dot, scale) -> str:
+    """One variant as SVG, on the same 256 canvas as the rasters.
+
+    The same `place` maths the PNGs use, so the vector is not a second drawing
+    of the mark that could drift from the first — it is the tier-A geometry,
+    which is the one tier with no stroke offset, written out as a polygon
+    instead of rasterised.
+
+    It exists for sizes no PNG covers. Freedesktop resolves an exact-size raster
+    in preference to a scalable, so this is only ever consulted above 256 or at
+    a fractional scale — neither of which is where hairlines are the problem, so
+    the small-size hinting the tiers exist for is correctly absent here.
+    """
+    def hex_of(rgb):
+        return "#%02x%02x%02x" % rgb
+
+    body = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {CANVAS} {CANVAS}" '
+            f'width="{CANVAS}" height="{CANVAS}">']
+    if plate is not None:
+        radius = RADIUS_PCT / 100 * CANVAS
+        body.append(f'<rect width="{CANVAS}" height="{CANVAS}" rx="{radius:.3f}" '
+                    f'fill="{hex_of(plate)}"/>')
+    points = " ".join(f"{x:.3f},{y:.3f}" for x, y in place(s_path, MARK_CENTRE, scale, CANVAS))
+    body.append(f'<polygon points="{points}" fill="{hex_of(letter)}"/>')
+
+    cx, cy, r = period
+    (px, py), = place([(cx, cy)], MARK_CENTRE, scale, CANVAS)
+    pr = r * scale
+    body.append(f'<circle cx="{px:.3f}" cy="{py:.3f}" r="{pr:.3f}" fill="{hex_of(dot)}"/>')
+    body.append("</svg>")
+    return "\n".join(body) + "\n"
+
+
+def build_linux(s_path, period, stem, plate, letter, dot, scale) -> list[tuple]:
+    """The same four variants as loose PNGs plus an SVG, for the GTK client.
+
+    Every size here is already in TIERS, so this reuses the tier the .ico
+    emitter would have used — same offset, same square period below 24, same
+    BOX reduce — and is held to the same four floors. A size added to
+    LINUX_SIZES that no tier claims is a hard error rather than a silently
+    unhinted raster.
+    """
+    report = []
+    for tier, sizes, target in TIERS:
+        wanted = [size for size in LINUX_SIZES if size in sizes]
+        if not wanted:
+            continue
+        # min(sizes), not min(wanted): the offset is the TIER's, so a variant
+        # that happens to skip a tier's smallest size still gets the weight that
+        # tier was designed with, and the seams stay continuous.
+        offset = solve_offset(scale, min(sizes), target)
+        master = render_tier(s_path, period, plate, letter, dot, scale, offset)
+        for size in wanted:
+            img = master.resize((size, size), Image.BOX)
+            if tier == "C":
+                stamp_square_period(img, period, dot, scale, size)
+            stage(os.path.join(LINUX, f"{stem}-{size}.png"), png(img))
+            report.append((size, tier, floors(scale, offset, size, squared=tier == "C")))
+
+    missing = set(LINUX_SIZES) - {size for size, _, _ in report}
+    if missing:
+        raise SystemExit(f"{stem}: {sorted(missing)} are in no tier; add them to TIERS")
+
+    stage(os.path.join(LINUX, f"{stem}.svg"),
+          svg(s_path, period, plate, letter, dot, scale).encode("utf-8"))
+
+    return sorted(report, key=lambda r: -r[0])
 
 
 def build_touch(s_path, period, size: int = 180) -> None:
@@ -388,7 +510,9 @@ def build_touch(s_path, period, size: int = 180) -> None:
     (px, py), = place([(cx, cy)], centre, scale, size * ss)
     pr = r * scale * (size * ss) / CANVAS
     draw.ellipse((px - pr, py - pr, px + pr, py + pr), fill=ACCENT)
-    img.resize((size, size), Image.BOX).save(TOUCH, format="PNG", optimize=True)
+    buffer = io.BytesIO()
+    img.resize((size, size), Image.BOX).save(buffer, format="PNG", optimize=True)
+    stage(TOUCH, buffer.getvalue())
 
 
 def main() -> None:
@@ -402,10 +526,10 @@ def main() -> None:
           f"  ({len(s_path)} points)\n")
 
     bad = 0
-    for name, plate, letter, dot, scale in VARIANTS:
+    for name, stem, plate, letter, dot, scale in VARIANTS:
         report, path = build_variant(s_path, period, name, plate, letter, dot, scale)
         fill = 35.004 * scale / CANVAS * 100
-        print(f"{os.path.relpath(path, ROOT)}  {os.path.getsize(path) / 1024:.1f} KB, "
+        print(f"{os.path.relpath(path, ROOT)}  {len(STAGED[path]) / 1024:.1f} KB, "
               f"{len(report)} entries, mark {fill:.1f}% of canvas")
         print(f"  {'size':>5} {'tier':>4} {'thin':>7} {'aperture':>9} {'period':>7} {'gap':>7}")
         for size, tier, f in report:
@@ -413,13 +537,43 @@ def main() -> None:
             bad += flags.count("!")
             print(f"  {size:>5} {tier:>4} {f['thin']:>7.2f} {f['aperture']:>9.2f}"
                   f"{f['period']:>7.2f} {f['gap']:>7.2f}  {flags.strip()}")
+
+        # The same art, packaged for the GTK client. Reported as one line rather
+        # than a second table: every size here is a subset of the one above and
+        # is held to the same floors by the same call, so a second full table
+        # would say nothing the first does not.
+        linux = build_linux(s_path, period, stem, plate, letter, dot, scale)
+
+        # NOT counted a second time. Every size here is also a TIERS size and
+        # build_linux measures it with the same call and the same arguments, so
+        # each entry is a frame the table above has already counted — which is
+        # why the exit line said "6 floor violation(s)" under a table printing
+        # three `!`, the first number anyone checks it against. Asserted rather
+        # than assumed, so a future divergence is a hard error and not a
+        # silently unmeasured raster.
+        measured = {size: f for size, _, f in report}
+        for size, _, f in linux:
+            if f != measured[size]:
+                raise SystemExit(
+                    f"{stem}-{size}.png measures differently from the .ico frame "
+                    f"of the same size; the Linux pass is no longer covered by "
+                    f"the table above")
+        total = sum(len(STAGED[os.path.join(LINUX, f"{stem}-{size}.png")])
+                    for size, _, _ in linux)
+        print(f"  {os.path.relpath(LINUX, ROOT)}/{stem}-*.png + {stem}.svg  "
+              f"{len(linux)} sizes, {total / 1024:.1f} KB")
         print()
 
     build_touch(s_path, period)
     print("floors: " + "  ".join(f"{k} >= {v:.2f}" for k, v in FLOORS.items()))
-    print(f"{os.path.relpath(TOUCH, ROOT)}  {os.path.getsize(TOUCH) / 1024:.1f} KB")
+    print(f"{os.path.relpath(TOUCH, ROOT)}  {len(STAGED[TOUCH]) / 1024:.1f} KB")
+
+    # BEFORE commit(), which is the whole point of staging: a run that refuses
+    # the art leaves the working tree exactly as it found it.
     if bad:
         raise SystemExit(f"{bad} floor violation(s); the art is not shippable")
+    commit()
+    print(f"wrote {len(STAGED)} files")
 
 
 if __name__ == "__main__":

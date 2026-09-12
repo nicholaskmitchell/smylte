@@ -410,9 +410,22 @@ public sealed class MainForm : Form, IDesktopBridge
         });
     }
 
+    /// INVOKE, not BeginInvoke, and it belongs with Float/Dock/Pin above rather
+    /// than with Appearance below. LocalServer answers this POST with `State()`,
+    /// and the page reconciles its dropdown and its checkbox from that answer —
+    /// so a fire-and-forget dispatch returns the state as it was BEFORE the
+    /// choice landed, and the page dutifully sets the control back to what the
+    /// user just changed it from.
+    ///
+    /// It was BeginInvoke, and the symptom was a race: on Windows the posted
+    /// message usually ran before the listener thread got to State(), so the
+    /// answer was usually right. The GTK client made it deterministic — the
+    /// same code, reliably in the wrong order — which is how it was noticed at
+    /// all. `resolved` is the giveaway either way: only the host can compute
+    /// it, so a stale answer cannot be papered over on the page.
     void IDesktopBridge.Icon(string? choice, bool startMenuShortcut)
     {
-        BeginInvoke(() =>
+        Invoke(() =>
         {
             _settings.IconChoice = IconLibrary.Parse(choice).ToString();
             _settings.StartMenuShortcut = startMenuShortcut;
@@ -430,6 +443,20 @@ public sealed class MainForm : Form, IDesktopBridge
     /// the app's own login screen do its job, which is exactly what it is for.
     private async Task SeedSessionAsync()
     {
+        // The jar belongs to whichever server last filled it, and nothing has
+        // ever emptied it. WebView2 keeps its cookies inside the user-data
+        // folder rather than in a file this code can delete, so the clear goes
+        // through the engine — before the login below, so a login that fails
+        // leaves no previous server's session behind for the proxy to relay.
+        // See Settings.CookieServer.
+        if (_settings.CookieJarIsForAnotherServer)
+        {
+            try { _web.CoreWebView2.CookieManager.DeleteAllCookies(); }
+            catch (Exception) { /* an engine that will not answer; the seed still runs */ }
+            _settings.ClaimCookieJar();
+            try { _settings.Save(); } catch (Exception) { /* claimed again next launch */ }
+        }
+
         var cookies = await Session
             .LoginAsync(_settings.ServerUrl, _settings.Username, _settings.GetPassword(),
                         CancellationToken.None)

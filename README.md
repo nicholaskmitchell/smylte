@@ -560,8 +560,9 @@ Settings → General → Clock switches every time the app draws between **12- a
 24-hour**; `time.ts` is the only thing that formats a clock, so there is one
 place for the choice to land. Date and time *pickers* are drawn by the browser
 rather than by us, and read the element's `lang` to decide — which works in
-Chrome, Edge and the Windows client, and is ignored by Firefox, which follows
-the OS. The public booking page is deliberately left on the visitor's own
+Chrome, Edge and the Windows client. Firefox ignores it and follows the OS, and
+so does WebKit, so the Linux client's pickers behave like Firefox's rather than
+like Edge's. The public booking page is deliberately left on the visitor's own
 locale.
 
 ## Architecture
@@ -614,29 +615,42 @@ frontend/
 firmware/       MicroPython example for a Pico 2 W + Waveshare 7.5" e-paper:
                 reads the raw framebuffer straight into the panel's own buffer
                 (firmware/README.md)
-desktop/        Windows client: a WebView2 window that serves the CI-built SPA
+desktop/        Desktop clients: a native window that serves the CI-built SPA
                 from disk and proxies /api to the server (desktop/README.md)
+  Smylte.Desktop/       shared logic + the Windows half (WinForms, WebView2)
+  Smylte.Desktop.Linux/ the GTK 4 half (WebKitGTK), which LINKS that shared
+                        logic rather than referencing it
+  Smylte.Desktop.Tests/ plain net8.0, links the same sources, runs on any OS
 scratch/        disposable Radicale 3.7.4 in Docker on :5233 (NEVER production)
 deploy/         systemd unit, Caddy path-split snippet, cloudflared, setup.sh
 docs/           DEPLOY.md, phase0-findings.md, recurrence-findings.md
 ```
 
-## Windows client
+## Desktop client
 
-`desktop/` builds a small native window around the app. It is not a rewrite —
-it hosts WebView2, the Edge engine already on Windows 10 and 11, so rendering is
-exactly the browser's. What it changes is that the app shell, CSS, JS and fonts
-load from local disk instead of over the network, and that installing is one
-`.exe` that keeps itself current: CI publishes the built SPA to a rolling
+`desktop/` builds a small native window around the app, for **Windows and
+Linux**. Neither is a rewrite — each hosts the engine its operating system
+already has, WebView2 on Windows 10 and 11 and WebKitGTK on Linux, so rendering
+is exactly the browser's. What they change is that the app shell, CSS, JS and
+fonts load from local disk instead of over the network, and that installing is
+one file that keeps itself current: CI publishes the built SPA to a rolling
 release, and the client picks it up on the next launch. API calls still go to
 the server, so nothing about CalDAV latency changes. See `desktop/README.md`.
+
+The port was small because the page↔host channel is HTTP, not a webview bridge:
+about 1,100 lines — the local server, the updater, the session and the settings
+— are shared by both clients and covered by one suite that runs on either OS.
+The Linux client needs `gtk4` and `webkitgtk6.0` from your distribution, and
+says so itself if they are missing.
 
 The one thing the client draws that the browser cannot is the **floating focus
 window**: the clock and the row you are on, in a small frameless window above
 everything else while the app itself waits in the taskbar. Drag it by its body,
 resize it from its edges, pin it or let it fall behind, dock it to bring the
 app back. It is the same `/focus` page at a small size, in the same session, so
-it and the app agree to the second.
+it and the app agree to the second. Staying above other windows is the one thing
+Wayland gives an application no way to ask for, so the Linux client runs on X11
+by default and says what changes if you tell it not to.
 
 ## Panel firmware
 

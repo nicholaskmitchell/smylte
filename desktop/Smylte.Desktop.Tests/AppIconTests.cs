@@ -53,7 +53,7 @@ public sealed class AppIconTests
     public static TheoryData<string> Icons() =>
         new() { "app.ico", "icon-paper.ico", "icon-ink.ico", "icon-mark.ico" };
 
-    private static byte[] Bytes(string name)
+    internal static byte[] Bytes(string name)
     {
         using var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream(name)
             ?? throw new InvalidOperationException($"{name} is not embedded in the test assembly");
@@ -64,6 +64,20 @@ public sealed class AppIconTests
 
     private readonly record struct Entry(int Size, int Planes, int BitCount, int Offset, int Length,
                                          byte ColorCount, byte Reserved, int RawHeight);
+
+    /// One frame's PNG payload, straight out of the container.
+    ///
+    /// Exposed for LinuxIconTests, which pins the loose rasters the GTK client
+    /// carries to the frames the .ico carries at the same size. The generator
+    /// makes both from one render with one set of arguments; nothing but a
+    /// comment said so, and a Linux emitter that quietly used a different
+    /// colour or a different reduce would have shipped with the suite green.
+    internal static byte[] Frame(string ico, int size)
+    {
+        var bytes = Bytes(ico);
+        var entry = Directory(bytes).Single(e => e.Size == size);
+        return bytes[entry.Offset..(entry.Offset + entry.Length)];
+    }
 
     private static List<Entry> Directory(byte[] ico)
     {
@@ -247,7 +261,10 @@ public sealed class AppIconTests
     /// Narrow on purpose: it handles what `build_app_icon.py` emits and what
     /// `Every_frame_is_a_non_interlaced_8_bit_RGBA_PNG_of_the_declared_size`
     /// has already asserted, and nothing else.
-    private static byte[] Decode(byte[] png, int size)
+    /// `internal` so LinuxIconTests can reuse it. Writing a second PNG
+    /// decoder for the Linux rasters would mean two decoders that could
+    /// disagree, and the assertions they support are the same assertions.
+    internal static byte[] Decode(byte[] png, int size)
     {
         var idat = new MemoryStream();
         int at = 8;

@@ -1,17 +1,19 @@
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace Smylte.Desktop;
 
-/// Client configuration, in %APPDATA%\Smylte\settings.json.
+/// Client configuration, in `%APPDATA%\Smylte\settings.json` on Windows and
+/// `~/.config/Smylte/settings.json` on Linux — one line, `SpecialFolder.ApplicationData`,
+/// which .NET already maps to `$XDG_CONFIG_HOME`.
 ///
 /// The password is the only sensitive field and it is never written in the
-/// clear: DPAPI encrypts it against the current Windows user, so a copied
-/// settings.json is inert on another account or machine. Unprotect failing is
-/// therefore an expected outcome, not an error — it means the file was roamed,
-/// and the right response is to fall back to the app's own login screen.
+/// clear. PasswordProtector encrypts it against the current user — DPAPI on
+/// Windows, a key derived from a 0600 file beside this one on Linux — so a
+/// copied settings.json is inert on another account or machine. Failing to
+/// decrypt is therefore an expected outcome, not an error: it means the file
+/// was roamed, and the right response is to fall back to the app's own login
+/// screen.
 public sealed class Settings
 {
     public string ServerUrl { get; set; } = "";
@@ -91,7 +93,76 @@ public sealed class Settings
     /// regions; false routes every drag through the bridge instead. Exists
     /// because CI cannot open a window, so the native path is proven only on
     /// real machines — and one where it misbehaves should not be stuck.
+    ///
+    /// Linux ignores it and always reports `nativeDrag: false`: WebKitGTK has
+    /// no `app-region` support at all, so the bridge path is not a fallback
+    /// there, it is the only path.
     public bool FloatNativeDrag { get; set; } = true;
+
+    // ── Linux only ────────────────────────────────────────────────────────
+    //
+    // Read before GTK is touched and ignored entirely by the Windows client.
+    // Both are the same shape as FloatNativeDrag above: no UI, a hand-edited
+    // settings.json, and an escape hatch for a machine where the default is
+    // wrong — because the failures they address cannot be reproduced in CI.
+
+    /// `"x11"` or `"wayland"`. X11 is the default because three things the
+    /// floating window needs — staying above other windows, opening where it
+    /// was left, and keeping out of the taskbar — have no Wayland protocol an
+    /// ordinary client can use, and GNOME implements no extension that would
+    /// give them. Under XWayland all three work. The cost is that XWayland can
+    /// look soft on a fractionally scaled display, which is why this is a
+    /// setting and not a decision.
+    public string Backend { get; set; } = "x11";
+
+    /// Forces `WEBKIT_DISABLE_DMABUF_RENDERER=1`. WebKitGTK's DMA-BUF renderer
+    /// paints nothing at all on the NVIDIA proprietary driver — a window frame
+    /// around a white rectangle, with no error anywhere. The client already
+    /// sets the variable when it finds `/proc/driver/nvidia/version`; this is
+    /// for the machines that need it and do not look like that.
+    public bool DisableDmabufRenderer { get; set; }
+
+    /// Which server the browser profile's cookie jar currently holds a session
+    /// for. Empty means "we do not know", which is treated as "not this one".
+    ///
+    /// **The jar outlives the setting it was filled from.** Nothing in either
+    /// client has ever deleted a cookie: the profile directory is created once
+    /// and kept, and `SeedSessionAsync` / `WebHost.SeedAsync` re-scope every
+    /// cookie the real server mints to domain `localhost` so the page can use
+    /// it through the proxy. That re-scoping is what makes this a problem
+    /// rather than a curiosity — a cookie for `tasks.example.com` and a cookie
+    /// for a different server are the same cookie as far as the jar is
+    /// concerned, and the proxy relays whatever the page sends.
+    ///
+    /// So a user who points the client at a second server — a move, a rename,
+    /// a test instance — sends the FIRST server's live `tasks_session` to the
+    /// second one, on an ordinary single-threaded launch, whenever the new
+    /// login does not immediately replace it (blank credentials, a password
+    /// the new server rejects, a server that is down). It is the one thing in
+    /// this area with a real confidentiality shape, and it needs no race.
+    public string CookieServer { get; set; } = "";
+
+    /// Is the jar's session for a server other than the one configured now?
+    ///
+    /// An empty `CookieServer` counts as stale, which means every existing
+    /// installation clears its jar once on the upgrade that introduces this
+    /// field. That is the safe direction and it is nearly free: the client
+    /// seeds from the stored password on the very next navigation, so the only
+    /// people who see a login screen are the ones who never stored one.
+    [JsonIgnore]
+    public bool CookieJarIsForAnotherServer =>
+        !string.Equals(CookieServer, CanonicalServer(ServerUrl), StringComparison.OrdinalIgnoreCase);
+
+    /// Record that the jar now belongs to the configured server. Call it after
+    /// clearing, not before — a crash in between must leave the jar looking
+    /// stale rather than looking claimed.
+    public void ClaimCookieJar() => CookieServer = CanonicalServer(ServerUrl);
+
+    /// Compared rather than stored verbatim, so `https://x.test/` and
+    /// `https://X.test` are one server. Only the shape matters here; nothing
+    /// resolves this string.
+    private static string CanonicalServer(string? url) =>
+        (url ?? "").Trim().TrimEnd('/').ToLowerInvariant();
 
     [JsonIgnore]
     public bool IsConfigured =>
@@ -103,10 +174,56 @@ public sealed class Settings
     [JsonIgnore]
     public string BrowserProfile => Path.Combine(DataFolder, "profile");
 
-    private static string Dir => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Smylte");
+    /// `%APPDATA%\Smylte` on Windows; `$XDG_CONFIG_HOME/Smylte`, i.e.
+    /// `~/.config/Smylte`, on Linux — .NET already maps ApplicationData that
+    /// way, so no second spelling is needed to be XDG-correct.
+    ///
+    /// `internal` rather than `private` so PasswordProtector can put its key
+    /// file beside settings.json. It is the one directory this client owns per
+    /// user on both systems, and a second way of naming it would be a second
+    /// thing to keep in step.
+    internal static string Dir => Path.Combine(ConfigHome, "Smylte");
 
-    private static string FilePath => Path.Combine(Dir, "settings.json");
+    /// `$XDG_CONFIG_HOME` / `%APPDATA%`, and `$XDG_DATA_HOME` / `%LOCALAPPDATA%`.
+    internal static string ConfigHome => Home(Environment.SpecialFolder.ApplicationData, ".config");
+    internal static string DataHome => Home(Environment.SpecialFolder.LocalApplicationData, ".local/share");
+
+    /// A user directory that is always ABSOLUTE, even on a machine where it does
+    /// not exist yet.
+    ///
+    /// `Environment.GetFolderPath(folder)` defaults to `SpecialFolderOption.None`,
+    /// which VERIFIES the directory and returns an EMPTY STRING when it is
+    /// missing or unreadable. Everything downstream then does
+    /// `Path.Combine("", "Smylte", "settings.json")` and writes a relative path —
+    /// so on a fresh account, a minimal container, or any user whose
+    /// `~/.config` no XDG application has created yet, the file holding the
+    /// encrypted password lands in whatever the working directory happened to
+    /// be. Silent, and impossible to notice from inside the app: it saves, it
+    /// loads, and it follows the user around by `cd`.
+    ///
+    /// Found by running the Linux client with XDG_DATA_HOME pointed at a
+    /// directory that did not exist, which is why it is fixed here rather than
+    /// only there — `%APPDATA%` always exists, so Windows was never going to
+    /// show this, but the line was the same line.
+    ///
+    /// `Create` asks for the directory to be made (0700 on Unix) and returns
+    /// the path. It can still come back empty if creation fails, so `$HOME` is
+    /// the floor beneath it, and the current directory beneath that — by then
+    /// there is nowhere better, and an absolute path is still better than a
+    /// relative one.
+    private static string Home(Environment.SpecialFolder folder, string fallback)
+    {
+        var path = Environment.GetFolderPath(folder, Environment.SpecialFolderOption.Create);
+        if (!string.IsNullOrEmpty(path)) return path;
+
+        var home = Environment.GetEnvironmentVariable("HOME");
+        return Path.GetFullPath(string.IsNullOrEmpty(home) ? fallback : Path.Combine(home, fallback));
+    }
+
+    /// Internal rather than private so the test project can assert the mode
+    /// the file is written with and that a torn write cannot replace it. Both
+    /// are properties of the PATH, not of the object.
+    internal static string FilePath => Path.Combine(Dir, "settings.json");
 
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = true };
 
@@ -126,34 +243,105 @@ public sealed class Settings
 
     private static Settings Fresh() => new()
     {
-        DataFolder = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Smylte"),
+        DataFolder = Path.Combine(DataHome, "Smylte"),
     };
+
+    /// Written 0600, and written atomically.
+    ///
+    /// TWO fixes to one line, both of which only bite on Linux. The mode,
+    /// first: this file holds the GitHub token IN THE CLEAR beside the
+    /// encrypted password, and the default umask makes it 0644 inside a 0755
+    /// `~/.config` — readable by every other account on the machine. On Windows
+    /// `%APPDATA%` is ACL'd to the user, which is why it never mattered there
+    /// and does the moment the client ships on Linux. PasswordProtector already
+    /// writes its key 0600; writing the token beside it world-readable made
+    /// that care pointless.
+    ///
+    /// And the replace: `WriteAllText` truncates in place, so a crash or a full
+    /// disk mid-write leaves a half-written file that `Load()` then discards as
+    /// corrupt — silently taking the server address, the username, the token
+    /// and the password with it. A temp file in the same directory followed by
+    /// a rename is atomic on both systems, so the file is either the old one or
+    /// the new one and never neither.
+    /// Make a directory only this account can enter, and narrow one that
+    /// already exists.
+    ///
+    /// Here rather than beside its caller because the caller is the GTK client's
+    /// WebHost, which cannot be linked into a test project without GirCore —
+    /// and this is precisely the kind of thing that has to be asserted rather
+    /// than reasoned about. `Directory.CreateDirectory(path)` takes no mode and
+    /// gives 0777 with the umask applied, which is 0755 nearly everywhere.
+    ///
+    /// What lives behind it: `<DataFolder>/profile/cookies.sqlite`, the cookie
+    /// jar WebKit persists. The app's proxy keeps `Max-Age` when it rewrites
+    /// `Set-Cookie` for the local origin, so the seven-day session cookie is on
+    /// disk there, and libsoup creates that file 0644. On a machine with a
+    /// second account that is a readable live credential — while the encrypted
+    /// password beside it is deliberately 0600. The directory is what actually
+    /// closes it: nobody else can traverse in, whatever the files inside say.
+    internal static void CreatePrivateDirectory(string path)
+    {
+        if (OperatingSystem.IsWindows()) { Directory.CreateDirectory(path); return; }
+
+        // The mode is applied AT creation, so there is no window in which the
+        // directory exists and is traversable.
+        Directory.CreateDirectory(path,
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+
+        // And narrowed when it is already there, which is the upgrade path for
+        // a profile an earlier build created 0755. CreateDirectory does not
+        // apply the mode to a directory that exists.
+        MakePrivate(path);
+    }
+
+    /// Narrow a file or directory that is already on disk, if it is there.
+    /// Best-effort: a path someone else owns is not a reason to refuse to run.
+    internal static void MakePrivate(string path)
+    {
+        if (OperatingSystem.IsWindows()) return;
+        try
+        {
+            if (Directory.Exists(path))
+                File.SetUnixFileMode(path,
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            else if (File.Exists(path))
+                File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
+        catch (Exception) { /* not ours to chmod; it still works */ }
+    }
 
     public void Save()
     {
         Directory.CreateDirectory(Dir);
-        File.WriteAllText(FilePath, JsonSerializer.Serialize(this, Json));
+        var temp = FilePath + ".tmp";
+        var json = JsonSerializer.Serialize(this, Json);
+
+        if (OperatingSystem.IsWindows())
+        {
+            File.WriteAllText(temp, json);
+        }
+        else
+        {
+            using var stream = new FileStream(temp, new FileStreamOptions
+            {
+                Mode = FileMode.Create,
+                Access = FileAccess.Write,
+                Share = FileShare.None,
+                UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite,
+            });
+            using var writer = new StreamWriter(stream);
+            writer.Write(json);
+        }
+
+        File.Move(temp, FilePath, overwrite: true);
     }
 
-    public void SetPassword(string password)
-    {
-        if (string.IsNullOrEmpty(password)) { PasswordBlob = ""; return; }
-        PasswordBlob = Convert.ToBase64String(ProtectedData.Protect(
-            Encoding.UTF8.GetBytes(password), null, DataProtectionScope.CurrentUser));
-    }
+    // Both sides of the password now go through PasswordProtector, which picks
+    // DPAPI on Windows and a key derived from a 0600 file beside this one
+    // everywhere else. The signatures and the contract are unchanged — an empty
+    // string out of GetPassword still means "show the app's own login screen" —
+    // and a Windows blob written before that file existed still reads.
+    public void SetPassword(string password) => PasswordBlob = PasswordProtector.Protect(password);
 
-    public string GetPassword()
-    {
-        if (string.IsNullOrEmpty(PasswordBlob)) return "";
-        try
-        {
-            return Encoding.UTF8.GetString(ProtectedData.Unprotect(
-                Convert.FromBase64String(PasswordBlob), null, DataProtectionScope.CurrentUser));
-        }
-        catch (Exception)
-        {
-            return "";   // different user or machine; the web login screen takes over
-        }
-    }
+    public string GetPassword() => PasswordProtector.Unprotect(PasswordBlob);
 }
