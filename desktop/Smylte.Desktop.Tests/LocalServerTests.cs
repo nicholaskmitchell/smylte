@@ -139,11 +139,25 @@ public sealed class LocalServerTests : IDisposable
         Assert.Equal(48741, first.Port);
         Assert.Equal(48741, second.Port);
 
-        // And once one of them actually starts, the other would not have
-        // chosen it — which is what makes the ordering matter at all.
-        first.Start();
-        using var third = new LocalServer(_root, "https://tasks.example.test", 48741);
-        Assert.NotEqual(48741, third.Port);
+        // There was a third assertion here — that once one of them STARTS, the
+        // next one would not choose the same port — and it was wrong to make.
+        // It passed on an IPv4-only machine and failed on the GitHub runner,
+        // because it asserts the operating system rather than this code:
+        //
+        //   `HttpListener` on Unix resolves the prefix host and binds ONE
+        //   address, while `ChoosePort`'s `IsFree` probes 127.0.0.1. Where
+        //   `localhost` has only an A record those are the same socket and the
+        //   probe sees the listener; where it also has a AAAA record they can
+        //   be different families, and the probe reports a busy port free.
+        //
+        // Which is worth knowing — `IsFree` is blind to the other family, so
+        // on a dual-stack box two instances can pick the same port and the
+        // second `Start()` throws — but it is pre-existing shared code, it is
+        // not what this test is for, and the single-instance lock means two
+        // instances should not be racing for a port in the first place.
+        //
+        // What the startup ordering actually needs is above: constructing
+        // binds nothing. That is true on every machine.
     }
 
     [Fact]

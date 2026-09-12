@@ -300,8 +300,8 @@ public sealed class LinuxIconTests
         // One letter, one period, and a plate for everything but the bare mark.
         // Cheap to check and it catches the failure that matters: an emitter
         // that wrote the plate for every variant, or none.
-        Assert.Single(root.Elements().Where(e => e.Name.LocalName == "polygon"));
-        Assert.Single(root.Elements().Where(e => e.Name.LocalName == "circle"));
+        Assert.Single(root.Elements(), e => e.Name.LocalName == "polygon");
+        Assert.Single(root.Elements(), e => e.Name.LocalName == "circle");
         Assert.Equal(stem == "mark" ? 0 : 1,
             root.Elements().Count(e => e.Name.LocalName == "rect"));
 
