@@ -25,7 +25,20 @@ public static class Updater
     private const string Repo = "smylte";
     private const string Tag = "desktop-latest";
     private const string AssetName = "smylte-web.zip";
-    private const string ClientAssetName = "Smylte.exe";
+
+    /// The client binary for the OS this process is running on.
+    ///
+    /// One release carries both, because there is one web build and it is
+    /// platform-neutral — `smylte-web.zip` is the same bytes for everybody, and
+    /// splitting the release would mean two things to keep in step for no gain.
+    /// The client asset is the only per-platform half, and each client only
+    /// ever asks about its own: a Linux client comparing digests against
+    /// Smylte.exe would offer an update to a binary it cannot run.
+    internal const string WindowsClientAsset = "Smylte.exe";
+    internal const string LinuxClientAsset = "Smylte-linux-x86_64";
+
+    internal static string ClientAssetName =>
+        OperatingSystem.IsWindows() ? WindowsClientAsset : LinuxClientAsset;
 
     /// Where to send someone whose client is out of date. The release is rolling,
     /// so this link never changes and always has the current exe behind it.
@@ -323,9 +336,46 @@ public static class Updater
     // and the new one is started with the old process's id so it can wait for
     // it to exit before taking the single-instance mutex. The old file is
     // deleted on that next start, once nothing is executing it.
+    //
+    // ONE PATH ON BOTH SYSTEMS, for two different reasons, and the Linux reason
+    // is the stronger of the two. Linux would not need the rename at all — a
+    // rename over a running binary is legal there, because the running process
+    // holds the inode and only opening the file for WRITING is refused. But it
+    // does need the wait: the Linux client takes its single-instance slot as a
+    // D-Bus name, and a second process that starts while the first still owns
+    // that name does not become a second instance — it becomes a remote
+    // activation and merely raises the OLD window. An update that appears to do
+    // nothing is worse than one that fails, so `--after-update <pid>` is not
+    // Windows scaffolding carried along; it is what makes the Linux swap
+    // visible.
 
     /// What the launched client is told, so it waits for this one to leave.
     public const string AfterUpdateFlag = "--after-update";
+
+    /// The process id in `--after-update <pid>`, or null when the flag is
+    /// absent or malformed.
+    ///
+    /// Here rather than in either Program.cs because both clients parse it and
+    /// the parse has three ways to be wrong that all look alike from the
+    /// outside — the flag last with nothing after it, a non-numeric argument,
+    /// and the flag never passed at all. All three mean the same thing (do not
+    /// wait) and none of them is a reason to refuse to start.
+    public static int? AfterUpdatePid(string[] args)
+    {
+        var at = Array.IndexOf(args, AfterUpdateFlag);
+        if (at < 0 || at + 1 >= args.Length) return null;
+        return int.TryParse(args[at + 1], out var pid) ? pid : null;
+    }
+
+    /// Block until the client this one is replacing has exited, so its
+    /// single-instance claim is released. Bounded: a process that will not exit
+    /// is not a reason never to start.
+    public static void WaitForPreviousClient(int pid)
+    {
+        try { System.Diagnostics.Process.GetProcessById(pid).WaitForExit(30_000); }
+        catch (ArgumentException) { /* already gone */ }
+        catch (Exception) { /* cannot watch it; carry on */ }
+    }
 
     /// Download the published exe, verify it and swap it into this exe's path.
     /// Returns the path to start. Throws with a sentence for the strip when
@@ -359,6 +409,12 @@ public static class Updater
                 "The downloaded client did not match the digest the release publishes; nothing was changed.");
         }
 
+        // A downloaded file is 0644, and 0644 is not executable. Nothing else
+        // in the swap notices — the rename succeeds, the process starts the new
+        // client, and the exec fails with a message no user can act on. Set it
+        // before the file is anywhere anyone could run it from.
+        MakeExecutable(staged);
+
         log.Report("Installing…");
         SwapClient(exe, staged);
         return exe;
@@ -383,6 +439,18 @@ public static class Updater
         return string.Equals(actual, published, StringComparison.OrdinalIgnoreCase);
     }
 
+    /// Give the staged client the mode a launcher needs. Windows has no such
+    /// concept and `File.SetUnixFileMode` throws there, so the guard is the
+    /// call, not an optimisation.
+    internal static void MakeExecutable(string path)
+    {
+        if (OperatingSystem.IsWindows()) return;
+        File.SetUnixFileMode(path,
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute |
+            UnixFileMode.GroupRead | UnixFileMode.GroupExecute |
+            UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
+    }
+
     internal static string StagedClientPath(string exe) => exe + ".new";
     internal static string RetiredClientPath(string exe) => exe + ".old";
 
@@ -404,16 +472,29 @@ public static class Updater
         }
     }
 
-    /// Delete what a previous replacement left beside the exe. Best effort:
-    /// the retired file is deletable only once the process that ran it has
-    /// exited, which is why the launched client waits for that first.
-    internal static void RemoveStaleClient(string? exe)
+    /// Delete the file a previous replacement moved aside. Best effort: the
+    /// retired file is deletable only once the process that ran it has exited,
+    /// which is why the launched client waits for that first.
+    ///
+    /// **The RETIRED file only, never the staged one.** `<exe>.new` is where a
+    /// running instance writes a ~69 MB download for minutes at a time, and
+    /// this runs at the top of Main in whichever process was launched — before
+    /// it knows whether it is even the primary instance. On Windows the
+    /// difference never showed: `File.Delete` on a file the downloader holds
+    /// open fails with a sharing violation. On Linux unlink succeeds, so
+    /// clicking the launcher while an update downloaded destroyed the staged
+    /// file (the downloader kept writing to an unlinked inode, and the digest
+    /// check then failed with "could not find file"), and a launch landing
+    /// between the two renames in SwapClient deleted BOTH files and left the
+    /// exe path empty with nothing for the rollback to restore.
+    ///
+    /// A staged file abandoned by a killed download is not leaked in exchange:
+    /// `DownloadAssetAsync` opens it with `File.Create`, which truncates.
+    internal static void RemoveRetiredClient(string? exe)
     {
         if (exe is null) return;
-        foreach (var stale in new[] { RetiredClientPath(exe), StagedClientPath(exe) })
-        {
-            try { if (File.Exists(stale)) File.Delete(stale); }
-            catch (Exception) { /* still held, or read-only; the next start tries again */ }
-        }
+        var retired = RetiredClientPath(exe);
+        try { if (File.Exists(retired)) File.Delete(retired); }
+        catch (Exception) { /* still held, or read-only; the next start tries again */ }
     }
 }

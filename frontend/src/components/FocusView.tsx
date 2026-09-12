@@ -103,6 +103,13 @@ export function FocusView({
   const canFloat = desktop?.floating !== undefined
   const floated = !!desktop?.floating
   const pinned = desktop?.pinned ?? true
+  // `!== false`, not `=== true`, and the asymmetry is the whole point: the
+  // Windows client never sends this key and neither does a Linux client on
+  // X11, so absent has to mean YES or a new web build would take the pin away
+  // from every installed exe. Only a Wayland session says false, where no
+  // protocol lets a window ask to stay above others. Settings → Appearance
+  // says why, since there is no room for a sentence here.
+  const canPin = desktop?.canPin !== false
   const reconcile = useCallback((answer: Promise<DesktopState | null>) => {
     void answer.then((s) => { if (s) setDesktop(s) })
   }, [])
@@ -577,18 +584,20 @@ export function FocusView({
         )}
         {floating ? (
           <>
-            <button type="button" className="btn ghost focus-pin" aria-pressed={pinned}
-              aria-label={tr(pinned ? 'focus.unpin' : 'focus.pin')}
-              title={tr(pinned ? 'focus.unpin' : 'focus.pin')} onClick={togglePin}>
-              {pinned ? '●' : '○'}
-            </button>
+            {canPin && (
+              <button type="button" className="btn ghost focus-pin" aria-pressed={pinned}
+                aria-label={tr(pinned ? 'focus.unpin' : 'focus.pin')}
+                title={tr(pinned ? 'focus.unpin' : 'focus.pin')} onClick={togglePin}>
+                {pinned ? '●' : '○'}
+              </button>
+            )}
             <button type="button" className="btn ghost focus-back" onClick={dock}>
               {tr('focus.dock')}
             </button>
           </>
         ) : (
           <>
-            {/* The Windows client only, and only an exe that has the window:
+            {/* A desktop client only, and only one whose host has the window:
                 absent everywhere else, never disabled. While the floating
                 window is up, main offers to bring it forward or to dock it. */}
             {canFloat && !floated && (

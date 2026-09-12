@@ -35,12 +35,43 @@
          interface with no Windows dependency, which is why linking it here does
          not cost this project its portable TFM. -->
     <Compile Include="../Smylte.Desktop/IDesktopBridge.cs" />
+    <!-- The portable halves of two files that are otherwise Windows: the colour
+         arithmetic the host chrome decides from, the five icon names and the
+         contrast rule behind Auto, and the password protector. All three are
+         linked by the Linux client too, which is the point of splitting them —
+         and none of them had a test before, because until now they only ever
+         ran inside a WinForms process this suite cannot start. -->
+    <Compile Include="../Smylte.Desktop/Theme.cs" />
+    <Compile Include="../Smylte.Desktop/IconChoice.cs" />
+    <Compile Include="../Smylte.Desktop/PasswordProtector.cs" />
+    <!-- The floating window's resize ring: thirty lines of corner arithmetic,
+         shared by both clients and untestable while it lived inside a WinForms
+         message loop. Every one of its failure modes is silent. -->
+    <Compile Include="../Smylte.Desktop/FloatRing.cs" />
+    <!-- Setting an environment variable so that NATIVE code can read it, which
+         `Environment.SetEnvironmentVariable` does not do on Linux. The whole
+         X11 default rested on it, and the managed API reads its own write back
+         so nothing looked wrong. -->
+    <Compile Include="../Smylte.Desktop/NativeEnv.cs" />
+    <!-- The Exec line of the desktop entry. The rest of DesktopEntry is GTK and
+         the filesystem; this is the string function that was wrong. -->
+    <Compile Include="../Smylte.Desktop.Linux/DesktopEntryText.cs" />
+    <!-- Write-only-if-different. It gates a process spawn with a ten-second
+         wait, so the branch that decides nothing happened is the branch worth
+         pinning. -->
+    <Compile Include="../Smylte.Desktop/FileSync.cs" />
     <!-- The icon comes in as bytes rather than as a linked source file, so
          AppIconTests asserts on the identical blob <ApplicationIcon> stamps into
          the exe. LogicalName pins the resource name: without it, the linked path
          would decide it. -->
     <EmbeddedResource Include="../Smylte.Desktop/app.ico" LogicalName="app.ico" />
     <EmbeddedResource Include="../Smylte.Desktop/icons/*.ico" LogicalName="%(Filename)%(Extension)" />
+    <!-- The same four variants as the GTK client carries them: loose PNGs at
+         the freedesktop sizes plus a scalable SVG. Prefixed, because
+         `accent-256.png` and `app.ico` are the same art and only the container
+         differs — a bare filename here would read as a second icon set. -->
+    <EmbeddedResource Include="../Smylte.Desktop.Linux/icons/*.png" LogicalName="linux.%(Filename)%(Extension)" />
+    <EmbeddedResource Include="../Smylte.Desktop.Linux/icons/*.svg" LogicalName="linux.%(Filename)%(Extension)" />
   </ItemGroup>
 
   <ItemGroup>

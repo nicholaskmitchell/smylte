@@ -31,6 +31,13 @@ public sealed class LocalServerTests : IDisposable
         Directory.CreateDirectory(Path.Combine(_dir, "webby"));
         File.WriteAllText(Path.Combine(_dir, "webby", "secret.txt"), "also not yours");
 
+        // And a sibling that differs from the root only in CASE. On Linux this
+        // is a second directory; on Windows it aliases the first. Either way
+        // nothing may be served through it — see the test below for why the two
+        // filesystems make the same assertion for different reasons.
+        Directory.CreateDirectory(Path.Combine(_dir, "WEB"));
+        File.WriteAllText(Path.Combine(_dir, "WEB", "secret.txt"), "not yours either");
+
         // Never Start()ed: Resolve is pure path arithmetic and binding a port
         // would make the suite depend on what else is listening.
         _server = new LocalServer(_root, "https://tasks.example.test", 48231);
@@ -63,7 +70,95 @@ public sealed class LocalServerTests : IDisposable
         Assert.Null(_server.Resolve("/../webby/secret.txt"));
     }
 
+    [Fact]
+    public void Resolve_refuses_a_sibling_that_differs_from_the_root_only_in_case()
+    {
+        // The guard used to compare OrdinalIgnoreCase, which is the NTFS rule
+        // applied to a path that may not be on NTFS. On a case-sensitive
+        // filesystem "…/Smylte/WEB/secret.txt" is a genuinely different
+        // directory and the check accepted it — a traversal, in the one place
+        // in this client where that is a security bug rather than a cosmetic
+        // one. The `webby` case above never caught it: that one fails on
+        // length, not on case.
+        //
+        // Non-vacuous on BOTH filesystems, which is the point of asserting it
+        // here rather than only on the Linux runner:
+        //   case-sensitive    WEB is a second directory, and serving out of it
+        //                     is the escape.
+        //   case-insensitive  WEB aliases web, so this reaches a real file
+        //                     through a spelling the guard was never meant to
+        //                     accept — still a refusal, for a weaker reason.
+        Assert.Null(_server.Resolve("/../WEB/secret.txt"));
+    }
+
+    [Fact]
+    public void Resolve_still_serves_the_root_through_its_own_spelling()
+    {
+        // The control for the case test above. Tightening the comparison must
+        // not cost the ordinary path, and "it refuses everything" would satisfy
+        // every traversal assertion in this file on its own.
+        Assert.NotNull(_server.Resolve("/index.html"));
+    }
+
     // ── the control: ordinary requests still work ──────────────────────────
+
+    [Fact]
+    public void Disposing_twice_is_not_an_error()
+    {
+        // The startup path has two places that can own a server — the field
+        // and a local inside StartAsync — and until Dispose became idempotent
+        // the second call threw: `_cts.Cancel()` is the first statement and
+        // `_cts.Dispose()` the last, and Cancel-after-Dispose is an
+        // ObjectDisposedException. It landed in a catch block that disposed the
+        // same server again, so the exception escaped a fire-and-forgotten Task
+        // and took the rest of the cleanup with it.
+        var started = new LocalServer(_root, "https://tasks.example.test", 48731);
+        started.Start();
+        started.Dispose();
+        started.Dispose();
+
+        // And on one that was constructed and never started, which is the
+        // shape an overtaken start now disposes.
+        var idle = new LocalServer(_root, "https://tasks.example.test", 48732);
+        idle.Dispose();
+        idle.Dispose();
+    }
+
+    [Fact]
+    public void Constructing_a_server_does_not_take_the_port()
+    {
+        // Load-bearing for the startup ordering: MainWindow constructs a
+        // LocalServer before it knows whether it has been overtaken and only
+        // calls Start() once it has won. If constructing bound the socket, an
+        // overtaken start would hold the port across a twenty-second login and
+        // the next start would silently move to another one — persisting it,
+        // so the SPA came back at a new origin with an empty localStorage.
+        using var first = new LocalServer(_root, "https://tasks.example.test", 48741);
+        using var second = new LocalServer(_root, "https://tasks.example.test", 48741);
+
+        Assert.Equal(48741, first.Port);
+        Assert.Equal(48741, second.Port);
+
+        // There was a third assertion here — that once one of them STARTS, the
+        // next one would not choose the same port — and it was wrong to make.
+        // It passed on an IPv4-only machine and failed on the GitHub runner,
+        // because it asserts the operating system rather than this code:
+        //
+        //   `HttpListener` on Unix resolves the prefix host and binds ONE
+        //   address, while `ChoosePort`'s `IsFree` probes 127.0.0.1. Where
+        //   `localhost` has only an A record those are the same socket and the
+        //   probe sees the listener; where it also has a AAAA record they can
+        //   be different families, and the probe reports a busy port free.
+        //
+        // Which is worth knowing — `IsFree` is blind to the other family, so
+        // on a dual-stack box two instances can pick the same port and the
+        // second `Start()` throws — but it is pre-existing shared code, it is
+        // not what this test is for, and the single-instance lock means two
+        // instances should not be racing for a port in the first place.
+        //
+        // What the startup ordering actually needs is above: constructing
+        // binds nothing. That is true on every machine.
+    }
 
     [Fact]
     public void Resolve_returns_a_real_asset()
@@ -299,6 +394,11 @@ public sealed class LocalServerBridgeTests : IDisposable
         try { Directory.Delete(_dir, recursive: true); } catch (IOException) { }
     }
 
+    /// Sends the page's own Origin unless told otherwise, because that is what
+    /// a browser does: per the Fetch standard, Origin is appended to every
+    /// request whose method is not GET or HEAD, same-origin included. Pass an
+    /// explicit origin to impersonate another page, or `""` to send none at
+    /// all — which is what curl does, and is now refused.
     private async Task<HttpResponseMessage> PostAsync(string path, string json, string? origin = null)
     {
         using var http = new HttpClient();
@@ -306,7 +406,8 @@ public sealed class LocalServerBridgeTests : IDisposable
         {
             Content = new StringContent(json, Encoding.UTF8, "application/json"),
         };
-        if (origin is not null) req.Headers.TryAddWithoutValidation("Origin", origin);
+        var value = origin ?? _server.Origin;
+        if (value.Length > 0) req.Headers.TryAddWithoutValidation("Origin", value);
         return await http.SendAsync(req);
     }
 
@@ -327,6 +428,92 @@ public sealed class LocalServerBridgeTests : IDisposable
     }
 
     [Fact]
+    public async Task TheIconRouteReachesTheBridgeAndAnswersWithItsState()
+    {
+        // Untested until now, on either platform — and it is the one bridge
+        // route whose argument decides whether a FILE in the user's home
+        // exists: the Start-menu shortcut on Windows, the desktop entry and its
+        // icon tree on Linux.
+        using var res = await PostAsync(
+            "/desktop/icon", "{\"choice\":\"Ink\",\"startMenuShortcut\":true}");
+
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        // The answer is State(), because the page reconciles the dropdown and
+        // the checkbox from it rather than from what it sent.
+        Assert.Equal(_bridge.State(), await res.Content.ReadAsStringAsync());
+        Assert.Equal(new[] { "icon:Ink:True" }, _bridge.Calls);
+    }
+
+    [Fact]
+    public async Task AnIconPostThatOmitsTheShortcutFlagIsRefusedRatherThanReadAsOff()
+    {
+        // `Bool` reads an absent key as false, so a POST carrying only
+        // `{"choice":"Ink"}` used to arrive at the host as
+        // `Icon("Ink", startMenuShortcut: false)` — which DELETES the user's
+        // launcher entry and its icons, and answers 200 so the page tickes the
+        // box off to match. Nothing in the app sends that shape; `setIcon`
+        // always passes both, which is why this is malformed rather than a
+        // request to turn the shortcut off.
+        //
+        // The same rule `pin` already followed, for the same reason: absent and
+        // false must not read the same on a field that changes something.
+        foreach (var body in new[]
+        {
+            "{\"choice\":\"Ink\"}",
+            "{}",
+            "{\"choice\":\"Ink\",\"startMenuShortcut\":\"yes\"}",
+            "{\"choice\":\"Ink\",\"startMenuShortcut\":null}",
+        })
+        {
+            using var res = await PostAsync("/desktop/icon", body);
+            Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
+        }
+        Assert.Empty(_bridge.Calls);
+    }
+
+    [Fact]
+    public async Task TheAppearanceRouteTakesWhateverTheThemeIsAndNeverRefuses()
+    {
+        // The opposite contract to the icon route above, deliberately: `--bg`
+        // can be a user-authored theme value, so the host parses it and hands
+        // the frame back to the system when it cannot — `Theme.ParseHex`
+        // returning null is the documented answer, not a 400. A refusal here
+        // would turn a bad custom theme into a failed request on every colour
+        // the user drags.
+        foreach (var body in new[]
+        {
+            "{\"background\":\"#0C0C10\"}",
+            "{\"background\":\"rebeccapurple\"}",
+            "{\"background\":\"\"}",
+            "{}",
+        })
+        {
+            using var res = await PostAsync("/desktop/appearance", body);
+            Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        }
+        Assert.Equal(
+            new[] { "appearance:#0C0C10", "appearance:rebeccapurple", "appearance:", "appearance:" },
+            _bridge.Calls);
+    }
+
+    [Fact]
+    public async Task TheIconAndAppearanceRoutesAreClosedToAnotherOriginToo()
+    {
+        // The window route has this test; these two did not, and they are
+        // reachable by exactly the same means.
+        using var icon = await PostAsync(
+            "/desktop/icon", "{\"choice\":\"Ink\",\"startMenuShortcut\":false}",
+            origin: "https://evil.example");
+        Assert.Equal(HttpStatusCode.Forbidden, icon.StatusCode);
+
+        using var appearance = await PostAsync(
+            "/desktop/appearance", "{\"background\":\"#000000\"}", origin: "https://evil.example");
+        Assert.Equal(HttpStatusCode.Forbidden, appearance.StatusCode);
+
+        Assert.Empty(_bridge.Calls);
+    }
+
+    [Fact]
     public async Task AnActionTheHostDoesNotKnowIsRefusedAndNothingIsCalled()
     {
         using var unknown = await PostAsync("/desktop/window", "{\"action\":\"explode\"}");
@@ -340,6 +527,46 @@ public sealed class LocalServerBridgeTests : IDisposable
         using var junk = await PostAsync("/desktop/window", "not json");
         Assert.Equal(HttpStatusCode.BadRequest, junk.StatusCode);
         Assert.Empty(_bridge.Calls);
+    }
+
+    [Fact]
+    public async Task AMutatingRouteRefusesARequestThatSendsNoOriginAtAll()
+    {
+        // The guard used to be "reject a WRONG Origin", which reads as a guard
+        // and is not one: absence was trust. Measured from a raw socket against
+        // the real file — no Origin, no Sec-Fetch-*, no User-Agent, HTTP/1.0 —
+        // pin, float, icon, appearance, dock and drag all executed.
+        //
+        // A browser cannot produce this shape on a POST. Fetch appends Origin
+        // to every request whose method is not GET or HEAD, same-origin
+        // included, so a POST with none is curl, a scanner, or another account
+        // on the machine.
+        foreach (var (path, body) in new[]
+        {
+            ("/desktop/window", "{\"action\":\"float\"}"),
+            ("/desktop/window", "{\"action\":\"pin\",\"pinned\":true}"),
+            ("/desktop/icon", "{\"choice\":\"Ink\",\"startMenuShortcut\":false}"),
+            ("/desktop/appearance", "{\"background\":\"#000000\"}"),
+        })
+        {
+            using var res = await PostAsync(path, body, origin: "");
+            Assert.Equal(HttpStatusCode.Forbidden, res.StatusCode);
+        }
+        Assert.Empty(_bridge.Calls);
+    }
+
+    [Fact]
+    public async Task TheReadOnlyStateRouteStillAnswersARequestWithNoOrigin()
+    {
+        // And it must, because the page cannot send one: a same-origin GET
+        // carries no Origin by spec. Requiring one here — the obvious next
+        // keystroke after the test above — would 403 `readState`, and every
+        // desktop-only control in the SPA would silently stop rendering.
+        using var http = new HttpClient();
+        using var res = await http.GetAsync($"{_server.Origin}/desktop/state");
+
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        Assert.Equal(_bridge.State(), await res.Content.ReadAsStringAsync());
     }
 
     [Fact]
@@ -357,6 +584,9 @@ public sealed class LocalServerBridgeTests : IDisposable
     public async Task TheRouteIsPostOnlyAndAbsentWithoutAWindow()
     {
         using var http = new HttpClient();
+        // 405, not 403 — the Origin requirement sits AFTER the method gate, so a
+        // wrong method still reads as a wrong method. Swap the two and this is
+        // the test that notices.
         using var get = await http.GetAsync($"{_server.Origin}/desktop/window");
         Assert.Equal(HttpStatusCode.MethodNotAllowed, get.StatusCode);
 

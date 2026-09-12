@@ -27,6 +27,11 @@ trap 'rm -rf "$WORK"' EXIT
 # against this checkout — from the repository root, as the release job does.
 cd "$REPO"
 CLIENT_TREE=$(git rev-parse "HEAD:desktop/Smylte.Desktop")
+# Derived the same way the step derives it, from the same checkout, so a change
+# to how the key is composed fails here rather than silently re-publishing the
+# Linux binary on every push forever.
+LINUX_KEY=$(printf '%s %s\n' "$CLIENT_TREE" "$(git rev-parse "HEAD:desktop/Smylte.Desktop.Linux")" \
+  | git hash-object --stdin)
 
 python3 - "$WORKFLOW" "$WORK/publish.sh" <<'PY'
 import sys, yaml, pathlib
@@ -49,14 +54,19 @@ run_case() {
     _STUB=$(mktemp -d)
     : "${FAIL_PROBE_TIMES:=0}" "${API_ANSWER:=present}" "${FAIL_UPLOAD_TIMES:=0}"
     : "${FAIL_EDIT_TIMES:=0}" "${FAIL_CREATE_TIMES:=0}" "${EDIT_WRITES_SHA:=1}" "${EDIT_DROPS_TREE:=0}"
+    # The body fetch is the one call in the step whose failure the code is
+    # allowed to swallow, so it is the one that most needs a knob.
+    : "${FAIL_BODY_TIMES:=0}"
     # What the release already holds: its asset names, and the client source
     # tree its notes record (empty = a release from before that line existed).
-    : "${ASSETS:=smylte-web.zip Smylte.exe}" "${PUBLISHED_TREE:=}"
+    : "${ASSETS:=smylte-web.zip Smylte.exe Smylte-linux-x86_64}" "${PUBLISHED_TREE:=}"
+    : "${PUBLISHED_LINUX_KEY:=}" "${EDIT_DROPS_LINUX_KEY:=0}"
 
     # Starts stale, the way the real release did after the 503.
     {
       echo "Rolling desktop build from 0000000000000000."
       [ -n "$PUBLISHED_TREE" ] && echo "Client source tree: $PUBLISHED_TREE"
+      [ -n "$PUBLISHED_LINUX_KEY" ] && echo "Linux client key: $PUBLISHED_LINUX_KEY"
     } > "$_STUB/body"
 
     # The notes the step passes to `gh release edit/create --notes`, so the
@@ -98,7 +108,13 @@ run_case() {
           # --json reads the release (assets, or the body for the decision and
           # the post-condition); bare is an existence probe.
           if [[ "$*" == *"--json assets"* ]]; then printf '%s\n' $ASSETS; return 0; fi
-          if [[ "$*" == *--json* ]]; then cat "$_STUB/body"; return 0; fi
+          if [[ "$*" == *--json* ]]; then
+            # `bodyfetch`, not `body`: the counter and the release body would
+            # otherwise be the same file under $_STUB.
+            n=$(_bump bodyfetch); echo "  [gh] release view --json body (call $n)" >&2
+            [ "$n" -le "$FAIL_BODY_TIMES" ] && { echo "gh: HTTP 503" >&2; return 1; }
+            cat "$_STUB/body"; return 0
+          fi
           _probe "release view" || return 1
           echo desktop-latest; return 0 ;;
         "release upload")
@@ -114,7 +130,10 @@ run_case() {
           # updated release of the other kind, one the NEXT run would read as
           # "unrecorded" and re-upload the exe over.
           if [ "$EDIT_WRITES_SHA" = 1 ]; then
-            _notes_arg "$@" | { [ "$EDIT_DROPS_TREE" = 1 ] && grep -v 'Client source tree' || cat; } > "$_STUB/body"
+            _notes_arg "$@" \
+              | { [ "$EDIT_DROPS_TREE" = 1 ] && grep -v 'Client source tree' || cat; } \
+              | { [ "$EDIT_DROPS_LINUX_KEY" = 1 ] && grep -v 'Linux client key' || cat; } \
+              > "$_STUB/body"
           fi
           return 0 ;;
         "release create")
@@ -128,8 +147,14 @@ run_case() {
       esac
     }
 
-    # `bash -e {0}` is the shell GitHub Actions runs a `run:` block with.
-    ( set -e; source "$WORK/publish.sh" )
+    # `bash -e {0}` is the shell GitHub Actions runs a `run:` block with —
+    # and `-e` is ALL of it. `-u` and `-o pipefail` are set above for the
+    # harness's own code and must be turned back off here, or the step under
+    # test runs stricter than the step that ships: with pipefail on, a scrape
+    # whose fetch failed is a failed assignment, and with it off — as in
+    # production — it is an empty string that reads as "unrecorded". That is a
+    # difference between red and green-and-wrong, and it hid exactly that bug.
+    ( set +u +o pipefail; set -e; source "$WORK/publish.sh" )
   )
 }
 
@@ -163,6 +188,17 @@ case_is "notes that miss the commit fail the job"        1 'half-updated' EDIT_W
 # sends the step into `gh release create`, which dies with already_exists.
 case_is "a transient probe does not become a create"     0 'release upload' FAIL_PROBE_TIMES=2
 case_is "a dead probe fails rather than guessing"        1 'EXIT|503' FAIL_PROBE_TIMES=99
+# The one call the step is allowed to swallow. `published=$(retry ... | sed |
+# head -1) || return 1` cannot fail — a pipeline's status is head's — so a
+# body fetch that 503s five times produced an empty key, which reads as
+# "unrecorded", which republishes BOTH binaries and exits 0. Everything else
+# about that run looks like a clean publish.
+# Ten, not 99: five attempts each for the two publish_reason fetches, and the
+# post-condition's own fetch left working. Failing that one too would make the
+# case pass for the wrong reason — `BODY=$(retry ...)` is a bare assignment and
+# dies under `set -e` whatever the decision above it did.
+case_is "a dead body fetch does not republish"          1 'giving up' \
+  FAIL_BODY_TIMES=10 PUBLISHED_TREE="$CLIENT_TREE" PUBLISHED_LINUX_KEY="$LINUX_KEY"
 
 # ── which files go up ───────────────────────────────────────────────────────
 # The exe is a self-contained bundle that is never the same bytes twice, and
@@ -172,13 +208,34 @@ case_is "a dead probe fails rather than guessing"        1 'EXIT|503' FAIL_PROBE
 # the published exe was built from, which the notes record.
 ZIP='artifacts/web/smylte-web\.zip'
 EXE='artifacts/client/Smylte\.exe'
-case_is "an unchanged client is not re-published"        0 "release upload \(call 1\): desktop-latest $ZIP --clobber" PUBLISHED_TREE="$CLIENT_TREE"
+LNX='artifacts/client-linux/Smylte-linux-x86_64'
+BOTH="PUBLISHED_TREE=$CLIENT_TREE PUBLISHED_LINUX_KEY=$LINUX_KEY"
+
+case_is "an unchanged client is not re-published"        0 "release upload \(call 1\): desktop-latest $ZIP --clobber" PUBLISHED_TREE="$CLIENT_TREE" PUBLISHED_LINUX_KEY="$LINUX_KEY"
 case_is "notes that lose the tree line fail the job"    1 'do not record the client source tree' EDIT_DROPS_TREE=1
-case_is "a changed client is published"                  0 "release upload \(call 1\): desktop-latest $ZIP $EXE --clobber" PUBLISHED_TREE=0123456789abcdef0123456789abcdef01234567
+case_is "a changed client is published"                  0 "release upload \(call 1\): desktop-latest $ZIP $EXE $LNX --clobber" PUBLISHED_TREE=0123456789abcdef0123456789abcdef01234567
 case_is "a release from before the tree was recorded gets the exe once" 0 "release upload .*$EXE"
-case_is "a release missing the exe gets it even when the tree matches"  0 "release upload .*$EXE" PUBLISHED_TREE="$CLIENT_TREE" ASSETS=smylte-web.zip
-case_is "a forced dispatch publishes the client regardless"             0 "release upload .*$EXE" PUBLISHED_TREE="$CLIENT_TREE" CLIENT_PUBLISH=force
-case_is "a first release carries both"                   0 "release create \(call 1\): desktop-latest $ZIP $EXE" API_ANSWER=absent
+case_is "a release missing the exe gets it even when the tree matches"  0 "release upload .*$EXE" PUBLISHED_TREE="$CLIENT_TREE" PUBLISHED_LINUX_KEY="$LINUX_KEY" ASSETS="smylte-web.zip Smylte-linux-x86_64"
+case_is "a forced dispatch publishes the client regardless"             0 "release upload .*$EXE" PUBLISHED_TREE="$CLIENT_TREE" PUBLISHED_LINUX_KEY="$LINUX_KEY" CLIENT_PUBLISH=force
+case_is "a first release carries all three"              0 "release create \(call 1\): desktop-latest $ZIP $EXE $LNX" API_ANSWER=absent
+
+# ── and the same decision for the Linux binary, taken separately ────────────
+# The two keys cover overlapping trees: the Linux client LINKS the shared
+# sources, so a change under desktop/Smylte.Desktop moves BOTH keys while a
+# change under desktop/Smylte.Desktop.Linux moves only its own. A single shared
+# key would get the second case wrong in the expensive direction — telling every
+# Windows user to download 69 MB because a GTK file moved.
+case_is "a changed Linux client is published without the exe" 0 "release upload \(call 1\): desktop-latest $ZIP $LNX --clobber" PUBLISHED_TREE="$CLIENT_TREE" PUBLISHED_LINUX_KEY=0123456789abcdef0123456789abcdef01234567
+case_is "a release missing the Linux binary gets it even when the key matches" 0 "release upload .*$LNX" PUBLISHED_TREE="$CLIENT_TREE" PUBLISHED_LINUX_KEY="$LINUX_KEY" ASSETS="smylte-web.zip Smylte.exe"
+case_is "a release from before the Linux key was recorded gets it once" 0 "release upload .*$LNX" PUBLISHED_TREE="$CLIENT_TREE"
+case_is "a forced dispatch publishes both clients"       0 "release upload \(call 1\): desktop-latest $ZIP $EXE $LNX --clobber" PUBLISHED_TREE="$CLIENT_TREE" PUBLISHED_LINUX_KEY="$LINUX_KEY" CLIENT_PUBLISH=force
+case_is "notes that lose the Linux key fail the job"     1 'do not record the linux client key' EDIT_DROPS_LINUX_KEY=1
+
+# The scrapes must not read each other'"'"'s line. Both labels are in the body and
+# both keys are correct, so the ONLY way this run publishes a binary is if one
+# pattern matched the other'"'"'s value — which is what a label like "Linux client
+# source tree" would have done to the exe'"'"'s `.*Client source tree` pattern.
+case_is "neither scrape reads the other label"           0 "release upload \(call 1\): desktop-latest $ZIP --clobber" PUBLISHED_TREE="$CLIENT_TREE" PUBLISHED_LINUX_KEY="$LINUX_KEY"
 
 echo
 echo "$pass passed, $fail failed"
