@@ -230,6 +230,38 @@ public sealed class SettingsWriteTests : IDisposable
     }
 
     [Fact]
+    public void The_system_title_bar_choice_survives_a_round_trip_through_settings_json()
+    {
+        // Persistence is not incidental here, it is the whole feature on Linux:
+        // the window is built from this field at startup and GTK will not let a
+        // realized window change its titlebar, so a value that did not survive
+        // the write would be a toggle that never did anything at all.
+        var settings = Settings.Load();
+        settings.DataFolder = _root;
+        Assert.False(settings.SystemTitleBar);   // the default, and it is the old behaviour
+
+        settings.SystemTitleBar = true;
+        settings.Save();
+
+        Assert.True(Settings.Load().SystemTitleBar);
+    }
+
+    [Fact]
+    public void A_settings_json_written_before_this_field_existed_keeps_the_drawn_title_bar()
+    {
+        // Absent must read as false, or an upgrade would silently take the
+        // coloured header bar away from everyone who never asked for that.
+        Directory.CreateDirectory(Path.GetDirectoryName(Settings.FilePath)!);
+        File.WriteAllText(
+            Settings.FilePath,
+            "{\"ServerUrl\":\"https://upgraded.invalid\",\"TitleBarColor\":\"#0C0C10\"}");
+
+        var settings = Settings.Load();
+        Assert.False(settings.SystemTitleBar);
+        Assert.Equal("#0C0C10", settings.TitleBarColor);
+    }
+
+    [Fact]
     public void Narrowing_a_path_that_is_not_there_is_not_an_error()
     {
         // The jar does not exist when SetPersistentStorage returns — libsoup

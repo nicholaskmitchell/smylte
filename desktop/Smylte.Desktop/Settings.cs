@@ -67,6 +67,35 @@ public sealed class Settings
     /// Empty means "never reported" — leave the frame to Windows.
     public string TitleBarColor { get; set; } = "";
 
+    /// Stop drawing the title bar and let the system have it back.
+    ///
+    /// Off by default, because the coloured strip is the whole of what
+    /// `Appearance` buys and turning it off by default would silently drop a
+    /// feature. It exists because the colour is not free on either platform,
+    /// and the cost is different on each:
+    ///
+    ///   Windows   The caption is already the OS's — `WindowChrome` only TINTS
+    ///             it — so this costs the tint and nothing else. `--bg` stops
+    ///             reaching the frame; the buttons, the glyphs and the metrics
+    ///             were never ours to change. Applies immediately.
+    ///   Linux     The app draws the strip itself, a GtkHeaderBar set as the
+    ///             window's titlebar, because no X11 property and no Wayland
+    ///             protocol names a frame's colour — see HeaderChrome. A window
+    ///             that declines a server-side frame declines ALL of it, so a
+    ///             window manager's decoration theme is invisible to this
+    ///             client: its button icons, their sizes, the frame and the
+    ///             window icon in the strip are the window manager's to draw
+    ///             and it is not being asked to. Turning this on asks it to,
+    ///             and the colour goes with it — they are exclusive, and this
+    ///             is which one you would rather have.
+    ///
+    /// The Linux half takes effect on the NEXT LAUNCH, and that is a GTK
+    /// constraint rather than a shortcut: `gtk_window_set_titlebar` on a
+    /// realized window warns and does nothing, and the only way to make it take
+    /// is to unrealize the window — which destroys the WebKit surface the page
+    /// is living on.
+    public bool SystemTitleBar { get; set; }
+
     public int WindowWidth { get; set; } = 1280;
     public int WindowHeight { get; set; } = 860;
     public bool WindowMaximized { get; set; }

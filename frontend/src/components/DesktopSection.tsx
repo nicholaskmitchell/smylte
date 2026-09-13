@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useT } from '../i18n'
-import { readState, setIcon, platformOf, type DesktopState, type IconChoice } from '../desktop'
+import { readState, setIcon, setTitleBar, platformOf, type DesktopState, type IconChoice } from '../desktop'
 
 // The desktop-only half of Appearance.
 //
@@ -26,6 +26,15 @@ import { readState, setIcon, platformOf, type DesktopState, type IconChoice } fr
 //
 // Hence `k()`: one suffix, applied at the call site, with every twin present in
 // both en.ts and de.ts or `i18n.test.ts`'s two parity guards go red.
+//
+// The title-bar row says a different thing again, and it is a TRADE rather than
+// a preference. On Windows the caption has always been the OS's and the client
+// only tints it, so turning this on costs the tint. On Linux the client draws
+// the strip itself — that is the only way to colour one at all — and a window
+// that draws its own strip never sees the window manager's decoration theme,
+// its buttons, its metrics or the window icon in the caption. So the row buys
+// those back at the price of the colour, and the hint has to say so rather than
+// leaving someone to discover which half they lost.
 
 const CHOICES: { id: IconChoice; key: string }[] = [
   { id: 'Auto', key: 'settings.icon.auto' },
@@ -55,6 +64,11 @@ export function DesktopSection() {
     void setIcon(choice, shortcut).then(fresh => fresh && setState(fresh))
   }
 
+  const applyTitleBar = (system: boolean) => {
+    setState({ ...state, systemTitleBar: system })
+    void setTitleBar(system).then(fresh => fresh && setState(fresh))
+  }
+
   return (
     <>
       <div className="menu-row">
@@ -74,14 +88,29 @@ export function DesktopSection() {
           onChange={e => apply({ shortcut: e.target.checked })} />
       </div>
 
+      {/* Absent from an older client's answer, and that absence is the feature
+          detection: the web build updates itself on every launch and the client
+          does not, so a page that knows about this routinely runs inside one
+          that does not. Same rule as the float controls. */}
+      {state.systemTitleBar !== undefined && (
+        <div className="menu-row">
+          <label htmlFor="desktop-titlebar">{tr('settings.titlebar')}</label>
+          <input id="desktop-titlebar" type="checkbox" checked={state.systemTitleBar}
+            onChange={e => applyTitleBar(e.target.checked)} />
+        </div>
+      )}
+
       <div className="hintline">
         {tr(k('settings.icon.hint'))}
         {state.choice === 'Auto' && ' ' + tr(k(
           state.systemUsesLightTheme ? 'settings.icon.autoLight' : 'settings.icon.autoDark'))}
+        {state.systemTitleBar !== undefined && ' ' + tr(k('settings.titlebar.hint'))}
         {/* Windows 10 only: it can be told light or dark and nothing else. The
             Linux client draws the strip itself, so it always reports true and
-            this never renders there — no platform test needed. */}
-        {!state.captionColour && ' ' + tr('settings.icon.win10')}
+            this never renders there — no platform test needed. Silenced once
+            the caption has been handed back: what the OS could have been told
+            is not worth a sentence when it is not being told anything. */}
+        {!state.captionColour && !state.systemTitleBar && ' ' + tr('settings.icon.win10')}
         {/* Said here rather than on the floating window, which has no room for
             a sentence: the pin control is simply absent under Wayland, and a
             control that vanished with no explanation reads as a bug. */}

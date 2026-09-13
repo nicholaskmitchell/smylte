@@ -373,6 +373,7 @@ public sealed class LocalServerBridgeTests : IDisposable
         public string State() => "{\"available\":true,\"floating\":false,\"pinned\":true}";
         public void Appearance(string? background) => Calls.Add($"appearance:{background}");
         public void Icon(string? choice, bool startMenuShortcut) => Calls.Add($"icon:{choice}:{startMenuShortcut}");
+        public void TitleBar(bool system) => Calls.Add($"titlebar:{system}");
         public void Float() => Calls.Add("float");
         public void Dock() => Calls.Add("dock");
         public void Pin(bool onTop) => Calls.Add($"pin:{onTop}");
@@ -468,6 +469,56 @@ public sealed class LocalServerBridgeTests : IDisposable
             using var res = await PostAsync("/desktop/icon", body);
             Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
         }
+        Assert.Empty(_bridge.Calls);
+    }
+
+    [Fact]
+    public async Task TheTitleBarRouteReachesTheBridgeBothWaysAndAnswersWithItsState()
+    {
+        foreach (var (body, call) in new[]
+        {
+            ("{\"system\":true}", "titlebar:True"),
+            ("{\"system\":false}", "titlebar:False"),
+        })
+        {
+            using var res = await PostAsync("/desktop/titlebar", body);
+            Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+            // State(), like every other mutating route: the page reconciles its
+            // checkbox from the answer rather than from what it sent.
+            Assert.Equal(_bridge.State(), await res.Content.ReadAsStringAsync());
+            Assert.Equal(call, _bridge.Calls[^1]);
+        }
+        Assert.Equal(new[] { "titlebar:True", "titlebar:False" }, _bridge.Calls);
+    }
+
+    [Fact]
+    public async Task ATitleBarPostWithoutABooleanIsRefusedRatherThanReadAsOff()
+    {
+        // The same rule as the icon route's shortcut flag and the window
+        // route's `pinned`, and it matters for the same reason: false here is
+        // "take the title bar back and colour it", which on Linux is a window
+        // the user did not ask to have redrawn on the next launch. `Bool` would
+        // read every one of these as exactly that and answer 200.
+        foreach (var body in new[]
+        {
+            "{}",
+            "{\"system\":\"yes\"}",
+            "{\"system\":null}",
+            "{\"system\":1}",
+        })
+        {
+            using var res = await PostAsync("/desktop/titlebar", body);
+            Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
+        }
+        Assert.Empty(_bridge.Calls);
+    }
+
+    [Fact]
+    public async Task TheTitleBarRouteIsClosedToAnotherOriginToo()
+    {
+        using var res = await PostAsync(
+            "/desktop/titlebar", "{\"system\":true}", origin: "https://evil.example");
+        Assert.Equal(HttpStatusCode.Forbidden, res.StatusCode);
         Assert.Empty(_bridge.Calls);
     }
 
