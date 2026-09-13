@@ -32,6 +32,19 @@ export type DesktopState = {
   /// only be told light or dark. The section says which, rather than promising
   /// a colour the OS will quietly ignore.
   captionColour: boolean
+  /// Whether the user has handed the title bar back to the system.
+  ///
+  /// OPTIONAL, and the optionality is the feature detection: a client that does
+  /// not send it has no such setting, and the row is not rendered at all. Absent
+  /// therefore means false, which is also what it means as a value.
+  ///
+  /// It is not the opposite of `captionColour`. That one is a CAPABILITY — what
+  /// this build could do to the caption — and this is a CHOICE. On Linux the
+  /// capability is always there and the choice is the whole question: the app
+  /// draws the strip, so it can colour it, and a window that draws its own strip
+  /// never sees the window manager's decoration theme. The two are exclusive
+  /// and nothing on X11 or Wayland makes them otherwise.
+  systemTitleBar?: boolean
   /// Which host this is. OPTIONAL, and absent means Windows — the Windows
   /// client has never sent it and never will, so reading its absence as
   /// anything else would change what every installed exe means. Only wording
@@ -83,6 +96,15 @@ export const readState = () => call('/desktop/state')
 
 export const setIcon = (choice: IconChoice, startMenuShortcut: boolean) =>
   call('/desktop/icon', { choice, startMenuShortcut })
+
+/// Hand the title bar to the system, or take it back.
+///
+/// Windows applies it at once — the caption was always the OS's and only the
+/// tint was the app's. Linux applies it on the next launch, because GTK refuses
+/// to change a realized window's titlebar and the only way round that would
+/// destroy the surface the page is running on. The hint says so.
+export const setTitleBar = (system: boolean) =>
+  call('/desktop/titlebar', { system })
 
 // The floating focus window. Four verbs on one route, each answered with the
 // fresh host state so the control that asked can reconcile from it.
