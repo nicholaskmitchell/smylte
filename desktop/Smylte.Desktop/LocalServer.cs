@@ -299,6 +299,18 @@ public sealed class LocalServer : IDisposable
                 }
                 bridge.Icon(Str(body, "choice"), shortcut);
                 break;
+            case "/desktop/titlebar":
+                // `system` is REQUIRED, for the same reason as above: absent
+                // must not read as false. False here means "take the title bar
+                // back and colour it", which on Linux is a window the user did
+                // not ask to have redrawn on the next launch.
+                if (BoolOrNull(body, "system") is not { } system)
+                {
+                    TrySetStatus(ctx, 400);
+                    return;
+                }
+                bridge.TitleBar(system);
+                break;
             case "/desktop/window":
                 // The floating focus window. An action the host does not know,
                 // or a `pin` without a boolean to pin to, is a 400 rather than a

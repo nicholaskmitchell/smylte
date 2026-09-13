@@ -20,7 +20,25 @@ namespace Smylte.Desktop;
 /// chose, on the one platform where the app is allowed to draw it properly.
 ///
 /// So `captionColour` is `true` here, always, and unlike Windows it is not a
-/// version test — the strip is ours on every desktop.
+/// version test — the strip is ours on every desktop that will let us have it.
+///
+/// **What that costs, which is the other half of the same fact.** A window that
+/// declines a server-side frame declines ALL of it. The window manager's
+/// decoration theme — KWin's Aurorae buttons, their icons and metrics, the
+/// frame, the window icon it would draw in the caption — is drawn by the window
+/// manager for windows it decorates, and this is not one of them. Someone who
+/// has themed their decorations sees none of it here, and there is no property
+/// on either display server that would let us have the frame and the colour at
+/// once. (KWin reads `_KDE_NET_WM_COLOR_SCHEME`, an X11 property naming a
+/// Plasma `.colors` file, and tints its decoration from it — KDE on X11 only,
+/// needing raw XChangeProperty interop and a generated colour-scheme file per
+/// background the page reports. Stated so it is not rediscovered as an option.)
+///
+/// The two are exclusive, so `Settings.SystemTitleBar` makes it a choice rather
+/// than a decision baked into the build: with it on, MainWindow never calls
+/// SetTitlebar and everything below still applies — the window's own
+/// background, the float ring, the update strip — because only the `headerbar`
+/// rules stop matching anything.
 internal static class HeaderChrome
 {
     /// One provider for the whole display, replaced in place. A second provider
