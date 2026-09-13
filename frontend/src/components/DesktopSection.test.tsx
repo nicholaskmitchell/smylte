@@ -12,11 +12,11 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { DesktopSection } from './DesktopSection'
-import { readState, setIcon, type DesktopState } from '../desktop'
+import { readState, setIcon, setTitleBar, type DesktopState } from '../desktop'
 
 vi.mock('../desktop', async (importOriginal) => {
   const mod = await importOriginal<typeof import('../desktop')>()
-  return { ...mod, readState: vi.fn(), setIcon: vi.fn() }
+  return { ...mod, readState: vi.fn(), setIcon: vi.fn(), setTitleBar: vi.fn() }
 })
 
 const host = (over: Partial<DesktopState> = {}): DesktopState => ({
@@ -26,6 +26,7 @@ const host = (over: Partial<DesktopState> = {}): DesktopState => ({
   systemUsesLightTheme: true,
   startMenuShortcut: false,
   captionColour: true,
+  systemTitleBar: false,
   ...over,
 } as DesktopState)
 
@@ -33,6 +34,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   cleanup()
   vi.mocked(setIcon).mockResolvedValue(null)
+  vi.mocked(setTitleBar).mockResolvedValue(null)
 })
 
 describe('outside a desktop client', () => {
@@ -66,6 +68,25 @@ describe('inside the Windows client', () => {
     render(<DesktopSection />)
     expect(await screen.findByText(/only supports a light or dark title bar/)).toBeInTheDocument()
   })
+
+  it('drops that sentence once the caption has been handed back', async () => {
+    // What Windows 10 could have been told is not worth a line when it is not
+    // being told anything — and leaving it there reads as the setting having
+    // failed rather than having been obeyed.
+    vi.mocked(readState).mockResolvedValue(
+      host({ captionColour: false, systemTitleBar: true }))
+    render(<DesktopSection />)
+    await screen.findByLabelText('System title bar')
+    expect(screen.queryByText(/only supports a light or dark title bar/)).not.toBeInTheDocument()
+  })
+
+  it('does not promise a restart Windows does not need', async () => {
+    vi.mocked(readState).mockResolvedValue(host())
+    render(<DesktopSection />)
+    await screen.findByLabelText('System title bar')
+    expect(screen.getByText(/the colour Windows draws it/)).toBeInTheDocument()
+    expect(screen.queryByText(/next time Smylte starts/)).not.toBeInTheDocument()
+  })
 })
 
 describe('inside the Linux client', () => {
@@ -83,6 +104,20 @@ describe('inside the Linux client', () => {
     expect(screen.queryByText(/taskbar/)).not.toBeInTheDocument()
     expect(screen.queryByText(/Start menu/)).not.toBeInTheDocument()
     expect(screen.queryByText(/only supports a light or dark title bar/)).not.toBeInTheDocument()
+  })
+
+  it('states the trade and the restart, which Windows has neither of', async () => {
+    // The two halves a Linux reader has to be told, because both are
+    // surprising: the app background stops reaching the strip (they are
+    // exclusive — nothing on X11 or Wayland tints a frame the client did not
+    // draw), and nothing visibly happens until the client is restarted.
+    vi.mocked(readState).mockResolvedValue(host({ platform: 'linux', canPin: true }))
+    render(<DesktopSection />)
+
+    await screen.findByLabelText('System title bar')
+    expect(screen.getByText(/window manager draw the title bar/)).toBeInTheDocument()
+    expect(screen.getByText(/next time Smylte starts/)).toBeInTheDocument()
+    expect(screen.queryByText(/the colour Windows draws it/)).not.toBeInTheDocument()
   })
 
   it('keeps the plate names, which are colours and not operating systems', async () => {
@@ -106,6 +141,65 @@ describe('inside the Linux client', () => {
     render(<DesktopSection />)
     await screen.findByLabelText('Applications menu entry')
     expect(screen.queryByText(/Wayland session/)).not.toBeInTheDocument()
+  })
+})
+
+describe('the title bar', () => {
+  it('is not offered at all by a client that has never heard of it', async () => {
+    // The web build updates itself on every launch and the client does not, so
+    // this page routinely runs inside an older one. An absent key is that
+    // client, and a checkbox it cannot answer is worse than no checkbox: it
+    // would render unchecked, POST to a route that 404s, and stay unchecked.
+    const { systemTitleBar: _omitted, ...older } = host()
+    vi.mocked(readState).mockResolvedValue(older as DesktopState)
+    render(<DesktopSection />)
+
+    await screen.findByLabelText('App icon')
+    expect(screen.queryByLabelText('System title bar')).not.toBeInTheDocument()
+    expect(screen.queryByText(/the colour Windows draws it/)).not.toBeInTheDocument()
+  })
+
+  it('applies at once and then takes the host answer over its own guess', async () => {
+    const user = userEvent.setup()
+    vi.mocked(readState).mockResolvedValue(host({ platform: 'linux', canPin: true }))
+    // Answered with the theme flipped, which is a value only the host can
+    // compute — so its arrival is the only observable proof of the reconcile,
+    // the same trick the icon test below uses.
+    vi.mocked(setTitleBar).mockResolvedValue(host({
+      platform: 'linux', canPin: true, systemTitleBar: true, systemUsesLightTheme: false }))
+
+    render(<DesktopSection />)
+    const toggle = await screen.findByLabelText('System title bar')
+    expect((toggle as HTMLInputElement).checked).toBe(false)
+
+    await user.click(toggle)
+    expect(setTitleBar).toHaveBeenCalledWith(true)
+    expect((toggle as HTMLInputElement).checked).toBe(true)
+    await waitFor(() =>
+      expect(screen.getByText(/The system is currently dark/)).toBeInTheDocument())
+  })
+
+  it('sends false when it is being turned back off', async () => {
+    // Absent and false must not read the same on this route — the host answers
+    // 400 rather than guessing — so the page has to send the boolean either way.
+    const user = userEvent.setup()
+    vi.mocked(readState).mockResolvedValue(host({ systemTitleBar: true }))
+    render(<DesktopSection />)
+
+    await user.click(await screen.findByLabelText('System title bar'))
+    expect(setTitleBar).toHaveBeenCalledWith(false)
+  })
+
+  it('does not disturb the icon choice', async () => {
+    // Two routes, two settings. A toggle that re-sent the icon would carry
+    // whatever the page last believed, which is how a stale flag deletes a
+    // launcher entry.
+    const user = userEvent.setup()
+    vi.mocked(readState).mockResolvedValue(host({ platform: 'linux', startMenuShortcut: true }))
+    render(<DesktopSection />)
+
+    await user.click(await screen.findByLabelText('System title bar'))
+    expect(setIcon).not.toHaveBeenCalled()
   })
 })
 

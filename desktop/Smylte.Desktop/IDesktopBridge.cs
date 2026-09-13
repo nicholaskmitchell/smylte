@@ -23,6 +23,18 @@ public interface IDesktopBridge
     /// one lever that reaches the grouped taskbar button.
     void Icon(string? choice, bool startMenuShortcut);
 
+    /// Hand the title bar back to the system, or take it again.
+    ///
+    /// Its own verb rather than a second argument to `Appearance`, because that
+    /// one fires on every colour the user drags and is answered without waiting;
+    /// this one the page reconciles a checkbox from, so it has to have landed
+    /// before `State()` is read.
+    ///
+    /// What it costs differs per platform and `Settings.SystemTitleBar` states
+    /// it. The one thing a caller has to know here: on Linux the window itself
+    /// does not change until the client is restarted.
+    void TitleBar(bool system);
+
     // ── the floating focus window ─────────────────────────────────────────
     //
     // Four verbs rather than one "window(action)" call, so the interface stays

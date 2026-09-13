@@ -20,7 +20,7 @@ they differ, they differ in a column.
 | Engine | WebView2 (ships with the OS) | WebKitGTK 6 (`webkitgtk6.0`) |
 | Toolkit | WinForms | GTK 4 |
 | Asset | `Smylte.exe` | `Smylte-linux-x86_64` |
-| Title bar | painted via `DwmSetWindowAttribute` | drawn by the app, a `GtkHeaderBar` |
+| Title bar | painted via `DwmSetWindowAttribute` | drawn by the app, a `GtkHeaderBar`, or handed back |
 | Password at rest | DPAPI | AES-GCM under a 0600 key file |
 | Floating window stays on top | yes | on X11, which is the default; see below |
 
@@ -134,7 +134,7 @@ One line of code chooses both columns: `SpecialFolder.ApplicationData` and
 
 | Windows | Linux | What |
 | --- | --- | --- |
-| `%APPDATA%\Smylte\settings.json` | `~/.config/Smylte/settings.json` | Server URL, username, encrypted password, optional GitHub token, data folder, port, window size, icon choice, title-bar colour, and the floating focus window's position, size and pin |
+| `%APPDATA%\Smylte\settings.json` | `~/.config/Smylte/settings.json` | Server URL, username, encrypted password, optional GitHub token, data folder, port, window size, icon choice, title-bar colour, whether the title bar is the system's, and the floating focus window's position, size and pin |
 | `<data folder>\web\` | `<data folder>/web/` | The downloaded web build |
 | `<data folder>\profile\` | `<data folder>/profile/` | Browser profile — cookies, localStorage |
 | — | `<data folder>/icons/` | The four icon variants, unpacked so GTK can look one up by name |
@@ -338,6 +338,29 @@ capability as always available, where the Windows one reports a version test.
 
 Either way the colour is remembered between launches, so the frame does not
 flash the system default while the web app boots.
+
+**And you can turn it off, which is worth more on Linux than it sounds.** The
+Linux half of that has a cost the Windows half does not: a window that declines
+a server-side frame declines *all* of it. Your window manager's decoration theme
+— KWin's Aurorae buttons and their sizes, the frame, the window icon it would
+draw in the caption — is drawn for windows it decorates, and a client-side
+decorated window is not one of them. So a themed desktop sees none of its own
+theme on this window, and nothing on X11 or Wayland lets an application have the
+frame and the colour at once. The two are exclusive.
+
+Settings → Appearance → **System title bar** is which of the two you would
+rather have. On Linux it stops the client calling `SetTitlebar` at all, so the
+window manager decorates the window as it does every other: your buttons, your
+metrics, your icon, its colour. `--setup` has always opened a window that way,
+so that dialog is a preview of what you would get. On Windows it means only that
+the caption stops following the app's `--bg` — that strip was always the OS's
+and all the client ever did was tint it.
+
+It applies immediately on Windows. On Linux it takes effect **the next time the
+client starts**, and that is GTK rather than laziness: `gtk_window_set_titlebar`
+on a window that is already on screen warns and does nothing, and the only way
+to force it is to unrealize the window — which would destroy the WebKitGTK
+surface the app is running on.
 
 **Fifteen sizes, and three of them are drawn differently.** Windows asks for 14
 distinct sizes across its three request bands, and Fraunces' hairlines go
