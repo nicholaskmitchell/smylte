@@ -292,7 +292,12 @@ public sealed class MainForm : Form, IDesktopBridge
     {
         try
         {
-            var colour = WindowChrome.ParseHex(background);
+            // The gate is here rather than at the two call sites — OnHandleCreated
+            // and the Appearance bridge — so "the user asked for the system
+            // caption" cannot be honoured on one path and forgotten on the other.
+            // Null takes the same arm an unparseable colour already takes, which
+            // is Reset: DWM's own "hand the frame back to the OS".
+            var colour = _settings.SystemTitleBar ? null : WindowChrome.ParseHex(background);
             if (colour is null) WindowChrome.Reset(Handle);
             else WindowChrome.Apply(Handle, colour.Value);
         }
@@ -330,6 +335,12 @@ public sealed class MainForm : Form, IDesktopBridge
             // is Windows 11 22000+. The page uses this to say which it will get
             // instead of promising a colour the OS will ignore.
             captionColour = Environment.OSVersion.Version.Build >= 22000,
+            // Whether the user has handed the caption back. A CAPABILITY above
+            // and a CHOICE here, and the page needs both: `captionColour` says
+            // what this build could do, this says what it is being asked to.
+            // Absent from an older exe's answer, which is how a newer web build
+            // knows not to offer the toggle at all.
+            systemTitleBar = _settings.SystemTitleBar,
             // The floating focus window. Absent from an older exe's answer,
             // which is how a newer web build knows not to offer it.
             floating = _floating,
@@ -431,6 +442,28 @@ public sealed class MainForm : Form, IDesktopBridge
             _settings.StartMenuShortcut = startMenuShortcut;
             _settings.Save();
             ApplyIcon();   // re-syncs the shortcut too
+        });
+    }
+
+    /// Invoke, for the reason Icon gives: the page reconciles its checkbox from
+    /// the State() this POST is answered with.
+    ///
+    /// `TitleBarColor` is left where it is, deliberately. It keeps being written
+    /// by Appearance while the caption is the system's, so turning this back off
+    /// repaints the frame at once instead of waiting for the page to push its
+    /// --bg again. Nothing here has to be undone.
+    void IDesktopBridge.TitleBar(bool system)
+    {
+        Invoke(() =>
+        {
+            _settings.SystemTitleBar = system;
+            _settings.Save();
+            // Immediate on Windows, both directions: the caption was always the
+            // OS's and only the tint was ours, so there is no window to rebuild.
+            ApplyChrome(_settings.TitleBarColor);
+            // The floating window is NOT touched. It is FormBorderStyle.None and
+            // draws its own ring, so it has no system title bar to hand back —
+            // its colour is the page's whatever this is set to.
         });
     }
 

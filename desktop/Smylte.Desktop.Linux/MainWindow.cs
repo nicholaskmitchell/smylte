@@ -42,6 +42,26 @@ internal sealed class MainWindow : IDesktopBridge
     /// the least likely thing the reader has open.
     private readonly Gtk.Button _setupPrompt = Gtk.Button.NewWithLabel("Setup…");
 
+    /// What `ShowSetup` shows and hides, which is not always the button.
+    ///
+    /// In the header bar it IS the button: the strip around it is the title bar
+    /// and has to stay. In the body it is the band the button sits in, because
+    /// hiding only the button would leave an empty coloured strip above the
+    /// page. Two containers, one visibility, so the three callers do not each
+    /// have to know which title bar this window is wearing.
+    private readonly Gtk.Widget _setupHost;
+
+    /// The monogram, at the left of the header bar.
+    ///
+    /// GTK puts NO icon in a header bar: `gtk_window_set_icon_name` feeds the
+    /// window manager, and with client-side decorations the window manager is
+    /// not drawing anything to put it in. So the strip had the app's name and
+    /// not its mark, and what appeared over a maximised window was the panel's
+    /// icon rather than this one — which reads as an icon that only sometimes
+    /// works. Exists only when the app draws the strip; with the system title
+    /// bar the window manager draws the window icon itself.
+    private readonly Gtk.Image _mark = Gtk.Image.New();
+
     private WebHost? _host;
     private WebKit.WebView? _web;
     private LocalServer? _server;
@@ -85,15 +105,52 @@ internal sealed class MainWindow : IDesktopBridge
         if (settings.WindowMaximized) _window.Maximize();
         _window.AddCssClass("smylte");
 
-        // Client-side decorations. Not a style preference: the header bar is
-        // the only surface on X11 or Wayland whose colour an application can
-        // set, so making it ours is what lets `Appearance` mean anything at
-        // all. See HeaderChrome for the alternative that was rejected.
-        _header.SetShowTitleButtons(true);
-        _setupPrompt.SetVisible(false);
+        // Client-side decorations, unless the user has asked for the system's.
+        //
+        // Not a style preference either way: the header bar is the only surface
+        // on X11 or Wayland whose colour an application can set, so making it
+        // ours is what lets `Appearance` mean anything at all. See HeaderChrome.
+        // The cost is the other half of the same fact — a window that declines a
+        // server-side frame declines the window manager's decoration theme with
+        // it, buttons, metrics, window icon and all — and `SystemTitleBar` is
+        // which of the two the user would rather have.
+        //
+        // Not calling SetTitlebar is the whole of the other arm: `decorated`
+        // stays true, so GTK asks the display server for a frame and gets one
+        // from any window manager that draws them. A compositor that draws none
+        // — GNOME's Wayland — has GTK build its own default header bar instead,
+        // which still follows the system theme, which is still what was asked
+        // for. SetupWindow has always worked this way; it is what `--setup`
+        // looks like.
         _setupPrompt.OnClicked += (_, _) => OpenSetup();
-        _header.PackStart(_setupPrompt);
-        _window.SetTitlebar(_header);
+        if (settings.SystemTitleBar)
+        {
+            // The Setup… button is the one control that has nowhere else to be:
+            // it is the way back when there is no page to offer one. The update
+            // strip is the precedent and the stylesheet already paints its
+            // class, so it costs no new CSS.
+            var strip = Gtk.Box.New(Gtk.Orientation.Horizontal, 8);
+            strip.AddCssClass("smylte-banner");
+            strip.Append(_setupPrompt);
+            _body.Append(strip);
+            _setupHost = strip;
+        }
+        else
+        {
+            _header.SetShowTitleButtons(true);
+            // 16px is the size GTK's own header-bar icons are, and the art is
+            // held legible at it by build_app_icon.py's four floors. Margins in
+            // code rather than in HeaderChrome's stylesheet: that is a string
+            // with no test, and this needs no cascade.
+            _mark.SetPixelSize(16);
+            _mark.SetMarginStart(8);
+            _mark.SetMarginEnd(2);
+            _header.PackStart(_mark);
+            _header.PackStart(_setupPrompt);
+            _window.SetTitlebar(_header);
+            _setupHost = _setupPrompt;
+        }
+        ShowSetup(false);
 
         _splash.SetVexpand(true);
         _splash.SetHexpand(true);
@@ -134,7 +191,7 @@ internal sealed class MainWindow : IDesktopBridge
         // next dock of the float window found `_closing` true, skipped
         // presenting the main window, and left the user with nothing on screen.
         _closing = false;
-        _setupPrompt.SetVisible(false);
+        ShowSetup(false);
         _splash.SetLabel("Starting…");
 
         // Built into locals and published to the fields only at the end, so a
@@ -178,6 +235,13 @@ internal sealed class MainWindow : IDesktopBridge
             // only allowed to write once it has won.
             host = new WebHost(_settings);
             IconAssets.Install(_settings, _window.GetDisplay());
+            // Again, now that the names resolve. The constructor's ApplyIcon
+            // runs before this and Program presents the window before it too,
+            // so everything set there was set against an icon theme that had
+            // never heard of these names. The WINDOW icon survives that — GTK
+            // re-resolves it at the window-manager handshake — but a Gtk.Image
+            // handed a name it cannot find just stays blank for good.
+            ApplyIcon();
 
             var web = host.NewView(chromeless: false);
             web.SetVexpand(true);
@@ -253,7 +317,7 @@ internal sealed class MainWindow : IDesktopBridge
     {
         _splash.SetLabel(message + "\n\nOpen setup to change the server address.");
         _stack.SetVisibleChildName("splash");
-        _setupPrompt.SetVisible(true);
+        ShowSetup(true);
         OpenSetup();
     }
 
@@ -268,7 +332,7 @@ internal sealed class MainWindow : IDesktopBridge
     {
         _splash.SetLabel("Smylte is not configured yet.\n\nOpen setup to name the server to use.");
         _stack.SetVisibleChildName("splash");
-        _setupPrompt.SetVisible(true);
+        ShowSetup(true);
     }
 
     public void OpenSetup()
@@ -355,6 +419,13 @@ internal sealed class MainWindow : IDesktopBridge
 
     // ── chrome and icon ─────────────────────────────────────────────────────
 
+    /// Show or hide the way back to setup, wherever it ended up living.
+    ///
+    /// The container rather than the button, because in the body it is a strip
+    /// with padding and a border of its own: hiding only the button would leave
+    /// an empty coloured band above the page.
+    private void ShowSetup(bool visible) => _setupHost.SetVisible(visible);
+
     private void ApplyChrome(string? background)
     {
         var colour = Theme.ParseHex(background);
@@ -375,6 +446,10 @@ internal sealed class MainWindow : IDesktopBridge
         var resolved = IconAssets.Resolve(_settings);
         _window.SetIconName(IconAssets.IconName(resolved));
         _float?.SetIconName(IconAssets.IconName(resolved));
+        // The header bar's copy, so the mark follows the setting and the Auto
+        // light/dark flip exactly as the window icon does. Harmless with the
+        // system title bar: the widget is simply not in anything.
+        _mark.SetFromIconName(IconAssets.IconName(resolved));
         if (authoritative) DesktopEntry.Sync(_settings, resolved);
         else DesktopEntry.Follow(_settings, resolved);
     }
@@ -460,6 +535,14 @@ internal sealed class MainWindow : IDesktopBridge
             // arbitrary colour on every desktop.
             captionColour = true,
 
+            // What the user has asked for, as opposed to what this client can
+            // do. With the system title bar on, the strip is the window
+            // manager's: its decoration theme, its buttons, its window icon —
+            // and no colour, because nothing on X11 or Wayland lets a client
+            // tint a frame it did not draw. Absent from an older client's
+            // answer, which is how a newer page knows not to offer the toggle.
+            systemTitleBar = _settings.SystemTitleBar,
+
             floating = _floating,
             pinned = _settings.FloatPinned,
 
@@ -519,6 +602,27 @@ internal sealed class MainWindow : IDesktopBridge
         // it carries no `startMenuShortcut`, so `false` here always means
         // somebody unticked the box.
         ApplyIcon(authoritative: true);
+    });
+
+    /// Invoke, with Icon above, for the same reason: the page reconciles its
+    /// checkbox from the State() this POST is answered with.
+    ///
+    /// And then it does nothing to the window, which is the whole of what is
+    /// worth knowing here. `gtk_window_set_titlebar` on a REALIZED window warns
+    /// and returns; the only way to make it take is to unrealize the window,
+    /// which destroys the WebKit surface the page is living on. So the setting
+    /// is written and the window is rebuilt on the next launch — and the page's
+    /// hint says so, because a toggle that appears to do nothing is worse than
+    /// one that says when it will.
+    ///
+    /// `TitleBarColor` is left alone, and ApplyChrome still runs on every
+    /// Appearance: the same display-wide stylesheet paints the window's own
+    /// background, the float window's ring and the update strip. Only the
+    /// `headerbar` rules in it stop matching anything.
+    void IDesktopBridge.TitleBar(bool system) => Invoke(() =>
+    {
+        _settings.SystemTitleBar = system;
+        TrySave();
     });
 
     void IDesktopBridge.Float() => Invoke(OpenFloat);
