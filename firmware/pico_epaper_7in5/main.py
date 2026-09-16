@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Nicholas K. Mitchell
 #
-# MIT, where the rest of Smylte is AGPL-3.0-or-later — `../LICENSE` here, and
+# MIT, where the rest of Smylte is AGPL-3.0-only — `../LICENSE` here, and
 # `../README.md` for why. Short version: this is an example whose purpose is to
 # be copied onto a board and changed, and the AGPL's own point (§13, source
 # offered to people who reach a modified copy over a network) cannot fire on a

@@ -156,7 +156,7 @@ describe('<SettingsMenu> → About', () => {
   it('names the licence it is offering the source under', async () => {
     show()
     await userEvent.click(nav('About'))
-    expect(within(panel()).getByText('AGPL-3.0-or-later')).toBeInTheDocument()
+    expect(within(panel()).getByText('AGPL-3.0-only')).toBeInTheDocument()
   })
 })
 
