@@ -34,7 +34,7 @@ import { TasksView } from './components/TasksView'
 import { CalendarView } from './components/CalendarView'
 import { SchedulingView } from './components/SchedulingView'
 import { HomeView } from './components/HomeView'
-import { TodayView, STALE_OVERDUE_DAYS } from './components/TodayView'
+import { TodayView, STALE_OVERDUE_DAYS, PLAN_ON_DUE_TODAY } from './components/TodayView'
 import { FocusView } from './components/FocusView'
 import { DEFAULT_FOCUS, sanitizeFocusSettings, type FocusSettings } from './focus'
 import { isFloatWindow } from './desktop'
@@ -111,6 +111,10 @@ export function App() {
   // rather than retyped: three copies of one default is how the Overdue module
   // and the Today strip come to disagree about which rows are waiting.
   const [staleOverdue, setStaleOverdue] = useState(STALE_OVERDUE_DAYS)
+  // Seeded from `PLAN_ON_DUE_TODAY` for the same reason as the line above: the
+  // Today tab falls back to the same constant, so the shipped default is one
+  // value rather than two that can drift apart.
+  const [planOnDueToday, setPlanOnDueToday] = useState(PLAN_ON_DUE_TODAY)
   const [timeFormat, setTimeFormat] = useState<TimeFormat>(DEFAULT_TIME_FORMAT)
   const [language, setLanguage] = useState<Language>(DEFAULT_LANGUAGE)
   // App's own translator rather than `useT()`, because App is what RENDERS the
@@ -440,6 +444,9 @@ export function App() {
             && s.stale_overdue_days >= 0 && s.stale_overdue_days <= 90) {
           setStaleOverdue(Math.round(s.stale_overdue_days))
         }
+        if (keep('plan_on_due_today') && typeof s.plan_on_due_today === 'boolean') {
+          setPlanOnDueToday(s.plan_on_due_today)
+        }
         if (keep('show_completed_tasks') && typeof s.show_completed_tasks === 'boolean') {
           setShowCompleted(s.show_completed_tasks)
         }
@@ -594,7 +601,7 @@ export function App() {
     'collapsed_groups', 'collapsed_tasks', 'dashboard', 'calendar_task_lists',
     'tab_order', 'session_ttl_s', 'home_timezone', 'appearance',
     'sidebar_collapsed', 'show_completed_tasks', 'auto_close_parents',
-    'calendar_show_done_tasks',
+    'calendar_show_done_tasks', 'plan_on_due_today',
     'calendar_fit', 'time_format', 'language',
     // The trigger map is READ-MODIFY-WRITE — one toggle rebuilds the whole
     // object — so writing it after a failed read would replace the account's
@@ -840,6 +847,16 @@ export function App() {
     setStaleOverdue(next)
     saveSettings({ stale_overdue_days: next })
   }, [])
+
+  // Whether answering an overdue task with today also puts it on today's plan.
+  // A toggle, so it IS in MERGED_SETTINGS: it writes `!current` over state this
+  // same read populates, and a failed read would turn the press into a flip to
+  // the opposite of what the account holds.
+  const togglePlanOnDueToday = useCallback(() => {
+    const next = !planOnDueToday
+    setPlanOnDueToday(next)
+    saveSettings({ plan_on_due_today: next })
+  }, [planOnDueToday])
 
   const changeCalTaskLists = useCallback((next: string[]) => {
     setCalTaskLists(next)
@@ -1216,6 +1233,8 @@ export function App() {
             autoCloseParents={autoCloseParents}
             onToggleAutoCloseParents={toggleAutoCloseParents}
             staleOverdue={staleOverdue} onStaleOverdueChange={changeStaleOverdue}
+            planOnDueToday={planOnDueToday}
+            onTogglePlanOnDueToday={togglePlanOnDueToday}
             focus={focus} onFocusChange={changeFocus}
             notifyEnabled={notifyEnabled} onNotifyEnabledChange={changeNotifyEnabled}
             notifyChatId={notifyChatId} onNotifyChatIdChange={changeNotifyChatId}
@@ -1265,7 +1284,7 @@ export function App() {
         // calendar on each switch between the two tabs.
         <TodayView rev={rev} onExpire={onExpire}
           hiddenCalendars={hiddenCals} archivedCalendars={archivedCals}
-          staleOverdueDays={staleOverdue}
+          staleOverdueDays={staleOverdue} planOnDueToday={planOnDueToday}
           onStartWorking={enterFocus} />
       )}
       {!booting && tab === 'home' && (

@@ -1155,6 +1155,12 @@ export const de: Catalogue = {
   // dafür hat — kurz genug, um neben dem neuen Datum zu stehen, ohne die
   // Schaltflächen einer Zeile auf dem Telefon aus dem Bild zu schieben.
   'today.wasDue': 'war fällig am {date}',
+  // Dieselbe Zeile mit dem Alter des Versprechens — die Lesart, auf die es
+  // ankommt: `fmtDue` schreibt kein Jahr, ein Datum allein lässt elf Tage
+  // Verzug und elf Monate gleich aussehen. `today.wasDue` bleibt für die
+  // Frist, die noch am selben Tag verstrichen ist, wo keine Zahl ehrlicher
+  // ist als eine Null.
+  'today.wasDueDays': 'war fällig am {date} · {days} T',
   'settings.staleOverdue': 'Ab mehr als wie vielen Tagen Verzug nachfragen',
   'settings.staleOverdue.hint': 'Danach wird eine Aufgabe deinem Tag nicht mehr '
     + 'als gewöhnliche Arbeit angeboten, sondern erfragt: neues Datum oder '
@@ -1162,6 +1168,22 @@ export const de: Catalogue = {
     + 'alles. Mit 0 schaltest du das ab.',
   'settings.staleOverdue.off': 'Aus. Überfälliges wird deinem Tag angeboten wie '
     + 'alles andere, egal wie lange es schon wartet.',
+  // Als REGEL formuliert, nicht als Schaltfläche: das Datumsfeld daneben tut
+  // dasselbe, wenn du denselben Tag wählst.
+  'settings.planOnDueToday': 'Beim Verschieben auf heute in den Tag aufnehmen',
+  'settings.planOnDueToday.on': 'An',
+  'settings.planOnDueToday.off': 'Aus',
+  'settings.planOnDueToday.hint': 'Diese Antworten verschieben eine Frist – '
+    + '„heute“ macht eine Aufgabe also heute fällig, ohne sie für heute zu '
+    + 'planen; du musst sie danach noch einmal suchen und hinzufügen. Ist dies '
+    + 'an, landet eine Aufgabe, die du auf den geplanten Tag verschiebst, auch '
+    + 'in diesem Tag. Nur auf diesen Tag: was du auf Donnerstag verschiebst, '
+    + 'ist terminiert, nicht geplant.',
+  // Statt des Hinweises, wenn die Schwelle oben 0 ist. Der Schalter bleibt
+  // sichtbar, damit man ihn wiederfindet – die Zeile sagt, warum er gerade
+  // nichts tut.
+  'settings.planOnDueToday.moot': 'Ohne Wirkung, solange die Einstellung oben 0 '
+    + 'ist: Wird nichts erfragt, gibt es auch keine Antworten zu ändern.',
   'home.overdueWaiting': {
     one: '{count} wartet lange genug, um eine Entscheidung zu brauchen.',
     other: '{count} warten lange genug, um eine Entscheidung zu brauchen.',

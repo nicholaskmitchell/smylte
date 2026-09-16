@@ -535,6 +535,21 @@ def test_settings_show_completed_sync(client):
     assert client.get("/api/settings").json().get("show_completed_tasks") is False
 
 
+def test_settings_plan_on_due_today_sync(client):
+    # A key not declared on SettingsPatch is dropped in silence — the model has
+    # no ConfigDict, so pydantic's extra="ignore" applies and the PUT answers
+    # 200 having stored nothing. That is exactly what this asserts: the store is
+    # key-agnostic, so only an HTTP round-trip can catch a missing field.
+    assert "plan_on_due_today" not in client.get("/api/settings").json(), "off by absence"
+    r = client.put("/api/settings", json={"plan_on_due_today": True})
+    assert r.status_code == 200 and r.json().get("plan_on_due_today") is True
+    assert client.get("/api/settings").json().get("plan_on_due_today") is True
+    # False is a real value, not a clear: an owner who turns this off has said
+    # something, and the merge has to keep it.
+    client.put("/api/settings", json={"plan_on_due_today": False})
+    assert client.get("/api/settings").json().get("plan_on_due_today") is False
+
+
 def test_settings_time_format_sync(client):
     # Only the two clocks are accepted — the blob is hand-editable, and an
     # unknown token would reach a formatter on every client that read it.

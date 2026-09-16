@@ -121,10 +121,11 @@ const held = <T,>() => {
 /** `opts` reaches `userEvent.setup` untouched. The only caller that passes
  *  anything is a fake-timer suite: userEvent's own delays are `setTimeout`s, so
  *  under a frozen clock they never resolve unless it is told how to move one. */
-function setup(opts: Parameters<typeof userEvent.setup>[0] = {}) {
+function setup(opts: Parameters<typeof userEvent.setup>[0] = {},
+  props: Partial<Parameters<typeof TodayView>[0]> = {}) {
   render(
     <DataProvider rev={0} onExpire={vi.fn()}>
-      <TodayView rev={0} onExpire={vi.fn()} />
+      <TodayView rev={0} onExpire={vi.fn()} {...props} />
     </DataProvider>,
   )
   return userEvent.setup(opts)
@@ -1331,6 +1332,144 @@ describe('<TodayView> work that has waited long enough to need a decision', () =
     expect(screen.queryByText(/was due/)).not.toBeInTheDocument()
   })
 
+  it('asks again the morning after a press, without a fresh grace period', async () => {
+    // THE LOOP THAT MADE THE ANSWER AN ESCAPE. The threshold used to count from
+    // the deadline the task CARRIED, which is the one the press had just
+    // rewritten — so something three weeks late, moved onto today yesterday,
+    // came back today reading "1 day late" and sat in "Overdue" like ordinary
+    // work for another three mornings. An owner who pressed "Due today" each
+    // morning reset the count each morning and was never asked again.
+    //
+    // Measured from the promise, which `original_due` remembers and nothing
+    // overwrites, the day after a press is day twenty-two and the question is
+    // back.
+    m.tasks.mockResolvedValue([
+      task({ uid: 'u1', summary: 'Renew the passport', due: inDays(-1),
+             original_due: inDays(-21), original_due_is_date: true }),
+    ])
+    setup()
+    await screen.findByText('Renew the passport')
+
+    const under = (name: string) => screen.getByText(name)
+      .closest('section')?.querySelector('.section-label')?.textContent
+    expect(under('Renew the passport')).toBe('Waiting on a decision')
+    // One day past the date it carries would have put it here.
+    expect(under('Renew the passport')).not.toBe('Overdue')
+  })
+
+  it('takes the press for the day it buys, rather than arguing with it', async () => {
+    // The other half, and the reason the reclaim above is gated on being late
+    // RIGHT NOW. A task moved onto today has been decided about; putting it
+    // straight back under "waiting on a decision" on the same paint would be
+    // the strip rejecting the answer it just asked for.
+    m.tasks.mockResolvedValue([
+      task({ uid: 'u1', summary: 'Renew the passport', due: today(),
+             original_due: inDays(-21), original_due_is_date: true }),
+    ])
+    setup()
+    await screen.findByText('Renew the passport')
+
+    const under = (name: string) => screen.getByText(name)
+      .closest('section')?.querySelector('.section-label')?.textContent
+    expect(under('Renew the passport')).toBe('Due today')
+    // …and the press is still visible as one. This is the whole complaint: the
+    // row moved to a neutral heading and stopped saying it had ever been late.
+    expect(screen.getByText(/was due/)).toBeInTheDocument()
+  })
+
+  it('says how old the promise is, not just when it was', async () => {
+    // A date alone has no scale, and `fmtDue` prints no year — so a deadline
+    // missed last March reads exactly like one missed eleven days ago.
+    m.tasks.mockResolvedValue([
+      task({ uid: 'u1', summary: 'Renew the passport', due: today(),
+             original_due: inDays(-21), original_due_is_date: true }),
+    ])
+    setup()
+    await screen.findByText('Renew the passport')
+    expect(screen.getByText(/was due .* · 21d/)).toBeInTheDocument()
+  })
+
+  it('moves the alarm onto the old date rather than lighting both', () => {
+    // Two orange dates on one row read as two alarms, and the interesting one
+    // is not the date the reschedule chose. So the warn moves: a slipped row
+    // has exactly one, on the promise it missed.
+    const overdueCell = (row: HTMLElement) => row.querySelector('.today-due')
+    m.tasks.mockResolvedValue([
+      task({ uid: 'u1', summary: 'Slipped', due: inDays(-1),
+             original_due: inDays(-21), original_due_is_date: true }),
+      task({ uid: 'u2', summary: 'Plainly late', due: inDays(-1) }),
+    ])
+    setup()
+    return waitFor(() => {
+      const slipped = screen.getByText('Slipped').closest('li')!
+      const plain = screen.getByText('Plainly late').closest('li')!
+      expect(overdueCell(slipped)).not.toHaveClass('overdue')
+      expect(slipped.querySelector('.was-due')).toBeInTheDocument()
+      // Untouched for everything that has never slipped.
+      expect(overdueCell(plain)).toHaveClass('overdue')
+      expect(plain.querySelector('.was-due')).toBeNull()
+    })
+  })
+
+  it('can be asked to plan it as well as redate it', async () => {
+    // The other half of the complaint the strip's answers leave open: redating
+    // and stopping schedules nothing. The row leaves this group for a heading
+    // saying it is due today, and actually doing it today is a second gesture —
+    // find it again, press `+` — that nobody asked for.
+    //
+    // OFF by default (the test above this block pins that), so this renders the
+    // view with the setting on rather than going through App.
+    m.tasks.mockResolvedValue([late(11)])
+    // Faithful to the row it answers: the patch moves the DEADLINE and nothing
+    // else, so the summary comes back unchanged and the day row can be found
+    // by the name it had in the strip.
+    m.patchTask.mockImplementation(async () =>
+      task({ uid: 'u11', summary: '11 days late', due: today() }))
+    const user = setup({}, { planOnDueToday: true })
+    await screen.findByText('11 days late')
+
+    await user.click(screen.getByRole('button', { name: 'Due today' }))
+    // Still the deadline first — the row's problem was its deadline, and that
+    // has not stopped being true.
+    expect(m.patchTask).toHaveBeenCalledWith('l1', 'u11', { due: today() })
+    await waitFor(() => expect(m.addDayEntry).toHaveBeenCalledWith(
+      today(), expect.objectContaining({ kind: 'task', list: 'l1', uid: 'u11' })))
+    await waitFor(() => expect(rowTitles()).toContain('11 days late'))
+  })
+
+  it('answers the date field the same way it answers the button', async () => {
+    // The rule is about the DESTINATION, not the button — which is why it lives
+    // in `reschedule` rather than on the press. Picking today out of the field
+    // is the same decision as pressing the button beside it, and two spellings
+    // of one answer must not do two different things.
+    m.tasks.mockResolvedValue([late(11)])
+    m.patchTask.mockImplementation(async () => task({ uid: 'u11', due: today() }))
+    setup({}, { planOnDueToday: true })
+    await screen.findByText('11 days late')
+
+    fireEvent.change(screen.getByLabelText('A new date for 11 days late'),
+      { target: { value: today() } })
+    await waitFor(() => expect(m.patchTask)
+      .toHaveBeenCalledWith('l1', 'u11', { due: today() }))
+    await waitFor(() => expect(m.addDayEntry).toHaveBeenCalled())
+  })
+
+  it('plans nothing for a date that is not the day being planned', async () => {
+    // A task moved to Thursday is SCHEDULED, not planned, and there is no day
+    // plan to put it on. `to === day` is the whole test, and this is the case
+    // that makes it read as what it means rather than as "today".
+    m.tasks.mockResolvedValue([late(11)])
+    m.patchTask.mockImplementation(async () => task({ uid: 'u11', due: inDays(4) }))
+    setup({}, { planOnDueToday: true })
+    await screen.findByText('11 days late')
+
+    fireEvent.change(screen.getByLabelText('A new date for 11 days late'),
+      { target: { value: inDays(4) } })
+    await waitFor(() => expect(m.patchTask)
+      .toHaveBeenCalledWith('l1', 'u11', { due: inDays(4) }))
+    expect(m.addDayEntry).not.toHaveBeenCalled()
+  })
+
   it('is off at zero, and everything late is offered again', async () => {
     // The off switch has to be checked where the group is BUILT, not in its
     // predicate: `group()` walks its matches into the `offered` set whether or
@@ -1345,6 +1484,87 @@ describe('<TodayView> work that has waited long enough to need a decision', () =
     expect(await screen.findByRole('button', { name: 'Add 11 days late to today' }))
       .toBeInTheDocument()
     expect(screen.queryByText('Waiting on a decision')).not.toBeInTheDocument()
+  })
+})
+
+describe('<TodayView> the deadline a task was moved off', () => {
+  /** A task pointed at by a day-plan row, with a deadline it already missed. */
+  const slipped = task({
+    uid: 'u1', list: 'l1', summary: 'Renew the passport', due: today(),
+    original_due: inDays(-21), original_due_is_date: true,
+  })
+
+  it('stays on the row once it is on the day', async () => {
+    // THE MOMENT THE RECORD USED TO DIE. The chip lived on the SUGGESTION rows
+    // and nowhere else, so pressing `+` — the gesture that means "yes, I am
+    // doing this" — moved the task onto a day row that showed a deadline of
+    // today and nothing else. The one fact worth keeping was erased by acting
+    // on it.
+    m.tasks.mockResolvedValue([slipped])
+    m.openDay.mockResolvedValue(plan([
+      entry({ entry_id: 'e1', kind: 'task', list: 'l1', uid: 'u1', title: null }),
+    ]))
+    setup()
+    await screen.findByText('Renew the passport')
+
+    const row = dayRows()[0]
+    expect(row.querySelector('.was-due')).toBeInTheDocument()
+    expect(row.textContent).toMatch(/was due .* · 21d/)
+  })
+
+  it('says nothing on a row that names no task', async () => {
+    // A note exists nowhere but in the day and a habit occurrence carries no
+    // (list, uid) at all, so neither resolves to a task and neither has a
+    // remembered deadline to show. The row renderer covers all three kinds.
+    m.tasks.mockResolvedValue([slipped])
+    m.openDay.mockResolvedValue(plan([entry({ entry_id: 'e1', title: 'Water the plants' })]))
+    setup()
+    await screen.findByText('Water the plants')
+    expect(dayRows()[0].querySelector('.was-due')).toBeNull()
+  })
+
+  it('paints before the server answers, not after', async () => {
+    // THE FLASH. `saveDetail` painted the new deadline optimistically and left
+    // `original_due` to arrive with the response, so for the length of the
+    // round trip the press produced exactly what it was supposed to prevent: an
+    // ordinary task due today, unmarked. The gesture meant to end the lateness
+    // opened by denying it.
+    m.tasks.mockResolvedValue([
+      task({ uid: 'u11', summary: '11 days late', due: inDays(-11) }),
+    ])
+    const patch = held<Task>()
+    m.patchTask.mockReturnValue(patch.promise)
+    const user = setup()
+    await screen.findByText('11 days late')
+
+    await user.click(screen.getByRole('button', { name: 'Due today' }))
+    // Still in flight — this is the frame the mark used to be missing from.
+    expect(screen.getByText(/was due .* · 11d/)).toBeInTheDocument()
+
+    // And the server stays the authority: its answer replaces the row.
+    await act(async () => {
+      patch.land(task({ uid: 'u11', summary: '11 days late', due: today(),
+                        original_due: inDays(-11), original_due_is_date: true }))
+    })
+    expect(screen.getByText(/was due .* · 11d/)).toBeInTheDocument()
+  })
+
+  it('remembers the first deadline missed, not the last', async () => {
+    // A task pushed four times has slipped from its ORIGINAL date, and a mark
+    // that tracked the previous hop would answer a question nobody asks while
+    // losing the one they do. The server never overwrites `original_due`; this
+    // pins that the client does not paint over it either.
+    m.tasks.mockResolvedValue([
+      task({ uid: 'u1', summary: 'Pushed again', due: inDays(-2),
+             original_due: inDays(-40), original_due_is_date: true }),
+    ])
+    const patch = held<Task>()
+    m.patchTask.mockReturnValue(patch.promise)
+    const user = setup()
+    await screen.findByText('Pushed again')
+
+    await user.click(screen.getByRole('button', { name: 'Due today' }))
+    expect(screen.getByText(/was due .* · 40d/)).toBeInTheDocument()
   })
 })
 

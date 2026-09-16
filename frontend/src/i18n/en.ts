@@ -1099,6 +1099,12 @@ export const en = {
   // Short enough to sit beside the date it replaced without pushing the
   // controls off the end of a triage row on a phone.
   'today.wasDue': 'was due {date}',
+  // The same line with the age of the promise on it, which is the reading that
+  // does the work: `fmtDue` prints no year, so a date alone makes eleven days
+  // late and eleven months late look identical. Used whenever that age is
+  // countable — `today.wasDue` stays for the deadline missed earlier the same
+  // day, where the honest count is no count rather than zero.
+  'today.wasDueDays': 'was due {date} · {days}d',
   'settings.staleOverdue': 'Ask about work more than this many days late',
   'settings.staleOverdue.hint': 'Past this, a task stops being offered to your '
     + 'day as ordinary work and is asked about instead: give it a new date, or '
@@ -1106,6 +1112,22 @@ export const en = {
     + 'it to 0 to turn this off.',
   'settings.staleOverdue.off': 'Off. Overdue work is offered to your day like '
     + 'anything else, however long it has been waiting.',
+  // Worded as the RULE rather than as the button, because it is not about the
+  // button: the date field beside it does the same thing when you pick the same
+  // day. Saying "when you press Due today" would describe half of what it does.
+  'settings.planOnDueToday': 'Put it on your day when you move it onto today',
+  'settings.planOnDueToday.on': 'On',
+  'settings.planOnDueToday.off': 'Off',
+  'settings.planOnDueToday.hint': 'Those answers move a deadline, so “today” '
+    + 'leaves a task due today without it being planned for today — you still '
+    + 'have to find it again and add it. With this on, moving one onto the day '
+    + 'you are planning adds it to that day as well. Only onto that day: a task '
+    + 'you move to Thursday is scheduled, not planned.',
+  // Shown in place of the hint when the threshold above is 0. The switch stays
+  // on screen — a control that vanishes is one nobody can find again to work
+  // out why it stopped mattering — so the line says why it is doing nothing.
+  'settings.planOnDueToday.moot': 'Nothing to do while the setting above is 0: '
+    + 'with no work being asked about, there are no answers for this to change.',
   'home.overdueWaiting': {
     one: '{count} has been waiting long enough to need a decision.',
     other: '{count} have been waiting long enough to need a decision.',
