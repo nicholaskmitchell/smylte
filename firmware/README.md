@@ -166,7 +166,7 @@ little further on every row.
 ## Licence
 
 **Everything in this directory is MIT** — `LICENSE` here — where the rest of
-Smylte is AGPL-3.0-or-later. The split is deliberate and it is narrow: only
+Smylte is AGPL-3.0-only. The split is deliberate and it is narrow: only
 `firmware/` moves. The `.bin` route that serves the framebuffer and the
 renderer behind it (`backend/tasksd/display/`) are the server, and they stay
 AGPL.

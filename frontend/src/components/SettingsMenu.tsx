@@ -495,7 +495,7 @@ export function SettingsMenu({
           <>
             <div className="menu-row">
               <label>{tr('about.licence')}</label>
-              <span className="menu-value">AGPL-3.0-or-later</span>
+              <span className="menu-value">AGPL-3.0-only</span>
             </div>
             <div className="menu-row">
               <label>{tr('about.source')}</label>
