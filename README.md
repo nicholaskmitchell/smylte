@@ -728,10 +728,9 @@ what ultimately ships are mine. Commits made with AI assistance carry a
 Copyright © 2026 Nicholas K. Mitchell.
 
 Smylte is free software: you can redistribute it and/or modify it under the
-terms of the **GNU Affero General Public License** as published by the Free
-Software Foundation, either **version 3** of the License, or (at your option)
-any later version — SPDX `AGPL-3.0-or-later`. The full text is in
-[`LICENSE`](LICENSE).
+terms of **version 3** of the **GNU Affero General Public License** as
+published by the Free Software Foundation — SPDX `AGPL-3.0-only`. The full
+text is in [`LICENSE`](LICENSE).
 
 Affero rather than plain GPL, because the GPL's copyleft is triggered by
 *distribution*, and a hosted app never distributes anything. Someone could fork
@@ -745,6 +744,17 @@ you fork it, point that link at your fork — that is the whole obligation.
 The version also settles a dependency question. `vobject` is Apache-2.0 and
 `recurring-ical-events` is LGPL-3.0-or-later; neither is compatible with GPLv2,
 and both fit under v3.
+
+And version 3 *only*, not "or later". `-or-later` is a standing grant to
+relicense on somebody else's schedule: whatever a future AGPLv4 turns out to
+say, downstream could take this code under it instead, and terms nobody here
+ever read would be the ones that govern it. Pinning costs the mirror of that —
+if v4 fixes something v3 gets wrong, picking it up becomes a deliberate
+relicence, and code that arrives as `AGPL-4.0-only` cannot be merged. That is
+the intended shape: the terms are the ones in `LICENSE`, and they move when I
+move them. It constrains nothing upstream — `vobject` and
+`recurring-ical-events` carry their own "or later", which is what makes pinning
+safe on this side.
 
 This program is distributed in the hope that it will be useful, but WITHOUT ANY
 WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
