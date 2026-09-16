@@ -77,6 +77,7 @@ export function SettingsMenu({
   archivedCals, onArchivedCalsChange,
   showCompleted, onToggleShowCompleted, autoCloseParents, onToggleAutoCloseParents,
   staleOverdue, onStaleOverdueChange,
+  planOnDueToday, onTogglePlanOnDueToday,
   focus, onFocusChange,
   notifyEnabled, onNotifyEnabledChange,
   notifyChatId, onNotifyChatIdChange,
@@ -120,6 +121,10 @@ export function SettingsMenu({
    *  task rather than offering it. 0 turns that off. */
   staleOverdue: number
   onStaleOverdueChange: (next: number) => void
+  /** Whether answering one of those rows with today also puts the task on
+   *  today's plan, rather than only moving its deadline there. */
+  planOnDueToday: boolean
+  onTogglePlanOnDueToday: () => void
   /** The focus clock, every key present (see `sanitizeFocusSettings`). */
   focus: FocusSettings
   onFocusChange: (patch: Partial<FocusSettings>) => void
@@ -399,6 +404,26 @@ export function SettingsMenu({
             </div>
             <div className="hintline">
               {tr(staleOverdue > 0 ? 'settings.staleOverdue.hint' : 'settings.staleOverdue.off')}
+            </div>
+            {/* Directly under the threshold, because the two describe one
+                strip: that one says when a task starts being asked about, this
+                says what one of the answers does. Left visible when the
+                threshold is 0 rather than hidden with the group it governs —
+                a control that disappears is a control the owner cannot find
+                again to work out why it stopped mattering, and the hint below
+                says plainly that the group has to be on for it to do
+                anything. */}
+            <div className="menu-row">
+              <label htmlFor="set-plan-on-due-today">{tr('settings.planOnDueToday')}</label>
+              <button className="menu-toggle" id="set-plan-on-due-today"
+                onClick={onTogglePlanOnDueToday} aria-pressed={planOnDueToday}>
+                {tr(planOnDueToday
+                  ? 'settings.planOnDueToday.on' : 'settings.planOnDueToday.off')}
+              </button>
+            </div>
+            <div className="hintline">
+              {tr(staleOverdue > 0
+                ? 'settings.planOnDueToday.hint' : 'settings.planOnDueToday.moot')}
             </div>
           </>
         )}

@@ -121,10 +121,11 @@ const held = <T,>() => {
 /** `opts` reaches `userEvent.setup` untouched. The only caller that passes
  *  anything is a fake-timer suite: userEvent's own delays are `setTimeout`s, so
  *  under a frozen clock they never resolve unless it is told how to move one. */
-function setup(opts: Parameters<typeof userEvent.setup>[0] = {}) {
+function setup(opts: Parameters<typeof userEvent.setup>[0] = {},
+  props: Partial<Parameters<typeof TodayView>[0]> = {}) {
   render(
     <DataProvider rev={0} onExpire={vi.fn()}>
-      <TodayView rev={0} onExpire={vi.fn()} />
+      <TodayView rev={0} onExpire={vi.fn()} {...props} />
     </DataProvider>,
   )
   return userEvent.setup(opts)
@@ -1408,6 +1409,65 @@ describe('<TodayView> work that has waited long enough to need a decision', () =
       expect(overdueCell(plain)).toHaveClass('overdue')
       expect(plain.querySelector('.was-due')).toBeNull()
     })
+  })
+
+  it('can be asked to plan it as well as redate it', async () => {
+    // The other half of the complaint the strip's answers leave open: redating
+    // and stopping schedules nothing. The row leaves this group for a heading
+    // saying it is due today, and actually doing it today is a second gesture —
+    // find it again, press `+` — that nobody asked for.
+    //
+    // OFF by default (the test above this block pins that), so this renders the
+    // view with the setting on rather than going through App.
+    m.tasks.mockResolvedValue([late(11)])
+    // Faithful to the row it answers: the patch moves the DEADLINE and nothing
+    // else, so the summary comes back unchanged and the day row can be found
+    // by the name it had in the strip.
+    m.patchTask.mockImplementation(async () =>
+      task({ uid: 'u11', summary: '11 days late', due: today() }))
+    const user = setup({}, { planOnDueToday: true })
+    await screen.findByText('11 days late')
+
+    await user.click(screen.getByRole('button', { name: 'Due today' }))
+    // Still the deadline first — the row's problem was its deadline, and that
+    // has not stopped being true.
+    expect(m.patchTask).toHaveBeenCalledWith('l1', 'u11', { due: today() })
+    await waitFor(() => expect(m.addDayEntry).toHaveBeenCalledWith(
+      today(), expect.objectContaining({ kind: 'task', list: 'l1', uid: 'u11' })))
+    await waitFor(() => expect(rowTitles()).toContain('11 days late'))
+  })
+
+  it('answers the date field the same way it answers the button', async () => {
+    // The rule is about the DESTINATION, not the button — which is why it lives
+    // in `reschedule` rather than on the press. Picking today out of the field
+    // is the same decision as pressing the button beside it, and two spellings
+    // of one answer must not do two different things.
+    m.tasks.mockResolvedValue([late(11)])
+    m.patchTask.mockImplementation(async () => task({ uid: 'u11', due: today() }))
+    setup({}, { planOnDueToday: true })
+    await screen.findByText('11 days late')
+
+    fireEvent.change(screen.getByLabelText('A new date for 11 days late'),
+      { target: { value: today() } })
+    await waitFor(() => expect(m.patchTask)
+      .toHaveBeenCalledWith('l1', 'u11', { due: today() }))
+    await waitFor(() => expect(m.addDayEntry).toHaveBeenCalled())
+  })
+
+  it('plans nothing for a date that is not the day being planned', async () => {
+    // A task moved to Thursday is SCHEDULED, not planned, and there is no day
+    // plan to put it on. `to === day` is the whole test, and this is the case
+    // that makes it read as what it means rather than as "today".
+    m.tasks.mockResolvedValue([late(11)])
+    m.patchTask.mockImplementation(async () => task({ uid: 'u11', due: inDays(4) }))
+    setup({}, { planOnDueToday: true })
+    await screen.findByText('11 days late')
+
+    fireEvent.change(screen.getByLabelText('A new date for 11 days late'),
+      { target: { value: inDays(4) } })
+    await waitFor(() => expect(m.patchTask)
+      .toHaveBeenCalledWith('l1', 'u11', { due: inDays(4) }))
+    expect(m.addDayEntry).not.toHaveBeenCalled()
   })
 
   it('is off at zero, and everything late is offered again', async () => {
