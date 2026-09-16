@@ -2367,15 +2367,37 @@
 }
 .today-due.overdue { color: var(--warn); }
 
-/* THE DEADLINE THIS TASK WAS MOVED OFF, beside the one it now carries. Quieter
-   than `.today-due` and never warn-coloured: it is a fact about the past, not a
-   second thing to act on, and two orange dates on one row would read as two
-   alarms. No `min-width` either — unlike the cell above it is painted only on
+/* THE DEADLINE THIS TASK WAS MOVED OFF, beside the one it now carries — on
+   every surface that renders a deadline, which is why the class is no longer
+   prefixed `today-`. Rendered by `WasDue`, on the Today tab's suggestion rows
+   and day-plan rows, in the Tasks pane and on both dashboard rows.
+
+   IT IS THE ALARM, and that is a reversal of what this rule used to say. It was
+   `--fg-faint` and never warn-coloured, on the argument that it is a fact about
+   the past rather than a second thing to act on, and that two orange dates on
+   one row would read as two alarms. The second half of that is right and the
+   first half had it backwards: DUE holds one value, so a task rescheduled off a
+   missed deadline wears a perfectly ordinary date, and the fact that it is
+   three weeks late lives ONLY here. Painting the interesting date faint and the
+   uninteresting one orange is what made pressing "Due today" feel like the
+   problem had gone away.
+
+   So the alarm moves rather than doubling: every caller drops its own `overdue`
+   colour when this chip is present (`!slippedFrom(task)` at each site), and the
+   row still reads as exactly one alarm — on the promise that was missed instead
+   of on the reprieve that was granted.
+
+   No `min-width` — unlike the due cell it sits beside, this is painted only on
    the few rows that have one, so there is no column here to hold steady. */
-.today-was-due {
-  font-size: calc(11px * var(--fs-scale)); color: var(--fg-faint); flex: none;
+.was-due {
+  font-size: calc(11px * var(--fs-scale)); color: var(--warn); flex: none;
   white-space: nowrap;
 }
+/* Finished: the same words, without the alarm. How late a task ran is part of
+   how the work went and the completed pane, the look-back and the dashboard's
+   done rows are all fair places to say it — but warn is a call to act, and a
+   ticked row has nothing left to act on. */
+.was-due.done { color: var(--fg-faint); }
 
 /* Row controls: bare glyph buttons, like .task-actions.
 

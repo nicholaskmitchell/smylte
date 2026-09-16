@@ -1,4 +1,5 @@
 import { AuthError } from './api'
+import type { Task } from './api'
 
 // App registers a notifier so guarded API failures surface as a toast instead
 // of dying silently in the console.
@@ -111,6 +112,75 @@ export function daysPastDue(
   const ms = new Date(`${day}T00:00`).getTime() - new Date(`${due}T00:00`).getTime()
   if (!Number.isFinite(ms)) return null
   return Math.round(ms / 86_400_000)
+}
+
+/** The four fields a slip is read off. A `Pick` rather than the whole `Task`
+ *  so a test fixture — and the optimistic row `data.tsx` paints before the
+ *  server answers — can be the shape these take without being a task. */
+export type Slippable = Pick<Task,
+  'due' | 'due_is_date' | 'original_due' | 'original_due_is_date'>
+
+/**
+ * The deadline this task was moved off AFTER IT HAD ALREADY PASSED, as
+ * `(iso, is_date)` — or null when there is no such deadline.
+ *
+ * `original_due` is written by the server and only by the server
+ * (`service.py::_deadline_being_missed`), once, from something that actually
+ * happened: it is the FIRST deadline missed, never the previous one, and
+ * nothing but an explicit "forget it" clears it. So this is a fact about the
+ * past that the app reads, never a judgement it makes.
+ *
+ * SUPPRESSED WHEN IT EQUALS `due`, which is what a deadline moved and then
+ * moved back looks like. Compared as the strings the server sent, so a
+ * remembered all-day deadline and a timed one on the same day stay the
+ * different answers they are — the same rule the chip rendered before this was
+ * a function, kept in one place now that four surfaces ask it.
+ */
+export function slippedFrom(t: Slippable): [string, boolean] | null {
+  if (!t.original_due || t.original_due === t.due) return null
+  return [t.original_due, t.original_due_is_date]
+}
+
+/**
+ * How many whole days ago the first missed deadline was, or null.
+ *
+ * Null covers two different cases and callers must not collapse them into a
+ * zero. A task that has not slipped has no such deadline at all; a task whose
+ * 09:00 deadline was moved at 10:00 HAS one, but it is on the day being
+ * measured against, and "0d late" is a worse thing to print than nothing. Ask
+ * `slippedFrom` whether there is a deadline to name and this for how old it is.
+ */
+export function daysSlipped(t: Slippable, day: string): number | null {
+  const from = slippedFrom(t)
+  return from ? daysPastDue(from[0], from[1], day) : null
+}
+
+/**
+ * How many whole days late, measured against the deadline this task is
+ * ANSWERABLE TO — the first one it missed when it has been moved off one, and
+ * the one it carries otherwise. Null when it is not late at all.
+ *
+ * This is `daysPastDue` for everything that has never slipped, and the whole
+ * difference for everything that has. DUE holds one value, so rescheduling
+ * overwrites how late a task was with how late it is — and the Today tab's
+ * triage strip is built entirely around rescheduling, which made pressing
+ * "Due today" on something three weeks late an answer that ERASED the question.
+ * Four days later it came back reading "1 day late", and pressing it again each
+ * morning meant it never came back at all: the threshold counted from a date
+ * the press had just reset. Measured from the promise instead, the count only
+ * grows, because `original_due` is never overwritten.
+ *
+ * IT STILL GATES ON THE CURRENT DEADLINE, and that is what keeps the press
+ * meaningful rather than making the strip argumentative. A task rescheduled
+ * into the future — or onto today — is NOT LATE, whatever it once was, so this
+ * answers null for it and the triage group does not reclaim it on the same
+ * paint as the answer. Tomorrow it is late again, and what the threshold sees
+ * then is the age of the promise (22) rather than of the reprieve (1).
+ */
+export function daysLate(t: Slippable, day: string): number | null {
+  const now = daysPastDue(t.due, t.due_is_date, day)
+  if (now == null) return null
+  return Math.max(now, daysSlipped(t, day) ?? 0)
 }
 
 export function pad(n: number): string {

@@ -4,13 +4,14 @@ import {
 import { api, uidFor, type CreateTaskBody, type List, type Task, type TaskGroup, type TasksViewMode } from '../api'
 import { useTaskData } from '../data'
 import {
-  addDays, cssColor, dayKey, isOverdue, makeGuard, toLocalInput, ymd,
+  addDays, cssColor, dayKey, isOverdue, makeGuard, slippedFrom, toLocalInput, ymd,
 } from '../util'
 import { fmtClock, fmtDue, inputLang } from '../time'
 import { sortByCompletion, sortTasks, taskKey } from '../order'
 import { useTimeFormat } from '../timeformat'
 import { useToday } from '../hooks'
 import { AddMultipleModal } from './AddMultipleModal'
+import { WasDue } from './WasDue'
 import { dateOut, TaskModal } from './TaskModal'
 import { Sidebar } from './Sidebar'
 import { useI18n } from '../i18n'
@@ -1077,18 +1078,30 @@ function DayCard({ task, showDate, dot, onToggle, onOpen, onDrag }: {
           {dot !== undefined && <span className="list-dot" style={dot ? { background: dot } : undefined} />}
           {task.summary || tr('common.untitled')}
         </div>
-        {(showDate || timed || task.tags.length > 0) && (
+        {/* `slippedFrom` in the gate as well as in the row: a deadline can be
+            CLEARED while the remembered one survives (the sidecar route keeps
+            `original_due` when `due` goes to null — see test_api.py), so a task
+            with no date and no tags still has something to say here. */}
+        {(showDate || timed || slippedFrom(task) || task.tags.length > 0) && (
           <div className="task-meta">
+            {/* `!slippedFrom(task)` on both: a task carrying a remembered
+                deadline hands its warn to the chip below, so a rescheduled row
+                reads as one alarm on the date that matters rather than two on
+                two dates. A task that has never slipped is coloured here
+                exactly as it always was. */}
             {showDate && task.due && (
-              <span className={`due ${!task.completed ? 'overdue' : ''}`}>
+              <span className={`due ${
+                !task.completed && !slippedFrom(task) ? 'overdue' : ''}`}>
                 ◷ {fmtDue(task.due, task.due_is_date, tf, locale)}
               </span>
             )}
             {!showDate && timed && (
-              <span className={`due ${isOverdue(task.due, task.due_is_date) && !task.completed ? 'overdue' : ''}`}>
+              <span className={`due ${isOverdue(task.due, task.due_is_date)
+                && !task.completed && !slippedFrom(task) ? 'overdue' : ''}`}>
                 {fmtClock(task.due!, tf, locale)}
               </span>
             )}
+            <WasDue task={task} done={task.completed || task.cancelled} />
             {task.tags.map((tg) => <span key={tg} className="chip">#{tg}</span>)}
           </div>
         )}
@@ -1156,13 +1169,15 @@ function TaskRow({ task, depth = 0, dot, progress, collapsed, onCollapse,
               differently: one is a verdict, the other is "not now". */}
           {task.parked && <span className="chip">{tr('tasks.parkedChip')}</span>}
         </div>
-        {(task.due || progress || task.tags.length > 0) && (
+        {(task.due || slippedFrom(task) || progress || task.tags.length > 0) && (
           <div className="task-meta">
             {task.due && (
-              <span className={`due ${isOverdue(task.due, task.due_is_date) && !task.completed ? 'overdue' : ''}`}>
+              <span className={`due ${isOverdue(task.due, task.due_is_date)
+                && !task.completed && !slippedFrom(task) ? 'overdue' : ''}`}>
                 ◷ {fmtDue(task.due, task.due_is_date, tf, locale)}
               </span>
             )}
+            <WasDue task={task} done={task.completed || task.cancelled} />
             {progress && (
               <span className="child-progress">{progress.done}/{progress.total}</span>
             )}

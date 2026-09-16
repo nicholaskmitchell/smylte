@@ -30,7 +30,7 @@ import {
   cacheCalendars, cacheEvents, cacheLists, cacheTasks,
   readCachedCalendars, readCachedEvents, readCachedLists, readCachedTasks,
 } from './cache'
-import { makeGuard } from './util'
+import { isOverdue, makeGuard } from './util'
 
 /** The shape a bare client_id has, matching the backend's `_CLIENT_ID_RE`. */
 const LEGACY_PARENT = /^[0-9a-f]{16,64}$/
@@ -672,6 +672,29 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
     if ('due' in patch) {
       opt.due = (patch.due as string) ?? null
       opt.due_is_date = typeof patch.due === 'string' && !patch.due.includes('T')
+      // AND THE DEADLINE THIS IS ABOUT TO OVERWRITE, when it is one already
+      // missed. The server records it (`service.py::_deadline_being_missed`)
+      // and stays the authority — `settle` below replaces this row with its
+      // answer — but the row has to be RIGHT in the meantime, and the gap is
+      // exactly where it is least affordable: the Today tab's triage strip
+      // offers "Due today" on work weeks late, and until this, pressing it
+      // painted an ordinary task due today, unmarked, for the length of the
+      // round trip. The one gesture meant to end the lateness opened by
+      // denying it.
+      //
+      // The same four tests the server applies, which is why they are spelled
+      // out rather than reduced: the edit mentions `due` (this branch), there
+      // IS an old deadline, it has PASSED, nothing is remembered yet, and the
+      // value actually changes. The last one is compared as strings here where
+      // the server compares parsed values, so a re-save that only reformats an
+      // unchanged deadline could paint a mark for one frame; `settle` takes it
+      // straight back off, and the alternative is a second parser in the
+      // client that has to agree with `due_rules` forever.
+      if (t.due && !t.original_due && patch.due !== t.due
+          && isOverdue(t.due, t.due_is_date)) {
+        opt.original_due = t.due
+        opt.original_due_is_date = t.due_is_date
+      }
     }
     if ('start' in patch) opt.start = (patch.start as string) ?? null
     if ('status' in patch) {

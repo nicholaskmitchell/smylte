@@ -7,13 +7,14 @@ import {
 import { useIsMobile, useToday } from '../hooks'
 import { useCalendarData, useTaskData, type TaskData } from '../data'
 import {
-  cssColor, makeGuard, addDays, dayKey, daysPastDue, isOverdue, textDir, ymd,
+  cssColor, makeGuard, addDays, dayKey, daysLate, isOverdue, slippedFrom, textDir, ymd,
 } from '../util'
 import { fmtDue, fmtDuration } from '../time'
 import { sortByCompletion, sortTasks, taskKey } from '../order'
 import { useTimeFormat } from '../timeformat'
 import { bucketByDay, monthGrid, type DayEv } from '../calendar'
 import { DayPopover } from './DayPopover'
+import { WasDue } from './WasDue'
 import { entryTitle, orderEntries, rowDone, STALE_OVERDUE_DAYS } from './TodayView'
 import { readCachedDayPlan } from '../cache'
 import { useI18n, useT } from '../i18n'
@@ -480,9 +481,13 @@ function ModuleBody({ kind, tasks, lists, days, byDay, calErrors, taskErrors, fa
       // triage group is built over (`free`). Counting all of them let this
       // module claim a decision was owed on something already sitting on
       // today's plan — a number pointing at a group that does not contain it.
+      // `daysLate` rather than `daysPastDue`, which is the swap TodayView's
+      // triage predicate makes for the same reason: the threshold counts from
+      // the deadline a task is ANSWERABLE to, so a reschedule cannot reset it
+      // and this number cannot drift from the group it points at.
       const waiting = staleOverdueDays > 0
         ? late.filter((t) => !onTodaysPlan.has(taskKey(t))
-            && (daysPastDue(t.due, t.due_is_date, today) ?? 0) > staleOverdueDays)
+            && (daysLate(t, today) ?? 0) > staleOverdueDays)
         : []
       return <TaskList items={late}
         note={waiting.length ? tr('home.overdueWaiting', { count: waiting.length }) : undefined}
@@ -667,11 +672,17 @@ function TaskList({ items, colorOf, empty, overdue, done, loaded, partial, note 
           <li key={taskKey(t)} className={`dash-task ${done ? 'done' : ''}`}>
             <span className="list-dot" style={c ? { background: c } : undefined} />
             <span className="dash-task-title">{t.summary || tr('common.untitled')}</span>
+            {/* `overdue` is the MODULE's, set once for the whole list by the
+                Overdue card, so the suppression has to be per-task: a
+                rescheduled row inside that list hands its warn to the chip
+                beside it, the rest of the list is coloured as before. */}
             {t.due && (
-              <span className={`dash-task-due mono ${overdue ? 'overdue' : ''}`}>
+              <span className={`dash-task-due mono ${
+                overdue && !slippedFrom(t) ? 'overdue' : ''}`}>
                 {fmtDue(t.due, t.due_is_date, tf, locale)}
               </span>
             )}
+            <WasDue task={t} done={done} />
           </li>
         )
       })}
@@ -807,26 +818,47 @@ const KIND_ARIA: Record<string, string> = {
   task: 'today.kind.task', note: 'today.kind.note', habit: 'today.kind.habit',
 }
 
-/** The one thing on the right of a plan row.
+/** The one thing on the right of a plan row — plus the one flag that is not a
+ *  candidate for it.
  *
  *  The Today tab has room for an estimate AND a due date in separate columns;
  *  a dashboard card has room for one, so this picks the one that says
  *  something. The estimate wins when there is one — "what am I doing today" is
  *  a question about time. Failing that, a due date, but only when it is NOT
  *  today: a due of today repeated down every row of a card headed "Today's
- *  plan" is the date already in the heading, said again per row. */
+ *  plan" is the date already in the heading, said again per row.
+ *
+ *  `WasDue` IS OUTSIDE THAT CONTEST, and has to be. The rule above picks
+ *  between two readings of the same question — when is this wanted, and how
+ *  long will it take — and a remembered deadline answers a third. Worse, the
+ *  two suppressions compound exactly where it matters most: a task three weeks
+ *  late that the owner pressed "Due today" on has a due of today, which this
+ *  component drops as redundant with the heading, and an estimate from the
+ *  ritual, which wins anyway. So the row that most needed to say something said
+ *  nothing at all. A flag and a value are different categories and the row has
+ *  space for both. */
 function PlanRowMeta({ entry, task }: { entry: DayEntry; task: Task | undefined }) {
   const { locale } = useI18n()
   const tf = useTimeFormat()
+  // `rowDone(…, true)` exactly as the row above computes it — live, because a
+  // dashboard only ever shows today. Two spellings of "is this finished" on one
+  // row is how the tick and the text drift apart.
+  const slipped = <WasDue task={task} day={entry.day}
+    done={rowDone(entry, task, true)} />
   if (entry.estimate_minutes != null) {
-    return <span className="dash-task-due mono">{fmtDuration(entry.estimate_minutes)}</span>
+    return <>
+      {slipped}
+      <span className="dash-task-due mono">{fmtDuration(entry.estimate_minutes)}</span>
+    </>
   }
-  if (!task?.due || dayKey(task.due) === entry.day) return null
-  return (
-    <span className={`dash-task-due mono ${isOverdue(task.due, task.due_is_date) ? 'overdue' : ''}`}>
+  if (!task?.due || dayKey(task.due) === entry.day) return slipped
+  return <>
+    {slipped}
+    <span className={`dash-task-due mono ${
+      isOverdue(task.due, task.due_is_date) && !slippedFrom(task) ? 'overdue' : ''}`}>
       {fmtDue(task.due, task.due_is_date, tf, locale)}
     </span>
-  )
+  </>
 }
 
 // At most this many dots fit under a day number without crowding it.
