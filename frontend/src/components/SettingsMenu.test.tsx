@@ -47,6 +47,7 @@ function show(over: Partial<Parameters<typeof SettingsMenu>[0]> = {}) {
     showCompleted={false} onToggleShowCompleted={vi.fn()}
     autoCloseParents={true} onToggleAutoCloseParents={vi.fn()}
     staleOverdue={3} onStaleOverdueChange={vi.fn()}
+    planOnDueToday={false} onTogglePlanOnDueToday={vi.fn()}
     focus={DEFAULT_FOCUS} onFocusChange={vi.fn()}
     notifyEnabled={false} onNotifyEnabledChange={vi.fn()}
     notifyChatId="" onNotifyChatIdChange={vi.fn()}
@@ -348,5 +349,53 @@ describe('<SettingsMenu> asking about work that has waited', () => {
     show({ staleOverdue: 0 })
     await user.click(nav('Tasks'))
     expect(panel()).toHaveTextContent(/Overdue work is offered to your day like anything else/)
+  })
+})
+
+describe('<SettingsMenu> planning the work you answer with today', () => {
+  beforeEach(() => stubMatchMedia(false))
+
+  const NAME = 'Put it on your day when you move it onto today'
+
+  it('offers the switch, off by default, and says what it would do', async () => {
+    // Worded as the RULE rather than as the button: the date field beside "Due
+    // today" does the same thing when you pick the same day, so a label naming
+    // the button would describe half of what the switch governs.
+    const onToggle = vi.fn()
+    const user = userEvent.setup()
+    show({ planOnDueToday: false, onTogglePlanOnDueToday: onToggle })
+    await user.click(nav('Tasks'))
+
+    const toggle = screen.getByRole('button', { name: NAME })
+    expect(toggle).toHaveAttribute('aria-pressed', 'false')
+    expect(toggle).toHaveTextContent('Off')
+    // The hint has to carry the exclusion, because it is the half that is not
+    // obvious from the label: a task moved to Thursday is scheduled, not
+    // planned, and there is no day plan to put it on.
+    expect(panel()).toHaveTextContent(/move to Thursday is scheduled, not planned/)
+
+    await user.click(toggle)
+    expect(onToggle).toHaveBeenCalled()
+  })
+
+  it('says On when it is on, rather than only styling it', async () => {
+    const user = userEvent.setup()
+    show({ planOnDueToday: true })
+    await user.click(nav('Tasks'))
+    const toggle = screen.getByRole('button', { name: NAME })
+    expect(toggle).toHaveAttribute('aria-pressed', 'true')
+    expect(toggle).toHaveTextContent('On')
+  })
+
+  it('stays on screen when the group it governs is off, and says why', async () => {
+    // A control that vanishes is one nobody can find again to work out why it
+    // stopped mattering. With the threshold at 0 nothing is asked about, so
+    // there are no answers for this to change — which the line says outright
+    // rather than leaving a switch that silently does nothing.
+    const user = userEvent.setup()
+    show({ staleOverdue: 0, planOnDueToday: true })
+    await user.click(nav('Tasks'))
+    expect(screen.getByRole('button', { name: NAME })).toBeInTheDocument()
+    expect(panel()).toHaveTextContent(/Nothing to do while the setting above is 0/)
   })
 })

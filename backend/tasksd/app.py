@@ -822,6 +822,26 @@ class SettingsPatch(BaseModel):
     # because one bad key must not take the theme and the layout down with it,
     # while a number in a field is a mistake worth reporting.
     stale_overdue_days: int | None = Field(default=None, ge=0, le=90)
+    # Whether moving an overdue task ONTO THE DAY BEING PLANNED also puts it on
+    # that day's plan. Absent means OFF, and `False` is a real value the merge
+    # keeps, so an explicit "no" survives a later default changing.
+    #
+    # OFF by default because the answers in the Today tab's triage strip are
+    # about a DEADLINE: pressing "Due today" moves the date and nothing else,
+    # which is what keeps the strip's promise that its answers END the lateness
+    # rather than re-planning the day. The complaint this switch exists for is
+    # the other side of that — a task can be answered and still not be planned,
+    # so "today" buys a date rather than a place to do it — and an owner who
+    # wants the press to mean both can say so here.
+    #
+    # ONLY when the new date IS the day being planned. A task moved to Thursday
+    # is scheduled, not planned, and there is no day plan to add it to.
+    #
+    # Read nowhere on this server: a preference about what one gesture in one
+    # tab does, stored here only so it follows the owner between browsers. That
+    # is the ordinary case for this blob (`stale_overdue_days` has no reader
+    # either), not an oversight.
+    plan_on_due_today: bool | None = None
     # 12- or 24-hour clock for every time the app renders. Absent means "12h",
     # which is what the app did before this was settable. Only the app's own
     # displays follow it: the public booking page is rendered for visitors who

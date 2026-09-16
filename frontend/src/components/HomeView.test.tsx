@@ -53,6 +53,15 @@ const today = () => {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
 }
 
+/** A day key `n` days either side of today, for the rows whose whole point is
+ *  the distance between two dates. */
+const inDaysKey = (n: number) => {
+  const d = new Date()
+  d.setDate(d.getDate() + n)
+  const p = (x: number) => String(x).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   setCacheUser('')
@@ -399,6 +408,51 @@ describe("the day-plan module", () => {
     const row = (t: string) => screen.getByText(t).closest('.dash-task')!
     expect(row('Due today').querySelector('.dash-task-due')).toBeNull()
     expect(row('Due later').querySelector('.dash-task-due')).not.toBeNull()
+  })
+
+  it('says a deadline was missed even where it says nothing else', async () => {
+    // THE TWO SUPPRESSIONS COMPOUNDING. A task three weeks late that the owner
+    // pressed "Due today" on has a due of today, which this module drops as
+    // redundant with its own heading, and an estimate from the ritual, which
+    // wins the one slot anyway. So the row that most needed to say something
+    // said nothing at all. A flag and a value are different categories.
+    const slipped = () => inDaysKey(-21)
+    m.tasks.mockResolvedValue([
+      task({ uid: 'a', list: 'l1', summary: 'Renew the passport', due: today(),
+             original_due: slipped(), original_due_is_date: true }),
+    ])
+    m.day.mockResolvedValue(dayPlan([
+      entry({ entry_id: '1', kind: 'task', list: 'l1', uid: 'a', title: null,
+              estimate_minutes: 45 }),
+    ]))
+    setup(PLAN_MODULE)
+    await screen.findByText('Renew the passport')
+
+    const row = screen.getByText('Renew the passport').closest('.dash-task')!
+    // The estimate still wins the one slot the card has room for…
+    expect(row.querySelector('.dash-task-due')?.textContent).toBe('45m')
+    // …and the slip is beside it rather than in place of it.
+    expect(row.querySelector('.was-due')?.textContent).toMatch(/was due .* · 21d/)
+  })
+
+  it('hands the Overdue module\'s warn to the chip on a slipped row', async () => {
+    // `overdue` is that module's, set once for the whole list, so the
+    // suppression has to be per-task: one alarm per row, on the promise that
+    // was missed rather than on the reprieve that was granted.
+    m.tasks.mockResolvedValue([
+      task({ uid: 'a', summary: 'Slipped', due: inDaysKey(-1),
+             original_due: inDaysKey(-21), original_due_is_date: true }),
+      task({ uid: 'b', summary: 'Plainly late', due: inDaysKey(-1) }),
+    ])
+    setup([{ id: 'x', kind: 'overdue', x: 0, y: 0, w: 6, h: 5 }])
+    await screen.findByText('Slipped')
+
+    const row = (t: string) => screen.getByText(t).closest('.dash-task')!
+    expect(row('Slipped').querySelector('.dash-task-due')).not.toHaveClass('overdue')
+    expect(row('Slipped').querySelector('.was-due')).toBeInTheDocument()
+    // Untouched for everything that has never slipped.
+    expect(row('Plainly late').querySelector('.dash-task-due')).toHaveClass('overdue')
+    expect(row('Plainly late').querySelector('.was-due')).toBeNull()
   })
 })
 

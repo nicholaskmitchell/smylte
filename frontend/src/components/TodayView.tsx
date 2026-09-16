@@ -296,8 +296,8 @@ import {
   readCachedDayPlan, readCachedDayRange, readCachedHabits,
 } from '../cache'
 import {
-  addDays, cssColor, dayKey, daysPastDue, isOverdue, makeGuard, msUntilMidnight, parseDate,
-  textDir, ymd,
+  addDays, cssColor, dayKey, daysLate, isOverdue, makeGuard, msUntilMidnight, parseDate,
+  slippedFrom, textDir, ymd,
 } from '../util'
 import { fmtClock, fmtDue, fmtDuration, inputLang } from '../time'
 import { useI18n } from '../i18n'
@@ -308,6 +308,7 @@ import { bucketByDay, eventKey, monthGrid, type DayEv } from '../calendar'
 import { parseEntry, type ParsedEntry } from '../daytext'
 import { AgendaEvent } from './DayPopover'
 import { DateTimeInput } from './DateTimeInput'
+import { WasDue } from './WasDue'
 import { PlanRitual } from './PlanRitual'
 import { ShutdownRitual } from './ShutdownRitual'
 import { useT } from '../i18n'
@@ -373,6 +374,25 @@ const STALE_DAYS = 21
  *  only changes which heading the DAY offers one under, and what it offers to
  *  do about it. */
 export const STALE_OVERDUE_DAYS = 3
+
+/** Whether moving an overdue task ONTO THE DAY BEING PLANNED also puts it on
+ *  that day's plan, rather than only moving its deadline there.
+ *
+ *  OFF, and the default is the argument `reschedule` makes below: the triage
+ *  strip's answers are about a DEADLINE. Pressing "Due today" moves the date
+ *  and nothing else, which is what lets the strip promise that its answers END
+ *  the lateness rather than quietly re-planning the day around them.
+ *
+ *  It is settable because that promise leaves a real gap, and it is the other
+ *  half of the complaint this whole area exists to answer: a task can be
+ *  ANSWERED and still not be PLANNED. "Today" buys it a date, and finding it
+ *  again under a different heading and pressing `+` is a second gesture nobody
+ *  asked for. An owner who wants the press to mean both can say so.
+ *
+ *  Here rather than retyped at each reader, for the reason `STALE_OVERDUE_DAYS`
+ *  is: App seeds its state from this and the view falls back to it, and two
+ *  copies of one default is how the two come to disagree. */
+export const PLAN_ON_DUE_TODAY = false
 
 /** How many of a suggestion group's tasks are shown before the rest are put
  *  behind one press.
@@ -628,7 +648,7 @@ export function rowDone(e: DayEntry, task: Task | undefined, live: boolean): boo
 
 export function TodayView({
   rev, onExpire, hiddenCalendars = [], archivedCalendars = [], onStartWorking,
-  staleOverdueDays = STALE_OVERDUE_DAYS,
+  staleOverdueDays = STALE_OVERDUE_DAYS, planOnDueToday = PLAN_ON_DUE_TODAY,
 }: {
   rev: number
   onExpire: () => void
@@ -646,6 +666,10 @@ export function TodayView({
    *  `STALE_OVERDUE_DAYS`. Threaded from settings by App, like every other
    *  account preference this view honours. */
   staleOverdueDays?: number
+  /** Whether answering a triage row with the day being planned also puts the
+   *  task on that day, rather than only moving its deadline. Default
+   *  `PLAN_ON_DUE_TODAY`, which is where the choice is argued for. */
+  planOnDueToday?: boolean
 }) {
   const { lang, locale, t: tr } = useI18n()
   // A STABLE guard, so it can sit in an effect's dependency list honestly
@@ -1460,9 +1484,40 @@ export function TodayView({
    * Through `saveDetail`, so it paints immediately and reconciles like every
    * other write in the app — and so it is the same PATCH the editor makes,
    * rather than a second path to the same field.
+   *
+   * ── and, when the owner has asked for it, a place on the day as well ──────
+   *
+   * `planOnDueToday` does NOT weaken the paragraph above; it answers what that
+   * paragraph leaves out. "Adding it to today instead of redating it" is still
+   * the answer that fails, for exactly the reason given. But redating it and
+   * STOPPING is an answer that schedules nothing: the row leaves this strip for
+   * a heading that says it is due today, and actually doing it today is a
+   * second gesture — find it again, press `+` — that nobody asked for. Both is
+   * strictly more than either, and the default stays off because the strip's
+   * promise is about deadlines (see `PLAN_ON_DUE_TODAY`).
+   *
+   * THE RULE IS ABOUT THE DESTINATION, NOT THE BUTTON, which is why it lives
+   * here and not on the "Due today" press. This function has two callers — that
+   * button and the date field beside it — and picking today out of the field is
+   * the same decision as pressing the button. Stated once, they cannot drift
+   * into answering it differently. `to === day` is the whole test, and it reads
+   * as what it means: a task moved to Thursday is SCHEDULED, not planned, and
+   * there is no day plan to put it on.
+   *
+   * THE DEADLINE FIRST. Both halves paint before their write lands, and a day
+   * row renders `task.due` — so adding first would flash the deadline the press
+   * just ended on the row it just created.
+   *
+   * A failed PATCH still leaves the add, and that is the honest outcome rather
+   * than a gap: `settle` puts the task's old deadline back while the day keeps
+   * a row pointing at it, which is a task planned for today whose deadline did
+   * not move. Every part of that is true and visible, and undoing the add would
+   * be this function inventing a second write to cover the first.
    */
-  const reschedule = useCallback(
-    (t: Task, to: string) => saveDetail(t, { due: to }), [saveDetail])
+  const reschedule = useCallback(async (t: Task, to: string) => {
+    await saveDetail(t, { due: to })
+    if (planOnDueToday && to === day) await addTask(day, t)
+  }, [saveDetail, addTask, planOnDueToday, day])
 
   /** Put a note on `on`. Same optimistic shape as `addTask`. */
   const addNote = useCallback(async (on: string, title: string): Promise<boolean> => {
@@ -1851,9 +1906,25 @@ export function TodayView({
     // rather than in the predicate: `group()` walks its matches into `offered`
     // whether or not it renders them, so a group that matched everything and
     // showed nothing would swallow the whole overdue list.
+    //
+    // MEASURED FROM THE PROMISE, not from the deadline the task happens to
+    // carry — `daysLate`, not `daysPastDue`. The two agree on everything that
+    // has never been rescheduled, and the difference is the whole reason this
+    // group had an exit that led back into it: DUE holds one value, so the
+    // press below overwrote how late the task WAS with how late it IS. A task
+    // three weeks past its promise came back four days later reading "1 day
+    // late" and sat in "Overdue" like ordinary work, and an owner who pressed
+    // "Due today" each morning reset the count each morning and never saw it
+    // again. The age of a promise only grows, because `original_due` is never
+    // overwritten once written.
+    //
+    // It does not bounce back on the same paint as the answer, though:
+    // `daysLate` is null for a task that is not late RIGHT NOW, and a task
+    // just moved onto today is not. The press is honoured for the day it buys
+    // and the question returns the morning it goes unanswered.
     if (staleOverdueDays > 0) {
       group('triage', tr('today.sug.triage'),
-        (t) => (daysPastDue(t.due, t.due_is_date, day) ?? 0) > staleOverdueDays)
+        (t) => (daysLate(t, day) ?? 0) > staleOverdueDays)
     }
     group('overdue', tr('today.sug.overdue'), (t) => isOverdue(t.due, t.due_is_date))
     // Tomorrow, out of the seven-day block and under its own heading. It is the
@@ -3103,7 +3174,7 @@ export function TodayView({
           <LookBack review={review} offPlan={offPlan} renderRow={renderReviewRow}
             reflection={plan?.day === day ? plan.reflection : null}
             committedOver={plan?.day === day ? plan.committed_over_minutes : null}
-            colorOf={colorOf} live={isToday} />
+            colorOf={colorOf} live={isToday} day={day} />
         )}
 
         {/* Not while reviewing. The `suggestions` memo keeps its own `isToday`
@@ -3152,40 +3223,29 @@ export function TodayView({
                   <span className="today-title" dir={textDir(t.summary)}>
                     {t.summary || tr('common.untitled')}
                   </span>
+                  {/* ONE ALARM PER ROW, and the chip below gets it whenever
+                      there is one to give. A rescheduled task carries two
+                      dates, and the interesting one is not the date the
+                      reschedule chose — so where `WasDue` paints, this cell
+                      reads as an ordinary deadline and the warn sits on the
+                      promise that was missed. Where it does not, nothing
+                      changes: an overdue task that has never slipped is
+                      warn-coloured here exactly as before. */}
                   {t.due && (
-                    <span className={`today-due mono ${g.key === 'overdue' ? 'overdue' : ''}`}>
+                    <span className={`today-due mono ${
+                      g.key === 'overdue' && !slippedFrom(t) ? 'overdue' : ''}`}>
                       {fmtDue(t.due, t.due_is_date, tf, locale)}
                     </span>
                   )}
-                  {/* WHAT IT WAS PROMISED FOR, beside what it is scheduled
-                      for now. `original_due` is the deadline this task was
-                      moved off after that deadline had already passed, and it
-                      is the fact rescheduling used to destroy: DUE holds one
-                      value, so pressing "Due today" on something three weeks
-                      late left nothing anywhere saying it had ever been late.
-                      The two answers this row offers END the lateness, which is
-                      the point of them — they should not also erase it.
-
-                      SHOWN ON EVERY GROUP, not only on triage. A task
+                  {/* SHOWN ON EVERY GROUP, not only on triage. A task
                       rescheduled here reappears under "Due today" on the same
                       paint, and that is precisely the moment the owner needs to
                       see that the old date survived the press; a chip that
                       lived on the triage row alone would vanish at the instant
-                      it was reassuring.
-
-                      Suppressed when it matches the date beside it, which is
-                      what a deadline moved and then moved back looks like:
-                      two identical dates on one row say nothing twice. Compared
-                      as the strings the server sent, so a remembered all-day
-                      deadline and a timed one on the same day still read as the
-                      different answers they are. */}
-                  {t.original_due && t.original_due !== t.due && (
-                    <span className="today-was-due mono">
-                      {tr('today.wasDue', {
-                        date: fmtDue(t.original_due, t.original_due_is_date, tf, locale),
-                      })}
-                    </span>
-                  )}
+                      it was reassuring. `WasDue` carries the rest of the
+                      argument, and now carries it to the four other surfaces
+                      that render a deadline as well. */}
+                  <WasDue task={t} day={day} />
                   {/* WHAT ADDING IT WOULD COST, on the button that would add it.
                       Only where both halves are actually known: the task has to
                       remember an estimate (`sidecar.estimated_minutes`, which is
@@ -3278,7 +3338,7 @@ export function TodayView({
  * arrives with `readOnly` already set by its caller, and nothing else in this
  * subtree is a control. See the header for why that matters.
  */
-function LookBack({ review, offPlan, reflection, renderRow, colorOf, live = false,
+function LookBack({ review, offPlan, reflection, renderRow, colorOf, day, live = false,
   committedOver = null }: {
   /** The day's live rows grouped by origin, plus the dropped ones, in reading
    *  order — or `null` while the read is still in flight. */
@@ -3298,6 +3358,12 @@ function LookBack({ review, offPlan, reflection, renderRow, colorOf, live = fals
   /** How far over the stated capacity the plan ran WHEN IT WAS COMMITTED, or
    *  null — never committed, no capacity stated, or committed inside it. */
   committedOver?: number | null
+  /** The day being reviewed. Only the off-plan rows read it, and only to say
+   *  how old a missed deadline was AS OF THAT DAY — measuring from the wall
+   *  clock instead would make a review of last Tuesday report the distance
+   *  from today, which is a number about the reader rather than about the day
+   *  they are reading. */
+  day: string
 }) {
   const { locale, t: tr } = useI18n()
   const tf = useTimeFormat()
@@ -3370,6 +3436,13 @@ function LookBack({ review, offPlan, reflection, renderRow, colorOf, live = fals
                     non-null for every task in this list by construction — it is
                     what put them in it. */}
                 <span className="today-due mono">{fmtClock(t.completed_at!, tf, locale)}</span>
+                {/* Here too, and quiet here by construction: every row in this
+                    list is finished, so the chip keeps the words and drops the
+                    warn. "Done, three weeks after it was promised" is a fair
+                    thing for a look-back to say, and a surface that showed the
+                    mark on the planned rows above but not on these would make
+                    the same task read two ways on one screen. */}
+                <WasDue task={t} day={day} done />
               </li>
             ))}
           </ul>
@@ -3827,6 +3900,27 @@ function TodayRow({
           ? tr('today.movedTo', { day: fmtDue(entry.rolled_to, true, tf, locale) })
           : task?.due ? fmtDue(task.due, task.due_is_date, tf, locale) : ''}
       </span>
+      {/* THE ONE PLACE THE RECORD USED TO DIE. The chip lived on the suggestion
+          rows above and nowhere else, so the gesture that means "yes, I am
+          doing this" — pressing `+`, which moves the task out of the strip and
+          onto the day — was also the gesture that erased the last visible trace
+          of how late it was. The row it landed on showed a deadline of today
+          and nothing else.
+
+          NOT inside the due cell above: that cell has a `min-width` holding the
+          column steady down a list where only some rows are dated, and a chip
+          that shares it would push that edge around on the few rows that have
+          one. Its own span, painted only where there is something to say.
+
+          A note and a habit occurrence name no task, so `task` is null for them
+          and this paints nothing — `WasDue` takes a nullable task for exactly
+          the rows this renderer has to cover.
+
+          It paints in a LOOK-BACK too, and that is worth keeping rather than
+          gating on `!readOnly`: a task finished three weeks after it was
+          promised is a true thing about the day it was finished on, and the
+          look-back is the one screen whose job is saying how the day went. */}
+      <WasDue task={task} day={entry.day} done={done} />
       {/* Absent, not disabled, on a finished day. Dropping is the one write the
           backend DOES still allow on a past day — `update_day_entry` permits it
           because saying "this did not happen" subtracts from the record rather
