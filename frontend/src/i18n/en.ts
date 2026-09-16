@@ -1099,6 +1099,12 @@ export const en = {
   // Short enough to sit beside the date it replaced without pushing the
   // controls off the end of a triage row on a phone.
   'today.wasDue': 'was due {date}',
+  // The same line with the age of the promise on it, which is the reading that
+  // does the work: `fmtDue` prints no year, so a date alone makes eleven days
+  // late and eleven months late look identical. Used whenever that age is
+  // countable — `today.wasDue` stays for the deadline missed earlier the same
+  // day, where the honest count is no count rather than zero.
+  'today.wasDueDays': 'was due {date} · {days}d',
   'settings.staleOverdue': 'Ask about work more than this many days late',
   'settings.staleOverdue.hint': 'Past this, a task stops being offered to your '
     + 'day as ordinary work and is asked about instead: give it a new date, or '

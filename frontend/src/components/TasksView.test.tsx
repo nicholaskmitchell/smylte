@@ -1971,3 +1971,74 @@ describe('<TasksView> parked work, and what must not vanish with it', () => {
     expect(m.park).toHaveBeenCalledWith('l1', 'italian', false)
   })
 })
+
+describe('<TasksView> the deadline a task was moved off', () => {
+  /** A day key `n` days either side of today. */
+  const inDays = (n: number) => {
+    const d = new Date()
+    d.setDate(d.getDate() + n)
+    const p = (x: number) => String(x).padStart(2, '0')
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+  }
+
+  it('carries the remembered deadline onto a list row', async () => {
+    // It used to live on the Today tab's suggestion rows and nowhere else, so
+    // "when is this due" had a different answer depending on which tab you
+    // asked it from. This pane shows every task the account has; a rescheduled
+    // one reading as ordinary work here is the same erasure in a wider place.
+    m.tasks.mockResolvedValue([
+      task({ uid: 'u1', summary: 'Renew the passport', due: inDays(-1),
+             original_due: inDays(-21), original_due_is_date: true }),
+    ])
+    setup()
+    await screen.findByText('Renew the passport')
+    expect(screen.getByText(/was due .* · 21d/)).toBeInTheDocument()
+  })
+
+  it('hands the row\'s warn to the chip rather than lighting both dates', async () => {
+    m.tasks.mockResolvedValue([
+      task({ uid: 'u1', summary: 'Slipped', due: inDays(-1),
+             original_due: inDays(-21), original_due_is_date: true }),
+      task({ uid: 'u2', summary: 'Plainly late', due: inDays(-1) }),
+    ])
+    setup()
+    await screen.findByText('Slipped')
+
+    const row = (t: string) => screen.getByText(t).closest('.task')!
+    expect(row('Slipped').querySelector('.due')).not.toHaveClass('overdue')
+    expect(row('Slipped').querySelector('.was-due')).toBeInTheDocument()
+    expect(row('Plainly late').querySelector('.due')).toHaveClass('overdue')
+    expect(row('Plainly late').querySelector('.was-due')).toBeNull()
+  })
+
+  it('keeps the fact and drops the alarm once the task is finished', async () => {
+    // How late something ran is part of how the work went, so the completed
+    // pane is a fair place to say it. But warn is a call to act and a ticked row
+    // has nothing left to act on — an orange chip there is the screen shouting
+    // about a question it has already answered.
+    m.tasks.mockResolvedValue([
+      task({ uid: 'u1', summary: 'Finished late', due: inDays(-1), completed: true,
+             status: 'COMPLETED', completed_at: '2026-09-15T10:00:00Z',
+             original_due: inDays(-21), original_due_is_date: true }),
+    ])
+    const { user } = setup()
+    await user.click(await screen.findByRole('button', { name: /view completed/i }))
+
+    const chip = await screen.findByText(/was due .* · 21d/)
+    expect(chip).toHaveClass('done')
+  })
+
+  it('still shows it on a task whose deadline was cleared altogether', async () => {
+    // Clearing `due` keeps `original_due` — the server's sidecar route is
+    // explicit about it — so a task with no date at all can still have missed
+    // one. The meta line is gated on having something to say, and this is
+    // something to say.
+    m.tasks.mockResolvedValue([
+      task({ uid: 'u1', summary: 'No date now', due: null,
+             original_due: inDays(-21), original_due_is_date: true }),
+    ])
+    setup()
+    await screen.findByText('No date now')
+    expect(screen.getByText(/was due .* · 21d/)).toBeInTheDocument()
+  })
+})

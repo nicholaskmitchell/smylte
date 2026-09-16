@@ -1155,6 +1155,12 @@ export const de: Catalogue = {
   // dafür hat — kurz genug, um neben dem neuen Datum zu stehen, ohne die
   // Schaltflächen einer Zeile auf dem Telefon aus dem Bild zu schieben.
   'today.wasDue': 'war fällig am {date}',
+  // Dieselbe Zeile mit dem Alter des Versprechens — die Lesart, auf die es
+  // ankommt: `fmtDue` schreibt kein Jahr, ein Datum allein lässt elf Tage
+  // Verzug und elf Monate gleich aussehen. `today.wasDue` bleibt für die
+  // Frist, die noch am selben Tag verstrichen ist, wo keine Zahl ehrlicher
+  // ist als eine Null.
+  'today.wasDueDays': 'war fällig am {date} · {days} T',
   'settings.staleOverdue': 'Ab mehr als wie vielen Tagen Verzug nachfragen',
   'settings.staleOverdue.hint': 'Danach wird eine Aufgabe deinem Tag nicht mehr '
     + 'als gewöhnliche Arbeit angeboten, sondern erfragt: neues Datum oder '

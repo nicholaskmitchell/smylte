@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AuthError } from './api'
-import { addDays, cssColor, dayKey, daysPastDue, hasZone, instantFromLocal, isOverdue, makeGuard, pad, parseDate, setErrorNotifier, textDir, toLocalInput, ymd } from './util'
+import { addDays, cssColor, dayKey, daysLate, daysPastDue, daysSlipped, hasZone, instantFromLocal, isOverdue, makeGuard, pad, parseDate, setErrorNotifier, slippedFrom, textDir, toLocalInput, ymd, type Slippable } from './util'
 
 describe('parseDate', () => {
   it('parses date-only strings as LOCAL midnight, not UTC', () => {
@@ -236,5 +236,104 @@ describe('daysPastDue', () => {
 
   it('crosses a month boundary as arithmetic rather than as a special case', () => {
     expect(daysPastDue('2026-08-30', true, DAY)).toBe(7)
+  })
+})
+
+describe('slippedFrom / daysSlipped / daysLate', () => {
+  const DAY = '2026-09-06'
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(`${DAY}T09:00:00`))
+  })
+  afterEach(() => vi.useRealTimers())
+
+  /** The four fields a slip is read off, with the shape of a task that has
+   *  never been moved off a deadline. */
+  const t = (o: Partial<Slippable> = {}): Slippable => ({
+    due: null, due_is_date: true, original_due: null, original_due_is_date: false, ...o,
+  })
+
+  it('reads nothing off a task that has never been rescheduled', () => {
+    expect(slippedFrom(t({ due: '2026-08-16' }))).toBeNull()
+    expect(daysSlipped(t({ due: '2026-08-16' }), DAY)).toBeNull()
+    // …and `daysLate` is then exactly `daysPastDue`, which is the property that
+    // keeps every row in the app reading as it always did.
+    expect(daysLate(t({ due: '2026-08-16' }), DAY)).toBe(daysPastDue('2026-08-16', true, DAY))
+  })
+
+  it('says nothing when the remembered deadline is the one still carried', () => {
+    // What a deadline moved and then moved back looks like. Two identical dates
+    // on one row say the same thing twice.
+    const moved = t({ due: '2026-08-16', original_due: '2026-08-16', original_due_is_date: true })
+    expect(slippedFrom(moved)).toBeNull()
+    expect(daysSlipped(moved, DAY)).toBeNull()
+  })
+
+  it('keeps a remembered deadline whose shape differs from the current one', () => {
+    // Compared as the strings the server sent: an all-day deadline and a timed
+    // one on the same day are different answers, not one answer twice.
+    const moved = t({ due: '2026-08-16', original_due: '2026-08-16T09:00', original_due_is_date: false })
+    expect(slippedFrom(moved)).toEqual(['2026-08-16T09:00', false])
+  })
+
+  it('measures lateness from the promise, not from the reprieve', () => {
+    // THE COMPLAINT, as arithmetic. A task three weeks past its deadline that
+    // was moved to yesterday is one day past the date it carries and
+    // twenty-two days past the one it was promised for. The second number is
+    // the one a threshold has to see, or every press resets the count.
+    const slipped = t({
+      due: '2026-09-05', original_due: '2026-08-15', original_due_is_date: true,
+    })
+    expect(daysPastDue(slipped.due, true, DAY)).toBe(1)
+    expect(daysSlipped(slipped, DAY)).toBe(22)
+    expect(daysLate(slipped, DAY)).toBe(22)
+  })
+
+  it('is null for a slipped task that is not late RIGHT NOW', () => {
+    // The half that keeps the answer an answer. A task moved onto today — or
+    // into next week — has been decided about, and a strip that put it straight
+    // back under "waiting on a decision" would be arguing with the press it
+    // just took. The mark survives (`slippedFrom` still reads), the RECLAIM
+    // does not.
+    const onToday = t({ due: DAY, original_due: '2026-08-15', original_due_is_date: true })
+    expect(daysLate(onToday, DAY)).toBeNull()
+    expect(slippedFrom(onToday)).toEqual(['2026-08-15', true])
+
+    const ahead = t({ due: '2026-09-20', original_due: '2026-08-15', original_due_is_date: true })
+    expect(daysLate(ahead, DAY)).toBeNull()
+    expect(slippedFrom(ahead)).toEqual(['2026-08-15', true])
+  })
+
+  it('reclaims it the moment it is late again, with no fresh grace period', () => {
+    // Yesterday's press, read today. The old rule gave this task a whole new
+    // STALE_OVERDUE_DAYS to run out before anything asked about it again, so
+    // pressing "Due today" each morning meant it was never asked about at all.
+    const pressedYesterday = t({
+      due: '2026-09-05', original_due: '2026-07-01', original_due_is_date: true,
+    })
+    expect(daysPastDue(pressedYesterday.due, true, DAY)).toBe(1)
+    expect(daysLate(pressedYesterday, DAY)).toBeGreaterThan(3)
+  })
+
+  it('counts no days for a deadline missed earlier the same day', () => {
+    // A 09:00 deadline moved at 10:00 HAS slipped, so the chip is painted — but
+    // its age is not a whole day and "0d" would be a claim that it had not.
+    // Null is how the count says "nothing to say", and the caller renders the
+    // date alone.
+    const sameDay = t({
+      due: '2026-09-20', original_due: `${DAY}T08:00`, original_due_is_date: false,
+    })
+    expect(slippedFrom(sameDay)).toEqual([`${DAY}T08:00`, false])
+    expect(daysSlipped(sameDay, DAY)).toBeNull()
+  })
+
+  it('takes the later of the two when the new deadline is the older one', () => {
+    // Nothing stops a deadline being hand-edited to a date before the one that
+    // was missed. Whichever is further back is how late this task is.
+    const backdated = t({
+      due: '2026-08-01', original_due: '2026-08-15', original_due_is_date: true,
+    })
+    expect(daysLate(backdated, DAY)).toBe(daysPastDue('2026-08-01', true, DAY))
   })
 })
