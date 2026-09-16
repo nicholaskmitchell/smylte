@@ -375,6 +375,25 @@ const STALE_DAYS = 21
  *  do about it. */
 export const STALE_OVERDUE_DAYS = 3
 
+/** Whether moving an overdue task ONTO THE DAY BEING PLANNED also puts it on
+ *  that day's plan, rather than only moving its deadline there.
+ *
+ *  OFF, and the default is the argument `reschedule` makes below: the triage
+ *  strip's answers are about a DEADLINE. Pressing "Due today" moves the date
+ *  and nothing else, which is what lets the strip promise that its answers END
+ *  the lateness rather than quietly re-planning the day around them.
+ *
+ *  It is settable because that promise leaves a real gap, and it is the other
+ *  half of the complaint this whole area exists to answer: a task can be
+ *  ANSWERED and still not be PLANNED. "Today" buys it a date, and finding it
+ *  again under a different heading and pressing `+` is a second gesture nobody
+ *  asked for. An owner who wants the press to mean both can say so.
+ *
+ *  Here rather than retyped at each reader, for the reason `STALE_OVERDUE_DAYS`
+ *  is: App seeds its state from this and the view falls back to it, and two
+ *  copies of one default is how the two come to disagree. */
+export const PLAN_ON_DUE_TODAY = false
+
 /** How many of a suggestion group's tasks are shown before the rest are put
  *  behind one press.
  *
@@ -629,7 +648,7 @@ export function rowDone(e: DayEntry, task: Task | undefined, live: boolean): boo
 
 export function TodayView({
   rev, onExpire, hiddenCalendars = [], archivedCalendars = [], onStartWorking,
-  staleOverdueDays = STALE_OVERDUE_DAYS,
+  staleOverdueDays = STALE_OVERDUE_DAYS, planOnDueToday = PLAN_ON_DUE_TODAY,
 }: {
   rev: number
   onExpire: () => void
@@ -647,6 +666,10 @@ export function TodayView({
    *  `STALE_OVERDUE_DAYS`. Threaded from settings by App, like every other
    *  account preference this view honours. */
   staleOverdueDays?: number
+  /** Whether answering a triage row with the day being planned also puts the
+   *  task on that day, rather than only moving its deadline. Default
+   *  `PLAN_ON_DUE_TODAY`, which is where the choice is argued for. */
+  planOnDueToday?: boolean
 }) {
   const { lang, locale, t: tr } = useI18n()
   // A STABLE guard, so it can sit in an effect's dependency list honestly
@@ -1461,9 +1484,40 @@ export function TodayView({
    * Through `saveDetail`, so it paints immediately and reconciles like every
    * other write in the app — and so it is the same PATCH the editor makes,
    * rather than a second path to the same field.
+   *
+   * ── and, when the owner has asked for it, a place on the day as well ──────
+   *
+   * `planOnDueToday` does NOT weaken the paragraph above; it answers what that
+   * paragraph leaves out. "Adding it to today instead of redating it" is still
+   * the answer that fails, for exactly the reason given. But redating it and
+   * STOPPING is an answer that schedules nothing: the row leaves this strip for
+   * a heading that says it is due today, and actually doing it today is a
+   * second gesture — find it again, press `+` — that nobody asked for. Both is
+   * strictly more than either, and the default stays off because the strip's
+   * promise is about deadlines (see `PLAN_ON_DUE_TODAY`).
+   *
+   * THE RULE IS ABOUT THE DESTINATION, NOT THE BUTTON, which is why it lives
+   * here and not on the "Due today" press. This function has two callers — that
+   * button and the date field beside it — and picking today out of the field is
+   * the same decision as pressing the button. Stated once, they cannot drift
+   * into answering it differently. `to === day` is the whole test, and it reads
+   * as what it means: a task moved to Thursday is SCHEDULED, not planned, and
+   * there is no day plan to put it on.
+   *
+   * THE DEADLINE FIRST. Both halves paint before their write lands, and a day
+   * row renders `task.due` — so adding first would flash the deadline the press
+   * just ended on the row it just created.
+   *
+   * A failed PATCH still leaves the add, and that is the honest outcome rather
+   * than a gap: `settle` puts the task's old deadline back while the day keeps
+   * a row pointing at it, which is a task planned for today whose deadline did
+   * not move. Every part of that is true and visible, and undoing the add would
+   * be this function inventing a second write to cover the first.
    */
-  const reschedule = useCallback(
-    (t: Task, to: string) => saveDetail(t, { due: to }), [saveDetail])
+  const reschedule = useCallback(async (t: Task, to: string) => {
+    await saveDetail(t, { due: to })
+    if (planOnDueToday && to === day) await addTask(day, t)
+  }, [saveDetail, addTask, planOnDueToday, day])
 
   /** Put a note on `on`. Same optimistic shape as `addTask`. */
   const addNote = useCallback(async (on: string, title: string): Promise<boolean> => {

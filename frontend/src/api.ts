@@ -915,6 +915,10 @@ export interface Settings {
   // offering it as ordinary work and asks for a decision. Absent means 3;
   // 0 turns the group off. Never hides a task from any list.
   stale_overdue_days?: number
+  // Whether answering an overdue task with the day being planned also puts it
+  // on that day's plan, rather than only moving its deadline there. Absent
+  // means OFF, which is what the triage strip did before this was settable.
+  plan_on_due_today?: boolean
   time_format?: TimeFormat         // 12- or 24-hour clock across the app (see time.ts); default '12h'
   // The language the app is shown in, and the locale it formats dates with
   // (see lang.ts). Account-synced like every other display preference here —

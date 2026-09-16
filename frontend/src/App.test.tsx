@@ -900,3 +900,55 @@ describe('the floating window', () => {
     expect(document.querySelector('.focus[aria-busy="true"]')).not.toBeNull()
   })
 })
+
+describe('planning the work you answer with today', () => {
+  const NAME = 'Put it on your day when you move it onto today'
+
+  const openTasks = async () => {
+    render(<App />)
+    await screen.findByRole('button', { name: 'Tasks' })
+    await waitFor(() => expect(m.getSettings).toHaveBeenCalled())
+    await openSettings('Tasks')
+    return screen.getByRole('button', { name: NAME })
+  }
+
+  it('saves the choice, and reads it back on the next boot', async () => {
+    const toggle = await openTasks()
+    expect(toggle).toHaveTextContent('Off')
+
+    await userEvent.click(toggle)
+    expect(toggle).toHaveTextContent('On')
+    expect(m.putSettings).toHaveBeenCalledWith({ plan_on_due_today: true })
+
+    // False is a real value, not a clear: turning it back off has to be a thing
+    // the account says rather than a thing it stops saying.
+    await userEvent.click(toggle)
+    expect(m.putSettings).toHaveBeenLastCalledWith({ plan_on_due_today: false })
+  })
+
+  it('restores a stored choice', async () => {
+    m.getSettings.mockResolvedValue({ plan_on_due_today: true })
+    expect(await openTasks()).toHaveTextContent('On')
+  })
+
+  it('ignores a stored value that is not a boolean', async () => {
+    // The blob is hand-editable, and `typeof === 'boolean'` is the whole guard.
+    m.getSettings.mockResolvedValue({ plan_on_due_today: 'yes' } as never)
+    expect(await openTasks()).toHaveTextContent('Off')
+  })
+
+  it('writes nothing when the read that would have set it failed', async () => {
+    // Why the key is in MERGED_SETTINGS. This is a toggle — `next = !current`
+    // over state the read populates — so after a failed read the row shows the
+    // shipped default whatever the account holds, and one press would write the
+    // NEGATION of a lie over it.
+    m.getSettings.mockRejectedValue(new HttpError(502, 'bad gateway'))
+    await userEvent.click(await openTasks())
+    await act(async () => { await Promise.resolve() })
+
+    const wrote = m.putSettings.mock.calls
+      .map((c) => c[0] as Record<string, unknown>)
+      .filter((b) => 'plan_on_due_today' in b)
+    expect(wrote, 'a failed read let one click write the setting anyway').toEqual([])
+  })
+})
