@@ -510,7 +510,7 @@ def test_a_closed_service_does_not_sweep_against_a_dead_connection():
     already-running work item, so `await loop_task` returns at once while the
     worker thread is still inside `sync_all`. Nothing awaits that future any
     more, so asyncio logs an "exception was never retrieved" traceback on every
-    `systemctl restart tasks` that lands mid-sweep, and the remaining
+    `systemctl restart smylte` that lands mid-sweep, and the remaining
     collections are never swept.
     """
     svc = _closable_service()
@@ -939,7 +939,7 @@ def _run_setup_sh(password: str, root: pathlib.Path, *, username: str = "",
 
     script = _read("deploy/setup.sh")
     script = re.sub(r"^PY=.*$", f"PY={fake_py}", script, flags=re.M)
-    script = script.replace("/etc/smylte", str(etc / "tasks"))
+    script = script.replace("/etc/smylte", str(etc / "smylte"))
     script = script.replace("/etc/systemd/system", str(etc / "systemd"))
     script = script.replace("/usr/local/bin", str(root / "usrbin"))
     script = script.replace("/home/$USER_NAME/smylte", str(REPO))
@@ -953,7 +953,7 @@ def _run_setup_sh(password: str, root: pathlib.Path, *, username: str = "",
     # exposure — a fix applied to the password alone leaves it open.
     proc = subprocess.run(["bash", str(sh)], input=f"{password}\n{username}\n",
                           text=True, capture_output=True, timeout=120, env=env)
-    envfile = etc / "tasks" / "smylte.env"
+    envfile = etc / "smylte" / "smylte.env"
     if expect_refusal:
         assert proc.returncode != 0, (
             f"setup.sh accepted input it should have refused (rc=0): "
