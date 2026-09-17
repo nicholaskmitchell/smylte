@@ -46,7 +46,7 @@ import threading
 
 from dateutil import rrule as _rrule
 
-log = logging.getLogger("tasksd.ical")
+log = logging.getLogger("smylted.ical")
 
 
 class SearchBudgetExceeded(BaseException):
@@ -91,10 +91,10 @@ def _install() -> None:
         log.error(
             "dateutil's rrule._iterinfo.rebuild is missing, so recurrence "
             "expansion is UNBOUNDED: a rule that never matches will walk to "
-            "year 9999. See tasksd/ical/rrule_budget.py."
+            "year 9999. See smylted/ical/rrule_budget.py."
         )
         return
-    if getattr(original, "_tasksd_budgeted", False):
+    if getattr(original, "_smylted_budgeted", False):
         return
 
     def rebuild(self, year, month, *a, **kw):
@@ -108,7 +108,7 @@ def _install() -> None:
             _state.left = left - 1
         return original(self, year, month, *a, **kw)
 
-    rebuild._tasksd_budgeted = True
+    rebuild._smylted_budgeted = True
     info.rebuild = rebuild
 
 

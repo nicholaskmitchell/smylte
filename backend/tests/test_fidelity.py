@@ -12,10 +12,10 @@ from pathlib import Path
 import pytest
 from icalendar import Calendar
 
-from tasksd.ical import TaskEdit, apply_changes, build_new, extract_from_raw, parse_calendar
-from tasksd.ical import canonical as C
-from tasksd.ical import recur
-from tasksd.ical.edit import (
+from smylted.ical import TaskEdit, apply_changes, build_new, extract_from_raw, parse_calendar
+from smylted.ical import canonical as C
+from smylted.ical import recur
+from smylted.ical.edit import (
     EventEdit,
     apply_event_changes,
     apply_occurrence_override,

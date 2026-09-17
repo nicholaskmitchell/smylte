@@ -32,7 +32,7 @@ from ..dav.errors import (Conflict, DavError, InvalidSyncToken, MalformedRespons
 from ..db import store
 from ..db.store import tx as _tx
 
-log = logging.getLogger("tasksd.sync")
+log = logging.getLogger("smylted.sync")
 
 # UID lines, read textually. Only used for a resource whose extraction already
 # failed: we still need to know which UIDs it claims so the resync sweep does
@@ -105,7 +105,7 @@ class SyncEngine:
         self.conn = conn
         self.batch = multiget_batch
         # Whether the last discover() saw the live collection set move. Read by
-        # TaskService.sync_all to decide whether the SPA needs telling.
+        # SmylteService.sync_all to decide whether the SPA needs telling.
         self.last_discovery_changed = False
 
     # ── discovery ────────────────────────────────────────────────────────────

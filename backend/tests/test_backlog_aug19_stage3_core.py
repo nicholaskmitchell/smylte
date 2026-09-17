@@ -42,17 +42,17 @@ from zoneinfo import ZoneInfo
 import pytest
 from fastapi.testclient import TestClient
 
-from tasksd import scheduling
-from tasksd.app import create_app
-from tasksd.config import Settings
-from tasksd.dav.client import CollectionInfo, Item
-from tasksd.dav.errors import DavError
-from tasksd.db import store
-from tasksd.ical import extract_from_raw
-from tasksd.mcp.api import McpApi
-from tasksd.mcp.server import McpServer
-from tasksd.mcp.tools import build_tools
-from tasksd.service import TaskService
+from smylted import scheduling
+from smylted.app import create_app
+from smylted.config import Settings
+from smylted.dav.client import CollectionInfo, Item
+from smylted.dav.errors import DavError
+from smylted.db import store
+from smylted.ical import extract_from_raw
+from smylted.mcp.api import McpApi
+from smylted.mcp.server import McpServer
+from smylted.mcp.tools import build_tools
+from smylted.service import SmylteService
 from tests.conftest import api_settings
 from tests.helpers import foreign_event_raw
 
@@ -79,7 +79,7 @@ def _offline_settings() -> Settings:
 
 
 class _StubService:
-    """The narrowest stand-in for TaskService that `McpApi.list_tasks` needs:
+    """The narrowest stand-in for SmylteService that `McpApi.list_tasks` needs:
     the lists it fans out over, and the rows in each. Everything about ordering
     happens above this line, in `_display_order` and the sort in list_tasks."""
 
@@ -316,7 +316,7 @@ CROSS_CHECKED = [
 
 @pytest.mark.parametrize("tasks, expected", CROSS_CHECKED)
 def test_the_port_agrees_with_order_ts(tasks, expected):
-    from tasksd.mcp.api import _in_display_order
+    from smylted.mcp.api import _in_display_order
 
     assert [f"{t['list']}/{t['uid']}" for t in _in_display_order(tasks)] == expected
 
@@ -327,7 +327,7 @@ def test_the_title_key_reproduces_localecompares_case_rule():
     "alpha") and `casefold` alone calls them equal — the first attempt at this
     port used casefold and disagreed with order.ts on exactly the six of 402
     cases where two tasks tied on due and priority and differed only in case."""
-    from tasksd.mcp.api import _title_key
+    from smylted.mcp.api import _title_key
 
     assert _title_key("alpha") < _title_key("Alpha")
     assert _title_key("alpha") < _title_key("beta")
@@ -371,7 +371,7 @@ def test_a_booking_retried_after_a_failed_write_is_not_a_conflict_with_itself():
     cal = "/u/meetings/"
     cid = "b" * 32
 
-    svc = TaskService(_offline_settings())
+    svc = SmylteService(_offline_settings())
     try:
         store.upsert_collection(svc._conn, CollectionInfo(
             href=cal, displayname="Meetings", components={"VEVENT"}))
@@ -456,7 +456,7 @@ def test_an_occurrence_moved_before_its_series_start_is_still_in_the_window():
     reports the occupied hour as free; and the six-week grid loses the
     occurrence from the month the owner just dragged it into.
 
-    Driven through `TaskService.events_in_range`, the method all three go
+    Driven through `SmylteService.events_in_range`, the method all three go
     through, so any fix — relaxing the lower gate for recurring rows, or caching
     a `min_occurrence` column — satisfies it.
     
@@ -475,7 +475,7 @@ def test_an_occurrence_moved_before_its_series_start_is_still_in_the_window():
                     "DTEND:20260824T093000Z", "SUMMARY:Standup (moved)"),),
     )
 
-    svc = TaskService(_offline_settings())
+    svc = SmylteService(_offline_settings())
     try:
         store.upsert_collection(svc._conn, CollectionInfo(
             href=cal, displayname="Cal", components={"VEVENT"}))
@@ -522,7 +522,7 @@ def test_an_occurrence_moved_before_its_series_start_is_still_in_the_window():
 # ── AUDIT: the task tools accept a calendar id and vice versa ───────────────
 
 def test_a_calendar_id_is_refused_by_the_task_tools():
-    """`McpApi._href` resolves ids through `TaskService.resolve_list`, which
+    """`McpApi._href` resolves ids through `SmylteService.resolve_list`, which
     matches any non-deleted collection by href or slug and never looks at
     `components`. The `kind` argument only changes the wording of the not-found
     sentence. Task lists and calendars share one slug namespace, and the MCP
@@ -539,7 +539,7 @@ def test_a_calendar_id_is_refused_by_the_task_tools():
     component == 'VTODO' and answers `{"total": 0, "tasks": []}`, so the model
     reports "that list is empty" about a calendar holding 900 events.
 
-    Both tools are driven for real, over a real `TaskService` and its real
+    Both tools are driven for real, over a real `SmylteService` and its real
     resolver; only the DAV client's own `delete_collection` is replaced, by a
     recorder, so what a calendar id costs is observable without destroying
     anything. What is asserted is the outcome — the calendar is not deleted, and
@@ -553,7 +553,7 @@ def test_a_calendar_id_is_refused_by_the_task_tools():
     through too, since one pair of methods backs both the list and the calendar
     tools.
     """
-    svc = TaskService(_offline_settings())
+    svc = SmylteService(_offline_settings())
     try:
         store.upsert_collection(svc._conn, CollectionInfo(
             href="/u/errands/", displayname="Errands", components={"VTODO"}))
@@ -1185,7 +1185,7 @@ def test_task_order_matches_the_browser_when_the_server_is_in_another_zone(monke
         _task("a", summary="Late call", due="2026-01-05T23:00:00-06:00"),
         _task("b", summary="All-day thing", due="2026-01-06"),
     ]
-    from tasksd.mcp.api import _in_display_order
+    from smylted.mcp.api import _in_display_order
     got = [t["uid"] for t in _in_display_order(tasks, chicago)]
     assert got == ["a", "b"], (
         f"a task due 23:00 on the 5th in the reader's zone sorted after an "
@@ -1279,7 +1279,7 @@ def test_task_order_without_a_zone_is_unchanged():
         _task("b", summary="Two", due="2026-01-06"),
         _task("c", summary="Three"),
     ]
-    from tasksd.mcp.api import _in_display_order
+    from smylted.mcp.api import _in_display_order
     assert [t["uid"] for t in _in_display_order(tasks)] == ["a", "b", "c"]
 
     # Server in Chicago, no zone passed: the 23:00-Chicago call is still the

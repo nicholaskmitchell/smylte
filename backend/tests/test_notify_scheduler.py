@@ -7,9 +7,9 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from tasksd.db import store
-from tasksd.notify import rules as R
-from tasksd.notify.scheduler import MAX_LOUD_PER_DAY, Notifier
+from smylted.db import store
+from smylted.notify import rules as R
+from smylted.notify.scheduler import MAX_LOUD_PER_DAY, Notifier
 
 from tests.test_notify_rules import NY, NullLog, StubSender, StubSvc, _event
 

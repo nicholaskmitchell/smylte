@@ -35,7 +35,7 @@ from .display import render as display_render
 from .ical import PRIORITY, UNSET, EventEdit, TaskEdit, blocks_time, recur
 from .sync import SyncEngine, SyncStats
 
-log = logging.getLogger("tasksd.service")
+log = logging.getLogger("smylted.service")
 
 # Reverse of ical.PRIORITY, bucketed to four levels (RFC 5545: 1 highest, 9 lowest).
 _PRIORITY_LABEL = {0: "none", 1: "high", 5: "medium", 9: "low"}
@@ -374,7 +374,7 @@ def focus_settings(blob: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-class TaskService:
+class SmylteService:
     def __init__(self, settings: Settings):
         self.settings = settings
         self._dav = DavClient(
@@ -3401,8 +3401,8 @@ class TaskService:
 
     @staticmethod
     def _refresh_floor(palette: str | None) -> int:
-        return (TaskService._REFRESH_MIN_EINK_S if palette == "eink"
-                else TaskService._REFRESH_MIN_S)
+        return (SmylteService._REFRESH_MIN_EINK_S if palette == "eink"
+                else SmylteService._REFRESH_MIN_S)
 
     def list_displays(self) -> list[dict[str, Any]]:
         with self._lock:
@@ -3439,7 +3439,7 @@ class TaskService:
             # number the owner sees agree with it.
             "refresh_seconds": max(
                 row["refresh_seconds"],
-                TaskService._refresh_floor(row["palette"])),
+                SmylteService._refresh_floor(row["palette"])),
             "panel_width": row["panel_width"],
             "panel_height": row["panel_height"],
             "rotation": row["rotation"],

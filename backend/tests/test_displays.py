@@ -22,20 +22,20 @@ import pytest
 from fastapi.testclient import TestClient
 from test_day_plan import DAY, LIST_A, _seed_task, _settings
 
-from tasksd.app import create_app
-from tasksd.config import Settings
-from tasksd.dav.client import CollectionInfo
-from tasksd.db import store
-from tasksd.display import frame as F
-from tasksd.display import render as R
-from tasksd.service import TaskService
+from smylted.app import create_app
+from smylted.config import Settings
+from smylted.dav.client import CollectionInfo
+from smylted.db import store
+from smylted.display import frame as F
+from smylted.display import render as R
+from smylted.service import SmylteService
 
 CAL_A, CAL_B = "/u/cal-a/", "/u/cal-b/"
 
 
 @pytest.fixture
 def svc(monkeypatch):
-    s = TaskService(_settings())
+    s = SmylteService(_settings())
     store.upsert_collection(
         s._conn, CollectionInfo(href=LIST_A, displayname="Work", components={"VTODO"}))
     store.upsert_collection(
@@ -45,7 +45,7 @@ def svc(monkeypatch):
     # Every day-derived answer is pinned to DAY rather than to the wall clock,
     # for the reason test_day_plan gives: a suite whose expectations move at
     # midnight is a suite that fails at midnight.
-    monkeypatch.setattr(TaskService, "_today", lambda self: DAY)
+    monkeypatch.setattr(SmylteService, "_today", lambda self: DAY)
     return s
 
 
@@ -1267,7 +1267,7 @@ def _api_settings(tmp_path) -> Settings:
 
 @pytest.fixture
 def api(tmp_path, monkeypatch):
-    monkeypatch.setattr(TaskService, "_today", lambda self: DAY)
+    monkeypatch.setattr(SmylteService, "_today", lambda self: DAY)
     app = create_app(_api_settings(tmp_path))
     with TestClient(app) as c:
         assert c.post("/api/login",
@@ -1683,7 +1683,7 @@ def test_the_display_surface_is_rate_limited_at_all(api, monkeypatch):
     test costs a few renders instead of a few hundred — the property under test
     is that the throttle is wired to these routes, not what the number is.
     """
-    import tasksd.app as app_mod
+    import smylted.app as app_mod
 
     token = api.post("/api/displays", json={"name": "Hallway"}).json()["token"]
     api.cookies.clear()
@@ -1805,7 +1805,7 @@ def test_a_rolling_display_repaints_only_when_what_it_draws_moves(svc):
 def test_the_eink_refresh_migration_raises_a_stored_interval_and_leaves_colour(tmp_path):
     """The one piece of code in the app that silently rewrites a setting the
     owner chose, and it ran on every startup with nothing asserting it."""
-    from tasksd.db import store
+    from smylted.db import store
 
     path = tmp_path / "m.db"
     with store.connect(str(path)) as conn:
@@ -1826,18 +1826,18 @@ def test_the_eink_refresh_migration_raises_a_stored_interval_and_leaves_colour(t
         store.init_db(conn)                      # the migration runs again
         eink = store.get_display(conn, fast_eink["token"])
         color = store.get_display(conn, fast_color["token"])
-    assert eink["refresh_seconds"] == TaskService._REFRESH_MIN_EINK_S
+    assert eink["refresh_seconds"] == SmylteService._REFRESH_MIN_EINK_S
     # An LCD has no such limit and its setting is the owner's to make.
     assert color["refresh_seconds"] == 60
 
 
 def test_a_failed_last_seen_stamp_does_not_cost_the_panel_its_frame(api, monkeypatch):
     """`touch_display` has always promised this in its docstring and did not
-    deliver it: nothing in tasksd catches sqlite3.Error, so the one write on an
+    deliver it: nothing in smylted catches sqlite3.Error, so the one write on an
     otherwise read-only path turned a built frame into a 500."""
     import sqlite3
 
-    from tasksd.db import store
+    from smylted.db import store
 
     token = api.post("/api/displays", json={"name": "Hallway"}).json()["token"]
     api.cookies.clear()
@@ -2003,23 +2003,23 @@ def test_the_preview_is_the_renderer_that_ships(api):
 # on the calendar path and the container runs in UTC, where the conversion is
 # the identity.
 
-def _tz_service(monkeypatch) -> TaskService:
+def _tz_service(monkeypatch) -> SmylteService:
     """A fresh service on its own in-memory DB, with today pinned to DAY.
 
     A factory rather than the `svc` fixture because several of these tests need
     TWO services — the same event read under two different zones — and the
     whole point is that the two answers differ.
     """
-    s = TaskService(_settings())
-    monkeypatch.setattr(TaskService, "_today", lambda self: DAY)
+    s = SmylteService(_settings())
+    monkeypatch.setattr(SmylteService, "_today", lambda self: DAY)
     return s
 
 
 def _zoned(svc, tz: str | None, stored: str, *, end: str | None = None,
            summary: str = "Standup") -> dict:
     """One event, one zone, through the real display path."""
-    from tasksd.dav.client import CollectionInfo
-    from tasksd.db import store
+    from smylted.dav.client import CollectionInfo
+    from smylted.db import store
 
     with svc._lock:
         store.upsert_collection(svc._conn, CollectionInfo(
@@ -2161,8 +2161,8 @@ def test_chips_in_a_cell_are_ordered_by_the_instant_not_by_the_string(
     order on the clock — and because the cell keeps only the first N, a mis-sort
     drops a different event than the app does.
     """
-    from tasksd.dav.client import CollectionInfo
-    from tasksd.db import store
+    from smylted.dav.client import CollectionInfo
+    from smylted.db import store
 
     svc = _tz_service(monkeypatch)
     with svc._lock:
@@ -2186,7 +2186,7 @@ def test_the_day_helpers_refuse_to_be_called_without_a_zone():
     """`None` is a legitimate zone meaning "the process's own", so a call site
     that forgot to thread one would be indistinguishable from one that meant it
     — and the only symptom would be a span's two ends resolved differently."""
-    from tasksd import service as S
+    from smylted import service as S
 
     with pytest.raises(TypeError):
         S._event_day("2026-08-31T13:00:00+00:00", True)          # positional
@@ -2202,7 +2202,7 @@ def test_a_datetime_at_the_edge_of_the_calendar_does_not_500_the_display():
     for every fetch of that display."""
     from zoneinfo import ZoneInfo
 
-    from tasksd import service as S
+    from smylted import service as S
 
     for value in ("0001-01-01T00:00:00+00:00", "9999-12-31T23:59:59+00:00"):
         for zone in (ZoneInfo("Pacific/Kiritimati"), ZoneInfo("Pacific/Midway"), None):

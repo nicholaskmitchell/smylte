@@ -3,7 +3,7 @@
 // dashboard.ts, so the part that matters can be reasoned about and tested on
 // its own.
 //
-// The backend is the authority on this list (backend/tasksd/notify/rules.py
+// The backend is the authority on this list (backend/smylted/notify/rules.py
 // exports the same four names, and app.py FILTERS unknown ones out of a
 // settings PUT rather than 422-ing it). That filtering is what makes deploying
 // these two halves apart safe in BOTH directions, unlike `tab_order`: a client

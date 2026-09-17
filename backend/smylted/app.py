@@ -57,7 +57,7 @@ from .csp import CSPMiddleware, policy_for_index
 from .limits import BodySizeLimitMiddleware
 from .scheduling import SlotTaken
 from .service import (
-    TaskService, day_key, priority_from_label,
+    SmylteService, day_key, priority_from_label,
     # The weekday vocabulary, imported rather than restated. `service._WEEKDAYS`
     # is documented as the ONE place those names and Python's numbering meet, and
     # a copy of the seven strings at this edge is exactly the second mapping that
@@ -66,7 +66,7 @@ from .service import (
 )
 from .sync.engine import ConflictError
 
-log = logging.getLogger("tasksd")
+log = logging.getLogger("smylted")
 
 
 # ── request models ───────────────────────────────────────────────────────────
@@ -1252,7 +1252,7 @@ def _event_edit_from_patch(req: EditEvent) -> EventEdit:
 # ── background sync loop ──────────────────────────────────────────────────────
 
 async def _sync_loop(app: FastAPI) -> None:
-    svc: TaskService = app.state.service
+    svc: SmylteService = app.state.service
     trigger: asyncio.Event = app.state.sync_trigger
     interval = svc.settings.sync_interval_s
     while True:
@@ -1269,7 +1269,7 @@ async def _sync_loop(app: FastAPI) -> None:
 
 # ── background notification scheduler ─────────────────────────────────────────
 
-def _build_notifier(settings: Settings, svc: TaskService):
+def _build_notifier(settings: Settings, svc: SmylteService):
     """The notifier, or None when notifications are switched off.
 
     None is the ordinary case — `TASKS_NOTIFY_ENABLED` is false by default — and
@@ -1308,7 +1308,7 @@ async def _notification_loop(app: FastAPI) -> None:
     notifier = getattr(app.state, "notifier", None)
     if notifier is None:
         return
-    svc: TaskService = app.state.service
+    svc: SmylteService = app.state.service
     trigger: asyncio.Event = app.state.notify_trigger
     first = True
     while True:
@@ -1359,12 +1359,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             password_hash = hash_password(settings.auth_password)
             log.warning(
                 "auth: hashing TASKS_AUTH_PASSWORD (plaintext env) at startup. Prefer "
-                "TASKS_AUTH_PASSWORD_HASH via `python -m tasksd hash-password` in production."
+                "TASKS_AUTH_PASSWORD_HASH via `python -m smylted hash-password` in production."
             )
         if not password_hash:
             raise RuntimeError(
                 "auth enabled but no password set. Generate one with "
-                "`python -m tasksd hash-password` and set TASKS_AUTH_PASSWORD_HASH "
+                "`python -m smylted hash-password` and set TASKS_AUTH_PASSWORD_HASH "
                 "(or TASKS_AUTH_PASSWORD for dev, or TASKS_AUTH_ENABLED=false to run open)."
             )
         session_secret = settings.session_secret or secrets.token_hex(32)
@@ -1416,7 +1416,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI):
-        svc = TaskService(settings)
+        svc = SmylteService(settings)
         svc.bind_loop(asyncio.get_running_loop())
         app.state.service = svc
         app.state.sync_trigger = asyncio.Event()
@@ -1445,16 +1445,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 notifier.close()
             svc.close()
 
-    app = FastAPI(title="tasksd", version="0.1.0-phase1", lifespan=lifespan)
+    app = FastAPI(title="smylted", version="0.1.0-phase1", lifespan=lifespan)
 
     # Ahead of the router, because that is the only place it works: FastAPI
     # buffers a pydantic body before the endpoint (and therefore before the
-    # login limiter and the booking throttles) ever runs. See tasksd/limits.py.
+    # login limiter and the booking throttles) ever runs. See smylted/limits.py.
     app.add_middleware(BodySizeLimitMiddleware, max_bytes=settings.max_body_bytes)
 
     # Content-Security-Policy. The script hash is derived from the index.html
     # this deployment actually serves rather than written down, so the two
-    # cannot drift into a blank page — see tasksd/csp.py. Read once, here: a
+    # cannot drift into a blank page — see smylted/csp.py. Read once, here: a
     # frontend rebuild therefore needs a restart, which docs/DEPLOY.md says.
     if settings.csp_mode != "off":
         index_path = os.path.join(settings.static_dir, "index.html")
@@ -1578,7 +1578,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     api = APIRouter(prefix="/api", dependencies=[Depends(require_auth)])
 
-    def _svc(request: Request) -> TaskService:
+    def _svc(request: Request) -> SmylteService:
         return request.app.state.service
 
     async def _run(fn, *a, **kw):
@@ -2892,7 +2892,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # advises a number it knows to be unsafe is not much of a defence.
         seconds = frame["display"]["refresh_seconds"]
         if fmt == "raw":
-            seconds = max(seconds, TaskService._REFRESH_MIN_EINK_S)
+            seconds = max(seconds, SmylteService._REFRESH_MIN_EINK_S)
         headers = {
             "ETag": etag,
             "Cache-Control": "no-store, private",

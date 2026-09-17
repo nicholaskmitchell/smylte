@@ -1,7 +1,7 @@
 """The MCP toolset over the tasks + calendar API.
 
 One table, `TOOLS`, drives everything: what `tools/list` advertises, which scope
-a call needs, and how it reaches `TaskService`. Adding a capability is one entry
+a call needs, and how it reaches `SmylteService`. Adding a capability is one entry
 rather than an edit in three places — the same shape the frontend's FIELDS table
 uses for task properties.
 
@@ -193,7 +193,7 @@ def page(rows: list, limit: int | None, offset: int | None, *, key: str) -> dict
 
 
 def build_tools(api) -> dict[str, Tool]:
-    """Build the registry against `api`, the adapter over TaskService."""
+    """Build the registry against `api`, the adapter over SmylteService."""
     tools: list[Tool] = []
 
     def tool(name, title, description, schema, *, scope=SCOPE_READ, read_only=True,

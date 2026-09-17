@@ -375,7 +375,7 @@ other four tables: executescript a hand-built pre-column
 `items`/`sidecar`/`oauth_tokens`/`collections` with one row each, call
 `store.init_db(conn)` twice (idempotency), assert `PRAGMA table_info` now contains
 transp/min_instant/fts_rowid, notify_minutes_before, cv, ord, and assert the real
-readers work: `TaskService._task_dto`/`_event_dto` on the legacy rows return
+readers work: `SmylteService._task_dto`/`_event_dto` on the legacy rows return
 `notify_minutes_before is None` / `busy is True`, `store.get_oauth_token` returns
 `cv == ''`, and one `upsert_item` on the legacy row sets a non-NULL fts_rowid.
 
@@ -410,7 +410,7 @@ rules.py:333-338:
         when = _instant(occ, s)
         if when is not None and start_of_day <= when.astimezone(s.tz) < end_of_day:
 
-Reproduced with a real TaskService/SQLite cache (home_timezone America/New_York, digest 07:30, sweep at 2026-08-31 07:30 NY) holding all-day VEVENTs on Aug 30, Aug 31, Sep 1 and Sep 2. `_eval_digest(...).text` was:
+Reproduced with a real SmylteService/SQLite cache (home_timezone America/New_York, digest 07:30, sweep at 2026-08-31 07:30 NY) holding all-day VEVENTs on Aug 30, Aug 31, Sep 1 and Sep 2. `_eval_digest(...).text` was:
   Mon 31 Aug: 4 events.
   all day  YESTERDAY all-day
   all day  TODAY all-day
@@ -425,7 +425,7 @@ Expected: "Mon 31 Aug: 1 event." with only the Aug 31 line.
 DATE start parses to local midnight) and keep the row only when `start_of_day <= d <
 end_of_day`, or — to keep multi-day spans visible on their middle days — when `d <
 end_of_day and (end or d + 1 day) > start_of_day` using `occ["end"]`. Add a digest
-test that goes through the real `events_in_range` (offline TaskService +
+test that goes through the real `events_in_range` (offline SmylteService +
 `store.upsert_item`) with all-day rows on D-1, D and D+1 and asserts only D's title
 and "1 event" appear.
 
@@ -434,7 +434,7 @@ and "1 event" appear.
 #### [x] Radicale going down after boot never records a sync error, so the notifier's sync_stalled rule is blind to a full outage
 `backend/tasksd/service.py:464` · **medium** · bug · minor
 
-`TaskService.sync_all` calls `self._engine.discover()` under the lock with no
+`SmylteService.sync_all` calls `self._engine.discover()` under the lock with no
 try/except. `discover()` -> `DavClient.list_collections()` -> `_request` raises
 `DavError` on any transport failure, so when Radicale is unreachable the exception
 leaves `sync_all` before the per-collection loop runs and `store.set_sync_error` is
@@ -464,7 +464,7 @@ service.py:461-466:
             collections_changed = self._engine.last_discovery_changed
             hrefs = [r["href"] for r in store.get_collections(self._conn)]
 
-Reproduced in the venv: a TaskService whose radicale_url points at a closed port, one cached collection with a token and last_sync_at three hours old, then three sync_all() calls:
+Reproduced in the venv: a SmylteService whose radicale_url points at a closed port, one cached collection with a token and last_sync_at three hours old, then three sync_all() calls:
   sync_all raised: DavError transport error on PROPFIND /testuser/: [Errno 111] Connection refused  (x3)
   sync_health -> []
   sync_state row -> {... 'last_error': None}
@@ -547,7 +547,7 @@ by `_link_is_live`'s second operand, `store.has_collection(self._conn,
 link["calendar_href"])`. The only test on this subject, `test_scheduling.py::test_li
 nk_is_disabled_and_unbookable_once_its_calendar_is_deleted`, drives the app's own
 DELETE route, so it is satisfied by the `enabled=0` half alone. I verified
-empirically (pytest plugin patching `TaskService._link_is_live` to `return
+empirically (pytest plugin patching `SmylteService._link_is_live` to `return
 bool(link["enabled"])`, run against the scratch Radicale): the whole backend suite
 passes with zero failures. With the guard gone, a scratch reproduction shows the
 link still reports `enabled: True`, `public_link_info` advertises 8 slots on the
@@ -569,7 +569,7 @@ service.py:1217-1224:
             self._conn, link["calendar_href"]
         )
 
-Store-tier reproduction (TaskService on :memory:, CAL_A cached, link created, then `store.mark_collection_deleted(svc._conn, CAL_A)` exactly as a sync sweep does after a foreign DELETE):
+Store-tier reproduction (SmylteService on :memory:, CAL_A cached, link created, then `store.mark_collection_deleted(svc._conn, CAL_A)` exactly as a sync sweep does after a foreign DELETE):
   real code            -> public_link_info -> None ; book_slot -> None ; DTO enabled=True calendar_missing=True
   has_collection half removed -> public_link_info -> 8 slots advertised ; book_slot -> ValueError('collection /u/meetings/ is unknown; run discover() first')  [route answers 422 with that string as the body]
 
@@ -1053,7 +1053,7 @@ the same task to another day with no estimate and assert 45.
 
 The search tool's schema is `{"query": {"type": "string", "minLength": 1}}` with no
 `maxLength`, and POST /mcp accepts a 1 MB body (`_MAX_RPC_BYTES`). The handler is a
-straight passthrough: `_search_tasks` -> `McpApi.search` -> `TaskService.search`,
+straight passthrough: `_search_tasks` -> `McpApi.search` -> `SmylteService.search`,
 which runs `store.search` INSIDE `with self._lock:`. `store.search` turns every
 whitespace token into a quoted FTS5 prefix phrase and the resulting MATCH is
 quadratic in the number of terms even on an EMPTY items table: 10k terms 0.09 s,
@@ -1076,7 +1076,7 @@ service.py:699  def search(self, query): with self._lock: rows = [r for r in sto
 store.py:1285  terms = [...query.split()...]; match = " ".join('"{}"*'.format(t...) for t in terms); conn.execute("... WHERE items_fts MATCH ?", (match,))
 Measured (backend/.venv, in-memory store, ZERO items): 1000 terms 0.004 s; 10000 0.094 s; 100000 22.8 s; 150000 50.9 s; 200000 90.3 s.
 Measured through McpServer.handle tools/call smylte_search_tasks {query: "a "*50000} with scopes={mcp:read}: isError false, 0 rows, 4.9 s.
-Scenario: a connector holding only mcp:read POSTs one 1 MB JSON-RPC message whose query is "a " repeated 500k times -> the worker thread spends ~10 minutes in FTS5 under TaskService._lock; every /api and /healthz request queues behind it; repeat as desired.
+Scenario: a connector holding only mcp:read POSTs one 1 MB JSON-RPC message whose query is "a " repeated 500k times -> the worker thread spends ~10 minutes in FTS5 under SmylteService._lock; every /api and /healthz request queues behind it; repeat as desired.
 ```
 
 </details>
@@ -1667,7 +1667,7 @@ Clients that embed attachments inline (Evolution, KOrganizer;
 `ATTACH;ENCODING=BASE64;VALUE=BINARY`) routinely produce multi-MB VEVENTs. Measured
 in the venv: a 12.5 MB VEVENT with one inline attachment -> `extract_from_raw` 2.14
 s and 154 MB RSS; the same event with an RRULE ->
-`recur.expand_occurrences(raw_ics)` 2.48 s, and `TaskService.events_in_range`
+`recur.expand_occurrences(raw_ics)` 2.48 s, and `SmylteService.events_in_range`
 (service.py:907) re-parses `raw_ics` for every recurring row on every read,
 including the `blocking=True` busy-set read behind the unauthenticated booking page
 (service.py:1199). lxml refuses the >10 MB text node in the multiget response
@@ -3675,7 +3675,7 @@ confirmed to fail against the commit before it.
 touches with `_u()` (i.e. `datetime.astimezone`) on every call. Nothing is hoisted and
 nothing is indexed, so the work is O(slots x busy-intervals-before-that-slot) with two
 ZoneInfo conversions per inner step. `public_link_info` runs this inside
-`TaskService._lock` (an RLock held by every other API call, /healthz included) on `GET
+`SmylteService._lock` (an RLock held by every other API call, /healthz included) on `GET
 /api/public/booking/{token}`, which requires no session; `public_get_limiter` allows 120
 requests per 300 s per client /64, so one source can keep the lock occupied
 continuously.
@@ -3720,7 +3720,7 @@ three configurations above: identical slot lists, 2.61 s -> 0.012 s, 19.49 s -> 
 #### [x] day_range reads SQLite outside the global service lock — two concurrent GET /api/day requests crash the endpoint (and can silently return another day's capacity)
 `backend/tasksd/service.py:2350` · **high** · bug
 
-`TaskService` is built on one sqlite3 connection opened with `check_same_thread=False`,
+`SmylteService` is built on one sqlite3 connection opened with `check_same_thread=False`,
 whose entire safety argument is the module docstring's "serializes every access behind a
 re-entrant lock" and `store.connect`'s "the service owns ONE connection and serializes
 all access behind a lock, so it is safe to touch from FastAPI's threadpool". `day_range`
@@ -3778,7 +3778,7 @@ A second run failed the same way inside `_effective_capacity` -> `store.get_sett
 
 CONTROL: the identical script with `with svc._lock:` wrapped around the `day_range` call ran 8 s clean — `errors: [] count: 0`. The lock is the only variable.
 
-(3) Through the real app (`create_app(settings)`, `app.state.service = TaskService(...)`, httpx ASGITransport), six concurrent `GET /api/day?from=2026-01-01&to=2026-06-01` failed on the FIRST round:
+(3) Through the real app (`create_app(settings)`, `app.state.service = SmylteService(...)`, httpx ASGITransport), six concurrent `GET /api/day?from=2026-01-01&to=2026-06-01` failed on the FIRST round:
 
 ```
 EXC IndexError('tuple index out of range')
@@ -3914,7 +3914,7 @@ scheduling.py:214-222:
 
 store.py get_events_in_range: "... ELSE dtstart <= ? AND (duration IS NOT NULL OR COALESCE(dtend, dtstart) >= ?) END" — the DURATION branch has no lower bound.
 
-Reproduced end-to-end against the real app (TestClient, seeded TaskService, no Radicale needed). Any other CalDAV client PUTs into one of the owner's event collections:
+Reproduced end-to-end against the real app (TestClient, seeded SmylteService, no Radicale needed). Any other CalDAV client PUTs into one of the owner's event collections:
 
   BEGIN:VEVENT\r\nUID:ancient\r\nDTSTART:00010101T000000\r\nDURATION:PT1H\r\nEND:VEVENT
 
@@ -3969,7 +3969,7 @@ scheduling.py:286-292:
 
 service.py book_slot: `slots = scheduling.generate_slots(..., only_day=req.date())` then `raise scheduling.SlotTaken("that time is not available")`.
 
-(a) Advertised-but-unbookable, reproduced through the real service (TaskService + create_booking_link + public_link_info + book_slot, in-memory DB):
+(a) Advertised-but-unbookable, reproduced through the real service (SmylteService + create_booking_link + public_link_info + book_slot, in-memory DB):
   link: timezone America/Nuuk, duration 30, availability {"4": ["18:00-23:30"], "5": ["18:00-23:30"]}, horizon 20, now = 2026-03-20T12:00Z
   public_link_info slots contain {'start': '2026-03-29T00:00:00-01:00', 'end': '2026-03-29T00:30:00-01:00'}
   book_slot(start_iso='2026-03-29T00:00:00-01:00') -> SlotTaken "that time is not available"  (HTTP 409)
@@ -4370,7 +4370,7 @@ service.py:2319-2323:
         store.set_sidecar(self._conn, row["collection_href"], row["uid"],
                           estimated_minutes=fields["estimate_minutes"])
 
-Reproduced (backend/.venv/bin/python, TaskService with db_path=':memory:'):
+Reproduced (backend/.venv/bin/python, SmylteService with db_path=':memory:'):
   seed VTODO 'due-today' in /u/work/; svc.open_day(DAY, create=True)
   -> the phone deletes the task: store.delete_item_by_href(...); store.orphan_sidecar(...)
      item gone: None ; sidecar after delete: None   (nothing to orphan)
@@ -4702,7 +4702,7 @@ rebuild.
 <details><summary>Evidence</summary>
 
 ```
-Reproduced against a real TaskService (no Radicale needed; day plan is SQLite-only). Raw body posted through the real parse path:
+Reproduced against a real SmylteService (no Radicale needed; day plan is SQLite-only). Raw body posted through the real parse path:
 
   {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"smylte_update_day_entry","arguments":{"entry_id":"<id>","position":1e400}}}
 
@@ -5060,7 +5060,7 @@ model chooses. The HTTP route that answers the same question, `GET /api/day?from
 <details><summary>Evidence</summary>
 
 ```
-Real TaskService, 2000 VTODOs in one list, one task entry per day, measured:
+Real SmylteService, 2000 VTODOs in one list, one task entry per day, measured:
 
   days=  1 returned=  1 elapsed=0.06s
   days= 30 returned= 30 elapsed=1.01s
@@ -7930,7 +7930,7 @@ see it" and nothing reads it. A comment is evidence of intent, not of behaviour.
 
 `backend/tasksd/dav/xml.py:264` · **high** · bug · stage 1
 
-`parse_multistatus` calls `etree.fromstring(data)` with no error handling. Radicale copies a resource's iCalendar bytes verbatim into `<C:calendar-data>` using stdlib ElementTree, which does NOT validate characters — so any VTODO/VEVENT whose text carries U+FFFE or U+FFFF makes Radicale emit a perfectly well-formed-looking 207 that lxml refuses (XML 1.0 §2.2 Char forbids exactly those two). `DavClient.multiget` (client.py:302) is the only path that fetches bodies, so the resulting `lxml.etree.XMLSyntaxError` — not a `DavError` — propagates out of `SyncEngine._multiget` for the whole 50-item batch, before `_upsert_body`'s explicit "one malformed foreign write must not wedge the collection's sync forever" guard (engine.py:226) ever runs. `TaskService.sync_all` (service.py:149) swallows it per-collection into `sync_state.last_error`, which no endpoint or UI ever reads, so the failure is completely silent: the sync token never advances and that list/calendar stops receiving ANY change from any other client, forever, while the app keeps looking healthy.
+`parse_multistatus` calls `etree.fromstring(data)` with no error handling. Radicale copies a resource's iCalendar bytes verbatim into `<C:calendar-data>` using stdlib ElementTree, which does NOT validate characters — so any VTODO/VEVENT whose text carries U+FFFE or U+FFFF makes Radicale emit a perfectly well-formed-looking 207 that lxml refuses (XML 1.0 §2.2 Char forbids exactly those two). `DavClient.multiget` (client.py:302) is the only path that fetches bodies, so the resulting `lxml.etree.XMLSyntaxError` — not a `DavError` — propagates out of `SyncEngine._multiget` for the whole 50-item batch, before `_upsert_body`'s explicit "one malformed foreign write must not wedge the collection's sync forever" guard (engine.py:226) ever runs. `SmylteService.sync_all` (service.py:149) swallows it per-collection into `sync_state.last_error`, which no endpoint or UI ever reads, so the failure is completely silent: the sync token never advances and that list/calendar stops receiving ANY change from any other client, forever, while the app keeps looking healthy.
 
 Two reachable triggers. (1) Adversary #2 — Tasks.org/DAVx5/jtx/Thunderbird PUT arbitrary iCalendar into these collections; one such resource freezes the collection immediately. (2) The app's own API: `CreateTask.summary` / `CreateEvent.summary` are unvalidated `str` (see the companion finding), so the owner pasting text containing U+FFFE creates the poison itself. In case (2) the freeze is dormant — the item is already cached with a matching etag, so `full_resync`'s `to_fetch` skips it — and detonates on the first cache rebuild, which is the repo's own documented recovery for a disposable cache (invariant #1). A rebuild then recovers **zero** items from that collection.
 
@@ -8725,7 +8725,7 @@ scope='thisandfuture' (via split_series) and for recurrence_id='   '.
 
 `backend/tasksd/mcp/api.py:176` · **medium** · bug · stage 3
 
-`McpApi._href` resolves ids through `TaskService.resolve_list`, which matches any non-deleted collection by href or slug and never looks at `components`. The `kind` parameter only changes the wording of the not-found sentence; there is no check that a `list_id` names a VTODO collection or that a `calendar_id` names a VEVENT one. Task lists and calendars are drawn from the same slug namespace (`_slug(href)` for both), and the MCP server's own `instructions` string anticipates the confusion ("Task tools need a list id from smylte_list_lists; event tools need a calendar id from smylte_list_calendars") — yet nothing enforces it. The result is worse than a wrong id: a nonexistent id gets a helpful ToolError naming the right discovery tool, while a *wrong-type* id succeeds silently. `service.delete_collection` (service.py:391) has no component guard either, so `smylte_delete_list` — annotated `destructiveHint: true` with the description "Delete a task list AND every task in it" — will DELETE a whole calendar and every event on it, and answer `{"deleted": "<id>"}`. The prior sweep's suggested fix asked for exactly this test ("and for a task-list id passed to a calendar tool"); no such test exists in test_mcp.py.
+`McpApi._href` resolves ids through `SmylteService.resolve_list`, which matches any non-deleted collection by href or slug and never looks at `components`. The `kind` parameter only changes the wording of the not-found sentence; there is no check that a `list_id` names a VTODO collection or that a `calendar_id` names a VEVENT one. Task lists and calendars are drawn from the same slug namespace (`_slug(href)` for both), and the MCP server's own `instructions` string anticipates the confusion ("Task tools need a list id from smylte_list_lists; event tools need a calendar id from smylte_list_calendars") — yet nothing enforces it. The result is worse than a wrong id: a nonexistent id gets a helpful ToolError naming the right discovery tool, while a *wrong-type* id succeeds silently. `service.delete_collection` (service.py:391) has no component guard either, so `smylte_delete_list` — annotated `destructiveHint: true` with the description "Delete a task list AND every task in it" — will DELETE a whole calendar and every event on it, and answer `{"deleted": "<id>"}`. The prior sweep's suggested fix asked for exactly this test ("and for a task-list id passed to a calendar tool"); no such test exists in test_mcp.py.
 
 <details><summary>Evidence</summary>
 
@@ -9077,7 +9077,7 @@ Driven against the real module (tz=America/Chicago, 2026-11-01 fall-back):
     06:45Z->07:15Z (30m across)                                        -> busy=[]
     06:00Z->06:30Z (control, no crossing)                              -> busy=[01:00-05:00 .. 01:30-05:00]
 
-End-to-end through the real TaskService (in-memory DB, one VEVENT collection seeded
+End-to-end through the real SmylteService (in-memory DB, one VEVENT collection seeded
 with DTSTART:20261101T063000Z / DTEND:20261101T070000Z — the owner's existing
 commitment; link tz America/Chicago, availability {"6": ["00:00-05:00"]}, duration 30,
 min_notice 0, now = 2026-11-01T05:30:00Z):
@@ -9546,7 +9546,7 @@ it, which would have driven a fix wider than this finding.
 
 `backend/tasksd/service.py:331` · **medium** · bug · `minor` · stage 2
 
-`store.search` has no LIMIT — it returns every item whose summary/description/categories contains a word with the queried prefix. `TaskService.search` then loops over those rows and calls `self._children_map(items)` inside the loop, where `items` is every VTODO in that row's collection. `_children_map` is a pure O(len(items)) rebuild with no memoisation, so the total cost is (matching rows) × (items in the collection) — quadratic in the size of the user's largest list, for a result the caller then paginates away. The per-collection tuple `by_col` was clearly built to hoist exactly this kind of work out of the loop (categories, sidecar and items are all fetched once per collection); the children map is the one piece left inside it. `/api/search` is reachable from `smylte_search_tasks`, which a read-only MCP grant may call — a single-character query matches most of a list, so a scoped connector can make the server spend seconds of CPU per call with no attacker-side cost. The same query pattern is what the already-closed frontend finding "The merged all-lists pane does an O(n²) scan per render (childrenOf)" fixed on the client.
+`store.search` has no LIMIT — it returns every item whose summary/description/categories contains a word with the queried prefix. `SmylteService.search` then loops over those rows and calls `self._children_map(items)` inside the loop, where `items` is every VTODO in that row's collection. `_children_map` is a pure O(len(items)) rebuild with no memoisation, so the total cost is (matching rows) × (items in the collection) — quadratic in the size of the user's largest list, for a result the caller then paginates away. The per-collection tuple `by_col` was clearly built to hoist exactly this kind of work out of the loop (categories, sidecar and items are all fetched once per collection); the children map is the one piece left inside it. `/api/search` is reachable from `smylte_search_tasks`, which a read-only MCP grant may call — a single-character query matches most of a list, so a scoped connector can make the server spend seconds of CPU per call with no attacker-side cost. The same query pattern is what the already-closed frontend finding "The merged all-lists pane does an O(n²) scan per render (childrenOf)" fixed on the client.
 
 <details><summary>Evidence</summary>
 
@@ -10671,7 +10671,7 @@ Compare the sibling route, which is tested: tests/test_api.py:895 `test_a_sideca
 
 </details>
 
-**Suggested fix.** In `reorder_tasks`, drop (or 422) entries whose uid is not a live task in the resolved collection — e.g. fetch `store.get_items(conn, href)` once per distinct href inside `TaskService.reorder_tasks` and skip pairs that do not match, or add the existence check to `store.set_sort_orders` (`INSERT ... WHERE EXISTS (SELECT 1 FROM items WHERE collection_href=? AND uid=?)`). Add a test that a reorder naming an unknown uid leaves `count(*) FROM sidecar` unchanged.
+**Suggested fix.** In `reorder_tasks`, drop (or 422) entries whose uid is not a live task in the resolved collection — e.g. fetch `store.get_items(conn, href)` once per distinct href inside `SmylteService.reorder_tasks` and skip pairs that do not match, or add the existence check to `store.set_sort_orders` (`INSERT ... WHERE EXISTS (SELECT 1 FROM items WHERE collection_href=? AND uid=?)`). Add a test that a reorder naming an unknown uid leaves `count(*) FROM sidecar` unchanged.
 
 **Pinned by** `test_a_reorder_naming_an_unknown_uid_writes_no_sidecar_row` in `backend/tests/test_backlog_aug19_stage3_core.py`.
 
@@ -10711,7 +10711,7 @@ Sequence on any `systemctl restart tasks` (or SIGTERM) that lands mid-sweep — 
 
 </details>
 
-**Suggested fix.** Give `TaskService` a `_closed` flag set under the lock in `close()` and checked at the top of each `sync_all` slice (returning early), or have the lifespan wait for the in-flight sweep before closing — e.g. keep a reference to the thread/future and `await asyncio.wait_for(shield(...))` with a short bound before `svc.close()`. Either way `close()` must not run concurrently with a live sweep.
+**Suggested fix.** Give `SmylteService` a `_closed` flag set under the lock in `close()` and checked at the top of each `sync_all` slice (returning early), or have the lifespan wait for the in-flight sweep before closing — e.g. keep a reference to the thread/future and `await asyncio.wait_for(shield(...))` with a short bound before `svc.close()`. Either way `close()` must not run concurrently with a live sweep.
 
 **Was not pinned**, and the note explaining why asked whoever fixed this to add
 a seam between two slices of `sync_all` so teardown could be ORDERED against the
@@ -10879,7 +10879,7 @@ comment names. Verified by the mutation the entry names: reverting
 
 `backend/tests/test_api.py:69` · **low** · test-gap · `minor` · stage 5
 
-`POST /api/lists/{list_id}/tasks/{uid}/cancel` (tasksd/app.py:1003) and `TaskService.cancel_task` (tasksd/service.py:423) write `STATUS:CANCELLED`, and `smylte_cancel_task` (tasksd/mcp/tools.py:316) exposes the same operation to a connector. Neither is called by any test. The only thing that looks like coverage is the comment `# complete + won't-do` at test_api.py:69, which sits above a block that exercises `/complete` and `/complete?done=false` and nothing else — the comment is the sole reason the path reads as covered. `cancelled` is a first-class Task DTO field that `list_tasks(include_done=False)` filters on (`if not (d["completed"] or d["cancelled"])`, service.py:227) and that the SPA's show-completed filter and "View completed" pane both key on, yet no test ever produces a task with it set through the API.
+`POST /api/lists/{list_id}/tasks/{uid}/cancel` (tasksd/app.py:1003) and `SmylteService.cancel_task` (tasksd/service.py:423) write `STATUS:CANCELLED`, and `smylte_cancel_task` (tasksd/mcp/tools.py:316) exposes the same operation to a connector. Neither is called by any test. The only thing that looks like coverage is the comment `# complete + won't-do` at test_api.py:69, which sits above a block that exercises `/complete` and `/complete?done=false` and nothing else — the comment is the sole reason the path reads as covered. `cancelled` is a first-class Task DTO field that `list_tasks(include_done=False)` filters on (`if not (d["completed"] or d["cancelled"])`, service.py:227) and that the SPA's show-completed filter and "View completed" pane both key on, yet no test ever produces a task with it set through the API.
 
 <details><summary>Evidence</summary>
 
@@ -11288,7 +11288,7 @@ differing.
 
 **Fixed** with a new `_due_instant(t, zone)` and an optional `zone` threaded
 through `_intrinsic_order` / `_in_display_order`, supplied by a fail-soft
-`McpApi._home_zone()` modelled on `TaskService._home_tz`.
+`McpApi._home_zone()` modelled on `SmylteService._home_tz`.
 
 `zone` is OPTIONAL and defaults to the previous behaviour, deliberately: the
 402-case corpus check calls `_in_display_order` directly and has no service
@@ -12010,7 +12010,7 @@ measures the `content` text block — `structuredContent` carries the same paylo
 second time and is unmeasured. Nothing caps the number of messages, the cumulative
 output, or the wall-clock time, and the whole batch runs inside a single
 `asyncio.to_thread` call that cannot be cancelled when the client disconnects. Each tool
-handler re-acquires `TaskService._lock`, the process-wide lock every web-UI request and
+handler re-acquires `SmylteService._lock`, the process-wide lock every web-UI request and
 the background sync also serialise on, so a long batch also freezes the rest of the app.
 The hardening commit added the request cap and explicitly reasoned that it was "generous
 enough for a large batch" — the batch itself was never bounded.
@@ -12203,7 +12203,7 @@ and a malformed-JSON body -> 400 with code -32700.
 `backend/tasksd/mcp/api.py:257` · **medium** · bug · `minor`
 
 `McpApi.update_task`, `complete_task`, `cancel_task`, `update_event` and `move_event`
-each call into `TaskService` and then check `if <result> is None: raise ToolError("No
+each call into `SmylteService` and then check `if <result> is None: raise ToolError("No
 task ... in list ...")`. That branch can never execute: `SyncEngine._edit`
 (engine.py:414-417) raises `KeyError(f"unknown {kind} {uid} in {collection_href}")` when
 the cached row is missing, and `split_event`/`move_event` raise `KeyError` directly, so
@@ -12261,7 +12261,7 @@ smylte_update_task/smylte_update_event against a bogus uid returns the "No task/
 
 Both delete handlers call the API and then unconditionally return a success payload
 naming the uid. `SyncEngine.delete_task` (engine.py:446-449) — which serves both
-`TaskService.delete_task` and `TaskService.delete_event` with scope='all'
+`SmylteService.delete_task` and `SmylteService.delete_event` with scope='all'
 (service.py:555) — returns silently when `store.get_item(conn, collection_href, uid)` is
 None. The cache lookup is scoped to the collection, so both a nonexistent uid and a uid
 that lives in a *different* list hit that early return.
@@ -12318,7 +12318,7 @@ isError true.
 `backend/tasksd/mcp/api.py:168` · **medium** · bug · `minor`
 
 `McpApi.list_tasks` builds its result by extending one list's rows after another.
-`TaskService.list_tasks` sorts *within* a collection (service.py:193-199, by sort_order
+`SmylteService.list_tasks` sorts *within* a collection (service.py:193-199, by sort_order
 → due → summary), but nothing re-sorts the concatenation, and `page()`
 (tools.py:131-140) then slices the head of that per-list ordering. The sibling
 `list_events` does sort globally (api.py:304), which is what makes this an oversight
@@ -12511,9 +12511,9 @@ write/delete tool and for a task-list id passed to a calendar tool; those pin fi
 Every service call in app.py is dispatched to a worker thread through `_run` (`await
 asyncio.to_thread(...)`, app.py:818-819) — with exactly two exceptions: `_href()`
 (app.py:812-816) and the identical call inside `reorder_tasks` (app.py:943). Both call
-`TaskService.resolve_list()` synchronously from inside an `async def` handler, so they
+`SmylteService.resolve_list()` synchronously from inside an `async def` handler, so they
 run on the event-loop thread.
-`resolve_list` (service.py:168-174) acquires `TaskService._lock` — the single global
+`resolve_list` (service.py:168-174) acquires `SmylteService._lock` — the single global
 `threading.RLock` (service.py:74) that serializes ALL SQLite and ALL CalDAV access. That
 lock is held across network I/O to Radicale: `_create_collection` holds it across
 `self._dav.create_task_collection` (service.py:303-305), `update_collection` across
@@ -12578,7 +12578,7 @@ and `await _href(...)` at the 20 call sites; likewise `resolved = await
 _run(svc.resolve_list, item.list)` at app.py:943. While there, give `ReorderLists.ids`
 the `max_length` bound its sibling `ReorderTasks.items` already carries (app.py:89 vs
 117) — `reorder_lists` does one resolve *and* one PROPPATCH under the lock per element.
-Add a test that holds `TaskService._lock` from a background thread and asserts `GET
+Add a test that holds `SmylteService._lock` from a background thread and asserts `GET
 /healthz` still answers within a second.
 
 ### Auth + session
@@ -12671,7 +12671,7 @@ The premise, against the pinned interpreter:
     b = datetime(2026,11,1,1,0,tzinfo=tz,fold=1)   # 07:00Z
     a == b  ->  True          # different instants, equal because tzinfo is tzinfo
 
-(1) Past slot advertised and bookable. Link tz America/Chicago, `availability={"6": ["00:00-05:00"]}`, duration 30, min_notice_hours=0, horizon 3, `now = 2026-11-01T07:15:00Z` (= 01:15 CST). Driven through the real `TaskService.public_link_info` (in-memory DB, DAV write stubbed at `create_event`):
+(1) Past slot advertised and bookable. Link tz America/Chicago, `availability={"6": ["00:00-05:00"]}`, duration 30, min_notice_hours=0, horizon 3, `now = 2026-11-01T07:15:00Z` (= 01:15 CST). Driven through the real `SmylteService.public_link_info` (in-memory DB, DAV write stubbed at `create_event`):
 
     advertised slots:
        2026-11-01T01:30:00-05:00  = 2026-11-01T06:30:00+00:00   <-- 45 MINUTES IN THE PAST
@@ -12737,7 +12737,7 @@ service.py:779-798 —
                    + timedelta(minutes=link["duration_minutes"])).astimezone(tz)
 ```
 
-Driven through the real `TaskService` (in-memory SQLite, one VEVENT collection, `create_event` stubbed to capture the write). Link: tz `America/Chicago`, duration 30, `availability={"6": ["00:00-01:30"]}` — the window closes at 01:30 CDT = 06:30Z. `now = 2026-10-31T12:00:00Z`.
+Driven through the real `SmylteService` (in-memory SQLite, one VEVENT collection, `create_event` stubbed to capture the write). Link: tz `America/Chicago`, duration 30, `availability={"6": ["00:00-01:30"]}` — the window closes at 01:30 CDT = 06:30Z. `now = 2026-10-31T12:00:00Z`.
 
     svc.public_link_info(tok, now=NOW)['slots']:
        2026-11-01T00:00:00-05:00   = 05:00Z
@@ -13091,9 +13091,9 @@ matches none of the seven handlers registered in app.py. `calendar-order` is a s
 property any CalDAV client sharing the collection can PROPPATCH (adversary #3 in the
 trust model); no special privilege is needed and Radicale stores dead properties
 verbatim without validating them. `SyncEngine.discover()` is where this lands, and
-discover() is the *first* thing on three critical paths: `TaskService.bootstrap()`
+discover() is the *first* thing on three critical paths: `SmylteService.bootstrap()`
 (service.py:105-107, no try/except) which runs inside the FastAPI lifespan (app.py:720)
-— so the process fails to start; `TaskService.sync_all()` (service.py:114-115) where the
+— so the process fails to start; `SmylteService.sync_all()` (service.py:114-115) where the
 discover() call sits OUTSIDE the per-collection `try/except`, so the whole sweep aborts
 on every poll and the cache for every list and calendar freezes silently (the only
 signal is one `log.warning` per interval from `_sync_loop`); and `update_collection()`
@@ -13228,7 +13228,7 @@ Verified directly against the repo's builder:
     >>> X.build_proppatch({X.DISPLAYNAME: "a\x7fb"})      # DEL is fine
     OK
 
-Both values pass `CollectionName`'s pattern `^[^\x00-\x08\x0b\x0c\x0e-\x1f]*$`, so the 422 never fires. Path: `PATCH /api/lists/{id}` (or `POST /api/lists`, or MCP `smylte_update_list`) with `{"name": "Work\ud800"}` -> `patch_list` -> `TaskService.update_collection` (service.py:324-332) -> `DavClient.proppatch` -> `X.build_proppatch` -> `_text` passes -> raise. No handler matches -> HTTP 500 + traceback. `build_mkcalendar` is the same shape on the create path.
+Both values pass `CollectionName`'s pattern `^[^\x00-\x08\x0b\x0c\x0e-\x1f]*$`, so the 422 never fires. Path: `PATCH /api/lists/{id}` (or `POST /api/lists`, or MCP `smylte_update_list`) with `{"name": "Work\ud800"}` -> `patch_list` -> `SmylteService.update_collection` (service.py:324-332) -> `DavClient.proppatch` -> `X.build_proppatch` -> `_text` passes -> raise. No handler matches -> HTTP 500 + traceback. `build_mkcalendar` is the same shape on the create path.
 
 The existing regression test (`test_the_xml_builders_refuse_what_lxml_cannot_serialize`, tests/test_security.py:437-449) only tries `a\x00b`, `a\x0bb`, `a\x1fb`, so the suite is green.
 ```
@@ -13344,7 +13344,7 @@ driving `discover()` with a stub whose `list_collections` returns one good and o
 `store.connect` opens the connection with `isolation_level=None` (store.py:28), which
 puts Python's sqlite3 driver in autocommit mode: it never issues an implicit `BEGIN`, so
 `with conn:` has no transaction to commit or roll back — both are no-ops.
-`TaskService.reorder_tasks` (service.py:402-404) relies on exactly that construct, and
+`SmylteService.reorder_tasks` (service.py:402-404) relies on exactly that construct, and
 `store.set_sort_orders`' docstring states the contract it is supposed to provide: "One
 statement per row inside the caller's transaction, so a reorder is all or nothing — a
 partial write would leave two tasks sharing a position and the order would depend on
@@ -13359,13 +13359,13 @@ claim atomicity: `take_oauth_code` ("read it and delete it in one transaction",
 store.py:750) and `use_refresh_token` (store.py:801). Those two happen to stay correct
 because the single-use property is carried by the atomicity of the individual
 DELETE/conditional-UPDATE and because every OAuth call is serialised behind
-`TaskService.oauth`'s lock — but the stated invariant is not the one the code
+`SmylteService.oauth`'s lock — but the stated invariant is not the one the code
 implements, so a future change that adds a second statement inside either block silently
 loses it.
 Secondary cost: `_MAX_REORDER_TASKS = 20_000` (app.py:95), and the engine's own `_tx`
 helper shows the intended pattern. 20 000 autocommits measured at 1.10 s (first pass) /
 0.50 s (steady state) versus 0.106 s inside a real `BEGIN IMMEDIATE` — a ~5-10x stall of
-every other request, since the whole call is inside `TaskService._lock`.
+every other request, since the whole call is inside `SmylteService._lock`.
 
 <details><summary>Evidence</summary>
 
@@ -14519,7 +14519,7 @@ Realistic trigger: any API client (the route is part of the shipped surface; tod
 **Suggested fix.** Mirror the sibling routes: `dto = await _run(_svc(request).set_sidecar, href, uid,
 **fields)` then `if dto is None: raise HTTPException(404, f"unknown task {uid}")`.
 Better, check existence before writing (`store.get_item(conn, href, uid)`) inside
-`TaskService.set_sidecar` so no row is created at all, and add a test asserting an
+`SmylteService.set_sidecar` so no row is created at all, and add a test asserting an
 unknown uid 404s and leaves `count(sidecar)` unchanged.
 
 #### [x] Test gap: the SSE endpoint /api/events has no backend test at all, including its per-connection cleanup
@@ -14528,7 +14528,7 @@ unknown uid 404s and leaves `count(sidecar)` unchanged.
 
 `GET /api/events` (app.py:954-979) is the only long-lived endpoint in the app and the
 only one holding unbounded per-connection state: `svc.subscribe()` (service.py:87-90)
-adds an unbounded `asyncio.Queue` to `TaskService._listeners`, which `_publish`
+adds an unbounded `asyncio.Queue` to `SmylteService._listeners`, which `_publish`
 (service.py:95-100) fans every mutation into, and the only thing that ever removes it is
 the `finally: svc.unsubscribe(queue)` inside the async generator. Whether that `finally`
 runs on an abrupt client disconnect depends entirely on Starlette's generator-
@@ -14606,7 +14606,7 @@ backend/tasksd/app.py:954-979 — the route takes its auth from the router depen
             finally:
                 svc.unsubscribe(queue)
 
-Reproduced against the real app under uvicorn (auth on, session_secret='s'*40, TaskService.bootstrap stubbed so no Radicale is needed):
+Reproduced against the real app under uvicorn (auth on, session_secret='s'*40, SmylteService.bootstrap stubbed so no Radicale is needed):
 
   login: 200
   sse status: 200
@@ -15371,7 +15371,7 @@ and fts5 has no index on them, so SQLite plans this as `SCAN items_fts VIRTUAL T
 INDEX 0:` — a full scan of the *entire* FTS table (all collections) for every single
 item upserted. A full resync upserts every item in a collection, so its cost is (items
 upserted) × (items in the whole DB).  That whole loop runs inside one `BEGIN IMMEDIATE`
-(engine.py:132 `with _tx(self.conn)`), and `TaskService.sync_all` holds `self._lock` for
+(engine.py:132 `with _tx(self.conn)`), and `SmylteService.sync_all` holds `self._lock` for
 the entire per-collection sync (service.py:118-122). Since every API route reaches
 SQLite through the same lock and the same single connection, the API is completely
 frozen for the duration — no task list, no calendar fetch, no public booking page, no
@@ -15401,7 +15401,7 @@ End-to-end via store.upsert_item (in-memory DB, so an on-disk DB is no faster), 
   N=4000 -> 5.73 s
   N=8000 -> 21.20 s        # ~4x work for 2x items: quadratic
 
-Failure scenario: an 8000-event calendar; Radicale prunes the sync token, so the next 30 s poll takes the full_resync branch. `sync_all` holds `TaskService._lock` and an exclusive SQLite write transaction for ~21 s. Every request during that window — including `GET /api/public/booking/{token}` and `POST /api/login` — blocks on `asyncio.to_thread(...) -> with self._lock`. No test covers cache behaviour above a handful of rows.
+Failure scenario: an 8000-event calendar; Radicale prunes the sync token, so the next 30 s poll takes the full_resync branch. `sync_all` holds `SmylteService._lock` and an exclusive SQLite write transaction for ~21 s. Every request during that window — including `GET /api/public/booking/{token}` and `POST /api/login` — blocks on `asyncio.to_thread(...) -> with self._lock`. No test covers cache behaviour above a handful of rows.
 ```
 
 </details>
@@ -15546,7 +15546,7 @@ app.py:1069-1080 and 1093-1121:
         ...
         public_post_link_limiter.record_failure(f"link:{token}")  # charged only here
 ```
-Failure scenario: attacker holds the published token and 300 source addresses (one VPS /48 = 65 536 IPv6 /64s, and `limiter_key` collapses to the /64). She opens 300 concurrent `POST /api/public/booking/<tok>/book` connections for 300 distinct free slots. All 300 handlers run `_gate` on the event loop before any of them reaches `record_failure`, so `link:<tok>` is at 0 fails for all of them; they then serialize on `TaskService._lock` and each writes a real VEVENT. Result: ~300 junk events on the owner's real calendar in one burst against a ceiling of 30/hour. `test_the_per_link_ceiling_still_bounds_real_bookings` books strictly sequentially, so the suite cannot see this.
+Failure scenario: attacker holds the published token and 300 source addresses (one VPS /48 = 65 536 IPv6 /64s, and `limiter_key` collapses to the /64). She opens 300 concurrent `POST /api/public/booking/<tok>/book` connections for 300 distinct free slots. All 300 handlers run `_gate` on the event loop before any of them reaches `record_failure`, so `link:<tok>` is at 0 fails for all of them; they then serialize on `SmylteService._lock` and each writes a real VEVENT. Result: ~300 junk events on the owner's real calendar in one burst against a ceiling of 30/hour. `test_the_per_link_ceiling_still_bounds_real_bookings` books strictly sequentially, so the suite cannot see this.
 ```
 
 </details>
@@ -16427,7 +16427,7 @@ The *write* path validates collection colors (`_check_color` / `_COLOR_RE =
 ^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$`, app.py:92-96, called from
 create_list/patch_list/create_calendar). The *read* path does not: `discover()` takes
 `calendar-color` as raw text (`color = (r.text(X.CALENDAR_COLOR) or "").strip() or
-None`), stores it, and `TaskService` hands it to the SPA in the list DTO
+None`), stores it, and `SmylteService` hands it to the SPA in the list DTO
 (`service.py:157 "color": ... or row["color"]`).  The SPA writes that string straight
 into the CSSOM as an inline declaration: - `Sidebar.tsx:191` `return l.color ? {
 background: l.color } : undefined` — React sets `node.style.background = <wire text>` -
@@ -16564,7 +16564,7 @@ The candidate query tests overlap with `COALESCE(dtend, dtstart) >= start_iso`. 
 event whose length is expressed as `DURATION` (no DTEND), `dtend` is NULL, so the
 event's effective end collapses to its start and any DURATION-only event whose DTSTART
 precedes the window is excluded outright — even though it still covers days inside it.
-This is the same query `TaskService._link_busy` uses to build the busy set for booking
+This is the same query `SmylteService._link_busy` uses to build the busy set for booking
 links (it only widens the window by ±1 day), so a multi-day DURATION-only block on the
 owner's calendar does not block slots on its later days, and an unauthenticated visitor
 on /book/{token} can book straight over it. The same rows are also missing from the
@@ -17048,7 +17048,7 @@ case to `test_search_operator_characters_do_not_crash`.
 
 `generate_slots` builds candidate slots by adding `timedelta` to ZoneInfo-aware
 datetimes (`slot = Interval(s, s + duration)`, `s += duration`), and
-`TaskService.book_slot` computes the event end the same way (`end = req +
+`SmylteService.book_slot` computes the event end the same way (`end = req +
 timedelta(minutes=link["duration_minutes"])`, service.py:733). Python's `aware_dt +
 timedelta` is *wall-clock* arithmetic: it adds to the naive fields and re-derives the
 UTC offset. Across a DST transition inside an availability window this silently changes
@@ -17107,7 +17107,7 @@ import xml as X; X.build_proppatch({X.DISPLAYNAME: 'a\x0bb'})" ValueError: All s
 must be XML compatible: Unicode or ASCII, no NULL bytes or control characters ``` The
 API models do not constrain the charset: `CreateList.name: str` (`app.py:62`) and
 `EditList.name: str | None` (`app.py:67`) have no pattern or sanitisation, and
-`TaskService.update_collection` passes the name through untouched into
+`SmylteService.update_collection` passes the name through untouched into
 `props[davxml.DISPLAYNAME]` (`tasksd/service.py:301,309`).
 
 <details><summary>Evidence</summary>
@@ -17120,7 +17120,7 @@ for name, value in to_set.items():
     etree.SubElement(prop, name).text = value
 ```
 
-Failure scenario: authenticated owner (or the SPA passing through a name pasted from another CalDAV client) sends `PATCH /api/lists/{id}` with body `{"name": "Work\x00"}` — JSON permits `\x00`. Route `patch_list` (`app.py:679`) -> `TaskService.update_collection` -> `DavClient.proppatch` -> `X.build_proppatch` raises `ValueError`. No handler matches, so uvicorn returns a 500 with a traceback in the server log instead of a 4xx validation error.
+Failure scenario: authenticated owner (or the SPA passing through a name pasted from another CalDAV client) sends `PATCH /api/lists/{id}` with body `{"name": "Work\x00"}` — JSON permits `\x00`. Route `patch_list` (`app.py:679`) -> `SmylteService.update_collection` -> `DavClient.proppatch` -> `X.build_proppatch` raises `ValueError`. No handler matches, so uvicorn returns a 500 with a traceback in the server log instead of a 4xx validation error.
 ```
 
 </details>
@@ -17612,7 +17612,7 @@ the backend bound (both 40, or both 200).
 
 `frontend/src/App.tsx:190` · **medium** · bug
 
-`TaskService.update_settings` publishes `{"type": "settings_updated"}` to every SSE
+`SmylteService.update_settings` publishes `{"type": "settings_updated"}` to every SSE
 subscriber including the tab that made the write (backend/tasksd/service.py:787). The
 client's `subscribe()` filter only excludes `hello`, so any settings event is treated as
 a data change and bumps `rev`, which is the refetch trigger for TasksView

@@ -1,6 +1,6 @@
 """The event loop must survive a service call that is stuck on the global lock.
 
-`TaskService._lock` is one process-wide RLock held across CalDAV I/O — a sync
+`SmylteService._lock` is one process-wide RLock held across CalDAV I/O — a sync
 sweep, a write, a PROPPATCH — for as long as the 30 s DAV timeout allows. Every
 route dispatches its service work to a worker thread through `_run`, so a slow
 Radicale costs the caller and nothing else.
@@ -25,9 +25,9 @@ import time
 import httpx
 import pytest
 
-from tasksd import app as tasksd_app
+from smylted import app as smylted_app
 
-from tasksd.app import create_app
+from smylted.app import create_app
 from tests.conftest import api_settings
 
 LOGIN = {"username": "admin", "password": "testpass123"}
@@ -78,7 +78,7 @@ def test_no_route_reaches_the_service_off_the_worker_thread():
     other reason to exercise."""
     import pathlib
 
-    src = pathlib.Path(tasksd_app.__file__).read_text(encoding="utf-8")
+    src = pathlib.Path(smylted_app.__file__).read_text(encoding="utf-8")
 
     unawaited = [
         (n, line.strip())

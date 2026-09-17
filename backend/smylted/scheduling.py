@@ -45,7 +45,7 @@ from .ical.read import advance
 # newline, so "09:00-17:00\n" satisfied a pattern written to be exact.
 _RANGE_RE = re.compile(r"(\d{2}):(\d{2})-(\d{2}):(\d{2})")
 
-log = logging.getLogger("tasksd.scheduling")
+log = logging.getLogger("smylted.scheduling")
 
 # A runaway backstop, not a page size. It exists because the candidate cursor
 # advances by `duration`, so a non-positive one never terminates (see
@@ -146,7 +146,7 @@ def parse_event_time(iso: str, tz: ZoneInfo, naive_tz: ZoneInfo | None = None) -
 def busy_intervals(
     events: Iterable[dict], tz: ZoneInfo, *, naive_tz: ZoneInfo | None = None
 ) -> list[Interval]:
-    """Blocking intervals from event DTOs (``TaskService.events_in_range`` shape,
+    """Blocking intervals from event DTOs (``SmylteService.events_in_range`` shape,
     recurrences already expanded). Cancelled, all-day and FREE events don't block
     (see module docstring); a malformed event is skipped rather than failing the
     page.

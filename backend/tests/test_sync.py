@@ -6,8 +6,8 @@ import shutil
 
 import pytest
 
-from tasksd import ical
-from tasksd.db import store
+from smylted import ical
+from smylted.db import store
 from tests.conftest import SCRATCH_STORAGE
 from tests.helpers import foreign_raw
 
@@ -134,7 +134,7 @@ def test_create_replay_with_same_slug_is_idempotent(engine, collection, db):
 
 
 def test_create_slug_occupied_by_foreign_resource_conflicts(engine, dav, collection):
-    from tasksd.sync.engine import ConflictError
+    from smylted.sync.engine import ConflictError
 
     engine.discover()
     slug = "cd" * 16
@@ -199,7 +199,7 @@ def test_a_transport_failure_is_not_retried_href_by_href(engine, collection, mon
     `MalformedResponse` (the server answered, and the bytes are not XML) earns
     the per-href retry; anything else still propagates.
     """
-    from tasksd.dav.errors import DavError
+    from smylted.dav.errors import DavError
 
     calls = []
 

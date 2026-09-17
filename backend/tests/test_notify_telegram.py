@@ -10,7 +10,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from tasksd.notify import telegram as tg
+from smylted.notify import telegram as tg
 
 TOKEN = "123456789:AAHverySecretTokenValueThatMustNotLeak_x"
 

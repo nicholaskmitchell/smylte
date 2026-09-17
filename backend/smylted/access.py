@@ -1,6 +1,6 @@
 """Cloudflare Access enforcement (spec §9) — an OPTIONAL second layer.
 
-The app's own username/password login (`tasksd/auth.py`) is the primary gate and
+The app's own username/password login (`smylted/auth.py`) is the primary gate and
 the one production actually runs on: `TASKS_AUTH_ENABLED` defaults to true, and
 `create_app` refuses to start with auth enabled and no password configured.
 

@@ -12,7 +12,7 @@ day: things that have nowhere to live on the wire, so a resync cannot rebuild
 them and a backup must include them. See
 `docs/phase0-findings.md`, and `docs/DEPLOY.md` for which tables those are).
 
-The stack is a FastAPI backend (`tasksd`) that owns the CalDAV/sync/write path
+The stack is a FastAPI backend (`smylted`) that owns the CalDAV/sync/write path
 and serves a React + Vite single-page app.
 
 ## Features
@@ -344,7 +344,7 @@ there are still no quiet hours to configure. And a sweep that would produce
 three or more messages sends one instead, so switching on the whole morning tier
 costs you one interruption at 07:30, not four.
 
-`backend/tasksd/notify/rules.py` is the whole policy, including the admission
+`backend/smylted/notify/rules.py` is the whole policy, including the admission
 test any fifth rule has to pass. Setup — and the systemd egress rule it needs,
 which is the easy step to miss — is in `docs/DEPLOY.md`.
 
@@ -569,7 +569,7 @@ locale.
 
 ```
 backend/
-  tasksd/
+  smylted/
     app.py      FastAPI app: /api routes, auth, SSE, serves the built SPA
     service.py  orchestration over the DAV client + cache + sync
     dav/        hand-rolled CalDAV client (httpx + lxml)
@@ -684,8 +684,8 @@ cd scratch && docker compose up -d --build      # http://127.0.0.1:5233
 # 2. backend — deps in a venv, then run the API on 127.0.0.1:8080
 cd ../backend && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 #    dev defaults already point at the scratch Radicale; auth can be disabled
-#    for local work (see backend/tasksd/config.py and deploy/tasks.env.example)
-TASKS_AUTH_ENABLED=false .venv/bin/python -m tasksd
+#    for local work (see backend/smylted/config.py and deploy/tasks.env.example)
+TASKS_AUTH_ENABLED=false .venv/bin/python -m smylted
 
 # 3. frontend — Vite dev server proxies /api to the backend on :8080
 cd ../frontend && npm install && npm run dev     # http://127.0.0.1:5173
@@ -764,7 +764,7 @@ PARTICULAR PURPOSE. See the GNU Affero General Public License for more details.
 an example whose purpose is to be copied onto a board and changed, and §13 —
 the reason the rest of this is Affero — cannot fire on a panel that makes
 outbound requests and accepts no connections. The line is exactly the directory:
-the `.bin` route and the renderer behind it (`backend/tasksd/display/`) are the
+the `.bin` route and the renderer behind it (`backend/smylted/display/`) are the
 server and stay AGPL. Note that it buys less than it looks like: Waveshare's
 driver, which the example imports and this repo deliberately does not vendor, is
 GPL-3.0, so what runs on the board is a GPL-3.0 combined work either way. What
@@ -773,4 +773,4 @@ MIT buys is lifting those sixty lines somewhere that driver is not.
 The three bundled typefaces are separate works and keep their own terms:
 Fraunces, Inter and JetBrains Mono are each under the SIL Open Font License 1.1,
 whose text ships beside them in `frontend/public/fonts/` and
-`backend/tasksd/display/fonts/`.
+`backend/smylted/display/fonts/`.

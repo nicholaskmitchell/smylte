@@ -21,13 +21,13 @@ from datetime import date, timedelta
 import pytest
 from helpers import foreign_raw
 
-from tasksd.config import Settings
-from tasksd.dav.client import CollectionInfo, Item
-from tasksd.db import store
-from tasksd.ical import extract_from_raw
-from tasksd.mcp.api import McpApi
-from tasksd.mcp.tools import ToolError
-from tasksd.service import TaskService
+from smylted.config import Settings
+from smylted.dav.client import CollectionInfo, Item
+from smylted.db import store
+from smylted.ical import extract_from_raw
+from smylted.mcp.api import McpApi
+from smylted.mcp.tools import ToolError
+from smylted.service import SmylteService
 
 # A Friday, with the days either side of it. Fixed rather than derived from
 # `date.today()`: a snapshot is a function of the day it is built for, and a
@@ -89,7 +89,7 @@ def _seed_task(
 
 @pytest.fixture
 def svc():
-    s = TaskService(_settings())
+    s = SmylteService(_settings())
     for href, name in ((LIST_A, "Work"), (LIST_B, "Home")):
         store.upsert_collection(
             s._conn, CollectionInfo(href=href, displayname=name, components={"VTODO"})
@@ -1139,7 +1139,7 @@ def test_an_older_database_gains_the_focus_columns(tmp_path):
     row = store.find_day_entry(conn, "2026-08-21", entry_id="legacy")
     assert row["worked_seconds"] is None and row["capped"] is None
     # And the legacy row reads through the DTO — which is the whole point.
-    dto = TaskService._day_entry_dto(row)
+    dto = SmylteService._day_entry_dto(row)
     assert dto["worked_seconds"] is None and dto["capped"] is None
     conn.close()
 
@@ -1195,12 +1195,12 @@ def test_an_older_database_gains_the_estimate_columns(tmp_path):
     # the honest answer — nobody said how long these take — and it is what keeps
     # them out of the day's total rather than counting them as zero-length work.
     row = store.find_day_entry(conn, "2026-08-21", entry_id="legacy")
-    dto = TaskService._day_entry_dto(row)
+    dto = SmylteService._day_entry_dto(row)
     assert dto["estimate_minutes"] is None
     assert dto["title"] == "Written before estimates"
 
     habit = next(iter(store.list_habits(conn)))
-    assert TaskService._habit_dto(habit)["estimate_minutes"] is None
+    assert SmylteService._habit_dto(habit)["estimate_minutes"] is None
 
     # Idempotent: init_db runs on every start, and the second pass must not try
     # to add either column again (SQLite has no ADD COLUMN IF NOT EXISTS).
@@ -1247,7 +1247,7 @@ def test_an_older_database_gains_the_habit_id_column(tmp_path):
     # The pre-existing row reads through the real DTO, with a null habit_id —
     # nothing to backfill, because "no rule minted this" IS null.
     row = store.find_day_entry(conn, "2026-08-21", entry_id="legacy")
-    dto = TaskService._day_entry_dto(row)
+    dto = SmylteService._day_entry_dto(row)
     assert dto["habit_id"] is None and dto["title"] == "Written before habits"
     # Idempotent: init_db runs on every start, and the second pass must not try
     # to add the column again (SQLite has no ADD COLUMN IF NOT EXISTS).
@@ -1274,7 +1274,7 @@ def test_day_range_is_bounded(svc):
     """The caller chooses the width of this scan, so the width is bounded. 190
     days is more than any view asks for; past it the answer is 422, not a walk
     of the whole table."""
-    from tasksd.service import DAY_RANGE_MAX_DAYS
+    from smylted.service import DAY_RANGE_MAX_DAYS
 
     assert svc.day_range("2026-01-01", "2026-07-10") == []      # 190 days exactly
     with pytest.raises(ValueError):
@@ -1733,7 +1733,7 @@ def test_every_sidecar_table_schema_names_is_in_the_backup_list():
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[2]
-    schema = (root / "backend/tasksd/db/schema.sql").read_text(encoding="utf-8")
+    schema = (root / "backend/smylted/db/schema.sql").read_text(encoding="utf-8")
     deploy = (root / "docs/DEPLOY.md").read_text(encoding="utf-8")
 
     # The parenthesised list in the "SIDECAR tables (...)" header line, which may
@@ -1770,7 +1770,7 @@ def test_a_created_habit_cannot_be_given_the_clear_sentinel(svc):
     `CreateDayEntry.estimate_minutes` carries), and a service-side swallow would
     leave two spellings of "no estimate" in one column.
     """
-    from tasksd.app import CreateHabit
+    from smylted.app import CreateHabit
     import pydantic
 
     # 0 is a real estimate and still passes; -1 is not a value, it is a verb.
@@ -1823,8 +1823,8 @@ def test_the_day_tools_advertise_bounds_the_validator_actually_enforces(svc):
     test_mcp.py checks the whole registry for unsupported keywords, but it needs
     the scratch server and skips without Docker. The day tools are checked here,
     where it runs."""
-    from tasksd.mcp.tools import build_tools
-    from tasksd.mcp.validate import SchemaError, check_arguments, unsupported_keywords
+    from smylted.mcp.tools import build_tools
+    from smylted.mcp.validate import SchemaError, check_arguments, unsupported_keywords
 
     tools = build_tools(McpApi(svc))
 

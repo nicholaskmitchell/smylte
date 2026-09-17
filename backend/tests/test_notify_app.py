@@ -11,9 +11,9 @@ import dataclasses
 import pytest
 from fastapi.testclient import TestClient
 
-from tasksd.app import _notification_loop, create_app
-from tasksd.db import store
-from tasksd.notify.rules import TRIGGERS
+from smylted.app import _notification_loop, create_app
+from smylted.db import store
+from smylted.notify.rules import TRIGGERS
 from tests.conftest import api_settings
 
 
@@ -230,7 +230,7 @@ def test_a_test_send_is_refused_when_the_deployment_forbids_notifications(tmp_pa
 def test_the_reminder_field_is_bounded_on_both_sides():
     import pydantic
 
-    from tasksd.app import Sidecar
+    from smylted.app import Sidecar
     # -1 is the clear sentinel and the only negative allowed; a week is the cap,
     # past which the reminder is about a different day than the one it names.
     assert Sidecar(notify_minutes_before=-1).notify_minutes_before == -1

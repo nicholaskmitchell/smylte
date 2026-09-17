@@ -621,7 +621,7 @@ def _eval_sync_stalled(s: Sweep) -> list[Pending]:
         "sync_stalled",
         s.day,
         f"Smylte sync is failing — {names}. Nothing new has synced for over an "
-        f"hour; check the tasksd log.",
+        f"hour; check the smylted log.",
         silent=True,
     )]
 

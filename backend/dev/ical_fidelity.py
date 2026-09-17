@@ -12,7 +12,7 @@ from __future__ import annotations
 import glob
 import os
 
-from tasksd.ical import canonical as C
+from smylted.ical import canonical as C
 
 CHANGED = "CHANGED-BY-TEST"
 CORPUS = os.path.join(os.path.dirname(__file__), "..", "tests", "corpus", "*.ics")

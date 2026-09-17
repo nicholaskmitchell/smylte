@@ -1,6 +1,6 @@
-"""The adapter between the MCP tools and `TaskService`.
+"""The adapter between the MCP tools and `SmylteService`.
 
-`TaskService` speaks collection hrefs and iCalendar edit objects; the tools
+`SmylteService` speaks collection hrefs and iCalendar edit objects; the tools
 speak list ids, plain strings and JSON. This is the layer that translates, and
 it exists so the tool table stays declarative — every handler in tools.py is one
 line, and every awkwardness about the underlying API lives here where it can be
@@ -152,7 +152,7 @@ def _instant_in(value: date | datetime, zone) -> float:
     """A date-or-datetime as an absolute instant, resolved in `zone`.
 
     THE one resolution rule for this module, and now for the whole app: it moved
-    to `tasksd/due.py` when the notifier became a second reader of a deadline.
+    to `smylted/due.py` when the notifier became a second reader of a deadline.
     Re-exported under the old private name so every call site in this file keeps
     reading the way it did.
     """
@@ -174,7 +174,7 @@ def _bound_instant(value, zone, *, field: str) -> float | None:
 def _due_parts(raw, zone) -> tuple[float, float] | None:
     """A deadline as `(due_at, overdue_at)`, both instants in `zone`.
 
-    Moved to `tasksd/due.py` — the daily digest counts overdue tasks and had to
+    Moved to `smylted/due.py` — the daily digest counts overdue tasks and had to
     ask the same question, and a second implementation is a second number for
     the same task on the same screen. Kept under the old name here because the
     call sites in this file read better with it.
@@ -404,7 +404,7 @@ class McpApi:
     """Everything the tools can reach, and nothing else.
 
     Deliberately a hand-written surface rather than a generic proxy onto
-    `TaskService`: a token granted `mcp:write` should not be able to reach
+    `SmylteService`: a token granted `mcp:write` should not be able to reach
     settings, session revocation or the sync engine just because they happen to
     be public methods. What is here is what the connector can do.
     """
@@ -421,7 +421,7 @@ class McpApi:
         thing this process has to the reader's zone and is already what
         `busy_intervals` uses for floating times.
 
-        Fail-soft in the same shape as `TaskService._home_tz`: a stored blob can
+        Fail-soft in the same shape as `SmylteService._home_tz`: a stored blob can
         hold anything, and an unusable zone must degrade to the old behaviour
         rather than break every task listing. Read through whatever the service
         exposes, so a stub without settings still works.

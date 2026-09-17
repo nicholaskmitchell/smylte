@@ -54,15 +54,15 @@ import pytest
 from helpers import foreign_event_raw
 from zoneinfo import ZoneInfo
 
-from tasksd import ical
-from tasksd.dav.client import CollectionInfo, Item
-from tasksd.dav.errors import Conflict, DavError, NotFound, PreconditionFailed
-from tasksd.db import store
-from tasksd.ical.edit import EventEdit, shift_series, split_series
-from tasksd.ical.recur import expand_occurrences
-from tasksd.mcp.api import McpApi
-from tasksd.sync import SyncEngine
-from tasksd.sync.engine import ConflictError
+from smylted import ical
+from smylted.dav.client import CollectionInfo, Item
+from smylted.dav.errors import Conflict, DavError, NotFound, PreconditionFailed
+from smylted.db import store
+from smylted.ical.edit import EventEdit, shift_series, split_series
+from smylted.ical.recur import expand_occurrences
+from smylted.mcp.api import McpApi
+from smylted.sync import SyncEngine
+from smylted.sync.engine import ConflictError
 
 pytestmark = [pytest.mark.backlog, pytest.mark.stage3]
 
@@ -222,7 +222,7 @@ def test_a_series_that_can_still_be_moved_is_still_moved(
 # ── AUDIT: list_tasks' due filters resolve in the server's zone ─────────────
 
 class _ZonedStub:
-    """The narrowest stand-in for `TaskService` that `McpApi.list_tasks` needs,
+    """The narrowest stand-in for `SmylteService` that `McpApi.list_tasks` needs,
     plus the one thing `_home_zone` reads.
 
     Same shape as `test_backlog_aug19_stage3_core.py::_ZonedService`, kept local
@@ -369,7 +369,7 @@ def test_a_deadlines_day_is_as_long_as_the_owners_day_actually_is(label, day, ho
     versions apart at all — the same trap the closed scheduling findings were
     about, one module over.
     """
-    from tasksd.mcp.api import _due_parts
+    from smylted.mcp.api import _due_parts
 
     zone = ZoneInfo("America/Chicago")
     due_at, overdue_at = _due_parts(day, zone)

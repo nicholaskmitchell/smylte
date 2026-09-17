@@ -32,7 +32,7 @@ from icalendar import Calendar
 from .rrule_budget import SearchBudgetExceeded, search_budget
 from .read import _iso, _text, advance, split_duration, wire_durations
 
-log = logging.getLogger("tasksd.recur")
+log = logging.getLogger("smylted.recur")
 
 # Instances one day of a rule may yield before we call it pathological and
 # decline to expand it. Hourly (24) is the densest shape a person plausibly puts
@@ -50,7 +50,7 @@ _MAX_TOTAL_INSTANCES = 200_000
 # bound a rule's YIELD; this bounds its SEARCH, which is the part an
 # unsatisfiable rule makes unbounded — UNTIL and COUNT are tested only when an
 # instance is actually produced, so neither bounds a rule that produces none.
-# See tasksd/ical/rrule_budget.py for why this is a cost bound rather than a
+# See smylted/ical/rrule_budget.py for why this is a cost bound rather than a
 # satisfiability check.
 #
 # Measured over a 42-day grid: the most expensive LEGITIMATE rule found costs 890

@@ -57,7 +57,7 @@ public sealed class LocalServer : IDisposable
 
     // ── Content-Security-Policy ─────────────────────────────────────────────
     //
-    // A PORT of backend/tasksd/csp.py, and it has to stay a faithful one. The
+    // A PORT of backend/smylted/csp.py, and it has to stay a faithful one. The
     // app's policy exists only as a response header the BACKEND attaches;
     // frontend/index.html carries no `http-equiv` meta (verified, zero
     // occurrences), so the document WebView2 runs — served from disk by

@@ -51,12 +51,12 @@ from datetime import date, time as dtime, timedelta
 
 import pytest
 
-from tasksd.dav.client import CollectionInfo, Item
-from tasksd.db import store
-from tasksd.ical import EventEdit, extract_from_raw, rrule_from_spec
-from tasksd.ical.edit import apply_event_changes, split_series
-from tasksd.ical.recur import expand_occurrences
-from tasksd.mcp import oauth as O
+from smylted.dav.client import CollectionInfo, Item
+from smylted.db import store
+from smylted.ical import EventEdit, extract_from_raw, rrule_from_spec
+from smylted.ical.edit import apply_event_changes, split_series
+from smylted.ical.recur import expand_occurrences
+from smylted.mcp import oauth as O
 from tests.helpers import foreign_event_raw, foreign_raw
 
 pytestmark = [pytest.mark.backlog, pytest.mark.stage2]
@@ -125,7 +125,7 @@ def test_a_rule_that_can_never_match_is_expanded_promptly(rrule):
     that can never be satisfied), not on the yield. The pin asserts neither: any
     of them satisfies it.
 
-    **Fixed** by `tasksd/ical/rrule_budget.py`: a thread-local step budget
+    **Fixed** by `smylted/ical/rrule_budget.py`: a thread-local step budget
     wrapped around dateutil's `_iterinfo.rebuild`, armed by `expand_occurrences`
     around `query.between(...)` and converted at that boundary into the
     `ValueError` vocabulary the function already raises. A cost bound, not a
@@ -286,11 +286,11 @@ def test_an_ordinary_count_split_still_divides_the_count():
 # ── AUDIT: service.search rebuilds the children map once per result row ────
 
 def _svc_with_tasks(n: int, extra: tuple[tuple[str, str | None], ...] = ()):
-    """A TaskService with no network: `search` is pure SQL plus DTO assembly.
+    """A SmylteService with no network: `search` is pure SQL plus DTO assembly.
     Same construction stage3's reorder pin uses."""
-    from tasksd import service as service_mod
+    from smylted import service as service_mod
 
-    svc = service_mod.TaskService.__new__(service_mod.TaskService)
+    svc = service_mod.SmylteService.__new__(service_mod.SmylteService)
     svc._conn = store.connect(":memory:")
     store.init_db(svc._conn)
     svc._lock = threading.RLock()
@@ -315,7 +315,7 @@ def _svc_with_tasks(n: int, extra: tuple[tuple[str, str | None], ...] = ()):
 
 
 def test_searching_a_large_list_is_not_quadratic_in_the_lists_size():
-    """`store.search` has no LIMIT, and `TaskService.search` calls
+    """`store.search` has no LIMIT, and `SmylteService.search` calls
     `self._children_map(items)` *inside* the loop over the matching rows, where
     `items` is every VTODO in that row's collection. The map is a pure
     O(len(items)) rebuild with no memoisation, so the whole call is
@@ -407,7 +407,7 @@ def test_a_table_full_of_junk_clients_does_not_lock_the_owner_out(_scratch_up, t
     """
     from fastapi.testclient import TestClient
 
-    from tasksd.app import create_app
+    from smylted.app import create_app
     from tests.conftest import api_settings
     from tests.test_mcp import CALLBACK, ISSUER
 
@@ -450,7 +450,7 @@ def test_a_client_holding_a_token_is_not_evicted_to_admit_a_new_one(_scratch_up,
     existed to prevent, arriving by a different route."""
     from fastapi.testclient import TestClient
 
-    from tasksd.app import create_app
+    from smylted.app import create_app
     from tests.conftest import api_settings
     from tests.test_mcp import CALLBACK, ISSUER, _connect, _rpc
 
@@ -503,7 +503,7 @@ def test_a_table_of_clients_that_all_hold_tokens_still_refuses(_scratch_up, tmp_
     room is a fix that evicts working grants."""
     from fastapi.testclient import TestClient
 
-    from tasksd.app import create_app
+    from smylted.app import create_app
     from tests.conftest import api_settings
     from tests.test_mcp import CALLBACK, ISSUER
 
@@ -543,7 +543,7 @@ def test_a_client_mid_consent_is_not_evicted(_scratch_up, tmp_path):
     would break the flow between the authorize and the exchange."""
     from fastapi.testclient import TestClient
 
-    from tasksd.app import create_app
+    from smylted.app import create_app
     from tests.conftest import api_settings
     from tests.test_mcp import (CALLBACK, ISSUER, _authorize, _code_from, _pkce,
                                 _register, _token)
@@ -626,7 +626,7 @@ def test_rotating_the_credentials_ends_an_mcp_grant_too(_scratch_up, tmp_path):
     """
     from fastapi.testclient import TestClient
 
-    from tasksd.app import create_app
+    from smylted.app import create_app
     from tests.conftest import api_settings
     from tests.test_mcp import ISSUER, MCP_URL, PASSWORD, _connect, _rpc
 
@@ -682,7 +682,7 @@ def test_an_ordinary_restart_does_not_end_a_grant(_scratch_up, tmp_path):
     fresh app, grant still works."""
     from fastapi.testclient import TestClient
 
-    from tasksd.app import create_app
+    from smylted.app import create_app
     from tests.conftest import api_settings
     from tests.test_mcp import ISSUER, MCP_URL, _connect, _rpc
 
@@ -719,7 +719,7 @@ def test_a_refused_refresh_does_not_burn_the_token_or_kill_the_family(
     token is still exactly where it was."""
     from fastapi.testclient import TestClient
 
-    from tasksd.app import create_app
+    from smylted.app import create_app
     from tests.conftest import api_settings
     from tests.test_mcp import ISSUER, MCP_URL, _connect
 
@@ -872,7 +872,7 @@ def test_a_client_id_that_is_not_plain_hex_is_refused(cid):
     the one of the five where the newline mattered on its own."""
     from fastapi import HTTPException
 
-    from tasksd.app import _check_client_id
+    from smylted.app import _check_client_id
 
     with pytest.raises(HTTPException) as e:
         _check_client_id(cid)
@@ -881,7 +881,7 @@ def test_a_client_id_that_is_not_plain_hex_is_refused(cid):
 
 def test_a_well_formed_client_id_is_still_accepted():
     """The control: `fullmatch` must not have narrowed the accepted set."""
-    from tasksd.app import _check_client_id
+    from smylted.app import _check_client_id
 
     _check_client_id(None)                       # optional field
     _check_client_id("0123456789abcdef")         # 16, the minimum
@@ -895,14 +895,14 @@ def test_an_availability_range_with_stray_whitespace_is_refused(rng):
     live: the value reaches `booking_links.availability` and the message the user
     would have got ("expected 'HH:MM-HH:MM'") describes a pattern it did not
     enforce."""
-    from tasksd.scheduling import parse_availability
+    from smylted.scheduling import parse_availability
 
     with pytest.raises(ValueError):
         parse_availability({"0": [rng]})
 
 
 def test_an_ordinary_availability_range_still_parses():
-    from tasksd.scheduling import parse_availability
+    from smylted.scheduling import parse_availability
 
     assert parse_availability({"0": ["09:00-17:00"]})[0] == [
         (dtime(9, 0), dtime(17, 0))]
@@ -917,13 +917,13 @@ def test_a_duration_with_something_after_a_newline_is_not_a_duration(dur):
     Note what is NOT asserted: a bare `"PT1H30M\n"` is still accepted, because
     the caller strips and the control below depends on that. The gap `fullmatch`
     closes is a newline with content AFTER it, which no strip touches."""
-    from tasksd.mcp.api import parse_duration
+    from smylted.mcp.api import parse_duration
 
     assert parse_duration(dur) is None
 
 
 def test_an_ordinary_duration_still_parses():
-    from tasksd.mcp.api import parse_duration
+    from smylted.mcp.api import parse_duration
 
     assert parse_duration("PT1H30M") == timedelta(hours=1, minutes=30)
     assert parse_duration("P2D") == timedelta(days=2)
@@ -936,13 +936,13 @@ def test_a_color_that_is_not_a_color_is_dropped(color):
     it strips, so a bare trailing newline was already covered and stays accepted;
     the point of fixing it at the pattern is that the next caller need not
     remember to strip, and that a newline with content after it is refused."""
-    from tasksd.dav.xml import clean_color
+    from smylted.dav.xml import clean_color
 
     assert clean_color(color) is None
 
 
 def test_an_ordinary_color_still_survives():
-    from tasksd.dav.xml import clean_color
+    from smylted.dav.xml import clean_color
 
     assert clean_color("#D9480F") == "#D9480F"
     assert clean_color("  #d9480f80  ") == "#d9480f80"          # 8-digit + strip
@@ -956,7 +956,7 @@ def test_the_xml_safe_pattern_does_not_have_this_bug():
     other five were all `^<positive>$`, which is the shape that has the gap."""
     import re
 
-    from tasksd.dav.xml import XML_SAFE_PATTERN
+    from smylted.dav.xml import XML_SAFE_PATTERN
 
     rx = re.compile(XML_SAFE_PATTERN)
     assert rx.match("ordinary text\n")                      # a newline is legal text

@@ -6,9 +6,9 @@ import random
 
 import pytest
 
-from tasksd import ical
-from tasksd.db import connect, init_db
-from tasksd.sync import ConflictError, SyncEngine
+from smylted import ical
+from smylted.db import connect, init_db
+from smylted.sync import ConflictError, SyncEngine
 from tests.helpers import foreign_event_raw, foreign_raw
 
 pytestmark = pytest.mark.radicale

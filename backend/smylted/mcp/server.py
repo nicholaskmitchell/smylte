@@ -30,7 +30,7 @@ from .oauth import OAuthError, SCOPE_WRITE, scope_set, wire_safe
 from .tools import ToolError, build_tools
 from .validate import SchemaError, check_arguments
 
-log = logging.getLogger("tasksd.mcp")
+log = logging.getLogger("smylted.mcp")
 
 # Revisions this server can speak. The client names one in `initialize`; we echo
 # it back when we know it, and otherwise answer with our newest and let the

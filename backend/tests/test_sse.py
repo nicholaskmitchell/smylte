@@ -3,7 +3,7 @@
 This endpoint had no backend test at all, which is how both defects here
 survived. It is the only long-lived route in the app and the only one holding
 unbounded per-connection state: `svc.subscribe()` adds an unbounded Queue to
-`TaskService._listeners`, `_publish` fans every mutation into all of them, and
+`SmylteService._listeners`, `_publish` fans every mutation into all of them, and
 the only thing that removes one is the `finally` inside the generator.
 
 Two properties are pinned:
@@ -24,7 +24,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from tasksd.app import create_app
+from smylted.app import create_app
 from tests.conftest import api_settings
 
 pytestmark = pytest.mark.radicale

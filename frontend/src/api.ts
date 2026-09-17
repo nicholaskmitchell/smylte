@@ -1,4 +1,4 @@
-// Typed client for the tasksd API. Same-origin: the session cookie rides along
+// Typed client for the smylted API. Same-origin: the session cookie rides along
 // automatically, so there are no tokens to manage in JS (it's HttpOnly anyway).
 
 // Both shapes are defined next to the code that gives them meaning — the token
@@ -338,7 +338,7 @@ export interface DisplayInput {
  * every clock are formatted SERVER-side, in the account's language and clock
  * setting. That is deliberate — the browser page and the server-rendered image
  * for a browserless panel are two rasterizers over this one object, and
- * localizing in each would let them drift. See backend tasksd/display/frame.py.
+ * localizing in each would let them drift. See backend smylted/display/frame.py.
  */
 export interface DisplayFrame {
   display: {

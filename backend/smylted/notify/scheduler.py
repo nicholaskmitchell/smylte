@@ -1,6 +1,6 @@
 """The sweep: evaluate the rules, claim what has not been said, send it, settle.
 
-Three phases, and the split between them is not stylistic. `TaskService._lock`
+Three phases, and the split between them is not stylistic. `SmylteService._lock`
 is one process-wide RLock that every API route waits on, so a send performed
 while holding it blocks the whole app for the length of an HTTP timeout — up to
 a minute, on a bad network, with retries. So:

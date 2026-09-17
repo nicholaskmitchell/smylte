@@ -10,7 +10,7 @@ raises" and raises; `MAX_LOUD_PER_DAY` says it counts notifications that BUZZ
 and counts ledger rows; and the tool table's scope invariant was true by
 inspection rather than by test.
 
-Every pin here is in-process — a stub service, or a real `TaskService` over an
+Every pin here is in-process — a stub service, or a real `SmylteService` over an
 in-memory SQLite with a DAV URL that points at a closed port — so nothing
 carries `@pytest.mark.radicale`. Where the cheap over-correction is a guard that
 refuses everything, the test carries its own CONTROL proving the live path
@@ -33,18 +33,18 @@ import httpx
 import pytest
 from helpers import foreign_event_raw
 
-from tasksd.config import Settings
-from tasksd.dav.client import CollectionInfo, Item
-from tasksd.db import store
-from tasksd.ical import extract_from_raw
-from tasksd.mcp.api import McpApi
-from tasksd.mcp.oauth import SCOPE_READ, SCOPE_WRITE
-from tasksd.mcp.server import McpServer
-from tasksd.mcp.tools import ToolError, build_tools
-from tasksd.notify import rules as R
-from tasksd.notify import telegram as tg
-from tasksd.notify.scheduler import MAX_LOUD_PER_DAY, Notifier
-from tasksd.service import TaskService
+from smylted.config import Settings
+from smylted.dav.client import CollectionInfo, Item
+from smylted.db import store
+from smylted.ical import extract_from_raw
+from smylted.mcp.api import McpApi
+from smylted.mcp.oauth import SCOPE_READ, SCOPE_WRITE
+from smylted.mcp.server import McpServer
+from smylted.mcp.tools import ToolError, build_tools
+from smylted.notify import rules as R
+from smylted.notify import telegram as tg
+from smylted.notify.scheduler import MAX_LOUD_PER_DAY, Notifier
+from smylted.service import SmylteService
 
 from tests.test_notify_rules import NY, NullLog, StubSender, StubSvc, _event
 
@@ -69,7 +69,7 @@ def _offline() -> Settings:
 
 @pytest.fixture
 def svc():
-    s = TaskService(_offline())
+    s = SmylteService(_offline())
     store.upsert_collection(
         s._conn, CollectionInfo(href=CAL, displayname="Cal", components={"VEVENT"})
     )
@@ -77,7 +77,7 @@ def svc():
     s.close()
 
 
-def _seed(svc: TaskService, uid: str, summary: str, **kw) -> None:
+def _seed(svc: SmylteService, uid: str, summary: str, **kw) -> None:
     raw = foreign_event_raw(uid, summary, **kw)
     store.upsert_item(svc._conn, CAL, Item(f"{CAL}{uid}.ics", '"1"', raw),
                       extract_from_raw(raw))
@@ -385,7 +385,7 @@ def test_one_batched_buzz_spends_one_slot_of_the_daily_ceiling(db):
     assert n.sweep(MORNING).sent == 4 and len(sender.sent) == 1, "one buzz, four rows"
 
     midnight = Notifier._local_midnight(MORNING, NY)
-    from tasksd.notify.scheduler import loud_deliveries_since
+    from smylted.notify.scheduler import loud_deliveries_since
     assert db.execute("SELECT COUNT(*) FROM notification_deliveries").fetchone()[0] == 4
     assert loud_deliveries_since(db, midnight) == 1
 

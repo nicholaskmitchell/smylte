@@ -1,8 +1,8 @@
 # systemd unit for the Tasks + Calendar app. Install to /etc/systemd/system/.
-# Binds 127.0.0.1:8080 (see tasksd/__main__.py); public exposure is via the
+# Binds 127.0.0.1:8080 (see smylted/__main__.py); public exposure is via the
 # cloudflared tunnel -> public Caddy site (see Caddyfile.snippet), never direct.
 [Unit]
-Description=Tasks + Calendar web app (tasksd)
+Description=Tasks + Calendar web app (smylted)
 After=network-online.target radicale.service
 Wants=network-online.target
 
@@ -12,7 +12,7 @@ User=nicholaskmitchell
 Group=nicholaskmitchell
 WorkingDirectory=/home/nicholaskmitchell/tasks/backend
 EnvironmentFile=/etc/tasks/tasks.env
-ExecStart=/home/nicholaskmitchell/tasks/backend/.venv/bin/python -m tasksd
+ExecStart=/home/nicholaskmitchell/tasks/backend/.venv/bin/python -m smylted
 Restart=on-failure
 RestartSec=3
 
@@ -24,7 +24,7 @@ RestartSec=3
 # NOTHING UNDER /home IS WRITABLE, and that is the point of StateDirectory
 # below. This used to read `ReadWritePaths=…/tasks/backend`, with a comment
 # claiming it opened "the one path it needs (the SQLite cache)". It opened the
-# whole tree: `.venv`, the interpreter ExecStart runs, and `tasksd`, the source
+# whole tree: `.venv`, the interpreter ExecStart runs, and `smylted`, the source
 # it imports. Every other line here exists to contain a compromise of this
 # process, and all of them are moot against an attacker who can drop a one-line
 # `.pth` into site-packages — the next restart executes it, as the same user,

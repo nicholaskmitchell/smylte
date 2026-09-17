@@ -27,7 +27,7 @@ from ..db.store import get_oauth_client as _get_oauth_client
 from ..db.store import list_oauth_grants as _list_grants, revoke_oauth_family as _revoke_family
 from .server import McpServer, parse_body, run_batch
 
-log = logging.getLogger("tasksd.mcp")
+log = logging.getLogger("smylted.mcp")
 
 # A POST to /oauth/authorize verifies a password, so it is throttled exactly
 # like /api/login — same shape, separate budget, so a connector flow being

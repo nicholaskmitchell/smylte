@@ -67,7 +67,7 @@ class DavClient:
         password: str,
         *,
         timeout: float = 30.0,
-        user_agent: str = "tasksd/0.1 (+phase0)",
+        user_agent: str = "smylted/0.1 (+phase0)",
     ):
         sp = urlsplit(base_url)
         self.origin = f"{sp.scheme}://{sp.netloc}"
