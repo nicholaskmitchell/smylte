@@ -1,6 +1,6 @@
 """CLI entrypoint.
 
-  python -m smylted hash-password    # generate a scrypt hash for TASKS_AUTH_PASSWORD_HASH
+  python -m smylted hash-password    # generate a scrypt hash for SMYLTE_AUTH_PASSWORD_HASH
   python -m smylted                  # run the server on 127.0.0.1:8080
 """
 from __future__ import annotations

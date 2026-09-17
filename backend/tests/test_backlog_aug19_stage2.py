@@ -585,7 +585,7 @@ def test_a_client_mid_consent_is_not_evicted(_scratch_up, tmp_path):
 def test_rotating_the_credentials_ends_an_mcp_grant_too(_scratch_up, tmp_path):
     """docs/DEPLOY.md §"If the password leaks — signing out everywhere" names
     two levers and calls each total: change the password ("Every existing
-    session is refused from that moment") and rotate TASKS_SESSION_SECRET
+    session is refused from that moment") and rotate SMYLTE_SESSION_SECRET
     ("Every session dies, including yours"). auth.py backs the first with
     `_credential_version` — a `cv` claim stamped into every session JWT and
     re-checked on each request — and the second by construction. NEITHER reaches
@@ -677,7 +677,7 @@ def test_rotating_the_credentials_ends_an_mcp_grant_too(_scratch_up, tmp_path):
 def test_an_ordinary_restart_does_not_end_a_grant(_scratch_up, tmp_path):
     """`credential_version` fingerprints the CONFIGURED credential, not the
     derived hash. scrypt salts randomly, so on the dev plaintext path
-    (TASKS_AUTH_PASSWORD, hashed at startup) the hash is different every boot —
+    (SMYLTE_AUTH_PASSWORD, hashed at startup) the hash is different every boot —
     binding to it would revoke every MCP grant on every restart. Same settings,
     fresh app, grant still works."""
     from fastapi.testclient import TestClient

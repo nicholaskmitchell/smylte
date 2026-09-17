@@ -286,7 +286,7 @@ class Authenticator:
         self._password_hash = password_hash
         # What "the credentials changed" is judged against — see
         # credential_version. Not the hash itself: scrypt salts randomly, so
-        # the dev plaintext path (TASKS_AUTH_PASSWORD, hashed at startup)
+        # the dev plaintext path (SMYLTE_AUTH_PASSWORD, hashed at startup)
         # produces a different hash every restart and would sign everyone out
         # on each one. The caller passes the *configured* material instead,
         # which is stable across restarts and moves only when it is changed.
@@ -328,7 +328,7 @@ class Authenticator:
 
         The signing secret is independent of the password, so before this the
         documented remedy for a compromise — regenerate the hash, update
-        TASKS_AUTH_PASSWORD_HASH, restart — left every session the attacker had
+        SMYLTE_AUTH_PASSWORD_HASH, restart — left every session the attacker had
         already minted valid for the rest of its TTL (7 days by default), and
         revocation could not reach them: logout withdraws a `jti` by name, and
         the owner never sees the jti of a session created on someone else's
@@ -348,7 +348,7 @@ class Authenticator:
         SESSION and left every MCP grant working, so docs/DEPLOY.md's documented
         incident response left a 30-day read/write backdoor open. One value
         covers both levers — it is keyed with the signing secret, so it moves
-        when EITHER the password or TASKS_SESSION_SECRET does.
+        when EITHER the password or SMYLTE_SESSION_SECRET does.
         """
         material = f"{self._user}\0{self._credential_id}".encode()
         return hmac.new(self._secret.encode(), material, hashlib.sha256).hexdigest()[:16]

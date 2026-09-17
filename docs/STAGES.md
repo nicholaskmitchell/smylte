@@ -1,5 +1,12 @@
 # Staged remediation of the audit backlog
 
+> **Naming note (2026-09-17).** The backend package was renamed `tasksd` →
+> `smylted`, the `TASKS_*` environment variables to `SMYLTE_*`, and the systemd
+> unit and its paths from `tasks` to `smylte`. Everything below predates that
+> rename and is left in its original spelling on purpose: this file is a record
+> of what was found and when, and rewriting the evidence would falsify it. For
+> current paths and variable names see `README.md` and `docs/DEPLOY.md`.
+
 `docs/AUDIT.md` is the evidence. This file is the plan for closing those
 findings, and the map from a finding to the test that pins it.
 

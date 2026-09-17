@@ -235,7 +235,7 @@ def test_setup_sh_actually_refuses_an_untested_interpreter():
     untested version and require it to stop.
 
     Only the REFUSING arm is exercised, deliberately: an accepted version
-    carries on into `install -d /etc/tasks` and a systemd unit, which is not
+    carries on into `install -d /etc/smylte` and a systemd unit, which is not
     something a test may do to the machine it runs on. The accepting arm is
     covered by `_run_setup_sh` in test_backlog_aug19_stage45.py, which runs the
     whole script to completion inside a sandbox with every system command

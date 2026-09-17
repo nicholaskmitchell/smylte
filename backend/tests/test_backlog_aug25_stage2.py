@@ -17,7 +17,7 @@ covers `LocalServer` headlessly.
 
 Two shapes recur. Three findings are a GUARD IN THE WRONG PLACE: `set_sidecar`
 lacks the live-item check that `set_sort_orders` carries and whose own docstring
-argues "the guard belongs here, where every door passes"; `tasks.service` opens
+argues "the guard belongs here, where every door passes"; `smylte.service` opens
 the very tree its hardening block exists to close; `RateLimiter` bounds a client
 and calls that bounding the guess budget. The other three are work that scales
 with an argument the caller chooses — a `kid`, a day range, an address.
@@ -585,7 +585,7 @@ def test_logging_in_correctly_never_runs_the_owner_out_of_budget(tmp_path):
     )
 
 
-# ── AUDIT: tasks.service grants the app write access to its own interpreter ───
+# ── AUDIT: smylte.service grants the app write access to its own interpreter ───
 # ── and source tree, contradicting the sandbox's stated invariant ────────────
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
@@ -611,14 +611,14 @@ def test_the_unit_does_not_open_its_own_interpreter_and_source_to_writes():
     saying plainly rather than burying. It read `assert rw` — "the unit declares
     no ReadWritePaths at all, has it been renamed?" — which is a fair question
     while the answer is a `ReadWritePaths` line, and became the wrong one the
-    moment the correct fix removed it: `StateDirectory=tasks` grants exactly
-    /var/lib/tasks and makes the directive unnecessary, so a unit with no
+    moment the correct fix removed it: `StateDirectory=smylte` grants exactly
+    /var/lib/smylte and makes the directive unnecessary, so a unit with no
     `ReadWritePaths` was about to be indistinguishable from a unit that had lost
     its writable path entirely. The guard now accepts either. What it guards
     against is unchanged — a unit that can write NOWHERE would not start — and
     the assertion that detects the finding, `opened == []`, was not touched.
     """
-    unit = (REPO / "deploy" / "tasks.service").read_text(encoding="utf-8")
+    unit = (REPO / "deploy" / "smylte.service").read_text(encoding="utf-8")
     rw = [ln.split("=", 1)[1].strip() for ln in unit.splitlines()
           if ln.strip().startswith("ReadWritePaths=")]
     state = [ln for ln in unit.splitlines() if ln.strip().startswith("StateDirectory=")]

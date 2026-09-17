@@ -1,8 +1,8 @@
-# systemd unit for the Tasks + Calendar app. Install to /etc/systemd/system/.
+# systemd unit for Smylte. Install to /etc/systemd/system/.
 # Binds 127.0.0.1:8080 (see smylted/__main__.py); public exposure is via the
 # cloudflared tunnel -> public Caddy site (see Caddyfile.snippet), never direct.
 [Unit]
-Description=Tasks + Calendar web app (smylted)
+Description=Smylte — tasks and calendar web app (smylted)
 After=network-online.target radicale.service
 Wants=network-online.target
 
@@ -10,9 +10,9 @@ Wants=network-online.target
 Type=exec
 User=nicholaskmitchell
 Group=nicholaskmitchell
-WorkingDirectory=/home/nicholaskmitchell/tasks/backend
-EnvironmentFile=/etc/tasks/tasks.env
-ExecStart=/home/nicholaskmitchell/tasks/backend/.venv/bin/python -m smylted
+WorkingDirectory=/home/nicholaskmitchell/smylte/backend
+EnvironmentFile=/etc/smylte/smylte.env
+ExecStart=/home/nicholaskmitchell/smylte/backend/.venv/bin/python -m smylted
 Restart=on-failure
 RestartSec=3
 
@@ -22,7 +22,7 @@ RestartSec=3
 # namespaces, loopback only.
 #
 # NOTHING UNDER /home IS WRITABLE, and that is the point of StateDirectory
-# below. This used to read `ReadWritePaths=…/tasks/backend`, with a comment
+# below. This used to read `ReadWritePaths=…/smylte/backend`, with a comment
 # claiming it opened "the one path it needs (the SQLite cache)". It opened the
 # whole tree: `.venv`, the interpreter ExecStart runs, and `smylted`, the source
 # it imports. Every other line here exists to contain a compromise of this
@@ -31,11 +31,11 @@ RestartSec=3
 # and the sandbox never notices, because the write went to a path the unit had
 # deliberately opened.
 #
-# StateDirectory grants exactly /var/lib/tasks (creating it, owned by this
+# StateDirectory grants exactly /var/lib/smylte (creating it, owned by this
 # user, mode 0700 under UMask below) and nothing else, so the venv and the
-# source are read-only like the rest of /home. TASKS_DB in /etc/tasks/tasks.env
-# points there. Moving an existing deployment: stop the unit, move tasks.db and
-# its -wal/-shm sidecars into /var/lib/tasks, update TASKS_DB, start — see
+# source are read-only like the rest of /home. SMYLTE_DB in /etc/smylte/smylte.env
+# points there. Moving an existing deployment: stop the unit, move smylte.db and
+# its -wal/-shm sidecars into /var/lib/smylte, update SMYLTE_DB, start — see
 # docs/DEPLOY.md, and note that setup.sh will not rewrite an env file that
 # already exists.
 NoNewPrivileges=true
@@ -43,7 +43,7 @@ PrivateTmp=true
 PrivateDevices=true
 ProtectSystem=strict
 ProtectHome=read-only
-StateDirectory=tasks
+StateDirectory=smylte
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectKernelLogs=true
@@ -59,12 +59,12 @@ LockPersonality=true
 SystemCallArchitectures=native
 CapabilityBoundingSet=
 UMask=0077
-# Loopback only: Caddy in, Radicale out. If TASKS_ACCESS_REQUIRED is ever
+# Loopback only: Caddy in, Radicale out. If SMYLTE_ACCESS_REQUIRED is ever
 # turned on, DELETE these two lines — the Cloudflare Access JWKS fetch needs
 # outbound HTTPS.
 #
 # TELEGRAM NOTIFICATIONS NEED EGRESS TOO, and this is the line that decides
-# whether they work. With TASKS_NOTIFY_ENABLED=true and this block unchanged,
+# whether they work. With SMYLTE_NOTIFY_ENABLED=true and this block unchanged,
 # every send fails at connect: the app retries, records the failure in
 # `notification_deliveries`, and nothing ever reaches a phone. There is no way
 # for the app to detect this and say so more clearly, because a blocked packet

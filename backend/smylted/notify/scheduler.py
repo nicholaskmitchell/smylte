@@ -180,7 +180,7 @@ class Notifier:
                      "bot at least once — a bot cannot open a conversation.")
         else:
             hint += (". If this persists, check that the service is allowed to "
-                     "reach api.telegram.org (see deploy/tasks.service).")
+                     "reach api.telegram.org (see deploy/smylte.service).")
         return False, hint
 
     def sweep(self, now: datetime | None = None) -> SweepResult:

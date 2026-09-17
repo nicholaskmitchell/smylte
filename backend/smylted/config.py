@@ -6,14 +6,76 @@ deploy time (spec §9).
 """
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
 
 from .limits import DEFAULT_MAX_BODY_BYTES
 
 
+log = logging.getLogger("smylted.config")
+
 _TRUE = frozenset({"1", "true", "yes", "y", "on"})
 _FALSE = frozenset({"0", "false", "no", "n", "off"})
+
+# Every setting below moved from TASKS_* to SMYLTE_* with the rename. The old
+# spelling is still honoured, because the two halves of a deployment do not move
+# at the same instant: autopull ships new code every minute, while the env file
+# is rewritten by a human running deploy/migrate.sh. Without this fallback that
+# window is not a graceful degradation — `auth_enabled` defaults ON, the hash
+# reads empty, and the app REFUSES TO START. Downtime, from a rename.
+#
+# It is a transition, not a permanent alias: each stale name is named once at
+# startup so the journal says exactly what to fix, and the fallback is deleted
+# once deployments have migrated.
+_NEW_PREFIX = "SMYLTE_"
+_OLD_PREFIX = "TASKS_"
+
+# Warn once per stale variable per process, not once per read.
+_stale_warned: set[str] = set()
+
+
+def _legacy(name: str) -> str | None:
+    """The pre-rename spelling of a SMYLTE_* variable, or None if there isn't one.
+
+    Guarded rather than a bare prefix swap: a caller passing an unprefixed name
+    would otherwise have it mangled into a plausible-looking variable that is
+    silently never found, which is the least debuggable outcome available.
+    """
+    if not name.startswith(_NEW_PREFIX):
+        return None
+    return _OLD_PREFIX + name[len(_NEW_PREFIX):]
+
+
+def _raw(name: str) -> str | None:
+    """The raw value for `name`, honouring the pre-rename TASKS_* spelling.
+
+    Precedence is new-over-old and never merged: if both are set, the SMYLTE_*
+    one wins outright. A half-rewritten env file is a real state to be in
+    mid-migration, and quietly preferring the stale value would make the
+    migration look applied when it was not.
+    """
+    v = os.environ.get(name)
+    if v is not None:
+        return v
+    old = _legacy(name)
+    if old is None:
+        return None
+    v = os.environ.get(old)
+    if v is not None and old not in _stale_warned:
+        _stale_warned.add(old)
+        log.warning(
+            "config: %s is the pre-rename name for %s and still works, but it is "
+            "deprecated. Run deploy/migrate.sh to rewrite the environment file.",
+            old, name,
+        )
+    return v
+
+
+def _env(name: str, default: str) -> str:
+    """A SMYLTE_* string setting, falling back to its TASKS_* predecessor."""
+    v = _raw(name)
+    return default if v is None else v
 
 
 def _bool(name: str, default: bool) -> bool:
@@ -21,7 +83,7 @@ def _bool(name: str, default: bool) -> bool:
 
     Every caller here gates a security control — auth_enabled, cookie_secure,
     access_required — and treating an unrecognised value as "not true" made all
-    three fail OPEN. `TASKS_AUTH_ENABLED=Y`, `=enabled`, or a plain typo turned
+    three fail OPEN. `SMYLTE_AUTH_ENABLED=Y`, `=enabled`, or a plain typo turned
     off the whole API auth gate on an internet-facing deployment, silently and
     with no way to tell from the outside but to try it.
 
@@ -29,7 +91,7 @@ def _bool(name: str, default: bool) -> bool:
     treats missing Access configuration: refuse to come up rather than come up
     unprotected.
     """
-    raw = os.environ.get(name)
+    raw = _raw(name)
     if raw is None or not raw.strip():
         return default
     v = raw.strip().lower()
@@ -115,15 +177,15 @@ class Settings:
     # guarantee a deployment can never message anyone, whatever the settings
     # blob says.
     #
-    # Sending also needs egress: deploy/tasks.service is loopback-only
+    # Sending also needs egress: deploy/smylte.service is loopback-only
     # (`IPAddressDeny=any`), so the unit must be widened before a single
     # message can leave the box. See docs/DEPLOY.md.
     notify_enabled: bool = True
     # A FALLBACK for the account's own setting, for a deployment configured
-    # entirely from /etc/tasks/tasks.env and never through the UI. Settings wins
+    # entirely from /etc/smylte/smylte.env and never through the UI. Settings wins
     # when both are present.
     #
-    # Worth knowing either way: a token set here stays out of tasks.db and so
+    # Worth knowing either way: a token set here stays out of smylte.db and so
     # out of every backup of it, which is what the schema header's promise about
     # reading that file is worth. One typed into Settings is stored in the clear
     # in `meta.app_settings`, like `booking_links.token` beside it — the app has
@@ -144,7 +206,7 @@ class Settings:
     # violations in the browser console, block nothing) or "off". An escape
     # hatch rather than a knob: a policy that turns out to block something real
     # takes the app down to a blank page, and the fix should be a line in
-    # /etc/tasks/tasks.env plus a restart, not a code change and a redeploy.
+    # /etc/smylte/smylte.env plus a restart, not a code change and a redeploy.
     # Anything unrecognised is treated as "on" — this is a security control, so
     # a typo must not quietly disable it (same posture as _bool above, which
     # refuses to fail open).
@@ -157,36 +219,36 @@ class Settings:
             radicale_user=os.environ.get("RADICALE_USER", "testuser"),
             radicale_password=os.environ.get("RADICALE_PASSWORD", "testpass"),
             # The fallback is a DEV path, and deliberately still under ~: a
-            # developer running `python -m smylted` has no /var/lib/tasks and no
-            # systemd to create one. Production sets TASKS_DB explicitly, to
-            # /var/lib/tasks/tasks.db, because the unit grants that and nothing
-            # under /home — see deploy/tasks.service.
-            db_path=os.environ.get("TASKS_DB", os.path.expanduser("~/tasks/backend/tasks.db")),
-            sync_interval_s=float(os.environ.get("TASKS_SYNC_INTERVAL", "30")),
-            request_timeout_s=float(os.environ.get("TASKS_HTTP_TIMEOUT", "30")),
-            static_dir=os.environ.get(
-                "TASKS_STATIC", os.path.expanduser("~/tasks/frontend/dist")
+            # developer running `python -m smylted` has no /var/lib/smylte and no
+            # systemd to create one. Production sets SMYLTE_DB explicitly, to
+            # /var/lib/smylte/smylte.db, because the unit grants that and nothing
+            # under /home — see deploy/smylte.service.
+            db_path=_env("SMYLTE_DB", os.path.expanduser("~/smylte/backend/smylte.db")),
+            sync_interval_s=float(_env("SMYLTE_SYNC_INTERVAL", "30")),
+            request_timeout_s=float(_env("SMYLTE_HTTP_TIMEOUT", "30")),
+            static_dir=_env(
+                "SMYLTE_STATIC", os.path.expanduser("~/smylte/frontend/dist")
             ),
-            hook_secret=os.environ.get("TASKS_HOOK_SECRET", "dev-hook-secret"),
-            auth_enabled=_bool("TASKS_AUTH_ENABLED", True),
-            auth_user=os.environ.get("TASKS_AUTH_USER", "admin"),
-            auth_password_hash=os.environ.get("TASKS_AUTH_PASSWORD_HASH", ""),
-            auth_password=os.environ.get("TASKS_AUTH_PASSWORD", ""),
-            session_secret=os.environ.get("TASKS_SESSION_SECRET", ""),
-            session_ttl_s=int(os.environ.get("TASKS_SESSION_TTL", str(7 * 24 * 3600))),
-            cookie_secure=_bool("TASKS_COOKIE_SECURE", True),
-            access_required=_bool("TASKS_ACCESS_REQUIRED", False),
-            access_team_domain=os.environ.get("TASKS_ACCESS_TEAM_DOMAIN", ""),
-            access_aud=os.environ.get("TASKS_ACCESS_AUD", ""),
-            dav_public_url=normalize_dav_url(os.environ.get("TASKS_DAV_URL", "/dav/")),
-            mcp_enabled=_bool("TASKS_MCP_ENABLED", False),
-            public_url=normalize_public_url(os.environ.get("TASKS_PUBLIC_URL", "")),
+            hook_secret=_env("SMYLTE_HOOK_SECRET", "dev-hook-secret"),
+            auth_enabled=_bool("SMYLTE_AUTH_ENABLED", True),
+            auth_user=_env("SMYLTE_AUTH_USER", "admin"),
+            auth_password_hash=_env("SMYLTE_AUTH_PASSWORD_HASH", ""),
+            auth_password=_env("SMYLTE_AUTH_PASSWORD", ""),
+            session_secret=_env("SMYLTE_SESSION_SECRET", ""),
+            session_ttl_s=int(_env("SMYLTE_SESSION_TTL", str(7 * 24 * 3600))),
+            cookie_secure=_bool("SMYLTE_COOKIE_SECURE", True),
+            access_required=_bool("SMYLTE_ACCESS_REQUIRED", False),
+            access_team_domain=_env("SMYLTE_ACCESS_TEAM_DOMAIN", ""),
+            access_aud=_env("SMYLTE_ACCESS_AUD", ""),
+            dav_public_url=normalize_dav_url(_env("SMYLTE_DAV_URL", "/dav/")),
+            mcp_enabled=_bool("SMYLTE_MCP_ENABLED", False),
+            public_url=normalize_public_url(_env("SMYLTE_PUBLIC_URL", "")),
             max_body_bytes=int(
-                os.environ.get("TASKS_MAX_BODY_BYTES", str(DEFAULT_MAX_BODY_BYTES))
+                _env("SMYLTE_MAX_BODY_BYTES", str(DEFAULT_MAX_BODY_BYTES))
             ),
-            csp_mode=os.environ.get("TASKS_CSP", "on").strip().lower() or "on",
-            notify_enabled=_bool("TASKS_NOTIFY_ENABLED", True),
-            telegram_bot_token=os.environ.get("TASKS_TELEGRAM_BOT_TOKEN", "").strip(),
-            telegram_chat_id=os.environ.get("TASKS_TELEGRAM_CHAT_ID", "").strip(),
-            notify_interval_s=float(os.environ.get("TASKS_NOTIFY_INTERVAL", "60")),
+            csp_mode=_env("SMYLTE_CSP", "on").strip().lower() or "on",
+            notify_enabled=_bool("SMYLTE_NOTIFY_ENABLED", True),
+            telegram_bot_token=_env("SMYLTE_TELEGRAM_BOT_TOKEN", "").strip(),
+            telegram_chat_id=_env("SMYLTE_TELEGRAM_CHAT_ID", "").strip(),
+            notify_interval_s=float(_env("SMYLTE_NOTIFY_INTERVAL", "60")),
         )

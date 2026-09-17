@@ -299,7 +299,7 @@ def test_a_withdrawn_session_stays_withdrawn_across_a_restart(make_app, tmp_path
 @pytest.mark.radicale
 def test_changing_the_password_invalidates_existing_sessions(make_app, tmp_path):
     """The documented remedy for a compromised password is: regenerate the hash,
-    update TASKS_AUTH_PASSWORD_HASH, restart. That left every session the
+    update SMYLTE_AUTH_PASSWORD_HASH, restart. That left every session the
     attacker had already minted valid for the rest of its TTL — and unreachable
     by revocation, which can only withdraw a jti the owner can name. Changing
     the password has to be a sign-out-everywhere."""
@@ -437,7 +437,7 @@ def test_auth_enabled_with_no_password_refuses_to_start():
 
 def test_auth_enabled_accepts_either_a_hash_or_a_plaintext_password():
     # The refusal must fire only when BOTH are absent — the fallback that hashes
-    # TASKS_AUTH_PASSWORD at startup has to keep working.
+    # SMYLTE_AUTH_PASSWORD at startup has to keep working.
     assert create_app(_settings(auth_password_hash="", auth_password="testpass123"))
     assert create_app(_settings(
         auth_password_hash=hash_password("testpass123"), auth_password=""))

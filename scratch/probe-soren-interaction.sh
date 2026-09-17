@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Empirical check (on SCRATCH, never production): when the Task Manager creates
+# Empirical check (on SCRATCH, never production): when Smylte creates
 # VTODO-only task collections alongside normal VEVENT calendars, how do Søren's
 # calendar tools behave? Søren's CalendarList keys on resourcetype=calendar;
 # a VTODO collection is *also* a calendar collection, so it will appear. We want
@@ -18,7 +18,7 @@ curl "${A[@]}" -X MKCALENDAR "$B/testuser/cal-events/" -w " -> HTTP %{http_code}
   <C:supported-calendar-component-set><C:comp name="VEVENT"/></C:supported-calendar-component-set>
  </D:prop></D:set></C:mkcalendar>'
 
-echo "### 2. MKCALENDAR a VTODO-ONLY task collection (what the Task Manager makes)"
+echo "### 2. MKCALENDAR a VTODO-ONLY task collection (what Smylte makes)"
 curl "${A[@]}" -X MKCALENDAR "$B/testuser/tasks-inbox/" -w " -> HTTP %{http_code}\n" \
   -H 'Content-Type: application/xml' --data '<?xml version="1.0" encoding="utf-8"?>
 <C:mkcalendar xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">

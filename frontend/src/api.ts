@@ -269,7 +269,7 @@ export interface BookingLink {
   booking_count: number
   created_at: string
   updated_at: string
-  /** The absolute public URL — `${TASKS_PUBLIC_URL}/book/{token}` — when the
+  /** The absolute public URL — `${SMYLTE_PUBLIC_URL}/book/{token}` — when the
    *  deployment has one configured, else null. The server's, not this page's:
    *  inside the Windows client `location.origin` is the loopback server the
    *  SPA is served from, and a link built from it worked on that machine and
@@ -288,7 +288,7 @@ export interface BookingLink {
 export interface Display {
   token: string
   /** The page a panel opens, absolute, when the deployment has said what its
-   *  origin is (TASKS_PUBLIC_URL); null otherwise. The Windows client serves
+   *  origin is (SMYLTE_PUBLIC_URL); null otherwise. The Windows client serves
    *  the app from localhost, so `location.origin` is the wrong origin there. */
   url?: string | null
   name: string

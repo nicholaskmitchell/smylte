@@ -135,13 +135,13 @@ def test_refuses_to_start_without_what_it_needs(_scratch_up, tmp_path):
     base = dataclasses.replace(
         api_settings(str(tmp_path / "x.db")), mcp_enabled=True, public_url=ISSUER)
     # No public URL: the metadata would have to guess, from a header the caller sets.
-    with pytest.raises(RuntimeError, match="TASKS_PUBLIC_URL"):
+    with pytest.raises(RuntimeError, match="SMYLTE_PUBLIC_URL"):
         create_app(dataclasses.replace(base, public_url=""))
     # No password: nothing at the consent screen proves you are the owner.
-    with pytest.raises(RuntimeError, match="TASKS_AUTH_ENABLED"):
+    with pytest.raises(RuntimeError, match="SMYLTE_AUTH_ENABLED"):
         create_app(dataclasses.replace(base, auth_enabled=False))
     # No session secret: consent signatures would not survive a restart.
-    with pytest.raises(RuntimeError, match="TASKS_SESSION_SECRET"):
+    with pytest.raises(RuntimeError, match="SMYLTE_SESSION_SECRET"):
         create_app(dataclasses.replace(base, session_secret=""))
 
 

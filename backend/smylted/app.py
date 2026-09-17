@@ -789,7 +789,7 @@ class SettingsPatch(BaseModel):
     collapsed_tasks: list[Id] | None = None
     # How long a login lasts before it has to be repeated, in seconds. Only the
     # values in _SESSION_TTLS are accepted. Absent means the deployment's own
-    # TASKS_SESSION_TTL, which is what this used to be the only way to set.
+    # SMYLTE_SESSION_TTL, which is what this used to be the only way to set.
     session_ttl_s: int | None = None
     # Whether completed/cancelled tasks show inline in the main tasks view.
     # Absent means the default (hidden); False is a real value the merge keeps,
@@ -1272,12 +1272,12 @@ async def _sync_loop(app: FastAPI) -> None:
 def _build_notifier(settings: Settings, svc: SmylteService):
     """The notifier, or None when notifications are switched off.
 
-    None is the ordinary case — `TASKS_NOTIFY_ENABLED` is false by default — and
+    None is the ordinary case — `SMYLTE_NOTIFY_ENABLED` is false by default — and
     `_notification_loop` returns immediately when it finds one, so a deployment
     that has not opted in runs no extra task and opens no HTTP client.
     """
     if not settings.notify_enabled:
-        log.info("notify: disabled by TASKS_NOTIFY_ENABLED; no scheduler will run")
+        log.info("notify: disabled by SMYLTE_NOTIFY_ENABLED; no scheduler will run")
         return None
     from .notify.scheduler import Notifier
     from .notify.telegram import TelegramSender
@@ -1333,7 +1333,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings.from_env()
     if settings.access_required and not (settings.access_team_domain and settings.access_aud):
         raise RuntimeError(
-            "TASKS_ACCESS_REQUIRED is set but TASKS_ACCESS_TEAM_DOMAIN / TASKS_ACCESS_AUD "
+            "SMYLTE_ACCESS_REQUIRED is set but SMYLTE_ACCESS_TEAM_DOMAIN / SMYLTE_ACCESS_AUD "
             "are not configured — refusing to start unprotected."
         )
     verifier = AccessVerifier(settings)
@@ -1358,24 +1358,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not password_hash and settings.auth_password:
             password_hash = hash_password(settings.auth_password)
             log.warning(
-                "auth: hashing TASKS_AUTH_PASSWORD (plaintext env) at startup. Prefer "
-                "TASKS_AUTH_PASSWORD_HASH via `python -m smylted hash-password` in production."
+                "auth: hashing SMYLTE_AUTH_PASSWORD (plaintext env) at startup. Prefer "
+                "SMYLTE_AUTH_PASSWORD_HASH via `python -m smylted hash-password` in production."
             )
         if not password_hash:
             raise RuntimeError(
                 "auth enabled but no password set. Generate one with "
-                "`python -m smylted hash-password` and set TASKS_AUTH_PASSWORD_HASH "
-                "(or TASKS_AUTH_PASSWORD for dev, or TASKS_AUTH_ENABLED=false to run open)."
+                "`python -m smylted hash-password` and set SMYLTE_AUTH_PASSWORD_HASH "
+                "(or SMYLTE_AUTH_PASSWORD for dev, or SMYLTE_AUTH_ENABLED=false to run open)."
             )
         session_secret = settings.session_secret or secrets.token_hex(32)
         if not settings.session_secret:
             log.warning(
-                "auth: TASKS_SESSION_SECRET unset — using an ephemeral secret; sessions "
+                "auth: SMYLTE_SESSION_SECRET unset — using an ephemeral secret; sessions "
                 "won't survive a restart. Set it in production."
             )
         elif len(settings.session_secret) < 32:
             log.warning(
-                "auth: TASKS_SESSION_SECRET is under 32 bytes — use a longer random secret "
+                "auth: SMYLTE_SESSION_SECRET is under 32 bytes — use a longer random secret "
                 "(e.g. `python -c 'import secrets;print(secrets.token_hex(32))'`)."
             )
         # The session length is a setting, so the Authenticator reads it
@@ -1397,7 +1397,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     elif not settings.access_required:
         # Deliberate dev/test posture, but loud: nothing gates /api at all.
         log.warning(
-            "auth: TASKS_AUTH_ENABLED=false and TASKS_ACCESS_REQUIRED=false — "
+            "auth: SMYLTE_AUTH_ENABLED=false and SMYLTE_ACCESS_REQUIRED=false — "
             "the entire API is open to anyone who can reach this listener."
         )
 
@@ -1409,9 +1409,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     if not hook_secret or hook_secret == "dev-hook-secret":
         hook_secret = secrets.token_hex(32)
         log.warning(
-            "hook: TASKS_HOOK_SECRET is unset or the insecure default — using an "
+            "hook: SMYLTE_HOOK_SECRET is unset or the insecure default — using an "
             "ephemeral secret; the Radicale storage hook won't authenticate until "
-            "TASKS_HOOK_SECRET (and /etc/tasks/hook-secret) are set to match."
+            "SMYLTE_HOOK_SECRET (and /etc/smylte/hook-secret) are set to match."
         )
 
     @contextlib.asynccontextmanager
@@ -2424,7 +2424,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(
                 status.HTTP_409_CONFLICT,
                 "notifications are disabled for this deployment "
-                "(TASKS_NOTIFY_ENABLED=false)",
+                "(SMYLTE_NOTIFY_ENABLED=false)",
             )
         prefs = await _run(_svc(request).get_settings)
         ok, detail = await asyncio.to_thread(notifier.send_test, prefs)
@@ -3091,21 +3091,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     if settings.mcp_enabled:
         if not settings.public_url:
             raise RuntimeError(
-                "TASKS_MCP_ENABLED is set but TASKS_PUBLIC_URL is not. The OAuth "
+                "SMYLTE_MCP_ENABLED is set but SMYLTE_PUBLIC_URL is not. The OAuth "
                 "metadata has to state this deployment's absolute URL (e.g. "
                 "https://tasks.example.com) and it cannot be read off the Host "
                 "header, which the caller controls — refusing to start."
             )
         if authenticator is None:
             raise RuntimeError(
-                "TASKS_MCP_ENABLED is set but TASKS_AUTH_ENABLED is false. The "
+                "SMYLTE_MCP_ENABLED is set but SMYLTE_AUTH_ENABLED is false. The "
                 "connector's consent screen is the app password — with no "
                 "password there is nothing to prove you are the owner, and "
                 "anyone reaching the server could mint a token. Refusing to start."
             )
         if not settings.session_secret:
             raise RuntimeError(
-                "TASKS_MCP_ENABLED is set but TASKS_SESSION_SECRET is not. "
+                "SMYLTE_MCP_ENABLED is set but SMYLTE_SESSION_SECRET is not. "
                 "Consent requests are signed with a key derived from it; an "
                 "ephemeral one would invalidate every in-flight connection on "
                 "restart. Refusing to start."
