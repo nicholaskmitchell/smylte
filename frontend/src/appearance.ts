@@ -602,9 +602,14 @@ export function syncThemeColor(): void {
 
 // ── persistence (the pre-paint cache) ───────────────────────────────────────
 // The server is the source of truth; this mirror exists only so index.html can
-// paint the right colors before the bundle loads. Same contract as `tasks-theme`.
+// paint the right colors before the bundle loads. Same contract as `smylte-theme`.
 
-export const APPEARANCE_KEY = 'tasks-appearance'
+export const APPEARANCE_KEY = 'smylte-appearance'
+// The pre-rename key. Read once and promoted, never written. Dropping it
+// outright would be a visible regression and not a small one: the first load
+// after deploy would paint the shipped default, and anyone on a custom
+// appearance would watch their colors disappear and reappear a frame later.
+export const APPEARANCE_KEY_LEGACY = 'tasks-appearance'
 
 export function cacheAppearance(appearance: Appearance | null): void {
   try {
@@ -615,8 +620,18 @@ export function cacheAppearance(appearance: Appearance | null): void {
 
 export function readCachedAppearance(): Appearance | null {
   try {
-    const raw = localStorage.getItem(APPEARANCE_KEY)
-    if (!raw) return null
+    let raw = localStorage.getItem(APPEARANCE_KEY)
+    if (!raw) {
+      // Promote the pre-rename cache, then retire it, so this costs one read
+      // on one load rather than forever.
+      const legacy = localStorage.getItem(APPEARANCE_KEY_LEGACY)
+      if (!legacy) return null
+      raw = legacy
+      try {
+        localStorage.setItem(APPEARANCE_KEY, legacy)
+        localStorage.removeItem(APPEARANCE_KEY_LEGACY)
+      } catch { /* promotion is best-effort; the read below still works */ }
+    }
     return sanitizeAppearance(JSON.parse(raw))
   } catch { return null }
 }

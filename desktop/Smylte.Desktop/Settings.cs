@@ -164,7 +164,7 @@ public sealed class Settings
     /// concerned, and the proxy relays whatever the page sends.
     ///
     /// So a user who points the client at a second server — a move, a rename,
-    /// a test instance — sends the FIRST server's live `tasks_session` to the
+    /// a test instance — sends the FIRST server's live `smylte_session` to the
     /// second one, on an ordinary single-threaded launch, whenever the new
     /// login does not immediately replace it (blank credentials, a password
     /// the new server rejects, a server that is down). It is the one thing in

@@ -62,7 +62,23 @@
         var root = document.documentElement
         var mode = 'light'
         try {
-          var t = localStorage.getItem('tasks-theme')
+          // `smylte-theme` with a one-time promotion of the pre-rename
+          // `tasks-theme`. This script is the ONLY reader of the key — App.tsx
+          // takes the theme off root.dataset — so dropping the old name here is
+          // not a tidy-up, it is everyone's theme resetting to light on the
+          // first load after deploy, with the flash of wrong colors this whole
+          // pre-paint block exists to prevent.
+          var t = localStorage.getItem('smylte-theme')
+          if (t === null) {
+            var legacyT = localStorage.getItem('tasks-theme')
+            if (legacyT !== null) {
+              t = legacyT
+              try {
+                localStorage.setItem('smylte-theme', legacyT)
+                localStorage.removeItem('tasks-theme')
+              } catch (_) {}
+            }
+          }
           if (t === 'dark' || t === 'light') { root.dataset.theme = t; mode = t }
         } catch (_) {}
         // tokens.css is imported by the bundle, so nothing is in the cascade yet
@@ -70,7 +86,19 @@
         // shipped backgrounds instead, and let a custom --bg override them.
         var bg = mode === 'dark' ? '#0C0C10' : '#FBFAF7'
         try {
-          var raw = localStorage.getItem('tasks-appearance')
+          // Same promotion for the appearance cache; readCachedAppearance()
+          // in appearance.ts does the matching read on the bundle side.
+          var raw = localStorage.getItem('smylte-appearance')
+          if (raw === null) {
+            var legacyA = localStorage.getItem('tasks-appearance')
+            if (legacyA !== null) {
+              raw = legacyA
+              try {
+                localStorage.setItem('smylte-appearance', legacyA)
+                localStorage.removeItem('tasks-appearance')
+              } catch (_) {}
+            }
+          }
           if (raw) {
             var a = JSON.parse(raw)
             var act = (a && typeof a.active === 'string') ? a.active : ''

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from .edit import (
     PRIORITY,
+    UID_SUFFIX,
+    UID_SUFFIX_LEGACY,
     EventEdit,
     NotEditable,
     TaskEdit,
@@ -15,6 +17,7 @@ from .edit import (
     build_new_event,
     exclude_occurrence,
     rrule_from_spec,
+    uid_candidates,
     shift_series,
     split_series,
 )

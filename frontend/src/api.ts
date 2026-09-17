@@ -1020,7 +1020,7 @@ export const clientId = () => crypto.randomUUID().replace(/-/g, '')
 
 /** The UID the server will give a resource created with this client_id.
  *
- * Deterministic by contract — `engine.create_task` builds `f"{slug}@tasksd"`
+ * Deterministic by contract — `engine.create_task` builds `f"{slug}{UID_SUFFIX}"`
  * from the slug we send — and knowing it up front is what lets an optimistic
  * stand-in carry its *final* identity from the very first paint. It has to:
  * a subtask added to a task whose create is still in flight sends the parent's
@@ -1031,8 +1031,25 @@ export const clientId = () => crypto.randomUUID().replace(/-/g, '')
  *
  * `test_api.py::test_created_uid_is_derived_from_client_id` pins the format
  * from the other side, so the two can't drift apart silently. */
-export const UID_SUFFIX = '@tasksd'
+// Only ever used to predict the UID of a resource being created right now, so
+// it tracks whatever the server currently mints and needs no pre-rename
+// variant — nothing here looks an EXISTING item up by suffix.
+export const UID_SUFFIX = '@smylted'
 export const uidFor = (cid: string) => `${cid}${UID_SUFFIX}`
+
+/** The pre-rename suffix, for RESOLVING an existing uid — never for minting one.
+ *
+ * `uidFor` predicts the identity of a resource being created right now, so it
+ * tracks whatever the server currently mints and nothing else. Resolution is a
+ * different question with a different answer: the legacy-parent repair in
+ * `data.tsx` and `TasksView.tsx` takes a bare client_id written before `uidFor`
+ * existed and looks for the task it was meant to name — and a task that old was
+ * minted under the OLD suffix by definition. Pointing that lookup at the new
+ * suffix alone would quietly retire the repair for exactly the rows it exists
+ * to fix, and the orphan stays orphaned in Tasks.org and jtx Board too. */
+export const UID_SUFFIX_LEGACY = '@tasksd'
+export const uidCandidatesFor = (cid: string) =>
+  [`${cid}${UID_SUFFIX}`, `${cid}${UID_SUFFIX_LEGACY}`] as const
 
 /** A FastAPI `detail` as something a person can read.
  *

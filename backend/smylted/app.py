@@ -1550,7 +1550,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
 
     async def require_auth(
-        session: str | None = Cookie(default=None, alias="tasks_session"),
+        session: str | None = Cookie(default=None, alias="smylte_session"),
         cf_token: str | None = Header(default=None, alias="Cf-Access-Jwt-Assertion"),
     ) -> None:
         if authenticator is not None and not authenticator.verify_session(session):
@@ -2453,7 +2453,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @api.get("/events")
     async def events(
         request: Request,
-        session: str | None = Cookie(default=None, alias="tasks_session"),
+        session: str | None = Cookie(default=None, alias="smylte_session"),
     ):
         svc = _svc(request)
         queue = svc.subscribe()
@@ -2558,7 +2558,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         hash_budget.give_back()
         resp = JSONResponse({"authenticated": True, "user": authenticator.user})
         resp.set_cookie(
-            "tasks_session", authenticator.issue_session(),
+            "smylte_session", authenticator.issue_session(),
             max_age=authenticator.ttl_s, httponly=True,
             secure=settings.cookie_secure, samesite="strict", path="/",
         )
@@ -2567,7 +2567,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/api/logout")
     async def logout(
         request: Request,
-        session: str | None = Cookie(default=None, alias="tasks_session"),
+        session: str | None = Cookie(default=None, alias="smylte_session"),
     ):
         # Clearing the cookie only asks the browser to forget the token; the
         # token itself stays valid for the rest of its TTL. Withdraw this one by
@@ -2579,11 +2579,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 authenticator.revoke(jti, float(exp))
                 await _run(_svc(request).revoke_session, jti, float(exp))
         resp = JSONResponse({"authenticated": False})
+        resp.delete_cookie("smylte_session", path="/")
+        # And the pre-rename cookie. Nothing reads `tasks_session` any more, so
+        # it is inert against this app — but it is a browser holding a still-
+        # valid signed token, and clearing credentials is the one thing logout
+        # exists to do. Costs a header; removable once no browser can plausibly
+        # still be carrying one.
         resp.delete_cookie("tasks_session", path="/")
         return resp
 
     @app.get("/api/me")
-    async def me(session: str | None = Cookie(default=None, alias="tasks_session")):
+    async def me(session: str | None = Cookie(default=None, alias="smylte_session")):
         if authenticator is None:
             return {"authenticated": True, "user": "dev", "auth_enabled": False}
         if not authenticator.verify_session(session):
@@ -2951,13 +2957,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/internal/changed", status_code=202)
     async def internal_changed(
         request: Request,
-        secret: str | None = Header(default=None, alias="X-Tasks-Hook-Secret"),
+        secret: str | None = Header(default=None, alias="X-Smylte-Hook-Secret"),
+        # The pre-rename spelling, still accepted. The hook script and this app
+        # are installed by different steps of the migration, and this hook is
+        # fire-and-forget by design — Radicale never sees the 403 and nothing
+        # retries. A mismatch here does not fail loudly, it just means live sync
+        # quietly stops and the app falls back to its 30s poll, which looks like
+        # "sync feels sluggish" rather than like a broken deploy. Accepting both
+        # spellings makes the order of the migration steps stop mattering.
+        legacy_secret: str | None = Header(default=None, alias="X-Tasks-Hook-Secret"),
     ):
         # Must return instantly — the Radicale hook fires this while the storage
         # is locked (spec §4). Just wake the sync loop. Constant-time compare so
         # the secret can't be recovered by timing the response; on bytes, since
         # compare_digest raises on non-ASCII str (a stray header byte would 500).
-        if not (secret and hmac.compare_digest(secret.encode(), hook_secret.encode())):
+        offered = secret if secret is not None else legacy_secret
+        if not (offered and hmac.compare_digest(offered.encode(), hook_secret.encode())):
             raise HTTPException(status.HTTP_403_FORBIDDEN, "bad hook secret")
         request.app.state.sync_trigger.set()
         return {"queued": True}

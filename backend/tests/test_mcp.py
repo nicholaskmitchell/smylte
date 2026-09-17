@@ -612,11 +612,11 @@ def test_a_session_cookie_is_not_an_mcp_token(mcp):
     which is why access tokens are opaque rather than JWTs signed with the
     session key."""
     login = mcp.post("/api/login", json={"username": "admin", "password": PASSWORD})
-    cookie = login.cookies["tasks_session"]
+    cookie = login.cookies["smylte_session"]
     assert _rpc(mcp, cookie, "ping").status_code == 401
     # …and the reverse: an access token is not a session.
     token = _connect(mcp)["access_token"]
-    assert mcp.get("/api/me", headers={"Cookie": f"tasks_session={token}"}).status_code == 401
+    assert mcp.get("/api/me", headers={"Cookie": f"smylte_session={token}"}).status_code == 401
 
 
 @pytest.mark.parametrize("token", ["", "garbage", "a" * 400, "Bearer nested"])
