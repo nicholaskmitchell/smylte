@@ -1,13 +1,13 @@
 # ── Secrets / tokens — NEVER commit ──────────────────────────────────────────
-# Real config lives in /etc/tasks/ (outside the repo). Only *.env.example ships.
+# Real config lives in /etc/smylte/ (outside the repo). Only *.env.example ships.
 *.env
 !*.env.example
-/deploy/tasks-cloudflared.env
+/deploy/smylte-cloudflared.env
 
 # ── User content & derived cache (holds REAL synced calendar/task data) ──────
-/backend/tasks.db
-/backend/tasks.db-shm
-/backend/tasks.db-wal
+/backend/smylte.db
+/backend/smylte.db-shm
+/backend/smylte.db-wal
 /backend/*.db
 /backend/*.sqlite3
 

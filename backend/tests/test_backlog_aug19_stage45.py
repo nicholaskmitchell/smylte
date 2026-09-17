@@ -814,7 +814,7 @@ def _parse_systemd_env(text: str) -> dict[str, str]:
     """systemd's `EnvironmentFile=` parser, as a state machine.
 
     Mirrors `parse_env_file_internal` in systemd's src/basic/env-file.c, which
-    is what actually reads /etc/tasks/tasks.env — NOT the shell. Three
+    is what actually reads /etc/smylte/smylte.env — NOT the shell. Three
     characters carry meaning there that a `KEY=value` heredoc does not account
     for: right after `=` a quote opens a quoted section, and a backslash escapes
     the next character and disappears. An unterminated quote is not an error: at
@@ -939,21 +939,21 @@ def _run_setup_sh(password: str, root: pathlib.Path, *, username: str = "",
 
     script = _read("deploy/setup.sh")
     script = re.sub(r"^PY=.*$", f"PY={fake_py}", script, flags=re.M)
-    script = script.replace("/etc/tasks", str(etc / "tasks"))
+    script = script.replace("/etc/smylte", str(etc / "tasks"))
     script = script.replace("/etc/systemd/system", str(etc / "systemd"))
     script = script.replace("/usr/local/bin", str(root / "usrbin"))
-    script = script.replace("/home/$USER_NAME/tasks", str(REPO))
+    script = script.replace("/home/$USER_NAME/smylte", str(REPO))
     sh = root / "setup.sh"
     sh.write_text(script)
 
     env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}")
     # stdin: the Radicale password, then the app username (empty takes the
-    # default). `username` is driven because `TASKS_AUTH_USER` is the SECOND
+    # default). `username` is driven because `SMYLTE_AUTH_USER` is the SECOND
     # value the heredoc interpolates from a prompt and carries exactly the same
     # exposure — a fix applied to the password alone leaves it open.
     proc = subprocess.run(["bash", str(sh)], input=f"{password}\n{username}\n",
                           text=True, capture_output=True, timeout=120, env=env)
-    envfile = etc / "tasks" / "tasks.env"
+    envfile = etc / "tasks" / "smylte.env"
     if expect_refusal:
         assert proc.returncode != 0, (
             f"setup.sh accepted input it should have refused (rc=0): "
@@ -973,7 +973,7 @@ def _run_setup_sh(password: str, root: pathlib.Path, *, username: str = "",
 
 def test_setup_sh_writes_a_password_systemd_reads_back_unchanged():
     """setup.sh interpolates `$RADPW`, read from an interactive prompt, straight
-    into a `KEY=value` line of /etc/tasks/tasks.env. The bash side is safe — an
+    into a `KEY=value` line of /etc/smylte/smylte.env. The bash side is safe — an
     expansion result is not rescanned — but systemd's `EnvironmentFile=` parser
     is not the shell, and it is the one that reads this file.
 
@@ -985,8 +985,8 @@ def test_setup_sh_writes_a_password_systemd_reads_back_unchanged():
     A password that BEGINS with a quote is worse. `"tunnel-otter-9` puts the
     parser into DOUBLE_QUOTE_VALUE at the first character of the value and it
     swallows the remaining lines of the file into that one value — no error, no
-    warning — so TASKS_AUTH_PASSWORD_HASH, TASKS_SESSION_SECRET and
-    TASKS_HOOK_SECRET are never set at all and the app refuses to start.
+    warning — so SMYLTE_AUTH_PASSWORD_HASH, SMYLTE_SESSION_SECRET and
+    SMYLTE_HOOK_SECRET are never set at all and the app refuses to start.
 
     The script already reasons about this file being corrupted by a bad prompt
     (it guards `$HASH` for exactly that), so the gap is in which values got the
@@ -996,7 +996,7 @@ def test_setup_sh_writes_a_password_systemd_reads_back_unchanged():
     care HOW the values are quoted — only that systemd hands back what was
     typed.
     """
-    # WIDENED to drive `TASKS_AUTH_USER` as well. The heredoc interpolates TWO
+    # WIDENED to drive `SMYLTE_AUTH_USER` as well. The heredoc interpolates TWO
     # prompt-read values and the finding names both; escaping only the password
     # leaves the username carrying the identical defect, and the username is the
     # one an installer is more likely to paste something odd into.
@@ -1038,13 +1038,13 @@ def test_setup_sh_writes_a_password_systemd_reads_back_unchanged():
             f"{parsed.get('RADICALE_PASSWORD')!r}, not the password that was "
             f"typed ({password!r}) — every CalDAV call would 401"
         )
-        assert parsed.get("TASKS_AUTH_USER") == user, (
-            f"{label}: systemd reads TASKS_AUTH_USER as "
-            f"{parsed.get('TASKS_AUTH_USER')!r}, not the username that was "
+        assert parsed.get("SMYLTE_AUTH_USER") == user, (
+            f"{label}: systemd reads SMYLTE_AUTH_USER as "
+            f"{parsed.get('SMYLTE_AUTH_USER')!r}, not the username that was "
             f"typed ({user!r}) — nobody can log in to the app at all"
         )
-        for key in ("TASKS_AUTH_PASSWORD_HASH", "TASKS_SESSION_SECRET",
-                    "TASKS_HOOK_SECRET"):
+        for key in ("SMYLTE_AUTH_PASSWORD_HASH", "SMYLTE_SESSION_SECRET",
+                    "SMYLTE_HOOK_SECRET"):
             assert parsed.get(key), (
                 f"{label}: {key} is missing from the parsed env file — the "
                 f"password swallowed the rest of it"
@@ -1058,7 +1058,7 @@ def test_setup_sh_refuses_an_empty_radicale_password():
 
     `$HASH` two lines above already gets this exact guard, with a comment
     explaining why — "a mismatched/aborted prompt would write an empty
-    TASKS_AUTH_PASSWORD_HASH and the service would refuse to start". `$RADPW`
+    SMYLTE_AUTH_PASSWORD_HASH and the service would refuse to start". `$RADPW`
     got none, and its failure is quieter: the service starts fine and every
     CalDAV call fails.
 
@@ -1106,16 +1106,16 @@ def test_setup_sh_still_writes_an_ordinary_install_unchanged():
         f"an ordinary password did not survive: "
         f"{parsed.get('RADICALE_PASSWORD')!r}"
     )
-    assert parsed.get("TASKS_AUTH_USER") == "nick", (
-        f"an ordinary username did not survive: {parsed.get('TASKS_AUTH_USER')!r}"
+    assert parsed.get("SMYLTE_AUTH_USER") == "nick", (
+        f"an ordinary username did not survive: {parsed.get('SMYLTE_AUTH_USER')!r}"
     )
     # The rest of the file is untouched by the fix and must stay that way.
     assert parsed.get("RADICALE_URL") == "http://127.0.0.1:5232"
-    assert parsed.get("TASKS_AUTH_ENABLED") == "true"
-    assert parsed.get("TASKS_SESSION_TTL") == "604800"
-    assert parsed.get("TASKS_COOKIE_SECURE") == "true"
-    for key in ("TASKS_AUTH_PASSWORD_HASH", "TASKS_SESSION_SECRET",
-                "TASKS_HOOK_SECRET", "TASKS_DB", "TASKS_STATIC"):
+    assert parsed.get("SMYLTE_AUTH_ENABLED") == "true"
+    assert parsed.get("SMYLTE_SESSION_TTL") == "604800"
+    assert parsed.get("SMYLTE_COOKIE_SECURE") == "true"
+    for key in ("SMYLTE_AUTH_PASSWORD_HASH", "SMYLTE_SESSION_SECRET",
+                "SMYLTE_HOOK_SECRET", "SMYLTE_DB", "SMYLTE_STATIC"):
         assert parsed.get(key), f"{key} is missing from an ordinary install"
 
 

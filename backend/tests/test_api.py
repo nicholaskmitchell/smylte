@@ -189,7 +189,7 @@ def test_session_length_is_an_allowlist(client):
     client.put("/api/settings", json={"session_ttl_s": 99})
     assert client.get("/api/settings").json()["session_ttl_s"] == 7 * 24 * 3600
     # An explicit null is not a bad value: it clears the choice and hands the
-    # question back to the deployment's own TASKS_SESSION_TTL.
+    # question back to the deployment's own SMYLTE_SESSION_TTL.
     assert client.put("/api/settings", json={"session_ttl_s": None}).status_code == 200
 
 

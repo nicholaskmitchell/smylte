@@ -1,4 +1,4 @@
-# Scratch Radicale for Task Manager development (spec §8).
+# Scratch Radicale for Smylte development (spec §8).
 # Version-pinned to match production (3.7.4). This instance is disposable and
 # isolated: its own port (5233), its own storage volume, its own test user.
 # It must NEVER be pointed at ~/radicale/collections.

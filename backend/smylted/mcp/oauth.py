@@ -174,7 +174,7 @@ class OAuthServer:
         self.mcp_url = mcp_url.rstrip("/")
         # Derived, not shared: this key only ever signs consent requests, so it
         # cannot be confused with the session key even though both trace back to
-        # TASKS_SESSION_SECRET.
+        # SMYLTE_SESSION_SECRET.
         self._key = hmac.new(secret.encode(), b"tasksd/mcp/oauth-request",
                              hashlib.sha256).digest()
         self._verify_password = verify_password

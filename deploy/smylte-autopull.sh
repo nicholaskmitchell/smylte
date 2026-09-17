@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Pull-only deploy sync for the Tasks app (mirrors notes-autopull.sh).
-# Fast-forward only — never clobbers local. User content (tasks.db) and secrets
-# (/etc/tasks) are gitignored / out-of-tree, so a pull only touches source.
+# Pull-only deploy sync for Smylte (mirrors notes-autopull.sh).
+# Fast-forward only — never clobbers local. User content (smylte.db) and secrets
+# (/etc/smylte) are gitignored / out-of-tree, so a pull only touches source.
 set -u
 export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
 
-REPO_DIR="$HOME/tasks"
-LOG="$HOME/tasks-autopull.log"
-LOCK="$HOME/.tasks-autopull.lock"
+REPO_DIR="$HOME/smylte"
+LOG="$HOME/smylte-autopull.log"
+LOCK="$HOME/.smylte-autopull.lock"
 
 exec 9>"$LOCK"
 flock -n 9 || exit 0
@@ -46,9 +46,9 @@ if echo "$CHANGED" | grep -q '^frontend/'; then
   ( cd frontend && npm run build ) >>"$LOG" 2>&1
 fi
 
-# Restart the app (allowed passwordless via /etc/sudoers.d/tasks-autopull).
-if sudo -n systemctl restart tasks.service >>"$LOG" 2>&1; then
-  echo "$(ts) applied + restarted tasks.service" >>"$LOG"
+# Restart the app (allowed passwordless via /etc/sudoers.d/smylte-autopull).
+if sudo -n systemctl restart smylte.service >>"$LOG" 2>&1; then
+  echo "$(ts) applied + restarted smylte.service" >>"$LOG"
 else
   echo "$(ts) restart failed (sudoers rule?)" >>"$LOG"
 fi

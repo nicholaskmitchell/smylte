@@ -222,7 +222,7 @@ def test_a_test_send_is_refused_when_the_deployment_forbids_notifications(tmp_pa
     with TestClient(app) as c:
         c.post("/api/login", json={"username": "admin", "password": "testpass123"})
         r = c.post("/api/notifications/test")
-        assert r.status_code == 409 and "TASKS_NOTIFY_ENABLED" in r.json()["detail"]
+        assert r.status_code == 409 and "SMYLTE_NOTIFY_ENABLED" in r.json()["detail"]
 
 
 # ── the per-item reminder ────────────────────────────────────────────────────

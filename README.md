@@ -512,7 +512,7 @@ storage. `appearance.test.ts` asserts the defaults *and* the presets still
 match `tokens.css`.
 
 **Connect it to Claude.** Settings → Account → Connected apps, once
-`TASKS_MCP_ENABLED=true`, exposes a remote **MCP server** at `/mcp` that Claude
+`SMYLTE_MCP_ENABLED=true`, exposes a remote **MCP server** at `/mcp` that Claude
 (or any MCP client) can be pointed at as a custom connector — around forty
 tools over lists, tasks (including parking one), subtasks, search, tags,
 calendars, events including the recurrence scopes, free/busy, booking links, the
@@ -684,15 +684,15 @@ cd scratch && docker compose up -d --build      # http://127.0.0.1:5233
 # 2. backend — deps in a venv, then run the API on 127.0.0.1:8080
 cd ../backend && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 #    dev defaults already point at the scratch Radicale; auth can be disabled
-#    for local work (see backend/smylted/config.py and deploy/tasks.env.example)
-TASKS_AUTH_ENABLED=false .venv/bin/python -m smylted
+#    for local work (see backend/smylted/config.py and deploy/smylte.env.example)
+SMYLTE_AUTH_ENABLED=false .venv/bin/python -m smylted
 
 # 3. frontend — Vite dev server proxies /api to the backend on :8080
 cd ../frontend && npm install && npm run dev     # http://127.0.0.1:5173
 ```
 
 For a production-shaped run, `npm run build` emits `frontend/dist/`, which the
-backend serves statically (`TASKS_STATIC`) so the whole app is one origin.
+backend serves statically (`SMYLTE_STATIC`) so the whole app is one origin.
 
 ```bash
 # tests — integration tests target the scratch Radicale on :5233 and skip if
@@ -712,8 +712,8 @@ Live at `https://radicale.nicholaskmitchell.com` behind a Cloudflare tunnel and
 a Caddy path split: `/dav*` → Radicale (device CalDAV sync), everything else →
 the app on `127.0.0.1:8080`. The app authenticates to Radicale as you over
 localhost; Radicale is never exposed except through `/dav`. Auto-deploys from
-`main` via `deploy/tasks-autopull.sh` on a one-minute cron (installed at
-`~/tasks-autopull.sh`). Full runbook, systemd unit, and Caddy/cloudflared config
+`main` via `deploy/smylte-autopull.sh` on a one-minute cron (installed at
+`~/smylte-autopull.sh`). Full runbook, systemd unit, and Caddy/cloudflared config
 in `docs/DEPLOY.md` and `deploy/`.
 
 ## Disclosure

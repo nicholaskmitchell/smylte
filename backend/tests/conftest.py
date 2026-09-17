@@ -28,7 +28,7 @@ USER = os.environ.get("SCRATCH_USER", "testuser")
 PASSWORD = os.environ.get("SCRATCH_PASSWORD", "testpass")
 # Host path to the scratch storage, used only by the .Radicale.cache-drop test.
 SCRATCH_STORAGE = os.environ.get(
-    "SCRATCH_STORAGE", os.path.expanduser("~/tasks/scratch/data/collections")
+    "SCRATCH_STORAGE", os.path.expanduser("~/smylte/scratch/data/collections")
 )
 
 
@@ -99,7 +99,7 @@ def collection(dav):
 
 @pytest.fixture
 def db(tmp_path):
-    conn = connect(str(tmp_path / "tasks.db"))
+    conn = connect(str(tmp_path / "smylte.db"))
     init_db(conn)
     yield conn
     conn.close()

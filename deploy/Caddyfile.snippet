@@ -58,13 +58,13 @@
 	}
 
 	# The Radicale storage hook (POST /internal/changed) is host-local only:
-	# tasks-notify curls 127.0.0.1:8080 directly, bypassing this proxy. It must
+	# smylte-notify curls 127.0.0.1:8080 directly, bypassing this proxy. It must
 	# never be reachable through the public tunnel.
 	handle /internal* {
 		respond 403
 	}
 
-	# Everything else -> the Tasks + Calendar web app.
+	# Everything else -> the Smylte web app.
 	handle {
 		# NO Content-Security-Policy here, deliberately. The app sets one itself
 		# (smylted/csp.py), and it has to: the policy carries a sha256 of the
@@ -73,7 +73,7 @@
 		# second policy here would not harden anything — browsers enforce the
 		# INTERSECTION of every policy on a response, so the two would combine
 		# into one that neither file describes, and the symptom is a blank page.
-		# To relax or disable it, set TASKS_CSP in /etc/tasks/tasks.env.
+		# To relax or disable it, set SMYLTE_CSP in /etc/smylte/smylte.env.
 
 		# Refuse an oversized body at the edge, before the app allocates for it.
 		# /api/login and the public booking POST are anonymous, and FastAPI

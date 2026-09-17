@@ -40,7 +40,7 @@ public sealed class LocalServerTests : IDisposable
 
         // Never Start()ed: Resolve is pure path arithmetic and binding a port
         // would make the suite depend on what else is listening.
-        _server = new LocalServer(_root, "https://tasks.example.test", 48231);
+        _server = new LocalServer(_root, "https://smylte.example.test", 48231);
     }
 
     public void Dispose()
@@ -112,14 +112,14 @@ public sealed class LocalServerTests : IDisposable
         // ObjectDisposedException. It landed in a catch block that disposed the
         // same server again, so the exception escaped a fire-and-forgotten Task
         // and took the rest of the cleanup with it.
-        var started = new LocalServer(_root, "https://tasks.example.test", 48731);
+        var started = new LocalServer(_root, "https://smylte.example.test", 48731);
         started.Start();
         started.Dispose();
         started.Dispose();
 
         // And on one that was constructed and never started, which is the
         // shape an overtaken start now disposes.
-        var idle = new LocalServer(_root, "https://tasks.example.test", 48732);
+        var idle = new LocalServer(_root, "https://smylte.example.test", 48732);
         idle.Dispose();
         idle.Dispose();
     }
@@ -133,8 +133,8 @@ public sealed class LocalServerTests : IDisposable
         // overtaken start would hold the port across a twenty-second login and
         // the next start would silently move to another one — persisting it,
         // so the SPA came back at a new origin with an empty localStorage.
-        using var first = new LocalServer(_root, "https://tasks.example.test", 48741);
-        using var second = new LocalServer(_root, "https://tasks.example.test", 48741);
+        using var first = new LocalServer(_root, "https://smylte.example.test", 48741);
+        using var second = new LocalServer(_root, "https://smylte.example.test", 48741);
 
         Assert.Equal(48741, first.Port);
         Assert.Equal(48741, second.Port);
@@ -188,7 +188,7 @@ public sealed class LocalServerTests : IDisposable
     public void LocaliseCookie_drops_domain_and_secure_and_downgrades_samesite()
     {
         var localised = LocalServer.LocaliseCookie(
-            "session=abc; Path=/; Domain=tasks.example.test; Secure; HttpOnly; SameSite=None");
+            "session=abc; Path=/; Domain=smylte.example.test; Secure; HttpOnly; SameSite=None");
 
         Assert.DoesNotContain("Domain=", localised, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("Secure", localised, StringComparison.OrdinalIgnoreCase);
@@ -259,7 +259,7 @@ public sealed class LocalServerCspTests : IDisposable
         File.WriteAllText(Path.Combine(root, "index.html"),
             $"<!doctype html><html><head><script>{InlineScript}</script></head><body></body></html>");
 
-        _server = new LocalServer(root, "https://tasks.example.test", 48311);
+        _server = new LocalServer(root, "https://smylte.example.test", 48311);
         _server.Start();
     }
 
@@ -385,7 +385,7 @@ public sealed class LocalServerBridgeTests : IDisposable
         var root = Path.Combine(_dir, "web");
         Directory.CreateDirectory(root);
         File.WriteAllText(Path.Combine(root, "index.html"), "<!doctype html>");
-        _server = new LocalServer(root, "https://tasks.example.test", 48411) { Bridge = _bridge };
+        _server = new LocalServer(root, "https://smylte.example.test", 48411) { Bridge = _bridge };
         _server.Start();
     }
 

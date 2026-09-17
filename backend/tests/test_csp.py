@@ -189,7 +189,7 @@ def test_report_only_mode_blocks_nothing(tmp_path):
 
 def test_off_sets_no_header_at_all(tmp_path):
     """The escape hatch has to actually escape: a policy that turns out to block
-    something real must be removable from /etc/tasks/tasks.env, without a code
+    something real must be removable from /etc/smylte/smylte.env, without a code
     change or a frontend redeploy."""
     with TestClient(_app(tmp_path, csp_mode="off")) as c:
         r = c.get("/api/me")

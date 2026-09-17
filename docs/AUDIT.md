@@ -1,5 +1,12 @@
 # Audit backlog
 
+> **Naming note (2026-09-17).** The backend package was renamed `tasksd` →
+> `smylted`, the `TASKS_*` environment variables to `SMYLTE_*`, and the systemd
+> unit and its paths from `tasks` to `smylte`. Everything below predates that
+> rename and is left in its original spelling on purpose: this file is a record
+> of what was found and when, and rewriting the evidence would falsify it. For
+> current paths and variable names see `README.md` and `docs/DEPLOY.md`.
+
 **3 open, all by decision — see the 2026-09-03 sweep.** Every
 other finding in this file is closed: the 82 that sweep fixed, all five stages
 of the 2026-08-25 sweep, the one its own remediation turned up (marked

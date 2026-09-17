@@ -355,7 +355,7 @@ CREATE TABLE IF NOT EXISTS oauth_tokens (
     created_at           REAL NOT NULL,
     -- Which credentials this grant was minted under (Authenticator.
     -- credential_version). Checked on every bearer AND before a refresh is
-    -- consumed, so rotating the password -- or TASKS_SESSION_SECRET -- ends the
+    -- consumed, so rotating the password -- or SMYLTE_SESSION_SECRET -- ends the
     -- MCP grants the same way it ends the browser sessions. Without it,
     -- docs/DEPLOY.md's "sign out everywhere" left a 30-day backdoor.
     cv                   TEXT NOT NULL DEFAULT ''

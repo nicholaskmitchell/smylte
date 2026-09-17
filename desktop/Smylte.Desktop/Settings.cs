@@ -159,7 +159,7 @@ public sealed class Settings
     /// and kept, and `SeedSessionAsync` / `WebHost.SeedAsync` re-scope every
     /// cookie the real server mints to domain `localhost` so the page can use
     /// it through the proxy. That re-scoping is what makes this a problem
-    /// rather than a curiosity — a cookie for `tasks.example.com` and a cookie
+    /// rather than a curiosity — a cookie for `smylte.example.com` and a cookie
     /// for a different server are the same cookie as far as the jar is
     /// concerned, and the proxy relays whatever the page sends.
     ///
