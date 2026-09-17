@@ -10,6 +10,12 @@
 /backend/smylte.db-wal
 /backend/*.db
 /backend/*.sqlite3
+# `*.db` does not match a `-wal`/`-shm` SUFFIX, so the sidecars need their own
+# globs. Without them a working copy created before the Smylte rename — where
+# the file is still tasks.db — has its WAL and shared-memory files untracked and
+# stageable, and those hold real synced calendar and task content.
+/backend/*.db-wal
+/backend/*.db-shm
 
 # ── Scratch Radicale runtime storage (test data) ─────────────────────────────
 /scratch/data/

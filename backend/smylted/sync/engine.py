@@ -449,7 +449,16 @@ class SyncEngine:
         except PreconditionFailed as e:
             stored = self.dav.get(href)
             fields = ical.extract_from_raw(stored.data)
-            if fields is None or fields.uid != uid:
+            # Either spelling counts as "ours". `uid` was minted a moment ago and
+            # so ends @smylted, but the occupant of this href may predate the
+            # rename and end @tasksd — the slug, which is what makes the href
+            # deterministic per logical create, is identical either way. Compared
+            # against the new suffix alone, a replayed create of a pre-rename
+            # resource reads as a foreign collision and answers 409 instead of
+            # succeeding. This is the one place that resolves an existing UID
+            # rather than minting one, so it is the one place that needs both.
+            ours = ical.uid_candidates(uid.rsplit("@", 1)[0])
+            if fields is None or fields.uid not in ours:
                 # The href names the Radicale user and the collection's UUID, and
                 # `app.py` returns `str(exc)` verbatim as the 409 body — including
                 # on POST /api/public/booking/{token}/book, the one write path an

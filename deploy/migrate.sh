@@ -84,7 +84,16 @@ is_root() { [ "$(id -u)" -eq 0 ]; }
 log()     { printf '%s migrate: %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
 run()     { if [ "$DRY" = 1 ]; then printf '  would: %s\n' "$*"; else "$@"; fi; }
 
-level() { [ -f "$LEVEL_FILE" ] && cat "$LEVEL_FILE" 2>/dev/null || echo 0; }
+level() {
+  # Sanitised: an empty, whitespace-only or truncated level file (a crash
+  # mid-write) would otherwise make $((10#$CURRENT)) an arithmetic error, which
+  # abandons the whole migration loop while the script still exits 0 — every
+  # pending migration silently skipped, --status reporting nothing pending.
+  local v=""
+  [ -f "$LEVEL_FILE" ] && v="$(cat "$LEVEL_FILE" 2>/dev/null || true)"
+  v="$(printf '%s' "$v" | tr -cd '0-9')"
+  printf '%s' "${v:-0}"
+}
 
 set_level() {
   [ "$DRY" = 1 ] && { printf '  would: record level %s\n' "$1"; return 0; }
@@ -131,7 +140,22 @@ for f in "${FILES[@]}"; do
   # shellcheck disable=SC1090
   . "$f"
 
-  if [ "$NEEDS_ROOT" = yes ] && ! is_root; then
+  # applies() FIRST, privilege second. Reversed, a root-needing migration that
+  # has nothing left to do still stops an unprivileged run — so `--auto`, which
+  # autopull runs every minute as the app user, would jam on it forever, never
+  # record the level, and never reach any later migration. applies() only stats
+  # paths, so it is safe to ask without privilege.
+  if ! applies; then
+    log "$n already satisfied: $(describe)"
+    set_level "$n"
+    continue
+  fi
+
+  # A dry run changes nothing, so it needs no privilege either — and the runbook
+  # tells the operator to preview before escalating. Gating the preview behind
+  # root made that instruction fail with an error whose remedy (`sudo migrate.sh`)
+  # drops the --dry-run flag and performs the real migration.
+  if [ "$NEEDS_ROOT" = yes ] && [ "$DRY" != 1 ] && ! is_root; then
     if [ "$MODE" = auto ]; then
       # Autopull's case. Say it loudly and stop — do NOT skip ahead to a later
       # migration, which would apply it against a box the earlier one has not
@@ -143,12 +167,6 @@ for f in "${FILES[@]}"; do
     log "migration $n needs root: $(describe)"
     log "re-run as:  sudo $REPO_DIR/deploy/migrate.sh"
     exit 1
-  fi
-
-  if ! applies; then
-    log "$n already satisfied: $(describe)"
-    set_level "$n"
-    continue
   fi
 
   log "applying $n: $(describe)"
