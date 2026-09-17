@@ -52,15 +52,15 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 from helpers import foreign_raw
 
-from tasksd.access import AccessVerifier
-from tasksd.app import create_app
-from tasksd.auth import Authenticator
-from tasksd.config import Settings
-from tasksd.dav.client import CollectionInfo, Item
-from tasksd.db import store
-from tasksd.ical import extract_from_raw
-from tasksd.mcp.api import McpApi
-from tasksd.service import TaskService
+from smylted.access import AccessVerifier
+from smylted.app import create_app
+from smylted.auth import Authenticator
+from smylted.config import Settings
+from smylted.dav.client import CollectionInfo, Item
+from smylted.db import store
+from smylted.ical import extract_from_raw
+from smylted.mcp.api import McpApi
+from smylted.service import SmylteService
 from tests.conftest import api_settings
 
 pytestmark = [pytest.mark.backlog, pytest.mark.stage2]
@@ -85,7 +85,7 @@ def _settings(db: str) -> Settings:
 
 @pytest.fixture
 def svc(tmp_path):
-    s = TaskService(_settings(str(tmp_path / "s2.db")))
+    s = SmylteService(_settings(str(tmp_path / "s2.db")))
     store.upsert_collection(
         s._conn, CollectionInfo(href=LIST_A, displayname="Work", components={"VTODO"}))
     yield s
@@ -628,10 +628,10 @@ def test_the_unit_does_not_open_its_own_interpreter_and_source_to_writes():
     )
 
     opened = [p for line in rw for p in line.split()
-              if pathlib.PurePosixPath(p).name in {"backend", "tasksd", ".venv"}
-              or p.rstrip("/").endswith(("/backend", "/tasksd", "/.venv"))]
+              if pathlib.PurePosixPath(p).name in {"backend", "smylted", ".venv"}
+              or p.rstrip("/").endswith(("/backend", "/smylted", "/.venv"))]
     assert opened == [], (
         f"ReadWritePaths opens {opened} — that covers .venv (the interpreter "
-        "ExecStart runs) and tasksd (the source), so the hardening block above "
+        "ExecStart runs) and smylted (the source), so the hardening block above "
         "it does not bound a write primitive in the parse path"
     )

@@ -18,8 +18,8 @@ import jwt
 import pytest
 from fastapi.testclient import TestClient
 
-from tasksd.app import create_app
-from tasksd.auth import Authenticator, hash_password, verify_password
+from smylted.app import create_app
+from smylted.auth import Authenticator, hash_password, verify_password
 from tests.conftest import api_settings
 
 SECRET = "s" * 40          # matches api_settings
@@ -405,13 +405,13 @@ def test_public_booking_unknown_token_is_404(make_app):
 def test_502_bodies_never_leak_internals(make_app, monkeypatch):
     # The DavError handler must speak in generic terms; URLs, credentials, and
     # exception internals stay in the log.
-    from tasksd.dav.errors import DavError
-    from tasksd.service import TaskService
+    from smylted.dav.errors import DavError
+    from smylted.service import SmylteService
 
     def boom(self):
         raise DavError("http://127.0.0.1:5233/testuser/secret-collection auth=testpass")
 
-    monkeypatch.setattr(TaskService, "list_lists", boom)
+    monkeypatch.setattr(SmylteService, "list_lists", boom)
     with TestClient(make_app()) as c:
         c.post("/api/login", json=LOGIN)
         r = c.get("/api/lists")
@@ -497,8 +497,8 @@ def test_ordinary_unicode_names_still_work(client):
 def test_the_xml_builders_refuse_what_lxml_cannot_serialize():
     """Backstop beneath the 422: no caller should be able to turn a stray byte
     into an unhandled crash deep in the DAV client."""
-    from tasksd.dav import xml as X
-    from tasksd.dav.errors import DavError
+    from smylted.dav import xml as X
+    from smylted.dav.errors import DavError
 
     for bad in ("a\x00b", "a\x0bb", "a\x1fb"):
         with pytest.raises(DavError):

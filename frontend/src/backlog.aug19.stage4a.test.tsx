@@ -872,7 +872,7 @@ describe('2026-08-19 — the booking-link editor', () => {
   // assertions all run in both branches.
   //
   // The contract is the server's, not this file's. `parse_availability`
-  // (backend/tasksd/scheduling.py:60) requires every field filled, `s < e`
+  // (backend/smylted/scheduling.py:60) requires every field filled, `s < e`
   // strictly (EQUAL endpoints are illegal), and no overlap once the day's
   // ranges are SORTED — so submission order is irrelevant and exactly adjacent
   // ranges are LEGAL. An empty day is omitted rather than rejected.

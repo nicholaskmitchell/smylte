@@ -12,8 +12,8 @@ from __future__ import annotations
 
 import pytest
 
-from tasksd.dav import xml as X
-from tasksd.dav.errors import DavError
+from smylted.dav import xml as X
+from smylted.dav.errors import DavError
 
 
 def ms(body: str) -> bytes:

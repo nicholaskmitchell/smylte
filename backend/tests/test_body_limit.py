@@ -1,4 +1,4 @@
-"""The request-body bound (tasksd/limits.py).
+"""The request-body bound (smylted/limits.py).
 
 The defect this pins: every guard the anonymous routes have — the login
 limiter, the hash semaphore, the public booking throttles — lives inside the
@@ -19,8 +19,8 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from tasksd.app import create_app
-from tasksd.limits import BodySizeLimitMiddleware
+from smylted.app import create_app
+from smylted.limits import BodySizeLimitMiddleware
 from tests.conftest import api_settings
 
 CAP = 4096

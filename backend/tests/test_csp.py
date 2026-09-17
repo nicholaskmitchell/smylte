@@ -1,4 +1,4 @@
-"""The Content-Security-Policy (tasksd/csp.py).
+"""The Content-Security-Policy (smylted/csp.py).
 
 The policy is the bound over everything the field-level guards do not name. It
 is also the kind of control that fails silently in both directions: too loose
@@ -20,8 +20,8 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from tasksd.app import create_app
-from tasksd.csp import build_policy, inline_script_hashes, policy_for_index
+from smylted.app import create_app
+from smylted.csp import build_policy, inline_script_hashes, policy_for_index
 from tests.conftest import api_settings
 
 HEADER = "content-security-policy"

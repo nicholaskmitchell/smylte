@@ -16,8 +16,8 @@ import threading
 import pytest
 from fastapi.testclient import TestClient
 
-from tasksd.app import create_app
-from tasksd.db import store
+from smylted.app import create_app
+from smylted.db import store
 from tests.conftest import api_settings
 
 pytestmark = [pytest.mark.backlog, pytest.mark.stage4]

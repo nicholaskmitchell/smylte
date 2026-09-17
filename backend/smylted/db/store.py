@@ -2180,7 +2180,7 @@ def touch_display(conn: sqlite3.Connection, token: str) -> None:
     Which is why the write is SWALLOWED rather than merely unchecked. The
     docstring has always promised this and the code did not deliver it: this is
     the one write on an otherwise entirely read-only path, `display_frame` calls
-    it as its last act, and nothing anywhere in tasksd catches `sqlite3.Error`
+    it as its last act, and nothing anywhere in smylted catches `sqlite3.Error`
     — app.py registers handlers for seven exception types and none of them is a
     database error. So a locked or full database turned a fully-built frame into
     a 500, on the route with no session, for a timestamp nobody reads but the

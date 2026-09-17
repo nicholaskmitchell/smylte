@@ -12,8 +12,8 @@ from __future__ import annotations
 import glob
 import os
 
-from tasksd.dav import DavClient
-from tasksd.ical import canonical as C
+from smylted.dav import DavClient
+from smylted.ical import canonical as C
 
 CORPUS = os.path.join(os.path.dirname(__file__), "..", "tests", "corpus", "*.ics")
 

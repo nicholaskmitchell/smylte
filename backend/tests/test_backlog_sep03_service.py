@@ -16,7 +16,7 @@ migrations).
 Every pin here is in-process. The series edit and the move drive the real
 `SyncEngine` against a write-capable DAV double (the same shape
 `test_backlog_aug25_stage3.py` introduced), the search pin goes through the
-real `McpServer` with a read-only scope, and everything else is `TaskService`
+real `McpServer` with a read-only scope, and everything else is `SmylteService`
 over an in-memory cache. Nothing needs the scratch Radicale, so nothing here
 carries `@pytest.mark.radicale`.
 
@@ -36,19 +36,19 @@ from zoneinfo import ZoneInfo
 import pytest
 from helpers import foreign_event_raw, foreign_raw
 
-from tasksd import due
-from tasksd.config import Settings
-from tasksd.dav.client import CollectionInfo, Item
-from tasksd.dav.errors import NotFound, PreconditionFailed
-from tasksd.db import store
-from tasksd.ical import extract_from_raw
-from tasksd.ical.edit import EventEdit
-from tasksd.mcp.api import McpApi, _intrinsic_order
-from tasksd.mcp.server import INVALID_PARAMS, McpServer
-from tasksd.mcp.tools import SCOPE_READ
-from tasksd.notify import rules as R
-from tasksd.service import TaskService
-from tasksd.sync import SyncEngine
+from smylted import due
+from smylted.config import Settings
+from smylted.dav.client import CollectionInfo, Item
+from smylted.dav.errors import NotFound, PreconditionFailed
+from smylted.db import store
+from smylted.ical import extract_from_raw
+from smylted.ical.edit import EventEdit
+from smylted.mcp.api import McpApi, _intrinsic_order
+from smylted.mcp.server import INVALID_PARAMS, McpServer
+from smylted.mcp.tools import SCOPE_READ
+from smylted.notify import rules as R
+from smylted.service import SmylteService
+from smylted.sync import SyncEngine
 
 pytestmark = [pytest.mark.backlog, pytest.mark.stage3]
 
@@ -85,7 +85,7 @@ def _task(conn, href: str, uid: str, summary: str, *, due_date: str | None = Non
 
 @pytest.fixture
 def svc():
-    s = TaskService(_settings())
+    s = SmylteService(_settings())
     for href, name, comps in ((CAL_A, "Meetings", {"VEVENT"}), (CAL_B, "Personal", {"VEVENT"}),
                               (LIST_A, "Work", {"VTODO"})):
         store.upsert_collection(
@@ -126,7 +126,7 @@ class _FakeDav:
         pass
 
 
-def _with_fake_dav(svc: TaskService, initial: dict[str, bytes]) -> _FakeDav:
+def _with_fake_dav(svc: SmylteService, initial: dict[str, bytes]) -> _FakeDav:
     """Swap the service's engine for one over the double, caching `initial`."""
     dav = _FakeDav(initial)
     svc._engine = SyncEngine(dav, svc._conn)
@@ -164,7 +164,7 @@ def test_a_1mb_search_query_is_refused_before_the_lock(svc, monkeypatch):
         reached.append(len(query))
         return []
 
-    monkeypatch.setattr("tasksd.service.store.search", sentinel)
+    monkeypatch.setattr("smylted.service.store.search", sentinel)
     server = McpServer(McpApi(svc))
     reply = _rpc(server, "smylte_search_tasks", {"query": "a " * 500_000})
 
@@ -429,7 +429,7 @@ def test_an_older_database_gains_the_cache_and_token_columns(tmp_path):
     assert "cv" in cols("oauth_tokens")
 
     # The real readers, over the legacy rows — which is the whole point.
-    svc = TaskService(_settings(db_path=str(tmp_path / "unused.db")))
+    svc = SmylteService(_settings(db_path=str(tmp_path / "unused.db")))
     try:
         cats = store.get_all_categories(conn, "/u/w/")
         side = store.get_all_sidecar(conn, "/u/w/")
@@ -466,7 +466,7 @@ def test_a_full_outage_after_boot_is_recorded_where_the_notifier_looks(svc):
     left before the per-collection loop, `store.set_sync_error` was never
     reached, `sync_health()` stayed empty, and the one notifier rule written
     for "everything on screen looks normal and the data is simply frozen"
-    never fired. Only `bootstrap()` recorded it, i.e. only if tasksd happened
+    never fired. Only `bootstrap()` recorded it, i.e. only if smylted happened
     to restart during the outage."""
     store.set_sync_token(svc._conn, CAL_A, "t0")
     stale = (datetime.now(timezone.utc) - timedelta(hours=3)).isoformat().replace("+00:00", "Z")
@@ -661,7 +661,7 @@ def test_a_booking_link_carries_its_absolute_url_when_the_deployment_knows_its_o
     """The Windows client's "Copy link" needs an absolute URL and only has the
     token; `settings.public_url` is the one place the deployment's origin is
     configured (config.py normalizes it, no trailing slash)."""
-    s = TaskService(_settings(public_url="https://tasks.example.test"))
+    s = SmylteService(_settings(public_url="https://tasks.example.test"))
     try:
         store.upsert_collection(
             s._conn, CollectionInfo(href=CAL_A, displayname="Meetings", components={"VEVENT"}))
@@ -683,7 +683,7 @@ def test_a_display_carries_its_absolute_url_when_the_deployment_knows_its_origin
     """Filed during remediation: the display row had the defect "Copy link" was
     fixed for — inside the Windows client `location.origin` is localhost. The
     url rides only with the token, since a frame must not carry its credential."""
-    s = TaskService(_settings(public_url="https://tasks.example.test"))
+    s = SmylteService(_settings(public_url="https://tasks.example.test"))
     try:
         d = s.create_display({"name": "Hallway", "mode": "calendar"})
         assert d["url"] == f"https://tasks.example.test/display/{d['token']}"

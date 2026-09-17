@@ -2,7 +2,7 @@
 
 `tools/list` publishes a schema per tool, but a client is not obliged to honour
 it and a compromised or simply buggy one will not. Everything downstream —
-`TaskService`, the scheduling maths, the iCalendar writer — was written behind
+`SmylteService`, the scheduling maths, the iCalendar writer — was written behind
 FastAPI, where pydantic had already checked bounds; reaching it from here
 without an equivalent check meant the advertised contract was decoration.
 

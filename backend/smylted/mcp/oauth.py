@@ -52,7 +52,7 @@ import time
 from dataclasses import dataclass
 from urllib.parse import urlencode, urlsplit, urlunsplit
 
-log = logging.getLogger("tasksd.mcp")
+log = logging.getLogger("smylted.mcp")
 
 # ── lifetimes ────────────────────────────────────────────────────────────────
 # Short access tokens because the spec asks for them and refresh is cheap; a

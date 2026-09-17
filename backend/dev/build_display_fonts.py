@@ -6,7 +6,7 @@ The display is one design with two rasterizers — a browser and Pillow — and 
 is what keeps the second one in the first one's typefaces. It takes the THREE
 SHIPPED FAMILIES from `frontend/public/fonts/` and pins each to the weight (and,
 for Fraunces, the optical size) the design actually uses, writing static TTFs
-into `tasksd/display/fonts/`.
+into `smylted/display/fonts/`.
 
 Nothing imports this at runtime. It is here rather than in a README snippet
 because the choices below are empirical — they were measured against a
@@ -61,7 +61,7 @@ from fontTools.varLib import instancer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SRC = os.path.normpath(os.path.join(HERE, "..", "..", "frontend", "public", "fonts"))
-DEST = os.path.normpath(os.path.join(HERE, "..", "tasksd", "display", "fonts"))
+DEST = os.path.normpath(os.path.join(HERE, "..", "smylted", "display", "fonts"))
 
 # (output name, subset prefix, axis pins). See the module docstring for why each
 # number is what it is.

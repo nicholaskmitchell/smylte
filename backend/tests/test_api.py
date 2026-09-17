@@ -9,7 +9,7 @@ from unittest import mock
 import pytest
 from fastapi.testclient import TestClient
 
-from tasksd.app import create_app
+from smylted.app import create_app
 from tests.conftest import api_settings
 
 pytestmark = pytest.mark.radicale
@@ -245,7 +245,7 @@ def test_shortening_the_session_ends_the_one_already_open(_scratch_up, tmp_path)
         # Still inside a day, so the same cookie is still good.
         assert c.get("/api/me").status_code == 200
 
-        with mock.patch("tasksd.auth.time.time", return_value=time.time() + day + 60):
+        with mock.patch("smylted.auth.time.time", return_value=time.time() + day + 60):
             assert c.get("/api/me").status_code == 401
         # …and it comes back once the setting is long again, because the token's
         # own exp still has a month to run. Lengthening is the direction that
@@ -829,8 +829,8 @@ def test_search_matches_prefixes(client):
 
 
 def test_edit_conflict_is_409(client, monkeypatch):
-    from tasksd.service import TaskService
-    from tasksd.sync.engine import ConflictError
+    from smylted.service import SmylteService
+    from smylted.sync.engine import ConflictError
 
     lid = _list(client)["id"]
     t = client.post(f"/api/lists/{lid}/tasks", json={"summary": "contested"}).json()
@@ -838,15 +838,15 @@ def test_edit_conflict_is_409(client, monkeypatch):
     def boom(self, href, uid, edit):
         raise ConflictError(f"edit conflict on {uid}: retry the change")
 
-    monkeypatch.setattr(TaskService, "edit_task", boom)
+    monkeypatch.setattr(SmylteService, "edit_task", boom)
     r = client.patch(f"/api/lists/{lid}/tasks/{t['uid']}", json={"summary": "x"})
     assert r.status_code == 409
     assert "conflict" in r.json()["detail"]
 
 
 def test_transport_error_is_dav_error():
-    from tasksd.dav import DavClient
-    from tasksd.dav.errors import DavError
+    from smylted.dav import DavClient
+    from smylted.dav.errors import DavError
 
     c = DavClient("http://127.0.0.1:9", "u", "p", timeout=1)   # nothing listens here
     with pytest.raises(DavError):
@@ -855,13 +855,13 @@ def test_transport_error_is_dav_error():
 
 
 def test_dav_outage_is_502(client, monkeypatch):
-    from tasksd.dav.errors import DavError
-    from tasksd.service import TaskService
+    from smylted.dav.errors import DavError
+    from smylted.service import SmylteService
 
     def boom(self):
         raise DavError("connection refused")
 
-    monkeypatch.setattr(TaskService, "list_lists", boom)
+    monkeypatch.setattr(SmylteService, "list_lists", boom)
     r = client.get("/api/lists")
     assert r.status_code == 502
     assert "connection refused" not in r.json()["detail"]   # internals stay internal

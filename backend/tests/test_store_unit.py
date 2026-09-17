@@ -9,9 +9,9 @@ import sqlite3
 
 import pytest
 
-from tasksd.dav.client import CollectionInfo, Item
-from tasksd.db import store
-from tasksd.ical import extract_from_raw
+from smylted.dav.client import CollectionInfo, Item
+from smylted.db import store
+from smylted.ical import extract_from_raw
 
 COL_A, COL_B = "/u/secret/", "/u/keep/"
 

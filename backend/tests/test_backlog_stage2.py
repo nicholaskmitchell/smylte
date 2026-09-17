@@ -24,9 +24,9 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from tasksd.app import create_app
-from tasksd.db import store
-from tasksd.mcp.server import run_batch
+from smylted.app import create_app
+from smylted.db import store
+from smylted.mcp.server import run_batch
 from tests.conftest import api_settings
 
 pytestmark = [pytest.mark.backlog, pytest.mark.stage2]
@@ -37,7 +37,7 @@ PASSWORD = "testpass123"
 
 
 class _StubService:
-    """`TaskService.oauth` is just "run this against the conn under the lock",
+    """`SmylteService.oauth` is just "run this against the conn under the lock",
     so the OAuth store works with no CalDAV behind it at all."""
 
     def __init__(self) -> None:
@@ -171,7 +171,7 @@ def test_the_consent_password_check_is_concurrency_bounded(mcp, monkeypatch):
     no such bound, so N concurrent posts were N x 16 MiB. It now shares that one
     semaphore — the budget protected is the process's memory, not either
     endpoint's throughput."""
-    from tasksd.auth import Authenticator
+    from smylted.auth import Authenticator
 
     live = 0
     peak = 0
@@ -227,20 +227,20 @@ def test_listing_lists_does_not_materialise_every_item_body(monkeypatch):
 
     Pinned by making the full-row read unavailable: the counts come from a COUNT
     query now, so listing must not need it."""
-    from tasksd import service as service_mod
+    from smylted import service as service_mod
 
     def _forbidden(*a, **kw):
         raise AssertionError("list rendering pulled full item rows (raw_ics included)")
 
     monkeypatch.setattr(service_mod.store, "get_items", _forbidden)
 
-    svc = service_mod.TaskService.__new__(service_mod.TaskService)
+    svc = service_mod.SmylteService.__new__(service_mod.SmylteService)
     svc._conn = store.connect(":memory:")
     store.init_db(svc._conn)
     svc._lock = threading.RLock()
     store.upsert_collection(
         svc._conn,
-        __import__("tasksd.dav.client", fromlist=["CollectionInfo"]).CollectionInfo(
+        __import__("smylted.dav.client", fromlist=["CollectionInfo"]).CollectionInfo(
             href="/u/inbox/", displayname="Inbox", components={"VTODO"}),
     )
 

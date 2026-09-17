@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from tasksd.db import store
+from smylted.db import store
 
 
 def test_settings_default_empty(db):
@@ -141,7 +141,7 @@ def test_bool_env_refuses_a_value_it_cannot_read():
     auth gate on an internet-facing deployment."""
     import os
 
-    from tasksd.config import _bool
+    from smylted.config import _bool
 
     key = "TASKS_TEST_BOOL"
     try:

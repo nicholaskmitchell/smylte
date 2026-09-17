@@ -12,7 +12,7 @@ device clients moves to `radicale.nicholaskmitchell.com/dav`.
                     /dav/* ──►│  Caddy path split   │──► everything else
               (X-Script-Name) │                     │
                               ▼                     ▼
-                   Radicale 127.0.0.1:5232   tasksd 127.0.0.1:8080 ──► Radicale (localhost)
+                   Radicale 127.0.0.1:5232   smylted 127.0.0.1:8080 ──► Radicale (localhost)
                      (device sync)              (web app)
 ```
 
@@ -72,7 +72,7 @@ generates the session + hook secrets, writes `/etc/tasks/tasks.env` and
 The SQLite cache lives at `/var/lib/tasks/tasks.db`, which `StateDirectory=tasks`
 in the unit creates and owns. It is deliberately outside the source tree: the
 unit used to grant `ReadWritePaths=~/tasks/backend`, which is where `.venv` and
-`tasksd` live, so a write primitive in the internet-reachable parse path could
+`smylted` live, so a write primitive in the internet-reachable parse path could
 drop a `.pth` into site-packages and survive every restart.
 
 ### Moving an existing install to /var/lib/tasks  **[PROD — one time]**
@@ -137,7 +137,7 @@ and `/.well-known/carddav`, plus DAV verbs (`PROPFIND`/`REPORT`/…) on `/`, all
 301 to `/dav/`. That is what makes clients which cannot be handed a path work:
 Apple's CalDAV setup takes a *host*, not a URL, so it can only find `/dav` by
 probing the root (step E). Only DAV methods are matched on `/`, so browsers
-loading the app are unaffected. `tasksd` answers the same probes itself, so
+loading the app are unaffected. `smylted` answers the same probes itself, so
 discovery still works behind a different reverse proxy; if `/dav` ever moves,
 change both this snippet and `TASKS_DAV_URL`.
 
@@ -285,7 +285,7 @@ looking reachable.
 
 ## Content-Security-Policy
 
-The app sets one on every response (`backend/tasksd/csp.py`). It is what bounds
+The app sets one on every response (`backend/smylted/csp.py`). It is what bounds
 where a page can fetch from at all — the field-level guards on collection colors
 and appearance tokens only cover the fields they name, and this covers the rest.
 Nothing to configure in Caddy; the snippet has a comment saying why it must not
@@ -327,9 +327,9 @@ else's machine, whose id you have never seen.
 Two levers, in the order to reach for them:
 
 1. **Change the password.** Regenerate with `cd ~/tasks/backend && .venv/bin/python
-   -m tasksd hash-password` — `tasksd` is not installed anywhere, so it resolves
+   -m smylted hash-password` — `smylted` is not installed anywhere, so it resolves
    only from the backend directory and run from elsewhere this aborts on "No
-   module named tasksd" — set `TASKS_AUTH_PASSWORD_HASH` in `/etc/tasks/tasks.env`, `sudo systemctl
+   module named smylted" — set `TASKS_AUTH_PASSWORD_HASH` in `/etc/tasks/tasks.env`, `sudo systemctl
    restart tasks`. Every existing session is refused from that moment: a token
    carries a fingerprint of the credentials it was minted under, so changing
    the password (or `TASKS_AUTH_USER`) invalidates all of them. This is the
@@ -351,7 +351,7 @@ consent screen, which is the point. (This has not always been true: before the
 "signing out everywhere" reached only the browser sessions.)
 
 ## Telegram notifications (optional, off by default)
-Thirteen rules, described in full in `backend/tasksd/notify/rules.py`. Five ship
+Thirteen rules, described in full in `backend/smylted/notify/rules.py`. Five ship
 on: a **daily digest** at an hour you set, a nudge **before a meeting starts**,
 the **reminders you set** on individual tasks and events, a note when **someone
 books you**, and a warning when **sync has stopped working**. The other eight —
@@ -552,7 +552,7 @@ own fixed palette. Pick `eink` for these today. `.bin` is 1-bit only this round 
 plane, and no second plane for the tri-colour (black/white/red) panels.
 
 The server-side renderer needs **Pillow** (`requirements.txt`), which is what
-rasterizes the three typefaces vendored under `backend/tasksd/display/fonts/` —
+rasterizes the three typefaces vendored under `backend/smylted/display/fonts/` —
 Fraunces, Inter and JetBrains Mono, the app's own, converted from the woff2 the
 frontend already ships so a bitmap panel is set in the same type as the browser
 page. Rebuild them with `python -m dev.build_display_fonts` if the frontend's

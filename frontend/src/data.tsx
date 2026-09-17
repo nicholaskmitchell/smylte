@@ -478,7 +478,7 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
   // Create many tasks in one go, for the "Add multiple" composer: one optimistic
   // paint for the whole batch, then one request per task, in order.
   //
-  // Sequential on purpose. TaskService holds a single lock around every engine
+  // Sequential on purpose. SmylteService holds a single lock around every engine
   // call and each create is a CalDAV PUT plus a re-read GET, so parallel POSTs
   // would queue server-side anyway; going one at a time costs nothing and buys
   // an honest progress count, per-row failure attribution, and a clean stop when

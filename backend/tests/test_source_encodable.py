@@ -32,7 +32,7 @@ before the crash.
 
 TWO RULES, because one would be wrong in one direction or the other:
 
-* **Shipped source (`tasksd/`) carries no lone surrogate in any literal.** That
+* **Shipped source (`smylted/`) carries no lone surrogate in any literal.** That
   is where an unencodable string becomes a running service's problem.
 * **No DOCSTRING anywhere carries one, tests included.** A docstring is read by
   tooling that encodes it — pytest reporting, `--co -q`, pydoc, an IDE — so it
@@ -84,14 +84,14 @@ def test_the_sweep_actually_reads_files():
     files = _sources()
     assert len(files) > 40, f"only found {len(files)} sources to check"
     assert any(p.name == "oauth.py" for p in files)
-    assert len(_sources("tasksd")) > 20, "the shipped-source sweep matched almost nothing"
+    assert len(_sources("smylted")) > 20, "the shipped-source sweep matched almost nothing"
 
 
 def test_no_shipped_string_carries_a_lone_surrogate():
-    """The guard itself, over `tasksd/` — reported per-offender, because the
+    """The guard itself, over `smylted/` — reported per-offender, because the
     failure is invisible at the site: the source looks like an ordinary escape."""
     offenders = []
-    for path in _sources("tasksd"):
+    for path in _sources("smylted"):
         for node in ast.walk(_parse(path)):
             if not (isinstance(node, ast.Constant) and isinstance(node.value, str)):
                 continue
@@ -145,10 +145,10 @@ def test_every_docstring_encodes():
     import importlib
     import pkgutil
 
-    import tasksd
+    import smylted
 
     bad = []
-    for mod in pkgutil.walk_packages(tasksd.__path__, prefix="tasksd."):
+    for mod in pkgutil.walk_packages(smylted.__path__, prefix="smylted."):
         try:
             m = importlib.import_module(mod.name)
         except Exception:                                   # noqa: BLE001

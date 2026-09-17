@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# App-side install for tasksd. Run on the Pi:  sudo ~/tasks/deploy/setup.sh
+# App-side install for smylted. Run on the Pi:  sudo ~/tasks/deploy/setup.sh
 #
 # This installs ONLY the app itself (env, secrets, hook script, systemd unit).
 # It does NOT touch Radicale's config, Caddy, or the tunnel — those are separate,
@@ -63,11 +63,11 @@ else
   # NB: a failing command substitution inside an assignment does NOT trip
   # `set -e` — check explicitly, or a mismatched/aborted prompt would write
   # an empty TASKS_AUTH_PASSWORD_HASH and the service would refuse to start.
-  # `cd` into $BACKEND first: `python -m tasksd` resolves the package off the
+  # `cd` into $BACKEND first: `python -m smylted` resolves the package off the
   # interpreter's path, which contains only the working directory, so run from
-  # anywhere else this aborts on "No module named tasksd" — after prompting for
+  # anywhere else this aborts on "No module named smylted" — after prompting for
   # every password and before writing the env file.
-  if ! HASH=$(cd "$BACKEND" && sudo -u "$USER_NAME" "$PY" -m tasksd hash-password) \
+  if ! HASH=$(cd "$BACKEND" && sudo -u "$USER_NAME" "$PY" -m smylted hash-password) \
      || [ -z "$HASH" ]; then
     echo "password hashing failed — env file not written; re-run setup" >&2
     exit 1
@@ -97,7 +97,7 @@ else
   # makes systemd create it, owned by the service user, on every start —
   # which also means it survives a `systemd-tmpfiles` sweep and needs no
   # chown of its own. The DB deliberately does not live in the source tree:
-  # ReadWritePaths over ~/tasks/backend opened .venv and tasksd to writes.
+  # ReadWritePaths over ~/tasks/backend opened .venv and smylted to writes.
   umask 077
   cat > "$ENVFILE" <<EOF
 RADICALE_URL=http://127.0.0.1:5232

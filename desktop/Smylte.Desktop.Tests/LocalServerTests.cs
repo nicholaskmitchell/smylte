@@ -231,7 +231,7 @@ public sealed class LocalServerTests : IDisposable
 ///
 /// What was wrong: the app's CSP existed only as a response header the BACKEND
 /// attaches
-/// (`tasksd/csp.py::CSPMiddleware`), derived at startup from the served
+/// (`smylted/csp.py::CSPMiddleware`), derived at startup from the served
 /// index.html so it can carry the sha256 of the inline pre-paint script.
 /// `frontend/index.html` has no `http-equiv` meta — verified, zero occurrences —
 /// so in the desktop client, where `ServeStatic` set exactly Content-Type and

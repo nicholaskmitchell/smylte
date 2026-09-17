@@ -60,7 +60,7 @@ export interface Appearance {
 // ── the allowlist ───────────────────────────────────────────────────────────
 // Nothing outside this map is ever applied, stored, exported or imported. It is
 // the single source of truth for what "customizable" means, and the backend
-// mirrors it (see SettingsPatch in backend/tasksd/app.py).
+// mirrors it (see SettingsPatch in backend/smylted/app.py).
 
 // `label`, `hint` and every `valueLabels` entry are catalogue KEYS, not text.
 // This module is React-free and is also the backend's mirror; a translator has

@@ -225,7 +225,7 @@ itself; two of the seven controls were widened as a result.
 `review_day` tests and both login-lockout tests are `@pytest.mark.radicale`, so
 the two changes with the widest blast radius had almost no local coverage. Rather
 than defer to CI, their contracts were driven in-process against a real
-`TaskService` and a real `create_app` before each landed — the uniform `task` key
+`SmylteService` and a real `create_app` before each landed — the uniform `task` key
 on every kind, an unplanned day in a range carrying no entries, read-only-ness,
 five wrong passwords still locking out, sixty concurrent guesses still evaluating
 exactly five. Two probes, thrown away after. Worth repeating in stages 3-5, which

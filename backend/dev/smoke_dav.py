@@ -13,12 +13,12 @@ from __future__ import annotations
 
 import sys
 
-from tasksd.dav import DavClient, InvalidSyncToken, PreconditionFailed
+from smylted.dav import DavClient, InvalidSyncToken, PreconditionFailed
 
 VTODO = (
     "BEGIN:VCALENDAR\r\n"
     "VERSION:2.0\r\n"
-    "PRODID:-//tasksd//smoke//EN\r\n"
+    "PRODID:-//smylted//smoke//EN\r\n"
     "BEGIN:VTODO\r\n"
     "UID:{uid}\r\n"
     "SUMMARY:{summary}\r\n"

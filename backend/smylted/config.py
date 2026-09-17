@@ -81,7 +81,7 @@ class Settings:
     # start with no password set. Tests/dev may disable it.
     auth_enabled: bool
     auth_user: str
-    auth_password_hash: str    # scrypt hash from `python -m tasksd hash-password`
+    auth_password_hash: str    # scrypt hash from `python -m smylted hash-password`
     auth_password: str         # plaintext, DEV ONLY — hashed at startup, logged as insecure
     session_secret: str        # HS256 signing key for session cookies (persist in prod)
     session_ttl_s: int
@@ -96,7 +96,7 @@ class Settings:
     dav_public_url: str = "/dav/"
     # Remote MCP server (Claude connectors). OFF by default: turning it on adds
     # publicly reachable OAuth endpoints, and a deploy should never grow an auth
-    # surface on its own. See tasksd/mcp/.
+    # surface on its own. See smylted/mcp/.
     mcp_enabled: bool = False
     # This deployment's external origin, e.g. https://tasks.example.com. The
     # OAuth metadata documents have to state absolute URLs, and the `resource`
@@ -104,7 +104,7 @@ class Settings:
     # configured rather than read off the Host header, which a caller controls.
     public_url: str = ""
     # Largest request body accepted, enforced ahead of the router — see
-    # tasksd/limits.py for why it cannot live in the routes themselves.
+    # smylted/limits.py for why it cannot live in the routes themselves.
     max_body_bytes: int = DEFAULT_MAX_BODY_BYTES
     # ── outbound notifications ───────────────────────────────────────────────
     # An operator KILL SWITCH, not the feature's on/off. It defaults to
@@ -157,7 +157,7 @@ class Settings:
             radicale_user=os.environ.get("RADICALE_USER", "testuser"),
             radicale_password=os.environ.get("RADICALE_PASSWORD", "testpass"),
             # The fallback is a DEV path, and deliberately still under ~: a
-            # developer running `python -m tasksd` has no /var/lib/tasks and no
+            # developer running `python -m smylted` has no /var/lib/tasks and no
             # systemd to create one. Production sets TASKS_DB explicitly, to
             # /var/lib/tasks/tasks.db, because the unit grants that and nothing
             # under /home — see deploy/tasks.service.

@@ -22,10 +22,10 @@ from datetime import date, timedelta
 import pytest
 from test_day_plan import DAY, LIST_A, NEXT, PREV, _seed_task, _settings
 
-from tasksd.dav.client import CollectionInfo
-from tasksd.db import store
-from tasksd.service import (
-    TaskService,
+from smylted.dav.client import CollectionInfo
+from smylted.db import store
+from smylted.service import (
+    SmylteService,
     _WEEKDAYS,
     habit_runs_on,
     normalize_habit_days,
@@ -40,7 +40,7 @@ LONG_PAST = "2026-08-19"
 
 @pytest.fixture
 def svc(monkeypatch):
-    s = TaskService(_settings())
+    s = SmylteService(_settings())
     store.upsert_collection(
         s._conn, CollectionInfo(href=LIST_A, displayname="Work", components={"VTODO"})
     )

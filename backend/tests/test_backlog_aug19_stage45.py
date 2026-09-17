@@ -52,14 +52,14 @@ import pytest
 import yaml
 from fastapi.testclient import TestClient
 
-from tasksd import scheduling
-from tasksd.app import create_app
-from tasksd.dav.client import CollectionInfo
-from tasksd.mcp.api import McpApi
-from tasksd.db import store
-from tasksd.service import TaskService
-from tasksd.sync import SyncStats
-from tasksd.config import Settings
+from smylted import scheduling
+from smylted.app import create_app
+from smylted.dav.client import CollectionInfo
+from smylted.mcp.api import McpApi
+from smylted.db import store
+from smylted.service import SmylteService
+from smylted.sync import SyncStats
+from smylted.config import Settings
 from tests.conftest import api_settings
 
 pytestmark = [pytest.mark.backlog, pytest.mark.stage4, pytest.mark.stage5]
@@ -93,7 +93,7 @@ def _read(rel: str) -> str:
 # ── a consent-screen app with no CalDAV server behind it ────────────────────
 
 class _StubService:
-    """Enough TaskService for the OAuth endpoints: they only ever touch the
+    """Enough SmylteService for the OAuth endpoints: they only ever touch the
     SQLite side, through `oauth()`."""
 
     def __init__(self) -> None:
@@ -482,7 +482,7 @@ def test_a_booking_link_serves_the_spa_with_or_without_a_trailing_slash(tmp_path
 
 
 def _closable_service():
-    """A TaskService with two collections and no reachable CalDAV server.
+    """A SmylteService with two collections and no reachable CalDAV server.
 
     `sync_all`'s first act is `self._engine.discover()`, which is a network
     call; the settings point at a closed port so it raises rather than hanging.
@@ -491,7 +491,7 @@ def _closable_service():
     which is why the assertions below are about `sqlite3.ProgrammingError`
     specifically and not about "did it raise".
     """
-    svc = TaskService(_service_settings())
+    svc = SmylteService(_service_settings())
     for href, name in (("/u/cal-a/", "A"), ("/u/cal-b/", "B")):
         store.upsert_collection(
             svc._conn, CollectionInfo(href=href, displayname=name, components={"VEVENT"}))
@@ -577,7 +577,7 @@ def test_closing_between_two_slices_does_not_kill_the_sweep():
     # says it eliminates. Structural of necessity, like the workflow pin: what
     # is asserted is that the `_closed` read and the `has_collection` query it
     # guards sit in one `with self._lock:` block.
-    src = inspect.getsource(TaskService.sync_all)
+    src = inspect.getsource(SmylteService.sync_all)
     body = textwrap.dedent(src[src.index("for href in hrefs:"):])
     guarded = re.search(
         r"with self\._lock:\s*\n(?:\s*#[^\n]*\n)*\s*if self\._closed:", body)
@@ -1382,7 +1382,7 @@ def test_a_204_delete_carries_no_body_and_no_content_type(client):
     # honest instrument here, and it fails for the right reason: a handler that
     # answers 204 any other way stops matching.
     handlers = [
-        b for b in re.split(r"\n(?=    @|@)", _read("backend/tasksd/app.py"))
+        b for b in re.split(r"\n(?=    @|@)", _read("backend/smylted/app.py"))
         if "204" in b and "def " in b
     ]
     bodiless = [b for b in handlers if "return Response(status_code=204)" in b]
@@ -1400,7 +1400,7 @@ def test_a_204_delete_carries_no_body_and_no_content_type(client):
 # ── AUDIT: find_free_time derives an end by wall-clock addition ─────────────
 
 class _EventsService:
-    """The narrowest stand-in for TaskService that `find_free_time` needs: the
+    """The narrowest stand-in for SmylteService that `find_free_time` needs: the
     calendars it fans out over, and the rows in each."""
 
     def __init__(self, rows: list[dict]):
@@ -1591,7 +1591,7 @@ def test_find_free_time_still_blocks_the_ordinary_cases(monkeypatch):
 def test_cancelling_a_task_is_wont_do_and_not_done(client):
     """Closing a test gap; the behaviour is already correct, so no marker.
 
-    `POST /api/lists/{id}/tasks/{uid}/cancel` and `TaskService.cancel_task`
+    `POST /api/lists/{id}/tasks/{uid}/cancel` and `SmylteService.cancel_task`
     write `STATUS:CANCELLED`, and nothing called either. The only thing that
     looked like coverage was the comment `# complete + won't-do` in
     test_api.py, above a block that exercises `/complete` and
