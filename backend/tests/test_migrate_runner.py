@@ -27,16 +27,23 @@ MIGRATIONS = REPO / "deploy" / "migrations"
 
 
 def _run(box: "Box", *args: str, as_root: bool = True):
+    """Run the real migrate.sh against the synthetic migrations.
+
+    `as_root` is SIMULATED in both directions, never inherited from whoever runs
+    pytest. The synthetic 0002 declares NEEDS_ROOT=yes, so a test that wanted a
+    privileged run but got an unprivileged interpreter would stop at it and fail
+    — which is exactly what happened on a non-root CI runner while passing for a
+    developer in a root container. `id` is stubbed on PATH to answer either way,
+    so these tests give the same result for both.
+    """
     cwd, home = box.repo, box.home
     env = dict(
         os.environ,
         HOME=str(home),
         SMYLTE_MIGRATION_STATE=str(home / ".smylte-migration-level"),
         SMYLTE_REPO_DIR=str(cwd),
+        PATH=f"{home / ('rootbin' if as_root else 'fakebin')}:{os.environ['PATH']}",
     )
-    if not as_root:
-        # The runner asks `id -u`; a stub earlier on PATH answers non-zero.
-        env["PATH"] = f"{home / 'fakebin'}:{env['PATH']}"
     return subprocess.run(
         [str(cwd / "deploy" / "migrate.sh"), *args],
         cwd=cwd, env=env, capture_output=True, text=True,
@@ -68,10 +75,14 @@ def box(tmp_path: Path) -> Box:
             f'apply() {{ run touch "{marks}/{n}"; }}\n'
         )
 
-    fake = tmp_path / "fakebin"
-    fake.mkdir()
-    (fake / "id").write_text('#!/bin/sh\n[ "$1" = "-u" ] && echo 1000 || exec /usr/bin/id "$@"\n')
-    (fake / "id").chmod(0o755)
+    # `id -u` stubs, one answering unprivileged and one answering root, so the
+    # tests are independent of the identity pytest itself runs under.
+    for name, uid in (("fakebin", "1000"), ("rootbin", "0")):
+        d = tmp_path / name
+        d.mkdir()
+        (d / "id").write_text(
+            f'#!/bin/sh\n[ "$1" = "-u" ] && echo {uid} || exec /usr/bin/id "$@"\n')
+        (d / "id").chmod(0o755)
 
     return Box(repo=repo, marks=marks, home=tmp_path)
 
@@ -186,7 +197,11 @@ def test_autopull_applies_migrations_and_refuses_to_restart_past_one():
     body = (REPO / "deploy" / "smylte-autopull.sh").read_text()
     assert "migrate.sh --auto" in body
     assert "--status" in body and "needs root" in body
-    guard = body.index("needs root")
+    # Anchor on the GUARD LINE, not the bare phrase. "needs root" also appears in
+    # the Telegram message near the top of the file, so body.index() of the
+    # phrase found that instead — and both orderings below then passed on the
+    # exact regression they are named for.
+    guard = body.index("""grep -q 'needs root'""")
     restart = body.index("systemctl restart smylte.service")
     assert guard < restart, "the pending-migration guard must come before the restart"
 
@@ -210,10 +225,15 @@ def test_the_pending_migration_notice_is_sent_once_not_every_tick():
     assert '[ -f "$NOTIFIED" ] && return 0' in body, "the once-only guard is gone"
     assert 'rm -f "$NOTIFIED"' in body, "the marker is never cleared; a later migration would be silent"
     # The bot token is in the URL because Telegram offers no alternative, so the
-    # call must not be able to write it into the deploy log.
+    # call must neither log it nor expose it in the process table.
     send = body.index("api.telegram.org")
     line_end = body.index("touch \"$NOTIFIED\"", send)
-    assert '>>"$LOG"' not in body[send:line_end], "the telegram call must not log (it carries the token)"
+    call = body[send:line_end]
+    assert '>>"$LOG"' not in call, "the telegram call must not log (it carries the token)"
+    assert "--config -" in call, (
+        "the token-bearing URL must reach curl on stdin, not in argv where "
+        "/proc/<pid>/cmdline exposes it to every local user")
+    assert "--fail" in call, "a failed send must not be recorded as delivered"
 
 
 # ── the `run` contract ──────────────────────────────────────────────────────
@@ -243,3 +263,38 @@ def test_every_side_effect_goes_through_run(path: Path):
     assert not offenders, (
         "side effects must be wrapped in `run` so --dry-run stays a preview:\n"
         + "\n".join(offenders))
+
+
+def test_dry_run_needs_no_privilege(box):
+    """docs/DEPLOY.md tells the operator to preview before escalating, and
+    migrate.sh's own --help says --dry-run changes nothing. Gated behind root,
+    that instruction failed with an error whose remedy line drops the --dry-run
+    flag — so following it performs the real migration."""
+    r = _run(box, "--dry-run", as_root=False)
+    assert r.returncode == 0, r.stderr
+    assert "would:" in r.stdout, "the unprivileged preview printed no actions"
+    assert _applied(box) == []
+
+
+def test_auto_does_not_jam_on_a_satisfied_root_migration(box):
+    """applies() must be asked BEFORE privilege. Reversed, a root-needing
+    migration with nothing left to do still stops an unprivileged run — so
+    --auto, which autopull runs every minute as the app user, jams on it
+    forever, never records the level and never reaches any later migration."""
+    _run(box, as_root=True)                       # everything applied
+    (box.home / ".smylte-migration-level").write_text("0\n")   # level lost
+    r = _run(box, "--auto", as_root=False)
+    assert r.returncode == 0, r.stderr
+    assert "NEEDS ROOT" not in r.stdout, "jammed on a migration with nothing to do"
+    assert _level(box) == "0003", "did not advance past the satisfied root migration"
+
+
+def test_a_corrupt_level_file_does_not_silently_skip_everything(box):
+    """A crash mid-write leaves a truncated or empty level file. Fed straight to
+    $((10#$CURRENT)) that is an arithmetic error, which abandons the migration
+    loop while the script still exits 0 — every pending migration skipped, and
+    --status reporting nothing pending."""
+    (box.home / ".smylte-migration-level").write_text("")
+    r = _run(box, as_root=True)
+    assert r.returncode == 0, r.stderr
+    assert _applied(box) == ["0001", "0002", "0003"], "a corrupt level file skipped migrations"

@@ -5,7 +5,7 @@ import userEvent from '@testing-library/user-event'
 import { TasksView } from './TasksView'
 import { DataProvider } from '../data'
 import { cacheLists, cacheTasks, setCacheUser } from '../cache'
-import { api, AuthError, uidFor, type List, type Task, type TaskGroup, type TasksViewMode } from '../api'
+import { api, AuthError, uidFor, UID_SUFFIX_LEGACY, type List, type Task, type TaskGroup, type TasksViewMode } from '../api'
 
 // Mock the whole API module: every method becomes a vi.fn() so the view never
 // touches the network.
@@ -898,6 +898,40 @@ describe('<TasksView> collapsing subtasks', () => {
 
 describe('<TasksView> legacy orphans', () => {
   const cid = 'a'.repeat(32)
+
+  // The whole point of this pane's repair is subtasks written BEFORE the uid
+  // contract was honoured — and a task that old was minted under the old
+  // @tasksd suffix by definition. Pinning every case to uidFor() (now @smylted)
+  // would leave `uidCandidatesFor`'s legacy branch, the reason the shim exists,
+  // with no coverage at all: the repair would silently stop working for exactly
+  // the rows it was written for, and the orphan would stay orphaned in
+  // Tasks.org and jtx Board too.
+  it('repairs an orphan whose parent predates the Smylte rename', async () => {
+    const legacyUid = `${cid}${UID_SUFFIX_LEGACY}`
+    m.tasks.mockResolvedValue([
+      task({ uid: legacyUid, summary: 'Trip planning' }),
+      task({ uid: 'c1', summary: 'Book flight', parent: cid }),
+    ])
+    m.patchTask.mockResolvedValue(task({ uid: 'c1', summary: 'Book flight', parent: legacyUid }))
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {})
+    setup()
+    await waitFor(() => expect(m.patchTask).toHaveBeenCalledTimes(1))
+    // Repaired to the parent's REAL uid, not to a reconstructed @smylted one
+    // that names nothing.
+    expect(m.patchTask).toHaveBeenCalledWith('l1', 'c1', { parent: legacyUid })
+    infoSpy.mockRestore()
+  })
+
+  it('nests an orphan under a pre-rename parent on display', async () => {
+    m.tasks.mockResolvedValue([
+      task({ uid: `${cid}${UID_SUFFIX_LEGACY}`, summary: 'Trip planning' }),
+      task({ uid: 'c1', summary: 'Book flight', parent: cid }),
+    ])
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {})
+    setup()
+    expect((await screen.findByText('Book flight')).closest('.task')).toHaveClass('sub')
+    infoSpy.mockRestore()
+  })
 
   it('repairs the stored pointer, not just the display', async () => {
     // The nesting below is cosmetic and local; the RELATED-TO on the wire is

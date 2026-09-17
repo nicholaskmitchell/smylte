@@ -41,12 +41,21 @@ notify_pending_migration() {
   [ -n "${token:-}" ] && [ -n "${chat:-}" ] || return 0
   # -o /dev/null, and nothing from this call reaches $LOG: the bot token is in
   # the URL (Telegram gives no other option) and a log is the wrong place for it.
-  curl -s -o /dev/null --max-time 10 \
-    "https://api.telegram.org/bot${token}/sendMessage" \
-    --data-urlencode "chat_id=${chat}" \
-    --data-urlencode "text=Smylte: a deploy is waiting on a migration that needs root. Deploys will not restart the service until it is applied. Run: sudo ${REPO_DIR}/deploy/migrate.sh" \
-    2>/dev/null || true
-  touch "$NOTIFIED"
+  # The URL carries the bot token, and Telegram offers no alternative — so it
+  # goes in on STDIN as a curl config file rather than on the command line,
+  # where /proc/<pid>/cmdline would expose it to every local user for the life
+  # of the request. Nothing here reaches $LOG either, for the same reason.
+  #
+  # --fail so a 4xx/5xx is a non-zero exit, and the marker is set ONLY on a send
+  # that actually landed. Marking a failed send as delivered would permanently
+  # suppress the one notice this exists to deliver — the failure mode this whole
+  # function was written to prevent, reintroduced one line lower.
+  local msg="Smylte: a deploy is waiting on a migration that needs root. Deploys will not restart the service until it is applied. Run: sudo ${REPO_DIR}/deploy/migrate.sh"
+  if printf 'url = "https://api.telegram.org/bot%s/sendMessage"\ndata-urlencode = "chat_id=%s"\ndata-urlencode = "text=%s"\n' \
+       "$token" "$chat" "$msg" \
+     | curl -sS --fail -o /dev/null --max-time 10 --config - 2>/dev/null; then
+    touch "$NOTIFIED"
+  fi
 }
 cd "$REPO_DIR" || { echo "$(ts) cd $REPO_DIR failed" >>"$LOG"; exit 1; }
 

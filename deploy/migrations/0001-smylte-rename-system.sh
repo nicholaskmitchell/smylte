@@ -21,7 +21,9 @@ applies() {
     || [ -f /etc/systemd/system/tasks.service ] \
     || [ -x /usr/local/bin/tasks-notify ] \
     || [ -f /etc/sudoers.d/tasks-autopull ] \
-    || { [ -d "$RUN_HOME/tasks" ] && [ ! -d "$RUN_HOME/smylte" ]; }
+    || { [ -d "$RUN_HOME/tasks" ] && [ ! -d "$RUN_HOME/smylte" ]; } \
+    || [ -f "$RUN_HOME/smylte/deploy/tasks-cloudflared.env" ] \
+    || [ -f "$RUN_HOME/tasks/deploy/tasks-cloudflared.env" ]
 }
 
 # A venv records absolute paths in the shebang of every console script it
@@ -60,7 +62,12 @@ apply() {
   if [ -f /etc/smylte/tasks.env ] && [ ! -f /etc/smylte/smylte.env ]; then
     run mv /etc/smylte/tasks.env /etc/smylte/smylte.env
   fi
-  if [ -f /etc/smylte/smylte.env ] && grep -q '^[[:space:]]*TASKS_' /etc/smylte/smylte.env; then
+  # Guarded on the LAST thing the block does, not the first. Keyed on the TASKS_
+  # names, an interruption between the three seds would leave the two path-value
+  # rewrites permanently unapplied: the resuming run finds no TASKS_ left, skips
+  # the whole block, and completes with SMYLTE_DB still pointing at /var/lib/tasks.
+  if [ -f /etc/smylte/smylte.env ] \
+     && grep -qE '^[[:space:]]*TASKS_|/var/lib/tasks/tasks\.db|/home/[^/]*/tasks/' /etc/smylte/smylte.env; then
     # Keep a copy. This file cannot be regenerated: the session secret and the
     # password hash exist nowhere else, and losing them logs everyone out and
     # locks you out respectively.
@@ -77,7 +84,19 @@ apply() {
   #    client details, display pairings — exist nowhere on the wire and a resync
   #    cannot rebuild them. The -wal and -shm sidecars move WITH the database;
   #    the unit is stopped, so the three are consistent.
-  if [ -d /var/lib/tasks ] && [ ! -d /var/lib/smylte ]; then
+  if [ -d /var/lib/tasks ] && [ -d /var/lib/smylte ]; then
+    # Both present. Guessing here risks stranding the only copy of the sidecar
+    # tables — parked tasks, day plans, habits, booking client details, display
+    # pairings — which exist nowhere on the wire and no resync can rebuild. Stop
+    # and let a human look, rather than skip the move, start the service on an
+    # empty database and record the migration as done.
+    echo "migrate: REFUSING TO CONTINUE — both /var/lib/tasks and /var/lib/smylte exist." >&2
+    echo "migrate: /var/lib/tasks may hold the only copy of the sidecar tables." >&2
+    echo "migrate: Inspect both, move the database you want to keep to" >&2
+    echo "migrate: /var/lib/smylte/smylte.db, remove /var/lib/tasks, and re-run." >&2
+    return 1
+  fi
+  if [ -d /var/lib/tasks ]; then
     run mv /var/lib/tasks /var/lib/smylte
   fi
   local s
@@ -91,24 +110,47 @@ apply() {
   #    Safe to do while running because migrate.sh re-execs from a temp copy.
   if [ -d "$RUN_HOME/tasks" ] && [ ! -d "$RUN_HOME/smylte" ]; then
     run mv "$RUN_HOME/tasks" "$RUN_HOME/smylte"
-    _repair_venv "$RUN_HOME/smylte/backend/.venv" "$RUN_HOME/tasks" "$RUN_HOME/smylte"
-    REPO_DIR="$RUN_HOME/smylte"
   fi
   [ -d "$RUN_HOME/smylte" ] && REPO_DIR="$RUN_HOME/smylte"
+  # OUTSIDE the move, deliberately. The mv above falsifies its own guard, so a
+  # run interrupted between the move and the repair would never come back to it
+  # — and _repair_venv is itself idempotent (it only rewrites shebangs that
+  # still name the old path), so calling it every time costs nothing.
+  _repair_venv "$RUN_HOME/smylte/backend/.venv" "$RUN_HOME/tasks" "$RUN_HOME/smylte"
 
   # 5. The Radicale storage hook. Install the new script before retiring the
   #    old: the app accepts BOTH header spellings, so an overlap is harmless
   #    while a gap means live sync silently stops.
   run install -m 0755 "$REPO_DIR/deploy/smylte-notify" /usr/local/bin/smylte-notify
-  local radcfg
-  for radcfg in /etc/radicale/config /etc/radicale/config.d/*.conf; do
+
+  # WHERE the hook line lives is deployment-specific, and getting it wrong here
+  # is silent: Radicale fires the hook and ignores the result, so a config still
+  # naming a script that no longer exists produces no error anywhere — live
+  # phone->web sync just stops and the app quietly falls back to its 30s poll.
+  # docs/DEPLOY.md puts this deployment's config at ~/radicale/config; the
+  # /etc paths are the distro-package default. Search all of them.
+  local radcfg repointed=0
+  for radcfg in "$RUN_HOME/radicale/config" \
+                /etc/radicale/config /etc/radicale/config.d/*.conf \
+                /etc/xdg/radicale/config; do
     [ -f "$radcfg" ] || continue
     if grep -q 'tasks-notify' "$radcfg"; then
       run sed -i 's#/usr/local/bin/tasks-notify#/usr/local/bin/smylte-notify#g' "$radcfg"
-      run systemctl restart radicale.service || true
+      repointed=1
     fi
   done
-  [ -x /usr/local/bin/tasks-notify ] && run rm -f /usr/local/bin/tasks-notify
+  if [ "$repointed" = 1 ]; then
+    run systemctl restart radicale.service || true
+    # Only now is nothing pointing at the old script.
+    [ -x /usr/local/bin/tasks-notify ] && run rm -f /usr/local/bin/tasks-notify
+  elif grep -rqs 'tasks-notify' "$RUN_HOME/radicale" /etc/radicale /etc/xdg/radicale 2>/dev/null; then
+    echo "migrate: WARNING — a Radicale config still names tasks-notify but was not" >&2
+    echo "migrate: rewritten. Leaving /usr/local/bin/tasks-notify in place. Point the" >&2
+    echo "migrate: hook at /usr/local/bin/smylte-notify by hand, then remove the old one." >&2
+  else
+    # Nothing references it anywhere we can see. Safe to retire.
+    [ -x /usr/local/bin/tasks-notify ] && run rm -f /usr/local/bin/tasks-notify
+  fi
 
   # 6. The unit.
   run install -m 0644 "$REPO_DIR/deploy/smylte.service" "$unit_new"
@@ -137,6 +179,16 @@ apply() {
     fi
   fi
 
-  # 8. Up on the new name.
+  # 8. The cloudflared connector's env file. deploy/smylte-cloudflared.compose.yml
+  #    now names smylte-cloudflared.env, so a deployment still carrying
+  #    tasks-cloudflared.env would fail to bring the tunnel up on its next
+  #    `docker compose up` — and the tunnel is the only public path to this box.
+  #    It is gitignored (it holds TUNNEL_TOKEN), so only a rename is possible here.
+  if [ -f "$REPO_DIR/deploy/tasks-cloudflared.env" ] \
+     && [ ! -f "$REPO_DIR/deploy/smylte-cloudflared.env" ]; then
+    run mv "$REPO_DIR/deploy/tasks-cloudflared.env" "$REPO_DIR/deploy/smylte-cloudflared.env"
+  fi
+
+  # 9. Up on the new name.
   run systemctl start smylte.service
 }

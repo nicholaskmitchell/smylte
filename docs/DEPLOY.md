@@ -130,7 +130,8 @@ from under a running script is safe. Progress is a single integer in
 `~/.smylte-migration-level`; re-running is a no-op and a run interrupted part way
 resumes rather than half-applying.
 
-**Autopull calls `migrate.sh --auto` on every deploy.** That applies migrations
+**Autopull calls `migrate.sh --auto` on every deploy** — but read the next
+paragraph before relying on that for *this* migration. It applies migrations
 needing no root, and for anything that does need root it logs the command and
 **declines to restart the service**, leaving the old one running rather than
 bringing it up against a half-renamed box. So a deploy that lands before you run
@@ -142,9 +143,18 @@ again. It cannot do the root half itself, because
 the sudoers rule grants exactly `systemctl restart smylte.service` — widening it
 so cron could rewrite `/etc` would undo the reason it is that narrow.
 
-The `tasksd` Python package also survives as a small shim for the same window,
-so the pre-rename unit's `python -m tasksd` keeps booting until you migrate. It
-is deleted in a later release, along with the `TASKS_*` env fallback.
+**For migration 0001 itself, that safety net is not yet installed.** The autopull
+loop running on a pre-rename box is the copy at `~/tasks-autopull.sh`, which
+predates `migrate.sh` and knows nothing about it — migration 0002 is what
+installs the version that calls it. So on the deploy that first carries this
+change, the old loop simply pulls and restarts `tasks.service` as it always has.
+
+That is safe, but by a different mechanism: the `tasksd` Python package survives
+as a small shim, so the old unit's `python -m tasksd` keeps booting the renamed
+code, and `config.py` still reads the `TASKS_*` names out of the old env file.
+The box keeps working, unmigrated, until you run the migration — it just will
+not nag you about it. Both the shim and the env fallback are deleted in a later
+release, once the deployment has migrated.
 
 Later migrations go in `deploy/migrations/` as `NNNN-slug.sh`, defining
 `NEEDS_ROOT`, `describe()`, `applies()` and `apply()`.
@@ -386,7 +396,7 @@ Two levers, in the order to reach for them:
    -m smylted hash-password` — `smylted` is not installed anywhere, so it resolves
    only from the backend directory and run from elsewhere this aborts on "No
    module named smylted" — set `SMYLTE_AUTH_PASSWORD_HASH` in `/etc/smylte/smylte.env`, `sudo systemctl
-   restart tasks`. Every existing session is refused from that moment: a token
+   restart smylte`. Every existing session is refused from that moment: a token
    carries a fingerprint of the credentials it was minted under, so changing
    the password (or `SMYLTE_AUTH_USER`) invalidates all of them. This is the
    normal response, and it keeps the session secret stable.
