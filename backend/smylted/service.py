@@ -32,7 +32,9 @@ from .dav.errors import NotFound as DavNotFound
 from .db import store
 from .display import frame as display_frame_mod
 from .display import render as display_render
-from .ical import PRIORITY, UNSET, EventEdit, TaskEdit, blocks_time, recur
+from .ical import (
+    PRIORITY, UNSET, EventEdit, TaskEdit, blocks_time, recur, uid_candidates,
+)
 from .sync import SyncEngine, SyncStats
 
 log = logging.getLogger("smylted.service")
@@ -1670,7 +1672,15 @@ class SmylteService:
             # not a replay of anything and must not disclose the other
             # booking's times (nor collide with its event resource).
             if client_id:
-                prior = store.get_booking_by_event(self._conn, f"{client_id}@tasksd")
+                prior = None
+                # Both spellings: a booking made before the Smylte rename carries
+                # the old UID suffix, and missing it here is not a cosmetic bug —
+                # the replay goes undetected and the visitor is either refused
+                # with "client_id already used" or books a second slot.
+                for uid in uid_candidates(client_id):
+                    prior = store.get_booking_by_event(self._conn, uid)
+                    if prior is not None:
+                        break
                 if prior is None:
                     prior = self._recover_orphaned_booking(
                         link, token, client_id, start_iso, name=name, email=email)
@@ -1784,7 +1794,11 @@ class SmylteService:
 
         Returns the new ledger row, or None if there is no such event.
         """
-        row = store.get_item(self._conn, link["calendar_href"], f"{client_id}@tasksd")
+        row = None
+        for uid in uid_candidates(client_id):   # new spelling first; see above
+            row = store.get_item(self._conn, link["calendar_href"], uid)
+            if row is not None:
+                break
         if row is None or row["component"] != "VEVENT":
             return None
         try:

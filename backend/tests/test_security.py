@@ -108,7 +108,7 @@ def test_session_cookie_attributes(make_app):
         r = c.post("/api/login", json=LOGIN)
         assert r.status_code == 200
         cookie = r.headers["set-cookie"]
-        assert "tasks_session=" in cookie
+        assert "smylte_session=" in cookie
         assert "httponly" in cookie.lower()          # JS (XSS) can't read it
         assert "samesite=strict" in cookie.lower()   # cross-site requests won't carry it
         assert "path=/" in cookie.lower()
@@ -186,7 +186,7 @@ def test_forged_and_expired_cookies_are_rejected(make_app):
     unsigned = jwt.encode(claims, key=None, algorithm="none")
     with TestClient(make_app()) as c:
         for token in (forged, expired, unsigned, "garbage"):
-            c.cookies.set("tasks_session", token)
+            c.cookies.set("smylte_session", token)
             assert c.get("/api/me").status_code == 401, token
         c.cookies.clear()
         # A genuine login still works (the checks above weren't a broken app).
@@ -255,14 +255,14 @@ def test_logout_withdraws_the_token_not_just_the_cookie(make_app):
     app = make_app()
     with TestClient(app) as c:
         assert c.post("/api/login", json=LOGIN).status_code == 200
-        stolen = c.cookies["tasks_session"]
+        stolen = c.cookies["smylte_session"]
         assert c.get("/api/me").status_code == 200
 
         c.post("/api/logout")
 
         # Replay the captured cookie against a client that never logged out.
         with TestClient(app) as replay:
-            replay.cookies.set("tasks_session", stolen)
+            replay.cookies.set("smylte_session", stolen)
             assert replay.get("/api/me").status_code == 401
             assert replay.get("/api/lists").status_code == 401
 
@@ -288,11 +288,11 @@ def test_a_withdrawn_session_stays_withdrawn_across_a_restart(make_app, tmp_path
     db = str(tmp_path / "revoke.db")
     with TestClient(make_app(db_path=db)) as c:
         assert c.post("/api/login", json=LOGIN).status_code == 200
-        stolen = c.cookies["tasks_session"]
+        stolen = c.cookies["smylte_session"]
         c.post("/api/logout")
 
     with TestClient(make_app(db_path=db)) as restarted:   # same DB, fresh process
-        restarted.cookies.set("tasks_session", stolen)
+        restarted.cookies.set("smylte_session", stolen)
         assert restarted.get("/api/me").status_code == 401
 
 
@@ -306,12 +306,12 @@ def test_changing_the_password_invalidates_existing_sessions(make_app, tmp_path)
     db = str(tmp_path / "credver.db")
     with TestClient(make_app(db_path=db)) as c:
         assert c.post("/api/login", json=LOGIN).status_code == 200
-        minted = c.cookies["tasks_session"]
+        minted = c.cookies["smylte_session"]
         assert c.get("/api/me").status_code == 200
 
     # Same signing secret, same DB — only the password moved.
     with TestClient(make_app(db_path=db, auth_password="a-different-password")) as rotated:
-        rotated.cookies.set("tasks_session", minted)
+        rotated.cookies.set("smylte_session", minted)
         assert rotated.get("/api/me").status_code == 401
 
 
@@ -321,10 +321,10 @@ def test_changing_the_username_invalidates_existing_sessions(make_app, tmp_path)
     db = str(tmp_path / "subver.db")
     with TestClient(make_app(db_path=db)) as c:
         assert c.post("/api/login", json=LOGIN).status_code == 200
-        minted = c.cookies["tasks_session"]
+        minted = c.cookies["smylte_session"]
 
     with TestClient(make_app(db_path=db, auth_user="someone-else")) as renamed:
-        renamed.cookies.set("tasks_session", minted)
+        renamed.cookies.set("smylte_session", minted)
         assert renamed.get("/api/me").status_code == 401
 
 
@@ -334,10 +334,10 @@ def test_an_unchanged_credential_keeps_its_sessions(make_app, tmp_path):
     db = str(tmp_path / "samecred.db")
     with TestClient(make_app(db_path=db)) as c:
         assert c.post("/api/login", json=LOGIN).status_code == 200
-        minted = c.cookies["tasks_session"]
+        minted = c.cookies["smylte_session"]
 
     with TestClient(make_app(db_path=db)) as restarted:
-        restarted.cookies.set("tasks_session", minted)
+        restarted.cookies.set("smylte_session", minted)
         assert restarted.get("/api/me").status_code == 200
 
 
@@ -361,13 +361,20 @@ def test_login_malformed_payloads_are_422_not_500(make_app):
 
 
 @pytest.mark.radicale
-def test_hook_requires_secret_header(make_app):
+@pytest.mark.parametrize("header", ["X-Smylte-Hook-Secret", "X-Tasks-Hook-Secret"])
+def test_hook_requires_secret_header(make_app, header):
+    """Both spellings, because the app and the hook script are installed by
+    different steps of the Smylte migration and this hook is fire-and-forget:
+    Radicale never sees a 403 and nothing retries, so a header mismatch does not
+    fail loudly — live sync just stops and the app falls back to its 30s poll.
+    The legacy spelling is accepted for exactly that reason, and an untested
+    accept is one a later cleanup deletes without noticing."""
     with TestClient(make_app()) as c:
         assert c.post("/internal/changed").status_code == 403
         assert c.post("/internal/changed",
-                      headers={"X-Tasks-Hook-Secret": ""}).status_code == 403
+                      headers={header: ""}).status_code == 403
         assert c.post("/internal/changed",
-                      headers={"X-Tasks-Hook-Secret": "testhook"}).status_code == 202
+                      headers={header: "testhook"}).status_code == 202
 
 
 @pytest.mark.radicale

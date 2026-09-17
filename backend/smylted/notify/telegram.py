@@ -128,7 +128,7 @@ class TelegramSender:
         self._sleep = sleep
         self._http = httpx.Client(
             timeout=timeout,
-            headers={"User-Agent": "tasksd-notify/0.1"},
+            headers={"User-Agent": "smylted-notify/0.1"},
             follow_redirects=False,
             transport=transport,
         )

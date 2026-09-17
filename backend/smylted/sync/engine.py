@@ -410,7 +410,7 @@ class SyncEngine:
         # cache at create time differ from the one sync reports. The UID may still
         # carry '@'; it is the join key, never the href (invariant #4).
         slug = slug or uuid.uuid4().hex
-        uid = f"{slug}@tasksd"
+        uid = f"{slug}{ical.UID_SUFFIX}"
         raw = ical.build_new(uid, summary=summary, edit=edit, related_parent=parent_uid)
         href = f"{collection_href}{slug}.ics"
         self._put_new(href, uid, raw)
@@ -430,7 +430,7 @@ class SyncEngine:
         if not store.has_collection(self.conn, collection_href):
             raise ValueError(f"collection {collection_href} is unknown; run discover() first")
         slug = slug or uuid.uuid4().hex
-        uid = f"{slug}@tasksd"
+        uid = f"{slug}{ical.UID_SUFFIX}"
         raw = ical.build_new_event(uid, summary=summary, dtstart=dtstart, dtend=dtend, edit=edit)
         href = f"{collection_href}{slug}.ics"
         self._put_new(href, uid, raw)

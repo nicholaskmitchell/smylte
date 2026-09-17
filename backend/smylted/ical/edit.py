@@ -49,7 +49,29 @@ class NotEditable(ValueError):
     handler keeps working."""
 
 
-_PRODID = "-//tasksd//Task Manager//EN"
+_PRODID = "-//smylted//Smylte//EN"
+
+# The domain half of every UID this app mints. It is opaque — a join key, never
+# parsed for meaning — so moving it forward costs nothing and old resources keep
+# whatever they were written with.
+#
+# UID_SUFFIX_LEGACY is NOT cosmetic. Booking replay detection reconstructs an
+# event UID from the visitor's client_id and looks it up (see
+# service._recover_orphaned_booking), so a booking made before the rename is
+# only findable under the old spelling. Lose that and a returning visitor is
+# told "client_id already used", or books a second slot. It stays for as long as
+# pre-rename bookings can exist, which is effectively forever.
+UID_SUFFIX = "@smylted"
+UID_SUFFIX_LEGACY = "@tasksd"
+
+
+def uid_candidates(local: str) -> tuple[str, ...]:
+    """Both spellings of a UID with this local part, newest first.
+
+    For looking a UID *up* when it was minted from a value we hold rather than
+    read back from the wire. Minting always uses UID_SUFFIX alone.
+    """
+    return (f"{local}{UID_SUFFIX}", f"{local}{UID_SUFFIX_LEGACY}")
 
 # Our four-level priority vocabulary -> RFC 5545 PRIORITY (spec §5).
 PRIORITY = {"none": 0, "low": 9, "medium": 5, "high": 1}
@@ -1959,7 +1981,7 @@ def split_series(
     tail = Calendar.from_ical(raw)
     tmaster = _find_master_event(tail)
     repeat_changed = edit.rrule is not UNSET and _rule_changed(tmaster, edit.rrule)
-    new_uid = f"{uuid4().hex}@tasksd"
+    new_uid = f"{uuid4().hex}{UID_SUFFIX}"
     dur = _event_duration(tmaster)
     orig_start = tmaster.get("DTSTART").dt if tmaster.get("DTSTART") is not None else anchor
 

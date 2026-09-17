@@ -478,7 +478,7 @@ def register(app, *, settings, authenticator, client_ip, run, login_hashes, hash
         """
         if authenticator is None:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "authentication required")
-        if not authenticator.verify_session(request.cookies.get("tasks_session")):
+        if not authenticator.verify_session(request.cookies.get("smylte_session")):
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "authentication required")
 
     # ── the MCP endpoint ─────────────────────────────────────────────────────

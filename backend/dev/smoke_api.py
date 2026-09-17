@@ -51,7 +51,7 @@ def main() -> None:
 
             r = c.post("/api/login", json={"username": "admin", "password": "testpass123"})
             print("login (correct):", r.status_code, "| session cookie set:",
-                  "tasks_session" in r.cookies)
+                  "smylte_session" in r.cookies)
             print("GET /api/me:", c.get("/api/me").json())
 
             lst = c.post("/api/lists", json={"name": "Smoke List"}).json()

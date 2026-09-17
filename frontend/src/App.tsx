@@ -313,7 +313,7 @@ export function App() {
 
   const applyTheme = useCallback((next: string) => {
     document.documentElement.dataset.theme = next
-    try { localStorage.setItem('tasks-theme', next) } catch { /* ignore */ }
+    try { localStorage.setItem('smylte-theme', next) } catch { /* ignore */ }
     setTheme(next)
   }, [])
 

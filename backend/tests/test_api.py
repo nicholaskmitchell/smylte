@@ -9,6 +9,7 @@ from unittest import mock
 import pytest
 from fastapi.testclient import TestClient
 
+from smylted import ical
 from smylted.app import create_app
 from tests.conftest import api_settings
 
@@ -34,7 +35,7 @@ def test_auth_gate(_scratch_up, tmp_path):
         assert c.get("/api/lists").status_code == 401
         assert c.post("/api/login", json={"username": "admin", "password": "nope"}).status_code == 401
         r = c.post("/api/login", json={"username": "admin", "password": "testpass123"})
-        assert r.status_code == 200 and "tasks_session" in r.cookies
+        assert r.status_code == 200 and "smylte_session" in r.cookies
         assert c.get("/api/me").json()["user"] == "admin"
         c.post("/api/logout")
         assert c.get("/api/lists").status_code == 401
@@ -87,7 +88,7 @@ def test_task_crud_and_subtasks(client):
 
 
 def test_client_id_determines_uid(client):
-    """The uid a create lands on is `{client_id}@tasksd`, and nothing else.
+    """The uid a create lands on is `{client_id}` + ical.UID_SUFFIX, and nothing else.
 
     The web client mints the same string up front (`uidFor` in api.ts) so a row
     whose create is still in flight already wears the identity it will keep —
@@ -99,7 +100,7 @@ def test_client_id_determines_uid(client):
     cid = uuid.uuid4().hex
     t = client.post(f"/api/lists/{lid}/tasks",
                     json={"summary": "trip", "client_id": cid}).json()
-    assert t["uid"] == f"{cid}@tasksd"
+    assert t["uid"] == f"{cid}{ical.UID_SUFFIX}"
 
     # …and the same slug names an event's uid, which the calendar view predicts
     # the same way.
@@ -108,7 +109,7 @@ def test_client_id_determines_uid(client):
     e = client.post(f"/api/calendars/{cal['id']}/events",
                     json={"summary": "lunch", "start": "2026-07-15", "all_day": True,
                           "client_id": ecid}).json()
-    assert e["uid"] == f"{ecid}@tasksd"
+    assert e["uid"] == f"{ecid}{ical.UID_SUFFIX}"
 
 
 def test_create_rejects_a_parent_that_names_nothing(client):

@@ -36,6 +36,7 @@ from zoneinfo import ZoneInfo
 import pytest
 from helpers import foreign_event_raw, foreign_raw
 
+from smylted import ical
 from smylted import due
 from smylted.config import Settings
 from smylted.dav.client import CollectionInfo, Item
@@ -621,6 +622,45 @@ def test_a_same_instant_retry_still_recovers_its_own_booking(svc):
     assert created is False
     assert confirmation["start"] == "2026-07-13T09:00:00-05:00"
     assert [b["event_uid"] for b in svc.list_bookings()] == [f"{cid}@tasksd"]
+
+
+# ── Smylte rename: booking replay must survive BOTH uid suffixes ────────────
+
+def _orphan_with(svc, cid: str, suffix: str) -> None:
+    uid = f"{cid}{suffix}"
+    raw = foreign_event_raw(uid, "Chat — Visitor",
+                           dtstart="20260713T140000Z", dtend="20260713T150000Z")
+    _cache(svc._conn, CAL_A, uid, raw)
+
+
+@pytest.mark.parametrize("suffix", [ical.UID_SUFFIX, ical.UID_SUFFIX_LEGACY])
+def test_booking_replay_is_found_under_either_uid_suffix(svc, suffix):
+    """`_recover_orphaned_booking` rebuilds the event UID from the visitor's
+    client_id rather than reading it back, so it has to know how UIDs are spelt
+    — and after the tasksd -> smylted rename there are two spellings in the
+    wild. A booking made before the rename carries the old one and is only
+    findable under it; one made after carries the new.
+
+    Getting this wrong is not a cosmetic bug. An unfound replay is not treated
+    as "no booking": `book_slot` refuses it with "client_id already used", or
+    goes on to create a second event for a visitor who already holds the slot.
+    The other tests in this file all build their orphan with the legacy suffix,
+    so without this the new spelling — the one every future booking uses — has
+    no coverage at all."""
+    token = _make_link(svc, title="Link A")
+    cid = "c" * 32
+    _orphan_with(svc, cid, suffix)
+
+    def fake(href, summary, *, dtstart, dtend=None, edit=None, client_id=None):
+        return {"uid": f"{client_id or 'x'}{suffix}"}
+    svc.create_event = fake
+
+    confirmation, created = svc.book_slot(
+        token, start_iso="2026-07-13T09:00:00-05:00",
+        name="Visitor", email="v@x.co", client_id=cid, now=NOW)
+    assert created is False, "the replay was treated as a fresh booking"
+    assert confirmation["start"] == "2026-07-13T09:00:00-05:00"
+    assert [b["event_uid"] for b in svc.list_bookings()] == [f"{cid}{suffix}"]
 
 
 # ── #12  list_bookings: ordered by the offset-bearing string ─────────────────

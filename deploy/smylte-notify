@@ -14,7 +14,7 @@ SECRET=""
 [ -r "$SECRET_FILE" ] && SECRET="$(cat "$SECRET_FILE")"
 
 /usr/bin/curl -s --connect-timeout 1 --max-time 2 -o /dev/null \
-  -H "X-Tasks-Hook-Secret: ${SECRET}" \
+  -H "X-Smylte-Hook-Secret: ${SECRET}" \
   -X POST http://127.0.0.1:8080/internal/changed >/dev/null 2>&1
 
 exit 0
