@@ -61,12 +61,12 @@ Everything below was measured against a **scratch** Radicale **3.7.4** (vobject
 
 ## What Phase 0 delivers
 
-- `tasksd.dav` — hand-rolled CalDAV client (PROPFIND, sync-collection,
+- `smylted.dav` — hand-rolled CalDAV client (PROPFIND, sync-collection,
   calendar-multiget, GET/PUT/DELETE with If-Match, MKCALENDAR VTODO-only).
-- `tasksd.ical` — icalendar read/extract + invariant-#2 edit path + an independent
+- `smylted.ical` — icalendar read/extract + invariant-#2 edit path + an independent
   canonicalizer that judges fidelity.
-- `tasksd.db` — SQLite (WAL, FTS5) cache + decoupled sidecar, raw sqlite3.
-- `tasksd.sync` — incremental + full-resync + invalid-token fallback + orphan GC,
+- `smylted.db` — SQLite (WAL, FTS5) cache + decoupled sidecar, raw sqlite3.
+- `smylted.sync` — incremental + full-resync + invalid-token fallback + orphan GC,
   and the write path with 412 merge.
 - 24 tests green, including a concurrent-writer fuzz that never loses a property.
 

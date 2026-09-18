@@ -222,7 +222,7 @@ jobs:
         # column names in store.py) carry reviewed `# nosec` annotations.
         run: |
           pip install bandit
-          bandit -r tasksd -ll
+          bandit -r smylted -ll
         working-directory: backend
       - uses: actions/setup-node@v4
         with:

@@ -120,19 +120,19 @@ def test_the_windows_client_has_tests_and_ci_runs_them():
 # ── delivery: install script and release workflow ─────────────────────────
 
 def test_setup_runs_the_module_from_the_backend_directory():
-    """`python -m tasksd hash-password` resolves `tasksd` off the interpreter's
+    """`python -m smylted hash-password` resolves `smylted` off the interpreter's
     path, which only contains the CWD. setup.sh called it without changing into
-    $BACKEND, so the documented install aborted on "No module named tasksd" —
+    $BACKEND, so the documented install aborted on "No module named smylted" —
     after prompting for every password, and before writing the env file."""
     src = _read("deploy/setup.sh")
 
-    call = re.search(r"^.*-m tasksd hash-password.*$", src, re.M)
+    call = re.search(r"^.*-m smylted hash-password.*$", src, re.M)
     assert call, "the hash-password call is gone — has setup.sh been rewritten?"
     line = call.group(0)
 
     assert re.search(r"\bcd\b|--directory|\bpushd\b", line) or re.search(
         r"^\s*cd\s+\"?\$\{?BACKEND", src[:call.start()], re.M), (
-        f"nothing puts the shell in $BACKEND before `python -m tasksd`:\n  {line.strip()}"
+        f"nothing puts the shell in $BACKEND before `python -m smylted`:\n  {line.strip()}"
     )
 
 
@@ -220,11 +220,11 @@ def test_book_slot_is_driven_across_a_dst_transition(tmp_path):
     behaviour as fixed and must stay green.
     """
     from tests.test_service_unit import _make_link, _settings, _stub_create_event
-    from tasksd.dav.client import CollectionInfo
-    from tasksd.db import store as _store
-    from tasksd.service import TaskService
+    from smylted.dav.client import CollectionInfo
+    from smylted.db import store as _store
+    from smylted.service import SmylteService
 
-    svc = TaskService(_settings())
+    svc = SmylteService(_settings())
     try:
         _store.upsert_collection(svc._conn, CollectionInfo(
             href="/u/meetings/", displayname="Meetings", components={"VEVENT"}))

@@ -19,11 +19,11 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from tasksd import scheduling
-from tasksd.db import store
-from tasksd.ical import EventEdit, rrule_from_spec
-from tasksd.ical.edit import apply_event_changes, split_series
-from tasksd.mcp.api import McpApi, ToolError
+from smylted import scheduling
+from smylted.db import store
+from smylted.ical import EventEdit, rrule_from_spec
+from smylted.ical.edit import apply_event_changes, split_series
+from smylted.mcp.api import McpApi, ToolError
 from tests.helpers import foreign_event_raw
 
 pytestmark = [pytest.mark.backlog, pytest.mark.stage3]
@@ -31,7 +31,7 @@ pytestmark = [pytest.mark.backlog, pytest.mark.stage3]
 
 
 class _Svc:
-    """A stub TaskService. Defaults mimic the real one's behaviour for the
+    """A stub SmylteService. Defaults mimic the real one's behaviour for the
     unknown-uid cases: the engine looks the item up in the cache and either
     raises KeyError (edits) or returns silently (deletes)."""
 
@@ -211,10 +211,10 @@ def test_a_failed_reorder_leaves_no_partial_order():
     guarantee therefore does not exist: a failure part-way leaves some rows
     renumbered and some not, and 20 000 rows are 20 000 separate commits under
     the global lock."""
-    from tasksd import service as service_mod
-    from tasksd.dav.client import CollectionInfo
+    from smylted import service as service_mod
+    from smylted.dav.client import CollectionInfo
 
-    svc = service_mod.TaskService.__new__(service_mod.TaskService)
+    svc = service_mod.SmylteService.__new__(service_mod.SmylteService)
     svc._conn = store.connect(":memory:")
     store.init_db(svc._conn)
     svc._lock = threading.RLock()

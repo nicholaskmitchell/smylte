@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from tasksd.app import Appearance, CustomTheme, DashboardModule, SettingsPatch
+from smylted.app import Appearance, CustomTheme, DashboardModule, SettingsPatch
 
 
 def theme(**over):
@@ -186,7 +186,7 @@ def test_backend_allowlist_matches_the_frontend():
     import re
     from pathlib import Path
 
-    from tasksd.app import _APPEARANCE_TOKENS
+    from smylted.app import _APPEARANCE_TOKENS
 
     src = Path(__file__).resolve().parents[2] / "frontend" / "src" / "appearance.ts"
     if not src.exists():                     # backend-only checkout

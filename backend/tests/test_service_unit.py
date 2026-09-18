@@ -11,12 +11,12 @@ from zoneinfo import ZoneInfo
 import pytest
 from helpers import foreign_event_raw
 
-from tasksd import scheduling
-from tasksd.config import Settings
-from tasksd.dav.client import CollectionInfo, Item
-from tasksd.db import store
-from tasksd.ical import extract_from_raw
-from tasksd.service import TaskService
+from smylted import scheduling
+from smylted.config import Settings
+from smylted.dav.client import CollectionInfo, Item
+from smylted.db import store
+from smylted.ical import extract_from_raw
+from smylted.service import SmylteService
 
 TZ = ZoneInfo("America/Chicago")
 # A Monday morning, link-local (CDT, -05:00).
@@ -42,7 +42,7 @@ def _seed_event(conn, cal: str, uid: str, start: str, end: str) -> None:
 
 @pytest.fixture
 def svc():
-    s = TaskService(_settings())
+    s = SmylteService(_settings())
     for href, name in ((CAL_A, "Meetings"), (CAL_B, "Personal")):
         store.upsert_collection(
             s._conn, CollectionInfo(href=href, displayname=name, components={"VEVENT"})

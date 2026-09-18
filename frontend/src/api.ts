@@ -1,4 +1,4 @@
-// Typed client for the tasksd API. Same-origin: the session cookie rides along
+// Typed client for the smylted API. Same-origin: the session cookie rides along
 // automatically, so there are no tokens to manage in JS (it's HttpOnly anyway).
 
 // Both shapes are defined next to the code that gives them meaning — the token
@@ -269,7 +269,7 @@ export interface BookingLink {
   booking_count: number
   created_at: string
   updated_at: string
-  /** The absolute public URL — `${TASKS_PUBLIC_URL}/book/{token}` — when the
+  /** The absolute public URL — `${SMYLTE_PUBLIC_URL}/book/{token}` — when the
    *  deployment has one configured, else null. The server's, not this page's:
    *  inside the Windows client `location.origin` is the loopback server the
    *  SPA is served from, and a link built from it worked on that machine and
@@ -288,7 +288,7 @@ export interface BookingLink {
 export interface Display {
   token: string
   /** The page a panel opens, absolute, when the deployment has said what its
-   *  origin is (TASKS_PUBLIC_URL); null otherwise. The Windows client serves
+   *  origin is (SMYLTE_PUBLIC_URL); null otherwise. The Windows client serves
    *  the app from localhost, so `location.origin` is the wrong origin there. */
   url?: string | null
   name: string
@@ -338,7 +338,7 @@ export interface DisplayInput {
  * every clock are formatted SERVER-side, in the account's language and clock
  * setting. That is deliberate — the browser page and the server-rendered image
  * for a browserless panel are two rasterizers over this one object, and
- * localizing in each would let them drift. See backend tasksd/display/frame.py.
+ * localizing in each would let them drift. See backend smylted/display/frame.py.
  */
 export interface DisplayFrame {
   display: {
@@ -1020,7 +1020,7 @@ export const clientId = () => crypto.randomUUID().replace(/-/g, '')
 
 /** The UID the server will give a resource created with this client_id.
  *
- * Deterministic by contract — `engine.create_task` builds `f"{slug}@tasksd"`
+ * Deterministic by contract — `engine.create_task` builds `f"{slug}{UID_SUFFIX}"`
  * from the slug we send — and knowing it up front is what lets an optimistic
  * stand-in carry its *final* identity from the very first paint. It has to:
  * a subtask added to a task whose create is still in flight sends the parent's
@@ -1031,8 +1031,25 @@ export const clientId = () => crypto.randomUUID().replace(/-/g, '')
  *
  * `test_api.py::test_created_uid_is_derived_from_client_id` pins the format
  * from the other side, so the two can't drift apart silently. */
-export const UID_SUFFIX = '@tasksd'
+// Only ever used to predict the UID of a resource being created right now, so
+// it tracks whatever the server currently mints and needs no pre-rename
+// variant — nothing here looks an EXISTING item up by suffix.
+export const UID_SUFFIX = '@smylted'
 export const uidFor = (cid: string) => `${cid}${UID_SUFFIX}`
+
+/** The pre-rename suffix, for RESOLVING an existing uid — never for minting one.
+ *
+ * `uidFor` predicts the identity of a resource being created right now, so it
+ * tracks whatever the server currently mints and nothing else. Resolution is a
+ * different question with a different answer: the legacy-parent repair in
+ * `data.tsx` and `TasksView.tsx` takes a bare client_id written before `uidFor`
+ * existed and looks for the task it was meant to name — and a task that old was
+ * minted under the OLD suffix by definition. Pointing that lookup at the new
+ * suffix alone would quietly retire the repair for exactly the rows it exists
+ * to fix, and the orphan stays orphaned in Tasks.org and jtx Board too. */
+export const UID_SUFFIX_LEGACY = '@tasksd'
+export const uidCandidatesFor = (cid: string) =>
+  [`${cid}${UID_SUFFIX}`, `${cid}${UID_SUFFIX_LEGACY}`] as const
 
 /** A FastAPI `detail` as something a person can read.
  *

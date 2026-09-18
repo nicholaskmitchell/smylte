@@ -40,8 +40,8 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from tasksd.app import create_app
-from tasksd.dav.errors import DavError
+from smylted.app import create_app
+from smylted.dav.errors import DavError
 from tests.conftest import PASSWORD, SCRATCH_URL, USER, api_settings
 
 pytestmark = [pytest.mark.backlog, pytest.mark.stage1]
@@ -133,19 +133,19 @@ def mcp_post(_scratch_up, tmp_path_factory):
 
 @pytest.fixture(scope="module")
 def mcp_stack(_scratch_up, tmp_path_factory):
-    """The real tool table over a real TaskService, with one recurring event.
+    """The real tool table over a real SmylteService, with one recurring event.
 
     No HTTP and no OAuth: that finding is about what the tool layer does with an
     argument, and this is the shortest path that still runs the genuine chain
-    McpServer -> McpApi -> TaskService -> SyncEngine -> ical.edit.
+    McpServer -> McpApi -> SmylteService -> SyncEngine -> ical.edit.
     """
-    from tasksd.mcp.api import McpApi
-    from tasksd.mcp.server import McpServer
-    from tasksd.mcp.tools import SCOPE_READ, SCOPE_WRITE
-    from tasksd.service import TaskService
+    from smylted.mcp.api import McpApi
+    from smylted.mcp.server import McpServer
+    from smylted.mcp.tools import SCOPE_READ, SCOPE_WRITE
+    from smylted.service import SmylteService
 
     db = tmp_path_factory.mktemp("aug19tools") / "tools.db"
-    svc = TaskService(api_settings(str(db)))
+    svc = SmylteService(api_settings(str(db)))
     api = McpApi(svc)
     cal = api.create_calendar(name=f"C-{uuid.uuid4().hex[:8]}")
     try:

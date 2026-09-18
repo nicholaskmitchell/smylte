@@ -57,7 +57,7 @@ public sealed class LocalServer : IDisposable
 
     // ── Content-Security-Policy ─────────────────────────────────────────────
     //
-    // A PORT of backend/tasksd/csp.py, and it has to stay a faithful one. The
+    // A PORT of backend/smylted/csp.py, and it has to stay a faithful one. The
     // app's policy exists only as a response header the BACKEND attaches;
     // frontend/index.html carries no `http-equiv` meta (verified, zero
     // occurrences), so the document WebView2 runs — served from disk by
@@ -72,7 +72,7 @@ public sealed class LocalServer : IDisposable
     // twice as a url() beacon. In the browser it is blocked by img-src 'self'
     // and never leaves the machine. In this window it fetches, and with no
     // connect-src and no script-hash restriction, any script injection here can
-    // exfiltrate to an arbitrary host from an origin holding tasks_session.
+    // exfiltrate to an arbitrary host from an origin holding smylte_session.
     //
     // The HASH is derived from the file actually served rather than written
     // down, for the reason csp.py gives: hardcoding it puts the same string in

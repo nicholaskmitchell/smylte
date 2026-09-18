@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import pytest
 
-from tasksd.mcp.api import McpApi
-from tasksd.mcp.tools import ToolError, build_tools
+from smylted.mcp.api import McpApi
+from smylted.mcp.tools import ToolError, build_tools
 
 
 class StubSvc:

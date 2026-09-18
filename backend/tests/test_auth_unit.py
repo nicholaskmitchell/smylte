@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from tasksd.app import _EVENT_STATUS, _TASK_STATUS, _check_status
-from tasksd.auth import Authenticator, HashBudget, hash_password, limiter_key
+from smylted.app import _EVENT_STATUS, _TASK_STATUS, _check_status
+from smylted.auth import Authenticator, HashBudget, hash_password, limiter_key
 
 
 def test_limiter_key_collapses_ipv6_to_its_64():

@@ -15,7 +15,7 @@ import { translate } from '../i18n/index'
 // Nothing here formats a date, a month or a clock. The frame arrives with every
 // string already rendered in the owner's language and clock setting, because the
 // same frame is rasterized server-side for panels with no browser, and two
-// formatters would drift. See backend tasksd/display/frame.py.
+// formatters would drift. See backend smylted/display/frame.py.
 //
 // The three strings this page authors ITSELF — the stale strip and the two
 // lines of the gone card — are states the frame cannot describe, and they take

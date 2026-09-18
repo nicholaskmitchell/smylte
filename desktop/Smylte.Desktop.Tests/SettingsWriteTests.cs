@@ -170,7 +170,7 @@ public sealed class SettingsWriteTests : IDisposable
         // can use it through the proxy — which means a session from server A
         // and a session from server B are the same cookie as far as the jar is
         // concerned. Point the client at a second server and the FIRST one's
-        // live `tasks_session` is what the proxy relays, on an ordinary launch,
+        // live `smylte_session` is what the proxy relays, on an ordinary launch,
         // whenever the new login does not immediately replace it.
         var settings = Settings.Load();
         settings.ServerUrl = "https://first.invalid";

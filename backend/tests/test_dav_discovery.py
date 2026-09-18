@@ -14,8 +14,8 @@ import dataclasses
 import pytest
 from fastapi.testclient import TestClient
 
-from tasksd.app import create_app
-from tasksd.config import normalize_dav_url
+from smylted.app import create_app
+from smylted.config import normalize_dav_url
 from tests.conftest import api_settings
 
 WELL_KNOWN = ["/.well-known/caldav", "/.well-known/carddav"]

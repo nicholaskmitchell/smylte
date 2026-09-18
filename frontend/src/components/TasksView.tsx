@@ -1,7 +1,7 @@
 import {
   useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent,
 } from 'react'
-import { api, uidFor, type CreateTaskBody, type List, type Task, type TaskGroup, type TasksViewMode } from '../api'
+import { api, uidFor, uidCandidatesFor, type CreateTaskBody, type List, type Task, type TaskGroup, type TasksViewMode } from '../api'
 import { useTaskData } from '../data'
 import {
   addDays, cssColor, dayKey, isOverdue, makeGuard, slippedFrom, toLocalInput, ymd,
@@ -73,7 +73,7 @@ const isHidden = (t: Task) => isDone(t) || isParked(t)
 
 /** The shape a bare client_id has, matching the backend's `_CLIENT_ID_RE`.
  *  Only a `parent` looking exactly like this is a candidate for the legacy
- *  reinterpretation below — a real uid always carries the `@tasksd` suffix. */
+ *  reinterpretation below — a real uid always carries a `@…` suffix. */
 const LEGACY_PARENT = /^[0-9a-f]{16,64}$/
 
 /** A parent's subtask tally, or null when it has none to show. */
@@ -223,7 +223,7 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
   //    collection, so a RELATED-TO pointing across lists counts for nothing
   //    there and must count for nothing here.
   //  - A `parent` with exactly the shape of a client_id (the backend's
-  //    _CLIENT_ID_RE) that names no task, while `${value}@tasksd` names one, is
+  //    _CLIENT_ID_RE) that names no task, while `${value}` + a uid suffix does, is
   //    read as that task. Those are the subtasks written before `uidFor`
   //    existed, pointing at the create id instead of the uid derived from it.
   //    They are repaired on the wire above; this is what nests them at once,
@@ -249,7 +249,9 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
       // `t.list` — rather than a whole-account lookup filtered afterwards. That
       // filter is what was silently discarding rows.
       const p = find(t.list, raw)
-        ?? (LEGACY_PARENT.test(raw) ? find(t.list, uidFor(raw)) : undefined)
+        ?? (LEGACY_PARENT.test(raw)
+            ? uidCandidatesFor(raw).map((u) => find(t.list, u)).find(Boolean)
+            : undefined)
       if (!p) continue
       parents.set(taskKey(t), p)
       const mine = kids.get(taskKey(p))

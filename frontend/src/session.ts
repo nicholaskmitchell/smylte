@@ -1,6 +1,6 @@
 // How long a login lasts, as the Settings menu offers it.
 //
-// It used to be TASKS_SESSION_TTL in /etc/tasks/tasks.env — a deploy-time
+// It used to be SMYLTE_SESSION_TTL in /etc/smylte/smylte.env — a deploy-time
 // decision, changed by editing a file and restarting the service. The values
 // here are the whole allowlist the server accepts (`_SESSION_TTLS` in app.py);
 // anything else is refused with a 422, because this decides how long a session

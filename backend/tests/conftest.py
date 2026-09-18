@@ -20,20 +20,20 @@ import uuid
 
 import pytest
 
-from tasksd.db import connect, init_db
-from tasksd.sync import SyncEngine
+from smylted.db import connect, init_db
+from smylted.sync import SyncEngine
 
 SCRATCH_URL = os.environ.get("SCRATCH_RADICALE", "http://127.0.0.1:5233")
 USER = os.environ.get("SCRATCH_USER", "testuser")
 PASSWORD = os.environ.get("SCRATCH_PASSWORD", "testpass")
 # Host path to the scratch storage, used only by the .Radicale.cache-drop test.
 SCRATCH_STORAGE = os.environ.get(
-    "SCRATCH_STORAGE", os.path.expanduser("~/tasks/scratch/data/collections")
+    "SCRATCH_STORAGE", os.path.expanduser("~/smylte/scratch/data/collections")
 )
 
 
 def _make_dav():
-    from tasksd.dav import DavClient
+    from smylted.dav import DavClient
 
     return DavClient(SCRATCH_URL, USER, PASSWORD)
 
@@ -99,7 +99,7 @@ def collection(dav):
 
 @pytest.fixture
 def db(tmp_path):
-    conn = connect(str(tmp_path / "tasks.db"))
+    conn = connect(str(tmp_path / "smylte.db"))
     init_db(conn)
     yield conn
     conn.close()
@@ -112,7 +112,7 @@ def engine(dav, db):
 
 def api_settings(db_path: str):
     """Settings for the HTTP layer against scratch, auth ON with a test password."""
-    from tasksd.config import Settings
+    from smylted.config import Settings
 
     return Settings(
         radicale_url=SCRATCH_URL, radicale_user=USER, radicale_password=PASSWORD,
@@ -127,7 +127,7 @@ def api_settings(db_path: str):
 def client(_scratch_up, tmp_path_factory):
     from fastapi.testclient import TestClient
 
-    from tasksd.app import create_app
+    from smylted.app import create_app
 
     db = tmp_path_factory.mktemp("api") / "api.db"
     app = create_app(api_settings(str(db)))

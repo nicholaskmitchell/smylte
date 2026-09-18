@@ -9,10 +9,10 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from tasksd import scheduling
-from tasksd.auth import RateLimiter
-from tasksd.db import store
-from tasksd.scheduling import Interval
+from smylted import scheduling
+from smylted.auth import RateLimiter
+from smylted.db import store
+from smylted.scheduling import Interval
 
 TZ = ZoneInfo("America/Chicago")
 UTC = ZoneInfo("UTC")
@@ -145,7 +145,7 @@ def test_busy_intervals_duration_from_real_ics():
     # Regression: a DURATION-only VEVENT (DAVx5/phone-client style) must block,
     # end-to-end through the same extraction the cache uses. str() of the parsed
     # property used to store a repr that busy_intervals silently skipped.
-    from tasksd.ical import extract_from_raw
+    from smylted.ical import extract_from_raw
 
     f = extract_from_raw(
         b"BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//t//t//EN\r\n"

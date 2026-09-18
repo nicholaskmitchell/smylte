@@ -21,13 +21,13 @@ from zoneinfo import ZoneInfo
 import pytest
 from helpers import foreign_event_raw
 
-from tasksd import scheduling
-from tasksd.config import Settings
-from tasksd.dav.client import CollectionInfo, Item
-from tasksd.db import store
-from tasksd.ical import EventEdit, apply_event_changes, blocks_time, build_new_event
-from tasksd.ical import extract_from_raw
-from tasksd.service import TaskService
+from smylted import scheduling
+from smylted.config import Settings
+from smylted.dav.client import CollectionInfo, Item
+from smylted.db import store
+from smylted.ical import EventEdit, apply_event_changes, blocks_time, build_new_event
+from smylted.ical import extract_from_raw
+from smylted.service import SmylteService
 
 TZ = ZoneInfo("America/Chicago")
 NOW = datetime(2026, 7, 13, 8, 0, tzinfo=TZ)          # a Monday morning, link-local
@@ -139,7 +139,7 @@ def _settings() -> Settings:
 
 @pytest.fixture
 def svc():
-    s = TaskService(_settings())
+    s = SmylteService(_settings())
     store.upsert_collection(
         s._conn, CollectionInfo(href=CAL, displayname="Meetings", components={"VEVENT"})
     )
@@ -303,8 +303,8 @@ def test_a_row_written_before_the_column_reads_as_busy(svc):
 def test_the_patch_model_leaves_an_unmentioned_transp_alone():
     """`model_fields_set`, not a None check. `busy: false` and "no opinion" are
     both falsy, and telling them apart by value would make Free unsendable."""
-    from tasksd.app import EditEvent, _event_edit_from_patch
-    from tasksd.ical import UNSET
+    from smylted.app import EditEvent, _event_edit_from_patch
+    from smylted.ical import UNSET
 
     assert _event_edit_from_patch(EditEvent(summary="x")).busy is UNSET
     assert _event_edit_from_patch(EditEvent(busy=False)).busy is False
@@ -317,7 +317,7 @@ def test_the_create_model_writes_nothing_unless_asked():
     """An omitted `busy` writes no TRANSP at all, which is already OPAQUE — so
     the resources this app has always written are unchanged, and a client that
     has never heard of the field cannot alter one."""
-    from tasksd.app import CreateEvent, _event_edit_from_create
+    from smylted.app import CreateEvent, _event_edit_from_create
 
     plain = _event_edit_from_create(
         CreateEvent(summary="Chat", start="2026-07-13T09:00:00"))
@@ -337,7 +337,7 @@ def test_find_free_time_skips_an_event_marked_free():
     because "what is my day like" and "what may a stranger book" are different
     questions — but what the owner has explicitly said does not consume time is
     not one of those differences."""
-    from tasksd.mcp.api import McpApi
+    from smylted.mcp.api import McpApi
 
     api = McpApi.__new__(McpApi)                 # no service needed: list_events is stubbed
     meeting = {"start": "2026-09-07T10:00:00", "end": "2026-09-07T12:00:00",

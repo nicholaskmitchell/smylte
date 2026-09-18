@@ -64,7 +64,7 @@ internal sealed class SetupWindow
 
         _password.SetVisibility(false);
         _token.SetVisibility(false);
-        _server.SetPlaceholderText("https://tasks.example.com");
+        _server.SetPlaceholderText("https://smylte.example.com");
         _folder.SetPlaceholderText(Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Smylte"));
 

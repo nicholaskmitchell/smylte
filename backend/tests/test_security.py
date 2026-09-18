@@ -18,8 +18,8 @@ import jwt
 import pytest
 from fastapi.testclient import TestClient
 
-from tasksd.app import create_app
-from tasksd.auth import Authenticator, hash_password, verify_password
+from smylted.app import create_app
+from smylted.auth import Authenticator, hash_password, verify_password
 from tests.conftest import api_settings
 
 SECRET = "s" * 40          # matches api_settings
@@ -108,7 +108,7 @@ def test_session_cookie_attributes(make_app):
         r = c.post("/api/login", json=LOGIN)
         assert r.status_code == 200
         cookie = r.headers["set-cookie"]
-        assert "tasks_session=" in cookie
+        assert "smylte_session=" in cookie
         assert "httponly" in cookie.lower()          # JS (XSS) can't read it
         assert "samesite=strict" in cookie.lower()   # cross-site requests won't carry it
         assert "path=/" in cookie.lower()
@@ -186,7 +186,7 @@ def test_forged_and_expired_cookies_are_rejected(make_app):
     unsigned = jwt.encode(claims, key=None, algorithm="none")
     with TestClient(make_app()) as c:
         for token in (forged, expired, unsigned, "garbage"):
-            c.cookies.set("tasks_session", token)
+            c.cookies.set("smylte_session", token)
             assert c.get("/api/me").status_code == 401, token
         c.cookies.clear()
         # A genuine login still works (the checks above weren't a broken app).
@@ -255,14 +255,14 @@ def test_logout_withdraws_the_token_not_just_the_cookie(make_app):
     app = make_app()
     with TestClient(app) as c:
         assert c.post("/api/login", json=LOGIN).status_code == 200
-        stolen = c.cookies["tasks_session"]
+        stolen = c.cookies["smylte_session"]
         assert c.get("/api/me").status_code == 200
 
         c.post("/api/logout")
 
         # Replay the captured cookie against a client that never logged out.
         with TestClient(app) as replay:
-            replay.cookies.set("tasks_session", stolen)
+            replay.cookies.set("smylte_session", stolen)
             assert replay.get("/api/me").status_code == 401
             assert replay.get("/api/lists").status_code == 401
 
@@ -288,30 +288,30 @@ def test_a_withdrawn_session_stays_withdrawn_across_a_restart(make_app, tmp_path
     db = str(tmp_path / "revoke.db")
     with TestClient(make_app(db_path=db)) as c:
         assert c.post("/api/login", json=LOGIN).status_code == 200
-        stolen = c.cookies["tasks_session"]
+        stolen = c.cookies["smylte_session"]
         c.post("/api/logout")
 
     with TestClient(make_app(db_path=db)) as restarted:   # same DB, fresh process
-        restarted.cookies.set("tasks_session", stolen)
+        restarted.cookies.set("smylte_session", stolen)
         assert restarted.get("/api/me").status_code == 401
 
 
 @pytest.mark.radicale
 def test_changing_the_password_invalidates_existing_sessions(make_app, tmp_path):
     """The documented remedy for a compromised password is: regenerate the hash,
-    update TASKS_AUTH_PASSWORD_HASH, restart. That left every session the
+    update SMYLTE_AUTH_PASSWORD_HASH, restart. That left every session the
     attacker had already minted valid for the rest of its TTL — and unreachable
     by revocation, which can only withdraw a jti the owner can name. Changing
     the password has to be a sign-out-everywhere."""
     db = str(tmp_path / "credver.db")
     with TestClient(make_app(db_path=db)) as c:
         assert c.post("/api/login", json=LOGIN).status_code == 200
-        minted = c.cookies["tasks_session"]
+        minted = c.cookies["smylte_session"]
         assert c.get("/api/me").status_code == 200
 
     # Same signing secret, same DB — only the password moved.
     with TestClient(make_app(db_path=db, auth_password="a-different-password")) as rotated:
-        rotated.cookies.set("tasks_session", minted)
+        rotated.cookies.set("smylte_session", minted)
         assert rotated.get("/api/me").status_code == 401
 
 
@@ -321,10 +321,10 @@ def test_changing_the_username_invalidates_existing_sessions(make_app, tmp_path)
     db = str(tmp_path / "subver.db")
     with TestClient(make_app(db_path=db)) as c:
         assert c.post("/api/login", json=LOGIN).status_code == 200
-        minted = c.cookies["tasks_session"]
+        minted = c.cookies["smylte_session"]
 
     with TestClient(make_app(db_path=db, auth_user="someone-else")) as renamed:
-        renamed.cookies.set("tasks_session", minted)
+        renamed.cookies.set("smylte_session", minted)
         assert renamed.get("/api/me").status_code == 401
 
 
@@ -334,10 +334,10 @@ def test_an_unchanged_credential_keeps_its_sessions(make_app, tmp_path):
     db = str(tmp_path / "samecred.db")
     with TestClient(make_app(db_path=db)) as c:
         assert c.post("/api/login", json=LOGIN).status_code == 200
-        minted = c.cookies["tasks_session"]
+        minted = c.cookies["smylte_session"]
 
     with TestClient(make_app(db_path=db)) as restarted:
-        restarted.cookies.set("tasks_session", minted)
+        restarted.cookies.set("smylte_session", minted)
         assert restarted.get("/api/me").status_code == 200
 
 
@@ -361,13 +361,20 @@ def test_login_malformed_payloads_are_422_not_500(make_app):
 
 
 @pytest.mark.radicale
-def test_hook_requires_secret_header(make_app):
+@pytest.mark.parametrize("header", ["X-Smylte-Hook-Secret", "X-Tasks-Hook-Secret"])
+def test_hook_requires_secret_header(make_app, header):
+    """Both spellings, because the app and the hook script are installed by
+    different steps of the Smylte migration and this hook is fire-and-forget:
+    Radicale never sees a 403 and nothing retries, so a header mismatch does not
+    fail loudly — live sync just stops and the app falls back to its 30s poll.
+    The legacy spelling is accepted for exactly that reason, and an untested
+    accept is one a later cleanup deletes without noticing."""
     with TestClient(make_app()) as c:
         assert c.post("/internal/changed").status_code == 403
         assert c.post("/internal/changed",
-                      headers={"X-Tasks-Hook-Secret": ""}).status_code == 403
+                      headers={header: ""}).status_code == 403
         assert c.post("/internal/changed",
-                      headers={"X-Tasks-Hook-Secret": "testhook"}).status_code == 202
+                      headers={header: "testhook"}).status_code == 202
 
 
 @pytest.mark.radicale
@@ -405,13 +412,13 @@ def test_public_booking_unknown_token_is_404(make_app):
 def test_502_bodies_never_leak_internals(make_app, monkeypatch):
     # The DavError handler must speak in generic terms; URLs, credentials, and
     # exception internals stay in the log.
-    from tasksd.dav.errors import DavError
-    from tasksd.service import TaskService
+    from smylted.dav.errors import DavError
+    from smylted.service import SmylteService
 
     def boom(self):
         raise DavError("http://127.0.0.1:5233/testuser/secret-collection auth=testpass")
 
-    monkeypatch.setattr(TaskService, "list_lists", boom)
+    monkeypatch.setattr(SmylteService, "list_lists", boom)
     with TestClient(make_app()) as c:
         c.post("/api/login", json=LOGIN)
         r = c.get("/api/lists")
@@ -437,7 +444,7 @@ def test_auth_enabled_with_no_password_refuses_to_start():
 
 def test_auth_enabled_accepts_either_a_hash_or_a_plaintext_password():
     # The refusal must fire only when BOTH are absent — the fallback that hashes
-    # TASKS_AUTH_PASSWORD at startup has to keep working.
+    # SMYLTE_AUTH_PASSWORD at startup has to keep working.
     assert create_app(_settings(auth_password_hash="", auth_password="testpass123"))
     assert create_app(_settings(
         auth_password_hash=hash_password("testpass123"), auth_password=""))
@@ -497,8 +504,8 @@ def test_ordinary_unicode_names_still_work(client):
 def test_the_xml_builders_refuse_what_lxml_cannot_serialize():
     """Backstop beneath the 422: no caller should be able to turn a stray byte
     into an unhandled crash deep in the DAV client."""
-    from tasksd.dav import xml as X
-    from tasksd.dav.errors import DavError
+    from smylted.dav import xml as X
+    from smylted.dav.errors import DavError
 
     for bad in ("a\x00b", "a\x0bb", "a\x1fb"):
         with pytest.raises(DavError):
