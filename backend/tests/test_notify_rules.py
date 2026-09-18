@@ -13,9 +13,9 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from tasksd.db import store
-from tasksd.notify import rules as R
-from tasksd.notify.scheduler import MAX_LOUD_PER_DAY, Notifier
+from smylted.db import store
+from smylted.notify import rules as R
+from smylted.notify.scheduler import MAX_LOUD_PER_DAY, Notifier
 
 NY = ZoneInfo("America/New_York")
 
@@ -96,7 +96,7 @@ class StubSender:
 
     def send(self, chat_id, text, *, silent=False, **kw):
         self.sent.append({"text": text, "silent": silent, "chat_id": chat_id})
-        from tasksd.notify.telegram import SendResult
+        from smylted.notify.telegram import SendResult
         # A fresh id per message, as Telegram hands out: the ledger now records
         # which delivery each occasion rode in, and the daily loud ceiling
         # counts distinct ids — a stub that answered `1` for every send would
@@ -313,7 +313,7 @@ def test_the_sync_message_never_carries_the_error_text(db):
     now = datetime(2026, 8, 31, 11, 30, tzinfo=timezone.utc)
     text = R._eval_sync_stalled(_sweep(svc, now))[0].text
     assert "hunter2" not in text and secret not in text
-    assert "tasksd log" in text
+    assert "smylted log" in text
 
 
 def test_every_broken_collection_is_one_message_not_five(db):

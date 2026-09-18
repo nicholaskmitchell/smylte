@@ -14,7 +14,7 @@ import { weekdayNames } from '../names'
 // lives at /book/<token> (BookingPage).
 
 // The availability map's keys are "0".."6", Monday-first — `parse_availability`
-// in backend/tasksd/scheduling.py. The NAMES for those seven slots are not
+// in backend/smylted/scheduling.py. The NAMES for those seven slots are not
 // spelled here any more: they come from `weekdayNames`, which reads them out of
 // the platform in whatever language the app is set to.
 const DAYS_IN_WEEK = 7
@@ -268,7 +268,7 @@ const isBlankRange = ([s, e]: [string, string]) => !s && !e
 /**
  * Why the server would refuse each day, keyed by weekday index.
  *
- * A mirror of `parse_availability` (backend/tasksd/scheduling.py:60), which is
+ * A mirror of `parse_availability` (backend/smylted/scheduling.py:60), which is
  * where the rules actually live, and it is deliberately exact:
  *   - both fields filled;
  *   - `s < e` STRICTLY — equal endpoints are illegal there too;

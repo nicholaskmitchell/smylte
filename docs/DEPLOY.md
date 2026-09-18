@@ -1,4 +1,4 @@
-# Deployment — unified Tasks + Calendar at radicale.nicholaskmitchell.com
+# Deployment — Smylte at radicale.nicholaskmitchell.com
 
 Public (no tailnet), gated by the app's own username/password. Raw CalDAV for
 device clients moves to `radicale.nicholaskmitchell.com/dav`.
@@ -12,7 +12,7 @@ device clients moves to `radicale.nicholaskmitchell.com/dav`.
                     /dav/* ──►│  Caddy path split   │──► everything else
               (X-Script-Name) │                     │
                               ▼                     ▼
-                   Radicale 127.0.0.1:5232   tasksd 127.0.0.1:8080 ──► Radicale (localhost)
+                   Radicale 127.0.0.1:5232   smylted 127.0.0.1:8080 ──► Radicale (localhost)
                      (device sync)              (web app)
 ```
 
@@ -26,9 +26,9 @@ Legend: **[SAFE]** on-Pi, reversible · **[DASH]** you, in the Cloudflare dashbo
 
 ## 0. Build the frontend  **[SAFE]**
 ```bash
-cd ~/tasks/frontend && npm install && npm run build   # -> dist/
+cd ~/smylte/frontend && npm install && npm run build   # -> dist/
 ```
-⚠️ **Restart the service after a rebuild**: `sudo systemctl restart tasks`. The
+⚠️ **Restart the service after a rebuild**: `sudo systemctl restart smylte`. The
 Content-Security-Policy (below) carries a hash of the SPA's inline pre-paint
 script, read from `dist/index.html` at startup — so a rebuild that changes that
 script while the old process is still running leaves a stale hash, and the
@@ -51,54 +51,120 @@ pinned to 3.12, was fully green.
 
 Check what is there, and rebuild it if it is not on the list:
 ```bash
-~/tasks/backend/.venv/bin/python -V
+~/smylte/backend/.venv/bin/python -V
 # if it is not 3.12.x or 3.13.x:
-sudo systemctl stop tasks
-cd ~/tasks/backend && rm -rf .venv
+sudo systemctl stop smylte
+cd ~/smylte/backend && rm -rf .venv
 python3.13 -m venv .venv && .venv/bin/pip install -r requirements.txt
-sudo systemctl start tasks && curl -s localhost:8080/healthz
+sudo systemctl start smylte && curl -s localhost:8080/healthz
 ```
 Worth re-checking after any `apt full-upgrade` that moves the system Python.
 
 ### Run it
 ```bash
-sudo ~/tasks/deploy/setup.sh
+sudo ~/smylte/deploy/setup.sh
 ```
 Prompts for the Radicale password and a new app login password (scrypt-hashed),
-generates the session + hook secrets, writes `/etc/tasks/tasks.env` and
-`/etc/tasks/hook-secret` (both 0600), installs `/usr/local/bin/tasks-notify` and
-`tasks.service`, and starts it on `127.0.0.1:8080`. Check: `curl -s localhost:8080/healthz`.
+generates the session + hook secrets, writes `/etc/smylte/smylte.env` and
+`/etc/smylte/hook-secret` (both 0600), installs `/usr/local/bin/smylte-notify` and
+`smylte.service`, and starts it on `127.0.0.1:8080`. Check: `curl -s localhost:8080/healthz`.
 
-The SQLite cache lives at `/var/lib/tasks/tasks.db`, which `StateDirectory=tasks`
+The SQLite cache lives at `/var/lib/smylte/smylte.db`, which `StateDirectory=smylte`
 in the unit creates and owns. It is deliberately outside the source tree: the
-unit used to grant `ReadWritePaths=~/tasks/backend`, which is where `.venv` and
-`tasksd` live, so a write primitive in the internet-reachable parse path could
+unit used to grant `ReadWritePaths=~/smylte/backend`, which is where `.venv` and
+`smylted` live, so a write primitive in the internet-reachable parse path could
 drop a `.pth` into site-packages and survive every restart.
 
-### Moving an existing install to /var/lib/tasks  **[PROD — one time]**
-`setup.sh` leaves an existing `/etc/tasks/tasks.env` untouched, so an install
-made before this change still points `TASKS_DB` at the old path — which the
+### Moving an existing install to /var/lib/smylte  **[PROD — one time]**
+`setup.sh` leaves an existing `/etc/smylte/smylte.env` untouched, so an install
+made before this change still points `SMYLTE_DB` at the old path — which the
 narrowed sandbox no longer grants, and the service will fail to open its cache.
 Move it by hand, once:
 ```bash
-sudo systemctl stop tasks
-sudo install -d -o nicholaskmitchell -g nicholaskmitchell -m 0700 /var/lib/tasks
-sudo mv ~/tasks/backend/tasks.db     /var/lib/tasks/tasks.db
-sudo mv ~/tasks/backend/tasks.db-wal /var/lib/tasks/ 2>/dev/null || true
-sudo mv ~/tasks/backend/tasks.db-shm /var/lib/tasks/ 2>/dev/null || true
-sudo chown nicholaskmitchell:nicholaskmitchell /var/lib/tasks/tasks.db*
-sudo sed -i 's#^TASKS_DB=.*#TASKS_DB=/var/lib/tasks/tasks.db#' /etc/tasks/tasks.env
-sudo systemctl start tasks && curl -s localhost:8080/healthz
+sudo systemctl stop smylte
+sudo install -d -o nicholaskmitchell -g nicholaskmitchell -m 0700 /var/lib/smylte
+sudo mv ~/smylte/backend/smylte.db     /var/lib/smylte/smylte.db
+sudo mv ~/smylte/backend/smylte.db-wal /var/lib/smylte/ 2>/dev/null || true
+sudo mv ~/smylte/backend/smylte.db-shm /var/lib/smylte/ 2>/dev/null || true
+sudo chown nicholaskmitchell:nicholaskmitchell /var/lib/smylte/smylte.db*
+sudo sed -i 's#^SMYLTE_DB=.*#SMYLTE_DB=/var/lib/smylte/smylte.db#' /etc/smylte/smylte.env
+sudo systemctl start smylte && curl -s localhost:8080/healthz
 ```
-Move the file rather than letting a fresh one be created: `tasks.db` holds the
+Move the file rather than letting a fresh one be created: `smylte.db` holds the
 sidecar-class tables under **Backups** below, and those are the one part of it a
 resync cannot rebuild. Take the backup first.
 
+### Migrating a box named `tasks`  **[PROD — one time, with sudo]**
+
+Everything above assumes the `smylte` names. A deployment installed before the
+rename is called `tasks` throughout — `tasks.service`, `/etc/tasks`,
+`/var/lib/tasks`, `~/tasks`, `TASKS_*` in the env file, `/usr/local/bin/tasks-notify`
+— and `deploy/migrate.sh` is what moves it. Do not do this by hand; the script
+is guarded at every step and a half-finished hand migration is the one state
+nothing here describes.
+
+```bash
+cd ~/tasks
+./deploy/migrate.sh --status     # what is pending, and what needs root
+./deploy/migrate.sh --dry-run    # print the actions, change nothing
+sudo ./deploy/migrate.sh         # apply
+```
+
+**Back up first** — see **Backups** below. The sidecar tables in the database
+exist nowhere on the wire and a resync cannot rebuild them.
+
+What it does, in this order and each step skipped if already done: stops the old
+unit; moves `/etc/tasks` → `/etc/smylte` and rewrites the `TASKS_*` names inside
+the env file **in place**, keeping a timestamped copy (the session secret and
+the password hash exist nowhere else, so the file is never regenerated); moves
+`/var/lib/tasks` → `/var/lib/smylte` with the `-wal`/`-shm` sidecars; moves the
+checkout `~/tasks` → `~/smylte` and repairs the venv's console-script shebangs;
+installs `smylte-notify` and repoints Radicale's `hook =` line; installs and
+enables `smylte.service` and removes the old unit; replaces the sudoers rule
+(validated with `visudo -c` before it lands — a malformed file under
+`/etc/sudoers.d` breaks *sudo*, not just one rule); starts the service;
+then reinstalls `~/smylte-autopull.sh` and rewrites the crontab line.
+
+`migrate.sh` re-execs itself from a temporary copy, so moving the checkout out
+from under a running script is safe. Progress is a single integer in
+`~/.smylte-migration-level`; re-running is a no-op and a run interrupted part way
+resumes rather than half-applying.
+
+**Autopull calls `migrate.sh --auto` on every deploy** — but read the next
+paragraph before relying on that for *this* migration. It applies migrations
+needing no root, and for anything that does need root it logs the command and
+**declines to restart the service**, leaving the old one running rather than
+bringing it up against a half-renamed box. So a deploy that lands before you run
+the migration is safe; it keeps saying so in `~/smylte-autopull.log` on every
+tick, and — if Telegram is configured — sends **one** message saying deploys are
+stalled. Once, not once a minute: the marker is `~/.smylte-migration-notified`,
+cleared automatically when nothing is pending so the next migration can notify
+again. It cannot do the root half itself, because
+the sudoers rule grants exactly `systemctl restart smylte.service` — widening it
+so cron could rewrite `/etc` would undo the reason it is that narrow.
+
+**For migration 0001 itself, that safety net is not yet installed.** The autopull
+loop running on a pre-rename box is the copy at `~/tasks-autopull.sh`, which
+predates `migrate.sh` and knows nothing about it — migration 0002 is what
+installs the version that calls it. So on the deploy that first carries this
+change, the old loop simply pulls and restarts `tasks.service` as it always has.
+
+That is safe, but by a different mechanism: the `tasksd` Python package survives
+as a small shim, so the old unit's `python -m tasksd` keeps booting the renamed
+code, and `config.py` still reads the `TASKS_*` names out of the old env file.
+The box keeps working, unmigrated, until you run the migration — it just will
+not nag you about it. Both the shim and the env fallback are deleted in a later
+release, once the deployment has migrated.
+
+Later migrations go in `deploy/migrations/` as `NNNN-slug.sh`, defining
+`NEEDS_ROOT`, `describe()`, `applies()` and `apply()`.
+
 ### Auto-deploy from `main`  **[PROD — cron + one sudoers rule]**
 
-`deploy/tasks-autopull.sh` is what keeps the Pi current: fetch, fast-forward
+`deploy/smylte-autopull.sh` is what keeps the Pi current: fetch, fast-forward
 only, reinstall backend deps if `requirements.txt` moved, rebuild the frontend
-if anything under `frontend/` did, restart the service. It refuses to do
+if anything under `frontend/` did, apply any pending unprivileged migration
+(`migrate.sh --auto`), restart the service. It refuses to do
 anything clever — a non-fast-forward pull is left alone for a human, and an
 `flock` means a slow rebuild cannot be overlapped by the next minute's run.
 
@@ -107,12 +173,12 @@ the script that produces the running deployment, and it is *installed* rather
 than run from the tree:
 
 ```bash
-cp ~/tasks/deploy/tasks-autopull.sh ~/tasks-autopull.sh   # re-copy after it changes
-chmod +x ~/tasks-autopull.sh
+cp ~/smylte/deploy/smylte-autopull.sh ~/smylte-autopull.sh   # re-copy after it changes
+chmod +x ~/smylte-autopull.sh
 # the restart needs one passwordless rule:
-echo "$(id -un) ALL=(root) NOPASSWD: /usr/bin/systemctl restart tasks.service" \
-  | sudo tee /etc/sudoers.d/tasks-autopull && sudo chmod 440 /etc/sudoers.d/tasks-autopull
-crontab -e     # * * * * * $HOME/tasks-autopull.sh
+echo "$(id -un) ALL=(root) NOPASSWD: /usr/bin/systemctl restart smylte.service" \
+  | sudo tee /etc/sudoers.d/smylte-autopull && sudo chmod 440 /etc/sudoers.d/smylte-autopull
+crontab -e     # * * * * * $HOME/smylte-autopull.sh
 ```
 
 A copy rather than a symlink into the tree, deliberately: the script's own job
@@ -121,10 +187,10 @@ rewrites itself mid-run is a failure mode nobody wants to debug at one-minute
 intervals. The cost is that a change to it needs the copy repeating — which is
 why the line above says so.
 
-Progress and failures go to `~/tasks-autopull.log`.
+Progress and failures go to `~/smylte-autopull.log`.
 
 ## B. Public Caddy site (path split)  **[PROD — reload Caddy]**
-Append `~/tasks/deploy/Caddyfile.snippet` to `/etc/caddy/Caddyfile`, then:
+Append `~/smylte/deploy/Caddyfile.snippet` to `/etc/caddy/Caddyfile`, then:
 ```bash
 sudo caddy validate --config /etc/caddy/Caddyfile && sudo systemctl reload caddy
 ```
@@ -137,16 +203,16 @@ and `/.well-known/carddav`, plus DAV verbs (`PROPFIND`/`REPORT`/…) on `/`, all
 301 to `/dav/`. That is what makes clients which cannot be handed a path work:
 Apple's CalDAV setup takes a *host*, not a URL, so it can only find `/dav` by
 probing the root (step E). Only DAV methods are matched on `/`, so browsers
-loading the app are unaffected. `tasksd` answers the same probes itself, so
+loading the app are unaffected. `smylted` answers the same probes itself, so
 discovery still works behind a different reverse proxy; if `/dav` ever moves,
-change both this snippet and `TASKS_DAV_URL`.
+change both this snippet and `SMYLTE_DAV_URL`.
 
 ## C. Tunnel + DNS  **[DASH]**
 1. Zero Trust → **Networks → Tunnels → Create tunnel** (name `tasks`). Copy the token.
-2. `cp ~/tasks/deploy/tasks-cloudflared.env.example ~/tasks/deploy/tasks-cloudflared.env`,
+2. `cp ~/smylte/deploy/smylte-cloudflared.env.example ~/smylte/deploy/smylte-cloudflared.env`,
    paste the token, then:
    ```bash
-   cd ~/tasks/deploy && docker compose -f tasks-cloudflared.compose.yml up -d
+   cd ~/smylte/deploy && docker compose -f smylte-cloudflared.compose.yml up -d
    ```
    (host-network connector so it can reach `127.0.0.1:9080`).
 3. On the tunnel → **Public Hostname** tab → **Add a public hostname** (this is the
@@ -163,7 +229,7 @@ change both this snippet and `TASKS_DAV_URL`.
 ## D. Radicale storage hook (live phone → web)  **[PROD — edit Radicale config + restart]**
 This is the one sharp edge (spec §4/§10). Add to `~/radicale/config` under `[storage]`:
 ```
-hook = /usr/local/bin/tasks-notify %(path)s
+hook = /usr/local/bin/smylte-notify %(path)s
 ```
 Optionally also `use_mtime_and_size_for_item_cache = True` (a Pi win, spec §9).
 Then `sudo systemctl restart radicale`.
@@ -171,7 +237,7 @@ Then `sudo systemctl restart radicale`.
 The hook POSTs **synchronously** (`curl --max-time 2`) and then exits — do NOT
 "optimize" it into a backgrounded curl: Radicale SIGKILLs the hook's whole
 process group the moment the script returns, so a backgrounded request dies
-before it connects (see the header comment in `deploy/tasks-notify`). The
+before it connects (see the header comment in `deploy/smylte-notify`). The
 bounded max-time keeps the locked write from stalling more than ~2s even if
 the app is down. **Søren note:** the restart briefly interrupts
 Søren's calendar tools (transient); and Søren should be reloaded once so it picks
@@ -225,17 +291,17 @@ they are the same collections either way.
 Off by default. Turning it on publishes an OAuth-protected MCP endpoint that
 Claude can be added to as a custom connector.
 
-1. In `/etc/tasks/tasks.env`:
+1. In `/etc/smylte/smylte.env`:
    ```
-   TASKS_MCP_ENABLED=true
-   TASKS_PUBLIC_URL=https://radicale.nicholaskmitchell.com
+   SMYLTE_MCP_ENABLED=true
+   SMYLTE_PUBLIC_URL=https://radicale.nicholaskmitchell.com
    ```
-   `TASKS_PUBLIC_URL` is required — the OAuth metadata has to state absolute
+   `SMYLTE_PUBLIC_URL` is required — the OAuth metadata has to state absolute
    URLs, and the value a token is bound to must match what the client was
    pointed at, so it is configured rather than read off the `Host` header. The
    app refuses to start if it is missing, or if app auth is off, or if
-   `TASKS_SESSION_SECRET` is unset.
-2. `sudo systemctl restart tasks`.
+   `SMYLTE_SESSION_SECRET` is unset.
+2. `sudo systemctl restart smylte`.
 3. No Caddy change is needed. `/.well-known/oauth-*` and `/mcp` fall through the
    existing catch-all to the app; only `/dav*`, the two CalDAV well-knowns and
    `/internal*` are handled before it.
@@ -285,7 +351,7 @@ looking reachable.
 
 ## Content-Security-Policy
 
-The app sets one on every response (`backend/tasksd/csp.py`). It is what bounds
+The app sets one on every response (`backend/smylted/csp.py`). It is what bounds
 where a page can fetch from at all — the field-level guards on collection colors
 and appearance tokens only cover the fields they name, and this covers the rest.
 Nothing to configure in Caddy; the snippet has a comment saying why it must not
@@ -304,37 +370,37 @@ Google entries: picking one of those font families means every page load — the
 public booking page included, for visitors who are not you — tells Google the
 reader's IP. Self-hosting those families would let both entries go.
 
-**If it breaks something**, in `/etc/tasks/tasks.env`:
+**If it breaks something**, in `/etc/smylte/smylte.env`:
 
 ```
-TASKS_CSP=report-only    # log violations in the browser console, block nothing
-TASKS_CSP=off            # no header at all
+SMYLTE_CSP=report-only    # log violations in the browser console, block nothing
+SMYLTE_CSP=off            # no header at all
 ```
-then `sudo systemctl restart tasks`. Unset (or anything unrecognised) enforces —
+then `sudo systemctl restart smylte`. Unset (or anything unrecognised) enforces —
 a typo must not silently disable a security control. The policy in force is
-logged at startup: `journalctl -u tasks | grep csp:`.
+logged at startup: `journalctl -u smylte | grep csp:`.
 
 ## If the password leaks — signing out everywhere
 
 Sessions are JWTs, so they are valid until they expire whether or not the
 browser still holds the cookie. How long that is comes from the **Stay signed
 in** setting under Settings → Account (1 day / 7 days / 30 days / Never), NOT
-from the env file: `TASKS_SESSION_TTL` is only the fallback used until the
+from the env file: `SMYLTE_SESSION_TTL` is only the fallback used until the
 account has chosen, so editing it does nothing once a choice has been stored. Logging out
 withdraws one session *by name*; it cannot reach a session minted on someone
 else's machine, whose id you have never seen.
 
 Two levers, in the order to reach for them:
 
-1. **Change the password.** Regenerate with `cd ~/tasks/backend && .venv/bin/python
-   -m tasksd hash-password` — `tasksd` is not installed anywhere, so it resolves
+1. **Change the password.** Regenerate with `cd ~/smylte/backend && .venv/bin/python
+   -m smylted hash-password` — `smylted` is not installed anywhere, so it resolves
    only from the backend directory and run from elsewhere this aborts on "No
-   module named tasksd" — set `TASKS_AUTH_PASSWORD_HASH` in `/etc/tasks/tasks.env`, `sudo systemctl
-   restart tasks`. Every existing session is refused from that moment: a token
+   module named smylted" — set `SMYLTE_AUTH_PASSWORD_HASH` in `/etc/smylte/smylte.env`, `sudo systemctl
+   restart smylte`. Every existing session is refused from that moment: a token
    carries a fingerprint of the credentials it was minted under, so changing
-   the password (or `TASKS_AUTH_USER`) invalidates all of them. This is the
+   the password (or `SMYLTE_AUTH_USER`) invalidates all of them. This is the
    normal response, and it keeps the session secret stable.
-2. **Rotate `TASKS_SESSION_SECRET`** if you have reason to think the secret
+2. **Rotate `SMYLTE_SESSION_SECRET`** if you have reason to think the secret
    itself leaked — it is the signing key, and anyone holding it can mint a
    valid session without the password. Set a fresh one (`python -c 'import
    secrets;print(secrets.token_hex(32))'`) and restart. Every session dies,
@@ -351,7 +417,7 @@ consent screen, which is the point. (This has not always been true: before the
 "signing out everywhere" reached only the browser sessions.)
 
 ## Telegram notifications (optional, off by default)
-Thirteen rules, described in full in `backend/tasksd/notify/rules.py`. Five ship
+Thirteen rules, described in full in `backend/smylted/notify/rules.py`. Five ship
 on: a **daily digest** at an hour you set, a nudge **before a meeting starts**,
 the **reminders you set** on individual tasks and events, a note when **someone
 books you**, and a warning when **sync has stopped working**. The other eight —
@@ -370,19 +436,19 @@ it.
 2. Paste the token and your chat id into **Settings → Notifications**, turn the
    switch on, and press **Send a test message**. Nothing is sent until all three
    are true. (A deployment that never opens the UI can use
-   `TASKS_TELEGRAM_BOT_TOKEN` and `TASKS_TELEGRAM_CHAT_ID` in
-   `/etc/tasks/tasks.env` instead; the account's own values win when both are
-   set. `TASKS_NOTIFY_ENABLED=false` is an operator kill switch that stops the
+   `SMYLTE_TELEGRAM_BOT_TOKEN` and `SMYLTE_TELEGRAM_CHAT_ID` in
+   `/etc/smylte/smylte.env` instead; the account's own values win when both are
+   set. `SMYLTE_NOTIFY_ENABLED=false` is an operator kill switch that stops the
    scheduler being built at all, whatever the settings say.)
 3. **Open egress.** This is the step that is easy to miss and impossible to
-   diagnose from the outside. `deploy/tasks.service` is loopback-only
+   diagnose from the outside. `deploy/smylte.service` is loopback-only
    (`IPAddressDeny=any`), so until it is widened every send fails at connect,
    gets retried, gets recorded in `notification_deliveries` with an error, and
    nothing reaches a phone. Add Telegram's ranges as `IPAddressAllow=` lines
    above the deny rather than deleting it — see the long note in the unit. The
    process parses attacker-influenced iCalendar, so unrestricted egress turns a
    parser bug into an exfiltration channel.
-4. `sudo systemctl daemon-reload && sudo systemctl restart tasks`. The scheduler
+4. `sudo systemctl daemon-reload && sudo systemctl restart smylte`. The scheduler
    sweeps once at startup, so a correctly configured deploy proves itself within
    a minute.
 
@@ -394,10 +460,10 @@ including anything the daily ceiling downgraded to silent.
 **The bot token is a credential.** Entered in Settings it is stored in
 `meta.app_settings` in the clear, like `booking_links.token` beside it — the app
 has to reproduce it to send, so unlike an OAuth secret it cannot be hashed, and
-it is therefore in every backup of `tasks.db`. It is never returned over HTTP:
+it is therefore in every backup of `smylte.db`. It is never returned over HTTP:
 `GET /api/settings` substitutes a boolean and the public bot-id half, so the
 settings document the browser fetches on every page load carries no working
-credential. Put it in `/etc/tasks/tasks.env` instead if you would rather it
+credential. Put it in `/etc/smylte/smylte.env` instead if you would rather it
 never touch the database. Rotating it either way is `/revoke` in BotFather plus
 re-entering it. Note that Telegram's Bot API is not end-to-end encrypted and this
 server captures nothing of the reply side: treat every notification as a
@@ -552,19 +618,19 @@ own fixed palette. Pick `eink` for these today. `.bin` is 1-bit only this round 
 plane, and no second plane for the tri-colour (black/white/red) panels.
 
 The server-side renderer needs **Pillow** (`requirements.txt`), which is what
-rasterizes the three typefaces vendored under `backend/tasksd/display/fonts/` —
+rasterizes the three typefaces vendored under `backend/smylted/display/fonts/` —
 Fraunces, Inter and JetBrains Mono, the app's own, converted from the woff2 the
 frontend already ships so a bitmap panel is set in the same type as the browser
 page. Rebuild them with `python -m dev.build_display_fonts` if the frontend's
 fonts are ever replaced; nothing does it automatically, and a stale instance
 here shows up as a panel drifting from the app rather than as an error. No
 outbound network is involved either way, so `IPAddressDeny=any` in
-`deploy/tasks.service` does not have to be relaxed for any of this.
+`deploy/smylte.service` does not have to be relaxed for any of this.
 
 ## Backups (spec §9 — important)
 Back up **both**:
 - `~/radicale/collections` — the source of truth (all `.ics`).
-- the app's **sidecar-class tables** from `/var/lib/tasks/tasks.db`:
+- the app's **sidecar-class tables** from `/var/lib/smylte/smylte.db`:
   **`sidecar`** (per-task app-only state: the manual order, pins, remembered
   estimates, per-item reminder leads, WHICH TASKS ARE PARKED — set aside
   without being finished; losing it un-parks everything, and since parking is
@@ -603,6 +669,6 @@ Back up **both**:
   cache" stopped being the whole truth when scheduling landed.
 
 ## Rollback
-`sudo systemctl disable --now tasks.service`; remove the Caddy snippet + reload;
+`sudo systemctl disable --now smylte.service`; remove the Caddy snippet + reload;
 delete the tunnel's public hostname (DNS reverts); remove the Radicale `hook`
 line + restart. Nothing in production Radicale's data is modified by any of this.

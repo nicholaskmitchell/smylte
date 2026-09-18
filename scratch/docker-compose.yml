@@ -7,13 +7,13 @@
 #
 # Runs as uid/gid 1000 so the bind-mounted collection tree stays host-owned and
 # tests can delete .Radicale.cache to simulate a pruned/invalid sync token.
-name: tasks-scratch
+name: smylte-scratch
 
 services:
   radicale:
     build: .
-    image: tasks-scratch-radicale:3.7.4
-    container_name: tasks-scratch-radicale
+    image: smylte-scratch-radicale:3.7.4
+    container_name: smylte-scratch-radicale
     user: "1000:1000"
     restart: unless-stopped
     ports:

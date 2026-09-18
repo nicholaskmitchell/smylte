@@ -52,14 +52,14 @@ import pytest
 import yaml
 from fastapi.testclient import TestClient
 
-from tasksd import scheduling
-from tasksd.app import create_app
-from tasksd.dav.client import CollectionInfo
-from tasksd.mcp.api import McpApi
-from tasksd.db import store
-from tasksd.service import TaskService
-from tasksd.sync import SyncStats
-from tasksd.config import Settings
+from smylted import scheduling
+from smylted.app import create_app
+from smylted.dav.client import CollectionInfo
+from smylted.mcp.api import McpApi
+from smylted.db import store
+from smylted.service import SmylteService
+from smylted.sync import SyncStats
+from smylted.config import Settings
 from tests.conftest import api_settings
 
 pytestmark = [pytest.mark.backlog, pytest.mark.stage4, pytest.mark.stage5]
@@ -93,7 +93,7 @@ def _read(rel: str) -> str:
 # ── a consent-screen app with no CalDAV server behind it ────────────────────
 
 class _StubService:
-    """Enough TaskService for the OAuth endpoints: they only ever touch the
+    """Enough SmylteService for the OAuth endpoints: they only ever touch the
     SQLite side, through `oauth()`."""
 
     def __init__(self) -> None:
@@ -482,7 +482,7 @@ def test_a_booking_link_serves_the_spa_with_or_without_a_trailing_slash(tmp_path
 
 
 def _closable_service():
-    """A TaskService with two collections and no reachable CalDAV server.
+    """A SmylteService with two collections and no reachable CalDAV server.
 
     `sync_all`'s first act is `self._engine.discover()`, which is a network
     call; the settings point at a closed port so it raises rather than hanging.
@@ -491,7 +491,7 @@ def _closable_service():
     which is why the assertions below are about `sqlite3.ProgrammingError`
     specifically and not about "did it raise".
     """
-    svc = TaskService(_service_settings())
+    svc = SmylteService(_service_settings())
     for href, name in (("/u/cal-a/", "A"), ("/u/cal-b/", "B")):
         store.upsert_collection(
             svc._conn, CollectionInfo(href=href, displayname=name, components={"VEVENT"}))
@@ -510,7 +510,7 @@ def test_a_closed_service_does_not_sweep_against_a_dead_connection():
     already-running work item, so `await loop_task` returns at once while the
     worker thread is still inside `sync_all`. Nothing awaits that future any
     more, so asyncio logs an "exception was never retrieved" traceback on every
-    `systemctl restart tasks` that lands mid-sweep, and the remaining
+    `systemctl restart smylte` that lands mid-sweep, and the remaining
     collections are never swept.
     """
     svc = _closable_service()
@@ -577,7 +577,7 @@ def test_closing_between_two_slices_does_not_kill_the_sweep():
     # says it eliminates. Structural of necessity, like the workflow pin: what
     # is asserted is that the `_closed` read and the `has_collection` query it
     # guards sit in one `with self._lock:` block.
-    src = inspect.getsource(TaskService.sync_all)
+    src = inspect.getsource(SmylteService.sync_all)
     body = textwrap.dedent(src[src.index("for href in hrefs:"):])
     guarded = re.search(
         r"with self\._lock:\s*\n(?:\s*#[^\n]*\n)*\s*if self\._closed:", body)
@@ -814,7 +814,7 @@ def _parse_systemd_env(text: str) -> dict[str, str]:
     """systemd's `EnvironmentFile=` parser, as a state machine.
 
     Mirrors `parse_env_file_internal` in systemd's src/basic/env-file.c, which
-    is what actually reads /etc/tasks/tasks.env — NOT the shell. Three
+    is what actually reads /etc/smylte/smylte.env — NOT the shell. Three
     characters carry meaning there that a `KEY=value` heredoc does not account
     for: right after `=` a quote opens a quoted section, and a backslash escapes
     the next character and disappears. An unterminated quote is not an error: at
@@ -939,21 +939,21 @@ def _run_setup_sh(password: str, root: pathlib.Path, *, username: str = "",
 
     script = _read("deploy/setup.sh")
     script = re.sub(r"^PY=.*$", f"PY={fake_py}", script, flags=re.M)
-    script = script.replace("/etc/tasks", str(etc / "tasks"))
+    script = script.replace("/etc/smylte", str(etc / "smylte"))
     script = script.replace("/etc/systemd/system", str(etc / "systemd"))
     script = script.replace("/usr/local/bin", str(root / "usrbin"))
-    script = script.replace("/home/$USER_NAME/tasks", str(REPO))
+    script = script.replace("/home/$USER_NAME/smylte", str(REPO))
     sh = root / "setup.sh"
     sh.write_text(script)
 
     env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}")
     # stdin: the Radicale password, then the app username (empty takes the
-    # default). `username` is driven because `TASKS_AUTH_USER` is the SECOND
+    # default). `username` is driven because `SMYLTE_AUTH_USER` is the SECOND
     # value the heredoc interpolates from a prompt and carries exactly the same
     # exposure — a fix applied to the password alone leaves it open.
     proc = subprocess.run(["bash", str(sh)], input=f"{password}\n{username}\n",
                           text=True, capture_output=True, timeout=120, env=env)
-    envfile = etc / "tasks" / "tasks.env"
+    envfile = etc / "smylte" / "smylte.env"
     if expect_refusal:
         assert proc.returncode != 0, (
             f"setup.sh accepted input it should have refused (rc=0): "
@@ -973,7 +973,7 @@ def _run_setup_sh(password: str, root: pathlib.Path, *, username: str = "",
 
 def test_setup_sh_writes_a_password_systemd_reads_back_unchanged():
     """setup.sh interpolates `$RADPW`, read from an interactive prompt, straight
-    into a `KEY=value` line of /etc/tasks/tasks.env. The bash side is safe — an
+    into a `KEY=value` line of /etc/smylte/smylte.env. The bash side is safe — an
     expansion result is not rescanned — but systemd's `EnvironmentFile=` parser
     is not the shell, and it is the one that reads this file.
 
@@ -985,8 +985,8 @@ def test_setup_sh_writes_a_password_systemd_reads_back_unchanged():
     A password that BEGINS with a quote is worse. `"tunnel-otter-9` puts the
     parser into DOUBLE_QUOTE_VALUE at the first character of the value and it
     swallows the remaining lines of the file into that one value — no error, no
-    warning — so TASKS_AUTH_PASSWORD_HASH, TASKS_SESSION_SECRET and
-    TASKS_HOOK_SECRET are never set at all and the app refuses to start.
+    warning — so SMYLTE_AUTH_PASSWORD_HASH, SMYLTE_SESSION_SECRET and
+    SMYLTE_HOOK_SECRET are never set at all and the app refuses to start.
 
     The script already reasons about this file being corrupted by a bad prompt
     (it guards `$HASH` for exactly that), so the gap is in which values got the
@@ -996,7 +996,7 @@ def test_setup_sh_writes_a_password_systemd_reads_back_unchanged():
     care HOW the values are quoted — only that systemd hands back what was
     typed.
     """
-    # WIDENED to drive `TASKS_AUTH_USER` as well. The heredoc interpolates TWO
+    # WIDENED to drive `SMYLTE_AUTH_USER` as well. The heredoc interpolates TWO
     # prompt-read values and the finding names both; escaping only the password
     # leaves the username carrying the identical defect, and the username is the
     # one an installer is more likely to paste something odd into.
@@ -1038,13 +1038,13 @@ def test_setup_sh_writes_a_password_systemd_reads_back_unchanged():
             f"{parsed.get('RADICALE_PASSWORD')!r}, not the password that was "
             f"typed ({password!r}) — every CalDAV call would 401"
         )
-        assert parsed.get("TASKS_AUTH_USER") == user, (
-            f"{label}: systemd reads TASKS_AUTH_USER as "
-            f"{parsed.get('TASKS_AUTH_USER')!r}, not the username that was "
+        assert parsed.get("SMYLTE_AUTH_USER") == user, (
+            f"{label}: systemd reads SMYLTE_AUTH_USER as "
+            f"{parsed.get('SMYLTE_AUTH_USER')!r}, not the username that was "
             f"typed ({user!r}) — nobody can log in to the app at all"
         )
-        for key in ("TASKS_AUTH_PASSWORD_HASH", "TASKS_SESSION_SECRET",
-                    "TASKS_HOOK_SECRET"):
+        for key in ("SMYLTE_AUTH_PASSWORD_HASH", "SMYLTE_SESSION_SECRET",
+                    "SMYLTE_HOOK_SECRET"):
             assert parsed.get(key), (
                 f"{label}: {key} is missing from the parsed env file — the "
                 f"password swallowed the rest of it"
@@ -1058,7 +1058,7 @@ def test_setup_sh_refuses_an_empty_radicale_password():
 
     `$HASH` two lines above already gets this exact guard, with a comment
     explaining why — "a mismatched/aborted prompt would write an empty
-    TASKS_AUTH_PASSWORD_HASH and the service would refuse to start". `$RADPW`
+    SMYLTE_AUTH_PASSWORD_HASH and the service would refuse to start". `$RADPW`
     got none, and its failure is quieter: the service starts fine and every
     CalDAV call fails.
 
@@ -1106,16 +1106,16 @@ def test_setup_sh_still_writes_an_ordinary_install_unchanged():
         f"an ordinary password did not survive: "
         f"{parsed.get('RADICALE_PASSWORD')!r}"
     )
-    assert parsed.get("TASKS_AUTH_USER") == "nick", (
-        f"an ordinary username did not survive: {parsed.get('TASKS_AUTH_USER')!r}"
+    assert parsed.get("SMYLTE_AUTH_USER") == "nick", (
+        f"an ordinary username did not survive: {parsed.get('SMYLTE_AUTH_USER')!r}"
     )
     # The rest of the file is untouched by the fix and must stay that way.
     assert parsed.get("RADICALE_URL") == "http://127.0.0.1:5232"
-    assert parsed.get("TASKS_AUTH_ENABLED") == "true"
-    assert parsed.get("TASKS_SESSION_TTL") == "604800"
-    assert parsed.get("TASKS_COOKIE_SECURE") == "true"
-    for key in ("TASKS_AUTH_PASSWORD_HASH", "TASKS_SESSION_SECRET",
-                "TASKS_HOOK_SECRET", "TASKS_DB", "TASKS_STATIC"):
+    assert parsed.get("SMYLTE_AUTH_ENABLED") == "true"
+    assert parsed.get("SMYLTE_SESSION_TTL") == "604800"
+    assert parsed.get("SMYLTE_COOKIE_SECURE") == "true"
+    for key in ("SMYLTE_AUTH_PASSWORD_HASH", "SMYLTE_SESSION_SECRET",
+                "SMYLTE_HOOK_SECRET", "SMYLTE_DB", "SMYLTE_STATIC"):
         assert parsed.get(key), f"{key} is missing from an ordinary install"
 
 
@@ -1382,7 +1382,7 @@ def test_a_204_delete_carries_no_body_and_no_content_type(client):
     # honest instrument here, and it fails for the right reason: a handler that
     # answers 204 any other way stops matching.
     handlers = [
-        b for b in re.split(r"\n(?=    @|@)", _read("backend/tasksd/app.py"))
+        b for b in re.split(r"\n(?=    @|@)", _read("backend/smylted/app.py"))
         if "204" in b and "def " in b
     ]
     bodiless = [b for b in handlers if "return Response(status_code=204)" in b]
@@ -1400,7 +1400,7 @@ def test_a_204_delete_carries_no_body_and_no_content_type(client):
 # ── AUDIT: find_free_time derives an end by wall-clock addition ─────────────
 
 class _EventsService:
-    """The narrowest stand-in for TaskService that `find_free_time` needs: the
+    """The narrowest stand-in for SmylteService that `find_free_time` needs: the
     calendars it fans out over, and the rows in each."""
 
     def __init__(self, rows: list[dict]):
@@ -1591,7 +1591,7 @@ def test_find_free_time_still_blocks_the_ordinary_cases(monkeypatch):
 def test_cancelling_a_task_is_wont_do_and_not_done(client):
     """Closing a test gap; the behaviour is already correct, so no marker.
 
-    `POST /api/lists/{id}/tasks/{uid}/cancel` and `TaskService.cancel_task`
+    `POST /api/lists/{id}/tasks/{uid}/cancel` and `SmylteService.cancel_task`
     write `STATUS:CANCELLED`, and nothing called either. The only thing that
     looked like coverage was the comment `# complete + won't-do` in
     test_api.py, above a block that exercises `/complete` and

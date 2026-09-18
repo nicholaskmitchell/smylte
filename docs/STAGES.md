@@ -1,5 +1,12 @@
 # Staged remediation of the audit backlog
 
+> **Naming note (2026-09-17).** The backend package was renamed `tasksd` →
+> `smylted`, the `TASKS_*` environment variables to `SMYLTE_*`, and the systemd
+> unit and its paths from `tasks` to `smylte`. Everything below predates that
+> rename and is left in its original spelling on purpose: this file is a record
+> of what was found and when, and rewriting the evidence would falsify it. For
+> current paths and variable names see `README.md` and `docs/DEPLOY.md`.
+
 `docs/AUDIT.md` is the evidence. This file is the plan for closing those
 findings, and the map from a finding to the test that pins it.
 
@@ -225,7 +232,7 @@ itself; two of the seven controls were widened as a result.
 `review_day` tests and both login-lockout tests are `@pytest.mark.radicale`, so
 the two changes with the widest blast radius had almost no local coverage. Rather
 than defer to CI, their contracts were driven in-process against a real
-`TaskService` and a real `create_app` before each landed — the uniform `task` key
+`SmylteService` and a real `create_app` before each landed — the uniform `task` key
 on every kind, an unplanned day in a range carrying no entries, read-only-ness,
 five wrong passwords still locking out, sixty concurrent guesses still evaluating
 exactly five. Two probes, thrown away after. Worth repeating in stages 3-5, which

@@ -292,11 +292,11 @@ describe('cache lifecycle', () => {
   it('sweeps entries written by an older shape, keeping the current one', () => {
     cacheTasks([task()])
     localStorage.setItem(`${CACHE_PREFIX}:0:nick:tasks`, JSON.stringify({ at: Date.now(), rows: [] }))
-    localStorage.setItem('tasks-theme', 'dark')     // not ours; must survive
+    localStorage.setItem('smylte-theme', 'dark')    // not ours; must survive
     sweepOldVersions()
     expect(localStorage.getItem(`${CACHE_PREFIX}:0:nick:tasks`)).toBeNull()
     expect(readCachedTasks()).toHaveLength(1)
-    expect(localStorage.getItem('tasks-theme')).toBe('dark')
+    expect(localStorage.getItem('smylte-theme')).toBe('dark')
   })
 })
 

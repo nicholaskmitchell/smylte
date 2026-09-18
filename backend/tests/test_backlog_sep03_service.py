@@ -16,7 +16,7 @@ migrations).
 Every pin here is in-process. The series edit and the move drive the real
 `SyncEngine` against a write-capable DAV double (the same shape
 `test_backlog_aug25_stage3.py` introduced), the search pin goes through the
-real `McpServer` with a read-only scope, and everything else is `TaskService`
+real `McpServer` with a read-only scope, and everything else is `SmylteService`
 over an in-memory cache. Nothing needs the scratch Radicale, so nothing here
 carries `@pytest.mark.radicale`.
 
@@ -36,19 +36,20 @@ from zoneinfo import ZoneInfo
 import pytest
 from helpers import foreign_event_raw, foreign_raw
 
-from tasksd import due
-from tasksd.config import Settings
-from tasksd.dav.client import CollectionInfo, Item
-from tasksd.dav.errors import NotFound, PreconditionFailed
-from tasksd.db import store
-from tasksd.ical import extract_from_raw
-from tasksd.ical.edit import EventEdit
-from tasksd.mcp.api import McpApi, _intrinsic_order
-from tasksd.mcp.server import INVALID_PARAMS, McpServer
-from tasksd.mcp.tools import SCOPE_READ
-from tasksd.notify import rules as R
-from tasksd.service import TaskService
-from tasksd.sync import SyncEngine
+from smylted import ical
+from smylted import due
+from smylted.config import Settings
+from smylted.dav.client import CollectionInfo, Item
+from smylted.dav.errors import NotFound, PreconditionFailed
+from smylted.db import store
+from smylted.ical import extract_from_raw
+from smylted.ical.edit import EventEdit
+from smylted.mcp.api import McpApi, _intrinsic_order
+from smylted.mcp.server import INVALID_PARAMS, McpServer
+from smylted.mcp.tools import SCOPE_READ
+from smylted.notify import rules as R
+from smylted.service import SmylteService
+from smylted.sync import SyncEngine
 
 pytestmark = [pytest.mark.backlog, pytest.mark.stage3]
 
@@ -85,7 +86,7 @@ def _task(conn, href: str, uid: str, summary: str, *, due_date: str | None = Non
 
 @pytest.fixture
 def svc():
-    s = TaskService(_settings())
+    s = SmylteService(_settings())
     for href, name, comps in ((CAL_A, "Meetings", {"VEVENT"}), (CAL_B, "Personal", {"VEVENT"}),
                               (LIST_A, "Work", {"VTODO"})):
         store.upsert_collection(
@@ -126,7 +127,7 @@ class _FakeDav:
         pass
 
 
-def _with_fake_dav(svc: TaskService, initial: dict[str, bytes]) -> _FakeDav:
+def _with_fake_dav(svc: SmylteService, initial: dict[str, bytes]) -> _FakeDav:
     """Swap the service's engine for one over the double, caching `initial`."""
     dav = _FakeDav(initial)
     svc._engine = SyncEngine(dav, svc._conn)
@@ -164,7 +165,7 @@ def test_a_1mb_search_query_is_refused_before_the_lock(svc, monkeypatch):
         reached.append(len(query))
         return []
 
-    monkeypatch.setattr("tasksd.service.store.search", sentinel)
+    monkeypatch.setattr("smylted.service.store.search", sentinel)
     server = McpServer(McpApi(svc))
     reply = _rpc(server, "smylte_search_tasks", {"query": "a " * 500_000})
 
@@ -429,7 +430,7 @@ def test_an_older_database_gains_the_cache_and_token_columns(tmp_path):
     assert "cv" in cols("oauth_tokens")
 
     # The real readers, over the legacy rows — which is the whole point.
-    svc = TaskService(_settings(db_path=str(tmp_path / "unused.db")))
+    svc = SmylteService(_settings(db_path=str(tmp_path / "unused.db")))
     try:
         cats = store.get_all_categories(conn, "/u/w/")
         side = store.get_all_sidecar(conn, "/u/w/")
@@ -466,7 +467,7 @@ def test_a_full_outage_after_boot_is_recorded_where_the_notifier_looks(svc):
     left before the per-collection loop, `store.set_sync_error` was never
     reached, `sync_health()` stayed empty, and the one notifier rule written
     for "everything on screen looks normal and the data is simply frozen"
-    never fired. Only `bootstrap()` recorded it, i.e. only if tasksd happened
+    never fired. Only `bootstrap()` recorded it, i.e. only if smylted happened
     to restart during the outage."""
     store.set_sync_token(svc._conn, CAL_A, "t0")
     stale = (datetime.now(timezone.utc) - timedelta(hours=3)).isoformat().replace("+00:00", "Z")
@@ -623,6 +624,45 @@ def test_a_same_instant_retry_still_recovers_its_own_booking(svc):
     assert [b["event_uid"] for b in svc.list_bookings()] == [f"{cid}@tasksd"]
 
 
+# ── Smylte rename: booking replay must survive BOTH uid suffixes ────────────
+
+def _orphan_with(svc, cid: str, suffix: str) -> None:
+    uid = f"{cid}{suffix}"
+    raw = foreign_event_raw(uid, "Chat — Visitor",
+                           dtstart="20260713T140000Z", dtend="20260713T150000Z")
+    _cache(svc._conn, CAL_A, uid, raw)
+
+
+@pytest.mark.parametrize("suffix", [ical.UID_SUFFIX, ical.UID_SUFFIX_LEGACY])
+def test_booking_replay_is_found_under_either_uid_suffix(svc, suffix):
+    """`_recover_orphaned_booking` rebuilds the event UID from the visitor's
+    client_id rather than reading it back, so it has to know how UIDs are spelt
+    — and after the tasksd -> smylted rename there are two spellings in the
+    wild. A booking made before the rename carries the old one and is only
+    findable under it; one made after carries the new.
+
+    Getting this wrong is not a cosmetic bug. An unfound replay is not treated
+    as "no booking": `book_slot` refuses it with "client_id already used", or
+    goes on to create a second event for a visitor who already holds the slot.
+    The other tests in this file all build their orphan with the legacy suffix,
+    so without this the new spelling — the one every future booking uses — has
+    no coverage at all."""
+    token = _make_link(svc, title="Link A")
+    cid = "c" * 32
+    _orphan_with(svc, cid, suffix)
+
+    def fake(href, summary, *, dtstart, dtend=None, edit=None, client_id=None):
+        return {"uid": f"{client_id or 'x'}{suffix}"}
+    svc.create_event = fake
+
+    confirmation, created = svc.book_slot(
+        token, start_iso="2026-07-13T09:00:00-05:00",
+        name="Visitor", email="v@x.co", client_id=cid, now=NOW)
+    assert created is False, "the replay was treated as a fresh booking"
+    assert confirmation["start"] == "2026-07-13T09:00:00-05:00"
+    assert [b["event_uid"] for b in svc.list_bookings()] == [f"{cid}{suffix}"]
+
+
 # ── #12  list_bookings: ordered by the offset-bearing string ─────────────────
 
 def test_bookings_from_links_in_different_zones_list_in_chronological_order(svc):
@@ -661,7 +701,7 @@ def test_a_booking_link_carries_its_absolute_url_when_the_deployment_knows_its_o
     """The Windows client's "Copy link" needs an absolute URL and only has the
     token; `settings.public_url` is the one place the deployment's origin is
     configured (config.py normalizes it, no trailing slash)."""
-    s = TaskService(_settings(public_url="https://tasks.example.test"))
+    s = SmylteService(_settings(public_url="https://tasks.example.test"))
     try:
         store.upsert_collection(
             s._conn, CollectionInfo(href=CAL_A, displayname="Meetings", components={"VEVENT"}))
@@ -683,7 +723,7 @@ def test_a_display_carries_its_absolute_url_when_the_deployment_knows_its_origin
     """Filed during remediation: the display row had the defect "Copy link" was
     fixed for — inside the Windows client `location.origin` is localhost. The
     url rides only with the token, since a frame must not carry its credential."""
-    s = TaskService(_settings(public_url="https://tasks.example.test"))
+    s = SmylteService(_settings(public_url="https://tasks.example.test"))
     try:
         d = s.create_display({"name": "Hallway", "mode": "calendar"})
         assert d["url"] == f"https://tasks.example.test/display/{d['token']}"

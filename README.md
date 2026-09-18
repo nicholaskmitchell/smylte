@@ -12,7 +12,7 @@ day: things that have nowhere to live on the wire, so a resync cannot rebuild
 them and a backup must include them. See
 `docs/phase0-findings.md`, and `docs/DEPLOY.md` for which tables those are).
 
-The stack is a FastAPI backend (`tasksd`) that owns the CalDAV/sync/write path
+The stack is a FastAPI backend (`smylted`) that owns the CalDAV/sync/write path
 and serves a React + Vite single-page app.
 
 ## Features
@@ -344,7 +344,7 @@ there are still no quiet hours to configure. And a sweep that would produce
 three or more messages sends one instead, so switching on the whole morning tier
 costs you one interruption at 07:30, not four.
 
-`backend/tasksd/notify/rules.py` is the whole policy, including the admission
+`backend/smylted/notify/rules.py` is the whole policy, including the admission
 test any fifth rule has to pass. Setup — and the systemd egress rule it needs,
 which is the easy step to miss — is in `docs/DEPLOY.md`.
 
@@ -512,7 +512,7 @@ storage. `appearance.test.ts` asserts the defaults *and* the presets still
 match `tokens.css`.
 
 **Connect it to Claude.** Settings → Account → Connected apps, once
-`TASKS_MCP_ENABLED=true`, exposes a remote **MCP server** at `/mcp` that Claude
+`SMYLTE_MCP_ENABLED=true`, exposes a remote **MCP server** at `/mcp` that Claude
 (or any MCP client) can be pointed at as a custom connector — around forty
 tools over lists, tasks (including parking one), subtasks, search, tags,
 calendars, events including the recurrence scopes, free/busy, booking links, the
@@ -569,7 +569,7 @@ locale.
 
 ```
 backend/
-  tasksd/
+  smylted/
     app.py      FastAPI app: /api routes, auth, SSE, serves the built SPA
     service.py  orchestration over the DAV client + cache + sync
     dav/        hand-rolled CalDAV client (httpx + lxml)
@@ -684,15 +684,15 @@ cd scratch && docker compose up -d --build      # http://127.0.0.1:5233
 # 2. backend — deps in a venv, then run the API on 127.0.0.1:8080
 cd ../backend && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 #    dev defaults already point at the scratch Radicale; auth can be disabled
-#    for local work (see backend/tasksd/config.py and deploy/tasks.env.example)
-TASKS_AUTH_ENABLED=false .venv/bin/python -m tasksd
+#    for local work (see backend/smylted/config.py and deploy/smylte.env.example)
+SMYLTE_AUTH_ENABLED=false .venv/bin/python -m smylted
 
 # 3. frontend — Vite dev server proxies /api to the backend on :8080
 cd ../frontend && npm install && npm run dev     # http://127.0.0.1:5173
 ```
 
 For a production-shaped run, `npm run build` emits `frontend/dist/`, which the
-backend serves statically (`TASKS_STATIC`) so the whole app is one origin.
+backend serves statically (`SMYLTE_STATIC`) so the whole app is one origin.
 
 ```bash
 # tests — integration tests target the scratch Radicale on :5233 and skip if
@@ -712,8 +712,8 @@ Live at `https://radicale.nicholaskmitchell.com` behind a Cloudflare tunnel and
 a Caddy path split: `/dav*` → Radicale (device CalDAV sync), everything else →
 the app on `127.0.0.1:8080`. The app authenticates to Radicale as you over
 localhost; Radicale is never exposed except through `/dav`. Auto-deploys from
-`main` via `deploy/tasks-autopull.sh` on a one-minute cron (installed at
-`~/tasks-autopull.sh`). Full runbook, systemd unit, and Caddy/cloudflared config
+`main` via `deploy/smylte-autopull.sh` on a one-minute cron (installed at
+`~/smylte-autopull.sh`). Full runbook, systemd unit, and Caddy/cloudflared config
 in `docs/DEPLOY.md` and `deploy/`.
 
 ## Disclosure
@@ -764,7 +764,7 @@ PARTICULAR PURPOSE. See the GNU Affero General Public License for more details.
 an example whose purpose is to be copied onto a board and changed, and §13 —
 the reason the rest of this is Affero — cannot fire on a panel that makes
 outbound requests and accepts no connections. The line is exactly the directory:
-the `.bin` route and the renderer behind it (`backend/tasksd/display/`) are the
+the `.bin` route and the renderer behind it (`backend/smylted/display/`) are the
 server and stay AGPL. Note that it buys less than it looks like: Waveshare's
 driver, which the example imports and this repo deliberately does not vendor, is
 GPL-3.0, so what runs on the board is a GPL-3.0 combined work either way. What
@@ -773,4 +773,4 @@ MIT buys is lifting those sixty lines somewhere that driver is not.
 The three bundled typefaces are separate works and keep their own terms:
 Fraunces, Inter and JetBrains Mono are each under the SIL Open Font License 1.1,
 whose text ships beside them in `frontend/public/fonts/` and
-`backend/tasksd/display/fonts/`.
+`backend/smylted/display/fonts/`.

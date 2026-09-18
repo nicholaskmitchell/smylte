@@ -7,7 +7,7 @@ the same message twice.
 """
 from __future__ import annotations
 
-from tasksd.db import store
+from smylted.db import store
 
 TRIGGER = "event_starting"
 KEY = "evt-abc:2026-08-31T09:00:00Z"

@@ -36,13 +36,13 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
-from tasksd import app as app_module
-from tasksd.app import create_app
-from tasksd.auth import HashBudget
-from tasksd.db import store
-from tasksd.mcp import oauth as O
-from tasksd.mcp import routes as R
-from tasksd.mcp.server import INVALID_PARAMS, McpServer
+from smylted import app as app_module
+from smylted.app import create_app
+from smylted.auth import HashBudget
+from smylted.db import store
+from smylted.mcp import oauth as O
+from smylted.mcp import routes as R
+from smylted.mcp.server import INVALID_PARAMS, McpServer
 from tests.conftest import api_settings
 
 pytestmark = [pytest.mark.backlog]
@@ -57,7 +57,7 @@ LONE_SURROGATE = "\ud800"
 # ── a connector app with no CalDAV server behind it ──────────────────────────
 
 class _StubService:
-    """Enough TaskService for the OAuth endpoints: they only ever touch the
+    """Enough SmylteService for the OAuth endpoints: they only ever touch the
     SQLite side, through `oauth()`."""
 
     def __init__(self) -> None:
@@ -475,7 +475,7 @@ def test_a_non_object_params_is_invalid_params_without_a_traceback(caplog):
     function (`arguments`, `name`, the id) is a readable -32602/-32600."""
     srv = McpServer.__new__(McpServer)
     srv.tools = {}
-    with caplog.at_level(logging.ERROR, logger="tasksd.mcp"):
+    with caplog.at_level(logging.ERROR, logger="smylted.mcp"):
         for method in ("tools/call", "initialize"):
             for params in ([1], "x", 5, True, [{"name": "smylte_list_lists"}]):
                 out = srv.handle({"jsonrpc": "2.0", "id": 1, "method": method,

@@ -62,7 +62,7 @@ device-capture investigation below is done and the design approved. The straw-ma
 in §6 ("one master VTODO, no RECURRENCE-ID overrides, app owns advancement") is
 the starting hypothesis to argue against once we have captures:
 
-1. Scratch Radicale with a test user — available (`~/tasks/scratch`, :5233).
+1. Scratch Radicale with a test user — available (`~/smylte/scratch`, :5233).
 2. Connect **Tasks.org via DAVx⁵** and **Thunderbird** — pending real devices.
 3. Capture exact PUT bodies for: create `RRULE:FREQ=WEEKLY`; complete one
    occurrence; complete a second; edit an unrelated field on a task carrying an

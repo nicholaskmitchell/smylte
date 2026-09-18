@@ -159,12 +159,12 @@ public sealed class Settings
     /// and kept, and `SeedSessionAsync` / `WebHost.SeedAsync` re-scope every
     /// cookie the real server mints to domain `localhost` so the page can use
     /// it through the proxy. That re-scoping is what makes this a problem
-    /// rather than a curiosity — a cookie for `tasks.example.com` and a cookie
+    /// rather than a curiosity — a cookie for `smylte.example.com` and a cookie
     /// for a different server are the same cookie as far as the jar is
     /// concerned, and the proxy relays whatever the page sends.
     ///
     /// So a user who points the client at a second server — a move, a rename,
-    /// a test instance — sends the FIRST server's live `tasks_session` to the
+    /// a test instance — sends the FIRST server's live `smylte_session` to the
     /// second one, on an ordinary single-threaded launch, whenever the new
     /// login does not immediately replace it (blank credentials, a password
     /// the new server rejects, a server that is down). It is the one thing in

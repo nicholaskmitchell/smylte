@@ -3,7 +3,7 @@
 This endpoint had no backend test at all, which is how both defects here
 survived. It is the only long-lived route in the app and the only one holding
 unbounded per-connection state: `svc.subscribe()` adds an unbounded Queue to
-`TaskService._listeners`, `_publish` fans every mutation into all of them, and
+`SmylteService._listeners`, `_publish` fans every mutation into all of them, and
 the only thing that removes one is the `finally` inside the generator.
 
 Two properties are pinned:
@@ -24,7 +24,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from tasksd.app import create_app
+from smylted.app import create_app
 from tests.conftest import api_settings
 
 pytestmark = pytest.mark.radicale
@@ -60,7 +60,7 @@ def _drive_stream(app, cookie: str, messages: list[dict]) -> list[bytes]:
         "root_path": "", "client": ("127.0.0.1", 12345), "server": ("testserver", 80),
         "headers": [
             (b"host", b"testserver"),
-            (b"cookie", f"tasks_session={cookie}".encode()),
+            (b"cookie", f"smylte_session={cookie}".encode()),
         ],
     }
     pending = list(messages)
@@ -88,7 +88,7 @@ def test_the_stream_opens_with_a_retry_hint_and_a_hello():
     app = create_app(api_settings(":memory:"))
     with TestClient(app) as c:
         assert c.post("/api/login", json=LOGIN).status_code == 200
-        cookie = c.cookies["tasks_session"]
+        cookie = c.cookies["smylte_session"]
         chunks = _drive_stream(app, cookie, [{"type": "http.disconnect"}])
 
     body = b"".join(chunks).decode()
@@ -103,7 +103,7 @@ def test_an_abrupt_disconnect_drains_the_listener():
     app = create_app(api_settings(":memory:"))
     with TestClient(app) as c:
         assert c.post("/api/login", json=LOGIN).status_code == 200
-        cookie = c.cookies["tasks_session"]
+        cookie = c.cookies["smylte_session"]
         svc = app.state.service
         assert len(svc._listeners) == 0
 
@@ -116,7 +116,7 @@ def test_a_queued_event_is_delivered_to_an_open_stream():
     app = create_app(api_settings(":memory:"))
     with TestClient(app) as c:
         assert c.post("/api/login", json=LOGIN).status_code == 200
-        cookie = c.cookies["tasks_session"]
+        cookie = c.cookies["smylte_session"]
         svc = app.state.service
 
         # subscribe() hands each connection its own Queue, so the publish has to
@@ -143,7 +143,7 @@ def test_a_queued_event_is_delivered_to_an_open_stream():
                 "path": "/api/events", "raw_path": b"/api/events", "query_string": b"",
                 "root_path": "", "client": ("127.0.0.1", 1), "server": ("testserver", 80),
                 "headers": [(b"host", b"testserver"),
-                            (b"cookie", f"tasks_session={cookie}".encode())],
+                            (b"cookie", f"smylte_session={cookie}".encode())],
             }
             task = asyncio.ensure_future(app(scope, receive, send))
             while not svc._listeners:               # wait for the subscribe
@@ -170,7 +170,7 @@ def test_logging_out_closes_a_stream_that_is_already_open():
     app = create_app(api_settings(":memory:"))
     with TestClient(app) as c:
         assert c.post("/api/login", json=LOGIN).status_code == 200
-        cookie = c.cookies["tasks_session"]
+        cookie = c.cookies["smylte_session"]
         svc = app.state.service
 
         async def go():
@@ -189,7 +189,7 @@ def test_logging_out_closes_a_stream_that_is_already_open():
                 "path": "/api/events", "raw_path": b"/api/events", "query_string": b"",
                 "root_path": "", "client": ("127.0.0.1", 1), "server": ("testserver", 80),
                 "headers": [(b"host", b"testserver"),
-                            (b"cookie", f"tasks_session={cookie}".encode())],
+                            (b"cookie", f"smylte_session={cookie}".encode())],
             }
             # Stream first, logout second — that ordering is the whole finding.
             task = asyncio.ensure_future(app(scope, receive, send))
@@ -198,7 +198,7 @@ def test_logging_out_closes_a_stream_that_is_already_open():
 
             async with httpx.AsyncClient(
                 transport=httpx.ASGITransport(app=app), base_url="http://testserver",
-                cookies={"tasks_session": cookie},
+                cookies={"smylte_session": cookie},
             ) as ac:
                 assert (await ac.post("/api/logout")).status_code == 200
                 assert (await ac.get("/api/me")).status_code == 401

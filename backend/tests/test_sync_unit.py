@@ -10,11 +10,11 @@ from datetime import date
 import pytest
 from helpers import foreign_event_raw
 
-from tasksd import ical
-from tasksd.dav.client import CollectionInfo, Item, SyncResult
-from tasksd.db import store
-from tasksd.sync import SyncEngine
-from tasksd.sync.engine import ConflictError
+from smylted import ical
+from smylted.dav.client import CollectionInfo, Item, SyncResult
+from smylted.db import store
+from smylted.sync import SyncEngine
+from smylted.sync.engine import ConflictError
 
 COL = "/u/cal/"
 
@@ -414,7 +414,7 @@ def test_an_unparseable_calendar_order_is_dropped_at_the_parser(monkeypatch):
     """The wire value is clamped where it enters, so it never reaches the bind."""
     import types
 
-    from tasksd.dav.client import DavClient
+    from smylted.dav.client import DavClient
 
     wire = b"""<?xml version="1.0"?>
 <D:multistatus xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav"
@@ -522,7 +522,7 @@ def test_discover_reports_whether_the_collection_set_moved():
     "   ",
 ])
 def test_a_hostile_calendar_color_surfaces_as_no_color(hostile):
-    from tasksd.dav import xml as X
+    from smylted.dav import xml as X
 
     assert X.clean_color(hostile) is None
 
@@ -534,7 +534,7 @@ def test_a_hostile_calendar_color_surfaces_as_no_color(hostile):
     ("  #D9480F  ", "#D9480F"),      # the wire value is stripped, as before
 ])
 def test_a_real_color_still_comes_through(ok, expected):
-    from tasksd.dav import xml as X
+    from smylted.dav import xml as X
 
     assert X.clean_color(ok) == expected
 
@@ -543,7 +543,7 @@ def test_the_read_path_drops_a_hostile_color_before_it_is_cached(monkeypatch):
     """End to end through the multistatus parser, the way `order` is pinned."""
     import types
 
-    from tasksd.dav.client import DavClient
+    from smylted.dav.client import DavClient
 
     wire = b"""<?xml version="1.0"?>
 <D:multistatus xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav"
@@ -579,7 +579,7 @@ def test_the_read_path_drops_a_hostile_color_before_it_is_cached(monkeypatch):
 
 def test_the_write_path_refuses_what_the_read_path_now_drops():
     """One shape, both directions — the point of sharing the pattern."""
-    from tasksd.app import _check_color
+    from smylted.app import _check_color
     from fastapi import HTTPException
 
     with pytest.raises(HTTPException):

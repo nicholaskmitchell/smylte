@@ -49,11 +49,11 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from tasksd import scheduling
-from tasksd.dav.errors import DavError
-from tasksd.ical import EventEdit
-from tasksd.ical.edit import apply_occurrence_override, shift_series, split_series
-from tasksd.ical.recur import expand_occurrences
+from smylted import scheduling
+from smylted.dav.errors import DavError
+from smylted.ical import EventEdit
+from smylted.ical.edit import apply_occurrence_override, shift_series, split_series
+from smylted.ical.recur import expand_occurrences
 from tests.helpers import foreign_event_raw
 
 pytestmark = [pytest.mark.backlog, pytest.mark.stage3]
@@ -898,9 +898,9 @@ def test_the_mcp_create_path_keeps_the_instant_too(sent, expect_utc):
     Driven at the parser plus the builder rather than over MCP, because what is
     being asserted is the bytes that reach Radicale.
     """
-    from tasksd.ical import build_new_event
-    from tasksd.ical.read import extract_from_raw
-    from tasksd.mcp.api import _parse_dt
+    from smylted.ical import build_new_event
+    from smylted.ical.read import extract_from_raw
+    from smylted.mcp.api import _parse_dt
 
     raw = build_new_event(
         "z@tasksd", summary="S", dtstart=_parse_dt(sent, field="start"))
@@ -917,7 +917,7 @@ def test_a_real_named_zone_is_not_flattened_to_utc():
     every aware value: a datetime carrying a real `ZoneInfo` has a zone name
     other clients can resolve and a series anchored to it must keep it, or every
     recurring event would silently lose its DST behaviour."""
-    from tasksd.ical.read import normalize_offset
+    from smylted.ical.read import normalize_offset
 
     z = datetime(2026, 8, 10, 9, 0, tzinfo=ZoneInfo("America/Los_Angeles"))
     assert normalize_offset(z).tzinfo is z.tzinfo
@@ -1269,7 +1269,7 @@ def test_an_exact_day_long_duration_survives_the_cache_and_the_expansion():
     wrong and looks done: the CACHED value (what `busy_intervals` re-parses) and
     the EXPANDED instance (what `_exact_durations` feeds `_repair_span`).
     """
-    from tasksd.ical.read import extract_from_raw
+    from smylted.ical.read import extract_from_raw
 
     # -- the cached column --
     for authored in ("PT24H", "PT36H", "P1DT12H", "P1D", "PT1H30M"):
@@ -1336,7 +1336,7 @@ def test_an_overrides_own_duration_is_not_classified_by_the_masters():
         ),),
     )
 
-    from tasksd.ical.read import wire_durations
+    from smylted.ical.read import wire_durations
     wire = wire_durations(raw)
     assert wire.get("20260307T230000") == "PT24H", (
         f"the override's own DURATION did not survive the scan: {wire!r}"
@@ -1497,7 +1497,7 @@ def test_an_alarms_duration_is_not_mistaken_for_the_events():
     entirely, and a parameterised DURATION whose first colon is inside the
     parameter rather than before the value.
     """
-    from tasksd.ical.read import extract_from_raw, split_duration, wire_durations
+    from smylted.ical.read import extract_from_raw, split_duration, wire_durations
 
     def alarmed(dur: str, alarm: str = "PT5M") -> str:
         return (
@@ -1571,7 +1571,7 @@ def test_unfolding_a_large_resource_stays_linear():
     quadratic, and quadratic misses it by two orders of magnitude.
     """
     import time
-    from tasksd.ical.read import unfold
+    from smylted.ical.read import unfold
 
     folded = ("BEGIN:VCALENDAR\r\nDESCRIPTION:x"
               + "".join("\r\n abcd" for _ in range(200_000))

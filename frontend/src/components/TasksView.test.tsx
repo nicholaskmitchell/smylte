@@ -5,7 +5,7 @@ import userEvent from '@testing-library/user-event'
 import { TasksView } from './TasksView'
 import { DataProvider } from '../data'
 import { cacheLists, cacheTasks, setCacheUser } from '../cache'
-import { api, AuthError, type List, type Task, type TaskGroup, type TasksViewMode } from '../api'
+import { api, AuthError, uidFor, UID_SUFFIX_LEGACY, type List, type Task, type TaskGroup, type TasksViewMode } from '../api'
 
 // Mock the whole API module: every method becomes a vi.fn() so the view never
 // touches the network.
@@ -474,7 +474,7 @@ describe('<TasksView> orphaned subtasks', () => {
 
 // ── a write issued against a row whose create is still in flight ────────────
 // The stand-in used to wear the bare client_id while the task the server was
-// actually writing carried `${client_id}@tasksd`. Every write aimed at the row
+// actually writing carried `uidFor(client_id)`. Every write aimed at the row
 // in that window therefore named a resource that did not exist. For a subtask
 // that meant a RELATED-TO pointing at nothing — persisted to CalDAV, so the
 // child came back as its own top-level task and no reload ever fixed it.
@@ -484,7 +484,7 @@ describe('<TasksView> creates still in flight', () => {
   const echoServer = () =>
     m.createTask.mockImplementation(async (_l: string, b: Record<string, unknown>) =>
       task({
-        uid: `${b.client_id as string}@tasksd`,
+        uid: uidFor(b.client_id as string),
         list: 'l1',
         summary: b.summary as string,
         parent: (b.parent as string) ?? null,
@@ -501,7 +501,7 @@ describe('<TasksView> creates still in flight', () => {
     m.createTask.mockImplementationOnce((_l: string, b: Record<string, unknown>) =>
       new Promise<Task>((res) => {
         held.cid = b.client_id as string
-        held.release = () => res(task({ uid: `${held.cid}@tasksd`, list: 'l1', summary: 'trip' }))
+        held.release = () => res(task({ uid: uidFor(held.cid), list: 'l1', summary: 'trip' }))
       }))
     echoServer()
     return held
@@ -522,7 +522,7 @@ describe('<TasksView> creates still in flight', () => {
     await waitFor(() => expect(m.createTask).toHaveBeenCalledTimes(2))
     // The assertion is about the relationship between the two requests, so the
     // id is read back off the first rather than guessed.
-    expect(m.createTask.mock.calls[1][1].parent).toBe(`${parent.cid}@tasksd`)
+    expect(m.createTask.mock.calls[1][1].parent).toBe(uidFor(parent.cid))
   })
 
   it('keeps the subtask nested once both creates settle', async () => {
@@ -577,14 +577,14 @@ describe('<TasksView> creates still in flight', () => {
     m.createTask.mockImplementation((_l: string, b: Record<string, unknown>) =>
       new Promise<Task>((res) => {
         cid = b.client_id as string
-        release = () => res(task({ uid: `${cid}@tasksd`, summary: 'solo' }))
+        release = () => res(task({ uid: uidFor(cid), summary: 'solo' }))
       }))
     m.complete.mockResolvedValue(task({ uid: 'ignored', completed: true }))
     const { user } = setup()
     await user.type(await screen.findByPlaceholderText('Add a task…'), 'solo{Enter}')
     await user.click(await screen.findByTitle('Toggle complete'))
     await waitFor(() => expect(m.complete).toHaveBeenCalledTimes(1))
-    expect(m.complete.mock.calls[0][1]).toBe(`${cid}@tasksd`)
+    expect(m.complete.mock.calls[0][1]).toBe(uidFor(cid))
     release(task())
   })
 
@@ -595,7 +595,7 @@ describe('<TasksView> creates still in flight', () => {
     let landed: Task | null = null
     m.createTask.mockImplementation((_l: string, b: Record<string, unknown>) =>
       new Promise<Task>((res) => {
-        landed = task({ uid: `${b.client_id as string}@tasksd`, summary: 'solo' })
+        landed = task({ uid: uidFor(b.client_id as string), summary: 'solo' })
         release = () => res(landed!)
       }))
     const { user } = setup()
@@ -629,7 +629,7 @@ describe('<TasksView> subtask progress', () => {
   it('moves the moment a subtask is added, with no refetch', async () => {
     m.tasks.mockResolvedValue([parent])
     m.createTask.mockImplementation(async (_l: string, b: Record<string, unknown>) =>
-      task({ uid: `${b.client_id as string}@tasksd`, summary: 'Book flight', parent: 'p1' }))
+      task({ uid: uidFor(b.client_id as string), summary: 'Book flight', parent: 'p1' }))
     const { user } = setup()
     await screen.findByText('Trip planning')
     const fetches = m.tasks.mock.calls.length
@@ -787,7 +787,7 @@ describe('<TasksView> nested subtasks', () => {
   it('offers "+ sub" on a subtask, so a tree can be grown from any row', async () => {
     m.tasks.mockResolvedValue(chain)
     m.createTask.mockImplementation(async (_l: string, b: Record<string, unknown>) =>
-      task({ uid: `${b.client_id as string}@tasksd`, summary: b.summary as string,
+      task({ uid: uidFor(b.client_id as string), summary: b.summary as string,
         parent: (b.parent as string) ?? null }))
     const { user } = setup()
     await screen.findByText('Buy boxes')
@@ -899,24 +899,58 @@ describe('<TasksView> collapsing subtasks', () => {
 describe('<TasksView> legacy orphans', () => {
   const cid = 'a'.repeat(32)
 
+  // The whole point of this pane's repair is subtasks written BEFORE the uid
+  // contract was honoured — and a task that old was minted under the old
+  // @tasksd suffix by definition. Pinning every case to uidFor() (now @smylted)
+  // would leave `uidCandidatesFor`'s legacy branch, the reason the shim exists,
+  // with no coverage at all: the repair would silently stop working for exactly
+  // the rows it was written for, and the orphan would stay orphaned in
+  // Tasks.org and jtx Board too.
+  it('repairs an orphan whose parent predates the Smylte rename', async () => {
+    const legacyUid = `${cid}${UID_SUFFIX_LEGACY}`
+    m.tasks.mockResolvedValue([
+      task({ uid: legacyUid, summary: 'Trip planning' }),
+      task({ uid: 'c1', summary: 'Book flight', parent: cid }),
+    ])
+    m.patchTask.mockResolvedValue(task({ uid: 'c1', summary: 'Book flight', parent: legacyUid }))
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {})
+    setup()
+    await waitFor(() => expect(m.patchTask).toHaveBeenCalledTimes(1))
+    // Repaired to the parent's REAL uid, not to a reconstructed @smylted one
+    // that names nothing.
+    expect(m.patchTask).toHaveBeenCalledWith('l1', 'c1', { parent: legacyUid })
+    infoSpy.mockRestore()
+  })
+
+  it('nests an orphan under a pre-rename parent on display', async () => {
+    m.tasks.mockResolvedValue([
+      task({ uid: `${cid}${UID_SUFFIX_LEGACY}`, summary: 'Trip planning' }),
+      task({ uid: 'c1', summary: 'Book flight', parent: cid }),
+    ])
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {})
+    setup()
+    expect((await screen.findByText('Book flight')).closest('.task')).toHaveClass('sub')
+    infoSpy.mockRestore()
+  })
+
   it('repairs the stored pointer, not just the display', async () => {
     // The nesting below is cosmetic and local; the RELATED-TO on the wire is
     // what the server counts and what Tasks.org and jtx Board read.
     m.tasks.mockResolvedValue([
-      task({ uid: `${cid}@tasksd`, summary: 'Trip planning' }),
+      task({ uid: uidFor(cid), summary: 'Trip planning' }),
       task({ uid: 'c1', summary: 'Book flight', parent: cid }),
     ])
-    m.patchTask.mockResolvedValue(task({ uid: 'c1', summary: 'Book flight', parent: `${cid}@tasksd` }))
+    m.patchTask.mockResolvedValue(task({ uid: 'c1', summary: 'Book flight', parent: uidFor(cid) }))
     const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {})
     setup()
     await waitFor(() => expect(m.patchTask).toHaveBeenCalledTimes(1))
-    expect(m.patchTask).toHaveBeenCalledWith('l1', 'c1', { parent: `${cid}@tasksd` })
+    expect(m.patchTask).toHaveBeenCalledWith('l1', 'c1', { parent: uidFor(cid) })
     infoSpy.mockRestore()
   })
 
   it('repairs a row once, even across refetches', async () => {
     m.tasks.mockResolvedValue([
-      task({ uid: `${cid}@tasksd`, summary: 'Trip planning' }),
+      task({ uid: uidFor(cid), summary: 'Trip planning' }),
       task({ uid: 'c1', summary: 'Book flight', parent: cid }),
     ])
     // The write fails, so the server keeps serving the broken row. Retrying it
@@ -938,7 +972,7 @@ describe('<TasksView> legacy orphans', () => {
     m.lists.mockResolvedValue([list, { ...list, id: 'l2', href: '/l2/', name: 'Personal' }])
     m.tasks.mockImplementation(async (id: string) =>
       id === 'l1'
-        ? [task({ uid: `${cid}@tasksd`, summary: 'Trip planning' })]
+        ? [task({ uid: uidFor(cid), summary: 'Trip planning' })]
         : [task({ uid: 'c1', list: 'l2', summary: 'Book flight', parent: cid })])
     setup()
     await screen.findByText('Trip planning')
@@ -947,7 +981,7 @@ describe('<TasksView> legacy orphans', () => {
 
   it('nests a subtask whose parent is the bare create id', async () => {
     m.tasks.mockResolvedValue([
-      task({ uid: `${cid}@tasksd`, summary: 'Trip planning' }),
+      task({ uid: uidFor(cid), summary: 'Trip planning' }),
       task({ uid: 'c1', summary: 'Book flight', parent: cid }),
     ])
     setup()

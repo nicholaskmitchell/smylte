@@ -7,7 +7,7 @@ code with none of the round trips.
 """
 from __future__ import annotations
 
-from tasksd.service import FOCUS_DEFAULTS, focus_settings
+from smylted.service import FOCUS_DEFAULTS, focus_settings
 
 
 # ── the clock's settings ─────────────────────────────────────────────────────
@@ -51,9 +51,9 @@ def test_focus_settings_clamp_and_refuse_junk():
 import pytest  # noqa: E402
 from datetime import datetime, timedelta, timezone  # noqa: E402
 
-from tasksd import service as service_mod  # noqa: E402
-from tasksd.db import store  # noqa: E402
-from tasksd.mcp.api import McpApi  # noqa: E402
+from smylted import service as service_mod  # noqa: E402
+from smylted.db import store  # noqa: E402
+from smylted.mcp.api import McpApi  # noqa: E402
 from test_day_plan import DAY, LIST_A, LIST_B, _seed_task, _today, svc  # noqa: E402,F401
 from test_displays import DAY as DISPLAY_DAY, api  # noqa: E402,F401
 

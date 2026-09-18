@@ -23,7 +23,7 @@ that carry them. Read it as the sweep's only closed-shaped work.
     `buffer_minutes=0` and the one non-zero-buffer test runs on an ordinary July
     Monday, so the two never meet.
 
-  * `tasksd/access.py` is a security control with no test of any kind.
+  * `smylted/access.py` is a security control with no test of any kind.
     `access_required` appears in the suite only as `False` inside settings
     fixtures; nothing constructs an `AccessVerifier`, nothing drives a token
     through it, and nothing pins the JWKS failure mode — which fails CLOSED today
@@ -64,11 +64,11 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import HTTPException
 
-from tasksd import scheduling
-from tasksd.access import AccessVerifier
-from tasksd.app import create_app
-from tasksd.config import Settings
-from tasksd.scheduling import Interval
+from smylted import scheduling
+from smylted.access import AccessVerifier
+from smylted.app import create_app
+from smylted.config import Settings
+from smylted.scheduling import Interval
 from tests.conftest import api_settings
 
 pytestmark = [pytest.mark.backlog, pytest.mark.stage5]

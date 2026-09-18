@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# App-side install for tasksd. Run on the Pi:  sudo ~/tasks/deploy/setup.sh
+# App-side install for smylted. Run on the Pi:  sudo ~/smylte/deploy/setup.sh
 #
 # This installs ONLY the app itself (env, secrets, hook script, systemd unit).
 # It does NOT touch Radicale's config, Caddy, or the tunnel — those are separate,
@@ -7,8 +7,8 @@
 set -euo pipefail
 
 USER_NAME=nicholaskmitchell
-BACKEND=/home/$USER_NAME/tasks/backend
-DEPLOY=/home/$USER_NAME/tasks/deploy
+BACKEND=/home/$USER_NAME/smylte/backend
+DEPLOY=/home/$USER_NAME/smylte/deploy
 PY=$BACKEND/.venv/bin/python
 [ -x "$PY" ] || { echo "backend venv missing at $PY — create it first"; exit 1; }
 
@@ -39,10 +39,10 @@ esac
 
 [ "$(id -u)" -eq 0 ] || { echo "run with sudo"; exit 1; }
 
-echo "== /etc/tasks =="
-install -d -m 0700 -o "$USER_NAME" -g "$USER_NAME" /etc/tasks
+echo "== /etc/smylte =="
+install -d -m 0700 -o "$USER_NAME" -g "$USER_NAME" /etc/smylte
 
-ENVFILE=/etc/tasks/tasks.env
+ENVFILE=/etc/smylte/smylte.env
 if [ -f "$ENVFILE" ]; then
   echo "$ENVFILE exists — leaving it untouched (delete it to regenerate)."
 else
@@ -62,12 +62,12 @@ else
   echo "Set the APP login password:"
   # NB: a failing command substitution inside an assignment does NOT trip
   # `set -e` — check explicitly, or a mismatched/aborted prompt would write
-  # an empty TASKS_AUTH_PASSWORD_HASH and the service would refuse to start.
-  # `cd` into $BACKEND first: `python -m tasksd` resolves the package off the
+  # an empty SMYLTE_AUTH_PASSWORD_HASH and the service would refuse to start.
+  # `cd` into $BACKEND first: `python -m smylted` resolves the package off the
   # interpreter's path, which contains only the working directory, so run from
-  # anywhere else this aborts on "No module named tasksd" — after prompting for
+  # anywhere else this aborts on "No module named smylted" — after prompting for
   # every password and before writing the env file.
-  if ! HASH=$(cd "$BACKEND" && sudo -u "$USER_NAME" "$PY" -m tasksd hash-password) \
+  if ! HASH=$(cd "$BACKEND" && sudo -u "$USER_NAME" "$PY" -m smylted hash-password) \
      || [ -z "$HASH" ]; then
     echo "password hashing failed — env file not written; re-run setup" >&2
     exit 1
@@ -81,8 +81,8 @@ else
   #
   # So `pi\home2024` was stored as `pihome2024` (silent 401s forever), and a
   # password starting with `"` swallowed the remaining twelve lines of this
-  # file into itself, leaving TASKS_AUTH_PASSWORD_HASH, TASKS_SESSION_SECRET
-  # and TASKS_HOOK_SECRET unset and the service in a restart loop.
+  # file into itself, leaving SMYLTE_AUTH_PASSWORD_HASH, SMYLTE_SESSION_SECRET
+  # and SMYLTE_HOOK_SECRET unset and the service in a restart loop.
   #
   # Emit the two prompt-read values in systemd's double-quoted form instead,
   # with backslash and double-quote escaped — the DOUBLE_QUOTE_VALUE_ESCAPE
@@ -93,39 +93,39 @@ else
   RADPW_Q=$(q "$RADPW")
   AUSER_Q=$(q "$AUSER")
 
-  # /var/lib/tasks is NOT created here: `StateDirectory=tasks` in the unit
+  # /var/lib/smylte is NOT created here: `StateDirectory=smylte` in the unit
   # makes systemd create it, owned by the service user, on every start —
   # which also means it survives a `systemd-tmpfiles` sweep and needs no
   # chown of its own. The DB deliberately does not live in the source tree:
-  # ReadWritePaths over ~/tasks/backend opened .venv and tasksd to writes.
+  # ReadWritePaths over ~/smylte/backend opened .venv and smylted to writes.
   umask 077
   cat > "$ENVFILE" <<EOF
 RADICALE_URL=http://127.0.0.1:5232
 RADICALE_USER=$USER_NAME
 RADICALE_PASSWORD=$RADPW_Q
-TASKS_DB=/var/lib/tasks/tasks.db
-TASKS_STATIC=/home/$USER_NAME/tasks/frontend/dist
-TASKS_SYNC_INTERVAL=30
-TASKS_AUTH_ENABLED=true
-TASKS_AUTH_USER=$AUSER_Q
-TASKS_AUTH_PASSWORD_HASH=$HASH
-TASKS_SESSION_SECRET=$SESSION
-TASKS_SESSION_TTL=604800
-TASKS_COOKIE_SECURE=true
-TASKS_HOOK_SECRET=$HOOK
-TASKS_ACCESS_REQUIRED=false
+SMYLTE_DB=/var/lib/smylte/smylte.db
+SMYLTE_STATIC=/home/$USER_NAME/smylte/frontend/dist
+SMYLTE_SYNC_INTERVAL=30
+SMYLTE_AUTH_ENABLED=true
+SMYLTE_AUTH_USER=$AUSER_Q
+SMYLTE_AUTH_PASSWORD_HASH=$HASH
+SMYLTE_SESSION_SECRET=$SESSION
+SMYLTE_SESSION_TTL=604800
+SMYLTE_COOKIE_SECURE=true
+SMYLTE_HOOK_SECRET=$HOOK
+SMYLTE_ACCESS_REQUIRED=false
 EOF
-  echo "$HOOK" > /etc/tasks/hook-secret
-  chown "$USER_NAME:$USER_NAME" "$ENVFILE" /etc/tasks/hook-secret
-  chmod 0600 "$ENVFILE" /etc/tasks/hook-secret
-  echo "wrote $ENVFILE and /etc/tasks/hook-secret (0600)"
+  echo "$HOOK" > /etc/smylte/hook-secret
+  chown "$USER_NAME:$USER_NAME" "$ENVFILE" /etc/smylte/hook-secret
+  chmod 0600 "$ENVFILE" /etc/smylte/hook-secret
+  echo "wrote $ENVFILE and /etc/smylte/hook-secret (0600)"
 fi
 
-echo "== hook notify script -> /usr/local/bin/tasks-notify =="
-install -m 0755 "$DEPLOY/tasks-notify" /usr/local/bin/tasks-notify
+echo "== hook notify script -> /usr/local/bin/smylte-notify =="
+install -m 0755 "$DEPLOY/smylte-notify" /usr/local/bin/smylte-notify
 
 echo "== systemd unit =="
-install -m 0644 "$DEPLOY/tasks.service" /etc/systemd/system/tasks.service
+install -m 0644 "$DEPLOY/smylte.service" /etc/systemd/system/smylte.service
 systemctl daemon-reload
 # `enable --now` is `enable` + `start`, and `start` on an already-active unit is
 # a no-op — so on a re-run (which this script is designed for) the new unit file
@@ -133,9 +133,9 @@ systemctl daemon-reload
 # `systemctl status` below printed a reassuring `active (running)`. `restart`
 # starts a stopped unit and re-execs a running one, so first install and re-run
 # both converge on the unit that was just written.
-systemctl enable tasks.service
-systemctl restart tasks.service
-systemctl --no-pager --lines=6 status tasks.service || true
+systemctl enable smylte.service
+systemctl restart smylte.service
+systemctl --no-pager --lines=6 status smylte.service || true
 
 echo
 echo "App installed on 127.0.0.1:8080. NEXT (docs/DEPLOY.md, production-touching):"

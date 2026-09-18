@@ -44,11 +44,11 @@ from datetime import date, datetime
 import pytest
 from helpers import foreign_event_raw, foreign_raw
 
-from tasksd import ical
-from tasksd.dav.client import CollectionInfo, Item, SyncResult
-from tasksd.dav.errors import DavError, MalformedResponse, NotFound
-from tasksd.db import store
-from tasksd.ical.edit import (
+from smylted import ical
+from smylted.dav.client import CollectionInfo, Item, SyncResult
+from smylted.dav.errors import DavError, MalformedResponse, NotFound
+from smylted.db import store
+from smylted.ical.edit import (
     EventEdit,
     TaskEdit,
     apply_changes,
@@ -58,8 +58,8 @@ from tasksd.ical.edit import (
     shift_series,
     split_series,
 )
-from tasksd.ical.recur import expand_occurrences
-from tasksd.sync import SyncEngine
+from smylted.ical.recur import expand_occurrences
+from smylted.sync import SyncEngine
 
 pytestmark = [pytest.mark.backlog, pytest.mark.stage3]
 

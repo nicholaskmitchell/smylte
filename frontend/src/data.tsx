@@ -20,7 +20,7 @@ import {
   type ReactNode,
 } from 'react'
 import {
-  api, AuthError, clientId, uidFor,
+  api, AuthError, clientId, uidFor, uidCandidatesFor,
   type CalEvent, type CreateTaskBody, type List, type Task, type TaskGroup,
 } from './api'
 import { orderLists } from './lists'
@@ -478,7 +478,7 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
   // Create many tasks in one go, for the "Add multiple" composer: one optimistic
   // paint for the whole batch, then one request per task, in order.
   //
-  // Sequential on purpose. TaskService holds a single lock around every engine
+  // Sequential on purpose. SmylteService holds a single lock around every engine
   // call and each create is a CalDAV PUT plus a re-read GET, so parallel POSTs
   // would queue server-side anyway; going one at a time costs nothing and buys
   // an honest progress count, per-row failure attribution, and a clean stop when
@@ -742,7 +742,7 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
   // Tasks.org and jtx Board show the same orphan until this lands.
   //
   // The signature is exact: bare client_id shape, naming no task, while
-  // `${value}@tasksd` names one in the same list. A RELATED-TO another client
+  // `${value}` + either uid suffix names one in the same list. A RELATED-TO another client
   // authored cannot match it without that sibling existing, so this never
   // rewrites someone else's data. Attempts are remembered whether or not they
   // succeed, so a row the server refuses is not retried in a loop.
@@ -754,7 +754,7 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
       const p = t.parent
       if (!p || byUid.has(p) || repaired.current.has(t.uid)) continue
       if (!LEGACY_PARENT.test(p)) continue
-      const real = byUid.get(uidFor(p))
+      const real = uidCandidatesFor(p).map((u) => byUid.get(u)).find(Boolean)
       if (!real || real.list !== t.list) continue
       repaired.current.add(t.uid)
       console.info(`repairing subtask ${t.uid}: parent ${p} → ${real.uid}`)

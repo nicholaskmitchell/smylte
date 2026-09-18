@@ -24,11 +24,11 @@ from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
-from tasksd.dav import xml as X
-from tasksd.dav.errors import DavError
-from tasksd.ical.edit import _at_or_after
-from tasksd.mcp import oauth as O
-from tasksd.mcp.server import parse_body
+from smylted.dav import xml as X
+from smylted.dav.errors import DavError
+from smylted.ical.edit import _at_or_after
+from smylted.mcp import oauth as O
+from smylted.mcp.server import parse_body
 
 pytestmark = [pytest.mark.backlog, pytest.mark.stage1]
 
@@ -55,7 +55,7 @@ def test_a_non_string_scope_in_registration_is_a_400_not_a_500():
     so its body is wholly attacker-controlled. `scope_set` calls `.split()` on
     whatever arrives; a JSON list or number WAS an AttributeError, not the
     OAuthError the route knows how to render."""
-    from tasksd.db import store
+    from smylted.db import store
 
     conn = store.connect(":memory:")
     store.init_db(conn)
@@ -88,7 +88,7 @@ def test_mcp_collection_name_schemas_reject_control_characters():
     deep in the DAV client. The MCP tool schemas described the same field and
     carried no such guard, so the same byte answered "the calendar server may be
     unreachable". Both now share `XML_SAFE_PATTERN` from dav/xml.py."""
-    from tasksd.mcp.tools import build_tools
+    from smylted.mcp.tools import build_tools
 
     tools = build_tools(object())
     named = [t for t in tools.values()
@@ -115,7 +115,7 @@ def test_find_free_time_at_the_end_of_time_is_an_error_not_an_overflow():
     Driven through the real method with the event lookup stubbed out, so the day
     cursor is the only thing under test.
     """
-    from tasksd.mcp.api import McpApi, ToolError
+    from smylted.mcp.api import McpApi, ToolError
 
     api = McpApi(object())
     api.list_events = lambda *a, **kw: []

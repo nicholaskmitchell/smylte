@@ -1,0 +1,92 @@
+# systemd unit for Smylte. Install to /etc/systemd/system/.
+# Binds 127.0.0.1:8080 (see smylted/__main__.py); public exposure is via the
+# cloudflared tunnel -> public Caddy site (see Caddyfile.snippet), never direct.
+[Unit]
+Description=Smylte — tasks and calendar web app (smylted)
+After=network-online.target radicale.service
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=nicholaskmitchell
+Group=nicholaskmitchell
+WorkingDirectory=/home/nicholaskmitchell/smylte/backend
+EnvironmentFile=/etc/smylte/smylte.env
+ExecStart=/home/nicholaskmitchell/smylte/backend/.venv/bin/python -m smylted
+Restart=on-failure
+RestartSec=3
+
+# Hardening. The app parses attacker-influenced iCalendar/HTTP and is
+# internet-reachable through the tunnel, so the sandbox is tight: no
+# capabilities (it binds 127.0.0.1:8080, nothing privileged), no devices, no
+# namespaces, loopback only.
+#
+# NOTHING UNDER /home IS WRITABLE, and that is the point of StateDirectory
+# below. This used to read `ReadWritePaths=…/smylte/backend`, with a comment
+# claiming it opened "the one path it needs (the SQLite cache)". It opened the
+# whole tree: `.venv`, the interpreter ExecStart runs, and `smylted`, the source
+# it imports. Every other line here exists to contain a compromise of this
+# process, and all of them are moot against an attacker who can drop a one-line
+# `.pth` into site-packages — the next restart executes it, as the same user,
+# and the sandbox never notices, because the write went to a path the unit had
+# deliberately opened.
+#
+# StateDirectory grants exactly /var/lib/smylte (creating it, owned by this
+# user, mode 0700 under UMask below) and nothing else, so the venv and the
+# source are read-only like the rest of /home. SMYLTE_DB in /etc/smylte/smylte.env
+# points there. Moving an existing deployment: stop the unit, move smylte.db and
+# its -wal/-shm sidecars into /var/lib/smylte, update SMYLTE_DB, start — see
+# docs/DEPLOY.md, and note that setup.sh will not rewrite an env file that
+# already exists.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=read-only
+StateDirectory=smylte
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectHostname=true
+ProtectClock=true
+ProtectProc=invisible
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+UMask=0077
+# Loopback only: Caddy in, Radicale out. If SMYLTE_ACCESS_REQUIRED is ever
+# turned on, DELETE these two lines — the Cloudflare Access JWKS fetch needs
+# outbound HTTPS.
+#
+# TELEGRAM NOTIFICATIONS NEED EGRESS TOO, and this is the line that decides
+# whether they work. With SMYLTE_NOTIFY_ENABLED=true and this block unchanged,
+# every send fails at connect: the app retries, records the failure in
+# `notification_deliveries`, and nothing ever reaches a phone. There is no way
+# for the app to detect this and say so more clearly, because a blocked packet
+# and a hostile network look identical from inside the sandbox.
+#
+# Do NOT simply delete the two lines. This process parses attacker-influenced
+# iCalendar and is internet-reachable through the tunnel; unrestricted egress
+# turns a parser bug into an exfiltration channel. Widen it exactly as far as
+# Telegram, by ADDING allow lines above the deny:
+#
+#   IPAddressAllow=149.154.160.0/20
+#   IPAddressAllow=91.108.4.0/22
+#   IPAddressAllow=2001:67c:4e8::/48
+#
+# Confirm those against Telegram's current published ranges before trusting
+# them — `getent hosts api.telegram.org` on the box is the honest check, and the
+# answer moves. DNS also has to be reachable: systemd-resolved on 127.0.0.53 is
+# already covered by `localhost`, but a deployment pointing /etc/resolv.conf at
+# a LAN or public resolver must allow that address too, or the name never
+# resolves and the failure looks exactly like Telegram being down.
+IPAddressAllow=localhost
+IPAddressDeny=any
+
+[Install]
+WantedBy=multi-user.target

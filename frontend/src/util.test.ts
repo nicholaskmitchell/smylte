@@ -160,7 +160,7 @@ describe('cssColor', () => {
     const { readFileSync } = await import('node:fs')
     const { resolve } = await import('node:path')
     const src = readFileSync(
-      resolve(process.cwd(), '../backend/tasksd/dav/xml.py'), 'utf8')
+      resolve(process.cwd(), '../backend/smylted/dav/xml.py'), 'utf8')
     const m = /COLOR_PATTERN = r"([^"]+)"/.exec(src)
     expect(m).not.toBeNull()
     // Python's (?:…) is a non-capturing group; JS spells it the same way.

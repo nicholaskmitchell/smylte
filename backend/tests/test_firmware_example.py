@@ -25,9 +25,9 @@ import pytest
 from fastapi.testclient import TestClient
 from test_displays import _api_settings
 
-from tasksd.app import create_app
-from tasksd.display import render
-from tasksd.service import TaskService
+from smylted.app import create_app
+from smylted.display import render
+from smylted.service import SmylteService
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 FIRMWARE = REPO / "firmware" / "pico_epaper_7in5" / "main.py"
@@ -131,7 +131,7 @@ def test_the_device_floor_is_never_below_the_servers(constants: dict):
     """`X-Display-Refresh-Seconds` is advisory — nothing enforces it on a
     device — so the firmware carries its own floor, and that floor may never be
     laxer than the one the server would apply to an e-ink panel."""
-    assert constants["MIN_REFRESH_S"] >= TaskService._REFRESH_MIN_EINK_S
+    assert constants["MIN_REFRESH_S"] >= SmylteService._REFRESH_MIN_EINK_S
 
 
 def test_the_example_reads_every_header_the_route_actually_sets(constants: dict, tmp_path):
@@ -288,7 +288,7 @@ def test_the_example_never_sleeps_outside_the_range_its_hardware_allows(constant
     statement in the loop outside the try.
     """
     lo, hi = constants["MIN_REFRESH_S"], constants["MAX_REFRESH_S"]
-    assert lo >= TaskService._REFRESH_MIN_EINK_S
+    assert lo >= SmylteService._REFRESH_MIN_EINK_S
     assert hi <= 86_400
     clamp = lambda n: min(hi, max(lo, n))          # noqa: E731 — the source line
     assert clamp(1) == lo and clamp(0) == lo and clamp(-99) == lo
@@ -319,10 +319,10 @@ def test_the_raw_route_never_advises_an_interval_the_glass_forbids(constants, tm
         assert c.get(f"/api/public/display/{token}.png"
                      ).headers["X-Display-Refresh-Seconds"] == "60"
         raw = c.get(f"/api/public/display/{token}.bin")
-        assert int(raw.headers["X-Display-Refresh-Seconds"]) >= TaskService._REFRESH_MIN_EINK_S
+        assert int(raw.headers["X-Display-Refresh-Seconds"]) >= SmylteService._REFRESH_MIN_EINK_S
         # And the firmware would not go below its own floor anyway — the header
         # is advice, which is exactly why it must not be bad advice.
-        assert constants["MIN_REFRESH_S"] >= TaskService._REFRESH_MIN_EINK_S
+        assert constants["MIN_REFRESH_S"] >= SmylteService._REFRESH_MIN_EINK_S
 
 
 def test_the_example_verifies_tls_when_it_is_given_a_ca_and_says_so_when_it_is_not(

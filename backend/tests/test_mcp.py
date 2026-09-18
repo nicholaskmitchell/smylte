@@ -19,8 +19,8 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 from fastapi.testclient import TestClient
 
-from tasksd.app import create_app
-from tasksd.db import store
+from smylted.app import create_app
+from smylted.db import store
 from tests.conftest import api_settings
 
 pytestmark = pytest.mark.radicale
@@ -135,13 +135,13 @@ def test_refuses_to_start_without_what_it_needs(_scratch_up, tmp_path):
     base = dataclasses.replace(
         api_settings(str(tmp_path / "x.db")), mcp_enabled=True, public_url=ISSUER)
     # No public URL: the metadata would have to guess, from a header the caller sets.
-    with pytest.raises(RuntimeError, match="TASKS_PUBLIC_URL"):
+    with pytest.raises(RuntimeError, match="SMYLTE_PUBLIC_URL"):
         create_app(dataclasses.replace(base, public_url=""))
     # No password: nothing at the consent screen proves you are the owner.
-    with pytest.raises(RuntimeError, match="TASKS_AUTH_ENABLED"):
+    with pytest.raises(RuntimeError, match="SMYLTE_AUTH_ENABLED"):
         create_app(dataclasses.replace(base, auth_enabled=False))
     # No session secret: consent signatures would not survive a restart.
-    with pytest.raises(RuntimeError, match="TASKS_SESSION_SECRET"):
+    with pytest.raises(RuntimeError, match="SMYLTE_SESSION_SECRET"):
         create_app(dataclasses.replace(base, session_secret=""))
 
 
@@ -612,11 +612,11 @@ def test_a_session_cookie_is_not_an_mcp_token(mcp):
     which is why access tokens are opaque rather than JWTs signed with the
     session key."""
     login = mcp.post("/api/login", json={"username": "admin", "password": PASSWORD})
-    cookie = login.cookies["tasks_session"]
+    cookie = login.cookies["smylte_session"]
     assert _rpc(mcp, cookie, "ping").status_code == 401
     # …and the reverse: an access token is not a session.
     token = _connect(mcp)["access_token"]
-    assert mcp.get("/api/me", headers={"Cookie": f"tasks_session={token}"}).status_code == 401
+    assert mcp.get("/api/me", headers={"Cookie": f"smylte_session={token}"}).status_code == 401
 
 
 @pytest.mark.parametrize("token", ["", "garbage", "a" * 400, "Bearer nested"])
@@ -775,7 +775,7 @@ def test_a_non_finite_number_is_refused_at_the_mcp_door_like_the_http_one():
 
     Enforced in the validator rather than per tool, so it holds for every
     `type: number` in the table."""
-    from tasksd.mcp.validate import SchemaError, check_value
+    from smylted.mcp.validate import SchemaError, check_value
 
     for bad in (float("inf"), float("-inf"), float("nan"), 1e400):
         with pytest.raises(SchemaError, match="finite"):
@@ -791,8 +791,8 @@ def test_a_non_finite_number_is_refused_at_the_mcp_door_like_the_http_one():
 def test_every_tool_schema_stays_inside_what_the_validator_enforces(mcp):
     """A schema keyword the validator does not implement would be advertised and
     silently unenforced — which is the exact shape of the bug above."""
-    from tasksd.mcp.tools import build_tools
-    from tasksd.mcp.validate import unsupported_keywords
+    from smylted.mcp.tools import build_tools
+    from smylted.mcp.validate import unsupported_keywords
 
     class _Stub:
         def __getattr__(self, _):
@@ -808,7 +808,7 @@ def test_slot_generation_refuses_a_duration_that_cannot_advance():
     from datetime import datetime, time, timezone
     from zoneinfo import ZoneInfo
 
-    from tasksd import scheduling
+    from smylted import scheduling
 
     for bad in (0, -30):
         with pytest.raises(ValueError, match="positive"):
@@ -851,7 +851,7 @@ def test_oversized_bodies_are_refused_before_they_are_buffered(mcp):
 def test_free_time_reads_a_duration_only_event(mcp, monkeypatch):
     """An event may carry DURATION instead of DTEND. Missing it made a two-hour
     meeting look like a half-hour one and offered the rest as free."""
-    from tasksd.mcp.api import McpApi, parse_duration
+    from smylted.mcp.api import McpApi, parse_duration
 
     assert parse_duration("PT2H") is not None
 
@@ -979,7 +979,7 @@ def test_an_oversized_batch_is_refused_whole(mcp):
     """Refused whole, not truncated. A caller that got results for the first N
     of its messages and silence for the rest cannot tell 'dropped' from
     'succeeded with no reply', and would carry on as though the writes landed."""
-    from tasksd.mcp.server import MAX_BATCH
+    from smylted.mcp.server import MAX_BATCH
 
     token = _connect(mcp)["access_token"]
     r = _batch(mcp, token, [
@@ -1715,8 +1715,8 @@ def test_a_lone_surrogate_anywhere_on_the_reply_path_cannot_kill_the_response():
     that echoes caller-supplied text into a reply goes through `wire_safe`."""
     import json as _json
 
-    from tasksd.mcp.oauth import wire_safe
-    from tasksd.mcp.server import _usable_id
+    from smylted.mcp.oauth import wire_safe
+    from smylted.mcp.server import _usable_id
 
     def render(obj):                      # what starlette's JSONResponse does
         return _json.dumps(obj, ensure_ascii=False, allow_nan=False).encode("utf-8")
@@ -1748,7 +1748,7 @@ def test_merged_events_are_ordered_by_instant_not_by_iso_string():
 
     Undated and unreadable rows sort LAST now rather than first — they came off
     the wire from another client — and uid/recurrence_id make the order total."""
-    from tasksd.mcp.api import _event_order
+    from smylted.mcp.api import _event_order
 
     rows = [
         {"uid": "utcone", "start": "2026-08-21T08:00:00+00:00", "summary": "B"},

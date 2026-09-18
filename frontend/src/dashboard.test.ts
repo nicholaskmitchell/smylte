@@ -226,7 +226,7 @@ describe('module registry', () => {
     // Read out of the source rather than duplicated here, so this file is not a
     // third copy of the same list.
     const py = readFileSync(
-      resolve(process.cwd(), '../backend/tasksd/app.py'), 'utf8')
+      resolve(process.cwd(), '../backend/smylted/app.py'), 'utf8')
     const block = /class DashboardModule\(BaseModel\):[\s\S]*?kind: Literal\[([\s\S]*?)\]/
       .exec(py)
     expect(block, 'DashboardModule.kind not found in app.py').toBeTruthy()

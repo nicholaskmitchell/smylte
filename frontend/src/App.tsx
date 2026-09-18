@@ -155,7 +155,7 @@ export function App() {
   // Whether the month grid fits the pane or grows to its busiest day. Dynamic is
   // what the grid has always done, so an account that never chose keeps it.
   const [calFit, setCalFit] = useState<CalendarFit>(DEFAULT_CALENDAR_FIT)
-  // How long a login lasts. Null means the deployment's own TASKS_SESSION_TTL,
+  // How long a login lasts. Null means the deployment's own SMYLTE_SESSION_TTL,
   // which is what this used to be the only way to set.
   const [sessionTtl, setSessionTtl] = useState<number | null>(null)
   const [rev, setRev] = useState(0)
@@ -313,7 +313,7 @@ export function App() {
 
   const applyTheme = useCallback((next: string) => {
     document.documentElement.dataset.theme = next
-    try { localStorage.setItem('tasks-theme', next) } catch { /* ignore */ }
+    try { localStorage.setItem('smylte-theme', next) } catch { /* ignore */ }
     setTheme(next)
   }, [])
 

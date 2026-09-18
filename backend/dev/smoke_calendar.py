@@ -9,8 +9,8 @@ import tempfile
 
 from fastapi.testclient import TestClient
 
-from tasksd.app import create_app
-from tasksd.config import Settings
+from smylted.app import create_app
+from smylted.config import Settings
 
 
 def _settings(db_path: str) -> Settings:

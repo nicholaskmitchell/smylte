@@ -9,7 +9,8 @@ from unittest import mock
 import pytest
 from fastapi.testclient import TestClient
 
-from tasksd.app import create_app
+from smylted import ical
+from smylted.app import create_app
 from tests.conftest import api_settings
 
 pytestmark = pytest.mark.radicale
@@ -34,7 +35,7 @@ def test_auth_gate(_scratch_up, tmp_path):
         assert c.get("/api/lists").status_code == 401
         assert c.post("/api/login", json={"username": "admin", "password": "nope"}).status_code == 401
         r = c.post("/api/login", json={"username": "admin", "password": "testpass123"})
-        assert r.status_code == 200 and "tasks_session" in r.cookies
+        assert r.status_code == 200 and "smylte_session" in r.cookies
         assert c.get("/api/me").json()["user"] == "admin"
         c.post("/api/logout")
         assert c.get("/api/lists").status_code == 401
@@ -87,7 +88,7 @@ def test_task_crud_and_subtasks(client):
 
 
 def test_client_id_determines_uid(client):
-    """The uid a create lands on is `{client_id}@tasksd`, and nothing else.
+    """The uid a create lands on is `{client_id}` + ical.UID_SUFFIX, and nothing else.
 
     The web client mints the same string up front (`uidFor` in api.ts) so a row
     whose create is still in flight already wears the identity it will keep —
@@ -99,7 +100,7 @@ def test_client_id_determines_uid(client):
     cid = uuid.uuid4().hex
     t = client.post(f"/api/lists/{lid}/tasks",
                     json={"summary": "trip", "client_id": cid}).json()
-    assert t["uid"] == f"{cid}@tasksd"
+    assert t["uid"] == f"{cid}{ical.UID_SUFFIX}"
 
     # …and the same slug names an event's uid, which the calendar view predicts
     # the same way.
@@ -108,7 +109,7 @@ def test_client_id_determines_uid(client):
     e = client.post(f"/api/calendars/{cal['id']}/events",
                     json={"summary": "lunch", "start": "2026-07-15", "all_day": True,
                           "client_id": ecid}).json()
-    assert e["uid"] == f"{ecid}@tasksd"
+    assert e["uid"] == f"{ecid}{ical.UID_SUFFIX}"
 
 
 def test_create_rejects_a_parent_that_names_nothing(client):
@@ -189,7 +190,7 @@ def test_session_length_is_an_allowlist(client):
     client.put("/api/settings", json={"session_ttl_s": 99})
     assert client.get("/api/settings").json()["session_ttl_s"] == 7 * 24 * 3600
     # An explicit null is not a bad value: it clears the choice and hands the
-    # question back to the deployment's own TASKS_SESSION_TTL.
+    # question back to the deployment's own SMYLTE_SESSION_TTL.
     assert client.put("/api/settings", json={"session_ttl_s": None}).status_code == 200
 
 
@@ -245,7 +246,7 @@ def test_shortening_the_session_ends_the_one_already_open(_scratch_up, tmp_path)
         # Still inside a day, so the same cookie is still good.
         assert c.get("/api/me").status_code == 200
 
-        with mock.patch("tasksd.auth.time.time", return_value=time.time() + day + 60):
+        with mock.patch("smylted.auth.time.time", return_value=time.time() + day + 60):
             assert c.get("/api/me").status_code == 401
         # …and it comes back once the setting is long again, because the token's
         # own exp still has a month to run. Lengthening is the direction that
@@ -829,8 +830,8 @@ def test_search_matches_prefixes(client):
 
 
 def test_edit_conflict_is_409(client, monkeypatch):
-    from tasksd.service import TaskService
-    from tasksd.sync.engine import ConflictError
+    from smylted.service import SmylteService
+    from smylted.sync.engine import ConflictError
 
     lid = _list(client)["id"]
     t = client.post(f"/api/lists/{lid}/tasks", json={"summary": "contested"}).json()
@@ -838,15 +839,15 @@ def test_edit_conflict_is_409(client, monkeypatch):
     def boom(self, href, uid, edit):
         raise ConflictError(f"edit conflict on {uid}: retry the change")
 
-    monkeypatch.setattr(TaskService, "edit_task", boom)
+    monkeypatch.setattr(SmylteService, "edit_task", boom)
     r = client.patch(f"/api/lists/{lid}/tasks/{t['uid']}", json={"summary": "x"})
     assert r.status_code == 409
     assert "conflict" in r.json()["detail"]
 
 
 def test_transport_error_is_dav_error():
-    from tasksd.dav import DavClient
-    from tasksd.dav.errors import DavError
+    from smylted.dav import DavClient
+    from smylted.dav.errors import DavError
 
     c = DavClient("http://127.0.0.1:9", "u", "p", timeout=1)   # nothing listens here
     with pytest.raises(DavError):
@@ -855,13 +856,13 @@ def test_transport_error_is_dav_error():
 
 
 def test_dav_outage_is_502(client, monkeypatch):
-    from tasksd.dav.errors import DavError
-    from tasksd.service import TaskService
+    from smylted.dav.errors import DavError
+    from smylted.service import SmylteService
 
     def boom(self):
         raise DavError("connection refused")
 
-    monkeypatch.setattr(TaskService, "list_lists", boom)
+    monkeypatch.setattr(SmylteService, "list_lists", boom)
     r = client.get("/api/lists")
     assert r.status_code == 502
     assert "connection refused" not in r.json()["detail"]   # internals stay internal

@@ -12,7 +12,7 @@ const read = (rel: string) =>
 const tokensCss = read('./styles/tokens.css')
 const indexHtml = read('../index.html')
 import {
-  APPEARANCE_KEY, DEFAULTS, FONT_CHOICES, GROUPS, MAX_THEMES, PRESETS, PRESET_PREFIX,
+  APPEARANCE_KEY, APPEARANCE_KEY_LEGACY, DEFAULTS, FONT_CHOICES, GROUPS, MAX_THEMES, PRESETS, PRESET_PREFIX,
   SHARED_DEFAULTS, TOKENS, TOKEN_NAMES,
   applyTokens, cacheAppearance, defaultValue, findPreset, isValidToken, isValidValue,
   parseTheme, presetSlug, readCachedAppearance, resolve, sanitizeAppearance,
@@ -246,6 +246,21 @@ describe('pre-paint script in index.html', () => {
 
   it('reads the same localStorage key the app writes', () => {
     expect(html).toContain(`'${APPEARANCE_KEY}'`)
+  })
+
+  it('still reads the pre-rename key, so the first load after deploy is not a flash', () => {
+    // This script is the ONLY reader of the cache before the bundle loads.
+    // Drop the old key here and everyone carrying a custom appearance gets the
+    // shipped default painted first and their own colors a frame later — which
+    // is precisely the flash the whole pre-paint block exists to prevent.
+    // Assert the READ specifically. `toContain(key)` alone passes on the
+    // removeItem call further down, so it would still be green with the
+    // getItem deleted — which is the exact regression this test is for.
+    expect(html).toContain(`getItem('${APPEARANCE_KEY_LEGACY}')`)
+    expect(html).toContain(`getItem('${APPEARANCE_KEY}')`)
+    expect(html).toContain("getItem('tasks-theme')")
+    expect(html).toContain("getItem('smylte-theme')")
+    expect(APPEARANCE_KEY_LEGACY).not.toBe(APPEARANCE_KEY)
   })
 
   it('knows every preset slug, and its background in both modes', () => {
@@ -497,6 +512,26 @@ describe('the pre-paint cache', () => {
     expect(localStorage.getItem(APPEARANCE_KEY)).toBe(null)
     expect(readCachedAppearance()).toBe(null)
   })
+
+  it('promotes a pre-rename cache once, then retires the old key', () => {
+    const app = { active: PRESETS[0].id, themes: [] }
+    localStorage.removeItem(APPEARANCE_KEY)
+    localStorage.setItem(APPEARANCE_KEY_LEGACY, JSON.stringify(app))
+
+    expect(readCachedAppearance()).toEqual(app)
+    // Promoted under the new name and the old one cleared, so this costs one
+    // read on one load rather than a fallback that lives forever.
+    expect(JSON.parse(localStorage.getItem(APPEARANCE_KEY)!)).toEqual(app)
+    expect(localStorage.getItem(APPEARANCE_KEY_LEGACY)).toBe(null)
+    expect(readCachedAppearance()).toEqual(app)
+  })
+
+  it('prefers the current key when both are present', () => {
+    localStorage.setItem(APPEARANCE_KEY, JSON.stringify({ active: PRESETS[0].id, themes: [] }))
+    localStorage.setItem(APPEARANCE_KEY_LEGACY, JSON.stringify({ active: null, themes: [] }))
+    expect(readCachedAppearance()?.active).toBe(PRESETS[0].id)
+  })
+
 
   it('keeps the key for a preset, which has no themes to store', () => {
     // The `!active` shortcut that clears the key for the default must not also

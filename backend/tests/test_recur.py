@@ -14,9 +14,9 @@ from zoneinfo import ZoneInfo
 import pytest
 from helpers import foreign_event_raw
 
-from tasksd.dav.client import CollectionInfo, Item
-from tasksd.db import store
-from tasksd.ical import (
+from smylted.dav.client import CollectionInfo, Item
+from smylted.db import store
+from smylted.ical import (
     EventEdit,
     apply_event_changes,
     apply_occurrence_override,
@@ -28,7 +28,7 @@ from tasksd.ical import (
     shift_series,
     split_series,
 )
-from tasksd.ical.read import extract_from_raw
+from smylted.ical.read import extract_from_raw
 
 _WIN = (date(2026, 1, 1), date(2026, 3, 1))
 
@@ -1498,7 +1498,7 @@ def test_the_search_budget_actually_fires():
     """
     from dateutil.rrule import rrulestr
 
-    from tasksd.ical.rrule_budget import SearchBudgetExceeded, search_budget
+    from smylted.ical.rrule_budget import SearchBudgetExceeded, search_budget
 
     with pytest.raises(SearchBudgetExceeded):
         with search_budget(2):
@@ -1656,7 +1656,7 @@ def test_an_unreadable_due_reads_as_absent_rather_than_as_a_repr():
     assert extract_from_raw(raw).due is None
 
     # And the MCP sort key fails soft even if a row reaches it unreadable anyway.
-    from tasksd.mcp.api import _intrinsic_order
+    from smylted.mcp.api import _intrinsic_order
     rows = [{"due": "(datetime.datetime(2026, 1, 1, 0, 0),)", "uid": "bad",
              "summary": "T", "priority": None},
             {"due": "2026-01-05", "uid": "ok", "summary": "O", "priority": None}]

@@ -1,4 +1,4 @@
-"""The Content-Security-Policy (tasksd/csp.py).
+"""The Content-Security-Policy (smylted/csp.py).
 
 The policy is the bound over everything the field-level guards do not name. It
 is also the kind of control that fails silently in both directions: too loose
@@ -20,8 +20,8 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from tasksd.app import create_app
-from tasksd.csp import build_policy, inline_script_hashes, policy_for_index
+from smylted.app import create_app
+from smylted.csp import build_policy, inline_script_hashes, policy_for_index
 from tests.conftest import api_settings
 
 HEADER = "content-security-policy"
@@ -189,7 +189,7 @@ def test_report_only_mode_blocks_nothing(tmp_path):
 
 def test_off_sets_no_header_at_all(tmp_path):
     """The escape hatch has to actually escape: a policy that turns out to block
-    something real must be removable from /etc/tasks/tasks.env, without a code
+    something real must be removable from /etc/smylte/smylte.env, without a code
     change or a frontend redeploy."""
     with TestClient(_app(tmp_path, csp_mode="off")) as c:
         r = c.get("/api/me")
