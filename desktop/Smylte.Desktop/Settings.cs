@@ -230,11 +230,23 @@ public sealed class Settings
 
     private const int CurrentVersion = 1;
 
-    /// Bring a file written by an older client up to date. Idempotent, and
-    /// deliberately not a save: the next ordinary `Save()` persists it, and a
-    /// client that never gets that far simply migrates again next launch.
-    private void Migrate()
+    /// Bring a file written by an older client up to date. Returns whether
+    /// anything changed, so `Load` can persist it AT ONCE.
+    ///
+    /// **Persisting immediately is the whole correctness of this.** It used to
+    /// mutate in memory and leave the write to the next ordinary `Save()`,
+    /// which looked harmless and is a trap: plenty of runs never reach a save —
+    /// `--check` and `--install` return before one, a missing native library
+    /// returns 1 out of `Program.Main`, a logout SIGKILLs the process. The file
+    /// then still has no version, so the promotion runs AGAIN next launch. A
+    /// user who read the hint, set `"Backend": "x11"` back by hand and
+    /// restarted would have their edit silently undone, every time, with the
+    /// floating window's pin never coming back and nothing anywhere saying
+    /// why.
+    private bool Migrate()
     {
+        var before = SettingsVersion;
+
         if (SettingsVersion < 1)
         {
             // `x11` was the default rather than a decision — the field has no
@@ -251,6 +263,7 @@ public sealed class Settings
         }
 
         SettingsVersion = CurrentVersion;
+        return SettingsVersion != before;
     }
 
     [JsonIgnore]
@@ -323,7 +336,15 @@ public sealed class Settings
             if (File.Exists(FilePath)
                 && JsonSerializer.Deserialize<Settings>(File.ReadAllText(FilePath)) is { } stored)
             {
-                stored.Migrate();
+                // Written back NOW rather than at the next ordinary save — see
+                // Migrate. Best-effort: a read-only home costs the promotion,
+                // not the launch, and the worst case is that it is attempted
+                // again next time, which is where this started.
+                if (stored.Migrate())
+                {
+                    try { stored.Save(); }
+                    catch (Exception) { /* see above */ }
+                }
                 return stored;
             }
         }

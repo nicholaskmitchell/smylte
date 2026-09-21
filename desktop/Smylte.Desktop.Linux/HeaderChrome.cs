@@ -123,16 +123,47 @@ internal static class HeaderChrome
             """);
     }
 
-    /// Hand the frame back to the theme, for before the page has said anything
-    /// — the moment before the SPA boots.
+    /// Hand the COLOUR back to the theme, for before the page has said anything
+    /// — the moment before the SPA boots, and whenever the page reports a
+    /// background the host cannot read.
     ///
     /// The provider is ONE object for the whole display, so this is not a
     /// per-window call and must not be treated as one. The setup dialog used to
     /// call it on open, which stripped the main window's header colour and the
     /// float ring's frame along with its own — a dialog cannot "reset its own"
     /// chrome when the chrome is shared. Only the main window calls this now,
-    /// and only before it has a colour to apply.
-    public static void Reset(Gdk.Display display) => Load(display, "");
+    /// and only when it has no colour to apply.
+    ///
+    /// **It used to load the empty string, and that was the real bug behind the
+    /// colour-parsing one.** Widening the parser makes this path rarer; it does
+    /// not make it safe, and it is still reachable — `toHex` hands the host the
+    /// raw value whenever a 2D canvas is unavailable or refuses, and a colour
+    /// space nothing here converts will exist again. Clearing every rule took
+    /// three things with it that have nothing to do with the header's colour:
+    /// the float window's `padding` and inset hairline, which are its ONLY
+    /// visible border, so a frameless window became a rectangle of page with no
+    /// edge; the update strip's padding; and the strip's colours — which is how
+    /// it went back to drawing the GTK theme's label colour on the page's own
+    /// background, the black-on-near-black state the rules below were written
+    /// to fix.
+    ///
+    /// So what is emitted here is everything EXCEPT the colours. Geometry is
+    /// always correct, and a widget told neither foreground nor background gets
+    /// both from the GTK theme — which pairs them legibly by construction,
+    /// whatever theme that is. That is the property the empty string threw away.
+    public static void Reset(Gdk.Display display) => Load(display, """
+        /* Structure only. No `background` and no `color` anywhere: the theme's
+           own pairing is the one thing guaranteed to be readable when the page
+           has not told us what it is painting. */
+        .float-ring {
+            padding: 6px;
+            box-shadow: inset 0 0 0 1px alpha(currentColor, 0.3);
+        }
+        .smylte-banner {
+            padding: 6px;
+            border-bottom: 1px solid alpha(currentColor, 0.3);
+        }
+        """);
 
     private static void Load(Gdk.Display display, string css)
     {
