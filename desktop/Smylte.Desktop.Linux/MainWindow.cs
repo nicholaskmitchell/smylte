@@ -22,6 +22,13 @@ namespace Smylte.Desktop;
 /// `_window.` prefix and buys a client that still compiles on the next GirCore.
 internal sealed class MainWindow : IDesktopBridge
 {
+    /// The same floor `MainForm` sets on Windows, in the same units — logical
+    /// pixels, which is what both `SetSizeRequest` and WinForms' scaled
+    /// `MinimumSize` mean. 720 is the SPA's own mobile breakpoint
+    /// (`hooks.ts`'s `MOBILE_QUERY`, mirrored in app.css), so this is the
+    /// narrowest the desktop layout is designed to be.
+    private const int MinWidth = 720, MinHeight = 520;
+
     private readonly Gtk.ApplicationWindow _window;
     private readonly Settings _settings;
     private readonly Gtk.Application _app;
@@ -102,6 +109,17 @@ internal sealed class MainWindow : IDesktopBridge
         X11Window.Active = X11Window.DisplayIsX11(_window.GetDisplay());
         _window.SetTitle("Smylte");
         _window.SetDefaultSize(settings.WindowWidth, settings.WindowHeight);
+
+        // The floor the Windows client has always had (`MainForm.MinimumSize`)
+        // and this one was missing. Not cosmetic: a GtkWindow's minimum is
+        // whatever its children need, a WebKitWebView asks for nothing, and the
+        // update strip's label ellipsizes — so the window could be dragged down
+        // to about the width of the header bar's buttons. Below 720 the SPA
+        // crosses its own mobile breakpoint and re-lays out as a phone inside a
+        // desktop window, and `.shell` is `overflow: hidden`, so what does not
+        // fit is clipped rather than scrolled.
+        _window.SetSizeRequest(MinWidth, MinHeight);
+
         if (settings.WindowMaximized) _window.Maximize();
         _window.AddCssClass("smylte");
 
@@ -138,6 +156,10 @@ internal sealed class MainWindow : IDesktopBridge
         else
         {
             _header.SetShowTitleButtons(true);
+            // What the stylesheet keys off, so its rules cannot also reach the
+            // header bar GTK builds for itself when this setting is on. See
+            // HeaderChrome's class note.
+            _header.AddCssClass(HeaderChrome.HeaderClass);
             // 16px is the size GTK's own header-bar icons are, and the art is
             // held legible at it by build_app_icon.py's four floors. Margins in
             // code rather than in HeaderChrome's stylesheet: that is a string
@@ -154,6 +176,22 @@ internal sealed class MainWindow : IDesktopBridge
 
         _splash.SetVexpand(true);
         _splash.SetHexpand(true);
+
+        // A GtkLabel does not wrap unless it is told to, and it asks for its
+        // full natural width — so `Fail()` putting an exception message in here
+        // set the WINDOW's minimum width to the length of that message. A
+        // `HttpRequestException` naming a long URL, or a socket error with an
+        // address and a port, made a window nothing could shrink and that on a
+        // small screen opened wider than the monitor. SetupWindow already wraps
+        // both of its labels; this one was missed.
+        //
+        // Selectable because this is the only place the reason a client will
+        // not start is ever shown, and the reader's next step is usually to
+        // paste it somewhere. It costs a caret in the splash and nothing else.
+        _splash.SetWrap(true);
+        _splash.SetJustify(Gtk.Justification.Center);
+        _splash.SetMaxWidthChars(60);
+        _splash.SetSelectable(true);
 
         _stack.AddNamed(_splash, "splash");
         _stack.SetVexpand(true);
@@ -406,6 +444,21 @@ internal sealed class MainWindow : IDesktopBridge
         {
             _web = null;
             _stack.Remove(web);
+            // AND disposed, which is the half that was missing. Removing it
+            // drops the STACK's reference; GirCore's wrapper holds one of its
+            // own, and StartAsync's abandoned-start path 140 lines up already
+            // says so in as many words ("GirCore pins the wrapper, so an
+            // unparented view is not reclaimed by GC") and calls Dispose for
+            // exactly that reason. This path did not, so the leak the comment
+            // describes was still live on the commonest route to it: every
+            // `--setup` save runs Shutdown and then StartAsync, and each one
+            // left a WebKitWebProcess behind holding the old page.
+            //
+            // Before `_host`, deliberately. The view holds a reference to the
+            // NetworkSession the host owns, and disposing the session out from
+            // under a live view would be the one ordering that is worse than
+            // leaking.
+            web.Dispose();
         }
 
         _host?.Dispose();
@@ -428,7 +481,7 @@ internal sealed class MainWindow : IDesktopBridge
 
     private void ApplyChrome(string? background)
     {
-        var colour = Theme.ParseHex(background);
+        var colour = Theme.ParseColour(background);
         if (colour is { } value) HeaderChrome.Apply(_window.GetDisplay(), value);
         else HeaderChrome.Reset(_window.GetDisplay());
     }
@@ -578,7 +631,16 @@ internal sealed class MainWindow : IDesktopBridge
         // send; without it, each one queued a closure on the GTK main loop that
         // repainted two windows and wrote settings.json, for a colour that had
         // not moved.
-        var value = Theme.ParseHex(background) is null ? "" : background!.Trim();
+        //
+        // What is STORED is the parsed colour re-rendered as `#RRGGBB`, not the
+        // string the page sent. Two reasons, and the second is the one that
+        // bites: settings.json then holds one spelling whatever the page's
+        // theme is authored in, so everything downstream — FloatWindow's
+        // re-read, the next launch's pre-paint colour — has a single shape to
+        // handle; and the comparison above becomes a comparison of COLOURS
+        // rather than of spellings, so a page that switches between `#abc` and
+        // `#AABBCC` for the same theme stops rewriting the file on every send.
+        var value = Theme.ParseColour(background) is { } parsed ? Chrome.Hex(parsed) : "";
         if (value == _settings.TitleBarColor) return;
 
         _settings.TitleBarColor = value;

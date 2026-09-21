@@ -135,14 +135,33 @@ public sealed class Settings
     // settings.json, and an escape hatch for a machine where the default is
     // wrong — because the failures they address cannot be reproduced in CI.
 
-    /// `"x11"` or `"wayland"`. X11 is the default because three things the
+    /// `"auto"`, `"x11"` or `"wayland"`.
+    ///
+    /// **This defaulted to `"x11"` and no longer does.** Three things the
     /// floating window needs — staying above other windows, opening where it
     /// was left, and keeping out of the taskbar — have no Wayland protocol an
     /// ordinary client can use, and GNOME implements no extension that would
-    /// give them. Under XWayland all three work. The cost is that XWayland can
-    /// look soft on a fractionally scaled display, which is why this is a
-    /// setting and not a decision.
-    public string Backend { get; set; } = "x11";
+    /// give them. Under XWayland all three work, so asking for X11 was how they
+    /// were had.
+    ///
+    /// The cost was understated as "XWayland can look soft". It is sharper than
+    /// that, and it lands on the main window rather than the floating one:
+    /// XWayland has a single scale factor for the entire display, so a desk
+    /// with two monitors at different scales cannot be served correctly at all,
+    /// and under fractional scaling the compositor bitmap-stretches the surface
+    /// rather than letting it re-render. Blurred text on at least one monitor,
+    /// permanently, for every user of the commonest Linux desktop there is —
+    /// because the old fallback only triggered when `DISPLAY` was unset, which
+    /// on a Wayland session with XWayland it never is.
+    ///
+    /// So `auto` now leaves the choice to GDK, which prefers Wayland when there
+    /// is one. `"x11"` is still honoured and is how someone who wants the pin,
+    /// the remembered position and the taskbar behaviour back asks for them —
+    /// which is exactly what Settings → Desktop's hint tells a user whose pin
+    /// control has gone. Both explicit values now fall back to `auto` when the
+    /// session cannot provide them, rather than handing GDK a backend it will
+    /// die trying to open.
+    public string Backend { get; set; } = "auto";
 
     /// Forces `WEBKIT_DISABLE_DMABUF_RENDERER=1`. WebKitGTK's DMA-BUF renderer
     /// paints nothing at all on the NVIDIA proprietary driver — a window frame
@@ -192,6 +211,47 @@ public sealed class Settings
     /// resolves this string.
     private static string CanonicalServer(string? url) =>
         (url ?? "").Trim().TrimEnd('/').ToLowerInvariant();
+
+    /// What shape this file is in, so a default that changes can reach the
+    /// people already running.
+    ///
+    /// **Why a version field and not just a new default.** `Save()` writes
+    /// every property, so an installed client's settings.json holds an explicit
+    /// value for everything — including the fields nobody has ever touched.
+    /// Changing a default therefore reaches new installs only, and the machines
+    /// that have the problem are by definition the ones already installed. The
+    /// backend solved the same thing the same way (see its migration runner);
+    /// this is the client-side two-line version of it.
+    ///
+    /// 0 — no version recorded: written by a client from before this field.
+    /// 1 — `Backend` may be `auto`, and a `Backend` of `x11` left over from
+    ///     when that was the DEFAULT is promoted to it. See `Migrate`.
+    public int SettingsVersion { get; set; }
+
+    private const int CurrentVersion = 1;
+
+    /// Bring a file written by an older client up to date. Idempotent, and
+    /// deliberately not a save: the next ordinary `Save()` persists it, and a
+    /// client that never gets that far simply migrates again next launch.
+    private void Migrate()
+    {
+        if (SettingsVersion < 1)
+        {
+            // `x11` was the default rather than a decision — the field has no
+            // UI at all, so every value in the wild was written by the client
+            // itself. Promoting it is what lets the XWayland fix actually reach
+            // an installed client; see Backend above for what it is fixing.
+            //
+            // The safe direction, and cheap to undo: someone who does want X11
+            // sets it back, and Settings → Desktop's hint already names that
+            // exact edit to anyone whose floating-window pin has gone. Same
+            // call `CookieJarIsForAnotherServer` makes for the same reason.
+            if (string.Equals(Backend?.Trim(), "x11", StringComparison.OrdinalIgnoreCase))
+                Backend = "auto";
+        }
+
+        SettingsVersion = CurrentVersion;
+    }
 
     [JsonIgnore]
     public bool IsConfigured =>
@@ -260,8 +320,12 @@ public sealed class Settings
     {
         try
         {
-            if (File.Exists(FilePath))
-                return JsonSerializer.Deserialize<Settings>(File.ReadAllText(FilePath)) ?? Fresh();
+            if (File.Exists(FilePath)
+                && JsonSerializer.Deserialize<Settings>(File.ReadAllText(FilePath)) is { } stored)
+            {
+                stored.Migrate();
+                return stored;
+            }
         }
         catch (Exception)
         {
@@ -273,6 +337,10 @@ public sealed class Settings
     private static Settings Fresh() => new()
     {
         DataFolder = Path.Combine(DataHome, "Smylte"),
+        // Already current: a file that never existed has nothing to migrate,
+        // and marking it otherwise would run every future migration against a
+        // brand new install.
+        SettingsVersion = CurrentVersion,
     };
 
     /// Written 0600, and written atomically.

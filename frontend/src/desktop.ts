@@ -131,20 +131,76 @@ export function syncCaption(): void {
   if (bg) void call('/desktop/appearance', { background: toHex(bg) })
 }
 
-/// --bg is authored as hex in every shipped theme, but a custom one is only
-/// validated against a character blacklist, so it can legitimately be `rgb()`
-/// or a named colour. The host parses hex and nothing else, so normalise here —
-/// where a Canvas is available — rather than teaching it CSS colour syntax.
+/// --bg is authored as hex in every shipped theme, but a custom one is whatever
+/// the Appearance editor accepted — and that editor takes any CSS colour on
+/// purpose, because this design system is authored in OKLCH and its own swatch
+/// control says so. The host parses hex and nothing else, so normalise here,
+/// where a real engine is available, rather than teaching it CSS colour syntax.
+///
+/// **Assigning to `fillStyle` and reading it back is not enough, and that is
+/// what this used to do.** The getter serialises per CSS Color 4: a colour that
+/// did not start in sRGB comes back as `color(srgb …)` and one with alpha as
+/// `rgba(…)`. Neither is hex. So `oklch(0.2 0.02 250)` — a perfectly ordinary
+/// value for this palette — went to the host unparseable, the host read that as
+/// "no colour to report", and on Linux that clears ONE display-wide stylesheet:
+/// the header lost its colour, the update strip went back to black-on-near-black
+/// and the floating window lost its entire visible border. A user picked a
+/// background and the window came apart.
+///
+/// Painting and reading the bytes back is exact for every colour the engine can
+/// render, in any space, and flattens alpha the way the page itself shows it —
+/// over white, which is what CSS says the canvas beneath the root element is.
 function toHex(value: string): string {
   if (/^#[0-9a-f]{3}([0-9a-f]{3})?$/i.test(value)) return value
   try {
-    const ctx = document.createElement('canvas').getContext('2d')!
-    ctx.fillStyle = '#000'
+    const canvas = document.createElement('canvas')
+    canvas.width = 1
+    canvas.height = 1
+    const ctx = canvas.getContext('2d', { willReadFrequently: true })
+    // No 2D context at all — jsdom, or a hardened browser. The host's own
+    // parser is the fallback and it handles the common shapes.
+    if (!ctx) return value
+    if (!isPaintable(ctx, value)) return value
+
+    // Opaque backdrop first, then the colour over it, so a translucent --bg
+    // resolves to what is actually on screen rather than to premultiplied
+    // nonsense read out of a transparent pixel.
+    ctx.fillStyle = '#ffffff'
+    ctx.fillRect(0, 0, 1, 1)
     ctx.fillStyle = value
-    return ctx.fillStyle as string
+    ctx.fillRect(0, 0, 1, 1)
+
+    const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data
+    return '#' + [r, g, b].map((c) => c.toString(16).padStart(2, '0')).join('')
   } catch {
+    // A tainted canvas cannot happen here — nothing but colours is ever drawn —
+    // but getImageData can still be refused by a privacy extension. The raw
+    // value is the same thing this returned before, and the host rejects what it
+    // cannot read.
     return value
   }
+}
+
+/// Can the engine parse this as a colour at all?
+///
+/// An invalid assignment to `fillStyle` is IGNORED rather than throwing, so the
+/// property keeps whatever it held — which means a single read cannot tell a
+/// rejected value from one that happens to equal the previous colour. Offering
+/// two different previous values and requiring the result to agree does: a
+/// parsed colour lands on the same serialisation from both starting points, and
+/// a rejected one lands on each of them in turn.
+///
+/// This matters because without it an unreadable value would paint the title bar
+/// WHITE — the backdrop above, showing through an assignment that did nothing —
+/// and a plausible wrong colour is worse than the documented "hand the frame
+/// back to the system" that returning the raw value gets.
+function isPaintable(ctx: CanvasRenderingContext2D, value: string): boolean {
+  ctx.fillStyle = '#000000'
+  ctx.fillStyle = value
+  const fromBlack = ctx.fillStyle
+  ctx.fillStyle = '#ffffff'
+  ctx.fillStyle = value
+  return ctx.fillStyle === fromBlack
 }
 
 /// Keep the caption in step for as long as the page is open.

@@ -242,5 +242,21 @@ internal sealed class WebHost : IDisposable
         return Task.WhenAny(done.Task, Task.Delay(TimeSpan.FromSeconds(5), ct));
     }
 
-    public void Dispose() => _pending.Clear();
+    /// Let go of the session, not just the callbacks.
+    ///
+    /// This cleared `_pending` and nothing else, so the `WebKitNetworkSession`
+    /// outlived the host that made it. That matters on one specific path and it
+    /// is not a rare one: a `--setup` save runs Shutdown and then StartAsync,
+    /// which builds a SECOND WebHost — so a second session was constructed on
+    /// the same profile directory while the first still held it, both of them
+    /// with the same `cookies.sqlite` open. Repeat per save.
+    ///
+    /// The caller disposes the view first (see MainWindow.Shutdown), so nothing
+    /// is still using the session when this runs.
+    public void Dispose()
+    {
+        _pending.Clear();
+        try { Session.Dispose(); }
+        catch (Exception) { /* already gone, or a wrapper GTK has torn down */ }
+    }
 }
