@@ -73,7 +73,7 @@ export const de: Catalogue = {
   'settings.titlebar': 'Systemtitelleiste',
   'settings.titlebar.hint': 'Eingeschaltet bleibt die Titelleiste in der Farbe, die Windows zeichnet, statt den App-Hintergrund aufzunehmen.',
   'settings.titlebar.hint.linux': 'Eingeschaltet zeichnet der Fenstermanager die Titelleiste — mit seinem Dekorationsdesign, seinen eigenen Schaltflächen und dem Fenstersymbol. Smylte kann eine Titelleiste, die es nicht selbst zeichnet, nicht einfärben; der App-Hintergrund erreicht sie dann nicht mehr. Beides zugleich geht nicht. Wirkt beim nächsten Start von Smylte.',
-  'settings.float.noPin': 'Dies ist eine Wayland-Sitzung, in der ein Fenster nicht darum bitten kann, über anderen zu bleiben — daher bietet das schwebende Fenster keine Anheftung. Mit "Backend": "x11" in der settings.json kommt sie zurück.',
+  'settings.float.noPin': 'Dies ist eine Wayland-Sitzung, in der ein Fenster nicht darum bitten kann, über anderen zu bleiben — daher bietet das schwebende Fenster keine Anheftung und öffnet sich nicht an der zuletzt genutzten Stelle. Wayland hat Vorrang, weil X11 zwei Monitore nicht unabhängig skalieren kann und Text bei fraktionaler Skalierung unscharf wird. Mit "Backend": "x11" in der settings.json tauschst du das gegen die Anheftung zurück.',
   'settings.section.calendar': 'Kalender',
   'settings.section.tasks': 'Aufgaben',
   'settings.section.focus': 'Fokus',

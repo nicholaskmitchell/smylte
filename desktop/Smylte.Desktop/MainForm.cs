@@ -297,7 +297,7 @@ public sealed class MainForm : Form, IDesktopBridge
             // caption" cannot be honoured on one path and forgotten on the other.
             // Null takes the same arm an unparseable colour already takes, which
             // is Reset: DWM's own "hand the frame back to the OS".
-            var colour = _settings.SystemTitleBar ? null : WindowChrome.ParseHex(background);
+            var colour = _settings.SystemTitleBar ? null : Theme.ParseColour(background);
             if (colour is null) WindowChrome.Reset(Handle);
             else WindowChrome.Apply(Handle, colour.Value);
         }
@@ -411,7 +411,12 @@ public sealed class MainForm : Form, IDesktopBridge
     {
         BeginInvoke(() =>
         {
-            var value = WindowChrome.ParseHex(background) is null ? "" : background!;
+            // Stored as normalised `#RRGGBB` rather than as the string the page
+            // sent, so settings.json holds one spelling whatever the theme is
+            // authored in and the comparison below is between COLOURS rather
+            // than between spellings. See the Linux client's Appearance for the
+            // longer version; both ends of this bridge now do the same thing.
+            var value = Theme.ParseColour(background) is { } parsed ? Chrome.Hex(parsed) : "";
             if (value == _settings.TitleBarColor) return;
             _settings.TitleBarColor = value;
             _settings.Save();

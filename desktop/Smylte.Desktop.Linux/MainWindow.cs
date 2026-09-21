@@ -22,6 +22,24 @@ namespace Smylte.Desktop;
 /// `_window.` prefix and buys a client that still compiles on the next GirCore.
 internal sealed class MainWindow : IDesktopBridge
 {
+    /// The floor for the PAGE AREA, in logical pixels.
+    ///
+    /// **721, not 720, and the page area rather than the window.** Both halves
+    /// are off-by-ones that would have left the floor doing the opposite of
+    /// what it is for. `MOBILE_QUERY` is `(max-width: 720px)` (hooks.ts,
+    /// mirrored by every `@media (max-width: 720px)` in app.css) and a max-width
+    /// query is INCLUSIVE, so a viewport of exactly 720 is the phone layout —
+    /// a floor of 720 would pin the window at precisely the rendering it exists
+    /// to keep it out of. And a size request on the window covers the header
+    /// bar, the update strip and the client-side decoration margins, so the
+    /// viewport inside it is narrower than the number asked for; requesting it
+    /// on the content is what actually constrains the page.
+    ///
+    /// The Windows client's `MainForm.MinimumSize` is 720x520 of OUTER window
+    /// and has both of the same off-by-ones. It is left alone here because it
+    /// is a behaviour change on a platform this change cannot test.
+    private const int MinPageWidth = 721, MinPageHeight = 480;
+
     private readonly Gtk.ApplicationWindow _window;
     private readonly Settings _settings;
     private readonly Gtk.Application _app;
@@ -102,6 +120,7 @@ internal sealed class MainWindow : IDesktopBridge
         X11Window.Active = X11Window.DisplayIsX11(_window.GetDisplay());
         _window.SetTitle("Smylte");
         _window.SetDefaultSize(settings.WindowWidth, settings.WindowHeight);
+
         if (settings.WindowMaximized) _window.Maximize();
         _window.AddCssClass("smylte");
 
@@ -138,6 +157,10 @@ internal sealed class MainWindow : IDesktopBridge
         else
         {
             _header.SetShowTitleButtons(true);
+            // What the stylesheet keys off, so its rules cannot also reach the
+            // header bar GTK builds for itself when this setting is on. See
+            // HeaderChrome's class note.
+            _header.AddCssClass(HeaderChrome.HeaderClass);
             // 16px is the size GTK's own header-bar icons are, and the art is
             // held legible at it by build_app_icon.py's four floors. Margins in
             // code rather than in HeaderChrome's stylesheet: that is a string
@@ -155,8 +178,39 @@ internal sealed class MainWindow : IDesktopBridge
         _splash.SetVexpand(true);
         _splash.SetHexpand(true);
 
+        // A GtkLabel does not wrap unless it is told to, and it asks for its
+        // full natural width — so `Fail()` putting an exception message in here
+        // set the WINDOW's minimum width to the length of that message. A
+        // `HttpRequestException` naming a long URL, or a socket error with an
+        // address and a port, made a window nothing could shrink and that on a
+        // small screen opened wider than the monitor. SetupWindow already wraps
+        // both of its labels; this one was missed.
+        //
+        // Selectable because this is the only place the reason a client will
+        // not start is ever shown, and the reader's next step is usually to
+        // paste it somewhere. It costs a caret in the splash and nothing else.
+        _splash.SetWrap(true);
+        _splash.SetJustify(Gtk.Justification.Center);
+        _splash.SetMaxWidthChars(60);
+        _splash.SetSelectable(true);
+
         _stack.AddNamed(_splash, "splash");
         _stack.SetVexpand(true);
+
+        // The floor the Windows client has always had (`MainForm.MinimumSize`)
+        // and this one was missing. Not cosmetic: a GtkWindow's minimum is
+        // whatever its children need, a WebKitWebView asks for nothing, and the
+        // update strip's label ellipsizes — so the window could be dragged down
+        // to about the width of the header bar's buttons. At or below 720 the
+        // SPA crosses its own mobile breakpoint and re-lays out as a phone
+        // inside a desktop window, and `.shell` is `overflow: hidden`, so what
+        // does not fit is clipped rather than scrolled.
+        //
+        // On the STACK, which is what holds the web view, so the number is the
+        // page's own viewport rather than the window's outer size. GTK
+        // propagates a child's minimum up, so the window still cannot be
+        // dragged below it.
+        _stack.SetSizeRequest(MinPageWidth, MinPageHeight);
         _stack.SetVisibleChildName("splash");
 
         _banner = new UpdateBanner(settings, () => _window.Close());
@@ -196,8 +250,18 @@ internal sealed class MainWindow : IDesktopBridge
 
         // Built into locals and published to the fields only at the end, so a
         // start this one has overtaken can dispose exactly what it made.
+        //
+        // The VIEW is out here with them, and that is not tidiness. It used to
+        // be declared inside the try, so the catch below could not see it —
+        // and once `WebHost.Dispose` began tearing down the NetworkSession,
+        // `host?.Dispose()` in that catch destroyed a session the surviving
+        // view still holds as a construct property. A failed `SeedAsync` (a
+        // server that is down, a password the server rejects) is the ordinary
+        // way to get there, so the commonest failure path was the one that
+        // disposed out of order AND leaked the view.
         LocalServer? server = null;
         WebHost? host = null;
+        WebKit.WebView? view = null;
 
         try
         {
@@ -244,6 +308,7 @@ internal sealed class MainWindow : IDesktopBridge
             ApplyIcon();
 
             var web = host.NewView(chromeless: false);
+            view = web;
             web.SetVexpand(true);
             Notifications.Attach(web, _app, _settings);
 
@@ -263,12 +328,19 @@ internal sealed class MainWindow : IDesktopBridge
                 // version of this (`_starting`, disposed from Shutdown) turned
                 // a leak into a double dispose.
                 server.Dispose();
-                host.Dispose();
-                // Explicitly: GirCore pins the wrapper, so an unparented view
-                // is not reclaimed by GC. It spawns no web process (nothing
-                // loaded it), but the GObject and its ref on the shared
+                // The VIEW first, then the host. Explicitly disposed because
+                // GirCore pins the wrapper, so an unparented view is not
+                // reclaimed by GC: it spawns no web process (nothing loaded
+                // it), but the GObject and its ref on the shared
                 // NetworkSession live for the rest of the process.
+                //
+                // The order is the same invariant Shutdown states, and it
+                // became load-bearing when `WebHost.Dispose` started releasing
+                // the session — this path had host first, which disposed a
+                // session the view beneath it was still holding.
                 web.Dispose();
+                view = null;
+                host.Dispose();
                 return;
             }
 
@@ -300,10 +372,14 @@ internal sealed class MainWindow : IDesktopBridge
             // owns, and past this line it owns nothing.
             server = null;
             host = null;
+            view = null;
         }
         catch (Exception ex)
         {
             server?.Dispose();
+            // View before host, for the reason the abandoned-start path above
+            // gives: the host owns the NetworkSession and the view holds it.
+            view?.Dispose();
             host?.Dispose();
             Program.Log(_settings, ex);
             if (generation == _generation) Fail(ex.Message);
@@ -406,6 +482,21 @@ internal sealed class MainWindow : IDesktopBridge
         {
             _web = null;
             _stack.Remove(web);
+            // AND disposed, which is the half that was missing. Removing it
+            // drops the STACK's reference; GirCore's wrapper holds one of its
+            // own, and StartAsync's abandoned-start path 140 lines up already
+            // says so in as many words ("GirCore pins the wrapper, so an
+            // unparented view is not reclaimed by GC") and calls Dispose for
+            // exactly that reason. This path did not, so the leak the comment
+            // describes was still live on the commonest route to it: every
+            // `--setup` save runs Shutdown and then StartAsync, and each one
+            // left a WebKitWebProcess behind holding the old page.
+            //
+            // Before `_host`, deliberately. The view holds a reference to the
+            // NetworkSession the host owns, and disposing the session out from
+            // under a live view would be the one ordering that is worse than
+            // leaking.
+            web.Dispose();
         }
 
         _host?.Dispose();
@@ -428,7 +519,7 @@ internal sealed class MainWindow : IDesktopBridge
 
     private void ApplyChrome(string? background)
     {
-        var colour = Theme.ParseHex(background);
+        var colour = Theme.ParseColour(background);
         if (colour is { } value) HeaderChrome.Apply(_window.GetDisplay(), value);
         else HeaderChrome.Reset(_window.GetDisplay());
     }
@@ -578,7 +669,16 @@ internal sealed class MainWindow : IDesktopBridge
         // send; without it, each one queued a closure on the GTK main loop that
         // repainted two windows and wrote settings.json, for a colour that had
         // not moved.
-        var value = Theme.ParseHex(background) is null ? "" : background!.Trim();
+        //
+        // What is STORED is the parsed colour re-rendered as `#RRGGBB`, not the
+        // string the page sent. Two reasons, and the second is the one that
+        // bites: settings.json then holds one spelling whatever the page's
+        // theme is authored in, so everything downstream — FloatWindow's
+        // re-read, the next launch's pre-paint colour — has a single shape to
+        // handle; and the comparison above becomes a comparison of COLOURS
+        // rather than of spellings, so a page that switches between `#abc` and
+        // `#AABBCC` for the same theme stops rewriting the file on every send.
+        var value = Theme.ParseColour(background) is { } parsed ? Chrome.Hex(parsed) : "";
         if (value == _settings.TitleBarColor) return;
 
         _settings.TitleBarColor = value;

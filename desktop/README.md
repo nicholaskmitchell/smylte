@@ -22,7 +22,7 @@ they differ, they differ in a column.
 | Asset | `Smylte.exe` | `Smylte-linux-x86_64` |
 | Title bar | painted via `DwmSetWindowAttribute` | drawn by the app, a `GtkHeaderBar`, or handed back |
 | Password at rest | DPAPI | AES-GCM under a 0600 key file |
-| Floating window stays on top | yes | on X11, which is the default; see below |
+| Floating window stays on top | yes | on X11 only, and Wayland is now the default; see below |
 
 ## What it does and does not make faster
 
@@ -356,6 +356,13 @@ so that dialog is a preview of what you would get. On Windows it means only that
 the caption stops following the app's `--bg` — that strip was always the OS's
 and all the client ever did was tint it.
 
+One wrinkle, because it bit: on a compositor that draws no server-side frames —
+GNOME on Wayland, which is most of them — GTK builds a default header bar for
+the window itself rather than leaving it bare. That widget is a `GtkHeaderBar`
+like ours, so the stylesheet that paints ours used to reach it too, and the
+setting appeared to do nothing on the one desktop it was written for. The rules
+carry a class now, so they can only reach the strip the client owns.
+
 It applies immediately on Windows. On Linux it takes effect **the next time the
 client starts**, and that is GTK rather than laziness: `gtk_window_set_titlebar`
 on a window that is already on screen warns and does nothing, and the only way
@@ -496,26 +503,49 @@ and every reader treats absence as the old behaviour.
 
 Staying above other windows, opening where it was left, and keeping out of the
 task list are all EWMH — twenty years old, honoured by every window manager, and
-absent from Wayland with no extension GNOME implements. So the Linux client asks
-for X11 before GDK looks, and does those three through `libX11` by hand.
+absent from Wayland with no extension GNOME implements. The Linux client can
+have all three by asking for X11 before GDK looks and doing them through
+`libX11` by hand, and for a while it did that by default.
+
+**It no longer does, and the reason is the other 99% of the window.** Asking for
+X11 on a Wayland session means XWayland, and XWayland has ONE scale factor for
+the whole display. A desk with a HiDPI laptop panel and an ordinary external
+monitor cannot be served correctly by one number, so one of the two screens is
+always wrong; and under fractional scaling the compositor renders the surface at
+an integer scale and stretches the bitmap rather than letting it re-render, so
+text blurs instead of re-hinting. The old fallback only cleared the request when
+`DISPLAY` was unset — which on a Wayland session with XWayland it never is — so
+that was not an edge case. It was every GNOME Wayland user, permanently, paying
+for three properties of one optional window with a soft main window on every
+monitor they own.
 
 ```jsonc
 // ~/.config/Smylte/settings.json
-"Backend": "x11"        // the default
-"Backend": "wayland"    // crisper at a fractional scale; see the table
+"Backend": "auto"       // the default: GDK picks, which means Wayland where there is one
+"Backend": "x11"        // the three properties below, at the cost of the row after them
+"Backend": "wayland"    // never XWayland, even if something else would have chosen it
 ```
 
-| | X11 (default) | Wayland |
+| | X11 | Wayland (default where available) |
 | --- | --- | --- |
-| Stays on top | yes | **no** — the pin control is absent, and Appearance says why |
+| Stays on top | yes | **no** — the pin control is absent, and Settings → Desktop says why |
 | Reopens where it was | yes | no; the compositor places it, and the saved position is left alone so switching back restores it |
 | Out of the task list | yes | no; it gets its own entry |
 | Drag and resize | yes | yes |
-| Crisp at a fractional scale | XWayland can look soft | yes |
+| Two monitors at different scales | **one scale for both; one of them is wrong** | each at its own |
+| Crisp at a fractional scale | **no — the compositor stretches the bitmap** | yes |
 
-Asking for X11 where there is no X server would be worse than not asking — GDK
-does not fall back when the variable is set, it fails to open the display — so a
-session with no `DISPLAY` quietly clears it and runs Wayland-native instead.
+An installed client that already had `"Backend": "x11"` written into its
+settings.json is promoted to `auto` once, because `Save()` writes every field —
+so a changed default would otherwise reach new installs only, and the machines
+with the problem are the ones already running. `SettingsVersion` records that it
+happened, so setting `x11` back afterwards sticks.
+
+Neither explicit value is handed to GDK when the session cannot provide it.
+Asking for a backend GDK cannot open is worse than not asking — it does not fall
+back when the variable is set, it fails to open the display and the process dies
+before it can draw anything to say so — so `"x11"` with no `DISPLAY`, and
+`"wayland"` with no `WAYLAND_DISPLAY`, both fall through to `auto`.
 
 One more escape hatch, for a machine where WebKitGTK's DMA-BUF renderer paints
 nothing at all — a window frame around a white rectangle, with no error

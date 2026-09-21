@@ -8,14 +8,18 @@ namespace Smylte.Desktop;
 /// the two agree to the second and either can be closed without the other
 /// losing anything.
 ///
-/// **Three of its four properties are X11-only, and that is why the client asks
-/// for X11.** Staying above other windows, opening where it was left, and
-/// keeping out of the task list are all EWMH, all honoured by every window
-/// manager, and all absent from Wayland with no extension GNOME implements.
-/// Under `"Backend": "wayland"` the window still opens, still drags, still
-/// resizes and still docks — it just cannot do those three, and the page is
-/// told so through `canPin` rather than being left with a control that does
-/// nothing.
+/// **Three of its four properties are X11-only, and the client no longer asks
+/// for X11 to get them.** Staying above other windows, opening where it was
+/// left, and keeping out of the task list are all EWMH, all honoured by every
+/// window manager, and all absent from Wayland with no extension GNOME
+/// implements. Forcing X11 bought them at the price of XWayland for the whole
+/// app — one scale factor for every monitor, and a stretched bitmap under
+/// fractional scaling — so `Backend` now defaults to `auto` and these three are
+/// what `"Backend": "x11"` is for. See DisplayBackend.
+///
+/// Under Wayland the window still opens, still drags, still resizes and still
+/// docks — it just cannot do those three, and the page is told so through
+/// `canPin` rather than being left with a control that does nothing.
 ///
 /// **The drag is the host's, not the page's.** On Windows the WebView2 runtime
 /// answers the hit test from the page's `app-region: drag` regions and moves
@@ -102,6 +106,30 @@ internal sealed class FloatWindow
         _window.OnCloseRequest += (_, _) =>
         {
             Remember();
+            // The view, explicitly, for the reason MainWindow's Shutdown gives:
+            // GirCore pins the wrapper, so destroying the window drops the
+            // CONTAINER's reference and leaves the WebKitWebProcess alive with
+            // the page still in it. Open the focus window and dock it ten times
+            // and ten of them are running.
+            //
+            // It also defeated the fix in WebHost.Dispose: a surviving view
+            // keeps a reference on the shared NetworkSession, so disposing the
+            // host did not release `cookies.sqlite` and the next `--setup` save
+            // still opened a second session on the same profile directory.
+            //
+            // Before `_onClosed`, which hands control back to MainWindow and
+            // may present the main window — nothing after this line is
+            // guaranteed to run before the next thing touches the host.
+            //
+            // Unparented first, exactly as MainWindow.Shutdown does it. A
+            // wrapper disposed while its widget is still in a container leaves
+            // the parent holding a live widget whose managed side is gone, and
+            // this one has an `OnNotify` handler on it that reads `_web` — so a
+            // title change arriving during teardown would touch a disposed
+            // handle. Removing first means the last reference goes with the
+            // Dispose and no signal can follow it.
+            _ring.Remove(_web);
+            _web.Dispose();
             _onClosed();
             return false;
         };
@@ -140,7 +168,7 @@ internal sealed class FloatWindow
         // The ring's colour follows the app's own --bg, which is the same value
         // the main window's header is painted with — the stylesheet is shared,
         // so a theme change reaches here through the same bridge call.
-        var colour = Theme.ParseHex(_settings.TitleBarColor);
+        var colour = Theme.ParseColour(_settings.TitleBarColor);
         if (colour is { } value) HeaderChrome.Apply(_window.GetDisplay(), value);
     }
 
@@ -265,41 +293,60 @@ internal sealed class FloatWindow
     private int RestoredWidth => _settings.FloatWidth > 0 ? _settings.FloatWidth : OpenWidth;
     private int RestoredHeight => _settings.FloatHeight > 0 ? _settings.FloatHeight : OpenHeight;
 
+    /// The value FloatX and FloatY carry when the window has never been placed.
+    ///
+    /// A named sentinel rather than "anything negative", which is what this
+    /// used to test. Negative is a legitimate position: a window dragged so its
+    /// left edge or its title row sits just off the screen has one, X11 reports
+    /// it faithfully, `Remember` stores it — and then `Restore` refused to put
+    /// the window back, because the guard could not tell a real -12 from the
+    /// default. `IsOnAScreen` is what actually decides whether a position is
+    /// reachable, and it handles negatives correctly.
+    ///
+    /// EITHER axis carrying it means unplaced, not both. The two fields default
+    /// independently (Settings.cs), so a hand-edited file, one half-written by
+    /// an older build, or a window genuinely at x = -1 all produce a mixed
+    /// pair — and requiring both would let the sentinel through as a
+    /// coordinate and move the window to logical -1. The cost is that a real
+    /// position of exactly -1 on one axis is not restored, which is one pixel
+    /// of one edge case against reading a sentinel as a position.
+    private const int Unplaced = -1;
+
     /// Put it back where it was, once there is a window to move.
     private void Restore()
     {
         if (!X11Window.Active) return;                       // the compositor places it
-        if (_settings.FloatX < 0 || _settings.FloatY < 0) return;
+        if (_settings.FloatX == Unplaced || _settings.FloatY == Unplaced) return;
         if (!OnAScreen(_settings.FloatX, _settings.FloatY, RestoredWidth, RestoredHeight)) return;
 
         X11Window.Move(_window, _settings.FloatX, _settings.FloatY);
     }
 
-    /// Would a window at this rectangle be reachable? The Windows client asks
-    /// each screen's WORKING area; GTK4 removed `gdk_monitor_get_workarea`, so
-    /// this asks the monitor's geometry instead. The difference is a window
-    /// that could land under a panel rather than off the screen entirely, which
-    /// is a nuisance the user can drag out of rather than a window they cannot
-    /// reach.
+    /// Would a window at this rectangle be reachable?
+    ///
+    /// Logical pixels throughout — `Gdk.Monitor.GetGeometry` is logical, and
+    /// X11Window now converts at its own boundary so the position handed in is
+    /// too. The arithmetic itself is `FloatPlacement.IsOnAScreen`, which is
+    /// unit-tested; what is left here is reading the monitor list, which is not
+    /// something a test can stand up.
     private bool OnAScreen(int x, int y, int width, int height)
     {
         try
         {
-            var monitors = _window.GetDisplay().GetMonitors();
-            for (uint i = 0; i < monitors.GetNItems(); i++)
+            var list = _window.GetDisplay().GetMonitors();
+            var rects = new List<ScreenRect>();
+            for (uint i = 0; i < list.GetNItems(); i++)
             {
-                if (monitors.GetObject(i) is not Gdk.Monitor monitor) continue;
+                if (list.GetObject(i) is not Gdk.Monitor monitor) continue;
                 monitor.GetGeometry(out var area);
-                var overlapX = Math.Min(x + width, area.X + area.Width) - Math.Max(x, area.X);
-                var overlapY = Math.Min(y + height, area.Y + area.Height) - Math.Max(y, area.Y);
-                if (overlapX >= 40 && overlapY >= 40) return true;
+                rects.Add(new ScreenRect(area.X, area.Y, area.Width, area.Height));
             }
+            return FloatPlacement.IsOnAScreen(x, y, width, height, rects);
         }
         catch (Exception)
         {
             return false;
         }
-        return false;
     }
 
     private void Remember()

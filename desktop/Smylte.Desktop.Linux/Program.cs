@@ -34,27 +34,34 @@ internal static class Program
         if (args.Any(a => a.Equals("--check", StringComparison.OrdinalIgnoreCase)))
             return Check();
 
-        // The display backend, chosen before GDK looks. See Settings.Backend for
-        // why X11 is the default; the short version is that three of the
-        // floating window's four properties have no Wayland protocol an
-        // ordinary client can use.
-        var backend = settings.Backend?.Trim().ToLowerInvariant();
-
-        // Asking for X11 when there is no X server to ask is worse than not
-        // asking: GDK does not fall back when GDK_BACKEND is set explicitly, it
-        // fails to open the display and the process dies with `cannot open
-        // display` — for a DEFAULT setting, on a Wayland session that simply
-        // has no XWayland. DISPLAY is the cheap, reliable tell: XWayland sets
-        // it, and a session without one does not.
-        if (backend == "x11" && string.IsNullOrEmpty(Environment.GetEnvironmentVariable("DISPLAY")))
-            backend = null;
+        // The display backend, chosen before GDK looks. DisplayBackend carries
+        // the whole argument, including why the default stopped being a flat
+        // "x11" — the short version is that forcing XWayland to buy three
+        // properties of the floating window cost every Wayland user a blurry,
+        // single-scale main window on every monitor they own.
+        var wayland = Environment.GetEnvironmentVariable("WAYLAND_DISPLAY");
+        var display = Environment.GetEnvironmentVariable("DISPLAY");
+        var backend = DisplayBackend.Choose(settings.Backend, wayland, display);
 
         // NativeEnv, not Environment.SetEnvironmentVariable — see that file.
         // The managed API writes a dictionary the runtime keeps to itself; GDK
         // reads getenv(3), so this asked for X11 and silently got whatever GDK
         // would have chosen anyway.
-        if (backend is "x11" or "wayland")
+        if (backend is not null)
             NativeEnv.Set("GDK_BACKEND", backend);
+
+        // Said out loud, once, because this one line decides how the whole app
+        // renders and the two ways it goes wrong are both invisible from
+        // inside: "my text is blurry on one monitor" is XWayland, and "the
+        // floating window lost its pin" is Wayland-native. Neither report can
+        // be acted on without knowing which was chosen, and the user cannot
+        // read it off anything.
+        //
+        // stderr only, and not the error log: this is the happy path, and
+        // running the binary from a terminal is what the README already tells
+        // anyone diagnosing it to do.
+        Console.Error.WriteLine(
+            $"Smylte: display backend {DisplayBackend.Describe(backend, wayland, display)}");
 
         // WebKitGTK's DMA-BUF renderer draws nothing at all on the NVIDIA
         // proprietary driver: the window and its header bar appear, the page
@@ -272,9 +279,23 @@ internal static class Program
         return app.RunWithSynchronizationContext(args);
     }
 
+    /// How large errors.log may get before it is started again. A stack trace
+    /// is a couple of kilobytes, so this is hundreds of them — far more than
+    /// anyone reporting a problem will read, and small enough that a client
+    /// looping on a failing signal handler cannot fill a disk with it.
+    private const long LogLimit = 256 * 1024;
+
     /// Somewhere to put what went wrong, since there is no Event Viewer and a
-    /// launcher swallows stderr. Bounded to the last run: this is a breadcrumb
-    /// for someone reporting a problem, not a log to grow forever.
+    /// launcher swallows stderr. A breadcrumb for someone reporting a problem,
+    /// not a log to grow forever.
+    ///
+    /// It said that second sentence already and did not do it: `AppendAllText`
+    /// with nothing trimming the file. Every handler in this client routes here
+    /// — that is the whole point of the GLib.UnhandledException handler — so a
+    /// signal that throws on every frame writes a stack trace on every frame,
+    /// into the user's data folder, unbounded. Rotated rather than truncated so
+    /// the run that is failing right now cannot be the one whose evidence is
+    /// thrown away.
     internal static void Log(Settings settings, Exception ex)
     {
         Console.Error.WriteLine(ex);
@@ -282,8 +303,19 @@ internal static class Program
         {
             var dir = string.IsNullOrEmpty(settings.DataFolder) ? Path.GetTempPath() : settings.DataFolder;
             Directory.CreateDirectory(dir);
-            File.AppendAllText(Path.Combine(dir, "errors.log"),
-                $"{DateTime.UtcNow:O}  {ex}{Environment.NewLine}");
+            var path = Path.Combine(dir, "errors.log");
+
+            var file = new FileInfo(path);
+            if (file.Exists && file.Length > LogLimit)
+            {
+                // One generation back, replaced each time. Two files bounded at
+                // the limit is the whole budget; `File.Move` with overwrite is
+                // atomic, so there is no window with neither.
+                try { File.Move(path, path + ".1", overwrite: true); }
+                catch (Exception) { File.Delete(path); }
+            }
+
+            File.AppendAllText(path, $"{DateTime.UtcNow:O}  {ex}{Environment.NewLine}");
         }
         catch (Exception) { /* the report is a nicety; staying up is not */ }
     }

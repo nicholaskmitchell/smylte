@@ -85,8 +85,10 @@ internal static class WindowChrome
     /// than an error.
     private static int ToColorRef(Color c) => c.R | (c.G << 8) | (c.B << 16);
 
-    /// Kept as a forwarder rather than deleted, because every caller here reads
-    /// `WindowChrome.ParseHex` and this file is the one they already know. The
-    /// implementation moved to Theme.cs so the Linux client can link it.
-    public static Color? ParseHex(string? hex) => Theme.ParseHex(hex);
+    // The `ParseHex` forwarder that used to sit here is gone rather than
+    // widened. It existed so callers in this file's neighbourhood could keep
+    // reading `WindowChrome.ParseHex`, and the colour the page sends is no
+    // longer only hex — so the familiar name had become the wrong one, which is
+    // worse than an unfamiliar right one. Everything calls `Theme.ParseColour`
+    // now, on both clients.
 }
