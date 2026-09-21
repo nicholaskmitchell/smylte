@@ -243,7 +243,14 @@ public sealed class Settings
     /// restarted would have their edit silently undone, every time, with the
     /// floating window's pin never coming back and nothing anywhere saying
     /// why.
-    private bool Migrate()
+    /// `internal`, so the test project — which LINKS this file rather than
+    /// referencing it, so `internal` is visible — can exercise the promotion
+    /// without going near the filesystem. That is not a convenience: on Windows
+    /// `ConfigHome` resolves `%APPDATA%` through the shell and ignores the XDG
+    /// variables a test can set, so a filesystem-based test of this has no way
+    /// to isolate itself there and would read and write the real installed
+    /// client's settings.json.
+    internal bool Migrate()
     {
         var before = SettingsVersion;
 
