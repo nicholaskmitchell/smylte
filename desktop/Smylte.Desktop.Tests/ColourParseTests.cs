@@ -107,6 +107,16 @@ public sealed class ColourParseTests
         // down.
         Reads("rgb(300, -20, 16)", 255, 0, 16);
         Reads("color(srgb 2 -1 0.5)", 255, 0, 128);
+
+        // Alpha too. Not a bug that shipped — the two early-outs it replaced
+        // covered these — but the invariant is worth pinning, because the
+        // blend is a linear interpolation and therefore EXTRAPOLATES rather
+        // than saturating: anyone who later routes an out-of-range alpha
+        // straight into `Chrome.Over` gets 5*0 - 4*255, not the opaque black
+        // CSS specifies.
+        Reads("rgba(0, 0, 0, 5)", 0, 0, 0);
+        Reads("rgba(0, 0, 0, -1)", 255, 255, 255);
+        Reads("rgba(255, 255, 255, -3)", 255, 255, 255);
     }
 
     [Fact]

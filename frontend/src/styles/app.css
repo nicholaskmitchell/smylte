@@ -3055,9 +3055,28 @@
 /* The one number on the screen. Fraunces at its display cut — the reverse of
    the eink rule in display.css, and for the reverse reason: this is a laptop,
    the hairlines survive, and a clock this size is the whole point of the page. */
+/* These were bare literals, which meant the focus surface ignored --fs-scale
+   outright — every other font-size in the app is `calc(<literal> *
+   var(--fs-scale))` and these were the hole in it.
+
+   Two things about how they scale now, both measured rather than reasoned.
+
+   Only the PX ENDPOINTS take the multiplier; the `vw`/`vh` preferred value
+   does not. --fs-scale is a type multiplier and a viewport unit is a layout
+   length that already tracks its container, so multiplying both is a double
+   count.
+
+   And the `[data-float]` overrides further down deliberately do NOT scale at
+   all. That surface is a window whose size the HOST owns — 420x280 opening,
+   320x200 at the floor — and its face is tuned to fill it exactly: measured in
+   Chromium, `.focus-main` fits at --fs-scale 1.05 and overflows at 1.1, with
+   no headroom anywhere in the range. A type multiplier cannot apply to a
+   fixed-size surface without the window growing with it, and the window is not
+   the page's to grow. `layout.browser.test.tsx` pins that the float face fits
+   across the whole 0.8-1.4 range, which is only true because of this. */
 .focus-clock {
   font-family: var(--serif); font-weight: 500; font-variation-settings: "opsz" 144;
-  font-size: clamp(calc(56px * var(--fs-scale)), calc(18vw * var(--fs-scale)), calc(168px * var(--fs-scale)));
+  font-size: clamp(calc(56px * var(--fs-scale)), 18vw, calc(168px * var(--fs-scale)));
   line-height: 1; letter-spacing: -0.02em;
 }
 .focus[data-state="paused"] .focus-clock,
@@ -3071,7 +3090,7 @@
 }
 .focus-now__title {
   margin: 0; font-family: var(--serif); font-weight: 500; letter-spacing: -0.01em;
-  font-size: clamp(calc(24px * var(--fs-scale)), calc(5vw * var(--fs-scale)), calc(56px * var(--fs-scale)));
+  font-size: clamp(calc(24px * var(--fs-scale)), 5vw, calc(56px * var(--fs-scale)));
   line-height: 1.12; overflow-wrap: anywhere;
   display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden;
 }
@@ -3110,7 +3129,7 @@
   padding: 12px var(--gutter); border-top: 1px solid var(--rule-faint);
   padding-bottom: calc(12px + env(safe-area-inset-bottom));
 }
-.focus-empty { margin: 0; font-family: var(--serif); font-size: clamp(calc(20px * var(--fs-scale)), calc(3vw * var(--fs-scale)), calc(32px * var(--fs-scale))); font-weight: 500; }
+.focus-empty { margin: 0; font-family: var(--serif); font-size: clamp(calc(20px * var(--fs-scale)), 3vw, calc(32px * var(--fs-scale))); font-weight: 500; }
 .focus-hint { margin: 0; font-size: calc(13px * var(--fs-scale)); color: var(--fg-muted); line-height: 1.4; max-width: 48ch; }
 
 /* The way in, in Today's header. `flex: none; align-self: center` is declared
@@ -3177,9 +3196,9 @@
 .focus[data-float] .focus-head { padding: 6px 10px; gap: 8px; }
 .focus[data-float] .focus-head .btn { padding: 4px 8px; }
 .focus[data-float] .focus-main { padding: 6px 12px; gap: 4px; max-width: none; }
-.focus[data-float] .focus-clock { font-size: clamp(calc(32px * var(--fs-scale)), calc(16vh * var(--fs-scale)), calc(56px * var(--fs-scale))); }
+.focus[data-float] .focus-clock { font-size: clamp(32px, 16vh, 56px); }
 .focus[data-float] .focus-now { gap: 4px; }
-.focus[data-float] .focus-now__title { font-size: clamp(calc(15px * var(--fs-scale)), calc(6.5vh * var(--fs-scale)), calc(22px * var(--fs-scale))); -webkit-line-clamp: 2; }
+.focus[data-float] .focus-now__title { font-size: clamp(15px, 6.5vh, 22px); -webkit-line-clamp: 2; }
 .focus[data-float] .focus-actions { margin-top: 4px; }
 .focus[data-float] .focus-actions .btn { padding: 6px 10px; }
 .focus[data-float] .focus-next {

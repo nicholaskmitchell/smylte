@@ -8,14 +8,18 @@ namespace Smylte.Desktop;
 /// the two agree to the second and either can be closed without the other
 /// losing anything.
 ///
-/// **Three of its four properties are X11-only, and that is why the client asks
-/// for X11.** Staying above other windows, opening where it was left, and
-/// keeping out of the task list are all EWMH, all honoured by every window
-/// manager, and all absent from Wayland with no extension GNOME implements.
-/// Under `"Backend": "wayland"` the window still opens, still drags, still
-/// resizes and still docks — it just cannot do those three, and the page is
-/// told so through `canPin` rather than being left with a control that does
-/// nothing.
+/// **Three of its four properties are X11-only, and the client no longer asks
+/// for X11 to get them.** Staying above other windows, opening where it was
+/// left, and keeping out of the task list are all EWMH, all honoured by every
+/// window manager, and all absent from Wayland with no extension GNOME
+/// implements. Forcing X11 bought them at the price of XWayland for the whole
+/// app — one scale factor for every monitor, and a stretched bitmap under
+/// fractional scaling — so `Backend` now defaults to `auto` and these three are
+/// what `"Backend": "x11"` is for. See DisplayBackend.
+///
+/// Under Wayland the window still opens, still drags, still resizes and still
+/// docks — it just cannot do those three, and the page is told so through
+/// `canPin` rather than being left with a control that does nothing.
 ///
 /// **The drag is the host's, not the page's.** On Windows the WebView2 runtime
 /// answers the hit test from the page's `app-region: drag` regions and moves
@@ -102,6 +106,30 @@ internal sealed class FloatWindow
         _window.OnCloseRequest += (_, _) =>
         {
             Remember();
+            // The view, explicitly, for the reason MainWindow's Shutdown gives:
+            // GirCore pins the wrapper, so destroying the window drops the
+            // CONTAINER's reference and leaves the WebKitWebProcess alive with
+            // the page still in it. Open the focus window and dock it ten times
+            // and ten of them are running.
+            //
+            // It also defeated the fix in WebHost.Dispose: a surviving view
+            // keeps a reference on the shared NetworkSession, so disposing the
+            // host did not release `cookies.sqlite` and the next `--setup` save
+            // still opened a second session on the same profile directory.
+            //
+            // Before `_onClosed`, which hands control back to MainWindow and
+            // may present the main window — nothing after this line is
+            // guaranteed to run before the next thing touches the host.
+            //
+            // Unparented first, exactly as MainWindow.Shutdown does it. A
+            // wrapper disposed while its widget is still in a container leaves
+            // the parent holding a live widget whose managed side is gone, and
+            // this one has an `OnNotify` handler on it that reads `_web` — so a
+            // title change arriving during teardown would touch a disposed
+            // handle. Removing first means the last reference goes with the
+            // Dispose and no signal can follow it.
+            _ring.Remove(_web);
+            _web.Dispose();
             _onClosed();
             return false;
         };
@@ -274,13 +302,21 @@ internal sealed class FloatWindow
     /// the window back, because the guard could not tell a real -12 from the
     /// default. `IsOnAScreen` is what actually decides whether a position is
     /// reachable, and it handles negatives correctly.
+    ///
+    /// EITHER axis carrying it means unplaced, not both. The two fields default
+    /// independently (Settings.cs), so a hand-edited file, one half-written by
+    /// an older build, or a window genuinely at x = -1 all produce a mixed
+    /// pair — and requiring both would let the sentinel through as a
+    /// coordinate and move the window to logical -1. The cost is that a real
+    /// position of exactly -1 on one axis is not restored, which is one pixel
+    /// of one edge case against reading a sentinel as a position.
     private const int Unplaced = -1;
 
     /// Put it back where it was, once there is a window to move.
     private void Restore()
     {
         if (!X11Window.Active) return;                       // the compositor places it
-        if (_settings.FloatX == Unplaced && _settings.FloatY == Unplaced) return;
+        if (_settings.FloatX == Unplaced || _settings.FloatY == Unplaced) return;
         if (!OnAScreen(_settings.FloatX, _settings.FloatY, RestoredWidth, RestoredHeight)) return;
 
         X11Window.Move(_window, _settings.FloatX, _settings.FloatY);

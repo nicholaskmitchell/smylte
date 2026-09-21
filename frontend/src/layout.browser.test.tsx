@@ -862,6 +862,47 @@ describe('the floating window fits its face', () => {
     expect(title.h).toBeLessThanOrEqual(15 * 1.12 + 2)
   })
 
+  // --fs-scale and the focus surface, both halves of it.
+  //
+  // The surface used to ignore the setting outright: every font-size in it was
+  // a bare literal while every other font-size in the app is
+  // `calc(<literal> * var(--fs-scale))`. Fixing that is right for the
+  // full-window view and WRONG for the floating one, and this pins both
+  // answers so neither can be "tidied" into the other.
+  //
+  // The floating window's size belongs to the HOST — 420x280 opening, 320x200
+  // at the floor — and its face is tuned to fill it exactly. Measured in
+  // Chromium, `.focus-main` fits at 1.05 and overflows at 1.1: there is no
+  // headroom anywhere in the 0.8-1.4 range, so a type multiplier there can
+  // only push the face into the scroll `.focus-main` already provides. The
+  // full-window view has a real viewport and grows honestly.
+  it('does not let the type scale into a window the page cannot grow', async () => {
+    const size = async (scale: number) => {
+      document.body.innerHTML = ''
+      await viewport(408, 268)
+      const host = await mount(
+        FLOAT_FACE().replace('class="focus"', `class="focus" style="--fs-scale: ${scale}"`))
+      return getComputedStyle(host.querySelector('.focus-clock')!).fontSize
+    }
+    const [small, one, large] = [await size(0.8), await size(1), await size(1.4)]
+    expect(small).toBe(one)
+    expect(large).toBe(one)
+  })
+
+  it('does let it scale the full-window focus view, which has room', async () => {
+    const size = async (scale: number) => {
+      document.body.innerHTML = ''
+      await viewport(1280, 860)
+      // The same face WITHOUT data-float: the full-window view, where
+      // `.focus-main` is a real viewport rather than a fixed host window.
+      const host = await mount(
+        FLOAT_FACE().replace(' data-float=""', '').replace('class="focus"', `class="focus" style="--fs-scale: ${scale}"`))
+      return parseFloat(getComputedStyle(host.querySelector('.focus-clock')!).fontSize)
+    }
+    expect(await size(1.4)).toBeGreaterThan(await size(1))
+    expect(await size(0.8)).toBeLessThan(await size(1))
+  })
+
   it('keeps the four-button row of an ended interval inside the window', async () => {
     for (const [w, h] of [[408, 268], [308, 188]] as const) {
       document.body.innerHTML = ''

@@ -50,6 +50,19 @@ internal static class Program
         if (backend is not null)
             NativeEnv.Set("GDK_BACKEND", backend);
 
+        // Said out loud, once, because this one line decides how the whole app
+        // renders and the two ways it goes wrong are both invisible from
+        // inside: "my text is blurry on one monitor" is XWayland, and "the
+        // floating window lost its pin" is Wayland-native. Neither report can
+        // be acted on without knowing which was chosen, and the user cannot
+        // read it off anything.
+        //
+        // stderr only, and not the error log: this is the happy path, and
+        // running the binary from a terminal is what the README already tells
+        // anyone diagnosing it to do.
+        Console.Error.WriteLine(
+            $"Smylte: display backend {DisplayBackend.Describe(backend, wayland, display)}");
+
         // WebKitGTK's DMA-BUF renderer draws nothing at all on the NVIDIA
         // proprietary driver: the window and its header bar appear, the page
         // area stays white, and no error is printed anywhere. It is the single

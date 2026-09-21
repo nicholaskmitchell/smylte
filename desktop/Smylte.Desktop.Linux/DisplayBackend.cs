@@ -73,15 +73,17 @@ internal static class DisplayBackend
             // requested backend this session cannot give. An unknown string is
             // here too: this is a hand-edited field with no UI, and a typo
             // should cost the preference rather than the window.
+            //
+            // One answer for all of them, and it is "say nothing":
+            //
+            //   * With Wayland reachable, GDK picks it already — which is what
+            //     we want, for native per-monitor and fractional scaling with
+            //     no XWayland blur — so naming it would only cost the fallback.
+            //   * With only an X server, naming x11 changes nothing GDK would
+            //     not do anyway, and costs the same fallback.
+            //   * With neither, nothing here can help; NativeCheck and GDK's
+            //     own failure say it far better than a guess would.
             default:
-                // Wayland is reachable, so GDK will pick it and we want it to:
-                // native per-monitor and fractional scaling, no XWayland blur.
-                if (hasWayland) return null;
-                // No Wayland but an X server: naming it changes nothing GDK
-                // would not do, so say nothing and keep GDK's fallback.
-                if (hasX11) return null;
-                // Neither. Nothing here can help; NativeCheck and GDK's own
-                // failure will say so far better than a guess would.
                 return null;
         }
     }

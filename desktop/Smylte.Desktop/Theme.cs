@@ -198,16 +198,33 @@ internal static class Theme
             : null;
     }
 
-    /// Clamp to the byte range CSS clamps to, and composite any alpha over
-    /// white. Shares `Chrome.Over` so "what does translucent mean here" has one
-    /// answer in the codebase rather than two.
+    /// What an opaque backdrop means here: CSS says the canvas beneath the root
+    /// element is white, and `--bg` is the root's background — so white is what
+    /// a translucent one is actually showing over, and what the title bar has
+    /// to match. Named once rather than written at each use, because if that
+    /// ever stops being true it has to stop being true in one place.
+    private static readonly Color Backdrop = Color.FromArgb(0xFF, 0xFF, 0xFF);
+
+    /// Clamp to the ranges CSS clamps to, and composite any alpha over the
+    /// backdrop. Shares `Chrome.Over` so "what does translucent mean here" has
+    /// one answer in the codebase rather than two.
     private static Color Flatten(int r, int g, int b, double alpha)
     {
         static int Clamp(int v) => v < 0 ? 0 : v > 255 ? 255 : v;
         var opaque = Color.FromArgb(Clamp(r), Clamp(g), Clamp(b));
-        if (alpha >= 1.0) return opaque;
-        if (alpha <= 0.0) return Color.FromArgb(0xFF, 0xFF, 0xFF);
-        return Chrome.Over(opaque, alpha, Color.FromArgb(0xFF, 0xFF, 0xFF));
+
+        // Alpha is clamped BEFORE the blend, not after. CSS clamps it to 0-1,
+        // and `Over` is a linear interpolation — so an out-of-range alpha does
+        // not saturate, it extrapolates: `rgba(0, 0, 0, 5)` would compute
+        // `5*0 - 4*255` and only then get clipped to black, and
+        // `rgba(255, 255, 255, -1)` would overshoot the other way. Both are
+        // plausible wrong colours rather than the clamped ones CSS specifies.
+        //
+        // The 1.0 case then short-circuits as a matter of exactness rather than
+        // speed: `Over` at alpha 1 already returns `opaque`, and this is the
+        // path every ordinary colour takes.
+        alpha = alpha < 0.0 ? 0.0 : alpha > 1.0 ? 1.0 : alpha;
+        return alpha >= 1.0 ? opaque : Chrome.Over(opaque, alpha, Backdrop);
     }
 
     /// Relative luminance, sRGB linearised — the same test caption text has to
